@@ -41,6 +41,29 @@ If your ship comes out sideways or backwards, adjust `yaw` in quarter turns:
 If your model was authored Z-up (some CAD exports), set `layFlat: false` and
 correct it with `yaw` instead.
 
+## Generated models
+
+`grass.glb` is **built, not downloaded**. Regenerate it with:
+
+```bash
+node tools/optimize-grass.mjs
+```
+
+Editing it by hand is a mistake waiting to happen — the next run overwrites it,
+and two things in the file are load-bearing contracts rather than incidental
+facts about the export:
+
+- **`uv.y` runs 0 at the blade root to 1 at the tip.** `systems/grassSway.js`
+  masks the bend on it. Re-atlasing the texture *vertically* would remap `v`
+  and the grass would bend from the wrong place — silently, since nothing
+  errors. The optimiser only ever remaps `u`.
+- **The blade bases sit at `y = 0`.** The sway reads object-space `y` as height
+  above the seabed, both to scale each blade's lean by its own length and to
+  hold its arc length while it bends.
+
+`npm run test:grass` asserts both, so a bad re-export fails a test instead of
+shipping as grass that swings from its middle.
+
 ## Notes
 
 - `fit` auto-scales, so model units don't matter. The pivot is recentred on the

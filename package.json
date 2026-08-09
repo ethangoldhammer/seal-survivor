@@ -17,8 +17,9 @@
     "test:octopus": "node --import ./tools/vite-loader.mjs tools/octopus-rig-test.mjs",
     "test:biolum": "node --import ./tools/vite-loader.mjs tools/biolum-test.mjs",
     "test:boats": "node --import ./tools/vite-loader.mjs tools/boat-destruction-test.mjs",
+    "test:grass": "node --import ./tools/vite-loader.mjs tools/grass-sway-test.mjs",
     "ship": "node tools/ship.mjs",
-    "test": "npm run test:upgrades && npm run test:abilities && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:boats"
+    "test": "npm run test:upgrades && npm run test:abilities && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:boats && npm run test:grass"
   },
   "dependencies": {
     "@rive-app/canvas": "^2.39.2",

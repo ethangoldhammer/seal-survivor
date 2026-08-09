@@ -2,6 +2,18 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "scratch-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5188",
+        "--directory",
+        "/private/tmp/claude-501/-Users-ethangoldhammer-Projects-seal-survivor/2329347e-b815-4454-a2e9-44d9bb1839ed/scratchpad"
+      ],
+      "port": 5188
+    },
+    {
       "name": "dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": [

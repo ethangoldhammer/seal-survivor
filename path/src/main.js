@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } from './config.js';
-import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetSignatureColor, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings } from './assets.js';
+import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetSignatureColor, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings } from './assets.js';
+import { updateGrassSway } from './systems/grassSway.js';
 import { createWorld } from './world.js';
 import { midWater, bounds } from './arena.js';
 import { initInput, updateInput, clearPendingInput, input } from './input.js';
@@ -28,6 +29,7 @@ import { updateProjectileTrails, clearProjectileTrails } from './systems/project
 import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from './systems/projectileVoices.js';
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
 import { createStrikeRing, updateStrikeRing } from './systems/strikeRing.js';
+import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
 import { play as playMusic, stop as stopMusic, duckForUpgrade, sweepOpen, applyMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth } from './systems/music.js';
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner } from './systems/crabSpawner.js';
@@ -100,6 +102,7 @@ let shrimpGroup = null;
 let belugaDrone = null;
 let eelCompanionMesh = null;
 let strikeRing = null;
+let aimIndicator = null;
 let dumboOcto = null;
 let octoGrabber = null;
 
@@ -165,6 +168,7 @@ async function boot() {
   // tuning) onto the uniforms, so a tuned size applies on the first frame
   // rather than only after the slider is next touched.
   applyNoiseSettings();
+  applyGrassSettings();
   // Must come after the looks above (it reads the size multipliers to keep
   // rim width in world units) and before the first createVisual call below —
   // it hooks spawns, so anything built earlier would come up with no outline.
@@ -182,6 +186,8 @@ async function boot() {
   world.scene.add(eelCompanionMesh);
   strikeRing = createStrikeRing();
   world.scene.add(strikeRing);
+  aimIndicator = createAimIndicator();
+  world.scene.add(aimIndicator);
   dumboOcto = createDumboOcto();
   world.scene.add(dumboOcto);
   octoGrabber = createOctoGrabber();
@@ -259,6 +265,7 @@ function handleTunerChange(path) {
   // Pure uniform writes on already-compiled shaders — no rebuild, so this is
   // safe to fire from a slider's every input event.
   if (path === '*' || path.startsWith('sealShader')) applyNoiseSettings();
+  if (path === '*' || path.startsWith('grass')) applyGrassSettings();
   // Also a pure material/uniform write on shells that already exist, so every
   // input event can drive it — no rebuild, and the toggle just hides them.
   if (path === '*' || path.startsWith('playerOutline')) applyPlayerOutline();
@@ -334,6 +341,7 @@ function startGame() {
   resetGarlic();
   resetShrimpRing();
   resetStrike();
+  resetAimIndicator();
   // Must follow resetStrike: the input edge is what feeds tryStrike, so
   // clearing the charge state without clearing the pending press would just
   // hand the fresh charges straight back to a leftover keypress.
@@ -1914,6 +1922,15 @@ function animate(now) {
   }
 
   updateStrikeRing(realDt, player.mesh.position, strikeState, gameState.running);
+  // Real time, like the ring above: the indicator is a readout of where you
+  // are pointing RIGHT NOW, and a hit-stop must not freeze it a frame behind
+  // the cursor. `wantsToFire` rather than input.firing, so autofire counts as
+  // firing and the beam doesn't sit at idle opacity for a whole run.
+  updateAimIndicator(
+    realDt, player.mesh.position, input.aim,
+    CONFIG.weapon.autofire || input.firing,
+    gameState.running && !gameState.paused,
+  );
   updateProjectileTrails(realDt, world.scene, projectiles);
   // Real time, like the trails and the particles above: a hit-stop shouldn't
   // stall a shell that's still in the air, and the flash it triggered has to
@@ -1929,6 +1946,10 @@ function animate(now) {
   // Both must land before world.updateSurface, which paints what they decided.
   updateDayCycle(rawDt);
   updateWeather(rawDt);
+  // Same wall clock, same reasoning: the current is a property of the ocean,
+  // not of the run. One uniform write per material — the bend itself is all
+  // vertex shader, so this does not scale with how much grass is on screen.
+  updateGrassSway(rawDt);
 
   // Surface first: it advances the wave, and bubbles bursting at the water line
   // are solved against wherever the wave ended up this frame, not last frame's.

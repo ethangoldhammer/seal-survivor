@@ -35,6 +35,58 @@ export const CONFIG = {
     waveSpeed: 0.8,
   },
 
+  // ---------------------------------------------------------------------------
+  // AIM INDICATOR — where the GUN is pointing (systems/aimIndicator.js).
+  //
+  // Two independent halves, so `enabled` on top of them gives three real
+  // looks: a beam on its own, a reticle on its own, or the pair. Off by
+  // default; the game has always aimed without one.
+  //
+  // Distinct from the dash corridor in cinecam.lens.path, and the two can
+  // legitimately contradict each other on screen: this follows input.aim
+  // (cursor / right stick), the corridor follows input.move (left stick), and
+  // aiming one way while swimming another is ordinary play.
+  aimIndicator: {
+    enabled: false,
+    opacity: 1,
+    // What it drops to when nothing is firing, as a fraction of `opacity`. A
+    // permanent full-strength beam becomes furniture and stops being read.
+    idleOpacity: 0.55,
+    fade: 0.12, // seconds, the ease between those two states
+    z: -0.04,
+
+    line: {
+      enabled: true,
+      color: 0x6fd3ff,
+      glow: 1.4,
+      start: 1.2,     // gap between the seal and the near end, world units
+      length: 16,
+      width: 0.16,    // half-width of the core
+      softness: 0.75, // 0 is a hard-edged bar, 1 is all falloff and no core
+      fade: 0.8,      // how much it dims toward the far end, 0..1
+      dashed: false,
+      dashSize: 1.6,  // world units per dash + gap
+      dashDuty: 0.55, // the lit fraction of that
+      dashSpeed: 6,   // world units/s, scrolling away from the seal
+    },
+
+    reticle: {
+      enabled: true,
+      color: 0x9fe8ff,
+      glow: 1.6,
+      // Stand-off along the aim. There is no "range" for it to sit at — the
+      // guns fire along a direction — so this is a look, not a measurement.
+      distance: 16,
+      radius: 1.1,
+      thickness: 0.16,
+      tickCount: 4,    // 0 for a bare ring
+      tickLength: 0.5,
+      tickWidth: 0.14,
+      dot: 0.18,       // 0 for no centre dot
+      spinSpeed: 0,    // rad/s; 0 for a fixed reticle
+    },
+  },
+
   camera: {
     followPlayer: false,
     followLerp: 0.08,
@@ -3518,6 +3570,38 @@ export const CONFIG = {
   },
 
   // ---------------------------------------------------------------------------
+  // GRASS — seabed plants bending in the current. Entirely a vertex shader
+  // (systems/grassSway.js), so the cost is the same for two clumps or two
+  // hundred and every number here is a uniform write rather than a rebuild.
+  // ---------------------------------------------------------------------------
+  grass: {
+    sway: {
+      enabled: true,
+      // How far the TIP travels to one side, as a FRACTION OF BLADE HEIGHT —
+      // so it means the same thing at any `fit`. 0.09 is a lean; past about
+      // 0.3 the blades start visibly sliding through each other, which the
+      // arc-length correction below cannot hide.
+      amplitude: 0.09,
+      // Exponent on the root-to-tip mask. 1 hinges the whole blade at the root
+      // like a wiper; higher keeps the lower third planted and curls the top,
+      // which is what a stem in current actually does.
+      stiffness: 1.8,
+      speed: 1.1, // radians/sec of the main sway
+      // Spatial frequency of the travelling wave, in radians per world unit.
+      // This is what makes the current cross the field as a gust instead of
+      // every clump breathing in unison; 0 pins them all to the same phase.
+      wavelength: 0.35,
+      direction: 0, // radians in the model's ground plane; 0 = along +X
+      flutter: 0.025, // fast tip-weighted chatter riding on the main sway
+      flutterSpeed: 3.7,
+      // Arc-length correction: how much the tip drops to pay for moving
+      // sideways. 1 keeps blades their own length, 0 lets them stretch (which
+      // reads as rubber). No reason to lower it except to see what it does.
+      bend: 1,
+    },
+  },
+
+  // ---------------------------------------------------------------------------
   // POINTS — score replaces a plain kill counter. Small schooling fish are
   // worth little individually but pop a bonus when the whole school is
   // wiped; tougher non-schooling creatures are worth more per kill. Any kill
@@ -3818,10 +3902,17 @@ export const CONFIG = {
       deckSpread: 0.6, // fraction of the hull's half-length they stand across
       sway: 0.03, // idle lean while aboard
       swaySpeed: 2.2,
-      // Bailing out. `panicAt` is the fraction of hull health at which the
-      // crew decides the boat is lost; they go one at a time from there.
+      // PANIC. `panicAt` is the fraction of hull health at which the crew
+      // decides the boat is lost. From there they run the deck — the same walk
+      // cycle at `panicClipSpeed`, pacing at `panicSpeed` and turning at the
+      // rail — and after `bailAfter` seconds of that they take their chances
+      // in the water. Set `bailAfter` to 0 to keep them aboard until the hull
+      // goes up, which is the moment they get thrown.
       panicAt: 0.35,
-      bailDelay: 0.35,
+      panicSpeed: 2.2, // world units/sec along the deck
+      panicClipSpeed: 1.9, // walk cycle playback multiplier
+      clipFade: 0.18, // crossfade between idle and walk
+      bailAfter: 4,
       bailSpread: 0.9,
       jumpOut: 3.4, // away from the hull
       jumpUp: 5.5,
@@ -3836,6 +3927,13 @@ export const CONFIG = {
       iterations: 4,
       floorClearance: 0.3,
       floorFriction: 0.35,
+      // Cosine of the widest angle the neck may bend to, measured against the
+      // spine. Negative allows a good lolling head; 1 would weld it upright.
+      neckLimit: -0.15,
+      // How hard the joint limits push. These are approximations of joint
+      // limits, not bone lengths — solved as hard as the links they distort
+      // the body they are meant to be shaping.
+      limitStiffness: 0.35,
       life: 9, // seconds before the body dissolves
       fade: 1.6,
       dissolveCells: 7,
@@ -4869,6 +4967,38 @@ export const TUNER_SCHEMA = [
     // The follow rig. Off by default and a real off switch — see the cinecam
     // block up top. The zoom floor is above 1 because the arena exactly fills
     // the frame at zoom 1, so a rig at 1 has nowhere to pan to.
+    group: 'Aim indicator',
+    items: [
+      { path: 'aimIndicator.enabled', type: 'bool', label: 'show an aim indicator' },
+      { path: 'aimIndicator.opacity', min: 0, max: 1, step: 0.02, label: 'opacity while firing' },
+      { path: 'aimIndicator.idleOpacity', min: 0, max: 1, step: 0.02, label: 'opacity when not firing (x)' },
+      { path: 'aimIndicator.fade', min: 0.01, max: 1, step: 0.01, label: 'fade between those (s)' },
+      // --- the beam ---
+      { path: 'aimIndicator.line.enabled', type: 'bool', label: 'line: draw the beam' },
+      { path: 'aimIndicator.line.length', min: 2, max: 60, step: 0.5, label: 'line: length' },
+      { path: 'aimIndicator.line.start', min: 0, max: 8, step: 0.1, label: 'line: gap from the seal' },
+      { path: 'aimIndicator.line.width', min: 0.02, max: 1.2, step: 0.01, label: 'line: half-width' },
+      { path: 'aimIndicator.line.softness', min: 0, max: 0.99, step: 0.01, label: 'line: edge softness' },
+      { path: 'aimIndicator.line.fade', min: 0, max: 1, step: 0.02, label: 'line: dim toward the far end' },
+      { path: 'aimIndicator.line.glow', min: 0, max: 4, step: 0.05, label: 'line: glow' },
+      { path: 'aimIndicator.line.dashed', type: 'bool', label: 'line: dashed' },
+      { path: 'aimIndicator.line.dashSize', min: 0.1, max: 8, step: 0.1, label: 'line: dash + gap length' },
+      { path: 'aimIndicator.line.dashDuty', min: 0.05, max: 0.95, step: 0.05, label: 'line: lit fraction of a dash' },
+      { path: 'aimIndicator.line.dashSpeed', min: -30, max: 30, step: 0.5, label: 'line: dash scroll speed' },
+      // --- the reticle ---
+      { path: 'aimIndicator.reticle.enabled', type: 'bool', label: 'reticle: draw it' },
+      { path: 'aimIndicator.reticle.distance', min: 2, max: 60, step: 0.5, label: 'reticle: stand-off along the aim' },
+      { path: 'aimIndicator.reticle.radius', min: 0.1, max: 6, step: 0.05, label: 'reticle: ring radius' },
+      { path: 'aimIndicator.reticle.thickness', min: 0.02, max: 1, step: 0.01, label: 'reticle: stroke thickness' },
+      { path: 'aimIndicator.reticle.tickCount', min: 0, max: 12, step: 1, label: 'reticle: ticks (0 = bare ring)' },
+      { path: 'aimIndicator.reticle.tickLength', min: 0, max: 3, step: 0.05, label: 'reticle: tick length' },
+      { path: 'aimIndicator.reticle.tickWidth', min: 0.02, max: 1, step: 0.01, label: 'reticle: tick width' },
+      { path: 'aimIndicator.reticle.dot', min: 0, max: 1.5, step: 0.02, label: 'reticle: centre dot (0 = none)' },
+      { path: 'aimIndicator.reticle.spinSpeed', min: -4, max: 4, step: 0.05, label: 'reticle: spin (rad/s)' },
+      { path: 'aimIndicator.reticle.glow', min: 0, max: 4, step: 0.05, label: 'reticle: glow' },
+    ],
+  },
+  {
     group: 'Cine camera: rig',
     items: [
       { path: 'cinecam.enabled', type: 'bool', label: 'cinematic follow camera' },
@@ -5321,6 +5451,24 @@ export const TUNER_SCHEMA = [
       { path: 'sealShader.strength', min: 0, max: 1, step: 0.01, label: 'noise strength' },
       { path: 'sealShader.contrast', min: 0.1, max: 4, step: 0.05, label: 'noise contrast' },
       { path: 'sealShader.color', type: 'color', label: 'noise colour' },
+    ],
+  },
+  {
+    group: 'Grass sway',
+    items: [
+      { path: 'grass.sway.enabled', type: 'bool', label: 'grass bends in the current' },
+      // Fraction of blade height the tip travels — the headline control. The
+      // top of the range is deliberately past the point where blades start
+      // sliding through each other, so the limit is visible rather than
+      // guessed at.
+      { path: 'grass.sway.amplitude', min: 0, max: 0.4, step: 0.005, label: 'sway distance (of height)' },
+      { path: 'grass.sway.stiffness', min: 1, max: 5, step: 0.1, label: 'stiffness (1 = hinges at root)' },
+      { path: 'grass.sway.speed', min: 0, max: 4, step: 0.05, label: 'sway speed' },
+      { path: 'grass.sway.wavelength', min: 0, max: 2, step: 0.01, label: 'gust spread (0 = all in unison)' },
+      { path: 'grass.sway.direction', min: 0, max: 6.28, step: 0.05, label: 'current direction (rad)' },
+      { path: 'grass.sway.flutter', min: 0, max: 0.15, step: 0.005, label: 'tip flutter' },
+      { path: 'grass.sway.flutterSpeed', min: 0, max: 12, step: 0.1, label: 'flutter speed' },
+      { path: 'grass.sway.bend', min: 0, max: 1, step: 0.05, label: 'keep blade length (0 = stretches)' },
     ],
   },
   {

@@ -4,6 +4,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { CONFIG } from './config.js';
 import { attachNoiseShader, applyNoiseSettings } from './systems/noiseShader.js';
+import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
 import { createRockGeometry, startTumble } from './systems/rocks.js';
 
 // ============================================================================
@@ -233,6 +234,34 @@ export const ASSETS = {
     tint: 0x0a1018,
     outline: { color: 0x9fc6e8, thickness: 0.02 },
     shape: 'box', width: 3.4, height: 1.3, depth: 1.4, color: 0xffd27a, unlit: true,
+  },
+  // The man on the boat. Stands on deck, runs about once the hull is holed,
+  // and ragdolls when it goes up — see systems/crew.js.
+  //
+  // He is modelled Y-up and facing +Z (measured: the arms spread along X and
+  // the toes point +Z). In side view `forward` lands on world +Y and `up` on
+  // world -X (see orientationQuaternion), so standing him up means putting his
+  // HEIGHT on forward and his FACING on up: '+Y'/'-Z' leaves him upright and
+  // looking along +X. Facing the other way is the same 180° flip a boat gets.
+  //
+  // `fit` is his standing height in world units and is deliberately NOT scaled
+  // with the boat: a trawler is bigger than a rowboat, its crew is not.
+  //
+  // Two clips, both misspelt in the file, both quoted here exactly as exported
+  // — 'idol' is the idle and the walk carries trailing spaces. `boost` reuses
+  // the walk so the animation system's own clipTimeScale gives the panic run
+  // without a second clip.
+  fisherman: {
+    model: '/models/fisherman.glb',
+    fit: 1.25,
+    forward: '+Y', up: '-Z',
+    animations: {
+      idle: 'Armature|idol',
+      swim: 'Armature|walk cycle ',
+      boost: 'Armature|walk cycle ',
+    },
+    outline: { color: 0x9fc6e8, thickness: 0.004 },
+    shape: 'box', width: 0.4, height: 1.2, depth: 0.3, color: 0x14202c, unlit: true,
   },
   attractorOrb: { shape: 'sphere', radius: 0.4, color: 0xffcf40, unlit: true },
   // Thrown starfish. Five drawn sea stars rather than one, picked at random
@@ -930,6 +959,35 @@ export const ASSETS = {
       ],
     },
     shape: 'octahedron', radius: 0.6, color: 0xc9713f, unlit: true,
+  },
+  // --- seabed decor --------------------------------------------------------
+  // A clump of blades that bends in the current. Built by
+  // tools/optimize-grass.mjs from the raw Sketchfab download, which arrives as
+  // 18 meshes over 4 materials plus four swatch quads floating above the
+  // model; that script merges it to one mesh with one atlased material and
+  // reseats it so the BASE sits at y=0. Placing a clump is therefore just
+  // "put it on the seabed" — no offset needed to stop it hovering.
+  //
+  // `fit` normalises the LONGEST axis, and this clump is wider (6.36) than it
+  // is tall (3.98). So fit is its WIDTH, and the grass stands about 0.63x fit
+  // high — 3 gives a clump roughly 3 wide and 1.9 tall.
+  grass: {
+    model: '/models/grass.glb',
+    fit: 3,
+    // Blades grow along model +Y and the clump spreads on XZ. No meaningful
+    // facing, so `forward` only decides which way the cards present; +Z puts
+    // the broad side of the clump toward the camera in the side-on view.
+    forward: '+Z', up: '+Y',
+    // Bending happens in the vertex shader in OBJECT space, so it follows this
+    // orientation rather than fighting it. See systems/grassSway.js and
+    // CONFIG.grass.sway.
+    sway: true,
+    // Lit, so the daylight cycle reaches it — grass that stays noon-green
+    // while the water goes to dusk is the thing that gives decor away. Low
+    // metalness because wet plant is not metal, high roughness so the key
+    // light does not put a specular hotspot on a flat card.
+    material: { roughness: 0.9, metalness: 0 },
+    shape: 'cone', radius: 0.5, height: 1.2, color: 0x3f7d44,
   },
   // --- new creatures -------------------------------------------------------
   // Axes below come from rendering each file with an axis helper (see
@@ -1767,6 +1825,11 @@ function prepareModel(source, def, clips = [], overrideTex = null, label = '', e
       // that rebuilds a look — tint, glow and the emissive toggle all write
       // uniforms or colours, none of which disturb the injected shader.
       if (def.noiseShader) attachNoiseShader(m2);
+      // Current-driven bend for seabed plants (CONFIG.grass.sway). `size.y` is
+      // the clump's height in MODEL units, before `fit` reaches the node's
+      // scale — the shader wants it there, both as the amplitude scale and as
+      // the mask denominator on a stand-in with no UVs.
+      if (def.sway) attachGrassSway(m2, size.y);
       m2.needsUpdate = true;
       return m2;
     };
@@ -2496,7 +2559,7 @@ function applyEmissiveMode(m) {
 // Flip every loaded asset between masked and uniform glow. Cheap enough to
 // call from a tuner checkbox — it only touches materials that actually have a
 // mask stashed, so assets without one are skipped rather than reset.
-export { applyNoiseSettings };
+export { applyNoiseSettings, applyGrassSettings };
 
 export function setEmissiveMapsEnabled(on) {
   if (!CONFIG.glow) CONFIG.glow = {};

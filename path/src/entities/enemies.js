@@ -8,6 +8,11 @@ import { createAnimationController, stateForSpeed } from '../systems/animation.j
 import { createHeadLook } from '../systems/headLook.js';
 import { recordSpawn } from '../systems/playtest.js';
 import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
+
+// Above this, a creature's hp means "invincible scenery" rather than a real
+// pool anyone is meant to chew through (the sea turtle ships 1e9). Only the
+// playtest pressure metric cares; combat treats it as an ordinary number.
+const UNKILLABLE_HP = 1e6;
 import { createJawDriver } from '../systems/jaw.js';
 import { player } from './player.js';
 
@@ -703,7 +708,14 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
   // at spawn rather than counted at death on purpose — the creatures a
   // flooding arena is made of are exactly the ones that never get killed, and
   // a kill-based tally would be blind to them.
-  recordSpawn(hp);
+  //
+  // Scenery is excluded. The sea turtle carries hp 1e9 to mean "cannot be
+  // killed", and counting that as hp the player is expected to clear made one
+  // turtle spawn read as 628 MILLION hp/sec of pressure — which silently
+  // pinned that whole window's clear rate at zero and would have had every
+  // report blaming the difficulty ramp for a turtle. Hp this large is a flag,
+  // not a quantity.
+  if (hp < UNKILLABLE_HP) recordSpawn(hp);
 
   // Any model with clips or a procedural rig gets a controller; static
   // shapes and unrigged models (e.g. the reef fish) simply don't.

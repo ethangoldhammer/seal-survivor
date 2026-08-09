@@ -75,10 +75,27 @@ export const SOURCE_UPGRADES = {
   // Damageless by design — they remove or neutralise creatures instead. Their
   // "output" is counted in events, not hp, and reported separately so they
   // don't show up as dead weight in a damage table they can't compete in.
-  bakalar: { upgrades: ['bakalar'], label: "Bakalar's Net", control: true },
   beluga: { upgrades: ['beluga'], label: 'Baby Beluga', control: true },
   dumbo: { upgrades: ['dumbo'], label: 'Dumbo Octopus', control: true },
+  // Bakalar's boat does both: the net hauls (control events) and the bomb
+  // deals damage. One pick pays for both, so they share a row — see
+  // SOURCE_ALIAS.
+  bakalar: { upgrades: ['bakalar'], label: "Bakalar's Boat" },
+  scallop: { upgrades: ['scallopSquirter'], label: 'Scallop Squirter' },
+  oyster: { upgrades: ['oysterBlaster'], label: 'Oyster Blaster' },
+  orca: { upgrades: ['orcaFamily'], label: 'Orca Family' },
 };
+
+// Two damage tags that are really one upgrade. Without this the bomb reads as
+// a source nobody ever spent a pick on — zero investment, so zero return, so
+// it can never be flagged as over- or under-tuned no matter what it does.
+const SOURCE_ALIAS = {
+  bakalarBomb: 'bakalar',
+};
+
+function resolveSource(source) {
+  return SOURCE_ALIAS[source] ?? source;
+}
 
 export function sourceLabel(source) {
   return SOURCE_UPGRADES[source]?.label ?? source;
@@ -209,8 +226,8 @@ function abilityTable(run, buckets) {
 
   for (const b of buckets) {
     const minutes = b.seconds / 60;
-    for (const src in b.dealtBySource) ensure(src).damage += b.dealtBySource[src];
-    for (const src in b.killsBySource) ensure(src).kills += b.killsBySource[src];
+    for (const src in b.dealtBySource) ensure(resolveSource(src)).damage += b.dealtBySource[src];
+    for (const src in b.killsBySource) ensure(resolveSource(src)).kills += b.killsBySource[src];
     // Stack snapshot for this bucket, converted from upgrade ids to sources.
     const stacksById = b.stacks ?? {};
     for (const source in SOURCE_UPGRADES) {
@@ -575,7 +592,7 @@ export function formatRunReport(a) {
   L.push('');
   L.push('  ability            damage   share  picks  return  per stack-min');
   for (const r of a.abilities) {
-    if (r.control) continue;
+    if (r.damage <= 0) continue; // a row appears wherever it did the work
     L.push([
       `  ${r.label.padEnd(18)}`,
       String(Math.round(r.damage)).padStart(7),
@@ -585,7 +602,7 @@ export function formatRunReport(a) {
       String(Math.round(r.dpsPerStackMinute)).padStart(14),
     ].join(''));
   }
-  const control = a.abilities.filter((r) => r.control && (r.events > 0 || r.stacks > 0));
+  const control = a.abilities.filter((r) => r.events > 0);
   if (control.length) {
     L.push('');
     L.push('  control            events  picks   per stack-min');
@@ -629,7 +646,7 @@ export function formatAggregateReport(agg) {
   L.push('');
   L.push('  ability            damage   share  return  per stack-min  runs');
   for (const r of agg.abilities) {
-    if (r.control) continue;
+    if (r.damage <= 0) continue;
     L.push([
       `  ${r.label.padEnd(18)}`,
       String(Math.round(r.damage)).padStart(7),
