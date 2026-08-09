@@ -1,0 +1,61 @@
+# Auto-deploy to Cloudflare Pages on push.
+#
+# The Pages project is a DIRECT UPLOAD project, and Cloudflare does not allow
+# converting one to a Git-integrated project — that would mean deleting this
+# project and recreating it, which gives up the seal-survivor.pages.dev name.
+# So instead of Cloudflare building from Git, GitHub builds and pushes the
+# result with the same `wrangler pages deploy` that `npm run deploy` runs
+# locally. Same project, same URL, no manual step.
+#
+# Setup (one time): add a repository secret named CLOUDFLARE_API_TOKEN.
+# Create it at https://dash.cloudflare.com/profile/api-tokens using the
+# "Edit Cloudflare Workers" template, or a custom token with the
+# "Cloudflare Pages: Edit" permission on this account. The account ID below is
+# an identifier rather than a credential, so it is fine in the clear.
+
+name: Deploy
+
+on:
+  push:
+    branches: [SealSurvivor-Main]
+  # Lets you re-deploy the current commit from the Actions tab without having
+  # to push an empty commit to do it.
+  workflow_dispatch:
+
+# A second push while one deploy is in flight cancels the first. Without this
+# two runs race to publish and the deployment that lands last is whichever
+# finished last, not whichever commit is newer.
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # wrangler requires >=22, and this matches the local Node the build
+          # is developed against.
+          node-version: 22
+          cache: npm
+
+      # `npm ci` rather than `npm install` so the lockfile is authoritative —
+      # a deploy should never silently pick up a different dependency tree
+      # than the one that was tested.
+      - run: npm ci
+
+      # VITE_LEADERBOARD_URL comes from .env.production, which is committed,
+      # so the build needs nothing extra here to reach the live board.
+      - run: npm run build
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: e24f39a9022246df1eea122296fe9374
+          # --branch must stay SealSurvivor-Main: it is this project's
+          # production branch, and any other value publishes a preview
+          # deployment that never reaches seal-survivor.pages.dev.
+          command: pages deploy dist --project-name=seal-survivor --branch=SealSurvivor-Main
