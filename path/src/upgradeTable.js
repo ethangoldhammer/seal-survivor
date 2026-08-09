@@ -4,10 +4,10 @@
 // What an upgrade DOES is code: each entry in CONFIG.upgrades carries an
 // apply() function, and that can't live in a spreadsheet. Everything else
 // about it — what it's called, what the card says, how far it stacks, whether
-// it's offered at all, and which hex art sits behind it — is content, and
-// content belongs in a table you can sort, fill down and diff.
+// it's offered at all, how often, and which hex art sits behind it — is
+// content, and content belongs in a table you can sort, fill down and diff.
 //
-// So upgrades.csv is the source of truth for those five fields. Open it in a
+// So upgrades.csv is the source of truth for those six fields. Open it in a
 // spreadsheet, edit, save; the dev server reloads the page and the new values
 // are live. Nothing in the game writes back to it — the in-game Upgrades tab
 // is a read-only view of what this file produced.
@@ -19,108 +19,47 @@
 //   maxStacks  how many times it can be taken. BLANK MEANS UNLIMITED — the
 //              same thing the old tuner's empty "max stacks" box meant.
 //   enabled    FALSE removes it from the offer pool. Blank means enabled.
+//   weight     how likely this is to be offered, RELATIVE TO THE OTHER ROWS.
+//              Blank means 1. A row at 2 comes up twice as often as a row at
+//              1; a row at 0 is never offered, which is a softer `enabled`
+//              FALSE — the upgrade still exists and still shows in the
+//              Upgrades tab, it just stops being dealt. See below for why
+//              this is a column rather than a slider.
 //   cardArt    a key from LEVELUP_IMAGE_KEYS. Blank means the plain card.
 //
 // Fields deliberately NOT here: `perLevelName` and `levelDescs`, which are
 // per-stack display rules on two upgrades and don't flatten into a row.
 // They stay in config.js.
+//
+// Why `weight` belongs in the file and not on a tuner slider: rarity is only
+// ever meaningful against the rest of the roster. "Is Baby Beluga too common"
+// is a question about the other twenty-nine rows, and the answer is a column
+// you can sort — not a number you drag on its own with nothing to compare it
+// to. That is the same reasoning that put `maxStacks` here.
 // ============================================================================
 
-// A quote-aware CSV reader, because the descriptions are full of commas
-// ("Chain lightning: +area, +damage, +max chain") and a naive split on ','
-// would truncate half the table. Handles doubled quotes as an escaped quote
-// and accepts LF or CRLF, which is what a spreadsheet export gives you.
-export function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let field = '';
-  let quoted = false;
-  let started = false; // distinguishes an empty last field from end-of-row
+import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
 
-  const endField = () => { row.push(field); field = ''; started = false; };
-  const endRow = () => { endField(); rows.push(row); row = []; };
+const LABEL = 'upgrades';
+const FILE = 'upgrades.csv';
 
-  // Strip a UTF-8 BOM — Excel writes one, and it would otherwise become part
-  // of the first header name, so the `id` column would never be found.
-  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i];
-    if (quoted) {
-      if (c === '"') {
-        if (src[i + 1] === '"') { field += '"'; i++; } else quoted = false;
-      } else field += c;
-      continue;
-    }
-    if (c === '"' && !started) { quoted = true; started = true; continue; }
-    if (c === ',') { endField(); continue; }
-    if (c === '\r') continue;
-    if (c === '\n') { endRow(); continue; }
-    field += c;
-    started = true;
-  }
-  // A trailing newline leaves nothing pending; anything else is a final row.
-  if (field !== '' || row.length) endRow();
-
-  // Drop blank lines — a spreadsheet loves to leave a few at the bottom.
-  return rows.filter((r) => r.some((v) => v.trim() !== ''));
-}
-
-// Turn the raw grid into { id -> row object }, keyed by the header names.
 export function parseUpgradeCsv(text, warn = console.warn) {
-  const rows = parseCsv(text);
-  if (!rows.length) {
-    warn('[upgrades] upgrades.csv is empty — every upgrade keeps its config.js defaults.');
-    return new Map();
-  }
-
-  const header = rows[0].map((h) => h.trim());
-  const idCol = header.indexOf('id');
-  if (idCol < 0) {
-    warn('[upgrades] upgrades.csv has no `id` column — the file is being ignored. First row was:', header.join(','));
-    return new Map();
-  }
-
-  const out = new Map();
-  for (let r = 1; r < rows.length; r++) {
-    const cells = rows[r];
-    const id = (cells[idCol] ?? '').trim();
-    if (!id) {
-      warn(`[upgrades] upgrades.csv row ${r + 1} has no id — skipped.`);
-      continue;
-    }
-    if (out.has(id)) {
-      warn(`[upgrades] upgrades.csv lists "${id}" more than once — row ${r + 1} wins.`);
-    }
-    const rec = {};
-    header.forEach((key, c) => { if (key) rec[key] = cells[c] ?? ''; });
-    out.set(id, rec);
-  }
-  return out;
-}
-
-// TRUE/FALSE as a spreadsheet writes it, plus the shapes people actually type.
-// Anything unrecognised is treated as enabled and warned about, because the
-// alternative — silently pulling an upgrade out of the pool over a typo — is
-// the kind of bug you'd spend a play session chasing.
-function parseBool(raw, id, warn) {
-  const v = String(raw ?? '').trim().toLowerCase();
-  if (v === '') return true;
-  if (['true', 'yes', 'y', '1', 'on'].includes(v)) return true;
-  if (['false', 'no', 'n', '0', 'off'].includes(v)) return false;
-  warn(`[upgrades] "${id}" has enabled="${raw}", which isn't a yes/no value — treating it as enabled.`);
-  return true;
+  return parseIdTable(text, LABEL, FILE, warn);
 }
 
 function parseStacks(raw, id, warn) {
-  const v = String(raw ?? '').trim();
-  if (v === '') return null; // unlimited
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < 1) {
-    warn(`[upgrades] "${id}" has maxStacks="${raw}", which isn't a number ≥ 1 — treating it as unlimited.`);
-    return null;
-  }
-  return Math.floor(n);
+  const n = parseNumber(raw, LABEL, id, 'maxStacks', warn, { min: 1, integer: true });
+  // Blank is unlimited, and so is a value that made no sense — the warning
+  // has already gone out, and the safe reading of "I don't understand this
+  // cap" is not to invent one.
+  return n == null ? null : n;
+}
+
+function parseWeight(raw, id, warn) {
+  const n = parseNumber(raw, LABEL, id, 'weight', warn, { min: 0 });
+  // Blank and unreadable both mean "ordinary", i.e. the same 1 every row had
+  // before this column existed. A typo must not silently make a card rare.
+  return n == null ? 1 : n;
 }
 
 // Write the table's fields onto the live CONFIG.upgrades entries, in place.
@@ -140,6 +79,7 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
       u.desc = b.desc;
       u.maxStacks = b.maxStacks;
       u.enabled = b.enabled;
+      u.weight = b.weight;
       u.cardArt = b.cardArt;
     }
 
@@ -152,7 +92,8 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
     if (name) u.name = name;
     if (desc) u.desc = desc;
     if ('maxStacks' in row) u.maxStacks = parseStacks(row.maxStacks, u.id, warn);
-    if ('enabled' in row) u.enabled = parseBool(row.enabled, u.id, warn);
+    if ('enabled' in row) u.enabled = parseBool(row.enabled, LABEL, u.id, 'enabled', warn);
+    if ('weight' in row) u.weight = parseWeight(row.weight, u.id, warn);
 
     if ('cardArt' in row) {
       const art = String(row.cardArt ?? '').trim();
@@ -160,7 +101,7 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
       else if (imageKeys.includes(art)) u.cardArt = art;
       else {
         u.cardArt = null;
-        warn(`[upgrades] "${u.id}" asks for card art "${art}", which isn't one of the level-up images — the card will use the plain background. Valid keys: ${imageKeys.join(', ')}`);
+        warn(`[${LABEL}] "${u.id}" asks for card art "${art}", which isn't one of the level-up images — the card will use the plain background. Valid keys: ${imageKeys.join(', ')}`);
       }
     }
   }
@@ -169,7 +110,57 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
   // renamed in code, and it does nothing at all — so it has to be loud.
   for (const id of rows.keys()) {
     if (!seen.has(id)) {
-      warn(`[upgrades] upgrades.csv has a row for "${id}", but no upgrade with that id exists — the row is being ignored.`);
+      warn(`[${LABEL}] ${FILE} has a row for "${id}", but no upgrade with that id exists — the row is being ignored.`);
     }
   }
+}
+
+// Deal `n` distinct upgrades out of `pool`, each row's chance proportional to
+// its `weight` column. This replaced a plain shuffle, under which every
+// enabled upgrade was equally likely at every level — so Baby Beluga and
+// Rapid Fire competed on identical terms on the very first card.
+//
+// Without replacement, so the three cards are always three different
+// upgrades. The total is recomputed after each draw rather than sampled once,
+// which is what keeps the remaining rows in their correct proportion to each
+// other after one has been taken out.
+//
+// A weight of 0 means "never dealt" — a softer `enabled` FALSE, since the
+// upgrade still exists and still shows in the Upgrades tab. If that leaves
+// fewer than `n` rows with any weight, the level-up offers fewer cards. The
+// one case that must not happen is offering NONE, so a pool with no positive
+// weight anywhere falls back to dealing uniformly: that's a misconfigured
+// file rather than an intention, and an empty level-up screen is a soft-lock.
+//
+// `random` is injectable so the distribution can be tested without running
+// the game — it is Math.random everywhere in the real build.
+export function drawUpgrades(pool, n, random = Math.random) {
+  const remaining = [...pool];
+  const weightOf = (u) => (typeof u.weight === 'number' && u.weight > 0 ? u.weight : 0);
+  if (!remaining.some(weightOf)) {
+    return remaining.sort(() => random() - 0.5).slice(0, n);
+  }
+
+  const picks = [];
+  while (picks.length < n && remaining.length) {
+    let total = 0;
+    for (const u of remaining) total += weightOf(u);
+    if (total <= 0) break; // nothing left that's willing to be offered
+
+    // Zero-weight rows are SKIPPED rather than merely contributing nothing:
+    // a random() of exactly 0 leaves `roll` at 0 from the start, and a
+    // "subtract then test <= 0" walk would hand the draw to whichever row
+    // came first — including one asking never to be dealt.
+    let roll = random() * total;
+    let idx = -1;
+    for (let i = 0; i < remaining.length; i++) {
+      const w = weightOf(remaining[i]);
+      if (w <= 0) continue;
+      roll -= w;
+      if (roll <= 0) { idx = i; break; }
+      idx = i; // last positive row seen, in case float drift eats the total
+    }
+    picks.push(remaining.splice(idx, 1)[0]);
+  }
+  return picks;
 }

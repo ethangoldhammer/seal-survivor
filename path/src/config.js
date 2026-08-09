@@ -1,6 +1,10 @@
 import importedTuning from './imported-tuning.json';
 import upgradesCsv from './upgrades.csv?raw';
+import enemiesCsv from './enemies.csv?raw';
 import { parseUpgradeCsv, applyUpgradeTable } from './upgradeTable.js';
+import {
+  parseEnemyCsv, applyEnemyTable, captureEnemyBase, withoutEnemyTableFields,
+} from './enemyTable.js';
 
 // ============================================================================
 // CONFIG — every gameplay number lives here. Nothing else hardcodes balance.
@@ -3105,11 +3109,16 @@ export const TUNER_SCHEMA = [
       { path: 'player.pickupRadius', min: 1, max: 20, step: 0.5 },
     ],
   },
+  // The stat sliders that used to head these two groups (fish speed, shark
+  // hp/speed/turnRate/weightPerDifficulty) are gone: those fields belong to
+  // enemies.csv now, and a slider writing the same number from a second place
+  // is how the two end up disagreeing. What's left is the flocking and
+  // pursuit FEEL, which is the half you genuinely want to drag while the game
+  // is moving — and which stays saved tuning.
   {
     group: 'The school',
     panel: 'enemies',
     items: [
-      { path: 'enemies.fish.speed', min: 1, max: 20, step: 0.5 },
       { path: 'enemies.fish.swarm.cohesion', min: 0, max: 10, step: 0.1 },
       { path: 'enemies.fish.swarm.separation', min: 0, max: 15, step: 0.1 },
       { path: 'enemies.fish.swarm.alignment', min: 0, max: 10, step: 0.1 },
@@ -3122,12 +3131,8 @@ export const TUNER_SCHEMA = [
     group: 'Sharks',
     panel: 'enemies',
     items: [
-      { path: 'enemies.shark.speed', min: 1, max: 20, step: 0.5 },
-      { path: 'enemies.shark.hp', min: 10, max: 300, step: 5 },
-      { path: 'enemies.shark.turnRate', min: 0.3, max: 10, step: 0.1 },
       { path: 'enemies.shark.hunt.preyRadius', min: 0, max: 60, step: 1 },
       { path: 'enemies.shark.hunt.healPerMeal', min: 0, max: 60, step: 1 },
-      { path: 'enemies.shark.weightPerDifficulty', min: 0, max: 0.5, step: 0.01 },
     ],
   },
   {
@@ -3460,12 +3465,11 @@ export const TUNER_SCHEMA = [
       { path: 'enemies.walkingCrab.crawl.feed.eatRange', min: 0.3, max: 5, step: 0.1, label: 'chum eat range' },
       { path: 'enemies.walkingCrab.crawl.feed.eatTime', min: 0.2, max: 12, step: 0.1, label: 'seconds to eat one orb' },
       { path: 'enemies.animatedCrab.crawl.feed.eatTime', min: 0.2, max: 12, step: 0.1, label: 'animated crab eat time' },
-      // --- how crabs scale over a run (difficulty climbs 1.0 every 20s) ---
-      { path: 'enemies.walkingCrab.scalePerDifficulty', min: 0, max: 0.1, step: 0.001, label: 'crab growth per difficulty' },
-      { path: 'enemies.walkingCrab.maxGrowth', min: 1, max: 4, step: 0.05, label: 'crab max size multiplier' },
-      { path: 'enemies.walkingCrab.hpPerDifficulty', min: 0, max: 30, step: 0.5, label: 'crab hp per difficulty' },
-      { path: 'enemies.walkingCrab.contactDamagePerDifficulty', min: 0, max: 5, step: 0.05, label: 'crab damage per difficulty' },
-      { path: 'enemies.walkingCrab.speedPerDifficulty', min: 0, max: 0.5, step: 0.01, label: 'crab speed per difficulty' },
+      // How crabs scale over a run used to be five sliders here
+      // (scalePerDifficulty, maxGrowth, hpPerDifficulty,
+      // contactDamagePerDifficulty, speedPerDifficulty). They're columns in
+      // enemies.csv now, where the crab's ramp sits next to every other
+      // creature's instead of on its own in a panel.
       // --- gait tempo ---
       { path: 'enemies.walkingCrab.beatSync.beatsPerStride', min: 0.25, max: 8, step: 0.25, label: 'beats per crab footfall' },
       { path: 'enemies.animatedCrab.beatSync.beatsPerStride', min: 0.25, max: 8, step: 0.25, label: 'animated crab beats/footfall' },
@@ -4239,16 +4243,27 @@ function deepMerge(target, source) {
 // whichever edit was applied last.
 const UPGRADE_BASE = new Map(CONFIG.upgrades.map((u) => [
   u.id,
-  { name: u.name, desc: u.desc, maxStacks: u.maxStacks, enabled: u.enabled, cardArt: null },
+  // `weight` is undefined here on purpose: config.js declares no rarity, so
+  // the built-in state of every upgrade is "ordinary", which the offer pool
+  // reads as 1. Listed rather than omitted so the reset contract is visible —
+  // a row that loses its weight column goes back to this, not to whatever the
+  // last edit set.
+  { name: u.name, desc: u.desc, maxStacks: u.maxStacks, enabled: u.enabled, weight: undefined, cardArt: null },
 ]));
 
 // Parsed once — the file can't change without a page reload, since it's the
 // dev server that notices the write.
 const UPGRADE_ROWS = parseUpgradeCsv(upgradesCsv);
 
+// The same pair for the creature roster. `captureEnemyBase` runs HERE, above
+// the merge below, for exactly the reason UPGRADE_BASE does: it has to hold
+// what config.js declares, not what a saved snapshot last set.
+const ENEMY_BASE = captureEnemyBase(CONFIG.enemies);
+const ENEMY_ROWS = parseEnemyCsv(enemiesCsv);
+
 // Project tuning imported from another session — merged before DEFAULTS so
 // Reset and fresh loads match the exported values.
-const diskTuning = withoutLegacyUpgradeKeys(importedTuning);
+const diskTuning = withoutTableOwnedKeys(importedTuning);
 for (const key of Object.keys(diskTuning)) {
   if (key === '_savedAt') continue; // bookkeeping, not a tunable value
   const sv = diskTuning[key];
@@ -4265,6 +4280,7 @@ pruneUnknownEnemies();
 // whatever the browser last cached, the file is what you just edited, and the
 // one you just edited is the one you expect to see.
 applyUpgradesFromTable();
+applyEnemiesFromTable();
 
 // Everything the tuner, the Look & Sound panel or the Reset button can touch
 // gets saved — and this list is what decides that. It used to be written out
@@ -4317,19 +4333,35 @@ export function applyUpgradesFromTable() {
   applyUpgradeTable(CONFIG.upgrades, UPGRADE_BASE, UPGRADE_ROWS, LEVELUP_IMAGE_KEYS);
 }
 
-// These two used to be saved tuning, and every snapshot written before the
-// move to upgrades.csv still carries them. Left alone they'd merge back into
+// The roster's equivalent, and it has to be called in all the same places for
+// the same reason: the file is what you just edited, a snapshot is what the
+// browser last cached, and the one you just edited is the one you expect to
+// see. Only the flat stats are touched — the nested behaviour blocks are
+// still ordinary saved tuning and still merge normally.
+export function applyEnemiesFromTable() {
+  applyEnemyTable(CONFIG.enemies, ENEMY_BASE, ENEMY_ROWS);
+}
+
+// Everything a CSV owns, taken back out of a snapshot on its way in.
+//
+// Three of these used to be saved tuning, and every snapshot written before
+// the move to a file still carries them. Left alone they'd merge back into
 // CONFIG, get written out again on the next save, and sit in the file forever
-// looking like live settings while nothing read them. Dropped on the way in
-// instead — the CSV is the only source for both now.
-function withoutLegacyUpgradeKeys(snapshot) {
+// looking like live settings while nothing read them.
+//
+// `upgradeOverrides` and the card `assignments` are whole keys and simply go.
+// The creature stats are one level deeper — CONFIG.enemies is still saved
+// tuning for its nested blocks (swarm weights, hunt radii, the crawl feed
+// rules), so only the flat fields enemies.csv owns are lifted out and the
+// rest of each creature is left exactly as it was.
+function withoutTableOwnedKeys(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return snapshot;
-  if (!('upgradeOverrides' in snapshot) && !snapshot.levelUpCards?.assignments) return snapshot;
   const { upgradeOverrides, ...rest } = snapshot;
   if (rest.levelUpCards?.assignments) {
     const { assignments, ...cards } = rest.levelUpCards;
     rest.levelUpCards = cards;
   }
+  if (rest.enemies) rest.enemies = withoutEnemyTableFields(rest.enemies);
   return rest;
 }
 
@@ -4389,6 +4421,7 @@ export function resetConfigToDefaults() {
     deepReplace(CONFIG[key], dv);
   }
   applyUpgradesFromTable();
+  applyEnemiesFromTable();
 }
 
 // Stamped into every snapshot so the two copies can be ordered on load.
@@ -4399,6 +4432,14 @@ const SAVED_AT = '_savedAt';
 function tuningSnapshot() {
   const snapshot = {};
   for (const key of Object.keys(DEFAULTS)) snapshot[key] = CONFIG[key];
+  // The creature stats belong to enemies.csv, so they must not be written
+  // here as well. Stripping them on the way in (see withoutTableOwnedKeys)
+  // stops a stale copy winning, but only NOT WRITING them keeps the file
+  // honest — otherwise every save puts twenty creatures' worth of hp and
+  // speed back into imported-tuning.json, where they'd read as live settings
+  // and disagree with the CSV the moment you edited one. The nested blocks
+  // survive: those are still tuner-owned and still need saving.
+  snapshot.enemies = withoutEnemyTableFields(CONFIG.enemies);
   snapshot[SAVED_AT] = Date.now();
   return snapshot;
 }
@@ -4512,7 +4553,7 @@ export function loadTuningFromStorage() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return false;
-    const snapshot = withoutLegacyUpgradeKeys(JSON.parse(raw));
+    const snapshot = withoutTableOwnedKeys(JSON.parse(raw));
 
     // Both copies carry a timestamp, so "which is authoritative" is a
     // question with an answer rather than a fixed precedence rule.
@@ -4536,6 +4577,7 @@ export function loadTuningFromStorage() {
     }
     pruneUnknownEnemies();
     applyUpgradesFromTable();
+    applyEnemiesFromTable();
     return true;
   } catch (err) {
     console.warn('[config] saved tuning was unreadable, using config.js defaults —', err?.message ?? err);
@@ -4547,7 +4589,7 @@ export function loadTuningFromStorage() {
 // saved snapshot, so importing an older file adds its values without
 // deleting anything that's been added to config.js since it was exported.
 export function importTuning(rawSnapshot) {
-  const snapshot = withoutLegacyUpgradeKeys(rawSnapshot);
+  const snapshot = withoutTableOwnedKeys(rawSnapshot);
   for (const key of Object.keys(snapshot)) {
     const sv = snapshot[key];
     if (CONFIG[key] && typeof CONFIG[key] === 'object' && sv && typeof sv === 'object') {
@@ -4558,6 +4600,7 @@ export function importTuning(rawSnapshot) {
   }
   pruneUnknownEnemies();
   applyUpgradesFromTable();
+  applyEnemiesFromTable();
 }
 
 export function clearSavedTuning() {

@@ -1,30 +1,30 @@
-id,name,desc,maxStacks,enabled,cardArt
-rapidFire,Supa Dupa Seal,+25% fire rate,,TRUE,Beach_001
-heavyRounds,Andre the Giant,+40% projectile damage,,TRUE,Beach_002
-overboost,None,,,FALSE,Beach_003
-maxSpeed,Speedy Seal,+20% max speed,,TRUE,OpeanOcean_001
-multishot,Pocket Full of Stones,+1 projectile,99,TRUE,OpeanOcean_002
-pierce,Pierce,Bullets pierce +1 enemy,4,FALSE,OpeanOcean_003
-vitality,Healthy Pup!,+30 max HP,,TRUE,Beach_001
-magnet,Attractor B,+50% pickup radius,,TRUE,Beach_002
-regen,Talkin Bout Regeneration,+0.5 HP/sec,,TRUE,Beach_003
-velocity,Seal the Deal,+30% projectile speed,,TRUE,OpeanOcean_003
-homingMissile,Homing Mussels,+1 seeking mussel,15,TRUE,OpeanOcean_001
-seaGarlic,Sea Garlic,"Damaging aura, +radius per level",9,TRUE,Beach_001
-shrimpRing,Shrimp Ring,+1 orbiting shrimp,15,TRUE,Beach_001
-bounceShot,Bouncing Baby Guppies,Bouncy balls ping pong around between fish and obstacles.,6,TRUE,Beach_002
-electricEel,Electric Eel Friend,Chain lightning:,8,TRUE,Beach_003
-starfish,Starfish Shuriken,Rapid thrown starfish.,8,TRUE,OpeanOcean_001
-seagullBomb,Seagull Bomb,Dive Bomb to the Crab Layer!,8,TRUE,OpeanOcean_002
-sealTeam,Seal Team,+1 escort seal. Rams and lunges at enemies.,6,TRUE,OpeanOcean_001
-beluga,Baby Beluga Bubble Blaster,Trap enemies in a bubble.,8,TRUE,OpeanOcean_003
-strikePower,Chain Gang,"+35% strike damage, chains hit harder",5,TRUE,GreatWhite
-strikeDash,Your Dasher is On The Way!,Strike dashes faster and further,5,TRUE,Reef_002
-strikeShrapnel,The Bone Zone,Strike hits burst fragments outward.,6,TRUE,TidePool_001
-strikeCharge,Epic Seal Time,"Strike charges faster, and chum refills more of the meter",4,TRUE,TidePool_002
-breachChain,Big Willy Style,Breach extends food chain!,3,TRUE,TidePool_003
-oxygenMax,Breathe Deep ,+30 max oxygen,5,TRUE,Beach_003
-oxygenRefill,Breathwork,+40% surface refill speed,5,TRUE,Reef_002
-bakalar,Bakalar's Boat,Giant net filled with bombs. How am I driving? Call 707-EXIT-FLU,8,TRUE,TidePool_001
-calamari,Calamari Ring,Rings of fried squid pulse outward…,8,TRUE,VampireSquid
-dumbo,Dumbo Octopus,Charms nearby enemies.,8,TRUE,DumboOctopus
+id,name,desc,maxStacks,enabled,weight,cardArt
+rapidFire,Supa Dupa Seal,+25% fire rate,,TRUE,1,Beach_001
+heavyRounds,Andre the Giant,+40% projectile damage,,TRUE,1,Beach_002
+overboost,None,,,FALSE,1,Beach_003
+maxSpeed,Speedy Seal,+20% max speed,,TRUE,1,OpeanOcean_001
+multishot,Pocket Full of Stones,+1 projectile,99,TRUE,1,OpeanOcean_002
+pierce,Pierce,Bullets pierce +1 enemy,4,FALSE,1,OpeanOcean_003
+vitality,Healthy Pup!,+30 max HP,,TRUE,1,Beach_001
+magnet,Attractor B,+50% pickup radius,,TRUE,1,Beach_002
+regen,Talkin Bout Regeneration,+0.5 HP/sec,,TRUE,1,Beach_003
+velocity,Seal the Deal,+30% projectile speed,,TRUE,1,OpeanOcean_003
+homingMissile,Homing Mussels,+1 seeking mussel,15,TRUE,1,OpeanOcean_001
+seaGarlic,Sea Garlic,"Damaging aura, +radius per level",9,TRUE,1,Beach_001
+shrimpRing,Shrimp Ring,+1 orbiting shrimp,15,TRUE,1,Beach_001
+bounceShot,Bouncing Baby Guppies,Bouncy balls ping pong around between fish and obstacles.,6,TRUE,1,Beach_002
+electricEel,Electric Eel Friend,Chain lightning:,8,TRUE,1,Beach_003
+starfish,Starfish Shuriken,Rapid thrown starfish.,8,TRUE,1,OpeanOcean_001
+seagullBomb,Seagull Bomb,Dive Bomb to the Crab Layer!,8,TRUE,1,OpeanOcean_002
+sealTeam,Seal Team,+1 escort seal. Rams and lunges at enemies.,6,TRUE,1,OpeanOcean_001
+beluga,Baby Beluga Bubble Blaster,Trap enemies in a bubble.,8,TRUE,1,OpeanOcean_003
+strikePower,Chain Gang,"+35% strike damage, chains hit harder",5,TRUE,1,GreatWhite
+strikeDash,Your Dasher is On The Way!,Strike dashes faster and further,5,TRUE,1,Reef_002
+strikeShrapnel,The Bone Zone,Strike hits burst fragments outward.,6,TRUE,1,TidePool_001
+strikeCharge,Epic Seal Time,"Strike charges faster, and chum refills more of the meter",4,TRUE,1,TidePool_002
+breachChain,Big Willy Style,Breach extends food chain!,3,TRUE,1,TidePool_003
+oxygenMax,Breathe Deep ,+30 max oxygen,5,TRUE,1,Beach_003
+oxygenRefill,Breathwork,+40% surface refill speed,5,TRUE,1,Reef_002
+bakalar,Bakalar's Boat,Giant net filled with bombs. How am I driving? Call 707-EXIT-FLU,8,TRUE,1,TidePool_001
+calamari,Calamari Ring,Rings of fried squid pulse outward…,8,TRUE,1,VampireSquid
+dumbo,Dumbo Octopus,Charms nearby enemies.,8,TRUE,1,DumboOctopus

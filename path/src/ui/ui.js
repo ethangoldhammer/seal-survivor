@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
+import { drawUpgrades } from '../upgradeTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { menuInput, resetMenuInput } from '../input.js';
 import { mountRiveSplash } from './riveSplash.js';
@@ -437,7 +438,7 @@ let selectedIndex = -1;
 
 export function showLevelUp() {
   const pool = availableUpgrades();
-  const picks = [...pool].sort(() => Math.random() - 0.5).slice(0, CONFIG.upgradeChoices);
+  const picks = drawUpgrades(pool, CONFIG.upgradeChoices);
 
   el.svCards.innerHTML = '';
   for (const choice of picks) {
