@@ -1,4 +1,6 @@
 import importedTuning from './imported-tuning.json';
+import upgradesCsv from './upgrades.csv?raw';
+import { parseUpgradeCsv, applyUpgradeTable } from './upgradeTable.js';
 
 // ============================================================================
 // CONFIG — every gameplay number lives here. Nothing else hardcodes balance.
@@ -3020,24 +3022,22 @@ export const CONFIG = {
 
   upgradeChoices: 3,
 
-  // Editable overrides for the upgrade table, keyed by upgrade id. The
-  // upgrades themselves live in CONFIG.upgrades, but each carries an
-  // apply() function that can't survive JSON, so display/tuning fields are
-  // mirrored here where they CAN be saved and edited. Empty by default —
-  // an id only appears once you change something about it.
-  //   { name, desc, maxStacks, enabled, weight }
-  upgradeOverrides: {},
+  // NOTE: the display fields above (name, desc, maxStacks, enabled) and each
+  // upgrade's card art are OVERWRITTEN at boot from upgrades.csv, which is the
+  // source of truth for them — see upgradeTable.js. Editing them here only
+  // changes what an upgrade falls back to when the CSV has no row for it.
+  // What an upgrade DOES — its apply() — is only ever code, and lives here.
 
   // ---------------------------------------------------------------------------
   // LEVEL-UP CARD ART — a hex background image per upgrade, with a dark
-  // overlay between the image and the text so the card stays readable.
-  // `assignments` maps upgrade id -> image key (see LEVELUP_IMAGE_KEYS below);
-  // an upgrade with no assignment just uses the plain card background.
+  // overlay between the image and the text so the card stays readable. Which
+  // image goes with which upgrade is the `cardArt` column of upgrades.csv
+  // (valid keys are LEVELUP_IMAGE_KEYS below); the overlay is tunable here
+  // because it's a look, not content.
   // ---------------------------------------------------------------------------
   levelUpCards: {
     overlayOpacity: 0.55,
     overlayColor: 0x000000,
-    assignments: {},
   },
 };
 
@@ -4001,14 +4001,13 @@ export const TUNER_SCHEMA = [
   },
   {
     group: 'Level-up card art',
+    // Only the overlay is a slider now. Which image sits behind which upgrade
+    // is the `cardArt` column of upgrades.csv, alongside that upgrade's name
+    // and description — one row per upgrade, rather than the art being picked
+    // here and the words written in a different panel.
     items: [
       { path: 'levelUpCards.overlayOpacity', min: 0, max: 1, step: 0.02, label: 'overlay darkness' },
       { path: 'levelUpCards.overlayColor', type: 'color', label: 'overlay color' },
-      ...CONFIG.upgrades.map((u) => ({
-        path: `levelUpCards.assignments.${u.id}`,
-        label: u.name,
-        options: ['(none)', ...LEVELUP_IMAGE_KEYS],
-      })),
     ],
   },
   {
@@ -4234,20 +4233,25 @@ function deepMerge(target, source) {
   }
 }
 
-// The built-in display fields of every upgrade, captured BEFORE any override
-// is applied. applyUpgradeOverrides() resets to these first, so removing an
-// override actually puts the built-in name/desc/cap back instead of leaving
-// the last edit stuck there until a full reload.
+// The built-in display fields of every upgrade, captured BEFORE the CSV is
+// applied. applyUpgradeTable() resets to these first, so an upgrade whose row
+// is deleted from the CSV goes back to its config.js values instead of keeping
+// whichever edit was applied last.
 const UPGRADE_BASE = new Map(CONFIG.upgrades.map((u) => [
   u.id,
-  { name: u.name, desc: u.desc, maxStacks: u.maxStacks, enabled: u.enabled },
+  { name: u.name, desc: u.desc, maxStacks: u.maxStacks, enabled: u.enabled, cardArt: null },
 ]));
+
+// Parsed once — the file can't change without a page reload, since it's the
+// dev server that notices the write.
+const UPGRADE_ROWS = parseUpgradeCsv(upgradesCsv);
 
 // Project tuning imported from another session — merged before DEFAULTS so
 // Reset and fresh loads match the exported values.
-for (const key of Object.keys(importedTuning)) {
+const diskTuning = withoutLegacyUpgradeKeys(importedTuning);
+for (const key of Object.keys(diskTuning)) {
   if (key === '_savedAt') continue; // bookkeeping, not a tunable value
-  const sv = importedTuning[key];
+  const sv = diskTuning[key];
   if (CONFIG[key] && typeof CONFIG[key] === 'object' && sv && typeof sv === 'object') {
     deepMerge(CONFIG[key], sv);
   } else if (sv !== undefined && typeof sv !== 'object') {
@@ -4256,14 +4260,11 @@ for (const key of Object.keys(importedTuning)) {
 }
 pruneUnknownEnemies();
 
-// The merge above only refills CONFIG.upgradeOverrides — it does NOT push those
-// values onto CONFIG.upgrades, which is what the game and the Upgrades table
-// actually read. Without this call the only path that ever applied them was
-// loadTuningFromStorage(), and in dev that returns early whenever the browser
-// cache isn't newer than the file — so every boot after a Reset or a "Clear
-// cache" showed the built-in names again and re-enabled upgrades that had been
-// switched off, while the edits sat intact on disk the whole time.
-applyUpgradeOverrides();
+// The CSV is applied AFTER the merge, at every load path, so the file always
+// wins over a saved snapshot. It has to be this way round: saved tuning is
+// whatever the browser last cached, the file is what you just edited, and the
+// one you just edited is the one you expect to see.
+applyUpgradesFromTable();
 
 // Everything the tuner, the Look & Sound panel or the Reset button can touch
 // gets saved — and this list is what decides that. It used to be written out
@@ -4273,10 +4274,10 @@ applyUpgradeOverrides();
 // restored on load and never reset. Deriving it from CONFIG means a new
 // section is persisted the moment it exists.
 //
-// `upgrades` is the sole exclusion: each entry carries an apply() function,
-// which neither structuredClone nor JSON can carry. Its editable display
-// fields are mirrored into `upgradeOverrides`, which IS saved — see
-// applyUpgradeOverrides().
+// `upgrades` is the sole exclusion, and now for two reasons: each entry
+// carries an apply() function that neither structuredClone nor JSON can
+// carry, and its editable fields belong to upgrades.csv — saving them here
+// would give them a second home that could disagree with the file.
 const UNSAVEABLE_KEYS = new Set(['upgrades']);
 
 export const DEFAULTS = structuredClone(Object.fromEntries(
@@ -4307,38 +4308,37 @@ export const DEFAULTS = structuredClone(Object.fromEntries(
 
 const STORAGE_KEY = 'deep-run-tuning-v2';
 
-// Reapply the editable upgrade fields over CONFIG.upgrades. Called after a
-// load and after any edit in the upgrade table — apply() is never touched,
-// only the display/tuning fields, so an edited upgrade still DOES the same
-// thing, it's just named/described/capped differently.
-export function applyUpgradeOverrides() {
-  for (const u of CONFIG.upgrades) {
-    // Start from the built-in fields every time, so this is idempotent AND
-    // reversible: an override that's been removed (by Reset, or by importing
-    // a file that doesn't mention this upgrade) stops applying instead of
-    // lingering because nothing ever wrote the original value back.
-    const base = UPGRADE_BASE.get(u.id);
-    if (base) {
-      u.name = base.name;
-      u.desc = base.desc;
-      u.maxStacks = base.maxStacks;
-      u.enabled = base.enabled;
-    }
-    const o = CONFIG.upgradeOverrides[u.id];
-    if (!o) continue;
-    if (o.name != null) u.name = o.name;
-    if (o.desc != null) u.desc = o.desc;
-    if (o.maxStacks != null) u.maxStacks = o.maxStacks;
-    if (o.enabled != null) u.enabled = o.enabled;
+// Reapply upgrades.csv over CONFIG.upgrades. Called after every path that
+// merges saved tuning in, so the file always has the last word over a stale
+// snapshot — apply() is never touched, only the display fields, so an edited
+// upgrade still DOES the same thing, it's just named/described/capped
+// differently.
+export function applyUpgradesFromTable() {
+  applyUpgradeTable(CONFIG.upgrades, UPGRADE_BASE, UPGRADE_ROWS, LEVELUP_IMAGE_KEYS);
+}
+
+// These two used to be saved tuning, and every snapshot written before the
+// move to upgrades.csv still carries them. Left alone they'd merge back into
+// CONFIG, get written out again on the next save, and sit in the file forever
+// looking like live settings while nothing read them. Dropped on the way in
+// instead — the CSV is the only source for both now.
+function withoutLegacyUpgradeKeys(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  if (!('upgradeOverrides' in snapshot) && !snapshot.levelUpCards?.assignments) return snapshot;
+  const { upgradeOverrides, ...rest } = snapshot;
+  if (rest.levelUpCards?.assignments) {
+    const { assignments, ...cards } = rest.levelUpCards;
+    rest.levelUpCards = cards;
   }
+  return rest;
 }
 
 // Overwrite `target` with `source` in place, preserving the identity of every
 // nested plain object rather than swapping it for a clone.
 //
 // The delete pass matters as much as the copy: a key added since boot (an
-// upgradeOverrides entry, a levelUpCards assignment) has no counterpart in
-// DEFAULTS and would otherwise survive the Reset that was meant to clear it.
+// `assetLooks` entry for a creature you just tinted, say) has no counterpart
+// in DEFAULTS and would otherwise survive the Reset that was meant to clear it.
 //
 // Arrays are replaced wholesale, deliberately. They're values here — a
 // frequency pair, a haptic pulse list, the pickup tier table — and nothing
@@ -4388,7 +4388,7 @@ export function resetConfigToDefaults() {
     // and only a reload fixed it.
     deepReplace(CONFIG[key], dv);
   }
-  applyUpgradeOverrides();
+  applyUpgradesFromTable();
 }
 
 // Stamped into every snapshot so the two copies can be ordered on load.
@@ -4512,7 +4512,7 @@ export function loadTuningFromStorage() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return false;
-    const snapshot = JSON.parse(raw);
+    const snapshot = withoutLegacyUpgradeKeys(JSON.parse(raw));
 
     // Both copies carry a timestamp, so "which is authoritative" is a
     // question with an answer rather than a fixed precedence rule.
@@ -4535,7 +4535,7 @@ export function loadTuningFromStorage() {
       }
     }
     pruneUnknownEnemies();
-    applyUpgradeOverrides();
+    applyUpgradesFromTable();
     return true;
   } catch (err) {
     console.warn('[config] saved tuning was unreadable, using config.js defaults —', err?.message ?? err);
@@ -4546,7 +4546,8 @@ export function loadTuningFromStorage() {
 // Apply an exported tuning file. Goes through the same deep merge as a
 // saved snapshot, so importing an older file adds its values without
 // deleting anything that's been added to config.js since it was exported.
-export function importTuning(snapshot) {
+export function importTuning(rawSnapshot) {
+  const snapshot = withoutLegacyUpgradeKeys(rawSnapshot);
   for (const key of Object.keys(snapshot)) {
     const sv = snapshot[key];
     if (CONFIG[key] && typeof CONFIG[key] === 'object' && sv && typeof sv === 'object') {
@@ -4556,7 +4557,7 @@ export function importTuning(snapshot) {
     }
   }
   pruneUnknownEnemies();
-  applyUpgradeOverrides();
+  applyUpgradesFromTable();
 }
 
 export function clearSavedTuning() {

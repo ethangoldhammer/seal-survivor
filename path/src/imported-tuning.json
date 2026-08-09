@@ -3801,97 +3801,9 @@
     ]
   },
   "upgradeChoices": 3,
-  "upgradeOverrides": {
-    "rapidFire": {
-      "name": "Supa Dupa Seal"
-    },
-    "heavyRounds": {
-      "name": "Andre the Giant",
-      "desc": "+40% projectile damage"
-    },
-    "overboost": {
-      "enabled": false
-    },
-    "maxSpeed": {
-      "name": "Speedy Seal "
-    },
-    "multishot": {
-      "name": "Pocket Full of Stones",
-      "maxStacks": 99
-    },
-    "pierce": {
-      "enabled": false
-    },
-    "vitality": {
-      "name": "Health up!"
-    },
-    "magnet": {
-      "name": "Attractor B"
-    },
-    "regen": {
-      "name": "Talkin Bout Regeneration"
-    },
-    "velocity": {
-      "name": "Quick Shot",
-      "desc": "+30% projectile speed"
-    },
-    "homingMissile": {
-      "name": "Homing Mussels",
-      "desc": "+1 seeking mussel",
-      "maxStacks": 15
-    },
-    "seaGarlic": {
-      "maxStacks": 9
-    },
-    "shrimpRing": {
-      "maxStacks": 15
-    },
-    "bounceShot": {
-      "name": "Bouncing Baby Guppies"
-    },
-    "electricEel": {
-      "name": "Electric Eel Friend"
-    },
-    "beluga": {
-      "name": "Baby Beluga Bubble Blaster",
-      "desc": "Trap enemies in a bubble."
-    },
-    "seagullBomb": {
-      "desc": "Dive Bomb to the Crab Layer!"
-    }
-  },
   "levelUpCards": {
     "overlayOpacity": 0.38,
-    "overlayColor": 0,
-    "assignments": {
-      "rapidFire": "Beach_001",
-      "heavyRounds": "Beach_002",
-      "overboost": "Beach_003",
-      "maxSpeed": "OpeanOcean_001",
-      "multishot": "OpeanOcean_002",
-      "pierce": "OpeanOcean_003",
-      "vitality": "Beach_001",
-      "magnet": "Beach_002",
-      "regen": "Beach_003",
-      "beluga": "OpeanOcean_003",
-      "seagullBomb": "OpeanOcean_002",
-      "starfish": "OpeanOcean_001",
-      "electricEel": "Beach_003",
-      "bounceShot": "Beach_002",
-      "shrimpRing": "Beach_001",
-      "seaGarlic": "Beach_001",
-      "homingMissile": "OpeanOcean_001",
-      "velocity": "OpeanOcean_003",
-      "sealTeam": "OpeanOcean_001",
-      "strikePower": "GreatWhite",
-      "strikeDash": "Reef_002",
-      "strikeShrapnel": "TidePool_001",
-      "oxygenMax": "Beach_003",
-      "oxygenRefill": "Reef_002",
-      "bakalar": "TidePool_001",
-      "calamari": "VampireSquid",
-      "dumbo": "DumboOctopus"
-    }
+    "overlayColor": 0
   },
   "_savedAt": 1786242536158
 }

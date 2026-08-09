@@ -1,0 +1,30 @@
+id,name,desc,maxStacks,enabled,cardArt
+rapidFire,Supa Dupa Seal,+25% fire rate,,TRUE,Beach_001
+heavyRounds,Andre the Giant,+40% projectile damage,,TRUE,Beach_002
+overboost,Overboost,+30% recoil boost,,FALSE,Beach_003
+maxSpeed,Speedy Seal,+20% max speed,,TRUE,OpeanOcean_001
+multishot,Pocket Full of Stones,+1 projectile,99,TRUE,OpeanOcean_002
+pierce,Railgun,Bullets pierce +1 enemy,4,FALSE,OpeanOcean_003
+vitality,Health up!,+30 max HP,,TRUE,Beach_001
+magnet,Attractor B,+50% pickup radius,,TRUE,Beach_002
+regen,Talkin Bout Regeneration,+0.5 HP/sec,,TRUE,Beach_003
+velocity,Quick Shot,+30% projectile speed,,TRUE,OpeanOcean_003
+homingMissile,Homing Mussels,+1 seeking mussel,15,TRUE,OpeanOcean_001
+seaGarlic,Sea Garlic,"Damaging aura, +radius per level",9,TRUE,Beach_001
+shrimpRing,Shrimp Ring,+1 orbiting shrimp,15,TRUE,Beach_001
+bounceShot,Bouncing Baby Guppies,"Chaining shot: +fire rate, +lifespan, +bounces",6,TRUE,Beach_002
+electricEel,Electric Eel Friend,"Chain lightning: +area, +damage, +max chain",8,TRUE,Beach_003
+starfish,Starfish Shuriken,"Rapid thrown starfish: +fire rate, +size",8,TRUE,OpeanOcean_001
+seagullBomb,Seagull Bomb,Dive Bomb to the Crab Layer!,8,TRUE,OpeanOcean_002
+sealTeam,Seal Team,+1 escort seal. Rams and lunges at enemies.,6,TRUE,OpeanOcean_001
+beluga,Baby Beluga Bubble Blaster,Trap enemies in a bubble.,8,TRUE,OpeanOcean_003
+strikePower,Killer Instinct,"+35% strike damage, chains hit harder",5,TRUE,GreatWhite
+strikeDash,Slipstream,Strike dashes faster and further,5,TRUE,Reef_002
+strikeShrapnel,Bone Shrapnel,Strike hits burst fragments outward: +fragments,6,TRUE,TidePool_001
+strikeCharge,Epic Seal Time,"Strike charges faster, and chum refills more of the meter",4,TRUE,
+breachChain,Big Willy Style,Breach extends food chain!,3,TRUE,
+oxygenMax,Breathe Deep ,+30 max oxygen,5,TRUE,Beach_003
+oxygenRefill,Breathwork,+40% surface refill speed,5,TRUE,Reef_002
+bakalar,Bakalar's Boat,Giant net filled with bombs. How am I driving? Call 707-EXIT-FLU,8,TRUE,TidePool_001
+calamari,Calamari Ring,"Shockwave sweeps outward: +damage, +radius, +rate",8,TRUE,VampireSquid
+dumbo,Dumbo Octopus,"Charms enemies harmless: +targets, +duration",8,TRUE,DumboOctopus

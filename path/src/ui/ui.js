@@ -445,8 +445,10 @@ export function showLevelUp() {
     card.className = 'sv-card';
     card.tabIndex = 0;
 
-    const imageKey = CONFIG.levelUpCards.assignments[choice.id];
-    const image = imageKey && imageKey !== '(none)' ? LEVELUP_IMAGES[imageKey] : null;
+    // `cardArt` comes off the upgrade itself — the `cardArt` column of
+    // upgrades.csv, validated against LEVELUP_IMAGE_KEYS when the file loads,
+    // so anything non-null here is a key that exists.
+    const image = choice.cardArt ? LEVELUP_IMAGES[choice.cardArt] : null;
     if (image) {
       card.style.backgroundImage = `url(${image.src})`;
       card.style.backgroundSize = '100% 100%'; // art and card are both square, so this aligns the drawn hex to the clip exactly

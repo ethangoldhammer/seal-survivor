@@ -131,8 +131,10 @@ function that sets a desired velocity, reference it by name.
 
 ### Adding an upgrade
 
-One entry in `CONFIG.upgrades`. Upgrades are pure functions over the derived
-stat block:
+An upgrade is split in two: what it **does** is code, what it **says** is data.
+
+The behaviour is one entry in `CONFIG.upgrades`. Upgrades are pure functions
+over the derived stat block:
 
 ```js
 { id: 'wideShot', name: 'Scattergun', desc: '+40% spread',
@@ -142,6 +144,36 @@ stat block:
 Stats are rebuilt from config and replayed in order every time anything changes,
 which is why tuning a base value updates an in-progress run correctly instead of
 compounding.
+
+Then add a row to **`path/src/upgrades.csv`** with the same `id`. That file is
+the source of truth for the display fields, and it overwrites whatever the
+config entry says — the values above are only the fallback for an id the CSV
+doesn't mention. See [Editing upgrades](#editing-upgrades).
+
+### Editing upgrades
+
+**`path/src/upgrades.csv`** — one row per upgrade, edited in a spreadsheet or
+any text editor. Save the file and reload the page; the values are live.
+
+| column | meaning |
+| --- | --- |
+| `id` | must match an id in `CONFIG.upgrades`. The join key. |
+| `name` | card title. Blank keeps the built-in name. |
+| `desc` | card body text. Blank keeps the built-in description. |
+| `maxStacks` | how many times it can be taken. **Blank means unlimited.** |
+| `enabled` | `FALSE` removes it from the offer pool. Blank means enabled. |
+| `cardArt` | a level-up image key, or blank for the plain card background. |
+
+Nothing in the game writes back to it, so it's yours to edit freely — the
+Upgrades tab of the **T** panel is a read-only view of what the file loaded,
+there to confirm an edit landed. Mistakes are loud rather than silent: an id
+that matches no upgrade, an unknown `cardArt` key, a non-numeric `maxStacks`
+and a duplicated row each log a console warning and fall back to a safe value.
+
+Two things stay in `config.js` because they don't flatten into a row:
+`perLevelName` (numbers the card by stack — "Seal Team 1", "Seal Team 2") and
+`levelDescs` (a different description at a given stack, used to announce an
+evolution).
 
 ## Swapping assets
 
@@ -486,11 +518,12 @@ directions the corruption can go.
 
 ## Level-up card art
 
-Six hex-tile background images (3 beach, 3 open ocean) ship with the game.
-Assign one to any upgrade under **Level-up card art** in the tuner — a
-dropdown per upgrade. Assigned cards get a dark overlay (colour + opacity
-both tunable) between the image and the text, so it stays readable regardless
-of which image is behind it.
+Hex-tile background images ship with the game — see `LEVELUP_IMAGE_KEYS` in
+`config.js` for the full list of keys. Assign one to an upgrade with the
+`cardArt` column of `path/src/upgrades.csv`, alongside that upgrade's name and
+description. Assigned cards get a dark overlay (colour + opacity both tunable
+under **Level-up card art** in the tuner) between the image and the text, so it
+stays readable regardless of which image is behind it.
 
 ## Four new abilities
 

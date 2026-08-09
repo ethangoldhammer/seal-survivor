@@ -4,7 +4,7 @@ import {
   loadUploadedAsset, isSpriteFile, setAssetEmissiveMask, assetEmissiveMaskState,
 } from '../assets.js';
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
-import { CONFIG, TUNER_SCHEMA, saveTuningToStorage, applyUpgradeOverrides } from '../config.js';
+import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
 import { buildTunerGroups, buildExpandAllToggle } from './tunerControls.js';
 import { isTypingTarget } from './typing.js';
 import { playSfx, unlockAudio, loadSampleFromFile, clearSample, hasSample, sampleCount, onSamplesChanged, reloadSample, getAudioContext, applyAudioBusSettings } from '../systems/audio.js';
@@ -116,6 +116,11 @@ const STYLES = `
   .sv-tex-upload-status { font-size: 9px; color: rgba(232,236,243,0.45); margin-top: 4px; line-height: 1.4; }
   .sv-up-text { flex: 1; background: rgba(255,255,255,0.06); color: #e8ecf3; font-family: inherit;
     border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 3px 6px; font-size: 10px; min-width: 0; }
+  /* The read-only twin of .sv-up-text — same size and rhythm so the Upgrades
+     roster lines up with the editable rows in the other tabs, but no box
+     around it, because there's nothing to type into. */
+  .sv-up-value { flex: 1; color: #e8ecf3; font-size: 10px; min-width: 0; padding: 3px 0;
+    line-height: 1.35; overflow-wrap: anywhere; }
   .sv-tex-size-number { width: 54px; background: rgba(255,255,255,0.06); color: #e8ecf3; font-family: inherit;
     border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 2px 5px; font-size: 10px; }
 
@@ -1036,87 +1041,60 @@ function slider(container, label, min, max, step, value, onInput) {
   return input;
 }
 
+// A read-only roster of what upgrades.csv actually produced. Deliberately not
+// editable: the file is the source of truth, and a second place to type a
+// name is a second place for the two to disagree. What this tab is FOR is
+// confirming that the row you just edited is the row the game loaded — a
+// typo'd id or an unknown card art key shows up here as a value that didn't
+// change, and in the console as a warning.
 function buildUpgradeTable() {
   const wrap = document.createElement('div');
 
   const note = document.createElement('div');
   note.className = 'sv-tex-upload-status';
   note.style.marginBottom = '10px';
-  note.textContent = "Edit what each upgrade is called, what it says, how many times it can stack, and whether it's offered at all. What an upgrade DOES is code (its apply function) and isn't editable here — these are the display and tuning fields, and they're saved with the rest of your tuning.";
+  note.textContent = 'Upgrades are edited in path/src/upgrades.csv — open it in a spreadsheet, save, and reload the page. This is a read-only view of what that file loaded, so you can check an edit landed. What an upgrade DOES is its apply() function in config.js and is only ever code.';
   wrap.appendChild(note);
 
   for (const u of CONFIG.upgrades) {
     const row = document.createElement('div');
     row.className = 'sv-sfx-row';
+    row.style.opacity = u.enabled === false ? '0.45' : '1';
 
     const head = document.createElement('div');
     head.className = 'sv-sfx-name';
     const idSpan = document.createElement('span');
     idSpan.className = 'sv-sfx-type';
     idSpan.textContent = u.id;
-    const onBox = document.createElement('input');
-    onBox.type = 'checkbox';
-    onBox.checked = u.enabled !== false;
-    onBox.title = 'Uncheck to stop this upgrade being offered';
-    onBox.addEventListener('change', () => {
-      setOverride(u.id, 'enabled', onBox.checked);
-      row.style.opacity = onBox.checked ? '1' : '0.45';
-    });
-    row.style.opacity = onBox.checked ? '1' : '0.45';
-    head.append(idSpan, onBox);
-    wrap.appendChild(row);
+    head.appendChild(idSpan);
+    if (u.enabled === false) {
+      const off = document.createElement('span');
+      off.className = 'sv-sfx-type';
+      off.textContent = 'not offered';
+      head.appendChild(off);
+    }
     row.appendChild(head);
+    wrap.appendChild(row);
 
-    const nameRow = document.createElement('div');
-    nameRow.className = 'sv-sfx-field';
-    const nameLab = document.createElement('label');
-    nameLab.textContent = 'name';
-    const nameIn = document.createElement('input');
-    nameIn.type = 'text';
-    nameIn.className = 'sv-up-text';
-    nameIn.value = u.name;
-    nameIn.addEventListener('change', () => setOverride(u.id, 'name', nameIn.value));
-    nameRow.append(nameLab, nameIn);
-    row.appendChild(nameRow);
+    const field = (label, value) => {
+      const el = document.createElement('div');
+      el.className = 'sv-sfx-field';
+      const lab = document.createElement('label');
+      lab.textContent = label;
+      const val = document.createElement('span');
+      val.className = 'sv-up-value';
+      val.textContent = value;
+      el.append(lab, val);
+      row.appendChild(el);
+    };
 
-    const descRow = document.createElement('div');
-    descRow.className = 'sv-sfx-field';
-    const descLab = document.createElement('label');
-    descLab.textContent = 'desc';
-    const descIn = document.createElement('input');
-    descIn.type = 'text';
-    descIn.className = 'sv-up-text';
-    descIn.value = u.desc;
-    descIn.addEventListener('change', () => setOverride(u.id, 'desc', descIn.value));
-    descRow.append(descLab, descIn);
-    row.appendChild(descRow);
-
-    const stackRow = document.createElement('div');
-    stackRow.className = 'sv-sfx-field';
-    const stackLab = document.createElement('label');
-    stackLab.textContent = 'max stacks';
-    const stackIn = document.createElement('input');
-    stackIn.type = 'number';
-    stackIn.min = '1';
-    stackIn.className = 'sv-tex-size-number';
-    stackIn.value = u.maxStacks ?? '';
-    stackIn.placeholder = '∞';
-    stackIn.addEventListener('change', () => {
-      const v = stackIn.value === '' ? null : Math.max(1, Number(stackIn.value));
-      setOverride(u.id, 'maxStacks', v);
-    });
-    stackRow.append(stackLab, stackIn);
-    row.appendChild(stackRow);
+    field('name', u.name);
+    field('desc', u.desc);
+    field('max stacks', u.maxStacks ?? '∞');
+    field('card art', u.cardArt ?? '—');
   }
 
   return wrap;
-}
-
-function setOverride(id, field, value) {
-  if (!CONFIG.upgradeOverrides[id]) CONFIG.upgradeOverrides[id] = {};
-  CONFIG.upgradeOverrides[id][field] = value;
-  applyUpgradeOverrides();
-  saveTuningToStorage();
 }
 
 // Master FX bus — one filter and one reverb every SFX runs through. Sits at
