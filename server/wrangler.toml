@@ -1,0 +1,10 @@
+name = "seal-survivor-leaderboard"
+main = "leaderboard-worker.js"
+compatibility_date = "2025-01-01"
+
+# The id below is filled in by `wrangler kv namespace create LEADERBOARD` —
+# see server/README.md. Deploying before that will fail with a binding error
+# rather than silently running without storage.
+[[kv_namespaces]]
+binding = "LEADERBOARD"
+id = "de4107dc22484c1dbfe3f9d5bf3db2d1"

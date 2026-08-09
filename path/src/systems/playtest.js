@@ -1,0 +1,319 @@
+// ---------------------------------------------------------------------------
+// PLAYTEST RECORDER
+//
+// Watches a run and writes down what actually happened: damage dealt by each
+// ability, damage taken from each creature, enemy hp arriving per second, how
+// close to death the player lived, and which upgrades were held while all of
+// that was true. playtestAnalysis.js turns that into balance verdicts.
+//
+// Design rules this file sticks to:
+//
+//   * AGGREGATE, DON'T LOG. A ten-minute run lands tens of thousands of damage
+//     events (the garlic aura alone ticks every frame against every creature in
+//     range). Keeping them individually would cost more memory than the game
+//     does and tell us nothing an accumulator can't. Everything folds into a
+//     30-second bucket, which is fine enough to see a difficulty spike and
+//     coarse enough to stay free.
+//   * NEVER THROW INTO THE GAME LOOP. Every entry point is called from the
+//     middle of combat resolution. A recorder bug must not be able to end a
+//     run, so the whole surface is null-guarded and does nothing at all when
+//     no run is active.
+//   * NO GAME IMPORTS. It takes numbers, it doesn't reach for them. That keeps
+//     it out of the module cycle between main/combat/enemies, and means the
+//     analysis half runs in plain Node.
+// ---------------------------------------------------------------------------
+
+const BUCKET_SECONDS = 30;
+const STORAGE_KEY = 'seal-survivor-playtest-runs';
+const STORED_RUN_LIMIT = 25;
+const ENDPOINT = '/__playtest';
+
+// Below 30% health is "one mistake from over" — the threshold the analysis
+// uses for how much of a run was played on the edge. Here rather than in the
+// analysis because it's sampled live, per frame, and can't be recovered after
+// the fact from bucket averages.
+const LOW_HP_FRAC = 0.3;
+
+let run = null; // the run in progress, or null between runs
+let last = null; // the most recently finished run, for the overlay
+let bucket = null;
+let stacks = {}; // upgrade id -> picks taken so far this run
+
+// Which source last damaged each creature, so a kill can be credited without
+// every kill hook in the game having to learn a new argument. A WeakMap rather
+// than a field on the enemy: nothing here should keep a corpse alive, and the
+// game object stays exactly as it was.
+const lastDamager = new WeakMap();
+
+function newBucket(t) {
+  return {
+    t,
+    seconds: 0,
+    dealtBySource: {},
+    takenBySource: {},
+    killsBySource: {},
+    kills: 0,
+    spawns: 0,
+    spawnHp: 0,
+    samples: 0,
+    hpFracSum: 0,
+    lowHpSamples: 0,
+    aliveSum: 0,
+    maxHpSum: 0,
+    level: 1,
+    stacks: {},
+  };
+}
+
+function add(map, key, amount) {
+  map[key] = (map[key] ?? 0) + amount;
+}
+
+export function isRecording() {
+  return run != null;
+}
+
+export function currentRun() {
+  return run;
+}
+
+export function lastFinishedRun() {
+  return last;
+}
+
+/**
+ * Start recording. `config` is a flat fingerprint of the knobs that decide
+ * difficulty — stored WITH the run because a verdict is only meaningful next
+ * to the numbers that produced it. Compare two runs recorded under different
+ * spawn.ramp values and you're comparing two different games.
+ */
+export function beginRun(config = {}) {
+  run = {
+    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    startedAt: Date.now(),
+    duration: 0,
+    endReason: 'in-progress',
+    level: 1,
+    kills: 0,
+    score: 0,
+    startMaxHp: config.playerMaxHp ?? 100,
+    config,
+    buckets: [],
+    upgradePicks: [], // [{t, id}] — the build order, for reading a run back
+    controlEvents: {}, // source -> count, for the damageless abilities
+    finalStacks: {},
+  };
+  bucket = newBucket(0);
+  stacks = {};
+}
+
+/** Damage dealt BY the player's kit. `source` is a key of SOURCE_UPGRADES. */
+export function recordDamage(source, amount, target) {
+  if (!run || !(amount > 0)) return;
+  add(bucket.dealtBySource, source, amount);
+  if (target && typeof target === 'object') lastDamager.set(target, source);
+}
+
+/**
+ * A creature died. Credit goes to whatever last damaged it, which is right
+ * often enough to rank abilities and wrong only for the last tick of an aura
+ * finishing something a bullet had already broken. `source` overrides that for
+ * kills with no damage behind them at all (the net haul).
+ */
+export function recordKill(target, source = null) {
+  if (!run) return;
+  const credited = source ?? (target && typeof target === 'object' ? lastDamager.get(target) : null) ?? 'unknown';
+  run.kills += 1;
+  bucket.kills += 1;
+  add(bucket.killsBySource, credited, 1);
+}
+
+/**
+ * A creature entered the arena with this much hp. Summed per bucket, this is
+ * "enemy hp arriving per second" — the pressure curve that CONFIG.spawn.ramp
+ * bends, and the denominator of the whole scaling question. Measured at spawn
+ * rather than inferred from kills so it stays honest about the creatures that
+ * were never killed at all: those are exactly the ones a flooding arena is
+ * made of.
+ */
+export function recordSpawn(hp) {
+  if (!run) return;
+  bucket.spawns += 1;
+  bucket.spawnHp += hp;
+}
+
+/** Damage taken by the player. `source` is a creature type or a hazard name. */
+export function recordPlayerDamage(amount, source = 'unknown') {
+  if (!run || !(amount > 0)) return;
+  add(bucket.takenBySource, source, amount);
+}
+
+/**
+ * An ability that doesn't deal damage did its thing — a bubble trap, a charm,
+ * a fish hauled off in the net. Counted so the report can rank them on the
+ * work they actually do instead of showing them as zero-damage dead weight.
+ */
+export function recordControl(source, n = 1) {
+  if (!run) return;
+  add(run.controlEvents, source, n);
+}
+
+export function recordUpgrade(id, t = 0) {
+  if (!run) return;
+  stacks[id] = (stacks[id] ?? 0) + 1;
+  run.upgradePicks.push({ t, id });
+}
+
+/**
+ * Per-frame sample. Rates come from the accumulators, but "how close to death
+ * did this feel" is only available frame by frame — a player who spent the
+ * whole bucket at 5% hp and one who dipped there once have identical damage
+ * totals and completely different runs.
+ */
+export function tick(dt, snap) {
+  if (!run || !(dt > 0)) return;
+  run.duration = snap.time;
+  run.level = snap.level;
+  run.score = snap.score ?? run.score;
+
+  bucket.seconds += dt;
+  bucket.samples += 1;
+  const maxHp = snap.maxHp > 0 ? snap.maxHp : 1;
+  const frac = Math.max(0, Math.min(1, snap.hp / maxHp));
+  bucket.hpFracSum += frac;
+  if (frac < LOW_HP_FRAC) bucket.lowHpSamples += 1;
+  bucket.aliveSum += snap.alive ?? 0;
+  bucket.maxHpSum += maxHp;
+  bucket.level = snap.level;
+
+  if (snap.time >= bucket.t + BUCKET_SECONDS) closeBucket(snap.time);
+}
+
+function closeBucket(now) {
+  bucket.stacks = { ...stacks };
+  run.buckets.push(bucket);
+  // Buckets are anchored to wall-clock windows, not to when the last one
+  // happened to close: a frame hitch that overshoots the boundary must not
+  // shift every bucket after it, or two runs stop being comparable minute for
+  // minute.
+  const nextStart = bucket.t + BUCKET_SECONDS;
+  bucket = newBucket(nextStart);
+  // A hitch big enough to skip a whole window (tab backgrounded, level-up
+  // screen left open) leaves an empty bucket rather than one giant lying one.
+  while (now >= bucket.t + BUCKET_SECONDS) {
+    bucket.stacks = { ...stacks };
+    run.buckets.push(bucket);
+    bucket = newBucket(bucket.t + BUCKET_SECONDS);
+  }
+}
+
+/**
+ * Finish and file the run. Returns it, so the caller can hand it straight to
+ * the overlay. `reason` is 'death' | 'quit' | 'restart'.
+ */
+export function endRun(reason = 'death') {
+  if (!run) return null;
+  // The final partial bucket counts — the last 20 seconds of a run are the
+  // ones that killed you, and dropping them would hide exactly the spike
+  // worth seeing. The analysis discards it if it's too short to draw a rate
+  // from; that call belongs there, not here.
+  if (bucket.seconds > 0) {
+    bucket.stacks = { ...stacks };
+    run.buckets.push(bucket);
+  }
+  run.endReason = reason;
+  run.finalStacks = { ...stacks };
+  last = run;
+  const finished = run;
+  run = null;
+  bucket = null;
+  persist(finished);
+  return finished;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence
+//
+// Two destinations, deliberately: localStorage so a run survives a reload with
+// no dev server involved, and — in dev only — an append to playtest/runs.jsonl
+// on disk, which is what makes a body of runs big enough to draw conclusions
+// from. Neither can fail the game: both are wrapped, and a rejected fetch is a
+// console warning, not an exception into the frame that called endRun.
+// ---------------------------------------------------------------------------
+
+function persist(finished) {
+  try {
+    const kept = [...loadStoredRuns(), finished].slice(-STORED_RUN_LIMIT);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(kept));
+  } catch (err) {
+    // Quota is the usual cause — a long session of long runs. Drop the oldest
+    // half and try once more rather than losing the run that just ended.
+    try {
+      const kept = [...loadStoredRuns()].slice(-4).concat(finished);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(kept));
+    } catch {
+      console.warn('[playtest] could not save run to localStorage —', err?.message ?? err);
+    }
+  }
+
+  if (!import.meta.env?.DEV) return;
+  fetch(ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(finished),
+    keepalive: true, // so a run filed on tab close still lands
+  }).catch((err) => console.warn('[playtest] run not written to disk —', err?.message ?? err));
+}
+
+export function loadStoredRuns() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearStoredRuns() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch { /* nothing to do — the report just keeps showing what it has */ }
+}
+
+/** Hands the browser's copy of the runs over as a file, for sharing a session. */
+export function downloadStoredRuns() {
+  const runs = loadStoredRuns();
+  const blob = new Blob([runs.map((r) => JSON.stringify(r)).join('\n')], { type: 'application/x-ndjson' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `seal-playtest-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jsonl`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return runs.length;
+}
+
+/**
+ * A live snapshot of the run in progress, for the overlay's HUD line. Cheap
+ * enough to call every frame the overlay is open, and returns null when
+ * nothing is being recorded.
+ */
+export function liveSnapshot() {
+  if (!run || !bucket || bucket.seconds < 1) return null;
+  let dealt = 0;
+  for (const k in bucket.dealtBySource) dealt += bucket.dealtBySource[k];
+  let taken = 0;
+  for (const k in bucket.takenBySource) taken += bucket.takenBySource[k];
+  const pressure = bucket.spawnHp / bucket.seconds;
+  const dps = dealt / bucket.seconds;
+  return {
+    t: run.duration,
+    dps,
+    pressure,
+    clearRatio: pressure > 0 ? dps / pressure : 0,
+    incomingDps: taken / bucket.seconds,
+    kills: run.kills,
+    alive: bucket.samples > 0 ? bucket.aliveSum / bucket.samples : 0,
+  };
+}

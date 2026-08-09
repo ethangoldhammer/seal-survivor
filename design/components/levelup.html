@@ -1,0 +1,61 @@
+<!-- @dsCard group="Screens" name="Level-up cards" subtitle="Hex-clipped upgrade picker, art + overlay tint" viewport="920x620" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Seal Survivor — Level up</title>
+<link rel="stylesheet" href="../styles.css" />
+<style>
+/* Preview scaffolding only — none of this ships. */
+html, body { margin: 0; height: 100%; }
+.stage { position: relative; width: 100%; height: 100vh; overflow: hidden;
+  background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+.stage .sv-ui { position: absolute; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="sv-ui">
+    <div class="sv-center" id="svLevelUpMenu">
+      <div class="sv-menu">
+        <div class="sv-title">Level up</div>
+        <div class="sv-sub">Pick one</div>
+        <div class="sv-cards" id="svCards">
+          <!-- background-size: 100% 100% is deliberate — art and card are both
+               square, so this lines the drawn hex up with the clip-path exactly.
+               Overlay is CONFIG.levelUpCards.overlayColor/overlayOpacity
+               (0x000000 at 0.55), tunable in-game via the ` tuner. -->
+          <div class="sv-card" tabindex="0"
+               style="background-image:url(../assets/OpeanOcean_001.webp); background-size:100% 100%; background-position:center;">
+            <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
+            <div class="sv-card-content">
+              <div class="sv-card-name">Sharper Teeth</div>
+              <div class="sv-card-desc">+25% damage on every bite.</div>
+            </div>
+          </div>
+
+          <div class="sv-card" tabindex="0"
+               style="background-image:url(../assets/Beach_002.webp); background-size:100% 100%; background-position:center;">
+            <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
+            <div class="sv-card-content">
+              <div class="sv-card-name">Bigger Lungs</div>
+              <div class="sv-card-desc">Oxygen drains 20% slower while you are under.</div>
+            </div>
+          </div>
+
+          <div class="sv-card" tabindex="0"
+               style="background-image:url(../assets/OpeanOcean_003.webp); background-size:100% 100%; background-position:center;">
+            <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
+            <div class="sv-card-content">
+              <div class="sv-card-name">Chum Magnet</div>
+              <div class="sv-card-desc">Pickups drift toward you from twice as far.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

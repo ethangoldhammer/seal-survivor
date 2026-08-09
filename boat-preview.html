@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Boat preview</title>
+<style>
+  body { margin:0; background:#ECC5EB; color:#12202c;
+         font:12px/1.4 'Inter', system-ui, sans-serif; }
+  h1 { font-size:14px; padding:8px 12px; margin:0; }
+  .row { display:flex; flex-wrap:wrap; }
+  .cell { position:relative; }
+  .cap { position:absolute; left:8px; top:6px; font-weight:700; z-index:2; }
+</style>
+</head>
+<body>
+<h1>Boat preview — real asset pipeline (createVisual), sky-coloured backdrop</h1>
+<div class="row" id="row"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { preloadAssets, createVisual, applySavedAssetLooks } from '/path/src/assets.js';
+import { CONFIG } from '/path/src/config.js';
+
+await preloadAssets();
+applySavedAssetLooks();
+
+const row = document.getElementById('row');
+const W = 420, H = 280;
+
+// Same lighting rig the game uses, so the silhouette is judged under real
+// conditions rather than a flattering studio setup.
+function makeScene() {
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff, CONFIG.lighting.ambient));
+  const key = new THREE.DirectionalLight(0xffffff, CONFIG.lighting.keyIntensity);
+  key.position.fromArray(CONFIG.lighting.keyPosition);
+  scene.add(key);
+  return scene;
+}
+
+for (const [label, key, dir] of [
+  ['boat — sailing RIGHT (dir +1)', 'boat', 1],
+  ['boat — sailing LEFT (dir -1)', 'boat', -1],
+  ['trawler — sailing RIGHT', 'trawler', 1],
+  ['trawler — sailing LEFT', 'trawler', -1],
+]) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  const cap = document.createElement('div');
+  cap.className = 'cap';
+  cap.textContent = label;
+  cell.appendChild(cap);
+  row.appendChild(cell);
+
+  const scene = makeScene();
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(W, H);
+  // The sky colour from the live tuning, so we're judging the silhouette
+  // against what it will actually sit in front of.
+  renderer.setClearColor(CONFIG.colors.sky, 1);
+  cell.appendChild(renderer.domElement);
+
+  const mesh = createVisual(key);
+  if (key === 'trawler') mesh.scale.multiplyScalar(CONFIG.boats.trawlerScale);
+  mesh.rotation.y = dir > 0 ? 0 : Math.PI;
+  scene.add(mesh);
+
+  const box = new THREE.Box3().setFromObject(mesh);
+  const size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+
+  // Straight-on side view — how the game's side-on camera sees it.
+  const camera = new THREE.PerspectiveCamera(35, W / H, 0.1, 2000);
+  const dist = Math.max(size.x, size.y) * 1.9 + 4;
+  camera.position.set(centre.x, centre.y, centre.z + dist);
+  camera.lookAt(centre);
+  renderer.render(scene, camera);
+
+  cap.textContent = `${label}  ·  ${size.x.toFixed(1)}×${size.y.toFixed(1)} world units`;
+}
+</script>
+</body>
+</html>

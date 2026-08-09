@@ -1,0 +1,75 @@
+<!-- @dsCard group="Screens" name="In-run HUD" subtitle="XP frame, score/time panel, player bars, score toasts" viewport="920x580" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Seal Survivor — HUD</title>
+<link rel="stylesheet" href="../styles.css" />
+<style>
+/* Preview scaffolding only — none of this ships. */
+html, body { margin: 0; height: 100%; }
+.stage { position: relative; width: 100%; height: 100vh; overflow: hidden;
+  background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+.stage .sv-ui { position: absolute; }
+/* Stand-in for the seal. In game the player bars are positioned every frame
+   from the seal's projected world position; here they are placed by hand. */
+.seal-mark { position: absolute; width: 54px; height: 26px; border-radius: 50%;
+  background: #6b7a8d; opacity: 0.55; transform: translate(-50%, -50%); }
+.state-note { position: absolute; font: 500 10px 'Inter', system-ui, sans-serif;
+  letter-spacing: 0.08em; text-transform: uppercase; color: rgba(232,236,243,0.4);
+  transform: translateX(-50%); }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="sv-ui">
+    <div class="sv-toast-layer" id="svToastLayer">
+      <div class="sv-toast" style="left:300px; top:190px;">+120</div>
+      <div class="sv-toast sv-toast-combo" style="left:430px; top:150px;">+540<span class="sv-toast-mult"> ×2.5</span></div>
+      <div class="sv-toast" style="left:520px; top:235px; opacity:0.45;">+80</div>
+    </div>
+
+    <div class="sv-hud" id="svHud">
+      <div class="sv-xptop"><div class="sv-xptop-fill" id="svXpBar" style="width:62%;"></div></div>
+      <div class="sv-xptop-level">Level <span id="svLevel">7</span></div>
+
+      <div class="sv-panel" style="margin-left:auto;">
+        <div class="sv-label">Score</div>
+        <div class="sv-value" id="svScore">12,480</div>
+        <div class="sv-label" style="margin-top:8px;">Time</div>
+        <div class="sv-value" id="svTime">3:24</div>
+      </div>
+      <div class="sv-panel" id="svRapidFirePanel">
+        <div class="sv-label">Rapid Fire</div>
+        <div class="sv-value" id="svRapidFireTime">4.2s</div>
+      </div>
+    </div>
+
+    <!-- Healthy + idle: both bars full, so the stack fades back to 0.25. -->
+    <div class="seal-mark" style="left:250px; top:390px;"></div>
+    <div class="sv-playerbars" style="left:250px; top:360px; opacity:0.25;">
+      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" style="width:100%;"></div></div>
+      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2" style="width:100%;"></div></div>
+    </div>
+    <div class="state-note" style="left:250px; top:406px;">Idle · faded</div>
+
+    <!-- Hurt: health down, oxygen mid. Full opacity. -->
+    <div class="seal-mark" style="left:460px; top:390px;"></div>
+    <div class="sv-playerbars" style="left:460px; top:360px;">
+      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" style="width:38%;"></div></div>
+      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2" style="width:64%;"></div></div>
+    </div>
+    <div class="state-note" style="left:460px; top:406px;">Hurt</div>
+
+    <!-- Drowning: oxygen under 25% flips the bar to the alarm colour. -->
+    <div class="seal-mark" style="left:670px; top:390px;"></div>
+    <div class="sv-playerbars" style="left:670px; top:360px;">
+      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" style="width:72%;"></div></div>
+      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2 sv-o2-low" style="width:14%;"></div></div>
+    </div>
+    <div class="state-note" style="left:670px; top:406px;">Low oxygen</div>
+  </div>
+</div>
+</body>
+</html>

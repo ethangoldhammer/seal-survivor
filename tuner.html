@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Seal Survivor — Tuning</title>
+  <style>
+    * { margin: 0; padding: 0; outline: none !important; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #05060a;
+      color: #e8ecf3; font-family: 'Inter', system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; }
+
+    .sv-sa-bar { flex-shrink: 0; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+      padding: 10px 18px; border-bottom: 1px solid rgba(255,255,255,0.12);
+      background: rgba(10,12,18,0.94); }
+    .sv-sa-bar h1 { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; }
+    .sv-sa-bar .sv-sa-hint { font-size: 10px; color: rgba(232,236,243,0.4); line-height: 1.5; }
+    .sv-sa-bar kbd { font: inherit; font-weight: 600; color: #7ad7ff; }
+
+    .sv-sa-panels { flex: 1; display: flex; justify-content: center; min-height: 0; }
+
+    /* The two panels position themselves as fixed side rails over the game
+       canvas. There's no canvas here, so let them be plain flex children that
+       split the window instead — which also means hiding one with its key
+       gives the other the whole width, rather than leaving half the page
+       black. Specificity beats their own rules whatever order the <style>
+       tags land in; `display` is deliberately left alone so .sv-hidden still
+       wins. */
+    body .sv-sa-panels .sv-tex,
+    body .sv-sa-panels .sv-tuner {
+      position: static; inset: auto; width: auto; height: 100%;
+      flex: 1 1 0; min-width: 0; max-width: 700px;
+    }
+    /* Capped and centred rather than filling the window: a lone panel
+       stretched to 1600px turns every slider into a hair-trigger a mouse
+       width wide. */
+    /* Same left/right arrangement as in game, regardless of which panel
+       appended itself first. */
+    body .sv-sa-panels .sv-tex { order: 0; }
+    body .sv-sa-panels .sv-tuner { order: 1; }
+
+    .sv-sa-empty { flex: 1; display: flex; align-items: center; justify-content: center;
+      font-size: 11px; color: rgba(232,236,243,0.35); letter-spacing: 0.06em; }
+  </style>
+</head>
+<body>
+  <div class="sv-sa-bar">
+    <h1>Seal Survivor — Tuning</h1>
+    <div class="sv-sa-hint">
+      <kbd>`</kbd> toggles Tuning · <kbd>T</kbd> toggles Look &amp; Sound · edits save to
+      path/src/imported-tuning.json, same as in game. No game is running here, so 3D changes
+      (tint, glow, size, models) are saved but can't be previewed — sound and music preview fine.
+    </div>
+  </div>
+  <div class="sv-sa-panels" id="svPanels">
+    <div class="sv-sa-empty">Both panels hidden — press ` or T.</div>
+  </div>
+  <script type="module" src="/path/src/tunerApp.js"></script>
+</body>
+</html>

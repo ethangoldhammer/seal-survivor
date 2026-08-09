@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8" /><title>Perf probe</title>
+<style>body{margin:0;background:#0b1622;color:#dfe9f5;font:13px/1.6 ui-monospace,Menlo,monospace;padding:14px}
+h1{font:600 14px system-ui;margin:0 0 10px}b{color:#7ad7ff}.bad{color:#ff8a8a}</style>
+</head>
+<body>
+<h1>Perf probe — cost of spawning one enemy visual</h1>
+<pre id="out">running…</pre>
+<script type="module">
+import { preloadAssets, createVisual, applySavedAssetLooks } from '/path/src/assets.js';
+import { createAnimationController } from '/path/src/systems/animation.js';
+import { CONFIG } from '/path/src/config.js';
+
+await preloadAssets();
+applySavedAssetLooks();
+
+const out = document.getElementById('out');
+const lines = [];
+
+// Time createVisual + the animation controller together, because that pair is
+// what a single enemy spawn actually costs.
+function bench(key, n = 20) {
+  try { createVisual(key); } catch (e) { return { key, err: String(e) }; }
+  // Split the two halves of a spawn so the fix targets the right one.
+  const tA = performance.now();
+  const kept = [];
+  for (let i = 0; i < n; i++) kept.push(createVisual(key));
+  const clone = (performance.now() - tA) / n;
+  const tB = performance.now();
+  for (const v of kept) createAnimationController(v);
+  const anim = (performance.now() - tB) / n;
+
+  // Shape of the thing being cloned, which is what drives both costs.
+  let meshes = 0, bones = 0, tris = 0, skinned = false;
+  kept[0].traverse((o) => {
+    if (o.isBone) bones++;
+    if (!o.isMesh) return;
+    meshes++;
+    if (o.isSkinnedMesh) skinned = true;
+    const g = o.geometry;
+    tris += (g?.index ? g.index.count : (g?.attributes?.position?.count ?? 0)) / 3;
+  });
+  const clips = kept[0].userData.clips?.length ?? 0;
+  return { key, per: clone + anim, clone, anim, meshes, bones, tris: Math.round(tris), clips, skinned };
+}
+
+const keys = [
+  'enemyFish', 'enemyTrout', 'enemyTang', 'enemyReeffish',
+  'enemyFishPackA', 'enemyShark', 'enemyGreatWhite',
+  'enemyWalkingCrab', 'sealTeam', 'boat',
+];
+
+const rows = keys.map((k) => bench(k));
+rows.sort((a, b) => (b.per ?? 0) - (a.per ?? 0));
+
+lines.push('per-spawn cost (createVisual + animation controller):');
+lines.push('');
+for (const r of rows) {
+  if (r.err) { lines.push(`  ${r.key.padEnd(18)} ERROR ${r.err}`); continue; }
+  lines.push(`  ${r.key.padEnd(18)} total ${r.per.toFixed(1).padStart(7)}ms  = clone ${r.clone.toFixed(1).padStart(7)}ms + anim ${r.anim.toFixed(1).padStart(6)}ms   [${r.meshes} mesh, ${r.bones} bones, ${r.tris} tris, ${r.clips} clips${r.skinned ? ', skinned' : ''}]`);
+}
+
+// What a school actually costs: group sizes come straight from the config.
+lines.push('');
+lines.push('worst-case SCHOOL spawn (group.max clones in one frame):');
+lines.push('');
+for (const [name, def] of Object.entries(CONFIG.enemies)) {
+  if (!def.group) continue;
+  const row = rows.find((r) => r.key === def.asset);
+  if (!row || row.err) continue;
+  const total = row.per * def.group.max;
+  lines.push(`  ${name.padEnd(14)} ${def.group.max} x ${row.per.toFixed(2)}ms = ${total.toFixed(0)}ms${total > 16 ? '   <-- drops frames' : ''}`);
+}
+
+out.textContent = lines.join('\n');
+</script>
+</body>
+</html>

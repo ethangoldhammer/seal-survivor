@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+.env
+server/.wrangler
+
+# Recorded playtest runs — session data, not source. `npm run playtest`
+# reads this; delete it any time to start a fresh body of evidence.
+playtest/

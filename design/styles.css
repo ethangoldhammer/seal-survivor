@@ -1,0 +1,91 @@
+/* Seal Survivor — game UI stylesheet.
+   Extracted verbatim from path/src/ui/ui.js (const STYLES).
+   This is the round-trip surface: edits here get folded back into ui.js.
+   Preview-only scaffolding lives in each components/*.html <style> block. */
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  .sv-ui * { box-sizing: border-box; font-family: 'Inter', system-ui, sans-serif; }
+  .sv-ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  .sv-hud { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: flex-start; color: #e8ecf3; }
+  .sv-panel { background: rgba(12,14,22,0.72); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 10px 14px; backdrop-filter: blur(6px); }
+
+  /* XP spans the full width at the very top — it's the run-long progress
+     bar, so it reads as a frame around the screen rather than a widget. */
+  .sv-xptop { position: absolute; top: 0; left: 0; right: 0; height: 6px;
+    background: rgba(255,255,255,0.07); overflow: hidden; }
+  .sv-xptop-fill { height: 100%; width: 0%; background: #7ad7ff;
+    box-shadow: 0 0 10px rgba(122,215,255,0.75); transition: width 0.15s ease; }
+  .sv-xptop-level { position: absolute; top: 9px; left: 14px; font-size: 10px;
+    letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;
+    color: rgba(232,236,243,0.5); text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+
+  /* Health and oxygen ride just above the seal, so the two things you have
+     to react to fastest are where your eyes already are. Positioned in
+     screen space each frame from the player's projected world position. */
+  /* translateY(-100%) puts the whole stack ABOVE its anchor point — without
+     it the bars hang down from the anchor and swallow the gap the world
+     offset is there to create. */
+  .sv-playerbars { position: absolute; width: 64px; margin-left: -32px;
+    display: flex; flex-direction: column; gap: 3px; pointer-events: none;
+    transform: translateY(-100%); transition: opacity 0.2s ease; }
+  .sv-pbar-wrap { height: 4px; background: rgba(4,6,12,0.55); border-radius: 3px;
+    overflow: hidden; box-shadow: 0 0 0 1px rgba(0,0,0,0.35); }
+  .sv-pbar { height: 100%; width: 100%; border-radius: 3px; transition: width 0.12s linear; }
+  .sv-pbar-hp { background: #4dd0a8; }
+  .sv-pbar-o2 { background: #6fd3ff; }
+  .sv-pbar-o2.sv-o2-low { background: #ff5566; }
+
+  /* Score toasts: one per kill, floating up from where the fish died. */
+  .sv-toast { position: absolute; font-size: 13px; font-weight: 700;
+    color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7);
+    font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap;
+    transform: translate(-50%, -50%); will-change: transform, opacity; }
+  .sv-toast-combo { color: #ffe066; font-size: 15px; }
+  .sv-toast-mult { font-size: 10px; opacity: 0.8; font-weight: 600; }
+  .sv-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(232,236,243,0.55); font-weight: 500; }
+  .sv-value { font-size: 15px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; }
+  .sv-menu { background: rgba(12,14,22,0.88); border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 28px 32px; text-align: center; color: #e8ecf3; max-width: 90vw; }
+  .sv-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+  .sv-sub { font-size: 13px; color: rgba(232,236,243,0.6); margin-bottom: 18px; line-height: 1.6; }
+  .sv-btn { pointer-events: all; background: #7ad7ff; color: #0a0c12; border: none; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 600; cursor: pointer; letter-spacing: 0.02em; }
+  .sv-btn:hover { background: #9fe3ff; }
+  .sv-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .sv-cards { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: min(760px, 92vw); }
+  /* Cards are hexagons matching the background art exactly. The vertex
+     percentages below were measured off the art itself (flat-top hex: points
+     at 5.7%/93.9% horizontally, flat top/bottom edges spanning 27.1%-72.3%,
+     vertical extent 12.7%-89.6%) so the clip lines up with the drawn edge
+     instead of approximately near it. The card is square because the art is. */
+  .sv-card { pointer-events: all; width: 210px; height: 210px; position: relative; overflow: hidden;
+    background-color: rgba(255,255,255,0.04);
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    cursor: pointer; transition: filter 0.15s ease, transform 0.15s ease; text-align: center; }
+  .sv-card:hover { filter: brightness(1.25) saturate(1.15); transform: scale(1.04); }
+  /* clip-path cuts off any outline, so focus is shown with an inner glow. */
+  .sv-card:focus-visible { filter: brightness(1.3); box-shadow: inset 0 0 0 3px #7ad7ff; }
+  .sv-card-overlay { position: absolute; inset: 0; pointer-events: none; }
+  /* Text is confined to the hex's inscribed box and centred both ways, so a
+     long upgrade name can't spill past the angled edges. The inset matches
+     the widest rectangle that fits inside the clip above, with a margin. */
+  .sv-card-content { position: absolute; left: 30%; right: 30%; top: 24%; bottom: 24%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; overflow: hidden; }
+  .sv-card-name { font-size: 14px; font-weight: 700; line-height: 1.15; text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
+    overflow-wrap: anywhere; hyphens: auto; }
+  .sv-card-desc { font-size: 11px; color: rgba(232,236,243,0.92); line-height: 1.3;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
+    overflow-wrap: anywhere;
+    /* Hard cap so an over-long description can't push out of the hex. */
+    display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .sv-hint { font-size: 11px; color: rgba(232,236,243,0.35); margin-top: 14px; letter-spacing: 0.04em; }
+  .sv-leaderboard { margin: 14px 0; max-height: 220px; overflow-y: auto; text-align: left; }
+  .sv-lb-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+  .sv-lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+  .sv-lb-row.sv-lb-mine { background: rgba(122,215,255,0.14); border: 1px solid rgba(122,215,255,0.4); }
+  .sv-lb-rank { width: 18px; color: rgba(232,236,243,0.5); font-weight: 600; }
+  .sv-lb-score { flex: 1; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sv-lb-meta { color: rgba(232,236,243,0.5); font-size: 11px; }
+  .sv-toast-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .sv-hidden { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { .sv-ui * { transition: none !important; } }

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Model inspector</title>
+<style>
+  body { margin: 0; background: #0b0d13; color: #e8ecf3;
+         font: 12px/1.4 'Inter', system-ui, sans-serif; }
+  h1 { font-size: 14px; padding: 10px 14px; margin: 0; border-bottom: 1px solid #222; }
+  .legend { padding: 8px 14px; color: #8b93a3; border-bottom: 1px solid #222; }
+  .legend b { color: #ff6b6b; } .legend i { color: #6bff8f; font-style: normal; }
+  .legend u { color: #6bb6ff; text-decoration: none; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 2px; }
+  .cell { position: relative; background: #11141c; }
+  .cap { position: absolute; left: 6px; top: 4px; font-size: 11px; font-weight: 600;
+         text-shadow: 0 1px 3px #000; z-index: 2; }
+  .sub { position: absolute; left: 6px; bottom: 4px; font-size: 10px; color: #98a2b3;
+         text-shadow: 0 1px 3px #000; z-index: 2; }
+</style>
+</head>
+<body>
+<h1>Model inspector — heading &amp; pivot</h1>
+<div class="legend">
+  Axes at the model ORIGIN: <b>red = +X</b>, <i>green = +Y</i>, <u>blue = +Z</u>.
+  White wireframe = bounding box. Yellow dot = origin (the pivot everything rotates about).
+  A creature is correctly declared when its NOSE points along the axis named in <code>forward</code>,
+  and the yellow dot sits inside the body.
+</div>
+<div id="grid"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+
+const MODELS = [
+  'barracuda', 'cutesquid', 'animatedcrab', 'sealhelper',
+  'seaturtle', 'orca', 'stingray', 'dolphin', 'trawler', 'oyster', 'lobster',
+  'fishingboat',
+  // existing, for comparison — these are the ones suspected mis-declared
+  'shark', 'greatwhite', 'megalodon', 'mightymeg', 'fish', 'fish2', 'furseal',
+];
+
+const loader = new GLTFLoader();
+const grid = document.getElementById('grid');
+const SIZE = 240;
+
+for (const name of MODELS) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  const cap = document.createElement('div');
+  cap.className = 'cap';
+  cap.textContent = name;
+  const sub = document.createElement('div');
+  sub.className = 'sub';
+  sub.textContent = 'loading…';
+  cell.append(cap, sub);
+  grid.appendChild(cell);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 5000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(SIZE, SIZE);
+  renderer.setClearColor(0x11141c, 1);
+  cell.appendChild(renderer.domElement);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+  const key = new THREE.DirectionalLight(0xffffff, 1.4);
+  key.position.set(3, 5, 4);
+  scene.add(key);
+
+  try {
+    const gltf = await loader.loadAsync(`/models/${name}.glb`);
+    const model = gltf.scene;
+    scene.add(model);
+
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const centre = box.getCenter(new THREE.Vector3());
+    const span = Math.max(size.x, size.y, size.z) || 1;
+
+    // Bounding box + a marker at the model's own origin, so a pivot sitting
+    // outside the mesh is immediately obvious.
+    const helper = new THREE.Box3Helper(box, 0xffffff);
+    helper.material.opacity = 0.28;
+    helper.material.transparent = true;
+    scene.add(helper);
+
+    const dot = new THREE.Mesh(
+      new THREE.SphereGeometry(span * 0.035, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xffe066 })
+    );
+    scene.add(dot); // stays at 0,0,0 — the origin
+
+    const axes = new THREE.AxesHelper(span * 0.75);
+    axes.material.depthTest = false;
+    axes.renderOrder = 999;
+    scene.add(axes);
+
+    // Three-quarter view so all three axes are distinguishable at a glance.
+    const d = span * 2.1;
+    camera.position.set(centre.x + d * 0.75, centre.y + d * 0.5, centre.z + d * 0.75);
+    camera.lookAt(centre);
+    renderer.render(scene, camera);
+
+    const longest = size.x >= size.y && size.x >= size.z ? 'X'
+      : size.y >= size.z ? 'Y' : 'Z';
+    const f = (v, min, s) => (s < 1e-9 ? 0.5 : ((0 - min) / s));
+    const inside = [f(0, box.min.x, size.x), f(0, box.min.y, size.y), f(0, box.min.z, size.z)]
+      .every((t) => t >= -0.05 && t <= 1.05);
+    sub.textContent = `${size.x.toFixed(1)}×${size.y.toFixed(1)}×${size.z.toFixed(1)} · long=${longest} · pivot ${inside ? 'inside' : 'OUTSIDE'}`;
+    if (!inside) sub.style.color = '#ff8080';
+  } catch (err) {
+    sub.textContent = `ERROR: ${err?.message ?? err}`;
+    sub.style.color = '#ff8080';
+  }
+}
+</script>
+</body>
+</html>

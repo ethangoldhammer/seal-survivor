@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Orbit preview</title>
+<style>
+  body { margin:0; background:#0b1622; color:#dfe9f5;
+         font:12px/1.4 'Inter', system-ui, sans-serif; }
+  h1 { font-size:14px; padding:8px 12px; margin:0; }
+  .hint { padding:0 12px 8px; color:#8fa3b8; }
+</style>
+</head>
+<body>
+<h1>Orbit preview — Seal Team + beluga on the shared 3D ring</h1>
+<div class="hint">Live. Camera is side-on like the game, so a companion swinging toward you grows and one going behind shrinks — that's the tilted ring. Player marker is the cyan sphere.</div>
+<div id="host"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { preloadAssets, createVisual, applySavedAssetLooks } from '/path/src/assets.js';
+import { CONFIG } from '/path/src/config.js';
+import { orbitTarget, springFollow } from '/path/src/systems/orbit.js';
+
+await preloadAssets();
+applySavedAssetLooks();
+
+const W = 760, H = 460;
+const scene = new THREE.Scene();
+scene.add(new THREE.AmbientLight(0xffffff, CONFIG.lighting.ambient));
+const key = new THREE.DirectionalLight(0xffffff, CONFIG.lighting.keyIntensity);
+key.position.fromArray(CONFIG.lighting.keyPosition);
+scene.add(key);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(W, H);
+renderer.setClearColor(0x0d1b2a, 1);
+document.getElementById('host').appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(40, W / H, 0.1, 500);
+camera.position.set(0, 0, 16);
+camera.lookAt(0, 0, 0);
+
+const playerPos = new THREE.Vector3(0, 0, 0);
+const marker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.5, 20, 20),
+  new THREE.MeshBasicMaterial({ color: 0x2effea })
+);
+scene.add(marker);
+
+// One full Seal Team plus the beluga, driven by the SAME helper the game uses.
+const seals = [];
+for (let i = 0; i < CONFIG.sealTeam.maxSeals; i++) {
+  const root = new THREE.Group();
+  root.add(createVisual('sealTeam'));
+  scene.add(root);
+  seals.push({ root, pos: new THREE.Vector3(), vel: new THREE.Vector3() });
+}
+const belugaRoot = new THREE.Group();
+belugaRoot.add(createVisual('belugaDrone'));
+scene.add(belugaRoot);
+const beluga = { pos: new THREE.Vector3(), vel: new THREE.Vector3() };
+
+let clock = 0;
+let last = performance.now();
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  clock += dt;
+
+  // Drift the "player" so the spring-follow lag is visible, not just a
+  // perfect circle — that lag is the whole reason companions read as alive.
+  playerPos.set(Math.sin(clock * 0.5) * 3, Math.cos(clock * 0.35) * 1.5, 0);
+  marker.position.copy(playerPos);
+
+  for (let i = 0; i < seals.length; i++) {
+    const s = seals[i];
+    const to = orbitTarget(clock, playerPos, CONFIG.sealTeam, i, seals.length);
+    springFollow(s.pos, s.vel, to, dt, CONFIG.sealTeam.followSpring, CONFIG.sealTeam.followDamping);
+    s.root.position.copy(s.pos);
+    const spd = Math.hypot(s.vel.x, s.vel.y);
+    if (spd > 0.3) {
+      s.root.rotation.z = Math.atan2(s.vel.y, s.vel.x) - Math.PI / 2;
+      s.root.children[0].rotation.y = s.vel.x < 0 ? Math.PI : 0;
+    }
+  }
+
+  const bt = orbitTarget(clock, playerPos, CONFIG.beluga);
+  springFollow(beluga.pos, beluga.vel, bt, dt, CONFIG.beluga.followSpring, CONFIG.beluga.followDamping);
+  belugaRoot.position.copy(beluga.pos);
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

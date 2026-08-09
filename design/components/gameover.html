@@ -1,0 +1,61 @@
+<!-- @dsCard group="Screens" name="Game over / leaderboard" subtitle="Run stats, leaderboard rows, your-run highlight" viewport="640x600" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Seal Survivor — Run ended</title>
+<link rel="stylesheet" href="../styles.css" />
+<style>
+/* Preview scaffolding only — none of this ships. */
+html, body { margin: 0; height: 100%; }
+.stage { position: relative; width: 100%; height: 100vh; overflow: hidden;
+  background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+.stage .sv-ui { position: absolute; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="sv-ui">
+    <div class="sv-center" id="svGameOverMenu">
+      <div class="sv-menu">
+        <div class="sv-title">Run ended</div>
+        <div class="sv-sub" id="svGameOverStats">
+          Score: 12,480<br/>Survived 3:24 — Kills: 148 — Level 7
+        </div>
+        <div class="sv-leaderboard" id="svLeaderboard">
+          <div class="sv-label" style="margin-bottom:6px;">Leaderboard</div>
+          <div class="sv-lb-row">
+            <span class="sv-lb-rank">1</span>
+            <span class="sv-lb-score">18,420</span>
+            <span class="sv-lb-meta">Lv9 · 4:41</span>
+          </div>
+          <!-- sv-lb-mine marks the row for the run that just ended. -->
+          <div class="sv-lb-row sv-lb-mine">
+            <span class="sv-lb-rank">2</span>
+            <span class="sv-lb-score">12,480</span>
+            <span class="sv-lb-meta">Lv7 · 3:24</span>
+          </div>
+          <div class="sv-lb-row">
+            <span class="sv-lb-rank">3</span>
+            <span class="sv-lb-score">11,905</span>
+            <span class="sv-lb-meta">Lv7 · 3:02</span>
+          </div>
+          <div class="sv-lb-row">
+            <span class="sv-lb-rank">4</span>
+            <span class="sv-lb-score">9,340</span>
+            <span class="sv-lb-meta">Lv6 · 2:48</span>
+          </div>
+          <div class="sv-lb-row">
+            <span class="sv-lb-rank">5</span>
+            <span class="sv-lb-score">7,110</span>
+            <span class="sv-lb-meta">Lv5 · 2:15</span>
+          </div>
+        </div>
+        <button class="sv-btn" id="svRestartBtn">Try again</button>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

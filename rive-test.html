@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rive splash harness</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070d; color: #e8ecf3;
+    font: 13px/1.5 'Inter', system-ui, sans-serif; }
+  #stage { position: absolute; inset: 0; }
+  #readout { position: absolute; left: 14px; bottom: 14px; z-index: 30;
+    background: rgba(12,14,22,0.85); border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px; padding: 10px 14px; max-width: 460px;
+    font-variant-numeric: tabular-nums; white-space: pre-wrap; }
+  #readout b { color: #7ad7ff; font-weight: 600; }
+  #again { margin-top: 8px; background: #7ad7ff; color: #0a0c12; border: none;
+    border-radius: 8px; padding: 6px 14px; font: 600 13px 'Inter', system-ui, sans-serif;
+    cursor: pointer; }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="readout">loading…<button id="again">Remount</button></div>
+<script type="module">
+  import { mountRiveSplash } from '/path/src/ui/riveSplash.js';
+
+  const stage = document.getElementById('stage');
+  const readout = document.getElementById('readout');
+  const again = document.getElementById('again');
+  let handle = null;
+  let log = [];
+
+  function render() {
+    readout.firstChild.textContent = log.join('\n') + '\n';
+  }
+  function say(line) { log.push(line); render(); }
+
+  // Exposed so the harness can be driven from the console / automation without
+  // synthesising real input events.
+  window.__riveTest = {
+    get handle() { return handle; },
+    get log() { return log; },
+  };
+
+  function mount() {
+    log = [];
+    say('mounting…');
+    const t0 = performance.now();
+    handle = mountRiveSplash({
+      parent: stage,
+      onReady: (info) => {
+        say(`loaded in ${Math.round(performance.now() - t0)}ms`);
+        say(`artboards: ${info.artboards.join(', ') || '(none reported)'}`);
+        say(`animations: ${info.animations.join(', ') || '(none)'}`);
+        say(`state machines: ${info.stateMachines.join(', ') || '(none)'}`);
+        say(`now playing SM: ${info.playingStateMachines.join(', ') || '(none)'}`);
+        say(`now playing anim: ${info.playingAnimations.join(', ') || '(none)'}`);
+        say(`playing: ${info.playing}`);
+        say('— click the stage or press any key to destroy —');
+      },
+      onError: (err) => say(`LOAD ERROR: ${err?.message ?? err}`),
+      onDismiss: (reason) => {
+        say(`destroyed via "${reason}"`);
+        say(`canvases left in stage: ${stage.querySelectorAll('canvas').length}`);
+      },
+    });
+  }
+
+  // Remount must tear the old one down first — otherwise instances stack up
+  // and the canvas you inspect is the previous one, still parked on its last
+  // frame.
+  again.addEventListener('click', (e) => {
+    e.stopPropagation();
+    handle?.destroy('remount');
+    mount();
+  });
+
+  // Counts how many distinct frames the canvas actually produces, so "is it
+  // animating" is a number rather than a judgement call about a screenshot.
+  window.__riveTest.watch = (ms = 4000) => new Promise((resolve) => {
+    const seen = new Set();
+    const t0 = performance.now();
+    (function tick() {
+      const c = document.querySelector('#stage canvas');
+      if (c?.width) {
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let h = 0;
+        for (let j = 0; j < d.length; j += 997) h = (h * 31 + d[j]) >>> 0;
+        seen.add(h);
+      }
+      if (performance.now() - t0 < ms) requestAnimationFrame(tick);
+      else resolve({ distinctFrames: seen.size, ms });
+    })();
+  });
+
+  window.__riveTest.playByName = (name) => {
+    const r = handle?.rive;
+    if (!r) return 'no instance';
+    r.stop();
+    r.play(name);
+    return { asked: name, sm: r.playingStateMachineNames, anim: r.playingAnimationNames };
+  };
+
+  mount();
+</script>
+</body>
+</html>
