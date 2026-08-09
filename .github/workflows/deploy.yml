@@ -8,10 +8,13 @@
 # locally. Same project, same URL, no manual step.
 #
 # Setup (one time): add a repository secret named CLOUDFLARE_API_TOKEN.
-# Create it at https://dash.cloudflare.com/profile/api-tokens using the
-# "Edit Cloudflare Workers" template, or a custom token with the
-# "Cloudflare Pages: Edit" permission on this account. The account ID below is
-# an identifier rather than a credential, so it is fine in the clear.
+# Create it at https://dash.cloudflare.com/profile/api-tokens as a CUSTOM token
+# with Account > Cloudflare Pages > Edit. The "Edit Cloudflare Workers" template
+# is NOT enough — it omits Pages, and `pages deploy` fails on authentication
+# with a token that only carries the Workers permissions.
+#
+# No CLOUDFLARE_ACCOUNT_ID secret is needed; the account ID below is an
+# identifier rather than a credential, so it is fine in the clear.
 
 name: Deploy
 
