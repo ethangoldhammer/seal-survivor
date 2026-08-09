@@ -52,6 +52,11 @@ export const deathState = {
   // 'done' so the scene behind the game-over card keeps its slow drift instead
   // of snapping back to full speed under the menu.
   phase: 'none',
+  // Wall-clock seconds since the killing blow. Published for the cinematic
+  // camera, which splits the 'sink' phase into its own two beats — the hit and
+  // the fall — and needs a clock to do it on. Nothing here reads it back;
+  // `elapsed` below is still the authority.
+  elapsed: 0,
   timeScale: 1,
   // The lens. Published rather than applied here, because the camera belongs
   // to world.js and this module has no business reaching into it — main.js
@@ -105,6 +110,7 @@ export function startDeathDive(finish) {
   deathState.timeScale = 1;
   deathState.camZoom = 1;
   deathState.camWeight = 0;
+  deathState.elapsed = 0;
   elapsed = 0;
   settleClock = 0;
   swayClock = 0;
@@ -193,6 +199,7 @@ export function updateDeathDive(rawDt) {
   }
 
   elapsed += rawDt;
+  deathState.elapsed = elapsed;
   // Two eases, one after the other: down into the dilation on the moment of
   // death, then back out toward a drift so the descent stays watchable. The
   // second one starts where the first ended rather than from 1, or the
@@ -377,6 +384,7 @@ export function beginRestartTransition(onReady) {
 export function resetDeathDive() {
   deathState.active = false;
   deathState.phase = 'none';
+  deathState.elapsed = 0;
   deathState.timeScale = 1;
   deathState.camZoom = 1;
   deathState.camWeight = 0;

@@ -18,7 +18,8 @@ export function spawnProjectile(scene, {
   homing = false, turnRate = 4, acquireRadius = Infinity, targetType = null, homingDelay = 0,
   bounce = false, maxBounces = 0, restitution = 1,
   chain = false, chainRange = 0, chainLock = 0, chainSpeedGain = 1,
-  spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false,
+  jet = false, jetInterval = [0.2, 0.4], jetSpeed = [10, 18], jetTurn = 2.4, jetDrag = 2,
+  spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false, burst = null,
 }) {
   const mesh = createVisual(asset ?? (faction === 'player' ? 'bullet' : 'enemyBullet'));
   mesh.position.copy(origin);
@@ -69,11 +70,56 @@ export function spawnProjectile(scene, {
     hitLock: 0, // brief post-ricochet immunity so one chain isn't spent in a frame
     bounceCombo: 0, // consecutive ricochets, drives the rising pitch and spray
 
+    // JET — self-propulsion in a direction it keeps changing its mind about.
+    // The scallop's whole identity, and the exact opposite of `homing`: it
+    // coasts, then claps, and the clap points it somewhere new rather than
+    // somewhere chosen. Never combine the two on one projectile — a seeker
+    // that also randomises its heading just looks like a broken seeker.
+    jet,
+    jetInterval, // [min, max] seconds between claps
+    jetSpeed, // [min, max] speed a clap imparts
+    jetTurn, // radians of heading change one clap may apply
+    jetDrag, // per-second falloff while coasting
+    // Fires on the first frame rather than after a full interval, so a
+    // launched flight scatters immediately instead of travelling as one
+    // clump for the first fifth of a second.
+    jetTimer: 0,
+
     spin, // radians/sec, purely visual
     orient, // face the direction of travel each frame
     splashDamage, // AoE dealt to OTHER nearby enemies on the first hit (see main.js)
     splashRadius,
+    // Payload description for something that breaks apart where it lands —
+    // the oyster's pearl. Read by main.js's impact handler, which hands it to
+    // systems/oyster.js; projectiles.js itself never acts on it, because a
+    // bullet has no business knowing what a bomblet is.
+    burst,
   });
+}
+
+// One clap of the bubble jet: pick a new heading within `jetTurn` of the
+// current one and shove off along it. Between claps the shell only coasts,
+// which is what gives it the stop-start rhythm a straight-line bullet with
+// randomised velocity would not have.
+function updateJet(p, dt) {
+  p.jetTimer -= dt;
+  // Exponential falloff rather than linear: a linear drag large enough to
+  // settle the shell between claps would stop it dead the instant a clap
+  // ended, and the coast is half the movement.
+  p.speed *= Math.exp(-p.jetDrag * dt);
+
+  if (p.jetTimer > 0) return false;
+
+  const [tMin, tMax] = p.jetInterval;
+  p.jetTimer = tMin + Math.random() * Math.max(0, tMax - tMin);
+
+  const turn = (Math.random() * 2 - 1) * p.jetTurn;
+  const angle = Math.atan2(p.dir.y, p.dir.x) + turn;
+  p.dir.set(Math.cos(angle), Math.sin(angle), 0);
+
+  const [sMin, sMax] = p.jetSpeed;
+  p.speed = sMin + Math.random() * Math.max(0, sMax - sMin);
+  return true;
 }
 
 function updateHoming(p, dt, enemiesList) {
@@ -175,13 +221,14 @@ export function deflectProjectile(p) {
   p.dir.set(Math.cos(angle), Math.sin(angle));
 }
 
-export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null) {
+export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, onJet = null, onExpire = null) {
   const m = 3;
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
 
     if (p.homingDelay > 0) p.homingDelay -= dt;
     if (p.homing && p.homingDelay <= 0) updateHoming(p, dt, enemiesList);
+    if (p.jet && updateJet(p, dt)) onJet?.(p);
 
     p.mesh.position.x += p.dir.x * p.speed * dt;
     p.mesh.position.y += p.dir.y * p.speed * dt;
@@ -216,6 +263,11 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null) 
       pos.x < bounds.left - m || pos.x > bounds.right + m ||
       pos.y < bounds.bottom - m || pos.y > bounds.top + m;
 
+    // A projectile that RAN OUT is a different event from one that left the
+    // arena, and only the first gets `onExpire`. A pearl that sails off the
+    // side of the world must not crack open out there: the bomblets would deal
+    // damage the player can neither see nor have aimed.
+    if (p.life <= 0 && !outside) onExpire?.(p);
     if (p.life <= 0 || outside) despawn(scene, i);
   }
 }

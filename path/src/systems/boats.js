@@ -4,6 +4,8 @@ import { createVisual, hasModel } from '../assets.js';
 import { bounds } from '../arena.js';
 import { pickups, spawnXpOrb } from '../entities/pickups.js';
 import { recordSpawn } from './playtest.js';
+import { primeBoatDebris, spawnBoatDebris, updateBoatDebris, resetBoatDebris, blastDebris } from './boatDebris.js';
+import { spawnCrewFor, updateCrew, resetCrew, releaseCrew, blastCrew } from './crew.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
@@ -27,6 +29,8 @@ export function resetBoats(scene) {
   boats.length = 0;
   for (const o of attractorOrbs) scene.remove(o.mesh);
   attractorOrbs.length = 0;
+  resetBoatDebris(scene);
+  resetCrew(scene);
   spawnTimer = randomBetween(CONFIG.boats.spawnMin, CONFIG.boats.spawnMax);
   clock = 0;
 }
@@ -109,6 +113,9 @@ function spawnBoat(scene, difficulty) {
   mesh.rotation.y = dir > 0 ? 0 : Math.PI;
   scene.add(mesh);
 
+  // Cut the wreck now rather than when it's needed — see primeBoatDebris.
+  primeBoatDebris(mesh, assetKey);
+
   // Same two-layer run scaling the creatures get (see spawnOne): the linear
   // per-difficulty term, then the roster-wide compounding ramp, so a boat
   // late in a run doesn't melt to a build that a ten-minute shark survives.
@@ -126,6 +133,7 @@ function spawnBoat(scene, difficulty) {
   boats.push({
     mesh,
     isTrawler,
+    assetKey,
     hp,
     maxHp: hp,
     dir,
@@ -151,6 +159,10 @@ function spawnBoat(scene, difficulty) {
     rock: 0,
     rockVel: 0,
   });
+
+  // Someone has to be sailing it. They ride the deck from here and get off it
+  // themselves once the hull is in trouble — see systems/crew.js.
+  spawnCrewFor(scene, boats[boats.length - 1]);
 }
 
 export function spawnAttractorOrb(scene, pos) {
@@ -216,13 +228,21 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
       b.mesh.scale.setScalar(b.spawnScale * (1 + CONFIG.fx.hitPop * t));
     }
 
-    // Sailed off the far side — despawn quietly, no reward.
+    // Sailed off the far side — despawn quietly, no reward. Its crew goes with
+    // it: they're still standing on a boat that just left the arena.
     const margin = b.radius + 5;
     if (b.sailX < bounds.left - margin || b.sailX > bounds.right + margin) {
+      releaseCrew(scene, b, false);
       scene.remove(b.mesh);
       boats.splice(i, 1);
     }
   }
+
+  // The wreckage of anything destroyed above, arcing and sinking on its own
+  // clock long after the boat it came from left the list — and the people, who
+  // outlive their boat by even longer.
+  updateBoatDebris(dt, scene);
+  updateCrew(dt, scene);
 
   // Attractor orbs: rise slowly and drag every settled chum bit toward the
   // player. This deliberately ignores the normal pickup magnet radius —
@@ -286,22 +306,50 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
 
   if (b.hp > 0) return false;
 
-  // Destroyed: dump the chum.
+  // Destroyed: dump the chum. Unlike the hull, which is thrown UP (see
+  // spawnBoatDebris), the catch spills out of the boat and goes straight down
+  // — it's the heavy half of the wreck, and the pile it leaves on the seabed
+  // is the thing the player is actually here for.
   const base = randomBetween(CONFIG.boats.chumMin, CONFIG.boats.chumMax);
   const count = Math.round(base * (b.isTrawler ? CONFIG.boats.trawlerChumMul : 1));
+  const toss = CONFIG.boats.chumToss ?? {};
   for (let i = 0; i < count; i++) {
+    const offset = (Math.random() - 0.5) * CONFIG.boats.chumSpread * 2;
     const pos = new THREE.Vector3(
-      b.mesh.position.x + (Math.random() - 0.5) * CONFIG.boats.chumSpread * 2,
-      b.mesh.position.y - Math.random() * 1.5,
+      b.mesh.position.x + offset,
+      // Under the water line, always: the hull rides the surface on a bob, so
+      // a drop measured straight off it can start fractionally in the air.
+      Math.min(b.mesh.position.y, bounds.surfaceY - 0.15) - Math.random() * 1.5,
       0
     );
+    // Scattered outward from the hull rather than appearing already spread:
+    // the orbs burst out, the water stops them within a second or so, and
+    // from there the ordinary sink carries them down (see updatePickups).
+    const spread = Math.max(CONFIG.boats.chumSpread, 1e-3);
+    const vel = {
+      x: (offset / spread) * (toss.out ?? 4) + b.dir * b.speed * (toss.carry ?? 0.3),
+      y: (toss.up ?? 1.6) * (Math.random() - 0.35),
+    };
     // Mid-tier chum: worth more than a minnow drop, less than a shark's.
-    spawnXpOrb(scene, pos, CONFIG.boats.chumXp, 0.8);
+    spawnXpOrb(scene, pos, CONFIG.boats.chumXp, 0.8, vel);
   }
 
   if (b.isTrawler) spawnAttractorOrb(scene, b.mesh.position.clone());
 
   hooks.onBoatDestroyed?.(b, count);
+
+  // THE BLAST. Order matters here: the wreckage and the crew have to exist
+  // before the explosion looks for something to throw. The crew is released
+  // first so anyone still standing on the deck is already a ragdoll by the
+  // time the impulse arrives.
+  releaseCrew(scene, b, true);
+  spawnBoatDebris(scene, b);
+  const blast = CONFIG.boats.blast ?? {};
+  const radius = (blast.radius ?? 9) * (b.isTrawler ? (blast.trawlerMul ?? 1.4) : 1);
+  const strength = (blast.strength ?? 11) * (b.isTrawler ? (blast.trawlerMul ?? 1.4) : 1);
+  blastDebris(b.mesh.position.x, b.mesh.position.y, radius, strength);
+  blastCrew(b.mesh.position.x, b.mesh.position.y, radius, strength);
+
   scene.remove(b.mesh);
   boats.splice(index, 1);
   return true;

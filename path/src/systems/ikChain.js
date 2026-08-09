@@ -220,6 +220,35 @@ export function coneGate(chain, cfg, aim) {
 // Solve one chain and blend the result over the clip. `weight` is already
 // eased by the caller; this only ever writes bones belonging to `chain`.
 export function applyChain(chain, dt, cfg, weight, tipMul, dir) {
+  // Each chain aims from its OWN root, not from the body's centre. A shared
+  // target would drag both flippers onto one line through the body; from
+  // their own roots they stay where they're attached and both point
+  // downrange.
+  chain.bones[0].updateWorldMatrix(true, true);
+  chain.bones[0].getWorldPosition(_bonePos);
+  _target.copy(dir).multiplyScalar(measureReach(chain, tipMul) * cfg.reach).add(_bonePos);
+  applyChainToPoint(chain, dt, cfg, weight, tipMul, _target);
+}
+
+/**
+ * Reach for an absolute world POINT rather than a direction at a fixed
+ * distance. Same solve, same clamp, same smoothing — only where the target
+ * comes from differs.
+ *
+ * The direction form above suits a fin: "point downrange", where downrange is
+ * infinitely far away and the limb just straightens along it. A tentacle
+ * grabbing a specific fish is the other problem — the target is a real place,
+ * it is usually INSIDE the chain's reach rather than beyond it, and the arm
+ * has to stop there rather than straightening through it. Expressing that as
+ * a direction would mean recovering the distance the caller already knew and
+ * throwing away the difference.
+ *
+ * `weight` is what makes this additive: 0 leaves the bones exactly as the clip
+ * (or, on a rig with no clips, the bind pose) left them, 1 hands them fully to
+ * the solver, and anything between blends the two. So an arm easing its weight
+ * up from 0 visibly reaches out of its resting pose toward the target.
+ */
+export function applyChainToPoint(chain, dt, cfg, weight, tipMul, target) {
   const bones = chain.bones;
   const n = bones.length;
 
@@ -235,14 +264,7 @@ export function applyChain(chain, dt, cfg, weight, tipMul, dir) {
     // blend back toward and the reference the bend limit is measured against.
     for (let i = 0; i < n; i++) chain.animQ[i].copy(bones[i].quaternion);
 
-    // Each chain aims from its OWN root, not from the body's centre. A shared
-    // target would drag both flippers onto one line through the body; from
-    // their own roots they stay where they're attached and both point
-    // downrange.
-    bones[0].getWorldPosition(_bonePos);
-    _target.copy(dir).multiplyScalar(measureReach(chain, tipMul) * cfg.reach).add(_bonePos);
-
-    solveChain(chain, _target, cfg, tipMul);
+    solveChain(chain, target, cfg, tipMul);
 
     const soft = cfg.softness ?? 1;
     for (let i = 0; i < n; i++) {

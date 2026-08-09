@@ -10,7 +10,15 @@
     "deploy": "npm run build && wrangler pages deploy dist --project-name=seal-survivor --branch=SealSurvivor-Main",
     "deploy:preview": "npm run build && wrangler pages deploy dist --project-name=seal-survivor --branch=preview",
     "placeholder": "node tools/make-placeholder-ship.mjs",
-    "playtest": "node tools/playtest-report.mjs"
+    "playtest": "node tools/playtest-report.mjs",
+    "test:crowd": "node tools/apex-crowd-test.mjs",
+    "test:upgrades": "node --import ./tools/vite-loader.mjs tools/upgrade-test.mjs",
+    "test:abilities": "node --import ./tools/vite-loader.mjs tools/ability-smoke.mjs",
+    "test:octopus": "node --import ./tools/vite-loader.mjs tools/octopus-rig-test.mjs",
+    "test:biolum": "node --import ./tools/vite-loader.mjs tools/biolum-test.mjs",
+    "test:boats": "node --import ./tools/vite-loader.mjs tools/boat-destruction-test.mjs",
+    "ship": "node tools/ship.mjs",
+    "test": "npm run test:upgrades && npm run test:abilities && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:boats"
   },
   "dependencies": {
     "@rive-app/canvas": "^2.39.2",

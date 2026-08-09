@@ -27,6 +27,9 @@ const tracks = new Map(); // name -> AudioBuffer
 let currentTrack = null;
 let queuedTrack = null;
 let loopStartTime = 0; // ctx time the current loop iteration began
+// ctx time playback started — the origin of the musical grid, and unlike
+// loopStartTime it never moves. See beatPhase().
+let gridAnchor = 0;
 let started = false;
 let pollTimer = null;
 let defaultsRequested = false;
@@ -66,6 +69,24 @@ export function beatDuration() {
 export function loopDuration() {
   const beats = Math.max(1, CONFIG.music.beatsPerLoop);
   return (60 / Math.max(1, CONFIG.music.bpm)) * beats;
+}
+
+// Where we are on the beat grid right now, in fractional beats since the
+// transport started. The whole part is which beat; the FRACTION is what
+// anything moving in time with the music actually wants — it says where in
+// the bar a cycle should currently be, so a loop can be started mid-way and
+// still land its next peak on a beat.
+//
+// Anchored to gridAnchor rather than loopStartTime because that one is
+// advanced by a whole loop every time the loop wraps (see pollQueue); phase
+// measured against it would reset every 32 beats.
+//
+// 0 while nothing is playing, which puts anything asking at the top of the
+// bar — the seal idling on the start menu before the audio context has been
+// unlocked animates from a clean phase rather than a random one.
+export function beatPhase() {
+  if (!started || !ctx) return 0;
+  return (ctx.currentTime - gridAnchor) / beatDuration();
 }
 
 function ensureChain() {
@@ -222,6 +243,8 @@ export function play(level = 1) {
   depthHeld = false;
   resumeUntil = 0;
   startSource(slot, ctx.currentTime + 0.02);
+  // Beat 0 is where the first loop starts, not where play() was called.
+  gridAnchor = loopStartTime;
   started = true;
   // Open at the surface value; the first updateDepth call glides it to
   // wherever the player actually is.

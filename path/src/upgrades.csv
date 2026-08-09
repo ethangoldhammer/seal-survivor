@@ -6,7 +6,7 @@ maxSpeed,Speedy Seal,+20% max speed,,TRUE,1,OpeanOcean_001
 multishot,Pocket Full of Stones,+1 projectile,99,TRUE,1,OpeanOcean_002
 pierce,Pierce,Bullets pierce +1 enemy,4,FALSE,1,OpeanOcean_003
 vitality,Healthy Pup!,+30 max HP,,TRUE,1,Beach_001
-magnet,Attractor B,+50% pickup radius,,TRUE,1,Beach_002
+magnet,Attractor B,+50% pickup and gulp radius,,TRUE,1,Beach_002
 regen,Talkin Bout Regeneration,+0.5 HP/sec,,TRUE,1,Beach_003
 velocity,Seal the Deal,+30% projectile speed,,TRUE,1,OpeanOcean_003
 homingMissile,Homing Mussels,+1 seeking mussel,15,TRUE,1,OpeanOcean_001
@@ -28,3 +28,7 @@ oxygenRefill,Breathwork,+40% surface refill speed,5,TRUE,1,Reef_002
 bakalar,Bakalar's Boat,Giant net filled with bombs. How am I driving? Call 707-EXIT-FLU,8,TRUE,1,TidePool_001
 calamari,Calamari Ring,Rings of fried squid pulse outward…,8,TRUE,1,VampireSquid
 dumbo,Dumbo Octopus,Charms nearby enemies.,8,TRUE,1,DumboOctopus
+scallopSquirter,Scallop Squirter,Wild bubble-jet shells that never fly straight.,12,TRUE,1,SeaAnemone
+oysterBlaster,Oyster Blaster,Glowing pearls that burst into shiny bomblets.,8,TRUE,1,Periwinkles
+octoGrab,Octopus Grabber,Tentacles reel fish in. Held fish can't touch you.,8,TRUE,1,Octopus
+orcaFamily,Orca Family,Three orcas hunt the boats up top.,6,TRUE,1,Humpback

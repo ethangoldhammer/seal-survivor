@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { beatDuration } from './music.js';
+import { beatDuration, beatPhase } from './music.js';
 import { createBoneSpring } from './boneSpring.js';
 
 // A real state machine for rigged creatures, not just a 3-way switch.
@@ -195,12 +195,51 @@ export function createAnimationController(instance) {
   // reversed; a death or an attack played backwards is nonsense.
   let playbackDir = 1;
   // >0 stretches locomotion so exactly one loop of the clip spans this many
-  // musical beats, whatever the clip was authored at. 0 = play at the clip's
-  // own tempo (everything except the crabs). The caller re-sets this as the
+  // musical beats, whatever the clip was authored at. 0 = defer to the state's
+  // own configured figure (see beatsFor). The caller re-sets this as the
   // creature speeds up and slows down; see the beatSync block in
   // entities/enemies.js, which quantises it to musical subdivisions so a
   // faster gait still starts each cycle on a beat.
   let beatSyncBeats = 0;
+  // Position within the current procedural wag cycle, 0..1. Only used by the
+  // sine fallback, and only while that state is beat-synced — see
+  // proceduralDrive, which advances it as a PHASE rather than multiplying the
+  // clock, so a tempo change bends the wag from where it is instead of
+  // teleporting it mid-swing.
+  let beatCycle = 0;
+
+  // How many beats one loop of `state` should span. The caller's explicit
+  // setBeatSync wins — the crabs re-derive theirs from their own speed every
+  // frame — and otherwise the state's configured figure applies, which is how
+  // idle animations ride the tempo without anyone driving them. One-shots are
+  // never synced: a death or a bite is a performance, not a loop.
+  function beatsFor(state) {
+    if (ONESHOT_STATES.includes(state)) return 0;
+    if (beatSyncBeats > 0) return beatSyncBeats;
+    const beats = CONFIG.animation.states[state]?.beatsPerLoop ?? 0;
+    return Number.isFinite(beats) && beats > 0 ? beats : 0;
+  }
+
+  // Start a beat-synced loop WHERE THE MUSIC IS rather than at frame 0.
+  //
+  // Stretching the clip to a whole number of beats gets its tempo right, but a
+  // cycle that begins the instant the seal stopped moving still peaks between
+  // beats — right length, visibly not in time, which reads as no sync at all.
+  // Offsetting once on entry puts the loop in phase, and it stays there for as
+  // long as the tempo holds, since the stretch keeps every cycle a whole
+  // number of beats long. The crossfade into the state covers the jump.
+  //
+  // `action` null means the procedural fallback is driving this state, which
+  // carries its own phase instead of a clip time.
+  function alignToBeat(state, action) {
+    const beats = beatsFor(state);
+    if (beats <= 0) return;
+    const cycles = beatPhase() / beats;
+    const frac = cycles - Math.floor(cycles);
+    if (!action) { beatCycle = frac; return; }
+    const clipLen = stateClipDuration[state] ?? 0;
+    if (clipLen > 0) action.time = frac * clipLen;
+  }
 
   function fadeDuration(state) {
     return CONFIG.animation.states[state]?.fade ?? CONFIG.animation.crossfade ?? 0.2;
@@ -225,6 +264,8 @@ export function createAnimationController(instance) {
         action.reset().setEffectiveWeight(1).fadeIn(fade).play();
         if (prev) prev.fadeOut(fade);
       }
+      // After reset(), which zeroes the clip time this is offsetting.
+      alignToBeat(state, action);
       current = action;
     }
     currentState = state;
@@ -246,18 +287,28 @@ export function createAnimationController(instance) {
   // Restoring first makes this a pure function of the clock, exactly like a
   // mixer clip, which is what the spring needs to have something to pull back
   // toward.
-  function proceduralDrive(dt, state, hitPulse) {
+  function proceduralDrive(dt, state, hitPulse, beats) {
     const cfg = CONFIG.animation.states[state] ?? CONFIG.animation.states.idle;
     const phase = CONFIG.animation.chainPhase;
     const n = wagBones.length;
+    // A beat-synced state takes its tempo from the music instead of from
+    // `wagSpeed`: one full sine cycle spans `beats` beats, which is the same
+    // deal a clip gets from the timeScale stretch below. Advanced by dt over
+    // the CURRENT beat length, so the wag simply follows the tempo when the
+    // death dive drags it down rather than jumping.
+    if (beats > 0) {
+      beatCycle += dt / Math.max(0.001, beats * beatDuration());
+      beatCycle -= Math.floor(beatCycle);
+    }
+    const wagPhase = beats > 0 ? beatCycle * Math.PI * 2 : clock * cfg.wagSpeed;
     for (let i = 0; i < n; i++) {
       const ramp = n > 1 ? i / (n - 1) : 1;
-      const wave = Math.sin(clock * cfg.wagSpeed - i * phase);
+      const wave = Math.sin(wagPhase - i * phase);
       wagBones[i].quaternion.copy(wagRest[i]);
       wagBones[i].rotation[axis] += wave * cfg.wagAmplitude * ramp + hitPulse * (1 - ramp);
     }
     for (let i = 0; i < headBones.length; i++) {
-      const wave = Math.sin(clock * cfg.wagSpeed * 0.5 + Math.PI / 2);
+      const wave = Math.sin(wagPhase * 0.5 + Math.PI / 2);
       headBones[i].quaternion.copy(headRest[i]);
       headBones[i].rotation[axis] += -wave * cfg.headBob - hitPulse * 0.6;
     }
@@ -302,13 +353,16 @@ export function createAnimationController(instance) {
       // rubber-banding it to the tempo, reads as a glitch rather than as
       // direction or rhythm.
       const oneShotNow = ONESHOT_STATES.includes(activeState);
-      if (!oneShotNow && beatSyncBeats > 0) {
-        // Stretch the clip so one full loop lasts exactly `beatSyncBeats`
-        // beats. This REPLACES clipTimeScale rather than multiplying it: the
-        // whole point is that the tempo now comes from the music, so folding
-        // in a second speed multiplier would put it back off the grid.
+      const beats = beatsFor(activeState); // 0 for one-shots, so they never stretch
+      if (beats > 0) {
+        // Stretch the clip so one full loop lasts exactly `beats` beats. This
+        // REPLACES clipTimeScale rather than multiplying it: the whole point
+        // is that the tempo now comes from the music, so folding in a second
+        // speed multiplier would put it back off the grid. Re-derived every
+        // frame, so a tuner BPM change (or the death dive dragging the tape
+        // down) retimes the loop as it happens.
         const clipLen = stateClipDuration[activeState] ?? 0;
-        const target = beatSyncBeats * beatDuration();
+        const target = beats * beatDuration();
         if (clipLen > 0 && target > 0) base = clipLen / target;
       }
       action.timeScale = oneShotNow ? base : base * playbackDir;
@@ -326,8 +380,12 @@ export function createAnimationController(instance) {
     // reads as fast movement rather than freezing.
     if (wagBones.length) {
       const proceduralState = CONFIG.animation.states[activeState] ? activeState : locomotionState;
+      // Entering the state, which is where a clip would be phase-aligned by
+      // switchTo — the fallback never gets there, since it has no action to
+      // switch to.
+      if (activeState !== currentState) alignToBeat(proceduralState, null);
       currentState = activeState;
-      proceduralDrive(dt, proceduralState, hitPulse);
+      proceduralDrive(dt, proceduralState, hitPulse, beatsFor(proceduralState));
       return;
     }
 
@@ -401,6 +459,7 @@ export function createAnimationController(instance) {
       locomotionState = 'idle';
       playbackDir = 1;
       beatSyncBeats = 0;
+      beatCycle = 0;
       // Stop every action outright rather than crossfading: fading from a
       // clamped death pose leaves it bleeding into the first moments of the
       // new run.
@@ -410,6 +469,9 @@ export function createAnimationController(instance) {
       const idle = stateAction.idle;
       if (idle) {
         idle.reset().setEffectiveWeight(1).play();
+        // Started outside switchTo, so it needs the phase offset applied by
+        // hand — a run that begins mid-bar should still open in time.
+        alignToBeat('idle', idle);
         current = idle;
         currentState = 'idle';
       }

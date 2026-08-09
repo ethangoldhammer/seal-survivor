@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { isInvulnerable } from './strike.js';
 import { boats, damageBoat, hitsBoat } from './boats.js';
+import { damageDebris } from './boatDebris.js';
 import { enemies, removeEnemy } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
@@ -110,6 +111,28 @@ export function resolveCombat(dt, scene, hooks) {
       b.pierce -= 1;
       if (destroyed) break;
     }
+  }
+
+  // --- player bullets vs floating wreckage ---------------------------------
+  // The chunks a sunk boat leaves are targets in their own right: they take
+  // damage, break up, and sometimes have something in them. Kept as its own
+  // pass rather than folded into the hull loop above because wreckage has no
+  // faction, no hp bar and no death hook — it's scenery you can shoot.
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const b = projectiles[i];
+    if (b.faction !== 'player') continue;
+    if (b.hitLock > 0) continue;
+    const hit = damageDebris(scene, b.mesh.position.x, b.mesh.position.y, b.radius, b.damage, {
+      // One pellet, one chunk — the blast paths (splashes, the dash) are the
+      // ones that take everything they cover.
+      single: true,
+      onDebrisHit: (x, y) => hooks.onDebrisHit?.(x, y),
+      onDebrisBroken: (x, y) => hooks.onDebrisBroken?.(x, y),
+    });
+    if (!hit) continue;
+    // Spent on the wreckage unless it pierces, exactly like a hull.
+    if (b.pierce > 0) b.pierce -= 1;
+    else if (!tryChain(b, enemies, null, hooks)) despawn(scene, i);
   }
 
   // --- enemy contact damage ------------------------------------------------

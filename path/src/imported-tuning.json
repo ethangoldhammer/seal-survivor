@@ -174,7 +174,7 @@
     },
     "missile": {
       "glow": 2.25,
-      "sizeMultiplier": 7.38,
+      "sizeMultiplier": 2,
       "tint": null,
       "emissive": null,
       "roughness": 0.5,
@@ -234,7 +234,7 @@
     },
     "trapBubble": {
       "glow": 6.4,
-      "sizeMultiplier": 4.16,
+      "sizeMultiplier": 5.02,
       "tint": 3465155,
       "emissive": null,
       "roughness": 0.5,
@@ -324,7 +324,7 @@
     },
     "enemyFishPackB": {
       "tint": null,
-      "emissive": null,
+      "emissive": 12451808,
       "repeatX": 1,
       "repeatY": 1,
       "sizeMultiplier": 1,
@@ -332,7 +332,7 @@
     },
     "enemyFishPackC": {
       "tint": null,
-      "emissive": null,
+      "emissive": 16751001,
       "repeatX": 1,
       "repeatY": 1,
       "sizeMultiplier": 1,
@@ -340,18 +340,18 @@
     },
     "enemyStingray": {
       "tint": null,
-      "emissive": null,
+      "emissive": 16109776,
       "repeatX": 1,
       "repeatY": 1,
       "sizeMultiplier": 1,
-      "glow": 1
+      "glow": 1.55
     },
     "enemySeaTurtle": {
       "tint": null,
       "emissive": 5947261,
       "repeatX": 1,
       "repeatY": 1,
-      "sizeMultiplier": 1,
+      "sizeMultiplier": 4.08,
       "glow": 1.8
     },
     "enemyAnimatedCrab": {
@@ -360,7 +360,8 @@
       "repeatX": 1,
       "repeatY": 1,
       "sizeMultiplier": 2.04,
-      "glow": 0.9
+      "glow": 0.9,
+      "emissiveMask": null
     },
     "enemyOyster": {
       "tint": null,
@@ -372,7 +373,7 @@
     },
     "dumboOcto": {
       "tint": null,
-      "emissive": null,
+      "emissive": 13827886,
       "repeatX": 1,
       "repeatY": 1,
       "sizeMultiplier": 1,
@@ -400,7 +401,8 @@
       "repeatX": 1,
       "repeatY": 1,
       "sizeMultiplier": 2.42,
-      "glow": 4.85
+      "glow": 4.85,
+      "emissiveMask": false
     },
     "xpOrb": {
       "tint": null,
@@ -409,6 +411,60 @@
       "repeatY": 1,
       "sizeMultiplier": 1,
       "glow": 1
+    },
+    "octoGrabber": {
+      "tint": null,
+      "emissive": 16759552,
+      "repeatX": 1,
+      "repeatY": 1,
+      "sizeMultiplier": 1,
+      "glow": 2.65,
+      "emissiveMask": null
+    },
+    "orcaFriend": {
+      "tint": null,
+      "emissive": null,
+      "repeatX": 1,
+      "repeatY": 1,
+      "sizeMultiplier": 1,
+      "glow": 1,
+      "emissiveMask": null
+    },
+    "scallopShell": {
+      "tint": null,
+      "emissive": 16773565,
+      "repeatX": 1,
+      "repeatY": 1,
+      "sizeMultiplier": 1,
+      "glow": 2.9,
+      "emissiveMask": null
+    },
+    "pearl": {
+      "tint": null,
+      "emissive": null,
+      "repeatX": 1,
+      "repeatY": 1,
+      "sizeMultiplier": 1,
+      "glow": 3.65,
+      "emissiveMask": null
+    },
+    "pearlBomblet": {
+      "tint": null,
+      "emissive": null,
+      "repeatX": 1,
+      "repeatY": 1,
+      "sizeMultiplier": 1,
+      "glow": 4.5,
+      "emissiveMask": null
+    },
+    "voicemailBomb": {
+      "tint": null,
+      "emissive": null,
+      "repeatX": 1,
+      "repeatY": 1,
+      "sizeMultiplier": 1,
+      "glow": 4.2,
+      "emissiveMask": null
     }
   },
   "arena": {
@@ -428,6 +484,182 @@
       "enabled": true,
       "max": 0.14,
       "decay": 7
+    }
+  },
+  "cinecam": {
+    "enabled": true,
+    "base": {
+      "zoom": 1.18,
+      "zoomMax": 3,
+      "zoomStiffness": 26,
+      "zoomDamping": 0.8,
+      "stiffness": {
+        "x": 33,
+        "y": 33
+      },
+      "damping": 0.86,
+      "deadZone": {
+        "x": 0.08,
+        "y": 0.13
+      },
+      "lookAhead": 0.48,
+      "lookAheadMax": 20,
+      "lookAheadLag": 0.4,
+      "aimBias": 3.5,
+      "defocus": 0.5,
+      "focusRadius": 0.41,
+      "focusFeather": 0.39,
+      "flare": 0.36,
+      "vignette": 0.12,
+      "path": 0,
+      "blendIn": 0.4,
+      "blendOut": 0.6
+    },
+    "states": {
+      "roundStart": {
+        "hold": 1.6,
+        "blendIn": 0.9,
+        "blendOut": 1.4,
+        "zoom": 1.08,
+        "stiffMul": 0.45,
+        "zoomStiffMul": 0.45,
+        "lookAheadMul": 0.2,
+        "aimBiasMul": 0.3,
+        "defocus": 0.26,
+        "focusRadius": 0.4,
+        "flare": 0.7,
+        "vignette": 0.1
+      },
+      "charging": {
+        "blendIn": 0.36,
+        "blendOut": 0.5,
+        "zoom": 1.55,
+        "zoomDampMul": 0.72,
+        "stiffMul": 1.5,
+        "zoomStiffMul": 1.5,
+        "lookAheadMul": 0.35,
+        "aimBiasMul": 0.4,
+        "deadZoneMul": 0.4,
+        "defocus": 0.96,
+        "focusRadius": 0.17,
+        "focusFeather": 0.3,
+        "flare": 0.5,
+        "vignette": 0.5,
+        "path": 1
+      },
+      "boosting": {
+        "blendIn": 0.12,
+        "blendOut": 0.46,
+        "zoom": 1.18,
+        "stiffMul": 0.55,
+        "zoomStiffMul": 2.6,
+        "dampMul": 0.8,
+        "lookAheadMul": 2,
+        "aimBiasMul": 0.2,
+        "defocus": 0.8,
+        "focusRadius": 0.34,
+        "focusFeather": 0.2,
+        "flare": 0.9,
+        "vignette": 0.46
+      },
+      "foodChain": {
+        "hold": 1.1,
+        "blendIn": 0.08,
+        "blendOut": 0.9,
+        "zoom": 1.62,
+        "stiffMul": 2.2,
+        "zoomStiffMul": 2.2,
+        "lookAheadMul": 0.3,
+        "aimBiasMul": 0,
+        "deadZoneMul": 0,
+        "defocus": 1,
+        "focusRadius": 0.2,
+        "focusFeather": 0.26,
+        "flare": 1.4,
+        "vignette": 0.56
+      },
+      "deathHit": {
+        "hold": 0.5,
+        "blendIn": 0.06,
+        "blendOut": 0.6,
+        "zoom": 1.5,
+        "stiffMul": 2.5,
+        "zoomStiffMul": 2.5,
+        "lookAheadMul": 0,
+        "aimBiasMul": 0,
+        "deadZoneMul": 0,
+        "defocus": 1,
+        "focusRadius": 0.14,
+        "focusFeather": 0.22,
+        "flare": 1.1,
+        "vignette": 0.7
+      },
+      "deathFall": {
+        "blendIn": 1.2,
+        "blendOut": 0.8,
+        "zoom": 1.15,
+        "stiffMul": 0.3,
+        "zoomStiffMul": 0.3,
+        "dampMul": 1.2,
+        "lookAheadMul": 0.6,
+        "aimBiasMul": 0,
+        "defocus": 0.7,
+        "focusRadius": 0.3,
+        "focusFeather": 0.4,
+        "flare": 0.3,
+        "vignette": 0.6
+      },
+      "deathFloor": {
+        "blendIn": 0.8,
+        "blendOut": 0.8,
+        "zoom": 1.35,
+        "stiffMul": 0.8,
+        "zoomStiffMul": 0.8,
+        "lookAheadMul": 0,
+        "aimBiasMul": 0,
+        "deadZoneMul": 0,
+        "defocus": 0.9,
+        "focusRadius": 0.22,
+        "focusFeather": 0.3,
+        "flare": 0.16,
+        "vignette": 0.8
+      }
+    },
+    "lens": {
+      "tiltShift": {
+        "enabled": true,
+        "strength": 1.22,
+        "radius": 2
+      },
+      "flare": {
+        "enabled": true,
+        "strength": 0.16,
+        "ghosts": 3,
+        "spacing": 0.37,
+        "halo": 0.75,
+        "streak": 0.006,
+        "streakGain": 1.06
+      },
+      "path": {
+        "enabled": true,
+        "width": 0.1,
+        "feather": 0.18,
+        "length": 0.3,
+        "lengthPerPower": 0.36,
+        "vignette": 0.46
+      },
+      "droplets": {
+        "enabled": true,
+        "perBreach": 0.52,
+        "life": 1.6,
+        "density": 9,
+        "size": 0.15,
+        "refract": 0.05,
+        "spec": 0.5,
+        "slide": 0.7,
+        "stretch": 0.65,
+        "taper": 0.56
+      }
     }
   },
   "lighting": {
@@ -453,13 +685,120 @@
     "depthLine": 1192009,
     "seabed": 662052
   },
+  "dayNight": {
+    "enabled": true,
+    "startHour": 7.5,
+    "scale": 60,
+    "chumSeconds": 0.35,
+    "restartAtMorning": false,
+    "paused": false,
+    "scrubHour": 7.5,
+    "sky": [
+      {
+        "hour": 0,
+        "zenith": 198415,
+        "horizon": 529959,
+        "light": 0.1
+      },
+      {
+        "hour": 5,
+        "zenith": 1056570,
+        "horizon": 5455979,
+        "light": 0.24
+      },
+      {
+        "hour": 6.5,
+        "zenith": 2974614,
+        "horizon": 16751971,
+        "light": 0.56
+      },
+      {
+        "hour": 9,
+        "zenith": 4164297,
+        "horizon": 11984885,
+        "light": 0.9
+      },
+      {
+        "hour": 12,
+        "zenith": 4956128,
+        "horizon": 14086143,
+        "light": 1
+      },
+      {
+        "hour": 17,
+        "zenith": 4359611,
+        "horizon": 15910035,
+        "light": 0.82
+      },
+      {
+        "hour": 19,
+        "zenith": 2046553,
+        "horizon": 16741440,
+        "light": 0.42
+      },
+      {
+        "hour": 20.5,
+        "zenith": 661296,
+        "horizon": 3483722,
+        "light": 0.18
+      },
+      {
+        "hour": 22,
+        "zenith": 198415,
+        "horizon": 529959,
+        "light": 0.1
+      }
+    ],
+    "skyCurve": 1.35,
+    "stars": {
+      "enabled": true,
+      "intensity": 0.55,
+      "density": 0.55,
+      "twinkle": 0.7
+    },
+    "orbit": {
+      "radiusX": 0.72,
+      "radiusY": 0.74,
+      "centerY": 0,
+      "riseHour": 6,
+      "parallax": 0.15,
+      "depth": -5.8
+    },
+    "sun": {
+      "size": 5.2,
+      "color": 16773320,
+      "brightness": 1.25,
+      "halo": 3.4,
+      "haloStrength": 0.56,
+      "horizonGlow": 1.7,
+      "horizonRange": 1.6,
+      "texture": null,
+      "model": null,
+      "maskToDisc": true
+    },
+    "moon": {
+      "size": 3.4,
+      "color": 13624063,
+      "brightness": 0.85,
+      "halo": 3,
+      "haloStrength": 0.36,
+      "horizonGlow": 1.5,
+      "horizonRange": 1.6,
+      "texture": "/textures/sky/moon.webp",
+      "model": null,
+      "maskToDisc": true
+    }
+  },
   "caustics": {
     "enabled": true,
     "intensity": 0.28,
     "scale": 0.52,
     "speed": 0.56,
     "falloff": 1,
-    "color": 12578815
+    "color": 12578815,
+    "followSun": true,
+    "nightFloor": 0.22,
+    "tintMix": 0.55
   },
   "godrays": {
     "enabled": true,
@@ -471,7 +810,73 @@
     "beamWidth": 2.4,
     "intensity": 0.24,
     "falloff": 0.6,
-    "color": 15465215
+    "color": 15465215,
+    "followSun": true,
+    "nightFloor": 0.16,
+    "tintMix": 0.55,
+    "followTilt": 1.6,
+    "followShift": 0.45
+  },
+  "weather": {
+    "enabled": true,
+    "forceIntensity": -1,
+    "firstDelay": [
+      45,
+      150
+    ],
+    "gap": [
+      150,
+      420
+    ],
+    "duration": [
+      30,
+      75
+    ],
+    "peak": [
+      0.45,
+      1
+    ],
+    "rampIn": 8,
+    "rampOut": 12,
+    "dim": 0.46,
+    "wind": {
+      "base": 0.15,
+      "gust": 0.85,
+      "speed": [
+        0.11,
+        0.29
+      ],
+      "calmGust": 0.35
+    },
+    "rain": {
+      "enabled": true,
+      "maxDrops": 1200,
+      "perSecond": 900,
+      "speed": [
+        30,
+        46
+      ],
+      "length": [
+        0.8,
+        1.9
+      ],
+      "drift": 26,
+      "turbulence": 6,
+      "color": 13034229,
+      "opacity": 0.46,
+      "splash": true,
+      "splashChance": 0.22
+    },
+    "clouds": {
+      "enabled": true,
+      "color": 660000,
+      "opacity": 0.6,
+      "coverage": 0.42,
+      "softness": 0.36,
+      "scale": 0.055,
+      "drift": 3.2,
+      "base": 0.12
+    }
   },
   "player": {
     "maxHp": 100,
@@ -508,7 +913,6 @@
       "enemyGreatWhite": true,
       "enemyMegalodon": true,
       "enemyMightyMeg": true,
-      "enemySharkLowpoly": true,
       "enemyOrca": true,
       "enemyDolphin": true,
       "enemyOtter": false,
@@ -516,6 +920,7 @@
       "enemyStingray": false,
       "enemyWalkingCrab": false,
       "enemyAnimatedCrab": false,
+      "enemySharkLowpoly": true,
       "enemyCrabClaw": false,
       "enemySchoolPod": false
     }
@@ -611,6 +1016,15 @@
       "damageMulMax": 2.2,
       "reachMulMin": 0.6,
       "reachMulMax": 2.2,
+      "gulp": {
+        "blockEating": true,
+        "radius": 5,
+        "tell": {
+          "shiver": 0.07,
+          "hz": 18,
+          "spinMul": 3.5
+        }
+      },
       "shake": 0.09,
       "hapticInterval": 0.07,
       "flashTime": 0.28,
@@ -718,7 +1132,21 @@
     "branchesPerHop": 3,
     "branchLength": 0.8,
     "branchTaper": 0.55,
-    "flickerSpeed": 51
+    "flickerSpeed": 51,
+    "storm": {
+      "enabled": true,
+      "glowMul": 2.3,
+      "widthMul": 1.7,
+      "amplitudeMul": 1.9,
+      "contrastMul": 1.35,
+      "branchChanceMul": 1.8,
+      "branchesPerHopMul": 1.6,
+      "flickerMul": 1.5,
+      "lifeMul": 1.35,
+      "damageInStorm": 1,
+      "color": 15131391,
+      "colorMix": 0.75
+    }
   },
   "starfish": {
     "baseFireRate": 0.95,
@@ -822,7 +1250,151 @@
     "haulSpeed": 5.5,
     "haulCatchGap": 0.6,
     "bobSpeed": 1.6,
-    "bobAmount": 0.22
+    "bobAmount": 0.22,
+    "bomb": {
+      "enabled": true,
+      "dropInterval": 3.2,
+      "dropIntervalPerLevel": 0.22,
+      "dropIntervalFloor": 1.2,
+      "minCatch": 1,
+      "fallSpeed": 9,
+      "fuse": 0.55,
+      "radius": 11,
+      "radiusPerLevel": 1.1,
+      "damage": 61,
+      "damagePerLevel": 22,
+      "knockback": 14,
+      "chumPerKill": 3,
+      "chumScatter": 4,
+      "chumXp": 3,
+      "chumSpread": 5.5,
+      "size": 0.72,
+      "color": 16765562,
+      "blinkSpeed": 9
+    }
+  },
+  "scallop": {
+    "fireRate": 2.6,
+    "damage": 26,
+    "speed": 15,
+    "life": 7.5,
+    "radius": 0.42,
+    "pulseInterval": [
+      0.18,
+      0.42
+    ],
+    "pulseSpeed": [
+      11,
+      19
+    ],
+    "turnRange": 2.4,
+    "drag": 1.9,
+    "sinkAccel": 2.2,
+    "maxBounces": 4,
+    "restitution": 0.86,
+    "spin": 7,
+    "launchStagger": 0.09
+  },
+  "oyster": {
+    "fireRate": 1.5,
+    "fireRatePerLevel": 0.06,
+    "fireRateFloor": 0.85,
+    "damage": 22,
+    "damagePerLevel": 5,
+    "speed": 13,
+    "life": 3.2,
+    "radius": 0.4,
+    "pearlColor": 16774102,
+    "pearlGlow": 2.4,
+    "bomblets": 4,
+    "bombletsPerLevel": 1,
+    "bombletDamage": 14,
+    "bombletDamagePerLevel": 4,
+    "bombletSpeed": [
+      4,
+      8
+    ],
+    "bombletLife": [
+      0.3,
+      0.55
+    ],
+    "bombletRadius": 0.2,
+    "bombletBlastRadius": 2.4,
+    "bombletBlastRadiusPerLevel": 0.18,
+    "bombletSpread": 6.283,
+    "bombletColor": 16773312,
+    "bombletGlow": 3.2,
+    "bombletDrag": 2.4
+  },
+  "octoGrab": {
+    "arms": 2,
+    "armsPerLevel": 1,
+    "reach": 4,
+    "reachPerLevel": 0.3,
+    "reachStretch": 1.5,
+    "grabCooldown": 0.9,
+    "graspTimeout": 0.7,
+    "reelSpeed": 7.5,
+    "reelSpeedPerLevel": 0.5,
+    "popDistance": 1.5,
+    "maxTargetRadius": 1.6,
+    "chumPerPop": 2,
+    "chumSpread": 1.4,
+    "chumXp": 2,
+    "ik": {
+      "iterations": 5,
+      "rootInfluence": 0.25,
+      "maxBend": 0.85,
+      "softness": 0.8,
+      "smoothing": 12,
+      "tolerance": 0.02
+    },
+    "reachWeight": 0.95,
+    "dangleWeight": 0.35,
+    "weightLerpIn": 6,
+    "weightLerpOut": 2.5,
+    "dangleLength": 2.6,
+    "dangleSpread": 1.7,
+    "dangleDroop": 0.8,
+    "idleWave": 1.7,
+    "idleAmp": 0.55,
+    "head": {
+      "weight": 0.8,
+      "lead": 3.2,
+      "thrust": 26,
+      "maxSpeed": 15,
+      "drag": 3.4,
+      "pulseInterval": 0.75,
+      "pulseFraction": 0.45
+    },
+    "bodyOffset": [
+      -1.9,
+      -1.1
+    ],
+    "bodyFollow": 7
+  },
+  "orca": {
+    "count": 3,
+    "damage": 31,
+    "damagePerLevel": 14,
+    "attackInterval": 2.6,
+    "attackIntervalPerLevel": 0.18,
+    "attackIntervalFloor": 1,
+    "chargeSpeed": 22,
+    "chargeSpeedPerLevel": 1.4,
+    "cruiseSpeed": 9,
+    "hitRadius": 2,
+    "huntRange": 34,
+    "fallbackMinRadius": 0.9,
+    "knockback": 6,
+    "formationSpacing": 2.6,
+    "formationOffset": [
+      -3.4,
+      1.6
+    ],
+    "formationFollow": 5.5,
+    "breachChance": 0.35,
+    "turnRate": 5.5
   },
   "calamari": {
     "interval": 3.4,
@@ -894,13 +1466,6 @@
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
-      "radius": 0.4,
-      "hp": 6,
-      "hpPerDifficulty": 0.8,
-      "speed": 6,
-      "speedVariance": 1.5,
-      "contactDamage": 3,
-      "xp": 2,
       "group": {
         "min": 6,
         "max": 14,
@@ -915,28 +1480,13 @@
         "fleeFromPredators": 9.5,
         "fleeRadius": 7,
         "wander": 1.2
-      },
-      "weight": 0.6,
-      "weightPerDifficulty": 0.04,
-      "maxWeight": 1.2,
-      "maxConcurrent": 90,
-      "minDifficulty": 0,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 0
+      }
     },
     "shark": {
       "separates": true,
       "asset": "enemyShark",
       "behavior": "hunt",
       "faceMotion": true,
-      "radius": 1.2,
-      "hp": 75,
-      "hpPerDifficulty": 5,
-      "speed": 7,
-      "speedVariance": 1,
-      "contactDamage": 24,
-      "xp": 15,
-      "turnRate": 2.6,
       "hunt": {
         "preyRadius": 18,
         "biteRange": 1.6,
@@ -946,28 +1496,13 @@
         "growPerMeal": 0.03,
         "maxGrow": 1.35,
         "wanderChange": 1.8
-      },
-      "weight": 0.15,
-      "weightPerDifficulty": 0.1,
-      "maxWeight": 0.5,
-      "maxConcurrent": 6,
-      "spawnGroup": "apex",
-      "minDifficulty": 0.5,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 3
+      }
     },
     "trout": {
       "asset": "enemyTrout",
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
-      "radius": 0.42,
-      "hp": 7,
-      "hpPerDifficulty": 0.9,
-      "speed": 5.5,
-      "speedVariance": 1.3,
-      "contactDamage": 3,
-      "xp": 3,
       "group": {
         "min": 4,
         "max": 10,
@@ -982,27 +1517,13 @@
         "fleeFromPredators": 8.5,
         "fleeRadius": 7,
         "wander": 1.1
-      },
-      "weight": 0.7,
-      "weightPerDifficulty": 0.05,
-      "maxWeight": 1.4,
-      "maxConcurrent": 60,
-      "minDifficulty": 0,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 0
+      }
     },
     "tang": {
       "asset": "enemyTang",
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
-      "radius": 0.4,
-      "hp": 6,
-      "hpPerDifficulty": 0.8,
-      "speed": 5,
-      "speedVariance": 1.2,
-      "contactDamage": 3,
-      "xp": 3,
       "group": {
         "min": 5,
         "max": 12,
@@ -1017,27 +1538,13 @@
         "fleeFromPredators": 8.8,
         "fleeRadius": 7,
         "wander": 1.2
-      },
-      "weight": 0.7,
-      "weightPerDifficulty": 0.05,
-      "maxWeight": 1.4,
-      "maxConcurrent": 60,
-      "minDifficulty": 0,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 0
+      }
     },
     "reeffish": {
       "asset": "enemyReeffish",
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
-      "radius": 0.38,
-      "hp": 6,
-      "hpPerDifficulty": 0.8,
-      "speed": 5.5,
-      "speedVariance": 1.4,
-      "contactDamage": 3,
-      "xp": 3,
       "group": {
         "min": 5,
         "max": 12,
@@ -1052,27 +1559,13 @@
         "fleeFromPredators": 8.6,
         "fleeRadius": 7,
         "wander": 1.15
-      },
-      "weight": 0.6,
-      "weightPerDifficulty": 0.04,
-      "maxWeight": 1.2,
-      "maxConcurrent": 60,
-      "minDifficulty": 0,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 0
+      }
     },
     "fishPackA": {
       "asset": "enemyFishPackA",
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
-      "radius": 0.35,
-      "hp": 6,
-      "hpPerDifficulty": 0.8,
-      "speed": 5,
-      "speedVariance": 1.2,
-      "contactDamage": 3,
-      "xp": 3,
       "group": {
         "min": 4,
         "max": 9,
@@ -1087,27 +1580,13 @@
         "fleeFromPredators": 8.5,
         "fleeRadius": 7,
         "wander": 1.1
-      },
-      "weight": 0.35,
-      "weightPerDifficulty": 0.02,
-      "maxWeight": 0.7,
-      "maxConcurrent": 40,
-      "minDifficulty": 0,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 0
+      }
     },
     "fishPackB": {
       "asset": "enemyFishPackB",
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
-      "radius": 0.42,
-      "hp": 7,
-      "hpPerDifficulty": 0.9,
-      "speed": 4.6,
-      "speedVariance": 1,
-      "contactDamage": 3,
-      "xp": 4,
       "group": {
         "min": 3,
         "max": 7,
@@ -1122,27 +1601,13 @@
         "fleeFromPredators": 8.2,
         "fleeRadius": 7,
         "wander": 1
-      },
-      "weight": 0.35,
-      "weightPerDifficulty": 0.02,
-      "maxWeight": 0.7,
-      "maxConcurrent": 40,
-      "minDifficulty": 0,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 0
+      }
     },
     "fishPackC": {
       "asset": "enemyFishPackC",
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
-      "radius": 0.32,
-      "hp": 5,
-      "hpPerDifficulty": 0.7,
-      "speed": 5.4,
-      "speedVariance": 1.3,
-      "contactDamage": 2,
-      "xp": 3,
       "group": {
         "min": 4,
         "max": 10,
@@ -1157,28 +1622,13 @@
         "fleeFromPredators": 8.8,
         "fleeRadius": 7,
         "wander": 1.2
-      },
-      "weight": 0.35,
-      "weightPerDifficulty": 0.02,
-      "maxWeight": 0.7,
-      "maxConcurrent": 40,
-      "minDifficulty": 0,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 0
+      }
     },
     "otter": {
       "separates": true,
       "asset": "enemyOtter",
       "behavior": "hunt",
       "faceMotion": true,
-      "radius": 0.7,
-      "hp": 26,
-      "hpPerDifficulty": 3,
-      "speed": 8,
-      "speedVariance": 1.5,
-      "contactDamage": 10,
-      "xp": 7,
-      "turnRate": 4.5,
       "hunt": {
         "preyRadius": 14,
         "biteRange": 1.3,
@@ -1188,28 +1638,13 @@
         "growPerMeal": 0.015,
         "maxGrow": 1.2,
         "wanderChange": 1.6
-      },
-      "weight": 0.3,
-      "weightPerDifficulty": 0.04,
-      "maxWeight": 0.6,
-      "maxConcurrent": 8,
-      "minDifficulty": 0.3,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 3
+      }
     },
     "greatWhite": {
       "separates": true,
       "asset": "enemyGreatWhite",
       "behavior": "hunt",
       "faceMotion": true,
-      "radius": 1.4,
-      "hp": 85,
-      "hpPerDifficulty": 9,
-      "speed": 6,
-      "speedVariance": 1,
-      "contactDamage": 26,
-      "xp": 18,
-      "turnRate": 2.2,
       "hunt": {
         "preyRadius": 20,
         "biteRange": 1.8,
@@ -1219,29 +1654,13 @@
         "growPerMeal": 0.03,
         "maxGrow": 1.35,
         "wanderChange": 2
-      },
-      "weight": 0.14,
-      "weightPerDifficulty": 0.035,
-      "maxWeight": 0.45,
-      "maxConcurrent": 4,
-      "minDifficulty": 1.5,
-      "spawnGroup": "apex",
-      "spawnRateMul": 1,
-      "minPlayerLevel": 0
+      }
     },
     "megalodon": {
       "separates": true,
       "asset": "enemyMegalodon",
       "behavior": "hunt",
       "faceMotion": true,
-      "radius": 2.2,
-      "hp": 220,
-      "hpPerDifficulty": 20,
-      "speed": 5.5,
-      "speedVariance": 0.8,
-      "contactDamage": 42,
-      "xp": 40,
-      "turnRate": 1.6,
       "hunt": {
         "preyRadius": 24,
         "biteRange": 2.6,
@@ -1251,29 +1670,13 @@
         "growPerMeal": 0.02,
         "maxGrow": 1.25,
         "wanderChange": 2.4
-      },
-      "weight": 0.05,
-      "weightPerDifficulty": 0.015,
-      "maxWeight": 0.18,
-      "maxConcurrent": 2,
-      "minDifficulty": 3,
-      "spawnGroup": "apex",
-      "spawnRateMul": 1,
-      "minPlayerLevel": 8
+      }
     },
     "mightyMeg": {
       "separates": true,
       "asset": "enemyMightyMeg",
       "behavior": "hunt",
       "faceMotion": true,
-      "radius": 2,
-      "hp": 190,
-      "hpPerDifficulty": 18,
-      "speed": 6,
-      "speedVariance": 0.9,
-      "contactDamage": 38,
-      "xp": 36,
-      "turnRate": 1.8,
       "hunt": {
         "preyRadius": 22,
         "biteRange": 2.4,
@@ -1283,15 +1686,7 @@
         "growPerMeal": 0.02,
         "maxGrow": 1.25,
         "wanderChange": 2.2
-      },
-      "weight": 0.05,
-      "weightPerDifficulty": 0.015,
-      "maxWeight": 0.18,
-      "maxConcurrent": 2,
-      "minDifficulty": 2.6,
-      "spawnGroup": "apex",
-      "spawnRateMul": 1,
-      "minPlayerLevel": 8
+      }
     },
     "walkingCrab": {
       "asset": "enemyWalkingCrab",
@@ -1299,17 +1694,6 @@
       "faceCamera": true,
       "gaitTravel": -1,
       "collides": true,
-      "radius": 0.8,
-      "hp": 34,
-      "hpPerDifficulty": 8,
-      "speed": 3,
-      "speedVariance": 0.6,
-      "contactDamage": 12,
-      "xp": 9,
-      "scalePerDifficulty": 0.015,
-      "maxGrowth": 1.6,
-      "contactDamagePerDifficulty": 0.45,
-      "speedPerDifficulty": 0.04,
       "beatSync": {
         "beatsPerStride": 1,
         "strides": 5,
@@ -1335,13 +1719,6 @@
           "distanceBias": 18
         }
       },
-      "weight": 0.35,
-      "weightPerDifficulty": 0.03,
-      "maxWeight": 0.6,
-      "maxConcurrent": 10,
-      "minDifficulty": 0.4,
-      "spawnRateMul": 0,
-      "minPlayerLevel": 5,
       "faceMotion": true
     },
     "orca": {
@@ -1349,32 +1726,16 @@
       "asset": "enemyOrca",
       "behavior": "hunt",
       "faceMotion": true,
-      "radius": 1.8,
-      "hp": 260,
-      "hpPerDifficulty": 16,
-      "speed": 6.2,
-      "speedVariance": 0.8,
-      "contactDamage": 34,
-      "xp": 45,
-      "turnRate": 2,
       "hunt": {
-        "preyRadius": 34,
+        "preyRadius": 24,
         "biteRange": 2.2,
-        "biteCooldown": 0.45,
-        "healPerMeal": 22,
-        "maxOverheal": 2.4,
-        "growPerMeal": 0.035,
-        "maxGrow": 1.6,
+        "biteCooldown": 1.0,
+        "healPerMeal": 16,
+        "maxOverheal": 1.6,
+        "growPerMeal": 0.02,
+        "maxGrow": 1.3,
         "wanderChange": 2
-      },
-      "weight": 0.05,
-      "weightPerDifficulty": 0.02,
-      "maxWeight": 0.22,
-      "maxConcurrent": 2,
-      "minDifficulty": 2.2,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 10,
-      "spawnGroup": "apex"
+      }
     },
     "dolphin": {
       "separates": true,
@@ -1382,14 +1743,6 @@
       "asset": "enemyDolphin",
       "behavior": "porpoise",
       "faceMotion": true,
-      "radius": 0.85,
-      "hp": 44,
-      "hpPerDifficulty": 4,
-      "speed": 10.5,
-      "speedVariance": 1.5,
-      "contactDamage": 18,
-      "xp": 16,
-      "turnRate": 3.6,
       "hunt": {
         "preyRadius": 16,
         "biteRange": 1.3,
@@ -1406,80 +1759,30 @@
         "launchSpeedY": 17,
         "gravity": 26,
         "launchDepth": 6
-      },
-      "weight": 0.12,
-      "weightPerDifficulty": 0.025,
-      "maxWeight": 0.4,
-      "maxConcurrent": 4,
-      "minDifficulty": 1,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 3,
-      "spawnGroup": "apex"
+      }
     },
     "stingray": {
       "asset": "enemyStingray",
       "behavior": "glide",
       "faceMotion": true,
-      "radius": 0.7,
-      "hp": 30,
-      "hpPerDifficulty": 2.5,
-      "speed": 5,
-      "speedVariance": 1.2,
-      "contactDamage": 14,
-      "xp": 10,
       "glide": {
         "height": 8,
         "bandSpread": 3
-      },
-      "weight": 0.25,
-      "weightPerDifficulty": 0.02,
-      "maxWeight": 0.5,
-      "maxConcurrent": 8,
-      "minDifficulty": 0.4,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 2
+      }
     },
     "seaTurtle": {
       "separates": true,
       "asset": "enemySeaTurtle",
       "behavior": "drift",
       "faceMotion": true,
-      "radius": 1,
-      "hp": 1000000000,
-      "hpPerDifficulty": 0,
-      "speed": 1.6,
-      "speedVariance": 0.4,
-      "contactDamage": 8,
-      "xp": 0,
       "drift": {
         "wanderChange": 4
-      },
-      "weight": 0.12,
-      "weightPerDifficulty": 0,
-      "maxWeight": 0.12,
-      "maxConcurrent": 3,
-      "minDifficulty": 0.6,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 2
+      }
     },
     "barracuda": {
       "asset": "enemyBarracuda",
       "behavior": "chase",
-      "faceMotion": true,
-      "radius": 0.45,
-      "hp": 10,
-      "hpPerDifficulty": 1,
-      "speed": 9,
-      "speedVariance": 2,
-      "contactDamage": 32,
-      "xp": 8,
-      "weight": 0.3,
-      "weightPerDifficulty": 0.03,
-      "maxWeight": 0.6,
-      "maxConcurrent": 12,
-      "minDifficulty": 0.8,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 3
+      "faceMotion": true
     },
     "animatedCrab": {
       "asset": "enemyAnimatedCrab",
@@ -1487,17 +1790,6 @@
       "faceCamera": true,
       "gaitTravel": 1,
       "collides": true,
-      "radius": 0.7,
-      "hp": 30,
-      "hpPerDifficulty": 3.5,
-      "speed": 3.4,
-      "speedVariance": 0.8,
-      "contactDamage": 11,
-      "xp": 8,
-      "scalePerDifficulty": 0.015,
-      "maxGrowth": 1.6,
-      "contactDamagePerDifficulty": 0.4,
-      "speedPerDifficulty": 0.04,
       "beatSync": {
         "beatsPerStride": 1,
         "strides": 1,
@@ -1523,13 +1815,6 @@
           "distanceBias": 18
         }
       },
-      "weight": 0.3,
-      "weightPerDifficulty": 0.025,
-      "maxWeight": 0.55,
-      "maxConcurrent": 10,
-      "minDifficulty": 0.4,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 4,
       "faceMotion": true
     },
     "oyster": {
@@ -1537,13 +1822,6 @@
       "asset": "enemyOyster",
       "behavior": "trap",
       "faceMotion": false,
-      "radius": 0.6,
-      "hp": 40,
-      "hpPerDifficulty": 3,
-      "speed": 0,
-      "speedVariance": 0,
-      "contactDamage": 0,
-      "xp": 12,
       "trap": {
         "range": 0,
         "cooldown": 999
@@ -1551,14 +1829,7 @@
       "deathBlast": {
         "radius": 9,
         "damage": 90
-      },
-      "weight": 0.2,
-      "weightPerDifficulty": 0.015,
-      "maxWeight": 0.4,
-      "maxConcurrent": 6,
-      "minDifficulty": 0.5,
-      "spawnRateMul": 1,
-      "minPlayerLevel": 2
+      }
     }
   },
   "grid": {
@@ -1862,6 +2133,33 @@
       "inherit": 0.2,
       "glow": 1.2
     },
+    "rainSplash": {
+      "count": 3,
+      "speed": [
+        1.5,
+        4.5
+      ],
+      "size": [
+        0.05,
+        0.12
+      ],
+      "life": [
+        0.12,
+        0.3
+      ],
+      "colors": [
+        12575999,
+        16777215
+      ],
+      "cone": 0.9,
+      "drag": 3.2,
+      "gravity": [
+        0,
+        -9
+      ],
+      "inherit": 0.15,
+      "glow": 0.8
+    },
     "levelUp": {
       "count": 80,
       "speed": [
@@ -1917,7 +2215,8 @@
         4.5
       ],
       "inherit": 0.2,
-      "glow": 1
+      "glow": 1,
+      "surfacePop": "bubbleBurst"
     },
     "wakeBubbles": {
       "count": 7,
@@ -1945,7 +2244,36 @@
         3.2
       ],
       "inherit": 0.3,
-      "glow": 0.9
+      "glow": 0.9,
+      "surfacePop": "bubbleBurst"
+    },
+    "bubbleBurst": {
+      "count": 5,
+      "speed": [
+        1.2,
+        3.4
+      ],
+      "size": [
+        0.04,
+        0.09
+      ],
+      "life": [
+        0.18,
+        0.34
+      ],
+      "colors": [
+        14677759,
+        16777215,
+        12578815
+      ],
+      "cone": 1.1,
+      "drag": 3.2,
+      "gravity": [
+        0,
+        -9
+      ],
+      "inherit": 0,
+      "glow": 1.1
     },
     "silt": {
       "count": 75,
@@ -2639,6 +2967,145 @@
       ],
       "sfxMinGap": 0.05
     },
+    "scallopLaunch": {
+      "emit": "bubbleBurst",
+      "shake": 0.04,
+      "hitstop": 0,
+      "glow": 0.2,
+      "ripple": {
+        "strength": 0.6,
+        "radius": 4
+      },
+      "sfx": "scallopLaunch",
+      "haptic": [
+        {
+          "duration": 14,
+          "magnitude": 0.3
+        }
+      ]
+    },
+    "scallopJet": {
+      "emit": "wakeBubbles",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.05,
+      "sfx": "scallopJet",
+      "haptic": null,
+      "sfxMinGap": 0.14
+    },
+    "pearlShot": {
+      "emit": "muzzle",
+      "shake": 0.05,
+      "hitstop": 0,
+      "glow": 0.35,
+      "ripple": {
+        "strength": 0.8,
+        "radius": 5
+      },
+      "sfx": "pearlShot",
+      "haptic": [
+        {
+          "duration": 18,
+          "magnitude": 0.45
+        }
+      ],
+      "sfxMinGap": 0.05
+    },
+    "pearlBurst": {
+      "emit": "sparks",
+      "shake": 0.05,
+      "hitstop": 0,
+      "glow": 0.5,
+      "ripple": {
+        "strength": 1,
+        "radius": 5
+      },
+      "sfx": "pearlBurst",
+      "haptic": [
+        {
+          "duration": 12,
+          "magnitude": 0.28
+        }
+      ],
+      "sfxMinGap": 0.06
+    },
+    "octoGrab": {
+      "emit": null,
+      "shake": 0.02,
+      "hitstop": 0,
+      "glow": 0.12,
+      "sfx": "octoGrab",
+      "haptic": [
+        {
+          "duration": 10,
+          "magnitude": 0.2
+        }
+      ],
+      "sfxMinGap": 0.1
+    },
+    "octoPop": {
+      "emit": "bite",
+      "shake": 0.09,
+      "hitstop": 0,
+      "glow": 0.4,
+      "ripple": {
+        "strength": 1.4,
+        "radius": 6
+      },
+      "sfx": "octoPop",
+      "haptic": [
+        {
+          "duration": 22,
+          "magnitude": 0.5
+        }
+      ],
+      "sfxMinGap": 0.05
+    },
+    "orcaStrike": {
+      "emit": "splash",
+      "shake": 0.3,
+      "hitstop": 0.04,
+      "glow": 0.5,
+      "ripple": {
+        "strength": 2.8,
+        "radius": 12
+      },
+      "sfx": "orcaStrike",
+      "haptic": [
+        26,
+        18
+      ],
+      "sfxMinGap": 0.06
+    },
+    "bakalarBombDrop": {
+      "emit": "bubbleBurst",
+      "shake": 0.03,
+      "hitstop": 0,
+      "glow": 0.25,
+      "sfx": "bakalarBombDrop",
+      "haptic": [
+        {
+          "duration": 16,
+          "magnitude": 0.35
+        }
+      ]
+    },
+    "bakalarBombBlast": {
+      "emit": "bigExplosion",
+      "shake": 0.6,
+      "hitstop": 0.06,
+      "glow": 1.1,
+      "ripple": {
+        "strength": 4.2,
+        "radius": 20
+      },
+      "sfx": "bakalarBombBlast",
+      "haptic": [
+        34,
+        24,
+        40
+      ]
+    },
     "seagullDive": {
       "emit": null,
       "shake": 0.02,
@@ -2733,7 +3200,8 @@
         "wagSpeed": 1.6,
         "wagAmplitude": 0.12,
         "headBob": 0.06,
-        "clipTimeScale": 0.45
+        "clipTimeScale": 0.45,
+        "beatsPerLoop": 4
       },
       "swim": {
         "wagSpeed": 4.2,
@@ -2751,7 +3219,8 @@
         "wagSpeed": 1.2,
         "wagAmplitude": 0.1,
         "headBob": 0.05,
-        "clipTimeScale": 1
+        "clipTimeScale": 1,
+        "beatsPerLoop": 8
       },
       "surfaceMove": {
         "wagSpeed": 3.6,
@@ -2848,7 +3317,9 @@
     "bullet": "fins",
     "missile": "fins",
     "bounce": "mouth",
-    "starfish": "tail"
+    "starfish": "tail",
+    "scallop": "mouth",
+    "oyster": "fins"
   },
   "tail": {
     "enabled": true,
@@ -3373,6 +3844,109 @@
       "decay": 0.3,
       "gain": 0.16,
       "pitchVary": 0.1
+    },
+    "scallopLaunch": {
+      "src": null,
+      "type": "noise",
+      "filter": 1900,
+      "decay": 0.16,
+      "gain": 0.16,
+      "pitchVary": 0.14,
+      "filterVary": 0.25
+    },
+    "scallopJet": {
+      "src": null,
+      "type": "noise",
+      "filter": 2600,
+      "decay": 0.09,
+      "gain": 0.05,
+      "pitchVary": 0.22,
+      "filterVary": 0.3
+    },
+    "pearlShot": {
+      "src": null,
+      "type": "blip",
+      "wave": "sine",
+      "freq": [
+        1200,
+        640
+      ],
+      "decay": 0.22,
+      "gain": 0.17,
+      "pitchVary": 0.07
+    },
+    "pearlBurst": {
+      "src": null,
+      "type": "blip",
+      "wave": "triangle",
+      "freq": [
+        1800,
+        2600
+      ],
+      "decay": 0.18,
+      "gain": 0.12,
+      "pitchVary": 0.16
+    },
+    "octoGrab": {
+      "src": null,
+      "type": "noise",
+      "filter": 900,
+      "decay": 0.14,
+      "gain": 0.07,
+      "pitchVary": 0.12,
+      "filterVary": 0.2
+    },
+    "octoPop": {
+      "src": null,
+      "type": "blip",
+      "wave": "sine",
+      "freq": [
+        420,
+        180
+      ],
+      "decay": 0.2,
+      "gain": 0.18,
+      "pitchVary": 0.12
+    },
+    "orcaStrike": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        150,
+        44
+      ],
+      "decay": 0.52,
+      "gain": 0.32,
+      "noise": 0.45,
+      "filter": 620,
+      "pitchVary": 0.08,
+      "filterVary": 0.18
+    },
+    "bakalarBombDrop": {
+      "src": null,
+      "type": "blip",
+      "wave": "square",
+      "freq": [
+        300,
+        150
+      ],
+      "decay": 0.18,
+      "gain": 0.13,
+      "pitchVary": 0.1
+    },
+    "bakalarBombBlast": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        130,
+        34
+      ],
+      "decay": 0.85,
+      "gain": 0.38,
+      "noise": 0.55,
+      "filter": 520,
+      "pitchVary": 0.05,
+      "filterVary": 0.2
     }
   },
   "flightSfx": {
@@ -3449,6 +4023,20 @@
       "ceiling": 1
     }
   },
+  "touch": {
+    "stickRadius": 55,
+    "deadzone": 6,
+    "fireAt": 0.35,
+    "splitX": 0.5,
+    "aimFollowsMove": true,
+    "strike": {
+      "thirdTouch": true,
+      "doubleTap": true,
+      "doubleTapMs": 300,
+      "tapMaxMs": 250,
+      "tapSlop": 16
+    }
+  },
   "post": {
     "enabled": true,
     "preset": "crt"
@@ -3521,7 +4109,7 @@
     "surfaceHz": 20000,
     "deepHz": 700,
     "depthSmoothing": 0.18,
-    "duckedHz": 420,
+    "duckedHz": 600,
     "duckTime": 0.35,
     "sweepTime": 0.9,
     "resonance": 1.6
@@ -3560,6 +4148,35 @@
       "rockPerHit": 5.5,
       "rockStiffness": 42,
       "rockDamping": 5
+    },
+    "debris": {
+      "enabled": true,
+      "chunkFraction": 0.12,
+      "minCoverage": 0.12,
+      "maxChunks": 26,
+      "sizeJitter": 0.35,
+      "tilt": 0.35,
+      "outSpeed": 7,
+      "upSpeed": 6.5,
+      "scatter": 2.5,
+      "gravity": 24,
+      "carry": 0.6,
+      "spin": 5,
+      "waterDrag": 3.6,
+      "waterGravity": 5,
+      "sinkSpeed": 1.4,
+      "spinDamp": 1.8,
+      "life": 6.5,
+      "fade": 1.4,
+      "dissolveCells": 6,
+      "maxAlive": 72,
+      "splashScale": 0.4,
+      "splashGap": 0.06
+    },
+    "chumToss": {
+      "out": 4,
+      "up": 1.6,
+      "carry": 0.3
     },
     "trawlerChance": 0.35,
     "trawlerHpMul": 2.2,
@@ -3768,13 +4385,18 @@
     "glowHeadroom": 0.55,
     "grit": 0.08,
     "tumble": 1.5,
-    "tumbleScale": 1
+    "tumbleScale": 1.45
   },
   "pickups": {
     "magnetSpeed": 14,
     "collectRadius": 0.6,
     "sinkSpeed": 1.2,
     "maxAlive": 140,
+    "toss": {
+      "gravity": 9,
+      "airDrag": 1.2,
+      "waterDrag": 4.5
+    },
     "healFraction": 0.01,
     "tiers": [
       {
@@ -3801,9 +4423,80 @@
     ]
   },
   "upgradeChoices": 3,
+  "levelUp": {
+    "enabled": true,
+    "hold": 0.5,
+    "dilateTime": 0.45,
+    "menuDelay": 0.12,
+    "restoreTime": 0.35,
+    "audio": {
+      "enabled": true,
+      "follow": 0.5,
+      "minRate": 0.9,
+      "glide": 0.6
+    },
+    "dither": {
+      "enabled": true,
+      "inTime": 0.5,
+      "outTime": 0.22,
+      "steps": 14,
+      "hexSize": 32,
+      "noise": {
+        "enabled": true,
+        "bias": 0.35,
+        "size": 96,
+        "scale": 7,
+        "levels": 8,
+        "phases": 4,
+        "boilHz": 17,
+        "drift": 32,
+        "zoom": 1.7
+      }
+    }
+  },
+  "reveals": {
+    "enabled": true,
+    "field": {
+      "size": 128,
+      "octaves": 2,
+      "scale": 8,
+      "levels": 12,
+      "phases": 5,
+      "boilHz": 12,
+      "drift": 26,
+      "over": 18
+    },
+    "upgrades": {
+      "style": "hex",
+      "algo": "billow",
+      "inTime": 0.5,
+      "outTime": 0.22,
+      "steps": 14,
+      "hexSize": 24,
+      "bias": 0.35,
+      "softness": 0,
+      "curve": 1
+    },
+    "splash": {
+      "style": "smooth",
+      "algo": "worley",
+      "outTime": 0.85,
+      "scale": 6,
+      "softness": 0.3,
+      "curve": 1.4
+    },
+    "scoreCard": {
+      "style": "smooth",
+      "algo": "ridged",
+      "inTime": 0.9,
+      "scale": 9,
+      "softness": 0.36,
+      "curve": 1.7
+    }
+  },
   "levelUpCards": {
     "overlayOpacity": 0.38,
     "overlayColor": 0
   },
-  "_savedAt": 1786242536158
+  "_savedAt": 1786299874868
 }

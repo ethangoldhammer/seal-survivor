@@ -7,6 +7,7 @@ import { nearestFloorPickup, bestChumTarget, refreshChumPiles, pickupAlive, bite
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createHeadLook } from '../systems/headLook.js';
 import { recordSpawn } from '../systems/playtest.js';
+import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
 import { createJawDriver } from '../systems/jaw.js';
 import { player } from './player.js';
 
@@ -181,6 +182,54 @@ function setLookTarget(e, x, y) {
   if (!e.lookAt) e.lookAt = new THREE.Vector3();
   e.lookAt.set(x, y, 0);
   e.lookTarget = e.lookAt;
+}
+
+// apexCrowd works on plain { x, y, radius } so it can be tested without a
+// scene. Each creature OWNS its view (`e.crowdView`) rather than the adapter
+// handing out one shared object: the view is what goes into the crowd list, so
+// it has to be identity-equal to the thing the avoidance skips — with a single
+// shared instance every hunter would find a body at distance zero (itself) and
+// flee from it. Owned views also mean no per-frame allocation.
+function crowdSelf(e) {
+  let v = e.crowdView;
+  if (!v) {
+    v = e.crowdView = {
+      x: 0, y: 0, radius: 1, feeding: false, orbitDir: 1, standoffDist: null, feedTimer: 0, e,
+      // Only the tagged bodies queue for a feeding slot. Everything else that
+      // hunts (the otter) still steers around them, but closes as it always did.
+      inCrowd: e.def.spawnGroup === 'apex',
+    };
+  }
+  v.x = e.mesh.position.x;
+  v.y = e.mesh.position.y;
+  v.radius = e.radius;
+  v.feeding = e.feeding === true;
+  v.orbitDir = e.orbitDir;
+  v.standoffDist = e.standoffDist;
+  v.feedTimer = e.feedTimer ?? 0;
+  return v;
+}
+
+// The apex bodies on screen this frame, as crowd views. Rebuilt in place each
+// frame; `assignFeedingSlots` sorts it, which is why it's ours and not shared.
+const apexViews = [];
+
+function refreshApexCrowd(dt, playerPos) {
+  apexViews.length = 0;
+  for (const e of enemies) {
+    // The tag is the contract: `spawnGroup: 'apex'` is already what the
+    // population cap uses to mean "big body competing for the same screen",
+    // and it's the same set that should be competing for the same player.
+    if (e.def.spawnGroup !== 'apex') continue;
+    if (e.trapTimer > 0 || e.charmTimer > 0) continue; // held: not in the running
+    apexViews.push(crowdSelf(e));
+  }
+  assignFeedingSlots(apexViews, playerPos, dt, CONFIG.apexCrowd);
+  // Slots decided on the views; the creatures are what the behaviors read.
+  for (const v of apexViews) {
+    v.e.feeding = v.feeding;
+    v.e.feedTimer = v.feedTimer;
+  }
 }
 
 const BEHAVIORS = {
@@ -402,7 +451,18 @@ const BEHAVIORS = {
       // MEAL is, and prey species differ in radius.
       setLookTarget(e, target.mesh.position.x, target.mesh.position.y);
       e.preyTarget = target;
-      steerTo(e, target.mesh.position.x - px, target.mesh.position.y - py, dt, 6, speedMul);
+      // Normalised BEFORE the crowd term is added — steerTo normalises the
+      // sum, so handing it a 20-unit target vector plus a 1-unit avoidance
+      // would make the avoidance vanish at range and only bite at point
+      // blank, which is exactly where it's too late to steer around anything.
+      const pd = Math.sqrt(best) || 1;
+      const avoid = crowdAvoid(crowdSelf(e), ctx.apex, CONFIG.apexCrowd);
+      steerTo(
+        e,
+        (target.mesh.position.x - px) / pd + avoid.x,
+        (target.mesh.position.y - py) / pd + avoid.y,
+        dt, 6, speedMul,
+      );
       return;
     }
 
@@ -410,8 +470,13 @@ const BEHAVIORS = {
     e.preyTarget = null;
     const aggro = h.playerAggroRadius ?? Infinity;
     if (ctx.dist < aggro) {
+      // Still LOOKS at the player even while circling — a shark holding the
+      // ring with its head turned in is stalking; one facing along its own
+      // arc is just swimming past, and the difference is the whole read.
       setLookTarget(e, px + ctx.dirX * ctx.dist, py + ctx.dirY * ctx.dist);
-      steerTo(e, ctx.dirX, ctx.dirY, dt, 6, speedMul);
+      if (e.standoffDist == null) e.standoffDist = pickStandoff(CONFIG.apexCrowd);
+      const want = approachVector(crowdSelf(e), ctx, ctx.apex, CONFIG.apexCrowd);
+      steerTo(e, want.x, want.y, dt, 6, speedMul);
       return;
     }
 
@@ -893,6 +958,31 @@ function playerBiteReach(e) {
 
 let clock = 0;
 
+// Frozen in place, still alive.
+//
+// The level-up pause stops the whole roster where it stands — main.js skips
+// updateEnemies entirely while the cards are up, so nothing steers, hunts,
+// bites or scavenges (see systems/levelUpTime.js). A creature that also stops
+// MOVING reads as a paused game rather than as a held moment, so the mixers
+// keep running on the dilated clock and everything goes on breathing on the
+// spot.
+//
+// Deliberately only the pose: no velocity, no rotation, no chum, and the state
+// is always the standing-still one, so a shark that was mid-charge idles
+// rather than continuing to swim on the spot. A one-shot already playing
+// (a bite that landed on the frame the level did) is allowed to finish — it's
+// a clip playing out in slow motion, and cutting it dead is the snap this is
+// here to avoid.
+export function animateEnemiesIdle(dt) {
+  if (!CONFIG.animation.enabled) return;
+  for (const e of enemies) {
+    e.anim?.update(dt, stateForSpeed(0), false);
+    // Same reason as in the main loop: the driver's anti-ratchet needs to see
+    // every frame, including the ones where nothing is biting.
+    e.jaw?.update(dt);
+  }
+}
+
 // `onChumEaten(x, y, enemy)` fires the moment a crab finishes an orb, so
 // main.js can put a puff and a sound on it — the player needs to notice
 // resources leaving, not just find fewer orbs than they remembered.
@@ -922,13 +1012,17 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten) {
     if (e.def.hunt) predators.push(e);
   }
 
+  // Who gets to press the player this frame, and who holds the ring. Must run
+  // before the behavior loop below — every hunter's steering reads the answer.
+  refreshApexCrowd(dt, playerPos);
+
   for (const e of enemies) {
     const dx = playerPos.x - e.mesh.position.x;
     const dy = playerPos.y - e.mesh.position.y;
     const dist = Math.hypot(dx, dy) || 0.0001;
     const ctx = {
       dist, dirX: dx / dist, dirY: dy / dist,
-      playerPos, schools, prey, predators, time: clock,
+      playerPos, schools, prey, predators, apex: apexViews, time: clock,
     };
 
     // Big creatures shoulder each other apart so predators don't stack into

@@ -5,6 +5,10 @@ import { bounds } from '../arena.js';
 import { updateTumble } from '../systems/rocks.js';
 
 export const pickups = [];
+// Drives the shiver on chum waiting inside a sealed mouth. One shared clock
+// rather than a per-orb one: the orbs are meant to buzz at a common frequency
+// and are separated by phase, not by rate.
+let tellClock = 0;
 export const strikeOrbs = [];
 export const bubbleOrbs = [];
 export const rapidFireOrbs = [];
@@ -12,6 +16,7 @@ export const rapidFireOrbs = [];
 export function resetPickups(scene) {
   for (const p of pickups) scene.remove(p.mesh);
   pickups.length = 0;
+  tellClock = 0;
   for (const o of strikeOrbs) scene.remove(o.mesh);
   strikeOrbs.length = 0;
   for (const o of bubbleOrbs) scene.remove(o.mesh);
@@ -27,7 +32,9 @@ function tierFor(radius) {
 
 // `sourceRadius` is the dropping enemy's def.radius — small fish drop small,
 // dim orbs worth less xp/heal; a shark or squid drops a big bright one.
-export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5) {
+// `vel` is an optional {x, y} throw, for a source that scatters its drop
+// rather than placing it (a boat coming apart) — see the toss in updatePickups.
+export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
   const tier = tierFor(sourceRadius);
   const mesh = createVisual('xpOrb');
   mesh.position.copy(pos);
@@ -39,7 +46,13 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5) {
   const userTint = CONFIG.assetLooks?.xpOrb?.tint;
   if (mesh.material?.color && userTint == null) mesh.material.color.set(tier.color);
   scene.add(mesh);
-  pickups.push({ mesh, value: value * tier.xpMul, healMul: tier.healMul });
+  pickups.push({
+    mesh,
+    value: value * tier.xpMul,
+    healMul: tier.healMul,
+    vx: vel?.x ?? 0,
+    vy: vel?.y ?? 0,
+  });
 
   // Orbs settle on the seabed and would otherwise pile up all run.
   while (pickups.length > CONFIG.pickups.maxAlive) {
@@ -114,35 +127,156 @@ function updateOrbArray(dt, scene, player, arr, driftSpeed, onCollect) {
 // onCollect(xpValue, x, y, healMul) — main.js applies both xp and heal from
 // one callback so the two always travel together.
 export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbleOrb, onRapidFireOrb) {
+  // A sealed mouth doesn't just refuse to swallow — it doesn't REACH either.
+  // The magnet is off for the whole wind-up, so chum stays exactly where it is.
+  // Leaving the magnet on looked far worse than no gate at all: every orb in
+  // range was dragged inside the seal's body and sat there hidden, which reads
+  // as having been collected, while the gate quietly refused to collect it.
+  const sealed = !!player.chumSealed;
+  const tell = CONFIG.strike.charge.gulp?.tell ?? {};
+  // What the release would take if it fired right now — that is the radius
+  // worth telegraphing, not the magnet's.
+  const tellRadius = sealed ? (player.stats.chumGulpRadius ?? 0) : 0;
+  tellClock += dt;
+
   for (let i = pickups.length - 1; i >= 0; i--) {
     const p = pickups[i];
-    // Chum keeps turning after it settles — a still pile on the seabed is the
-    // easiest thing on screen to stop noticing.
-    updateTumble(p.mesh, dt);
+
+    // Last frame's shiver comes off before anything reads the position. The
+    // mesh has to hold the orb's REAL position everywhere else — the gulp, the
+    // pile grid and the crabs all measure straight off it — and an offset left
+    // on would integrate into a visible drift across a long hold.
+    if (p.shiverX || p.shiverY) {
+      p.mesh.position.x -= p.shiverX;
+      p.mesh.position.y -= p.shiverY;
+      p.shiverX = 0;
+      p.shiverY = 0;
+    }
+
     const dx = player.mesh.position.x - p.mesh.position.x;
     const dy = player.mesh.position.y - p.mesh.position.y;
     const dist = Math.hypot(dx, dy) || 0.0001;
+    // Inside a sealed mouth's reach: about to be swallowed, but not yet.
+    const waiting = sealed && dist < tellRadius;
 
-    if (dist < player.stats.pickupRadius) {
+    // Chum keeps turning after it settles — a still pile on the seabed is the
+    // easiest thing on screen to stop noticing — and turns FASTER while it
+    // waits on a release, which is half the telegraph.
+    updateTumble(p.mesh, dt * (waiting ? (tell.spinMul ?? 1) : 1));
+
+    if (waiting) {
+      // HELD: not pulled, and not sinking either. An orb advertising "the
+      // release is going to take me" has to still be inside the gulp when the
+      // release comes, and at the default sink speed a wind-up only a few
+      // seconds long drops a mid-water pile clean out of the radius it was
+      // telegraphing. Anything already resting on the seabed was going nowhere
+      // anyway, so this only ever holds the ones in open water.
+    } else if (!sealed && dist < player.stats.pickupRadius) {
+      // The magnet outranks any throw still in flight, and cancels it — an orb
+      // the player swam away from should go back to sinking, not pick its old
+      // arc back up.
+      p.vx = 0;
+      p.vy = 0;
       p.mesh.position.x += (dx / dist) * CONFIG.pickups.magnetSpeed * dt;
       p.mesh.position.y += (dy / dist) * CONFIG.pickups.magnetSpeed * dt;
+    } else if (p.vx || p.vy) {
+      // Still carrying a throw (boat chum, spilling out of a hull). Gravity
+      // only applies in the air — below the water line it's drag alone, which
+      // is what hands the orb over to the ordinary sink below within about a
+      // second instead of letting the throw run on into a fall.
+      const toss = CONFIG.pickups.toss ?? {};
+      const underwater = p.mesh.position.y < bounds.surfaceY;
+      if (!underwater) p.vy -= (toss.gravity ?? 9) * dt;
+      const drag = Math.exp(-(underwater ? (toss.waterDrag ?? 4.5) : (toss.airDrag ?? 1.2)) * dt);
+      p.vx *= drag;
+      p.vy *= drag;
+      p.mesh.position.x += p.vx * dt;
+      p.mesh.position.y += p.vy * dt;
+      // Chum belongs in the water: a throw never lifts an orb out of it, or a
+      // boat kill would leave bits of catch hanging in the sky.
+      const ceiling = bounds.surfaceY - 0.15;
+      if (p.mesh.position.y > ceiling) {
+        p.mesh.position.y = ceiling;
+        p.vy = Math.min(p.vy, 0);
+      }
+      const floor = bounds.bottom + 0.8;
+      if (p.mesh.position.y < floor) {
+        p.mesh.position.y = floor;
+        p.vy = 0;
+      }
+      if (p.vx * p.vx + p.vy * p.vy < 0.09) { p.vx = 0; p.vy = 0; }
     } else {
-      // Out of range, orbs sink through the water and settle on the seabed.
+      // Out of magnet range — or held out of it by a wind-up — orbs sink
+      // through the water and settle on the seabed.
       p.mesh.position.y -= CONFIG.pickups.sinkSpeed * dt;
       const floor = bounds.bottom + 0.8;
       if (p.mesh.position.y < floor) p.mesh.position.y = floor;
     }
 
-    if (dist < CONFIG.pickups.collectRadius) {
+    // Nothing goes down while the mouth is sealed; the release gulps the lot
+    // instead (see gulpPickups and CONFIG.strike.charge.gulp).
+    if (!sealed && dist < CONFIG.pickups.collectRadius) {
       onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul);
       scene.remove(p.mesh);
       pickups.splice(i, 1);
+      continue;
+    }
+
+    // The other half of the telegraph: a shiver in place. Geometric on purpose
+    // — orb materials are SHARED across every instance (see spawnXpOrb), so a
+    // flash written to a colour or an emissive would light up every orb in the
+    // arena rather than the ones about to be eaten.
+    //
+    // Per-orb phase, or a pile shivers in lockstep and reads as one object
+    // wobbling instead of a dozen loose bits rattling.
+    if (waiting && (tell.shiver ?? 0) > 0) {
+      const phase = (p.shiverPhase ??= Math.random() * Math.PI * 2);
+      // Same Nyquist limit the wind-up tremble lives under (see
+      // CONFIG.strike.charge.vibrate): past ~20Hz at 60fps this aliases into a
+      // slow wobble, which reads as broken rather than as urgent.
+      const w = tellClock * (tell.hz ?? 18) * Math.PI * 2 + phase;
+      p.shiverX = Math.cos(w) * tell.shiver;
+      // Beaten against a different multiple so it buzzes in a little figure
+      // rather than sliding back and forth along one line.
+      p.shiverY = Math.sin(w * 1.7) * tell.shiver;
+      p.mesh.position.x += p.shiverX;
+      p.mesh.position.y += p.shiverY;
     }
   }
 
   if (onStrikeOrb) updateOrbArray(dt, scene, player, strikeOrbs, 0, onStrikeOrb);
   if (onBubbleOrb) updateOrbArray(dt, scene, player, bubbleOrbs, CONFIG.oxygen.bubbleRiseSpeed, onBubbleOrb);
   if (onRapidFireOrb) updateOrbArray(dt, scene, player, rapidFireOrbs, 0, onRapidFireOrb);
+}
+
+// Swallow every chum orb within `radius` of (x, y) on this frame — the release
+// half of the charge gulp, and the payoff for the mouth being sealed through
+// the wind-up.
+//
+// Each orb goes through the SAME onCollect the swim-over path uses rather than
+// a cut-down version, so xp, healing, the charge meter and the food chain all
+// land exactly as if the seal had crossed them one at a time. That matters
+// beyond tidiness: the gate stops the meter refilling during a hold, and this
+// is the call that gives it back, so anything this path skipped would be a
+// resource the gate quietly deleted.
+//
+// Returns how many went down, so the caller can stay silent on an empty gulp.
+export function gulpPickups(scene, x, y, radius, onCollect) {
+  if (!(radius > 0)) return 0;
+  const r2 = radius * radius;
+  let n = 0;
+  // Backwards, like every other loop here that splices as it goes.
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const p = pickups[i];
+    const dx = p.mesh.position.x - x;
+    const dy = p.mesh.position.y - y;
+    if (dx * dx + dy * dy > r2) continue;
+    onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul);
+    scene.remove(p.mesh);
+    pickups.splice(i, 1);
+    n++;
+  }
+  return n;
 }
 
 // How many xp orbs are currently settled on the seabed — the crab-spawn

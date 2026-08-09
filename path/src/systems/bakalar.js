@@ -20,6 +20,21 @@ import { removeEnemy } from '../entities/enemies.js';
 // (topped up every frame, so they can't wriggle free mid-haul) and their
 // position is driven directly by this system.
 
+// VOICEMAIL BOMBS — dropped into the loaded net while the boat sails, ON TOP
+// of the haul rather than instead of it. The haul is a quiet remover: fish go
+// up the net and away, and it never had a moment you could watch coming. The
+// bomb is that moment. It falls down the net among whatever is still being
+// dragged, sits armed and blinking for a beat, then detonates in a radius far
+// wider than the net itself and pays the whole catch out as chum.
+//
+// Chum rather than XP, deliberately. The haul already pays XP through
+// `onHauled`; if the bomb paid XP too the two halves of the same ability would
+// be competing to collect the same fish, and the boat would quietly become the
+// only upgrade worth taking. Paying in chum feeds the strike meter instead, so
+// the bomb pays into a different loop than the net it rides on.
+const bombs = []; // { mesh, y, targetY, fuse, armed, level }
+let bombTimer = 0;
+
 const caught = []; // { enemy, offsetX } — offsetX keeps the catch spread across the net
 let boat = null;
 let visual = null;
@@ -77,16 +92,134 @@ export function rebuildBakalarBoat(scene) {
   scene.add(boat);
 }
 
-export function resetBakalar() {
+export function resetBakalar(scene = null) {
   // Anything still in the net when a run ends is simply released — the enemy
   // array is about to be cleared by resetEnemies anyway, so removing them here
   // would just be fighting over the same indices.
   caught.length = 0;
   sailing = false;
   clock = 0;
+  bombTimer = 0;
+  // Bombs DO have to be cleaned up: unlike the catch, they own meshes this
+  // module put in the scene, and nothing else will take them out.
+  for (const b of bombs) b.mesh.parent?.remove(b.mesh);
+  bombs.length = 0;
   if (boat) boat.visible = false;
   if (netMesh) netMesh.visible = false;
   spawnTimer = randomBetween(CONFIG.bakalar.spawnMin, CONFIG.bakalar.spawnMax);
+}
+
+function bombStats(level) {
+  const c = CONFIG.bakalar.bomb;
+  const lv = Math.max(1, level);
+  return {
+    interval: Math.max(c.dropIntervalFloor, c.dropInterval - c.dropIntervalPerLevel * (lv - 1)),
+    radius: c.radius + c.radiusPerLevel * (lv - 1),
+    damage: c.damage + c.damagePerLevel * (lv - 1),
+  };
+}
+
+function dropBomb(scene, x, netTop, netBottom, level) {
+  const c = CONFIG.bakalar.bomb;
+  const mesh = createVisual('voicemailBomb');
+  mesh.position.set(x, bounds.surfaceY, -0.1);
+  mesh.scale.setScalar(c.size / 0.72); // the asset's authored radius
+  scene.add(mesh);
+
+  bombs.push({
+    mesh,
+    // THE BOMB SAILS WITH THE BOAT. It was dropped from a moving hull into a
+    // moving net, so it inherits the hull's velocity and keeps pace with the
+    // catch. Without this it hung in the water where it was released while the
+    // net sailed on at 7 units/sec — by the time the ~1.9s of fall and fuse
+    // had run, the fish it was meant to blow up were thirteen units downrange
+    // and the blast reliably hit nothing at all.
+    vx: dir * CONFIG.bakalar.speed,
+    // Falls to the MIDDLE of the net rather than the bottom. The catch is
+    // being hauled upward the whole time the bomb is falling downward, so
+    // aiming at the floor of the net means the two pass each other.
+    targetY: (netTop + netBottom) * 0.5,
+    fuse: c.fuse,
+    armed: false,
+    level,
+  });
+}
+
+// hooks: { onEnemyDamaged, onEnemyKilled, onBombBlast(x, y, radius), onChum(x, y) }
+function updateBombs(dt, scene, enemiesList, hooks) {
+  const c = CONFIG.bakalar.bomb;
+
+  for (let i = bombs.length - 1; i >= 0; i--) {
+    const b = bombs[i];
+    const s = bombStats(b.level);
+
+    // Keeps pace with the net for its whole life, armed or not — the fuse
+    // burns while it is still travelling with the catch.
+    b.mesh.position.x += b.vx * dt;
+
+    if (!b.armed) {
+      b.mesh.position.y -= c.fallSpeed * dt;
+      if (b.mesh.position.y <= b.targetY) {
+        b.mesh.position.y = b.targetY;
+        b.armed = true;
+      }
+    } else {
+      b.fuse -= dt;
+      // Blink faster as the fuse runs out — the tell that says "now".
+      const urgency = 1 + (1 - Math.max(0, b.fuse) / Math.max(1e-3, c.fuse)) * 2;
+      const on = Math.sin(clock * c.blinkSpeed * urgency) > 0;
+      if (b.mesh.material?.color) b.mesh.material.color.set(on ? c.color : 0x2a2118);
+    }
+
+    if (!b.armed || b.fuse > 0) continue;
+
+    // --- detonate ---------------------------------------------------------
+    const x = b.mesh.position.x;
+    const y = b.mesh.position.y;
+    const r2 = s.radius * s.radius;
+    let kills = 0;
+
+    hooks.onBombBlast?.(x, y, s.radius);
+
+    for (let j = enemiesList.length - 1; j >= 0; j--) {
+      const e = enemiesList[j];
+      const dx = e.mesh.position.x - x;
+      const dy = e.mesh.position.y - y;
+      if (dx * dx + dy * dy > r2) continue;
+
+      e.hp -= s.damage;
+      e.flash = CONFIG.fx.hitFlash;
+      e.hitThisFrame = true;
+
+      const len = Math.hypot(dx, dy) || 1e-4;
+      e.vx += (dx / len) * c.knockback;
+      e.vy += (dy / len) * c.knockback;
+
+      hooks.onEnemyDamaged?.(e, s.damage, e.mesh.position.x, e.mesh.position.y);
+      if (e.hp <= 0) {
+        kills++;
+        // Freed from the net first: the haul list holds a reference, and a
+        // hauler still dragging a creature that has just been removed would
+        // spend the rest of the sailing pulling on nothing.
+        const held = caught.findIndex((h) => h.enemy === e);
+        if (held >= 0) caught.splice(held, 1);
+        hooks.onEnemyKilled?.(e);
+        removeEnemy(scene, j);
+      }
+    }
+
+    // Chum for the catch, plus a flat scatter so a bomb that hits nothing
+    // still reads as worth having watched.
+    const payout = c.chumScatter + kills * c.chumPerKill;
+    for (let n = 0; n < payout; n++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.random() * c.chumSpread;
+      hooks.onChum?.(x + Math.cos(a) * d, y + Math.sin(a) * d);
+    }
+
+    scene.remove(b.mesh);
+    bombs.splice(i, 1);
+  }
 }
 
 function netGeometry(level) {
@@ -100,6 +233,10 @@ function netGeometry(level) {
 function launch(level) {
   const c = CONFIG.bakalar;
   sailing = true;
+  // Reset per sailing rather than running free: the first bomb should land
+  // partway through a pass with a net that has had time to fill, not on the
+  // frame the boat appears with an empty one.
+  bombTimer = bombStats(level).interval;
   dir = Math.random() < 0.5 ? 1 : -1;
   const { halfWidth } = netGeometry(level);
   // Start far enough out that the whole net is offscreen, so fish don't
@@ -127,11 +264,19 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
   const active = level > 0 && CONFIG.bakalar.enabled;
   if (!active) {
     if (sailing) { releaseAll(); sailing = false; boat.visible = false; netMesh.visible = false; }
+    for (const b of bombs) scene.remove(b.mesh);
+    bombs.length = 0;
     return;
   }
 
   const c = CONFIG.bakalar;
   clock += dt;
+
+  // Bombs are updated BEFORE the sailing check, and outside it: one dropped on
+  // the boat's last frame in the arena still has to fall, arm and go off. Tying
+  // them to `sailing` would make a late drop vanish silently, which looks
+  // exactly like a bug from the seabed.
+  if (c.bomb?.enabled) updateBombs(dt, scene, enemiesList, hooks);
 
   if (!sailing) {
     spawnTimer -= dt;
@@ -169,6 +314,22 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
     if (Math.abs(ex - netCenterX) > halfWidth + e.radius) continue;
     if (ey > netTop + e.radius || ey < netBottom - e.radius) continue;
     caught.push({ enemy: e, offsetX: ex - netCenterX });
+  }
+
+  // --- drop a voicemail bomb into the loaded net ----------------------------
+  // Gated on the net actually holding something (`minCatch`), so a boat
+  // sailing through empty water doesn't litter the arena with bombs. The
+  // timer only runs while sailing — the interval describes drops per
+  // sailing, not per run.
+  if (c.bomb?.enabled) {
+    bombTimer -= dt;
+    if (bombTimer <= 0 && caught.length >= c.bomb.minCatch) {
+      bombTimer = bombStats(level).interval;
+      // Dropped at the net's centre so it falls THROUGH the catch, rather than
+      // at the hull where it would detonate above everything being hauled.
+      dropBomb(scene, netCenterX, netTop, netBottom, level);
+      hooks.onBombDrop?.(netCenterX, netTop);
+    }
   }
 
   // --- haul: drag every catch up toward the hull ----------------------------

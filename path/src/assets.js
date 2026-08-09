@@ -254,6 +254,17 @@ export const ASSETS = {
     // Two-tone mask (--pure), not a composite: this file's own maps never
     // reach the renderer, so the mask is built from the source base colour
     // in the C4D library. See tools/make-emissive-masks.mjs EXTERNAL.
+    //
+    // Needs `--lit 0.8`, and the default 0.15 is badly wrong here. The gull's
+    // art sits at luminance p25=139 / p50=160 / p90=217, so the default pivot
+    // of 210 lands ABOVE the ninth decile: only the white body survived and
+    // the entire wing fan — the largest island on the sheet — thresholded to
+    // black, giving a bird that glowed on the body with dead wings. At 0.8
+    // the pivot drops to 125, which lights body, wings, head and tail while
+    // still holding the black wingtip band, the eye and the feet dark. That
+    // band is the whole point of masking this bird rather than letting it
+    // glow flat. Verified against the model's own UVs, not assumed: 0.6% of
+    // the mapped area falls on sheet background.
     texture: { emissive: '/textures/emissive/seagull.png' },
     fit: 1.3,
     forward: '+Z', up: '+Y',
@@ -385,6 +396,130 @@ export const ASSETS = {
     texture: { emissive: '/textures/emissive/cutesquid.jpg' },
     shape: 'icosahedron', radius: 0.45, color: 0xffd83d, unlit: true,
   },
+
+  // Octopus Grabber — the reeling companion, standing in with the same cute
+  // squid the dumbo borrows. A SEPARATE entry rather than a reuse of
+  // `dumboOcto` for the reason `bakalarBoat` is separate from `trawler`: the
+  // two octopuses do opposite things and are both on screen at once, so they
+  // have to be re-skinnable and re-tintable apart from each other. Cooler and
+  // darker than the dumbo's yellow so a glance tells them apart.
+  //
+  // The ARMS are not in this entry. They're procedural curves drawn by
+  // systems/octoGrab.js from CONFIG.octoGrab.arm* until the rigged arm art
+  // lands — see that file's header.
+  octoGrabber: {
+    model: '/models/octopus_rig.glb',
+    // Sized off the ARMS, not off taste. At this fit one tentacle measures
+    // ~4.4 world units root to tip, which is what makes CONFIG.octoGrab.reach
+    // achievable without the octopus having to be absurd — the first pass sat
+    // at 2.6 (a 2.5-unit arm) against a configured 8.5 grab radius, so every
+    // grab was clamped out and the companion did nothing at all. Getting 8.5
+    // honestly would have needed fit ~8.9, i.e. an octopus nine units wide
+    // next to a seal whose hit radius is 1.
+    fit: 4.6,
+    // Measured, not guessed — see tools/check-octopus-orientation.mjs. The
+    // arms radiate around the model's Y axis, so Y has to point at the camera
+    // or they reach into and out of the screen instead of across it. This
+    // basis puts 3.08 x 1.94 units of arm spread in the screen plane against
+    // 0.96 of depth, with the mantle leading +Y (the travel direction).
+    //
+    // Deliberately NOT the squid's '+Y'/'+Z': that convention on this rig
+    // splays the arms into the screen (0.96 across, 3.08 deep).
+    forward: '-Z', up: '-X',
+    // No clips at all — this is a bare rig. Everything it does is procedural,
+    // driven from systems/octoGrab.js: the head chain steers and propels, the
+    // arms dangle or reach. That is why there is no `animations` block here
+    // and why the system never builds an animation controller for it.
+    tint: 0xb07ad0,
+    outline: { color: 0xe0b0ff, thickness: 0.02 },
+
+    // The six arms and the mantle, each named by its ROOT and TIP rather than
+    // by listing all 19 bones. The chains are unbranched single-child runs, so
+    // the middle is walkable at load (see systems/octoGrab.js buildArm) and
+    // 114 hand-typed bone names is 114 chances to typo one.
+    //
+    // Verified against the file: 128 bones, 6 chains of 18 driven bones each,
+    // a 3-bone mantle on the midline, and 4 face bones. Every `*_end_*` bone
+    // carries ZERO skin weight — they drive no vertices at all, which is
+    // exactly what makes them usable as pure target locators.
+    armRig: {
+      tipAxis: '+Y',
+      arms: [
+        { root: 'Bone001_06', tip: 'Bone018_end_0119' },
+        { root: 'Bone019_024', tip: 'Bone036_end_0120' },
+        { root: 'Bone037_042', tip: 'Bone054_end_0121' },
+        { root: 'Bone055_060', tip: 'Bone072_end_0122' },
+        { root: 'Bone073_078', tip: 'Bone090_end_0123' },
+        { root: 'Bone091_096', tip: 'Bone108_end_0124' },
+      ],
+      // The mantle. Short (3 driven bones), on the midline, and the only chain
+      // whose skin-weight centroids all sit at x=0 — which is how it was told
+      // apart from the arms rather than by its number.
+      head: { root: 'Bone110_03', tip: 'Bone111_end_0118' },
+    },
+
+    shape: 'icosahedron', radius: 0.55, color: 0xb07ad0, unlit: true,
+  },
+
+  // The pod. Same hull as `enemyOrca`, kept separate for the `bakalarBoat`
+  // reason again — these are yours, so they carry the warm friendly outline
+  // every other companion uses instead of the cold hostile one.
+  orcaFriend: {
+    model: '/models/orca.glb',
+    fit: 4.4, // a shade smaller than the hostile orca — a family, not a boss
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    // The file's three real clips, mapped the way the pod actually behaves:
+    // `swim` while cruising in formation, `rushbeach` on an attack run. The
+    // first pass had all three pointing at `idle`, which meant an orca
+    // charging a hull at 22 units/sec looked exactly like one drifting.
+    animations: {
+      idle: 'Orca_Rig|Orca_Rig|idle',
+      swim: 'Orca_Rig|Orca_Rig|swim',
+      boost: 'Orca_Rig|Orca_Rig|rushbeach',
+    },
+    // Same four spring chains as `enemyOrca` — same file, same bones, and no
+    // reason a friendly orca should have a stiffer tail than a hostile one.
+    // See that entry for how the fin bones were identified (measured, not
+    // read: `Thigh`/`Foot` are the pectoral flippers on a reused quadruped
+    // rig). Kept as its own copy rather than shared, for the same reason the
+    // entry itself is separate: this one is re-skinnable on its own.
+    rig: {
+      springChains: [
+        ['hip_01001_024', 'tail_01_025', 'tail_02_026', 'tail_03_027',
+         'tail_04_028', 'tail_05_029', 'tail_05001_030'],
+        ['fin001_06', 'fin002_07', 'fin003_08', 'fin004_09'],
+        ['Thigh_F01_L_016', 'Foot_F02_L_017', 'Foot_F03_L_018', 'Foot_F04_L_019'],
+        ['Thigh_F01_R_020', 'Foot_F02_R_021', 'Foot_F03_R_022', 'Foot_F04_R_023'],
+      ],
+    },
+    outline: { color: 0xffd27a, thickness: 0.022 },
+    shape: 'icosahedron', radius: 1.1, color: 0x2c3a4a, unlit: true,
+  },
+
+  // Scallop Squirter. Borrowing the oyster hull — both are bivalves and at
+  // this camera distance the silhouette reads correctly; the real Noble
+  // Scallop model in SeaBed is still zipped. Tinted coral so it can't be
+  // mistaken for the oyster ENEMY it shares geometry with.
+  scallopShell: {
+    model: '/models/oyster.glb',
+    texture: { emissive: '/textures/emissive/oyster.jpg' },
+    fit: 0.95,
+    forward: '+Z', up: '+Y',
+    tint: 0xff9a6a,
+    shape: 'icosahedron', radius: 0.42, color: 0xff9a6a, unlit: true,
+  },
+
+  // Oyster Blaster's payload. Both are unlit glowing spheres rather than
+  // models on purpose: a pearl is a highlight, and any baked shading on a
+  // thing this bright clips to flat white in the composite anyway.
+  pearl: { shape: 'sphere', radius: 0.4, color: 0xfff3d6, unlit: true },
+  pearlBomblet: { shape: 'sphere', radius: 0.2, color: 0xfff0c0, unlit: true },
+
+  // Bakalar's voicemail bomb — a fat dark canister with a warm blinking
+  // light, built as a shape rather than a model so the blink can drive its
+  // colour directly (see systems/bakalar.js).
+  voicemailBomb: { shape: 'sphere', radius: 0.72, color: 0x2a2118, unlit: true },
 
   // Strike shrapnel: small, pale, and short-lived. Reads as bone rather than
   // as another bullet, which matters when a dash through a school throws
@@ -1117,6 +1252,27 @@ async function loadModel(picked, url) {
   // based and must only ever be invoked once.
   if (picked.kind === 'fbx') return picked.loader.parse(buffer, '');
   return new Promise((resolve, reject) => picked.loader.parse(buffer, '', resolve, reject));
+}
+
+/**
+ * Register an already-parsed model under an asset key, running it through the
+ * same `prepareModel` the network path uses so it gets the identical fit,
+ * orientation, pivot and material treatment.
+ *
+ * This exists because `preloadAssets` fetches by URL, which a terminal script
+ * has no way to serve — so a headless harness that wants to exercise a real
+ * RIG (bone chains, IK reach) rather than the procedural stand-in has no way
+ * in. It's the same operation `loadUploadedModel` already performs on a File,
+ * just starting from an Object3D someone else parsed.
+ */
+export function installModel(key, source, clips = []) {
+  const def = ASSETS[key];
+  if (!def) {
+    console.warn(`[assets] installModel: unknown asset "${key}"`);
+    return false;
+  }
+  loadedModels.set(key, prepareModel(source, def, clips, null, key));
+  return true;
 }
 
 export async function preloadAssets(onProgress) {

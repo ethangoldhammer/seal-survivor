@@ -50,6 +50,245 @@ export const CONFIG = {
     },
   },
 
+  // ---------------------------------------------------------------------------
+  // CINEMATIC CAMERA — the opt-in second camera brain (systems/cineCamera.js).
+  // `enabled: false` is the shipped default and it is a real off switch: the
+  // rig never ticks, the lens uniforms stay at zero, the extra blur chain is
+  // never allocated work, and world.js takes the original fixed-frame path.
+  //
+  // Nothing in here moves the PLAYFIELD. Arena bounds come from
+  // arena.viewHeight and the aspect ratio alone; this only decides which part
+  // of that unchanged box is framed, and how sharp it is. That does mean the
+  // rig has to sit above zoom 1 to have anywhere to pan to — at zoom 1 the
+  // frustum already covers the whole arena and the clamp collapses to a point.
+  //
+  // `base` is the resting rig. Each entry in `states` is a SPARSE override on
+  // it — anything a state doesn't name, it inherits, so a base value tuned
+  // here flows to all eight states instead of needing eight edits. Keys ending
+  // `Mul` scale the base; the rest replace it.
+  cinecam: {
+    enabled: false,
+
+    base: {
+      // The loose punch-in. Everything else is measured against this: the
+      // dead zone and the lead are fractions of the frame this zoom produces.
+      // Resting width. Deliberately loose — normal play wants to see the water
+      // around the seal, and the states are what earn a tighter frame. The
+      // cost of going wider is pan range: the clamp closes as zoom approaches
+      // 1 (at exactly 1 the frustum IS the arena and there is nowhere to pan),
+      // so at 1.18 the frame can travel about 7 world units off centre against
+      // 12 at the old 1.35. That is the trade being made here, on purpose.
+      zoom: 1.18,
+      zoomMax: 3,
+      zoomStiffness: 26,
+      // Under 1, so every zoom move overshoots a little and settles back
+      // rather than easing politely into place. This is what makes the strike
+      // wind-up feel elastic in both directions — see `zoomDampMul` on the
+      // charging state, and the note by the zoom spring in cineCamera.js.
+      zoomDamping: 0.8,
+
+      // Per-axis spring stiffness. Y is softer than X on purpose — the arena
+      // is a tall vertical slice with a fixed water line, and a vertical
+      // follow as tight as the horizontal one makes every dive feel like the
+      // ocean is being winched past the seal rather than the seal descending.
+      stiffness: { x: 55, y: 38 },
+      // A damping RATIO, not a coefficient: 1 is critically damped at any
+      // stiffness, below 1 overshoots and settles back. 0.9 is a single
+      // barely-perceptible overshoot, which is what reads as "sprung" rather
+      // than "slow".
+      damping: 0.9,
+
+      // Soft box, as a fraction of the HALF-frame. Inside it the camera does
+      // not move at all, so small corrections and the aim-rig's constant
+      // little adjustments don't drag the whole frame around with them.
+      deadZone: { x: 0.1, y: 0.14 },
+
+      // Velocity lead, in SECONDS — "frame where the seal will be this long
+      // from now". Time rather than distance because it stays correct when
+      // Redline and the combo speed multiplier raise the top speed.
+      lookAhead: 0.18,
+      lookAheadMax: 12,   // world units, so a dash can't throw the seal out of frame
+      lookAheadLag: 0.35, // the lead has its own smoothing, or a direction flip snaps
+
+      // How far the frame drifts toward the aim direction, in world units, on
+      // top of the player. Shooting off to one side pulls that side into view.
+      aimBias: 3.5,
+
+      // Lens defaults. States override these; see the tilt-shift and flare
+      // blocks under `lens` for the parts that aren't per-state.
+      defocus: 0.55,      // 0..1, how much of the blurred buffer the edges take
+      focusRadius: 0.26,  // sharp disc radius around the seal, in aspect-corrected uv
+      focusFeather: 0.34, // how far the falloff takes to reach full blur
+      flare: 0.35,
+      vignette: 0.25,
+      // The dash corridor's strength, 0..1. Zero everywhere except `charging`,
+      // and blendable like anything else, so it fades in and out on the same
+      // curve as the pull-in. Its GEOMETRY lives under lens.path below.
+      path: 0,
+
+      // Fallbacks for a state that names neither.
+      blendIn: 0.4,
+      blendOut: 0.6,
+    },
+
+    // Every one of these is a sparse override. `hold` is only meaningful on
+    // the two states that expire on their own clock (roundStart, foodChain)
+    // and on deathHit, where it is how long the hit beat lasts before the
+    // fall takes over.
+    states: {
+      // Wide, calm, barely tracking — then it settles into the normal follow
+      // as the blend-out runs. The rig is placed rather than sprung on the
+      // first frame of a run (see cineCamera.js), so this opens where the
+      // seal is instead of sailing in from the last death.
+      roundStart: {
+        hold: 1.6, blendIn: 0.9, blendOut: 1.4,
+        zoom: 1.08, stiffMul: 0.45, zoomStiffMul: 0.45, lookAheadMul: 0.2, aimBiasMul: 0.3,
+        defocus: 0.25, focusRadius: 0.4, flare: 0.7, vignette: 0.1,
+      },
+      // The lens leans in and the world falls away — the seal ends up the
+      // only sharp thing on screen while the meter fills.
+      // Held for exactly as long as the strike button is DOWN — the state
+      // rides the button, not strikeState.charging, so holding through an
+      // empty bar keeps the lens in (see the note in cineCamera.js).
+      //
+      // The elastic pull-in is `zoomDampMul` doing the work, not the blend:
+      // at 0.72 x the base 0.8 the zoom spring is well under-damped, so it
+      // overshoots past 1.62 on the way in and rebounds. Release hands it a
+      // target that has jumped back out to the resting width and the same
+      // spring throws the frame open past it before settling — the pop out is
+      // the pull-in run backwards, which is why there is no separate release
+      // animation anywhere.
+      charging: {
+        blendIn: 0.35, blendOut: 0.5,
+        zoom: 1.62, zoomDampMul: 0.72,
+        stiffMul: 1.5, zoomStiffMul: 1.5, lookAheadMul: 0.35, aimBiasMul: 0.4, deadZoneMul: 0.4,
+        defocus: 0.95, focusRadius: 0.17, focusFeather: 0.3, flare: 0.5, vignette: 0.5,
+        // The only state that lights the dash corridor.
+        path: 1,
+      },
+      // The opposite move: snaps wide and goes SOFT, so the dash outruns the
+      // frame for a beat before the spring catches up. The low stiffMul is
+      // doing the work here — a dash the camera keeps up with perfectly has
+      // no speed to it.
+      boosting: {
+        blendIn: 0.12, blendOut: 0.45,
+        // zoomStiffMul is the ONE place these two deliberately disagree: the
+        // frame stays soft (0.55) so the dash outruns it, while the lens snaps
+        // open at 2.6. Matched to stiffMul, the release crawled wide over most
+        // of a second and read as an ease rather than a spring.
+        zoom: 1.18, stiffMul: 0.55, zoomStiffMul: 2.6, dampMul: 0.8, lookAheadMul: 2, aimBiasMul: 0.2,
+        defocus: 0.8, focusRadius: 0.34, focusFeather: 0.2, flare: 0.9, vignette: 0.45,
+      },
+      // A hard, short punch. Blends in over four frames and takes most of a
+      // second to let go, which is the asymmetry that makes it land as a hit.
+      foodChain: {
+        hold: 1.1, blendIn: 0.08, blendOut: 0.9,
+        zoom: 1.62, stiffMul: 2.2, zoomStiffMul: 2.2, lookAheadMul: 0.3, aimBiasMul: 0, deadZoneMul: 0,
+        defocus: 1, focusRadius: 0.2, focusFeather: 0.26, flare: 1.4, vignette: 0.55,
+      },
+
+      // --- the death, in three beats ---------------------------------------
+      // Framing during a death is still deathDive.js's job — it publishes a
+      // focus claim that world.js blends over whatever the rig produced, and
+      // at full weight it owns the shot outright. The rig's ZOOM hands over on
+      // that same ramp (see updateCamera), so these zooms and death.camera.zoom
+      // do not compound: the hit lands at full strength because the handover
+      // has barely started that early, and by the seabed the dive is at
+      // exactly the 1.8 it is tuned for. The LENS does not hand over — these
+      // states own the focus falloff, flares and vignette throughout.
+      deathHit: {
+        hold: 0.5, blendIn: 0.06, blendOut: 0.6,
+        zoom: 1.5, stiffMul: 2.5, zoomStiffMul: 2.5, lookAheadMul: 0, aimBiasMul: 0, deadZoneMul: 0,
+        defocus: 1, focusRadius: 0.14, focusFeather: 0.22, flare: 1.1, vignette: 0.7,
+      },
+      deathFall: {
+        blendIn: 1.2, blendOut: 0.8,
+        zoom: 1.15, stiffMul: 0.3, zoomStiffMul: 0.3, dampMul: 1.2, lookAheadMul: 0.6, aimBiasMul: 0,
+        defocus: 0.7, focusRadius: 0.3, focusFeather: 0.4, flare: 0.3, vignette: 0.6,
+      },
+      deathFloor: {
+        blendIn: 0.8, blendOut: 0.8,
+        zoom: 1.35, stiffMul: 0.8, zoomStiffMul: 0.8, lookAheadMul: 0, aimBiasMul: 0, deadZoneMul: 0,
+        defocus: 0.9, focusRadius: 0.22, focusFeather: 0.3, flare: 0.15, vignette: 0.8,
+      },
+    },
+
+    // The parts of the lens that are global rather than per-state. Each has
+    // its own enable so any one of the three can be A/B'd on its own without
+    // losing the rig.
+    lens: {
+      tiltShift: {
+        enabled: true,
+        strength: 1,  // master scale over every state's `defocus`
+        // Blur iterations on the defocus chain. Each one is two half-res
+        // draws, and each roughly doubles the apparent blur radius — 2 is a
+        // gentle optical falloff, 4 is unmistakably a miniature.
+        radius: 2,
+      },
+      flare: {
+        enabled: true,
+        strength: 1,   // master scale over every state's `flare`
+        // Ghosts are sampled from the bloom buffer along the line through the
+        // centre of frame, so anything bright throws them with no authoring.
+        ghosts: 3,
+        spacing: 0.32,
+        halo: 0.42,
+        // The anamorphic smear. Small numbers: this is a uv step per tap and
+        // nine taps wide, so 0.006 already reaches 5% of the screen.
+        streak: 0.006,
+        streakGain: 0.5,
+      },
+      // THE DASH CORRIDOR. A second focus claim laid along the line the strike
+      // will travel, live only while one is being wound up.
+      //
+      // It is a union with the radial focus, not a replacement: the seal keeps
+      // its own sharp disc and this carves a sharp LANE out ahead of it, so
+      // the shot reads as "here, and that way" rather than the sharp region
+      // sliding off the player. The vignette is the other half — darkening
+      // everything outside the lane is what turns a sharp streak into a
+      // highlighted path.
+      //
+      // Distances are in aspect-corrected uv, where 1.0 is the height of the
+      // frame, so they mean the same thing at any window shape.
+      path: {
+        enabled: true,
+        width: 0.1,        // half-width of the sharp lane
+        feather: 0.18,     // falloff either side of it
+        length: 0.3,       // reach at zero charge
+        lengthPerPower: 0.35, // ...and how much further a full meter throws it
+        vignette: 0.45,    // darkening OUTSIDE the lane, added to the state's own
+      },
+
+      droplets: {
+        enabled: true,
+        perBreach: 1,   // how wet one surface crossing leaves the glass
+        life: 3.2,      // seconds to dry, linear — drops evaporate, they don't decay
+        density: 9,     // cells across the frame; higher = more, smaller drops
+        size: 0.34,     // drop radius as a fraction of its cell
+        refract: 0.05,  // how far a drop bends what's behind it, in uv
+        spec: 0.5,      // the highlight on the bead
+        // How far a drop RUNS before it dries, in cell heights, accelerating
+        // the whole way. Above 1 it leaves its own cell, which the shader
+        // handles by evaluating the cell overhead as well.
+        //
+        // That one extra lookup is also the ceiling. The fastest drops carry a
+        // 1.3x personal multiplier, so this reaches ~1.5 cells of travel, and
+        // a drop that outran the neighbour lookup would blink out in mid-fall
+        // instead of drying. It gets away with even that much only because a
+        // drop at full travel is also at the end of its drain and is a sliver
+        // by the time it arrives — which is why the slider stops at 1.6 rather
+        // than somewhere rounder.
+        slide: 1.15,
+        // Vertical elongation at full speed. This is the difference between
+        // water running down glass and a circle sliding down glass.
+        stretch: 1.7,
+        // How far the trailing half is pinched into a tail, 0..1. The leading
+        // edge always stays full width — a drop is a teardrop point-up.
+        taper: 0.55,
+      },
+    },
+  },
+
   lighting: {
     ambient: 0.85,
     keyIntensity: 1.25,
@@ -71,6 +310,140 @@ export const CONFIG = {
     seabed: 0x0a1a24,
   },
 
+  // ---------------------------------------------------------------------------
+  // DAY / NIGHT — one clock (systems/daylight.js) that every other sky system
+  // reads. It publishes a single "light bus": how bright the world is right
+  // now, what colour that light is, and where in the sky it's coming from. The
+  // sky gradient, the sun and moon, the caustics and the light beams all hang
+  // off that one object rather than each deriving their own idea of the time,
+  // so nothing can drift out of step with anything else.
+  //
+  // The clock runs on REAL seconds scaled by `scale`: at 60 one real second is
+  // one in-game minute, so a full day takes 24 minutes.
+  // ---------------------------------------------------------------------------
+  dayNight: {
+    enabled: true,
+    startHour: 7.5, // where a fresh save opens — morning
+    scale: 60, // in-game seconds per real second. 60 = 1 real sec is 1 minute
+    // Every chum orb swallowed nudges the clock on. In REAL seconds of
+    // ordinary passage, not in-game minutes, so it stays proportional to
+    // `scale` instead of quietly changing meaning when the clock is retuned:
+    // at 60x, 0.35 here buys 21 in-game seconds a mouthful.
+    //
+    // Sized to be felt over a run and invisible per orb. A busy 12-minute run
+    // eats a couple of hundred orbs, which is about +1.2 in-game hours on the
+    // 12 that run covers anyway — call it 10% further through the day, with
+    // no single swallow ever visibly jumping the sun. Turn it up if you want
+    // hunting to drive the cycle rather than just lean on it.
+    chumSeconds: 0.35,
+    // A new run picks the clock up where the last one left it, so the first
+    // run of a session is the one that starts in the morning and later runs
+    // inherit whatever time you died at. Flip this on to restart every run at
+    // `startHour` instead.
+    restartAtMorning: false,
+    // Tuning aids, not gameplay: freeze the clock and scrub it by hand so a
+    // sunset can be looked at for longer than the fifteen seconds it lasts.
+    paused: false,
+    scrubHour: 7.5,
+
+    // The sky, as keyframes through the day. Two colours (the band at the
+    // water line, and the top of the frame) plus `light`, which is the master
+    // brightness the caustics, beams and lighting rig all ride. Whichever two
+    // entries bracket the current hour are interpolated, wrapping past
+    // midnight — so the list only needs the moments where the sky CHANGES
+    // character, not one entry per hour.
+    sky: [
+      { hour: 0,    zenith: 0x03070f, horizon: 0x081627, light: 0.10 },
+      { hour: 5,    zenith: 0x101f3a, horizon: 0x53406b, light: 0.24 },
+      { hour: 6.5,  zenith: 0x2d6396, horizon: 0xff9d63, light: 0.55 },
+      { hour: 9,    zenith: 0x3f8ac9, horizon: 0xb6dff5, light: 0.90 },
+      { hour: 12,   zenith: 0x4b9fe0, horizon: 0xd6efff, light: 1.00 },
+      { hour: 17,   zenith: 0x4285bb, horizon: 0xf2c493, light: 0.82 },
+      { hour: 19,   zenith: 0x1f3a59, horizon: 0xff7440, light: 0.42 },
+      { hour: 20.5, zenith: 0x0a1730, horizon: 0x35284a, light: 0.18 },
+      { hour: 22,   zenith: 0x03070f, horizon: 0x081627, light: 0.10 },
+    ],
+    // How the gradient is distributed. >1 pushes the horizon colour further up
+    // the frame, which is what a real sky does — the interesting band is thin.
+    skyCurve: 1.35,
+
+    // Stars. Fade in with the night factor (see daylight.js) and out again at
+    // dawn; density is cells per world unit, so a smaller number is sparser.
+    stars: { enabled: true, intensity: 0.55, density: 0.55, twinkle: 0.7 },
+
+    // The shared ellipse. Sun and moon sit on polar opposite points of it, so
+    // exactly one of them is above the water line at any moment. Radii are
+    // FRACTIONS — of half the arena width, and of the air band's height — so
+    // the arc reframes itself on resize instead of needing world units that
+    // only look right at one aspect ratio.
+    orbit: {
+      radiusX: 0.72,
+      radiusY: 0.74,
+      centerY: 0, // world units above the water line; 0 = rise/set on it
+      riseHour: 6, // sun crosses the horizon going up; it sets 12h later
+
+      // PARALLAX — how much of the camera's motion the sky layer takes.
+      // 1 pins the bodies to the world (they slide past exactly like a rock
+      // on the seabed), 0 pins them to the screen. 0.15 is "very far away":
+      // the sun barely drifts as the frame pans, which is what stops it
+      // reading as a prop hanging a few metres behind the seal.
+      //
+      // Done as an explicit x/y offset, NOT by moving it back in z. The
+      // camera is orthographic — there is no perspective divide, so depth
+      // alone buys exactly nothing. `depth` below is still worth setting
+      // (it's the sort order against the sky plane at -6 and the cloud
+      // overlay at -5.2) but it does not, on its own, move anything.
+      parallax: 0.15,
+      depth: -5.8,
+    },
+
+    // Both bodies take the same shape of definition, so anything written
+    // against one works on the other.
+    //
+    // `texture` and `model` are the replacement hooks: leave both null for the
+    // built-in placeholder disc, set `texture` to a .webp/.png path under
+    // public/ for flat art, or `model` to a .glb. A model is auto-scaled so
+    // its largest dimension matches `size` — deliberately, so swapping art in
+    // can't drop a sun of some unrelated size into the sky (assets carry their
+    // own scale, and hand-matching it is a trap).
+    //
+    // Everything below the water line is CLIPPED, not faded: a setting sun is
+    // cut off by the horizon rather than dissolving through it.
+    sun: {
+      size: 5.2, // world units across the disc
+      color: 0xfff0c8,
+      brightness: 1.25, // >1 pushes past the bloom threshold and blooms
+      halo: 3.4, // glow diameter, as a multiple of `size`
+      haloStrength: 0.55,
+      // Extra glow while the disc is touching the horizon — the moment the
+      // sun is half in the water is the one that should flare.
+      horizonGlow: 1.7,
+      horizonRange: 1.6, // how far (in disc radii) off the line still counts
+      texture: null,
+      model: null,
+      // Fold the disc's circular edge into the art's alpha. On by default
+      // because a body painted on an opaque background is otherwise a square
+      // in the sky — the single most likely thing to be wrong with a dropped
+      // -in .webp. Turn it off for art that spills past its own circle
+      // (a corona, a ring, a crescent with a glow).
+      maskToDisc: true,
+    },
+    moon: {
+      size: 3.4,
+      color: 0xcfe2ff,
+      brightness: 0.85,
+      halo: 3.0,
+      haloStrength: 0.35,
+      horizonGlow: 1.5,
+      horizonRange: 1.6,
+      // Painted moon. If the file isn't there the rig warns once and falls
+      // back to the placeholder disc, so this path is safe to keep set.
+      texture: '/textures/sky/moon.webp',
+      model: null,
+      maskToDisc: true,
+    },
+  },
+
   caustics: {
     enabled: true,
     intensity: 0.4, // brightness of the light veins
@@ -78,6 +451,15 @@ export const CONFIG = {
     speed: 0.55,
     falloff: 1.6, // how fast caustics fade with depth (higher = shallower-only)
     color: 0xbfefff,
+    // Caustics are sunlight refracted through the surface, so they have no
+    // business being at full strength at midnight. With this on, `intensity`
+    // becomes the NOON value and the day/night light bus scales it down from
+    // there — `nightFloor` is what's left under a full moon, and `tintMix` is
+    // how much of the light's own colour (warm at dawn, cold at night) is
+    // blended into `color`.
+    followSun: true,
+    nightFloor: 0.22,
+    tintMix: 0.55,
   },
 
   godrays: {
@@ -91,6 +473,89 @@ export const CONFIG = {
     intensity: 0.22,
     falloff: 1.2, // how fast beams fade with depth
     color: 0xdff6ff,
+    // Same coupling as the caustics, plus the geometry: beams lean AWAY from
+    // wherever the light is (a low sun on the left throws light down and to
+    // the right) and the whole bundle slides under it. Both are driven by the
+    // body's horizontal position as a fraction of half the arena, which is
+    // zero at the top of the arc and ±1 at the horizon — so the lean is
+    // strongest at sunrise and sunset and vanishes at noon, for free.
+    followSun: true,
+    nightFloor: 0.16,
+    tintMix: 0.55,
+    followTilt: 1.6, // extra `angle` at the extremes of the arc
+    followShift: 0.45, // fraction of the light's x the anchors slide by
+  },
+
+  // ---------------------------------------------------------------------------
+  // WEATHER — occasional rainstorms, and nothing else yet. The state machine
+  // (systems/weather.js) publishes an intensity and a wind, and every visual
+  // reads those two numbers: the rain, the cloud overlay, and the dimming the
+  // day/night light bus applies during a storm. Adding a weather TYPE later
+  // means adding a state to that machine and something that reads it — not
+  // touching any of the three consumers.
+  //
+  // All of these are REAL seconds. Weather keeps running on menus and through
+  // a death, because a storm that pauses with the game reads as a bug.
+  // ---------------------------------------------------------------------------
+  weather: {
+    enabled: true,
+    // -1 = run the schedule. Anything 0..1 pins the intensity there and holds
+    // it, which is the only sane way to tune rain that otherwise shows up
+    // twice in ten minutes.
+    forceIntensity: -1,
+
+    firstDelay: [45, 150], // [min, max] before the first storm of a run
+    // Clear spell between storms. Wide, and deliberately: with the durations
+    // below this rains about 15% of the time, which is what "occasional"
+    // measures out to. Halve it and it's raining a quarter of every run.
+    gap: [150, 420],
+    duration: [30, 75], // how long a storm lasts, ramps included
+    peak: [0.45, 1], // how hard a given storm rains at its height
+    rampIn: 8, // seconds to reach peak
+    rampOut: 12, // seconds to fall back to clear
+    dim: 0.45, // how much of the sky's brightness a full storm takes away
+
+    // Wind is one signed number, -1 (hard left) to +1 (hard right). Two slow
+    // sines beating against each other give gusts that never repeat on any
+    // interval you can hear; `turbulence` is derived from how hard it's
+    // gusting and is what the rain jitters against.
+    wind: {
+      base: 0.15, // prevailing direction, before gusts
+      gust: 0.85, // gust amplitude
+      speed: [0.11, 0.29], // the two beat frequencies, Hz
+      calmGust: 0.35, // fraction of the gust that blows outside a storm
+    },
+
+    rain: {
+      enabled: true,
+      maxDrops: 1200, // pool size; the ring buffer never grows past this
+      perSecond: 900, // spawn rate at full intensity
+      speed: [30, 46], // fall speed, world units/sec
+      length: [0.8, 1.9], // streak length, scaled by speed
+      drift: 26, // world units/sec of sideways push at wind = 1
+      turbulence: 6, // extra per-drop wobble at full turbulence
+      color: 0xc6e2f5,
+      opacity: 0.45,
+      splash: true,
+      splashChance: 0.22, // fraction of drops that leave a splash particle
+    },
+
+    // CLOUDS — a stub, on purpose. There is no cloud layer yet: this is a
+    // noise field over the sky band that darkens with the storm and slides
+    // with the wind, which is enough to read as overcast from a distance.
+    // When real clouds arrive they belong in systems/clouds.js alongside
+    // this, reading the same two numbers; the overlay then becomes the
+    // bottom layer of that stack rather than something to tear out.
+    clouds: {
+      enabled: true,
+      color: 0x0a1220,
+      opacity: 0.6, // at full storm intensity
+      coverage: 0.42, // 0 = wisps, 1 = solid ceiling
+      softness: 0.35, // edge feather on the noise
+      scale: 0.055, // noise cells per world unit
+      drift: 3.2, // world units/sec of scroll at wind = 1
+      base: 0.12, // a little haze even in clear weather
+    },
   },
 
   player: {
@@ -411,6 +876,61 @@ export const CONFIG = {
       reachMulMin: 0.6,
       reachMulMax: 2.2,
 
+      // --- the gulp ---------------------------------------------------------
+      // Winding up SEALS THE MOUTH. For as long as the button is held the seal
+      // neither swallows chum nor REACHES for it: no xp, no heal, and above all
+      // nothing back into the bar. Without that gate a wind-up held over a pile
+      // paid for itself — the meter refilled about as fast as the hold drained
+      // it, and a full commitment cost nothing.
+      //
+      // The magnet goes off with the swallow, and has to. Gating only the
+      // swallow looked worse than no gate at all: the magnet dragged every orb
+      // in range inside the seal's body, where it sat hidden, which reads as
+      // having been collected while the gate quietly refused to collect it.
+      // Nothing moves during a wind-up; `tell` below is how the player sees
+      // what the release is about to take.
+      //
+      // The release swallows the lot. Every orb inside `radius` goes down on
+      // the frame the strike fires, through exactly the same collect path as
+      // swimming over one, so the xp, the healing and the refill all land as
+      // normal — the wind-up banks food alongside power and the strike cashes
+      // both at once. That refill arriving on the release frame is also what
+      // keeps the eat-strike-eat loop turning through a gate that would
+      // otherwise starve it.
+      //
+      // Only a release that actually FIRES gulps: the mouthful is the strike's
+      // payoff, not the hold's. A fizzle under `minFire` leaves the chum where
+      // it is, still magnetised, for the wind-up that follows.
+      //
+      // The gate follows the BUTTON, for as long as it is down, and not the
+      // meter's `charging` flag. Charging goes false the moment the bar runs
+      // dry — a second into a hold at the `time` above — and a still-held
+      // button burns each swallowed chum's refill straight back out, so a gate
+      // tied to it came off partway through every long hold and let the pile
+      // go down anyway. Releasing is what reopens the mouth, and nothing can
+      // starve behind that: whatever gathered while it was shut is swallowed
+      // by the ordinary collect path on the frame after the let-go, fired or
+      // not.
+      gulp: {
+        blockEating: true, // false = eat freely while charging, and no gulp
+        radius: 5,         // world units swallowed on release, before upgrades
+
+        // How chum inside that radius shows it is spoken for while the mouth is
+        // shut. It does not move an inch — it shivers in place and spins up.
+        //
+        // Both channels are GEOMETRIC, and that is a constraint rather than a
+        // preference: orb materials are shared across every instance (see
+        // spawnXpOrb in entities/pickups.js), so a flash written to a colour or
+        // an emissive would light up every orb in the arena at once, including
+        // the ones nowhere near the seal.
+        tell: {
+          shiver: 0.07,  // world units of jitter, peak — a buzz, not a wobble
+          hz: 18,        // under the ~20Hz Nyquist ceiling at 60fps, same limit
+                         // the wind-up tremble lives under (see `vibrate`)
+          spinMul: 3.5,  // tumble speed while it waits on the release
+        },
+      },
+
       // --- the feel of winding one up ---------------------------------------
       // Burning fuel should be felt, and it should build. The shake is
       // SUSTAINED — a continuous tremble that grows with banked power, not a
@@ -607,6 +1127,34 @@ export const CONFIG = {
     branchLength: 0.45, // fraction of the hop's length
     branchTaper: 0.55, // branches are dimmer/thinner than the main arc
     flickerSpeed: 40, // brightness flicker while the bolt is alive
+
+    // --- storm response ---------------------------------------------------
+    // The eel reads weatherState.intensity (0..1) and scales its LOOK with it,
+    // so a storm overhead makes the chain lightning visibly angrier. Purely
+    // visual by default: `damageInStorm` is 1, so a storm changes how the
+    // ability reads without quietly changing how strong it is. Turn that up
+    // only if you want weather to be a balance lever as well as a mood one.
+    //
+    // Every multiplier below is applied as 1 + (mul - 1) * intensity, so at
+    // intensity 0 the eel is exactly what it always was and nothing about
+    // clear-weather behaviour moves.
+    storm: {
+      enabled: true,
+      glowMul: 2.3, // bolt brightness at full storm
+      widthMul: 1.7, // core and halo thickness
+      amplitudeMul: 1.9, // how far the arc thrashes off the straight line
+      contrastMul: 1.35, // sharper spikes, less gentle waving
+      branchChanceMul: 1.8, // far more dead-end forks
+      branchesPerHopMul: 1.6,
+      flickerMul: 1.5,
+      lifeMul: 1.35, // bolts linger a little longer in the murk
+      damageInStorm: 1, // 1 = looks angrier, hits exactly the same
+      // Tint the bolt toward this colour as the storm builds. A cold white-
+      // violet rather than a hotter blue: the storm should read as higher
+      // voltage, not as a different element.
+      color: 0xe6e2ff,
+      colorMix: 0.75, // how far toward `color` a full storm pulls the bolt
+    },
   },
 
   // ---------------------------------------------------------------------------
@@ -786,6 +1334,322 @@ export const CONFIG = {
     haulCatchGap: 0.6, // how close to the hull counts as landed
     bobSpeed: 1.6,
     bobAmount: 0.22,
+
+    // --- voicemail bombs ------------------------------------------------
+    // Dropped INTO the loaded net while the boat sails, on top of the haul
+    // rather than instead of it. The haul is a quiet remover — fish go up and
+    // away — and it always lacked a moment you could watch coming. The bomb
+    // is that moment: it falls down the net, detonates among whatever is
+    // still being dragged, and pays the whole catch out as chum in a radius
+    // far wider than the net itself.
+    //
+    // Chum rather than XP orbs on purpose. The haul already pays XP through
+    // onHauled; if the bomb paid XP too, the two halves would compete to
+    // collect the same fish and the boat would become the only ability worth
+    // taking. Chum feeds the strike meter instead, so the bomb pays into a
+    // different loop than the net it rides on.
+    bomb: {
+      enabled: true,
+      dropInterval: 3.2, // seconds between drops while sailing, at level 1
+      dropIntervalPerLevel: 0.22,
+      dropIntervalFloor: 1.2,
+      minCatch: 1, // don't waste a bomb on an empty net
+      fallSpeed: 9, // how fast it sinks down the net toward the catch
+      fuse: 0.55, // seconds it sits armed at the bottom before going off
+      radius: 11, // blast radius — deliberately much wider than netWidth
+      radiusPerLevel: 1.1,
+      damage: 60, // enough to finish anything the net could realistically hold
+      damagePerLevel: 22,
+      knockback: 14,
+      // Chum paid per enemy killed in the blast, plus a flat scatter so a
+      // bomb that catches nothing still reads as worth watching.
+      chumPerKill: 3,
+      chumScatter: 4,
+      chumXp: 3, // per bit — a netted catch blown open is a real payday
+      chumSpread: 5.5, // how far the chum is flung from the blast centre
+      size: 0.72, // visual radius of the falling bomb
+      color: 0xffd27a,
+      blinkSpeed: 9, // how fast it flashes once armed
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // SCALLOP SQUIRTER — the anti-mussel. A shell that claps itself around the
+  // playfield on a bubble jet, choosing a NEW random heading every time its
+  // jet pulses, and only stopping when it hits something.
+  //
+  // The homing mussel answers "hit the thing I'm looking at". This answers
+  // "cover the water I'm not looking at" — which is why it deliberately has no
+  // seeker. Adding homing to it would collapse it into a slower mussel; the
+  // wandering IS the ability, and the payoff is that scallops are still
+  // bouncing around behind you while you fight something else.
+  // ---------------------------------------------------------------------------
+  scallop: {
+    fireRate: 2.6, // seconds between launches of the whole flight
+    damage: 26,
+    speed: 15, // jet burst speed
+    life: 7.5, // seconds before it gives up and sinks
+    radius: 0.42,
+    // The jet: a hard shove in a new direction, then coasting drag until the
+    // next pulse. That stop-start is what makes it read as a scallop clapping
+    // rather than a bullet flying.
+    pulseInterval: [0.18, 0.42], // seconds between jets, randomised per pulse
+    pulseSpeed: [11, 19], // speed added by each jet
+    turnRange: 2.4, // radians of heading change a pulse may apply
+    drag: 1.9, // per-second velocity falloff between pulses
+    sinkAccel: 2.2, // gravity once `life` runs out, so spent shells settle
+    maxBounces: 4, // ricochets off the arena walls before it's spent
+    restitution: 0.85,
+    spin: 7, // radians/sec, purely visual — the shell tumbles as it jets
+    launchStagger: 0.09, // seconds between each scallop in one flight
+  },
+
+  // ---------------------------------------------------------------------------
+  // OYSTER BLASTER — a slow, heavy pearl that is worth much more when it lands
+  // than while it travels. On impact it cracks into `bomblets` glowing shards
+  // that fly outward and detonate individually.
+  //
+  // Stacks buy the BURST, not the rate of fire, so the upgrade always answers
+  // "what happens where the pearl lands" rather than "how many pearls". That
+  // keeps it distinct from the basic shot, which is already a rate-of-fire
+  // upgrade with three cards feeding it.
+  // ---------------------------------------------------------------------------
+  oyster: {
+    fireRate: 1.5, // seconds between pearls
+    fireRatePerLevel: 0.06, // only a slight cadence gain — the burst is the upgrade
+    fireRateFloor: 0.85,
+    damage: 22, // the pearl's own impact
+    damagePerLevel: 5,
+    speed: 13,
+    life: 3.2,
+    radius: 0.4,
+    pearlColor: 0xfff3d6,
+    pearlGlow: 2.4,
+    // --- the burst ---
+    bomblets: 4,
+    bombletsPerLevel: 1,
+    bombletDamage: 14,
+    bombletDamagePerLevel: 4,
+    // Travel is deliberately held UNDER `bombletBlastRadius`. Under
+    // exponential drag a bomblet covers (speed/drag)*(1-e^(-drag*life)), which
+    // at the first pass of these numbers ([7,13] speed, 1.4 drag, up to 0.7s)
+    // reached 5.8 units against a 2.4 blast — so a fast bomblet detonated in a
+    // ring 3.4 to 8.2 units out and the impact point itself, where the fish
+    // the pearl just hit is standing, was covered by nothing. It read as a
+    // pearl that sometimes did nothing at all.
+    //
+    // Keeping max travel (2.44) just inside the blast radius (2.4) means every
+    // bomblet's blast still reaches back over where the pearl landed, so the
+    // burst is contiguous from the impact outward however the angles roll.
+    bombletSpeed: [4, 8],
+    bombletLife: [0.3, 0.55], // seconds of flight before it detonates
+    bombletRadius: 0.2,
+    bombletBlastRadius: 2.4,
+    bombletBlastRadiusPerLevel: 0.18,
+    bombletSpread: 6.283, // full circle — the pearl shatters, it doesn't cone
+    bombletColor: 0xfff0c0,
+    bombletGlow: 3.2,
+    bombletDrag: 2.4,
+  },
+
+  // ---------------------------------------------------------------------------
+  // OCTOPUS GRABBER — the game's only defensive companion. It hangs off the
+  // seal and reels fish in with individually-tracked arms; a fish an arm has
+  // hold of is inert, and arrives as chum rather than as a corpse.
+  //
+  // Each arm is its own state machine (idle → reaching → holding → reeling →
+  // pop) rather than the whole octopus sharing one target, because the whole
+  // point of the fantasy is several arms busy with several different fish at
+  // once. That's also why `octoGrabLevel` adds arms rather than speed.
+  //
+  // NOTE: the arms are procedural curves for now — real rigged arm art is a
+  // separate task. systems/octoGrab.js draws them from `armSegments` points so
+  // swapping in a rig later means replacing the draw call, not the logic.
+  // ---------------------------------------------------------------------------
+  octoGrab: {
+    arms: 2, // at level 1
+    armsPerLevel: 1,
+    // No maxArms: the rig IS the cap. The model has six tentacles, and
+    // systems/octoGrab.js clamps to however many arm chains actually
+    // resolved — a config number claiming nine would be a slider that
+    // silently does nothing past six.
+    // THE GRAB RADIUS — the stat the upgrade actually buys. In world units,
+    // and sized against the rig: one tentacle measures about 4.4 units at
+    // ASSETS.octoGrabber.fit, so level 1 sits just inside what an arm can
+    // physically touch and the level scaling spends the stretch below.
+    reach: 4.2,
+    reachPerLevel: 0.28, // level 8 reaches 6.2
+    // How far past its real length an arm may strain, as a multiple of the
+    // measured chain. Above 1 the tip stops quite touching the fish and the
+    // tentacle simply points hard at it — which is what a real octopus
+    // reaching does, and is far better than the alternative of silently
+    // refusing grabs the config asked for. Set it to 1 to forbid straining;
+    // the grab radius is then hard-capped at the arm's true reach.
+    reachStretch: 1.5,
+    grabCooldown: 0.9, // per-arm rest after a pop before it can reach again
+    // A strained arm never gets its tip onto the fish, so "have I arrived"
+    // cannot be a distance test alone or those grabs hang in `reaching`
+    // forever. After this long the arm has committed and takes hold.
+    graspTimeout: 0.7,
+    reelSpeed: 7.5, // how fast a held fish is dragged toward the seal
+    reelSpeedPerLevel: 0.5,
+    popDistance: 1.5, // how close to the seal a fish gets before it pops
+    // A fish too big to reel is simply never grabbed — an arm that latched
+    // onto a megalodon and then couldn't move it would look broken, and the
+    // arm would be tied up for the rest of the run.
+    maxTargetRadius: 1.6,
+    // What a popped fish is worth. Chum rather than a normal kill payout: the
+    // arm did the work, and chum feeds the strike meter, so the octopus
+    // converts incoming pressure into strike uptime.
+    chumPerPop: 2,
+    chumSpread: 1.4,
+    chumXp: 2, // per bit — a popped fish is worth a little more than a minnow drop
+
+    // --- the rig -------------------------------------------------------------
+    // Six real arm chains, driven by CCD IK against a target at each chain's
+    // tip. `arms` above is now how many may GRAB AT ONCE, not how many exist:
+    // the model has six tentacles whatever your level is, and hiding two of
+    // them at level 1 would look like a broken octopus. The rest dangle.
+    ik: {
+      iterations: 5, // CCD passes per arm per frame
+      rootInfluence: 0.25, // low: the base of a tentacle should barely swing
+      maxBend: 0.85, // radians one bone may deviate from its rest pose
+      softness: 0.8, // <1 eases into the limit rather than stopping hard
+      smoothing: 12, // how fast an arm chases a moving fish
+      tolerance: 0.02,
+    },
+    // How completely the IK owns an arm in each state. Reaching is near-total;
+    // dangling is deliberately weak, so an idle arm keeps most of its rest
+    // pose and only drifts toward the trailing point.
+    reachWeight: 0.95,
+    dangleWeight: 0.35,
+    // Per-second easing between those two. This is what makes the grab read as
+    // a REACH rather than a snap: the weight ramps, so the arm visibly leaves
+    // its dangle and extends. Slower out than in — letting go is lazier than
+    // grabbing.
+    weightLerpIn: 6,
+    weightLerpOut: 2.5,
+
+    // --- dangle --------------------------------------------------------------
+    // Where an unoccupied arm's target sits: behind the body, opposite the
+    // direction of travel, fanned out per arm so six tentacles don't converge
+    // on one point.
+    dangleLength: 3.4, // how far behind the body the trailing point sits
+    dangleSpread: 2.4, // how wide the fan is across the trail
+    dangleDroop: 1.1, // how far the fan sags below the trail line
+    idleWave: 1.15, // undulation speed of a dangling arm — slow and lazy
+    idleAmp: 1.35, // and how far it wanders
+
+    // --- drift and drag ------------------------------------------------------
+    // What makes the arms read as LOOSE rather than as posed sticks.
+    //
+    // The IK target does not sit on the computed dangle point; it lags behind
+    // it on a soft spring, per arm. That lag IS the secondary motion: when the
+    // octopus accelerates the arms are still where the body used to be, and
+    // they get dragged into line over the next half second rather than
+    // teleporting along with it.
+    //
+    // `stiffnessVariance` is what stops the six looking like one object. Each
+    // arm's spring is scaled by 1 ± this, so they settle at visibly different
+    // rates and the bundle never moves in lockstep — which is the single thing
+    // that most made the first pass look rigid.
+    drift: {
+      stiffness: 5.5, // spring pulling the target toward the dangle point
+      damping: 2.6, // low, so it overshoots and sways instead of easing in
+      stiffnessVariance: 0.45, // ±45% per arm
+      // A second, slower wander layered over the first at a non-harmonic
+      // ratio, so the motion never repeats on an obvious beat.
+      wanderOctave: 0.37,
+      wanderOctaveAmp: 0.7,
+      // How much of the body's own velocity is thrown into the trailing
+      // point. Above zero the arms visibly stream backward when it jets.
+      velocityDrag: 0.22,
+    },
+
+    // --- bioluminescence -----------------------------------------------------
+    // A glow that runs up each arm from the TIP, so how much the octopus is
+    // helping is legible at a glance: a dark bundle is idle, a bundle with
+    // three lit tips is holding three fish. See systems/bioluminescence.js.
+    //
+    // Per-channel, one channel per arm — which is the whole reason the glow is
+    // procedural rather than an emissive map. A texture can say "tentacles
+    // glow"; it cannot say "THAT tentacle, right now".
+    glow: {
+      enabled: true,
+      color: 0x59ffd8,
+      strength: 1.9,
+      falloff: 2.4, // >1 concentrates it at the tip
+      span: 0.5, // fraction of the arm, from the tip back, that lights at all
+      ambient: 0.06, // a faint always-on shimmer, so it never looks dead
+      shimmerAmp: 0.3,
+      shimmerFreq: 7.0,
+      shimmerSpeed: 2.4,
+      // Target level per arm state. Reaching is a flare of intent; holding is
+      // the sustained "this arm is working" read.
+      reachLevel: 0.65,
+      holdLevel: 1.0,
+      // Per-second easing toward those. Fast up, slow down — a tip that has
+      // just let go keeps a fading afterglow, which reads as effort spent.
+      riseRate: 7.0,
+      fallRate: 1.8,
+    },
+
+    // --- head / propulsion ---------------------------------------------------
+    // The mantle chain aims at a point ahead of the body, and that same point
+    // is what the body accelerates toward — so the octopus genuinely swims
+    // where its head is pointing instead of sliding sideways with the head
+    // decorating the motion.
+    head: {
+      weight: 0.8,
+      lead: 3.2, // how far ahead of the body the head target is placed
+      thrust: 26, // acceleration toward the head target
+      maxSpeed: 15,
+      drag: 3.4,
+      // Jet in pulses rather than thrusting continuously — an octopus glides
+      // between contractions, and a constant push reads as a hovering drone.
+      pulseInterval: 0.75,
+      pulseFraction: 0.45, // of each interval spent actually thrusting
+    },
+
+    bodyOffset: [-1.9, -1.1], // where the octopus prefers to ride vs the seal
+    bodyFollow: 7, // spring pulling the head target back toward that spot
+  },
+
+  // ---------------------------------------------------------------------------
+  // ORCA FAMILY — a pod of three that hunts the surface boats specifically.
+  //
+  // Boats are the one threat the rest of the arsenal handles badly: they sit
+  // at the surface, out of the way of the seal's usual fight, and chip at you
+  // while you're busy below. Every other companion targets whatever is
+  // nearest, which in practice means fish. This one deliberately looks past
+  // fish to the thing you'd otherwise have to swim up and deal with yourself,
+  // and only falls back to large fish when there's no boat left to hunt.
+  // ---------------------------------------------------------------------------
+  orca: {
+    count: 3, // the pod. Fixed — stacks make them stronger, not more numerous
+    damage: 30,
+    damagePerLevel: 14,
+    // Seconds between one orca's attack runs. The pod staggers itself so all
+    // three don't breach the same boat on the same frame.
+    attackInterval: 2.6,
+    attackIntervalPerLevel: 0.18,
+    attackIntervalFloor: 1.0,
+    chargeSpeed: 22,
+    chargeSpeedPerLevel: 1.4,
+    cruiseSpeed: 9,
+    hitRadius: 2.0, // how close a charging orca must get to land the hit
+    huntRange: 34, // how far it will travel to find a boat
+    // Falls back to fish only above this radius — the pod ignores minnows even
+    // when idle, so it never looks like a third seal team.
+    fallbackMinRadius: 0.9,
+    knockback: 6,
+    // Formation while there's nothing to hunt: a loose line abreast trailing
+    // the seal, spaced so they read as a family group rather than a stack.
+    formationSpacing: 2.6,
+    formationOffset: [-3.4, 1.6],
+    formationFollow: 5.5,
+    breachChance: 0.35, // odds an attack run carries through the surface
+    turnRate: 5.5,
   },
 
   // ---------------------------------------------------------------------------
@@ -1157,8 +2021,17 @@ export const CONFIG = {
       asset: 'enemyOrca', behavior: 'hunt', faceMotion: true,
       radius: 1.8, hp: 260, hpPerDifficulty: 16,
       speed: 6.2, speedVariance: 0.8, contactDamage: 34, xp: 45, turnRate: 2,
-      hunt: { preyRadius: 34, biteRange: 2.2, biteCooldown: 0.45, healPerMeal: 22,
-              maxOverheal: 2.4, growPerMeal: 0.035, maxGrow: 1.6, wanderChange: 2 },
+      // The orca used to be the roster's runaway: a 0.45s bite (three times
+      // faster than any other apex), a 34-unit prey radius that covers most of
+      // the arena, and 3.5% growth per meal up to 1.6x. Those numbers
+      // multiplied out to a pod that hit maximum size roughly EIGHT SECONDS
+      // after arriving — every orca a player ever saw was already the biggest
+      // it could be, which read as "orcas scale absurdly" when nothing about
+      // the difficulty curve was involved at all. Now in line with the other
+      // apex feeders: still the fastest eater and the widest hunter of them,
+      // by a nose rather than by a factor of three.
+      hunt: { preyRadius: 24, biteRange: 2.2, biteCooldown: 1.0, healPerMeal: 16,
+              maxOverheal: 1.6, growPerMeal: 0.02, maxGrow: 1.3, wanderChange: 2 },
       weight: 0.05, weightPerDifficulty: 0.02, maxWeight: 0.22,
       maxConcurrent: 2, minDifficulty: 2.2, spawnRateMul: 1, minPlayerLevel: 5,
       spawnGroup: 'apex',
@@ -1348,6 +2221,15 @@ export const CONFIG = {
       count: 10, speed: [3, 10], size: [0.08, 0.2], life: [0.2, 0.45],
       colors: [0x6fd3ff, 0xffffff], cone: 1.4, drag: 3, gravity: [0, 0], inherit: 0.2, glow: 1.2,
     },
+    // One raindrop hitting the water. Fires hundreds of times a second in a
+    // storm, so it is the smallest burst in the table by a distance — three
+    // specks, barely alive, no glow to speak of. The volume is the effect;
+    // any one of these being visible on its own would be too much.
+    rainSplash: {
+      count: 3, speed: [1.5, 4.5], size: [0.05, 0.12], life: [0.12, 0.3],
+      colors: [0xbfe4ff, 0xffffff], cone: 0.9, drag: 3.2,
+      gravity: [0, -9], inherit: 0.15, glow: 0.8,
+    },
     levelUp: {
       count: 80, speed: [6, 20], size: [0.12, 0.36], life: [0.6, 1.2],
       colors: [0x7ad7ff, 0x8effa1, 0xffe066, 0xffffff], cone: 0, drag: 1.6,
@@ -1358,15 +2240,30 @@ export const CONFIG = {
     // after they leave the seal. Modest glow: these are ambient, and at this
     // spawn rate anything brighter turns into a permanent haze around the
     // player.
+    // `surfacePop` is the one emitter field the CPU acts on rather than the
+    // GPU: entities/particles.js follows these particles and bursts them into
+    // the named emitter the moment they break the water line, instead of
+    // letting them drift on into the sky and fade. Any emitter can opt in; only
+    // things that rise have a reason to.
     breathBubbles: {
       count: 4, speed: [0.6, 2.2], size: [0.07, 0.18], life: [0.9, 1.9],
       colors: [0xbfefff, 0xffffff, 0x9fe8ff], cone: 0.55, drag: 1.1,
-      gravity: [0, 4.5], inherit: 0.2, glow: 1.0,
+      gravity: [0, 4.5], inherit: 0.2, glow: 1.0, surfacePop: 'bubbleBurst',
     },
     wakeBubbles: {
       count: 2, speed: [0.8, 3.0], size: [0.05, 0.14], life: [0.6, 1.4],
       colors: [0x9fe8ff, 0xdff6ff, 0xffffff], cone: 0.6, drag: 1.6,
-      gravity: [0, 3.2], inherit: 0.3, glow: 0.9,
+      gravity: [0, 3.2], inherit: 0.3, glow: 0.9, surfacePop: 'bubbleBurst',
+    },
+    // What a bubble leaves behind at the water line. Small, fast and short —
+    // the whole event is over in a third of a second, because a burst that
+    // lingers reads as a splash, and a bubble is not big enough to splash.
+    // Gravity is NEGATIVE here, the only bubble-ish emitter where it is: the
+    // droplets are thrown into the air and fall straight back in.
+    bubbleBurst: {
+      count: 5, speed: [1.2, 3.4], size: [0.04, 0.09], life: [0.18, 0.34],
+      colors: [0xdff6ff, 0xffffff, 0xbfefff], cone: 1.1, drag: 3.2,
+      gravity: [0, -9], inherit: 0, glow: 1.1,
     },
     // Seabed silt, kicked up when the dead seal lands on it. Everything here
     // is the opposite of an explosion: slow, wide, long-lived and barely
@@ -1454,6 +2351,13 @@ export const CONFIG = {
     // haptics.js stops a big crab wave from summing into a drone.
     chumEaten: { emit: 'bite',        shake: 0.04, hitstop: 0,     glow: 0.15, ripple: { strength: 0.7, radius: 4 },   sfx: 'bite',     haptic: [{ duration: 10, magnitude: 0.14 }], sfxMinGap: 0.12 },
     levelUp:   { emit: 'levelUp',     shake: 0.4,  hitstop: 0,     glow: 0.8,  ripple: { strength: 3.5, radius: 22 },  sfx: 'levelUp',  haptic: [20, 40, 20] },
+    // A chunk of wreckage coming apart. Heavier than the pellet that did it,
+    // lighter than a kill — and rate-limited, because a splash landing in a
+    // debris field breaks several on the same frame.
+    debrisBreak: { emit: 'explosion', shake: 0.09, hitstop: 0,     glow: 0.3,  ripple: { strength: 1.4, radius: 6 },   sfx: 'kill',     haptic: [12], sfxMinGap: 0.08 },
+    // The hull itself going up, which is a bigger event than the biggest kill:
+    // it throws the crew, the wreckage and the catch all at once.
+    boatExplosion: { emit: 'bigExplosion', shake: 1.0, hitstop: 0.09, glow: 1.6, ripple: { strength: 6, radius: 24 },  sfx: 'bigKill',  haptic: [40, 30, 60] },
     breach:    { emit: 'splash',      shake: 0.2,  hitstop: 0,     glow: 0.3,  ripple: { strength: 2.0, radius: 9 },   sfx: 'splash',   haptic: [12] },
     bounce:    { emit: 'bounce',      shake: 0.12, hitstop: 0,     glow: 0.25, ripple: { strength: 1.2, radius: 6 },   sfx: 'bounce',   haptic: [8] },
     // Collecting a bubble orb bursts it into smaller bubbles rather than the
@@ -1610,6 +2514,56 @@ export const CONFIG = {
     // exactly like collecting chum.
     dumboCharm:  { emit: 'pickup', shake: 0.02, hitstop: 0, glow: 0.2, ripple: { strength: 0.4, radius: 4 }, sfx: 'dumboCharm',
                    haptic: [{ duration: 24, magnitude: 0.2 }], sfxMinGap: 0.05 },
+
+    // --- scallop squirter ---------------------------------------------------
+    // The launch is one event for the whole flight, not one per shell: they
+    // all leave the mouth on the same frame, and six stacked spits is a smear.
+    scallopLaunch: { emit: 'bubbleBurst', shake: 0.04, hitstop: 0, glow: 0.2, ripple: { strength: 0.6, radius: 4 },
+                     sfx: 'scallopLaunch', haptic: [{ duration: 14, magnitude: 0.3 }] },
+    // Every clap of the jet, from every shell in the water at once. This is
+    // the most frequently fired event in the game by some margin — a full
+    // stack of twelve scallops claps roughly forty times a second between
+    // them — so it carries NO shake and NO haptic, and the sound is throttled
+    // hard. Camera shake on this would be a permanent tremble.
+    scallopJet:  { emit: 'wakeBubbles', shake: 0, hitstop: 0, glow: 0.05, sfx: 'scallopJet',
+                   haptic: null, sfxMinGap: 0.14 },
+
+    // --- oyster blaster -----------------------------------------------------
+    pearlShot:   { emit: 'muzzle', shake: 0.05, hitstop: 0, glow: 0.35, ripple: { strength: 0.8, radius: 5 },
+                   sfx: 'pearlShot', haptic: [{ duration: 18, magnitude: 0.45 }], sfxMinGap: 0.05 },
+    // A bomblet going off. Several land within a few frames of each other by
+    // design, so this is throttled and light — the pearl's own impact already
+    // played the big sound, and this is the sparkle after it.
+    pearlBurst:  { emit: 'sparks', shake: 0.05, hitstop: 0, glow: 0.5, ripple: { strength: 1.0, radius: 5 },
+                   sfx: 'pearlBurst', haptic: [{ duration: 12, magnitude: 0.28 }], sfxMinGap: 0.06 },
+
+    // --- octopus grabber ----------------------------------------------------
+    // An arm latching on. Quiet and throttled: with nine arms this fires
+    // constantly, and it is not the moment worth selling — the pop is.
+    octoGrab:    { emit: null, shake: 0.02, hitstop: 0, glow: 0.12, sfx: 'octoGrab',
+                   haptic: [{ duration: 10, magnitude: 0.2 }], sfxMinGap: 0.1 },
+    // A fish reeled all the way in and popped into chum. THIS is the payoff
+    // beat of the ability, so it gets the weight the grab doesn't.
+    octoPop:     { emit: 'bite', shake: 0.09, hitstop: 0, glow: 0.4, ripple: { strength: 1.4, radius: 6 },
+                   sfx: 'octoPop', haptic: [{ duration: 22, magnitude: 0.5 }], sfxMinGap: 0.05 },
+
+    // --- orca family --------------------------------------------------------
+    // A three-tonne animal hitting a hull. Real weight, and the one companion
+    // event that earns hitstop — it happens rarely, away from the player, and
+    // it's the pod's whole reason to exist.
+    orcaStrike:  { emit: 'splash', shake: 0.3, hitstop: 0.04, glow: 0.5, ripple: { strength: 2.8, radius: 12 },
+                   sfx: 'orcaStrike', haptic: [26, 18], sfxMinGap: 0.06 },
+
+    // --- bakalar's voicemail bombs -------------------------------------------
+    // The drop is a tell, not an impact: it tells you something is about to
+    // happen in the net so you can be somewhere useful when it does.
+    bakalarBombDrop: { emit: 'bubbleBurst', shake: 0.03, hitstop: 0, glow: 0.25, sfx: 'bakalarBombDrop',
+                       haptic: [{ duration: 16, magnitude: 0.35 }] },
+    // And the payoff. The biggest single blast in the game — a netful of fish
+    // going up at once — so it's tuned near `bigKill` rather than near the
+    // other ability events.
+    bakalarBombBlast: { emit: 'bigExplosion', shake: 0.6, hitstop: 0.06, glow: 1.1, ripple: { strength: 4.2, radius: 20 },
+                        sfx: 'bakalarBombBlast', haptic: [34, 24, 40] },
     // A bomber committing to its stoop. The one event here that fires far
     // from the player, so it's the sound that carries it, not the rumble.
     seagullDive: { emit: null, shake: 0.02, hitstop: 0, glow: 0.15, sfx: 'seagullDive',
@@ -1768,10 +2722,27 @@ export const CONFIG = {
       // models reusing one clip across states, and for one-shots that want
       // to play faster/slower than authored. `fade` overrides the global
       // crossfade for entering that specific state.
-      idle:        { wagSpeed: 1.6, wagAmplitude: 0.12, headBob: 0.06, clipTimeScale: 0.45 },
+      //
+      // `beatsPerLoop` locks a LOOPING state to the music instead: one full
+      // cycle spans that many beats at the audible tempo (CONFIG.music.bpm
+      // through the death dive's drag), and the cycle is started in phase
+      // with the beat grid, so the seal's idle waggle keeps time with the
+      // loop that's playing rather than running at whatever pace it was
+      // authored at. 0 or absent = play at the clip's own speed, which is
+      // every other state.
+      //
+      // Idle is one bar of 4/4 and the surface idle two — the closest
+      // musical figures to how those two clips were authored (2.67s and 6s,
+      // against 2.29s and 4.57s at 105bpm), so they read as the same
+      // animations, now in time. Note this REPLACES clipTimeScale for these
+      // states: a beat-synced loop takes its tempo from the music alone, or
+      // the second multiplier would put it straight back off the grid.
+      // Moving speed is deliberately left alone — a swim cycle has to match
+      // how fast the seal is actually travelling, or it foot-slides.
+      idle:        { wagSpeed: 1.6, wagAmplitude: 0.12, headBob: 0.06, clipTimeScale: 0.45, beatsPerLoop: 4 },
       swim:        { wagSpeed: 4.2, wagAmplitude: 0.24, headBob: 0.03, clipTimeScale: 1.0 },
       boost:       { wagSpeed: 7.5, wagAmplitude: 0.34, headBob: 0.0,  clipTimeScale: 1.4 },
-      surfaceIdle: { wagSpeed: 1.2, wagAmplitude: 0.10, headBob: 0.05, clipTimeScale: 1.0 },
+      surfaceIdle: { wagSpeed: 1.2, wagAmplitude: 0.10, headBob: 0.05, clipTimeScale: 1.0, beatsPerLoop: 8 },
       surfaceMove: { wagSpeed: 3.6, wagAmplitude: 0.20, headBob: 0.04, clipTimeScale: 1.2 },
       // One-shots. Short fades so they punch in rather than easing in.
       // `maxDuration` caps how long the one-shot may hold locomotion —
@@ -1881,6 +2852,10 @@ export const CONFIG = {
     missile: 'fins',
     bounce: 'mouth',
     starfish: 'tail',
+    // The scallop is spat, not thrown — it leaves the mouth and immediately
+    // stops taking direction from the seal, which is the whole joke.
+    scallop: 'mouth',
+    oyster: 'fins',
   },
 
   // ---------------------------------------------------------------------------
@@ -2268,6 +3243,28 @@ export const CONFIG = {
     dumboCharm: { src: null, type: 'blip',  wave: 'triangle', freq: [880, 1560], decay: 0.28, gain: 0.14, pitchVary: 0.08 },
     // The dive. Falling sawtooth — a bird committing to a stoop.
     seagullDive:{ src: null, type: 'blip',  wave: 'sawtooth', freq: [1500, 480], decay: 0.30, gain: 0.16, pitchVary: 0.10 },
+
+    // Scallops. The launch is a wet spit; the jet is deliberately the
+    // quietest thing in this table — it fires dozens of times a second across
+    // a full stack, so anything with body would become a drone.
+    scallopLaunch: { src: null, type: 'noise', filter: 1900, decay: 0.16, gain: 0.16, pitchVary: 0.14, filterVary: 0.25 },
+    scallopJet:    { src: null, type: 'noise', filter: 2600, decay: 0.09, gain: 0.05, pitchVary: 0.22, filterVary: 0.30 },
+
+    // Pearls. A hard glassy tick going out, a bright sparkle coming back.
+    pearlShot:  { src: null, type: 'blip',  wave: 'sine',     freq: [1200, 640], decay: 0.22, gain: 0.17, pitchVary: 0.07 },
+    pearlBurst: { src: null, type: 'blip',  wave: 'triangle', freq: [1800, 2600], decay: 0.18, gain: 0.12, pitchVary: 0.16 },
+
+    // The octopus. A soft suck on the grab, a wet pop on the payoff.
+    octoGrab:   { src: null, type: 'noise', filter: 900,  decay: 0.14, gain: 0.07, pitchVary: 0.12, filterVary: 0.20 },
+    octoPop:    { src: null, type: 'blip',  wave: 'sine', freq: [420, 180], decay: 0.20, gain: 0.18, pitchVary: 0.12 },
+
+    // Three tonnes of orca into a wooden hull.
+    orcaStrike: { src: null, type: 'boom',  freq: [150, 44], decay: 0.52, gain: 0.32, noise: 0.45, filter: 620, pitchVary: 0.08, filterVary: 0.18 },
+
+    // The bomb: a hollow clunk as it goes in, and the biggest boom in the
+    // table when it goes off.
+    bakalarBombDrop:  { src: null, type: 'blip', wave: 'square', freq: [300, 150], decay: 0.18, gain: 0.13, pitchVary: 0.10 },
+    bakalarBombBlast: { src: null, type: 'boom', freq: [130, 34], decay: 0.85, gain: 0.38, noise: 0.55, filter: 520, pitchVary: 0.05, filterVary: 0.20 },
   },
 
   // ---------------------------------------------------------------------------
@@ -2539,6 +3536,37 @@ export const CONFIG = {
   // their own flocking separation already.
   enemySeparation: { gap: 2.2, strength: 0.55 },
 
+  // How the big bodies share one player — see systems/apexCrowd.js for the
+  // reasoning. enemySeparation above is the physical shove that happens after
+  // two creatures are already too close; this is the steering that stops them
+  // choosing to be there in the first place.
+  apexCrowd: {
+    enabled: true,
+    // Personal space a hunter steers AROUND, as a multiple of the two bodies'
+    // radii. Deliberately wider than enemySeparation.gap: this one has to act
+    // early enough to change a course, not just to unstick an overlap.
+    avoidGap: 3.2,
+    avoidStrength: 1.5,
+    // How many may press the player at once. The rest hold the ring. Two is
+    // the number that reads as a pack working together rather than as a queue
+    // (one) or a pile (four or more).
+    feedingSlots: 2,
+    // Seconds a hunter holds the front before it stops being favoured and the
+    // pack rotates. Not a hard eviction — it just gets ranked honestly again,
+    // so it keeps the slot if nothing else is closer.
+    feedTurn: 4.5,
+    // Ranking bonus, in world units, for whoever currently holds a slot. Stops
+    // two evenly-matched hunters swapping places every frame.
+    incumbentBonus: 2.5,
+    // The waiting ring. Jitter is per-creature so it reads as a loose shoal
+    // rather than a drawn circle.
+    standoff: 7,
+    standoffJitter: 2.5,
+    // Tangential weight while holding the ring: 0 hovers, 1 circles at about
+    // the same rate it closes.
+    circleStrength: 1,
+  },
+
   // ---------------------------------------------------------------------------
   // CRAB PHYSICS — real collisions between creatures marked `collides`, as
   // opposed to the soft `enemySeparation` shove everything else uses. Crabs
@@ -2696,6 +3724,132 @@ export const CONFIG = {
       rockPerHit: 5.5, // roll imparted per unit of recoil
       rockStiffness: 42, // spring pulling the hull back level
       rockDamping: 5, // so it settles instead of oscillating
+    },
+    // WRECKAGE. A destroyed hull breaks into boxes laid out over the boat's
+    // own measured surface — generic shapes on purpose: cutting the real model
+    // leaves hollow chunks with sawtooth edges, because these hulls are open
+    // shells. Every chunk leaves with an UPWARD velocity, whichever part of
+    // the boat it came from: a piece driven straight down is a piece that
+    // spends the explosion underwater where nobody sees it.
+    // See systems/boatDebris.js.
+    debris: {
+      enabled: true,
+      // Chunk size as a fraction of the hull's length — so a trawler breaks
+      // into bigger pieces than a rowboat, not more of them.
+      chunkFraction: 0.12,
+      // How much of a grid cell the hull has to actually cover before it earns
+      // a chunk. This is the cull: rigging, cables and stray fittings have
+      // almost no surface area and would otherwise fly off as solid boxes.
+      minCoverage: 0.12,
+      maxChunks: 26, // densest cells win past this
+      sizeJitter: 0.35, // ± on each axis, on top of the chunk's form
+      tilt: 0.35, // radians of random lean at spawn — a lean, not a shuffle
+      // Fraction of chunks that come out at a completely free roll instead of
+      // just a lean. A few pieces already turned over sell the break; all of
+      // them turned over means the boat was never there.
+      yawFree: 0.12,
+      // --- shooting the wreckage ---------------------------------------
+      // Chunks are targets. hp is proportional to size: `chunkHp` is what a
+      // chunk one `hpAtExtent` across is worth, and the rest scale off that,
+      // so a splinter pops and a hull panel takes a burst.
+      chunkHp: 6,
+      hpAtExtent: 1,
+      hitInvuln: 0.12, // seconds a chunk shrugs off further hits after one lands
+      hitKnock: 3.5, // how hard a non-fatal hit shoves it
+      shatterPieces: 2, // fragments a broken chunk leaves
+      shatterScale: 0.55, // each one this much of the parent
+      shatterSpeed: 4, // thrown off the break this fast
+      // Fragments smaller than this fraction of the ORIGINAL chunk stop
+      // splitting and simply go — halving forever ends in a cloud of specks
+      // that costs more to draw than it is worth looking at.
+      shatterFloor: 0.34,
+      dropChance: 0.18, // chance a broken chunk had something stowed in it
+      // What it was, by weight. `chum` drops a small scatter rather than one
+      // orb. An entry whose system is switched off is skipped, not rolled.
+      drops: { rapidFire: 1, strike: 1.4, bubble: 1.2, chum: 3 },
+      // What a dash is worth against wreckage, as a share of its damage to a
+      // creature. A charged strike should go straight through a debris field.
+      strikeMul: 1,
+      outSpeed: 7, // thrown away from the hull's centre
+      upSpeed: 6.5, // and up, on top of that, always
+      scatter: 2.5, // random sideways kick, so amidships isn't a fountain
+      gravity: 24, // pulls it back to the water
+      carry: 0.6, // share of the boat's own speed the pieces keep
+      spin: 5, // rad/s, mostly about the view axis
+      // In the water. Drag kills the throw fast, then `sinkSpeed` — the chum's
+      // drift, near enough — carries the wreck down to the seabed.
+      waterDrag: 3.6,
+      waterGravity: 5,
+      sinkSpeed: 1.4,
+      spinDamp: 1.8,
+      life: 6.5, // seconds before the chunk is gone
+      // ...of which the last this many are spent DISSOLVING. Not shrinking: a
+      // box scaling toward nothing reads as it retreating into the distance.
+      // It's eaten away by the same organic noise the menus reveal through.
+      fade: 1.4,
+      dissolveCells: 6, // noise cells across a chunk — lower is chunkier
+      maxAlive: 72,
+      // Water entry. Small, and rate-limited across all the chunks in the air,
+      // so a dozen landing together read as one wreck going in and not as a
+      // dozen splashes stacked on the same pixel.
+      splashScale: 0.4,
+      splashGap: 0.06,
+    },
+    // THE EXPLOSION when a hull finally goes: an outward impulse applied to
+    // the wreckage and to whoever was still aboard. Never downward, same rule
+    // as the break — see systems/boatDebris.js.
+    blast: {
+      radius: 9,
+      strength: 11,
+      trawlerMul: 1.4, // a trawler goes up harder and reaches further
+    },
+    // THE CREW. Ragdoll figures standing on the deck who bail once the hull is
+    // clearly going down, and who are thrown by the explosion if they left it
+    // too late. Placeholder art (a box per bone) over a real humanoid joint
+    // layout — see systems/crew.js.
+    crew: {
+      enabled: true,
+      min: 1, max: 2, // aboard a fishing boat
+      trawlerMin: 2, trawlerMax: 4,
+      // ABSOLUTE, not scaled by the boat: a trawler being bigger than a
+      // rowboat doesn't make the people on it bigger.
+      height: 1.25,
+      deckHeight: 0.5, // above the hull's origin, times the boat's own scale
+      deckSpread: 0.6, // fraction of the hull's half-length they stand across
+      sway: 0.03, // idle lean while aboard
+      swaySpeed: 2.2,
+      // Bailing out. `panicAt` is the fraction of hull health at which the
+      // crew decides the boat is lost; they go one at a time from there.
+      panicAt: 0.35,
+      bailDelay: 0.35,
+      bailSpread: 0.9,
+      jumpOut: 3.4, // away from the hull
+      jumpUp: 5.5,
+      jumpSpin: 4,
+      // Ragdoll solver. Fixed 1/60 steps regardless of frame rate.
+      gravity: 22,
+      airDrag: 0.25,
+      waterDrag: 4.5,
+      // How much of gravity the water cancels — high, so a body entering the
+      // water slows hard and then settles instead of dropping like a stone.
+      buoyancy: 0.82,
+      iterations: 4,
+      floorClearance: 0.3,
+      floorFriction: 0.35,
+      life: 9, // seconds before the body dissolves
+      fade: 1.6,
+      dissolveCells: 7,
+      color: 0x14202c,
+      outlineColor: 0x9fc6e8,
+      outlineThickness: 0.035,
+    },
+    // How the catch spills when the hull goes. Outward from the boat and
+    // barely up — the chum is the heavy half of the wreck, and it belongs on
+    // the seabed, not in the air.
+    chumToss: {
+      out: 4, // outward speed at the edge of chumSpread
+      up: 1.6, // scale of the vertical kick, biased downward
+      carry: 0.3, // share of the boat's speed
     },
     // Chance a given boat is a trawler (bigger, tougher, drops the attractor).
     trawlerChance: 0.35,
@@ -2927,6 +4081,10 @@ export const CONFIG = {
     collectRadius: 0.6,
     sinkSpeed: 1.2, // xp orbs drift down through the water
     maxAlive: 140, // oldest orbs are recycled past this
+    // A drop that was THROWN rather than placed — boat chum spilling out of a
+    // hull. The throw is temporary: gravity above the water line, drag below
+    // it, and once it's spent the orb goes back to the plain sink above.
+    toss: { gravity: 9, airDrag: 1.2, waterDrag: 4.5 },
     healFraction: 0.02, // fraction of max HP restored per orb, before tier scaling
     // Orb size is tiered by the source enemy's radius, so a school fish drops
     // a small dim orb and a shark or squid drops a big bright one — both xp
@@ -2949,7 +4107,11 @@ export const CONFIG = {
     { id: 'multishot', name: 'Multishot', desc: '+1 projectile', apply: (s) => { s.multishot += 1; }, maxStacks: 6 },
     { id: 'pierce', name: 'Railgun', desc: 'Bullets pierce +1 enemy', apply: (s) => { s.pierce += 1; }, maxStacks: 4 },
     { id: 'vitality', name: 'Vitality', desc: '+30 max HP', apply: (s) => { s.maxHp += 30; } },
-    { id: 'magnet', name: 'Magnet', desc: '+50% pickup radius', apply: (s) => { s.pickupRadius *= 1.5; } },
+    // Scales the gulp with the magnet deliberately: both are "how far the
+    // seal's mouth reaches", and splitting them would mean an Attractor that
+    // widened the passive sweep while the strike's own mouthful stayed the
+    // size it was on the first card.
+    { id: 'magnet', name: 'Magnet', desc: '+50% pickup radius', apply: (s) => { s.pickupRadius *= 1.5; s.chumGulpRadius *= 1.5; } },
     { id: 'regen', name: 'Regeneration', desc: '+0.5 HP/sec', apply: (s) => { s.regenPerSec += 0.5; } },
     { id: 'velocity', name: 'Hot Rounds', desc: '+30% bullet speed', apply: (s) => { s.speed *= 1.3; } },
     { id: 'homingMissile', name: 'Homing Missile', desc: '+1 seeking missile per volley', apply: (s) => { s.missileCount = (s.missileCount ?? 0) + 1; }, maxStacks: 5 },
@@ -3022,6 +4184,35 @@ export const CONFIG = {
     { id: 'bakalar', name: "Bakalar's Boat", desc: 'Trawler drags a net that hauls fish away: +net size, +sailings', apply: (s) => { s.bakalarLevel = (s.bakalarLevel ?? 0) + 1; }, maxStacks: 8 },
     { id: 'calamari', name: 'Calamari Ring', desc: 'Shockwave sweeps outward: +damage, +radius, +rate', apply: (s) => { s.calamariLevel = (s.calamariLevel ?? 0) + 1; }, maxStacks: 8 },
     { id: 'dumbo', name: 'Dumbo Octopus', desc: 'Charms enemies harmless: +targets, +duration', apply: (s) => { s.dumboLevel = (s.dumboLevel ?? 0) + 1; }, maxStacks: 8 },
+
+    // --- shellfish line -----------------------------------------------------
+    // Two takes on the homing mussel, deliberately pulling in opposite
+    // directions. The mussel tracks: it picks a target and turns onto it. The
+    // scallop does NOT — it jets off at random and only turns when a wall or a
+    // gust of its own bubble jet points it somewhere new, so it covers ground
+    // the mussel never would and arrives from angles you didn't aim at. Count
+    // rather than level, same as the mussel, because "how many are loose in
+    // the water" IS the upgrade.
+    { id: 'scallopSquirter', name: 'Scallop Squirter', desc: '+1 wild scallop', apply: (s) => { s.scallopCount = (s.scallopCount ?? 0) + 1; }, maxStacks: 12 },
+    // Levelled rather than counted: the pearl's payload is what grows, not the
+    // number in the air. See CONFIG.oyster — stacks buy more shrapnel pearls
+    // per burst and a wider burst, so the ceiling is the size of one impact.
+    { id: 'oysterBlaster', name: 'Oyster Blaster', desc: 'Pearls burst into glowing bomblets: +bomblets, +radius', apply: (s) => { s.oysterLevel = (s.oysterLevel ?? 0) + 1; }, maxStacks: 8 },
+
+    // --- grapple / escort ---------------------------------------------------
+    // The only DEFENSIVE companion in the game. Every other one adds output;
+    // this one removes threats from the board by holding them, and a held fish
+    // cannot touch you (see systems/octoGrab.js). Stacks add arms, so it reads
+    // as "how many things can be held at once" — which is exactly the stat
+    // that matters when a school closes in.
+    { id: 'octoGrab', name: 'Octopus Grabber', desc: '+1 tentacle. Held fish deal no damage.',
+      perLevelName: true,
+      apply: (s) => { s.octoGrabLevel = (s.octoGrabLevel ?? 0) + 1; }, maxStacks: 8 },
+    // A pod, not a count — all three orcas arrive on the first pick and stacks
+    // make them hit harder and hunt more often. Splitting the pod across
+    // levels would mean the first card bought a lone orca, and a lone orca is
+    // not what the fantasy is.
+    { id: 'orcaFamily', name: 'Orca Family', desc: 'Three orcas hunt enemy boats: +damage, +speed', apply: (s) => { s.orcaLevel = (s.orcaLevel ?? 0) + 1; }, maxStacks: 6 },
   ],
 
   upgradeChoices: 3,
@@ -3031,6 +4222,127 @@ export const CONFIG = {
   // source of truth for them — see upgradeTable.js. Editing them here only
   // changes what an upgrade falls back to when the CSV has no row for it.
   // What an upgrade DOES — its apply() — is only ever code, and lives here.
+
+  // ---------------------------------------------------------------------------
+  // THE LEVEL-UP PAUSE — the beat between filling the XP bar and picking a
+  // card. The world eases into slow motion and holds there with every body
+  // frozen where it stands (systems/levelUpTime.js), the cards dither in over
+  // the top of it, and the pick hands the run straight back while the speed
+  // ramps home. Times are WALL-CLOCK seconds: they're what decides the
+  // dilation, so they can't be measured in it.
+  // ---------------------------------------------------------------------------
+  levelUp: {
+    enabled: true,
+    hold: 0.5, // time scale the world settles at while the cards are up
+    // Long enough to read as the ocean leaning into the slow motion. Under
+    // about a fifth of a second it's over before you've registered the level,
+    // which is indistinguishable from the old instant pop-up.
+    dilateTime: 0.45,
+    // A beat at the BOTTOM of the ramp before the cards start arriving, so the
+    // slow motion is seen as slow motion rather than as a frame behind a menu.
+    menuDelay: 0.12,
+    // Back to full speed after a pick. Gameplay is live for all of it — the
+    // run re-engages on the frame the card is clicked and the world catches up
+    // underneath it.
+    restoreTime: 0.55,
+
+    // The mix sags with the picture. Gentler than the death dive by default:
+    // this sits on top of the filter duck the upgrade screen already applies
+    // (music.js duckForUpgrade), and a full-follow drop on top of that buries
+    // the loop.
+    audio: {
+      enabled: true,
+      follow: 0.5, // 0 = sound ignores the dilation, 1 = it slows exactly as far
+      minRate: 0.5, // floor on the playback rate
+      glide: 0.2, // seconds of smoothing on the music's rate, so it doesn't zipper
+    },
+
+    // How the cards themselves arrive — which noise, how long, how chunky —
+    // lives under CONFIG.reveals.upgrades, with the splash's and the score
+    // card's, because all three share one machine: ui/dither.js builds the
+    // masks and ui.js applies them.
+  },
+
+  // ---------------------------------------------------------------------------
+  // REVEALS — how surfaces arrive and leave.
+  //
+  // Nothing in this UI cuts in or plain-fades. Every menu dissolves through a
+  // mask built from noise, and each surface gets its OWN algorithm so the
+  // transitions read as different events rather than one effect used three
+  // times. The masks are built in ui/dither.js and applied by ui.js.
+  //
+  // Two styles:
+  //   'hex'     an ordered dither on a hexagonal lattice — the shape the cards
+  //             are clipped to and the seabed is tiled with — with the noise
+  //             deciding where it fills in. Chunky, stepped, deliberately
+  //             digital. Needs a surface with an inner box to mask.
+  //   'smooth'  no lattice and no dithering: the field alone with a soft edge.
+  //
+  // The algorithms (NOISE_ALGOS in ui/dither.js — keep the tuner's dropdowns
+  // in sync with it): value, perlin, simplex, worley, ridged, billow.
+  // ---------------------------------------------------------------------------
+  reveals: {
+    enabled: true,
+
+    // Shared by every surface, because it's what the bake costs are made of:
+    // one set of tiles per ALGORITHM, and these decide how many and how big.
+    // Roughly 60ms per algorithm at these numbers, 130 for the cellular one,
+    // paid once at boot while the browser is idle (ui.js warmReveals).
+    field: {
+      size: 128, // px the field is baked at — it gets stretched over the surface
+      octaves: 2, // fractal detail. Costs a full pass of the field each
+      scale: 8, // noise cells across the field: higher is finer, patchier
+      levels: 12, // openness steps the reveal is quantised to
+      phases: 5, // frames in the boil loop (slices of one continuous field)
+      boilHz: 12, // frames per second of churn — below 60 on purpose, like hand-drawn animation
+      drift: 26, // px the field slides while it opens, settling as it lands
+      over: 18, // % the field oversizes the surface, so the drift can't pull it off the edge
+    },
+
+    // THE UPGRADE CARDS. Billow through the hex lattice: puffy clumps of
+    // hexagons filling in, which is the most "game" of the three and belongs
+    // on the one screen that interrupts play. Nothing on the menu can be
+    // clicked until it lands, so a held fire button can't pick through it.
+    upgrades: {
+      style: 'hex',
+      algo: 'billow',
+      inTime: 0.5,
+      outTime: 0.22,
+      steps: 14, // dither levels — fewer is chunkier
+      hexSize: 24, // hex width, point to point, in px
+      // How much of the reveal the field owns, with the lattice taking the
+      // rest. The two exponents add to 1, so the reveal still paces linearly
+      // however it's split.
+      bias: 0.35,
+      softness: 0, // a hard edge: the hexes ARE the edge
+      curve: 1,
+    },
+
+    // THE SPLASH, LEAVING. Worley breaks it into rounded cells that clear one
+    // by one — a title screen coming apart rather than fading out. The run is
+    // already live underneath it by the time this runs (see riveSplash.js), so
+    // it can afford to be the longest of the three.
+    splash: {
+      style: 'smooth',
+      algo: 'worley',
+      outTime: 0.85,
+      scale: 6, // coarser than the default: bigger cells read better full-screen
+      softness: 0.3,
+      curve: 1.4,
+    },
+
+    // THE SCORE CARD. Ridged comes in as veins and strands rather than blobs —
+    // slower and colder, which is the right note for the end of a run. Runs
+    // alongside the card's rise (CONFIG.death.fadeIn), not instead of it.
+    scoreCard: {
+      style: 'smooth',
+      algo: 'ridged',
+      inTime: 0.9,
+      scale: 9,
+      softness: 0.35,
+      curve: 1.7,
+    },
+  },
 
   // ---------------------------------------------------------------------------
   // LEVEL-UP CARD ART — a hex background image per upgrade, with a dark
@@ -3133,6 +4445,24 @@ export const TUNER_SCHEMA = [
     items: [
       { path: 'enemies.shark.hunt.preyRadius', min: 0, max: 60, step: 1 },
       { path: 'enemies.shark.hunt.healPerMeal', min: 0, max: 60, step: 1 },
+      // The orca's feeding profile, exposed because it was the one apex whose
+      // numbers ran away and there was no way to see or fix that from in game.
+      // Growth is what makes a fed one look enormous: maxGrow multiplies a
+      // body that is already radius x the asset's own size multiplier.
+      { path: 'enemies.orca.hunt.biteCooldown', min: 0.2, max: 4, step: 0.05, label: 'orca seconds per meal' },
+      { path: 'enemies.orca.hunt.growPerMeal', min: 0, max: 0.06, step: 0.002, label: 'orca growth per meal' },
+      { path: 'enemies.orca.hunt.maxGrow', min: 1, max: 2.5, step: 0.05, label: 'orca max size (x)' },
+      { path: 'enemies.orca.hunt.preyRadius', min: 0, max: 60, step: 1, label: 'orca prey radius' },
+      { path: 'enemies.orca.hunt.maxOverheal', min: 1, max: 4, step: 0.1, label: 'orca max overheal (x)' },
+      // Crowding — see CONFIG.apexCrowd and systems/apexCrowd.js.
+      { path: 'apexCrowd.enabled', type: 'bool', label: 'apex predators share the player' },
+      { path: 'apexCrowd.feedingSlots', min: 1, max: 6, step: 1, label: 'apex allowed on the player' },
+      { path: 'apexCrowd.standoff', min: 2, max: 20, step: 0.5, label: 'apex circling distance' },
+      { path: 'apexCrowd.standoffJitter', min: 0, max: 8, step: 0.5, label: 'apex circling spread' },
+      { path: 'apexCrowd.circleStrength', min: 0, max: 2, step: 0.05, label: 'apex circling vs closing' },
+      { path: 'apexCrowd.feedTurn', min: 0.5, max: 15, step: 0.5, label: 'seconds before the pack rotates' },
+      { path: 'apexCrowd.avoidGap', min: 1, max: 6, step: 0.1, label: 'apex personal space (x radii)' },
+      { path: 'apexCrowd.avoidStrength', min: 0, max: 4, step: 0.1, label: 'apex avoidance strength' },
     ],
   },
   {
@@ -3206,6 +4536,144 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
+    group: 'Day & night',
+    items: [
+      { path: 'dayNight.enabled', type: 'bool', label: 'day/night cycle' },
+      { path: 'dayNight.scale', min: 0, max: 600, step: 5, label: 'clock speed (x real time)' },
+      { path: 'dayNight.startHour', min: 0, max: 24, step: 0.25, label: 'first run starts at' },
+      // In seconds of ordinary passage, so it reads against `scale` above: at
+      // 60x, 0.35 is 21 in-game seconds per orb, ~+10% of clock over a run.
+      { path: 'dayNight.chumSeconds', min: 0, max: 5, step: 0.05, label: 'clock per chum eaten (s)' },
+      { path: 'dayNight.restartAtMorning', type: 'bool', label: 'every run starts at that hour' },
+      // The pair that makes any of the rest of this tunable: freeze the clock,
+      // then drag it to the moment you want to look at.
+      { path: 'dayNight.paused', type: 'bool', label: 'freeze clock' },
+      { path: 'dayNight.scrubHour', min: 0, max: 24, step: 0.05, label: 'scrub to hour (while frozen)' },
+      { path: 'dayNight.skyCurve', min: 0.4, max: 4, step: 0.05, label: 'horizon band height' },
+      { path: 'dayNight.stars.enabled', type: 'bool', label: 'stars' },
+      { path: 'dayNight.stars.intensity', min: 0, max: 2, step: 0.05, label: 'star brightness' },
+      { path: 'dayNight.stars.density', min: 0.1, max: 2, step: 0.05, label: 'star density' },
+      { path: 'dayNight.stars.twinkle', min: 0, max: 1, step: 0.05, label: 'star twinkle' },
+    ],
+  },
+  {
+    // One row per keyframe, in clock order. `light` is the master brightness
+    // the caustics and beams ride, NOT the sky's own — the colours carry that.
+    group: 'Sky through the day',
+    items: [
+      { path: 'dayNight.sky.0.horizon', type: 'color', label: '00:00 horizon' },
+      { path: 'dayNight.sky.0.zenith', type: 'color', label: '00:00 zenith' },
+      { path: 'dayNight.sky.0.light', min: 0, max: 1, step: 0.02, label: '00:00 light' },
+      { path: 'dayNight.sky.1.horizon', type: 'color', label: '05:00 horizon' },
+      { path: 'dayNight.sky.1.zenith', type: 'color', label: '05:00 zenith' },
+      { path: 'dayNight.sky.1.light', min: 0, max: 1, step: 0.02, label: '05:00 light' },
+      { path: 'dayNight.sky.2.horizon', type: 'color', label: '06:30 horizon' },
+      { path: 'dayNight.sky.2.zenith', type: 'color', label: '06:30 zenith' },
+      { path: 'dayNight.sky.2.light', min: 0, max: 1, step: 0.02, label: '06:30 light' },
+      { path: 'dayNight.sky.3.horizon', type: 'color', label: '09:00 horizon' },
+      { path: 'dayNight.sky.3.zenith', type: 'color', label: '09:00 zenith' },
+      { path: 'dayNight.sky.3.light', min: 0, max: 1, step: 0.02, label: '09:00 light' },
+      { path: 'dayNight.sky.4.horizon', type: 'color', label: '12:00 horizon' },
+      { path: 'dayNight.sky.4.zenith', type: 'color', label: '12:00 zenith' },
+      { path: 'dayNight.sky.4.light', min: 0, max: 1, step: 0.02, label: '12:00 light' },
+      { path: 'dayNight.sky.5.horizon', type: 'color', label: '17:00 horizon' },
+      { path: 'dayNight.sky.5.zenith', type: 'color', label: '17:00 zenith' },
+      { path: 'dayNight.sky.5.light', min: 0, max: 1, step: 0.02, label: '17:00 light' },
+      { path: 'dayNight.sky.6.horizon', type: 'color', label: '19:00 horizon' },
+      { path: 'dayNight.sky.6.zenith', type: 'color', label: '19:00 zenith' },
+      { path: 'dayNight.sky.6.light', min: 0, max: 1, step: 0.02, label: '19:00 light' },
+      { path: 'dayNight.sky.7.horizon', type: 'color', label: '20:30 horizon' },
+      { path: 'dayNight.sky.7.zenith', type: 'color', label: '20:30 zenith' },
+      { path: 'dayNight.sky.7.light', min: 0, max: 1, step: 0.02, label: '20:30 light' },
+      { path: 'dayNight.sky.8.horizon', type: 'color', label: '22:00 horizon' },
+      { path: 'dayNight.sky.8.zenith', type: 'color', label: '22:00 zenith' },
+      { path: 'dayNight.sky.8.light', min: 0, max: 1, step: 0.02, label: '22:00 light' },
+    ],
+  },
+  {
+    group: 'Sun & moon',
+    items: [
+      { path: 'dayNight.orbit.radiusX', min: 0.1, max: 1.4, step: 0.02, label: 'arc width (x half arena)' },
+      { path: 'dayNight.orbit.radiusY', min: 0.1, max: 1.6, step: 0.02, label: 'arc height (x air band)' },
+      { path: 'dayNight.orbit.centerY', min: -10, max: 10, step: 0.25, label: 'horizon offset' },
+      { path: 'dayNight.orbit.riseHour', min: 0, max: 12, step: 0.25, label: 'sunrise hour' },
+      // 0 = welded to the screen, 1 = sits in the world like a rock.
+      { path: 'dayNight.orbit.parallax', min: 0, max: 1, step: 0.01, label: 'sky pans with camera' },
+      { path: 'dayNight.orbit.depth', min: -5.9, max: -5.3, step: 0.05, label: 'sky layer z (sort only)' },
+      { path: 'dayNight.sun.size', min: 0.5, max: 20, step: 0.1, label: 'sun size' },
+      { path: 'dayNight.sun.color', type: 'color', label: 'sun colour' },
+      { path: 'dayNight.sun.brightness', min: 0, max: 3, step: 0.05, label: 'sun brightness' },
+      { path: 'dayNight.sun.halo', min: 1, max: 8, step: 0.1, label: 'sun halo size' },
+      { path: 'dayNight.sun.haloStrength', min: 0, max: 2, step: 0.02, label: 'sun halo strength' },
+      { path: 'dayNight.sun.horizonGlow', min: 0, max: 5, step: 0.1, label: 'sun horizon flare' },
+      { path: 'dayNight.sun.horizonRange', min: 0.2, max: 5, step: 0.1, label: 'sun flare reach' },
+      { path: 'dayNight.sun.maskToDisc', type: 'bool', label: 'crop sun art to a circle' },
+      { path: 'dayNight.moon.size', min: 0.5, max: 20, step: 0.1, label: 'moon size' },
+      { path: 'dayNight.moon.color', type: 'color', label: 'moon colour' },
+      { path: 'dayNight.moon.brightness', min: 0, max: 3, step: 0.05, label: 'moon brightness' },
+      { path: 'dayNight.moon.halo', min: 1, max: 8, step: 0.1, label: 'moon halo size' },
+      { path: 'dayNight.moon.haloStrength', min: 0, max: 2, step: 0.02, label: 'moon halo strength' },
+      { path: 'dayNight.moon.horizonGlow', min: 0, max: 5, step: 0.1, label: 'moon horizon flare' },
+      { path: 'dayNight.moon.horizonRange', min: 0.2, max: 5, step: 0.1, label: 'moon flare reach' },
+      { path: 'dayNight.moon.maskToDisc', type: 'bool', label: 'crop moon art to a circle' },
+    ],
+  },
+  {
+    group: 'Weather',
+    items: [
+      { path: 'weather.enabled', type: 'bool', label: 'weather' },
+      // -1 runs the schedule; anything else pins the storm there. The only
+      // practical way to tune rain that shows up twice in ten minutes.
+      { path: 'weather.forceIntensity', min: -1, max: 1, step: 0.05, label: 'pin storm strength (-1 = auto)' },
+      { path: 'weather.firstDelay.0', min: 0, max: 300, step: 5, label: 'first storm, earliest (s)' },
+      { path: 'weather.firstDelay.1', min: 0, max: 600, step: 5, label: 'first storm, latest (s)' },
+      { path: 'weather.gap.0', min: 10, max: 600, step: 5, label: 'clear spell, shortest (s)' },
+      { path: 'weather.gap.1', min: 10, max: 900, step: 5, label: 'clear spell, longest (s)' },
+      { path: 'weather.duration.0', min: 5, max: 300, step: 5, label: 'storm, shortest (s)' },
+      { path: 'weather.duration.1', min: 5, max: 400, step: 5, label: 'storm, longest (s)' },
+      { path: 'weather.peak.0', min: 0, max: 1, step: 0.05, label: 'storm strength, weakest' },
+      { path: 'weather.peak.1', min: 0, max: 1, step: 0.05, label: 'storm strength, strongest' },
+      { path: 'weather.rampIn', min: 0.5, max: 60, step: 0.5, label: 'ramp in (s)' },
+      { path: 'weather.rampOut', min: 0.5, max: 60, step: 0.5, label: 'ramp out (s)' },
+      { path: 'weather.dim', min: 0, max: 1, step: 0.02, label: 'storm dims the light by' },
+      { path: 'weather.wind.base', min: -1, max: 1, step: 0.05, label: 'prevailing wind' },
+      { path: 'weather.wind.gust', min: 0, max: 1.5, step: 0.05, label: 'gust strength' },
+      { path: 'weather.wind.speed.0', min: 0.01, max: 1, step: 0.01, label: 'gust beat 1 (hz)' },
+      { path: 'weather.wind.speed.1', min: 0.01, max: 1, step: 0.01, label: 'gust beat 2 (hz)' },
+      { path: 'weather.wind.calmGust', min: 0, max: 1, step: 0.05, label: 'wind on a clear day' },
+    ],
+  },
+  {
+    group: 'Rain',
+    items: [
+      { path: 'weather.rain.enabled', type: 'bool', label: 'rain' },
+      { path: 'weather.rain.perSecond', min: 0, max: 3000, step: 25, label: 'drops/sec at full storm' },
+      { path: 'weather.rain.speed.0', min: 5, max: 100, step: 1, label: 'fall speed, min' },
+      { path: 'weather.rain.speed.1', min: 5, max: 120, step: 1, label: 'fall speed, max' },
+      { path: 'weather.rain.length.0', min: 0.1, max: 6, step: 0.1, label: 'streak length, min' },
+      { path: 'weather.rain.length.1', min: 0.1, max: 8, step: 0.1, label: 'streak length, max' },
+      { path: 'weather.rain.drift', min: 0, max: 80, step: 1, label: 'wind push' },
+      { path: 'weather.rain.turbulence', min: 0, max: 30, step: 0.5, label: 'turbulence' },
+      { path: 'weather.rain.color', type: 'color', label: 'rain colour' },
+      { path: 'weather.rain.opacity', min: 0, max: 1, step: 0.02, label: 'rain opacity' },
+      { path: 'weather.rain.splash', type: 'bool', label: 'surface splashes' },
+      { path: 'weather.rain.splashChance', min: 0, max: 1, step: 0.02, label: 'drops that splash' },
+    ],
+  },
+  {
+    group: 'Clouds (overlay stub)',
+    items: [
+      { path: 'weather.clouds.enabled', type: 'bool', label: 'cloud overlay' },
+      { path: 'weather.clouds.color', type: 'color', label: 'cloud colour' },
+      { path: 'weather.clouds.opacity', min: 0, max: 1, step: 0.02, label: 'opacity at full storm' },
+      { path: 'weather.clouds.base', min: 0, max: 1, step: 0.02, label: 'haze on a clear day' },
+      { path: 'weather.clouds.coverage', min: 0, max: 1, step: 0.02, label: 'coverage' },
+      { path: 'weather.clouds.softness', min: 0.02, max: 1, step: 0.02, label: 'edge softness' },
+      { path: 'weather.clouds.scale', min: 0.005, max: 0.3, step: 0.005, label: 'noise scale' },
+      { path: 'weather.clouds.drift', min: 0, max: 30, step: 0.2, label: 'scroll with wind' },
+    ],
+  },
+  {
     group: 'Caustics & light beams',
     items: [
       { path: 'caustics.enabled', type: 'bool', label: 'caustics' },
@@ -3214,6 +4682,9 @@ export const TUNER_SCHEMA = [
       { path: 'caustics.speed', min: 0, max: 2, step: 0.02 },
       { path: 'caustics.falloff', min: 0.2, max: 4, step: 0.1, label: 'caustics depth falloff' },
       { path: 'caustics.color', type: 'color' },
+      { path: 'caustics.followSun', type: 'bool', label: 'caustics follow the sun' },
+      { path: 'caustics.nightFloor', min: 0, max: 1, step: 0.02, label: 'caustics left at night' },
+      { path: 'caustics.tintMix', min: 0, max: 1, step: 0.05, label: 'caustics take sun colour' },
       { path: 'godrays.enabled', type: 'bool', label: 'light beams' },
       { path: 'godrays.count', min: 0, max: 8, step: 1 },
       { path: 'godrays.spread', min: 4, max: 60, step: 1 },
@@ -3223,6 +4694,11 @@ export const TUNER_SCHEMA = [
       { path: 'godrays.intensity', min: 0, max: 1, step: 0.02 },
       { path: 'godrays.falloff', min: 0.2, max: 4, step: 0.1, label: 'beam depth falloff' },
       { path: 'godrays.color', type: 'color' },
+      { path: 'godrays.followSun', type: 'bool', label: 'beams follow the sun' },
+      { path: 'godrays.nightFloor', min: 0, max: 1, step: 0.02, label: 'beams left at night' },
+      { path: 'godrays.tintMix', min: 0, max: 1, step: 0.05, label: 'beams take sun colour' },
+      { path: 'godrays.followTilt', min: 0, max: 5, step: 0.1, label: 'beam lean at sunrise/set' },
+      { path: 'godrays.followShift', min: 0, max: 1.5, step: 0.05, label: 'beams slide under the sun' },
     ],
   },
   {
@@ -3334,6 +4810,11 @@ export const TUNER_SCHEMA = [
       { path: 'strike.charge.time', min: 0.15, max: 3, step: 0.05, label: 'charge: seconds a full bar buys' },
       { path: 'strike.charge.minFire', min: 0, max: 0.9, step: 0.05, label: 'charge: minimum to fire' },
       { path: 'strike.charge.chumRefill', min: 0.02, max: 1, step: 0.02, label: 'charge: refill per chum' },
+      { path: 'strike.charge.gulp.blockEating', type: 'bool', label: 'gulp: charging seals the mouth' },
+      { path: 'strike.charge.gulp.radius', min: 0, max: 20, step: 0.5, label: 'gulp: chum swallowed on release (radius)' },
+      { path: 'strike.charge.gulp.tell.shiver', min: 0, max: 0.4, step: 0.01, label: 'gulp: waiting chum shiver' },
+      { path: 'strike.charge.gulp.tell.hz', min: 2, max: 20, step: 1, label: 'gulp: shiver speed (Hz)' },
+      { path: 'strike.charge.gulp.tell.spinMul', min: 1, max: 10, step: 0.5, label: 'gulp: waiting chum spin-up' },
       { path: 'strike.charge.shake', min: 0, max: 0.3, step: 0.005, label: 'charge: wind-up shake' },
       { path: 'strike.charge.hapticInterval', min: 0.02, max: 0.4, step: 0.01, label: 'charge: rumble interval' },
       { path: 'strike.charge.flashTime', min: 0, max: 1, step: 0.02, label: 'charge: spend flash' },
@@ -3382,6 +4863,159 @@ export const TUNER_SCHEMA = [
       { path: 'camera.punch.enabled', type: 'bool', label: 'camera punch-in' },
       { path: 'camera.punch.max', min: 0, max: 0.4, step: 0.01, label: 'camera punch: max zoom' },
       { path: 'camera.punch.decay', min: 1, max: 20, step: 0.5, label: 'camera punch: release speed' },
+    ],
+  },
+  {
+    // The follow rig. Off by default and a real off switch — see the cinecam
+    // block up top. The zoom floor is above 1 because the arena exactly fills
+    // the frame at zoom 1, so a rig at 1 has nowhere to pan to.
+    group: 'Cine camera: rig',
+    items: [
+      { path: 'cinecam.enabled', type: 'bool', label: 'cinematic follow camera' },
+      { path: 'cinecam.base.zoom', min: 1.02, max: 2.5, step: 0.01, label: 'punch-in (x)' },
+      { path: 'cinecam.base.zoomMax', min: 1.2, max: 4, step: 0.05, label: 'zoom ceiling (x)' },
+      { path: 'cinecam.base.zoomStiffness', min: 4, max: 90, step: 1, label: 'zoom spring stiffness' },
+      { path: 'cinecam.base.zoomDamping', min: 0.4, max: 1.6, step: 0.02, label: 'zoom damping (1 = critical)' },
+      { path: 'cinecam.base.stiffness.x', min: 4, max: 160, step: 1, label: 'spring stiffness: horizontal' },
+      { path: 'cinecam.base.stiffness.y', min: 4, max: 160, step: 1, label: 'spring stiffness: vertical' },
+      { path: 'cinecam.base.damping', min: 0.4, max: 1.6, step: 0.02, label: 'damping (1 = critical, less = overshoot)' },
+      { path: 'cinecam.base.deadZone.x', min: 0, max: 0.45, step: 0.005, label: 'dead zone: horizontal (frac of half-frame)' },
+      { path: 'cinecam.base.deadZone.y', min: 0, max: 0.45, step: 0.005, label: 'dead zone: vertical (frac of half-frame)' },
+      { path: 'cinecam.base.lookAhead', min: 0, max: 0.8, step: 0.01, label: 'look-ahead (seconds of velocity)' },
+      { path: 'cinecam.base.lookAheadMax', min: 0, max: 30, step: 0.5, label: 'look-ahead cap (world units)' },
+      { path: 'cinecam.base.lookAheadLag', min: 0.02, max: 1.5, step: 0.02, label: 'look-ahead smoothing (s)' },
+      { path: 'cinecam.base.aimBias', min: 0, max: 15, step: 0.1, label: 'aim bias (world units)' },
+      { path: 'cinecam.base.blendIn', min: 0.02, max: 3, step: 0.02, label: 'default blend in (s)' },
+      { path: 'cinecam.base.blendOut', min: 0.02, max: 3, step: 0.02, label: 'default blend out (s)' },
+    ],
+  },
+  {
+    // The lens. Each of the three has its own enable so any one can be A/B'd
+    // without losing the rig. Flare intensities stay low on purpose: the
+    // composite is LDR with no tonemapping, so an additive flare over an
+    // already-bright frame clips straight to white.
+    group: 'Cine camera: lens',
+    items: [
+      { path: 'cinecam.lens.tiltShift.enabled', type: 'bool', label: 'tilt shift' },
+      { path: 'cinecam.lens.tiltShift.strength', min: 0, max: 1.5, step: 0.02, label: 'tilt shift: master strength' },
+      { path: 'cinecam.lens.tiltShift.radius', min: 1, max: 6, step: 1, label: 'tilt shift: blur iterations (cost)' },
+      { path: 'cinecam.base.defocus', min: 0, max: 1, step: 0.02, label: 'tilt shift: edge blur (base)' },
+      { path: 'cinecam.base.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'tilt shift: sharp radius (base)' },
+      { path: 'cinecam.base.focusFeather', min: 0.02, max: 0.8, step: 0.01, label: 'tilt shift: falloff width (base)' },
+      { path: 'cinecam.lens.flare.enabled', type: 'bool', label: 'lens flares' },
+      { path: 'cinecam.lens.flare.strength', min: 0, max: 2, step: 0.02, label: 'flare: master strength' },
+      { path: 'cinecam.base.flare', min: 0, max: 2, step: 0.02, label: 'flare: amount (base)' },
+      { path: 'cinecam.lens.flare.spacing', min: 0.05, max: 1, step: 0.01, label: 'flare: ghost spacing' },
+      { path: 'cinecam.lens.flare.halo', min: 0, max: 1, step: 0.01, label: 'flare: halo distance' },
+      { path: 'cinecam.lens.flare.streak', min: 0, max: 0.03, step: 0.0005, label: 'flare: anamorphic width' },
+      { path: 'cinecam.lens.flare.streakGain', min: 0, max: 2, step: 0.02, label: 'flare: anamorphic strength' },
+      { path: 'cinecam.base.vignette', min: 0, max: 1, step: 0.02, label: 'vignette (base, adds to the post preset)' },
+      // --- the dash corridor ---
+      { path: 'cinecam.lens.path.enabled', type: 'bool', label: 'highlight the dash path while charging' },
+      { path: 'cinecam.lens.path.width', min: 0.01, max: 0.4, step: 0.005, label: 'dash path: lane half-width' },
+      { path: 'cinecam.lens.path.feather', min: 0.02, max: 0.6, step: 0.01, label: 'dash path: lane falloff' },
+      { path: 'cinecam.lens.path.length', min: 0, max: 1, step: 0.02, label: 'dash path: reach at zero charge' },
+      { path: 'cinecam.lens.path.lengthPerPower', min: 0, max: 1.2, step: 0.02, label: 'dash path: extra reach at full charge' },
+      { path: 'cinecam.lens.path.vignette', min: 0, max: 1, step: 0.02, label: 'dash path: darkening outside the lane' },
+      { path: 'cinecam.lens.droplets.enabled', type: 'bool', label: 'water on the lens after a breach' },
+      { path: 'cinecam.lens.droplets.perBreach', min: 0, max: 1, step: 0.02, label: 'droplets: wetness per breach' },
+      { path: 'cinecam.lens.droplets.life', min: 0.3, max: 10, step: 0.1, label: 'droplets: time to dry (s)' },
+      { path: 'cinecam.lens.droplets.density', min: 3, max: 26, step: 1, label: 'droplets: count across the frame' },
+      { path: 'cinecam.lens.droplets.size', min: 0.05, max: 0.5, step: 0.01, label: 'droplets: bead size' },
+      { path: 'cinecam.lens.droplets.refract', min: 0, max: 0.2, step: 0.002, label: 'droplets: refraction' },
+      { path: 'cinecam.lens.droplets.spec', min: 0, max: 2, step: 0.02, label: 'droplets: highlight' },
+      { path: 'cinecam.lens.droplets.slide', min: 0, max: 1.6, step: 0.05, label: 'droplets: run distance (cell heights)' },
+      { path: 'cinecam.lens.droplets.stretch', min: 0, max: 4, step: 0.05, label: 'droplets: vertical stretch when running' },
+      { path: 'cinecam.lens.droplets.taper', min: 0, max: 0.9, step: 0.02, label: 'droplets: teardrop tail' },
+      { path: 'cinecam.lens.droplets.slide', min: 0, max: 1, step: 0.02, label: 'droplets: how far they creep down' },
+    ],
+  },
+  {
+    // Per-state overrides. Anything a state doesn't set, it inherits from the
+    // rig and lens groups above — these are the deltas, not a second copy.
+    // `Mul` sliders scale the base value; the rest replace it.
+    group: 'Cine camera: states',
+    items: [
+      { path: 'cinecam.states.roundStart.hold', min: 0, max: 6, step: 0.1, label: 'round start: length (s)' },
+      { path: 'cinecam.states.roundStart.blendIn', min: 0.02, max: 3, step: 0.02, label: 'round start: blend in (s)' },
+      { path: 'cinecam.states.roundStart.blendOut', min: 0.02, max: 4, step: 0.02, label: 'round start: blend out (s)' },
+      { path: 'cinecam.states.roundStart.zoom', min: 1.02, max: 2.5, step: 0.01, label: 'round start: zoom' },
+      { path: 'cinecam.states.roundStart.stiffMul', min: 0.05, max: 4, step: 0.05, label: 'round start: stiffness (x)' },
+      { path: 'cinecam.states.roundStart.lookAheadMul', min: 0, max: 3, step: 0.05, label: 'round start: look-ahead (x)' },
+      { path: 'cinecam.states.roundStart.defocus', min: 0, max: 1, step: 0.02, label: 'round start: edge blur' },
+      { path: 'cinecam.states.roundStart.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'round start: sharp radius' },
+      { path: 'cinecam.states.roundStart.flare', min: 0, max: 2, step: 0.02, label: 'round start: flare' },
+      { path: 'cinecam.states.roundStart.vignette', min: 0, max: 1, step: 0.02, label: 'round start: vignette' },
+
+      { path: 'cinecam.states.charging.blendIn', min: 0.02, max: 3, step: 0.02, label: 'charging: blend in (s)' },
+      { path: 'cinecam.states.charging.blendOut', min: 0.02, max: 3, step: 0.02, label: 'charging: blend out (s)' },
+      { path: 'cinecam.states.charging.zoom', min: 1.02, max: 2.5, step: 0.01, label: 'charging: zoom' },
+      { path: 'cinecam.states.charging.zoomDampMul', min: 0.3, max: 1.6, step: 0.02, label: 'charging: zoom elasticity (lower = bouncier)' },
+      { path: 'cinecam.states.charging.zoomStiffMul', min: 0.05, max: 4, step: 0.05, label: 'charging: zoom pull-in speed (x)' },
+      { path: 'cinecam.states.boosting.zoomStiffMul', min: 0.05, max: 4, step: 0.05, label: 'boosting: zoom snap-out speed (x)' },
+      { path: 'cinecam.states.charging.path', min: 0, max: 1, step: 0.02, label: 'charging: dash path highlight' },
+      { path: 'cinecam.states.charging.stiffMul', min: 0.05, max: 4, step: 0.05, label: 'charging: stiffness (x)' },
+      { path: 'cinecam.states.charging.lookAheadMul', min: 0, max: 3, step: 0.05, label: 'charging: look-ahead (x)' },
+      { path: 'cinecam.states.charging.deadZoneMul', min: 0, max: 2, step: 0.05, label: 'charging: dead zone (x)' },
+      { path: 'cinecam.states.charging.defocus', min: 0, max: 1, step: 0.02, label: 'charging: edge blur' },
+      { path: 'cinecam.states.charging.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'charging: sharp radius' },
+      { path: 'cinecam.states.charging.flare', min: 0, max: 2, step: 0.02, label: 'charging: flare' },
+      { path: 'cinecam.states.charging.vignette', min: 0, max: 1, step: 0.02, label: 'charging: vignette' },
+
+      { path: 'cinecam.states.boosting.blendIn', min: 0.02, max: 3, step: 0.02, label: 'boosting: blend in (s)' },
+      { path: 'cinecam.states.boosting.blendOut', min: 0.02, max: 3, step: 0.02, label: 'boosting: blend out (s)' },
+      { path: 'cinecam.states.boosting.zoom', min: 1.02, max: 2.5, step: 0.01, label: 'boosting: zoom' },
+      // Below 1 is the point of this one: a soft spring is what lets the dash
+      // outrun the frame instead of the frame gliding along with it.
+      { path: 'cinecam.states.boosting.stiffMul', min: 0.05, max: 4, step: 0.05, label: 'boosting: stiffness (x)' },
+      { path: 'cinecam.states.boosting.dampMul', min: 0.3, max: 2, step: 0.05, label: 'boosting: damping (x)' },
+      { path: 'cinecam.states.boosting.lookAheadMul', min: 0, max: 4, step: 0.05, label: 'boosting: look-ahead (x)' },
+      { path: 'cinecam.states.boosting.defocus', min: 0, max: 1, step: 0.02, label: 'boosting: edge blur' },
+      { path: 'cinecam.states.boosting.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'boosting: sharp radius' },
+      { path: 'cinecam.states.boosting.flare', min: 0, max: 2, step: 0.02, label: 'boosting: flare' },
+      { path: 'cinecam.states.boosting.vignette', min: 0, max: 1, step: 0.02, label: 'boosting: vignette' },
+
+      { path: 'cinecam.states.foodChain.hold', min: 0.1, max: 4, step: 0.05, label: 'food chain: length (s)' },
+      { path: 'cinecam.states.foodChain.blendIn', min: 0.02, max: 2, step: 0.01, label: 'food chain: blend in (s)' },
+      { path: 'cinecam.states.foodChain.blendOut', min: 0.02, max: 3, step: 0.02, label: 'food chain: blend out (s)' },
+      { path: 'cinecam.states.foodChain.zoom', min: 1.02, max: 2.5, step: 0.01, label: 'food chain: zoom' },
+      { path: 'cinecam.states.foodChain.stiffMul', min: 0.05, max: 5, step: 0.05, label: 'food chain: stiffness (x)' },
+      { path: 'cinecam.states.foodChain.defocus', min: 0, max: 1, step: 0.02, label: 'food chain: edge blur' },
+      { path: 'cinecam.states.foodChain.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'food chain: sharp radius' },
+      { path: 'cinecam.states.foodChain.flare', min: 0, max: 2, step: 0.02, label: 'food chain: flare' },
+      { path: 'cinecam.states.foodChain.vignette', min: 0, max: 1, step: 0.02, label: 'food chain: vignette' },
+
+      // The three death beats. `deathHit.hold` is also the handover point —
+      // it's how long the hit lasts before the fall takes the frame. Framing
+      // during a death still belongs to deathDive.js's push-in, which blends
+      // over the top of these, so keep the zooms near the base value or the
+      // two push-ins compound into a close-up of one flipper.
+      { path: 'cinecam.states.deathHit.hold', min: 0.05, max: 3, step: 0.05, label: 'death hit: length before the fall (s)' },
+      { path: 'cinecam.states.deathHit.blendIn', min: 0.02, max: 2, step: 0.01, label: 'death hit: blend in (s)' },
+      { path: 'cinecam.states.deathHit.zoom', min: 1.02, max: 2.5, step: 0.01, label: 'death hit: zoom' },
+      { path: 'cinecam.states.deathHit.stiffMul', min: 0.05, max: 5, step: 0.05, label: 'death hit: stiffness (x)' },
+      { path: 'cinecam.states.deathHit.defocus', min: 0, max: 1, step: 0.02, label: 'death hit: edge blur' },
+      { path: 'cinecam.states.deathHit.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'death hit: sharp radius' },
+      { path: 'cinecam.states.deathHit.flare', min: 0, max: 2, step: 0.02, label: 'death hit: flare' },
+      { path: 'cinecam.states.deathHit.vignette', min: 0, max: 1, step: 0.02, label: 'death hit: vignette' },
+
+      { path: 'cinecam.states.deathFall.blendIn', min: 0.02, max: 4, step: 0.02, label: 'death fall: blend in (s)' },
+      { path: 'cinecam.states.deathFall.zoom', min: 1.02, max: 2.5, step: 0.01, label: 'death fall: zoom' },
+      { path: 'cinecam.states.deathFall.stiffMul', min: 0.05, max: 4, step: 0.05, label: 'death fall: stiffness (x)' },
+      { path: 'cinecam.states.deathFall.dampMul', min: 0.3, max: 2, step: 0.05, label: 'death fall: damping (x)' },
+      { path: 'cinecam.states.deathFall.lookAheadMul', min: 0, max: 3, step: 0.05, label: 'death fall: look-ahead (x)' },
+      { path: 'cinecam.states.deathFall.defocus', min: 0, max: 1, step: 0.02, label: 'death fall: edge blur' },
+      { path: 'cinecam.states.deathFall.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'death fall: sharp radius' },
+      { path: 'cinecam.states.deathFall.flare', min: 0, max: 2, step: 0.02, label: 'death fall: flare' },
+      { path: 'cinecam.states.deathFall.vignette', min: 0, max: 1, step: 0.02, label: 'death fall: vignette' },
+
+      { path: 'cinecam.states.deathFloor.blendIn', min: 0.02, max: 4, step: 0.02, label: 'floor hit: blend in (s)' },
+      { path: 'cinecam.states.deathFloor.zoom', min: 1.02, max: 2.5, step: 0.01, label: 'floor hit: zoom' },
+      { path: 'cinecam.states.deathFloor.stiffMul', min: 0.05, max: 4, step: 0.05, label: 'floor hit: stiffness (x)' },
+      { path: 'cinecam.states.deathFloor.defocus', min: 0, max: 1, step: 0.02, label: 'floor hit: edge blur' },
+      { path: 'cinecam.states.deathFloor.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'floor hit: sharp radius' },
+      { path: 'cinecam.states.deathFloor.flare', min: 0, max: 2, step: 0.02, label: 'floor hit: flare' },
+      { path: 'cinecam.states.deathFloor.vignette', min: 0, max: 1, step: 0.02, label: 'floor hit: vignette' },
     ],
   },
   {
@@ -3499,6 +5133,11 @@ export const TUNER_SCHEMA = [
       { path: 'animation.moveThreshold', min: 0, max: 10, step: 0.1, label: 'idle -> swim speed' },
       { path: 'animation.boostThreshold', min: 1, max: 40, step: 0.5, label: 'swim -> boost speed' },
       { path: 'animation.crossfade', min: 0, max: 1, step: 0.01, label: 'blend time' },
+      // Idle tempo comes from the music (see beatsPerLoop on
+      // CONFIG.animation.states), so the two 'idle speed' sliders below only
+      // bite once these are set back to 0.
+      { path: 'animation.states.idle.beatsPerLoop', min: 0, max: 16, step: 1, label: 'beats per idle loop (0 = off)' },
+      { path: 'animation.states.surfaceIdle.beatsPerLoop', min: 0, max: 16, step: 1, label: 'beats per surface idle loop' },
       { path: 'animation.states.idle.clipTimeScale', min: 0.05, max: 3, step: 0.05, label: 'idle speed' },
       { path: 'animation.states.swim.clipTimeScale', min: 0.05, max: 3, step: 0.05, label: 'swim speed' },
       { path: 'animation.states.boost.clipTimeScale', min: 0.05, max: 4, step: 0.05, label: 'boost speed' },
@@ -3875,6 +5514,23 @@ export const TUNER_SCHEMA = [
       { path: 'eel.branchesPerHop', min: 0, max: 5, step: 1, label: 'branches per hop' },
       { path: 'eel.branchLength', min: 0.1, max: 1.5, step: 0.05, label: 'branch length' },
       { path: 'eel.flickerSpeed', min: 0, max: 120, step: 1, label: 'flicker speed' },
+      // Storm response. Every one of these is a MULTIPLIER reached at full
+      // storm and folded in as 1 + (mul - 1) * intensity, so 1 means "weather
+      // changes nothing about this" and the sliders above stay the clear-sky
+      // truth. `damage in storm` is the only one that touches balance rather
+      // than looks — left at 1 deliberately.
+      { path: 'eel.storm.enabled', type: 'bool', label: 'storm response' },
+      { path: 'eel.storm.glowMul', min: 1, max: 6, step: 0.1, label: 'storm: glow x' },
+      { path: 'eel.storm.widthMul', min: 1, max: 5, step: 0.1, label: 'storm: width x' },
+      { path: 'eel.storm.amplitudeMul', min: 1, max: 5, step: 0.1, label: 'storm: thrash x' },
+      { path: 'eel.storm.contrastMul', min: 1, max: 3, step: 0.05, label: 'storm: spikiness x' },
+      { path: 'eel.storm.branchChanceMul', min: 1, max: 4, step: 0.1, label: 'storm: fork chance x' },
+      { path: 'eel.storm.branchesPerHopMul', min: 1, max: 4, step: 0.1, label: 'storm: forks per hop x' },
+      { path: 'eel.storm.flickerMul', min: 1, max: 4, step: 0.1, label: 'storm: flicker x' },
+      { path: 'eel.storm.lifeMul', min: 1, max: 3, step: 0.05, label: 'storm: bolt lifetime x' },
+      { path: 'eel.storm.damageInStorm', min: 1, max: 3, step: 0.05, label: 'storm: damage x' },
+      { path: 'eel.storm.color', type: 'color', label: 'storm: bolt tint' },
+      { path: 'eel.storm.colorMix', min: 0, max: 1, step: 0.05, label: 'storm: tint strength' },
     ],
   },
   {
@@ -3957,6 +5613,162 @@ export const TUNER_SCHEMA = [
       { path: 'bakalar.haulSpeed', min: 0.5, max: 30, step: 0.5, label: 'haul speed' },
       { path: 'bakalar.bobSpeed', min: 0, max: 6, step: 0.1, label: 'hull bob speed' },
       { path: 'bakalar.bobAmount', min: 0, max: 2, step: 0.02, label: 'hull bob' },
+      { path: 'bakalar.bomb.enabled', type: 'bool', label: 'drops voicemail bombs' },
+      { path: 'bakalar.bomb.dropInterval', min: 0.5, max: 15, step: 0.1, label: 'seconds between drops' },
+      { path: 'bakalar.bomb.dropIntervalPerLevel', min: 0, max: 2, step: 0.02, label: 'drops sooner per level' },
+      { path: 'bakalar.bomb.dropIntervalFloor', min: 0.3, max: 8, step: 0.1, label: 'fastest allowed drop' },
+      { path: 'bakalar.bomb.minCatch', min: 0, max: 10, step: 1, label: 'fish needed to bother' },
+      { path: 'bakalar.bomb.fallSpeed', min: 1, max: 30, step: 0.5, label: 'bomb fall speed' },
+      { path: 'bakalar.bomb.fuse', min: 0, max: 3, step: 0.05, label: 'fuse (seconds armed)' },
+      { path: 'bakalar.bomb.radius', min: 1, max: 30, step: 0.5, label: 'blast radius' },
+      { path: 'bakalar.bomb.radiusPerLevel', min: 0, max: 4, step: 0.1, label: 'blast radius per level' },
+      { path: 'bakalar.bomb.damage', min: 1, max: 250, step: 5, label: 'blast damage' },
+      { path: 'bakalar.bomb.damagePerLevel', min: 0, max: 80, step: 2, label: 'blast damage per level' },
+      { path: 'bakalar.bomb.knockback', min: 0, max: 40, step: 1, label: 'blast knockback' },
+      { path: 'bakalar.bomb.chumPerKill', min: 0, max: 10, step: 1, label: 'chum per kill' },
+      { path: 'bakalar.bomb.chumScatter', min: 0, max: 20, step: 1, label: 'chum scattered regardless' },
+      { path: 'bakalar.bomb.chumSpread', min: 0.5, max: 20, step: 0.5, label: 'chum spread' },
+      { path: 'bakalar.bomb.size', min: 0.1, max: 3, step: 0.02, label: 'bomb size' },
+      { path: 'bakalar.bomb.color', type: 'color', label: 'bomb light color' },
+      { path: 'bakalar.bomb.blinkSpeed', min: 1, max: 30, step: 0.5, label: 'blink speed' },
+    ],
+  },
+  {
+    group: 'Scallop squirter',
+    panel: 'companions',
+    items: [
+      { path: 'scallop.fireRate', min: 0.2, max: 10, step: 0.1, label: 'seconds between flights' },
+      { path: 'scallop.damage', min: 1, max: 120, step: 1, label: 'damage' },
+      { path: 'scallop.speed', min: 1, max: 40, step: 0.5, label: 'launch speed' },
+      { path: 'scallop.life', min: 0.5, max: 20, step: 0.5, label: 'seconds before it sinks' },
+      { path: 'scallop.radius', min: 0.1, max: 2, step: 0.02, label: 'hit radius' },
+      { path: 'scallop.turnRange', min: 0, max: 3.2, step: 0.05, label: 'heading change per jet' },
+      { path: 'scallop.drag', min: 0, max: 8, step: 0.1, label: 'coast drag between jets' },
+      { path: 'scallop.maxBounces', min: 0, max: 20, step: 1, label: 'wall bounces' },
+      { path: 'scallop.restitution', min: 0.1, max: 1.2, step: 0.02, label: 'bounce retention' },
+      { path: 'scallop.spin', min: 0, max: 25, step: 0.5, label: 'tumble speed' },
+    ],
+  },
+  {
+    group: 'Oyster blaster',
+    panel: 'companions',
+    items: [
+      { path: 'oyster.fireRate', min: 0.2, max: 8, step: 0.05, label: 'seconds between pearls' },
+      { path: 'oyster.fireRatePerLevel', min: 0, max: 0.5, step: 0.01, label: 'faster per level' },
+      { path: 'oyster.fireRateFloor', min: 0.1, max: 4, step: 0.05, label: 'fastest allowed' },
+      { path: 'oyster.damage', min: 1, max: 120, step: 1, label: 'pearl impact damage' },
+      { path: 'oyster.damagePerLevel', min: 0, max: 40, step: 1, label: 'pearl damage per level' },
+      { path: 'oyster.speed', min: 1, max: 40, step: 0.5, label: 'pearl speed' },
+      { path: 'oyster.life', min: 0.5, max: 10, step: 0.1, label: 'pearl lifetime' },
+      { path: 'oyster.pearlColor', type: 'color', label: 'pearl color' },
+      { path: 'oyster.bomblets', min: 1, max: 20, step: 1, label: 'bomblets per burst' },
+      { path: 'oyster.bombletsPerLevel', min: 0, max: 5, step: 1, label: 'bomblets per level' },
+      { path: 'oyster.bombletDamage', min: 1, max: 80, step: 1, label: 'bomblet damage' },
+      { path: 'oyster.bombletDamagePerLevel', min: 0, max: 30, step: 1, label: 'bomblet damage per level' },
+      { path: 'oyster.bombletBlastRadius', min: 0.5, max: 12, step: 0.1, label: 'bomblet blast radius' },
+      { path: 'oyster.bombletBlastRadiusPerLevel', min: 0, max: 2, step: 0.02, label: 'blast radius per level' },
+      // These three set how far a bomblet travels before it goes off, and they
+      // have to stay in proportion to the blast radius above — travel much
+      // further than the blast and the burst stops covering the impact point.
+      // See the note in CONFIG.oyster.
+      { path: 'oyster.bombletDrag', min: 0.2, max: 8, step: 0.1, label: 'bomblet drag' },
+      { path: 'oyster.bombletColor', type: 'color', label: 'bomblet color' },
+      { path: 'oyster.bombletGlow', min: 0, max: 8, step: 0.1, label: 'bomblet glow' },
+    ],
+  },
+  {
+    group: 'Octopus grabber',
+    panel: 'companions',
+    items: [
+      // How many arms may be GRABBING at once, not how many exist — the
+      // model always shows six and the surplus dangle.
+      { path: 'octoGrab.arms', min: 1, max: 6, step: 1, label: 'arms grabbing at level 1' },
+      { path: 'octoGrab.armsPerLevel', min: 0, max: 3, step: 1, label: 'arms per level' },
+      // THE GRAB RADIUS. Capped in code at the arm's measured length times
+      // `arm strain` below, so pushing this past what the tentacle can cover
+      // stops having an effect rather than silently granting reach the arm
+      // visibly doesn't have.
+      { path: 'octoGrab.reach', min: 1, max: 25, step: 0.5, label: 'grab radius' },
+      { path: 'octoGrab.reachPerLevel', min: 0, max: 3, step: 0.05, label: 'grab radius per level' },
+      { path: 'octoGrab.reachStretch', min: 1, max: 2.5, step: 0.05, label: 'arm strain (x real length)' },
+      { path: 'octoGrab.reelSpeed', min: 0.5, max: 30, step: 0.5, label: 'reel speed' },
+      { path: 'octoGrab.reelSpeedPerLevel', min: 0, max: 4, step: 0.1, label: 'reel speed per level' },
+      { path: 'octoGrab.grabCooldown', min: 0, max: 5, step: 0.05, label: 'arm rest after a pop' },
+      { path: 'octoGrab.graspTimeout', min: 0.1, max: 3, step: 0.05, label: 'seconds before it commits' },
+      { path: 'octoGrab.popDistance', min: 0.2, max: 6, step: 0.1, label: 'pop distance' },
+      { path: 'octoGrab.maxTargetRadius', min: 0.2, max: 6, step: 0.1, label: 'biggest grabbable fish' },
+      { path: 'octoGrab.chumPerPop', min: 0, max: 10, step: 1, label: 'chum per pop' },
+      { path: 'octoGrab.chumXp', min: 1, max: 20, step: 1, label: 'xp per chum bit' },
+      // --- rig ---
+      { path: 'octoGrab.reachWeight', min: 0, max: 1, step: 0.05, label: 'IK weight while reaching' },
+      { path: 'octoGrab.dangleWeight', min: 0, max: 1, step: 0.05, label: 'IK weight while dangling' },
+      { path: 'octoGrab.weightLerpIn', min: 0.5, max: 20, step: 0.5, label: 'reach ramp in' },
+      { path: 'octoGrab.weightLerpOut', min: 0.5, max: 20, step: 0.5, label: 'release ramp out' },
+      { path: 'octoGrab.ik.iterations', min: 1, max: 12, step: 1, label: 'CCD passes per arm' },
+      { path: 'octoGrab.ik.rootInfluence', min: 0, max: 1, step: 0.05, label: 'how much the base swings' },
+      { path: 'octoGrab.ik.maxBend', min: 0.1, max: 2.5, step: 0.05, label: 'max bend per bone' },
+      { path: 'octoGrab.ik.softness', min: 0.1, max: 1, step: 0.05, label: 'bend limit softness' },
+      { path: 'octoGrab.ik.smoothing', min: 1, max: 40, step: 1, label: 'arm chase speed' },
+      // --- dangle ---
+      { path: 'octoGrab.dangleLength', min: 0.2, max: 10, step: 0.1, label: 'dangle trail length' },
+      { path: 'octoGrab.dangleSpread', min: 0, max: 6, step: 0.1, label: 'dangle fan width' },
+      { path: 'octoGrab.dangleDroop', min: 0, max: 4, step: 0.05, label: 'dangle sag' },
+      { path: 'octoGrab.idleWave', min: 0, max: 6, step: 0.1, label: 'idle undulation speed' },
+      { path: 'octoGrab.idleAmp', min: 0, max: 4, step: 0.05, label: 'idle undulation' },
+      // --- drift / secondary motion ---
+      // LOWER stiffness and damping = looser. The variance is what stops the
+      // six arms reading as one object.
+      { path: 'octoGrab.drift.stiffness', min: 0.5, max: 30, step: 0.5, label: 'arm follow stiffness' },
+      { path: 'octoGrab.drift.damping', min: 0.2, max: 15, step: 0.1, label: 'arm damping (low = sways)' },
+      { path: 'octoGrab.drift.stiffnessVariance', min: 0, max: 0.9, step: 0.05, label: 'per-arm stiffness spread' },
+      { path: 'octoGrab.drift.wanderOctave', min: 0.05, max: 1, step: 0.01, label: 'second wander ratio' },
+      { path: 'octoGrab.drift.wanderOctaveAmp', min: 0, max: 2, step: 0.05, label: 'second wander amount' },
+      { path: 'octoGrab.drift.velocityDrag', min: 0, max: 1, step: 0.02, label: 'streaming from velocity' },
+      // --- bioluminescence ---
+      { path: 'octoGrab.glow.enabled', type: 'bool', label: 'arm glow' },
+      { path: 'octoGrab.glow.color', type: 'color', label: 'glow color' },
+      { path: 'octoGrab.glow.strength', min: 0, max: 6, step: 0.1, label: 'glow strength' },
+      { path: 'octoGrab.glow.falloff', min: 0.5, max: 8, step: 0.1, label: 'glow falloff (higher = tip only)' },
+      { path: 'octoGrab.glow.span', min: 0.05, max: 1, step: 0.05, label: 'lit fraction of the arm' },
+      { path: 'octoGrab.glow.ambient', min: 0, max: 0.5, step: 0.01, label: 'idle glow floor' },
+      { path: 'octoGrab.glow.shimmerAmp', min: 0, max: 1, step: 0.05, label: 'shimmer amount' },
+      { path: 'octoGrab.glow.shimmerFreq', min: 0, max: 20, step: 0.5, label: 'shimmer frequency' },
+      { path: 'octoGrab.glow.shimmerSpeed', min: 0, max: 10, step: 0.1, label: 'shimmer speed' },
+      { path: 'octoGrab.glow.reachLevel', min: 0, max: 1, step: 0.05, label: 'glow while reaching' },
+      { path: 'octoGrab.glow.holdLevel', min: 0, max: 1, step: 0.05, label: 'glow while holding' },
+      { path: 'octoGrab.glow.riseRate', min: 0.5, max: 20, step: 0.5, label: 'glow rise rate' },
+      { path: 'octoGrab.glow.fallRate', min: 0.2, max: 20, step: 0.1, label: 'glow fade rate' },
+      // --- head / propulsion ---
+      { path: 'octoGrab.head.weight', min: 0, max: 1, step: 0.05, label: 'head IK weight' },
+      { path: 'octoGrab.head.lead', min: 0.5, max: 12, step: 0.1, label: 'head target lead' },
+      { path: 'octoGrab.head.thrust', min: 1, max: 80, step: 1, label: 'jet thrust' },
+      { path: 'octoGrab.head.maxSpeed', min: 1, max: 40, step: 0.5, label: 'max swim speed' },
+      { path: 'octoGrab.head.drag', min: 0.2, max: 12, step: 0.1, label: 'water drag' },
+      { path: 'octoGrab.head.pulseInterval', min: 0.1, max: 3, step: 0.05, label: 'seconds between jets' },
+      { path: 'octoGrab.head.pulseFraction', min: 0.05, max: 1, step: 0.05, label: 'jet duty cycle' },
+      { path: 'octoGrab.bodyFollow', min: 0.5, max: 25, step: 0.5, label: 'body follow spring' },
+    ],
+  },
+  {
+    group: 'Orca family',
+    panel: 'companions',
+    items: [
+      { path: 'orca.count', min: 1, max: 8, step: 1, label: 'pod size' },
+      { path: 'orca.damage', min: 1, max: 200, step: 2, label: 'damage per hit' },
+      { path: 'orca.damagePerLevel', min: 0, max: 60, step: 1, label: 'damage per level' },
+      { path: 'orca.attackInterval', min: 0.3, max: 12, step: 0.1, label: 'seconds between runs' },
+      { path: 'orca.attackIntervalPerLevel', min: 0, max: 1.5, step: 0.02, label: 'faster per level' },
+      { path: 'orca.attackIntervalFloor', min: 0.2, max: 6, step: 0.1, label: 'fastest allowed' },
+      { path: 'orca.chargeSpeed', min: 2, max: 60, step: 1, label: 'charge speed' },
+      { path: 'orca.chargeSpeedPerLevel', min: 0, max: 8, step: 0.2, label: 'charge speed per level' },
+      { path: 'orca.cruiseSpeed', min: 1, max: 30, step: 0.5, label: 'cruise speed' },
+      { path: 'orca.hitRadius', min: 0.3, max: 8, step: 0.1, label: 'hit radius' },
+      { path: 'orca.huntRange', min: 5, max: 90, step: 1, label: 'hunt range' },
+      { path: 'orca.fallbackMinRadius', min: 0, max: 4, step: 0.1, label: 'smallest fish it will chase' },
+      { path: 'orca.knockback', min: 0, max: 30, step: 0.5, label: 'knockback' },
+      { path: 'orca.turnRate', min: 0.5, max: 15, step: 0.1, label: 'turn rate' },
+      { path: 'orca.formationSpacing', min: 0.5, max: 10, step: 0.1, label: 'formation spacing' },
+      { path: 'orca.formationFollow', min: 0.5, max: 20, step: 0.5, label: 'formation follow spring' },
     ],
   },
   {
@@ -4001,6 +5813,42 @@ export const TUNER_SCHEMA = [
       { path: 'dumbo.offsetX', min: -10, max: 10, step: 0.1, label: 'offset X' },
       { path: 'dumbo.offsetY', min: -10, max: 10, step: 0.1, label: 'offset Y' },
       { path: 'dumbo.offsetZ', min: -10, max: 10, step: 0.1, label: 'offset Z (depth)' },
+    ],
+  },
+  {
+    group: 'Level-up pause',
+    items: [
+      { path: 'levelUp.enabled', type: 'bool', label: 'slow down before the cards' },
+      { path: 'levelUp.hold', min: 0.05, max: 1, step: 0.01, label: 'held time scale' },
+      { path: 'levelUp.dilateTime', min: 0.05, max: 2, step: 0.05, label: 'time to reach it (s)' },
+      { path: 'levelUp.menuDelay', min: 0, max: 2, step: 0.02, label: 'beat before the cards (s)' },
+      { path: 'levelUp.restoreTime', min: 0.05, max: 3, step: 0.05, label: 'speed back up over (s)' },
+      { path: 'levelUp.audio.enabled', type: 'bool', label: 'slow the sound too' },
+      { path: 'levelUp.audio.follow', min: 0, max: 1, step: 0.05, label: 'how far sound follows' },
+      { path: 'levelUp.audio.minRate', min: 0.1, max: 1, step: 0.02, label: 'slowest playback rate' },
+      { path: 'levelUp.audio.glide', min: 0, max: 1, step: 0.05, label: 'music rate smoothing (s)' },
+      { path: 'reveals.enabled', type: 'bool', label: 'dissolve menus in/out' },
+      { path: 'reveals.upgrades.algo', options: ['value', 'perlin', 'simplex', 'worley', 'ridged', 'billow'], label: 'upgrades: noise' },
+      { path: 'reveals.upgrades.style', options: ['hex', 'smooth'], label: 'upgrades: style' },
+      { path: 'reveals.upgrades.inTime', min: 0.05, max: 2, step: 0.05, label: 'upgrades: in (s)' },
+      { path: 'reveals.upgrades.outTime', min: 0, max: 2, step: 0.02, label: 'upgrades: out (s)' },
+      { path: 'reveals.upgrades.steps', min: 2, max: 32, step: 1, label: 'upgrades: dither levels' },
+      { path: 'reveals.upgrades.hexSize', min: 8, max: 64, step: 4, label: 'upgrades: hex size (px)' },
+      { path: 'reveals.upgrades.bias', min: 0.05, max: 0.9, step: 0.05, label: 'upgrades: organic share' },
+      { path: 'reveals.splash.algo', options: ['value', 'perlin', 'simplex', 'worley', 'ridged', 'billow'], label: 'splash: noise' },
+      { path: 'reveals.splash.outTime', min: 0.1, max: 3, step: 0.05, label: 'splash: clear over (s)' },
+      { path: 'reveals.splash.softness', min: 0.02, max: 1, step: 0.02, label: 'splash: edge softness' },
+      { path: 'reveals.splash.scale', min: 1, max: 20, step: 1, label: 'splash: detail' },
+      { path: 'reveals.scoreCard.algo', options: ['value', 'perlin', 'simplex', 'worley', 'ridged', 'billow'], label: 'score card: noise' },
+      { path: 'reveals.scoreCard.inTime', min: 0.1, max: 3, step: 0.05, label: 'score card: in (s)' },
+      { path: 'reveals.scoreCard.softness', min: 0.02, max: 1, step: 0.02, label: 'score card: edge softness' },
+      { path: 'reveals.scoreCard.scale', min: 1, max: 20, step: 1, label: 'score card: detail' },
+      { path: 'reveals.field.size', min: 48, max: 224, step: 16, label: 'field bake size (px)' },
+      { path: 'reveals.field.levels', min: 2, max: 24, step: 1, label: 'field levels' },
+      { path: 'reveals.field.phases', min: 1, max: 10, step: 1, label: 'boil frames' },
+      { path: 'reveals.field.octaves', min: 1, max: 4, step: 1, label: 'field octaves' },
+      { path: 'reveals.field.boilHz', min: 0, max: 30, step: 1, label: 'boil rate (fps)' },
+      { path: 'reveals.field.drift', min: 0, max: 120, step: 2, label: 'field drift (px)' },
     ],
   },
   {

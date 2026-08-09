@@ -88,4 +88,11 @@
   .sv-lb-meta { color: rgba(232,236,243,0.5); font-size: 11px; }
   .sv-toast-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
   .sv-hidden { display: none !important; }
+
+  /* While the upgrade cards are dithering in or out they're half-drawn, and a
+     half-drawn card is not something you can be asked to have chosen. The
+     descendant rule is the one that matters: .sv-center and .sv-card each set
+     pointer-events themselves, so switching it off on the container alone
+     would leave the cards live under a mask full of holes. */
+  .sv-menu-locked, .sv-menu-locked * { pointer-events: none !important; }
   @media (prefers-reduced-motion: reduce) { .sv-ui * { transition: none !important; } }

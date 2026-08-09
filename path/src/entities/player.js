@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { baseStats, applyLevelGrowth } from '../stats.js';
 import { createVisual } from '../assets.js';
 import { bounds, clampToArena, midWater } from '../arena.js';
 import { feedback } from '../systems/feedback.js';
@@ -57,6 +58,11 @@ export const player = {
   // and comboSpeedMul, and for the same reason: entities/ doesn't import from
   // systems/, so the strike state comes to it rather than the other way round.
   chargePose: 0,
+  // True while a wind-up has the mouth sealed — chum still magnetises in but
+  // nothing is swallowed until the strike fires and gulps the lot (see
+  // CONFIG.strike.charge.gulp and updatePickups). Pushed in by main.js each
+  // frame for the same reason as chargePose above.
+  chumSealed: false,
   // Body twist toward the camera when the aim goes behind, and the clock for
   // the wind-up tremble. Both live on the same body transform as the mirror
   // and the barrel roll, composed together in updatePlayer.
@@ -135,81 +141,14 @@ export function rebuildShipBody() {
 // on reset, on level-up, and whenever the tuner changes a value — which is why
 // sliders affect a run already in progress.
 export function recomputeStats() {
-  const s = {
-    maxHp: CONFIG.player.maxHp,
-    thrust: CONFIG.player.thrust,
-    friction: CONFIG.player.friction,
-    maxSpeed: CONFIG.player.maxSpeed,
-    hitRadius: CONFIG.player.hitRadius,
-    pickupRadius: CONFIG.player.pickupRadius,
-    regenPerSec: CONFIG.player.regenPerSec,
-    invulnAfterHit: CONFIG.player.invulnAfterHit,
-
-    fireRate: CONFIG.weapon.fireRate,
-    damage: CONFIG.weapon.damage,
-    speed: CONFIG.weapon.speed,
-    life: CONFIG.weapon.life,
-    radius: CONFIG.weapon.radius,
-    multishot: CONFIG.weapon.multishot,
-    spread: CONFIG.weapon.spread,
-    pierce: CONFIG.weapon.pierce,
-    recoil: CONFIG.weapon.recoil,
-
-    // Strike (the dash attack). Seeded from CONFIG the same way the bounce
-    // fields below are, so the tuner sliders keep acting as the BASE value and
-    // upgrades scale on top. Before this existed every strike number was read
-    // straight off CONFIG at the point of use, which is why nothing in a
-    // level-up could touch the dash. The charge meter's thresholds and
-    // multipliers (minFire, damageMul*, reachMul*) deliberately stay on CONFIG
-    // — they define what the mechanic IS, and an upgrade that moved them would
-    // change the shape of the curve rather than the player's place on it.
-    strikeDamage: CONFIG.strike.damage,
-    strikeChainMul: CONFIG.strike.chainDamageMul,
-    strikeDashSpeed: CONFIG.strike.dashSpeed,
-    strikeDashDuration: CONFIG.strike.dashDuration,
-    // How long the charge meter takes to fill by hand, and how much each chum
-    // puts back mid-combo. Both are per-run so upgrades can tighten the
-    // rhythm loop — a faster wind-up and a fatter bite per orb.
-    strikeChargeTime: CONFIG.strike.charge.time,
-    strikeChumRefill: CONFIG.strike.charge.chumRefill,
-
-    // Oxygen. Same reason: the bar, the suffocation FX and the refill all read
-    // these now instead of CONFIG.oxygen, so they can't disagree about the cap.
-    maxOxygen: CONFIG.oxygen.max,
-    oxygenRefillRate: CONFIG.oxygen.refillRateSurface,
-
-    // Upgrade-gated systems — 0/false until the matching upgrade is taken.
-    missileCount: 0,
-    shrapnelCount: 0,
-    breachChainLevel: 0,
-    garlicLevel: 0,
-    shrimpCount: 0,
-    bounceLevel: 0,
-    bounceFireRate: CONFIG.bounce.fireRate,
-    bounceLife: CONFIG.bounce.life,
-    bounceMaxBounces: CONFIG.bounce.maxBounces,
-    eelLevel: 0,
-    starfishLevel: 0,
-    seagullLevel: 0,
-    belugaLevel: 0,
-    sealTeamLevel: 0,
-    bakalarLevel: 0,
-    calamariLevel: 0,
-    dumboLevel: 0,
-  };
+  const s = baseStats();
 
   for (const id of player.upgrades) {
     CONFIG.upgrades.find((u) => u.id === id)?.apply(s);
   }
 
-  // Baseline growth applied AFTER upgrades, so the basic shot keeps pace as
-  // you level even on a run where you never picked a damage upgrade. Extra
-  // pellets arrive on a fixed cadence (every `levelsPerExtraShot`) on top of
-  // whatever Multishot added.
-  const lvl = Math.max(1, player.level ?? 1);
-  s.damage += CONFIG.weapon.damagePerLevel * (lvl - 1);
-  s.speed += CONFIG.weapon.speedPerLevel * (lvl - 1);
-  s.multishot += Math.floor((lvl - 1) / CONFIG.weapon.levelsPerExtraShot);
+  // Baseline growth applied AFTER upgrades — see stats.js for the why.
+  applyLevelGrowth(s, player.level);
 
   player.stats = s;
   player.hp = Math.min(player.hp, s.maxHp);
@@ -268,6 +207,7 @@ export function resetPlayer() {
   player.invuln = 0;
   player.dashTimer = 0;
   player.comboSpeedMul = 1;
+  player.chumSealed = false;
   // The controller is reused across runs, and 'death' is a one-shot that
   // never expires by design — so without this the seal stays clamped in its
   // death pose for every subsequent run.

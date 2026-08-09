@@ -1,0 +1,1230 @@
+{
+  "rapidFire": {
+    "cap": null,
+    "perStack": [
+      {
+        "fireRate": 75
+      },
+      {
+        "fireRate": 56.25
+      },
+      {
+        "fireRate": 42.1875
+      },
+      {
+        "fireRate": 31.640625
+      },
+      {
+        "fireRate": 23.730469
+      },
+      {
+        "fireRate": 17.797852
+      },
+      {
+        "fireRate": 13.348389
+      },
+      {
+        "fireRate": 10.011292
+      }
+    ]
+  },
+  "heavyRounds": {
+    "cap": null,
+    "perStack": [
+      {
+        "damage": 140
+      },
+      {
+        "damage": 196
+      },
+      {
+        "damage": 274.4
+      },
+      {
+        "damage": 384.16
+      },
+      {
+        "damage": 537.824
+      },
+      {
+        "damage": 752.9536
+      },
+      {
+        "damage": 1054.13504
+      },
+      {
+        "damage": 1475.789056
+      }
+    ]
+  },
+  "overboost": {
+    "cap": null,
+    "perStack": [
+      {
+        "recoil": 130
+      },
+      {
+        "recoil": 169
+      },
+      {
+        "recoil": 219.7
+      },
+      {
+        "recoil": 285.61
+      },
+      {
+        "recoil": 371.293
+      },
+      {
+        "recoil": 482.6809
+      },
+      {
+        "recoil": 627.48517
+      },
+      {
+        "recoil": 815.730721
+      }
+    ]
+  },
+  "maxSpeed": {
+    "cap": null,
+    "perStack": [
+      {
+        "maxSpeed": 120
+      },
+      {
+        "maxSpeed": 144
+      },
+      {
+        "maxSpeed": 172.8
+      },
+      {
+        "maxSpeed": 207.36
+      },
+      {
+        "maxSpeed": 248.832
+      },
+      {
+        "maxSpeed": 298.5984
+      },
+      {
+        "maxSpeed": 358.31808
+      },
+      {
+        "maxSpeed": 429.981696
+      }
+    ]
+  },
+  "multishot": {
+    "cap": 99,
+    "perStack": [
+      {
+        "multishot": 101
+      },
+      {
+        "multishot": 102
+      },
+      {
+        "multishot": 103
+      },
+      {
+        "multishot": 104
+      },
+      {
+        "multishot": 105
+      },
+      {
+        "multishot": 106
+      },
+      {
+        "multishot": 107
+      },
+      {
+        "multishot": 108
+      },
+      {
+        "multishot": 109
+      },
+      {
+        "multishot": 110
+      },
+      {
+        "multishot": 111
+      },
+      {
+        "multishot": 112
+      },
+      {
+        "multishot": 113
+      },
+      {
+        "multishot": 114
+      },
+      {
+        "multishot": 115
+      },
+      {
+        "multishot": 116
+      },
+      {
+        "multishot": 117
+      },
+      {
+        "multishot": 118
+      },
+      {
+        "multishot": 119
+      },
+      {
+        "multishot": 120
+      },
+      {
+        "multishot": 121
+      },
+      {
+        "multishot": 122
+      },
+      {
+        "multishot": 123
+      },
+      {
+        "multishot": 124
+      },
+      {
+        "multishot": 125
+      },
+      {
+        "multishot": 126
+      },
+      {
+        "multishot": 127
+      },
+      {
+        "multishot": 128
+      },
+      {
+        "multishot": 129
+      },
+      {
+        "multishot": 130
+      },
+      {
+        "multishot": 131
+      },
+      {
+        "multishot": 132
+      },
+      {
+        "multishot": 133
+      },
+      {
+        "multishot": 134
+      },
+      {
+        "multishot": 135
+      },
+      {
+        "multishot": 136
+      },
+      {
+        "multishot": 137
+      },
+      {
+        "multishot": 138
+      },
+      {
+        "multishot": 139
+      },
+      {
+        "multishot": 140
+      },
+      {
+        "multishot": 141
+      },
+      {
+        "multishot": 142
+      },
+      {
+        "multishot": 143
+      },
+      {
+        "multishot": 144
+      },
+      {
+        "multishot": 145
+      },
+      {
+        "multishot": 146
+      },
+      {
+        "multishot": 147
+      },
+      {
+        "multishot": 148
+      },
+      {
+        "multishot": 149
+      },
+      {
+        "multishot": 150
+      },
+      {
+        "multishot": 151
+      },
+      {
+        "multishot": 152
+      },
+      {
+        "multishot": 153
+      },
+      {
+        "multishot": 154
+      },
+      {
+        "multishot": 155
+      },
+      {
+        "multishot": 156
+      },
+      {
+        "multishot": 157
+      },
+      {
+        "multishot": 158
+      },
+      {
+        "multishot": 159
+      },
+      {
+        "multishot": 160
+      },
+      {
+        "multishot": 161
+      },
+      {
+        "multishot": 162
+      },
+      {
+        "multishot": 163
+      },
+      {
+        "multishot": 164
+      },
+      {
+        "multishot": 165
+      },
+      {
+        "multishot": 166
+      },
+      {
+        "multishot": 167
+      },
+      {
+        "multishot": 168
+      },
+      {
+        "multishot": 169
+      },
+      {
+        "multishot": 170
+      },
+      {
+        "multishot": 171
+      },
+      {
+        "multishot": 172
+      },
+      {
+        "multishot": 173
+      },
+      {
+        "multishot": 174
+      },
+      {
+        "multishot": 175
+      },
+      {
+        "multishot": 176
+      },
+      {
+        "multishot": 177
+      },
+      {
+        "multishot": 178
+      },
+      {
+        "multishot": 179
+      },
+      {
+        "multishot": 180
+      },
+      {
+        "multishot": 181
+      },
+      {
+        "multishot": 182
+      },
+      {
+        "multishot": 183
+      },
+      {
+        "multishot": 184
+      },
+      {
+        "multishot": 185
+      },
+      {
+        "multishot": 186
+      },
+      {
+        "multishot": 187
+      },
+      {
+        "multishot": 188
+      },
+      {
+        "multishot": 189
+      },
+      {
+        "multishot": 190
+      },
+      {
+        "multishot": 191
+      },
+      {
+        "multishot": 192
+      },
+      {
+        "multishot": 193
+      },
+      {
+        "multishot": 194
+      },
+      {
+        "multishot": 195
+      },
+      {
+        "multishot": 196
+      },
+      {
+        "multishot": 197
+      },
+      {
+        "multishot": 198
+      },
+      {
+        "multishot": 199
+      }
+    ]
+  },
+  "pierce": {
+    "cap": 4,
+    "perStack": [
+      {
+        "pierce": 101
+      },
+      {
+        "pierce": 102
+      },
+      {
+        "pierce": 103
+      },
+      {
+        "pierce": 104
+      }
+    ]
+  },
+  "vitality": {
+    "cap": null,
+    "perStack": [
+      {
+        "maxHp": 130
+      },
+      {
+        "maxHp": 160
+      },
+      {
+        "maxHp": 190
+      },
+      {
+        "maxHp": 220
+      },
+      {
+        "maxHp": 250
+      },
+      {
+        "maxHp": 280
+      },
+      {
+        "maxHp": 310
+      },
+      {
+        "maxHp": 340
+      }
+    ]
+  },
+  "magnet": {
+    "cap": null,
+    "perStack": [
+      {
+        "pickupRadius": 150,
+        "chumGulpRadius": 150
+      },
+      {
+        "pickupRadius": 225,
+        "chumGulpRadius": 225
+      },
+      {
+        "pickupRadius": 337.5,
+        "chumGulpRadius": 337.5
+      },
+      {
+        "pickupRadius": 506.25,
+        "chumGulpRadius": 506.25
+      },
+      {
+        "pickupRadius": 759.375,
+        "chumGulpRadius": 759.375
+      },
+      {
+        "pickupRadius": 1139.0625,
+        "chumGulpRadius": 1139.0625
+      },
+      {
+        "pickupRadius": 1708.59375,
+        "chumGulpRadius": 1708.59375
+      },
+      {
+        "pickupRadius": 2562.890625,
+        "chumGulpRadius": 2562.890625
+      }
+    ]
+  },
+  "regen": {
+    "cap": null,
+    "perStack": [
+      {
+        "regenPerSec": 100.5
+      },
+      {
+        "regenPerSec": 101
+      },
+      {
+        "regenPerSec": 101.5
+      },
+      {
+        "regenPerSec": 102
+      },
+      {
+        "regenPerSec": 102.5
+      },
+      {
+        "regenPerSec": 103
+      },
+      {
+        "regenPerSec": 103.5
+      },
+      {
+        "regenPerSec": 104
+      }
+    ]
+  },
+  "velocity": {
+    "cap": null,
+    "perStack": [
+      {
+        "speed": 130
+      },
+      {
+        "speed": 169
+      },
+      {
+        "speed": 219.7
+      },
+      {
+        "speed": 285.61
+      },
+      {
+        "speed": 371.293
+      },
+      {
+        "speed": 482.6809
+      },
+      {
+        "speed": 627.48517
+      },
+      {
+        "speed": 815.730721
+      }
+    ]
+  },
+  "homingMissile": {
+    "cap": 15,
+    "perStack": [
+      {
+        "missileCount": 101
+      },
+      {
+        "missileCount": 102
+      },
+      {
+        "missileCount": 103
+      },
+      {
+        "missileCount": 104
+      },
+      {
+        "missileCount": 105
+      },
+      {
+        "missileCount": 106
+      },
+      {
+        "missileCount": 107
+      },
+      {
+        "missileCount": 108
+      },
+      {
+        "missileCount": 109
+      },
+      {
+        "missileCount": 110
+      },
+      {
+        "missileCount": 111
+      },
+      {
+        "missileCount": 112
+      },
+      {
+        "missileCount": 113
+      },
+      {
+        "missileCount": 114
+      },
+      {
+        "missileCount": 115
+      }
+    ]
+  },
+  "seaGarlic": {
+    "cap": 9,
+    "perStack": [
+      {
+        "garlicLevel": 101
+      },
+      {
+        "garlicLevel": 102
+      },
+      {
+        "garlicLevel": 103
+      },
+      {
+        "garlicLevel": 104
+      },
+      {
+        "garlicLevel": 105
+      },
+      {
+        "garlicLevel": 106
+      },
+      {
+        "garlicLevel": 107
+      },
+      {
+        "garlicLevel": 108
+      },
+      {
+        "garlicLevel": 109
+      }
+    ]
+  },
+  "shrimpRing": {
+    "cap": 15,
+    "perStack": [
+      {
+        "shrimpCount": 101
+      },
+      {
+        "shrimpCount": 102
+      },
+      {
+        "shrimpCount": 103
+      },
+      {
+        "shrimpCount": 104
+      },
+      {
+        "shrimpCount": 105
+      },
+      {
+        "shrimpCount": 106
+      },
+      {
+        "shrimpCount": 107
+      },
+      {
+        "shrimpCount": 108
+      },
+      {
+        "shrimpCount": 109
+      },
+      {
+        "shrimpCount": 110
+      },
+      {
+        "shrimpCount": 111
+      },
+      {
+        "shrimpCount": 112
+      },
+      {
+        "shrimpCount": 113
+      },
+      {
+        "shrimpCount": 114
+      },
+      {
+        "shrimpCount": 115
+      }
+    ]
+  },
+  "bounceShot": {
+    "cap": 6,
+    "perStack": [
+      {
+        "bounceLevel": 101,
+        "bounceFireRate": 88,
+        "bounceLife": 100.6,
+        "bounceMaxBounces": 102
+      },
+      {
+        "bounceLevel": 102,
+        "bounceFireRate": 77.44,
+        "bounceLife": 101.2,
+        "bounceMaxBounces": 104
+      },
+      {
+        "bounceLevel": 103,
+        "bounceFireRate": 68.1472,
+        "bounceLife": 101.8,
+        "bounceMaxBounces": 106
+      },
+      {
+        "bounceLevel": 104,
+        "bounceFireRate": 59.969536,
+        "bounceLife": 102.4,
+        "bounceMaxBounces": 108
+      },
+      {
+        "bounceLevel": 105,
+        "bounceFireRate": 52.773192,
+        "bounceLife": 103,
+        "bounceMaxBounces": 110
+      },
+      {
+        "bounceLevel": 106,
+        "bounceFireRate": 46.440409,
+        "bounceLife": 103.6,
+        "bounceMaxBounces": 112
+      }
+    ]
+  },
+  "electricEel": {
+    "cap": 8,
+    "perStack": [
+      {
+        "eelLevel": 101
+      },
+      {
+        "eelLevel": 102
+      },
+      {
+        "eelLevel": 103
+      },
+      {
+        "eelLevel": 104
+      },
+      {
+        "eelLevel": 105
+      },
+      {
+        "eelLevel": 106
+      },
+      {
+        "eelLevel": 107
+      },
+      {
+        "eelLevel": 108
+      }
+    ]
+  },
+  "starfish": {
+    "cap": 8,
+    "perStack": [
+      {
+        "starfishLevel": 101
+      },
+      {
+        "starfishLevel": 102
+      },
+      {
+        "starfishLevel": 103
+      },
+      {
+        "starfishLevel": 104
+      },
+      {
+        "starfishLevel": 105
+      },
+      {
+        "starfishLevel": 106
+      },
+      {
+        "starfishLevel": 107
+      },
+      {
+        "starfishLevel": 108
+      }
+    ]
+  },
+  "seagullBomb": {
+    "cap": 8,
+    "perStack": [
+      {
+        "seagullLevel": 101
+      },
+      {
+        "seagullLevel": 102
+      },
+      {
+        "seagullLevel": 103
+      },
+      {
+        "seagullLevel": 104
+      },
+      {
+        "seagullLevel": 105
+      },
+      {
+        "seagullLevel": 106
+      },
+      {
+        "seagullLevel": 107
+      },
+      {
+        "seagullLevel": 108
+      }
+    ]
+  },
+  "sealTeam": {
+    "cap": 6,
+    "perStack": [
+      {
+        "sealTeamLevel": 101
+      },
+      {
+        "sealTeamLevel": 102
+      },
+      {
+        "sealTeamLevel": 103
+      },
+      {
+        "sealTeamLevel": 104
+      },
+      {
+        "sealTeamLevel": 105
+      },
+      {
+        "sealTeamLevel": 106
+      }
+    ]
+  },
+  "beluga": {
+    "cap": 8,
+    "perStack": [
+      {
+        "belugaLevel": 101
+      },
+      {
+        "belugaLevel": 102
+      },
+      {
+        "belugaLevel": 103
+      },
+      {
+        "belugaLevel": 104
+      },
+      {
+        "belugaLevel": 105
+      },
+      {
+        "belugaLevel": 106
+      },
+      {
+        "belugaLevel": 107
+      },
+      {
+        "belugaLevel": 108
+      }
+    ]
+  },
+  "strikePower": {
+    "cap": 5,
+    "perStack": [
+      {
+        "strikeDamage": 135,
+        "strikeChainMul": 129.7
+      },
+      {
+        "strikeDamage": 182.25,
+        "strikeChainMul": 168.31
+      },
+      {
+        "strikeDamage": 246.0375,
+        "strikeChainMul": 218.503
+      },
+      {
+        "strikeDamage": 332.150625,
+        "strikeChainMul": 283.7539
+      },
+      {
+        "strikeDamage": 448.403344,
+        "strikeChainMul": 368.58007
+      }
+    ]
+  },
+  "strikeDash": {
+    "cap": 5,
+    "perStack": [
+      {
+        "strikeDashSpeed": 122,
+        "strikeDashDuration": 112
+      },
+      {
+        "strikeDashSpeed": 148.84,
+        "strikeDashDuration": 125.44
+      },
+      {
+        "strikeDashSpeed": 181.5848,
+        "strikeDashDuration": 140.4928
+      },
+      {
+        "strikeDashSpeed": 221.533456,
+        "strikeDashDuration": 157.351936
+      },
+      {
+        "strikeDashSpeed": 270.270816,
+        "strikeDashDuration": 176.234168
+      }
+    ]
+  },
+  "strikeShrapnel": {
+    "cap": 6,
+    "perStack": [
+      {
+        "shrapnelCount": 101
+      },
+      {
+        "shrapnelCount": 102
+      },
+      {
+        "shrapnelCount": 103
+      },
+      {
+        "shrapnelCount": 104
+      },
+      {
+        "shrapnelCount": 105
+      },
+      {
+        "shrapnelCount": 106
+      }
+    ]
+  },
+  "strikeCharge": {
+    "cap": 4,
+    "perStack": [
+      {
+        "strikeChargeTime": 78,
+        "strikeChumRefill": 100.04
+      },
+      {
+        "strikeChargeTime": 60.84,
+        "strikeChumRefill": 100.08
+      },
+      {
+        "strikeChargeTime": 47.4552,
+        "strikeChumRefill": 100.12
+      },
+      {
+        "strikeChargeTime": 37.015056,
+        "strikeChumRefill": 100.16
+      }
+    ]
+  },
+  "breachChain": {
+    "cap": 3,
+    "perStack": [
+      {
+        "breachChainLevel": 101
+      },
+      {
+        "breachChainLevel": 102
+      },
+      {
+        "breachChainLevel": 103
+      }
+    ]
+  },
+  "oxygenMax": {
+    "cap": 5,
+    "perStack": [
+      {
+        "maxOxygen": 130
+      },
+      {
+        "maxOxygen": 160
+      },
+      {
+        "maxOxygen": 190
+      },
+      {
+        "maxOxygen": 220
+      },
+      {
+        "maxOxygen": 250
+      }
+    ]
+  },
+  "oxygenRefill": {
+    "cap": 5,
+    "perStack": [
+      {
+        "oxygenRefillRate": 140
+      },
+      {
+        "oxygenRefillRate": 196
+      },
+      {
+        "oxygenRefillRate": 274.4
+      },
+      {
+        "oxygenRefillRate": 384.16
+      },
+      {
+        "oxygenRefillRate": 537.824
+      }
+    ]
+  },
+  "bakalar": {
+    "cap": 8,
+    "perStack": [
+      {
+        "bakalarLevel": 101
+      },
+      {
+        "bakalarLevel": 102
+      },
+      {
+        "bakalarLevel": 103
+      },
+      {
+        "bakalarLevel": 104
+      },
+      {
+        "bakalarLevel": 105
+      },
+      {
+        "bakalarLevel": 106
+      },
+      {
+        "bakalarLevel": 107
+      },
+      {
+        "bakalarLevel": 108
+      }
+    ]
+  },
+  "calamari": {
+    "cap": 8,
+    "perStack": [
+      {
+        "calamariLevel": 101
+      },
+      {
+        "calamariLevel": 102
+      },
+      {
+        "calamariLevel": 103
+      },
+      {
+        "calamariLevel": 104
+      },
+      {
+        "calamariLevel": 105
+      },
+      {
+        "calamariLevel": 106
+      },
+      {
+        "calamariLevel": 107
+      },
+      {
+        "calamariLevel": 108
+      }
+    ]
+  },
+  "dumbo": {
+    "cap": 8,
+    "perStack": [
+      {
+        "dumboLevel": 101
+      },
+      {
+        "dumboLevel": 102
+      },
+      {
+        "dumboLevel": 103
+      },
+      {
+        "dumboLevel": 104
+      },
+      {
+        "dumboLevel": 105
+      },
+      {
+        "dumboLevel": 106
+      },
+      {
+        "dumboLevel": 107
+      },
+      {
+        "dumboLevel": 108
+      }
+    ]
+  },
+  "scallopSquirter": {
+    "cap": 12,
+    "perStack": [
+      {
+        "scallopCount": 101
+      },
+      {
+        "scallopCount": 102
+      },
+      {
+        "scallopCount": 103
+      },
+      {
+        "scallopCount": 104
+      },
+      {
+        "scallopCount": 105
+      },
+      {
+        "scallopCount": 106
+      },
+      {
+        "scallopCount": 107
+      },
+      {
+        "scallopCount": 108
+      },
+      {
+        "scallopCount": 109
+      },
+      {
+        "scallopCount": 110
+      },
+      {
+        "scallopCount": 111
+      },
+      {
+        "scallopCount": 112
+      }
+    ]
+  },
+  "oysterBlaster": {
+    "cap": 8,
+    "perStack": [
+      {
+        "oysterLevel": 101
+      },
+      {
+        "oysterLevel": 102
+      },
+      {
+        "oysterLevel": 103
+      },
+      {
+        "oysterLevel": 104
+      },
+      {
+        "oysterLevel": 105
+      },
+      {
+        "oysterLevel": 106
+      },
+      {
+        "oysterLevel": 107
+      },
+      {
+        "oysterLevel": 108
+      }
+    ]
+  },
+  "octoGrab": {
+    "cap": 8,
+    "perStack": [
+      {
+        "octoGrabLevel": 101
+      },
+      {
+        "octoGrabLevel": 102
+      },
+      {
+        "octoGrabLevel": 103
+      },
+      {
+        "octoGrabLevel": 104
+      },
+      {
+        "octoGrabLevel": 105
+      },
+      {
+        "octoGrabLevel": 106
+      },
+      {
+        "octoGrabLevel": 107
+      },
+      {
+        "octoGrabLevel": 108
+      }
+    ]
+  },
+  "orcaFamily": {
+    "cap": 6,
+    "perStack": [
+      {
+        "orcaLevel": 101
+      },
+      {
+        "orcaLevel": 102
+      },
+      {
+        "orcaLevel": 103
+      },
+      {
+        "orcaLevel": 104
+      },
+      {
+        "orcaLevel": 105
+      },
+      {
+        "orcaLevel": 106
+      }
+    ]
+  }
+}

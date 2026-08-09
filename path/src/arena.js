@@ -38,7 +38,18 @@ export function midWater() {
 // GLSL, so the drawn line and anything cut to it cannot drift apart.
 export const WAVE = { k1: 0.25, w1: 2.0, k2: 0.11, w2: -1.3, amp2: 0.5 };
 
-export function surfaceHeightAt(x, waveT, amp = CONFIG.arena.waveAmplitude) {
+// Where the wave is RIGHT NOW. world.updateSurface advances it and publishes it
+// here once a frame; the grid and the water fill still have it pushed into their
+// uniforms, because a shader can't read a module. This exists for the callers
+// that aren't shaders — anything asking "is this point out of the water yet?"
+// shouldn't have to have the phase handed to it from four frames of plumbing.
+let waveTime = 0;
+
+export function setWaveTime(t) {
+  waveTime = t;
+}
+
+export function surfaceHeightAt(x, waveT = waveTime, amp = CONFIG.arena.waveAmplitude) {
   return bounds.surfaceY
     + Math.sin(x * WAVE.k1 + waveT * WAVE.w1) * amp
     + Math.sin(x * WAVE.k2 + waveT * WAVE.w2) * amp * WAVE.amp2;

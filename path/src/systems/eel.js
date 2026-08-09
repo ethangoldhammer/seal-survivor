@@ -3,9 +3,55 @@ import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
+import { weatherState } from './weather.js';
 
 let cooldown = 0;
 const activeBolts = []; // { mesh, life }
+
+// The eel's storm response. Weather makes the chain lightning visibly angrier:
+// brighter, thicker, thrashing further off the straight line, throwing many
+// more dead-end forks.
+//
+// Returned as a SNAPSHOT taken once per bolt rather than read live at each of
+// the dozen places along the bolt path that touch CONFIG.eel. A storm is
+// easing in and out continuously, and sampling it separately per hop and per
+// branch would let one arc be built from several different storm intensities —
+// a bolt whose first half is calm and second half is furious.
+//
+// Every multiplier folds in as 1 + (mul - 1) * intensity, so at intensity 0
+// this returns CONFIG.eel untouched and clear weather behaves exactly as it
+// always did. `damageInStorm` defaults to 1: a storm changes how the ability
+// READS without quietly changing how strong it is.
+// Exported for tools/ability-smoke.mjs. The storm response is otherwise only
+// observable as pixels, and "the lightning looks angrier" is not something a
+// terminal can check — but the numbers it derives are, and those are the whole
+// mechanism.
+export function eelCfg() {
+  const c = CONFIG.eel;
+  const st = c.storm;
+  const k = st?.enabled ? Math.max(0, Math.min(1, weatherState.intensity ?? 0)) : 0;
+  if (k <= 0) return c;
+
+  const ramp = (mul) => 1 + ((mul ?? 1) - 1) * k;
+  return {
+    ...c,
+    boltGlow: c.boltGlow * ramp(st.glowMul),
+    coreWidth: c.coreWidth * ramp(st.widthMul),
+    glowWidth: c.glowWidth * ramp(st.widthMul),
+    noiseAmplitude: c.noiseAmplitude * ramp(st.amplitudeMul),
+    noiseContrast: c.noiseContrast * ramp(st.contrastMul),
+    // Clamped: branchChance is tested against a 0..1 hash, so a multiplied
+    // value above 1 would mean "every fork, always" and the arc would stop
+    // reading as lightning and start reading as a bush.
+    branchChance: Math.min(1, c.branchChance * ramp(st.branchChanceMul)),
+    branchesPerHop: c.branchesPerHop * ramp(st.branchesPerHopMul),
+    flickerSpeed: c.flickerSpeed * ramp(st.flickerMul),
+    boltLife: c.boltLife * ramp(st.lifeMul),
+    boltColor: new THREE.Color(c.boltColor)
+      .lerp(new THREE.Color(st.color ?? c.boltColor), (st.colorMix ?? 0) * k)
+      .getHex(),
+  };
+}
 
 // A companion eel that swims near the ship — the chain lightning originates
 // from its position rather than the ship's, and it gets the same
@@ -76,8 +122,16 @@ export function resetEel() {
 }
 
 export function currentEelStats(level) {
+  const st = CONFIG.eel.storm;
+  // 1 by default, so the storm is a look and not a balance change. Raising it
+  // above 1 is the one knob that makes weather genuinely matter to output —
+  // deliberately opt-in, because a run's damage silently doubling when the sky
+  // changes is very hard to read from inside the fight.
+  const k = st?.enabled ? Math.max(0, Math.min(1, weatherState.intensity ?? 0)) : 0;
+  const damageMul = 1 + ((st?.damageInStorm ?? 1) - 1) * k;
+
   return {
-    damage: CONFIG.eel.baseDamage + CONFIG.eel.damagePerLevel * (level - 1),
+    damage: (CONFIG.eel.baseDamage + CONFIG.eel.damagePerLevel * (level - 1)) * damageMul,
     chainRadius: CONFIG.eel.baseChainRadius + CONFIG.eel.radiusPerLevel * (level - 1),
     maxChain: Math.round(CONFIG.eel.baseMaxChain + CONFIG.eel.chainPerLevel * (level - 1)),
   };
@@ -127,8 +181,7 @@ function fbm(x, octaves, contrast) {
 }
 
 // Build the displaced point list for one hop, plus any branches off it.
-function hopPoints(a, b, seed, t) {
-  const cfg = CONFIG.eel;
+function hopPoints(a, b, seed, t, cfg) {
   const segs = Math.max(2, Math.round(cfg.segmentsPerHop));
   const dir = new THREE.Vector3().subVectors(b, a);
   const len = dir.length() || 1;
@@ -185,14 +238,13 @@ function ribbonFromPoints(pts, width, taperEnds) {
   return geo;
 }
 
-function buildBoltGeometry(points, t) {
-  const cfg = CONFIG.eel;
+function buildBoltGeometry(points, t, cfg) {
   const mainRuns = [];
   const branchRuns = [];
 
   for (let i = 0; i < points.length - 1; i++) {
     const seed = i * 17.3 + points.length * 3.1;
-    const { pts, perp, len } = hopPoints(points[i], points[i + 1], seed, t);
+    const { pts, perp, len } = hopPoints(points[i], points[i + 1], seed, t, cfg);
     mainRuns.push(pts);
 
     // Forks: start partway along the hop and shoot off at an angle, ending
@@ -211,16 +263,16 @@ function buildBoltGeometry(points, t) {
         .normalize();
       const bLen = len * cfg.branchLength * (0.5 + hash11(seed + bIdx * 2.2) * 0.7);
       const bEnd = new THREE.Vector3().copy(from).addScaledVector(bDir, bLen);
-      branchRuns.push(hopPoints(from, bEnd, seed + bIdx * 31.1, t).pts);
+      branchRuns.push(hopPoints(from, bEnd, seed + bIdx * 31.1, t, cfg).pts);
     }
   }
   return { mainRuns, branchRuns };
 }
 
 function spawnBolt(scene, points) {
-  const cfg = CONFIG.eel;
+  const cfg = eelCfg();
   const t = performance.now() / 1000;
-  const { mainRuns, branchRuns } = buildBoltGeometry(points, t);
+  const { mainRuns, branchRuns } = buildBoltGeometry(points, t, cfg);
   const group = new THREE.Group();
   const colour = new THREE.Color(cfg.boltColor);
 
@@ -247,7 +299,11 @@ function spawnBolt(scene, points) {
 
   group.position.z = 0.12;
   scene.add(group);
-  activeBolts.push({ mesh: group, life: cfg.boltLife, maxLife: cfg.boltLife });
+  // flickerSpeed rides along on the bolt rather than being read from CONFIG
+  // during the fade, for the same reason the rest of the snapshot exists: the
+  // storm can ease out while a bolt is still fading, and a bolt that changes
+  // its crackle rate halfway through its own fade reads as a stutter.
+  activeBolts.push({ mesh: group, life: cfg.boltLife, maxLife: cfg.boltLife, flickerSpeed: cfg.flickerSpeed });
 }
 
 // hooks: { onEnemyDamaged(e, dmg), onEnemyKilled(e),
@@ -267,7 +323,7 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
     const f = Math.max(0, b.life / b.maxLife);
     // Flicker on top of the fade so it crackles out rather than dimming
     // smoothly like a fading line.
-    const flick = 0.65 + 0.35 * Math.sin(b.life * CONFIG.eel.flickerSpeed);
+    const flick = 0.65 + 0.35 * Math.sin(b.life * (b.flickerSpeed ?? CONFIG.eel.flickerSpeed));
     for (const child of b.mesh.children) {
       child.material.opacity = f * flick * (child.material.userData.baseOpacity ?? 1);
     }

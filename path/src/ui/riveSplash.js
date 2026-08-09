@@ -14,6 +14,14 @@ export function mountRiveSplash({
   onReady,
   onError,
   onDismiss,
+  // How the splash LEAVES. Given `(wrap, done)`, it owns the wrapper until it
+  // calls `done`, which removes it. Optional: without it the wrapper goes on
+  // the frame the player dismisses it, which is what this did before.
+  //
+  // Kept as a callback rather than an effect implemented here, because this
+  // module deliberately knows nothing about the rest of the UI — ui.js hands
+  // in a reveal, and a test page can hand in nothing.
+  exit,
 } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'sv-riv';
@@ -44,12 +52,23 @@ export function mountRiveSplash({
     for (const [target, type, fn] of inputListeners) target.removeEventListener(type, fn);
 
     // cleanup() stops the render loop and frees the WASM-side artboard. Without
-    // it the instance keeps drawing into a detached canvas.
+    // it the instance keeps drawing into a detached canvas. The canvas keeps
+    // the last frame it painted, which is what the exit animation dissolves.
     rive?.cleanup();
     rive = null;
-    wrap.remove();
 
+    // Off immediately, whatever happens next: the wrapper covers the whole
+    // screen, and an exit animation that took a second would otherwise eat the
+    // first second of the run's input.
+    wrap.style.pointerEvents = 'none';
+
+    // Before the exit, not after: the run starts NOW and the splash dissolves
+    // over the top of a game that is already moving. Waiting would be a second
+    // of nothing between the player asking to play and the game answering.
     onDismiss?.(reason);
+
+    if (exit) exit(wrap, () => wrap.remove());
+    else wrap.remove();
   }
 
   // Any of these count as "the player is ready to move on".

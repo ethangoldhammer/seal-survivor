@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { surfaceHeightAt } from '../arena.js';
 
 // One draw call for every particle in the game.
 //
@@ -68,6 +69,19 @@ let clock = 0;
 
 const attrs = {};
 
+// --- surface pops -----------------------------------------------------------
+// The simulation is entirely GPU-side, so nothing on the CPU normally knows
+// where a particle IS. Bubbles are the exception: one that reaches the water
+// line has to burst there rather than sail on into the sky, and that needs a
+// position on this side. Only emitters that ask for it (`surfacePop`, naming
+// the burst to fire) are tracked, and the solve below is the same closed form
+// the vertex shader uses, so the burst lands exactly where the bubble is drawn.
+const tracked = [];
+// A ceiling on the bookkeeping, not on the bubbles: past this, extra particles
+// simply aren't followed and fade out on their own timer as they always did.
+// Well above what breath and wake produce together at full tilt.
+const MAX_TRACKED = 256;
+
 export function initParticles(scene) {
   disposeParticles(scene);
 
@@ -111,6 +125,7 @@ export function initParticles(scene) {
 }
 
 export function disposeParticles(scene) {
+  tracked.length = 0;
   if (!points) return;
   scene.remove(points);
   geometry.dispose();
@@ -170,8 +185,10 @@ export function emit(name, x, y, opts = {}) {
     attrs.position.array[p3 + 1] = y;
     attrs.position.array[p3 + 2] = 0;
 
-    attrs.aVelocity.array[p3] = Math.cos(angle) * speed + (opts.vx ?? 0) * inherit;
-    attrs.aVelocity.array[p3 + 1] = Math.sin(angle) * speed + (opts.vy ?? 0) * inherit;
+    const vx = Math.cos(angle) * speed + (opts.vx ?? 0) * inherit;
+    const vy = Math.sin(angle) * speed + (opts.vy ?? 0) * inherit;
+    attrs.aVelocity.array[p3] = vx;
+    attrs.aVelocity.array[p3 + 1] = vy;
     attrs.aVelocity.array[p3 + 2] = 0;
 
     if (opts.color != null) {
@@ -199,18 +216,83 @@ export function emit(name, x, y, opts = {}) {
     attrs.aGravity.array[p2] = def.gravity ? def.gravity[0] : 0;
     attrs.aGravity.array[p2 + 1] = def.gravity ? def.gravity[1] : 0;
 
+    const life = rand(def.life, 0.5);
+    const drag = def.drag ?? 2;
     attrs.aStart.array[idx] = clock;
-    attrs.aLife.array[idx] = rand(def.life, 0.5);
+    attrs.aLife.array[idx] = life;
     attrs.aSize.array[idx] = rand(def.size, 0.15);
-    attrs.aDrag.array[idx] = def.drag ?? 2;
+    attrs.aDrag.array[idx] = drag;
+
+    // Spawned above the water already (a breach mid-puff) — there is no
+    // surface left for it to reach, and following it would burst it instantly
+    // in the air.
+    if (def.surfacePop && tracked.length < MAX_TRACKED && y < surfaceHeightAt(x)) {
+      tracked.push({
+        idx,
+        start: clock,
+        life,
+        drag,
+        x,
+        y,
+        vx,
+        vy,
+        gx: attrs.aGravity.array[p2],
+        gy: attrs.aGravity.array[p2 + 1],
+        pop: def.surfacePop,
+      });
+    }
   }
 
   for (const attr of Object.values(attrs)) attr.needsUpdate = true;
 }
 
+// Solve every tracked bubble's position and burst the ones that have broken
+// the surface. Mirrors the vertex shader's closed form exactly — the two
+// drifting apart would show up as a pop happening off the bubble.
+function updateSurfacePops() {
+  if (!tracked.length) return;
+  let pops = null;
+
+  for (let i = tracked.length - 1; i >= 0; i--) {
+    const p = tracked[i];
+    const age = clock - p.start;
+    // Slots are a ring buffer, so a busy frame can hand this one to a newer
+    // burst. The spawn time is the cheapest thing that says so, and once the
+    // slot has been reused the bubble we were following is gone anyway.
+    if (age >= p.life || attrs.aStart.array[p.idx] !== p.start) {
+      tracked[i] = tracked[tracked.length - 1];
+      tracked.pop();
+      continue;
+    }
+
+    const k = Math.max(p.drag, 0.0001);
+    const f = (1 - Math.exp(-k * age)) / k;
+    const x = p.x + p.vx * f + 0.5 * p.gx * age * age;
+    const y = p.y + p.vy * f + 0.5 * p.gy * age * age;
+
+    const surf = surfaceHeightAt(x);
+    if (y < surf) continue;
+
+    // Killed outright rather than left to fade: a bubble that has burst is
+    // gone, and one still drifting up through its own spray is the tell.
+    attrs.aStart.array[p.idx] = -1e9;
+    attrs.aStart.needsUpdate = true;
+    (pops ??= []).push({ x, y: surf, name: p.pop });
+    tracked[i] = tracked[tracked.length - 1];
+    tracked.pop();
+  }
+
+  // Fired after the walk, never during it: emit() writes into the same ring
+  // buffer this loop reads, and a burst that recycled a slot mid-walk would be
+  // indistinguishable from the bubble that slot used to hold.
+  if (!pops) return;
+  for (const p of pops) emit(p.name, p.x, p.y, { dirX: 0, dirY: 1 });
+}
+
 export function updateParticles(dt) {
   clock += dt;
   if (material) material.uniforms.uTime.value = clock;
+  updateSurfacePops();
 }
 
 export function resetParticles() {
@@ -218,6 +300,7 @@ export function resetParticles() {
   for (let i = 0; i < capacity; i++) attrs.aStart.array[i] = -1e9;
   attrs.aStart.needsUpdate = true;
   cursor = 0;
+  tracked.length = 0;
 }
 
 export function particleCount() {

@@ -5,9 +5,9 @@ import { createWorld } from './world.js';
 import { midWater, bounds } from './arena.js';
 import { initInput, updateInput, clearPendingInput, input } from './input.js';
 import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, applyRecoil, rebuildShipBody } from './entities/player.js';
-import { enemies, updateSpawning, updateEnemies, resetEnemies, removeEnemy } from './entities/enemies.js';
+import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy } from './entities/enemies.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, gulpPickups } from './entities/pickups.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
@@ -21,6 +21,8 @@ import { strikeState, tryStrike, restoreCharge, updateStrike, updateCharge, feed
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
+import { updateDayCycle, resetDayCycle, advanceClock } from './systems/daylight.js';
+import { updateWeather, resetWeather } from './systems/weather.js';
 import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
 import { updateProjectileTrails, clearProjectileTrails } from './systems/projectileTrails.js';
 import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from './systems/projectileVoices.js';
@@ -31,14 +33,20 @@ import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner } from './systems/crabSpawner.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls } from './systems/seagull.js';
 import { updateBoats, resetBoats, boats } from './systems/boats.js';
+import { damageDebris } from './systems/boatDebris.js';
 import { updateEel, resetEel, resetEelBolts, currentEelStats, createEelCompanion, resetEelCompanion, rebuildEelCompanion } from './systems/eel.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, rebuildBelugaDrone } from './systems/beluga.js';
 import { updateSealTeam, resetSealTeam, rebuildSealTeam } from './systems/sealTeam.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, rebuildBakalarBoat } from './systems/bakalar.js';
 import { updateCalamari, resetCalamari } from './systems/calamari.js';
 import { createDumboOcto, updateDumbo, resetDumbo, rebuildDumboOcto } from './systems/dumbo.js';
+import { firePearl, burstPearl, updateOyster, resetOyster } from './systems/oyster.js';
+import { createOctoGrabber, updateOctoGrab, resetOctoGrab, rebuildOctoGrabber } from './systems/octoGrab.js';
+import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
 import { applyPlayerOutline, initCreatureOutlines, applyCreatureOutlines } from './systems/outlines.js';
 import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginRestartTransition } from './systems/deathDive.js';
+import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime } from './systems/levelUpTime.js';
+import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
 import { highScore } from './systems/leaderboard.js';
 import { initUI, showStartMenu, hideAllMenus, showLevelUp, showGameOver, updateHUD, setHighScore, spawnScoreToast, spawnChainToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition } from './ui/ui.js';
 import { isTypingTarget } from './ui/typing.js';
@@ -93,6 +101,7 @@ let belugaDrone = null;
 let eelCompanionMesh = null;
 let strikeRing = null;
 let dumboOcto = null;
+let octoGrabber = null;
 
 const gameState = {
   running: false,
@@ -109,6 +118,8 @@ const gameState = {
 let pendingLevels = 0;
 let shootCooldown = 0;
 let missileCooldown = 0;
+let scallopCooldown = 0;
+let oysterCooldown = 0;
 let bounceCooldown = 0;
 let rapidFireTimer = 0; // seconds remaining on an active rapid-fire pickup
 let chargeHapticTimer = 0; // counts down between wind-up rumble pulses
@@ -173,6 +184,8 @@ async function boot() {
   world.scene.add(strikeRing);
   dumboOcto = createDumboOcto();
   world.scene.add(dumboOcto);
+  octoGrabber = createOctoGrabber();
+  world.scene.add(octoGrabber);
   // Adds itself to the scene (it owns two objects — the hull and the net).
   createBakalarBoat(world.scene);
 
@@ -193,6 +206,8 @@ async function boot() {
     else if (key === 'shrimp') resetShrimpRing();
     else if (key === 'dumboOcto') rebuildDumboOcto(world.scene);
     else if (key === 'bakalarBoat') rebuildBakalarBoat(world.scene);
+    else if (key === 'octoGrabber') rebuildOctoGrabber(world.scene);
+    else if (key === 'orcaFriend') rebuildOrcaPod(world.scene);
   }, handleTunerChange);
   if (DEV_UI) bindGlobalKeys();
   if (DEV_UI) initGamepadDebug();
@@ -306,7 +321,16 @@ function startGame() {
   // clock and the mix back to full speed, so a run started from the score
   // screen doesn't open in the last one's slow motion.
   resetDeathDive();
+  // Same idea, for the other thing that bends the clock: a run can only be
+  // started from a menu, but a level-up left half-dilated by a reload or a
+  // restart would hand this one a world running at half speed.
+  resetLevelUpTime();
   resetPlayer();
+  // AFTER resetPlayer, not before: the rig places itself on the seal rather
+  // than springing to it on its first frame, so it has to be reset once the
+  // seal is back at midwater. Reset before, and a run opens with the frame
+  // sailing across the arena from wherever the last body came to rest.
+  resetCineCamera();
   resetGarlic();
   resetShrimpRing();
   resetStrike();
@@ -317,6 +341,16 @@ function startGame() {
   // A fresh run shouldn't inherit the death rumble from the last one.
   stopHaptics();
   resetBubbles();
+  // The first run of a session opens in the morning; after that the clock
+  // keeps whatever time the last one ended at, unless dayNight.restartAtMorning
+  // says otherwise. resetDayCycle knows which — see systems/daylight.js.
+  resetDayCycle();
+  // Weather does NOT carry over: a fresh run shouldn't open in the middle of
+  // the downpour that the last one died in, and the schedule's `firstDelay`
+  // exists precisely so a run gets a while of clear sky before its first
+  // storm. Drops still falling from the old run go with it.
+  resetWeather();
+  world.rain.reset();
   resetOxygenFx();
   resetCrabSpawner();
   resetSeagulls(world.scene);
@@ -326,9 +360,12 @@ function startGame() {
   resetEelCompanion(player.mesh.position);
   resetBeluga(world.scene, player.mesh.position);
   resetSealTeam(world.scene);
-  resetBakalar();
+  resetBakalar(world.scene);
   resetCalamari(world.scene);
   resetDumbo(player.mesh.position);
+  resetOyster(world.scene);
+  resetOctoGrab(world.scene, player.mesh.position);
+  resetOrcaPod(world.scene, player.mesh.position);
   world.grid.reset();
   refreshTuner();
 
@@ -343,12 +380,17 @@ function startGame() {
   // from the level it's handed, so running it first started every new run on
   // whatever loop the PREVIOUS run had climbed to.
   playMusic(gameState.level);
+  // The opening shot: wide and barely tracking, easing into the normal follow
+  // over the state's blend-out. No-op with the cinematic camera off.
+  cineEvent('roundStart');
   sweepOpen(); // in case the last run ended on the level-up screen's ducked filter
   gameState.xp = 0;
   gameState.xpToNext = CONFIG.xp.first;
   pendingLevels = 0;
   shootCooldown = 0;
   missileCooldown = 0;
+  scallopCooldown = 0;
+  oysterCooldown = 0;
   bounceCooldown = 0;
   rapidFireTimer = 0;
   bubbleSpawnTimer = randomBetween(CONFIG.oxygen.bubbleSpawnMin, CONFIG.oxygen.bubbleSpawnMax);
@@ -441,11 +483,25 @@ function gainXP(amount) {
 }
 
 function openLevelUp() {
+  // A second card from the same batch of levels: the world is already dilated
+  // and the mix already ducked, so only the cards come back — re-ramping
+  // between two picks would be a dip to nowhere and a second wait.
+  if (levelUpState.active) {
+    showLevelUp();
+    return;
+  }
+  // Freezes the run on this frame: no steering, no attacks, no spawning, no
+  // combat — every body stops where it stands. What keeps moving is the world
+  // (systems/levelUpTime.js owns the clock it moves on) and the idle mixers,
+  // which are ticked below in animate.
   gameState.paused = true;
   // Muffle the mix and queue the upgrade loop — it takes over at the next
   // loop boundary rather than cutting the current one off mid-phrase.
   duckForUpgrade();
-  showLevelUp();
+  // The cards arrive at the BOTTOM of the ramp, not on the frame the XP bar
+  // filled — the level is worth watching land, and a menu over the top of it
+  // is a screenshot of the fight you were in the middle of.
+  startLevelUpTime(showLevelUp);
 }
 
 function applyLevelChoice(choice) {
@@ -460,6 +516,11 @@ function applyLevelChoice(choice) {
   } else {
     gameState.paused = false;
     sweepOpen(); // filter opens back up, main loop returns on the next boundary
+    // The run is live again from this frame, in slow motion, and the world
+    // accelerates back to full speed underneath it. Handing control back only
+    // once the ramp finished would mean half a second where the game looks
+    // playable and isn't.
+    endLevelUpTime();
   }
 }
 
@@ -470,6 +531,11 @@ function applyLevelChoice(choice) {
 // double-hitting something as the array shifts underneath the running loop.
 // Processed once, safely, right after resolveCombat() returns for the frame.
 const pendingSplashes = [];
+
+// Pearls waiting to crack open, for exactly the same reason as the splashes
+// above: the burst spawns bomblets and a bomblet can remove enemies, and
+// onEnemyDamagedFeedback runs from inside combat.js's own iteration.
+const pendingBursts = [];
 
 // A mussel going off on whatever it hit: the particle burst, shake and crack
 // from the `missileImpact` feedback event, plus a real sheet of light on top.
@@ -551,6 +617,14 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile) {
     });
   }
 
+  // A pearl cracks open where it lands. Deferred through the same pending
+  // queue the splash uses rather than bursting inline: this runs from inside a
+  // loop over `enemies`, and spawning bomblets that immediately remove other
+  // entries would shift the array under the running loop.
+  if (projectile?.burst) {
+    pendingBursts.push({ x: x ?? e.mesh.position.x, y: y ?? e.mesh.position.y, burst: projectile.burst });
+  }
+
   if (projectile?.splashDamage > 0) {
     pendingSplashes.push({
       x: x ?? e.mesh.position.x,
@@ -583,9 +657,17 @@ function processPendingSplashes() {
         removeEnemy(world.scene, i);
       }
     }
+    // Anything going off in the water also breaks up the wreckage floating in
+    // it — a mussel landing in a debris field should clear it.
+    damageDebris(world.scene, s.x, s.y, s.radius, s.damage, {
+      onDebrisBroken: (x, y) => feedback('debrisBreak', { x, y }),
+    });
     feedback('bigKill', { x: s.x, y: s.y, scale: 1.3 });
   }
   pendingSplashes.length = 0;
+
+  for (const b of pendingBursts) burstPearl(world.scene, b.x, b.y, b.burst);
+  pendingBursts.length = 0;
 }
 
 /**
@@ -688,6 +770,10 @@ function onChainHit(chain, source) {
     });
     spawnChainToast(world.camera, x, y, chain);
     world.punchCamera((fc.punch ?? 0.045) + (fc.punchPerChain ?? 0.012) * (chain - 2));
+    // The punch above is the fixed camera's version of this and stays exactly
+    // as it was — both fire, and on the cinematic rig the punch rides on top
+    // of the state's push-in the same way it rides on top of a death.
+    cineEvent('foodChain');
   }
 
   // The dash's own impact. Only for links that ARE a dash hit — an orb
@@ -749,6 +835,38 @@ function onChumSwallowed(x, y) {
   // refilled the meter, and a burst on the seal doesn't say that.
   feedback('chumFull', { x, y });
   chainFrom('chumFull');
+}
+
+// One chum orb going down, wherever it came from: swum over, or hoovered up by
+// the release gulp. A named function rather than the inline callback it used to
+// be because the gulp has to take exactly this path — the gate stops the meter
+// refilling for the length of a wind-up, and anything the gulp did differently
+// would be a resource that gate had quietly deleted.
+function collectChum(value, x, y, healMul = 1) {
+  gainXP(value);
+  // Eating moves the sun. A tiny push per orb — worth a fraction of a second
+  // of ordinary passage (see CONFIG.dayNight.chumSeconds) — so a run that
+  // hunts hard sees the light change noticeably faster than one that doesn't,
+  // without any single mouthful being visible as a jump. Placed here rather
+  // than in the pickup callback so the release gulp's hoovered orbs pay out
+  // exactly like swum-over ones, which is the whole reason this function
+  // exists.
+  advanceClock(CONFIG.dayNight?.chumSeconds ?? 0);
+  const heal = player.stats.maxHp * CONFIG.pickups.healFraction * healMul;
+  player.hp = Math.min(player.stats.maxHp, player.hp + heal);
+  // Pitch rises a full octave across the level-up bar: 0% progress =
+  // base pitch, 100% = double (one octave up). Read AFTER gainXP so a
+  // pickup that levels you up resets to the bottom of the next octave
+  // rather than sounding the top of the old one. Clamped so a big
+  // overflow can't shriek past the octave.
+  const progress = Math.max(0, Math.min(1, gameState.xp / gameState.xpToNext));
+  feedback('pickup', { x, y, sfxOpts: { pitch: 1 + progress } });
+  // THE LOOP. Chum swallowed inside a live combo goes back into the
+  // charge meter, and the swallow that fills it is what scores the FOOD
+  // CHAIN link — so eating is both the reward for the last strike and
+  // the ammunition for the next one. Outside a combo feedChum is a
+  // no-op and this is just XP, exactly as it always was.
+  onChumSwallowed(x, y);
 }
 
 // Shapes the basic shot's sound from the firing interval alone.
@@ -918,6 +1036,91 @@ function fireMissiles() {
   if (CONFIG.fins.alternate) muzzleCursor++;
 }
 
+// Scallop Squirter — spits the whole flight at once, each shell on its own
+// random heading. No fan and no aim inheritance beyond the first frame: the
+// scallop's jet takes over immediately (see projectiles.js updateJet), so
+// spreading them carefully at launch would be effort the very first clap
+// throws away.
+// A hull going down, whoever sank it. Named rather than inline because the
+// orca pod sinks boats too, and a pod kill has to score and sound exactly like
+// a player kill — two copies of this would have drifted the first time one of
+// them was tuned. The chum itself is spawned inside damageBoat; this is only
+// the score and the noise.
+function onBoatDestroyed(boat, chum) {
+  gameState.score += Math.round(CONFIG.boats.xp * CONFIG.points.predatorMultiplier * (boat.isTrawler ? 2 : 1));
+  // Its own event rather than `bigKill`: a hull going up throws the crew, the
+  // wreckage and the catch all at once, and it should land heavier than the
+  // biggest creature in the game dying.
+  feedback('boatExplosion', {
+    x: boat.mesh.position.x, y: boat.mesh.position.y,
+    scale: boat.isTrawler ? 2.4 : 1.7,
+    sfxOpts: { pitch: boat.isTrawler ? 0.7 : 0.85, decayMul: 1.6 },
+  });
+  // A trawler going down is a bigger moment than a rowboat.
+  if (boat.isTrawler) world.grid.ripple(boat.mesh.position.x, boat.mesh.position.y, 6, 20);
+}
+
+function fireScallops() {
+  const s = player.stats;
+  const c = CONFIG.scallop;
+  scallopCooldown = c.fireRate;
+  const dir = input.aim.clone().normalize();
+  const rig = player.aimRig;
+
+  for (let i = 0; i < s.scallopCount; i++) {
+    const origin = emitPoint(rig, CONFIG.emitPoints.scallop, i, dir, player.mesh.position, muzzlePoint);
+    // A full random heading rather than a cone around the aim. The card
+    // promises a shell that goes wherever it likes, and biasing the launch
+    // toward the crosshair would make the first second of its life look
+    // aimed — which is the one thing this weapon is not.
+    const angle = Math.random() * Math.PI * 2;
+    const launchDir = new THREE.Vector2(Math.cos(angle), Math.sin(angle));
+
+    spawnProjectile(world.scene, {
+      origin,
+      dir: launchDir,
+      faction: 'player',
+      damage: c.damage,
+      speed: c.speed,
+      life: c.life,
+      radius: c.radius,
+      asset: 'scallopShell',
+      source: 'scallop',
+      spin: c.spin,
+      jet: true,
+      jetInterval: c.pulseInterval,
+      jetSpeed: c.pulseSpeed,
+      jetTurn: c.turnRange,
+      jetDrag: c.drag,
+      bounce: true,
+      maxBounces: c.maxBounces,
+      restitution: c.restitution,
+    });
+  }
+
+  feedback('scallopLaunch', {
+    x: player.mesh.position.x,
+    y: player.mesh.position.y,
+    scale: Math.min(1.6, 0.7 + s.scallopCount * 0.12),
+  });
+}
+
+// Oyster Blaster — one heavy pearl per shot. The burst it carries is described
+// at launch (see systems/oyster.js) rather than looked up on impact, because
+// by the time it lands the stat block may have moved under it.
+function firePearlShot() {
+  const s = player.stats;
+  oysterCooldown = Math.max(
+    CONFIG.oyster.fireRateFloor,
+    CONFIG.oyster.fireRate - CONFIG.oyster.fireRatePerLevel * (s.oysterLevel - 1),
+  );
+  const dir = input.aim.clone().normalize();
+  const origin = emitPoint(player.aimRig, CONFIG.emitPoints.oyster, muzzleCursor, dir, player.mesh.position, muzzlePoint);
+
+  firePearl(world.scene, origin, dir, s.oysterLevel);
+  feedback('pearlShot', { x: origin.x, y: origin.y, dirX: dir.x, dirY: dir.y });
+}
+
 function fireBounce() {
   const s = player.stats;
   bounceCooldown = s.bounceFireRate;
@@ -1074,8 +1277,20 @@ function animate(now) {
   // gameplay `dt` below on purpose — the particles, the water, the mixer and
   // the camera all read realDt, and dilating only gameplay would leave the
   // seal sinking through spray still moving at full speed.
+  // The level-up pause dilates the same way and for the same reason — see
+  // systems/levelUpTime.js. Multiplied with the dive's scale rather than
+  // picked between: the two very nearly never overlap (the run is frozen while
+  // the cards are up, so nothing can kill you there), but a death during the
+  // half-second ramp back OUT is reachable, and stacking is the right answer
+  // for it — the dive takes over a world that hasn't finished speeding up yet,
+  // rather than one or the other being thrown away mid-ramp.
+  //
+  // FIRST, so the dive below gets the last word on the playback rates in that
+  // overlap: both systems push the mix around every frame, and the one whose
+  // sequence is longer and louder should win the tie.
+  const levelScale = updateLevelUpTime(rawDt);
   const deathScale = updateDeathDive(rawDt);
-  const realDt = rawDt * deathScale;
+  const realDt = rawDt * deathScale * levelScale;
 
   // Shake and hit-stop run on real time; gameplay runs on scaled time. Fed the
   // RAW delta, not the dilated one: a hit-stop is measured in wall-clock
@@ -1087,8 +1302,10 @@ function animate(now) {
   // that's easing IN, that's a hole punched in the first tenth of the ramp:
   // the ocean froze solid for a beat while the seal, which reads its own
   // clock, carried on moving. A freeze inside a slow motion isn't a freeze,
-  // it's a stutter.
-  const dt = deathState.active ? realDt : realDt * timeScale;
+  // it's a stutter. The level-up ramp owns it for the same reason: the kill
+  // that granted the level lands its hit-stop on the exact frame the ramp
+  // starts, and the last thing that ramp needs is a hole in its first tenth.
+  const dt = deathState.active || levelUpState.active ? realDt : realDt * timeScale;
 
   updateInput(world.camera, player.mesh.position);
   // Reads the pad snapshot updateInput just took, so it must follow it. No-op
@@ -1104,6 +1321,8 @@ function animate(now) {
     gameState.difficulty = gameState.time * CONFIG.spawn.difficultyPerSecond;
     shootCooldown -= dt;
     missileCooldown -= dt;
+    scallopCooldown -= dt;
+    oysterCooldown -= dt;
     bounceCooldown -= dt;
     starfishCooldown -= dt;
     seagullCooldown -= dt;
@@ -1126,6 +1345,15 @@ function animate(now) {
     // get properly out of the water.
     if (player.breachDir > 0 && player.stats.breachChainLevel > 0) {
       chainFrom('breach', CONFIG.strike.breachChain.linksPerLevel * player.stats.breachChainLevel);
+    }
+
+    // Water on the glass, on the way OUT of the sea only. Outside the
+    // Porpoising gate above on purpose: the lens gets wet whether or not the
+    // player has taken the upgrade that makes a breach worth points. Scaled by
+    // how hard the seal came out, so skimming the surface leaves a few beads
+    // and a full jump soaks it.
+    if (player.breachDir > 0) {
+      cineBreach(Math.min(1.5, 0.35 + Math.abs(player.velocity.y) / 26));
     }
 
     // Water muffles the mix: the low-pass tracks how deep the player is,
@@ -1186,21 +1414,19 @@ function animate(now) {
       },
     });
     updateBoats(dt, world.scene, gameState.difficulty, player.mesh.position, {
-      onBoatDestroyed: (boat, chum) => {
-        gameState.score += Math.round(CONFIG.boats.xp * CONFIG.points.predatorMultiplier * (boat.isTrawler ? 2 : 1));
-        feedback('bigKill', {
-          x: boat.mesh.position.x, y: boat.mesh.position.y,
-          scale: boat.isTrawler ? 2.2 : 1.6,
-          sfxOpts: { pitch: boat.isTrawler ? 0.7 : 0.85, decayMul: 1.6 },
-        });
-        // A trawler going down is a bigger moment than a rowboat.
-        if (boat.isTrawler) world.grid.ripple(boat.mesh.position.x, boat.mesh.position.y, 6, 20);
-      },
+      onBoatDestroyed,
     });
 
     const wantsToFire = CONFIG.weapon.autofire || input.firing;
     if (wantsToFire && shootCooldown <= 0 && input.aim.lengthSq() > 0.001) fire();
     if (wantsToFire && player.stats.missileCount > 0 && missileCooldown <= 0 && input.aim.lengthSq() > 0.001) fireMissiles();
+    // Neither of these needs `wantsToFire`. The scallop is spat and forgotten
+    // and the pearl is slow and heavy — both are meant to be in the water
+    // whether or not you're holding the trigger, the same way the shrimp ring
+    // and the starfish are. Aim still matters for the pearl, which is why it
+    // keeps the aim check the scallop doesn't need.
+    if (player.stats.scallopCount > 0 && scallopCooldown <= 0) fireScallops();
+    if (player.stats.oysterLevel > 0 && oysterCooldown <= 0 && input.aim.lengthSq() > 0.001) firePearlShot();
     if (wantsToFire && player.stats.bounceLevel > 0 && bounceCooldown <= 0 && input.aim.lengthSq() > 0.001) fireBounce();
     // Starfish and seagull bombs are passive abilities, like garlic/eel/beluga
     // below — they fire on their own timer once taken, independent of input.
@@ -1218,6 +1444,23 @@ function animate(now) {
     // bar — what's building is the strike, and on a half-empty bar the wind-up
     // should peter out exactly as the fuel does rather than keep shaking.
     player.chargePose = strikeState.charging ? strikeState.pending : 0;
+    // Mouth sealed for as long as the button is DOWN — the whole wind-up, not
+    // just the part of it with fuel left to burn.
+    //
+    // `strikeState.charging` looks like the right signal and is not: it goes
+    // false the moment the bar empties, one second into a hold at defaults.
+    // After that the gate came off, and since a still-held button burns each
+    // swallowed chum's refill straight back out again, the gate spent most of a
+    // long hold open and the pile went down regardless. The button being down
+    // is what the player means by "charging"; the fuel level is bookkeeping.
+    //
+    // Nothing can starve behind this. Letting go reopens the mouth on the same
+    // frame, and everything that magnetised in during the hold is swallowed by
+    // the ordinary collect path immediately after — even on a release too weak
+    // to fire, which gulps nothing.
+    player.chumSealed = CONFIG.strike.enabled
+      && input.strikeHeld
+      && CONFIG.strike.charge.gulp?.blockEating !== false;
     if (strikeState.charging) {
       addSustainedShake(CONFIG.strike.charge.shake * strikeState.pending);
       chargeHapticTimer -= dt;
@@ -1303,10 +1546,34 @@ function animate(now) {
           sfxOpts: { pitch: 1.18 - strikeState.power * 0.3 },
         });
         player.anim?.trigger('strike'); // roll clip, auto-returns to locomotion
+
+        // THE GULP. The wind-up held the mouth shut while chum gathered around
+        // the seal; this is the swallow. Runs after the strike's own feedback
+        // so the dash leads and the mouthful follows it, which is the order the
+        // two happened in.
+        //
+        // Only on a release that FIRED — the mouthful is the strike's payoff,
+        // not the hold's — and only if the gate was on: with `blockEating`
+        // switched off nothing was ever held back, and hoovering the arena on
+        // every release as well would be a second mechanic, not the off switch.
+        if (CONFIG.strike.charge.gulp?.blockEating !== false) {
+          gulpPickups(
+            world.scene, player.mesh.position.x, player.mesh.position.y,
+            player.stats.chumGulpRadius, collectChum,
+          );
+        }
       }
     }
 
-    updateProjectiles(dt, world.scene, enemies, (x, y, p) => feedback('bounce', { x, y, ...bounceComboFx(p) }));
+    updateProjectiles(
+      dt, world.scene, enemies,
+      (x, y, p) => feedback('bounce', { x, y, ...bounceComboFx(p) }),
+      (p) => feedback('scallopJet', { x: p.mesh.position.x, y: p.mesh.position.y, dirX: -p.dir.x, dirY: -p.dir.y }),
+      // A pearl that times out in open water still cracks. Queued rather than
+      // burst inline for the same array-mutation reason as everything else in
+      // pendingBursts — this runs inside the projectile loop.
+      (p) => { if (p.burst) pendingBursts.push({ x: p.mesh.position.x, y: p.mesh.position.y, burst: p.burst }); },
+    );
     updateSpawning(dt, gameState, world.scene);
     updateEnemies(dt, world.scene, player.mesh.position, (x, y) => {
       feedback('chumEaten', { x, y, scale: 0.8 });
@@ -1358,6 +1625,10 @@ function animate(now) {
         if (missileImpactFeedback(boat.mesh?.name, x, y, dmg, projectile, boat.radius * 0.5)) return;
         feedback('bulletHit', { x, y, scale: 1.1 });
       },
+      // Wreckage shot at. A chunk taking a hit reads like any other bullet
+      // landing; one coming apart gets its own, heavier crack.
+      onDebrisHit: (x, y) => feedback('bulletHit', { x, y, scale: 0.8 }),
+      onDebrisBroken: (x, y) => feedback('debrisBreak', { x, y }),
     });
     processPendingSplashes(); // safe now that resolveCombat's own loop has finished
 
@@ -1422,6 +1693,37 @@ function animate(now) {
         feedback('dumboCharm', { x: e.mesh.position.x, y: e.mesh.position.y, scale: 1.1 });
       },
     });
+    updateOyster(dt, world.scene, enemies, {
+      onEnemyDamaged: damageFrom('oyster'),
+      onEnemyKilled: onEnemyKilledFeedback,
+      onBlast: (x, y, r) => feedback('pearlBurst', { x, y, scale: Math.min(1.6, r / 2.4) }),
+    });
+    updateOrcaPod(dt, world.scene, player.mesh.position, player.stats.orcaLevel, enemies, {
+      onEnemyDamaged: damageFrom('orca'),
+      onEnemyKilled: onEnemyKilledFeedback,
+      onStrike: (x, y) => feedback('orcaStrike', { x, y }),
+      onBoatHit: (boat, dmg, x, y) => feedback('orcaStrike', { x, y, scale: 1.3 }),
+      onBoatDestroyed,
+    });
+    // Must follow updateEnemies for the same reason Bakalar's net does: a held
+    // fish's position is written directly, and enemies.js has already
+    // integrated velocity for the frame — running this first would let every
+    // grabbed fish snap straight back out of the arm.
+    updateOctoGrab(dt, world.scene, player.mesh.position, player.stats.octoGrabLevel, enemies, {
+      onGrab: (e) => feedback('octoGrab', { x: e.mesh.position.x, y: e.mesh.position.y }),
+      onPop: (e, x, y) => {
+        playtest.recordControl('octoGrab');
+        feedback('octoPop', { x, y, scale: 1.1 });
+        // Paid as chum rather than as a kill: the arm did the work, and chum
+        // feeds the strike meter, so the octopus converts incoming pressure
+        // into strike uptime instead of into raw XP.
+        for (let n = 0; n < CONFIG.octoGrab.chumPerPop; n++) {
+          const a = Math.random() * Math.PI * 2;
+          const d = Math.random() * CONFIG.octoGrab.chumSpread;
+          spawnXpOrb(world.scene, { x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, z: 0 }, CONFIG.octoGrab.chumXp, e.radius);
+        }
+      },
+    });
     // Must follow updateEnemies: the net writes caught positions directly, and
     // enemies.js integrates position for the frame — running this first would
     // just have every catch snap back out of the net.
@@ -1434,6 +1736,18 @@ function animate(now) {
         playtest.recordControl('bakalar');
         onEnemyKilledFeedback(e, 'bakalarHaul');
       },
+      onBombDrop: (x, y) => feedback('bakalarBombDrop', { x, y }),
+      onBombBlast: (x, y, r) => {
+        feedback('bakalarBombBlast', { x, y, scale: Math.min(2.4, r / 6) });
+        world.grid.ripple(x, y, 5, r);
+      },
+      onEnemyDamaged: damageFrom('bakalarBomb'),
+      onEnemyKilled: onEnemyKilledFeedback,
+      // The bomb pays in chum, not XP — see the note on CONFIG.bakalar.bomb.
+      // The haul above already pays XP, and having both halves of one ability
+      // compete to collect the same fish is what would make the boat the only
+      // upgrade worth taking.
+      onChum: (x, y) => spawnXpOrb(world.scene, { x, y, z: 0 }, CONFIG.bakalar.bomb.chumXp, 0.8),
     });
 
     // Strike system: chain-hit damage, charge recharge, and the orb timer.
@@ -1460,6 +1774,20 @@ function animate(now) {
     });
     if (spawnOrb) spawnStrikeOrb(world.scene, randomArenaPoint());
 
+    // A dash goes THROUGH floating wreckage. Driven from here rather than from
+    // inside updateStrike so the strike system keeps knowing only about
+    // creatures; the dash's own per-creature "once per dash" bookkeeping isn't
+    // needed, because a chunk shrugs off further hits for a moment after each
+    // one lands (see CONFIG.boats.debris.hitInvuln).
+    if (strikeState.active) {
+      damageDebris(
+        world.scene, player.mesh.position.x, player.mesh.position.y,
+        player.stats.hitRadius + 0.3,
+        player.stats.strikeDamage * (CONFIG.boats.debris?.strikeMul ?? 1),
+        { onDebrisBroken: (x, y) => feedback('debrisBreak', { x, y }) },
+      );
+    }
+
     // Sharks feed on fish whether or not the player is involved.
     resolvePredation(dt, world.scene, {
       onFishEaten: (fish, pred) => {
@@ -1468,25 +1796,7 @@ function animate(now) {
     });
 
     updatePickups(
-      dt, world.scene, player,
-      (value, x, y, healMul = 1) => {
-        gainXP(value);
-        const heal = player.stats.maxHp * CONFIG.pickups.healFraction * healMul;
-        player.hp = Math.min(player.stats.maxHp, player.hp + heal);
-        // Pitch rises a full octave across the level-up bar: 0% progress =
-        // base pitch, 100% = double (one octave up). Read AFTER gainXP so a
-        // pickup that levels you up resets to the bottom of the next octave
-        // rather than sounding the top of the old one. Clamped so a big
-        // overflow can't shriek past the octave.
-        const progress = Math.max(0, Math.min(1, gameState.xp / gameState.xpToNext));
-        feedback('pickup', { x, y, sfxOpts: { pitch: 1 + progress } });
-        // THE LOOP. Chum swallowed inside a live combo goes back into the
-        // charge meter, and the swallow that fills it is what scores the FOOD
-        // CHAIN link — so eating is both the reward for the last strike and
-        // the ammunition for the next one. Outside a combo feedChum is a
-        // no-op and this is just XP, exactly as it always was.
-        onChumSwallowed(x, y);
-      },
+      dt, world.scene, player, collectChum,
       (x, y) => {
         // The blue orb skips the wind-up entirely: a full meter, instantly.
         // If that fill lands inside a combo it reaches the chain the same way
@@ -1552,6 +1862,16 @@ function animate(now) {
         feedback('bite', { x: fish.mesh.position.x, y: fish.mesh.position.y, vx: pred.vx, vy: pred.vy });
       },
     });
+  } else if (gameState.paused && levelUpState.active) {
+    // The level-up freeze. Nothing above ran, so no creature steers, hunts,
+    // bites, spawns or scavenges and no shot travels — the fight is stopped
+    // dead where it stands, which is the whole point of the beat.
+    //
+    // What still moves is the pose: the mixers tick on the dilated clock so
+    // the ocean is full of animals breathing on the spot rather than a
+    // freeze-frame. The seal gets the same treatment a few lines down, in the
+    // block that idles it behind every other menu.
+    animateEnemiesIdle(realDt);
   }
 
   // Toasts run on REAL time, outside the pause gate, so the numbers from the
@@ -1602,8 +1922,18 @@ function animate(now) {
   // behind it and a lagging listener smears the pan.
   updateProjectileVoices(realDt, projectiles, player.mesh.position, gameState.running && !gameState.paused);
   updateImpactFlashes(realDt);
-  updateParticles(realDt);
+  // The sky and the weather run on the WALL clock, outside the pause gate and
+  // untouched by the death dive's dilation: they belong to the world, not to
+  // the run. A sunset that stalls behind the upgrade screen, or a storm that
+  // crawls because the seal is dying, reads as a bug rather than as drama.
+  // Both must land before world.updateSurface, which paints what they decided.
+  updateDayCycle(rawDt);
+  updateWeather(rawDt);
+
+  // Surface first: it advances the wave, and bubbles bursting at the water line
+  // are solved against wherever the wave ended up this frame, not last frame's.
   world.updateSurface(realDt);
+  updateParticles(realDt);
   world.grid.update(realDt, player.mesh.position, player.velocity);
   world.hexTiles.update(player.mesh.position);
   // The death shot: the frame closes in on the body and rides it down. Claimed
@@ -1613,7 +1943,35 @@ function animate(now) {
   if (deathState.active) {
     world.focusCamera(player.mesh.position, deathState.camZoom, deathState.camWeight);
   }
-  world.updateCamera(player.mesh.position, realDt);
+  // The signals the cinematic rig picks its state from, and the motion it
+  // frames off. Ignored entirely by the fixed camera — see world.updateCamera,
+  // which doesn't read them unless CONFIG.cinecam.enabled.
+  world.updateCamera(player.mesh.position, realDt, {
+    velocity: player.velocity,
+    aim: input.aim,
+    // Where a strike released THIS frame would actually go. Same rule
+    // tryStrike uses below — movement stick first, aim only from a standstill
+    // — because the corridor the lens draws has to be the line the dash will
+    // take, not the one the cursor is on.
+    dashDir: input.move.lengthSq() > 0.001 ? input.move : input.aim,
+    chargePower: strikeState.pending,
+    // The button, for the lens; the fuel-gated flag, for everything that a
+    // dry meter really should stop. See the note in cineCamera.js.
+    //
+    // Gated on the run being live, which strikeState.charging got for free by
+    // being written inside the pause block and this does not: input is read
+    // every frame regardless, so a strike button still held as the level-up
+    // screen opens would otherwise punch the lens in behind the menu and hold
+    // it there for as long as the card was being chosen.
+    strikeHeld: input.strikeHeld && gameState.running && !gameState.paused,
+    charging: strikeState.charging,
+    // The dash window plus the raised-ceiling window it runs inside; either on
+    // its own leaves a frame or two at the ends where the seal is visibly
+    // still boosting and the camera has already let go.
+    boosting: strikeState.active || player.dashTimer > 0,
+    deathPhase: deathState.active ? deathState.phase : 'none',
+    deathElapsed: deathState.elapsed,
+  });
 
   // Impulse shake plus whatever is trembling continuously this frame (the
   // strike wind-up). Summed rather than max'd: a hit landing while you're

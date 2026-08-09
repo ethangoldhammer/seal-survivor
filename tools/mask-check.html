@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>dither mask check</title>
+<!--
+  Eyeball page for path/src/ui/dither.js. Imports the REAL module — no bundler
+  needed, which is why that file has no imports of its own.
+
+  Serve the repo root over http and open /tools/mask-check.html. The project's
+  own dev server does it: http://localhost:5173/tools/mask-check.html.
+  Deliberately not part of the game: it starts nothing, loads no config and
+  writes nothing.
+
+  The frames are rendered as a static filmstrip rather than animated, because
+  the tool this is usually inspected through suspends requestAnimationFrame.
+-->
+<style>
+  body { margin: 0; background: #05060a; color: #e8ecf3;
+    font: 13px/1.4 'Inter', system-ui, sans-serif; padding: 16px 20px 60px; }
+  h1 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+  h2 { font-size: 12px; margin: 24px 0 8px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: rgba(232,236,243,0.55); }
+  .meta { color: rgba(232,236,243,0.45); font-size: 11px; margin-bottom: 2px; }
+  .strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+  .cell { width: 130px; }
+  /* Stands in for the level-up menu: the outer div takes the hex mask, the
+     inner one the organic mask, exactly as ui.js nests them. */
+  .outer { width: 130px; height: 130px; }
+  .inner { width: 100%; height: 100%; position: relative; overflow: hidden;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    background: linear-gradient(135deg, #2b6d8f, #7ad7ff 60%, #ffe066);
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    color: #06131c; font-weight: 700; font-size: 12px; }
+  .label { color: rgba(232,236,243,0.6); font-size: 11px; margin-top: 3px; }
+  .algo { color: #7ad7ff; font-size: 12px; font-weight: 600; margin: 14px 0 6px; }
+</style>
+</head>
+<body>
+<h1>UI reveals — every noise algorithm, both styles</h1>
+<div class="meta">In use: <b>billow</b> on the upgrade cards (hex style) · <b>worley</b> clearing the splash · <b>ridged</b> bringing in the score card (both smooth).</div>
+<div class="meta" id="meta">building…</div>
+<div id="out"></div>
+<script type="module">
+import { hexMaskSet, noiseMaskSet, NOISE_ALGOS } from '/path/src/ui/dither.js';
+
+// The shipping defaults, mirrored here so the page shows what the game shows.
+const STEPS = 14;
+const HEX_SIZE = 24;
+const BIAS = 0.35;
+const DRIFT = 26;
+const OVER = 18;
+const BASE = { size: 128, scale: 8, octaves: 2, levels: 12, phases: 5 };
+// Gamma on the progress — see ui.js. 1 for the lattice, above 1 for smooth.
+const CURVE = { hex: 1, smooth: 1.7 };
+
+const timings = [];
+const t0 = performance.now();
+const hex = hexMaskSet(STEPS, HEX_SIZE);
+timings.push(`hex ${(performance.now() - t0).toFixed(0)}ms`);
+
+function applyMask(el, image, size, position, repeat) {
+  const s = el.style;
+  s.webkitMaskImage = image;
+  s.maskImage = image;
+  s.webkitMaskSize = size;
+  s.maskSize = size;
+  s.webkitMaskRepeat = repeat;
+  s.maskRepeat = repeat;
+  s.webkitMaskPosition = position;
+  s.maskPosition = position;
+  s.webkitMaskMode = 'alpha';
+  s.maskMode = 'alpha';
+}
+
+// Exactly what ui.js paintReveal does, for one frame.
+function frame(container, { noise, smooth, t: raw, phase, label }) {
+  const t = Math.pow(raw, smooth ? CURVE.smooth : CURVE.hex);
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  const outer = document.createElement('div');
+  outer.className = 'outer';
+  const inner = document.createElement('div');
+  inner.className = 'inner';
+  inner.textContent = 'Chum Magnet';
+
+  const bias = smooth ? 1 : BIAS;
+  if (!smooth) {
+    applyMask(outer, hex.masks[Math.round(Math.pow(t, 1 - bias) * STEPS)], hex.tile, '0px 0px', 'repeat');
+  }
+  const drift = (1 - t) * DRIFT;
+  applyMask(
+    inner,
+    noise.masks[phase % BASE.phases][Math.round(Math.pow(t, bias) * BASE.levels)],
+    `${100 + OVER}% ${100 + OVER}%`,
+    `${-drift}px ${drift * 0.6}px`,
+    'no-repeat',
+  );
+
+  outer.appendChild(inner);
+  const cap = document.createElement('div');
+  cap.className = 'label';
+  cap.textContent = label;
+  cell.append(outer, cap);
+  container.appendChild(cell);
+}
+
+function heading(text, cls) {
+  const h = document.createElement(cls === 'algo' ? 'div' : 'h2');
+  if (cls) h.className = cls;
+  h.textContent = text;
+  document.getElementById('out').appendChild(h);
+}
+
+// Both styles, every algorithm, sampled across the reveal.
+for (const [style, softness] of [['hex', 0], ['smooth', 0.35]]) {
+  heading(`${style} style`);
+  for (const algo of NOISE_ALGOS) {
+    const t1 = performance.now();
+    const noise = noiseMaskSet({ ...BASE, algo, softness });
+    const ms = performance.now() - t1;
+    timings.push(`${algo}/${style} ${ms.toFixed(0)}ms`);
+    heading(`${algo} — baked in ${ms.toFixed(0)}ms`, 'algo');
+    const strip = document.createElement('div');
+    strip.className = 'strip';
+    document.getElementById('out').appendChild(strip);
+    const N = 8;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      frame(strip, { noise, smooth: style === 'smooth', t, phase: i, label: `t ${t.toFixed(2)}` });
+    }
+  }
+}
+
+document.getElementById('meta').textContent = timings.join(' · ');
+</script>
+</body>
+</html>

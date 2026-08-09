@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
+import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { drawUpgrades } from '../upgradeTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { menuInput, resetMenuInput } from '../input.js';
@@ -170,6 +171,13 @@ const STYLES = `
     background: #05060a; opacity: 0; transition: opacity var(--sv-trans, 0.9s) ease; }
   .sv-transition.sv-trans-in { opacity: 1; }
 
+  /* While the upgrade cards are dithering in or out they're half-drawn, and a
+     half-drawn card is not something you can be asked to have chosen. The
+     descendant rule is the one that matters: .sv-center and .sv-card each set
+     pointer-events themselves, so switching it off on the container alone
+     would leave the cards live under a mask full of holes. */
+  .sv-menu-locked, .sv-menu-locked * { pointer-events: none !important; }
+
   @media (prefers-reduced-motion: reduce) {
     .sv-ui * { transition: none !important; animation: none !important; }
   }
@@ -226,7 +234,7 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
     </div>
 
     <div class="sv-center sv-hidden" id="svLevelUpMenu">
-      <div class="sv-menu">
+      <div class="sv-menu" id="svLevelUpBox">
         <div class="sv-title">Level up</div>
         <div class="sv-sub">Pick one</div>
         <div class="sv-cards" id="svCards"></div>
@@ -255,13 +263,18 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
 
   for (const id of [
     'svHud', 'svHpBar', 'svO2Bar', 'svXpBar', 'svLevel', 'svTime', 'svScore',
-    'svStartMenu', 'svLevelUpMenu', 'svGameOverMenu', 'svCards', 'svGameOverStats',
+    'svStartMenu', 'svLevelUpMenu', 'svLevelUpBox', 'svGameOverMenu', 'svCards', 'svGameOverStats',
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
     'svHighScoreLabel', 'svHighScore', 'svRapidFirePanel', 'svRapidFireTime',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
   ]) {
     el[id] = document.getElementById(id);
   }
+
+  // Every surface's tiles, built while the browser is otherwise idle — see
+  // warmReveals. Nothing waits on it; a menu that somehow beats it just pays
+  // the bake itself.
+  warmReveals();
 
   // The start button is unreachable now that the splash goes straight into a
   // run, but it stays wired so the markup keeps working if it's ever shown
@@ -327,6 +340,9 @@ export function showStartMenu() {
     splashPlayed = true;
     mountRiveSplash({
       parent: root,
+      // The title screen breaking up into cells and clearing, over a run that
+      // has already started. See revealSplashOut.
+      exit: revealSplashOut,
       // onDismiss also fires on a load failure, so a missing or corrupt .riv
       // starts the run anyway instead of stranding the player on a blank
       // screen with no way forward now that there's no menu to fall back to.
@@ -406,9 +422,350 @@ function prefersReducedMotion() {
 
 export function hideAllMenus() {
   el.svStartMenu.classList.add('sv-hidden');
+  cancelReveal('upgrades');
+  clearMask(el.svLevelUpMenu, el.svLevelUpBox);
+  setMenuLocked(false);
   el.svLevelUpMenu.classList.add('sv-hidden');
   el.svGameOverMenu.classList.add('sv-hidden');
   levelUpCards = [];
+}
+
+// ---------------------------------------------------------------------------
+// Reveals
+// ---------------------------------------------------------------------------
+// Nothing in this UI cuts in or plain-fades any more. Menus dissolve, through
+// a mask built from noise, and each surface gets its own algorithm so the
+// transitions are recognisably different from each other rather than one
+// effect used three times:
+//
+//   upgrades   BILLOW through a hexagonal lattice. Chunky and digital, made of
+//              the same hexagons the cards are clipped to.
+//   splash     WORLEY, smooth. The title screen breaks up into cells and
+//              clears, and the run is already live underneath it.
+//   scoreCard  RIDGED, smooth. The score card arrives in strands rather than
+//              blobs, which is a slower, colder read for the end of a run.
+//
+// Two styles:
+//
+//   'hex'      an ordered dither on a hex lattice (the structure) masked by
+//              the noise field (where it fills in). Needs TWO nested elements,
+//              because masks multiply down the tree — that's how the two
+//              layers compose without `mask-composite`, whose keywords and
+//              layer order still differ between engines.
+//   'smooth'   no lattice and no dithering at all: the field alone, with a
+//              soft edge, on one element.
+//
+// The field is stretched over the element rather than tiled across it — see
+// revealFieldSize. The tiles come from ./dither.js and are baked once.
+//
+// All of this runs on the WALL clock, on its own rAF, like every other
+// transition in this file. It deliberately does NOT ride the level-up time
+// dilation: the slow motion is the world, and the interface arriving over the
+// top of it is not part of the world.
+
+// One entry per running reveal, keyed by surface name, so the splash
+// dissolving out and a menu coming in never cancel each other.
+const revealRaf = new Map();
+let menuLocked = false;
+
+function supportsMask() {
+  const s = document.documentElement.style;
+  return 'maskImage' in s || 'webkitMaskImage' in s;
+}
+
+function applyMask(target, image, size, position = '0px 0px', repeat = 'repeat') {
+  if (!target) return;
+  const s = target.style;
+  s.webkitMaskImage = image;
+  s.maskImage = image;
+  s.webkitMaskSize = size;
+  s.maskSize = size;
+  s.webkitMaskRepeat = repeat;
+  s.maskRepeat = repeat;
+  s.webkitMaskPosition = position;
+  s.maskPosition = position;
+  s.webkitMaskMode = 'alpha';
+  s.maskMode = 'alpha';
+}
+
+// A masked layer costs compositing for as long as it's there, and once the
+// reveal has landed the mask is a no-op anyway.
+function clearMask(...targets) {
+  for (const target of targets) {
+    if (!target) continue;
+    target.style.webkitMaskImage = '';
+    target.style.maskImage = '';
+  }
+}
+
+function cancelReveal(name) {
+  const raf = revealRaf.get(name);
+  if (raf) cancelAnimationFrame(raf);
+  revealRaf.delete(name);
+}
+
+// Locking is a class rather than a flag alone because the cards are real DOM
+// elements with their own hover and focus: mid-dissolve they're half-drawn and
+// must not be clickable, or a held fire button picks whatever the pointer
+// happens to be over before the menu has finished arriving.
+function setMenuLocked(locked) {
+  menuLocked = locked;
+  el.svLevelUpMenu?.classList.toggle('sv-menu-locked', locked);
+}
+
+// A surface's settings: the shared field, then whatever that surface overrides.
+function revealCfg(name) {
+  const all = CONFIG.reveals ?? {};
+  const f = all.field ?? {};
+  const r = all[name] ?? {};
+  const smooth = r.style !== 'hex';
+  return {
+    name,
+    enabled: all.enabled !== false && r.enabled !== false,
+    smooth,
+    inTime: r.inTime ?? 0.5,
+    outTime: r.outTime ?? 0.22,
+    steps: Math.max(2, Math.round(r.steps ?? 14)),
+    hexSize: Math.max(4, Math.round(r.hexSize ?? 24)),
+    // Without the lattice there is nothing else to reveal through, so in
+    // smooth style the field owns the whole reveal rather than sharing it.
+    bias: smooth ? 1 : Math.max(0.02, Math.min(0.9, r.bias ?? 0.35)),
+    // A hard edge is what the lattice wants under it — the hexes ARE the edge.
+    // Smooth style is the opposite: the ramp is the whole effect.
+    softness: smooth ? Math.max(0.02, r.softness ?? 0.35) : (r.softness ?? 0),
+    // Gamma on the reveal's progress. The masks are measurably linear — mean
+    // alpha tracks the level to within a couple of percent — but a soft mask
+    // does not LOOK linear: a bright card at 20% alpha over a dark ocean
+    // already reads as arrived, so an even ramp appears to finish half way
+    // through and then dawdle. Above 1 holds the start back.
+    curve: r.curve ?? (smooth ? 1.7 : 1),
+    drift: r.drift ?? f.drift ?? 26,
+    over: Math.max(0, r.over ?? f.over ?? 18),
+    boilHz: Math.max(0, r.boilHz ?? f.boilHz ?? 12),
+    field: {
+      algo: r.algo ?? 'simplex',
+      size: Math.max(16, Math.round(f.size ?? 128)),
+      scale: Math.max(1, Math.round(r.scale ?? f.scale ?? 8)),
+      octaves: Math.max(1, Math.round(f.octaves ?? 2)),
+      levels: Math.max(2, Math.round(f.levels ?? 12)),
+      phases: Math.max(1, Math.round(f.phases ?? 5)),
+      softness: smooth ? Math.max(0.02, r.softness ?? 0.35) : (r.softness ?? 0),
+    },
+  };
+}
+
+// The field is STRETCHED over the surface, not tiled across it.
+//
+// Tiling was the original approach and it repeats: a tile big enough to cover
+// a 760px menu costs a third of a second to bake (measured — 160px takes 55ms,
+// 224px takes 380ms, and it is quadratic in the side). Stretching one small
+// field over the whole element costs nothing, can never repeat, and the blur
+// from the upscale is either invisible (the hex lattice supplies the hard
+// edges) or the entire point (smooth style). It also frees the noise from
+// having to be periodic in x and y, which is what lets simplex and worley be
+// on the menu at all.
+//
+// Oversized by `over` percent so the drift has somewhere to move without
+// pulling the field off the element. Anything past the edge of a no-repeat
+// mask is transparent — which HIDES rather than reveals, so the failure
+// direction is safe either way.
+function revealFieldSize(c) {
+  const pct = 100 + c.over;
+  return `${pct}% ${pct}%`;
+}
+
+// One frame. `raw` is 0 (nothing showing) to 1 (everything).
+function paintReveal(c, hex, noise, target, inner, raw, elapsed) {
+  const t = Math.pow(raw, c.curve);
+  if (hex) {
+    // Exponents that add to 1, so the product of the two layers' coverage is t
+    // itself — the share can be tuned without changing how long the reveal
+    // takes or how it paces.
+    applyMask(target, hex.masks[Math.round(Math.pow(t, 1 - c.bias) * c.steps)], hex.tile);
+  } else {
+    clearMask(target === inner ? null : target);
+  }
+  if (!noise) return;
+  // The field slides into place as it opens, then settles — motion that stops
+  // when the reveal does, rather than a pattern still sliding under a menu
+  // that has finished arriving.
+  const drift = (1 - t) * c.drift;
+  const phase = Math.floor(elapsed * c.boilHz) % c.field.phases;
+  applyMask(
+    inner,
+    noise.masks[phase][Math.round(Math.pow(t, c.bias) * c.field.levels)],
+    revealFieldSize(c),
+    `${-drift}px ${drift * 0.6}px`,
+    'no-repeat',
+  );
+}
+
+/**
+ * Dissolve a surface in or out.
+ *
+ * @param name    which surface's settings to use (CONFIG.reveals.<name>)
+ * @param target  the element the lattice masks. In smooth style this is only
+ *                used when there's no separate `inner`.
+ * @param inner   the element the field masks — a CHILD of target, so the two
+ *                masks multiply. Hex style needs one; smooth style doesn't.
+ * @returns false if it couldn't run (masks unsupported, reduced motion, tiles
+ *          wouldn't build). `onDone` has already been called in that case, so
+ *          the caller's finish-up still happens — a reveal that can't animate
+ *          must still SHOW the thing.
+ */
+function runReveal(name, { target, inner, from, to, seconds, onDone }) {
+  cancelReveal(name);
+  const c = revealCfg(name);
+  const box = inner ?? target;
+  const finish = () => {
+    revealRaf.delete(name);
+    clearMask(target, box);
+    onDone?.();
+  };
+
+  if (!c.enabled || seconds <= 0 || prefersReducedMotion() || !supportsMask()) {
+    finish();
+    return false;
+  }
+
+  let hex = null;
+  let noise = null;
+  try {
+    if (!c.smooth && inner) hex = hexMaskSet(c.steps, c.hexSize);
+    noise = noiseMaskSet(c.field);
+  } catch {
+    // Couldn't build the tiles at all — a canvas that won't give up pixels.
+    // Show the thing rather than leaving it masked by something that doesn't
+    // exist.
+    finish();
+    return false;
+  }
+
+  const start = performance.now();
+  // Times itself off performance.now() rather than the timestamp rAF hands in.
+  // The two agree in a browser, but only one of them is guaranteed to be the
+  // same clock `start` was read from, and a reveal measured across two clocks
+  // either finishes instantly or never finishes at all.
+  const frame = () => {
+    const elapsed = (performance.now() - start) / 1000;
+    const t = Math.min(1, elapsed / seconds);
+    paintReveal(c, hex, noise, target, box, from + (to - from) * t, elapsed);
+    if (t >= 1) {
+      finish();
+      return;
+    }
+    revealRaf.set(name, requestAnimationFrame(frame));
+  };
+  // First frame painted synchronously, so the surface is never visible whole
+  // for the frame between being un-hidden and the first rAF landing.
+  frame();
+  return true;
+}
+
+// Baking the tiles costs tens of milliseconds per surface — up to about 130
+// for the cellular field, which is the dearest of the set. That's nothing at
+// boot and very visible if it lands on the frame a menu opens, so every
+// surface's tiles are built here instead, when the browser next has a moment.
+//
+// The splash is first because it's the first one needed, and by some margin.
+export function warmReveals() {
+  if (!supportsMask() || prefersReducedMotion()) return;
+  const queue = ['splash', 'upgrades', 'scoreCard'];
+  const build = () => {
+    const name = queue.shift();
+    if (!name) return;
+    const c = revealCfg(name);
+    try {
+      if (c.enabled) {
+        if (!c.smooth) hexMaskSet(c.steps, c.hexSize);
+        noiseMaskSet(c.field);
+      }
+    } catch {
+      // See runReveal: a surface that can't bake still shows, uncovered.
+    }
+    // One per idle slot rather than all three back to back, so a slow machine
+    // spreads the work over several frames instead of dropping one.
+    schedule(build);
+  };
+  schedule(build);
+}
+
+function schedule(fn) {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 4000 });
+  else setTimeout(fn, 120);
+}
+
+// --- the surfaces -----------------------------------------------------------
+
+// Upgrade cards in. Called once the menu's contents are built and laid out.
+function revealUpgradesIn() {
+  setMenuLocked(true);
+  const landed = runReveal('upgrades', {
+    target: el.svLevelUpMenu,
+    inner: el.svLevelUpBox,
+    from: 0,
+    to: 1,
+    seconds: revealCfg('upgrades').inTime,
+    onDone: () => setMenuLocked(false),
+  });
+  // Nothing animated, so nothing is half-drawn and nothing needs locking.
+  if (!landed) setMenuLocked(false);
+}
+
+// Upgrade cards out, on a pick. Deliberately does not block anything: the run
+// is re-engaged on the same frame the card is clicked, and this dissolves over
+// the top of a game that is already moving again.
+function revealUpgradesOut() {
+  const finish = () => {
+    el.svLevelUpMenu.classList.add('sv-hidden');
+    setMenuLocked(false);
+  };
+  // Stays locked for the dissolve, so the cards on their way out can't take a
+  // second click. If another level is pending, showLevelUp cancels this and
+  // starts a fresh reveal — which is why `finish` hides the menu rather than
+  // anything on the way in doing it.
+  setMenuLocked(true);
+  runReveal('upgrades', {
+    target: el.svLevelUpMenu,
+    inner: el.svLevelUpBox,
+    from: 1,
+    to: 0,
+    seconds: revealCfg('upgrades').outTime,
+    onDone: finish,
+  });
+}
+
+/**
+ * The splash breaking up and clearing. Handed to mountRiveSplash, which calls
+ * it instead of removing its own wrapper — see riveSplash.js.
+ *
+ * The run has already started by the time this runs, so what's dissolving is a
+ * still of the title screen over a live game.
+ */
+function revealSplashOut(wrap, done) {
+  runReveal('splash', {
+    target: wrap,
+    from: 1,
+    to: 0,
+    seconds: revealCfg('splash').outTime,
+    onDone: done,
+  });
+}
+
+// The score card arriving, in strands. Runs alongside the CSS rise — see
+// showGameOver — rather than instead of it: the rise is the movement, this is
+// the texture it arrives with.
+//
+// Nothing is locked out while it runs. The name field is focused immediately
+// and typing into a card that is still resolving is fine; there is no wrong
+// thing to click on this screen the way there is on the upgrade menu.
+function revealScoreCardIn() {
+  runReveal('scoreCard', {
+    target: el.svGameOverMenu,
+    from: 0,
+    to: 1,
+    seconds: revealCfg('scoreCard').inTime,
+  });
 }
 
 // Which stack of `choice` this card would be — 1 for the first one taken.
@@ -473,8 +830,15 @@ export function showLevelUp() {
     card.append(overlay, content);
 
     const pick = () => {
-      el.svLevelUpMenu.classList.add('sv-hidden');
+      // Half-drawn cards aren't a menu yet — see setMenuLocked. The class
+      // stops the mouse; this stops the pad and the keyboard, which reach the
+      // card without going through pointer-events at all.
+      if (menuLocked) return;
       levelUpCards = [];
+      // Dissolves out rather than vanishing, and the choice is filed on this
+      // frame regardless: the run comes back to life behind the cards while
+      // they're still on their way off, not after them.
+      revealUpgradesOut();
       callbacks.onLevelChoice(choice);
     };
     card.addEventListener('click', pick);
@@ -498,6 +862,11 @@ export function showLevelUp() {
   selectedIndex = -1;
   resetMenuInput();
   selectCard(0);
+
+  // Last, once everything is built, laid out and selected: the reveal masks
+  // the finished menu, and a card added after it started would appear whole
+  // over a half-dithered one.
+  revealUpgradesIn();
 }
 
 function selectCard(i) {
@@ -549,6 +918,10 @@ function stepSelection(dx, dy) {
 // actually up — it's the only screen the pad drives.
 export function updateMenuNav() {
   if (!levelUpCards.length || el.svLevelUpMenu.classList.contains('sv-hidden')) return;
+  // Nothing to drive while the cards are still dissolving in — and in
+  // particular no confirm, or a fire button held through the level-up picks
+  // the first card before it has finished arriving.
+  if (menuLocked) return;
 
   // Tab or a click can move focus without going through selectCard, so adopt
   // whatever the player is actually on before stepping off it.
@@ -807,16 +1180,22 @@ export function showGameOver(gameState) {
     });
   }
 
-  // Fades up rather than cutting in. The dive spends its last couple of
-  // seconds on a body lying still on the seabed, and a card that hard-cuts
-  // over that shot throws the pacing away in one frame. Restarted by hand each
-  // time — an animation on an element that was display:none doesn't replay on
-  // its own, so a second run would show the card already at full opacity.
+  // Arrives rather than cutting in. The dive spends its last couple of seconds
+  // on a body lying still on the seabed, and a card that hard-cuts over that
+  // shot throws the pacing away in one frame.
+  //
+  // Two things at once: the card rises and fades (the CSS animation, restarted
+  // by hand each time — an animation on an element that was display:none
+  // doesn't replay on its own, so a second run would show it already at full
+  // opacity), and it dissolves in through the ridged field, which comes in as
+  // strands rather than blobs. The rise is the motion; the reveal is the
+  // texture.
   el.svGameOverMenu.classList.remove('sv-fade-in');
   el.svGameOverMenu.style.setProperty('--sv-fade', `${CONFIG.death?.fadeIn ?? 0.9}s`);
   el.svGameOverMenu.classList.remove('sv-hidden');
   void el.svGameOverMenu.offsetWidth; // reflow — this is what re-arms the animation
   el.svGameOverMenu.classList.add('sv-fade-in');
+  revealScoreCardIn();
 
   // Focus lands on the field so a name can be typed without clicking first,
   // but only with a real keyboard — on touch, focusing would throw up the
