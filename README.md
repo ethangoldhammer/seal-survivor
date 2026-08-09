@@ -14,6 +14,65 @@ npm install
 npm run dev
 ```
 
+## Deploying
+
+The public build is **https://seal-survivor.pages.dev**, on Cloudflare Pages.
+
+**Pushing to `SealSurvivor-Main` deploys it.** There is no separate publish
+step: `.github/workflows/deploy.yml` builds on every push and uploads `dist/`,
+which takes a minute or two. So the normal loop is edit, check with
+`npm run dev`, commit, push.
+
+Deployed builds ship without the authoring UI — no `` ` `` tuner, no T panel, no
+G/B overlays, no P/X debug keys. Adding `?tune` to the URL brings them all back,
+so tuning against the live build still works without a rebuild.
+
+Two escape hatches, for when git isn't the right path:
+
+```bash
+npm run deploy          # build + publish to production, no commit
+npm run deploy:preview  # same build to preview.seal-survivor.pages.dev
+```
+
+`deploy:preview` is the safe one — it publishes to a separate URL and leaves the
+live site alone. Plain `npm run deploy` works but leaves the repo out of sync
+with what's deployed, so it suits an urgent fix rather than daily use.
+
+### What pushing does NOT cover
+
+**The leaderboard worker deploys separately.** It is its own Cloudflare Worker
+and the Pages pipeline never touches it. After changing
+`server/leaderboard-worker.js`:
+
+```bash
+cd server && npx wrangler deploy
+```
+
+**Tuning done on the deployed site never comes back.** Under `?tune`, a
+production build saves to that browser's localStorage only — it cannot write to
+disk, by design (see the note on the tuning endpoint in `vite.config.js`). Use
+the live build to *find* values on a phone or a shared link, then re-enter them
+under `npm run dev`, which writes `path/src/imported-tuning.json`, and commit
+that like any other change.
+
+**New assets have to be committed.** Everything in `public/` is copied verbatim
+into the build, but only if git knows about it. A model or sound added through
+the in-game T panel lands on your disk, not in the repo.
+
+### Checking a deploy
+
+The repo's Actions tab shows every run. When one fails, *which step* failed is
+the useful signal: `npm ci` or `npm run build` failing is a real code problem,
+while a failure only at the wrangler step is almost always the
+`CLOUDFLARE_API_TOKEN` secret.
+
+One Cloudflare quirk worth knowing when an asset misbehaves on the deployed
+site: a missing file does not 404. Pages falls back to `index.html` and returns
+**200 with `content-type: text/html`**, so a bad asset path surfaces as a loader
+failing to parse rather than as a missing file. Check the content type, not the
+status code. Locally, `python3 -m http.server` inside `dist/` gives an honest
+404 for the same miss.
+
 ## Tuning the mechanics
 
 Every gameplay number lives in **`path/src/config.js`**. No other file hardcodes
