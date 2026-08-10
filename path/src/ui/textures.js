@@ -68,6 +68,7 @@ const EDITABLE_SECTIONS = [
   ['Apex predators', [
     ['enemyShark', 'Shark'],
     ['enemyGreatWhite', 'Great White'],
+    ['enemyHammerhead', 'Hammerhead'],
     ['enemyMegalodon', 'Megalodon'],
     ['enemyMightyMeg', 'Mighty Meg'],
     ['enemyOrca', 'Orca'],

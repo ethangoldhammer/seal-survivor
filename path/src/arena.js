@@ -98,6 +98,12 @@ export function setWaveTime(t) {
   waveTime = t;
 }
 
+// For the readers that need the raw phase rather than a height — a shader
+// uniform, in practice. Everything else should call surfaceHeightAt.
+export function waveTimeNow() {
+  return waveTime;
+}
+
 export function surfaceHeightAt(x, waveT = waveTime, amp = sea.amp, chop = sea.chop) {
   return bounds.surfaceY
     + Math.sin(x * WAVE.k1 + waveT * WAVE.w1) * amp

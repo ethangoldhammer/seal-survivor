@@ -19,6 +19,13 @@ import * as THREE from 'three';
 // Gameplay then writes one intensity per channel per frame, and the shader
 // lights each vertex by `intensity[channel] * falloff(param)`.
 //
+// COLOUR is per channel too. It defaults to the one `color` every channel is
+// seeded with — so a caller that only ever writes intensities sees a single
+// hue, as before — but any channel can be pinned to a colour of its own with
+// setChannelColor. That is what lets the octopus wear the colour of the fish
+// each individual tentacle is reaching for, rather than one tint for the
+// whole animal.
+//
 // `param` being normalised is what makes this work on any mesh at any size.
 // Nothing here is in world units, so a 0.4-unit shrimp and a 40-unit whale use
 // the same numbers, and rescaling a model — or the per-asset size slider —
@@ -172,25 +179,36 @@ const VERT_HEAD = `
 attribute float aGlowChannel;
 attribute float aGlowParam;
 uniform float uGlowIntensity[GLOW_CHANNELS];
+uniform vec3 uGlowChColor[GLOW_CHANNELS];
 varying float vGlowLevel;
 varying float vGlowParam;
+varying vec3 vGlowColor;
 `;
 
 // The channel lookup is a constant-bounds loop rather than a dynamic array
 // index. Dynamic indexing of a uniform array is legal in GLSL ES 3.00 but not
 // reliably in 1.00, and this costs nothing at these channel counts — six
 // comparisons on a vertex shader that is already skinning four bones.
+//
+// COLOUR IS PER CHANNEL, and resolved here rather than in the fragment shader
+// for exactly the same reason the intensity is: one lookup per vertex instead
+// of one per pixel, and the interpolation between two regions comes out as a
+// free gradient across the triangles that straddle them.
 const VERT_BODY = `
   vGlowParam = aGlowParam;
   vGlowLevel = 0.0;
+  vGlowColor = uGlowChColor[0];
   int glowCh = int(aGlowChannel + 0.5);
   for (int i = 0; i < GLOW_CHANNELS; i++) {
-    if (i == glowCh) vGlowLevel = uGlowIntensity[i];
+    if (i == glowCh) {
+      vGlowLevel = uGlowIntensity[i];
+      vGlowColor = uGlowChColor[i];
+    }
   }
 `;
 
 const FRAG_HEAD = `
-uniform vec3 uGlowColor;
+varying vec3 vGlowColor;
 uniform float uGlowStrength;
 uniform float uGlowFalloff;
 uniform float uGlowSpan;
@@ -214,7 +232,7 @@ const FRAG_BODY = `
     float band = clamp((vGlowParam - (1.0 - uGlowSpan)) / max(1e-4, uGlowSpan), 0.0, 1.0);
     float shape = pow(band, uGlowFalloff);
     float shimmer = 1.0 + uGlowShimmer * sin(vGlowParam * uGlowShimmerFreq - uGlowTime * uGlowShimmerSpeed);
-    gl_FragColor.rgb += uGlowColor * (vGlowLevel * shape * shimmer * uGlowStrength);
+    gl_FragColor.rgb += vGlowColor * (vGlowLevel * shape * shimmer * uGlowStrength);
   }
 `;
 
@@ -227,12 +245,44 @@ let attachSeq = 0;
  *               Mesh under it is attached.
  * @param spec   { channels, source, color, strength, falloff, span, ambient,
  *                 shimmerAmp, shimmerFreq, shimmerSpeed, tag }
- * @returns a handle: setChannel(i, v), setAll(v), setColor(hex), update(dt),
- *          dispose(). Null if nothing could be attached.
+ * @returns a handle: setChannel(i, v), setAll(v), setColor(hex),
+ *          setChannelColor(i, hex|null), update(dt), dispose(). Null if
+ *          nothing could be attached.
  */
 export function attachBioluminescence(root, spec = {}) {
   const cfg = { ...DEFAULTS, ...spec };
   const channels = Math.max(1, Math.round(cfg.channels ?? 1));
+
+  // The BASE colour, and the per-channel colours that default to it.
+  //
+  // Colour is per channel because "which arm is doing something" and "what
+  // colour is that arm right now" are the same question asked twice — the
+  // octopus takes the colour of whatever each tentacle is reaching for (see
+  // CONFIG.octoGrab.camouflage), and a single uniform could only ever paint
+  // all six the same. A caller that never touches setChannelColor gets
+  // exactly the single-colour behaviour this system had before: every channel
+  // is seeded from `color` and follows it whenever it changes.
+  const baseColor = new THREE.Color(cfg.color);
+  const chColor = new Float32Array(channels * 3);
+  // Which channels the caller has pinned to a colour of their own — those are
+  // the ones setColor/apply must NOT overwrite, or a per-frame apply() from
+  // the tuner would stamp the base colour back over the camouflage every
+  // frame and nothing would ever look tinted.
+  const chPinned = new Array(channels).fill(false);
+  const _c = new THREE.Color();
+  for (let i = 0; i < channels; i++) baseColor.toArray(chColor, i * 3);
+
+  // Moving the base moves every channel that hasn't been pinned. Skipped
+  // outright when the colour didn't change, because the tuner's per-frame
+  // apply() calls straight into here with the same value on most frames.
+  function setBaseColor(hex) {
+    _c.set(hex);
+    if (_c.equals(baseColor)) return;
+    baseColor.copy(_c);
+    for (let i = 0; i < channels; i++) {
+      if (!chPinned[i]) baseColor.toArray(chColor, i * 3);
+    }
+  }
 
   // The uniform objects are created HERE and handed to each shader, rather
   // than written into shader.uniforms from inside onBeforeCompile — that
@@ -241,7 +291,7 @@ export function attachBioluminescence(root, spec = {}) {
   // silently dropped. Same reasoning as makeOutlineMaterial's uOutline.
   const uniforms = {
     uGlowIntensity: { value: new Float32Array(channels).fill(cfg.ambient) },
-    uGlowColor: { value: new THREE.Color(cfg.color) },
+    uGlowChColor: { value: chColor },
     uGlowStrength: { value: cfg.strength },
     uGlowFalloff: { value: cfg.falloff },
     uGlowSpan: { value: cfg.span },
@@ -301,11 +351,29 @@ export function attachBioluminescence(root, spec = {}) {
     setAll(value) {
       uniforms.uGlowIntensity.value.fill(Math.max(cfg.ambient, value));
     },
-    setColor(hex) { uniforms.uGlowColor.value.set(hex); },
+    setColor: setBaseColor,
+    /**
+     * Give ONE region its own colour. `null` hands it back to the base colour
+     * and stops it being pinned, which is how a channel returns to the flock
+     * after whatever tinted it has gone away.
+     */
+    setChannelColor(i, color) {
+      if (i < 0 || i >= channels) return;
+      if (color == null) {
+        chPinned[i] = false;
+        baseColor.toArray(chColor, i * 3);
+        return;
+      }
+      chPinned[i] = true;
+      _c.set(color);
+      _c.toArray(chColor, i * 3);
+    },
+    /** What the base colour currently is, for callers easing toward it. */
+    baseColor,
     // Reads the live config every frame on purpose, so the tuner sliders move
     // the look of a creature already on screen instead of only new ones.
     apply(look = {}) {
-      if (look.color != null) uniforms.uGlowColor.value.set(look.color);
+      if (look.color != null) setBaseColor(look.color);
       if (look.strength != null) uniforms.uGlowStrength.value = look.strength;
       if (look.falloff != null) uniforms.uGlowFalloff.value = look.falloff;
       if (look.span != null) uniforms.uGlowSpan.value = look.span;
@@ -327,7 +395,13 @@ export function attachBioluminescence(root, spec = {}) {
 
 function injectInto(mat, uniforms, channels, tag) {
   const previous = mat.onBeforeCompile;
-  mat.userData.__biolum = true;
+  // The uniform bag rather than a bare flag. It is still only ever tested for
+  // truthiness (the guard above, which stops a material being injected twice),
+  // but hanging the live uniforms off the material is the only way anything
+  // outside this file can see what a glow is actually doing — there is no GL
+  // context in the Node harnesses, so shader.uniforms never gets populated
+  // there and the closure would otherwise be unreachable.
+  mat.userData.__biolum = uniforms;
 
   // three keys compiled programs partly by the SOURCE of onBeforeCompile, and
   // every creature instance gets its own material. Pinning the key to a

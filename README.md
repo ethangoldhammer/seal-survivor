@@ -24,7 +24,7 @@ which takes a minute or two. So the normal loop is edit, check with
 `npm run dev`, commit, push.
 
 Deployed builds ship without the authoring UI — no `` ` `` tuner, no T panel, no
-G/B overlays, no P/X debug keys. Adding `?tune` to the URL brings them all back,
+G/B overlays, no P/X/N debug keys. Adding `?tune` to the URL brings them all back,
 so tuning against the live build still works without a rebuild.
 
 Two escape hatches, for when git isn't the right path:
@@ -191,6 +191,18 @@ time it is — a creature tagged there stays out of the pool until the sun goes
 down, fades in across dusk, and is held back again at dawn. It is the only one
 of the three that can go back to "not yet". See `CONFIG.spawn.nightlife`.
 
+To look at the glowing variants without waiting for the spawner to offer them —
+the rarest is two per arena behind a level gate — press **`N`** in game. It puts
+one of each tagged creature in a row beside the seal and logs the hour, so you
+can compare the presets side by side. Judge them after dark: the glow is
+additive, so in daylight they read as dark fish.
+
+"What time it is" starts as the player's own: the clock opens at the device's
+local time of day (`dayNight.startFromSystemClock`) and then runs forward at
+`scale × rate` from there, so a session that starts after dark starts with the
+glowing schools already out. Only the opening hour comes from the wall clock —
+a game day is minutes long, and pinning it to a real one would stop the sky.
+
 Behaviors are `'chase'`, `'keepDistance'`, `'orbit'`, `'swarm'` and `'hunt'`.
 New ones go in the `BEHAVIORS` map in `path/src/entities/enemies.js` — write a
 function that sets a desired velocity, reference it by name.
@@ -308,6 +320,36 @@ directly.
 Hit-stop is deliberately rare: it's rate-limited and reserved for big kills and
 taking damage, because wiring it to every bullet impact left the game running at
 23% slow-motion. Shake is clamped for the same reason.
+
+### Taking damage
+
+The one event that does *not* get called directly is `playerHit`. Damage to the
+seal goes through `systems/playerDamageFx.js`, because damage arrives in two
+shapes that look identical at the call site: a bullet is one number on one
+frame, while contact with a body is a *rate* — `combat.js` hands over
+`contactDamage * dt`, so a megalodon's 42/second shows up as 0.7 on a 60fps
+frame. Any threshold on a single call is therefore really a question about
+framerate, which is how every creature in the game used to be able to eat you in
+complete silence.
+
+So damage accumulates instead, and the pile is spent as one hit once it's worth
+showing — capped to one hit every `fx.playerDamage.minGap`, so swimming into a
+school reads as solid repeated hits rather than forty overlapping copies of the
+same sound. Everything downstream is scaled by the **fraction of the health bar
+lost**, not by raw damage: max HP moves a long way over a run, and 20 damage at
+300 HP is not the emergency the same 20 was on wave one. That one number drives
+the shake, the spray, the ripple, the bloom pulse and the volume of the grunt.
+
+The seal's outline flashes red alongside it (`playerOutline.hit`) — full red on
+any hit whatever its size, because a rim only part of the way to red just reads
+as an off-colour outline, with the *brightness and duration* carrying how much
+it cost. `npm run test:damagefx` drives all of it headless, including every
+contact rate in the roster at 30, 60 and 144fps.
+
+The damage shake is one of the smallest numbers in `CONFIG.feedback` on purpose:
+it gets multiplied by a 0.35–2.0 scale before it lands, and that range only
+exists *below* `fx.maxShake`. Anything that hits the ceiling on an ordinary hit
+is a constant rattle with the scaling quietly clamped out of it.
 
 ## Water
 
@@ -696,11 +738,45 @@ To make it global, deploy the Cloudflare Worker in `server/` and put its URL in
 [server/README.md](server/README.md). Vite inlines that at build time, so
 changing it means rebuilding.
 
+Each character typed into the name field ticks (`uiType`). It is the quietest
+sound in the menu and the only synthesised one, because it fires a dozen times
+in two seconds and a repeated identical sample at that rate is a machine gun —
+`pitchVary` is what keeps it from becoming one.
+
 Submissions are range-checked, checked for internal consistency, and
-rate-limited per IP, and names are stripped of markup and capped at 12
+rate-limited per IP, and names are stripped of markup and capped at 24
 characters. That keeps the board readable; it is not anti-cheat, since the
 payload is written by the browser. See `server/README.md` for what that does
 and doesn't buy you.
+
+**The name length lives in two places and they must agree**: `MAX_NAME_LEN` in
+`path/src/systems/leaderboard.js` and in `server/leaderboard-worker.js`. The
+server is the authority and truncates anything longer, so raising only the
+client lets players type a name the board then silently cuts. Changing it means
+redeploying the worker, not just rebuilding the game.
+
+## The game-over headline
+
+The line above your score is drawn from **`path/src/quips.csv`**, one row per
+line, the same spreadsheet-backed shape as `upgrades.csv` and `enemies.csv`:
+
+| column | meaning |
+| --- | --- |
+| `id` | a short handle. Must be unique; never shown. |
+| `text` | the headline itself. |
+| `enabled` | `FALSE` takes it out of rotation. Blank means enabled. |
+| `weight` | how likely, relative to the other rows. Blank means 1, `0` never. |
+
+It's a table rather than a string because dying is the most-repeated moment in
+the game, so it's the line the player reads more often than any other — and
+adding one should be a row, not a code change. Use `weight` if you want
+"You Died!" to be the common case with the punchier lines kept rare; a joke you
+see every third death stops being one.
+
+A quip is content in a file that can be edited by hand, so every failure path —
+empty file, deleted column, every row disabled, all weights zero — falls back
+to "You Died!" rather than rendering a blank headline. `npm run test:quips`
+pins that down.
 
 ## Weapons and upgrades
 

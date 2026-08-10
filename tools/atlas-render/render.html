@@ -1,0 +1,190 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>atlas renderer</title>
+<style>body{margin:0;background:#111;color:#ddd;font:13px monospace}
+#log{padding:10px;white-space:pre-wrap;max-height:40vh;overflow:auto}
+canvas{display:block;margin:8px auto;background:#222}</style>
+<div id="log">booting…</div>
+<script type="importmap">
+{"imports":{"three":"/three/build/three.module.js","three/addons/":"/three/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+const SIZE = 512;
+const log = (m) => { document.getElementById('log').textContent += '\n' + m; };
+
+// Renders on demand and never inside a rAF loop: this page has to work in a
+// backgrounded tab, where rAF simply does not fire.
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(2);
+renderer.setSize(SIZE, SIZE);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const AXES = { '+X': [1,0,0], '-X': [-1,0,0], '+Y': [0,1,0], '-Y': [0,-1,0], '+Z': [0,0,1], '-Z': [0,0,-1] };
+const v = (n) => new THREE.Vector3().fromArray(AXES[n] ?? AXES['+Z']);
+
+// Every creature is shown in the same frame: its declared `forward` points
+// screen-right and its `up` points screen-up, so the boats and the moray come
+// out rotated here exactly as they are rotated in the game.
+function orient(obj, forward, up) {
+  const f = v(forward), u = v(up).normalize();
+  u.addScaledVector(f, -u.dot(f)).normalize();       // orthogonalise
+  const r = new THREE.Vector3().crossVectors(f, u);  // model's own right
+  // Columns are where the model's axes should land: forward -> +X, up -> +Y.
+  const m = new THREE.Matrix4().makeBasis(f, u, r).invert();
+  obj.applyMatrix4(m);
+}
+
+function frame(root) {
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3(); box.getSize(size);
+  const centre = new THREE.Vector3(); box.getCenter(centre);
+  root.position.sub(centre);
+  return Math.max(size.x, size.y, size.z) || 1;
+}
+
+function makeScene() {
+  const scene = new THREE.Scene();
+  // Neutral studio light: a cool sky/ground hemisphere so nothing goes pure
+  // black in shadow, a warm key from front-left-above, and a dim rim behind to
+  // separate a dark animal from a transparent background.
+  scene.add(new THREE.HemisphereLight(0xbfd8e0, 0x2a3438, 2.1));
+  const key = new THREE.DirectionalLight(0xfff2e0, 2.6); key.position.set(-3, 4, 5); scene.add(key);
+  const fill = new THREE.DirectionalLight(0xcfe4ff, 0.9); fill.position.set(4, 1, 3); scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xffffff, 1.2); rim.position.set(1, 2, -5); scene.add(rim);
+  return scene;
+}
+
+async function loadModel(spec) {
+  const url = '/models/' + spec.file;
+  if (spec.fmt === 'fbx') return { root: await new FBXLoader().loadAsync(url), clips: [] };
+  const g = await new GLTFLoader().loadAsync(url);
+  return { root: g.scene, clips: g.animations ?? [] };
+}
+
+// Trim the transparent margin off a render.
+//
+// The camera frames on the model's LONGEST axis against a square canvas, so a
+// shark -- 4x longer than it is tall -- leaves most of the height empty. Left
+// uncropped that empty space is what the page ends up laying out around: every
+// gallery cell gets sized for a square that is three-quarters nothing, and the
+// wasted pixels are carried in the base64 too.
+//
+// Reads the alpha channel to find the real bounds. A few pixels of padding are
+// kept so antialiased edges are not clipped.
+function crop(canvas, pad = 6) {
+  const ctx = canvas.getContext('2d') ?? null;
+  // WebGL canvases have no 2d context, so copy through one first.
+  const src = document.createElement('canvas');
+  src.width = canvas.width; src.height = canvas.height;
+  const sctx = src.getContext('2d');
+  sctx.drawImage(canvas, 0, 0);
+  const { data, width, height } = sctx.getImageData(0, 0, src.width, src.height);
+  let x0 = width, y0 = height, x1 = -1, y1 = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] > 8) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (x1 < 0) return src;                 // fully transparent: nothing to trim
+  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
+  x1 = Math.min(width - 1, x1 + pad); y1 = Math.min(height - 1, y1 + pad);
+  const out = document.createElement('canvas');
+  out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
+  out.getContext('2d').drawImage(src, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+
+async function shoot(spec) {
+  const { root, clips } = await loadModel(spec);
+
+  // A skinned creature in its bind pose reads as a specimen, not an animal.
+  // Sampling the swim clip a third of the way in gives it a real swimming
+  // shape — a tail mid-beat, fins spread — which is the whole point of asking
+  // for the skinned appearance rather than the geometry.
+  let posed = 'bind pose';
+  if (clips.length) {
+    const wanted = spec.wantClips?.swim ?? spec.wantClips?.idle;
+    const clip = (wanted && clips.find((c) => c.name === wanted)) || clips[0];
+    if (clip && clip.duration > 0) {
+      const mixer = new THREE.AnimationMixer(root);
+      const action = mixer.clipAction(clip);
+      action.play();
+      mixer.setTime(clip.duration * 0.33);
+      posed = `posed at 33% of "${clip.name}"`;
+    }
+  }
+
+  // The hammerhead is the one asset whose base colour lives outside its
+  // binary, so without this it would render as flat untextured grey — the very
+  // thing the plate is meant to show is not the case.
+  if (spec.baseColorMap) {
+    const tex = await new THREE.TextureLoader().loadAsync(spec.baseColorMap);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    // Same override assets.js honours: a sidecar on a model that ships no
+    // maps of its own carries the baking tool's convention, not the model's.
+    tex.flipY = spec.flipY ?? (spec.fmt === 'fbx');
+    root.traverse((o) => {
+      if (o.isMesh || o.isSkinnedMesh) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const mm of mats) { mm.map = tex; mm.needsUpdate = true; }
+      }
+    });
+  }
+
+  root.traverse((o) => {
+    if (o.isMesh || o.isSkinnedMesh) {
+      o.frustumCulled = false;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const mm of mats) {
+        mm.side = THREE.DoubleSide;      // several of these are single-sided fins
+        if (mm.transparent && mm.opacity === 1) mm.transparent = false;
+      }
+    }
+  });
+
+  const scene = makeScene();
+  const holder = new THREE.Group();
+  holder.add(root);
+  orient(holder, spec.forward, spec.up);
+  scene.add(holder);
+  const span = frame(holder);
+
+  // Three-quarter view: round to the front-left and slightly above, which
+  // reads a body's depth where a flat side-on does not.
+  const cam = new THREE.PerspectiveCamera(30, 1, span / 100, span * 20);
+  const d = span * 2.05;
+  cam.position.set(-d * 0.42, d * 0.30, d * 0.86);
+  cam.lookAt(0, 0, 0);
+
+  renderer.render(scene, cam);
+  const blob = await new Promise((res) => crop(renderer.domElement).toBlob(res, 'image/png'));
+  await fetch('/shot/' + spec.key + '.png', { method: 'POST', body: blob });
+  return `${spec.key}: ${(blob.size / 1024).toFixed(0)}KB, ${posed}`;
+}
+
+const specs = await (await fetch('/list.json')).json();
+window.__total = specs.length;
+window.__done = 0;
+window.__fails = [];
+document.getElementById('log').textContent = `rendering ${specs.length} models`;
+
+for (const spec of specs) {
+  try {
+    log(await shoot(spec));
+  } catch (err) {
+    window.__fails.push(spec.key + ': ' + (err?.message ?? err));
+    log(`FAIL ${spec.key}: ${err?.message ?? err}`);
+  }
+  window.__done++;
+}
+window.__finished = true;
+log(`\nDONE ${window.__done}/${specs.length}, ${window.__fails.length} failed`);
+</script>

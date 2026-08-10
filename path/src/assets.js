@@ -277,6 +277,24 @@ export const ASSETS = {
       '/sprites/starfish-4.webp',
       '/sprites/starfish-5.webp',
     ],
+    // GLOWING, and this number is the reason it can be. The five drawings are
+    // not calibrated against each other — measured mean linear luminance runs
+    // 0.054 (starfish-5) to 0.29 (starfish-4), a factor of five. That gap is
+    // invisible on an ordinary sprite and fatal on a glowing one: a single
+    // glow multiplier pushes the bright stars past the bloom threshold and
+    // leaves the dark ones under it, so the same throw produces one star that
+    // blazes and one that does not light at all.
+    //
+    // Normalising to 0.34 puts every variant a comfortable way above
+    // CONFIG.bloom.threshold before the per-asset glow is applied on top, so
+    // `glow` means one thing across the whole pool. See normalizeSpriteLuma.
+    //
+    // Deliberately NOT additive blending, which is the other way to make a
+    // sprite look emissive: these are drawn stars with dark outlines and
+    // interior shading, and additive throws all of that away — the outline is
+    // the drawing. Overdriven colour into the HDR bright-pass keeps the art
+    // and puts a bloom halo around it, which is the look being asked for.
+    spriteNormalize: 0.34,
     shape: 'octahedron', radius: 0.22, color: 0xff7fb0, unlit: true,
   },
   seagull: {
@@ -371,6 +389,11 @@ export const ASSETS = {
       bark: 'Seal_Rig|Seal_Rig|Seal_Rig|clapping',
       death: 'Seal_Rig|Seal_Rig|Seal_Rig|sleep',
     },
+    // Procedural glow, and the one asset in the game that varies it PER
+    // INDIVIDUAL: systems/sealTeam.js stamps a different pattern and palette
+    // onto each squad member's own material (see CONFIG.sealTeam.skin), so
+    // five escorts built from one model read as five different animals.
+    biolumSkin: 'escort',
     shape: 'cone', radius: 0.3, height: 0.8, color: 0xbfe6ff, unlit: true,
   },
 
@@ -588,6 +611,36 @@ export const ASSETS = {
         'unused_valvebipedcaudal03_014',
       ],
       headChain: ['head_neck_lower_020', 'head_neck_upper_021'],
+      // FINS. The wag chain above undulates the spine, but every fin on this
+      // model hangs off `pelvis_03`, which the wag chain deliberately does NOT
+      // include — so until now the fins were welded to the body and the only
+      // thing moving was the spine behind them. These give each one its own
+      // lag, which on a creature with no animation clips at all is the whole
+      // of the motion they have.
+      //
+      // Nothing here is driven by the sine wag, so a fin only moves when the
+      // BODY does: the spring measures its bone directions in world space, and
+      // a turn swings them. That is exactly the read wanted — fins that trail
+      // through a turn and settle after it.
+      //
+      // Verified against the file: each is a clean single-child chain ending on
+      // a bone that still has an `_end` child, so the solver reads its tip
+      // direction from that child rather than the tipLength fallback.
+      springChains: [
+        // The lower caudal lobe. Forks off spine_8_011, which is mid-wag-chain,
+        // so it already inherits some of the spine's motion — this adds its own
+        // lag on top, which is right for a lobe that flexes separately from the
+        // upper one.
+        { role: 'fin', bones: ['unused_valvebipedcaudal_lower01_015', 'unused_valvebipedcaudal_lower02_016'] },
+        { role: 'fin', bones: ['fin_pectoral_l_026', 'unused_valvebipedl_pectoral02_027'] },
+        { role: 'fin', bones: ['fin_pectoral_r_024', 'unused_valvebipedr_pectoral02_025'] },
+        { role: 'fin', bones: ['fin_dorsal_018', 'unused_valvebipeddorsal02_019'] },
+      ],
+      // STUB — the pelvic/anal pair, ['unused_valvebipedl_buttfin_00'] and
+      // ['unused_valvebipedr_buttfin_017'], not enabled. Each is ONE bone above an
+      // `_end` leaf, and the solver needs two DRIVEN bones. Including the `_end`
+      // to make up the count would rotate a bone the exporter emitted as a pure
+      // direction marker, which is not what it is for.
     },
     // HEAD-LOOK — points the snout at whatever this shark is chasing, via the
     // CCD chain in systems/ikChain.js. See systems/headLook.js and
@@ -722,20 +775,35 @@ export const ASSETS = {
     //
     // Chain ends on the upper caudal lobe, so the trail carries all the way
     // out to the fin tip instead of stopping at the peduncle.
+    //
+    // FINS TOO, since this is an apex. The tail alone was the cheap 80%, but a
+    // body this size turning with four rigid blades stuck to it is the thing
+    // that still read as a prop. Each fin is its own chain and its own solver
+    // for the reason spelled out on enemyOrca — they branch off the spine, and
+    // the solver assumes a single root-to-tip ordering — and the payoff is that
+    // they lag on their OWN timing rather than as one piece.
+    //
+    // `role: 'fin'` solves them against a stiffer scaled copy of the spring
+    // config; see CONFIG.animation.spring.roleLooseness. A fin run at the
+    // tail's numbers trails as far as a tail does over a fifth the span, which
+    // reads as detached rather than as flexing.
+    //
+    // Every chain here was verified against the file: each is a clean
+    // single-child parent chain, and none of the roots forks into the body.
     rig: {
       springChains: [
-        ['spine002_01', 'spine001_02', 'spine_03',
-         'back_finTBk_04', 'back_finT001Bk_05', 'back_finT002Bk_06'],
+        { role: 'tail',
+          bones: ['spine002_01', 'spine001_02', 'spine_03',
+                  'back_finTBk_04', 'back_finT001Bk_05', 'back_finT002Bk_06'] },
+        // The lower caudal lobe forks off ABOVE where the tail chain starts, so
+        // it is not already riding that chain's lag — unlike the orca's fluke
+        // lobes, which hang off the last tail bone and are deliberately still
+        // left alone below.
+        { role: 'fin', bones: ['back_finBBk_07', 'back_finB001Bk_08'] },
+        { role: 'fin', bones: ['shoulderL_018', 'side_finL_019', 'side_finL001_020'] },
+        { role: 'fin', bones: ['shoulderR_021', 'side_finR_022', 'side_finR001_023'] },
+        { role: 'fin', bones: ['top_fin_024', 'top_fin001_025'] },
       ],
-      // STUB — other fins, not enabled. Each of these is a valid independent
-      // chain that would get its own lag if appended to springChains above.
-      // Left off for now because every extra chain is another spring solve
-      // per creature per frame, and the tails are where the read actually is.
-      // Bone names verified against the file:
-      //   lower caudal lobe  ['back_finBBk_07', 'back_finB001Bk_08']
-      //   pectoral L         ['shoulderL_018', 'side_finL_019', 'side_finL001_020']
-      //   pectoral R         ['shoulderR_021', 'side_finR_022', 'side_finR001_023']
-      //   dorsal             ['top_fin_024', 'top_fin001_025']
     },
     // Head-look — see enemyShark. Stops at spine007_015 rather than running
     // on into jaw_016, and starts at spine006_014 rather than spine005_013,
@@ -759,15 +827,18 @@ export const ASSETS = {
     // pectorals and Spine_03_02 carries the dorsal, so either would swing a
     // fin set with the tail. Spine_04 is the first bone whose only descendant
     // is the tail itself. Ends on Tail_05_08, the upper lobe.
+    // Fins too — see enemyMegalodon. All four are 2-bone chains here, the
+    // solver's minimum, so they hinge rather than curl. That is this rig, not a
+    // tuning problem.
     rig: {
       springChains: [
-        ['Spine_04_03', 'Tail_01_04', 'Tail_02_05', 'Tail_03_06', 'Tail_04_07', 'Tail_05_08'],
+        { role: 'tail',
+          bones: ['Spine_04_03', 'Tail_01_04', 'Tail_02_05', 'Tail_03_06', 'Tail_04_07', 'Tail_05_08'] },
+        { role: 'fin', bones: ['Tail_06_09', 'Tail_07_010'] },
+        { role: 'fin', bones: ['Fin_L_01_013', 'Fin_L_02_014'] },
+        { role: 'fin', bones: ['Fin_R_01_015', 'Fin_R_02_016'] },
+        { role: 'fin', bones: ['Fin_01_011', 'Fin_02_012'] },
       ],
-      // STUB — other fins, not enabled. See enemyMegalodon.
-      //   lower caudal lobe  ['Tail_06_09', 'Tail_07_010']
-      //   pectoral L         ['Fin_L_01_013', 'Fin_L_02_014']
-      //   pectoral R         ['Fin_R_01_015', 'Fin_R_02_016']
-      //   dorsal             ['Fin_01_011', 'Fin_02_012']
     },
     // Head-look — see enemyShark. A ONE-BONE chain, which is everything this
     // rig has: Head_017 hangs straight off Spine_01_00, and Spine_01_00 is
@@ -815,15 +886,23 @@ export const ASSETS = {
     // read as a stiffer trail than the megalodon's six. That is the rig, not
     // a tuning problem. The caudal lobes fork at Bone004_Armature_3, and the
     // solver picks up the first of them as its direction reference.
+    // Fins too — see enemyMegalodon. They matter more on this model than on
+    // any other apex, because its tail chain is the shortest in the roster
+    // (three bones) and so contributes the least secondary motion of the set.
     rig: {
       springChains: [
-        ['Bone003_Armature_5', 'Bone002_Armature_4', 'Bone004_Armature_3'],
+        { role: 'tail', bones: ['Bone003_Armature_5', 'Bone002_Armature_4', 'Bone004_Armature_3'] },
+        { role: 'fin', bones: ['Bone011_Armature_22', 'Bone013_Armature_21', 'Bone015_Armature_20'] },
+        { role: 'fin', bones: ['Bone012_Armature_25', 'Bone014_Armature_24', 'Bone016_Armature_23'] },
+        { role: 'fin', bones: ['Bone009_Armature_28', 'Bone010_Armature_27'] },
       ],
-      // STUB — other fins, not enabled. See enemyMegalodon.
-      //   pelvic/anal cluster ['Bone017_Armature_12', 'Bone018_Armature_8']
-      //   pectoral L          ['Bone011_Armature_22', 'Bone013_Armature_21', 'Bone015_Armature_20']
-      //   pectoral R          ['Bone012_Armature_25', 'Bone014_Armature_24', 'Bone016_Armature_23']
-      //   dorsal              ['Bone009_Armature_28', 'Bone010_Armature_27']
+      // STUB — the pelvic/anal cluster ['Bone017_Armature_12', 'Bone018_Armature_8'],
+      // still not enabled, and this one is a rig fact rather than a budget call.
+      // Bone017 forks into BOTH Bone018 and Bone019, so a chain through it
+      // drives one of the pair and drags the other along rigidly — the fins
+      // would swing as a welded cluster. There is no fork-free way in: Bone018
+      // then forks again into Bone020 and Bone022. Low on the belly and small,
+      // so it is not worth a bespoke solver.
     },
     // Head-look — see enemyShark. Names mean nothing in this rig, so the
     // chain was read off world positions: this branch runs from z+0.46 out to
@@ -878,6 +957,25 @@ export const ASSETS = {
     // The great white's own biteRig, verified on that model and unchanged
     // here — this is the same file, so the same bone and the same sign hold.
     biteRig: { bone: 'Bone028_Armature_16', axis: 'x', openAngle: -0.5 },
+    // And its rig, for the same reason: same file, same bones. This asset had
+    // no `rig` at all, which meant the one apex in the roster that is supposed
+    // to be the scariest thing in the water was also the only one that swam
+    // rigidly and did not flinch when shot — `hasSpring` was false, so
+    // main.js's impulse call skipped it entirely. Copied rather than shared
+    // because these are per-asset declarations and the great white may yet want
+    // different chains from the abyss one.
+    rig: {
+      springChains: [
+        { role: 'tail', bones: ['Bone003_Armature_5', 'Bone002_Armature_4', 'Bone004_Armature_3'] },
+        { role: 'fin', bones: ['Bone011_Armature_22', 'Bone013_Armature_21', 'Bone015_Armature_20'] },
+        { role: 'fin', bones: ['Bone012_Armature_25', 'Bone014_Armature_24', 'Bone016_Armature_23'] },
+        { role: 'fin', bones: ['Bone009_Armature_28', 'Bone010_Armature_27'] },
+      ],
+    },
+    // NOTE: this asset also has no `lookRig`, so it does not turn its head
+    // toward what it is chasing the way the great white does. Same cause —
+    // nothing was copied across when this entry was cloned — but it is a
+    // separate system from the springs and is left alone here.
     // UNLIT, unlike the creatures these three copy. The glow is ADDITIVE, so
     // anything the scene lights contributes on top of it — and on a broad flat
     // body angled at the key light (the ray, measured: its dorsal surface
@@ -888,6 +986,105 @@ export const ASSETS = {
     biolumSkin: 'abyssHunter',
     tint: 0x141c24,
     shape: 'cone', radius: 0.9, height: 2.6, color: 0x141c24, unlit: true,
+  },
+
+  enemyHammerhead: {
+    model: '/models/hammerhead.glb',
+    // The ONLY model in the roster that needs an explicit diffuse map. Every
+    // other file carries its texture embedded; this one ships none at all —
+    // not even in the 2.25MB source — so its colour lives entirely in these
+    // two sidecars. Without them it renders as flat untextured grey, and
+    // nothing warns, because an absent map is not an error.
+    //
+    // flipY TRUE on a glTF, which breaks the rule the loader derives from the
+    // model format — see the note beside it. Measured, not guessed: at the
+    // format default of false the body still looks plausible (its UV island is
+    // the big central one either way) while every fin lands off its own small
+    // island and picks up the black background between them, so the animal
+    // renders with hard black-and-white patches on the fins and nowhere else.
+    // That is the tell for a vertically mirrored atlas, and it is easy to
+    // misread as bad source art.
+    //
+    // The cause is that these sidecars were NOT thresholded from this model's
+    // own maps the way every other mask here was — the file has none — so they
+    // carry the baking tool's convention instead of the model's. Both sidecars
+    // share one UV layout (the emissive is the diffuse with its brights blown
+    // out), so one value is correct for both.
+    texture: {
+      map: '/textures/hammerhead.jpg',
+      emissive: '/textures/emissive/hammerhead.jpg',
+      flipY: true,
+    },
+    fit: 4.0, // between the shark's 3.8 and the great white's 4.2, as it is in life
+    pivot: 0.15, // turn about the head, not the belly
+    forward: '+Z', up: '+Y', // measured: Head bone at z+3.6, tail tip at z-6.9
+
+    // One clip, so every locomotion state reuses it at its own configured
+    // pace — the same arrangement as mightymeg. It keys all 11 bones, which
+    // matters for the springs below: a clip-keyed bone is rebuilt from the
+    // clip every frame and so has something to spring back toward.
+    animations: { idle: 'Take 001', swim: 'Take 001', boost: 'Take 001' },
+
+    rig: {
+      // THIS RIG RUNS ALONG LOCAL +X, and it is the only one here that does.
+      // Measured, not inferred: every bone's bind offset from its parent comes
+      // out as (1.000, 0.000, 0.000) to three decimals, where every other file
+      // in this project gives (0, 1, 0). All three chains below end on a leaf
+      // bone, so all three consult this — see makeSpring in systems/animation
+      // .js. Left at the default it would hand each chain's last bone a tip
+      // direction square to the bone itself.
+      boneAxis: '+X',
+
+      // The chain starts at Torso2, not Torso1, and this rig makes the reason
+      // unusually easy to see. Skinned and measured at 0.4 rad:
+      //   Torso1  moves 699 verts spanning z -9.2..2.3 — the whole body behind
+      //           the head, max displacement 4.3
+      //   Torso2  moves 472 verts spanning z -9.2..1.1, max 0.75
+      // and the head is NOT under the torso on this rig at all: `Head` and both
+      // pectorals hang off a sibling root (`HeadFin_Rotation`), so bending
+      // Torso1 swings the body while the head stays put and the mesh shears at
+      // the neck. Confirmed the other way too — springing Torso2 moves 23
+      // head-region vertices by at most 0.0155, which is nothing.
+      //
+      // No dorsal or lower-lobe chain, because this rig has no bones for them:
+      // 11 bones total against the megalodon's 29. The dorsal and the caudal
+      // lobes are skinned to the torso and tail and ride them.
+      springChains: [
+        { role: 'tail', bones: ['Torso2', 'Torso3', 'Torso4', 'Tail1', 'Tail2'] },
+        { role: 'fin', bones: ['Fin_L1', 'Fin_L2'] },
+        { role: 'fin', bones: ['Fin_R1', 'Fin_R2'] },
+      ],
+    },
+
+    // HEAD-LOOK — and on this creature it is the whole point of the model. A
+    // hammerhead reads as a hammerhead when the head swings; a shark silhouette
+    // that tracks you is the one thing this rig does better than any other in
+    // the roster.
+    //
+    // A ONE-BONE chain, which is all there is: `Head` hangs straight off
+    // `HeadFin_Rotation`, and that bone also carries both pectorals and moves
+    // 3936 vertices at 0.4 rad — the entire front assembly. Including it would
+    // swing the fins with the skull. systems/headLook.js allows a single bone
+    // for exactly this case.
+    //
+    // tipAxis '+X', measured like everything else here: local +X on `Head`
+    // maps to world (0, 0, 1), dot 1.000 with the model's forward, against
+    // 0.000 for both other axes. tipLength is the bone's own bind length in
+    // the FILE's units — raw, not fit-scaled, since the fit is applied to the
+    // wrapper and never reaches the bone transforms (verified against the
+    // great white, whose declared 0.24 still measures 0.2421 after loading).
+    lookRig: {
+      head: { bones: ['Head'], tipAxis: '+X', tipLength: 1.6 },
+    },
+
+    // NO biteRig, and this is a rig limitation rather than an oversight: there
+    // is no jaw bone in this file. The 11 bones are torso x4, tail x2, head,
+    // the head/fin root and two fins x2 — nothing under the skull to hinge. So
+    // this is the one hunter in the roster that closes without a gape. If it
+    // ever needs one it wants a new bone in the source, not a different bone
+    // name here; systems/jaw.js is simply never built for it (see the biteRig
+    // check in entities/enemies.js).
+    shape: 'cone', radius: 0.85, height: 2.6, color: 0x7d8a94, unlit: true,
   },
 
   // --- schooling prey (behavior:'swarm', prey:true) ---
@@ -1075,8 +1272,9 @@ export const ASSETS = {
     // A cetacean's fluke beats vertically, which is the plane the camera
     // sees, so this is the one creature in the set where the trail reads at
     // full strength rather than partly into the screen.
-    // The orca is the one creature here that springs its fins as well as its
-    // tail — four independent chains. They have to be separate solvers rather
+    // The orca was the FIRST creature here to spring its fins as well as its
+    // tail, and is now one of six — four independent chains. They have to be
+    // separate solvers rather
     // than one long chain: the solver's whole method is each bone measuring
     // its target after its PARENT has moved, which assumes a single root-to-
     // tip ordering, and a body with fins coming off it has no such ordering.
@@ -1090,15 +1288,15 @@ export const ASSETS = {
     // spread to ±X low on the body near the head.
     rig: {
       springChains: [
-        // tail
-        ['hip_01001_024', 'tail_01_025', 'tail_02_026', 'tail_03_027',
-         'tail_04_028', 'tail_05_029', 'tail_05001_030'],
+        { role: 'tail',
+          bones: ['hip_01001_024', 'tail_01_025', 'tail_02_026', 'tail_03_027',
+                  'tail_04_028', 'tail_05_029', 'tail_05001_030'] },
         // dorsal
-        ['fin001_06', 'fin002_07', 'fin003_08', 'fin004_09'],
+        { role: 'fin', bones: ['fin001_06', 'fin002_07', 'fin003_08', 'fin004_09'] },
         // pectoral L
-        ['Thigh_F01_L_016', 'Foot_F02_L_017', 'Foot_F03_L_018', 'Foot_F04_L_019'],
+        { role: 'fin', bones: ['Thigh_F01_L_016', 'Foot_F02_L_017', 'Foot_F03_L_018', 'Foot_F04_L_019'] },
         // pectoral R
-        ['Thigh_F01_R_020', 'Foot_F02_R_021', 'Foot_F03_R_022', 'Foot_F04_R_023'],
+        { role: 'fin', bones: ['Thigh_F01_R_020', 'Foot_F02_R_021', 'Foot_F03_R_022', 'Foot_F04_R_023'] },
       ],
       // STUB — the fluke lobes, still not enabled. They hang off the last
       // tail bone, so they already ride the tail's own trail; giving them
@@ -1150,15 +1348,22 @@ export const ASSETS = {
     // tail00_018 immediately forks into the two flukes, so there is nowhere
     // further to run. That is the solver's minimum, and it will read as a
     // hinge rather than as a wave — a rig limitation, not a tuning one.
+    //
+    // The flukes and pectorals carry the motion here BECAUSE the tail is only
+    // two bones — this is the rig with the least spine to work with and the
+    // most to gain from the rest of the skeleton. Unlike the orca's fluke lobes
+    // (left off deliberately), these hang off tail00_018, which is the LAST
+    // bone of a 2-bone chain and therefore barely moves: the tail's own lag has
+    // almost no span to accumulate over, so the flukes are not double-lagged in
+    // any meaningful way, they are where the trail actually happens.
     rig: {
       springChains: [
-        ['pelvis_017', 'tail00_018'],
+        { role: 'tail', bones: ['pelvis_017', 'tail00_018'] },
+        { role: 'fin', bones: ['leg_L_019', 'foot_L_020'] },
+        { role: 'fin', bones: ['leg_R_021', 'foot_R_022'] },
+        { role: 'fin', bones: ['shoulder_L_011', 'arm_L_012', 'hand_L_013'] },
+        { role: 'fin', bones: ['shoulder_R_014', 'arm_R_015', 'hand_R_016'] },
       ],
-      // STUB — other fins, not enabled. See enemyMegalodon.
-      //   fluke L    ['leg_L_019', 'foot_L_020']
-      //   fluke R    ['leg_R_021', 'foot_R_022']
-      //   pectoral L ['shoulder_L_011', 'arm_L_012', 'hand_L_013']
-      //   pectoral R ['shoulder_R_014', 'arm_R_015', 'hand_R_016']
     },
     // Head-look — see enemyShark. The best-shaped head chain in the set: a
     // real neck bone and a real skull, both keyed by the 'move' clip, and
@@ -1461,7 +1666,16 @@ export async function preloadAssets(onProgress) {
         // origin; FBXLoader sets nothing, so an FBX keeps the THREE.Texture
         // default of true. A texture we load ourselves has to match whatever
         // the model's own maps did, or it renders vertically mirrored.
-        const flipY = /\.fbx$/i.test(def.model ?? '');
+        //
+        // `def.texture.flipY` overrides that, and the reason it has to exist is
+        // that the rule above assumes the loose texture was DERIVED FROM the
+        // model's own maps — which is true of every emissive mask here, since
+        // they were thresholded from the embedded diffuse and so inherit its
+        // orientation. It is not true of a model that ships no maps at all: its
+        // sidecars came from somewhere else entirely and carry whatever
+        // convention that tool wrote. See enemyHammerhead, which is the only
+        // asset in that position.
+        const flipY = def.texture?.flipY ?? /\.fbx$/i.test(def.model ?? '');
         let overrideTex = null;
         if (def.texture?.map) {
           try {
@@ -2495,6 +2709,91 @@ export async function loadUploadedSprite(key, file, size = 1) {
 // per spawn. Files that fail to load are dropped individually, so four good
 // images out of five still give a pool of four rather than nothing; if every
 // one fails the key falls back to its built-in shape.
+// Mean LINEAR luminance of a texture's opaque pixels, or null if it can't be
+// measured. Same 16x16 canvas downscale creatureTint uses in systems/
+// octoGrab.js — 256 samples however big the image is — and the same guards:
+// no document in the Node harnesses, and a tainted or undecoded image falls
+// back to null rather than throwing.
+//
+// LINEAR, not the raw bytes, and that is the whole reason this is worth
+// measuring at all. The bytes are sRGB; the renderer and the bloom bright-pass
+// both work in linear, where sRGB 128 is 0.216 rather than 0.5. Averaging the
+// bytes would rank the sprites correctly but scale them by numbers that mean
+// nothing to the thing doing the thresholding.
+function averageSpriteLuma(tex) {
+  const img = tex?.image;
+  if (!img || typeof document === 'undefined') return null;
+  const w = img.width ?? img.videoWidth ?? 0;
+  const h = img.height ?? img.videoHeight ?? 0;
+  if (!w || !h) return null;
+
+  try {
+    const N = 16;
+    const canvas = document.createElement('canvas');
+    canvas.width = N;
+    canvas.height = N;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, N, N);
+    const data = ctx.getImageData(0, 0, N, N).data;
+
+    const toLinear = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      // A drawn sprite is mostly transparent background — averaging it in
+      // would rank every star by how much empty space is around it rather
+      // than by how bright the star is.
+      if (data[i + 3] < 8) continue;
+      const r = toLinear(data[i] / 255);
+      const g = toLinear(data[i + 1] / 255);
+      const b = toLinear(data[i + 2] / 255);
+      sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      n++;
+    }
+    return n ? sum / n : null;
+  } catch {
+    return null;
+  }
+}
+
+// SPRITE LUMINANCE NORMALIZATION — why a glowing sprite pool needs it.
+//
+// A pool is several DRAWN images, and drawn images are not calibrated against
+// each other. The five starfish measure a mean linear luminance of 0.054 to
+// 0.29 — a factor of five — which is invisible while they are ordinary
+// sprites and fatal the moment they are meant to glow: one glow multiplier
+// puts the bright ones well past the bloom threshold and leaves the dark ones
+// under it, so the same ability throws two stars that blaze and one that does
+// not light at all. That reads as a bug, not as variety.
+//
+// So each variant is scaled to a common target BEFORE the glow slider is
+// applied. `glow` then means the same thing for every star in the pool, and
+// the art keeps its own internal contrast — this is one multiply per variant,
+// not a per-pixel remap, so a star with bright highlights still has them.
+//
+// Stored on the material rather than folded into its colour, because
+// applyColorAndGlow rewrites that colour from scratch every time a tint or
+// glow changes and would throw a baked-in factor away on the first slider
+// touch. Clamped: a nearly-black variant would otherwise ask for a multiplier
+// in the hundreds and come back as a white blob.
+// Exported for tools/sprite-glow-test.mjs, which measures the real files.
+export function spriteLumaNorm(measured, target) {
+  return Math.min(6, Math.max(0.2, target / Math.max(1e-4, measured)));
+}
+
+function normalizeSpriteLuma(mesh, tex, target, key) {
+  const measured = averageSpriteLuma(tex);
+  const mat = mesh?.material;
+  // A texture that failed to decode leaves the variant un-normalised rather
+  // than scaled by a garbage factor — it will simply glow like it used to.
+  if (!mat || !measured) return;
+  mat.userData.__spriteLumaNorm = spriteLumaNorm(measured, target);
+  // Re-resolved rather than multiplied in here, so this lands through the same
+  // one path that owns an unlit material's colour.
+  applyColorAndGlow(key);
+}
+
 async function loadDeclaredSprites(key, def, textureLoader) {
   const size = spriteSizeFor(key);
   const meshes = [];
@@ -2503,6 +2802,7 @@ async function loadDeclaredSprites(key, def, textureLoader) {
       const tex = await textureLoader.loadAsync(url);
       tex.colorSpace = THREE.SRGBColorSpace;
       meshes[i] = makeSpriteMesh(key, tex, size);
+      if (def.spriteNormalize) normalizeSpriteLuma(meshes[i], tex, def.spriteNormalize, key);
     } catch (err) {
       console.warn(`[assets] "${key}" sprite ${url} failed to load — skipping this variant.`, err?.message ?? err);
     }
@@ -2587,9 +2887,15 @@ function applyColorAndGlow(key) {
       // past 1.0. That's only meaningful because the scene renders to an HDR
       // target — the bloom bright-pass sees the true value instead of a
       // pre-clamped white. Same mechanism the particle overdrive uses.
+      // A sprite pool's per-variant brightness correction rides along here —
+      // see normalizeSpriteLuma. It has to be inside this function rather than
+      // baked into the colour at load, because this is the one place that
+      // rewrites an unlit material's colour and it starts from `base` every
+      // time; a baked factor would survive exactly until the first tint or
+      // glow change and then silently vanish.
       const g = st.glow ?? 1;
       m.color.set(base);
-      m.color.multiplyScalar(g);
+      m.color.multiplyScalar(g * (m.userData.__spriteLumaNorm ?? 1));
     }
   }
 }

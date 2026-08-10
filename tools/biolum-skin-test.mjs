@@ -31,7 +31,7 @@ import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import {
   attachBiolumSkin, applyBiolumSkinSettings, updateBiolumSkin, instantiateBiolumSkin,
-  BIOLUM_PATTERNS, patternIndex, biolumSkinMaterialCount,
+  BIOLUM_PATTERNS, patternIndex, biolumSkinMaterialCount, setBiolumSkinVariant,
 } from '../path/src/systems/biolumSkin.js';
 import * as THREE_NS from 'three';
 import { CONFIG, TUNER_SCHEMA, withoutInheritedPresetKeys } from '../path/src/config.js';
@@ -404,6 +404,59 @@ section('SAVED SNAPSHOT');
   check('and arrives late enough that its first night has come',
     glowCreatures.every((k) => (CONFIG.enemies[k].minDifficulty ?? 0) > 0),
     glowCreatures.map((k) => `${k}@${CONFIG.enemies[k].minDifficulty}`).join(', '));
+}
+
+// --- per-seal variants ------------------------------------------------------
+// The seal team is the one asset that varies its look PER INDIVIDUAL rather
+// than per species: one model, one shared `escort` preset, and a different
+// pattern and palette stamped onto each squad member. The failure this guards
+// is the obvious one — stamping the shared template instead of the instance
+// clone, which repaints the entire squad the same colour and looks exactly
+// like the variants "not working" rather than like a leak.
+section('PER-SEAL VARIANTS');
+{
+  const seals = [];
+  const tpl = makeBody();
+  attachBiolumSkin(tpl.material, tpl, 'escort');
+  const variants = CONFIG.sealTeam.skin.variants;
+
+  for (let i = 0; i < variants.length; i++) {
+    const root = new THREE_NS.Group();
+    const inst = new THREE_NS.Mesh(tpl.geometry, tpl.material);
+    root.add(inst);
+    instantiateBiolumSkin(root);
+    setBiolumSkinVariant(root, variants[i % variants.length]);
+    seals.push(inst);
+  }
+
+  const patterns = new Set(seals.map((s) => s.material.userData.__bioSkinUniforms.uBioPattern.value));
+  check('every seal in the squad wears a different pattern',
+    patterns.size === variants.length, `${patterns.size} distinct from ${variants.length} seals`);
+
+  const colors = new Set(seals.map((s) => s.material.userData.__bioSkinUniforms.uBioColorA.value.getHexString()));
+  check('...and a different colour', colors.size === variants.length,
+    `${colors.size} distinct from ${variants.length} seals`);
+
+  // The leak check. If the variant were stamped on the template, this would be
+  // whichever seal was built last instead of the preset's own pattern.
+  check('the shared template is not repainted by any of them',
+    tpl.material.userData.__bioSkinVariant === undefined
+    && tpl.material.userData.__bioSkinUniforms.uBioPattern.value
+       === patternIndex(CONFIG.biolumSkin.presets.escort.pattern));
+
+  // A variant is a LAYER, not a replacement: anything it doesn't mention still
+  // has to come from the preset, or every variant would silently reset the
+  // squad's shared look back to `base`.
+  const escort = CONFIG.biolumSkin.presets.escort;
+  check('a variant layers over the preset rather than replacing it',
+    seals.every((s) => s.material.userData.__bioSkinUniforms.uBioBodyDarken.value === escort.bodyDarken),
+    `bodyDarken ${escort.bodyDarken} survives on all ${seals.length}`);
+
+  // The tuner's off switch has to genuinely collapse them, since that is the
+  // only way to judge the shared preset.
+  const before = seals[0].material.userData.__bioSkinUniforms.uBioPattern.value;
+  check('the variants are what is doing it, not the preset',
+    before !== patternIndex(escort.pattern) || variants[0].pattern === escort.pattern);
 }
 
 check('the lanternfish still schools like the fish it copies',

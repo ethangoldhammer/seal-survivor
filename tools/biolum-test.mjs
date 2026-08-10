@@ -143,6 +143,31 @@ const t0 = handle.uniforms.uGlowTime.value;
 handle.update(0.5);
 check('update advances the shimmer clock', handle.uniforms.uGlowTime.value > t0);
 
+// --- per-channel colour ----------------------------------------------------
+// What the octopus's camouflage rides on: each arm wears the colour of what it
+// is near. The contract that matters is that a PINNED channel survives the
+// per-frame apply() the tuner does — otherwise the base colour is stamped back
+// over the camouflage every frame and nothing ever looks tinted.
+section('PER-CHANNEL COLOUR');
+const cc = handle.uniforms.uGlowChColor.value;
+const rgbOf = (i) => [cc[i * 3], cc[i * 3 + 1], cc[i * 3 + 2]];
+check('every channel is seeded from the base colour',
+  rgbOf(0).every((v, k) => Math.abs(v - rgbOf(1)[k]) < 1e-6));
+
+handle.setChannelColor(1, 0xff0000);
+check('setChannelColor writes only its own channel',
+  Math.abs(rgbOf(1)[0] - 1) < 1e-6 && rgbOf(1)[1] === 0 && rgbOf(0)[0] < 1,
+  `ch0 [${rgbOf(0).map((v) => v.toFixed(2))}] ch1 [${rgbOf(1).map((v) => v.toFixed(2))}]`);
+
+handle.apply({ color: 0x0000ff });
+check('a base-colour change moves the unpinned channel', Math.abs(rgbOf(0)[2] - 1) < 1e-6);
+check('...and leaves the pinned one alone', Math.abs(rgbOf(1)[0] - 1) < 1e-6);
+
+handle.setChannelColor(1, null);
+check('null unpins it back onto the base colour', Math.abs(rgbOf(1)[2] - 1) < 1e-6);
+handle.setChannelColor(99, 0x00ff00);
+check('an out-of-range channel colour is ignored', cc.length === 6);
+
 // --- INJECTION against real three.js source --------------------------------
 section('SHADER INJECTION (against real three.js chunks)');
 for (const [label, libKey] of [['lit (standard)', 'standard'], ['unlit (basic)', 'basic']]) {
@@ -161,17 +186,19 @@ for (const [label, libKey] of [['lit (standard)', 'standard'], ['unlit (basic)',
   mat.onBeforeCompile(shader, {});
 
   check(`${label}: uniforms reached the shader`,
-    !!shader.uniforms.uGlowIntensity && !!shader.uniforms.uGlowColor);
+    !!shader.uniforms.uGlowIntensity && !!shader.uniforms.uGlowChColor);
   check(`${label}: vertex hook landed`,
     shader.vertexShader.includes('attribute float aGlowParam') &&
-    shader.vertexShader.includes('vGlowLevel = uGlowIntensity[i]'));
+    shader.vertexShader.includes('vGlowLevel = uGlowIntensity[i]') &&
+    shader.vertexShader.includes('vGlowColor = uGlowChColor[i]'));
   check(`${label}: fragment hook landed`,
-    shader.fragmentShader.includes('uGlowColor') &&
-    shader.fragmentShader.includes('gl_FragColor.rgb += uGlowColor'));
-  // The channel count is baked into the array declaration, so a mismatch here
-  // is a shader that will not compile at all.
-  check(`${label}: channel count baked into the array`,
-    shader.vertexShader.includes('uniform float uGlowIntensity[2]'));
+    shader.fragmentShader.includes('varying vec3 vGlowColor') &&
+    shader.fragmentShader.includes('gl_FragColor.rgb += vGlowColor'));
+  // The channel count is baked into BOTH array declarations, so a mismatch
+  // here is a shader that will not compile at all.
+  check(`${label}: channel count baked into the arrays`,
+    shader.vertexShader.includes('uniform float uGlowIntensity[2]') &&
+    shader.vertexShader.includes('uniform vec3 uGlowChColor[2]'));
   check(`${label}: no GLOW_CHANNELS placeholder survived`,
     !shader.vertexShader.includes('GLOW_CHANNELS'));
   h?.dispose();

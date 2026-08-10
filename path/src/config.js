@@ -376,8 +376,33 @@ export const CONFIG = {
     // ---------------------------------------------------------------------------
     dayNight: {
       enabled: true,
-      startHour: 7.5, // where a fresh save opens — morning
+      // Open the game at the player's OWN time of day, read off the device
+      // clock, and then let the cycle run at `scale` from there. Someone
+      // playing at dusk starts at dusk; someone playing at 2am starts in the
+      // dark with the lanternfish already out (CONFIG.spawn.nightlife).
+      //
+      // Only the STARTING point comes from the system clock. The day does not
+      // track real time after that — a 24-minute day chasing a 24-hour one
+      // would freeze the sky, and the whole cycle is built to be seen inside
+      // one run.
+      //
+      // Local time, deliberately: this is the sun outside the player's window,
+      // not a timestamp, so a timezone is exactly what it should be read in.
+      startFromSystemClock: true,
+      // Where a fresh save opens when the line above is off — morning. Also
+      // the fallback if the device clock is unreadable.
+      startHour: 7.5,
       scale: 60, // in-game seconds per real second. 60 = 1 real sec is 1 minute
+      // A plain multiplier over `scale`, so the baseline above keeps meaning
+      // what it says (1 real second = 1 in-game minute) and this is the dial
+      // you actually turn. Everything measured in real seconds of ordinary
+      // passage rides it — the clock itself AND the per-chum nudge below — so
+      // turning it up moves the whole day forward together rather than
+      // changing what a mouthful of chum is worth relative to a sunset.
+      //
+      // At 2 with scale 60: 120 in-game seconds per real second, a full day
+      // every 12 real minutes.
+      rate: 2,
       // Every chum orb swallowed nudges the clock on. In REAL seconds of
       // ordinary passage, not in-game minutes, so it stays proportional to
       // `scale` instead of quietly changing meaning when the clock is retuned:
@@ -390,9 +415,11 @@ export const CONFIG = {
       // hunting to drive the cycle rather than just lean on it.
       chumSeconds: 0.35,
       // A new run picks the clock up where the last one left it, so the first
-      // run of a session is the one that starts in the morning and later runs
-      // inherit whatever time you died at. Flip this on to restart every run at
-      // `startHour` instead.
+      // run of a session is the one that opens at the starting hour and later
+      // runs inherit whatever time you died at. Flip this on to re-read the
+      // starting hour every run instead — which with `startFromSystemClock`
+      // means every run opens at the real time of day, however long the
+      // session has been going.
       restartAtMorning: false,
       // Tuning aids, not gameplay: freeze the clock and scrub it by hand so a
       // sunset can be looked at for longer than the fifteen seconds it lasts.
@@ -842,6 +869,40 @@ export const CONFIG = {
       // glow without the bloom pass.
       glow: 2.0,
       opacity: 1,
+
+      // Taking damage. The rim is the one thing on screen that is always
+      // exactly the seal's shape and always findable, which makes it the right
+      // surface to say "that was YOU" on — particles land wherever the hit
+      // did, and the shake is a property of the whole frame.
+      //
+      // The COLOUR goes fully to `color` on the frame of any hit, whatever its
+      // size, and eases back to the tuned rim. It has to be all-or-nothing: a
+      // rim only 20% of the way to red on a small hit reads as the outline
+      // being slightly off-white, not as being bitten.
+      //
+      // The BLOWOUT — glow and width — is what carries how much it cost. That
+      // is scaled by the fraction of the health bar the hit took (see
+      // fx.playerDamage), along with how long the flash lasts, so a graze is a
+      // brief red blink and a megalodon is a long, bright red flare.
+      hit: {
+        enabled: true,
+        // A red that survives the rim's own glow multiplier. Deliberately
+        // pushed towards orange rather than pure 0xff0000: at glow 5 a pure
+        // red rim clips to a flat unreadable slab in the bloom pass, and the
+        // warmer hue keeps its shape (see the note in glow-clipping).
+        color: 0xff2a18,
+        // Seconds a FULL-strength flash takes to fade out completely.
+        time: 0.45,
+        // ...and what the smallest hit gets. Floored well above a couple of
+        // frames: the point of the flash is that you notice it while looking
+        // somewhere else on the screen.
+        minTime: 0.18,
+        // Added to playerOutline.glow / .thickness at the peak of a
+        // full-strength flash. Same units and same meaning as the strike
+        // wind-up's, and added on top of it — being hit mid-charge shows both.
+        glowAdd: 4.0,
+        thicknessAdd: 0.07,
+      },
     },
 
     // The same rim, on the things hunting you. One shared colour across every
@@ -1100,7 +1161,28 @@ export const CONFIG = {
       charge: {
         time: 1.0,       // seconds of wind-up a full bar buys — i.e. its drain time
         minFire: 0.35,   // power that must be banked before a release will fire
-        chumRefill: 0.2, // bar returned per chum swallowed
+        chumRefill: 0.2, // bar returned per chum swallowed — i.e. 5 chum a link
+
+        // EACH LINK COSTS MORE THAN THE LAST. Every chum is worth this much
+        // less per link already on the chain, which at the refill above runs
+        // 5, 7, 8, 10, 12, 14 mouthfuls for the first six links (measured —
+        // npm run test:strike prints the ladder). Compounding rather than a
+        // flat step, because the whole loop compounds: a deep chain is already
+        // handing out more speed, more damage and more score per kill, and a
+        // flat cost would be swallowed by that within a couple of links.
+        //
+        // Only the LINK gets harder to earn. The refill itself is untouched
+        // outside a live combo (see the note above on why that separation is
+        // load-bearing), and a blue orb still fills the bar outright — that is
+        // the orb's identity, and it stays the way out of a chain that has
+        // priced itself past what the water in front of you can pay.
+        chainRefillFalloff: 0.82,
+        // Floor on that compounding, as a fraction of the base refill. Without
+        // it a long chain reaches a bar that cannot practically be filled, and
+        // the combo dies to arithmetic rather than to anything the player did.
+        // At 0.3 the deepest chains take a little over three times the chum of
+        // the first link and stop getting worse.
+        chainRefillFloor: 0.3,
         // What banked power is worth, as multipliers over the 0..1 power. Both
         // ranges start below 1 so a barely-armed strike is genuinely feeble and
         // a full one is genuinely a commitment.
@@ -1517,6 +1599,41 @@ export const CONFIG = {
     // `maxSeals`) and a little damage, so the upgrade is visibly "more friends".
     // ---------------------------------------------------------------------------
     sealTeam: {
+      // --- per-seal skins ------------------------------------------------------
+      // EVERY ESCORT IS A DIFFERENT ANIMAL. One model, one shared `escort`
+      // preset (CONFIG.biolumSkin.presets.escort), and then each squad member
+      // stamps its own pattern and palette over the top through
+      // setBiolumSkinVariant — so a maxed squad is six visibly distinct seals
+      // rather than six copies of one.
+      //
+      // WHY IT MATTERS BEYOND LOOKS: the squad is the one companion that
+      // breaks formation and acts individually (a single seal lunges while the
+      // rest hold the ring — see systems/sealTeam.js). Six identical bodies
+      // made that unreadable; you could see A seal charge but never WHICH, so
+      // the behaviour looked random instead of like one member reacting. Told
+      // apart, the formation becomes something you can actually follow.
+      //
+      // Assigned by squad INDEX, not randomly: a seal's identity should be
+      // stable for the whole run, and index order also means the first pick
+      // always gets the first entry, so the squad grows predictably.
+      //
+      // Wraps if the list is shorter than maxSeals. Keep at least that many
+      // entries or the seventh seal is a copy of the first.
+      skin: {
+        enabled: true,
+        variants: [
+          // Deliberately spread across the pattern family AND the colour
+          // wheel — two seals differing only in hue read as a lighting
+          // difference at this camera distance, not as two animals.
+          { pattern: 'spots', colorA: 0x00e5ff, colorB: 0x0066ff, colorC: 0xbdf5ff, scale: 0.24 },
+          { pattern: 'stripes', colorA: 0xffb347, colorB: 0xff5e3a, colorC: 0xffe9c9, scale: 0.42, coverage: 0.26 },
+          { pattern: 'marble', colorA: 0x7b2dff, colorB: 0xd94fff, colorC: 0xffd1f5, scale: 0.34, warp: 1.1 },
+          { pattern: 'net', colorA: 0x2fffb0, colorB: 0x0f9e6a, colorC: 0xd8fff0, scale: 0.3 },
+          { pattern: 'speckle', colorA: 0xffe066, colorB: 0xff9500, colorC: 0xfff4d6, scale: 0.2, coverage: 0.4 },
+          { pattern: 'veins', colorA: 0xff4d6d, colorB: 0x8a0f3c, colorC: 0xffd6e0, scale: 0.32 },
+        ],
+      },
+
       maxSeals: 6,
       contactDamage: 14,
       damagePerLevel: 5,
@@ -1615,10 +1732,76 @@ export const CONFIG = {
       netDepth: 9,
       netDepthPerLevel: 1.6,
       netTrail: 2.2, // how far behind the hull the net hangs, so it reads as dragged
-      netColor: 0xbfe9ff,
-      netOpacity: 0.18,
+      netColor: 0xbfe9ff, // now the BEAM colour — see the beam block below
+      // (`netOpacity` lived here until the beam replaced the flat panel. It is
+      // gone rather than kept as a tombstone: a config value nothing reads is
+      // indistinguishable from a slider that has quietly stopped working. The
+      // beam carries its strength in `beam.intensity`.)
       haulSpeed: 5.5, // how fast a catch is dragged up toward the hull
       haulCatchGap: 0.6, // how close to the hull counts as landed
+
+      // --- the tractor beam ----------------------------------------------------
+      // The net was a flat translucent rectangle. It was honest about the
+      // volume and it read as a pane of glass hanging off the boat, because
+      // the thing that makes light look like light is FALLOFF — brightest on
+      // its axis and at its source, fading to nothing at the edges — and a
+      // constant-opacity quad has none of it.
+      //
+      // Drawn additively, so the beam brightens the water rather than covering
+      // it and the fish inside stay legible. That matters more here than
+      // anywhere else in the game: this beam is full of fish by design.
+      //
+      // See systems/bakalar.js for the shader itself. `intensity` above 1 is
+      // meaningful — post.js runs the bright pass through a HalfFloat target,
+      // so the core blooms instead of clipping.
+      beam: {
+        intensity: 1.5,
+        // The cone: beam width at the HULL as a fraction of its width at the
+        // bottom. Below 1 it tapers upward, which is what makes it read as
+        // coming from the boat. At 1 it is a column again.
+        topWidth: 0.45,
+        // How hard it fades across its own width. This is the single control
+        // that decides searchlight (high) versus slab of colour (low).
+        edgeFalloff: 1.8,
+        // How much the water eats it on the way down. Higher = the bottom of
+        // the beam disappears.
+        depthFalloff: 0.85,
+        // Bands travelling UP the beam — the suction made visible. Without a
+        // direction cue a static glow reads as a wall rather than as a pull.
+        bandSpeed: 0.55,
+        bandCount: 3.5,
+        bandAmount: 0.28, // 0 is a smooth beam with no travelling structure
+        // A hot core down the axis, over the body of the beam. Without it the
+        // beam is uniformly bright across its width and reads flat.
+        coreBoost: 0.9,
+    },
+
+      // --- suction -------------------------------------------------------------
+      // The gameplay half of the same two curves the beam is DRAWN with (see
+      // suctionAt in systems/bakalar.js). Keeping them in one function is
+      // load-bearing: if the pull and the light disagreed, fish would be
+      // dragged hardest through the dim parts of the beam, which reads as
+      // broken without anyone being able to say why.
+      //
+      // What this replaced was a constant haul speed with the catch pinned at
+      // a fixed offset — every fish rose at the same rate wherever it sat,
+      // which is a conveyor belt rather than a pull.
+      suction: {
+        strength: 1.0, // overall multiplier on the pull
+        edgeFalloff: 1.5, // across the cone. Near the shader's, not identical — the
+        // pull is allowed to reach a little wider than the visible glow, or
+        // fish appear to be gripped by nothing at the edges.
+        depthFalloff: 0.7, // weaker the further from the hull
+        // How fast the catch is drawn IN toward the beam axis, as a rate
+        // scaled by the local pull. This is the horizontal half, and the
+        // reason a catch converges into a column under the hull instead of
+        // riding up in the spread it was caught in.
+        inwardRate: 1.6,
+        // A floor under the rise, so a fish at the very edge of the cone is
+        // still slowly recovered rather than parked there for the whole
+        // sailing. The falloff should make the haul UNEVEN, not stall it.
+        minPull: 0.18,
+    },
       bobSpeed: 1.6,
       bobAmount: 0.22,
 
@@ -1754,37 +1937,58 @@ export const CONFIG = {
     // swapping in a rig later means replacing the draw call, not the logic.
     // ---------------------------------------------------------------------------
     octoGrab: {
-      arms: 2, // at level 1
+      // Three at level 1, not two. The card promises an animal that takes fish
+      // off you, and half the rig sitting idle at the level most people see it
+      // at read as an octopus that had not noticed the fight — the numbers
+      // through this whole block are tuned so the FIRST fish to come inside
+      // reach is reached for, rather than waited out.
+      arms: 4, // at level 1
       armsPerLevel: 1,
       // No maxArms: the rig IS the cap. The model has six tentacles, and
       // systems/octoGrab.js clamps to however many arm chains actually
       // resolved — a config number claiming nine would be a slider that
       // silently does nothing past six.
       // THE GRAB RADIUS — the stat the upgrade actually buys. In world units,
-      // and sized against the rig: one tentacle measures about 4.4 units at
-      // ASSETS.octoGrabber.fit, so level 1 sits just inside what an arm can
-      // physically touch and the level scaling spends the stretch below.
-      reach: 4.2,
-      reachPerLevel: 0.28, // level 8 reaches 6.2
+      // and sized against the rig: one tentacle measures 4.38 units at
+      // ASSETS.octoGrabber.fit (measured, not estimated — the sweep is in
+      // tools/octopus-rig-test.mjs). Level 1 now sits PAST that on purpose and
+      // spends `reachStretch` below to get there — a strained arm points hard
+      // at the fish instead of quite touching it, which is what a reaching
+      // octopus does anyway, and it is what makes the grab happen the moment
+      // something is near rather than only once it has swum right in.
+      //
+      // These three numbers are ONE setting. The level scaling has to still
+      // land under the stretch cap (4.38 * reachStretch) or the upgrade's whole
+      // reason to exist stops working silently partway up the levels: every
+      // level past the cap buys nothing at all. At 5.0/0.25/1.6 the cap is 7.0
+      // and level 8 asks for 6.75, so the stat keeps paying the whole way.
+      reach: 6.0,
+      reachPerLevel: 0.3, // level 8 reaches 8.10, just inside the 8.31 cap
       // How far past its real length an arm may strain, as a multiple of the
       // measured chain. Above 1 the tip stops quite touching the fish and the
       // tentacle simply points hard at it — which is what a real octopus
       // reaching does, and is far better than the alternative of silently
       // refusing grabs the config asked for. Set it to 1 to forbid straining;
       // the grab radius is then hard-capped at the arm's true reach.
-      reachStretch: 1.5,
-      grabCooldown: 0.9, // per-arm rest after a pop before it can reach again
+      reachStretch: 1.9,
+      // Per-arm rest after a pop before it can reach again. Short: this is the
+      // single number that decided whether the octopus looked busy or looked
+      // asleep, because with six arms on a long rest the whole bundle spends
+      // most of a fight in cooldown.
+      grabCooldown: 0.16,
       // A strained arm never gets its tip onto the fish, so "have I arrived"
       // cannot be a distance test alone or those grabs hang in `reaching`
-      // forever. After this long the arm has committed and takes hold.
-      graspTimeout: 0.7,
-      reelSpeed: 7.5, // how fast a held fish is dragged toward the seal
-      reelSpeedPerLevel: 0.5,
+      // forever. After this long the arm has committed and takes hold. At the
+      // strained reach above this is the usual way a grab lands, so it is
+      // deliberately short — it IS the grab speed.
+      graspTimeout: 0.22,
+      reelSpeed: 14, // how fast a held fish is dragged toward the seal
+      reelSpeedPerLevel: 0.9,
       popDistance: 1.5, // how close to the seal a fish gets before it pops
       // A fish too big to reel is simply never grabbed — an arm that latched
       // onto a megalodon and then couldn't move it would look broken, and the
       // arm would be tied up for the rest of the run.
-      maxTargetRadius: 1.6,
+      maxTargetRadius: 2.2,
       // What a popped fish is worth. Chum rather than a normal kill payout: the
       // arm did the work, and chum feeds the strike meter, so the octopus
       // converts incoming pressure into strike uptime.
@@ -1806,7 +2010,11 @@ export const CONFIG = {
         // joint bend a radian and a half lets the arm curl.
         maxBend: 1.5,
         softness: 0.6, // <1 eases into the limit rather than stopping hard
-        smoothing: 4, // how fast an arm chases a moving fish — low is languid
+        // How fast an arm chases a moving fish. Was 4, which was languid to the
+        // point of looking uninterested — the arm arrived after the fish had
+        // gone. This is the visible half of "grabs right away"; `weightLerpIn`
+        // below is the other half.
+        smoothing: 9,
         tolerance: 0.02,
     },
       // How completely the IK owns an arm in each state. Reaching is near-total;
@@ -1827,7 +2035,7 @@ export const CONFIG = {
       // a REACH rather than a snap: the weight ramps, so the arm visibly leaves
       // its dangle and extends. Slower out than in — letting go is lazier than
       // grabbing.
-      weightLerpIn: 6,
+      weightLerpIn: 11,
       weightLerpOut: 2.5,
 
       // --- dangle --------------------------------------------------------------
@@ -1873,6 +2081,108 @@ export const CONFIG = {
         // How much of the body's own velocity is thrown into the trailing
         // point. Above zero the arms visibly stream backward when it jets.
         velocityDrag: 0.45,
+    },
+
+      // --- hunting -------------------------------------------------------------
+      // THE OCTOPUS LEAVES STATION. Without this it station-keeps at
+      // `bodyOffset` and waits for fish to swim into reach, which is what made
+      // it read as a passenger: the arms did all the work and the body did
+      // none. Here the head target — which is also the thrust vector, see the
+      // head block — is pulled off station toward the nearest grabbable fish,
+      // so the whole animal commits to the hunt and the arms arrive because
+      // the body took them there.
+      //
+      // `weight` is the aggression dial. At 0 it station-keeps exactly as
+      // before; at 1 it ignores the seal completely and chases fish across the
+      // arena. Below 1 on purpose — it is still an escort, and an octopus that
+      // never comes home stops protecting the thing it is escorting.
+      hunt: {
+        enabled: true,
+        radius: 15, // how far out it will look for something to go after
+        weight: 0.8, // how far off station a hunt pulls the head target
+        // Jets harder and more often while committed. An octopus closing on
+        // prey shouldn't be coasting on the same lazy duty cycle it patrols
+        // with — this is most of what reads as "it noticed you".
+        thrustBoost: 1.7,
+        pulseFraction: 0.85, // of each jet interval, while hunting
+        // Ignore anything already claimed by an arm. Without this it would
+        // keep charging the fish it is currently reeling in, which means it
+        // swims away from the seal it is delivering to.
+        skipHeld: true,
+    },
+
+      // --- turbulence ----------------------------------------------------------
+      // SLOW BUT STRONG. The per-bone spring below only reacts to the body
+      // moving, so an octopus holding station has perfectly still arms — the
+      // one state it spends most of a fight in. This is an independent force
+      // field pushing each tentacle around on its own wandering vector,
+      // injected into the same spring as the drag impulse.
+      //
+      // The character is entirely in the ratio of `strength` to `speed`: a big
+      // force that changes direction slowly gives long, heavy, unpredictable
+      // sweeps (a tentacle in a current), where a small fast one gives a
+      // buzzing jitter that reads as noise. Keep speed low and strength high.
+      //
+      // Non-harmonic octaves, and every arm is seeded off its own slot, so no
+      // two tentacles ever wander together and the field never lands on a beat
+      // you can see repeating.
+      turbulence: {
+        enabled: true,
+        strength: 22, // impulse per second at full deflection. Deliberately big.
+        speed: 0.4, // how fast the field itself changes. Deliberately small.
+        octave: 2.9, // second layer's frequency ratio — irrational-ish on purpose
+        octaveAmp: 0.45,
+        // Where the push lands along the arm. Near 1 the base stays planted and
+        // the tip does the flailing, which is the shape a real tentacle makes.
+        tipBias: 0.85,
+        // How much of the force is TANGENTIAL (a swirl around the body) rather
+        // than a straight push. Some of it is what makes the arms curl and
+        // sweep instead of just being shoved back and forth.
+        swirl: 0.55,
+        // Turbulence still applies to an arm that is reaching or holding, at
+        // this fraction — a working tentacle should still be in the water, it
+        // just shouldn't be thrashing hard enough to miss.
+        busyScale: 0.35,
+    },
+
+      // --- spread --------------------------------------------------------------
+      // THE ANTI-BUNCHING PASS, and the reason it is needed: `dangleWeight` is
+      // 0, so an idle arm is not posed by the IK at all. Nothing was holding
+      // the six apart. The spring's drag and droop both push every tentacle the
+      // same way, so over a few seconds they collect into one thick rope
+      // hanging under the body — six arms rendering as one.
+      //
+      // Two forces, both measured on the arms' own solved TIPS:
+      //
+      //   radial   a tip closer to the body than `minRadius` is pushed out
+      //            along its own bearing. This is what stops the bundle
+      //            collapsing INTO the mantle.
+      //   pairwise two tips closer together than `minGap` shove each other
+      //            apart. This is what keeps them distinguishable once out.
+      //
+      // Applied as spring impulses rather than by moving the IK targets,
+      // because the IK is off for exactly these arms — the spring is the only
+      // channel that reaches an idle tentacle at all.
+      spread: {
+        enabled: true,
+        // THE FAN — the part that actually holds the star open. Each arm owns
+        // a permanent bearing and is pulled toward the point at `fanRadius`
+        // along it, so it always has somewhere to be. `fanArc` is how much of
+        // the circle the six share out, centred behind the direction of
+        // travel: a full 2PI wraps the end arms back around the front and they
+        // meet, which is the bunching this exists to prevent.
+        fanRadius: 4.2,
+        fanForce: 9,
+        fanArc: 4.2, // radians the fan spans, ~240 degrees
+        minRadius: 2.6, // how far a tip must stay from the body centre
+        radialForce: 20,
+        minGap: 2.2, // world units between two tips before they push apart
+        gapForce: 16,
+        tipBias: 1.0, // spreading is entirely a tip concern
+        // Engaged arms are exempt from the pairwise shove: two arms reaching
+        // for fish that happen to be next to each other SHOULD converge, and
+        // pushing them apart would make both grabs miss.
+        skipBusy: true,
     },
 
       // --- per-bone flow (the flagellum) ---------------------------------------
@@ -1950,6 +2260,36 @@ export const CONFIG = {
         fallRate: 1.8,
     },
 
+      // --- camouflage ----------------------------------------------------------
+      // A real octopus takes the colour of what it is near, and this one does it
+      // PER ARM: each tentacle's glow channel eases toward the colour of the
+      // fish it is holding, or of the nearest creature to its own TIP when it
+      // is holding nothing, and back to `glow.color` when there is nothing
+      // close. Six arms therefore routinely wear six different colours at once.
+      //
+      // Where the colour comes from is a cascade — a tint set in the T panel,
+      // then the average of the creature's own base texture, then its material
+      // colour — see creatureTint in systems/octoGrab.js. That means it tracks
+      // the actual art rather than a table someone has to keep in sync.
+      camouflage: {
+        enabled: true,
+        // How near counts as near, measured from the arm's solved TIP rather
+        // than from the body — "close to" should mean close to that tentacle.
+        // Comfortably past `reach`, so an arm picks up the colour of what it is
+        // about to go for before it commits.
+        radius: 7.5,
+        // Per-second easing onto a colour, and back off it. Slower off, so an
+        // arm that has just let go keeps the colour for a beat instead of
+        // snapping back to teal the frame the fish pops.
+        blend: 5.0,
+        fade: 1.6,
+        // The sampled colour is pushed past what was actually measured. A
+        // creature's own colour, added at its own level, is a wash — this is
+        // what keeps it reading as a glow, and above ~2 it starts clipping to
+        // white in the bright-pass.
+        gain: 1.5,
+    },
+
       // --- head / propulsion ---------------------------------------------------
       // The mantle chain aims at a point ahead of the body, and that same point
       // is what the body accelerates toward — so the octopus genuinely swims
@@ -1969,6 +2309,60 @@ export const CONFIG = {
 
       bodyOffset: [-1.9, -1.1], // where the octopus prefers to ride vs the seal
       bodyFollow: 7, // spring pulling the head target back toward that spot
+    },
+
+    // ---------------------------------------------------------------------------
+    // MUSSEL BARRAGE — the octopus's second trick, and the payoff for
+    // committing to a full charge.
+    //
+    // Releasing a strike at or above `chargeThreshold` throws the whole flight
+    // of homing mussels at once, in a wide fan around the dash heading. It is
+    // deliberately the Hades multishot bow: you do not get a stream, you get
+    // ONE loud moment that costs you a full wind-up, and the fan is wide
+    // enough that it is an area answer rather than an aimed one — the homing
+    // is what turns the spread back into hits.
+    //
+    // WHY IT HANGS OFF THE STRIKE rather than being another auto-firing
+    // companion: the strike meter is already the game's commitment currency
+    // (see systems/strike.js), and the one thing a full charge did NOT do
+    // before was pay out offensively — it bought reach and damage on the dash
+    // itself and nothing else. This makes the deepest charge the biggest
+    // single burst of damage in the game, which is the read a charge-up meter
+    // is supposed to have.
+    //
+    // The threshold is the whole design. Below it, nothing: a flick strike is
+    // still just a dash, so the barrage can never become the thing you spam.
+    musselVolley: {
+      enabled: true,
+      // How hard the strike must be charged to trigger it at all. High on
+      // purpose — this is the reward for a FULL commitment, and at 0.85 a
+      // panic-flick release cannot buy it.
+      chargeThreshold: 0.85,
+      count: 8, // shells per barrage at level 1
+      countPerLevel: 2,
+      // The fan, in radians, centred on the dash heading. Wide: the barrage is
+      // meant to clear the space you are diving into, not to snipe.
+      arc: 2.1,
+      // Random jitter on each shell's launch angle on top of its slot in the
+      // fan, so two barrages never trace the same eight curves.
+      spread: 0.16,
+      speedJitter: 0.22,
+      // Its own numbers rather than CONFIG.missile's: this is a burst on a
+      // long cooldown, where the missile is a sustained stream, so it hits
+      // harder per shell and flies faster and shorter.
+      damage: 22,
+      damagePerLevel: 7,
+      speed: 19,
+      life: 2.6,
+      radius: 0.24,
+      turnRate: 5.2, // curves harder than a standard missile
+      acquireRadius: 30,
+      // Longer than the missile's, and for a different reason: eight shells
+      // leaving at once from one point need to visibly BE a volley before the
+      // seekers pull them onto separate targets. Homing that engages instantly
+      // collapses the fan into a single stream in the first few frames.
+      homingDelay: 0.26,
+      launchFlashScale: 1.9,
     },
 
     // ---------------------------------------------------------------------------
@@ -2006,6 +2400,30 @@ export const CONFIG = {
       formationFollow: 5.5,
       breachChance: 0.35, // odds an attack run carries through the surface
       turnRate: 5.5,
+
+      // --- facing ---------------------------------------------------------------
+      // How the pod turns, as opposed to where it goes. All of this exists
+      // because the cruise velocity is a spring toward a formation point that
+      // moves with the seal: swimming circles around the pod used to swing each
+      // orca's drift through every angle there is, at almost no speed, and the
+      // model snapped end to end several times a second. See faceTravel in
+      // systems/orca.js — the three numbers below are one mechanism, not three.
+      //
+      // e-folds per second the heading eases toward the direction of travel.
+      // Deliberately unhurried: an orca is three tonnes and should read like it.
+      faceLerp: 5,
+      // Below this speed it holds the facing it has rather than turning to
+      // chase near-zero drift. Well above the old 0.4 — station-keeping happens
+      // almost entirely under it, which is where the flipping lived.
+      minSpeedToTurn: 2.2,
+      // How far off vertical the facing must get before a side swap is even
+      // considered, as |cos(heading)|. A pod drifting up and down never asks.
+      mirrorDeadZone: 0.35,
+      // ...and then it has to keep asking for this long before the roll starts.
+      mirrorHold: 0.35,
+      // Seconds the eased half turn takes once it does. Long enough to read as
+      // the animal coming about.
+      mirrorDuration: 0.55,
     },
 
     // ---------------------------------------------------------------------------
@@ -2132,11 +2550,13 @@ export const CONFIG = {
       //
       // The apex group exists because the per-species caps only ever asked "how
       // many of THIS one", and every big predator answered separately: shark 6
-      // + greatWhite 4 + dolphin 4 + megalodon 2 + mightyMeg 2 + orca 2 is 20
-      // large bodies that could legally be on
+      // + greatWhite 4 + hammerhead 4 + dolphin 4 + abyssShark 2 + megalodon 2
+      // + mightyMeg 2 + orca 2 is 26 large bodies that could legally be on
       // screen at once, none of them over its own limit. That reads as a crowd
       // rather than as a threat, buries the player's own silhouette, and is now
-      // also the expensive case — every one of these carries a tail spring.
+      // also the expensive case — every one of these carries a tail spring and
+      // a set of fin springs (measured at tools/apex-spring-test.mjs: 0.4ms of
+      // spring solving for the whole group at its caps).
       //
       // Whichever of them spawns first takes the slot; nothing here reserves
       // room for the rarer ones, since they are already gated behind
@@ -2422,6 +2842,28 @@ export const CONFIG = {
         hunt: { preyRadius: 24, biteRange: 1.8, biteCooldown: 1.0, healPerMeal: 12, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 2 },
         weight: 0.07, weightPerDifficulty: 0.02, maxWeight: 0.28, maxConcurrent: 2,
         minDifficulty: 3, minPlayerLevel: 5,
+        spawnGroup: 'apex',
+      },
+
+      // The manoeuvrable one. Every other shark in this group is a straight-line
+      // threat you out-turn — a great white at turnRate 2.2 against speed 6 has
+      // a wide arc, and the whole counterplay is circling inside it. The
+      // hammerhead is built to punish exactly that: the highest turnRate of any
+      // apex (3.4, above the dolphin's 3.6 only because the dolphin is not
+      // really a shark), traded against hp and bite that sit below the great
+      // white's. It should cost you the turn, not the trade.
+      //
+      // Its `preyRadius` is the widest of the plain sharks at 22, which is the
+      // one place the model's own gimmick shows up in the numbers — the head is
+      // a sensor array, so it notices fish from further out.
+      hammerhead: {
+        separates: true,
+        asset: 'enemyHammerhead', behavior: 'hunt', faceMotion: true,
+        radius: 1.3, hp: 80, hpPerDifficulty: 6, speed: 7.5, speedVariance: 1,
+        contactDamage: 25, xp: 17, turnRate: 3.4,
+        hunt: { preyRadius: 22, biteRange: 1.7, biteCooldown: 1.15, healPerMeal: 9, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 1.6 },
+        weight: 0.13, weightPerDifficulty: 0.04, maxWeight: 0.45, maxConcurrent: 4, minDifficulty: 1,
+        minPlayerLevel: 3,
         spawnGroup: 'apex',
       },
 
@@ -2767,11 +3209,69 @@ export const CONFIG = {
       wakeRadius: 7,
       wakeStrength: -0.55, // negative = grid sucks inward toward the ship
       wakeSpeedGain: 0.02, // extra pull proportional to ship speed
+
+      // TOUCH GLOW — what the player's fingers do to the lattice on a phone.
+      // Every contact on the canvas gets a slot (see TOUCH_SLOTS in input.js),
+      // and each slot shoves the grid around AND lights it with a colour of its
+      // own, so a hand on the glass tears five holes in the backdrop rather
+      // than one anonymous smudge.
+      //
+      // THE MULTICOLOUR HERE IS DELIBERATE, and the one place in the game it
+      // is. The rule everywhere else — see the note above `emitters` — is one
+      // colour family per effect, because a burst tinted per creature stops
+      // telling you anything. This is the opposite case: the colour is the only
+      // thing that says WHICH FINGER, which is exactly the information a
+      // multitouch flourish has to convey. The ramp still escalates in heat
+      // rather than picking five unrelated hues.
+      touchGlow: {
+        enabled: true,
+        radius: 6.0,  // world units the first finger reaches; scaled per finger
+        // How bright the finger's colour burns at the core. Kept near 1 for a
+        // reason: the composite is LDR, so colour * gain * power clips at 1 and
+        // anything much over it lands as white. Push this up and the fingers
+        // stop being TELLABLE APART, which is the one thing they're for — the
+        // fifth finger already spends its 1.5x power on a white-hot core, and
+        // that's meant to be the top of the range rather than where all five
+        // sit. Brightness lives in `alpha` instead, which doesn't cost hue.
+        gain: 1.15,
+        alpha: 0.5,   // extra opacity at the core, on top of grid.opacity
+        push: 0.5,    // outward shove on the lattice nodes
+        swirl: 0.4,   // rotational shear — what makes it read as DISRUPTION
+        wave: 1.1,    // spatial frequency of the shove, so it ripples outward
+        spin: 2.2,    // how fast that ripple churns
+        attack: 16,   // per-second rate the glow rises at when a finger lands
+        release: 5,   // and falls at when it lifts. Slower, so it trails off
+        // In order of arrival: finger 0 is whoever touched down first. `power`
+        // and `spread` scale gain/push/swirl and radius respectively, so the
+        // fifth finger is a bigger event than the first — a full hand slapped
+        // on the screen should look like one.
+        fingers: [
+          { color: 0x7fe9ff, power: 1.0, spread: 1.0 },  // the grid's own hot cyan
+          { color: 0x4dffc3, power: 1.1, spread: 1.05 }, // aqua
+          { color: 0xffe071, power: 1.2, spread: 1.1 },  // gold
+          { color: 0xff7ad9, power: 1.35, spread: 1.15 },// hot pink
+          { color: 0xb98cff, power: 1.5, spread: 1.25 }, // violet
+        ],
+      },
     },
 
     // ---------------------------------------------------------------------------
     // EMITTERS — named particle bursts. Reference these from `feedback` below.
     // speed/size/life are [min, max] ranges. cone = 0 means a full circle.
+    //
+    // ONE COLOUR FAMILY PER EMITTER. `colors` is a list so a burst can have
+    // depth — a hot core, a mid, a white — not so it can have variety. Two hues
+    // that aren't neighbours in the same ramp put a rainbow on the screen, and a
+    // screen where every burst is multicoloured is a screen where colour has
+    // stopped telling you anything about what just happened. If a burst needs to
+    // read as different, change its SHAPE: count, speed, size, life, drag.
+    //
+    // There is deliberately no way for a caller to pass a colour in (see
+    // entities/particles.js). Bursts tinted per creature were how the rainbow got
+    // in last time.
+    //
+    // `turbulence` scales how hard the global current (CONFIG.fx.turbulence)
+    // takes this emitter's particles. 1 unless there's a reason.
     // ---------------------------------------------------------------------------
     emitters: {
       muzzle: {
@@ -2794,9 +3294,14 @@ export const CONFIG = {
         colors: [0xff4d6d, 0xffb347, 0xffe066, 0xffffff], cone: 0, drag: 2.2,
         gravity: [0, -1.4], inherit: 0.2, glow: 2.2,
     },
+      // Same fire ramp as `explosion`, bigger and longer. The purple that used
+      // to sit second in this list was the loudest rainbow in the game — a
+      // magenta flash in the middle of an orange blast, on the single most
+      // frequent big event there is. It reads as bigger WITHOUT it, because
+      // nothing in the burst is competing with the core any more.
       bigExplosion: {
         count: 110, speed: [5, 34], size: [0.14, 0.5], life: [0.5, 1.3],
-        colors: [0xff4d6d, 0xc44dff, 0xffb347, 0xffffff], cone: 0, drag: 1.8,
+        colors: [0xff4d6d, 0xff7a3d, 0xffb347, 0xffffff], cone: 0, drag: 1.8,
         gravity: [0, -1.2], inherit: 0.15, glow: 3.5,
     },
       bite: {
@@ -2840,9 +3345,14 @@ export const CONFIG = {
         colors: [0xffffff, 0xdce8ff, 0x9fd0ff], cone: 0.45, drag: 2.0,
         gravity: [0, -12], inherit: 0, glow: 2.6,
     },
+      // Was cyan + green + yellow + white, which is three unrelated hues and
+      // the closest thing in the table to literal confetti. One cool ramp
+      // instead: the level-up already owns the whole screen for a moment
+      // (time dilation, the cards, the sound), so the particles only have to
+      // be bright, not busy.
       levelUp: {
         count: 80, speed: [6, 20], size: [0.12, 0.36], life: [0.6, 1.2],
-        colors: [0x7ad7ff, 0x8effa1, 0xffe066, 0xffffff], cone: 0, drag: 1.6,
+        colors: [0x7ad7ff, 0xbfefff, 0xffffff], cone: 0, drag: 1.6,
         gravity: [0, 1], inherit: 0, glow: 2.8,
     },
       // Bubbles rise, so their gravity is POSITIVE — and low drag is what lets
@@ -2880,9 +3390,12 @@ export const CONFIG = {
       // so it is deliberately tiny — the read is a steady trickle of bits being
       // pulled off the pile, not a burst. Gravity is POSITIVE and small so the
       // crumbs drift up out of the mouth like scraps a feeding animal misses.
+      // Green family only — it matches `pickup`, which is the same substance
+      // being collected rather than eaten. The yellow that used to be third in
+      // the list was the odd one out of that pair.
       chumCrumbs: {
         count: 3, speed: [0.8, 3.2], size: [0.05, 0.13], life: [0.25, 0.6],
-        colors: [0x8effa1, 0xd6ffe2, 0xffe066], cone: 0, drag: 3.4,
+        colors: [0x8effa1, 0xd6ffe2, 0xffffff], cone: 0, drag: 3.4,
         gravity: [0, 1.6], inherit: 0.25, glow: 1.2,
     },
       // Seabed silt, kicked up when the dead seal lands on it. Everything here
@@ -2927,6 +3440,19 @@ export const CONFIG = {
         count: 34, speed: [10, 34], size: [0.1, 0.34], life: [0.16, 0.42],
         colors: [0xffffff, 0xffe7b8, 0xff9f4d], cone: 0, drag: 5.5,
         gravity: [0, -1.0], inherit: 0.12, glow: 3.4,
+    },
+      // --- oyster blaster -----------------------------------------------------
+      // A bomblet going off. White, and ONLY white — no warm tint, no cool
+      // tint, nothing sampled from anything else. It borrowed `sparks` before,
+      // which is a yellow-orange fire ramp, and a pearl throwing sparks reads
+      // as ordnance; a pearl should throw light. The depth that a palette
+      // usually supplies comes from the glow instead: every particle is the
+      // same colour and blown well past white, so the crowded middle of the
+      // burst blooms harder than its edges.
+      pearlBurst: {
+        count: 30, speed: [6, 22], size: [0.08, 0.26], life: [0.2, 0.5],
+        colors: [0xffffff], cone: 0, drag: 4.5,
+        gravity: [0, -0.8], inherit: 0.1, glow: 4.5,
     },
     },
 
@@ -2978,7 +3504,19 @@ export const CONFIG = {
       // them, and a rumble that shook the water would give away that the strike
       // is imaginary.
       thunder:   { emit: null,          shake: 0.06, hitstop: 0,     glow: 0.35, sfx: 'thunderRumble', haptic: [{ duration: 90, magnitude: 0.25 }] },
-      playerHit: { emit: 'playerHit',   shake: 0.5,  hitstop: 0.06,  glow: 0.9,  ripple: { strength: 3.0, radius: 12 },  sfx: 'playerHit',haptic: [45] },
+      // Taking a hit. NEVER call this directly — it goes through
+      // systems/playerDamageFx.js, which is what turns a damage number into
+      // the `scale` below and fires the rim flash alongside it.
+      //
+      // `shake` is deliberately one of the SMALLEST numbers in this table,
+      // well under a kill's, and that is not a mistake. It is multiplied by a
+      // scale that runs from ~0.35 on a graze to 2.0 on a hit that takes half
+      // the bar, so the useful thing is the RANGE, and the range only exists
+      // below fx.maxShake — anything that reaches the ceiling on an ordinary
+      // hit is a constant rattle with the scaling quietly clamped out of it.
+      // At 0.07 the whole curve tops out around 0.14, which is subtle on its
+      // own and unmistakable next to a graze.
+      playerHit: { emit: 'playerHit',   shake: 0.07, hitstop: 0.06,  glow: 0.9,  ripple: { strength: 3.0, radius: 12 },  sfx: 'playerHit',haptic: [45] },
       // The player's own death, which until now fired `bigKill` — the sound and
       // the particles of killing something else, played at the moment you are the
       // thing that died. Same weight as bigKill deliberately (it is the biggest
@@ -3033,6 +3571,20 @@ export const CONFIG = {
       // it is worth feeling. Light, because a menu is not an impact.
       uiClick:   { emit: null, shake: 0, hitstop: 0, glow: 0, sfx: 'uiClick',
                    haptic: [{ duration: 18, magnitude: 0.35 }] },
+      // One character into the name field. This fires FAR more often than any
+      // other menu sound — a name is a dozen of these in two seconds — so it
+      // sits well below the hover, which is itself below the click. The order
+      // hover < click was already deliberate; typing goes under all of it,
+      // because a keystroke is the least significant thing a menu can report.
+      //
+      // No haptic: a phone buzzing per character while the on-screen keyboard
+      // is up is the one place rumble stops being feedback and becomes noise.
+      //
+      // The gap is set just under a held key's repeat rate (~30/s), so normal
+      // typing is never swallowed but leaning on a key ticks at a rate that
+      // still resolves as separate sounds instead of a buzz.
+      uiType:    { emit: null, shake: 0, hitstop: 0, glow: 0, sfx: 'uiType',
+                   haptic: null, sfxMinGap: 0.03 },
       // A body swallowed. The heaviest `bite` in the game — it is the biggest
       // single mouthful there is — and it reads as eating, not as a kill.
       crewEaten: { emit: 'bite',        shake: 0.18, hitstop: 0.03,  glow: 0.5,  ripple: { strength: 2.2, radius: 9 },   sfx: 'bite',     haptic: [24, 20, 30] },
@@ -3064,6 +3616,13 @@ export const CONFIG = {
       // Shells 2..n of the same volley: the flash off their own flipper, and
       // nothing else. Same emitter, so tuning the look is one edit above.
       missileLaunchExtra: { emit: 'missileLaunch', shake: 0, hitstop: 0, glow: 0.12, ripple: { strength: 0.6, radius: 5 }, sfx: null, haptic: null },
+      // The MUSSEL BARRAGE going off — eight shells leaving on one frame, on
+      // top of a full-charge strike that is already the loudest thing the
+      // player does. Bigger than a missile launch in every channel because it
+      // is the payoff for the deepest commitment in the game, but STILL no
+      // hitstop: it fires on the frame the dash launches, and freezing there
+      // would eat the one manoeuvre it is supposed to be celebrating.
+      musselBarrage: { emit: 'missileLaunch', shake: 0.3, hitstop: 0, glow: 1.1, ripple: { strength: 3.2, radius: 13 }, sfx: 'musselBarrage', haptic: [45, 30, 55] },
       // A mussel detonating on a target. Fires INSTEAD of the generic
       // `bulletHit` for that hit, not on top of it — a shell going off and a
       // pellet landing are not the same event, and playing both stacked two
@@ -3226,7 +3785,7 @@ export const CONFIG = {
       // A bomblet going off. Several land within a few frames of each other by
       // design, so this is throttled and light — the pearl's own impact already
       // played the big sound, and this is the sparkle after it.
-      pearlBurst:  { emit: 'sparks', shake: 0.05, hitstop: 0, glow: 0.5, ripple: { strength: 1.0, radius: 5 },
+      pearlBurst:  { emit: 'pearlBurst', shake: 0.05, hitstop: 0, glow: 0.5, ripple: { strength: 1.0, radius: 5 },
                      sfx: 'pearlBurst', haptic: [{ duration: 12, magnitude: 0.28 }], sfxMinGap: 0.06 },
 
       // --- octopus grabber ----------------------------------------------------
@@ -3270,12 +3829,76 @@ export const CONFIG = {
 
     fx: {
       maxParticles: 8000, // ring buffer; oldest bursts are overwritten
+
+      // THE CURRENT. One divergence-free swirl field covering the whole arena
+      // that every particle in the game is pushed by — see entities/particles.js
+      // for the shape of it. Global on purpose: two bursts going off next to
+      // each other bending the same way is the entire reason it reads as water
+      // rather than as noise per emitter.
+      turbulence: {
+        enabled: true,
+        // World units of wander per second of a particle's life, before the
+        // emitter's own `turbulence` multiplier. Ramps from zero at spawn, so
+        // the number is what a one-second particle picks up, and a 0.3s spark
+        // sees very little of it.
+        strength: 0.55,
+        // Spatial frequency: 0.35 puts the main swirl at roughly an 18-unit
+        // wavelength, which is a good fraction of the visible arena — big slow
+        // eddies with a smaller harmonic folded in, not a rippling texture.
+        frequency: 0.35,
+        // How fast the field itself churns. Low: the current should drift, and
+        // anything quick enough to see moving stops looking like water.
+        timeScale: 0.6,
+        // Per-particle spread on the emitter's drag, as a fraction either way
+        // (0.5 = every particle lands somewhere in 0.5x..1.5x). At 0 a burst is
+        // a rigid shell that all stops on the same frame; this is what lets the
+        // light bits stall in the water while the heavy ones carry on.
+        dragVary: 0.5,
+      },
+
       shakeDecay: 0.0004, // fraction of shake left after 1s
       maxShake: 0.85, // ceiling, so a busy fight can't pin the camera
       hitstopScale: 0.12, // time scale during a hit-stop, not a full freeze
       hitstopCooldown: 0.4, // minimum gap between hit-stops
       hitFlash: 0.12, // seconds an enemy pops when hit
       hitPop: 0.35, // extra scale on that pop
+
+      // How a number of damage becomes a hit you can feel. Read only by
+      // systems/playerDamageFx.js — the long version of why any of this is
+      // needed is at the top of that file.
+      playerDamage: {
+        // Minimum real seconds between two damage events being SHOWN. Damage
+        // arriving inside the window isn't dropped, it's added to the next
+        // one — so swimming into a school reads as a run of solid hits
+        // instead of forty overlapping copies of the same sound.
+        minGap: 0.16,
+        // ...and the smallest pile worth showing at all, as a fraction of max
+        // HP. Below this the accumulator just keeps counting. This is what
+        // stops a 3-damage-per-second fish brushing past from firing the full
+        // hit treatment eight times a second.
+        minFraction: 0.012,
+        // fraction of the bar lost -> `scale` on the feedback event, which is
+        // what drives shake, particle count, ripple, glow and sfx volume:
+        //
+        //   scale = clamp(base + lost * gain, base, max)
+        //
+        // At the shipped numbers a 1% graze is 0.39, a 10% bite is 0.75, and
+        // anything past ~41% of the bar in one go pins the ceiling. Tuned in
+        // FRACTIONS rather than raw damage on purpose: max HP moves a long
+        // way over a run (Blubber stacks), and a 20-damage hit late is not
+        // the emergency the same 20 was on the first wave.
+        base: 0.35,
+        gain: 4.0,
+        max: 2.0,
+        // The fraction of the bar that earns a full-strength rim flash — the
+        // longest, brightest red. Lower than the point where `scale` pins, so
+        // the rim saturates before the shake does; the rim is the readable
+        // channel and the camera is the one that gets annoying.
+        flashFraction: 0.3,
+        // ...and the floor under it, so the smallest hit still flashes for a
+        // readable length rather than for two frames.
+        minFlash: 0.3,
+      },
     },
 
     // ---------------------------------------------------------------------------
@@ -3498,6 +4121,33 @@ export const CONFIG = {
         impulsePerDamage: 0.5,
         impulseMax: 14,
         impulseTipBias: 0.85, // 0 = whole body kicked equally, 1 = all of it at the tail
+
+        // PER-ROLE LOOSENESS. Every value above is one setting shared by every
+        // chain on every creature, which was fine while the only chain was the
+        // tail. It stops being fine the moment a pectoral fin gets its own
+        // spring: a fin is a short stiff blade on a 2-3 bone chain, and run at
+        // the tail's numbers it trails as far as a tail does — over a span a
+        // fifth as long, which reads as the fin having come unstuck rather than
+        // as it flexing.
+        //
+        // So each chain in `rig.springChains` declares a role, and the number
+        // here scales the solver for it. Higher = looser:
+        //
+        //   stiffness / L    lower L is a stiffer spring, so it keeps up better
+        //   maxLag   * L     and is allowed to travel less far before the cap
+        //   damping  / sqrt(L)
+        //
+        // That last one is the same correction boneSpring already applies along
+        // a chain for `tipLooseness`, for the same reason: the damping RATIO is
+        // what decides whether a spring wobbles or settles, and changing
+        // stiffness without it turns a stiffer fin into a ringing one.
+        //
+        // 1.0 is "exactly the numbers above", so the tail is unscaled by
+        // definition and every existing chain behaves as it always has.
+        roleLooseness: {
+          tail: 1.0,
+          fin: 0.8, // eyeballed, not measured — it is a look, and it is on a slider
+        },
     },
     },
 
@@ -4102,6 +4752,12 @@ export const CONFIG = {
       // thing being thrown, pitched well below the pea-shooter `shoot` blip so a
       // volley cuts through a firefight already full of it.
       missileLaunch: { src: null, type: 'boom', freq: [260, 60], decay: 0.26, gain: 0.32, noise: 0.65, filter: 1800, pitchVary: 0.10, filterVary: 0.20 },
+      // The barrage: the same wet thump dropped an octave and given a long
+      // tail, so eight shells leaving at once read as ONE heavy release rather
+      // than as a fast burst of the single-shell sound. Low pitchVary on
+      // purpose — this fires at most once per full charge, so it should sound
+      // like the same event every time instead of wandering.
+      musselBarrage: { src: null, type: 'boom', freq: [190, 38], decay: 0.52, gain: 0.44, noise: 0.7, filter: 1500, pitchVary: 0.04, filterVary: 0.15 },
       // The detonation at the far end of the flight. Pitched ABOVE the launch
       // and much shorter — the launch is a heavy thing being thrown and this is
       // it coming apart, so it cracks rather than thumps, and the two stay
@@ -4215,6 +4871,16 @@ export const CONFIG = {
         '/sfx/HG_UI_Blip_Menu_Tappies-converted.mp3',
         '/sfx/HG_UI_Blip_Menu_Static-converted.mp3',
       ], type: 'blip', wave: 'triangle', freq: [900, 1500], decay: 0.09, gain: 1.0, pitchVary: 0.03 },
+      // The keystroke. Synthesised rather than sampled — this is the one menu
+      // sound with no file behind it, because what it needs is to be tiny and
+      // slightly different every time, and that is exactly what the synth path
+      // is good at. A single sampled take repeated twelve times in two seconds
+      // is a machine gun; `pitchVary` at 0.18 is what stops it.
+      //
+      // A short DOWNWARD blip: up reads as confirmation, and a name half typed
+      // is not a confirmation of anything. 40ms decay keeps a fast typist's
+      // ticks from overlapping into a tone.
+      uiType:    { src: null, type: 'blip', wave: 'square', freq: [1500, 1150], decay: 0.04, gain: 0.30, pitchVary: 0.18 },
 
       bakalarBombDrop:  { src: null, type: 'blip', wave: 'square', freq: [300, 150], decay: 0.18, gain: 0.13, pitchVary: 0.10 },
       bakalarBombBlast: { src: null, type: 'boom', freq: [130, 34], decay: 0.85, gain: 0.38, noise: 0.55, filter: 520, pitchVary: 0.05, filterVary: 0.20 },
@@ -4596,6 +5262,30 @@ export const CONFIG = {
         pulseAmp: 0.35,
         pulseSpeed: 0.7,
         colorA: 0x1de5c8, colorB: 0x2f6fd6, colorC: 0xbdf5ff, // cold
+      },
+
+      // The escort seals. The SHARED half of their look — see
+      // CONFIG.sealTeam.skin for the per-individual half, which is the point
+      // of this one: every squad member overrides pattern and palette, so what
+      // is left here is only what they agree on.
+      //
+      // Restrained on purpose. Escorts are friendly and there are up to five
+      // of them swimming inside the same few metres as the player; at fish
+      // strength the squad would out-glow the seal it is escorting and the
+      // screen would read as a light show rather than as a formation. Low
+      // coverage and a modest strength give a marked animal, not a lantern.
+      escort: {
+        pattern: 'blotches',
+        scale: 0.3,
+        coverage: 0.32,
+        contrast: 1.8,
+        strength: 1.5,
+        bodyDarken: 0.55, // less than the fish: a seal should still read as a seal
+        tailBias: 0.15,
+        pulseAmp: 0.22,
+        pulseSpeed: 1.4,
+        flickerAmp: 0.06,
+        flickerRate: 1.8,
       },
 
       // The shark. Not a light show — a warning. Stripes down a long body, low
@@ -5161,7 +5851,19 @@ export const CONFIG = {
     chumMax: 26,
     trawlerChumMul: 2.0,
     chumSpread: 3.5,
-    chumXp: 3,
+    // XP per bit. Was 3, which made a boat a level-up in a can: ~26 bits is
+    // 79 xp, a trawler 117, against the 256 it takes to reach level 7 from
+    // scratch. One trawler popped at thirty seconds covered levels one
+    // through six by itself, which is exactly what "levels 2-7 fly past"
+    // was — the recorded gaps SHRANK through that stretch (8s, 7s, 6s, 5s)
+    // because the boat's lump landed in the middle of it.
+    //
+    // Only the xp value moved. The bits still drop in the same numbers, still
+    // heal, still refill the strike meter, and still bait the crabs — the
+    // spectacle of a hull coming apart is the point and is untouched. A boat
+    // is now worth 26 xp: a real reward, not a shortcut through a third of
+    // the level curve.
+    chumXp: 1,
   },
 
   // Sucks every settled chum bit off the sea floor and carries it to the
@@ -5435,7 +6137,21 @@ export const CONFIG = {
     { id: 'velocity', name: 'Hot Rounds', desc: '+30% bullet speed', apply: (s) => { s.speed *= 1.3; } },
     { id: 'homingMissile', name: 'Homing Missile', desc: '+1 seeking missile per volley', apply: (s) => { s.missileCount = (s.missileCount ?? 0) + 1; }, maxStacks: 5 },
     { id: 'seaGarlic', name: 'Sea Garlic', desc: 'Damaging aura, +radius per level', apply: (s) => { s.garlicLevel = (s.garlicLevel ?? 0) + 1; }, maxStacks: 6 },
-    { id: 'shrimpRing', name: 'Shrimp Ring', desc: '+1 orbiting shrimp', apply: (s) => { s.shrimpCount = (s.shrimpCount ?? 0) + 1; }, maxStacks: 8 },
+    // First pick opens the ring at `baseCount` — one lone shrimp circling reads
+    // as a bug rather than an orbital weapon. Every stack after that is +1.
+    { id: 'shrimpRing', name: 'Shrimp Ring', desc: '+1 orbiting shrimp',
+      apply: (s) => { s.shrimpCount = s.shrimpCount ? s.shrimpCount + 1 : CONFIG.shrimpRing.baseCount; },
+      // Not interpolated from `baseCount`: this literal is built before CONFIG
+      // is assigned, so the number can't be read here.
+      levelDescs: { 1: 'Opens a full ring of orbiting shrimp' }, maxStacks: 8 },
+    // Reads the CONFIG count rather than counting its own stacks, for the same
+    // reason bounceShot reads maxBouncesPerLevel: the card's promise is "a
+    // barrage of N", and N lives in one place so the tuner slider and the
+    // description can't drift apart.
+    { id: 'musselVolley', name: 'Mussel Barrage', desc: 'Full-charge strike fires a barrage of homing mussels',
+      apply: (s) => { s.musselVolleyLevel = (s.musselVolleyLevel ?? 0) + 1; }, maxStacks: 5,
+      perLevelName: true,
+      levelDescs: { 1: 'Full-charge strike fires 8 homing mussels at once' } },
     { id: 'bounceShot', name: 'Ricochet Rounds', desc: 'Chaining shot: +fire rate, +lifespan, +bounces', apply: (s) => {
         s.bounceLevel = (s.bounceLevel ?? 0) + 1;
         s.bounceFireRate = (s.bounceFireRate ?? CONFIG.bounce.fireRate) * 0.88;
@@ -5966,7 +6682,11 @@ export const TUNER_SCHEMA = [
     items: [
       { path: 'dayNight.enabled', type: 'bool', label: 'day/night cycle' },
       { path: 'dayNight.scale', min: 0, max: 600, step: 5, label: 'clock speed (x real time)' },
-      { path: 'dayNight.startHour', min: 0, max: 24, step: 0.25, label: 'first run starts at' },
+      { path: 'dayNight.rate', min: 0, max: 10, step: 0.25, label: 'time rate multiplier' },
+      // Turn this off before tuning a specific hour, or the slider under it
+      // does nothing and the reason isn't visible from the panel.
+      { path: 'dayNight.startFromSystemClock', type: 'bool', label: 'open at the real time of day' },
+      { path: 'dayNight.startHour', min: 0, max: 24, step: 0.25, label: 'first run starts at (if not)' },
       // In seconds of ordinary passage, so it reads against `scale` above: at
       // 60x, 0.35 is 21 in-game seconds per orb, ~+10% of clock over a run.
       { path: 'dayNight.chumSeconds', min: 0, max: 5, step: 0.05, label: 'clock per chum eaten (s)' },
@@ -6806,6 +7526,7 @@ export const TUNER_SCHEMA = [
       { path: 'animation.spring.impulsePerDamage', min: 0, max: 3, step: 0.05, label: 'hit impulse per damage' },
       { path: 'animation.spring.impulseMax', min: 0, max: 60, step: 1, label: 'hit impulse cap' },
       { path: 'animation.spring.impulseTipBias', min: 0, max: 1, step: 0.02, label: 'impulse toward tail' },
+      { path: 'animation.spring.roleLooseness.fin', min: 0.1, max: 2, step: 0.05, label: 'fin looseness (vs tail)' },
     ],
   },
   {
@@ -6894,6 +7615,15 @@ export const TUNER_SCHEMA = [
       // depends on the Glow group's threshold and amount.
       { path: 'playerOutline.glow', min: 0, max: 8, step: 0.1, label: 'outline glow' },
       { path: 'playerOutline.opacity', min: 0, max: 1, step: 0.05, label: 'outline opacity' },
+      // The damage flash. Sat next to the base rim rather than in Feel because
+      // it is read against the colour two rows up — a hit colour is only ever
+      // "red enough" relative to whatever the rim already is.
+      { path: 'playerOutline.hit.enabled', type: 'bool', label: 'flash on damage' },
+      { path: 'playerOutline.hit.color', type: 'color', label: 'damage colour' },
+      { path: 'playerOutline.hit.time', min: 0.05, max: 1.5, step: 0.01, label: 'damage flash time' },
+      { path: 'playerOutline.hit.minTime', min: 0.05, max: 1.5, step: 0.01, label: '...on a graze' },
+      { path: 'playerOutline.hit.glowAdd', min: 0, max: 12, step: 0.1, label: 'damage flash glow' },
+      { path: 'playerOutline.hit.thicknessAdd', min: 0, max: 0.4, step: 0.005, label: 'damage flash width' },
     ],
   },
   {
@@ -7023,6 +7753,10 @@ export const TUNER_SCHEMA = [
     panel: 'companions',
     section: 'Escorts',
     items: [
+      // Off collapses the squad back to six identical seals wearing the shared
+      // `escort` preset — worth having, because it is the only way to judge
+      // that preset without six variants arguing over it.
+      { path: 'sealTeam.skin.enabled', type: 'bool', label: 'different skin per seal' },
       { path: 'sealTeam.maxSeals', min: 1, max: 12, step: 1, label: 'max seals' },
       { path: 'sealTeam.contactDamage', min: 0, max: 80, step: 1, label: 'ram damage' },
       { path: 'sealTeam.damagePerLevel', min: 0, max: 30, step: 1, label: 'damage per level' },
@@ -7128,6 +7862,9 @@ export const TUNER_SCHEMA = [
       { path: 'boats.trawlerHpMul', min: 1, max: 5, step: 0.1, label: 'trawler hp mult' },
       { path: 'boats.chumMin', min: 1, max: 60, step: 1, label: 'chum dropped (min)' },
       { path: 'boats.chumMax', min: 1, max: 90, step: 1, label: 'chum dropped (max)' },
+      // The one that decides whether a boat is a reward or a level-up. Read
+      // it next to the level costs: reaching level 7 takes 256 xp total.
+      { path: 'boats.chumXp', min: 0, max: 6, step: 0.5, label: 'xp per chum bit' },
       { path: 'boats.trawlerChumMul', min: 1, max: 5, step: 0.1, label: 'trawler chum mult' },
       { path: 'boats.chumSpread', min: 0.5, max: 12, step: 0.1, label: 'chum scatter' },
       { path: 'attractorOrb.lifetime', min: 1, max: 30, step: 0.5, label: 'attractor duration' },
@@ -7263,8 +8000,26 @@ export const TUNER_SCHEMA = [
       { path: 'bakalar.netDepth', min: 1, max: 40, step: 0.5, label: 'net depth' },
       { path: 'bakalar.netDepthPerLevel', min: 0, max: 6, step: 0.1, label: 'net depth per level' },
       { path: 'bakalar.netTrail', min: 0, max: 10, step: 0.1, label: 'net drag behind hull' },
-      { path: 'bakalar.netColor', type: 'color', label: 'net color' },
-      { path: 'bakalar.netOpacity', min: 0, max: 1, step: 0.02, label: 'net opacity' },
+      { path: 'bakalar.netColor', type: 'color', label: 'beam color' },
+      // --- beam (the look) ---
+      // `edge falloff` is the one to reach for first: high reads as a
+      // searchlight, low as a flat slab of colour.
+      { path: 'bakalar.beam.intensity', min: 0, max: 5, step: 0.1, label: 'beam brightness' },
+      { path: 'bakalar.beam.topWidth', min: 0.05, max: 1, step: 0.05, label: 'width at the hull (cone)' },
+      { path: 'bakalar.beam.edgeFalloff', min: 0.2, max: 6, step: 0.1, label: 'edge falloff (soft <-> tight)' },
+      { path: 'bakalar.beam.depthFalloff', min: 0.1, max: 4, step: 0.05, label: 'light falloff with depth' },
+      { path: 'bakalar.beam.bandSpeed', min: 0, max: 3, step: 0.05, label: 'band travel speed' },
+      { path: 'bakalar.beam.bandCount', min: 0.5, max: 12, step: 0.5, label: 'band count' },
+      { path: 'bakalar.beam.bandAmount', min: 0, max: 1, step: 0.02, label: 'band strength' },
+      { path: 'bakalar.beam.coreBoost', min: 0, max: 3, step: 0.05, label: 'hot core' },
+      // --- suction (the pull) ---
+      // Deliberately mirrors the two falloffs above. Drag them apart and fish
+      // get pulled hardest through the dim parts of the beam.
+      { path: 'bakalar.suction.strength', min: 0, max: 3, step: 0.05, label: 'suction strength' },
+      { path: 'bakalar.suction.edgeFalloff', min: 0.2, max: 6, step: 0.1, label: 'suction falloff across' },
+      { path: 'bakalar.suction.depthFalloff', min: 0.1, max: 4, step: 0.05, label: 'suction falloff with depth' },
+      { path: 'bakalar.suction.inwardRate', min: 0, max: 6, step: 0.1, label: 'pull toward the axis' },
+      { path: 'bakalar.suction.minPull', min: 0, max: 1, step: 0.02, label: 'minimum pull at the edge' },
       { path: 'bakalar.haulSpeed', min: 0.5, max: 30, step: 0.5, label: 'haul speed' },
       { path: 'bakalar.bobSpeed', min: 0, max: 6, step: 0.1, label: 'hull bob speed' },
       { path: 'bakalar.bobAmount', min: 0, max: 2, step: 0.02, label: 'hull bob' },
@@ -7331,6 +8086,11 @@ export const TUNER_SCHEMA = [
       { path: 'oyster.bombletDrag', min: 0.2, max: 8, step: 0.1, label: 'bomblet drag' },
       { path: 'oyster.bombletColor', type: 'color', label: 'bomblet color' },
       { path: 'oyster.bombletGlow', min: 0, max: 8, step: 0.1, label: 'bomblet glow' },
+      // The white burst, fired both where the pearl cracks and at every
+      // bomblet. No colour control on purpose — it is white, and the glow is
+      // the only dial it needs.
+      { path: 'emitters.pearlBurst.count', min: 0, max: 120, step: 2, label: 'pearl burst particles' },
+      { path: 'emitters.pearlBurst.glow', min: 0, max: 10, step: 0.1, label: 'pearl burst glow' },
     ],
   },
   {
@@ -7382,6 +8142,36 @@ export const TUNER_SCHEMA = [
       { path: 'octoGrab.drift.wanderOctave', min: 0.05, max: 1, step: 0.01, label: 'second wander ratio' },
       { path: 'octoGrab.drift.wanderOctaveAmp', min: 0, max: 2, step: 0.05, label: 'second wander amount' },
       { path: 'octoGrab.drift.velocityDrag', min: 0, max: 1, step: 0.02, label: 'streaming from velocity' },
+      // --- hunting ---
+      // `aggression` is the one that changes its personality: 0 station-keeps
+      // beside the seal and waits, 1 abandons the escort entirely to chase.
+      { path: 'octoGrab.hunt.enabled', type: 'bool', label: 'hunt for fish' },
+      { path: 'octoGrab.hunt.radius', min: 2, max: 40, step: 0.5, label: 'hunting radius' },
+      { path: 'octoGrab.hunt.weight', min: 0, max: 1, step: 0.05, label: 'aggression (off station)' },
+      { path: 'octoGrab.hunt.thrustBoost', min: 1, max: 4, step: 0.1, label: 'thrust while hunting' },
+      { path: 'octoGrab.hunt.pulseFraction', min: 0.1, max: 1, step: 0.05, label: 'jet duty while hunting' },
+      // --- turbulence ---
+      // SLOW and STRONG is the setting. Raising `speed` past about 1 turns
+      // long heavy sweeps into a buzz, whatever the strength.
+      { path: 'octoGrab.turbulence.enabled', type: 'bool', label: 'arm turbulence' },
+      { path: 'octoGrab.turbulence.strength', min: 0, max: 60, step: 1, label: 'turbulence strength' },
+      { path: 'octoGrab.turbulence.speed', min: 0.05, max: 3, step: 0.05, label: 'turbulence speed (low = heavy)' },
+      { path: 'octoGrab.turbulence.octave', min: 1, max: 6, step: 0.1, label: 'second octave ratio' },
+      { path: 'octoGrab.turbulence.octaveAmp', min: 0, max: 1.5, step: 0.05, label: 'second octave amount' },
+      { path: 'octoGrab.turbulence.swirl', min: 0, max: 1, step: 0.05, label: 'swirl vs straight push' },
+      { path: 'octoGrab.turbulence.tipBias', min: 0, max: 1, step: 0.05, label: 'turbulence toward the tips' },
+      { path: 'octoGrab.turbulence.busyScale', min: 0, max: 1, step: 0.05, label: 'turbulence while gripping' },
+      // --- spread (anti-bunching) ---
+      // What stops the six tentacles collecting into one rope under the body.
+      { path: 'octoGrab.spread.enabled', type: 'bool', label: 'keep arms apart' },
+      { path: 'octoGrab.spread.fanRadius', min: 0.5, max: 10, step: 0.1, label: 'fan radius' },
+      { path: 'octoGrab.spread.fanForce', min: 0, max: 40, step: 0.5, label: 'fan strength' },
+      { path: 'octoGrab.spread.fanArc', min: 0.5, max: 6.28, step: 0.1, label: 'fan arc (radians)' },
+      { path: 'octoGrab.spread.minRadius', min: 0, max: 8, step: 0.1, label: 'min tip distance from body' },
+      { path: 'octoGrab.spread.radialForce', min: 0, max: 60, step: 1, label: 'push out of the centre' },
+      { path: 'octoGrab.spread.minGap', min: 0, max: 8, step: 0.1, label: 'min gap between tips' },
+      { path: 'octoGrab.spread.gapForce', min: 0, max: 60, step: 1, label: 'push tips apart' },
+      { path: 'octoGrab.spread.tipBias', min: 0, max: 1, step: 0.05, label: 'spread toward the tips' },
       // --- per-bone flow (the flagellum) ---
       // These are the looseness controls. `arm IK while idle` at 0 means the
       // arms are pure physics; raising it reimposes a posed shape and is the
@@ -7603,6 +8393,11 @@ export const TUNER_SCHEMA = [
       { path: 'grid.warpGain', min: 0, max: 5, step: 0.1 },
       { path: 'grid.rippleDecay', min: 0.3, max: 8, step: 0.1, label: 'ripple snap-back' },
       { path: 'grid.wakeStrength', min: -3, max: 3, step: 0.05, label: 'ship wake' },
+      { path: 'grid.touchGlow.enabled', type: 'bool', label: 'finger glow (touch)' },
+      { path: 'grid.touchGlow.radius', min: 1, max: 20, step: 0.5, label: 'finger glow reach' },
+      { path: 'grid.touchGlow.gain', min: 0, max: 4, step: 0.1, label: 'finger glow brightness' },
+      { path: 'grid.touchGlow.push', min: 0, max: 3, step: 0.05, label: 'finger shove' },
+      { path: 'grid.touchGlow.swirl', min: 0, max: 3, step: 0.05, label: 'finger swirl' },
     ],
   },
   {
@@ -7614,9 +8409,25 @@ export const TUNER_SCHEMA = [
       { path: 'fx.maxShake', min: 0, max: 3, step: 0.05, label: 'max shake' },
       { path: 'fx.hitPop', min: 0, max: 1.5, step: 0.05, label: 'enemy hit pop' },
       { path: 'feedback.kill.shake', min: 0, max: 2, step: 0.05, label: 'kill shake' },
-      { path: 'feedback.playerHit.shake', min: 0, max: 3, step: 0.05, label: 'damage shake' },
+      // A tenth the range and a fifth the step of the other shakes, because
+      // this one is multiplied by a 0.35..2.0 scale before it lands and the
+      // whole curve has to stay under `max shake` for that scaling to survive
+      // — see the note on CONFIG.feedback.playerHit.
+      { path: 'feedback.playerHit.shake', min: 0, max: 0.3, step: 0.01, label: 'damage shake (x0.35-2 by hp lost)' },
+      { path: 'fx.playerDamage.minGap', min: 0.02, max: 0.6, step: 0.01, label: 'min gap between hits shown' },
+      { path: 'fx.playerDamage.gain', min: 0, max: 12, step: 0.1, label: 'hit size per hp fraction' },
+      { path: 'fx.playerDamage.flashFraction', min: 0.05, max: 1, step: 0.01, label: 'hp lost for a full rim flash' },
       { path: 'feedback.kill.ripple.strength', min: 0, max: 10, step: 0.1, label: 'kill grid punch' },
       { path: 'emitters.explosion.count', min: 0, max: 200, step: 5, label: 'explosion bits' },
+      // The current every particle in the game swims in. `drag spread` is the
+      // one to reach for first — it costs nothing and is most of the
+      // difference between a burst that looks thrown through water and one
+      // that looks played back.
+      { path: 'fx.turbulence.enabled', type: 'bool', label: 'water turbulence' },
+      { path: 'fx.turbulence.strength', min: 0, max: 3, step: 0.05, label: 'turbulence strength' },
+      { path: 'fx.turbulence.frequency', min: 0.05, max: 2, step: 0.05, label: 'turbulence eddy size (low = big)' },
+      { path: 'fx.turbulence.timeScale', min: 0, max: 4, step: 0.05, label: 'turbulence churn speed' },
+      { path: 'fx.turbulence.dragVary', min: 0, max: 0.95, step: 0.05, label: 'particle drag spread' },
       { path: 'audio.masterVolume', min: 0, max: 1, step: 0.05 },
       { path: 'audio.enabled', type: 'bool', label: 'sound' },
       { path: 'haptics.enabled', type: 'bool', label: 'haptics' },
@@ -7909,7 +8720,36 @@ function withoutTableOwnedKeys(snapshot) {
     rest.levelUpCards = cards;
   }
   if (rest.enemies) rest.enemies = withoutEnemyTableFields(rest.enemies);
+  if (rest.emitters) rest.emitters = withoutCodeOwnedFields(rest.emitters, ['colors']);
+  if (rest.feedback) rest.feedback = withoutCodeOwnedFields(rest.feedback, ['emit']);
   return rest;
+}
+
+// Fields inside a saved snapshot that config.js owns outright.
+//
+// The tuner has never had a control for a burst's palette or for which emitter
+// an event fires — a snapshot carries them only because it saves whole objects,
+// so what's in the file is an echo of whatever config.js held on the day it was
+// written. Left in, that echo is authoritative: the palettes are the one part
+// of the particle design that has to hold across the whole game (see the note
+// on CONFIG.emitters), and a months-old snapshot would quietly put the rainbow
+// back every time it loaded, whatever the source says.
+//
+// Everything the tuner CAN reach — count, size, speed, life, glow, cone — is
+// left exactly as saved. This drops nothing anyone tuned.
+function withoutCodeOwnedFields(section, fields) {
+  if (!section || typeof section !== 'object') return section;
+  const out = {};
+  for (const [name, entry] of Object.entries(section)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      out[name] = entry;
+      continue;
+    }
+    const kept = { ...entry };
+    for (const f of fields) delete kept[f];
+    out[name] = kept;
+  }
+  return out;
 }
 
 // Overwrite `target` with `source` in place, preserving the identity of every

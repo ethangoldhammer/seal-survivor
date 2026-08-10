@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-08-10T01:59:03.240Z",
+  "generatedAt": "2026-08-10T06:08:50.207Z",
   "counts": {
-    "sounds": 47,
+    "sounds": 49,
     "sampled": 19,
-    "synth": 28,
-    "events": 55,
-    "eventsWithSound": 51,
+    "synth": 30,
+    "events": 57,
+    "eventsWithSound": 53,
     "silentEvents": 4,
     "callSites": 73,
-    "files": 67,
-    "orphanFiles": 12,
+    "files": 70,
+    "orphanFiles": 13,
     "unreferencedSounds": 0
   },
   "bus": {
@@ -334,8 +334,8 @@
         "filter": 3420,
         "noise": 0.62,
         "decay": 0.49,
-        "gain": 1,
-        "pitchVary": 0.08,
+        "gain": 4.731512589614805,
+        "pitchVary": 0.19,
         "filterVary": 0.15,
         "detune": 0
       },
@@ -395,24 +395,17 @@
     },
     {
       "name": "bite",
-      "mode": "sample",
-      "files": [
-        {
-          "path": "/sfx/HG_UI_Blip_Click_Jagged.mp3",
-          "exists": true,
-          "bytes": 5223,
-          "seconds": 0.130575
-        }
-      ],
+      "mode": "synth",
+      "files": [],
       "missing": [],
-      "variations": 1,
+      "variations": 0,
       "synth": {
         "type": "noise",
         "wave": null,
         "freq": null,
-        "filter": 6000,
+        "filter": 680,
         "noise": null,
-        "decay": 1.26,
+        "decay": 0.19,
         "gain": 2.17,
         "pitchVary": 0.14,
         "filterVary": 0.25,
@@ -628,10 +621,29 @@
     },
     {
       "name": "seabedThud",
-      "mode": "synth",
-      "files": [],
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/Seal_58.mp3",
+          "exists": true,
+          "bytes": 24764,
+          "seconds": 2.037583
+        },
+        {
+          "path": "/sfx/Seal_56.mp3",
+          "exists": true,
+          "bytes": 27898,
+          "seconds": 2.29875
+        },
+        {
+          "path": "/sfx/Seal_48.mp3",
+          "exists": true,
+          "bytes": 19435,
+          "seconds": 1.5935
+        }
+      ],
       "missing": [],
-      "variations": 0,
+      "variations": 3,
       "synth": {
         "type": "boom",
         "wave": null,
@@ -642,7 +654,7 @@
         "filter": 480,
         "noise": 0.85,
         "decay": 0.85,
-        "gain": 0.4,
+        "gain": 11.220184543019636,
         "pitchVary": 0.05,
         "filterVary": 0.15,
         "detune": 0
@@ -829,7 +841,7 @@
         "freq": null,
         "filter": 1700,
         "noise": null,
-        "decay": 0.42,
+        "decay": 0.99,
         "gain": 0.24,
         "pitchVary": 0.08,
         "filterVary": 0.25,
@@ -893,6 +905,34 @@
       },
       "firedBy": [
         "missileLaunch"
+      ],
+      "directSites": [],
+      "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "musselBarrage",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          190,
+          38
+        ],
+        "filter": 1500,
+        "noise": 0.7,
+        "decay": 0.52,
+        "gain": 0.44,
+        "pitchVary": 0.04,
+        "filterVary": 0.15,
+        "detune": 0
+      },
+      "firedBy": [
+        "musselBarrage"
       ],
       "directSites": [],
       "minGap": 0,
@@ -1565,6 +1605,34 @@
       "orphaned": false
     },
     {
+      "name": "uiType",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "blip",
+        "wave": "square",
+        "freq": [
+          1500,
+          1150
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.04,
+        "gain": 0.3,
+        "pitchVary": 0.18,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "uiType"
+      ],
+      "directSites": [],
+      "minGap": 0.03,
+      "orphaned": false
+    },
+    {
       "name": "bakalarBombDrop",
       "mode": "synth",
       "files": [],
@@ -1638,11 +1706,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1063
+          "line": 1083
         },
         {
           "file": "path/src/main.js",
-          "line": 1333
+          "line": 1380
         }
       ]
     },
@@ -1662,7 +1730,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1074
+          "line": 1094
         }
       ]
     },
@@ -1682,15 +1750,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 663
+          "line": 673
         },
         {
           "file": "path/src/main.js",
-          "line": 1748
+          "line": 1825
         },
         {
           "file": "path/src/main.js",
-          "line": 1752
+          "line": 1829
         }
       ]
     },
@@ -1725,11 +1793,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 728
+          "line": 738
         },
         {
           "file": "path/src/main.js",
-          "line": 1525
+          "line": 1588
         }
       ]
     },
@@ -1749,7 +1817,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 946
+          "line": 962
         }
       ]
     },
@@ -1766,7 +1834,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 947
+          "line": 963
         }
       ]
     },
@@ -1775,7 +1843,7 @@
       "sfx": "playerHit",
       "sfxMinGap": 0,
       "emit": "playerHit",
-      "shake": 0.5,
+      "shake": 0.07,
       "hitstop": 0.06,
       "glow": 0.9,
       "ripple": {
@@ -1785,12 +1853,8 @@
       "haptic": "45ms",
       "sites": [
         {
-          "file": "path/src/main.js",
-          "line": 979
-        },
-        {
-          "file": "path/src/main.js",
-          "line": 1731
+          "file": "path/src/systems/playerDamageFx.js",
+          "line": 115
         }
       ]
     },
@@ -1810,7 +1874,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 485
+          "line": 493
         }
       ]
     },
@@ -1830,11 +1894,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1948
+          "line": 2025
         },
         {
           "file": "path/src/main.js",
-          "line": 2025
+          "line": 2102
         }
       ]
     },
@@ -1854,7 +1918,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 926
+          "line": 942
         }
       ]
     },
@@ -1874,11 +1938,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1696
+          "line": 1769
         },
         {
           "file": "path/src/main.js",
-          "line": 2006
+          "line": 2083
         }
       ]
     },
@@ -1895,11 +1959,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1701
+          "line": 1774
         },
         {
           "file": "path/src/main.js",
-          "line": 2008
+          "line": 2085
         }
       ]
     },
@@ -1919,15 +1983,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 528
+          "line": 537
         },
         {
           "file": "path/src/main.js",
-          "line": 1962
+          "line": 2039
         },
         {
           "file": "path/src/main.js",
-          "line": 1981
+          "line": 2058
         }
       ]
     },
@@ -1944,11 +2008,11 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 40
+          "line": 47
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 912
+          "line": 937
         }
       ]
     },
@@ -1965,11 +2029,28 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 41
+          "line": 48
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 877
+          "line": 902
+        }
+      ]
+    },
+    {
+      "name": "uiType",
+      "sfx": "uiType",
+      "sfxMinGap": 0.03,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/ui/ui.js",
+          "line": 353
         }
       ]
     },
@@ -1989,19 +2070,19 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1830
+          "line": 1907
         },
         {
           "file": "path/src/main.js",
-          "line": 1927
-        },
-        {
-          "file": "path/src/main.js",
-          "line": 1952
+          "line": 2004
         },
         {
           "file": "path/src/main.js",
           "line": 2029
+        },
+        {
+          "file": "path/src/main.js",
+          "line": 2106
         }
       ]
     },
@@ -2021,11 +2102,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1755
+          "line": 1832
         },
         {
           "file": "path/src/main.js",
-          "line": 1941
+          "line": 2018
         }
       ]
     },
@@ -2045,15 +2126,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 721
+          "line": 731
         },
         {
           "file": "path/src/main.js",
-          "line": 1753
+          "line": 1830
         },
         {
           "file": "path/src/main.js",
-          "line": 1912
+          "line": 1989
         }
       ]
     },
@@ -2073,7 +2154,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1161
+          "line": 1208
         }
       ]
     },
@@ -2097,7 +2178,7 @@
         },
         {
           "file": "path/src/main.js",
-          "line": 1516
+          "line": 1579
         }
       ]
     },
@@ -2121,11 +2202,11 @@
         },
         {
           "file": "path/src/main.js",
-          "line": 1687
+          "line": 1760
         },
         {
           "file": "path/src/main.js",
-          "line": 1711
+          "line": 1784
         }
       ]
     },
@@ -2145,7 +2226,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1977
+          "line": 2054
         }
       ]
     },
@@ -2180,6 +2261,21 @@
       "sites": []
     },
     {
+      "name": "musselBarrage",
+      "sfx": "musselBarrage",
+      "sfxMinGap": 0,
+      "emit": "missileLaunch",
+      "shake": 0.3,
+      "hitstop": 0,
+      "glow": 1.1,
+      "ripple": {
+        "strength": 3.2,
+        "radius": 13
+      },
+      "haptic": "45ms / 30ms / 55ms",
+      "sites": []
+    },
+    {
       "name": "missileImpact",
       "sfx": "missileImpact",
       "sfxMinGap": 0.05,
@@ -2195,7 +2291,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 612
+          "line": 622
         }
       ]
     },
@@ -2215,7 +2311,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1659
+          "line": 1727
         }
       ]
     },
@@ -2235,7 +2331,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 862
+          "line": 878
         }
       ]
     },
@@ -2252,7 +2348,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1584
+          "line": 1647
         }
       ]
     },
@@ -2272,7 +2368,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 899
+          "line": 915
         }
       ]
     },
@@ -2292,7 +2388,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 827
+          "line": 843
         }
       ]
     },
@@ -2346,7 +2442,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1777
+          "line": 1854
         }
       ]
     },
@@ -2366,7 +2462,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1783
+          "line": 1860
         }
       ]
     },
@@ -2386,7 +2482,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1801
+          "line": 1878
         }
       ]
     },
@@ -2406,7 +2502,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1800
+          "line": 1877
         }
       ]
     },
@@ -2423,7 +2519,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1802
+          "line": 1879
         }
       ]
     },
@@ -2443,7 +2539,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1810
+          "line": 1887
         }
       ]
     },
@@ -2460,7 +2556,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1767
+          "line": 1844
         }
       ]
     },
@@ -2480,7 +2576,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1772
+          "line": 1849
         }
       ]
     },
@@ -2500,7 +2596,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1794
+          "line": 1871
         }
       ]
     },
@@ -2535,7 +2631,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1817
+          "line": 1894
         }
       ]
     },
@@ -2555,7 +2651,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1208
+          "line": 1255
         }
       ]
     },
@@ -2572,7 +2668,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1688
+          "line": 1761
         }
       ]
     },
@@ -2592,7 +2688,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1228
+          "line": 1275
         }
       ]
     },
@@ -2600,7 +2696,7 @@
       "name": "pearlBurst",
       "sfx": "pearlBurst",
       "sfxMinGap": 0.06,
-      "emit": "sparks",
+      "emit": "pearlBurst",
       "shake": 0.05,
       "hitstop": 0,
       "glow": 0.5,
@@ -2612,7 +2708,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1823
+          "line": 1900
         }
       ]
     },
@@ -2629,7 +2725,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1838
+          "line": 1915
         }
       ]
     },
@@ -2649,7 +2745,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1841
+          "line": 1918
         }
       ]
     },
@@ -2669,11 +2765,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1828
+          "line": 1905
         },
         {
           "file": "path/src/main.js",
-          "line": 1829
+          "line": 1906
         }
       ]
     },
@@ -2690,7 +2786,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1864
+          "line": 1941
         }
       ]
     },
@@ -2710,7 +2806,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1866
+          "line": 1943
         }
       ]
     },
@@ -2727,7 +2823,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1519
+          "line": 1582
         }
       ]
     },
@@ -2747,7 +2843,7 @@
       "sites": [
         {
           "file": "path/src/systems/deathDive.js",
-          "line": 339
+          "line": 369
         }
       ]
     }
@@ -3173,6 +3269,16 @@
       ]
     },
     {
+      "path": "/sfx/Seal_56.mp3",
+      "exists": true,
+      "bytes": 27898,
+      "seconds": 2.29875,
+      "name": "Seal_56.mp3",
+      "usedBy": [
+        "seabedThud"
+      ]
+    },
+    {
       "path": "/sfx/Seal_FoodChain_03.mp3",
       "exists": true,
       "bytes": 27898,
@@ -3216,6 +3322,16 @@
       "name": "Seal_Boost_03.mp3",
       "usedBy": [
         "strike"
+      ]
+    },
+    {
+      "path": "/sfx/Seal_58.mp3",
+      "exists": true,
+      "bytes": 24764,
+      "seconds": 2.037583,
+      "name": "Seal_58.mp3",
+      "usedBy": [
+        "seabedThud"
       ]
     },
     {
@@ -3306,6 +3422,16 @@
       "name": "Seal_PlayerHit_05.mp3",
       "usedBy": [
         "playerHit"
+      ]
+    },
+    {
+      "path": "/sfx/Seal_48.mp3",
+      "exists": true,
+      "bytes": 19435,
+      "seconds": 1.5935,
+      "name": "Seal_48.mp3",
+      "usedBy": [
+        "seabedThud"
       ]
     },
     {
@@ -3558,9 +3684,7 @@
       "bytes": 5223,
       "seconds": 0.130575,
       "name": "HG_UI_Blip_Click_Jagged.mp3",
-      "usedBy": [
-        "bite"
-      ]
+      "usedBy": []
     },
     {
       "path": "/sfx/HG_UI_Blip_Menu_TikTok-converted.mp3",
@@ -3614,6 +3738,7 @@
       "Seal_PlayerHit_FoodChain_03.mp3",
       "HG_UI_Blip_Nutatch-converted.mp3",
       "HG_UI_Blip_Menu_Bic-converted.mp3",
+      "HG_UI_Blip_Click_Jagged.mp3",
       "HG_UI_Blip_Menu_TikTok-converted.mp3",
       "HG_UI_Blip_Noize-converted.mp3"
     ],

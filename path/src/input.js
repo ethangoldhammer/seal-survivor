@@ -87,6 +87,27 @@ const lastTap = { move: null, aim: null }; // { at, x, y }
 // release spends a full charge on nothing.
 let suppressStrikeRelease = false;
 
+// --- multitouch, for the grid ----------------------------------------------
+// The sticks above care about ROLES — which half a thumb landed in, and what
+// that half does. This cares about FINGERS: every contact on the canvas, sticks
+// and strike fingers included, so the backdrop can light up under each one.
+//
+// A finger takes the LOWEST FREE slot as it lands and holds it until it lifts.
+// Not a monotonically increasing counter: with one, lifting and re-planting the
+// left thumb would walk it up through the palette, and the grid would change
+// colour under a thumb that never moved. Lowest-free means the first finger
+// down is slot 0 for as long as it's down, every time.
+//
+// Position is kept in NDC rather than client px because the only consumer
+// unprojects it through the camera — see systems/grid.js. Slots hold their last
+// position after the lift so the glow has somewhere to fade out FROM.
+export const TOUCH_SLOTS = 5;
+export const touchSlots = Array.from({ length: TOUCH_SLOTS }, () => ({
+  id: null, // browser touch identifier, or null while the slot is free
+  x: 0,
+  y: 0,
+}));
+
 const DEADZONE = 0.15;
 // A menu step should take a deliberate push, so it asks for more of the stick
 // than steering does — otherwise the drift that's harmless in gameplay walks
@@ -176,6 +197,8 @@ export function initInput(canvas) {
     if (wasCharging) suppressStrikeRelease = true;
   });
 
+  // The rect is read ONCE per event rather than once per finger: it's a layout
+  // read, and a five-finger touchmove arrives many times a second.
   canvas.addEventListener(
     'touchstart',
     (e) => {
@@ -184,7 +207,11 @@ export function initInput(canvas) {
       // which a touch device can still latch via a synthesised event — keeps
       // overwriting touch aim the moment the aim thumb comes off.
       lastAimDevice = 'touch';
-      forEachTouch(e.changedTouches, beginTouch);
+      const rect = canvas.getBoundingClientRect();
+      forEachTouch(e.changedTouches, (t) => {
+        beginTouch(t);
+        claimTouchSlot(t, rect);
+      });
     },
     { passive: false }
   );
@@ -192,9 +219,11 @@ export function initInput(canvas) {
     'touchmove',
     (e) => {
       e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
       forEachTouch(e.changedTouches, (t) => {
         const stick = stickById(t.identifier);
         if (stick) stick.current.set(t.clientX, t.clientY);
+        moveTouchSlot(t, rect);
       });
     },
     { passive: false }
@@ -204,7 +233,10 @@ export function initInput(canvas) {
   // left in the registry then steers at full deflection forever.
   const lift = (cancelled) => (e) => {
     e.preventDefault();
-    forEachTouch(e.changedTouches, (t) => endTouch(t, cancelled));
+    forEachTouch(e.changedTouches, (t) => {
+      endTouch(t, cancelled);
+      releaseTouchSlot(t);
+    });
   };
   canvas.addEventListener('touchend', lift(false), { passive: false });
   canvas.addEventListener('touchcancel', lift(true), { passive: false });
@@ -263,6 +295,43 @@ function beginTouch(t) {
   sticks[role] = stick;
 }
 
+// --- touch slots -----------------------------------------------------------
+// Deliberately outside beginTouch/endTouch: those return early for a finger
+// that isn't driving a stick, and the grid wants every contact — including the
+// third-finger strike and the fourth one the strike ignores.
+
+function touchSlotById(id) {
+  for (const slot of touchSlots) if (slot.id === id) return slot;
+  return null;
+}
+
+function setTouchSlotPos(slot, t, rect) {
+  slot.x = rect.width > 0 ? ((t.clientX - rect.left) / rect.width) * 2 - 1 : 0;
+  slot.y = rect.height > 0 ? -(((t.clientY - rect.top) / rect.height) * 2 - 1) : 0;
+}
+
+function claimTouchSlot(t, rect) {
+  // A sixth finger simply doesn't light anything up. Growing the palette to
+  // cover it would cost a uniform slot and a fragment-loop iteration for a case
+  // that needs both hands flat on the glass.
+  const slot = touchSlots.find((s) => s.id === null);
+  if (!slot) return;
+  slot.id = t.identifier;
+  setTouchSlotPos(slot, t, rect);
+}
+
+function moveTouchSlot(t, rect) {
+  const slot = touchSlotById(t.identifier);
+  if (slot) setTouchSlotPos(slot, t, rect);
+}
+
+// The position is left behind on purpose — the glow fades out where the finger
+// was, rather than snapping to the origin on the way down.
+function releaseTouchSlot(t) {
+  const slot = touchSlotById(t.identifier);
+  if (slot) slot.id = null;
+}
+
 function stickById(id) {
   if (sticks.move?.id === id) return sticks.move;
   if (sticks.aim?.id === id) return sticks.aim;
@@ -314,6 +383,9 @@ function clearSticks() {
   lastTap.move = null;
   lastTap.aim = null;
   suppressStrikeRelease = false;
+  // Freed, not repositioned: whatever the grid is showing under these fingers
+  // fades out from where they were, exactly as a normal lift does.
+  for (const slot of touchSlots) slot.id = null;
 }
 
 /** Is a touch winding up a strike right now — either route. */

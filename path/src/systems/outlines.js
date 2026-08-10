@@ -56,6 +56,8 @@ export function attachPlayerOutline(body) {
   // would decay onto shells that never saw the strike.
   pulsePhase = 0;
   flare = 0;
+  hurt = 0;
+  hurtPower = 0;
   boosted = false;
   applyPlayerOutline();
 }
@@ -72,28 +74,40 @@ export function applyPlayerOutline() {
 }
 
 // ---------------------------------------------------------------------------
-// The player's rim, winding up a strike
+// The player's rim, as a state readout
 // ---------------------------------------------------------------------------
 //
-// A strike being charged throbs the rim and the release blows it out. It lives
-// here rather than in systems/strike.js because the shells and the one function
-// that interprets a look are here — anywhere else would need a second copy of
-// applyLook, which is exactly the drift this file exists to prevent.
+// Two things drive the rim away from its tuned look, and both live here rather
+// than in the systems that cause them (strike.js, playerDamageFx.js) because
+// the shells and the one function that interprets a look are here — anywhere
+// else would need a second copy of applyLook, which is exactly the drift this
+// file exists to prevent.
+//
+//   THE WIND-UP  a strike being charged throbs the rim, and the release blows
+//                it out. CONFIG.strike.charge.outline.
+//   THE HIT      taking damage flashes it red. CONFIG.playerOutline.hit.
+//
+// They stack rather than taking turns: being bitten mid-charge is both things
+// happening, and a rim that dropped the throb to show the hit would read as
+// the charge having been lost.
 //
 // Everything is ADDED to whatever CONFIG.playerOutline currently says, read
 // fresh each frame. That is what lets the rim be dragged around in the tuner
 // mid-wind-up and keeps the pulse relative to the tuned look instead of
 // stamping over it with numbers of its own.
-//
-// See CONFIG.strike.charge.outline for what the knobs mean.
 
 let pulsePhase = 0; // 0..1 through the current throb
 let flare = 0; // the release burst, 1 -> 0 over flareTime
+let hurt = 0; // the damage flash, 1 -> 0 over its (strength-scaled) duration
+let hurtPower = 0; // how big the hit that lit it was, 0..1 — held for the flash
 let boosted = false; // was anything added last frame? (see the idle guard)
 
 // Scratch, reused: this runs every frame of a wind-up and applyLook only ever
 // reads it. Allocating a look object per frame would be garbage for nothing.
 const chargeLook = { color: 0xffffff, thickness: 0, glow: 1, opacity: 1 };
+// Same reasoning, for the tuned-colour -> hit-colour blend.
+const hurtColor = new THREE.Color();
+const hurtTarget = new THREE.Color();
 
 /**
  * Fire the release flare. Called on the frame a strike actually launches.
@@ -104,9 +118,30 @@ export function flarePlayerOutline(power = 1) {
   flare = Math.max(flare, Math.min(1, Math.max(0, power)));
 }
 
+/**
+ * Flash the rim red. Called on the frame the player takes a hit worth showing —
+ * systems/playerDamageFx.js decides which those are.
+ *
+ * @param strength 0..1, how much of the health bar the hit cost relative to
+ *   CONFIG.fx.playerDamage.flashFraction. Sets how bright and how long, never
+ *   how red — see the note on CONFIG.playerOutline.hit.
+ */
+export function flashPlayerOutlineDamage(strength = 1) {
+  const s = Math.min(1, Math.max(0, strength));
+  if (!(s > 0)) return;
+  // A hit landing inside a flash re-lights it from full. What it must not do
+  // is DOWNGRADE one: `hurtPower * hurt` is the strength still burning, so a
+  // scratch taken a moment after a maiming re-lights at the maiming's
+  // brightness rather than cutting it short at the scratch's.
+  hurtPower = Math.max(hurtPower * hurt, s);
+  hurt = 1;
+}
+
 export function resetPlayerOutlineCharge() {
   pulsePhase = 0;
   flare = 0;
+  hurt = 0;
+  hurtPower = 0;
   if (boosted) {
     boosted = false;
     applyPlayerOutline();
@@ -114,19 +149,46 @@ export function resetPlayerOutlineCharge() {
 }
 
 /**
+ * Ticks both rim effects and pushes the result onto the shells. Call once a
+ * frame, always — the damage flash decays here too, so skipping it while
+ * nothing is being charged would leave a hit's red hanging on the rim.
+ *
  * @param dt    REAL seconds — the pulse is a readout of the button being held,
- *              and a hit-stop should not stall it.
+ *              and a hit-stop should not stall it. Neither should it stall the
+ *              damage flash, which is over inside two hit-stops.
  * @param power banked power of the wind-up in progress, 0..1, or 0 when nothing
  *              is being held.
  */
 export function updatePlayerOutline(dt, power) {
   const cfg = CONFIG.playerOutline ?? {};
   const pc = CONFIG.strike?.charge?.outline ?? {};
-  const off = pc.enabled === false || cfg.enabled === false;
-  const wind = off ? 0 : Math.min(1, Math.max(0, power || 0));
+  const hc = cfg.hit ?? {};
+  // Three switches, not one. The rim's own kills everything downstream of it,
+  // but the wind-up and the damage flash are separate features with separate
+  // reasons to be turned off — folding them together (as this did while the
+  // wind-up was the only effect here) would mean switching off the charge
+  // throb also silenced every hit the player took.
+  const rimOff = cfg.enabled === false;
+  const chargeOff = rimOff || pc.enabled === false;
+  const hitOff = rimOff || hc.enabled === false;
+  const wind = chargeOff ? 0 : Math.min(1, Math.max(0, power || 0));
 
   if (flare > 0) flare = Math.max(0, flare - dt / Math.max(0.01, pc.flareTime ?? 0.32));
-  if (off) flare = 0;
+  if (chargeOff) flare = 0;
+
+  // The flash runs SHORTER for a smaller hit as well as dimmer — a graze that
+  // lingered as long as a maiming would make every hit read the same size no
+  // matter what the brightness said, because duration is the thing you notice
+  // when you're looking somewhere else on the screen.
+  if (hurt > 0) {
+    const span = lerp(hc.minTime ?? 0.18, hc.time ?? 0.45, hurtPower);
+    hurt = Math.max(0, hurt - dt / Math.max(0.01, span));
+    if (hurt <= 0) hurtPower = 0;
+  }
+  if (hitOff) {
+    hurt = 0;
+    hurtPower = 0;
+  }
 
   // Rate climbs with banked power — urgency reads as speed, and it keeps
   // building after the brightness has run out of room to.
@@ -149,15 +211,25 @@ export function updatePlayerOutline(dt, power) {
   // Squared, so the flare falls off its peak fast and then lingers — a linear
   // decay reads as a dimmer switch rather than as something blowing off.
   const burst = flare * flare;
+  // Squared for the same reason the flare is: a hit should peak instantly and
+  // then let go, and a linear fade reads as the rim being TINTED red rather
+  // than as something having just happened to you.
+  const sting = hurt * hurt;
 
-  const glowAdd = (pc.glowAdd ?? 5) * throb + (pc.flareGlow ?? 9) * burst;
-  const thickAdd = (pc.thicknessAdd ?? 0.06) * throb + (pc.flareThickness ?? 0.14) * burst;
+  const glowAdd = (pc.glowAdd ?? 5) * throb + (pc.flareGlow ?? 9) * burst
+    + (hc.glowAdd ?? 4) * sting * hurtPower;
+  const thickAdd = (pc.thicknessAdd ?? 0.06) * throb + (pc.flareThickness ?? 0.14) * burst
+    + (hc.thicknessAdd ?? 0.07) * sting * hurtPower;
 
   // Idle: write the base look back ONCE and then do nothing at all. Without the
   // latch this would push four materials' worth of colour every frame of a run
   // in which nobody is charging anything, and — worse — would fight the tuner,
   // overwriting a slider drag on the very next frame.
-  if (glowAdd <= 0 && thickAdd <= 0) {
+  //
+  // `hurt` is in the test on its own account, not folded into glowAdd: the
+  // colour blend below runs off it, so a flash with both `hit` adds tuned to
+  // zero still has to reach the materials or the rim would never turn red.
+  if (glowAdd <= 0 && thickAdd <= 0 && hurt <= 0) {
     pulsePhase = 0;
     if (boosted) {
       boosted = false;
@@ -167,7 +239,16 @@ export function updatePlayerOutline(dt, power) {
   }
   boosted = true;
 
+  // Full hit colour on the frame of the hit whatever its size, easing back to
+  // the tuned rim — see CONFIG.playerOutline.hit. `hurt` rather than `sting`
+  // here on purpose: the squared curve is right for a brightness spike and
+  // wrong for a hue, which needs to hold long enough to be recognised as red.
   chargeLook.color = cfg.color ?? 0xffffff;
+  if (hurt > 0) {
+    hurtColor.set(cfg.color ?? 0xffffff);
+    hurtTarget.set(hc.color ?? 0xff2a18);
+    chargeLook.color = hurtColor.lerp(hurtTarget, hurt);
+  }
   chargeLook.opacity = cfg.opacity ?? 1;
   // Glow is the channel that blooms: it multiplies the colour past 1.0 into the
   // HDR bright-pass, so this is a rim that throws light rather than a lighter

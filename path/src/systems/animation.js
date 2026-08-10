@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { beatDuration, beatPhase } from './music.js';
 import { createBoneSpring } from './boneSpring.js';
+import { axisVec } from './ikChain.js';
 
 // A real state machine for rigged creatures, not just a 3-way switch.
 //
@@ -41,7 +42,6 @@ import { createBoneSpring } from './boneSpring.js';
 // the beluga drone) behaves exactly as it did before this file grew.
 
 const AXES = { x: 'x', y: 'y', z: 'z' };
-const BONE_LENGTH_AXIS = new THREE.Vector3(0, 1, 0);
 
 // Build a spring for one chain, working out what the LAST bone should aim at.
 //
@@ -62,10 +62,69 @@ const BONE_LENGTH_AXIS = new THREE.Vector3(0, 1, 0);
 // bone's offset from its parent is the best estimate available of its own
 // length. Chains ending on a bone that HAS a child are unaffected — that
 // child still wins.
-function makeSpring(bones) {
+//
+// `boneAxis` is the direction a bone's own length runs in ITS OWN local space,
+// which is what the tip fallback needs and is a property of the exporter that
+// made the file. Almost every rig here runs along +Y and that is the default,
+// but it is not a law: hammerhead.glb runs along local +X (measured — each
+// child bone's bind offset from its parent is (1,0,0) to three decimals), and
+// feeding it +Y would hand the last bone of every chain a tip direction square
+// to the bone it belongs to. The spring still runs, it just lags about an axis
+// the fin does not have — the kind of wrong that looks like bad tuning.
+//
+// Only chains ending on a LEAF are affected. A last bone with a child reads its
+// direction from that child and never consults this.
+function makeSpring(bones, boneAxis) {
   const last = bones[bones.length - 1];
   const tipLength = last.children.some((c) => c.isBone) ? 0 : last.position.length();
-  return createBoneSpring(bones, { tipAxis: BONE_LENGTH_AXIS, tipLength });
+  return createBoneSpring(bones, { tipAxis: boneAxis, tipLength });
+}
+
+// One spring config per ROLE, derived from the single shared CONFIG.animation
+// .spring block — see the roleLooseness note there for what the scaling means
+// and why damping moves with the square root.
+//
+// Rebuilt only when the inputs actually change. This is read once per chain
+// per creature per frame, so allocating a fresh object each time would put a
+// few thousand short-lived objects a second on the heap for values that are
+// identical between frames — and identical between CREATURES, since the config
+// is global. A module-level cache means the whole roster shares one object per
+// role, rebuilt on the frame a tuner slider moves and not otherwise.
+const roleCfgCache = new Map();
+let roleCfgSource = null;
+function springCfgFor(cfg, role) {
+  const looseness = cfg.roleLooseness?.[role];
+  // Absent role, or a role that is already 1.0: hand back the config itself
+  // rather than a copy of it. `tail` takes this path always.
+  if (!(looseness > 0) || looseness === 1) return cfg;
+  // Any edit to the spring block invalidates every derived config. Comparing
+  // the object identity is not enough — the tuner mutates CONFIG in place — so
+  // this keys on the three values the scaling actually reads.
+  const stamp = `${cfg.stiffness}|${cfg.damping}|${cfg.maxLag}`;
+  if (roleCfgSource !== stamp) {
+    roleCfgCache.clear();
+    roleCfgSource = stamp;
+  }
+  let derived = roleCfgCache.get(role);
+  if (!derived || derived.__looseness !== looseness) {
+    derived = {
+      ...cfg,
+      stiffness: cfg.stiffness / looseness,
+      damping: cfg.damping / Math.sqrt(looseness),
+      maxLag: cfg.maxLag * looseness,
+      __looseness: looseness,
+    };
+    roleCfgCache.set(role, derived);
+  }
+  return derived;
+}
+
+// `rig.springChains` entries come in two forms: a bare array of bone names
+// (role defaults to 'tail', which is unscaled, so every chain written before
+// roles existed keeps behaving exactly as it did), or { bones, role }.
+function chainSpec(entry) {
+  if (Array.isArray(entry)) return { names: entry, role: 'tail' };
+  return { names: entry?.bones ?? [], role: entry?.role ?? 'tail' };
 }
 
 
@@ -152,9 +211,12 @@ export function createAnimationController(instance) {
   // The spring drives the SAME chain the sine wave does, one layer later —
   // sine sets a target pose, spring lags toward it. Bones only, so a model
   // with no rig simply doesn't get one and impulse() becomes a no-op.
-  // Every bone rig in this project runs its length along its own +Y (each
-  // child sits at a pure +Y offset), which is what the tip fallback needs.
-  // That is NOT `rig.axis` — that's the axis the chain BENDS about.
+  //
+  // `rig.boneAxis` is the direction a bone's length runs in its own local
+  // space, defaulting to the +Y that nearly every file here uses — see
+  // makeSpring for what it feeds and which bones care. That is NOT `rig.axis`,
+  // which is the axis the chain BENDS about; the two are different questions
+  // and on this project's rigs they are usually different answers.
   //
   // `rig.springChains` adds FURTHER independent chains that get a spring but
   // no procedural drive. One wagChain describes a fish — a spine, tip to
@@ -163,22 +225,55 @@ export function createAnimationController(instance) {
   // solver's whole method (each bone measuring its target after its parent
   // has moved) assumes one. So limbed creatures list each limb separately and
   // get one solver each, all shoved together by impulse().
+  //
+  // Each entry is stored as { solver, role } — the role picks which scaled
+  // copy of the spring config this chain solves with, so a fin can be stiffer
+  // than the tail it hangs behind. See springCfgFor.
   const springs = [];
   // makeSpring returns null for a chain too short to solve (under two bones).
-  // Dropping those here rather than storing them keeps every later
-  // `for (const s of springs)` from having to null-check.
-  const addSpring = (bones) => {
-    const s = makeSpring(bones);
-    if (s) springs.push(s);
+  // Dropping those here rather than storing them keeps every later walk over
+  // `springs` from having to null-check.
+  const boneAxis = axisVec(rig?.boneAxis ?? '+Y');
+  const addSpring = (bones, role) => {
+    const solver = makeSpring(bones, boneAxis);
+    if (solver) springs.push({ solver, role });
   };
-  if (wagBones.length) addSpring(wagBones);
-  for (const chain of rig?.springChains ?? []) {
-    const bones = chain.map((name) => instance.getObjectByName(name)).filter(Boolean);
-    if (bones.length) addSpring(bones);
+  // The wag chain is the body's own undulation, so it is a tail by definition
+  // whatever the creature is.
+  if (wagBones.length) addSpring(wagBones, 'tail');
+  for (const entry of rig?.springChains ?? []) {
+    const { names, role } = chainSpec(entry);
+    const bones = names.map((name) => instance.getObjectByName(name)).filter(Boolean);
+    if (bones.length) addSpring(bones, role);
   }
   if (rig?.springChains?.length && springs.length === 0) {
     console.warn('[animation] rig.springChains named no bones that exist on this model — it will not react to impacts.');
   }
+
+  // THE SPRING NEEDS SOMETHING TO PULL BACK TOWARD, and on a spring-only chain
+  // nothing supplies it.
+  //
+  // Read the solver and this falls out: each bone's target is the direction it
+  // is ALREADY pointing when update() runs, so once the spring has caught up,
+  // whatever pose it happens to be sitting in is a fixed point. It converges to
+  // "stop changing", not to "go back". A pose driver is what makes that a
+  // restoring force — proceduralDrive rebuilds the wag chain from `wagRest`
+  // every frame for exactly this reason, and the mixer does the same for any
+  // bone its clip keys.
+  //
+  // A `springChains` bone that neither one touches has no such driver, so an
+  // impulse bends it and it stays bent. Measured, not theorised: shove the
+  // megalodon's lower caudal lobe and five seconds later it is still further
+  // from where it started than the shove itself moved it. Every fin on
+  // shark.glb would ratchet the same way — that file ships no clips at all —
+  // and so would the crab limbs, whose clips key the body but not every leg.
+  //
+  // So the rest pose of every sprung bone is captured here, before anything has
+  // written to the skeleton, and restored at the top of each frame. A bone the
+  // clip does key is then immediately overwritten by the mixer, which is why
+  // this can run unconditionally instead of working out who owns what.
+  const springBones = [...new Set(springs.flatMap(({ solver }) => solver.bones))];
+  const springRest = springBones.map((b) => b.quaternion.clone());
 
   const warnedMissing = new Set();
   let current = null; // the action currently faded in
@@ -478,12 +573,18 @@ export function createAnimationController(instance) {
     },
 
     update(dt, state, hitThisFrame) {
+      // Before the pose driver, not after: whatever writes this frame's pose —
+      // mixer or sine — is meant to win over the rest pose wherever it has an
+      // opinion. See springRest.
+      for (let i = 0; i < springBones.length; i++) springBones[i].quaternion.copy(springRest[i]);
       writePose(dt, state, hitThisFrame);
       // The spring layers over WHATEVER wrote the pose — a clip, the sine
       // fallback, or nothing at all — so an impulse lands the same way no
       // matter how (or whether) the creature is animated.
       const cfg = CONFIG.animation.spring;
-      if (cfg.enabled) for (const s of springs) s.update(dt, cfg, cfg.weight);
+      if (cfg.enabled) {
+        for (const { solver, role } of springs) solver.update(dt, springCfgFor(cfg, role), cfg.weight);
+      }
     },
 
     // Shove the skeleton. This is the hit reaction for a creature with no
@@ -496,19 +597,28 @@ export function createAnimationController(instance) {
     // target is still whatever the walk cycle wrote this frame, they all
     // converge back into the loop as the energy bleeds off. Nothing has to
     // switch the animation back on.
+    // A stiffer chain absorbs the same shove into a smaller swing on its own,
+    // through its own spring constant, so the impulse is NOT role-scaled here.
+    // Scaling it as well would apply the same stiffening twice.
     impulse(dirWorld, strength) {
       const cfg = CONFIG.animation.spring;
       if (!cfg.enabled) return;
-      for (const s of springs) s.impulse(dirWorld, strength, cfg.impulseTipBias);
+      for (const { solver } of springs) solver.impulse(dirWorld, strength, cfg.impulseTipBias);
     },
 
     resetSpring() {
-      for (const s of springs) s.reset();
+      for (const { solver } of springs) solver.reset();
     },
 
     // Whether a shove would actually do anything — false for a model whose
     // rig named no bones that exist, so callers can skip the work.
     hasSpring: springs.length > 0,
+
+    // How many chains actually resolved into solvers. Bone lookup silently
+    // drops names that miss, so this is the only way to tell "four chains, all
+    // solving" from "four declared, one survived" — see tools/apex-spring-test
+    // .mjs, which asserts it against the model files.
+    springCount: springs.length,
 
     hasRealClips: !!mixer,
     availableStates: Object.keys(stateAction),

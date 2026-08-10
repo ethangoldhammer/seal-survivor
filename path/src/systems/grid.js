@@ -2,21 +2,32 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds, WAVE, sea } from '../arena.js';
 import { hexMetrics, hexCorners, hexCellsIn } from './hexLattice.js';
+import { touchSlots, TOUCH_SLOTS } from '../input.js';
 
 // The backdrop grid. Every node is displaced in the vertex shader by a ring
 // buffer of ripples plus a constant pull from the ship's wake, so the whole
 // field breathes with what the player is doing. Nothing is simulated on the
 // CPU — JS only pushes ripple positions into a uniform array.
+//
+// On a phone the player's own fingers are in there too: every contact shoves
+// the lattice apart and lights it in a colour of its own. See CONFIG.grid
+// .touchGlow, and input.js for how a finger gets its slot.
 
 const MAX_RIPPLES = 24; // must match the shader's loop bound
+// Same contract, for the fingers. Read from input.js rather than retyped so the
+// shader loop and the slot registry cannot drift apart.
+const MAX_TOUCH = TOUCH_SLOTS;
 
 const vertexShader = /* glsl */ `
   #define MAX_RIPPLES ${MAX_RIPPLES}
+  #define MAX_TOUCH ${MAX_TOUCH}
 
   uniform float uTime;
   uniform vec3 uRipples[MAX_RIPPLES];   // xy = origin, z = start time
   uniform vec2 uRippleParams[MAX_RIPPLES]; // x = strength, y = radius
   uniform vec4 uWake;                   // xy = ship, z = radius, w = strength
+  uniform vec4 uTouch[MAX_TOUCH];       // xy = world pos, z = radius, w = level
+  uniform vec4 uTouchWarp;              // x = push, y = swirl, z = wave, w = spin
   uniform float uDecay;
   uniform float uFreq;
   uniform float uWavelength;
@@ -50,6 +61,23 @@ const vertexShader = /* glsl */ `
     float wakeFall = smoothstep(uWake.z, 0.0, wakeDist);
     disp += (wakeDelta / wakeDist) * wakeFall * uWake.w;
 
+    // Fingers. Two components on purpose: a radial shove that pulses outward
+    // (the finger pushing the water away) and a tangential shear (the lattice
+    // twisting around it). The radial part alone just makes a clean bubble —
+    // it's the shear that breaks the hexes out of alignment with their
+    // neighbours, which is the thing that reads as DISRUPTION rather than as
+    // one more ripple. A slot with level 0 contributes exactly nothing.
+    for (int i = 0; i < MAX_TOUCH; i++) {
+      float level = uTouch[i].w;
+      vec2 delta = pos.xy - uTouch[i].xy;
+      float dist = length(delta) + 0.0001;
+      vec2 dir = delta / dist;
+      float fall = smoothstep(uTouch[i].z, 0.0, dist);
+      float pulse = sin(dist * uTouchWarp.z - uTime * uTouchWarp.w);
+      disp += (dir * pulse * uTouchWarp.x + vec2(-dir.y, dir.x) * uTouchWarp.y)
+              * fall * level;
+    }
+
     pos.xy += disp;
     vWarp = length(disp);
     // Post-displacement, so the surface clip cuts where the line actually ends
@@ -64,6 +92,8 @@ const vertexShader = /* glsl */ `
 // The wave constants are injected from arena.js rather than retyped, so the
 // clip line here is the same curve world.js draws the surface with.
 const fragmentShader = /* glsl */ `
+  #define MAX_TOUCH ${MAX_TOUCH}
+
   uniform vec3 uColor;
   uniform vec3 uHotColor;
   uniform float uOpacity;
@@ -73,6 +103,9 @@ const fragmentShader = /* glsl */ `
   uniform float uWaveAmp;
   uniform float uChop;
   uniform float uClip;    // 0 = draw everywhere, 1 = water only
+  uniform vec4 uTouch[MAX_TOUCH];      // xy = world pos, z = radius, w = level
+  uniform vec3 uTouchColor[MAX_TOUCH]; // one hue per finger, by arrival order
+  uniform vec2 uTouchGain;             // x = colour gain, y = extra opacity
 
   varying float vWarp;
   varying vec2 vPos;
@@ -98,7 +131,33 @@ const fragmentShader = /* glsl */ `
 
     float heat = clamp(vWarp * uWarpGain, 0.0, 1.0);
     vec3 color = mix(uColor, uHotColor, heat);
-    gl_FragColor = vec4(color, uOpacity * (0.3 + heat * 0.7) * mask);
+    float alpha = uOpacity * (0.3 + heat * 0.7) * mask;
+
+    // Per-fragment rather than per-vertex: a span is only cut into as many
+    // pieces as CONFIG.grid.subdivisions asks for, so a glow evaluated at the
+    // nodes would step down the line in visible blocks instead of falling off
+    // smoothly. Distances are measured against the DISPLACED position, so the
+    // light stays on the line the finger just shoved out of place.
+    //
+    // Colours ADD — two fingers overlapping give you the blend of both, which
+    // is what a light does — while the opacity takes the strongest of them
+    // rather than summing, so a crowded corner of the screen brightens without
+    // blowing out to a white blob.
+    vec3 fingerLight = vec3(0.0);
+    float fingerAmt = 0.0;
+    for (int i = 0; i < MAX_TOUCH; i++) {
+      float d = distance(vPos, uTouch[i].xy);
+      float f = smoothstep(uTouch[i].z, 0.0, d);
+      f *= f; // squared, so the falloff has a hot core instead of a flat disc
+      float a = f * uTouch[i].w;
+      fingerLight += uTouchColor[i] * a;
+      fingerAmt = max(fingerAmt, a);
+    }
+
+    gl_FragColor = vec4(
+      color + fingerLight * uTouchGain.x,
+      clamp(alpha + fingerAmt * uTouchGain.y * mask, 0.0, 1.0)
+    );
   }
 `;
 
@@ -174,6 +233,18 @@ export function createGrid(scene) {
   const ripples = new Array(MAX_RIPPLES).fill(0).map(() => new THREE.Vector3());
   const rippleParams = new Array(MAX_RIPPLES).fill(0).map(() => new THREE.Vector2());
 
+  // One entry per finger slot. `w` is the eased level — it rises while a finger
+  // is down and falls back after it lifts, so nothing pops on or off.
+  const touch = new Array(MAX_TOUCH).fill(0).map(() => new THREE.Vector4(0, 0, 1, 0));
+  const touchColor = new Array(MAX_TOUCH).fill(0).map(() => new THREE.Color(0xffffff));
+  const touchWarp = new THREE.Vector4(0, 0, 1, 0);
+  const touchGain = new THREE.Vector2(0, 0);
+  // Which finger each slot is currently showing. A slot freed and immediately
+  // re-taken by another finger has to restart rather than slide its glow across
+  // the screen from wherever the last one was.
+  const touchOwner = new Array(MAX_TOUCH).fill(null);
+  const touchPoint = new THREE.Vector3();
+
   function build() {
     dispose();
     if (!CONFIG.grid.enabled) return;
@@ -198,6 +269,10 @@ export function createGrid(scene) {
         uRipples: { value: ripples },
         uRippleParams: { value: rippleParams },
         uWake: { value: new THREE.Vector4(0, 0, CONFIG.grid.wakeRadius, CONFIG.grid.wakeStrength) },
+        uTouch: { value: touch },
+        uTouchColor: { value: touchColor },
+        uTouchWarp: { value: touchWarp },
+        uTouchGain: { value: touchGain },
         uDecay: { value: CONFIG.grid.rippleDecay },
         uFreq: { value: CONFIG.grid.rippleFreq },
         uWavelength: { value: CONFIG.grid.rippleWavelength },
@@ -244,7 +319,58 @@ export function createGrid(scene) {
     rippleParams[slot].set(strength, Math.max(0.1, radius));
   }
 
-  function update(dt, shipPos, shipVel) {
+  // The fingers, resolved from screen space into the water every frame. It has
+  // to be every frame, not just when a finger moves: the camera follows the
+  // player, so a thumb held perfectly still is over a different piece of ocean
+  // each frame, and a world position cached at touchdown would slide out from
+  // under it. Slots keep their last NDC after the lift, so the fade-out stays
+  // put on screen where the finger was.
+  function updateTouch(dt, camera) {
+    const cfg = CONFIG.grid.touchGlow ?? {};
+    const fingers = cfg.fingers ?? [];
+    const on = cfg.enabled !== false && !!camera;
+
+    touchWarp.set(cfg.push ?? 0, cfg.swirl ?? 0, cfg.wave ?? 1, cfg.spin ?? 0);
+    touchGain.set(cfg.gain ?? 0, cfg.alpha ?? 0);
+
+    for (let i = 0; i < MAX_TOUCH; i++) {
+      const slot = touchSlots[i];
+      const live = on && slot.id !== null;
+      // Falls back to the last entry rather than going dark, so shortening the
+      // palette in the tuner doesn't silently disable the outer fingers.
+      const finger = fingers[i] ?? fingers[fingers.length - 1] ?? {};
+      const u = touch[i];
+
+      if (live && slot.id !== touchOwner[i]) {
+        // A brand-new finger in this slot: start from nothing, wherever it
+        // landed, instead of inheriting the last one's level and position.
+        u.w = 0;
+        touchOwner[i] = slot.id;
+      }
+      if (!live) touchOwner[i] = null;
+
+      // Skip the unproject once a released slot has faded out — there's nothing
+      // left to place, and this is the state every slot is in most of the time.
+      if (live || u.w > 0.001) {
+        touchPoint.set(slot.x, slot.y, 0).unproject(camera);
+        u.x = touchPoint.x;
+        u.y = touchPoint.y;
+        u.z = Math.max(0.001, (cfg.radius ?? 6) * (finger.spread ?? 1));
+      }
+
+      // Exponential, so it's framerate-independent — the same feel at 60 and at
+      // 120. Attack is the faster of the two: a finger landing should be
+      // instant, a finger lifting should trail.
+      const target = live ? (finger.power ?? 1) : 0;
+      const rate = live ? (cfg.attack ?? 16) : (cfg.release ?? 5);
+      u.w += (target - u.w) * (1 - Math.exp(-Math.max(0, rate) * dt));
+      if (!live && u.w < 0.001) u.w = 0;
+
+      touchColor[i].set(finger.color ?? 0xffffff);
+    }
+  }
+
+  function update(dt, shipPos, shipVel, camera) {
     clock += dt;
     if (!material) return;
     material.uniforms.uTime.value = clock;
@@ -268,11 +394,17 @@ export function createGrid(scene) {
       CONFIG.grid.wakeRadius,
       CONFIG.grid.wakeStrength * (1 + speed * CONFIG.grid.wakeSpeedGain)
     );
+
+    updateTouch(dt, camera);
   }
 
   function reset() {
     for (let i = 0; i < MAX_RIPPLES; i++) rippleParams[i].set(0, 1);
     cursor = 0;
+    for (let i = 0; i < MAX_TOUCH; i++) {
+      touch[i].set(0, 0, 1, 0);
+      touchOwner[i] = null;
+    }
   }
 
   build();

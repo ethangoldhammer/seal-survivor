@@ -2,12 +2,16 @@
 // ---------------------------------------------------------------------------
 // npm run test:strike
 //
-// The dash heading — strikeDirection() in systems/strike.js — is the one rule
-// shared by the impulse the release applies and the corridor the lens paints
-// during the wind-up. That sharing is the whole point of the function, so this
-// checks the maths AND checks that both call sites really do go through it.
+// Two things in systems/strike.js that are pure arithmetic, and therefore the
+// two things in it that can be checked without a frame: where a dash GOES, and
+// what a mouthful of chum is WORTH.
 //
-// Three things worth failing over:
+// The dash heading — strikeDirection() — is the one rule shared by the impulse
+// the release applies and the corridor the lens paints during the wind-up.
+// That sharing is the whole point of the function, so this checks the maths
+// AND checks that both call sites really do go through it.
+//
+// Four things worth failing over:
 //
 //   HALFWAY    that the heading actually lands between the swim and the aim,
 //              at the ANGULAR midpoint, for spreads all the way out to 180
@@ -26,15 +30,22 @@
 //              in either place. Source-level, because the alternative is a GL
 //              context and a real frame.
 //
-// What it cannot tell you: whether splitting the difference FEELS right. That
-// is a controller in your hands.
+//   APPETITE   that each successive FOOD CHAIN link genuinely takes more chum
+//              to earn than the one before it, and that the floor keeps a deep
+//              chain payable. This is the gate on the whole combo, and it is a
+//              compounding curve with a clamp on it — exactly the shape that
+//              looks fine and is quietly off by a link.
+//
+// What it cannot tell you: whether splitting the difference FEELS right, or
+// whether the ramp bites at the right depth. Those are a controller in your
+// hands.
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
-import { strikeDirection } from '../path/src/systems/strike.js';
+import { strikeDirection, strikeState, resetStrike, feedChum, chumRefillMul } from '../path/src/systems/strike.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAIN = path.join(HERE, '../path/src/main.js');
@@ -185,5 +196,50 @@ check('the lens prediction calls it', /dashDir: strikeDirection\(input\.move, in
 check('the movement-first fallback is gone',
   !/input\.move\.lengthSq\(\) > 0\.001 \? input\.move/.test(main));
 
-console.log(failures === 0 ? '\nAll strike-direction checks passed.' : `\n${failures} check(s) failed.`);
+// ----------------------------------------------------------------- appetite
+
+section('APPETITE — each chain link costs more chum than the last');
+
+const chumStats = { strikeChumRefill: CONFIG.strike.charge.chumRefill };
+
+// Mouthfuls to take an empty bar to full at a given chain depth. The chain
+// state is written directly rather than built up through chainStrike: the
+// sources are individually rate-limited, so earning six real links here would
+// be testing the throttles instead of the price.
+function chumToFill(depth) {
+  resetStrike();
+  strikeState.charge = 0;
+  strikeState.active = true; // a live combo, which is what gates the LINK
+  strikeState.chainCount = depth;
+  strikeState.chainTimer = depth > 0 ? CONFIG.strike.chainWindow : 0;
+
+  let n = 0;
+  while (strikeState.charge < 1 && n < 1000) { feedChum(chumStats); n++; }
+  return n;
+}
+
+const costs = [0, 1, 2, 3, 4, 5].map(chumToFill);
+check(`the first link costs the base ${Math.ceil(1 / CONFIG.strike.charge.chumRefill)} chum`,
+  costs[0] === Math.ceil(1 / CONFIG.strike.charge.chumRefill), `costs [${costs}]`);
+check('no link is ever cheaper than the one before it',
+  costs.every((c, i) => i === 0 || c >= costs[i - 1]), `costs [${costs}]`);
+// The failure this is really guarding: a falloff so gentle that rounding eats
+// it and the "ramp" is five identical numbers.
+check('and it is a real ramp, not a rounding wobble',
+  costs[3] > costs[0] && costs[5] > costs[3], `costs [${costs}]`);
+
+const floor = CONFIG.strike.charge.chainRefillFloor;
+check('the floor stops a deep chain running away',
+  chumToFill(60) <= Math.ceil(costs[0] / floor) + 1,
+  `${chumToFill(60)} chum at depth 60, floored at ${floor}`);
+
+// The counter is left standing until the window expires, so the discount has
+// to read the TIMER as well or the next combo opens paying the last one's bill.
+resetStrike();
+strikeState.chainCount = 6;
+strikeState.chainTimer = 0;
+check('an expired chain is back to base price', chumRefillMul() === 1);
+resetStrike();
+
+console.log(failures === 0 ? '\nAll strike checks passed.' : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

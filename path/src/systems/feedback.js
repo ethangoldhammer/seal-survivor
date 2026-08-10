@@ -59,7 +59,9 @@ export function initFeedback(gridSystem) {
 
 /**
  * @param {string} event key in CONFIG.feedback
- * @param {object} at    { x, y, dirX, dirY, vx, vy, scale, color }
+ * @param {object} at    { x, y, dirX, dirY, vx, vy, scale }
+ *                       No `color`: a burst's colour is the emitter's, always.
+ *                       See CONFIG.emitters for why.
  */
 export function feedback(event, at = {}) {
   const def = CONFIG.feedback[event];

@@ -27,6 +27,7 @@ import { createAnimationController, stateForSpeed } from './animation.js';
 const pod = []; // { root, visual, anim, pos, vel, state, target, cooldown, slot }
 let clock = 0;
 
+const TAU = Math.PI * 2;
 const _to = new THREE.Vector3();
 
 export function podStats(level) {
@@ -61,6 +62,14 @@ function newMember(root, visual, anim, slot, pos) {
     // Staggered from the start so all three don't breach the same hull on the
     // same frame — the pod should read as taking turns, not as a volley.
     cooldown: slot * 0.45,
+    // --- facing (see faceTravel) ---
+    heading: 0,      // the EASED heading, which is what root.rotation.z shows
+    mirrored: null,  // which side it is on; null until the first frame resolves it
+    mirrorAngle: 0,  // the live roll, composited onto visual.rotation.y
+    mirrorFrom: 0,
+    mirrorTo: 0,
+    mirrorT: 1,      // 1 = settled
+    mirrorWantT: 0,  // how long it has wanted the other side
   };
 }
 
@@ -152,13 +161,93 @@ function targetAlive(target, enemiesList) {
   return enemiesList.includes(target.ref);
 }
 
+// FACING, and the reason it is this much machinery.
+//
+// Both halves of this used to be written absolutely, every frame, from the
+// instantaneous velocity: the heading was assigned outright and the left/right
+// mirror was a hard swap on the sign of vel.x. In a charge that is fine — the
+// velocity is a committed run. In CRUISE it is not: the velocity there is a
+// spring toward a formation point that moves with the seal, so swimming
+// circles around the pod swings each orca's drift direction through every
+// angle there is, repeatedly across vertical, at almost no speed. The pod
+// answered by snapping end to end several times a second.
+//
+// Three things fix it, and all three are needed:
+//
+//   the heading EASES toward the travel direction instead of being assigned,
+//   so a change of direction is a turn;
+//   the mirror only even gets considered once the facing is clear of a dead
+//   zone either side of vertical, so drift that merely wobbles across the
+//   vertical never asks for a side swap at all;
+//   and a side swap has to be WANTED continuously for `mirrorHold` before it
+//   commits, then ROLLS across over `mirrorDuration` — the same eased half
+//   turn about the model's own axis the seal uses (see entities/player.js),
+//   which is a turnaround rather than a pop.
+//
+// An orca is still free to rotate and spin all it likes; what it can no longer
+// do is arrive somewhere instantly.
 function faceTravel(m, dt) {
+  const c = CONFIG.orca;
   const speed = Math.hypot(m.vel.x, m.vel.y);
-  if (speed > 0.4) {
-    m.root.rotation.z = Math.atan2(m.vel.y, m.vel.x);
-    // Mirror rather than rolling belly-up when swimming leftward.
-    m.visual.rotation.y = m.vel.x < 0 ? Math.PI : 0;
+
+  if (speed > (c.minSpeedToTurn ?? 0.4)) {
+    const target = Math.atan2(m.vel.y, m.vel.x);
+    // The short way round, so crossing the -pi/pi seam doesn't send it the
+    // long way about.
+    let delta = target - m.heading;
+    while (delta > Math.PI) delta -= TAU;
+    while (delta < -Math.PI) delta += TAU;
+    m.heading += delta * (1 - Math.exp(-(c.faceLerp ?? 6) * dt));
+
+    // Which way the model needs to be facing, decided off the SMOOTHED
+    // heading rather than off the raw velocity — the smoothing is what makes
+    // the question stable enough to answer.
+    const facingX = Math.cos(m.heading);
+    const band = c.mirrorDeadZone ?? 0.3;
+    let want = m.mirrored;
+    if (facingX < -band) want = true;
+    else if (facingX > band) want = false;
+
+    if (m.mirrored == null) {
+      // First frame of this orca's life — there is no previous side to ease
+      // from, so it simply starts on the right one.
+      m.mirrored = !!want;
+      m.mirrorAngle = want ? Math.PI : 0;
+      m.mirrorT = 1;
+      m.mirrorWantT = 0;
+    } else if (want !== m.mirrored) {
+      // Wanting the other side is not enough; it has to keep wanting it. There
+      // are only two sides, so the disagreement itself is the whole intent —
+      // this timer is only ever counting one thing.
+      m.mirrorWantT += dt;
+      if (m.mirrorWantT >= (c.mirrorHold ?? 0.3)) {
+        m.mirrored = want;
+        m.mirrorWantT = 0;
+        // Always rolls onward rather than unwinding the way it came, and from
+        // the CURRENT angle, so a reversal arriving mid-roll extends the turn
+        // already happening instead of fighting it.
+        m.mirrorFrom = m.mirrorAngle;
+        m.mirrorTo = m.mirrorAngle + Math.PI;
+        m.mirrorT = 0;
+      }
+    } else {
+      m.mirrorWantT = 0;
+    }
   }
+
+  // Smoothstep, like the seal's: a linear sweep starts and stops abruptly,
+  // which is the same pop wearing a longer coat.
+  if (m.mirrorT < 1) {
+    m.mirrorT = Math.min(1, m.mirrorT + dt / Math.max(0.01, c.mirrorDuration ?? 0.5));
+    const e = m.mirrorT * m.mirrorT * (3 - 2 * m.mirrorT);
+    m.mirrorAngle = m.mirrorFrom + (m.mirrorTo - m.mirrorFrom) * e;
+    // Wrapped once settled, or a long run of reversals walks the angle up
+    // forever and bleeds float precision.
+    if (m.mirrorT >= 1) m.mirrorAngle = ((m.mirrorTo % TAU) + TAU) % TAU;
+  }
+
+  m.root.rotation.z = m.heading;
+  m.visual.rotation.y = m.mirrorAngle;
   if (m.anim) m.anim.update(dt, stateForSpeed(speed), false);
 }
 

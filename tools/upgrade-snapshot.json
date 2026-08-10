@@ -690,6 +690,26 @@
       }
     ]
   },
+  "musselVolley": {
+    "cap": 5,
+    "perStack": [
+      {
+        "musselVolleyLevel": 101
+      },
+      {
+        "musselVolleyLevel": 102
+      },
+      {
+        "musselVolleyLevel": 103
+      },
+      {
+        "musselVolleyLevel": 104
+      },
+      {
+        "musselVolleyLevel": 105
+      }
+    ]
+  },
   "bounceShot": {
     "cap": 6,
     "perStack": [

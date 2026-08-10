@@ -71,7 +71,34 @@ let baseIntensity = 1;
 const cA = new THREE.Color();
 const cB = new THREE.Color();
 
-let clock = CONFIG.dayNight?.startHour ?? 7.5;
+/**
+ * What hour a fresh clock opens at — the player's own, if they'll have it.
+ *
+ * `startFromSystemClock` reads the device's LOCAL time of day, which is the
+ * point: this is meant to be the sun outside their window, so the timezone is
+ * part of the answer rather than something to normalise away. Seconds are
+ * included so the opening minute isn't quantised to the hour; at the default
+ * rate they're worth a few frames of sky, but they cost nothing to keep.
+ *
+ * Seeds the START only. Nothing after this consults the wall clock — the game
+ * day is 12 real minutes long and the sky would simply stop moving if it were
+ * pinned to a real one.
+ *
+ * Falls back to `startHour` if the environment has no usable clock. Node's
+ * Date is always there, but a headless harness may well have stubbed it, and a
+ * NaN reaching `clock` propagates into every position on the orbit — an
+ * invisible sun and a sky stuck on one keyframe, with nothing to point at.
+ */
+function startingHour() {
+  const cfg = CONFIG.dayNight;
+  const fallback = cfg?.startHour ?? 7.5;
+  if (!cfg?.startFromSystemClock) return fallback;
+  const now = new Date();
+  const h = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  return Number.isFinite(h) ? h : fallback;
+}
+
+let clock = startingHour();
 let started = false;
 
 function clamp01(v) {
@@ -82,13 +109,13 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
-// Reset to `startHour`. Called once at boot, and per run only if
+// Reset to the starting hour. Called once at boot, and per run only if
 // `restartAtMorning` is on — the default is that the clock keeps running
-// across runs, so the FIRST run of a session opens in the morning and later
-// ones inherit whatever time the last death happened at.
+// across runs, so the FIRST run of a session opens at the real time of day and
+// later ones inherit whatever time the last death happened at.
 export function resetDayCycle(force = false) {
   if (!started || force || CONFIG.dayNight?.restartAtMorning) {
-    clock = CONFIG.dayNight?.startHour ?? 7.5;
+    clock = startingHour();
     dayState.days = 0;
   }
   started = true;
@@ -97,10 +124,20 @@ export function resetDayCycle(force = false) {
   updateDayCycle(0);
 }
 
+// Real seconds -> hours on the game clock. The ONE place the conversion
+// lives, so the ticking clock and every by-hand nudge (see advanceClock) move
+// at the same rate by construction — including when `rate` is turned up, which
+// otherwise has to be remembered in two places and eventually isn't.
+function hoursFor(seconds, cfg = CONFIG.dayNight) {
+  return (seconds * (cfg.scale ?? 60) * (cfg.rate ?? 1)) / 3600;
+}
+
 /**
  * Push the clock forward by hand, in the same unit the clock already runs on:
  * REAL seconds of normal passage. `advanceClock(1)` is worth exactly one
- * second of standing still, which at the default scale is one in-game minute.
+ * second of standing still, whatever `scale` and `rate` currently make that —
+ * so a nudge keeps the same value relative to a sunset when the clock is
+ * sped up, rather than quietly shrinking against it.
  *
  * Expressed that way on purpose. The alternative — "add N in-game minutes" —
  * would silently stop meaning anything the moment `scale` is tuned, and the
@@ -113,7 +150,7 @@ export function resetDayCycle(force = false) {
 export function advanceClock(seconds) {
   const cfg = CONFIG.dayNight;
   if (!cfg?.enabled || cfg.paused || !(seconds > 0)) return;
-  clock += (seconds * cfg.scale) / 3600;
+  clock += hoursFor(seconds, cfg);
   while (clock >= 24) { clock -= 24; dayState.days += 1; }
   dayState.hours = clock;
 }
@@ -204,7 +241,7 @@ export function updateDayCycle(dt) {
   if (cfg.paused) {
     clock = cfg.scrubHour ?? clock;
   } else {
-    clock += (dt * cfg.scale) / 3600; // scaled seconds -> hours
+    clock += hoursFor(dt, cfg);
     while (clock >= 24) { clock -= 24; dayState.days += 1; }
     while (clock < 0) { clock += 24; dayState.days -= 1; }
   }

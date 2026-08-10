@@ -2,6 +2,7 @@ import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { spawnProjectile } from '../entities/projectiles.js';
+import { emit } from '../entities/particles.js';
 import { bounds } from '../arena.js';
 
 // Oyster Blaster — a slow, heavy, bright pearl whose value is almost entirely
@@ -63,6 +64,13 @@ export function firePearl(scene, origin, dir, level) {
 export function burstPearl(scene, x, y, burst) {
   const c = CONFIG.oyster;
   const count = Math.max(1, Math.round(burst?.count ?? c.bomblets));
+
+  // The shell coming apart, in the same white the bomblets will go off in a
+  // moment later — the whole ability is one colour from the crack to the last
+  // detonation. Emitted straight rather than through `feedback` on purpose:
+  // the sound, shake and ripple of an oyster blast belong to the bomblets,
+  // and firing the event here would play all of it twice.
+  emit('pearlBurst', x, y, { scale: 1.5 });
 
   for (let i = 0; i < count; i++) {
     const mesh = createVisual('pearlBomblet');

@@ -143,7 +143,7 @@
       "variantIndex": 0
     },
     "starfish": {
-      "glow": 1.35,
+      "glow": 1.8,
       "sizeMultiplier": 6.2,
       "tint": null,
       "emissive": null,
@@ -721,8 +721,10 @@
   },
   "dayNight": {
     "enabled": true,
+    "startFromSystemClock": true,
     "startHour": 7.5,
     "scale": 60,
+    "rate": 2,
     "chumSeconds": 0.35,
     "restartAtMorning": false,
     "paused": false,
@@ -1005,9 +1007,17 @@
   "playerOutline": {
     "enabled": true,
     "color": 16777215,
-    "thickness": 0.055,
+    "thickness": 0.04,
     "glow": 5.6,
-    "opacity": 1
+    "opacity": 1,
+    "hit": {
+      "enabled": true,
+      "color": 16722456,
+      "time": 0.45,
+      "minTime": 0.18,
+      "glowAdd": 4,
+      "thicknessAdd": 0.095
+    }
   },
   "creatureOutline": {
     "color": 16742973,
@@ -1118,6 +1128,8 @@
       "time": 1,
       "minFire": 0.35,
       "chumRefill": 0.2,
+      "chainRefillFalloff": 0.82,
+      "chainRefillFloor": 0.3,
       "damageMulMin": 0.8,
       "damageMulMax": 2.2,
       "reachMulMin": 0.6,
@@ -1134,6 +1146,17 @@
       "shake": 0.09,
       "hapticInterval": 0.07,
       "flashTime": 0.28,
+      "outline": {
+        "enabled": true,
+        "glowAdd": 5,
+        "thicknessAdd": 0.06,
+        "hzMin": 2.2,
+        "hzMax": 7.5,
+        "pulseDepth": 0.55,
+        "flareGlow": 9,
+        "flareThickness": 0.14,
+        "flareTime": 0.33
+      },
       "vibrate": {
         "head": 0.3,
         "body": 0.035,
@@ -1353,7 +1376,6 @@
     "netDepthPerLevel": 2.9,
     "netTrail": 2.2,
     "netColor": 12577279,
-    "netOpacity": 0.18,
     "haulSpeed": 5.5,
     "haulCatchGap": 0.6,
     "bobSpeed": 1.6,
@@ -1434,17 +1456,17 @@
     "bombletDrag": 2.4
   },
   "octoGrab": {
-    "arms": 2,
+    "arms": 4,
     "armsPerLevel": 1,
-    "reach": 4,
+    "reach": 6,
     "reachPerLevel": 0.3,
-    "reachStretch": 1.5,
-    "grabCooldown": 0.9,
-    "graspTimeout": 0.7,
-    "reelSpeed": 7.5,
-    "reelSpeedPerLevel": 0.5,
+    "reachStretch": 1.9,
+    "grabCooldown": 0.16,
+    "graspTimeout": 0.22,
+    "reelSpeed": 14,
+    "reelSpeedPerLevel": 0.9,
     "popDistance": 1.5,
-    "maxTargetRadius": 1.6,
+    "maxTargetRadius": 2.2,
     "chumPerPop": 2,
     "chumSpread": 1.4,
     "chumXp": 2,
@@ -1453,12 +1475,12 @@
       "rootInfluence": 0.1,
       "maxBend": 1.5,
       "softness": 0.6,
-      "smoothing": 4,
+      "smoothing": 9,
       "tolerance": 0.02
     },
     "reachWeight": 0.95,
     "dangleWeight": 0,
-    "weightLerpIn": 6,
+    "weightLerpIn": 11,
     "weightLerpOut": 2.5,
     "dangleLength": 1.8,
     "dangleSpread": 1.4,
@@ -1503,6 +1525,13 @@
       "riseRate": 7,
       "fallRate": 1.8
     },
+    "camouflage": {
+      "enabled": true,
+      "radius": 7.5,
+      "blend": 5,
+      "fade": 1.6,
+      "gain": 1.5
+    },
     "head": {
       "weight": 0.8,
       "lead": 3.2,
@@ -1539,7 +1568,12 @@
     ],
     "formationFollow": 6,
     "breachChance": 0.35,
-    "turnRate": 4.5
+    "turnRate": 4.5,
+    "faceLerp": 5,
+    "minSpeedToTurn": 2.2,
+    "mirrorDeadZone": 0.35,
+    "mirrorHold": 0.35,
+    "mirrorDuration": 0.55
   },
   "calamari": {
     "interval": 2.4,
@@ -2677,6 +2711,32 @@
       ],
       "inherit": 0.12,
       "glow": 3.4
+    },
+    "pearlBurst": {
+      "count": 30,
+      "speed": [
+        6,
+        22
+      ],
+      "size": [
+        0.08,
+        0.26
+      ],
+      "life": [
+        0.2,
+        0.5
+      ],
+      "colors": [
+        16777215
+      ],
+      "cone": 0,
+      "drag": 4.5,
+      "gravity": [
+        0,
+        -0.8
+      ],
+      "inherit": 0.1,
+      "glow": 4.5
     }
   },
   "feedback": {
@@ -2817,7 +2877,7 @@
     },
     "playerHit": {
       "emit": "playerHit",
-      "shake": 0.5,
+      "shake": 0.07,
       "hitstop": 0.06,
       "glow": 0.9,
       "ripple": {
@@ -2944,6 +3004,15 @@
           "magnitude": 0.35
         }
       ]
+    },
+    "uiType": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "sfx": "uiType",
+      "haptic": null,
+      "sfxMinGap": 0.03
     },
     "crewEaten": {
       "emit": "bite",
@@ -3572,12 +3641,28 @@
   },
   "fx": {
     "maxParticles": 8000,
+    "turbulence": {
+      "enabled": true,
+      "strength": 0.55,
+      "frequency": 0.35,
+      "timeScale": 0.6,
+      "dragVary": 0.5
+    },
     "shakeDecay": 0.0004,
     "maxShake": 0.15,
     "hitstopScale": 0.15,
     "hitstopCooldown": 0.4,
     "hitFlash": 0.12,
-    "hitPop": 0.55
+    "hitPop": 0.55,
+    "playerDamage": {
+      "minGap": 0.16,
+      "minFraction": 0.012,
+      "base": 0.35,
+      "gain": 4,
+      "max": 2,
+      "flashFraction": 0.3,
+      "minFlash": 0.3
+    }
   },
   "death": {
     "enabled": true,
@@ -3614,7 +3699,8 @@
       "enabled": true,
       "follow": 1,
       "minRate": 0.3,
-      "glide": 0.25
+      "glide": 0.25,
+      "restoreTime": 2.6
     },
     "restart": {
       "time": 0.9,
@@ -3846,6 +3932,14 @@
       "minSpeed": 2.5,
       "perSecond": 23,
       "scale": 0.55
+    },
+    "charge": {
+      "enabled": true,
+      "perSecondMin": 10,
+      "perSecondMax": 70,
+      "scaleMin": 0.6,
+      "scaleMax": 1.9,
+      "maxPerFrame": 6
     }
   },
   "audio": {
@@ -4504,6 +4598,18 @@
       "gain": 1,
       "pitchVary": 0.03
     },
+    "uiType": {
+      "src": null,
+      "type": "blip",
+      "wave": "square",
+      "freq": [
+        1500,
+        1150
+      ],
+      "decay": 0.04,
+      "gain": 0.3,
+      "pitchVary": 0.18
+    },
     "bakalarBombDrop": {
       "src": null,
       "type": "blip",
@@ -4669,9 +4775,6 @@
         "flickerRate": 5,
         "pulseAmp": 0.2,
         "pulseSpeed": 2.4,
-        "colorA": 58879,
-        "colorB": 8072703,
-        "colorC": 16765286,
         "bodyDarken": 0.53,
         "warp": 1.5,
         "flow": 0.3,
@@ -4708,7 +4811,6 @@
         "strength": 2.4,
         "tailBias": -0.35,
         "hueSpread": 0.55,
-        "flickerAmp": 0,
         "pulseAmp": 0.45,
         "pulseSpeed": 0.6,
         "colorA": 16731438,
@@ -4999,7 +5101,7 @@
     "chumMax": 32,
     "trawlerChumMul": 2,
     "chumSpread": 5.6,
-    "chumXp": 3
+    "chumXp": 1
   },
   "attractorOrb": {
     "lifetime": 9,
@@ -5318,5 +5420,5 @@
     "overlayOpacity": 0.38,
     "overlayColor": 0
   },
-  "_savedAt": 1786329507094
+  "_savedAt": 1786340310178
 }

@@ -48,6 +48,157 @@ function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
 }
 
+// ---------------------------------------------------------------------------
+// THE TRACTOR BEAM
+//
+// This was a flat translucent rectangle: honest about the volume, and it read
+// as a pane of glass hanging off the boat. What a beam has that a panel does
+// not is FALLOFF — it is brightest on its axis and at its source, and it fades
+// to nothing at its edges — and falloff is the thing that makes light look
+// like light rather than like a shape.
+//
+// Three falloffs, all in one fragment shader, all sliders:
+//
+//   cone     the beam is narrow at the hull and wide at the bottom, so it
+//            reads as coming FROM somewhere. Geometry stays a plain quad; the
+//            width is a mask, so a net that grows with level costs no rebuild.
+//   radial   soft across the beam, raised to `edgeFalloff` — this is the one
+//            that decides whether it looks like a searchlight (high) or a slab
+//            of colour (low).
+//   depth    dimmer the further from the hull, because the water eats it.
+//
+// Over the top, bands scrolling UP the beam. They are the suction made
+// visible: everything the beam is doing to a fish is upward, and without a
+// direction cue a static glow reads as a wall rather than as a pull.
+//
+// ADDITIVE, and that is deliberate. The beam is light being added to the
+// water, not a surface covering it, so it brightens whatever is behind it and
+// never darkens anything — a fish inside the beam stays legible, which matters
+// because the beam is full of fish by design. NoDepthWrite for the same
+// reason: it must not occlude the catch it is hauling.
+//
+// (A backtick anywhere in here — even inside a comment — would end the
+// template literal and produce an error pointing at a line of prose. Don't.)
+const BEAM_VERT = `
+  varying vec2 vBeamUv;
+  void main() {
+    vBeamUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const BEAM_FRAG = `
+  uniform vec3  uColor;
+  uniform float uTime;
+  uniform float uIntensity;
+  uniform float uTopWidth;    // beam width at the hull, as a fraction of the quad
+  uniform float uEdgeFalloff; // >1 tightens the beam onto its axis
+  uniform float uDepthFalloff;
+  uniform float uBandSpeed;
+  uniform float uBandCount;
+  uniform float uBandAmount;
+  uniform float uCoreBoost;
+  varying vec2  vBeamUv;
+
+  void main() {
+    // v: 0 at the bottom of the net, 1 at the hull. The whole shader is
+    // written in "distance from the source" so every falloff below reads the
+    // same way round.
+    float v = vBeamUv.y;
+    float axis = abs(vBeamUv.x - 0.5) * 2.0; // 0 on the axis, 1 at the quad edge
+
+    // CONE. Narrow at the hull, full width at the bottom.
+    float halfWidth = mix(1.0, uTopWidth, v);
+    float radial = 1.0 - clamp(axis / max(halfWidth, 0.001), 0.0, 1.0);
+
+    // The soft edge. smoothstep rather than the raw ramp so there is no hard
+    // line where the cone mask reaches zero.
+    float body = pow(smoothstep(0.0, 1.0, radial), uEdgeFalloff);
+
+    // DEPTH. Brightest at the hull; the water eats the rest.
+    float depth = pow(v, uDepthFalloff);
+
+    // The bands, travelling UP — the suction made visible. Sped up slightly
+    // toward the hull so they appear to accelerate into the boat, which is
+    // what the fish inside are actually doing.
+    float bands = sin((v * uBandCount - uTime * uBandSpeed * (0.7 + v * 0.6)) * 6.28318);
+    bands = 1.0 + uBandAmount * bands;
+
+    // A hot core down the axis, on top of the body. Without it the beam is
+    // uniformly bright across its width and reads flat.
+    float core = pow(body, 3.0) * uCoreBoost;
+
+    float a = body * depth * bands + core * depth;
+    // Additive: the alpha channel carries the whole strength, and the colour
+    // is pushed past 1 so the bright pass in post.js blooms it.
+    gl_FragColor = vec4(uColor * uIntensity * max(a, 0.0), max(a, 0.0));
+  }
+`;
+
+function makeBeamMaterial() {
+  const b = CONFIG.bakalar.beam;
+  return new THREE.ShaderMaterial({
+    vertexShader: BEAM_VERT,
+    fragmentShader: BEAM_FRAG,
+    uniforms: {
+      uColor: { value: new THREE.Color(CONFIG.bakalar.netColor) },
+      uTime: { value: 0 },
+      uIntensity: { value: b.intensity },
+      uTopWidth: { value: b.topWidth },
+      uEdgeFalloff: { value: b.edgeFalloff },
+      uDepthFalloff: { value: b.depthFalloff },
+      uBandSpeed: { value: b.bandSpeed },
+      uBandCount: { value: b.bandCount },
+      uBandAmount: { value: b.bandAmount },
+      uCoreBoost: { value: b.coreBoost },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+}
+
+// Push the live config at the beam every frame, so the tuner sliders move a
+// beam that is already sailing rather than only the next one.
+function applyBeamSettings() {
+  const b = CONFIG.bakalar.beam;
+  const u = netMesh?.material?.uniforms;
+  if (!u) return;
+  u.uColor.value.set(CONFIG.bakalar.netColor);
+  u.uIntensity.value = b.intensity;
+  u.uTopWidth.value = b.topWidth;
+  u.uEdgeFalloff.value = b.edgeFalloff;
+  u.uDepthFalloff.value = b.depthFalloff;
+  u.uBandSpeed.value = b.bandSpeed;
+  u.uBandCount.value = b.bandCount;
+  u.uBandAmount.value = b.bandAmount;
+  u.uCoreBoost.value = b.coreBoost;
+}
+
+/**
+ * How hard the beam pulls at a point, 0..1 — and the single source of truth
+ * for it, because the LOOK and the PULL have to agree. The shader's falloff
+ * and this function are the same two curves (across the cone, and down from
+ * the hull); if they drifted apart, fish would be dragged hardest through the
+ * dim parts of the beam, which is the kind of thing that reads as broken
+ * without anyone being able to say why.
+ *
+ * @param dx    horizontal distance from the beam axis
+ * @param depth how far below the hull, in world units
+ * @param halfWidth the beam's half-width at the BOTTOM (the cone's wide end)
+ * @param netDepth  the beam's full length
+ */
+export function suctionAt(dx, depth, halfWidth, netDepth) {
+  const s = CONFIG.bakalar.suction;
+  const v = 1 - Math.min(1, Math.max(0, depth / Math.max(1e-4, netDepth))); // 1 at the hull
+  // Same cone the shader draws: narrow at the hull, wide at the bottom.
+  const coneHalf = halfWidth * (1 - (1 - CONFIG.bakalar.beam.topWidth) * v);
+  const radial = 1 - Math.min(1, Math.abs(dx) / Math.max(1e-4, coneHalf));
+  if (radial <= 0) return 0;
+  return Math.pow(radial, s.edgeFalloff) * Math.pow(v, s.depthFalloff) * s.strength;
+}
+
 function buildBoat() {
   const root = new THREE.Group();
   visual = createVisual('bakalarBoat');
@@ -60,19 +211,13 @@ export function createBakalarBoat(scene) {
   boat.visible = false;
   scene.add(boat);
 
-  // The net itself is a flat translucent panel rather than modelled mesh — at
-  // this camera distance a real net reads as noise, and a soft rectangle reads
-  // instantly as "this volume is dangerous", which is the only thing the
-  // player needs from it.
-  const geo = new THREE.PlaneGeometry(1, 1);
-  const mat = new THREE.MeshBasicMaterial({
-    color: CONFIG.bakalar.netColor,
-    transparent: true,
-    opacity: CONFIG.bakalar.netOpacity,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  netMesh = new THREE.Mesh(geo, mat);
+  // The beam. Still one quad — the shape is all in the fragment shader, which
+  // is what lets the cone, the falloff and the scrolling bands be sliders
+  // rather than geometry that has to be rebuilt whenever the net grows.
+  //
+  // See CONFIG.bakalar.beam for what each control does and why the beam
+  // replaced the flat panel it used to be.
+  netMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), makeBeamMaterial());
   netMesh.position.z = -0.15;
   netMesh.visible = false;
   scene.add(netMesh);
@@ -303,8 +448,8 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
   const netBottom = netTop - depth;
   netMesh.position.set(netCenterX, (netTop + netBottom) * 0.5, -0.15);
   netMesh.scale.set(halfWidth * 2, depth, 1);
-  netMesh.material.color.set(c.netColor);
-  netMesh.material.opacity = c.netOpacity;
+  netMesh.material.uniforms.uTime.value = clock;
+  applyBeamSettings();
 
   // --- catch: anything inside the net volume that isn't already held --------
   for (const e of enemiesList) {
@@ -347,11 +492,35 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
     // Topped up rather than set once: enemies.js decrements it every frame, so
     // a long haul would otherwise let the fish start swimming again halfway up.
     e.trapTimer = Math.max(e.trapTimer, 0.5);
-    // Ride along with the boat and climb toward it. Position is written
-    // directly because enemies.js has already zeroed this creature's velocity
-    // and integrated for the frame — this must run after updateEnemies.
+
+    // THE SUCTION, and its falloff. This used to be a constant `haulSpeed`
+    // with the catch pinned to a fixed offset — every fish rose at the same
+    // rate wherever it sat, which is a conveyor belt, not a pull. Now the
+    // strength comes from suctionAt(), the same two curves the beam is drawn
+    // with, so a fish out at the dim edge is dragged slowly and one on the hot
+    // axis is dragged fast, and what you see is what is happening.
+    const belowHull = netTop - e.mesh.position.y;
+    // The floor is applied ONCE, here, and both halves of the pull read the
+    // result. A fish out past the cone edge gets a suction of exactly 0, and
+    // without the floor reaching the inward draw as well it would never
+    // converge — it would ride straight up the outside of the beam on the
+    // minimum rise and never enter it. The falloff is meant to make the haul
+    // uneven, not to strand anything outside the light.
+    const pull = Math.max(
+      c.suction.minPull,
+      suctionAt(h.offsetX, belowHull, halfWidth, depth),
+    );
+
+    // Drawn IN toward the axis as well as up — the horizontal half of the
+    // pull, and the reason the catch converges into a column under the hull
+    // instead of riding up in the spread-out formation it was caught in.
+    h.offsetX -= h.offsetX * Math.min(1, c.suction.inwardRate * pull * dt);
+
+    // Position is written directly because enemies.js has already zeroed this
+    // creature's velocity and integrated for the frame — this must run after
+    // updateEnemies.
     e.mesh.position.x = netCenterX + h.offsetX;
-    e.mesh.position.y = Math.min(netTop, e.mesh.position.y + c.haulSpeed * dt);
+    e.mesh.position.y = Math.min(netTop, e.mesh.position.y + c.haulSpeed * pull * dt);
 
     // Reached the hull: hauled out of the water and gone.
     if (e.mesh.position.y >= netTop - c.haulCatchGap) {
@@ -374,3 +543,12 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
     spawnTimer = randomBetween(c.spawnMin, c.spawnMax);
   }
 }
+
+// Exported for tools/ability-smoke.mjs. Nothing in Node can COMPILE GLSL, and
+// the browser preview suspends requestAnimationFrame so it never renders a
+// frame to compile it in either — which leaves the realistic failure here
+// completely uncovered: a uniform renamed on one side of the pair and not the
+// other. The material declares uniforms in JS and the shader reads them by
+// name, and a mismatch is silently a black beam. Exposing both halves lets the
+// harness check they agree.
+export const __beamShader = { BEAM_VERT, BEAM_FRAG, makeBeamMaterial };

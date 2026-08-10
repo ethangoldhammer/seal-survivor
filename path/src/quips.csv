@@ -1,0 +1,7 @@
+id,text,enabled,weight
+died,You Died!,TRUE,1
+sealed,Your Fate is Sealed!,TRUE,1
+clubbed,Clubbed to Death,TRUE,1
+pinched,Pinched Out,TRUE,1
+chum,You're the Chum Now,TRUE,1
+lastbreath,Out of Air,TRUE,1

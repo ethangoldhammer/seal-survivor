@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } from './config.js';
-import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetSignatureColor, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings } from './assets.js';
+import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin } from './systems/biolumSkin.js';
 import { reseatDecor } from './systems/decor.js';
@@ -8,7 +8,7 @@ import { createWorld } from './world.js';
 import { midWater, bounds } from './arena.js';
 import { initInput, updateInput, clearPendingInput, input } from './input.js';
 import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, applyRecoil, rebuildShipBody } from './entities/player.js';
-import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy } from './entities/enemies.js';
+import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight } from './entities/enemies.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
 import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, gulpPickups, setChumDifficulty } from './entities/pickups.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
@@ -20,14 +20,16 @@ import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
+import { fireMusselBarrage } from './systems/musselVolley.js';
 import { strikeState, tryStrike, restoreCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, strikeDirection } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
-import { updateDayCycle, resetDayCycle, advanceClock } from './systems/daylight.js';
+import { updateDayCycle, resetDayCycle, advanceClock, dayState } from './systems/daylight.js';
 import { updateWeather, resetWeather } from './systems/weather.js';
 import { lightningStrikes } from './systems/lightning.js';
 import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
+import { playerDamageFx, updatePlayerDamageFx, resetPlayerDamageFx } from './systems/playerDamageFx.js';
 import { updateProjectileTrails, clearProjectileTrails } from './systems/projectileTrails.js';
 import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from './systems/projectileVoices.js';
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
@@ -76,7 +78,7 @@ import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js
 if (!loadTuningFromStorage() && !import.meta.env?.DEV) saveTuningToStorage();
 
 // The authoring tools — the ` tuning panel, the T Look & Sound panel, the G
-// gamepad readout, the B playtest overlay and the P/X debug keys — are for
+// gamepad readout, the B playtest overlay and the P/X/N debug keys — are for
 // building the game, not for playing it. A production build leaves them out
 // entirely, so a link handed to a player has no key that opens a wall of
 // sliders over the ocean, and the panel code never runs.
@@ -259,7 +261,45 @@ function bindGlobalKeys() {
     if (e.key.toLowerCase() === 'x' && !isTypingTarget(e.target) && !e.repeat) {
       world.hexTiles.toggle();
     }
+    // N: line up one of every bioluminescent creature beside the seal, so the
+    // glow presets can be compared against each other instead of waiting for
+    // the spawner to offer them one at a time — the rarest is two per arena
+    // behind a level gate, which is not a thing you can art-direct against.
+    //
+    // Caps and gates are bypassed on purpose (that IS the feature), but the
+    // clock is left strictly alone: parking it would write `paused` and
+    // `scrubHour` into the live config, and the next tuner edit would save
+    // that to imported-tuning.json as though someone had chosen it. It says
+    // what time it is instead and lets you scrub, which is one drag away.
+    if (e.key.toLowerCase() === 'n' && !isTypingTarget(e.target) && !e.repeat) {
+      spawnGlowLineup();
+    }
   });
+}
+
+// The lineup itself. Spread along a row in front of the seal at its own depth,
+// far enough apart that two bodies don't overlap at the widest of them.
+function spawnGlowLineup() {
+  const keys = Object.keys(CONFIG.enemies).filter((k) => CONFIG.enemies[k].bioluminescent);
+  if (!keys.length) {
+    console.warn('[nightlife] nothing is tagged `bioluminescent` in enemies.csv — nothing to line up.');
+    return;
+  }
+  const origin = player.mesh.position;
+  const spacing = 4;
+  keys.forEach((key, i) => {
+    const at = { x: origin.x + (i - (keys.length - 1) / 2) * spacing, y: origin.y + 3 };
+    const e = spawnNamed(world.scene, key, gameState.difficulty, at, { ignoreCaps: true });
+    // `entering` suppresses the side walls for a creature walking on from off
+    // screen; one placed deliberately inside the arena has already arrived.
+    if (e) e.entering = false;
+  });
+  const mul = nightlifeWeight();
+  console.log(
+    `[nightlife] ${keys.join(', ')} — ${dayState.hours.toFixed(1)}h (${dayState.phase}), spawn weight x${mul.toFixed(2)}`
+    + (mul > 0.5 ? '' : '\n  The sun is up, so the glow is additive over almost nothing and these will read as dark fish.'
+      + ' Freeze the clock and scrub to ~23h under The ocean in the ` panel to judge them.')
+  );
 }
 
 // Any tuner edit re-derives player stats, and rebuilds the backdrop, grid or
@@ -376,8 +416,11 @@ function startGame() {
   stopHaptics();
   resetBubbles();
   // Same idea for the rim: a run that ended mid-flare shouldn't hand the next
-  // one a seal that opens lit and fades down.
+  // one a seal that opens lit and fades down. Clears the damage flash too.
   resetPlayerOutlineCharge();
+  // And the damage accumulator, or the sub-threshold nibbling the last run
+  // died with would ride along and land on the first scratch of this one.
+  resetPlayerDamageFx();
   // The first run of a session opens in the morning; after that the clock
   // keeps whatever time the last one ended at, unless dayNight.restartAtMorning
   // says otherwise. resetDayCycle knows which — see systems/daylight.js.
@@ -596,12 +639,13 @@ const pendingBursts = [];
 // A mussel going off on whatever it hit: the particle burst, shake and crack
 // from the `missileImpact` feedback event, plus a real sheet of light on top.
 //
-// The whole point is that it's the TARGET's colour, not the weapon's — the
-// mussel is a black shell with an orange trail, and if its detonation were
-// orange too every hit in the game would look the same. Taking the colour off
-// the thing it hit means a hit reads as "that creature, hit" at a glance, in
-// a fight where you're tracking five shells at once and can't follow any of
-// them individually.
+// The FLASH takes the target's colour — the mussel is a black shell with an
+// orange trail, and a hit lighting up in the colour of the thing it hit is
+// readable in a fight where you're tracking five shells at once. That is one
+// sheet of light for a sixth of a second, which is a different thing from
+// forty particles: the colour used to be handed to the burst as well, and
+// forty magenta chips flying out of an orange trail is how the roster's hues
+// ended up all over the screen. The particles are the emitter's palette now.
 //
 // Returns true when it fired, which is the caller's cue to skip the generic
 // bullet-hit feedback for this one.
@@ -613,7 +657,7 @@ function missileImpactFeedback(assetKey, x, y, dmg, projectile, targetRadius = 0
   // megalodon and a megalodon dying agree about how big a deal it is.
   const scale = Math.min(2.2, 0.7 + targetRadius + dmg / 60);
 
-  feedback('missileImpact', { x, y, scale, color });
+  feedback('missileImpact', { x, y, scale });
 
   if (cfg.flash !== false) {
     spawnImpactFlash(x, y, {
@@ -783,7 +827,8 @@ function onEnemyKilledFeedback(e, killEvent = null) {
   const { points, schoolWipe } = computeKillPoints(e, enemies, combo);
   gameState.score += points;
   // `points` is already multiplied, so the toast shows what actually got
-  // banked; the combo factor rides along as a smaller tag for context.
+  // banked. The factor is still passed, but only to colour the toast as a
+  // combo kill — it is no longer printed alongside the number.
   spawnScoreToast(world.camera, e.mesh.position.x, e.mesh.position.y, points, combo);
 
   const big = e.def.radius >= 1 || schoolWipe;
@@ -799,9 +844,14 @@ function onEnemyKilledFeedback(e, killEvent = null) {
     vx: e.vx,
     vy: e.vy,
     scale: Math.min(2.2, 0.7 + e.def.radius + (schoolWipe ? 0.6 : 0)),
-    // Burst in the dying creature's own colour. Null for anything with no
-    // configured look, which leaves the emitter's default palette alone.
-    color: assetSignatureColor(e.def.asset) ?? undefined,
+    // No `color` here, deliberately. This used to pass the dying creature's own
+    // emissive through, so a kill burst came out lime for a trout, magenta for
+    // a reeffish, purple for a barracuda — a different hue every second or two
+    // across a wave. `kill` and `bigKill` own one colour each now, and what
+    // says which creature died is the size of the burst and the pitch of the
+    // sound (see `heft` and `scale` above), which is the same information
+    // without a rainbow on the screen. The tinted flash on a mussel hit is a
+    // light, not particles, and is untouched.
   });
 
   return { points, schoolWipe };
@@ -980,7 +1030,11 @@ function resolveLightningStrike(strike) {
     if (dx * dx + dy * dy <= cfg.killRadius * cfg.killRadius) {
       player.hp -= dmg;
       playtest.recordPlayerDamage(dmg, 'lightning');
-      feedback('playerHit', { x: player.mesh.position.x, y: player.mesh.position.y });
+      // Through the same door as everything else that hurts, so a bolt reads
+      // at its true size instead of at the flat scale 1 it used to fire at —
+      // this is one of the biggest single hits in the game and it should look
+      // like one.
+      playerDamageFx(dmg, player.stats.maxHp, player.mesh.position);
       if (player.hp <= 0 && !deathState.active) killPlayer();
     }
   }
@@ -1145,6 +1199,33 @@ function fireMissiles() {
   // Rotate which flipper the NEXT volley starts from, so an odd missile count
   // doesn't leave one side doing all the throwing forever.
   if (CONFIG.fins.alternate) muzzleCursor++;
+}
+
+// The MUSSEL BARRAGE's launch points and its noise. The fan itself, the
+// threshold and the shells all live in systems/musselVolley.js; what stays
+// here is the two things only main.js can answer — where on the seal's rig a
+// shell leaves from, and what that sounds like.
+function launchMusselBarrage(power) {
+  const rig = player.aimRig;
+  const dir = strikeState.dashDir;
+  return fireMusselBarrage(
+    world.scene, power, player.stats.musselVolleyLevel, dir,
+    (i) => emitPoint(rig, CONFIG.emitPoints.missile, i, dir, player.mesh.position, muzzlePoint),
+    {
+      // One full event for the barrage and flash-only for the rest, same
+      // reason the missile volley does it: eight stacked thumps and eight
+      // stacked shakes is mud, and this fires on a frame that is already loud
+      // with the strike itself.
+      onLaunch: (i, x, y, dirX, dirY, speed) => {
+        feedback(i === 0 ? 'musselBarrage' : 'missileLaunchExtra', {
+          x, y, dirX, dirY,
+          vx: dirX * speed,
+          vy: dirY * speed,
+          scale: CONFIG.musselVolley.launchFlashScale,
+        });
+      },
+    },
+  );
 }
 
 // Scallop Squirter — spits the whole flight at once, each shell on its own
@@ -1408,6 +1489,10 @@ function animate(now) {
   // milliseconds by definition, and the death dive's own dilation would
   // otherwise stretch the kill's 70ms freeze into most of a second.
   const timeScale = updateFeedback(rawDt);
+  // The gap between two hits being SHOWN, on the same raw clock and for the
+  // same reason: this system is what fires the 60ms hit-stop, so a gap
+  // measured in scaled time would be stretched by the freeze it caused.
+  updatePlayerDamageFx(rawDt);
   // The dive owns the clock outright while it runs. The killing blow fires
   // `bigKill`, which carries a 70ms hit-stop — laid on top of a dilation
   // that's easing IN, that's a hole punched in the first tenth of the ramp:
@@ -1640,6 +1725,11 @@ function animate(now) {
         // speed halfway through.
         player.dashTimer = strikeState.dashDuration;
 
+        // The full-charge payoff. Reads `power` — the banked amount this dash
+        // was actually bought with — rather than the meter, which tryStrike
+        // has already zeroed by now.
+        launchMusselBarrage(strikeState.power);
+
         // Barrel roll. Whole turns only — a roll that stops three-quarters of
         // the way round leaves the seal belly-up for the rest of the dash —
         // and bought with banked power, so a full commitment is visibly a
@@ -1733,27 +1823,31 @@ function animate(now) {
       onPlayerHit: (dmg, dir, source = 'unknown') => {
         playtest.recordPlayerDamage(dmg, source);
         player.hp -= dmg;
-        // Contact damage arrives every frame, so only make noise about real hits.
-        if (dmg > 1) {
+        // Damage in, hit on screen out — see systems/playerDamageFx.js. It
+        // banks contact damage (which arrives as a per-frame slice of a rate,
+        // never as a number big enough to be worth showing on its own) and
+        // hands back the size of the hit on the frames it decides to show one.
+        // The gate used to live here as `dmg > 1`, which no contact rate in
+        // the game can clear at any framerate it runs at — so a shark eating
+        // you made no sound at all.
+        const shown = playerDamageFx(dmg, player.stats.maxHp, player.mesh.position);
+        if (shown > 0) {
           player.hitThisFrame = true;
           player.anim?.trigger('hit');
           // Same shove the enemies get, on the one chain of the seal that's
-          // spring-driven rather than IK-driven.
+          // spring-driven rather than IK-driven. Sized by the whole banked hit
+          // rather than by this frame's slice of it, so a body chewing on you
+          // flicks the tail once and properly instead of never.
           if (dir) {
             const spring = CONFIG.animation.spring;
             impulseDir.set(dir.x, dir.y, 0);
             if (impulseDir.lengthSq() > 1e-8) {
               player.aimRig?.tailImpulse(
                 impulseDir.normalize(),
-                Math.min(spring.impulseMax, dmg * spring.impulsePerDamage),
+                Math.min(spring.impulseMax, shown * spring.impulsePerDamage),
               );
             }
           }
-          feedback('playerHit', {
-            x: player.mesh.position.x,
-            y: player.mesh.position.y,
-            scale: Math.min(2, 0.5 + dmg / 20),
-          });
         }
         if (player.hp <= 0 && !deathState.active) killPlayer();
       },
@@ -2162,7 +2256,9 @@ function animate(now) {
     lightningStrikes.length = 0;
   }
   updateParticles(realDt);
-  world.grid.update(realDt, player.mesh.position, player.velocity);
+  // The camera is what turns a finger on the glass into a point in the water —
+  // see updateTouch in systems/grid.js.
+  world.grid.update(realDt, player.mesh.position, player.velocity, world.camera);
   world.hexTiles.update(player.mesh.position);
   // The death shot: the frame closes in on the body and rides it down. Claimed
   // per frame, immediately before the camera update that consumes it — the

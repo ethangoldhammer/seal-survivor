@@ -152,7 +152,15 @@ check('several arms engage at once', claimed.length > 1, `${claimed.length} grab
 
 // --- grab radius scales with level -----------------------------------------
 console.log('\nGRAB RADIUS BY LEVEL');
-function reachedAt(level, distance) {
+// HUNTING HAS TO BE OFF FOR THIS SWEEP. `reach` is the radius of an arm
+// measured from the BODY, and CONFIG.octoGrab.hunt lets the body go to the
+// fish — so with it on, "can it reach 12 units away" is answered by swimming
+// there and the stat stops bounding anything. Every check here is about what
+// the arm covers from a standing start, so the body is pinned for the
+// duration and hunting is asserted separately below.
+function reachedAt(level, distance, { hunt = false } = {}) {
+  const wasHunting = cfg.hunt.enabled;
+  cfg.hunt.enabled = hunt;
   resetOctoGrab(scene, player);
   enemies.length = 0;
   enemies.push(atRange(distance));
@@ -161,6 +169,7 @@ function reachedAt(level, distance) {
     updateOctoGrab(dt, scene, player, level, enemies, { onGrab: () => { got = true; }, onPop: () => {} });
     if (got) break;
   }
+  cfg.hunt.enabled = wasHunting;
   return got;
 }
 const near = cfg.reach * 0.5;
@@ -170,6 +179,46 @@ check(`level 1 reaches a fish ${near.toFixed(1)} out`, reachedAt(1, near));
 const far = cfg.reach + cfg.reachPerLevel * 4;
 check(`level 1 does NOT reach a fish ${far.toFixed(1)} out`, !reachedAt(1, far));
 check(`level 8 DOES reach a fish ${far.toFixed(1)} out`, reachedAt(8, far));
+
+// ...and the aggression pass, which is the reason the sweep above had to pin
+// the body: a hunting octopus catches things its arms could never have
+// covered from station, because it goes and gets them.
+const outOfReach = cfg.reach * 1.9;
+check(`hunting catches a fish ${outOfReach.toFixed(1)} out, well past arm reach`,
+  reachedAt(1, outOfReach, { hunt: true }));
+check('...which station-keeping alone does not',
+  !reachedAt(1, outOfReach, { hunt: false }));
+
+// THE CEILING, and why it is worth a sweep of its own. armReach() clamps the
+// configured radius to what the tentacle can physically cover — the measured
+// chain length times `reachStretch` — so `reach` and `reachPerLevel` can be
+// raised past it and every level above the clamp then buys NOTHING, silently.
+// The checks above would keep passing through that: they only ask whether
+// level 8 beats level 1, and it still would, just not by what the config says.
+//
+// So the cap is measured (a bisection on the grab distance with the level
+// scaling switched off) and the top of the level range is asserted to sit
+// under it. This is also where the 4.38-unit figure quoted in CONFIG.octoGrab
+// comes from — nobody should have to guess it again.
+const savedReach = cfg.reach;
+const savedPerLevel = cfg.reachPerLevel;
+cfg.reach = 1000;
+cfg.reachPerLevel = 0;
+let lo = 1;
+let hi = cfg.reach;
+for (let i = 0; i < 24; i++) {
+  const mid = (lo + hi) / 2;
+  if (reachedAt(1, mid)) lo = mid; else hi = mid;
+}
+cfg.reach = savedReach;
+cfg.reachPerLevel = savedPerLevel;
+
+const chain = lo / cfg.reachStretch;
+const topLevel = cfg.reach + cfg.reachPerLevel * 7;
+check(`one tentacle measures ${chain.toFixed(2)} units, so the cap is ${lo.toFixed(2)}`,
+  chain > 1 && chain < 100, `at reachStretch ${cfg.reachStretch}`);
+check('the top of the level range still fits under that cap', topLevel <= lo,
+  `level 8 asks for ${topLevel.toFixed(2)} of ${lo.toFixed(2)}`);
 
 // --- head drives propulsion ------------------------------------------------
 console.log('\nHEAD / PROPULSION');
@@ -205,16 +254,24 @@ function octoArmTip(i) {
   return v;
 }
 
-// A BECALMED octopus holds still. This asserts the absence of an idle
-// animation, which is a deliberate design choice rather than an oversight: all
-// arm motion is meant to come from how the body actually moves, so a body that
-// is not moving produces arms that are not moving. An earlier pass asserted
-// the opposite — that idle tips wander — and that check was removed rather
-// than loosened, because a sine playing under a stationary creature is exactly
-// the decorated-stick look this is trying to get away from.
+// A BECALMED octopus FLAILS — and this check has now been round the houses
+// twice, so the reasoning is worth keeping.
 //
-// (CONFIG.octoGrab.idleAmp turns a wander back on for a resting octopus; it
-// defaults to 0.)
+// The original pass asserted that idle tips wander, driven by a sine on the IK
+// target (CONFIG.octoGrab.idleAmp). That was removed, correctly: a sine
+// playing under a stationary creature is the decorated-stick look the whole
+// rig is trying to escape, so the assertion was inverted to demand stillness
+// and idleAmp was left at 0.
+//
+// It is inverted BACK now, because CONFIG.octoGrab.turbulence supplies the
+// motion from a different place: a slow, strong, per-arm force field pushed
+// through the same bone spring the body's drag uses. The distinction is the
+// whole point — the arms are not being posed by a wave, they are being blown
+// around by one, and the spring still owns the shape that comes out. So a body
+// that is not moving now produces arms that very much are.
+//
+// Guarded at both ends: motion has to actually happen, and it has to stay
+// physical rather than launching the tips into orbit.
 function tipSpreadOver(frames, target) {
   const seen = [];
   for (let i = 0; i < frames; i++) {
@@ -226,8 +283,64 @@ function tipSpreadOver(frames, target) {
   return s;
 }
 const stillSpread = tipSpreadOver(420, player);
-check('a stationary octopus holds its arms still (no idle animation)',
-  stillSpread < 0.05, `${stillSpread.toFixed(3)} units of wander`);
+check('a stationary octopus still flails (turbulence, not body motion)',
+  stillSpread > 0.5, `${stillSpread.toFixed(3)} units of wander`);
+check('...and the flailing stays physical rather than flinging the tips',
+  stillSpread < 40, `${stillSpread.toFixed(3)} units of wander`);
+
+// --- the arms do not bunch up ------------------------------------------------
+// The failure this guards is specific and was the visible one: with the IK off
+// for idle arms (dangleWeight 0), nothing held the six apart, and the drag and
+// droop impulses push every tentacle the same way — so over a few seconds the
+// bundle collected into one rope hanging under the mantle and six arms
+// rendered as one.
+//
+// Measured as the two numbers CONFIG.octoGrab.spread actually controls: how
+// close the nearest pair of tips gets, and how close a tip gets to the body
+// centre. Run with spread off as well, so this fails loudly if the pass is
+// ever silently doing nothing rather than quietly passing on the geometry the
+// rest pose happened to have.
+// AVERAGED OVER TIME, not sampled once. With turbulence this strong the tips
+// genuinely do sweep past each other, so an instantaneous nearest-pair reading
+// catches those crossings and calls them bunching. What "bunched" actually
+// means is that the bundle SITS collapsed, which is a question about the mean.
+function bundleGeometry(frames) {
+  resetOctoGrab(scene, player);
+  enemies.length = 0;
+  let pairSum = 0;
+  let radiusSum = 0;
+  let samples = 0;
+  for (let i = 0; i < frames; i++) {
+    updateOctoGrab(dt, scene, player, 1, enemies, {});
+    if (i < 120 || i % 10) continue; // let it settle, then sample periodically
+    const tips = rig.arms.map((_, k) => tipOf(k));
+    let minPair = Infinity;
+    for (let a = 0; a < tips.length; a++) {
+      for (let b = a + 1; b < tips.length; b++) minPair = Math.min(minPair, tips[a].distanceTo(tips[b]));
+    }
+    let minRadius = Infinity;
+    for (const t of tips) {
+      minRadius = Math.min(minRadius, Math.hypot(t.x - octo.position.x, t.y - octo.position.y));
+    }
+    pairSum += minPair;
+    radiusSum += minRadius;
+    samples++;
+  }
+  return { minPair: pairSum / samples, minRadius: radiusSum / samples };
+}
+
+const spread = bundleGeometry(600);
+check('the arm tips stay apart from each other',
+  spread.minPair > 0.8, `nearest pair averages ${spread.minPair.toFixed(2)} units`);
+check('no arm tip sits in the body centre',
+  spread.minRadius > 1.5, `nearest tip averages ${spread.minRadius.toFixed(2)} from the body`);
+
+cfg.spread.enabled = false;
+const bunched = bundleGeometry(600);
+cfg.spread.enabled = true;
+check('the spread pass is what is doing it, not the rest pose',
+  spread.minPair > bunched.minPair * 1.15,
+  `${bunched.minPair.toFixed(2)} without the pass, ${spread.minPair.toFixed(2)} with it`);
 
 // Drag: yank the station a long way and check the arms LAG the body rather
 // than translating rigidly with it.
@@ -334,6 +447,49 @@ if (attrs.length) {
   check('the parameterisation reaches the tip', Math.abs(maxParam - 1) < 1e-5, `max param ${maxParam.toFixed(3)}`);
   check('a good share of the mesh is lit-capable', lit > pm.count * 0.4,
     `${lit} of ${pm.count} vertices on an arm`);
+}
+
+// --- camouflage ------------------------------------------------------------
+// Each arm takes the colour of whatever it is holding, or of the nearest
+// creature to its own tip. What can be checked here is the plumbing and the
+// direction of travel: with a creature parked next to the octopus, at least
+// one channel must leave the configured glow colour, and it must come back
+// when the water empties. Whether the colour is RIGHT is the art's problem —
+// in the browser it comes from averaging the creature's own texture, which
+// needs a canvas this harness does not have.
+console.log('\nCAMOUFLAGE');
+const glowU = octoGlowUniform()?.userData?.__biolum;
+check('the glow uniforms are reachable', !!glowU?.uGlowChColor);
+
+if (glowU?.uGlowChColor) {
+  const cc = glowU.uGlowChColor.value;
+  const base = new THREE.Color(cfg.glow.color);
+  const offBase = () => {
+    let worst = 0;
+    for (let i = 0; i < cc.length; i += 3) {
+      worst = Math.max(worst, Math.abs(cc[i] - base.r) + Math.abs(cc[i + 1] - base.g) + Math.abs(cc[i + 2] - base.b));
+    }
+    return worst;
+  };
+
+  resetOctoGrab(scene, player);
+  enemies.length = 0;
+  for (let i = 0; i < 30; i++) updateOctoGrab(dt, scene, player, 1, enemies, {});
+  check('an octopus in empty water wears its own glow colour', offBase() < 1e-3,
+    `worst channel is ${offBase().toFixed(4)} off the base`);
+
+  // Parked at the station rather than at reach, so it is unambiguously inside
+  // the camouflage radius of several arms at once.
+  enemies.push(atRange(1.0));
+  for (let i = 0; i < 60; i++) updateOctoGrab(dt, scene, player, 1, enemies, {});
+  const tinted = offBase();
+  check('a creature alongside tints at least one arm', tinted > 0.05,
+    `worst channel is ${tinted.toFixed(3)} off the base`);
+
+  enemies.length = 0;
+  for (let i = 0; i < 300; i++) updateOctoGrab(dt, scene, player, 1, enemies, {});
+  check('and the colour drains back once it is gone', offBase() < tinted * 0.25,
+    `${offBase().toFixed(3)} left of ${tinted.toFixed(3)}`);
 }
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);

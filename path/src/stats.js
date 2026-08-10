@@ -86,6 +86,7 @@ export function baseStats() {
     oysterLevel: 0,
     octoGrabLevel: 0,
     orcaLevel: 0,
+    musselVolleyLevel: 0,
   };
 }
 

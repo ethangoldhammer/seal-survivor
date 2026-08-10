@@ -584,6 +584,42 @@ export function instantiateBiolumSkin(root) {
 }
 
 /**
+ * Override the look of ONE individual, on top of its species preset.
+ *
+ * WHY THIS EXISTS, given presets already exist. A preset answers "what does
+ * this species look like" and is shared by every clone of the key — which is
+ * right for a school, where nine fish wearing one pattern IS the read. The
+ * seal team wants the opposite: five escorts that are visibly five different
+ * animals, each with its own pattern and palette, all built from one model.
+ * Without this the only per-individual channel was `phase`, which varies WHEN
+ * a body lights, never HOW.
+ *
+ * Call AFTER instantiateBiolumSkin (createVisual does that for any asset
+ * carrying `biolumSkin`), because the variant is stamped on the per-instance
+ * material clone — writing it onto the shared template would repaint every
+ * clone of the key, which is exactly the bug this is here to avoid. Silently
+ * does nothing on a root whose materials aren't instanced, rather than
+ * corrupting the template.
+ *
+ * @param root    the object returned by createVisual
+ * @param variant any subset of the preset keys — pattern, colorA/B/C, scale,
+ *                coverage, strength, and so on
+ */
+export function setBiolumSkinVariant(root, variant) {
+  if (!root || !variant) return;
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const stamp = (mat) => {
+      if (!mat?.userData?.__bioSkin || !mat.userData.__bioSkinInstance) return;
+      mat.userData.__bioSkinVariant = variant;
+    };
+    if (Array.isArray(o.material)) o.material.forEach(stamp);
+    else stamp(o.material);
+  });
+  applyBiolumSkinSettings();
+}
+
+/**
  * Push CONFIG.biolumSkin onto every attached material. Pure uniform writes —
  * no recompile, including the pattern switch, so this is safe to call from a
  * slider's every input event.
@@ -610,7 +646,14 @@ export function applyBiolumSkinSettings() {
   for (const m of liveMaterials()) {
     const u = m.userData.__bioSkinUniforms;
     if (!u) continue;
-    const cfg = resolve(m.userData.__bioSkinPreset ?? 'lantern');
+    const preset = resolve(m.userData.__bioSkinPreset ?? 'lantern');
+    // A VARIANT is a third layer, over base and preset, carried per material
+    // by whoever built the individual — see setBiolumSkinVariant. The preset
+    // says what the species looks like; this says what THIS ONE looks like.
+    // Spread rather than cached because it differs per material by definition,
+    // which is the whole point of it.
+    const variant = m.userData.__bioSkinVariant;
+    const cfg = variant ? { ...preset, ...variant } : preset;
     u.uBioPattern.value = patternIndex(cfg.pattern);
     // `enabled` folds into strength rather than branching in the shader —
     // one less test per fragment, and the toggle fades out the same way the

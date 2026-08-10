@@ -10,10 +10,15 @@ import { cineLens } from './cineCamera.js';
 //   3. one final shader: composite scene + glow, then everything in
 //      CONFIG.postPresets (CRT/VHS/etc) on top of the combined result
 //
-// This is deliberately an LDR (8-bit) bloom, not a physically-based HDR one —
-// thresholding straight off the normal 0..1 rendered image is exactly how
-// simple screen-space glow worked on 2000s-era hardware, and it's plenty for
-// a stylized neon look without needing float render targets.
+// The bright-pass is a simple screen-space threshold, in the spirit of
+// 2000s-era glow rather than a physically-based HDR pipeline — but it does
+// read from a HalfFloat target, NOT an 8-bit one. That distinction is
+// load-bearing and this comment used to deny it: because the scene target is
+// float, a colour driven past 1.0 survives to the threshold instead of
+// clamping on the way in, which is the entire mechanism behind every
+// "overdrive" control in the game (particle glow, unlit asset glow,
+// biolumSkin strength). On an 8-bit target 1.0 and 5.0 would be the same
+// pixel and all of those sliders would stop above 1. See createPost.
 
 const vertexShader = /* glsl */ `
   varying vec2 vUv;

@@ -12,7 +12,10 @@
 const STORAGE_KEY = 'seal-survivor-leaderboard-v1';
 const NAME_KEY = 'seal-survivor-player-name';
 const MAX_ENTRIES = 10;
-const MAX_NAME_LEN = 12;
+// Must match MAX_NAME_LEN in server/leaderboard-worker.js — the server is the
+// authority and truncates anything longer, so raising it here alone would let
+// players type a name the board then silently cuts.
+const MAX_NAME_LEN = 24;
 
 // Trailing slash trimmed so the URL works whether or not it was pasted with
 // one. Empty/unset means "no backend" — checked via isGlobal() everywhere.

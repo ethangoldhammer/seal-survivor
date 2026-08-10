@@ -3,6 +3,8 @@ import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { drawUpgrades } from '../upgradeTable.js';
+import quipsCsv from '../quips.csv?raw';
+import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { menuInput, resetMenuInput } from '../input.js';
 import { mountRiveSplash } from './riveSplash.js';
@@ -21,6 +23,11 @@ import { feedback } from '../systems/feedback.js';
 
 let callbacks = {};
 const el = {};
+
+// Parsed once at module load, not per death — the file can't change while the
+// page is up (a dev-server edit reloads it), and parsing on the frame the
+// player dies is work for nothing.
+const QUIPS = parseQuipCsv(quipsCsv);
 
 // Menus answer back. Every clickable thing in the UI goes through here rather
 // than binding its own sounds, so a control added later is silent only if
@@ -91,7 +98,6 @@ const STYLES = `
     font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap;
     transform: translate(-50%, -50%); will-change: transform, opacity; }
   .sv-toast-combo { color: #ffe066; font-size: 15px; }
-  .sv-toast-mult { font-size: 10px; opacity: 0.8; font-weight: 600; }
   /* FOOD CHAIN! — the chain-extension banner. Reuses the toast layer and the
      toast update loop, but it is an announcement rather than a number: it
      rises from the seal, only one is ever on screen (an extension re-uses the
@@ -153,7 +159,11 @@ const STYLES = `
   .sv-lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
   .sv-lb-row.sv-lb-mine { background: rgba(122,215,255,0.14); border: 1px solid rgba(122,215,255,0.4); }
   .sv-lb-rank { width: 18px; color: rgba(232,236,243,0.5); font-weight: 600; }
-  .sv-lb-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* min-width:0 is load-bearing: a flex item defaults to min-width:auto, which
+     refuses to shrink below its content — so without it a long name pushes the
+     score and time out of the row instead of ellipsing, which is exactly what
+     a 24-character name does. */
+  .sv-lb-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sv-lb-score { font-weight: 600; font-variant-numeric: tabular-nums; }
   .sv-lb-meta { color: rgba(232,236,243,0.5); font-size: 11px; min-width: 78px; text-align: right; }
   .sv-lb-empty { font-size: 12px; color: rgba(232,236,243,0.4); padding: 6px 8px; }
@@ -161,10 +171,16 @@ const STYLES = `
   /* Name entry. The row is a single control: text field plus its submit
      button, sized so the two read as one unit rather than a form. */
   .sv-name-row { display: flex; gap: 8px; justify-content: center; margin: 14px 0 4px; }
-  .sv-name-input { pointer-events: all; flex: 1; min-width: 0; max-width: 200px;
+  /* Sized to hold a full-length name without the text scrolling inside the
+     field — at 24 characters the old 200px/0.08em pairing ran out around
+     character 15, so the tail of your own name was hidden while you typed it.
+     The tracking comes down as the field gets longer: letter-spacing is there
+     to make a SHORT arcade-style name look deliberate, and at this width it
+     was only costing room. */
+  .sv-name-input { pointer-events: all; flex: 1; min-width: 0; max-width: 300px;
     background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.18);
     border-radius: 8px; padding: 9px 12px; color: #e8ecf3; font-size: 14px;
-    font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
     text-align: center; -webkit-user-select: text; user-select: text; }
   .sv-name-input::placeholder { color: rgba(232,236,243,0.3); letter-spacing: 0.06em; font-weight: 500; }
   .sv-name-input:focus { outline: none; border-color: #7ad7ff; background: rgba(122,215,255,0.08); }
@@ -264,7 +280,7 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
 
     <div class="sv-center sv-hidden" id="svGameOverMenu">
       <div class="sv-menu">
-        <div class="sv-title">Run ended</div>
+        <div class="sv-title" id="svGameOverTitle">You Died!</div>
         <div class="sv-sub" id="svGameOverStats"></div>
         <div class="sv-name-row" id="svNameRow">
           <input class="sv-name-input" id="svNameInput" type="text" maxlength="${MAX_NAME_LEN}"
@@ -288,6 +304,7 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
     'svHighScoreLabel', 'svHighScore', 'svRapidFirePanel', 'svRapidFireTime',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
+    'svGameOverTitle',
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -325,7 +342,15 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
   });
   // Typed characters are normalised on the way in rather than only on submit,
   // so the field can't show a name that the board won't accept.
+  //
+  // The tick is voiced from `input` rather than `keydown` because `input` is
+  // the event that means a character actually landed: keydown also fires for
+  // Shift, the arrow keys, Tab, and — the one that would sound broken — every
+  // keypress once the field is full, where the browser refuses the character
+  // but still reports the key. Backspace DOES tick, deliberately; deleting is
+  // as much a keystroke as typing, and silence there reads as a dead key.
   el.svNameInput.addEventListener('input', () => {
+    feedback('uiType');
     const clean = sanitizeName(el.svNameInput.value);
     if (clean !== el.svNameInput.value) {
       const caret = el.svNameInput.selectionStart;
@@ -1058,16 +1083,16 @@ export function spawnScoreToast(camera, worldX, worldY, points, multiplier = 1) 
   const node = document.createElement('div');
   const combo = multiplier > 1;
   node.className = combo ? 'sv-toast sv-toast-combo' : 'sv-toast';
-  // The number shown is always what was actually banked. When a combo is
-  // live, the multiplier is appended as context — so the big figure is the
-  // real one and you never have to do the arithmetic yourself.
+  // THE PRODUCT, AND ONLY THE PRODUCT. `points` is already multiplied, so this
+  // is what actually went into the score.
+  //
+  // The multiplier used to ride along as a "×2.4" tag. It was arithmetic
+  // homework at the exact moment there is least time to do it — a chain is
+  // half a dozen of these a second, and the two numbers side by side invited
+  // reading the small one and multiplying it yourself against the big one that
+  // had already had it applied. The combo still shows: `sv-toast-combo` is the
+  // colour, and the FOOD CHAIN banner carries the depth.
   node.textContent = `+${points.toLocaleString()}`;
-  if (combo) {
-    const tag = document.createElement('span');
-    tag.className = 'sv-toast-mult';
-    tag.textContent = ` ×${multiplier.toFixed(1)}`;
-    node.appendChild(tag);
-  }
   el.svToastLayer.appendChild(node);
 
   toasts.push({
@@ -1187,6 +1212,9 @@ export function clearToasts() {
 // at while typing rather than an empty panel.
 export function showGameOver(gameState) {
   el.svHud.classList.add('sv-hidden');
+  // Rolled per death, not once per session — the line is the first thing read
+  // on a screen the player sees dozens of times a sitting.
+  el.svGameOverTitle.textContent = pickQuip(QUIPS);
   const score = Math.floor(gameState.score ?? 0);
   el.svGameOverStats.innerHTML =
     `Score: ${score.toLocaleString()}<br/>Survived ${formatTime(gameState.time)} — Kills: ${gameState.kills} — Level ${gameState.level}`;

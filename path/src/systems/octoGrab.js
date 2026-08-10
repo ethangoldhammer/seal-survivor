@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { ASSETS, createVisual } from '../assets.js';
+import { ASSETS, createVisual, assetSignatureColor, assetBaseColor } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { buildChain, applyChainToPoint, measureReach } from './ikChain.js';
 import { springFollow } from './orbit.js';
@@ -44,6 +44,14 @@ import { createBoneSpring } from './boneSpring.js';
 // ARM COUNT IS NOT RIG COUNT. The model has six tentacles at every level;
 // CONFIG.octoGrab.arms is how many may be GRABBING at once. Hiding tentacles
 // at low level would look like a broken octopus, so the surplus dangle.
+//
+// CAMOUFLAGE. A real octopus takes the colour of what it is near, and this one
+// does it PER ARM: each tentacle's glow channel eases toward the colour of the
+// nearest creature within CONFIG.octoGrab.camouflage.radius — the fish it has
+// hold of if it has one — and back to the configured glow colour when there is
+// nothing close. Six arms therefore routinely wear six different colours at
+// once, which is the whole read: the bundle tells you what is around you and
+// which arms are on it. See setChannelColor in systems/bioluminescence.js.
 
 let body = null;
 let chains = []; // one per arm, in rig order
@@ -64,6 +72,122 @@ let jetClock = 0;
 const _target = new THREE.Vector3();
 const _perp = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+const _tint = new THREE.Color();
+const _camTint = new THREE.Color();
+
+// --- camouflage ------------------------------------------------------------
+// "What colour is this creature", answered once per asset and then cached.
+//
+// Three sources, in the order of how much each actually knows:
+//
+//   1. the tuned look. A tint or emissive chosen in the T panel wins outright,
+//      because somebody picked it on purpose. Read fresh every time rather
+//      than cached, so moving the slider re-colours the arms immediately.
+//   2. the average of the model's own base texture. The only source that
+//      knows a clownfish is orange — a textured model's material colour is
+//      almost always plain white, so sampling the material first would paint
+//      every arm the same nothing.
+//   3. the material colour, which is what the untextured procedural
+//      stand-ins carry, and then the asset's authored fallback colour.
+//
+// Averaging needs a canvas, so it is guarded on `document` (the Node harnesses
+// have none) and every failure path falls through to the next source rather
+// than throwing. Downscaled to 16x16 by the draw itself, so the read-back is
+// 256 pixels however big the texture is.
+const tintCache = new Map();
+
+function averageTextureColor(tex) {
+  const img = tex?.image;
+  if (!img || typeof document === 'undefined') return null;
+  const w = img.width ?? img.videoWidth ?? 0;
+  const h = img.height ?? img.videoHeight ?? 0;
+  if (!w || !h) return null;
+
+  try {
+    const N = 16;
+    const canvas = document.createElement('canvas');
+    canvas.width = N;
+    canvas.height = N;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, N, N);
+    const data = ctx.getImageData(0, 0, N, N).data;
+
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      // Transparent padding is most of some atlases and is pure black in the
+      // colour channels — averaging it in drags every creature toward dark.
+      if (data[i + 3] < 8) continue;
+      r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+    }
+    if (!n) return null;
+    // Bytes are sRGB; everything downstream of here is linear, and the glow is
+    // added to a linear frame buffer. Converting on the way in is what stops
+    // the tint reading two stops brighter than the fish it came from.
+    return new THREE.Color().setRGB(
+      r / (n * 255), g / (n * 255), b / (n * 255), THREE.SRGBColorSpace,
+    );
+  } catch {
+    return null; // a tainted or not-yet-decoded image; the fallbacks cover it
+  }
+}
+
+/**
+ * @returns {THREE.Color|null} possibly SHARED scratch — read it or copy it on
+ *   the spot, never hold onto it.
+ */
+function creatureTint(e) {
+  const key = e?.def?.asset ?? e?.type ?? null;
+
+  const tuned = key ? assetSignatureColor(key) : null;
+  if (tuned != null) return _tint.set(tuned);
+
+  if (key && tintCache.has(key)) return tintCache.get(key);
+
+  let color = null;
+  // A texture that exists but has not DECODED yet. The answer this call gives
+  // is still usable, but it must not be cached — a model whose texture landed
+  // a frame late would otherwise wear its material colour (plain white, for
+  // anything textured) for the rest of the session. Narrowed to "no dimensions
+  // yet" on purpose: every other reason averaging can fail is permanent, and
+  // retrying those would mean traversing the mesh again on every frame.
+  let provisional = false;
+
+  e?.visual?.traverse((o) => {
+    if (color || !o.isMesh) return;
+    const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+    if (!mat) return;
+    color = averageTextureColor(mat.map);
+    if (!color) {
+      const img = mat.map?.image;
+      if (mat.map && !(img?.width || img?.videoWidth)) provisional = true;
+      if (mat.color) color = new THREE.Color(mat.color);
+    }
+  });
+
+  if (!color && key) {
+    const fallback = assetBaseColor(key);
+    if (fallback != null) color = new THREE.Color(fallback);
+  }
+  if (key && !provisional) tintCache.set(key, color);
+  return color;
+}
+
+// The nearest creature to a POINT — the arm's own solved tip, not the body, so
+// "close to" means close to that tentacle rather than close to the octopus.
+// Unfiltered by size on purpose: an arm brushing a megalodon it could never
+// grab should still take its colour.
+function nearestCreature(x, y, list, radius) {
+  let best = null;
+  let bestD2 = radius * radius;
+  for (const e of list) {
+    const dx = e.mesh.position.x - x;
+    const dy = e.mesh.position.y - y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) { bestD2 = d2; best = e; }
+  }
+  return best;
+}
 
 // Walk a single-child bone run from `root` to `tip`. The rig's chains are
 // unbranched, so the middle is derivable — which beats listing all 19 bones
@@ -144,8 +268,14 @@ function buildChains() {
       // motion (see CONFIG.octoGrab.drift).
       lag: new THREE.Vector3(),
       lagVel: new THREE.Vector3(),
+      // Accumulated by the spread pre-pass each frame and spent in the spring
+      // section — see computeSpread. Held per arm rather than applied on the
+      // spot because the pass needs every tip measured before any of them move.
+      spreadForce: new THREE.Vector3(),
       stiffMul: 1 + bias * spread,
       glow: 0, // eased 0..1, drives this arm's bioluminescence channel
+      // This arm's live camouflage colour, eased toward whatever it is near.
+      tint: new THREE.Color(CONFIG.octoGrab.glow?.color ?? 0xffffff),
       // Per-bone flow. Built over the DRIVEN bones only — the last entry of
       // the run is the `_end` locator, and handing it to the spring would
       // both waste a joint on something that deforms nothing and rob the last
@@ -261,6 +391,45 @@ function danglePoint(arm, out) {
   return out;
 }
 
+// Smooth pseudo-random scalar in roughly [-1, 1], continuous in `t`.
+//
+// Three sines at non-harmonic ratios. Continuity is the requirement — this
+// feeds a force, and a force that jumps between frames reads as a glitch
+// rather than as turbulence — and the ratios are what stop it landing on an
+// audible beat the way a single sine does within about two seconds of
+// watching. Cheap enough to call six times a frame without thinking about it.
+function wander(t, seed) {
+  return Math.sin(t + seed) * 0.62
+    + Math.sin(t * 1.618 + seed * 2.7) * 0.27
+    + Math.sin(t * 2.714 + seed * 5.1) * 0.11;
+}
+
+// What the BODY should go after: the nearest fish it could actually grab,
+// inside `hunt.radius`. Deliberately a different question from acquire()
+// below, which asks what one ARM can reach right now — the body commits to
+// things well outside arm range, which is the entire point of hunting.
+function huntTarget(enemiesList) {
+  const c = CONFIG.octoGrab;
+  const h = c.hunt;
+  let best = null;
+  let bestD2 = h.radius * h.radius;
+
+  for (const e of enemiesList) {
+    // Same size gate the arms use. Charging something no arm can lift would
+    // park the octopus next to a megalodon doing nothing.
+    if (e.radius > c.maxTargetRadius) continue;
+    // Already being reeled in — chasing it means swimming away from the seal
+    // it is being delivered to.
+    if (h.skipHeld !== false && arms.some((a) => a.target === e)) continue;
+
+    const dx = e.mesh.position.x - bodyPos.x;
+    const dy = e.mesh.position.y - bodyPos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) { bestD2 = d2; best = e; }
+  }
+  return best;
+}
+
 // Nearest ungrabbed, reelable fish inside this arm's reach.
 //
 // Nearest-first rather than biggest-first: the arm's job is to take pressure
@@ -284,6 +453,92 @@ function acquire(arm, enemiesList, reach) {
     if (d2 < bestD2) { bestD2 = d2; best = e; }
   }
   return best;
+}
+
+// THE ANTI-BUNCHING PASS. See CONFIG.octoGrab.spread for why it is needed at
+// all: with dangleWeight at 0 nothing poses an idle arm, and the drag and
+// droop impulses push all six the same way, so the bundle collects into one
+// rope under the mantle.
+//
+// Measured on last frame's solved tips. A frame of lag on a repulsion force is
+// invisible, and it is what lets this run as a single pass BEFORE any arm has
+// moved — computing it inside the main loop would have each arm pushing off
+// tips that some of its neighbours had already updated and others hadn't,
+// which is an asymmetric force and drifts the whole bundle sideways.
+function computeSpread(dt) {
+  const s = CONFIG.octoGrab.spread;
+  for (const arm of arms) arm.spreadForce.set(0, 0, 0);
+  if (!s || s.enabled === false || !arms.length) return;
+
+  // THE FAN. Each arm owns a permanent bearing — its slot's share of the full
+  // circle — and is pulled toward the point at `fanRadius` along it.
+  //
+  // This replaced a purely reactive version that only pushed once two tips had
+  // already collapsed, and measured at an 8% improvement: a bounded impulse
+  // fighting a stiffness-12 spring settles at a small deflection, so reacting
+  // to a collapse can never undo one. Giving every arm somewhere to BE is what
+  // holds the star open, and it costs nothing in looseness — this is a force
+  // through the same spring, not an IK pose, so the arm still flows and
+  // turbulence still owns its character. The fan only says which way out.
+  //
+  // Rotated to sit behind the direction of travel, like the old dangle fan, so
+  // a swimming octopus streams its arms rather than holding a fixed compass
+  // rose while it moves.
+  const n = Math.max(1, arms.length);
+  const speed = Math.hypot(bodyVel.x, bodyVel.y);
+  const base = speed > 0.4 ? Math.atan2(-bodyVel.y, -bodyVel.x) : -Math.PI / 2;
+  for (const arm of arms) {
+    if (s.skipBusy !== false && arm.state !== 'idle') continue;
+    // Spread across a fan centred on `base` rather than the whole circle, or
+    // the two end arms meet again round the front of the body.
+    const lane = n > 1 ? (arm.slot / (n - 1)) * 2 - 1 : 0;
+    const bearing = base + lane * (s.fanArc ?? Math.PI) * 0.5;
+    const wantX = bodyPos.x + Math.cos(bearing) * s.fanRadius;
+    const wantY = bodyPos.y + Math.sin(bearing) * s.fanRadius;
+    arm.spreadForce.x += (wantX - arm.chain.point.x) * s.fanForce;
+    arm.spreadForce.y += (wantY - arm.chain.point.y) * s.fanForce;
+  }
+
+  // Radial: a tip that has still ended up inside minRadius is pushed straight
+  // out along its own bearing. The fan above handles the steady state; this is
+  // the hard floor for a tentacle that got dragged through the mantle anyway.
+  for (const arm of arms) {
+    const dx = arm.chain.point.x - bodyPos.x;
+    const dy = arm.chain.point.y - bodyPos.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= s.minRadius) continue;
+    // A tip sitting exactly on the body has no bearing to push along; its slot
+    // supplies one, which also guarantees the six pick different directions
+    // out of that degenerate case instead of all choosing the same axis.
+    const a = d > 1e-3 ? Math.atan2(dy, dx) : (arm.slot / n) * Math.PI * 2;
+    const deficit = (s.minRadius - d) / s.minRadius; // 0 at the edge, 1 at the centre
+    arm.spreadForce.x += Math.cos(a) * s.radialForce * deficit;
+    arm.spreadForce.y += Math.sin(a) * s.radialForce * deficit;
+  }
+
+  // Pairwise: tips that have drifted within minGap of each other shove apart.
+  // Equal and opposite, so this can never move the bundle as a whole.
+  for (let i = 0; i < arms.length; i++) {
+    const a = arms[i];
+    if (s.skipBusy !== false && a.state !== 'idle') continue;
+    for (let j = i + 1; j < arms.length; j++) {
+      const b = arms[j];
+      if (s.skipBusy !== false && b.state !== 'idle') continue;
+      const dx = a.chain.point.x - b.chain.point.x;
+      const dy = a.chain.point.y - b.chain.point.y;
+      const d = Math.hypot(dx, dy);
+      if (d >= s.minGap) continue;
+      const push = ((s.minGap - d) / s.minGap) * s.gapForce;
+      // Same degenerate case as above: two tips at the same point have no
+      // separating axis, so the slots pick one.
+      const ux = d > 1e-3 ? dx / d : Math.cos(a.slot * 2.4);
+      const uy = d > 1e-3 ? dy / d : Math.sin(a.slot * 2.4);
+      a.spreadForce.x += ux * push;
+      a.spreadForce.y += uy * push;
+      b.spreadForce.x -= ux * push;
+      b.spreadForce.y -= uy * push;
+    }
+  }
 }
 
 function release(arm) {
@@ -314,8 +569,21 @@ export function updateOctoGrab(dt, scene, playerPos, level, enemiesList, hooks =
   // The preferred station is an offset from the seal. The head target leads
   // that by `lead` so the mantle is always pointing at where the body is
   // going rather than at where it already is.
-  const wantX = playerPos.x + c.bodyOffset[0];
-  const wantY = playerPos.y + c.bodyOffset[1];
+  let wantX = playerPos.x + c.bodyOffset[0];
+  let wantY = playerPos.y + c.bodyOffset[1];
+
+  // THE HUNT. The station above is where it idles; a fish inside hunt.radius
+  // drags that station toward itself, and because the head target is also the
+  // thrust vector the whole animal goes with it. Blended rather than switched
+  // so it leans into a chase and drifts back off one, instead of snapping
+  // between two behaviours the moment a fish crosses the radius.
+  const hunting = c.hunt?.enabled !== false ? huntTarget(enemiesList) : null;
+  if (hunting) {
+    const w = c.hunt.weight;
+    wantX += (hunting.mesh.position.x - wantX) * w;
+    wantY += (hunting.mesh.position.y - wantY) * w;
+  }
+
   _dir.set(wantX - bodyPos.x, wantY - bodyPos.y, 0);
   const toStation = _dir.length();
   if (toStation > 1e-4) _dir.divideScalar(toStation);
@@ -332,14 +600,19 @@ export function updateOctoGrab(dt, scene, playerPos, level, enemiesList, hooks =
   // hovering drone, so thrust only fires during the first `pulseFraction` of
   // each interval and the rest of the cycle is a coast.
   jetClock = (jetClock + dt) % Math.max(1e-3, c.head.pulseInterval);
-  const jetting = jetClock < c.head.pulseInterval * c.head.pulseFraction;
+  // A committed octopus spends far more of each cycle under power and pushes
+  // harder while it does — coasting is what patrolling looks like, not what
+  // closing on prey looks like.
+  const duty = hunting ? (c.hunt.pulseFraction ?? c.head.pulseFraction) : c.head.pulseFraction;
+  const jetting = jetClock < c.head.pulseInterval * duty;
 
   if (jetting) {
     // Scaled by how far off station it is, so it doesn't jet at full power
     // while already sitting where it wants to be.
     const urgency = Math.min(1, toStation / Math.max(1e-3, c.head.lead));
-    bodyVel.x += _dir.x * c.head.thrust * urgency * dt;
-    bodyVel.y += _dir.y * c.head.thrust * urgency * dt;
+    const push = c.head.thrust * (hunting ? (c.hunt.thrustBoost ?? 1) : 1);
+    bodyVel.x += _dir.x * push * urgency * dt;
+    bodyVel.y += _dir.y * push * urgency * dt;
   }
 
   const damp = Math.exp(-c.head.drag * dt);
@@ -378,6 +651,9 @@ export function updateOctoGrab(dt, scene, playerPos, level, enemiesList, hooks =
   const grabbers = Math.min(chains.length, c.arms + c.armsPerLevel * (Math.max(1, level) - 1));
   const reelSpeed = c.reelSpeed + c.reelSpeedPerLevel * (Math.max(1, level) - 1);
   let grabbing = 0;
+
+  // Every tip measured before any arm moves — see the note on computeSpread.
+  computeSpread(dt);
 
   for (const arm of arms) {
     // A target killed by something else mid-reel is gone from enemiesList, and
@@ -495,6 +771,29 @@ export function updateOctoGrab(dt, scene, playerPos, level, enemiesList, hooks =
     arm.glow += (wantGlow - arm.glow) * (1 - Math.exp(-rate * dt));
     glowRig?.setChannel(arm.slot, arm.glow);
 
+    // CAMOUFLAGE. What this tentacle is holding, or failing that whatever is
+    // nearest its TIP — see the header. Eased rather than switched, because
+    // the whole point is watching the colour bleed across the arm as it
+    // reaches; a hard set would just be six arms changing swatch.
+    const cam = c.camouflage;
+    if (glowRig && cam?.enabled !== false) {
+      // Before the first solve the tip is still at the origin, which would
+      // sample whatever happens to be near the middle of the arena.
+      const tip = arm.chain.primed ? arm.chain.point : bodyPos;
+      const near = arm.target ?? nearestCreature(tip.x, tip.y, enemiesList, cam.radius);
+      const found = near ? creatureTint(near) : null;
+      if (found) {
+        // Pushed past what was sampled so the tint survives being added to an
+        // already-lit body — a fish's own colour, added at its own level, is
+        // a wash rather than a glow.
+        _camTint.copy(found).multiplyScalar(cam.gain ?? 1);
+        arm.tint.lerp(_camTint, 1 - Math.exp(-cam.blend * dt));
+      } else {
+        arm.tint.lerp(glowRig.baseColor, 1 - Math.exp(-cam.fade * dt));
+      }
+      glowRig.setChannelColor(arm.slot, arm.tint);
+    }
+
     // IK writes the pose the arm is AIMING at...
     applyChainToPoint(arm.chain, dt, c.ik, arm.weight, 1, _target);
 
@@ -519,6 +818,44 @@ export function updateOctoGrab(dt, scene, playerPos, level, enemiesList, hooks =
       if (sp.droop > 0) {
         _dir.set(0, -1, 0);
         arm.spring.impulse(_dir, sp.droop * dt, sp.tipBias);
+      }
+
+      // TURBULENCE. A slow, strong, per-arm force field — the thing that makes
+      // a stationary octopus's arms move at all, since every other impulse
+      // here is a reaction to the body going somewhere. See CONFIG's block:
+      // the character is the ratio of a big strength to a small speed.
+      const tb = c.turbulence;
+      if (tb?.enabled !== false && tb.strength > 0) {
+        const t = clock * tb.speed;
+        const seed = arm.slot * 7.31;
+        // Two octaves at a non-harmonic ratio, per axis. The x and y seeds are
+        // offset rather than sharing one, or the vector would only ever swing
+        // along a single diagonal.
+        const nx = wander(t, seed) + wander(t * tb.octave, seed * 1.9) * tb.octaveAmp;
+        const ny = wander(t, seed + 3.77) + wander(t * tb.octave, seed * 1.9 + 8.4) * tb.octaveAmp;
+        _dir.set(nx, ny, 0);
+        const mag = _dir.length();
+        if (mag > 1e-4) {
+          _dir.divideScalar(mag);
+          // Some of the push is turned 90 degrees into a swirl around the
+          // body. A purely linear shove slides a tentacle back and forth; the
+          // tangential part is what makes it curl and sweep.
+          if (tb.swirl > 0) {
+            _perp.set(-_dir.y, _dir.x, 0);
+            _dir.lerp(_perp, tb.swirl).normalize();
+          }
+          // Still moving while it works, just not thrashing hard enough to
+          // miss the fish it is reaching for.
+          const scale = arm.state === 'idle' ? 1 : (tb.busyScale ?? 1);
+          arm.spring.impulse(_dir, tb.strength * mag * scale * dt, tb.tipBias ?? 1);
+        }
+      }
+
+      // SPREAD, computed for every arm before any of them moved.
+      const push = arm.spreadForce.length();
+      if (push > 1e-4) {
+        _dir.copy(arm.spreadForce).divideScalar(push);
+        arm.spring.impulse(_dir, push * dt, c.spread.tipBias ?? 1);
       }
 
       arm.spring.update(dt, sp, arm.state === 'idle' ? sp.weightIdle : sp.weightBusy);
@@ -554,11 +891,16 @@ export function resetOctoGrab(scene, playerPos) {
     arm.weight = c.dangleWeight;
     arm.chain.primed = false;
     arm.glow = 0;
+    // Back to the configured glow colour, or the arms open the next run still
+    // wearing whatever they were last near in the previous one.
+    arm.tint.set(c.glow?.color ?? 0xffffff);
+    glowRig?.setChannelColor(arm.slot, null);
     // Seeded ON the body rather than at the origin: a lag vector left over
     // from a previous run would spend the first second of this one being
     // dragged across the arena, with six tentacles pointing at nothing.
     arm.lag.set(bodyPos.x, bodyPos.y, 0);
     arm.lagVel.set(0, 0, 0);
+    arm.spreadForce.set(0, 0, 0);
     arm.spring?.reset();
     glowRig?.setChannel(arm.slot, 0);
   }

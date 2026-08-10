@@ -5,6 +5,7 @@ import { removeEnemy } from '../entities/enemies.js';
 import { bounds } from '../arena.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { orbitTarget, springFollow } from './orbit.js';
+import { setBiolumSkinVariant } from './biolumSkin.js';
 import { spawnProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 
@@ -31,10 +32,23 @@ let clock = 0;
 // Shared across the squad so only one seal is ever out of formation at a time.
 let teamLungeGate = 0;
 
-function buildSeal() {
+// One escort's body. `slot` is its index in the squad, and it is what picks
+// the seal's procedural skin — see CONFIG.sealTeam.skin. By index rather than
+// at random so a seal's identity is stable across a run: the third member is
+// always the purple one, which is the entire point of telling them apart.
+//
+// createVisual has already given this clone its OWN material (assets.js calls
+// instantiateBiolumSkin for any asset carrying `biolumSkin`), so stamping a
+// variant here paints this seal and no other. Doing it before that clone
+// exists would write onto the shared template and repaint the whole squad.
+function buildSeal(slot) {
   const root = new THREE.Group();
   const visual = createVisual('sealTeam');
   root.add(visual);
+  const skin = CONFIG.sealTeam.skin;
+  if (skin?.enabled !== false && skin?.variants?.length) {
+    setBiolumSkinVariant(visual, skin.variants[slot % skin.variants.length]);
+  }
   const anim = CONFIG.animation.enabled ? createAnimationController(visual) : null;
   return { root, visual, anim };
 }
@@ -58,7 +72,7 @@ function newMember(root, visual, anim, pos, vel) {
 // seal without disturbing the ones already swimming.
 function resize(scene, count, playerPos) {
   while (team.length < count) {
-    const { root, visual, anim } = buildSeal();
+    const { root, visual, anim } = buildSeal(team.length);
     // Spawn on the player so a newly-earned seal swims OUT to its slot rather
     // than popping into position.
     const pos = new THREE.Vector3(playerPos.x, playerPos.y, 0);
@@ -87,7 +101,9 @@ export function rebuildSealTeam(scene) {
   for (const t of team) scene.remove(t.root);
   team.length = 0;
   for (let i = 0; i < count; i++) {
-    const { root, visual, anim } = buildSeal();
+    // Same slot as before the swap, so a re-uploaded model doesn't reshuffle
+    // which seal wears which skin.
+    const { root, visual, anim } = buildSeal(i);
     root.position.copy(saved[i].pos);
     scene.add(root);
     team.push(newMember(root, visual, anim, saved[i].pos, saved[i].vel));

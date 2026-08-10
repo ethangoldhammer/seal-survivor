@@ -236,13 +236,74 @@ for (const node of [restart, submit, document.getElementById('svStartBtn')]) {
 }
 check('no control plays its click more than once', doubled === 0, `${doubled} doubled`);
 
+section('Typing the name');
+// The tick hangs off `input`, not `keydown`, and the difference is the whole
+// test: keydown also fires for modifiers and arrows, and — the one that would
+// sound broken — for every rejected keypress once the field is full.
+const nameInput = document.getElementById('svNameInput');
+
+// A voice slot is released on a real setTimeout of (decay + 0.1)s, so a
+// synchronous burst of keystrokes exhausts CONFIG.audio.maxConcurrent and
+// every tick after the first is dropped as 'voices' — in the HARNESS, where
+// no time passes. Real typing is nowhere near it (a keystroke holds a slot for
+// 140ms, so even a fast typist keeps about two alive out of twelve). Hence the
+// real wait: this is a test that has to let the clock run to mean anything.
+const RELEASE_MS = (CONFIG.sfx.uiType.decay + 0.1) * 1000 + 20;
+const typeChar = async (ch) => {
+  key(nameInput, ch);
+  nameInput.value += ch;
+  nameInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  updateFeedback(0.2);
+  await new Promise((r) => setTimeout(r, RELEASE_MS));
+};
+
+settle();
+nameInput.value = '';
+await typeChar('A');
+let typed = drain();
+check('a character is heard', only(typed, 'uiType') === 1, `x${only(typed, 'uiType')}`);
+
+settle();
+nameInput.value = '';
+for (const ch of 'SEAL') await typeChar(ch);
+typed = drain();
+const typeEaten = drainDropped().filter((d) => d.startsWith('uiType')).length;
+// A shortfall here means the tick is being swallowed rather than never asked
+// for, so the dropped count is reported alongside — the two failures look
+// identical from the heard count alone.
+check('four characters give four ticks', only(typed, 'uiType') === 4,
+  `x${only(typed, 'uiType')}${typeEaten ? `, ${typeEaten} dropped` : ''}`);
+
+settle();
+for (const k of ['Shift', 'ArrowLeft', 'ArrowRight', 'Control', 'Tab']) key(nameInput, k);
+check('modifiers and arrows are silent', only(drain(), 'uiType') === 0);
+
+settle();
+key(nameInput, 'x'); // keydown with no `input` — what a full field looks like
+check('a rejected keypress is silent', only(drain(), 'uiType') === 0);
+
+settle();
+nameInput.value = 'SEA'; // one character shorter — a backspace
+nameInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+check('backspace ticks too', only(drain(), 'uiType') === 1);
+
 section('The sounds exist');
 check('uiHover has takes', (CONFIG.sfx.uiHover?.srcs ?? []).length >= 2,
   `${(CONFIG.sfx.uiHover?.srcs ?? []).length} takes`);
 check('uiClick has takes', (CONFIG.sfx.uiClick?.srcs ?? []).length >= 1);
 check('the hover sits below the click', CONFIG.sfx.uiHover.gain < CONFIG.sfx.uiClick.gain,
   `${CONFIG.sfx.uiHover.gain} vs ${CONFIG.sfx.uiClick.gain}`);
+check('uiType exists', Boolean(CONFIG.sfx.uiType));
+// Typing is the most frequent sound in the UI by a wide margin, so it has to
+// sit under the two that are meant to be noticed.
+check('typing sits below the hover', CONFIG.sfx.uiType.gain < CONFIG.sfx.uiHover.gain,
+  `${CONFIG.sfx.uiType.gain} vs ${CONFIG.sfx.uiHover.gain}`);
+check('typing varies its pitch', CONFIG.sfx.uiType.pitchVary > 0.1,
+  `${CONFIG.sfx.uiType.pitchVary} — a repeated identical take is a machine gun`);
+check('typing is short', CONFIG.sfx.uiType.decay <= 0.06, `${CONFIG.sfx.uiType.decay}s`);
+check('typing does not buzz the phone', !CONFIG.feedback.uiType.haptic);
 check('neither throws particles into the world', !CONFIG.feedback.uiHover.emit && !CONFIG.feedback.uiClick.emit);
+check('nor does typing', !CONFIG.feedback.uiType.emit);
 check('nor shakes the camera for a menu', !CONFIG.feedback.uiHover.shake && !CONFIG.feedback.uiClick.shake);
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);

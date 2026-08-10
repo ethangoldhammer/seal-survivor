@@ -168,7 +168,7 @@ const BUDGET_BYTES = 11e6;
 const PRIORITY = [
   'ship', 'belugaDrone', 'eelCompanion', 'seagull',
   'enemyShark', 'enemyGlowingShark', 'enemyFish', 'enemyTang', 'enemyReeffish',
-  'enemyTrout', 'enemyGreatWhite', 'enemyMightyMeg',
+  'enemyTrout', 'enemyGreatWhite', 'enemyHammerhead', 'enemyMightyMeg',
   'enemyWalkingCrab', 'enemyOtter', 'enemyMegalodon',
   'enemyFishPackA', 'enemyFishPackB', 'enemyFishPackC',
 ];

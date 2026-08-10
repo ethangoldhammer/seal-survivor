@@ -16,6 +16,12 @@ import { removeEnemy } from '../entities/enemies.js';
 // next strike. Charge -> strike -> eat -> strike is a cycle that powers
 // itself for as long as there is food in the water.
 //
+// EACH LINK COSTS MORE THAN THE LAST. A mouthful is worth less the deeper the
+// chain already is (see chumRefillMul), so holding a long combo means finding
+// progressively more food inside each window rather than the same amount over
+// and over. That is the whole gate on the chain: it is not a timer you outrun,
+// it is an appetite that grows.
+//
 // The chain also survives on things that aren't dash hits — emptying a school,
 // breaching the surface with Porpoising taken; see chainStrike() and
 // CONFIG.strike.chainOn. Blue orbs fill the meter outright, and their spawn is
@@ -252,6 +258,29 @@ function fillMeter(amount) {
 }
 
 /**
+ * What one chum is worth RIGHT NOW, as a multiplier on stats.strikeChumRefill.
+ *
+ * Every link already on the chain makes the next mouthful count for less, so
+ * each successive link takes more chum than the one before it — link one is
+ * five chum at the default refill, link two about six, link three about seven.
+ * Floored, or a deep chain ends up needing a bar's worth of food that isn't in
+ * the water and dies to arithmetic instead of to anything the player did.
+ *
+ * Reads the LIVE chain: `chainCount` is left standing until the window expires
+ * (see updateStrike), so an expired chain has to be discounted here or the
+ * first mouthful of the next combo would still be paying the last one's price.
+ *
+ * Exported so the HUD and the tuner can show the same number the meter uses.
+ */
+export function chumRefillMul() {
+  const c = CONFIG.strike.charge;
+  const falloff = c.chainRefillFalloff ?? 1;
+  if (falloff >= 1) return 1;
+  const depth = strikeState.chainTimer > 0 ? strikeState.chainCount : 0;
+  return Math.max(c.chainRefillFloor ?? 0, Math.pow(falloff, depth));
+}
+
+/**
  * A chum orb swallowed. ALWAYS puts fuel back — food is the bar's only source,
  * so gating this on anything would be a way to strand the player with an empty
  * bar. Returns true only when it topped the bar off inside a live combo, which
@@ -259,7 +288,7 @@ function fillMeter(amount) {
  */
 export function feedChum(stats) {
   if (!CONFIG.strike.enabled) return false;
-  return fillMeter(stats.strikeChumRefill);
+  return fillMeter(stats.strikeChumRefill * chumRefillMul());
 }
 
 // One link of the FOOD CHAIN. Starts a chain if none is running, extends the

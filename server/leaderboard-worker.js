@@ -17,7 +17,10 @@
 const BOARD_KEY = 'board:v1';
 const MAX_ENTRIES = 100;
 const RETURNED_ENTRIES = 10;
-const MAX_NAME_LEN = 12;
+// Must match MAX_NAME_LEN in path/src/systems/leaderboard.js. This one is the
+// authority — the client's copy only keeps the field from showing a name that
+// would be cut here.
+const MAX_NAME_LEN = 24;
 
 // Per-IP submit budget. Reads are unmetered — it's writes that cost and that a
 // script would hammer.
