@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { advanceCycles } from './beatSync.js';
 
 // ============================================================================
 // BIOLUMINESCENCE — procedural glow that runs ALONG a creature, not over it.
@@ -71,7 +72,12 @@ const DEFAULTS = {
   ambient: 0.0, // floor intensity every channel gets even when "off"
   shimmerAmp: 0.25,
   shimmerFreq: 6.0, // cycles along the region
-  shimmerSpeed: 2.2,
+  // One travel of the shimmer per this musical division — see
+  // systems/beatSync.js. '1 bar' is the figure nearest the 2.86s cycle
+  // `shimmerSpeed` was authored at, so nothing about the look moved when it
+  // went on the grid.
+  shimmerSync: '1 bar',
+  shimmerSpeed: 2.2, // radians/sec, used only when shimmerSync is 'free'
 };
 
 // --- sources ---------------------------------------------------------------
@@ -214,8 +220,10 @@ uniform float uGlowFalloff;
 uniform float uGlowSpan;
 uniform float uGlowShimmer;
 uniform float uGlowShimmerFreq;
-uniform float uGlowShimmerSpeed;
-uniform float uGlowTime;
+// The shimmer's position in CYCLES, computed on the CPU so the same two floats
+// express both "2.2 rad/s" and "one travel per bar" — see systems/beatSync.js.
+// A shader handed a time and a rate can only ever run free.
+uniform float uGlowShimmerCycle;
 varying float vGlowLevel;
 varying float vGlowParam;
 `;
@@ -231,7 +239,7 @@ const FRAG_BODY = `
     // Remap so only the last uGlowSpan of the region lights up, then shape it.
     float band = clamp((vGlowParam - (1.0 - uGlowSpan)) / max(1e-4, uGlowSpan), 0.0, 1.0);
     float shape = pow(band, uGlowFalloff);
-    float shimmer = 1.0 + uGlowShimmer * sin(vGlowParam * uGlowShimmerFreq - uGlowTime * uGlowShimmerSpeed);
+    float shimmer = 1.0 + uGlowShimmer * sin(vGlowParam * uGlowShimmerFreq - uGlowShimmerCycle * 6.2831853);
     gl_FragColor.rgb += vGlowColor * (vGlowLevel * shape * shimmer * uGlowStrength);
   }
 `;
@@ -297,9 +305,14 @@ export function attachBioluminescence(root, spec = {}) {
     uGlowSpan: { value: cfg.span },
     uGlowShimmer: { value: cfg.shimmerAmp },
     uGlowShimmerFreq: { value: cfg.shimmerFreq },
-    uGlowShimmerSpeed: { value: cfg.shimmerSpeed },
-    uGlowTime: { value: 0 },
+    uGlowShimmerCycle: { value: 0 },
   };
+  // The rate half of the shimmer, held here rather than as a uniform: the
+  // shader is handed the finished phase, so `speed` only matters on the free
+  // path and `sync` only matters off it.
+  let shimmerSpeed = cfg.shimmerSpeed;
+  let shimmerSync = cfg.shimmerSync ?? 'free';
+  let shimmerCycle = 0;
 
   const tag = `${cfg.tag ?? 'biolum'}:${channels}`;
   const touched = [];
@@ -379,9 +392,16 @@ export function attachBioluminescence(root, spec = {}) {
       if (look.span != null) uniforms.uGlowSpan.value = look.span;
       if (look.shimmerAmp != null) uniforms.uGlowShimmer.value = look.shimmerAmp;
       if (look.shimmerFreq != null) uniforms.uGlowShimmerFreq.value = look.shimmerFreq;
-      if (look.shimmerSpeed != null) uniforms.uGlowShimmerSpeed.value = look.shimmerSpeed;
+      if (look.shimmerSpeed != null) shimmerSpeed = look.shimmerSpeed;
+      if (look.shimmerSync != null) shimmerSync = look.shimmerSync;
     },
-    update(dt) { uniforms.uGlowTime.value += dt; },
+    // `shimmerSpeed` is radians/sec (it was written straight into a sin), so
+    // it divides by 2π to become the cycles/sec the free path wants. Wrap 1
+    // is safe here: the only thing reading the cycle is a single sin().
+    update(dt) {
+      shimmerCycle = advanceCycles(shimmerCycle, shimmerSync, shimmerSpeed / (Math.PI * 2), dt, 1);
+      uniforms.uGlowShimmerCycle.value = shimmerCycle;
+    },
     uniforms,
     dispose() {
       for (const mat of touched) {

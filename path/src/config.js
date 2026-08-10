@@ -2,6 +2,14 @@ import importedTuning from './imported-tuning.json';
 import upgradesCsv from './upgrades.csv?raw';
 import enemiesCsv from './enemies.csv?raw';
 import { parseUpgradeCsv, applyUpgradeTable } from './upgradeTable.js';
+// A leaf module on purpose — see the note at the top of it. The tuner's beat
+// pickers are built from the same list systems/beatSync.js interprets, and
+// config.js cannot import beatSync (beatSync imports CONFIG).
+import { BEAT_DIVISIONS, divisionBeatsIn, nearestDivisionIn } from './beatDivisions.js';
+// A leaf, like beatDivisions above it: the star field's placement rule, with
+// no imports of its own, so the tuner can count the field it is about to build
+// without config.js having to import the system that builds it.
+import { STAR_THRESHOLD, starsIn } from './systems/starField.js';
 import {
   parseEnemyCsv, applyEnemyTable, captureEnemyBase, withoutEnemyTableFields,
 } from './enemyTable.js';
@@ -512,13 +520,47 @@ export const CONFIG = {
         // -in .webp. Turn it off for art that spills past its own circle
         // (a corona, a ring, a crescent with a glow).
         maskToDisc: true,
+        edgeFeather: 0.06, // width of that alpha edge, in disc radii
     },
       moon: {
         size: 3.4,
         color: 0xcfe2ff,
-        brightness: 0.85,
-        halo: 3.0,
-        haloStrength: 0.35,
+        // Above 1, like the sun, and for a reason the sun does not have: the
+        // painted moon is DARK. Its mid grey is around 0.45 in sRGB, which the
+        // loader decodes to roughly 0.17 linear before this multiplies it, so
+        // the 0.85 it used to sit at put the whole disc under the bloom
+        // threshold and the moon was a flat grey sticker. At 1.5 the lighter
+        // wisps and the rim clear the bright pass while the dark maria stay
+        // under it — which is what makes it read as a lit body with structure
+        // rather than as a white blob. See the note on luminance below.
+        brightness: 1.5,
+        // The glow itself. The README in public/textures/sky/ says it and it
+        // is worth repeating: paint the art as the OBJECT, and let the halo do
+        // the emitting. Cranking `brightness` far enough to glow on its own
+        // just flattens the craters.
+        halo: 3.8, // glow diameter, as a multiple of `size`
+        // Was 0.35, which put the halo an order of magnitude under the bright
+        // pass everywhere outside the disc it was hidden behind — a glow that
+        // technically existed and never bloomed. At 1.2 the corona clears the
+        // threshold from the disc edge out to about half the halo's radius.
+        //
+        // WHY THE NUMBER IS WHAT IT IS. post.js thresholds Rec.709 LUMINANCE,
+        // and this pale blue is 0.75 of it; the halo's own falloff is 0.32 at
+        // the disc edge. 0.75 x 0.32 x 1.2 = 0.29, comfortably over. Changing
+        // `color` toward a deeper blue drops that fast — blue is 7% of
+        // luminance — so a colder moon needs this raised with it.
+        haloStrength: 1.2,
+        // ...and the guarantee that it actually blooms whatever the above says.
+        // The rig SOLVES for the halo strength that puts the corona's rim this
+        // far past CONFIG.bloom.threshold, and takes whichever is higher — so
+        // the slider still works, but it can no longer be left somewhere the
+        // glow silently does nothing. 1.0 sits exactly on the threshold.
+        //
+        // This is what makes the moon glow on a machine that already has a
+        // tuning snapshot: `haloStrength` is persisted, so a new default up
+        // there would never have arrived. See haloStrengthFor in
+        // systems/celestial.js.
+        bloomRim: 1.6,
         horizonGlow: 1.5,
         horizonRange: 1.6,
         // Painted moon. If the file isn't there the rig warns once and falls
@@ -526,7 +568,154 @@ export const CONFIG = {
         texture: '/textures/sky/moon.webp',
         model: null,
         maskToDisc: true,
+        // Wider than the sun's default: the art is a hand-painted blob whose
+        // edge is slightly irregular and doesn't quite reach the frame, so a
+        // tight mask leaves a bright rim of background between the paint and
+        // the cut. Raise it further if a white ring shows at moonrise; drop it
+        // to 0.06 if the source ever gets a proper alpha channel.
+        edgeFeather: 0.12,
     },
+    },
+
+    // -------------------------------------------------------------------------
+    // THE NIGHT SKY (systems/constellations.js) — the backdrop grid's opposite
+    // number, in the air instead of the water, and only after dark.
+    //
+    // The lattice is the star field itself. dayNight.stars above is a shader
+    // painting a dot per cell; this promotes the BRIGHTEST of exactly those
+    // cells to real geometry, strings nearest-neighbour links between them, and
+    // grows a fractal branch out of the brightest of all. Both layers read the
+    // same placement rule (systems/starField.js), so the lines are always
+    // between stars that are actually up there — and `star density` in the Sky
+    // panel is the one control that moves both.
+    //
+    // Two things then happen to it. It BLOOMS on the beat: every star carries a
+    // phase quantised onto a beat slot, so the field lights in waves that land
+    // on the music, and the light travels out along the links and one
+    // generation per step through the fractal. And it SPRINGS: world.js tees
+    // every backdrop ripple into it, so the same kills and explosions that
+    // punch the grid ring the constellations overhead.
+    // -------------------------------------------------------------------------
+    constellations: {
+      enabled: true,
+      // Fraction of the sky's own stars promoted to geometry. Not a count: the
+      // field is whatever `dayNight.stars.density` makes it, and this says how
+      // much of it is worth drawing properly. Past ~0.6 the sky reads as a mesh
+      // rather than as constellations.
+      brightest: 0.45,
+      margin: 4, // world units of field built past the frame, so a warped line
+                 // never drags its end into view
+      depth: -5.7, // in front of the sky plane (-6), behind the moon (-5.5)
+      haze: 3.2, // world units above the wave that a star fades in over
+
+      // --- when it is there ---------------------------------------------------
+      // Both on the same 0..1 darkness the stars and the nocturnal spawns ride
+      // (skyLight.night), so scrubbing the clock under Day & night and dragging
+      // these two is how you find the moment the sky should come alive. With
+      // the day/night cycle switched off, `night` is a flat 0 and this system
+      // never appears at all — there is no second switch to forget.
+      dusk: 0.12,
+      dark: 0.55,
+
+      // --- the stars ----------------------------------------------------------
+      size: 0.34, // world units, half-width of the biggest star's quad
+      color: 0xbcd8ff,
+      hotColor: 0xfff2cc, // what a star mixes to at the peak of its bloom
+      opacity: 0.95,
+      core: 1.7, // falloff power of the hot centre; higher = tighter
+      halo: 0.45, // and of the soft lobe around it; lower = wider
+      haloAmount: 0.4,
+      spike: 0.8, // the four-point diffraction flare
+      spikeWidth: 5.5, // higher = thinner arms
+
+      // --- the connections ----------------------------------------------------
+      links: 2, // nearest neighbours each star reaches for
+      linkRadius: 11, // and how far it will reach, in world units
+      linkColor: 0x2f5f96,
+      linkOpacity: 0.45,
+      subdivisions: 4, // segments per link; higher = curvier under a ripple
+
+      // --- the fractal --------------------------------------------------------
+      // A branch grown out of the brightest stars: `branches` children fanned
+      // across `spread` radians, each `shrink` of its parent, `depth` deep. The
+      // tips are stars in their own right, so they bloom and spring with the
+      // rest of the field rather than being decoration hung off it.
+      fractal: {
+        enabled: true,
+        anchors: 0.3, // fraction of the promoted stars that grow one
+        depth: 3,
+        branches: 2,
+        length: 3.2, // world units of the first limb
+        shrink: 0.62, // each generation, as a fraction of its parent
+        spread: 1.15, // radians the fan covers
+        wobble: 0.45, // radians of per-branch scatter, so no two trees match
+        tipScale: 0.55, // how much smaller each generation's stars are
+      },
+      // Its own colour, so the two families of line read as different kinds of
+      // thing rather than as one messy web.
+      fractalColor: 0x6f4fb0,
+
+      // --- the bloom ----------------------------------------------------------
+      // One bloom per division, per star. The phase steps are what make it a
+      // FIELD blooming rather than a field flashing: at '1 bar' with 4 steps
+      // the sky lights on the four beats of the bar, in whichever order the
+      // stars happened to be seeded in.
+      bloomSync: '1 bar',
+      bloomRate: 0.5, // cycles/sec, and only used at 'free'
+      phaseSteps: 4,
+      phaseSpread: 1,
+      bloomDecay: 5, // how fast a bloom falls away. Higher = a sharper flash
+      base: 0.3, // brightness between blooms — starlight, with nothing on it
+      gain: 1, // and how much the bloom adds on top
+      swell: 0.85, // how much bigger a star gets at its peak
+      // Both in CYCLES, and both defaulted to a sixteenth of the bloom's own
+      // division so the crawl is itself on the grid rather than being one more
+      // rate picked by eye.
+      genDelay: 0.0625, // a fractal generation's lag behind its parent
+      travel: 0.05, // how long light takes to cross one link
+
+      // --- what the game does to it -------------------------------------------
+      // Every ripple the backdrop grid gets, this gets too (see world.js), at
+      // these scales. `squash` is the one that matters: the gameplay is under
+      // the water and the sky is above it, so the falloff measures the vertical
+      // distance at a quarter weight and a blast far below arrives overhead as
+      // a broad sideways swell instead of not arriving at all.
+      rippleGain: 0.35,
+      rippleReach: 2.2, // multiplies the radius the event asked for
+      rippleSquash: 0.25,
+      rippleDecay: 1.9, // higher = snaps back faster
+      rippleFreq: 5.5,
+      rippleWavelength: 0.8,
+      warpGain: 1.6, // how bright a warped link gets
+      // How far a link is allowed to bow. THE STARS NEVER MOVE — they are
+      // fixed points, and a link's displacement is masked to zero at both ends
+      // so it stays welded to the two stars it joins and does all its moving in
+      // between them. This is the amount of that middle, and it is the only
+      // thing in the night sky that travels: at 0 the constellations are rigid
+      // and the ripples show as brightness alone.
+      bend: 1,
+      // ...and a cap on it, as a fraction of the link's OWN length. The ripple
+      // answers in world units, which suits a lattice of equal spans and does
+      // not suit this: the fractal's deepest twigs are under a unit long, and a
+      // shove that bows a long constellation line nicely throws one of those
+      // most of its own length and reads as noise. 0.3 lets every string swing
+      // by up to a third of itself, so a twig sways and a long line still
+      // carries the whole ripple.
+      bendMax: 0.3,
+
+      // The fingers, on the same terms as grid.touchGlow but without the
+      // per-finger palette or the charge meter — up here it is one sky, and a
+      // hand on the glass pulls the constellations out of shape.
+      touch: {
+        enabled: true,
+        radius: 9,
+        push: 0.35,
+        swirl: 0.3,
+        wave: 0.9,
+        spin: 1.8,
+        attack: 14,
+        release: 4,
+      },
     },
 
     caustics: {
@@ -917,7 +1106,7 @@ export const CONFIG = {
     // is an informed one:
     //
     //   1 mesh   greatWhite, orca, dolphin, seaTurtle, stingray, walkingCrab
-    //   2-5      otter 2, animatedCrab 2, mightyMeg 3, megalodon 4, shark 5
+    //   2-5      otter 2, mightyMeg 3, megalodon 4, shark 5
     //
     // The apex family is capped at 8 bodies on screen (enemies.groupMaxAlive),
     // so the whole apex row switched on is bounded at a few dozen extra calls,
@@ -958,7 +1147,6 @@ export const CONFIG = {
         enemySeaTurtle: false,
         enemyStingray: false,
         enemyWalkingCrab: false,
-        enemyAnimatedCrab: false,
     },
     },
 
@@ -1585,6 +1773,22 @@ export const CONFIG = {
       diveSpeedMax: 30,
       diveSteer: 16, // horizontal correction while falling
       hitRadius: 0.55, // gull's own contact radius, added to the crab's
+      // DEGREES of body rotation to take BACK OUT while diving, because the
+      // stoop clip is not a level pose.
+      //
+      // The two cruise clips sit within 4 degrees of level, so pointing the
+      // gull down its own velocity vector is the whole story for them. The dive
+      // clip is not like that: the artist animated the stoop as a tuck with the
+      // body already pitched 84 degrees nose-down, in place, expecting the pose
+      // to carry the plunge (see ASSETS.seagull.subclips). Aiming a container
+      // at the ground and then playing a clip that is ALSO aimed at the ground
+      // put the bird 96 degrees off its own flight path — it fell sideways.
+      //
+      // 96 rather than 84: it cancels the stoop's pitch and the -3.6 the level
+      // clips carry as well, which is what makes the nose land on the velocity
+      // vector instead of near it. Measured, and it moves with the dive range —
+      // re-pick those frames and this needs re-solving.
+      divePitch: 96,
     },
 
     // ---------------------------------------------------------------------------
@@ -1768,7 +1972,14 @@ export const CONFIG = {
         depthFalloff: 0.85,
         // Bands travelling UP the beam — the suction made visible. Without a
         // direction cue a static glow reads as a wall rather than as a pull.
-        bandSpeed: 0.55,
+        // One full travel of the band pattern per `bandSync`. A bar is the
+        // nearest figure to the 1.8s cycle `bandSpeed` was authored at, and
+        // the beam is a big bright thing that arrives on a timer — exactly the
+        // sort of event that reads as intentional when it lands on a bar and
+        // as an accident when it doesn't. Only the beam's MIDDLE is exactly on
+        // the grid; see the note in the shader about the depth taper.
+        bandSync: '1 bar',
+        bandSpeed: 0.55, // cycles/sec, used only when bandSync is 'free'
         bandCount: 3.5,
         bandAmount: 0.28, // 0 is a smooth beam with no travelling structure
         // A hot core down the axis, over the body of the beam. Without it the
@@ -2249,7 +2460,11 @@ export const CONFIG = {
         ambient: 0.06, // a faint always-on shimmer, so it never looks dead
         shimmerAmp: 0.3,
         shimmerFreq: 7.0,
-        shimmerSpeed: 2.4,
+        // One travel of the shimmer down each arm per bar — the nearest figure
+        // to the 2.6s cycle `shimmerSpeed` was authored at, so the arms kept
+        // their pace and gained the grid. See systems/beatSync.js.
+        shimmerSync: '1 bar',
+        shimmerSpeed: 2.4, // radians/sec, used only when shimmerSync is 'free'
         // Target level per arm state. Reaching is a flare of intent; holding is
         // the sustained "this arm is working" read.
         reachLevel: 0.65,
@@ -2481,6 +2696,233 @@ export const CONFIG = {
       bobAmount: 0.45,
     },
 
+    // ---------------------------------------------------------------------------
+    // GLOW UP! — the seal's own bioluminescence, and the game's only ELEMENT.
+    //
+    // Every other upgrade adds a thing to the water. This one changes what the
+    // seal's existing attacks ARE: the basic shot and the strike both start
+    // carrying a second damage packet with a status attached, in a colour the
+    // seal itself wears (systems/elements.js paints a biolumSkin on the body to
+    // match, so you can see which element you rolled without opening a menu).
+    //
+    // WHICH element is rolled ONCE per run, on the card, and shown before you
+    // pick it — so it's a variant you accept rather than a surprise you're
+    // handed. Every stack after the first deepens the element you already have.
+    //
+    // THE NIGHT RAMP is the reason the ability is bioluminescence rather than
+    // "elemental damage". `skyLight.night` already runs 0 by day to 1 in full
+    // dark (systems/daylight.js), and a game day is 12 real minutes, so any run
+    // past the first few levels crosses at least one dusk. The damage bonus at
+    // night is deliberately SMALL — the real night payoff is `durationMul`,
+    // because a status that lingers changes how a fight plays out, while 20%
+    // more damage is a number nobody can feel.
+    // ---------------------------------------------------------------------------
+    biolum: {
+      enabled: true,
+
+      // The elemental packet, as a FRACTION of the hit's own damage rather than
+      // a flat number. Flat elemental damage is enormous at level 3 and
+      // rounding error at level 30; a fraction keeps the element worth carrying
+      // for the whole run without ever eclipsing the weapon it rides on.
+      damageFraction: 0.3,
+      damageFractionPerLevel: 0.16,
+
+      // Scales every status magnitude — DoT rates, slow strength, spread reach,
+      // arc counts. One knob so a stack feels like the same amount of "more"
+      // whichever element was rolled.
+      statusPerLevel: 0.22,
+
+      // The strike carries the element too, at a discount. A dash that hits six
+      // fish would otherwise apply six full-strength statuses in one frame and
+      // make the gun — the thing this upgrade is nominally about — irrelevant.
+      strikeFraction: 0.5,
+
+      night: {
+        enabled: true,
+        // At full dark. Modest on purpose; see the note above.
+        damageMul: 1.2,
+        // The one that matters. A venom that ticks for three seconds by day
+        // ticks for five and a half at midnight, and an infection gets that
+        // much longer to find its next host.
+        durationMul: 1.8,
+        // Twilight counts as most of the way to night for this ability, so
+        // dusk is when it visibly wakes up rather than an hour later.
+        twilightBoost: 0.35,
+
+        // HOW MUCH OF THE ABILITY IS LIVE AT FULL NOON, 0..1. Zero is the
+        // point: bioluminescence at midday is a contradiction, and a seal
+        // blazing away under the sun reads as a bug in the shader rather than
+        // as a power. At 0 the glow goes out AND nothing elemental is applied
+        // — no bonus packet, no venom, no arc — until the light starts going.
+        //
+        // The knob is here rather than hardcoded because it is a real design
+        // trade: a run that rolls Glow Up! at 9am has bought an ability that
+        // does nothing for several minutes, and the card does not currently
+        // say so. Put this at ~0.25 if that reads as broken rather than as
+        // "wait for dark".
+        //
+        // Live statuses are NOT cancelled at sunrise — see applyElementalHit.
+        dayPower: 0,
+        // Shapes the fade between the two. 1 is linear in `nightFactor`;
+        // above 1 holds the ability off until it is properly dark, below 1
+        // wakes it early in the dusk. The crossfade to the plain noise-shaded
+        // seal rides the same curve, so this is also how sharp dawn looks.
+        blendGamma: 1.2,
+      },
+
+      // How the seal is repainted to match the element. A diff against
+      // CONFIG.biolumSkin.base, exactly like the species presets there — the
+      // element's own colour is written over colorA/colorB at runtime.
+      skin: {
+        enabled: true,
+        pattern: 'veins',
+        scale: 0.28,
+        coverage: 0.3,
+        contrast: 2.2,
+        // Climbs with the level, so a maxed Glow Up! is visibly lit up rather
+        // than merely tinted.
+        strength: 1.4,
+        strengthPerLevel: 0.3,
+        bodyDarken: 0.5,
+        pulseAmp: 0.3,
+        // No `pulseSync` of its own: this is a diff against
+        // CONFIG.biolumSkin.base, and base's '2 bars' is already the figure
+        // nearest the 3.9s cycle `pulseSpeed` below asks for. Declaring it
+        // here would be a second copy of the same decision, which is how the
+        // seal and the shoal end up disagreeing after someone retunes one.
+        pulseSpeed: 1.6,
+        // ...and brighter after dark, which is the whole conceit.
+        nightStrengthMul: 1.6,
+      },
+
+      // -------------------------------------------------------------------------
+      // THE FOUR ELEMENTS. Each is a different ANSWER to a crowd, not a
+      // different number: shock picks a second target, venom rewards staying on
+      // one, chill buys you space, and infection turns the crowd against itself.
+      //
+      // `label` is what the card calls it, so these are content and can be
+      // renamed freely. The ids are not — systems/elements.js switches on them.
+      // -------------------------------------------------------------------------
+      elements: {
+        // Arcs to one more body. The cheapest element to read at a glance and
+        // the only one whose whole effect is over within a frame.
+        shock: {
+          label: 'Voltaic',
+          desc: 'Shots arc to a second fish',
+          color: 0x9fe8ff,
+          chance: 0.4,
+          chancePerLevel: 0.08,
+          chanceMax: 0.9,
+          arcRange: 6.5,
+          arcs: 1,
+          arcsPerLevel: 0.34, // floored, so every third stack buys another hop
+          // Fraction of the elemental packet the arc victim takes. Under 1 so a
+          // chain is a bonus rather than free damage multiplication.
+          arcDamage: 0.7,
+        },
+
+        // Stacking damage over time. The focus-fire element: five stacks on one
+        // shark is worth far more than one stack on five fish.
+        venom: {
+          label: 'Venom',
+          desc: 'Shots poison. Stacks on the same fish',
+          color: 0x7dff3d,
+          dps: 4,
+          dpsPerLevel: 2.4,
+          duration: 3,
+          maxStacks: 5,
+          tick: 0.35, // seconds between damage applications
+          // A fresh hit refreshes the whole duration rather than tracking each
+          // stack's own clock — one timer per enemy, and a fight you're
+          // actually in keeps the poison alive by itself.
+          refreshes: true,
+        },
+
+        // Slow, then a hard stop at saturation. The defensive element.
+        chill: {
+          label: 'Chill',
+          desc: 'Shots slow. Enough of them freeze',
+          color: 0xbdf5ff,
+          slowPerHit: 0.16,
+          slowPerHitPerLevel: 0.03,
+          maxSlow: 0.7, // never a full stop from the slow alone — that's `freeze`
+          duration: 2.5,
+          // Saturating the slow locks the fish outright for a moment, using the
+          // same `trapTimer` the beluga's bubble writes. Reused deliberately:
+          // "held, inert, harmless" already exists and every system in the game
+          // already agrees about what it means.
+          freezeAt: 0.98, // fraction of maxSlow that triggers it
+          freezeDuration: 0.9,
+          freezeDurationPerLevel: 0.12,
+          // Spent on freezing: the slow resets so a frozen fish thaws into full
+          // speed rather than into a permanent lock.
+          freezeResets: true,
+        },
+
+        // The contagion. Ticks like venom, but it also CREEPS to neighbours
+        // while the host is alive and BURSTS to more of them when it dies —
+        // so a packed school infected at one edge lights up across its whole
+        // width without another shot fired.
+        //
+        // Three limiters keep that from eating the arena, and all three are
+        // load-bearing: `maxHosts` caps how many are sick at once, `generations`
+        // caps how far from the shot fish it can travel, and `hopFalloff`
+        // weakens every hop so the far edge of a school is a nuisance rather
+        // than a second gun.
+        infection: {
+          label: 'Infected',
+          desc: 'Shots infect. It spreads between fish',
+          color: 0x66ff9e,
+          dps: 3.5,
+          dpsPerLevel: 1.7,
+          duration: 5,
+          tick: 0.4,
+
+          // --- creep, while the host lives ---
+          spreadInterval: 1.2,
+          spreadRange: 3.4,
+          spreadRangePerLevel: 0.28,
+          spreadPerHop: 1, // how many neighbours one creep event may take
+
+          // --- burst, when the host dies ---
+          burstRange: 4.5,
+          burstRangePerLevel: 0.3,
+          burstTargets: 3,
+          // Straight damage to everything in the burst, on top of the new
+          // infections. This is what makes a chain reaction visible as damage
+          // and not just as more green fish.
+          burstDamage: 9,
+          burstDamagePerLevel: 4,
+
+          // --- limits ---
+          maxHosts: 14,
+          generations: 4, // hops from the originally-shot fish
+          hopFalloff: 0.8, // dps multiplier applied per generation
+
+          // --- the motes ---
+          // Tiny points that pulse and bloom around an infected body, and
+          // visibly TRAVEL to the next one when it spreads. The travel is the
+          // point: without it a second fish just turns green somewhere else on
+          // screen and the contagion reads as coincidence.
+          motes: {
+            enabled: true,
+            perHost: 5,
+            size: 0.09,
+            orbitRadius: 0.65, // as a fraction of the host's radius, plus this
+            orbitSpeed: 2.2,
+            pulseSpeed: 5.5,
+            pulseAmp: 0.6,
+            glow: 3.4,
+            travelSpeed: 9, // world units/sec on a spread hop
+            // Motes are pooled — this is the ceiling across every host at once,
+            // so a maxed infection in a dense school can't allocate its way
+            // into a frame spike.
+            maxAlive: 90,
+          },
+        },
+      },
+    },
+
     // XP curve. Each level costs the previous one times a factor, plus `add`.
     //
     // The factor is banded rather than fixed, because the thing it races —
@@ -2544,6 +2986,108 @@ export const CONFIG = {
       countPerDifficulty: 0.35,
       maxAlive: 220,
 
+      // WAVES — the run breathes instead of pouring.
+      //
+      // Everything above describes a tap: an interval and a count budget, both
+      // smooth functions of difficulty. That fills the water evenly at every
+      // moment of a run, which means there is never a swell to brace for and
+      // never a quiet stretch in which to notice you survived one. This block
+      // gives that output a shape without changing how much of it there is.
+      //
+      // The cycle is SURGE (full roster, rate swelling to a crest and falling
+      // away) then CALM (little fish only, slowly, carrying almost no chum),
+      // repeating. The clock and the curve live in systems/waves.js; this is
+      // the whole tuning surface.
+      //
+      // THROUGHPUT. The crest gives more and the trough gives less, and over a
+      // full cycle they very nearly cancel. Measured against the same spawner
+      // with `enabled: false`, over fifteen minutes at each point (the figures
+      // tools/wave-test.mjs prints, so they can be re-measured rather than
+      // trusted): 0.85x at the start of a run, 0.96x at three minutes, 1.09x
+      // at seven and beyond. So this is a gentler opening and a mild late-run
+      // tightening, not a difficulty rewrite. `peakRate` is the knob if that
+      // late figure wants to come back to 1.0.
+      //
+      // Both multipliers are needed to get that, and the reason shows up in
+      // those numbers: early on the count budget is still flooring to 1, so
+      // only the interval can carry the wave; past difficulty ~13 the interval
+      // has hit `minInterval` and can't stretch further, so only the budget
+      // can. Drop either and half the run stops breathing.
+      //
+      // Set `enabled: false` and every multiplier reads 1: the spawner goes
+      // back to the flat tap exactly, with no other value here consulted.
+      waves: {
+        enabled: true,
+
+        // Phase lengths, in seconds, drifting with difficulty — surges grow,
+        // calms shrink, both to a limit. A run therefore opens with a third of
+        // its time as respite and ends with under a tenth of it, which is the
+        // late game closing in expressed as pacing rather than as more hp.
+        //
+        // `perDifficulty` is per difficulty POINT, not per second, so retuning
+        // spawn.difficultyPerSecond above moves the wave pacing with it. At the
+        // rate currently saved to tuning (0.09/s, i.e. a point every ~11s) the
+        // surge reaches its ceiling and the calm its floor at around eight
+        // minutes in.
+        surge: { seconds: 24, perDifficulty: 0.5, max: 46 },
+        calm: { seconds: 12, perDifficulty: -0.16, min: 5 },
+
+        // The shape of a surge, as fractions of its length: how much of it is
+        // spent climbing to the crest, and how much falling away from it. The
+        // rest is the crest itself. Both ramps are smoothstepped in waves.js —
+        // a linear one reads as a dial being turned rather than as water
+        // arriving.
+        attack: 0.3,
+        release: 0.22,
+
+        // What pressure is worth. The spawn rate is lerped between these two by
+        // the 0..1 curve, so `calmRate` is the trough and `peakRate` the crest.
+        // Both multiply the tick interval AND the per-tick creature budget —
+        // the interval alone stops doing anything once a long run pins it at
+        // `minInterval`, and the budget alone is too coarse early, when it is
+        // still flooring to 1.
+        calmRate: 0.3,
+        peakRate: 1.6,
+
+        // Where the roster hands over. At or below this pressure only the small
+        // fry spawn — which covers the whole calm plus the low ends of a
+        // surge's two ramps, so the shoal arrives before the predators do and
+        // the last thing a breaking wave sends is minnows again. A phase flag
+        // instead of a threshold would put a megalodon in the water on the
+        // same frame the calm ended.
+        lullBelow: 0.35,
+
+        lull: {
+          // Who a lull is allowed to send: creatures already tagged `prey`
+          // (the eight schooling fish), capped by size so a future large prey
+          // animal can't join them. Nothing is listed by name — see
+          // lullEligible() in systems/waves.js.
+          maxRadius: 0.5,
+
+          // Lull schools arrive at a fraction of their authored size. A single
+          // pick of a schooling species spawns the WHOLE school regardless of
+          // what is left of the tick's budget, so without this one unlucky
+          // roll would put fourteen fish in the water and end the respite in a
+          // single tick.
+          groupMul: 0.4,
+
+          // ...and what they are worth. THIS IS THE POINT OF THE LULL, not a
+          // side effect of it: a respite that paid full chum would be the best
+          // farming window in the run, and the optimal play would be to hold
+          // fire through every surge and clean up in the quiet. At a quarter
+          // value the calm is still worth fishing — the orbs feed the strike
+          // meter and the healing at full strength, since only the xp is
+          // scaled (exactly like the early holdback in CONFIG.xp.dropRamp) —
+          // but it is not where levels come from. Levels come from surviving
+          // the wave.
+          //
+          // Score is deliberately NOT scaled with it. Killing a fish in the
+          // quiet still banks its full points, so a calm is a scoring window
+          // that doesn't accelerate the difficulty curve.
+          xpMul: 0.25,
+      },
+    },
+
       // Population ceilings for a WHOLE FAMILY of creatures, applied on top of
       // each species' own `maxConcurrent`. Tag a creature with `spawnGroup` and
       // it draws from the shared allowance here.
@@ -2561,40 +3105,70 @@ export const CONFIG = {
       // Whichever of them spawns first takes the slot; nothing here reserves
       // room for the rarer ones, since they are already gated behind
       // minDifficulty and minPlayerLevel.
-      groupMaxAlive: { apex: 8 },
+      // `crab` is here because crabs arrive through TWO doors: the ordinary
+      // weighted pool and systems/crabSpawner.js's chum-pile summons. Each
+      // door honours maxConcurrent per TYPE, so without a family cap a dusk
+      // changeover could field ten day crabs and ten night ones at once. This
+      // binds in pickType and in spawnNamed, so it holds whichever door they
+      // come through — and the summoner's own family count keeps its waves
+      // under the same ceiling.
+      groupMaxAlive: { apex: 8, crab: 10 },
 
-      // NIGHTLIFE — the sun going down is a spawn gate, not just a light change.
+      // NIGHTLIFE — the sun going down swaps the CAST, not just the light.
       //
-      // Any creature tagged `bioluminescent` in enemies.csv is held out of the
-      // pool while the sun is up and faded in behind it. That is the third kind
-      // of "not yet" the roster has: minDifficulty asks how long the run has
-      // gone on, minPlayerLevel asks how strong the seal is, and this asks what
-      // time it is — the only one of the three that can go back to `no` later,
-      // because morning comes.
+      // Two curves over one ramp. Creatures tagged `bioluminescent` in
+      // enemies.csv fade in as it gets dark; everything else fades out. Both
+      // are multipliers on spawn weight, and because the spawner draws a fixed
+      // budget of creatures per tick and normalises over whatever weight it
+      // finds, suppressing the daylight roster does not make the night emptier
+      // — it makes the same number of bodies be different bodies.
       //
-      // A RAMP RATHER THAN A SWITCH. `night` is 0 at the moment the sun touches
-      // the water and 1 once it is properly under (see skyLight.night), so the
-      // window between the two numbers below is a dusk in which the glowing
-      // schools arrive a few at a time. Flipping them on at a threshold instead
-      // would put a shoal of lights on screen in one spawn tick, which reads as
-      // a spawner firing rather than as the deep waking up.
+      // That is the whole reason this is two curves rather than one. Merely
+      // holding the glowing fish back until sunset made them 13% of a night's
+      // spawns: present, findable in a log, and completely lost in an
+      // otherwise unchanged daylight ocean. "It gets dark" is a lighting
+      // change; "the tangs and trout go wherever fish go, and the deep comes
+      // up" is a different place.
       //
-      // Nothing is removed at dawn: the multiplier only decides what NEW spawns
-      // are drawn from the pool, so a school caught out by sunrise swims on and
-      // is thinned by the ordinary maxAlive churn. Despawning them on a clock
-      // would delete creatures out from under a player mid-fight.
+      // This is the third kind of "not yet" the roster has: minDifficulty asks
+      // how long the run has gone on, minPlayerLevel asks how strong the seal
+      // is, and this asks what time it is — the only one of the three that can
+      // go back to `no` later, because morning comes.
+      //
+      // A RAMP RATHER THAN A SWITCH. `skyLight.night` is 0 at the moment the
+      // sun touches the water and 1 once it is properly under, so the window
+      // between `dusk` and `dark` is a changeover you can watch happen.
+      // Flipping at a threshold instead would swap the whole ocean between two
+      // spawn ticks, which reads as a bug rather than as nightfall.
+      //
+      // Nothing is removed at either changeover: these only decide what NEW
+      // spawns are drawn, so a school caught out by sunrise swims on and is
+      // thinned by the ordinary maxAlive churn. Despawning on a clock would
+      // delete creatures out from under a player mid-fight.
       nightlife: {
         enabled: true,
-        // Where the ramp starts and finishes, both on skyLight.night. `night`
-        // is clamp01(-sunElevation / 0.35), so 0.05 is just below the horizon
-        // and 0.45 is a good way into the blue hour.
+        // Where the changeover starts and finishes, both on skyLight.night,
+        // which is clamp01(-sunElevation / 0.35) — so 0.05 is just below the
+        // horizon and 0.45 is a good way into the blue hour.
         dusk: 0.05,
         dark: 0.45,
-        // What the multiplier is worth at each end. `day` above 0 lets a few
-        // glowing fish wander the daylight roster if you want them to; at 0 the
-        // gate is absolute and the species simply does not exist before sunset.
-        day: 0,
-        night: 1,
+        // The tagged roster. `day` above 0 lets a few glowing fish wander the
+        // daylight ocean; at 0 the gate is absolute and they do not exist
+        // before sunset.
+        glowing: { day: 0, night: 1 },
+        // Everything else. `night` here is what makes the swap read as a swap
+        // rather than as a garnish — at 0.08 the daylight species drop to a
+        // twelfth of their usual weight after dark, which puts the glowing
+        // roster in the clear majority of bodies on screen. The exact share is
+        // measured and asserted in tools/nightlife-test.mjs.
+        //
+        // Turning it up is how you keep the night dangerous in the ordinary
+        // way: every apex predator is untagged, so this number doubles as "how
+        // much of the shark population survives sunset". At 0.08 a night is
+        // mostly lights and very few teeth — a mood, but also easier than the
+        // day it follows. The other lever is tagging a predator bioluminescent
+        // instead, which is exactly what abyssShark is.
+        daylight: { day: 1, night: 0.08 },
     },
 
       // Run-wide stat ramp, layered ON TOP of each species' own linear
@@ -2621,6 +3195,38 @@ export const CONFIG = {
         damageMax: 4,
         speed: 0.013,
         speedMax: 1.9,
+    },
+
+      // --- NIGHT DIFFICULTY (stub — not wired to anything yet) ----------------
+      // The idea: the water itself gets harder after dark, not just differently
+      // populated. `nightlife` above already decides WHICH creatures the night
+      // sends; this would decide how hard the ones it sends actually are.
+      //
+      // It sits here, off, rather than in a notebook because this is the block
+      // it belongs to — the multipliers below are the same three stats `ramp`
+      // scales, and wiring it means multiplying them by these at spawn (again
+      // in spawnOne, again per-instance and baked, so the same "only affects
+      // creatures spawned after it" rule holds).
+      //
+      // WHY IT IS NOT WIRED. It interacts with Glow Up!, which is also a
+      // night-scaling ability (CONFIG.biolum.night). Turning both on at once
+      // means the night is simultaneously more dangerous and the moment your
+      // element is strongest, and whether those cancel out or compound is a
+      // question for a played run rather than for a number chosen here. Ship
+      // one, feel it, then decide what the other is worth.
+      //
+      // Multipliers on the species' base stat, applied at full dark and ramped
+      // by skyLight.night exactly as the element's bonus is — so 1.0 is "no
+      // change" and the shape matches the ability it has to coexist with.
+      nightDifficulty: {
+        enabled: false,
+        hpMul: 1.15,
+        damageMul: 1.1,
+        speedMul: 1.05,
+        // Reuse `nightlife`'s dusk/dark window rather than introducing a second
+        // definition of when night starts — two answers to that question is how
+        // the sky and the spawner end up disagreeing about what time it is.
+        followsNightlifeWindow: true,
     },
     },
 
@@ -2675,6 +3281,49 @@ export const CONFIG = {
         xp: 15,
         turnRate: 2.6, // radians/sec — sharks arc rather than pivot on the spot
         hunt: {
+        // CRUISE — how this body carries itself when it is not mid-bite. See
+        // the shark-cruise notes in entities/enemies.js for the mechanism; the
+        // short version is that vertical movement has to be earned by getting
+        // close, and the sinuous shape is carried by the HEAD (the look target
+        // this weaves) with the body trailing on the existing spring chain.
+        //
+        // On the sharks only. The dolphin and orca are deliberately left out:
+        // they are cetaceans that surface to breathe, and `porpoise` and their
+        // own arcs are built on being able to climb whenever they like.
+        lateral: {
+          // Vertical authority ramps between these two HORIZONTAL distances to
+          // the thing being chased — see updateSwim for why horizontal and not
+          // straight-line. Outside `climbRange` a shark closes almost flat;
+          // inside `climbFull` it is directly enough beneath its target to come
+          // up into it.
+          climbRange: 15,
+          climbFull: 5.5,
+          // Never quite zero, or a shark could never correct its depth at all
+          // and would slowly settle onto whatever line it spawned on.
+          climbFloor: 0.12,
+          // Per-second easing of that gain. Low on purpose: this is the number
+          // that decides "not abrupt", and at 0.9 a shark takes a good second
+          // and a half to commit to a climb after the range opens it up.
+          climbEase: 0.9,
+          // The idle weave. One full side-to-side sweep every `weavePeriod`
+          // seconds, aimed `weaveLead` ahead of the nose and swinging
+          // `weaveAmp` to each side of the path.
+          weavePeriod: 5.5,
+          weaveLead: 6,
+          weaveAmp: 2.4,
+          // How much of that weave reaches the STEERING rather than staying in
+          // the head. These last two are the ones that decide whether a cruise
+          // reads as lateral, and they ADD: tools/shark-swim-test.mjs measures
+          // vertical travel against horizontal, and it lands at roughly
+          // `weaveBody + tan(wanderPitch)`. At 0.18/0.22 that came out near 40%
+          // and the path visibly snaked; these give about 24%, which is a
+          // gentle weave on a body that is clearly going somewhere. The head
+          // swing (`weaveAmp`) is deliberately NOT reduced with them — that is
+          // the part that is supposed to be obvious.
+          weaveBody: 0.1,
+          // Radians either side of horizontal the idle wander may pick.
+          wanderPitch: 0.14,
+        },
           preyRadius: 18, // breaks off to chase fish inside this range
           biteRange: 1.6,
           biteCooldown: 1.2,
@@ -2821,7 +3470,9 @@ export const CONFIG = {
         asset: 'enemyGreatWhite', behavior: 'hunt', faceMotion: true,
         radius: 1.4, hp: 85, hpPerDifficulty: 9, speed: 6, speedVariance: 1,
         contactDamage: 26, xp: 18, turnRate: 2.2,
-        hunt: { preyRadius: 20, biteRange: 1.8, biteCooldown: 1.1, healPerMeal: 10, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 2 },
+        // Cruise shaping — see the `lateral` notes on `shark`.
+        hunt: { preyRadius: 20, biteRange: 1.8, biteCooldown: 1.1, healPerMeal: 10, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 2,
+                lateral: { climbRange: 15, climbFull: 5.5, climbFloor: 0.12, climbEase: 0.85, weavePeriod: 6.2, weaveLead: 7, weaveAmp: 2.6, weaveBody: 0.1, wanderPitch: 0.13 } },
         weight: 0.14, weightPerDifficulty: 0.035, maxWeight: 0.45, maxConcurrent: 4, minDifficulty: 1.5,
         spawnGroup: 'apex',
     },
@@ -2839,7 +3490,9 @@ export const CONFIG = {
         asset: 'enemyAbyssShark', behavior: 'hunt', faceMotion: true,
         radius: 1.4, hp: 110, hpPerDifficulty: 10, speed: 6.4, speedVariance: 1,
         contactDamage: 30, xp: 26, turnRate: 2.2,
-        hunt: { preyRadius: 24, biteRange: 1.8, biteCooldown: 1.0, healPerMeal: 12, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 2 },
+        // Cruise shaping — see the `lateral` notes on `shark`.
+        hunt: { preyRadius: 24, biteRange: 1.8, biteCooldown: 1.0, healPerMeal: 12, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 2,
+                lateral: { climbRange: 16, climbFull: 6, climbFloor: 0.12, climbEase: 0.85, weavePeriod: 6, weaveLead: 7, weaveAmp: 2.6, weaveBody: 0.1, wanderPitch: 0.13 } },
         weight: 0.07, weightPerDifficulty: 0.02, maxWeight: 0.28, maxConcurrent: 2,
         minDifficulty: 3, minPlayerLevel: 5,
         spawnGroup: 'apex',
@@ -2861,7 +3514,9 @@ export const CONFIG = {
         asset: 'enemyHammerhead', behavior: 'hunt', faceMotion: true,
         radius: 1.3, hp: 80, hpPerDifficulty: 6, speed: 7.5, speedVariance: 1,
         contactDamage: 25, xp: 17, turnRate: 3.4,
-        hunt: { preyRadius: 22, biteRange: 1.7, biteCooldown: 1.15, healPerMeal: 9, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 1.6 },
+        // Cruise shaping — see the `lateral` notes on `shark`.
+        hunt: { preyRadius: 22, biteRange: 1.7, biteCooldown: 1.15, healPerMeal: 9, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 1.6,
+                lateral: { climbRange: 15, climbFull: 5, climbFloor: 0.14, climbEase: 1.05, weavePeriod: 4.6, weaveLead: 6, weaveAmp: 2.8, weaveBody: 0.13, wanderPitch: 0.16 } },
         weight: 0.13, weightPerDifficulty: 0.04, maxWeight: 0.45, maxConcurrent: 4, minDifficulty: 1,
         minPlayerLevel: 3,
         spawnGroup: 'apex',
@@ -2872,7 +3527,9 @@ export const CONFIG = {
         asset: 'enemyMegalodon', behavior: 'hunt', faceMotion: true,
         radius: 2.2, hp: 220, hpPerDifficulty: 20, speed: 5.5, speedVariance: 0.8,
         contactDamage: 42, xp: 40, turnRate: 1.6,
-        hunt: { preyRadius: 24, biteRange: 2.6, biteCooldown: 1.4, healPerMeal: 16, maxOverheal: 1.4, growPerMeal: 0.02, maxGrow: 1.25, wanderChange: 2.4 },
+        // Cruise shaping — see the `lateral` notes on `shark`.
+        hunt: { preyRadius: 24, biteRange: 2.6, biteCooldown: 1.4, healPerMeal: 16, maxOverheal: 1.4, growPerMeal: 0.02, maxGrow: 1.25, wanderChange: 2.4,
+                lateral: { climbRange: 18, climbFull: 7, climbFloor: 0.1, climbEase: 0.6, weavePeriod: 8, weaveLead: 10, weaveAmp: 3.4, weaveBody: 0.08, wanderPitch: 0.11 } },
         weight: 0.05, weightPerDifficulty: 0.015, maxWeight: 0.18, maxConcurrent: 2, minDifficulty: 3,
         spawnGroup: 'apex',
     },
@@ -2881,7 +3538,9 @@ export const CONFIG = {
         asset: 'enemyMightyMeg', behavior: 'hunt', faceMotion: true,
         radius: 2.0, hp: 190, hpPerDifficulty: 18, speed: 6, speedVariance: 0.9,
         contactDamage: 38, xp: 36, turnRate: 1.8,
-        hunt: { preyRadius: 22, biteRange: 2.4, biteCooldown: 1.3, healPerMeal: 15, maxOverheal: 1.4, growPerMeal: 0.02, maxGrow: 1.25, wanderChange: 2.2 },
+        // Cruise shaping — see the `lateral` notes on `shark`.
+        hunt: { preyRadius: 22, biteRange: 2.4, biteCooldown: 1.3, healPerMeal: 15, maxOverheal: 1.4, growPerMeal: 0.02, maxGrow: 1.25, wanderChange: 2.2,
+                lateral: { climbRange: 17, climbFull: 6.5, climbFloor: 0.1, climbEase: 0.65, weavePeriod: 7.4, weaveLead: 9, weaveAmp: 3.2, weaveBody: 0.08, wanderPitch: 0.12 } },
         weight: 0.05, weightPerDifficulty: 0.015, maxWeight: 0.18, maxConcurrent: 2, minDifficulty: 2.6,
         spawnGroup: 'apex',
     },
@@ -2964,9 +3623,13 @@ export const CONFIG = {
         // March to the music: one footfall per beat at the crab's normal amble,
         // halving to two per beat when it rushes. Every option is a musical
         // subdivision, so footfalls always land on the grid whatever the speed.
-        // `strides` is how many steps this model's clip loop contains (measured
-        // from the foot bones: crabwalking.glb packs 5 into its 3.33s take).
-        beatSync: { beatsPerStride: 1, strides: 5, subdivisions: [2, 1, 0.5, 0.25] },
+        //
+        // `strides` is how many steps this model's clip loop contains, and it
+        // is a property of the FILE rather than of the crab — crabpincer.glb's
+        // "Scene" is a single 0.48s stride, where the crabwalking.glb it
+        // replaced packed 5 into a 3.33s take. Left at 5 it would stretch one
+        // step across five beats and the crab would moonwalk.
+        beatSync: { beatsPerStride: 1, strides: 1, subdivisions: [2, 1, 0.5, 0.25] },
         crawl: {
           aggroRadius: 12, wanderChange: 2.5, groundHeight: 2.5,
           floorRushHeight: 10.5, // player within this height of the seabed triggers a rush
@@ -3041,6 +3704,44 @@ export const CONFIG = {
           },
         },
         weight: 0.35, weightPerDifficulty: 0.03, maxWeight: 0.6, maxConcurrent: 10, minDifficulty: 0.4,
+    },
+
+      // THE SAME CRAB, AFTER DARK. A different shell and a harder stat line;
+      // everything about how it walks, feeds, rushes and piles onto a corpse is
+      // literally the walking crab's, shared by reference rather than copied —
+      // see the note at linkCrabVariants near applyEnemiesFromTable. That is
+      // deliberately unlike abyssShark and lanternRay, which each carry a full
+      // duplicate of their parent's behaviour block: those blocks are a dozen
+      // lines and the crab's is seventy, and seventy lines of feeding tuning
+      // maintained in two places would be wrong within a week.
+      //
+      // WHICH ONE SPAWNS IS NOT DECIDED HERE, and not by a knob either. Crabs
+      // do not come from the weighted pool at all (both rows ship
+      // spawnRateMul 0) — systems/crabSpawner.js summons them, and it splits
+      // between the family by each row's `bioluminescent` column against
+      // CONFIG.spawn.nightlife, which is the same changeover rule the rest of
+      // the roster uses. enemies.csv is the whole story.
+      emberCrab: {
+        asset: 'enemyEmberCrab', behavior: 'crawl', faceCamera: true, gaitTravel: -1,
+        collides: true,
+        bioluminescent: true, // held back until the sun is down — enemies.csv owns this
+        // Balance lives in enemies.csv. The values here are the built-in
+        // fallback for a row that goes missing, and are what the CSV's
+        // emberCrab line currently restates.
+        radius: 0.8, hp: 44, hpPerDifficulty: 9, speed: 3.2, speedVariance: 0.6,
+        contactDamage: 15, xp: 14,
+        scalePerDifficulty: 0.015, maxGrowth: 1.6,
+        contactDamagePerDifficulty: 0.5,
+        speedPerDifficulty: 0.04,
+        // Crowd variation, same reasoning as the day crab's — these are facts
+        // about the model, which is the same model, so they are the same
+        // numbers.
+        scaleVariance: 0.16,
+        depthSpread: 1.4,
+        restLean: 0.18,
+        restYaw: 0.34,
+        weight: 0.35, weightPerDifficulty: 0.03, maxWeight: 0.6, maxConcurrent: 10, minDifficulty: 1.5,
+        spawnGroup: 'crab',
     },
       // --- new creatures -------------------------------------------------------
       // Eats far more than any other hunter — a huge prey radius, a short bite
@@ -3135,33 +3836,41 @@ export const CONFIG = {
         maxConcurrent: 12, minDifficulty: 0.8, spawnRateMul: 1, minPlayerLevel: 3,
     },
 
-      // Slots into the existing crab layer alongside walkingCrab — same crawl
-      // behaviour and the same seabed rules. Note crabSpawner does NOT pull
-      // this one: pile-triggered swarms are walkingCrab only, so this arrives
-      // through the ordinary weighted spawn pool.
-      animatedCrab: {
-        // gaitTravel +1: 'Derecha' (the clip this one walks on) carries it
-        // toward +X, the mirror of the walking crab. The file also ships an
-        // authored 'Izquierda' for the other direction — reversing Derecha
-        // produces the same motion, so it goes unused, but it's there if the
-        // reversal ever reads wrong.
-        asset: 'enemyAnimatedCrab', behavior: 'crawl', faceCamera: true, gaitTravel: 1,
-        collides: true,
-        radius: 0.7, hp: 30, hpPerDifficulty: 3.5,
-        speed: 3.4, speedVariance: 0.8, contactDamage: 11, xp: 8,
-        // Same ramp as the walking crab — see the notes there.
-        scalePerDifficulty: 0.015, maxGrowth: 1.6,
-        contactDamagePerDifficulty: 0.4,
-        speedPerDifficulty: 0.04,
-        // 'Derecha' is a single stride, so one loop is one step.
-        beatSync: { beatsPerStride: 1, strides: 1, subdivisions: [2, 1, 0.5, 0.25] },
-        crawl: { aggroRadius: 12, wanderChange: 2.5, groundHeight: 2.5,
-                 floorRushHeight: 10.5, rushAggroRadius: 999, rushSpeedMul: 2.5,
-                 // Eats a little faster than the walking crab — same seek, less
-                 // patience, so a mixed swarm strips a pile unevenly.
-                 feed: { seekRadius: 120, eatRange: 1.1, eatTime: 1.8, reacquire: 0.4, distanceBias: 18 } },
-        weight: 0.3, weightPerDifficulty: 0.025, maxWeight: 0.55,
-        maxConcurrent: 10, minDifficulty: 0.4, spawnRateMul: 1, minPlayerLevel: 4,
+      // Squid. A straight chaser, deliberately — it is the roster's plainest
+      // behaviour and that is the point, because the ASSET cannot carry any
+      // other kind. The model is a static mesh: no bones exist for it and none
+      // can (see enemySquid in assets.js), so its arms are frozen in one pose
+      // forever. That pose happens to be a good one — arms gathered and
+      // trailing, the shape a squid holds while it is actually swimming — which
+      // means the one thing this creature must never do is hold still. Moving
+      // nose-first it reads as a swimming animal; stopped, it reads as a
+      // statue. `chase` is the behaviour that never stops.
+      //
+      // Slotted between the barracuda and the stingray in threat: tougher and
+      // slower than the barracuda, hits for less, and worth a little more. It
+      // arrives at the same time as the ray so the mid-game has a pursuer
+      // alongside the traffic rather than only traffic.
+      squid: {
+        separates: true, // a big arm spread looks wrong overlapping itself
+        asset: 'enemySquid', behavior: 'chase', faceMotion: true,
+        radius: 0.55, hp: 24, hpPerDifficulty: 2.2,
+        speed: 6.4, speedVariance: 1.2, contactDamage: 16, xp: 9,
+        // Arcs rather than pivoting. A squid that spun on the spot would swing
+        // its whole 1.7-unit arm trail around like a rigid board — the turn
+        // has to be slow enough that the silhouette sweeps instead of snapping.
+        turnRate: 2.2,
+        weight: 0.24, weightPerDifficulty: 0.025, maxWeight: 0.45,
+        // maxConcurrent IS THE NIGHT BUDGET, not just a crowd limit, and this
+        // one is held at 5 for that reason rather than for pacing. The arena
+        // sits at its maxAlive ceiling most of a run, so any untagged creature
+        // occupies its full headcount after dark no matter how far
+        // nightlife.daylight suppresses its spawn RATE — a slow trickle still
+        // accumulates to the cap over three minutes, and every body it holds is
+        // one the glowing roster is not filling. Measured: at 10 this creature
+        // alone took the glowing share of bodies from 64% to 51%, one point off
+        // failing the majority assertion in tools/nightlife-test.mjs. At 5 it
+        // costs about half that. Raise it and re-run `npm run test:nightlife`.
+        maxConcurrent: 5, minDifficulty: 0.7, spawnRateMul: 1, minPlayerLevel: 2,
     },
 
       // Sits on the seabed and does nothing until killed, then drops a pearl
@@ -3241,6 +3950,46 @@ export const CONFIG = {
         spin: 2.2,    // how fast that ripple churns
         attack: 16,   // per-second rate the glow rises at when a finger lands
         release: 5,   // and falls at when it lifts. Slower, so it trails off
+
+        // THE KNOCK. A finger landing punches the lattice and lets it spring
+        // back. This is not a second warp system — it pushes into the very same
+        // ripple ring buffer every kill, splash and explosion uses, so it
+        // oscillates and snaps back on `rippleDecay` along with all of them and
+        // costs nothing extra to draw. The sustained push/swirl above is what
+        // holds the hole open while the finger sits there; this is the WATER
+        // MOVING when it arrives and when it goes.
+        ripple: {
+          strength: 1.4,
+          radius: 5.0,
+          liftScale: 0.55, // the smaller knock as the finger comes off again
+        },
+
+        // THE CHARGE. A finger winding up a strike — the third-finger press, or
+        // a double-tap-and-hold thumb — doesn't just sit there glowing. It
+        // GROWS with the meter and throws a ripple outward on a beat that
+        // tightens as it fills, so the wind-up is visible in the backdrop
+        // instead of only in the HUD. Progress is strikeState.pending, the same
+        // 0..1 the dash spends on release, so the grid can never disagree with
+        // the strike about how hard it was charged.
+        // Sized against a PORTRAIT PHONE, which is the only place any of this
+        // runs: the arena is ~50 tall there but only ~23 across, so reach is
+        // spent against the narrow axis. At `grow` 0.8 the third finger ends a
+        // full wind-up about half the screen wide, which is a crescendo. Past
+        // ~1.5 it stops being a finger and becomes a full-screen wash — that is
+        // the first slider to pull back if a charge starts drowning the fight.
+        charge: {
+          grow: 0.8,          // extra reach at full charge, as a fraction
+          power: 0.6,         // extra brightness and shove at full charge
+          pulseAt: 0.46,      // seconds between pulses at the start of a charge
+          pulseAtFull: 0.13,  // ...and once it's full. The beat tightening IS
+                              // the tell that something is about to happen.
+                              // Note these go into the same 24-slot ring buffer
+                              // as combat, so a full-tilt wind-up spends about a
+                              // third of it per second — fine at this cadence,
+                              // and the reason not to drop it much below 0.1
+          pulseStrength: 1.1, // at full charge; scaled down early on
+          pulseRadius: 7.0,
+        },
         // In order of arrival: finger 0 is whoever touched down first. `power`
         // and `spread` scale gain/push/swirl and radius respectively, so the
         // fifth finger is a bigger event than the first — a full hand slapped
@@ -3288,6 +4037,44 @@ export const CONFIG = {
         count: 12, speed: [7, 20], size: [0.07, 0.16], life: [0.15, 0.4],
         colors: [0xffe066, 0xffffff, 0xff9f4d], cone: 1.2, drag: 4,
         gravity: [0, -1], inherit: 0.3, glow: 1.8,
+    },
+
+      // --- Glow Up! (one per element) ------------------------------------------
+      // Four presets rather than one preset tinted per call, because a burst's
+      // colour is the EMITTER's here — feedback() deliberately takes no `color`
+      // (see systems/feedback.js). That rule is what keeps particle colour
+      // authored in one place instead of decided by whichever system happened to
+      // fire the event, and the element is no reason to break it.
+      //
+      // All four are small: they land on top of `bulletHit`, which has already
+      // fired for the same pellet on the same frame. Half the count of `sparks`
+      // and a shorter life, so the element decorates the impact rather than
+      // doubling it.
+      elementShock: {
+        count: 8, speed: [9, 24], size: [0.05, 0.13], life: [0.1, 0.26],
+        colors: [0x9fe8ff, 0xffffff, 0x6fd0ff], cone: 1.6, drag: 5,
+        gravity: [0, 0], inherit: 0.3, glow: 2.6,
+    },
+      elementVenom: {
+        // Slower and heavier than the rest — venom should look like it drips
+        // off the fish rather than spraying off it.
+        count: 9, speed: [2, 8], size: [0.07, 0.17], life: [0.3, 0.7],
+        colors: [0x7dff3d, 0xc6ff9e, 0x3aa81f], cone: 0, drag: 2.6,
+        gravity: [0, -2.2], inherit: 0.2, glow: 2.0,
+    },
+      elementChill: {
+        count: 10, speed: [3, 11], size: [0.06, 0.15], life: [0.25, 0.6],
+        colors: [0xbdf5ff, 0xffffff, 0x7fd8ff], cone: 0, drag: 4.5,
+        gravity: [0, -0.4], inherit: 0.15, glow: 2.2,
+    },
+      elementInfection: {
+        // The pixels. Deliberately near-uniform in size and long-lived, so a
+        // burst reads as a cloud of points hanging around the fish rather than
+        // as a spray leaving it — the same look the orbiting motes carry, which
+        // is what ties the impact to the contagion that follows it.
+        count: 12, speed: [1.5, 6], size: [0.07, 0.1], life: [0.4, 0.9],
+        colors: [0x66ff9e, 0xd6ffe8, 0x1fbf6b], cone: 0, drag: 3.2,
+        gravity: [0, 0.3], inherit: 0.15, glow: 2.8,
     },
       explosion: {
         count: 46, speed: [4, 24], size: [0.1, 0.34], life: [0.35, 0.9],
@@ -3756,6 +4543,47 @@ export const CONFIG = {
       // for something that deals no damage at all.
       belugaTrap:  { emit: 'breathBubbles', shake: 0.02, hitstop: 0, glow: 0.2, ripple: { strength: 0.6, radius: 5 }, sfx: 'belugaTrap',
                      haptic: [{ duration: 18, magnitude: 0.3 }], sfxMinGap: 0.05 },
+
+      // --- Glow Up! (systems/elements.js) -----------------------------------
+      // The elemental half of a hit rides on TOP of `bulletHit`, which has
+      // already fired for the same pellet on the same frame. So everything here
+      // is deliberately smaller than the impact it decorates: no hitstop at
+      // all, minimal shake, and a tight `sfxMinGap` on every one of them,
+      // because the basic shot is the most frequently landing thing in the game
+      // and this fires on every single pellet that connects.
+      //
+      // ONE ENTRY PER ELEMENT, keyed `elementHit<Element>` — systems/elements.js
+      // builds the key from the element id. They differ only in their emitter,
+      // and that is exactly why they can't be collapsed into one row: a burst's
+      // colour belongs to the emitter (feedback() takes no `color`, on purpose),
+      // so four colours means four emitters means four rows.
+      elementHitShock: { emit: 'elementShock', shake: 0.012, hitstop: 0, glow: 0.3, sfx: 'elementHit',
+                     haptic: [{ duration: 8, magnitude: 0.12 }], sfxMinGap: 0.11 },
+      elementHitVenom: { emit: 'elementVenom', shake: 0.012, hitstop: 0, glow: 0.26, sfx: 'elementHit',
+                     haptic: [{ duration: 8, magnitude: 0.12 }], sfxMinGap: 0.11 },
+      elementHitChill: { emit: 'elementChill', shake: 0.012, hitstop: 0, glow: 0.3, sfx: 'elementHit',
+                     haptic: [{ duration: 8, magnitude: 0.12 }], sfxMinGap: 0.11 },
+      elementHitInfection: { emit: 'elementInfection', shake: 0.012, hitstop: 0, glow: 0.34, sfx: 'elementHit',
+                     haptic: [{ duration: 8, magnitude: 0.12 }], sfxMinGap: 0.11 },
+      // Voltaic arcing to a second body. Louder than the hit that caused it —
+      // this one is the ability doing something you did not aim at, and it has
+      // to announce itself or it reads as the fish dying at random.
+      elementArc:  { emit: 'sparks', shake: 0.05, hitstop: 0, glow: 0.55, ripple: { strength: 1.2, radius: 6 }, sfx: 'elementArc',
+                     haptic: [{ duration: 14, magnitude: 0.25 }], sfxMinGap: 0.07 },
+      // Chill saturating into a hard lock. A rarer event than the rest of this
+      // block and worth a real beat: it is the moment the element pays off.
+      elementFreeze: { emit: 'breathBubbles', shake: 0.06, hitstop: 0, glow: 0.7, ripple: { strength: 1.6, radius: 7 }, sfx: 'elementFreeze',
+                     haptic: [{ duration: 22, magnitude: 0.35 }], sfxMinGap: 0.06 },
+      // An infected host coming apart and taking its neighbours with it. The
+      // heaviest of the four, because a burst can chain into another burst and
+      // the chain is the whole reason to pick the element.
+      infectionBurst: { emit: 'explosion', shake: 0.18, hitstop: 0, glow: 0.8, ripple: { strength: 2.2, radius: 9 }, sfx: 'infectionBurst',
+                     haptic: [{ duration: 24, magnitude: 0.4 }], sfxMinGap: 0.05 },
+      // The contagion creeping to the next fish. Almost silent on purpose: the
+      // motes travelling between bodies are the event, and a sound on every hop
+      // would turn a spreading school into a rattle.
+      infectionSpread: { emit: null, shake: 0, hitstop: 0, glow: 0.12, sfx: 'infectionSpread',
+                     sfxMinGap: 0.22 },
       // The net dragging a fish off. Counts as a kill everywhere else in the
       // game, but it isn't one to the hand — nothing was hit, something was
       // taken away, so it's a pull rather than a knock.
@@ -4505,7 +5333,35 @@ export const CONFIG = {
     audio: {
       enabled: true,
       masterVolume: 0.55,
-      maxConcurrent: 12, // drop new sounds past this to avoid mush
+      // How many one-shots may sound at once. Past this the newest sound still
+      // plays and the voice with the least left to play is faded out under it
+      // (see systems/audio.js) — so this is a density control, not a cliff.
+      //
+      // It was 12, sized when every sound was a synthesised oscillator. A
+      // buffer source is far cheaper than an oscillator plus a filter plus an
+      // envelope, and the bus already carries a compressor and a soft ceiling
+      // for exactly the case of a dozen one-shots landing on one frame, so the
+      // old number was protecting against something that is now handled a
+      // stage later. At 12 a wave clear spent the entire budget on `kill`
+      // alone — 20/s against a tail that long is more than twice the cap — and
+      // every other sound in the game went silent behind it.
+      //
+      // 32 is measured, not chosen. A heavy wave clear (~41 sounds a second,
+      // real sample lengths) wants 21.5 voices on average and peaks near 32,
+      // and a sweep of the cap against that load has its knee exactly there:
+      //
+      //     cap 12 -> 40 steals/s     cap 32 -> 0.1 steals/s
+      //     cap 16 -> 37 steals/s     cap 40 -> 0 steals/s
+      //     cap 24 -> 11 steals/s     cap 64 -> 0 steals/s
+      //
+      // Nothing above 32 buys anything: demand stops at 21.5 whatever the cap
+      // is, so a bigger number only widens a headroom nobody uses.
+      //
+      // NOT saved tuning: this is stripped out of any snapshot on the way in
+      // (see withoutTableOwnedKeys) so config.js owns it outright. A cap that
+      // can be quietly restored to an old value by a months-old localStorage
+      // snapshot is a bug nobody can see, which is precisely how it survived.
+      maxConcurrent: 32,
 
       // REPETITION — what stops a fast sound turning to static.
       //
@@ -4812,6 +5668,25 @@ export const CONFIG = {
       // The net closing on a fish and dragging it off. Longer than any other
       // passive here because a haul IS the whole ability paying off.
       bakalarHaul:{ src: null, type: 'noise', filter: 1400,     decay: 0.32, gain: 0.22, pitchVary: 0.10, filterVary: 0.22 },
+
+      // --- Glow Up! ---------------------------------------------------------
+      // These play UNDER the shot that carried them, on the same frame, so all
+      // of them are quiet and short. `elementHit` in particular fires on every
+      // pellet that connects — it is the most frequent voice in this table
+      // after the gun itself, and anything with a tail here becomes a drone.
+      elementHit: { src: null, type: 'blip',  wave: 'triangle', freq: [1500, 2200], decay: 0.045, gain: 0.06, pitchVary: 0.22 },
+      // The arc. Short, bright and dry — a crackle rather than the eel's
+      // full-length discharge, because this is one hop and not a chain.
+      elementArc: { src: null, type: 'noise', filter: 4200,     decay: 0.09,  gain: 0.13, pitchVary: 0.20, filterVary: 0.30 },
+      // Water going hard. Falling rather than rising, the opposite shape to
+      // belugaTrap's closing bubble — one thing seizes up, the other encloses.
+      elementFreeze: { src: null, type: 'blip', wave: 'sine',   freq: [900, 260],   decay: 0.2,  gain: 0.16, pitchVary: 0.12 },
+      // The burst. Low and wet, so a chain reaction rolls through the mix
+      // rather than clicking through it.
+      infectionBurst: { src: null, type: 'noise', filter: 900,  decay: 0.26, gain: 0.2,  pitchVary: 0.14, filterVary: 0.25 },
+      // A hop landing on a new host. Barely there by design — see the note on
+      // the feedback entry; the motes crossing the gap are the real event.
+      infectionSpread: { src: null, type: 'blip', wave: 'sine', freq: [640, 1180],  decay: 0.07, gain: 0.05, pitchVary: 0.3 },
       // Charm. The one deliberately pleasant sound in the block — rising
       // triangle, no aggression in it, because the enemy isn't being hurt.
       dumboCharm: { src: null, type: 'blip',  wave: 'triangle', freq: [880, 1560], decay: 0.28, gain: 0.14, pitchVary: 0.08 },
@@ -5166,22 +6041,95 @@ export const CONFIG = {
       // Above 1 on purpose: post.js runs the bright pass through a HalfFloat
       // target, so this blooms rather than clipping. The colours below are what
       // should be saturated; this is what carries them past white.
-      strength: 1.8,
+      strength: 2.4,
+      // ONE KNOB FOR THE WHOLE FAMILY'S BLOOM, multiplied onto `strength`.
+      //
+      // Two controls rather than one because they answer different questions.
+      // `strength` is per species and says how bright THIS animal is next to
+      // the others — tuning worth keeping once the palettes settle. `glow`
+      // says how hard the family as a whole pushes past the bloom threshold,
+      // which is a decision about the whole screen and gets re-made whenever
+      // CONFIG.bloom moves.
+      //
+      // Watch the readout in the tuner group, not this number: post.js's
+      // bright pass thresholds REC.709 LUMINANCE, so a deep blue at 1.0 counts
+      // as 0.07 and a pale cyan at the same strength counts as 0.71. Which
+      // colours in a ramp bloom is a question about the palette at least as
+      // much as about this slider.
+      glow: 1.35,
       contrast: 1.6, // >1 hardens the edge of each feature, <1 softens to a wash
       coverage: 0.45, // how much of the body lights at all, 0..1
       flow: 0.05, // how fast the whole field drifts — small, or it crawls
       // A slow breath over everything, so a stationary fish is never a static
       // decal. Amplitude is a fraction of full brightness.
       pulseAmp: 0.25,
-      pulseSpeed: 1.8, // also the travel speed of the `pulse` pattern
+      // ONE BREATH PER `pulseSync`. A name from BEAT_DIVISIONS in
+      // systems/beatSync.js, picked in the tuner with a button row; the
+      // breath then keeps time with whatever loop is playing and retimes
+      // itself when the BPM moves or the death dive drags the tape down.
+      //
+      // The `pulse` pattern's travelling wave rides the same clock at twice
+      // the rate, which is the ratio it had when both came off `pulseSpeed`.
+      pulseSync: '2 bars',
+      // What the breath does when `pulseSync` is 'free' (or the master switch
+      // in CONFIG.beatSync is off). Radians per second, which is what it has
+      // always been — 1.8 is one breath every 3.5s, and '2 bars' is the
+      // closest musical figure to it at 105bpm. Kept rather than deleted so
+      // turning sync off is a real A/B and not a jump to some other look.
+      pulseSpeed: 1.8,
       // The colour field's own feature size, independent of the pattern's — a
       // big number means one colour drifts across the whole animal, a small one
       // means neighbouring patches disagree.
       hueScale: 1.2,
       hueSpread: 1.0, // 0 collapses the ramp to one colour; 1 uses all three
+      // IS THIS PATTERN LIGHT, OR IS IT PIGMENT? True for every preset that
+      // means "this animal emits"; false for one that is only borrowing the
+      // generator to paint a surface.
+      //
+      // It reads as a technicality and it is not. The whole roster used to be
+      // luminous, so "has a biolumSkin" and "is bioluminescent" described the
+      // same set of creatures and either could stand in for the other. The day
+      // crab breaks that: `carapace` is a shell texture — dim, static, brown —
+      // on a creature that must NOT be night-gated. Without a flag saying so,
+      // the only way to tell the two apart is to eyeball `strength`, and the
+      // invariant that a glowing creature never spawns at noon (asserted in
+      // tools/biolum-skin-test.mjs) quietly stops meaning anything.
+      luminous: true,
+      // --- the eyes, as a separate lamp -------------------------------------
+      // Not part of the body pattern and not scaled by its `strength`: a crab's
+      // eyes sit on stalks and should read as two hot points whatever the shell
+      // is doing. Only creatures whose asset declares `eyeStalks` have anything
+      // to light, so `eyeStrength` here is the default for the ones that do.
+      //
+      // OFF in the shared base, ON per preset. Every glowing fish in the roster
+      // inherits this block, and none of them has an eye stalk to put it on.
+      eyeStrength: 0,
+      // Which colour the eyes burn. Warm by default and that is a BLOOM
+      // decision, not only a taste one: the bright pass is Rec.709 luminance,
+      // where blue counts for 0.07 against green's 0.72, so a cold blue eye can
+      // be visibly bright on screen and never reach the bloom threshold at all.
+      eyeColor: 0xffd166,
+      // Where along the stalk the light actually sits. aEyeGlow is a linear
+      // 0..1 from socket to tip, so this is the exponent that concentrates it:
+      // 1 lights the whole stalk evenly (a glowing antenna), 3 keeps the stalk
+      // dark and blows out the last third (an eyeball), 6 is a pinpoint.
+      eyeFalloff: 3,
+      // A slow bloom in and out, on the body's own breath clock so the two
+      // never drift apart. Shallower than the body's `pulseAmp` on purpose —
+      // an eye pulsing as hard as the shell reads as a blinking indicator.
+      eyePulse: 0,
       // Positive concentrates the glow toward the tail, negative toward the
       // head, 0 lights evenly.
       tailBias: 0.2,
+      // The same bias applied to the RAMP rather than to brightness: positive
+      // pushes the tail end toward colorC and the head end toward colorA, so
+      // the animal changes colour along its length instead of merely getting
+      // brighter. 0 leaves the ramp wherever the pattern put it, which is what
+      // every preset written before this knob existed expects.
+      //
+      // This is what buys a two-tone creature without a second material. See
+      // `emberClaw`: one ramp, dark red at the shell, ember at the claws.
+      hueBias: 0,
       // How far the organic patterns (flow, billow, marble) displace their own
       // sample point before reading it. 0 leaves them as ordinary noise; this is
       // the single control that turns lumps into something that looks advected.
@@ -5201,7 +6149,14 @@ export const CONFIG = {
       // rather than a sine — a sine is a throb, and `pulseAmp` is already that.
       // 0 is off, which is where every preset that wants to look calm leaves it.
       flickerAmp: 0,
-      flickerRate: 2.5, // stutters per second, roughly
+      // ONE STUTTER STEP PER `flickerSync`. Its own division rather than the
+      // breath's, because the two are usually nowhere near each other: a
+      // shark breathing on four bars still wants its photophores twitching on
+      // eighths. The stutter is value noise, so quantising it means the noise
+      // CHANGES VALUE on the grid — the light still wanders, it just stops
+      // wandering off the beat.
+      flickerSync: '1/8',
+      flickerRate: 2.5, // stutters per second when `flickerSync` is 'free'
 
       // How far apart in the cycle two individuals of the same species are. 1
       // scatters them across the whole cycle; 0 collapses a school into perfect
@@ -5211,6 +6166,16 @@ export const CONFIG = {
       // This is the ONE setting that needs a material per creature rather than
       // per species — see instantiateBiolumSkin.
       phaseSpread: 1,
+      // HOW MANY SLOTS that spread is allowed to use. This is the setting that
+      // makes a school musical rather than merely desynchronised: at 0 every
+      // fish sits a random fraction of a beat off the grid, which quietly
+      // undoes `pulseSync` one creature at a time. At 4, a school on '1 bar'
+      // breathes on the four beats of the bar, in whatever order they were
+      // born in — a section, not mush.
+      //
+      // Set it to the number of subdivisions you want to hear. 2 is call and
+      // response, 4 is a bar of quarters, 8 gets busy.
+      phaseSteps: 4,
     },
 
     // -------------------------------------------------------------------------
@@ -5235,6 +6200,15 @@ export const CONFIG = {
         flickerRate: 5.0,
         pulseAmp: 0.2,
         pulseSpeed: 2.4,
+        // The divisions nearest the two rates above at 105bpm, so nothing
+        // about the shoal's tempo visibly moved when it went on the grid —
+        // 2.4 rad/s is a breath every 2.6s against a bar's 2.29s, and 5
+        // stutters a second is 0.2s against a sixteenth's 0.14s.
+        pulseSync: '1 bar',
+        flickerSync: '1/16',
+        // Nine at once, so this is the preset the spread actually matters for.
+        // Four slots on a one-bar breath puts the shoal on the four beats.
+        phaseSteps: 4,
         colorA: 0x00e5ff, colorB: 0x7b2dff, colorC: 0xffd166,
       },
 
@@ -5261,6 +6235,13 @@ export const CONFIG = {
         flickerRate: 1.2,
         pulseAmp: 0.35,
         pulseSpeed: 0.7,
+        // Four bars a breath, which is the nearest figure to its 9s glide and
+        // the slowest thing on screen. Rays arrive alone, so the phase spread
+        // has nobody to spread against — the steps here only matter on the
+        // rare frame two are in the water at once.
+        pulseSync: '4 bars',
+        flickerSync: '1/2',
+        phaseSteps: 2,
         colorA: 0x1de5c8, colorB: 0x2f6fd6, colorC: 0xbdf5ff, // cold
       },
 
@@ -5286,6 +6267,14 @@ export const CONFIG = {
         pulseSpeed: 1.4,
         flickerAmp: 0.06,
         flickerRate: 1.8,
+        // Two bars, which is the figure nearest their 4.5s breath — a bar
+        // would have been half the period and visibly faster. With four slots
+        // that puts the five escorts on beats 1 and 3 of alternating bars:
+        // still a squad keeping step, which is the one thing this preset is
+        // trying to say, and still the pace it was tuned at.
+        pulseSync: '2 bars',
+        flickerSync: '1/4',
+        phaseSteps: 4,
       },
 
       // The shark. Not a light show — a warning. Stripes down a long body, low
@@ -5304,7 +6293,153 @@ export const CONFIG = {
         flickerAmp: 0,
         pulseAmp: 0.45,
         pulseSpeed: 0.55,
+        // The slowest thing in the roster: one breath every four bars, which
+        // is nine seconds at 105bpm and is meant to be felt rather than
+        // watched. Never more than one on screen, so the spread is moot.
+        pulseSync: '4 bars',
+        // No flickerSync of its own: flickerAmp is 0, so there is no stutter
+        // to put on a grid. Pinning a division on a silent effect is a value
+        // that looks meaningful and isn't — it inherits base's instead, which
+        // is what it will use the moment anyone turns the flicker up.
+        phaseSteps: 0,
         colorA: 0xff4d2e, colorB: 0xffa62b, colorC: 0xfff1a8, // ember
+      },
+
+      // --- the two crabs -------------------------------------------------------
+      // The first preset pair in the file, and the first that is NOT about
+      // bioluminescence at all on one side of it. Both ride the same shader for
+      // the same reason: a crab's shell is mottled, and the pattern generator
+      // already makes mottling. What separates them is whether the mottling is
+      // LIGHT or merely COLOUR.
+
+      // DAYTIME. Every walking crab wears this, which makes it the only preset
+      // in the roster that is on a creature the player meets in the first
+      // minute — so it has to survive being looked at a lot, and it must not
+      // read as "glowing" in daylight.
+      //
+      // Three deliberate zeroes: `strength` is low, and `pulseAmp`, `flickerAmp`
+      // and `flow` are all 0. That last trio is what makes this a TEXTURE rather
+      // than an effect — the shader is handed phases rather than a clock (see
+      // the header of systems/biolumSkin.js), so a zeroed drift and a zeroed
+      // breath mean the pattern is a pure function of position and never moves.
+      // A crab whose shell mottling crawled while it walked would give the whole
+      // thing away instantly.
+      carapace: {
+        // PIGMENT, NOT LIGHT — the one preset in the file that is not
+        // bioluminescence. This is what keeps the day crab out of the
+        // night-gated roster; see `luminous` in `base`.
+        //
+        // Its EYES are the exception, and they are why eyeStrength hangs off
+        // the preset rather than off the pattern's `strength`: the shell emits
+        // nothing and the eyes still catch the light. Kept low — this is a wet
+        // highlight on a daylight animal, not a lamp.
+        // A WET HIGHLIGHT, not a lamp. The instinct is a near-black eye colour
+        // because a crab's eye is a dark bead — but this term is ADDITIVE, and
+        // adding near-black is indistinguishable from adding nothing (measured:
+        // 0x1a1410 at 0.5 contributes a peak luminance of 0.004). Additive
+        // light cannot darken anything, so the only honest daylight read is a
+        // small pale glint, kept deliberately under the bloom threshold: peak
+        // Rec.709 luminance ~0.13 against CONFIG.bloom.threshold 0.18, so the
+        // eye catches the light without the day crab hazing.
+        eyeStrength: 0.14,
+        eyeColor: 0xffe6c4,
+        eyeFalloff: 5,   // tight, so only the bead itself picks it up
+        luminous: false,
+        pattern: 'marble', // turbulence-folded veining reads as shell, not as spots
+        scale: 0.3,
+        coverage: 0.34,
+        contrast: 1.9,
+        // Low, and this is the number that keeps it out of the bloom pass. The
+        // bright pass thresholds LUMINANCE, and these browns are dark enough
+        // that nothing here reaches it — which is the point. See the note on
+        // `strength` in the header for why the glowing presets go past 1.
+        strength: 0.55,
+        // Off. All three of them.
+        flow: 0,
+        pulseAmp: 0,
+        flickerAmp: 0,
+        // Wet shell: brown into rust into a bone highlight. Nothing saturated,
+        // nothing that could be mistaken for light.
+        colorA: 0x4a3524, colorB: 0x7a4a2c, colorC: 0xa88a63,
+        hueSpread: 0.7,
+        // Mild, and forward — the claws and the front of the shell catch a
+        // little more than the back does, the way a wet animal does under a
+        // sun that is above and in front of it. Needs biolumAxis 'z' on the
+        // asset to mean anything; see ASSETS.enemyWalkingCrab.
+        tailBias: 0.18,
+        hueBias: 0,
+        // The body underneath is a real texture on this model, unlike the fish,
+        // so darkening it hard would just make a muddy crab. Light touch.
+        bodyDarken: 0.12,
+        // No phase spread worth having on a static pattern — there is no phase.
+        phaseSpread: 0,
+        phaseSteps: 0,
+      },
+
+      // NIGHT. The same animal after dark: a dark shell with light in the
+      // cracks, and claws that are visibly hotter than the rest of it.
+      //
+      // The two-tone is `hueBias`, not a second material. The ramp runs dark
+      // crimson -> red -> hot ember, and biasing the ramp along the body axis
+      // samples the low end on the shell and the high end at the claws. That
+      // only works because the asset declares biolumAxis 'z': the derived axis
+      // would have been X, which runs from one claw to the OTHER and would have
+      // lit the left claw and blacked out the right. Measured in
+      // tools/crab-claw-probe.mjs — with 'z' both claws sit at 0.94 and the
+      // shell at 0.54.
+      emberClaw: {
+        pattern: 'veins', // filaments in the shell seams
+        scale: 0.26,
+        coverage: 0.3,
+        contrast: 2.6,
+        strength: 2.1,
+        // Both biases pushed hard toward the claw end. tailBias gathers the
+        // BRIGHTNESS there, hueBias gathers the COLOUR — together that is "dark
+        // red shell, ember claws" rather than "evenly orange crab".
+        tailBias: 0.55,
+        hueBias: 0.45,
+        hueSpread: 0.8,
+        colorA: 0x5c0f1e, colorB: 0xc22a1c, colorC: 0xffb04a,
+        // Dark under the light, unlike the day preset — after sunset the body
+        // texture is competing with the glow rather than carrying it.
+        bodyDarken: 0.55,
+        // A slow bellows rather than a shimmer. This animal walks; a fast
+        // stutter on a slow walker reads as a rendering fault, and the crab is
+        // the only glowing thing in the roster with FEET.
+        // THE EYES ARE THE BRIGHTEST THING ON THIS ANIMAL, and the point of
+        // the whole feature: two hot points that find you before the shell
+        // resolves out of the dark. Well above the body's own strength on
+        // purpose. Warm, so the bloom's Rec.709 bright pass actually catches
+        // them — see `eyeColor` in base.
+        // Hot enough to be the first thing you see and not so hot that it is
+        // just a white disc: the composite is LDR with no tonemapping, so
+        // anything far over 1 clips flat. At 2.4 the very tip clips and the
+        // falloff keeps a warm fringe around it, which is what reads as a
+        // glowing eye rather than a bloom sprite. Peak Rec.709 luminance ~1.3
+        // against a 0.18 threshold, so it blooms hard.
+        eyeStrength: 2.4,
+        eyeColor: 0xffb347,
+        eyeFalloff: 3.2,
+        eyePulse: 0.22,
+        pulseAmp: 0.32,
+        // 2pi/4.571s, which IS '2 bars' at 105bpm. The two have to agree: the
+        // sync picker decides the pace when beat sync is on and `pulseSpeed`
+        // decides it when it is off, so a mismatched pair means switching sync
+        // off visibly changes the animal's tempo. tools/beat-sync-test.mjs
+        // checks every pair in the file for exactly this.
+        pulseSpeed: 1.375,
+        pulseSync: '2 bars',
+        // A little stutter, on a slow division — the claws guttering like
+        // something burning inside the shell.
+        flickerAmp: 0.18,
+        flickerSync: '1/4',
+        // ...and the free-running twin of that division — one step per beat.
+        flickerRate: 1.75,
+        // Crabs arrive in crowds, so the spread matters more here than on the
+        // apex presets: four slots keeps a heap of them breathing as a section
+        // instead of one animal with nine bodies.
+        phaseSpread: 1,
+        phaseSteps: 4,
       },
     },
   },
@@ -5326,14 +6461,25 @@ export const CONFIG = {
       // like a wiper; higher keeps the lower third planted and curls the top,
       // which is what a stem in current actually does.
       stiffness: 1.8,
-      speed: 1.1, // radians/sec of the main sway
+      // ONE SWAY PER `speedSync`, and one flutter per `flutterSync` — the two
+      // divisions nearest the rates below at 105bpm, so the field kept its
+      // pace and gained the grid. Set either to 'free' to go back to the
+      // rad/sec figure beside it. See systems/beatSync.js.
+      //
+      // Worth doing even though nobody watches the grass: it is a large, slow,
+      // full-width thing, and a large slow thing that is nearly in time is
+      // what makes a whole screen feel off without anyone being able to say
+      // which element is wrong.
+      speedSync: '2 bars',
+      speed: 1.1, // radians/sec of the main sway, when speedSync is 'free'
       // Spatial frequency of the travelling wave, in radians per world unit.
       // This is what makes the current cross the field as a gust instead of
       // every clump breathing in unison; 0 pins them all to the same phase.
       wavelength: 0.35,
       direction: 0, // radians in the model's ground plane; 0 = along +X
       flutter: 0.025, // fast tip-weighted chatter riding on the main sway
-      flutterSpeed: 3.7,
+      flutterSync: '1 bar',
+      flutterSpeed: 3.7, // radians/sec, when flutterSync is 'free'
       // Arc-length correction: how much the tip drops to pay for moving
       // sideways. 1 keeps blades their own length, 0 lets them stretch (which
       // reads as rubber). No reason to lower it except to see what it does.
@@ -5389,6 +6535,144 @@ export const CONFIG = {
     // Tangential weight while holding the ring: 0 hovers, 1 circles at about
     // the same rate it closes.
     circleStrength: 1,
+  },
+
+  // ---------------------------------------------------------------------------
+  // CRAB CLAW — the telegraphed pinch (systems/crabClaw.js).
+  //
+  // A crab used to be a walking contact hitbox: nothing it did on screen said
+  // it was about to hurt you, and nothing you could do in the moment avoided
+  // it. This is the tell and the answer to it. The claw rears up, hangs, and
+  // slams — and the whole gesture is long enough that a player who reads it
+  // gets out of the way.
+  //
+  // Contact damage is UNCHANGED and still applies. This is deliberately a
+  // second, longer-ranged threat rather than a replacement: touching a crab
+  // should always hurt, and the pinch is what makes standing just outside
+  // touching distance stop being free. `damageMul` below is what keeps that
+  // from being a straight buff.
+  //
+  // Every distance here is a MULTIPLE of something the crab already carries —
+  // its own radius or its arm's measured reach — for the reason written out at
+  // enemies.walkingCrab.depthSpread: the crab ships a size multiplier well
+  // above 1, so a hand-typed number in world units means something different
+  // in play than it does in this file.
+  // ---------------------------------------------------------------------------
+  crabClaw: {
+    enabled: true,
+
+    // --- timing, in seconds --------------------------------------------------
+    // The three phases. `windup` is the contract with the player: it is the
+    // only part they can act on, so it is the longest of the three by some way
+    // and it is where the claw is furthest from where it will end up.
+    windup: 0.42,
+    // Fast, because a slow strike is a strike you can walk out of after it has
+    // committed, which makes the windup meaningless.
+    strike: 0.16,
+    recover: 0.34,
+    // Between pinches. Long: a crab that pinches on a two-second cycle is a
+    // damage-per-second problem rather than a thing you dodge, and there are
+    // usually six of them.
+    cooldown: 2.6,
+    // How far into the STRIKE phase the claws actually meet, as a fraction.
+    // Not 1.0 — the slam curve puts most of its travel at the end, so the
+    // claws are effectively shut a little before the phase formally ends, and
+    // billing the damage at 1.0 lands it a frame after the visual contact.
+    connectAt: 0.85,
+    // Seconds the second claw trails the first. Small, but it is the single
+    // cheapest thing that stops two claws reading as one animation played
+    // twice.
+    armLag: 0.06,
+
+    // --- geometry ------------------------------------------------------------
+    // How far the player can be and still be pinched, in multiples of the
+    // crab's own radius. The arm's real reach is measured off the skeleton at
+    // runtime, so this is the GAMEPLAY range, deliberately kept a little
+    // shorter than what the arm can physically cover — a pinch that connects
+    // at the exact limit of the IK looks like a miss.
+    range: 2.4,
+    // ...and how far inside that range the crab has to be before it commits.
+    // Without this a crab at the edge of range starts a windup, the player
+    // drifts a hair further out, and the whole 0.9s gesture plays to nobody.
+    commitRange: 2.1,
+    // Windup offsets, as fractions of the arm's measured reach: how far the
+    // claw lifts above the aim line, and how far back along it the claw draws
+    // before coming forward.
+    rise: 0.55,
+    draw: 0.3,
+    // How far past its true reach the solver is allowed to aim. Slightly over
+    // 1 keeps the arm from locking dead straight at full extension, which is
+    // the pose that reads as a stick rather than a limb.
+    reachStretch: 1.05,
+
+    // --- the scissor ---------------------------------------------------------
+    // Radians. `gape` swings the claw head AWAY from the crab's midline (the
+    // measured sign of a positive rotation about the Palm's local z, on both
+    // sides — see ASSETS.enemyWalkingCrab.clawRig), and `snap` carries it back
+    // through rest and a little past on the slam.
+    //
+    // Kept modest, and this is a limitation talking rather than taste: the
+    // claw is a closed lump with no interior geometry, so a large angle reads
+    // as the whole head swivelling on the wrist rather than as a pincer. Under
+    // about 0.7 it reads as a snap.
+    gape: 0.6,
+    snap: 0.22,
+    // How much of `gape` a REAL jaw uses. Separate from the scissor's angle
+    // because they are different joints doing different jobs: the scissor
+    // swings a whole claw head and 0.6rad on it is a modest cock of the wrist,
+    // while 0.6rad on a pincer finger is a wide-open claw. Measured on
+    // crabpincer.glb: 0.4rad already takes the tip aperture from 9% of finger
+    // length to 33%, so the full gape here is a deliberate, threatening gape
+    // rather than the most the joint will take.
+    //
+    // The jaw never closes past rest whatever this says — see the clamp in
+    // systems/crabClaw.js, and `snap` above for what it is protecting against.
+    jawScale: 0.85,
+    // How much of the scissor angle the FOREARM takes, negated — this is what
+    // makes it a shear rather than a wave. At 0 the whole head swings on a
+    // still forearm; at 1 the two rotate equal and opposite and the claw
+    // barely moves through space at all.
+    counterRotation: 0.45,
+
+    // --- how completely the IK owns the arm -----------------------------------
+    // Near-total while striking. Unlike the octopus's idle tentacles there is
+    // no dangle state to preserve — a crab not pinching is simply walking, and
+    // the walk cycle should own the arm completely.
+    reachWeight: 0.92,
+    weightLerpIn: 14,
+    weightLerpOut: 4,
+
+    ik: {
+      iterations: 4, // a 5-bone chain converges well short of the octopus's 5
+      // Low, for the reason the octopus's is low: the collarbone is the
+      // cheapest joint to move the tip a long way, and letting it take the
+      // work reads as a shoulder coming out of its socket.
+      rootInfluence: 0.15,
+      // Tighter than the octopus's 1.5. A tentacle curls; a crab's arm has
+      // three rigid segments and an elbow, and letting one joint take a radian
+      // and a half folds the forearm through the shell.
+      maxBend: 0.9,
+      softness: 0.6,
+      // Fast — the strike phase is 0.16s, and a smoothing that takes longer
+      // than the phase turns the slam into a drift.
+      smoothing: 16,
+      tolerance: 0.02,
+    },
+
+    // --- damage ---------------------------------------------------------------
+    // The pinch's damage as a MULTIPLE of the crab's contact damage, which
+    // already carries the difficulty ramp — so this rides the ramp for free
+    // and never has to be re-tuned against it.
+    //
+    // Below 1 on purpose. Contact damage is charged per second while touching;
+    // this is a burst on a 2.6s cycle at longer range, and pricing it at parity
+    // with a full second of contact would make walking into a crab the SAFER
+    // option, which is exactly backwards.
+    damageMul: 0.75,
+    // Shove, as a multiple of the usual contact knockback. A pinch that
+    // pushes you out of range is the reward for having been hit by the thing
+    // you were supposed to dodge.
+    knockback: 1.4,
   },
 
   // ---------------------------------------------------------------------------
@@ -5478,6 +6762,30 @@ export const CONFIG = {
   hud: {
     // How far above the seal the health/oxygen stack floats, in WORLD units.
     playerBarOffset: 2.6,
+  },
+
+  // ---------------------------------------------------------------------------
+  // BEAT SYNC — the master switch for every shader that animates on a musical
+  // division instead of on a rate in seconds. See systems/beatSync.js for the
+  // reasoning; in short, a dozen effects each running at a hand-picked
+  // rad/sec are each very slightly out of time with the loop, and the screen
+  // never quite agrees with itself.
+  //
+  // The individual pickers live next to the effects they belong to — the
+  // breath and flicker divisions under each Bioluminescence group, the sway
+  // under Grass, the beam bands under Bakalar. This block is only the two
+  // things they all share.
+  // ---------------------------------------------------------------------------
+  beatSync: {
+    // Off sends every synced effect back to its own rate in seconds, which is
+    // exactly how the game ran before any of this existed. Worth keeping as a
+    // toggle rather than a code path to delete: A/B-ing "is this actually
+    // better" is the only way to answer it.
+    enabled: true,
+    // What "1 bar" means. Everything else in the picker is a note value and
+    // needs no interpretation; only the bar figures read this, and they are
+    // the ones most FX end up on.
+    beatsPerBar: 4,
   },
 
   // ---------------------------------------------------------------------------
@@ -6248,6 +7556,45 @@ export const CONFIG = {
     // levels would mean the first card bought a lone orca, and a lone orca is
     // not what the fantasy is.
     { id: 'orcaFamily', name: 'Orca Family', desc: 'Three orcas hunt enemy boats: +damage, +speed', apply: (s) => { s.orcaLevel = (s.orcaLevel ?? 0) + 1; }, maxStacks: 6 },
+
+    // --- the cross-cutting four ----------------------------------------------
+    // Every upgrade above this line grants or deepens ONE ability. These four
+    // grant nothing and scale what you already have, which makes them the only
+    // cards whose value depends on the rest of the build — and the reason they
+    // are capped low and weighted rare. A +1-to-everything card offered as
+    // often as Rapid Fire, at eight stacks, is the whole game.
+    //
+    // Their stats are seeded in stats.js with a full note on why the projectile
+    // bonus is applied at the point of use instead of here.
+
+    // Clone Warz. The count is added at each firing site through
+    // projectileCount() — see stats.js. Deliberately flat rather than a
+    // percentage: +1 shrimp on a ring of three and +1 pellet per fin are both
+    // legible from the seat, where "+22% projectiles" is not.
+    { id: 'projectileAmount', name: 'Clone Warz', desc: '+1 of everything you fire',
+      perLevelName: true,
+      apply: (s) => { s.projectileBonus += 1; }, maxStacks: 3 },
+
+    // Splash Zone. Two multipliers, not one — see stats.js for why reach and
+    // acquisition are split, and why acquisition moves so much less.
+    { id: 'areaOfEffect', name: 'Splash Zone', desc: '+18% blast, aura and wave size',
+      perLevelName: true,
+      apply: (s) => { s.aoeMul *= 1.18; s.targetingMul *= 1.06; }, maxStacks: 5 },
+
+    // Big Rigz. Scale is applied to the mesh AND the contact radius, so the
+    // size is a real hitbox rather than a bigger picture of the same animal.
+    { id: 'companionSize', name: 'Big Rigz', desc: '+15% companion size, +25% companion damage',
+      perLevelName: true,
+      apply: (s) => { s.companionScale *= 1.15; s.companionDamageMul *= 1.25; }, maxStacks: 5 },
+
+    // Glow Up!. `roll` names a variant rolled at DRAW time and shown on the
+    // card — ui.js asks systems/elements.js for it, so which element you're
+    // being offered is on the card before you commit. The roll happens once per
+    // run: every later stack deepens the element already carried.
+    { id: 'bioluminescence', name: 'Glow Up!', desc: 'Your shots and strike carry an element',
+      perLevelName: true,
+      roll: 'biolumElement',
+      apply: (s) => { s.biolumLevel += 1; }, maxStacks: 6 },
   ],
 
   upgradeChoices: 3,
@@ -6439,6 +7786,299 @@ export const LEVELUP_IMAGE_KEYS = [
 // species' group is what promotes that value from inherited to overridden.
 // That is the intended workflow and the reason the rows are identical.
 // ---------------------------------------------------------------------------
+// What a bioluminescence group's controls actually resolve to. `base` is read
+// straight; a preset is base with its own overrides on top, exactly as
+// systems/biolumSkin.js layers them — the readouts have to agree with the
+// shader or they are worse than no readout at all.
+function resolveBiolumCfg(prefix) {
+  const base = CONFIG.biolumSkin?.base ?? {};
+  const PRESETS = 'biolumSkin.presets.';
+  if (!prefix.startsWith(PRESETS)) return base;
+  return { ...base, ...(CONFIG.biolumSkin?.presets?.[prefix.slice(PRESETS.length)] ?? {}) };
+}
+
+// Rec.709, matching the bright pass in systems/post.js exactly. This is the
+// coefficient set that makes blue nearly invisible to bloom (0.07 against
+// green's 0.72), which is the single most surprising thing about tuning a
+// cold-palette glow and the reason this readout exists.
+function relLuminance(hex) {
+  const n = hex >>> 0;
+  return 0.2126 * (((n >> 16) & 255) / 255)
+    + 0.7152 * (((n >> 8) & 255) / 255)
+    + 0.0722 * ((n & 255) / 255);
+}
+
+function biolumBloomReadout(prefix) {
+  const cfg = resolveBiolumCfg(prefix);
+  // What the shader adds at a FULLY LIT pixel, at the top of the breath. The
+  // ceiling, not the average: bioMask() only reaches 1 where the noise field
+  // peaks, so most of a lit patch sits below this. It is still the right
+  // number to check, because bloom is a threshold — what matters is whether
+  // the brightest pixels get over it, not what the mean does.
+  const gain = (cfg.strength ?? 1.6) * (cfg.glow ?? 1) * (1 + (cfg.pulseAmp ?? 0));
+  const stops = [['A', cfg.colorA ?? 0x00e5ff], ['B', cfg.colorB ?? 0x7b2dff], ['C', cfg.colorC ?? 0xffd166]];
+  const vals = stops.map(([n, c]) => [n, relLuminance(c) * gain]);
+  const bloom = CONFIG.bloom ?? {};
+  const thr = bloom.threshold ?? 0.55;
+  const clear = vals.filter(([, v]) => v >= thr).length;
+  if (bloom.enabled === false) {
+    return ['bloom is OFF in CONFIG.bloom — nothing here glows past its own colour'];
+  }
+  return [
+    `brightest pixel: ${vals.map(([n, v]) => `${n} ${v.toFixed(2)}`).join('   ')}`,
+    `threshold ${thr.toFixed(2)} · ${clear}/3 ramp stops clear it · bloom intensity ${(bloom.intensity ?? 0).toFixed(2)}`,
+  ];
+}
+
+// The tempo the readouts quote. The AUDIBLE rate lives inside music.js behind
+// a ramp and importing it here would be a cycle (music.js imports CONFIG), so
+// this is the configured tempo — which is what it settles to, and what you are
+// tuning against anyway.
+function tunerBpm() {
+  return Math.max(1, (CONFIG.music?.bpm ?? 120) * (CONFIG.music?.playbackRate ?? 1));
+}
+
+function biolumTimingReadout(prefix) {
+  const cfg = resolveBiolumCfg(prefix);
+  const bpm = tunerBpm();
+  const beat = 60 / bpm;
+  const bpb = Math.max(1, CONFIG.beatSync?.beatsPerBar ?? 4);
+  const synced = CONFIG.beatSync?.enabled !== false;
+
+  // A picker on 'free' gets its real period printed AND the figure it is
+  // closest to, so setting it properly is reading one line rather than doing
+  // the arithmetic. This is the whole point of the row.
+  const show = (division, freeSeconds) => {
+    const secs = synced ? divisionBeatsIn(division, bpb) * beat : 0;
+    if (secs > 0) return `${division} · ${secs.toFixed(2)}s`;
+    const near = nearestDivisionIn(freeSeconds, beat, bpb);
+    return `free · ${freeSeconds.toFixed(2)}s (nearest: ${near})`;
+  };
+
+  // pulseSpeed is radians/sec, flickerRate is steps/sec — both converted to
+  // one period so the two halves of the line are comparable.
+  const breath = (Math.PI * 2) / Math.max(0.01, cfg.pulseSpeed ?? 1.8);
+  const flick = 1 / Math.max(0.01, cfg.flickerRate ?? 2.5);
+  const steps = Math.round(cfg.phaseSteps ?? 0);
+  const spread = cfg.phaseSpread ?? 1;
+
+  return [
+    `breath  ${show(cfg.pulseSync, breath)}`,
+    `flicker ${show(cfg.flickerSync, flick)}`,
+    `${bpm.toFixed(0)} bpm · beat ${beat.toFixed(2)}s · bar ${(beat * bpb).toFixed(2)}s`,
+    spread <= 0 ? 'school: lockstep (spread 0)'
+      : steps > 0 ? `school: ${steps} slots across ${(spread * 100).toFixed(0)}% of the cycle`
+        : 'school: continuous random — individuals sit OFF the grid',
+  ];
+}
+
+// EVERY beat-synced effect in the game, in one list.
+//
+// The pickers themselves are scattered on purpose — each sits beside the thing
+// it drives, because auditioning a fish by scrolling away from it is not
+// auditioning it. The cost of that is you can no longer see the whole picture,
+// and "the whole picture" is exactly what you need when the question is
+// whether two effects are fighting each other. So this list exists, and the
+// Beat sync group prints it.
+//
+// Adding a synced effect and forgetting this line is the one drift worth
+// guarding: tools/beat-sync-test.mjs checks that every '…Sync' key reachable
+// from the tuner schema appears here.
+const SYNCED_FX = [
+  ['seal', () => resolveBiolumCfg('biolumSkin.presets.escort'), ['pulseSync', 'flickerSync']],
+  ['lanternfish', () => resolveBiolumCfg('biolumSkin.presets.lantern'), ['pulseSync', 'flickerSync']],
+  ['lantern ray', () => resolveBiolumCfg('biolumSkin.presets.veil'), ['pulseSync', 'flickerSync']],
+  ['abyss shark', () => resolveBiolumCfg('biolumSkin.presets.abyssHunter'), ['pulseSync', 'flickerSync']],
+  ['ember crab', () => resolveBiolumCfg('biolumSkin.presets.emberClaw'), ['pulseSync', 'flickerSync']],
+  // Listed even though it is STATIC — carapace zeroes pulseAmp and flickerAmp,
+  // so neither division does anything today. It still owns the pickers, and a
+  // row that says '2 bars / 1/8' next to an effect with no amplitude is the
+  // honest reading of "configured but silent". Dropping it instead would mean
+  // the day anyone turns that amplitude up, the effect is beat-synced and
+  // absent from the one list that is supposed to show every synced effect.
+  ['walking crab (static)', () => resolveBiolumCfg('biolumSkin.presets.carapace'), ['pulseSync', 'flickerSync']],
+  ['octopus arms', () => CONFIG.octoGrab?.glow ?? {}, ['shimmerSync']],
+  ['grass', () => CONFIG.grass?.sway ?? {}, ['speedSync', 'flutterSync']],
+  ['bakalar beam', () => CONFIG.bakalar?.beam ?? {}, ['bandSync']],
+  ['night sky', () => CONFIG.constellations ?? {}, ['bloomSync']],
+];
+
+// The generic version of the bioluminescence timing rows, for the effects that
+// have one or two synced phases rather than a whole preset behind them.
+//
+// `entries` are [label, path to the division, () => the free period in
+// seconds]. The free period is a thunk because it has to be read at paint
+// time — the slider next to it is what moves it.
+function fxTimingReadout(entries) {
+  const bpm = tunerBpm();
+  const beat = 60 / bpm;
+  const bpb = Math.max(1, CONFIG.beatSync?.beatsPerBar ?? 4);
+  const synced = CONFIG.beatSync?.enabled !== false;
+  const lines = entries.map(([label, path, freeSeconds]) => {
+    const free = freeSeconds();
+    const secs = synced ? divisionBeatsIn(getPath(CONFIG, path), bpb) * beat : 0;
+    if (secs > 0) return `${label}  ${getPath(CONFIG, path)} · ${secs.toFixed(2)}s`;
+    // Off the grid: print what it actually is and what it is nearest, so
+    // putting it on the grid is reading a line rather than doing the maths.
+    return `${label}  free · ${free.toFixed(2)}s (nearest: ${nearestDivisionIn(free, beat, bpb)})`;
+  });
+  return [...lines, `${bpm.toFixed(0)} bpm · beat ${beat.toFixed(2)}s · bar ${(beat * bpb).toFixed(2)}s`];
+}
+
+// How much of a celestial body clears the bloom bright pass.
+//
+// Two numbers nobody can hold in their head at once: the halo's own falloff
+// curve, and the fact that post.js thresholds Rec.709 LUMINANCE — where this
+// pale blue moon is worth 0.75 and a deeper blue would be worth a third of
+// that. "Turn the halo up until it glows" is otherwise a slider you drag
+// blind, because the part of the halo you can see is the part the disc is not
+// covering, and that is where the falloff has already eaten most of it.
+function celestialBloomReadout(which) {
+  const cfg = CONFIG.dayNight?.[which] ?? {};
+  const bloom = CONFIG.bloom ?? {};
+  if (bloom.enabled === false) return ['bloom is OFF in CONFIG.bloom — nothing here glows'];
+  const thr = bloom.threshold ?? 0.55;
+  const lum = relLuminance(cfg.color ?? 0xffffff);
+
+  // The halo's two summed lobes, straight out of haloFragment in
+  // systems/celestial.js. Mirrored rather than imported because config.js
+  // cannot import a system — and a drift here is a wrong readout, not a wrong
+  // render, so it is worth the copy.
+  const falloff = (d) => {
+    const r = Math.max(0, 1 - d);
+    return Math.pow(r, 2.6) * 0.65 + Math.pow(r, 9.0) * 0.35;
+  };
+  // Where the disc's own edge sits on the halo quad: the halo is `halo` times
+  // the disc across, so everything inside this radius is hidden behind it.
+  const rim = 1 / Math.max(1, cfg.halo ?? 2);
+  // The SOLVED strength, matching haloStrengthFor in systems/celestial.js —
+  // reporting the raw slider here would tell you the corona is dark on a body
+  // whose `bloomRim` is quietly holding it lit.
+  const want = cfg.bloomRim ?? 0;
+  const solved = want > 0
+    ? Math.max(thr * want / Math.max(1e-4, lum * falloff(rim)), cfg.haloStrength ?? 0.5)
+    : (cfg.haloStrength ?? 0.5);
+  const at = (d) => falloff(d) * lum * solved;
+
+  // How far out the corona still clears the threshold — the actual answer to
+  // "how big is the glow", in disc radii rather than in halo units.
+  let reach = rim;
+  for (let d = rim; d <= 1; d += 0.005) { if (at(d) >= thr) reach = d; }
+  const discLum = lum * (cfg.brightness ?? 1);
+
+  const art = cfg.texture || cfg.model;
+  const lines = [
+    `disc ${discLum.toFixed(2)} · corona rim ${at(rim).toFixed(2)} · threshold ${thr.toFixed(2)}`
+      + (solved > (cfg.haloStrength ?? 0.5) + 1e-6 ? ` · bloomRim solved halo to ${solved.toFixed(2)}` : ''),
+    at(rim) >= thr
+      ? `corona blooms out to ${(reach / rim).toFixed(2)}x the disc radius`
+      : `the corona never blooms — raise halo strength past ${(thr / Math.max(0.001, falloff(rim) * lum)).toFixed(2)}`,
+  ];
+  // The disc figure above is the WHITE-ART case. Painted art multiplies into
+  // it, and the art here is dark — so the honest reading is a range, and the
+  // number that matters is the one for the mid-greys, not the highlights.
+  if (art) {
+    lines.push('with art the disc figure is multiplied by each pixel, so it is a RANGE:');
+    lines.push(`  mid-grey (0.45 sRGB ~ 0.17 linear) -> ${(discLum * 0.17).toFixed(2)}`
+      + `,  highlights (0.7 ~ 0.45) -> ${(discLum * 0.45).toFixed(2)}`);
+    // Dark maria under the threshold and bright wisps over it is the GOOD
+    // outcome — that split is what leaves craters visible instead of a white
+    // blob. Only flag it when the whole disc is dark.
+    lines.push(discLum * 0.45 >= thr
+      ? 'highlights bloom, dark areas do not — which is what keeps the craters readable'
+      : `nothing on the disc blooms — brightness ${(thr / Math.max(0.01, lum * 0.45)).toFixed(2)} would light the highlights`);
+  } else {
+    lines.push(discLum >= thr ? 'the disc blooms' : `the disc does NOT bloom — raise brightness past ${(thr / Math.max(0.01, lum)).toFixed(2)}`);
+  }
+  return lines;
+}
+
+// The Glow Up! day/night ramp, as a table. `elementPower` itself lives in
+// systems/elements.js and cannot be imported here (it imports CONFIG), so the
+// curve is restated — it is three lines and the alternative is a slider whose
+// effect you can only see by waiting for dusk.
+function elementPowerReadout() {
+  const n = CONFIG.biolum?.night ?? {};
+  if (!n.enabled || CONFIG.dayNight?.enabled === false) {
+    return ['no day cycle (or the night bonus is off) — the element is always fully awake'];
+  }
+  const floor = Math.min(1, Math.max(0, n.dayPower ?? 0));
+  const g = Math.max(0.05, n.blendGamma ?? 1);
+  const at = (dark) => floor + (1 - floor) * Math.pow(dark, g);
+  const row = [0, 0.25, 0.5, 0.75, 1]
+    .map((d) => `${String(Math.round(d * 100)).padStart(3)}%->${String(Math.round(at(d) * 100)).padStart(3)}%`)
+    .join('  ');
+  return [
+    'how dark it is -> how much glow + elemental effect:',
+    row,
+    floor <= 0
+      ? 'at noon: no glow at all, and no elemental hit is applied (statuses already ticking still finish)'
+      : `at noon: ${Math.round(floor * 100)}% power`,
+  ];
+}
+
+function beatGridReadout() {
+  const bpm = tunerBpm();
+  const beat = 60 / bpm;
+  const bpb = Math.max(1, CONFIG.beatSync?.beatsPerBar ?? 4);
+  if (CONFIG.beatSync?.enabled === false) {
+    return ['sync is OFF — every effect below is running at its own rate in seconds'];
+  }
+  // The conversion table, once, so no picker anywhere needs one beside it.
+  const grid = ['1/16', '1/8', '1/4', '1/2', '1 bar', '2 bars', '4 bars', '8 bars']
+    .map((n) => `${n} ${(divisionBeatsIn(n, bpb) * beat).toFixed(2)}s`)
+    .join('   ');
+  const fx = SYNCED_FX.map(([label, read, keys]) => {
+    const cfg = read();
+    return `${label}: ${keys.map((k) => cfg[k] ?? 'free').join(' / ')}`;
+  });
+  return [`${bpm.toFixed(0)} bpm · ${bpb}/4 · beat ${beat.toFixed(2)}s · bar ${(beat * bpb).toFixed(2)}s`, grid, ...fx];
+}
+
+// THE ROW THAT ANSWERS "is there anything up there to join up".
+//
+// The constellations don't have a star count of their own — they take a share
+// of the field the sky shader is already painting, so the control that decides
+// how many there are lives in a different group (Day & night's `star density`)
+// and its effect here is not something you can work out by looking at it. On a
+// portrait phone the sky band is a quarter the width of a landscape one, so
+// the same density that gives a rich field on a desktop can leave a phone with
+// four stars and nothing to draw between them. That is exactly the failure
+// this prints before it happens.
+//
+// The counts are real: this walks the same placement rule the system does,
+// over the frame each aspect ratio would actually build.
+function constellationReadout() {
+  const cfg = CONFIG.constellations ?? {};
+  if (!cfg.enabled) return ['off — only the sky shader’s own dots are drawn'];
+
+  const density = CONFIG.dayNight?.stars?.density ?? 0.55;
+  const air = CONFIG.arena.viewHeight * CONFIG.arena.surfaceFromTop;
+  const margin = cfg.margin ?? 4;
+  const keep = Math.max(0, Math.min(1, cfg.brightest ?? 0.5));
+  const threshold = 1 - (1 - STAR_THRESHOLD) * keep;
+
+  const lines = [`one cell per ${(1 / Math.max(0.01, density)).toFixed(2)} units · sky band ${air.toFixed(1)} tall`];
+  let thinnest = Infinity;
+  for (const [name, aspect] of [['landscape 16:9', 16 / 9], ['phone 9:19.5', 9 / 19.5]]) {
+    const half = (CONFIG.arena.viewHeight * aspect) / 2;
+    const field = starsIn(
+      { left: -half - margin, right: half + margin, bottom: 0, top: air + margin },
+      density,
+    );
+    const drawn = field.filter((s) => s.seed > threshold).length;
+    thinnest = Math.min(thinnest, drawn);
+    lines.push(`${name}: ${field.length} in the sky, ${drawn} drawn, ~${Math.round(drawn * (cfg.links ?? 2) * 0.75)} links`);
+  }
+  if (thinnest < 6) {
+    lines.push('too thin to read as constellations — raise `star density` under Day & night');
+  }
+  if (!CONFIG.dayNight?.enabled) {
+    lines.push('the day/night cycle is OFF, so night never comes and none of this is drawn');
+  }
+  return lines;
+}
+
 function biolumSkinItems(prefix) {
   const at = (k) => `${prefix}.${k}`;
   return [
@@ -6450,28 +8090,62 @@ function biolumSkinItems(prefix) {
         'flow', 'billow', 'marble',
       ],
     },
+    // THE ROW THAT ANSWERS "will this actually bloom". Everything above and
+    // below it is a number you set; this is the number you were guessing at.
+    //
+    // post.js's bright pass thresholds Rec.709 LUMINANCE, not the biggest
+    // channel, so this is the one place the palette and the strength sliders
+    // meet: a saturated blue at strength 3 sits at 0.22 and barely lights,
+    // while a pale cyan at the same strength is at 2.1. Both ends of the ramp
+    // are shown because it is normal for one of them to bloom and the other
+    // not to — that is what makes a pattern read as having a hot core.
+    { type: 'readout', label: 'bloom check', lines: () => biolumBloomReadout(prefix) },
     // Fraction of BODY LENGTH per feature, so it means the same thing after
     // any per-asset Size change.
     { path: at('scale'), min: 0.04, max: 1.2, step: 0.01, label: 'feature size' },
-    { path: at('strength'), min: 0, max: 5, step: 0.05, label: 'glow strength' },
+    { path: at('strength'), min: 0, max: 5, step: 0.05, label: 'glow strength (this species)' },
+    { path: at('glow'), min: 0, max: 4, step: 0.05, label: 'bloom push (× strength)' },
     { path: at('coverage'), min: 0, max: 1, step: 0.01, label: 'how much of the body lights' },
     { path: at('contrast'), min: 0.1, max: 6, step: 0.05, label: 'edge hardness' },
     { path: at('bodyDarken'), min: 0.05, max: 1, step: 0.01, label: 'body darkening under the glow' },
     { path: at('tailBias'), min: -1, max: 1, step: 0.05, label: 'head ← → tail bias' },
+    { path: at('hueBias'), min: -1, max: 1, step: 0.05, label: 'colour shift along the body' },
+    // Only does anything on a creature whose asset declares `eyeStalks` —
+    // today the two crabs. Left visible on every preset so it is discoverable
+    // rather than hidden behind a species check.
+    { path: at('eyeStrength'), min: 0, max: 6, step: 0.05, label: 'eye glow' },
+    { path: at('eyeColor'), type: 'color', label: 'eye colour' },
+    { path: at('eyeFalloff'), min: 1, max: 8, step: 0.1, label: 'eye tightness (1 = whole stalk, 6 = pinpoint)' },
+    { path: at('eyePulse'), min: 0, max: 1, step: 0.02, label: 'eye breath depth' },
     // Only flow / billow / marble read this.
     { path: at('warp'), min: 0, max: 3, step: 0.05, label: 'organic warp (flow/billow/marble)' },
     // --- motion ---
-    { path: at('flow'), min: 0, max: 0.6, step: 0.01, label: 'pattern drift' },
+    // Drift is the one motion here that is honestly a rate in seconds: it
+    // translates through the noise rather than repeating, so there is no cycle
+    // to put on the grid. See the note in systems/biolumSkin.js's FRAG_BODY.
+    { path: at('flow'), min: 0, max: 0.6, step: 0.01, label: 'pattern drift (not synced)' },
     { path: at('pulseAmp'), min: 0, max: 1, step: 0.01, label: 'breath depth' },
-    { path: at('pulseSpeed'), min: 0, max: 8, step: 0.1, label: 'breath / travel speed' },
+    // One breath per division. The row below only does anything at 'free'.
+    { path: at('pulseSync'), type: 'choice', options: BEAT_DIVISIONS, label: 'breath — one per' },
+    { path: at('pulseSpeed'), min: 0, max: 8, step: 0.1, label: '…or free-running, rad/s' },
     // --- flicker ---
     // Noise in time, not a sine — the sine is `breath depth` above. At 0 the
     // creature is perfectly steady, which is a look, not an absence of one.
     { path: at('flickerAmp'), min: 0, max: 1, step: 0.01, label: 'flicker depth' },
-    { path: at('flickerRate'), min: 0.1, max: 12, step: 0.1, label: 'flicker rate (per second)' },
+    { path: at('flickerSync'), type: 'choice', options: BEAT_DIVISIONS, label: 'flicker — one step per' },
+    { path: at('flickerRate'), min: 0.1, max: 12, step: 0.1, label: '…or free-running, per second' },
+    // A live reading of what those two pickers cost in real seconds at the
+    // tempo currently playing, so "2 bars" is a duration you can judge rather
+    // than a conversion you have to do in your head.
+    { type: 'readout', label: 'timing', lines: () => biolumTimingReadout(prefix) },
     // How far apart two individuals sit in the cycle. 0 is lockstep, which is
     // the setting to use while judging a pattern and the wrong one afterwards.
     { path: at('phaseSpread'), min: 0, max: 1, step: 0.01, label: 'phase spread across a school' },
+    // ...and how many slots that spread may use. This is what keeps a school
+    // ON the beat while still being spread out — see the note on phaseSteps in
+    // CONFIG.biolumSkin.base. 0 is a continuous random offset, which puts
+    // every individual slightly off the grid.
+    { path: at('phaseSteps'), min: 0, max: 16, step: 1, label: 'phase slots (0 = off-grid random)' },
     // --- colour ---
     { path: at('hueSpread'), min: 0, max: 1, step: 0.01, label: 'colour variety (0 = one colour)' },
     { path: at('hueScale'), min: 0.1, max: 4, step: 0.05, label: 'colour patch size' },
@@ -6488,6 +8162,11 @@ function biolumSkinGroups() {
     lantern: 'Bioluminescence — lanternfish',
     veil: 'Bioluminescence — lantern ray',
     abyssHunter: 'Bioluminescence — abyss shark',
+    emberClaw: 'Bioluminescence — ember crab',
+    // Not bioluminescence at all — the one preset using the generator as
+    // pigment rather than light. Named differently on purpose, so nobody goes
+    // looking for it under the glowing species. See `luminous`.
+    carapace: 'Shell pattern — walking crab (daytime)',
   };
   const groups = [{
     group: 'Bioluminescence — shared base',
@@ -6635,11 +8314,15 @@ export const TUNER_SCHEMA = [
       // The nocturnal gate. Both thresholds are on the same 0..1 darkness the
       // stars ride, so scrubbing the clock (Sky panel) and dragging these two
       // is how you find the moment the lights should come on.
-      { path: 'spawn.nightlife.enabled', type: 'bool', label: 'glowing fish only after dark' },
-      { path: 'spawn.nightlife.dusk', min: 0, max: 1, step: 0.01, label: 'darkness they start arriving at' },
-      { path: 'spawn.nightlife.dark', min: 0, max: 1, step: 0.01, label: 'darkness they reach full numbers at' },
-      { path: 'spawn.nightlife.day', min: 0, max: 1, step: 0.01, label: 'daytime spawn rate (x)' },
-      { path: 'spawn.nightlife.night', min: 0, max: 3, step: 0.05, label: 'night spawn rate (x)' },
+      { path: 'spawn.nightlife.enabled', type: 'bool', label: 'the night has its own cast' },
+      { path: 'spawn.nightlife.dusk', min: 0, max: 1, step: 0.01, label: 'darkness the changeover starts at' },
+      { path: 'spawn.nightlife.dark', min: 0, max: 1, step: 0.01, label: 'darkness it completes at' },
+      { path: 'spawn.nightlife.glowing.day', min: 0, max: 1, step: 0.01, label: 'glowing: daytime rate (x)' },
+      { path: 'spawn.nightlife.glowing.night', min: 0, max: 3, step: 0.05, label: 'glowing: night rate (x)' },
+      { path: 'spawn.nightlife.daylight.day', min: 0, max: 3, step: 0.05, label: 'everything else: daytime rate (x)' },
+      // The one that decides whether night is a different ocean or the same
+      // one with lights in it. Low, and the sharks go with the tangs.
+      { path: 'spawn.nightlife.daylight.night', min: 0, max: 1, step: 0.01, label: 'everything else: night rate (x)' },
       // Compounding per difficulty point (20s by default), so small numbers
       // move a lot: 0.05 is x2.2 at five minutes and x4.3 at ten. The caps
       // are multipliers on the species' base stat.
@@ -6753,17 +8436,100 @@ export const TUNER_SCHEMA = [
       { path: 'dayNight.sun.brightness', min: 0, max: 3, step: 0.05, label: 'sun brightness' },
       { path: 'dayNight.sun.halo', min: 1, max: 8, step: 0.1, label: 'sun halo size' },
       { path: 'dayNight.sun.haloStrength', min: 0, max: 2, step: 0.02, label: 'sun halo strength' },
+      { path: 'dayNight.sun.bloomRim', min: 0, max: 4, step: 0.05, label: 'sun corona bloom (0 = off)' },
       { path: 'dayNight.sun.horizonGlow', min: 0, max: 5, step: 0.1, label: 'sun horizon flare' },
       { path: 'dayNight.sun.horizonRange', min: 0.2, max: 5, step: 0.1, label: 'sun flare reach' },
       { path: 'dayNight.sun.maskToDisc', type: 'bool', label: 'crop sun art to a circle' },
+      { path: 'dayNight.sun.edgeFeather', min: 0.01, max: 0.5, step: 0.01, label: 'sun edge feather' },
       { path: 'dayNight.moon.size', min: 0.5, max: 20, step: 0.1, label: 'moon size' },
       { path: 'dayNight.moon.color', type: 'color', label: 'moon colour' },
       { path: 'dayNight.moon.brightness', min: 0, max: 3, step: 0.05, label: 'moon brightness' },
       { path: 'dayNight.moon.halo', min: 1, max: 8, step: 0.1, label: 'moon halo size' },
       { path: 'dayNight.moon.haloStrength', min: 0, max: 2, step: 0.02, label: 'moon halo strength' },
+      { path: 'dayNight.moon.bloomRim', min: 0, max: 4, step: 0.05, label: 'moon corona bloom (0 = off)' },
       { path: 'dayNight.moon.horizonGlow', min: 0, max: 5, step: 0.1, label: 'moon horizon flare' },
       { path: 'dayNight.moon.horizonRange', min: 0.2, max: 5, step: 0.1, label: 'moon flare reach' },
       { path: 'dayNight.moon.maskToDisc', type: 'bool', label: 'crop moon art to a circle' },
+      { path: 'dayNight.moon.edgeFeather', min: 0.01, max: 0.5, step: 0.01, label: 'moon edge feather' },
+      // What the moon's disc and halo are actually worth to the bright pass.
+      // The moon art is dark and the palette is blue, which is the pair of
+      // facts that makes 'is it glowing' impossible to answer from the two
+      // sliders above.
+      { type: 'readout', label: 'moon bloom', lines: () => celestialBloomReadout('moon') },
+    ],
+  },
+  {
+    // The backdrop grid, in the air. Everything here needs the clock to be
+    // somewhere dark to be visible at all — freeze it and scrub to ~23h under
+    // Day & night before touching any of it.
+    group: 'Night sky',
+    section: 'The ocean',
+    items: [
+      { path: 'constellations.enabled', type: 'bool', label: 'constellations' },
+      { type: 'readout', label: 'the field', lines: () => constellationReadout() },
+      { path: 'constellations.brightest', min: 0, max: 1, step: 0.05, label: 'share of stars drawn' },
+      // The two that decide when the sky wakes up, on the same 0..1 darkness
+      // the nocturnal spawns use.
+      { path: 'constellations.dusk', min: 0, max: 1, step: 0.01, label: 'darkness it starts appearing at' },
+      { path: 'constellations.dark', min: 0, max: 1, step: 0.01, label: 'darkness it reaches full at' },
+      // --- the stars ---
+      { path: 'constellations.size', min: 0.05, max: 1.5, step: 0.01, label: 'star size' },
+      { path: 'constellations.color', type: 'color', label: 'star colour' },
+      { path: 'constellations.hotColor', type: 'color', label: 'bloom colour' },
+      { path: 'constellations.opacity', min: 0, max: 1, step: 0.05, label: 'star brightness' },
+      { path: 'constellations.spike', min: 0, max: 2, step: 0.05, label: 'star flare' },
+      { path: 'constellations.spikeWidth', min: 1, max: 14, step: 0.5, label: 'star flare thinness' },
+      { path: 'constellations.haloAmount', min: 0, max: 1.5, step: 0.05, label: 'star halo' },
+      { path: 'constellations.haze', min: 0.2, max: 12, step: 0.2, label: 'horizon fade (units)' },
+      // --- the connections ---
+      { path: 'constellations.links', min: 0, max: 5, step: 1, label: 'links per star' },
+      { path: 'constellations.linkRadius', min: 1, max: 30, step: 0.5, label: 'link reach' },
+      { path: 'constellations.linkColor', type: 'color', label: 'link colour' },
+      { path: 'constellations.linkOpacity', min: 0, max: 1, step: 0.05, label: 'link brightness' },
+      { path: 'constellations.subdivisions', min: 1, max: 12, step: 1, label: 'link segments (curviness)' },
+      // --- the fractal ---
+      { path: 'constellations.fractal.enabled', type: 'bool', label: 'fractal branches' },
+      { path: 'constellations.fractal.anchors', min: 0, max: 1, step: 0.05, label: 'share of stars that grow one' },
+      // Cost is branches^depth per anchor, so these two multiply fast — the
+      // readout above counts stars, not tips.
+      { path: 'constellations.fractal.depth', min: 1, max: 6, step: 1, label: 'fractal depth' },
+      { path: 'constellations.fractal.branches', min: 1, max: 4, step: 1, label: 'branches per split' },
+      { path: 'constellations.fractal.length', min: 0.5, max: 12, step: 0.1, label: 'first limb length' },
+      { path: 'constellations.fractal.shrink', min: 0.2, max: 0.95, step: 0.01, label: 'shrink per generation' },
+      { path: 'constellations.fractal.spread', min: 0, max: 3.2, step: 0.05, label: 'fan width (rad)' },
+      { path: 'constellations.fractal.wobble', min: 0, max: 2, step: 0.05, label: 'branch scatter (rad)' },
+      { path: 'constellations.fractal.tipScale', min: 0.1, max: 1, step: 0.05, label: 'tip star size (x parent)' },
+      { path: 'constellations.fractalColor', type: 'color', label: 'branch colour' },
+      // --- the bloom ---
+      { path: 'constellations.bloomSync', type: 'choice', options: BEAT_DIVISIONS, label: 'bloom — one per' },
+      { path: 'constellations.bloomRate', min: 0.05, max: 4, step: 0.05, label: '…or free-running, cycles/s' },
+      { type: 'readout', label: 'timing', lines: () => fxTimingReadout([
+        ['bloom', 'constellations.bloomSync', () => 1 / Math.max(0.01, CONFIG.constellations?.bloomRate ?? 0.5)],
+      ]) },
+      // 0 puts the whole sky on one flash, which is a look and is almost never
+      // the one you want; 4 lights it on the four beats of the bar.
+      { path: 'constellations.phaseSteps', min: 0, max: 16, step: 1, label: 'beat slots across the field' },
+      { path: 'constellations.phaseSpread', min: 0, max: 1, step: 0.05, label: 'how much of the cycle they spread over' },
+      { path: 'constellations.bloomDecay', min: 0.5, max: 20, step: 0.5, label: 'bloom sharpness' },
+      { path: 'constellations.base', min: 0, max: 1, step: 0.05, label: 'brightness between blooms' },
+      { path: 'constellations.gain', min: 0, max: 3, step: 0.05, label: 'bloom brightness' },
+      { path: 'constellations.swell', min: 0, max: 3, step: 0.05, label: 'bloom growth' },
+      { path: 'constellations.genDelay', min: 0, max: 0.5, step: 0.005, label: 'fractal step (cycles)' },
+      { path: 'constellations.travel', min: 0, max: 0.5, step: 0.005, label: 'light travel per link (cycles)' },
+      // --- what the game does to it ---
+      { path: 'constellations.rippleGain', min: 0, max: 2, step: 0.05, label: 'how hard events ring the sky' },
+      { path: 'constellations.rippleReach', min: 0.2, max: 6, step: 0.1, label: 'event reach (x)' },
+      { path: 'constellations.rippleSquash', min: 0.02, max: 1, step: 0.02, label: 'vertical reach (lower = further)' },
+      { path: 'constellations.rippleDecay', min: 0.3, max: 8, step: 0.1, label: 'sky snap-back' },
+      // The stars are fixed; this is how far the LINES between them bow. 0
+      // makes the constellations rigid and leaves only the brightness.
+      { path: 'constellations.bend', min: 0, max: 4, step: 0.05, label: 'how far links bow (stars never move)' },
+      { path: 'constellations.bendMax', min: 0, max: 1, step: 0.02, label: 'max bow (x the link’s own length)' },
+      { path: 'constellations.warpGain', min: 0, max: 5, step: 0.1, label: 'warped link brightness' },
+      { path: 'constellations.touch.enabled', type: 'bool', label: 'fingers bend the sky (touch)' },
+      { path: 'constellations.touch.radius', min: 1, max: 25, step: 0.5, label: 'finger reach' },
+      { path: 'constellations.touch.push', min: 0, max: 3, step: 0.05, label: 'finger shove' },
+      { path: 'constellations.touch.swirl', min: 0, max: 3, step: 0.05, label: 'finger swirl' },
     ],
   },
   {
@@ -7001,6 +8767,95 @@ export const TUNER_SCHEMA = [
       { path: 'bounce.comboPitchMax', min: 0, max: 36, step: 1, label: 'bounce combo pitch cap (semitones)' },
       { path: 'bounce.comboScaleStep', min: 0, max: 0.6, step: 0.01, label: 'bounce combo fx growth' },
       { path: 'bounce.comboScaleMax', min: 1, max: 5, step: 0.1, label: 'bounce combo fx cap' },
+    ],
+  },
+  // Glow Up!. Split into the shared curve and one group per element, because
+  // only ONE element is live in any run — a single flat list would be four
+  // fifths sliders that do nothing to the seal currently on screen.
+  {
+    group: 'Glow Up! (shared)',
+    panel: 'companions',
+    section: 'Auras & orbits',
+    items: [
+      { path: 'biolum.damageFraction', min: 0, max: 1, step: 0.02, label: 'element damage (of hit)' },
+      { path: 'biolum.damageFractionPerLevel', min: 0, max: 0.5, step: 0.01, label: '...per level' },
+      { path: 'biolum.statusPerLevel', min: 0, max: 1, step: 0.02, label: 'status growth per level' },
+      { path: 'biolum.strikeFraction', min: 0, max: 1, step: 0.05, label: 'share the strike carries' },
+      { path: 'biolum.night.damageMul', min: 1, max: 3, step: 0.05, label: 'night damage' },
+      { path: 'biolum.night.durationMul', min: 1, max: 4, step: 0.05, label: 'night duration' },
+      { path: 'biolum.night.twilightBoost', min: 0, max: 1, step: 0.05, label: 'dusk counts for' },
+      // 0 = the ability is asleep at noon, glow and elemental effects alike.
+      { path: 'biolum.night.dayPower', min: 0, max: 1, step: 0.05, label: 'power kept in daylight' },
+      { path: 'biolum.night.blendGamma', min: 0.25, max: 4, step: 0.05, label: 'day → night fade curve' },
+      { type: 'readout', label: 'day/night', lines: () => elementPowerReadout() },
+      { path: 'biolum.skin.strength', min: 0, max: 5, step: 0.1, label: 'seal glow' },
+      { path: 'biolum.skin.strengthPerLevel', min: 0, max: 1, step: 0.05, label: '...per level' },
+      { path: 'biolum.skin.nightStrengthMul', min: 1, max: 4, step: 0.1, label: '...at night' },
+      { path: 'biolum.skin.coverage', min: 0, max: 1, step: 0.02, label: 'seal glow coverage' },
+    ],
+  },
+  {
+    group: 'Glow Up! — Voltaic',
+    panel: 'companions',
+    section: 'Auras & orbits',
+    items: [
+      { path: 'biolum.elements.shock.color', type: 'color' },
+      { path: 'biolum.elements.shock.chance', min: 0, max: 1, step: 0.05, label: 'arc chance' },
+      { path: 'biolum.elements.shock.chancePerLevel', min: 0, max: 0.3, step: 0.01 },
+      { path: 'biolum.elements.shock.arcRange', min: 1, max: 20, step: 0.5 },
+      { path: 'biolum.elements.shock.arcDamage', min: 0, max: 2, step: 0.05 },
+      { path: 'biolum.elements.shock.arcsPerLevel', min: 0, max: 2, step: 0.02 },
+    ],
+  },
+  {
+    group: 'Glow Up! — Venom',
+    panel: 'companions',
+    section: 'Auras & orbits',
+    items: [
+      { path: 'biolum.elements.venom.color', type: 'color' },
+      { path: 'biolum.elements.venom.dps', min: 0, max: 30, step: 0.5 },
+      { path: 'biolum.elements.venom.dpsPerLevel', min: 0, max: 15, step: 0.2 },
+      { path: 'biolum.elements.venom.duration', min: 0.5, max: 12, step: 0.25 },
+      { path: 'biolum.elements.venom.maxStacks', min: 1, max: 12, step: 1 },
+      { path: 'biolum.elements.venom.tick', min: 0.05, max: 1, step: 0.05 },
+    ],
+  },
+  {
+    group: 'Glow Up! — Chill',
+    panel: 'companions',
+    section: 'Auras & orbits',
+    items: [
+      { path: 'biolum.elements.chill.color', type: 'color' },
+      { path: 'biolum.elements.chill.slowPerHit', min: 0, max: 0.6, step: 0.01 },
+      { path: 'biolum.elements.chill.slowPerHitPerLevel', min: 0, max: 0.2, step: 0.005 },
+      { path: 'biolum.elements.chill.maxSlow', min: 0.1, max: 0.95, step: 0.05 },
+      { path: 'biolum.elements.chill.duration', min: 0.5, max: 10, step: 0.25 },
+      { path: 'biolum.elements.chill.freezeDuration', min: 0, max: 4, step: 0.1 },
+    ],
+  },
+  {
+    group: 'Glow Up! — Infected',
+    panel: 'companions',
+    section: 'Auras & orbits',
+    items: [
+      { path: 'biolum.elements.infection.color', type: 'color' },
+      { path: 'biolum.elements.infection.dps', min: 0, max: 30, step: 0.5 },
+      { path: 'biolum.elements.infection.dpsPerLevel', min: 0, max: 15, step: 0.2 },
+      { path: 'biolum.elements.infection.duration', min: 0.5, max: 15, step: 0.25 },
+      { path: 'biolum.elements.infection.spreadInterval', min: 0.1, max: 5, step: 0.1 },
+      { path: 'biolum.elements.infection.spreadRange', min: 0.5, max: 15, step: 0.25 },
+      { path: 'biolum.elements.infection.generations', min: 1, max: 10, step: 1, label: 'hops from the shot fish' },
+      { path: 'biolum.elements.infection.maxHosts', min: 1, max: 60, step: 1 },
+      { path: 'biolum.elements.infection.hopFalloff', min: 0.2, max: 1, step: 0.02 },
+      { path: 'biolum.elements.infection.burstRange', min: 0.5, max: 20, step: 0.5 },
+      { path: 'biolum.elements.infection.burstDamage', min: 0, max: 60, step: 1 },
+      { path: 'biolum.elements.infection.burstTargets', min: 0, max: 12, step: 1 },
+      { path: 'biolum.elements.infection.motes.perHost', min: 0, max: 16, step: 1 },
+      { path: 'biolum.elements.infection.motes.size', min: 0.01, max: 0.5, step: 0.01 },
+      { path: 'biolum.elements.infection.motes.pulseSpeed', min: 0, max: 15, step: 0.5 },
+      { path: 'biolum.elements.infection.motes.pulseAmp', min: 0, max: 1.5, step: 0.05 },
+      { path: 'biolum.elements.infection.motes.travelSpeed', min: 1, max: 30, step: 0.5 },
+      { path: 'biolum.elements.infection.motes.maxAlive', min: 10, max: 300, step: 10 },
     ],
   },
   {
@@ -7379,7 +9234,6 @@ export const TUNER_SCHEMA = [
       { path: 'enemies.walkingCrab.crawl.feed.seekRadius', min: 0, max: 60, step: 1, label: 'chum seek radius' },
       { path: 'enemies.walkingCrab.crawl.feed.eatRange', min: 0.3, max: 5, step: 0.1, label: 'chum eat range' },
       { path: 'enemies.walkingCrab.crawl.feed.eatTime', min: 0.2, max: 12, step: 0.1, label: 'seconds to eat one orb' },
-      { path: 'enemies.animatedCrab.crawl.feed.eatTime', min: 0.2, max: 12, step: 0.1, label: 'animated crab eat time' },
       // How crabs scale over a run used to be five sliders here
       // (scalePerDifficulty, maxGrowth, hpPerDifficulty,
       // contactDamagePerDifficulty, speedPerDifficulty). They're columns in
@@ -7387,12 +9241,36 @@ export const TUNER_SCHEMA = [
       // creature's instead of on its own in a panel.
       // --- gait tempo ---
       { path: 'enemies.walkingCrab.beatSync.beatsPerStride', min: 0.25, max: 8, step: 0.25, label: 'beats per crab footfall' },
-      { path: 'enemies.animatedCrab.beatSync.beatsPerStride', min: 0.25, max: 8, step: 0.25, label: 'animated crab beats/footfall' },
       // --- how crabs find and reach the chum ---
       { path: 'enemies.walkingCrab.crawl.feed.seekRadius', min: 5, max: 150, step: 5, label: 'chum seek range' },
       { path: 'enemies.walkingCrab.crawl.feed.distanceBias', min: 2, max: 80, step: 1, label: 'pile pull half-distance' },
       { path: 'crabSpawn.spawnMargin', min: 0, max: 15, step: 0.5, label: 'offscreen spawn margin' },
       { path: 'crabSpawn.clusterRadius', min: 1, max: 20, step: 0.5, label: 'what counts as one pile' },
+      // --- the pinch (systems/crabClaw.js) ---
+      // `windup` is the one that changes how the crab FEELS rather than how it
+      // looks: it is the whole window a player has to read the attack and move,
+      // so shortening it makes crabs harder without touching a damage number.
+      { path: 'crabClaw.enabled', type: 'bool', label: 'crabs pinch at you' },
+      { path: 'crabClaw.windup', min: 0.1, max: 1.5, step: 0.02, label: 'windup (the tell)' },
+      { path: 'crabClaw.strike', min: 0.05, max: 0.6, step: 0.01, label: 'strike' },
+      { path: 'crabClaw.recover', min: 0.1, max: 1, step: 0.02, label: 'recover' },
+      { path: 'crabClaw.cooldown', min: 0.3, max: 8, step: 0.1, label: 'between pinches' },
+      { path: 'crabClaw.range', min: 1, max: 6, step: 0.1, label: 'reach (x crab radius)' },
+      { path: 'crabClaw.commitRange', min: 1, max: 6, step: 0.1, label: 'range it commits at' },
+      { path: 'crabClaw.damageMul', min: 0, max: 3, step: 0.05, label: 'damage (x contact damage)' },
+      { path: 'crabClaw.knockback', min: 0, max: 4, step: 0.1, label: 'knockback' },
+      // --- what the pinch looks like ---
+      { path: 'crabClaw.rise', min: 0, max: 1.5, step: 0.05, label: 'how high the claw rears' },
+      { path: 'crabClaw.draw', min: 0, max: 1, step: 0.05, label: 'how far back it draws' },
+      { path: 'crabClaw.gape', min: 0, max: 1.4, step: 0.02, label: 'claw gape' },
+      { path: 'crabClaw.snap', min: 0, max: 0.8, step: 0.02, label: 'snap overshoot (scissor only)' },
+      { path: 'crabClaw.jawScale', min: 0, max: 1.5, step: 0.05, label: 'how wide a real claw opens' },
+      { path: 'crabClaw.counterRotation', min: 0, max: 1, step: 0.05, label: 'forearm shear (0 = whole head swings)' },
+      { path: 'crabClaw.armLag', min: 0, max: 0.4, step: 0.01, label: 'second claw lag' },
+      { path: 'crabClaw.reachWeight', min: 0, max: 1, step: 0.02, label: 'how completely the IK owns the arm' },
+      { path: 'crabClaw.ik.maxBend', min: 0.1, max: 2, step: 0.05, label: 'max bend per joint' },
+      { path: 'crabClaw.ik.rootInfluence', min: 0, max: 1, step: 0.05, label: 'shoulder swing' },
+      { path: 'crabClaw.ik.smoothing', min: 1, max: 30, step: 0.5, label: 'IK smoothing' },
       // --- crab-vs-crab collisions ---
       { path: 'crabPhysics.enabled', type: 'bool', label: 'crab collisions' },
       { path: 'crabPhysics.restitution', min: 0, max: 1, step: 0.05, label: 'bounciness' },
@@ -7527,6 +9405,17 @@ export const TUNER_SCHEMA = [
       { path: 'animation.spring.impulseMax', min: 0, max: 60, step: 1, label: 'hit impulse cap' },
       { path: 'animation.spring.impulseTipBias', min: 0, max: 1, step: 0.02, label: 'impulse toward tail' },
       { path: 'animation.spring.roleLooseness.fin', min: 0.1, max: 2, step: 0.05, label: 'fin looseness (vs tail)' },
+      // Shark cruise — see the `lateral` block on enemies.shark. On the base
+      // shark only; the rest of the family carries its own copy, which is the
+      // same arrangement every other per-creature block here uses.
+      { path: 'enemies.shark.hunt.lateral.climbRange', min: 4, max: 40, step: 1, label: 'shark: flat until this far out' },
+      { path: 'enemies.shark.hunt.lateral.climbFull', min: 1, max: 20, step: 0.5, label: 'shark: full climb inside this' },
+      { path: 'enemies.shark.hunt.lateral.climbFloor', min: 0, max: 1, step: 0.02, label: 'shark: climb allowed at range' },
+      { path: 'enemies.shark.hunt.lateral.climbEase', min: 0.1, max: 6, step: 0.05, label: 'shark: how fast the climb opens' },
+      { path: 'enemies.shark.hunt.lateral.weavePeriod', min: 1, max: 16, step: 0.2, label: 'shark: seconds per weave' },
+      { path: 'enemies.shark.hunt.lateral.weaveAmp', min: 0, max: 10, step: 0.2, label: 'shark: head swing' },
+      { path: 'enemies.shark.hunt.lateral.weaveBody', min: 0, max: 0.6, step: 0.01, label: 'shark: weave reaching the body' },
+      { path: 'enemies.shark.hunt.lateral.wanderPitch', min: 0, max: 1, step: 0.02, label: 'shark: idle wander pitch' },
     ],
   },
   {
@@ -7680,11 +9569,17 @@ export const TUNER_SCHEMA = [
       // guessed at.
       { path: 'grass.sway.amplitude', min: 0, max: 0.4, step: 0.005, label: 'sway distance (of height)' },
       { path: 'grass.sway.stiffness', min: 1, max: 5, step: 0.1, label: 'stiffness (1 = hinges at root)' },
-      { path: 'grass.sway.speed', min: 0, max: 4, step: 0.05, label: 'sway speed' },
+      { path: 'grass.sway.speedSync', type: 'choice', options: BEAT_DIVISIONS, label: 'sway — one per' },
+      { path: 'grass.sway.speed', min: 0, max: 4, step: 0.05, label: '…or free-running, rad/s' },
       { path: 'grass.sway.wavelength', min: 0, max: 2, step: 0.01, label: 'gust spread (0 = all in unison)' },
       { path: 'grass.sway.direction', min: 0, max: 6.28, step: 0.05, label: 'current direction (rad)' },
       { path: 'grass.sway.flutter', min: 0, max: 0.15, step: 0.005, label: 'tip flutter' },
-      { path: 'grass.sway.flutterSpeed', min: 0, max: 12, step: 0.1, label: 'flutter speed' },
+      { path: 'grass.sway.flutterSync', type: 'choice', options: BEAT_DIVISIONS, label: 'flutter — one per' },
+      { path: 'grass.sway.flutterSpeed', min: 0, max: 12, step: 0.1, label: '…or free-running, rad/s' },
+      { type: 'readout', label: 'timing', lines: () => fxTimingReadout([
+        ['sway', 'grass.sway.speedSync', () => (Math.PI * 2) / Math.max(0.01, CONFIG.grass?.sway?.speed ?? 1.1)],
+        ['flutter', 'grass.sway.flutterSync', () => (Math.PI * 2) / Math.max(0.01, CONFIG.grass?.sway?.flutterSpeed ?? 3.7)],
+      ]) },
       { path: 'grass.sway.bend', min: 0, max: 1, step: 0.05, label: 'keep blade length (0 = stretches)' },
     ],
   },
@@ -7783,6 +9678,20 @@ export const TUNER_SCHEMA = [
       { path: 'sealTeam.evolved.damageMul', min: 0.1, max: 3, step: 0.05, label: 'evolved damage x player' },
       { path: 'sealTeam.evolved.speedMul', min: 0.2, max: 2, step: 0.05, label: 'evolved shot speed x player' },
       { path: 'sealTeam.evolved.range', min: 2, max: 40, step: 1, label: 'evolved fire range' },
+    ],
+  },
+  {
+    // The two settings every beat-synced effect shares. The pickers
+    // themselves live beside the effects they drive — that is deliberate:
+    // "what division is the lanternfish's breath on" is a question about the
+    // lanternfish, and burying twelve pickers in one panel would mean
+    // auditioning a fish by scrolling away from it.
+    group: 'Beat sync',
+    section: 'Audio',
+    items: [
+      { path: 'beatSync.enabled', type: 'bool', label: 'quantise shader FX to the beat' },
+      { path: 'beatSync.beatsPerBar', min: 2, max: 12, step: 1, label: 'beats per bar' },
+      { type: 'readout', label: 'grid', lines: () => beatGridReadout() },
     ],
   },
   {
@@ -7961,6 +9870,9 @@ export const TUNER_SCHEMA = [
       { path: 'seagullBomb.diveSpeedMax', min: 5, max: 80, step: 1 },
       { path: 'seagullBomb.diveSteer', min: 0, max: 50, step: 1, label: 'steering while diving' },
       { path: 'seagullBomb.hitRadius', min: 0.1, max: 3, step: 0.05 },
+      // Full 360 because the honest answer depends entirely on which frames the
+      // dive clip is cut from, and 96 is only right for the current ones.
+      { path: 'seagullBomb.divePitch', min: -180, max: 180, step: 1, label: 'cancel the stoop clip’s baked pitch (deg)' },
     ],
   },
   {
@@ -8008,7 +9920,11 @@ export const TUNER_SCHEMA = [
       { path: 'bakalar.beam.topWidth', min: 0.05, max: 1, step: 0.05, label: 'width at the hull (cone)' },
       { path: 'bakalar.beam.edgeFalloff', min: 0.2, max: 6, step: 0.1, label: 'edge falloff (soft <-> tight)' },
       { path: 'bakalar.beam.depthFalloff', min: 0.1, max: 4, step: 0.05, label: 'light falloff with depth' },
-      { path: 'bakalar.beam.bandSpeed', min: 0, max: 3, step: 0.05, label: 'band travel speed' },
+      { path: 'bakalar.beam.bandSync', type: 'choice', options: BEAT_DIVISIONS, label: 'bands — one travel per' },
+      { path: 'bakalar.beam.bandSpeed', min: 0, max: 3, step: 0.05, label: '…or free-running, cycles/s' },
+      { type: 'readout', label: 'timing', lines: () => fxTimingReadout([
+        ['bands', 'bakalar.beam.bandSync', () => 1 / Math.max(0.01, CONFIG.bakalar?.beam?.bandSpeed ?? 0.55)],
+      ]) },
       { path: 'bakalar.beam.bandCount', min: 0.5, max: 12, step: 0.5, label: 'band count' },
       { path: 'bakalar.beam.bandAmount', min: 0, max: 1, step: 0.02, label: 'band strength' },
       { path: 'bakalar.beam.coreBoost', min: 0, max: 3, step: 0.05, label: 'hot core' },
@@ -8197,7 +10113,11 @@ export const TUNER_SCHEMA = [
       { path: 'octoGrab.glow.ambient', min: 0, max: 0.5, step: 0.01, label: 'idle glow floor' },
       { path: 'octoGrab.glow.shimmerAmp', min: 0, max: 1, step: 0.05, label: 'shimmer amount' },
       { path: 'octoGrab.glow.shimmerFreq', min: 0, max: 20, step: 0.5, label: 'shimmer frequency' },
-      { path: 'octoGrab.glow.shimmerSpeed', min: 0, max: 10, step: 0.1, label: 'shimmer speed' },
+      { path: 'octoGrab.glow.shimmerSync', type: 'choice', options: BEAT_DIVISIONS, label: 'shimmer — one travel per' },
+      { path: 'octoGrab.glow.shimmerSpeed', min: 0, max: 10, step: 0.1, label: '…or free-running, rad/s' },
+      { type: 'readout', label: 'timing', lines: () => fxTimingReadout([
+        ['shimmer', 'octoGrab.glow.shimmerSync', () => (Math.PI * 2) / Math.max(0.01, CONFIG.octoGrab?.glow?.shimmerSpeed ?? 2.4)],
+      ]) },
       { path: 'octoGrab.glow.reachLevel', min: 0, max: 1, step: 0.05, label: 'glow while reaching' },
       { path: 'octoGrab.glow.holdLevel', min: 0, max: 1, step: 0.05, label: 'glow while holding' },
       { path: 'octoGrab.glow.riseRate', min: 0.5, max: 20, step: 0.5, label: 'glow rise rate' },
@@ -8398,6 +10318,11 @@ export const TUNER_SCHEMA = [
       { path: 'grid.touchGlow.gain', min: 0, max: 4, step: 0.1, label: 'finger glow brightness' },
       { path: 'grid.touchGlow.push', min: 0, max: 3, step: 0.05, label: 'finger shove' },
       { path: 'grid.touchGlow.swirl', min: 0, max: 3, step: 0.05, label: 'finger swirl' },
+      { path: 'grid.touchGlow.ripple.strength', min: 0, max: 8, step: 0.1, label: 'finger knock' },
+      { path: 'grid.touchGlow.ripple.radius', min: 1, max: 20, step: 0.5, label: 'finger knock reach' },
+      { path: 'grid.touchGlow.charge.grow', min: 0, max: 4, step: 0.1, label: 'charge growth' },
+      { path: 'grid.touchGlow.charge.pulseAtFull', min: 0.04, max: 1, step: 0.01, label: 'charge beat at full (s)' },
+      { path: 'grid.touchGlow.charge.pulseStrength', min: 0, max: 8, step: 0.1, label: 'charge pulse' },
     ],
   },
   {
@@ -8700,6 +10625,54 @@ export function applyEnemiesFromTable() {
   applyEnemyTable(CONFIG.enemies, ENEMY_BASE, ENEMY_ROWS);
 }
 
+// The night crab walks, feeds and piles on EXACTLY like the day crab, because
+// it is the day crab. Pointing its nested behaviour blocks at the originals is
+// what keeps that true — a duplicate would be seventy lines of feeding tuning
+// maintained in two places, and the copy would be stale the first time anyone
+// dragged a slider.
+//
+// Runs AFTER tuning has been merged, and has to: the merge gives each crab its
+// own copy of every nested block, so linking earlier would just be undone. The
+// consequence is that the night crab always ends up wearing the day crab's
+// behaviour even if a snapshot carried something else for it — which is the
+// intended reading of "it is the same animal", and the only outcome that
+// cannot drift.
+//
+// Nested blocks only. Every flat stat is enemies.csv's, and the two crabs
+// genuinely differ there.
+//
+// --- and the LOOK -----------------------------------------------------------
+// `sizeMultiplier` is the trap. CONFIG.assetLooks ships EMPTY — every entry in
+// it is tuning — so a newly added asset starts at 1 while the thing it is a
+// variant of may have been dragged to something else entirely. The walking crab
+// sits at 2.42, so without this the night crab is the same animal at 40% scale,
+// and because the hitbox is derived from the visual scale it would be a
+// correspondingly smaller target too.
+//
+// Mirrored rather than hardcoded: writing 2.42 into config.js would be a second
+// copy of a number the user can drag, and the two would disagree the first time
+// they did. Only the size is copied — glow and emissive are deliberately left
+// alone, since the ember crab is unlit with no emissive mask and gets its light
+// from `emberClaw` instead.
+//
+// Not written into imported-tuning.json, which the live game rewrites from its
+// own state; a field config.js owns is the thing that survives.
+function linkCrabVariants() {
+  const day = CONFIG.enemies.walkingCrab;
+  const night = CONFIG.enemies.emberCrab;
+  if (!day || !night) return;
+  night.crawl = day.crawl;
+  night.beatSync = day.beatSync;
+
+  const looks = CONFIG.assetLooks ?? (CONFIG.assetLooks = {});
+  const dayLook = looks[day.asset];
+  if (dayLook?.sizeMultiplier != null) {
+    const nightLook = looks[night.asset] ?? (looks[night.asset] = {});
+    if (nightLook.sizeMultiplier == null) nightLook.sizeMultiplier = dayLook.sizeMultiplier;
+  }
+}
+linkCrabVariants();
+
 // Everything a CSV owns, taken back out of a snapshot on its way in.
 //
 // Three of these used to be saved tuning, and every snapshot written before
@@ -8722,6 +10695,16 @@ function withoutTableOwnedKeys(snapshot) {
   if (rest.enemies) rest.enemies = withoutEnemyTableFields(rest.enemies);
   if (rest.emitters) rest.emitters = withoutCodeOwnedFields(rest.emitters, ['colors']);
   if (rest.feedback) rest.feedback = withoutCodeOwnedFields(rest.feedback, ['emit']);
+  // The voice cap has never had a control either — the Sound tab tunes levels
+  // and the bus, not polyphony — so every snapshot carrying `maxConcurrent` is
+  // an echo of whatever config.js held the day it was written. Left in, that
+  // echo wins: raising the cap in source would do nothing at all, because a
+  // snapshot on disk AND one in localStorage both still said 12. Everything
+  // else under `audio` is real, reachable tuning and merges normally.
+  if (rest.audio && 'maxConcurrent' in rest.audio) {
+    const { maxConcurrent, ...audio } = rest.audio;
+    rest.audio = audio;
+  }
   return rest;
 }
 
@@ -8994,6 +10977,7 @@ export function loadTuningFromStorage() {
       }
     }
     pruneUnknownEnemies();
+    linkCrabVariants();
     applyUpgradesFromTable();
     applyEnemiesFromTable();
     return true;
@@ -9017,6 +11001,7 @@ export function importTuning(rawSnapshot) {
     }
   }
   pruneUnknownEnemies();
+  linkCrabVariants();
   applyUpgradesFromTable();
   applyEnemiesFromTable();
 }

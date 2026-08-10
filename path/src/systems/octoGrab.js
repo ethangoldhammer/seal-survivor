@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { ASSETS, createVisual, assetSignatureColor, assetBaseColor } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
-import { buildChain, applyChainToPoint, measureReach } from './ikChain.js';
+import { boneRun, buildChain, applyChainToPoint, measureReach } from './ikChain.js';
 import { springFollow } from './orbit.js';
 import { attachBioluminescence } from './bioluminescence.js';
 import { createBoneSpring } from './boneSpring.js';
@@ -189,36 +189,6 @@ function nearestCreature(x, y, list, radius) {
   return best;
 }
 
-// Walk a single-child bone run from `root` to `tip`. The rig's chains are
-// unbranched, so the middle is derivable — which beats listing all 19 bones
-// per arm in assets.js, where 114 names is 114 chances to typo one and get a
-// chain that silently resolves short.
-function boneRun(instance, rootName, tipName, label) {
-  const root = instance.getObjectByName(rootName);
-  const tip = instance.getObjectByName(tipName);
-  if (!root || !tip) {
-    console.warn(`[octoGrab] ${label}: could not find ${!root ? rootName : tipName} — this arm will not move.`);
-    return null;
-  }
-
-  // Walk UP from the tip rather than down from the root: a bone has one
-  // parent but may have several children, so the upward walk is unambiguous
-  // even if the rig later grows a branch.
-  const names = [];
-  let cur = tip;
-  while (cur && cur !== root) {
-    names.unshift(cur.name);
-    cur = cur.parent;
-    if (names.length > 64) break; // a cycle, or the tip isn't under this root
-  }
-  if (cur !== root) {
-    console.warn(`[octoGrab] ${label}: ${tipName} is not a descendant of ${rootName} — this arm will not move.`);
-    return null;
-  }
-  names.unshift(root.name);
-  return names;
-}
-
 export function createOctoGrabber() {
   body = createVisual('octoGrabber');
   body.visible = false;
@@ -317,6 +287,7 @@ function buildChains() {
     ambient: g.ambient,
     shimmerAmp: g.shimmerAmp,
     shimmerFreq: g.shimmerFreq,
+    shimmerSync: g.shimmerSync,
     shimmerSpeed: g.shimmerSpeed,
   });
 }

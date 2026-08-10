@@ -163,7 +163,10 @@ const scene = new THREE.Scene();
 const grid = createGrid(scene);
 const at = new THREE.Vector3(0, 0, 0);
 const vel = new THREE.Vector3(0, 0, 0);
-const step = (dt = 1 / 60, n = 1) => { for (let i = 0; i < n; i++) grid.update(dt, at, vel, camera); };
+// The strike meter, handed in the way main.js hands it in. Mutated by the
+// CHARGE section below and left alone by everything else.
+const meter = { camera, charging: false, charge: 0 };
+const step = (dt = 1 / 60, n = 1) => { for (let i = 0; i < n; i++) grid.update(dt, at, vel, meter); };
 const uni = () => scene.children.find((c) => c.isLineSegments).material.uniforms;
 
 check(`the shader loops over exactly ${TOUCH_SLOTS} fingers, the same number input.js hands out`,
@@ -276,6 +279,135 @@ check('the tuner switch really turns it off', uni().uTouch.value.every((u) => u.
 CONFIG.grid.touchGlow.enabled = wasEnabled;
 clearPendingInput();
 step(1 / 60, 60);
+
+// ---------------------------------------------------------------------------
+section('KNOCK — a finger landing ripples, and the water springs back');
+// ---------------------------------------------------------------------------
+// The knock goes into the SAME ring buffer every kill and explosion uses, which
+// is the whole point: it decays on grid.rippleDecay along with them and costs
+// nothing extra to draw. So counting is easy — reset() zeroes every slot's
+// strength, and the buffer is filled round-robin from slot 0.
+
+const KNOCK = GLOW.ripple;
+const CHG = GLOW.charge;
+const rippleAt = (i) => ({
+  pos: uni().uRipples.value[i],
+  params: uni().uRippleParams.value[i],
+});
+const ripplesFired = () => uni().uRippleParams.value.filter((p) => p.x !== 0).length;
+
+clearPendingInput();
+grid.reset();
+step(1 / 60, 2);
+check('an idle grid knocks nothing', ripplesFired() === 0);
+
+fire('touchstart', [60, 100, 600]);
+step();
+check('a finger landing knocks the lattice', ripplesFired() === 1);
+check('...with the configured strength and reach',
+  near(rippleAt(0).params.x, KNOCK.strength) && near(rippleAt(0).params.y, KNOCK.radius),
+  `strength ${rippleAt(0).params.x}, radius ${rippleAt(0).params.y}`);
+check('...at the finger, not at the origin',
+  near(rippleAt(0).pos.x, worldXAt(touchSlots[0].x), 1e-3) &&
+  near(rippleAt(0).pos.y, worldYAt(touchSlots[0].y), 1e-3));
+
+step(1 / 60, 30);
+check('a finger just sitting there does not keep knocking', ripplesFired() === 1);
+
+fire('touchend', [60, 100, 600]);
+step();
+check('lifting knocks it again', ripplesFired() === 2);
+check('...softer than the landing, by liftScale',
+  near(rippleAt(1).params.x, KNOCK.strength * KNOCK.liftScale),
+  `${rippleAt(1).params.x.toFixed(2)} vs ${KNOCK.strength} on the way down`);
+
+check('the knock springs back rather than holding — it decays like every other ripple',
+  CONFIG.grid.rippleDecay > 0 &&
+  /decay = exp\(-age \* uDecay\)/.test(scene.children.find((c) => c.isLineSegments).material.vertexShader),
+  `snap-back ${CONFIG.grid.rippleDecay}/s`);
+check('...and oscillates on the way, which is what makes it a ripple',
+  /wave = sin\(dist \* uWavelength - age \* uFreq\)/.test(
+    scene.children.find((c) => c.isLineSegments).material.vertexShader));
+
+// ---------------------------------------------------------------------------
+section('CHARGE — the third finger grows and pulses as it winds up');
+// ---------------------------------------------------------------------------
+
+clearPendingInput();
+grid.reset();
+const frame = (dt = 1 / 60, n = 1) => {
+  for (let k = 0; k < n; k++) { updateInput(camera, at); grid.update(dt, at, vel, meter); }
+};
+
+fire('touchstart', [70, 100, 600]); // left half  -> the move stick, slot 0
+fire('touchstart', [71, 300, 600]); // right half -> the aim stick,  slot 1
+fire('touchstart', [72, 120, 640]); // left half again -> the third-finger strike
+frame();
+check('the third finger takes a slot of its own', slotOf(72) === 2);
+check('...and it is the one marked as charging',
+  touchSlots[2].charging && !touchSlots[0].charging && !touchSlots[1].charging);
+
+const u2 = uni().uTouch.value[2];
+const reach2 = GLOW.radius * GLOW.fingers[2].spread;
+meter.charging = true;
+meter.charge = 0;
+frame(1 / 60, 20);
+check('an empty meter leaves it at its normal size', near(u2.z, reach2, 1e-3));
+
+meter.charge = 1;
+frame(1 / 60, 40);
+check('a full charge grows its reach', u2.z > reach2, `${reach2.toFixed(2)} -> ${u2.z.toFixed(2)}`);
+check('...by exactly the configured growth', near(u2.z, reach2 * (1 + CHG.grow), 1e-3));
+check('...and burns brighter with it',
+  near(u2.w, GLOW.fingers[2].power * (1 + CHG.power), 0.03),
+  `w = ${u2.w.toFixed(3)}`);
+
+// The regression this section exists for: the strike meter is ONE meter, so a
+// naive read of `charging` swells every finger on the glass at once.
+check('the two thumbs steering do NOT grow along with it',
+  near(uni().uTouch.value[0].z, GLOW.radius * GLOW.fingers[0].spread, 1e-3) &&
+  near(uni().uTouch.value[1].z, GLOW.radius * GLOW.fingers[1].spread, 1e-3));
+
+// Pulses over a one-second window. The landing knocks and the first pulse all
+// happen in the settle frame, which is why that count is taken as a baseline
+// and subtracted rather than assumed to be zero.
+const pulsesPerSecond = (charge) => {
+  grid.reset();
+  meter.charge = charge;
+  frame(1 / 60, 1);
+  const settled = ripplesFired();
+  frame(1 / 60, 60);
+  return ripplesFired() - settled;
+};
+const slow = pulsesPerSecond(0.05);
+const fast = pulsesPerSecond(1);
+check('a wind-up pulses the grid outward on a beat', slow >= 1 && fast >= 1);
+check('the beat TIGHTENS as the charge fills', fast > slow, `${slow}/s empty -> ${fast}/s full`);
+check('...to the configured cadence at full', Math.abs(fast - 1 / CHG.pulseAtFull) <= 2,
+  `${fast}/s vs ${(1 / CHG.pulseAtFull).toFixed(1)}/s asked for`);
+check('...and the early beat matches the slow end too',
+  Math.abs(slow - 1 / CHG.pulseAt) <= 2, `${slow}/s vs ${(1 / CHG.pulseAt).toFixed(1)}/s asked for`);
+
+// An empty fuel tank is not a released button. The player is still holding, the
+// strike is still coming, and a backdrop that went quiet at exactly that moment
+// reads as the game having dropped the input.
+meter.charging = false;
+const quiet = pulsesPerSecond(1);
+check('nothing pulses once the finger is no longer winding up', quiet === 0);
+
+meter.charging = true;
+meter.charge = 0.6;
+frame(1 / 60, 10);
+fire('touchend', [72, 120, 640]);
+frame(1 / 60, 30);
+check('letting go stops the pulsing', pulsesPerSecond(1) === 0);
+check('...and the grown finger shrinks back out', uni().uTouch.value[2].w === 0);
+
+meter.charging = false;
+meter.charge = 0;
+clearPendingInput();
+grid.reset();
+step(1 / 60, 4);
 
 // ---------------------------------------------------------------------------
 section('SHADER — the uniforms it declares are the ones it is given');

@@ -101,6 +101,84 @@ function startingHour() {
 let clock = startingHour();
 let started = false;
 
+// ---------------------------------------------------------------------------
+// NIGHT LOCK — dev-only. Pins the clock at full dark so the glowing half of
+// the roster can be looked at on demand.
+//
+// WHY IT IS NOT A CONFIG VALUE, which is the obvious way to do this and the
+// wrong one. CONFIG.dayNight already has `paused` + `scrubHour`, and parking
+// the clock through those is exactly what the N-key lineup in main.js refuses
+// to do: the next tuner edit snapshots the whole live config into
+// imported-tuning.json, and a debugging convenience arrives in the repo as
+// though someone had chosen a permanent midnight. A module-level variable is
+// unreachable from the save path, so no amount of dragging a slider can
+// persist it.
+//
+// WHY IT CANNOT SHIP. `import.meta.env.DEV` is a COMPILE-TIME constant, so
+// `vite build` folds this entire block away — the query param and the console
+// hook do not exist in the deployed bundle, whatever the URL says. That is a
+// stronger guarantee than a runtime check, which would still be in the file
+// and still be reachable by anyone who guessed the flag.
+//
+//   ?night        lock at the darkest hour
+//   ?night=17.5   lock at any hour, for judging dusk
+//   Shift+N       toggle it mid-run without a reload (main.js)
+//   __night(h)    the same, from the console
+//
+// null = the clock runs normally, which is every build anyone else ever sees.
+let nightLock = null;
+
+// The hour the sun sits furthest below the horizon — elevation exactly -1.
+// Derived from the orbit rather than hardcoded to midnight so it stays the
+// darkest moment if `riseHour` is ever retuned, and so it cannot quietly
+// become "quite dark" after someone moves sunrise.
+function darkestHour() {
+  return (((CONFIG.dayNight?.orbit?.riseHour ?? 6) + 18) % 24 + 24) % 24;
+}
+
+function asHour(at) {
+  return Number.isFinite(at) ? (((at % 24) + 24) % 24) : darkestHour();
+}
+
+/**
+ * Lock the clock, move the lock, or hand it back. Dev builds only.
+ *
+ * @param at `true`/omitted for the darkest hour, a number for a specific one,
+ *           `false` or `null` to release.
+ * @returns a one-line status, so the console and the keybind can both say what
+ *          just happened rather than appearing to do nothing.
+ */
+export function setNightLock(at = true) {
+  if (!import.meta.env?.DEV) return 'night lock is dev-only';
+  nightLock = (at === false || at === null) ? null : asHour(typeof at === 'number' ? at : NaN);
+  // Republish immediately: the caller is usually a keypress, and waiting for
+  // the next frame makes a toggle feel like it missed.
+  updateDayCycle(0);
+  if (nightLock == null) return 'night lock off — clock running';
+  // A lock on a disabled cycle is a silent no-op, and silence reads as a
+  // broken keybind rather than as a switched-off system.
+  if (!CONFIG.dayNight?.enabled) {
+    return `night lock at ${nightLock.toFixed(2)}h, but CONFIG.dayNight.enabled is false — nothing will get dark`;
+  }
+  return `night lock at ${nightLock.toFixed(2)}h (night ${skyLight.night.toFixed(2)}, ${dayState.phase})`;
+}
+
+/** The locked hour, or null. For anything that wants to say the lock is on. */
+export function nightLockedAt() {
+  return nightLock;
+}
+
+if (import.meta.env?.DEV) {
+  const flag = new URLSearchParams(window.location.search).get('night');
+  // Present-but-empty (?night) is the common case and must not parse as hour 0
+  // by accident — that it happens to be near midnight is luck, not intent.
+  if (flag != null) console.info(`[daylight] ${setNightLock(flag === '' ? true : Number(flag))}`);
+  // Toggling from the console beats a reload: it keeps the run, the upgrades
+  // and the creatures already in the water, which is the whole reason you
+  // wanted to see them at night.
+  window.__night = setNightLock;
+}
+
 function clamp01(v) {
   return v < 0 ? 0 : (v > 1 ? 1 : v);
 }
@@ -149,7 +227,10 @@ function hoursFor(seconds, cfg = CONFIG.dayNight) {
  */
 export function advanceClock(seconds) {
   const cfg = CONFIG.dayNight;
-  if (!cfg?.enabled || cfg.paused || !(seconds > 0)) return;
+  // nightLock included for the same reason `paused` is: a locked clock that
+  // still crept forward on every mouthful of chum is not a locked clock, and
+  // the creep would show up as dayState.hours disagreeing with the sky.
+  if (!cfg?.enabled || cfg.paused || nightLock != null || !(seconds > 0)) return;
   clock += hoursFor(seconds, cfg);
   while (clock >= 24) { clock -= 24; dayState.days += 1; }
   dayState.hours = clock;
@@ -238,7 +319,11 @@ export function updateDayCycle(dt) {
     return;
   }
 
-  if (cfg.paused) {
+  // The dev lock wins over both the running clock and the tuner's scrub, so
+  // Shift+N does something visible whatever state the ` panel was left in.
+  if (nightLock != null) {
+    clock = nightLock;
+  } else if (cfg.paused) {
     clock = cfg.scrubHour ?? clock;
   } else {
     clock += hoursFor(dt, cfg);

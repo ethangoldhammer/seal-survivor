@@ -14,6 +14,15 @@
       "port": 5188
     },
     {
+      "name": "csv-editor",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "csv"
+      ],
+      "port": 5177
+    },
+    {
       "name": "dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": [

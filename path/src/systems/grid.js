@@ -244,6 +244,10 @@ export function createGrid(scene) {
   // the screen from wherever the last one was.
   const touchOwner = new Array(MAX_TOUCH).fill(null);
   const touchPoint = new THREE.Vector3();
+  // Seconds until this finger's next charge pulse. Counted down per slot rather
+  // than off one global clock so two fingers charging at once don't pulse in
+  // lockstep, which reads as one big event instead of two.
+  const touchPulseAt = new Float32Array(MAX_TOUCH);
 
   function build() {
     dispose();
@@ -325,13 +329,21 @@ export function createGrid(scene) {
   // each frame, and a world position cached at touchdown would slide out from
   // under it. Slots keep their last NDC after the lift, so the fade-out stays
   // put on screen where the finger was.
-  function updateTouch(dt, camera) {
+  //
+  // `view.charging` / `view.charge` are the strike meter, handed in by main.js
+  // rather than imported. systems/strike.js pulls the whole enemy graph in
+  // behind it, and the backdrop wants two numbers, not a dependency on combat.
+  function updateTouch(dt, view) {
+    const camera = view.camera;
     const cfg = CONFIG.grid.touchGlow ?? {};
     const fingers = cfg.fingers ?? [];
     const on = cfg.enabled !== false && !!camera;
 
     touchWarp.set(cfg.push ?? 0, cfg.swirl ?? 0, cfg.wave ?? 1, cfg.spin ?? 0);
     touchGain.set(cfg.gain ?? 0, cfg.alpha ?? 0);
+
+    const knock = cfg.ripple ?? {};
+    const chg = cfg.charge ?? {};
 
     for (let i = 0; i < MAX_TOUCH; i++) {
       const slot = touchSlots[i];
@@ -341,13 +353,23 @@ export function createGrid(scene) {
       const finger = fingers[i] ?? fingers[fingers.length - 1] ?? {};
       const u = touch[i];
 
-      if (live && slot.id !== touchOwner[i]) {
+      const landed = live && slot.id !== touchOwner[i];
+      const lifted = !live && touchOwner[i] !== null;
+      if (landed) {
         // A brand-new finger in this slot: start from nothing, wherever it
         // landed, instead of inheriting the last one's level and position.
         u.w = 0;
         touchOwner[i] = slot.id;
+        touchPulseAt[i] = 0;
       }
       if (!live) touchOwner[i] = null;
+
+      // How far into a wind-up this finger is, 0..1. Only the finger actually
+      // doing it grows — the strike meter is ONE meter shared by every route
+      // into it (a held trigger charges the same one), so without the per-slot
+      // flag a thumb resting on the glass would swell along with it.
+      const winding = live && slot.charging && !!view.charging;
+      const wind = winding ? Math.min(1, Math.max(0, view.charge ?? 0)) : 0;
 
       // Skip the unproject once a released slot has faded out — there's nothing
       // left to place, and this is the state every slot is in most of the time.
@@ -355,13 +377,37 @@ export function createGrid(scene) {
         touchPoint.set(slot.x, slot.y, 0).unproject(camera);
         u.x = touchPoint.x;
         u.y = touchPoint.y;
-        u.z = Math.max(0.001, (cfg.radius ?? 6) * (finger.spread ?? 1));
+        u.z = Math.max(0.001,
+          (cfg.radius ?? 6) * (finger.spread ?? 1) * (1 + (chg.grow ?? 0) * wind));
+      }
+
+      // Both knocks are fired AFTER the position above is resolved, or the
+      // first one of a touch would land at wherever the slot pointed last.
+      if (landed) ripple(u.x, u.y, knock.strength ?? 0, knock.radius ?? 1);
+      if (lifted) {
+        ripple(u.x, u.y, (knock.strength ?? 0) * (knock.liftScale ?? 0), knock.radius ?? 1);
+      }
+
+      // The wind-up's own beat. Timed rather than fired on a fraction of the
+      // meter so it keeps pulsing on an empty tank — the player is still
+      // holding, the strike is still coming, and a backdrop that went quiet
+      // exactly when the fuel ran out would read as the input being dropped.
+      if (winding) {
+        touchPulseAt[i] -= dt;
+        if (touchPulseAt[i] <= 0) {
+          ripple(u.x, u.y, (chg.pulseStrength ?? 0) * (0.35 + 0.65 * wind),
+            (chg.pulseRadius ?? 1) * (0.55 + 0.45 * wind));
+          const gap = (chg.pulseAt ?? 0.5) + ((chg.pulseAtFull ?? 0.15) - (chg.pulseAt ?? 0.5)) * wind;
+          touchPulseAt[i] = Math.max(0.02, gap);
+        }
+      } else {
+        touchPulseAt[i] = 0; // so the next wind-up pulses immediately
       }
 
       // Exponential, so it's framerate-independent — the same feel at 60 and at
       // 120. Attack is the faster of the two: a finger landing should be
       // instant, a finger lifting should trail.
-      const target = live ? (finger.power ?? 1) : 0;
+      const target = live ? (finger.power ?? 1) * (1 + (chg.power ?? 0) * wind) : 0;
       const rate = live ? (cfg.attack ?? 16) : (cfg.release ?? 5);
       u.w += (target - u.w) * (1 - Math.exp(-Math.max(0, rate) * dt));
       if (!live && u.w < 0.001) u.w = 0;
@@ -370,7 +416,7 @@ export function createGrid(scene) {
     }
   }
 
-  function update(dt, shipPos, shipVel, camera) {
+  function update(dt, shipPos, shipVel, view = {}) {
     clock += dt;
     if (!material) return;
     material.uniforms.uTime.value = clock;
@@ -395,7 +441,7 @@ export function createGrid(scene) {
       CONFIG.grid.wakeStrength * (1 + speed * CONFIG.grid.wakeSpeedGain)
     );
 
-    updateTouch(dt, camera);
+    updateTouch(dt, view);
   }
 
   function reset() {
@@ -404,6 +450,7 @@ export function createGrid(scene) {
     for (let i = 0; i < MAX_TOUCH; i++) {
       touch[i].set(0, 0, 1, 0);
       touchOwner[i] = null;
+      touchPulseAt[i] = 0;
     }
   }
 

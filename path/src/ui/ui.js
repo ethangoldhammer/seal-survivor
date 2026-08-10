@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { drawUpgrades } from '../upgradeTable.js';
+import { rollElementFor, elementCardName, elementCardDesc } from '../systems/elements.js';
 import quipsCsv from '../quips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
@@ -825,12 +826,21 @@ function nextStack(choice) {
 // name is still whatever the Upgrades tab has it set to — renaming Seal Team
 // there renames the numbered card too.
 function cardName(choice) {
+  // A rolled card names the variant it is offering — "Glow Up! 1: Venom" — so
+  // which element you are being handed is on the card BEFORE you commit to it.
+  // A blind pick on a run-defining upgrade is a slot machine, not a choice.
+  if (choice.rolledElement) {
+    return elementCardName(choice.name, choice.rolledElement, nextStack(choice));
+  }
   return choice.perLevelName ? `${choice.name} ${nextStack(choice)}` : choice.name;
 }
 
 // `levelDescs` swaps the description at a specific stack, so a card that
 // changes what it does at level N can say so on the card that grants it.
 function cardDesc(choice) {
+  if (choice.rolledElement) {
+    return elementCardDesc(choice.rolledElement, nextStack(choice)) ?? choice.desc;
+  }
   return choice.levelDescs?.[nextStack(choice)] ?? choice.desc;
 }
 
@@ -844,7 +854,15 @@ export function showLevelUp() {
   const picks = drawUpgrades(pool, CONFIG.upgradeChoices);
 
   el.svCards.innerHTML = '';
-  for (const choice of picks) {
+  for (const def of picks) {
+    // An upgrade declaring `roll` picks its variant HERE, at draw time, so the
+    // card can show what it is offering. Rolled onto a SHALLOW COPY rather than
+    // onto the CONFIG entry itself: config.js is the shared definition, and
+    // writing this frame's roll into it would leak the variant into the tuner's
+    // Upgrades tab and into the next draw.
+    const choice = def.roll === 'biolumElement'
+      ? { ...def, rolledElement: rollElementFor() }
+      : def;
     const card = document.createElement('div');
     card.className = 'sv-card';
     card.tabIndex = 0;

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { spawnProjectile } from '../entities/projectiles.js';
+import { player } from '../entities/player.js';
+import { projectileCount } from '../stats.js';
 
 // MUSSEL BARRAGE — the whole flight of homing mussels thrown at once, on a
 // strike released at or above CONFIG.musselVolley.chargeThreshold.
@@ -62,7 +64,10 @@ export function fireMusselBarrage(scene, power, level, dashDir, originFor, hooks
   if (!barrageReady(power, level)) return 0;
 
   const c = CONFIG.musselVolley;
-  const count = barrageCount(level);
+  // Clone Warz is applied HERE rather than inside barrageCount, which stays a
+  // pure level -> shells function for the card text and the tuner readout. The
+  // barrage is already gated on being owned by barrageReady above.
+  const count = projectileCount(barrageCount(level), player.stats);
   const damage = barrageDamage(level);
   const heading = Math.atan2(dashDir.y, dashDir.x);
 

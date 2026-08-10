@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT } from './arena.js';
 import { createGrid } from './systems/grid.js';
+import { createConstellations } from './systems/constellations.js';
 import { createHexTiles } from './systems/hexTiles.js';
 import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime } from './systems/water.js';
 import { createSkyMaterial, updateSkyMaterial } from './systems/sky.js';
@@ -54,8 +55,27 @@ export function createWorld(container) {
   const backdrop = new THREE.Group();
   scene.add(backdrop);
 
-  const grid = createGrid(scene);
+  const warpGrid = createGrid(scene);
+  const constellations = createConstellations(scene);
   const hexTiles = createHexTiles(scene);
+
+  // ONE PUNCH, BOTH BACKDROPS. Everything juicy in the game already rings the
+  // grid — kills, chain reactions, trawlers going up, a finger landing on the
+  // glass — through `world.grid.ripple`. The night sky is the same machine
+  // pointed at the air (see systems/constellations.js) and it wants the same
+  // events, so the ripple is teed here rather than at the call sites: a second
+  // set of them would start out identical and drift the first time one of them
+  // was edited and the other wasn't.
+  //
+  // Nothing outside this file knows there are two. `world.grid` is still the
+  // grid — same object, same methods — with one function in front of it.
+  const grid = {
+    ...warpGrid,
+    ripple(x, y, strength, radius) {
+      warpGrid.ripple(x, y, strength, radius);
+      constellations.ripple(x, y, strength, radius);
+    },
+  };
 
   // The sky systems live OUTSIDE the backdrop group on purpose. The backdrop
   // is torn down and rebuilt on every resize, and these three hold things
@@ -213,6 +233,13 @@ export function createWorld(container) {
     // grid and the hex tiles, and at a fifteenth of the camera's speed that
     // is not a thing anyone can see.
     celestials.update(camAnchor.x);
+    // No parallax on this one, and that is not an oversight. The sky plane's
+    // own star field is painted from vWorldPos on a mesh that never moves, so
+    // it is welded to the world; the constellations are drawn between those
+    // exact stars, and a layer that drifted against them at even a fifteenth
+    // of the camera's speed would visibly walk off its own field. It gets the
+    // camera only so a finger on the glass can be resolved into the sky.
+    constellations.update(dt, { camera });
     clouds.update(dt);
     if (seabedMesh) seabedMesh.material.color.set(CONFIG.colors.seabed);
     if (depthLines) depthLines.material.color.set(CONFIG.colors.depthLine);
@@ -249,6 +276,9 @@ export function createWorld(container) {
     renderer.setSize(window.innerWidth, window.innerHeight);
     buildBackdrop();
     grid.build();
+    // The field is generated across the frame's own bounds, so a resize is a
+    // rebuild — same as the grid, and for the same reason.
+    constellations.build();
   }
 
   // Set by main.js: what a flash SOUNDS like and what a strike DOES are
@@ -300,6 +330,10 @@ export function createWorld(container) {
     // wave is. Pushed from here rather than pulled in grid.update() because
     // waveT belongs to the surface, not to the grid.
     grid.setWaveTime(waveT);
+    // Same push, same reason: the night sky hazes out at the water line, and
+    // it has to fade against the curve this frame draws rather than the last
+    // one's or the seam crawls.
+    constellations.setWaveTime(waveT);
     // Same reasoning for the fill, which clips itself to the wave: it has to be
     // cut on the curve this frame draws, not the previous one.
     if (waterMesh) setWaterWaveTime(waterMesh.material, waveT);
@@ -544,5 +578,5 @@ export function createWorld(container) {
   resize();
   window.addEventListener('resize', resize);
 
-  return { scene, camera, renderer, resize, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, hexTiles, rain, lightning, setLightningHandler };
+  return { scene, camera, renderer, resize, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, constellations, hexTiles, rain, lightning, setLightningHandler };
 }

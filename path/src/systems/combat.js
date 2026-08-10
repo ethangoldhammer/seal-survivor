@@ -6,6 +6,7 @@ import { damageCrew } from './crew.js';
 import { enemies, removeEnemy } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
+import { applyElementalHit } from './elements.js';
 
 // A chaining shot (the bounce weapon) spends one of its bounces to ricochet off
 // whatever it just hit and carry on, instead of being consumed by the impact.
@@ -48,6 +49,19 @@ export function resolveCombat(dt, scene, hooks) {
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
       hooks.onEnemyDamaged?.(e, b.damage, b.mesh.position.x, b.mesh.position.y, b.dir, b);
+
+      // Glow Up! rides the BASIC SHOT and nothing else here. Gated on the
+      // source rather than on the faction because every ability in the game
+      // spawns its projectiles through this same list — un-gated, one card
+      // would put an element on mussels, scallops, starfish, ricochets, pearls
+      // and shrapnel at once, which is a different (and much larger) upgrade
+      // than the one on the card.
+      //
+      // Applied BEFORE the death check below, so a pellet that finishes a fish
+      // with its elemental half still counts as the kill.
+      if (b.source === 'gun') {
+        applyElementalHit(scene, e, b.damage, enemies, hooks);
+      }
 
       if (e.hp <= 0) {
         hooks.onEnemyKilled(e);
@@ -174,6 +188,35 @@ export function resolveCombat(dt, scene, hooks) {
         }
       }
       continue;
+    }
+
+    // The crab's pinch. A burst on the frame the claws meet, at a longer reach
+    // than touching — the crab told you it was coming (systems/crabClaw.js
+    // spends 0.42s rearing up first), so this is the price of not reading it.
+    //
+    // Deliberately IN ADDITION to the contact damage below rather than instead
+    // of it: touching a crab still hurts, and the pinch is what stops standing
+    // just outside touching distance from being free. `damageMul` is what keeps
+    // that from being a straight buff — see CONFIG.crabClaw.
+    //
+    // Both are charged the same frame if the player is close enough for both,
+    // which is correct: they walked into a crab that was already swinging.
+    if (e.justPinched) {
+      const pc = CONFIG.crabClaw;
+      const px = e.mesh.position.x - pPos.x;
+      const py = e.mesh.position.y - pPos.y;
+      // Scaled by the crab's own radius, so a crab that has grown over a long
+      // run reaches proportionally further — the same rule the driver aims by.
+      const pinchReach = e.radius * (pc.range ?? 2.4) + pRadius;
+      if (px * px + py * py <= pinchReach * pinchReach && !isInvulnerable()) {
+        const base = e.contactDamage ?? e.def.contactDamage;
+        hooks.onPlayerHit(
+          base * (pc.damageMul ?? 0.75),
+          // Shoved harder than an ordinary contact, and away from the crab.
+          { x: -px * (pc.knockback ?? 1.4), y: -py * (pc.knockback ?? 1.4) },
+          e.type,
+        );
+      }
     }
 
     const reach = e.radius + pRadius;

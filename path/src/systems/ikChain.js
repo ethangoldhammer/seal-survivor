@@ -204,6 +204,42 @@ export function tipWorld(chain, out, lengthMul = 1) {
 }
 
 /**
+ * Resolve the bone NAMES between a root and a tip, inclusive.
+ *
+ * Walking a single-child run beats listing every bone in assets.js: the
+ * octopus's six arms are 19 bones each, and 114 hand-typed names is 114
+ * chances to typo one and get a chain that silently resolves short.
+ *
+ * Walks UP from the tip rather than down from the root: a bone has one parent
+ * but may have several children, so the upward walk stays unambiguous even if
+ * the rig later grows a branch. Returns null (having warned) when either end
+ * is missing or the tip turns out not to be under the root at all — every
+ * caller treats that as "this limb doesn't move".
+ */
+export function boneRun(instance, rootName, tipName, label) {
+  const root = instance.getObjectByName(rootName);
+  const tip = instance.getObjectByName(tipName);
+  if (!root || !tip) {
+    console.warn(`[ikChain] ${label}: could not find ${!root ? rootName : tipName} — this limb will not move.`);
+    return null;
+  }
+
+  const names = [];
+  let cur = tip;
+  while (cur && cur !== root) {
+    names.unshift(cur.name);
+    cur = cur.parent;
+    if (names.length > 64) break; // a cycle, or the tip isn't under this root
+  }
+  if (cur !== root) {
+    console.warn(`[ikChain] ${label}: ${tipName} is not a descendant of ${rootName} — this limb will not move.`);
+    return null;
+  }
+  names.unshift(root.name);
+  return names;
+}
+
+/**
  * @param minBones  the shortest chain worth solving. Two for a limb: one bone
  *   is a hinge, there's nothing for CCD to distribute across, and a one-bone
  *   "chain" is almost certainly a typo in the bone list rather than a

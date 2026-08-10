@@ -89,7 +89,6 @@ const EDITABLE_SECTIONS = [
     ['enemyStingray', 'Stingray'],
     ['enemySeaTurtle', 'Sea turtle'],
     ['enemyWalkingCrab', 'Walking crab'],
-    ['enemyAnimatedCrab', 'Animated crab'],
     ['enemyOyster', 'Oyster'],
   ]],
 ];

@@ -187,9 +187,22 @@ Spawn odds are weighted: `weight + weightPerDifficulty × difficulty`, clamped b
 Three things can hold a creature back, and they ask different questions:
 `minDifficulty` asks how long the run has gone on, `minPlayerLevel` asks how
 strong the seal is, and the `bioluminescent` column of `enemies.csv` asks what
-time it is — a creature tagged there stays out of the pool until the sun goes
-down, fades in across dusk, and is held back again at dawn. It is the only one
-of the three that can go back to "not yet". See `CONFIG.spawn.nightlife`.
+time it is. It is the only one of the three that can go back to "not yet",
+because morning comes.
+
+Sunset swaps the **cast**, not just the light. `CONFIG.spawn.nightlife` runs two
+curves over one ramp: creatures tagged `bioluminescent` fade in as it gets dark,
+and everything else drops to `daylight.night` (0.08) of its usual weight. The
+spawner draws a fixed budget per tick and normalises over whatever weight it
+finds, so suppressing the day roster doesn't empty the night — it makes the same
+number of bodies be different bodies. Measured: **~55% of spawns and ~60% of
+bodies on screen** glow after dark, against a ceiling of 73% set by the glowing
+roster's own `maxConcurrent` (45 + 4 + 2). One curve alone got 13%, which reads
+as an unchanged ocean with a few lights in it.
+
+Every apex predator is untagged, so `daylight.night` doubles as "how much of the
+shark population survives sunset" — turn it up to keep nights dangerous in the
+ordinary way, or tag a predator instead, which is what `abyssShark` is.
 
 To look at the glowing variants without waiting for the spawner to offer them —
 the rarest is two per arena behind a level gate — press **`N`** in game. It puts
@@ -230,8 +243,19 @@ doesn't mention. See [Editing upgrades](#editing-upgrades).
 
 ### Editing upgrades
 
-**`path/src/upgrades.csv`** — one row per upgrade, edited in a spreadsheet or
-any text editor. Save the file and reload the page; the values are live.
+**`path/src/upgrades.csv`** — one row per upgrade, edited in a spreadsheet, any
+text editor, or `npm run csv`. Save the file and reload the page; the values
+are live.
+
+`npm run csv` serves a grid of all three tables at
+[localhost:5177](http://localhost:5177), with the columns typed: `cardArt` is a
+picker showing the thirty real hex images, `enabled` and `bioluminescent` are
+dropdowns, `spawnGroup` offers the groups that exist while still letting you
+type a new one, and a number the game would reject turns red before you save
+rather than warning in the console after. It reads those rules out of
+`enemyTable.js` and `config.js` at startup, so it cannot drift into enforcing
+something the game does not, and it writes only the cells you changed — an edit
+is one line in the diff.
 
 | column | meaning |
 | --- | --- |

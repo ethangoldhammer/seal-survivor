@@ -39,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CONFIG } from '../path/src/config.js';
 import { attachGrassSway, applyGrassSettings, updateGrassSway } from '../path/src/systems/grassSway.js';
+import { updateBeatSync, BEAT_DIVISIONS } from '../path/src/systems/beatSync.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MODEL = path.join(HERE, '../public/models/grass.glb');
@@ -121,6 +122,11 @@ check('enabled is not nulled out by saved tuning', sway?.enabled === true, Strin
 for (const key of ['amplitude', 'stiffness', 'speed', 'wavelength', 'direction', 'flutter', 'flutterSpeed', 'bend']) {
   check(`${key} is a number`, typeof sway?.[key] === 'number', String(sway?.[key]));
 }
+// A division name that isn't in the table silently reads as 'free', so a typo
+// here is a setting that looks applied and does nothing.
+for (const key of ['speedSync', 'flutterSync']) {
+  check(`${key} names a real division`, BEAT_DIVISIONS.includes(sway?.[key]), String(sway?.[key]));
+}
 
 // ------------------------------------------------------------------ injection
 
@@ -143,10 +149,16 @@ check('vertex shader was modified', shader.vertexShader !== before);
 check('uniform block landed', shader.vertexShader.includes('uniform float uSwayAmplitude'));
 check('displacement landed', shader.vertexShader.includes('transformed.xz += push'));
 check('arc-length correction landed', shader.vertexShader.includes('transformed.y -='));
-for (const u of ['uSwayTime', 'uSwayAmplitude', 'uSwayStiffness', 'uSwaySpeed',
-  'uSwayWavelength', 'uSwayDir', 'uSwayFlutter', 'uSwayFlutterSpeed', 'uSwayBend', 'uSwayHeight']) {
+for (const u of ['uSwayCycle', 'uSwayFlutterCycle', 'uSwayAmplitude', 'uSwayStiffness',
+  'uSwayWavelength', 'uSwayDir', 'uSwayFlutter', 'uSwayBend', 'uSwayHeight']) {
   check(`uniform ${u} bound`, shader.uniforms[u] !== undefined);
 }
+// The rates are gone from the shader on purpose: it is handed POSITIONS, which
+// is what lets the same GLSL run free or on a musical division. A uniform
+// named for a rate reappearing here means someone put the clock back.
+check('no rate uniforms survive in the shader',
+  !shader.vertexShader.includes('uSwaySpeed') && !shader.vertexShader.includes('uSwayFlutterSpeed'),
+  'the shader takes a phase, not a clock and a rate');
 // The one that a three.js upgrade breaks silently: vMapUv is declared under
 // USE_MAP, and <uv_vertex> must assign it BEFORE <begin_vertex> or the sway
 // reads last frame's garbage.
@@ -302,10 +314,37 @@ for (let t = 0; t < 12; t += 0.05) {
 }
 check('wavelength 0 puts every clump in unison, as documented', unisonDivergence < 1e-9);
 
-// The clock only advances through updateGrassSway.
-const u0 = material.userData.__swayUniforms.uSwayTime.value;
+// ----------------------------------------------------------------- the clock
+section('CLOCK — free-running and beat-synced');
+
+// The grass ships beat-synced ('2 bars'), which means its phase is DERIVED
+// from the beat transport rather than integrated from dt. A harness that never
+// ticks updateBeatSync therefore sees it frozen — and so would the game, if the
+// call in main.js ever went missing.
+const cycleOf = () => material.userData.__swayUniforms.uSwayCycle.value;
+CONFIG.grass.sway.speedSync = '2 bars';
+applyGrassSettings();
 updateGrassSway(0.5);
-check('updateGrassSway advances the clock', material.userData.__swayUniforms.uSwayTime.value > u0);
+check('a synced sway does not move on dt alone', cycleOf() === 0,
+  'it reads the transport, not the frame time');
+updateBeatSync(0.5);
+updateGrassSway(0.5);
+check('...and does move once the beat clock has been ticked', cycleOf() > 0,
+  `cycle ${cycleOf().toFixed(4)}`);
+
+// Free-running is the path swayVertex above mirrors: phase = t * speed, which
+// is exactly cycle * 2π once the rate has been divided by 2π. That equivalence
+// is why the motion section is still a valid model of the shader.
+CONFIG.grass.sway.speedSync = 'free';
+applyGrassSettings();
+const c0 = cycleOf();
+updateGrassSway(0.5);
+const advanced = (cycleOf() - c0 + 1) % 1;
+check('updateGrassSway advances a free clock', advanced > 0);
+check('...at the configured rate', Math.abs(advanced - (0.5 * CONFIG.grass.sway.speed) / (Math.PI * 2)) < 1e-6,
+  `${advanced.toFixed(5)} cycles in 0.5s at ${CONFIG.grass.sway.speed} rad/s`);
+check('and keeps the phase inside one cycle', cycleOf() >= 0 && cycleOf() < 1);
+delete CONFIG.grass.sway.speedSync;
 
 // disabling settles the grass rather than freezing it mid-bend
 CONFIG.grass.sway.enabled = false;

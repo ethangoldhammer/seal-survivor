@@ -4,6 +4,7 @@ import { removeEnemy } from '../entities/enemies.js';
 import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { weatherState } from './weather.js';
+import { aoe, targeting } from './scaling.js';
 
 let cooldown = 0;
 const activeBolts = []; // { mesh, life }
@@ -132,7 +133,10 @@ export function currentEelStats(level) {
 
   return {
     damage: (CONFIG.eel.baseDamage + CONFIG.eel.damagePerLevel * (level - 1)) * damageMul,
-    chainRadius: CONFIG.eel.baseChainRadius + CONFIG.eel.radiusPerLevel * (level - 1),
+    // How far a bolt HOPS is reach, not acquisition — the chain is already
+    // in the crowd by the time this is read, so it takes the full Splash
+    // Zone multiplier rather than the gentle targeting one.
+    chainRadius: aoe(CONFIG.eel.baseChainRadius + CONFIG.eel.radiusPerLevel * (level - 1)),
     maxChain: Math.round(CONFIG.eel.baseMaxChain + CONFIG.eel.chainPerLevel * (level - 1)),
   };
 }
@@ -346,7 +350,8 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
   const stats = currentEelStats(level);
 
   let current = null;
-  let bestD = CONFIG.eel.initialRange;
+  // ...whereas how far the FIRST zap will look for a victim is acquisition.
+  let bestD = targeting(CONFIG.eel.initialRange);
   for (const e of enemiesList) {
     const d = Math.hypot(e.mesh.position.x - origin.x, e.mesh.position.y - origin.y);
     if (d < bestD) { bestD = d; current = e; }
@@ -395,6 +400,23 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
     // away that the eel is decorative.
     hooks.onBolt?.(origin.x, origin.y);
   }
+}
+
+/**
+ * Draw a single bolt between two points, for something that is not the eel.
+ *
+ * The Voltaic element's arc (systems/elements.js) is the same picture as one
+ * hop of the eel's chain — a jagged, branching, flickering line between two
+ * bodies — and rebuilding that geometry a second time would mean two lightning
+ * looks that drift apart the first time either is tuned. So this is the eel's
+ * renderer, borrowed.
+ *
+ * The bolt joins `activeBolts` and is faded and disposed by updateEel's own
+ * loop above, which runs every frame whether or not the eel upgrade was ever
+ * taken — that unconditional pass is what makes lending the renderer safe.
+ */
+export function spawnArcBolt(scene, x1, y1, x2, y2) {
+  spawnBolt(scene, [new THREE.Vector3(x1, y1, 0), new THREE.Vector3(x2, y2, 0)]);
 }
 
 export function resetEelBolts(scene) {

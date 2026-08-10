@@ -11,12 +11,14 @@ import { createAnimationController, stateForSpeed } from '../systems/animation.j
 import { createHeadLook } from '../systems/headLook.js';
 import { recordSpawn } from '../systems/playtest.js';
 import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
+import { updateWaves, waveSpawn, resetWaves, lullEligible } from '../systems/waves.js';
 
 // Above this, a creature's hp means "invincible scenery" rather than a real
 // pool anyone is meant to chew through (the sea turtle ships 1e9). Only the
 // playtest pressure metric cares; combat treats it as an ordinary number.
 const UNKILLABLE_HP = 1e6;
 import { createJawDriver } from '../systems/jaw.js';
+import { createClawDriver } from '../systems/crabClaw.js';
 import { player } from './player.js';
 
 export const enemies = [];
@@ -29,6 +31,10 @@ export function resetEnemies(scene) {
   enemies.length = 0;
   spawnTimer = 0;
   nextSchoolId = 1;
+  // The wave clock is spawner state like the timer above it, and resets with
+  // it for the same reason: a new run has to open on its own first surge
+  // rather than partway through the last one's.
+  resetWaves();
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +258,8 @@ function feedConfig(e) {
 // here would be wrong by that factor and would silently re-break the next time
 // anyone touched the Look panel's size slider.
 const _mouth = { x: 0, y: 0 };
+// Reused every frame by every crab — see the pinch block in updateEnemies.
+const _clawAim = new THREE.Vector3();
 function mouthPoint(e, cfg, out) {
   let fx;
   let fy;
@@ -283,6 +291,157 @@ function setLookTarget(e, x, y) {
   if (!e.lookAt) e.lookAt = new THREE.Vector3();
   e.lookAt.set(x, y, 0);
   e.lookTarget = e.lookAt;
+}
+
+// ---------------------------------------------------------------------------
+// SHARK CRUISE — see CONFIG.enemies.<key>.hunt.lateral, and `null` there (or a
+// missing block) opts a creature out entirely, which is how the dolphin, orca
+// and otter keep the free movement their behaviour is built on.
+//
+// A hunter used to steer straight at whatever it wanted, in whatever direction
+// that happened to be. On a side-on camera that reads badly: `steerTo` drives
+// the body at FULL speed along its heading, so a target overhead means a shark
+// climbing vertically like a lift, and the wander branch picked a uniformly
+// random angle — as likely to swim straight up as along the reef.
+//
+// Two things fix it, and neither is a new movement system:
+//
+//   VERTICAL AUTHORITY IS EARNED. `dy` is scaled by a gain that is near zero at
+//   range and reaches 1 only as the creature closes. Because steerTo normalises
+//   what it is given, flattening `dy` does not slow the shark down — it turns a
+//   dive into a long horizontal approach that only tips upward near the end.
+//   The gain is eased over time rather than switched, which is what keeps it
+//   from snapping the moment the player crosses a radius.
+//
+//   THE HEAD LEADS. The weave is applied to the LOOK TARGET first and only
+//   bleeds into the steering by `weaveBody`. systems/headLook.js aims the snout
+//   at that point and the bone springs (systems/boneSpring.js) drag the body
+//   after it, so the sinuous shape comes out of rigging that already exists
+//   rather than being animated into the path.
+//
+// The weave runs in the creature's VERTICAL plane, which is the same call
+// assets.js already makes for the procedural body wag (`axis: 'x'` on
+// enemyShark): a real shark bends side to side, and side to side is straight
+// into this camera and invisible.
+// ---------------------------------------------------------------------------
+
+// Hermite smoothstep between two distances, 1 when near and 0 when far.
+function closeness(dist, far, near) {
+  if (!(far > near)) return dist <= near ? 1 : 0;
+  const t = Math.min(1, Math.max(0, (far - dist) / (far - near)));
+  return t * t * (3 - 2 * t);
+}
+
+// Advances the per-creature cruise state. `gap` is the distance to whatever it
+// is pursuing; pass null when it is pursuing nothing, which holds vertical
+// authority at the floor.
+//
+// WHICH distance is per-branch, and the distinction matters more than it looks:
+//
+//   The PLAYER approach and the idle cruise pass the HORIZONTAL gap. Gating
+//   those on the straight-line distance deadlocks — a shark directly below the
+//   player is far away, so it is flattened, so it swims sideways, so it never
+//   closes, because the only direction that would close the gap is the one it
+//   is forbidden. Measured: a shark 36 units under the player circled at its
+//   own depth indefinitely. The horizontal gap makes the rule "come up once you
+//   are underneath", which is also the shape a real attack has — run in flat
+//   and level, get beneath, then rise into it.
+//
+//   Going after a specific piece of FOOD passes the straight-line distance, so
+//   the creature may commit to a dive as soon as it is near in any direction.
+//   These are deliberate acts on a fixed point rather than the drifting the
+//   flattening exists to stop, and gating them horizontally breaks them: chum
+//   sits on the seabed, so a shark that had to be almost directly above it
+//   before it could descend would overshoot on a turning circle wider than the
+//   window it had, circle, and try again. Measured as a 1-in-12 failure of
+//   tools/crab-crowd-test.mjs, where a shark abandoned 182 chases in 20s.
+function updateSwim(e, dt, gap, cfg) {
+  if (!cfg) return;
+  const floor = cfg.climbFloor ?? 0.1;
+  const want = gap == null
+    ? floor
+    : Math.max(floor, closeness(gap, cfg.climbRange ?? 14, cfg.climbFull ?? 6));
+  // Exponential ease, written frame-rate independently — a plain lerp by
+  // `rate * dt` changes how abrupt this looks with the frame rate, and "not
+  // abrupt" is the entire requirement.
+  const k = 1 - Math.exp(-(cfg.climbEase ?? 0.9) * dt);
+  e.climbGain = (e.climbGain ?? floor) + (want - (e.climbGain ?? floor)) * k;
+
+  const period = cfg.weavePeriod ?? 5.5;
+  // Seeded per creature at spawn so a pack does not weave in lockstep.
+  e.weavePhase = ((e.weavePhase ?? 0) + (dt / Math.max(0.05, period))) % 1;
+}
+
+// Flattens a desired direction against the current vertical authority.
+function shapeSwim(e, dx, dy, cfg) {
+  if (!cfg) return { x: dx, y: dy };
+  const gain = e.climbGain ?? 1;
+  let x = dx;
+  let y = dy * gain;
+
+  // Scaling `dy` alone is not enough, and the case it misses is the common one.
+  // What "swims laterally" means is a bound on the SLOPE of the path, and a
+  // slope is a ratio — so a target almost directly overhead (`dx` small but not
+  // zero, which is most of the orbit around a player) still comes out near
+  // vertical no matter how far `dy` is scaled down. Measured before this: a
+  // shark approaching a player straight above it, well outside its climb range,
+  // still travelled 140% as far vertically as horizontally.
+  //
+  // So the gain buys SLOPE rather than scale. Flat at range, free up close, and
+  // any steeper request is answered by lengthening the horizontal run instead
+  // of by refusing to climb — which is what turns a dive into a pass.
+  const flat = cfg.flatSlope ?? 0.35;   // ~19 degrees off horizontal
+  const free = cfg.climbSlope ?? 8;     // effectively unconstrained
+  // GEOMETRIC between the two, not linear. A slope is a ratio, and interpolating
+  // a ratio linearly spends almost all of the range immediately: from 0.35 to 8,
+  // a gain of just 0.12 already buys 1.27 — a 52-degree climb, at the floor,
+  // which is the setting that is supposed to mean "flat". Geometrically the same
+  // 0.12 gives 0.50, and the curve stays gentle until the creature is genuinely
+  // close.
+  const slope = flat * Math.pow(free / flat, gain);
+  const minX = Math.abs(y) / slope;
+  if (Math.abs(x) < minX) {
+    // Keep whatever horizontal intent it had; falling back to the way it is
+    // already pointing when there is none, so it commits to a side rather than
+    // stalling head-on.
+    const dir = Math.abs(x) > 1e-6 ? Math.sign(x) : (Math.cos(e.heading ?? 0) >= 0 ? 1 : -1);
+    x = dir * minX;
+  }
+  // The weave, at the fraction of it that reaches the body.
+  //
+  // PROPORTIONAL to the vector, not an absolute nudge. The flattening above
+  // deliberately leaves a short vector (a shark at range hands steerTo
+  // something of length ~0.04), so a fixed-size perpendicular offset does not
+  // bend that path — it replaces it. Measured with an absolute 0.1: a shark
+  // whose shaped direction was 26 degrees off horizontal came out of the weave
+  // at 93 degrees, i.e. straight up, and the whole flattening was undone one
+  // line after it was applied.
+  //
+  // Scaling by the vector's own length makes this a rotation of about
+  // atan(body) whatever the magnitude, which is what "a fraction of the weave
+  // reaches the body" was always supposed to mean.
+  const body = cfg.weaveBody ?? 0;
+  if (body > 0) {
+    const s = Math.sin((e.weavePhase ?? 0) * Math.PI * 2);
+    // Both components read the PRE-weave vector: updating x first and feeding
+    // it into y would rotate by a different amount each frame and drift.
+    const ox = x;
+    const oy = y;
+    x += -oy * s * body;
+    y += ox * s * body;
+  }
+  return { x, y };
+}
+
+// Offsets a look point sideways so the snout leads the weave. Perpendicular to
+// the heading, because that is the direction the body is actually travelling.
+function weaveLook(e, x, y, cfg) {
+  if (!cfg) return { x, y };
+  const amp = cfg.weaveAmp ?? 0;
+  if (amp <= 0) return { x, y };
+  const s = Math.sin((e.weavePhase ?? 0) * Math.PI * 2);
+  const h = e.heading ?? 0;
+  return { x: x + -Math.sin(h) * amp * s, y: y + Math.cos(h) * amp * s };
 }
 
 // apexCrowd works on plain { x, y, radius } so it can be tested without a
@@ -542,6 +701,24 @@ const BEHAVIORS = {
     const h = e.def.hunt ?? {};
     const px = e.mesh.position.x;
     const py = e.mesh.position.y;
+    // Cruise shaping — see shapeSwim. `lat` is null on anything that has not
+    // opted in, and every call below is then a pass-through.
+    //
+    // It shapes TWO of the five branches: the idle cruise and the approach to
+    // the player. The three that chase a specific piece of food — a floating
+    // body, a fish, chum on the seabed — steer at it exactly as they always
+    // did, because a dive onto a fixed point is a deliberate act rather than
+    // the aimless vertical drifting this exists to stop, and flattening it
+    // breaks the chase outright: a shark that has to be nearly above a scrap of
+    // seabed chum before it may descend overshoots on a turning circle wider
+    // than the window, circles, and tries again. That showed up as a 1-in-8
+    // failure of tools/crab-crowd-test.mjs (182 abandoned chases in 20s)
+    // against 0 in 15 runs without the shaping.
+    //
+    // They still call updateSwim, so the gain keeps tracking while a shark is
+    // busy and is already correct for where it is the moment it goes back to
+    // cruising.
+    const lat = h.lateral ?? null;
 
     // Mid-lunge everything moves faster — the burst that carries the last
     // stretch into a bite. See triggerBite / CONFIG.bite.lunge.
@@ -559,11 +736,12 @@ const BEHAVIORS = {
       e.hunting = true;
       e.preyTarget = null; // not an enemy — predation.js reads `humanTarget`
       e.humanTarget = body;
-      setLookTarget(e, at.x, at.y);
       const dx = at.x - px;
       const dy = at.y - py;
       const d = Math.hypot(dx, dy) || 1;
       const avoid = crowdAvoid(crowdSelf(e), ctx.apex, CONFIG.apexCrowd);
+      updateSwim(e, dt, d, lat);
+      setLookTarget(e, at.x, at.y);
       steerTo(e, dx / d + avoid.x, dy / d + avoid.y, dt, 6, speedMul);
       return;
     }
@@ -594,7 +772,6 @@ const BEHAVIORS = {
       // The bite reads the same field, and gets the target's radius from
       // `preyTarget` alongside it — a snap has to fire at the distance the
       // MEAL is, and prey species differ in radius.
-      setLookTarget(e, target.mesh.position.x, target.mesh.position.y);
       e.preyTarget = target;
       // Normalised BEFORE the crowd term is added — steerTo normalises the
       // sum, so handing it a 20-unit target vector plus a 1-unit avoidance
@@ -602,6 +779,8 @@ const BEHAVIORS = {
       // blank, which is exactly where it's too late to steer around anything.
       const pd = Math.sqrt(best) || 1;
       const avoid = crowdAvoid(crowdSelf(e), ctx.apex, CONFIG.apexCrowd);
+      updateSwim(e, dt, pd, lat);
+      setLookTarget(e, target.mesh.position.x, target.mesh.position.y);
       steerTo(
         e,
         (target.mesh.position.x - px) / pd + avoid.x,
@@ -656,8 +835,10 @@ const BEHAVIORS = {
         // keeps a shark hoovering chum beside the player from also snapping at
         // the player on the same frame.
         e.hunting = true;
+        const cd = Math.hypot(ox - px, oy - py);
+        updateSwim(e, dt, cd, lat);
         setLookTarget(e, ox, oy);
-        e.eating = Math.hypot(ox - px, oy - py) <= (sc.eatRange ?? 2.6);
+        e.eating = cd <= (sc.eatRange ?? 2.6);
         // Swims straight through it either way — the gulp happens in passing.
         steerTo(e, ox - px, oy - py, dt, 6, speedMul);
         return;
@@ -670,20 +851,56 @@ const BEHAVIORS = {
       // Still LOOKS at the player even while circling — a shark holding the
       // ring with its head turned in is stalking; one facing along its own
       // arc is just swimming past, and the difference is the whole read.
-      setLookTarget(e, px + ctx.dirX * ctx.dist, py + ctx.dirY * ctx.dist);
+      updateSwim(e, dt, Math.abs(ctx.dirX * ctx.dist), lat);
+      const look = weaveLook(e, px + ctx.dirX * ctx.dist, py + ctx.dirY * ctx.dist, lat);
+      setLookTarget(e, look.x, look.y);
       if (e.standoffDist == null) e.standoffDist = pickStandoff(CONFIG.apexCrowd);
       const want = approachVector(crowdSelf(e), ctx, ctx.apex, CONFIG.apexCrowd);
-      steerTo(e, want.x, want.y, dt, 6, speedMul);
+      const go = shapeSwim(e, want.x, want.y, lat);
+      steerTo(e, go.x, go.y, dt, 6, speedMul);
       return;
     }
 
-    e.lookTarget = null;
+    // Cruising with nothing in mind. The uniformly random angle this used to
+    // pick is the single biggest source of vertical wandering in the game: a
+    // shark was as likely to head straight up as along the reef, and since
+    // steerTo drives at full speed along the heading, "up" meant a body-length
+    // a second of climb for no reason at all.
+    //
+    // `wanderPitch` keeps the same wander but confines it to a shallow cone
+    // either side of horizontal, so the direction is still a real choice — it
+    // just stops being a vertical one.
     e.wanderTimer -= dt;
     if (e.wanderTimer <= 0) {
       e.wanderTimer = h.wanderChange ?? 2;
-      e.wanderAngle = Math.random() * Math.PI * 2;
+      if (lat) {
+        const pitch = lat.wanderPitch ?? 0.22;
+        const side = Math.random() < 0.5 ? 0 : Math.PI;
+        e.wanderAngle = side + (Math.random() * 2 - 1) * pitch;
+      } else {
+        e.wanderAngle = Math.random() * Math.PI * 2;
+      }
     }
-    steerTo(e, Math.cos(e.wanderAngle), Math.sin(e.wanderAngle), dt);
+    updateSwim(e, dt, null, lat);
+    if (lat) {
+      // A cruising shark still LOOKS somewhere: down its own path, swinging
+      // slowly to each side. That look point is the whole of the idle weave —
+      // headLook aims the snout at it and the spring chain trails the body
+      // after it, so an unengaged shark reads as swimming rather than as being
+      // towed. Cleared only when it has opted out of this block.
+      const ahead = lat.weaveLead ?? 6;
+      const look = weaveLook(
+        e,
+        px + Math.cos(e.wanderAngle) * ahead,
+        py + Math.sin(e.wanderAngle) * ahead,
+        lat,
+      );
+      setLookTarget(e, look.x, look.y);
+    } else {
+      e.lookTarget = null;
+    }
+    const go = shapeSwim(e, Math.cos(e.wanderAngle), Math.sin(e.wanderAngle), lat);
+    steerTo(e, go.x, go.y, dt);
   },
 
   // A shark that periodically leaves the water. Between arcs it hunts exactly
@@ -781,29 +998,46 @@ function groupAtCap(def, counts = null) {
   return n >= cap;
 }
 
-// How welcome a bioluminescent creature is right now, as a multiplier on its
-// spawn weight. 0 while the sun is up, ramping to `night` across dusk.
+// How welcome a creature is right now, as a multiplier on its spawn weight.
+// `glowing` picks which of the two curves in CONFIG.spawn.nightlife to walk:
+// the tagged roster fades IN as it gets dark, everything else fades OUT. The
+// two together are what turn sunset into a change of cast rather than a change
+// of lighting with the same fish under it.
 //
 // Reads skyLight.night rather than dayState.phase because a label can't be
 // ramped against — 'dusk' is either true or it isn't, and the whole point is
-// that the glowing schools fade in over the minute the sun spends going down.
+// that the swap happens over the minute the sun spends going down.
 //
-// With the day/night cycle switched off the bus publishes night = 0 forever,
-// which would silently delete every nocturnal species from a run. A world
-// with no night can't be after sunset OR before it, so the gate stands down
-// entirely rather than picking one — the alternative is a creature nobody can
-// find and no message saying why.
-export function nightlifeWeight() {
+// With the day/night cycle switched off the bus publishes night = 0 forever.
+// Walking the curves against that would hold the glowing roster at its daytime
+// weight (0 — deleted from the game) and the daylight roster at its own (1),
+// so a world with no night would be a permanent noon. Both curves stand down
+// to 1 instead: no clock means no changeover, and every species spawns at the
+// weight its row asks for.
+//
+// Returning each curve's `night` end here instead is the tempting version and
+// is worse in both directions — it would pin the daylight roster at 0.08
+// forever, quietly deleting most of the roster from any run with the cycle
+// off, and there'd be no message saying why.
+export function nightlifeWeight(glowing) {
   const cfg = CONFIG.spawn.nightlife;
   if (!cfg?.enabled) return 1;
-  if (!CONFIG.dayNight?.enabled) return cfg.night ?? 1;
+  if (!CONFIG.dayNight?.enabled) return 1;
+  const curve = (glowing ? cfg.glowing : cfg.daylight) ?? {};
+  const day = curve.day ?? (glowing ? 0 : 1);
+  const night = curve.night ?? 1;
   const dusk = cfg.dusk ?? 0;
   const dark = Math.max(dusk + 1e-4, cfg.dark ?? 1);
   const t = Math.min(1, Math.max(0, (skyLight.night - dusk) / (dark - dusk)));
-  return (cfg.day ?? 0) + ((cfg.night ?? 1) - (cfg.day ?? 0)) * t;
+  return day + (night - day) * t;
 }
 
-function pickType(difficulty, playerLevel = 1) {
+// `lull` is the wave clock's quiet stretch (see systems/waves.js): a fourth
+// kind of "not yet", alongside minDifficulty, minPlayerLevel and the nightlife
+// gate. Unlike those three it asks nothing about the creature's place in the
+// run — only whether the water is meant to be calm right now — so it sits
+// ahead of the weight maths rather than scaling it.
+function pickType(difficulty, playerLevel = 1, lull = false) {
   // Per-type headcount, so `maxConcurrent` can keep any one species in check,
   // and the same walk tallies each `spawnGroup` for the family-wide cap.
   const alive = new Map();
@@ -814,9 +1048,10 @@ function pickType(difficulty, playerLevel = 1) {
     if (group != null) aliveGroup.set(group, (aliveGroup.get(group) ?? 0) + 1);
   }
 
-  // Worked out once for the whole walk rather than per creature: it's the same
-  // answer for all of them, and it reads the clock.
-  const nightMul = nightlifeWeight();
+  // Both curves worked out once for the whole walk rather than per creature:
+  // there are only two answers and they read the clock.
+  const glowMul = nightlifeWeight(true);
+  const dayMul = nightlifeWeight(false);
 
   const pool = [];
   let total = 0;
@@ -826,6 +1061,10 @@ function pickType(difficulty, playerLevel = 1) {
     // creature with minPlayerLevel simply cannot appear until the player
     // reaches that level, however long the run has gone on.
     if (playerLevel < (def.minPlayerLevel ?? 0)) continue;
+    // Between waves, only the small fry. An empty pool is a legitimate answer
+    // here — a lull with every little fish already at its cap is simply quiet,
+    // and the caller treats "nothing to send" as nothing to send.
+    if (lull && !lullEligible(def)) continue;
     if (def.maxConcurrent != null && (alive.get(key) ?? 0) >= def.maxConcurrent) continue;
     if (groupAtCap(def, aliveGroup)) continue;
     // spawnRateMul is the per-creature tuning knob: 0 disables a creature
@@ -833,9 +1072,9 @@ function pickType(difficulty, playerLevel = 1) {
     let w = ((def.weight ?? 0) + (def.weightPerDifficulty ?? 0) * difficulty) * (def.spawnRateMul ?? 1);
     if (def.maxWeight != null) w = Math.min(w, def.maxWeight);
     // After the cap, not before: `maxWeight` is a ceiling on how common a
-    // species gets over a long run, and dusk is meant to scale the result of
-    // that curve rather than be clipped by it.
-    if (def.bioluminescent) w *= nightMul;
+    // species gets over a long run, and the changeover is meant to scale the
+    // result of that curve rather than be clipped by it.
+    w *= def.bioluminescent ? glowMul : dayMul;
     if (w <= 0) continue;
     total += w;
     pool.push({ key, def, w });
@@ -850,8 +1089,25 @@ function pickType(difficulty, playerLevel = 1) {
 }
 
 // Sea creatures enter from the sides or from the deep — never from the sky.
-function edgeSpawnPoint() {
+//
+// A CRAWLER IS THE EXCEPTION and has to be asked for by passing its def. The
+// generic point picks a random DEPTH, which for a swimmer is the whole idea
+// and for a crab means arriving in mid-water and falling to the seabed — and
+// arriving INSIDE the arena, where the wall clamp grabs it on frame one so it
+// pops into place instead of walking on. Crabs get the same wing entrance the
+// chum-pile summoner gives them (systems/crabSpawner.js edgeFloorPoint), which
+// is the only reason they read as walking on from off-screen.
+function edgeSpawnPoint(def = null) {
   const margin = 1.5;
+  if (def?.behavior === 'crawl') {
+    // OUTSIDE the arena on purpose: spawnOne only skips the horizontal clamp
+    // while a body is still beyond the wall, and that is what buys the walk-on.
+    const m = CONFIG.crabSpawn?.spawnMargin ?? 3;
+    return {
+      x: Math.random() < 0.5 ? bounds.left - m : bounds.right + m,
+      y: bounds.bottom + (CONFIG.crabSpawn?.floorHeight ?? 2.5) * 0.5,
+    };
+  }
   const r = Math.random();
   const depth = bounds.bottom + margin + Math.random() * (bounds.surfaceY - bounds.bottom - margin * 2);
   if (r < 0.45) return { x: bounds.left + margin, y: depth };
@@ -859,7 +1115,11 @@ function edgeSpawnPoint() {
   return { x: bounds.left + Math.random() * bounds.width, y: bounds.bottom + margin };
 }
 
-function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
+// `opts.schoolId` groups a school for the boids; `opts.xpMul` scales what this
+// individual's chum will be worth when it dies (the lull between waves pays a
+// fraction — see CONFIG.spawn.waves.lull).
+function spawnOne(scene, key, def, difficulty, at, opts = {}) {
+  const { schoolId = null, xpMul = 1 } = opts;
   const container = new THREE.Group();
   const visual = createVisual(def.asset ?? key);
   container.add(visual);
@@ -974,6 +1234,11 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
   // a second rotation piled on top of the one it is already writing.
   const jaw = anim?.clipCoverage?.bite ? null : createJawDriver(visual);
 
+  // The crab's telegraphed pinch. Null for everything that declares no
+  // clawRig, which is every creature but the two crabs — see systems/
+  // crabClaw.js for why the gesture has to be manufactured rather than played.
+  const claw = createClawDriver(visual);
+
   // Behavioural difficulty ramp, baked per instance for the same reason
   // hp/damage/speed above are: `def` is one object shared by every member of
   // the species. See CONFIG.hunterRamp.
@@ -1018,6 +1283,16 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
     hp,
     maxHp: hp,
     spawnHp: hp,
+    // What this individual's chum is worth. Baked at spawn like hp, damage and
+    // speed above, and for the same reason: `def` is one object shared by the
+    // whole species, so a creature has to carry the value it was born with. A
+    // fish that drifted in during a lull stays a low-value fish even if the
+    // next surge has started by the time anything kills it.
+    //
+    // Score is not scaled with this — systems/scoring.js reads def.xp on
+    // purpose, so a quiet-water kill still banks full points. See
+    // CONFIG.spawn.waves.lull.
+    xp: (def.xp ?? 0) * xpMul,
     speed,
     // Per-instance, so a crab that spawned at minute one keeps hitting for
     // what it was worth then. combat.js reads e.contactDamage, not the def.
@@ -1046,6 +1321,15 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
     // Jaw state. `biteCooldown` rate-limits the snap; `lungeTimer` is the
     // burst of speed that carries it in. Both tick in updateEnemies.
     jaw,
+    claw,
+    // Seconds until this crab may start another pinch. Per instance, so a
+    // crowd does not snap in unison — seeded short and random so the first
+    // crab to reach you does not have to serve a full cooldown before it may
+    // do anything at all.
+    pinchTimer: Math.random() * (CONFIG.crabClaw?.cooldown ?? 2.6),
+    // Set for exactly one frame, on the frame the claws meet. systems/
+    // combat.js reads it and bills the damage; nothing else may write it.
+    justPinched: false,
     biteCooldown: 0,
     lungeTimer: 0,
     look,
@@ -1054,6 +1338,13 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
     // vector behind it.
     lookTarget: null,
     lookAt: null,
+    // Cruise state — see shapeSwim. The phase is randomised per individual so
+    // a pack that spawned together does not weave in unison, which reads as a
+    // shoal rather than as several predators.
+    weavePhase: Math.random(),
+    // Starts flat: a shark that has just spawned has not earned any vertical
+    // authority yet, so it enters the arena swimming rather than climbing.
+    climbGain: 0,
     flash: 0,
     // The scale the visual spawned at, and the growth multiplier layered on
     // top of it (predation bumps baseScale as a predator feeds). Kept apart
@@ -1072,6 +1363,28 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
     // meant a beluga bubble landing on a charmed fish would cut the charm
     // short (or extend it) depending on which fired last.
     charmTimer: 0,
+    // --- elemental status (Glow Up!, systems/elements.js) --------------------
+    // Seeded here rather than created on first application, for the reason
+    // every stat field is seeded in stats.js: `undefined - dt` is NaN, and a
+    // NaN timer never expires, so a fish would carry a status forever with
+    // nothing on screen to say why. All four elements share this block; only
+    // one of them can be live in a run, since the element is rolled once.
+    venomTimer: 0,
+    venomStacks: 0,
+    venomTick: 0,
+    // How much of its speed is currently taken. Read by the integrator below,
+    // NOT by the behaviours — a chilled fish still decides to chase, it just
+    // can't get there, which is what makes chill feel like the water thickening
+    // rather than like the fish losing interest.
+    chillTimer: 0,
+    chillSlow: 0,
+    infectTimer: 0,
+    infectDps: 0,
+    infectTick: 0,
+    // Hops from the fish that was actually shot. Capped so a contagion crosses
+    // a school without crossing the arena — see CONFIG.biolum.elements.infection.
+    infectGen: 0,
+    infectSpreadTimer: 0,
     attackMixer,
     attackAction,
     attackTimer: Math.random() * (def.trap?.cooldown ?? 2),
@@ -1101,14 +1414,24 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
   });
 }
 
-function spawnPicked(scene, difficulty, playerLevel = 1) {
-  const picked = pickType(difficulty, playerLevel);
+// `wave` is this tick's answer from systems/waves.js — which roster is open,
+// how big a school it may send, and what the chum is worth. Defaulted so any
+// caller that doesn't care about pacing gets the unmodified spawn.
+const FLAT_WAVE = { rateMul: 1, lull: false, groupMul: 1, xpMul: 1 };
+
+function spawnPicked(scene, difficulty, playerLevel = 1, wave = FLAT_WAVE) {
+  const picked = pickType(difficulty, playerLevel, wave.lull);
   if (!picked) return 0;
   const { key, def } = picked;
 
   if (def.group) {
-    const anchor = edgeSpawnPoint();
-    const n = def.group.min + Math.floor(Math.random() * (def.group.max - def.group.min + 1));
+    const anchor = edgeSpawnPoint(def);
+    let n = def.group.min + Math.floor(Math.random() * (def.group.max - def.group.min + 1));
+    // A quiet stretch sends a few fish, not a shoal. Floored at one so the
+    // multiplier can thin a school without ever cancelling the spawn outright
+    // — a pick that produced nothing would just spend the guard budget and
+    // leave the water emptier than the calm was asking for.
+    if (wave.groupMul !== 1) n = Math.max(1, Math.round(n * wave.groupMul));
     const id = nextSchoolId++;
     const spread = def.group.spread ?? 3;
     let made = 0;
@@ -1117,13 +1440,13 @@ function spawnPicked(scene, difficulty, playerLevel = 1) {
       spawnOne(scene, key, def, difficulty, {
         x: anchor.x + (Math.random() - 0.5) * spread * 2,
         y: anchor.y + (Math.random() - 0.5) * spread * 2,
-      }, id);
+      }, { schoolId: id, xpMul: wave.xpMul });
       made += 1;
     }
     return made;
   }
 
-  spawnOne(scene, key, def, difficulty, edgeSpawnPoint());
+  spawnOne(scene, key, def, difficulty, edgeSpawnPoint(def), { xpMul: wave.xpMul });
   return 1;
 }
 
@@ -1138,7 +1461,7 @@ function spawnPicked(scene, difficulty, playerLevel = 1) {
 // One caller uses it: the crabs piling onto the corpse (systems/crabSpawner.js).
 // The caps below exist to keep a fight readable, and once the run is over
 // there is no fight — but maxAlive is a memory bound and binds regardless.
-export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(), opts = {}) {
+export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(CONFIG.enemies[key]), opts = {}) {
   const def = CONFIG.enemies[key];
   if (!def) {
     console.warn(`[enemies] spawnNamed: unknown enemy key "${key}"`);
@@ -1165,21 +1488,42 @@ export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(), opts =
 }
 
 export function updateSpawning(dt, gameState, scene) {
+  const d = gameState.difficulty;
+
+  // The wave clock rides this function's own dt rather than main.js's frame
+  // loop, so it advances in lockstep with the spawn timer below and cannot
+  // drift from the thing it paces — and so anything that stops spawning (the
+  // level-up cards, the death dive, the score screen) stops the wave with it.
+  // It has to tick every frame, above the timer's early return, or a slow
+  // stretch of the cycle would also slow down the cycle itself.
+  updateWaves(dt, d);
+  const wave = waveSpawn();
+
   spawnTimer -= dt;
   if (spawnTimer > 0) return;
 
-  const d = gameState.difficulty;
+  // Both halves of the spawn rate take the wave multiplier, because neither
+  // one carries it alone: the interval stops responding once a long run has
+  // pinned it at `minInterval`, and the count budget is too coarse early on,
+  // when it is still flooring to a single creature.
+  //
+  // The multiplier goes INSIDE the clamp so `minInterval` stays the absolute
+  // floor it has always been — a crest asks for more by spending a bigger
+  // budget per tick, not by ticking faster than the spawner is meant to.
   spawnTimer = Math.max(
     CONFIG.spawn.minInterval,
-    CONFIG.spawn.baseInterval - d * CONFIG.spawn.intervalPerDifficulty
+    (CONFIG.spawn.baseInterval - d * CONFIG.spawn.intervalPerDifficulty) / wave.rateMul
   );
 
   // Budget is in creatures, not spawn events: a school of 12 costs 12, so
   // schooling species can't quietly multiply the intended spawn rate.
   let budget = 1 + Math.floor(d * CONFIG.spawn.countPerDifficulty);
+  // Applied after the floor rather than folded into it, so waves switched off
+  // (rateMul 1) leaves the original arithmetic bit-for-bit intact.
+  if (wave.rateMul !== 1) budget = Math.max(1, Math.round(budget * wave.rateMul));
   let guard = 12;
   while (budget > 0 && guard-- > 0 && enemies.length < CONFIG.spawn.maxAlive) {
-    const made = spawnPicked(scene, d, gameState.level ?? 1);
+    const made = spawnPicked(scene, d, gameState.level ?? 1, wave);
     if (made === 0) break;
     budget -= made;
   }
@@ -1250,6 +1594,11 @@ export function animateEnemiesIdle(dt) {
     // Same reason as in the main loop: the driver's anti-ratchet needs to see
     // every frame, including the ones where nothing is biting.
     e.jaw?.update(dt);
+    // No aim while the world is frozen — a crab mid-pinch lowers its claw
+    // rather than holding it over a player who cannot be hit. Still driven,
+    // for the same anti-ratchet reason as the jaw, and so the IK weight
+    // actually eases out instead of freezing the arm mid-reach.
+    e.claw?.update(dt, null);
   }
 }
 
@@ -1365,8 +1714,15 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
       if (ctx.dist < reach) triggerBite(e);
     }
 
-    e.mesh.position.x += e.vx * dt;
-    e.mesh.position.y += e.vy * dt;
+    // CHILL scales the STEP, not the steering. Applied at the integrator so it
+    // reaches every behaviour at once — chase, flock, crawl, porpoise — without
+    // each having to know the element exists, and so a chilled hunter still
+    // turns to face you at full rate while crawling toward you at a fraction of
+    // its speed. Slowing the steering instead would read as a fish that had
+    // lost interest, which is a different feeling entirely.
+    const chill = e.chillTimer > 0 ? 1 - e.chillSlow : 1;
+    e.mesh.position.x += e.vx * chill * dt;
+    e.mesh.position.y += e.vy * chill * dt;
     // `canBreach` creatures are allowed above the water line — the porpoise
     // arc IS the jump, and clamping here would flatten it against the
     // surface. They still get the horizontal/floor limits below.
@@ -1431,8 +1787,9 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
     // Z) while its claws and face point along +Z. Getting the stride axis onto
     // the screen horizontal AND the face toward the camera would need the map
     // (+X,+Y,+Z) -> (-X,+Y,+Z), which is a reflection, not a rotation — so no
-    // orientation exists that does both. That is exactly why animatedcrab.glb
-    // ships BOTH 'Derecha' (+X) and 'Izquierda' (-X) rather than one clip.
+    // orientation exists that does both. Crab rigs in the wild tend to ship a
+    // separate clip per direction for exactly this reason rather than expecting
+    // one to be mirrored.
     //
     // So the body is pinned at a fixed heading — upright, front to camera,
     // never rolling — and the direction it walks is carried by the gait's
@@ -1541,6 +1898,47 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
     // frame rather than only mid-bite: the driver's anti-ratchet needs to see
     // an untouched frame to know what pose it was handed. See systems/jaw.js.
     e.jaw?.update(dt);
+
+    // --- the crab's pinch ---------------------------------------------------
+    // After the animation controller, the head-look and the jaw, because it is
+    // the last word on the arm: anim.update() resets the spring bones, writes
+    // the walk clip and layers the impact springs, and the claw blends on top
+    // of whatever that produced. Running it earlier means the mixer overwrites
+    // the reach and nothing visible happens.
+    //
+    // Driven every frame rather than only mid-pinch — the IK weight has to
+    // ease back OUT after a strike, and a driver that only ran while striking
+    // would drop the arm on the frame the pinch ended.
+    if (e.claw) {
+      const pc = CONFIG.crabClaw;
+      if (e.pinchTimer > 0) e.pinchTimer -= dt;
+
+      // A crab does not pinch at a corpse. The death pile-on is the last thing
+      // you watch, and a heap of crabs snapping at a body that cannot react
+      // reads as them eating it — which is what the pile already says, more
+      // quietly. Also skipped while trapped or charmed, for the same reason
+      // combat.js skips those: a bubbled crab is frozen, harmless.
+      const canPinch = !!pc?.enabled
+        && !deathState.active
+        && e.trapTimer <= 0
+        && e.charmTimer <= 0;
+
+      // COMMIT range is deliberately tighter than the range the pinch reaches
+      // at. A crab that starts a windup at the exact edge plays the whole
+      // 0.9s gesture at a player who has already drifted out of it.
+      if (canPinch && e.pinchTimer <= 0 && !e.claw.isStriking()
+        && ctx.dist < e.radius * (pc.commitRange ?? 2.1)) {
+        if (e.claw.strike()) e.pinchTimer = pc.cooldown ?? 2.6;
+      }
+
+      // Aim at the player in the PLAY PLANE, not at their exact position: the
+      // crab sits at its own depth (enemies.walkingCrab.depthSpread scatters
+      // them in z) and reaching to that z would have the claw swipe in front
+      // of or behind the seal rather than at it.
+      _clawAim.set(playerPos.x, playerPos.y, 0);
+      e.claw.update(dt, canPinch ? _clawAim : null);
+      e.justPinched = e.claw.didConnect();
+    }
 
     // Chewing. Applied here rather than inside the behavior so the actual
     // mutation of the pickups array happens once per crab per frame, at a

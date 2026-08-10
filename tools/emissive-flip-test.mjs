@@ -55,9 +55,17 @@ check(masked.length > 0, `${masked.length} assets declare an emissive mask`);
 // crude, but the alternative is standing up a WebGL texture loader in Node to
 // observe a property the loader only sets during a real fetch.
 const src = fs.readFileSync(path.join(ROOT, 'path/src/assets.js'), 'utf8');
-check(/emissiveTex\.flipY\s*=\s*flipY\b/.test(src),
+// Loading now goes through loadSharedTexture(url, flipY) — side-car textures
+// are deduped by URL so two assets naming one mask share the decoded image —
+// so the rule is carried by the ARGUMENT rather than by an assignment at the
+// call site. Both halves of that chain are checked: the call must pass the
+// computed flipY, and the helper must actually apply the parameter it was
+// given. Either one alone can be satisfied while the mask still ships mirrored.
+check(/loadSharedTexture\(def\.texture\.emissive,\s*flipY\)/.test(src),
   'the emissive mask takes its flipY from the model format');
-check(!/emissiveTex\.flipY\s*=\s*(true|false)\b/.test(src),
+check(/t\.flipY\s*=\s*flipY\b/.test(src),
+  'loadSharedTexture applies the flipY it was passed');
+check(!/loadSharedTexture\([^)]*,\s*(true|false)\s*\)/.test(src),
   'the emissive mask does not hardcode a flipY');
 check(/const flipY = def\.texture\?\.flipY \?\? \/\\\.fbx\$\/i\.test\(def\.model \?\? ''\)/.test(src),
   'the format test is on the model extension, with a per-asset override in front of it');

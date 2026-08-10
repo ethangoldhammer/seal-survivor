@@ -18,7 +18,44 @@ import { isTypingTarget } from '../ui/typing.js';
 let ctx = null;
 let master = null;
 let unlocked = false;
-let active = 0;
+
+// --- voices -----------------------------------------------------------------
+// Every one-shot currently sounding, so the concurrency cap has something real
+// to reason about. This used to be a bare counter incremented on play and
+// decremented by a setTimeout, and both halves of that were wrong:
+//
+//   WHAT IT COUNTED   the timer was set from `def.decay`, which is the SYNTH
+//                     fallback's envelope. Nineteen of the bank's entries play
+//                     a FILE, and for those the number is fiction in both
+//                     directions — `kill` held a slot for 1.21s to play a 0.58s
+//                     sample (so the cap saw two voices for every one that was
+//                     audible), while `playerDeath` released its slot after 1s
+//                     with 8.4s of sample still ringing. The budget was spent
+//                     on silence at one end and blind at the other.
+//   WHAT IT DID       past the cap, playSfx returned. The NEWEST sound lost,
+//                     which is backwards: the new hit is the one carrying
+//                     information, and the spent tail it lost to is the one
+//                     nobody would miss.
+//
+// So: real lengths, and the cap steals instead of refusing. `endsAt` is on the
+// audio clock (ctx.currentTime), not wall time — it is the same clock the
+// sounds themselves are scheduled on, and it does not drift when the tab does.
+//
+// Retirement is a sweep at the top of playSfx rather than a timer per voice.
+// The cap is only ever read there, so a lazy sweep is exactly as accurate as a
+// timer would be, and it costs one pass over a list bounded by maxConcurrent
+// instead of sixty setTimeouts a second.
+const voices = [];
+
+// Seconds to fade a stolen voice out over. A hard stop mid-waveform is a click
+// — an instantaneous edge is broadband — and a click is far more noticeable
+// than the sound it was meant to make room for. 30ms is under the ear's
+// resolution for "cut short" but long enough to reach zero smoothly.
+const STEAL_FADE = 0.03;
+
+// The synth path schedules its nodes to stop at `decay + 0.05` (see below), so
+// that — not `decay` — is when a synthesised voice is genuinely done.
+const SYNTH_TAIL = 0.05;
 // name -> AudioBuffer[]  (one entry per successfully decoded variation)
 const buffers = new Map();
 // name -> index last played, so a random pick never repeats back-to-back.
@@ -305,9 +342,9 @@ export function openBusFilter(smoothing = 0.3) {
 //
 // It reports OUTCOMES, not just names, because the interesting question when a
 // sound is missing is never "did it fire" but "what happened to it": the
-// throttle ate it, the voice limit ate it, it fell back to the synth because a
-// file failed to decode, or the name is wrong and nothing was ever going to
-// play. See ui/sfxDebug.js.
+// throttle ate it, a newer sound stole its voice, it fell back to the synth
+// because a file failed to decode, or the name is wrong and nothing was ever
+// going to play. See ui/sfxDebug.js.
 let sfxWatcher = null;
 
 export function watchSfx(cb) {
@@ -316,7 +353,7 @@ export function watchSfx(cb) {
 
 /**
  * @param name    the CONFIG.sfx key
- * @param outcome 'sample' | 'synth' | 'gap' | 'voices' | 'muted' | 'unknown' | 'off' | 'note'
+ * @param outcome 'sample' | 'synth' | 'gap' | 'stolen' | 'voices' | 'muted' | 'unknown' | 'off' | 'note'
  * @param detail  optional { take, takes, gain, text }
  */
 export function noteSfx(name, outcome, detail) {
@@ -551,6 +588,69 @@ export function resetRepetition() {
   heat.clear();
 }
 
+// Drop every voice that has finished sounding. Called once at the top of
+// playSfx, which is the only place the cap is read.
+function retireFinishedVoices(now) {
+  for (let i = voices.length - 1; i >= 0; i--) {
+    if (voices[i].endsAt <= now) voices.splice(i, 1);
+  }
+}
+
+// Make room for one more, and return whose slot it was.
+//
+// The victim is the voice with the LEAST LEFT TO PLAY, not the oldest one.
+// Oldest-first is the usual rule and it is the wrong one here, because this
+// bank mixes 50ms blips with a 9-second death: the oldest voice is routinely
+// the one with the most tail still to come, so stealing it punches an audible
+// hole in the mix to save a sound that was nearly over anyway. Taking the
+// closest to finishing is the strictly smallest loss available — often the last
+// few milliseconds of something, which is inaudible under the sound that
+// replaces it.
+function stealVoice(now) {
+  if (!voices.length) return null;
+  let pick = 0;
+  for (let i = 1; i < voices.length; i++) {
+    if (voices[i].endsAt < voices[pick].endsAt) pick = i;
+  }
+  const victim = voices[pick];
+  voices.splice(pick, 1);
+  releaseVoice(victim, now);
+  return victim;
+}
+
+// Fade a voice out and stop its sources. Wrapped because both halves throw on
+// a node that has already finished on its own, and a voice that ended between
+// the sweep and here is a race we would rather ignore than crash on.
+function releaseVoice(v, now) {
+  for (const gain of v.gains) {
+    try {
+      const p = gain.gain;
+      // cancelAndHoldAtTime freezes the param at its CURRENT value mid-ramp,
+      // which is what we want: an envelope already on its way down should fade
+      // from where it actually is, not jump back to its peak. Not everywhere
+      // yet, hence the read-and-pin fallback.
+      if (p.cancelAndHoldAtTime) p.cancelAndHoldAtTime(now);
+      else {
+        p.cancelScheduledValues(now);
+        p.setValueAtTime(Math.max(0.0001, p.value), now);
+      }
+      p.exponentialRampToValueAtTime(0.0001, now + STEAL_FADE);
+    } catch { /* param is past its schedule — the node is already done */ }
+  }
+  for (const src of v.sources) {
+    // A later stop() overrides an earlier one, so the synth path's own
+    // stop(now + decay) does not fight this.
+    try { src.stop(now + STEAL_FADE + 0.01); } catch { /* already stopped */ }
+  }
+}
+
+// How loaded the voice budget is right now. Exported for the sound overlay,
+// which is where this whole mechanism is visible at all — and for the tests.
+export function sfxVoiceLoad() {
+  if (ctx) retireFinishedVoices(ctx.currentTime);
+  return { active: voices.length, cap: CONFIG.audio.maxConcurrent };
+}
+
 // A symmetric random multiplier around 1: vary(0.1) -> 0.9 .. 1.1. Clamped
 // so an unlucky roll can never invert or silence a sound.
 function vary(amount) {
@@ -606,27 +706,46 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
   // so a typo'd name is a sound that silently never plays. The overlay is the
   // only place it becomes visible.
   if (!def) { noteSfx(name, 'unknown'); return; }
-  if (active >= CONFIG.audio.maxConcurrent) { noteSfx(name, 'voices'); return; }
 
   const now = ctx.currentTime;
+  retireFinishedVoices(now);
+
   const pitchMul = vary(def.pitchVary) * (opts.pitch ?? 1) * rateScale;
   const filterMul = vary(def.filterVary);
   // Stretched by the same factor the pitch drops by, so slowing a sound down
-  // makes it longer as well as lower. The throttle counter below reads this,
-  // so a dilated tail also holds its voice slot for as long as it really rings.
+  // makes it longer as well as lower.
   const decay = ((def.decay ?? 0.2) * (opts.decayMul ?? 1)) / rateScale;
   // Measured on the audio clock rather than a counter, so the attenuation
   // follows real elapsed time and behaves the same at any frame rate.
   const rep = repetitionGain(name, now);
   const gainValue = (def.gain ?? 0.2) * volumeScale * rep;
 
-  active += 1;
-  window.setTimeout(() => { active = Math.max(0, active - 1); }, (decay + 0.1) * 1000);
-
   // A loaded sample replaces the synth entirely, but still gets the same
   // pitch treatment — playbackRate doubles as pitch for a buffer source. With
   // several variations loaded, each play picks a different one.
   const sample = pickSample(name);
+  // Playback rate IS tape speed, so a sample pitched up is correspondingly
+  // shorter. This is the number the voice budget is spent in, so it has to be
+  // what the sound will actually do rather than what its config says.
+  const rate = Math.max(0.05, pitchMul);
+  const length = sample ? sample.duration / rate : decay + SYNTH_TAIL;
+
+  // Past the cap, the new sound wins and the one with the least left to play
+  // gets faded out under it. `stealVoice` only comes back empty when the cap is
+  // zero or below — which is a deliberate off switch, and the one case where
+  // refusing is still the right answer.
+  if (voices.length >= CONFIG.audio.maxConcurrent) {
+    const victim = stealVoice(now);
+    if (!victim) { noteSfx(name, 'voices'); return; }
+    // Reported against the voice that LOST, not the one that played, because
+    // "what got cut" is the question — a run of these naming one sound is the
+    // shape of a budget being eaten by one event.
+    noteSfx(victim.name, 'stolen');
+  }
+
+  const voice = { name, endsAt: now + length, gains: [], sources: [] };
+  voices.push(voice);
+
   if (sample) {
     noteSfx(name, 'sample', {
       take: (lastPick.get(name) ?? 0) + 1,
@@ -639,7 +758,7 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
     const gain = ctx.createGain();
     gain.gain.value = gainValue;
     src.buffer = sample;
-    src.playbackRate.value = Math.max(0.05, pitchMul);
+    src.playbackRate.value = rate;
     let node = src;
     if (def.filter) {
       const filter = ctx.createBiquadFilter();
@@ -650,6 +769,8 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
     }
     node.connect(gain).connect(master);
     src.start(now);
+    voice.gains.push(gain);
+    voice.sources.push(src);
     return;
   }
 
@@ -675,14 +796,16 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
     envelope(gain, gainValue, decay, now);
     osc.connect(gain).connect(master);
     osc.start(now);
-    osc.stop(now + decay + 0.05);
+    osc.stop(now + decay + SYNTH_TAIL);
+    voice.gains.push(gain);
+    voice.sources.push(osc);
   }
 
   if (wantsNoise) {
     const src = ctx.createBufferSource();
     const filter = ctx.createBiquadFilter();
     const gain = ctx.createGain();
-    src.buffer = noiseBuffer(decay + 0.05);
+    src.buffer = noiseBuffer(decay + SYNTH_TAIL);
     filter.type = 'lowpass';
     const cutoff = Math.max(80, (def.filter ?? 2000) * filterMul * pitchMul);
     filter.frequency.setValueAtTime(cutoff, now);
@@ -690,7 +813,9 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
     envelope(gain, gainValue * (def.noise ?? 1), decay, now);
     src.connect(filter).connect(gain).connect(master);
     src.start(now);
-    src.stop(now + decay + 0.05);
+    src.stop(now + decay + SYNTH_TAIL);
+    voice.gains.push(gain);
+    voice.sources.push(src);
   }
 }
 

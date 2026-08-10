@@ -102,8 +102,26 @@ function crop(canvas, pad = 6) {
   return out;
 }
 
+// Keep only the mesh this asset actually uses, exactly as assets.js does.
+//
+// Several assets share one binary and pick a mesh out of it by index — the
+// three fish packs are one file with three different fish in it. Without this
+// all three render as the whole file, which is to say identically, and the
+// atlas reports each of them as carrying the other two's triangles as well.
+function isolateMesh(root, index) {
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) meshes.push(o); });
+  const target = meshes[index];
+  if (!target) return meshes.length;
+  const keep = new Set();
+  for (let o = target; o; o = o.parent) keep.add(o);
+  for (const m of meshes) if (!keep.has(m)) m.parent?.remove(m);
+  return 1;
+}
+
 async function shoot(spec) {
   const { root, clips } = await loadModel(spec);
+  if (spec.meshIndex != null) isolateMesh(root, spec.meshIndex);
 
   // A skinned creature in its bind pose reads as a specimen, not an animal.
   // Sampling the swim clip a third of the way in gives it a real swimming

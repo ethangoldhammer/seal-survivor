@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
+import { applyElementalHit } from './elements.js';
 
 // The strike is a CHARGE-UP. Holding the button fills a single meter (about a
 // second from empty); releasing spends it and gives the ship a strong
@@ -405,6 +406,12 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       hitThisDash.add(e);
       hooks.onEnemyDamaged?.(e, dmg);
       hooks.onChainHit?.(strikeState.chainCount);
+
+      // The seal itself is elemental, not just its bullets — so the dash
+      // carries it too, at CONFIG.biolum.strikeFraction. Discounted because a
+      // dash through six fish applies six statuses on one frame, and at full
+      // strength that makes the gun the card is nominally about irrelevant.
+      applyElementalHit(scene, e, dmg, enemiesList, hooks, CONFIG.biolum?.strikeFraction ?? 0.5);
 
       if (e.hp <= 0) {
         hooks.onEnemyKilled?.(e);

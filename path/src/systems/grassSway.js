@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { advanceCycles } from './beatSync.js';
 
 // Seabed grass bending in the current, done entirely in the vertex shader.
 // Nothing here touches the CPU per frame except one uniform write for the
@@ -41,14 +42,13 @@ import { CONFIG } from '../config.js';
 // property of where the clump stands, not of its local mesh.
 
 const GLSL_SWAY = `
-uniform float uSwayTime;
+uniform float uSwayCycle;        // main sway position, in cycles
+uniform float uSwayFlutterCycle; // tip chatter position, in cycles
 uniform float uSwayAmplitude;
 uniform float uSwayStiffness;
-uniform float uSwaySpeed;
 uniform float uSwayWavelength;
 uniform vec2  uSwayDir;
 uniform float uSwayFlutter;
-uniform float uSwayFlutterSpeed;
 uniform float uSwayBend;
 uniform float uSwayHeight; // clump height, model units; only the UV fallback
 `;
@@ -117,10 +117,14 @@ const GLSL_SWAY_BODY = `
   float bladeY = transformed.y;
 
   vec3 swayWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
-  float phase = dot(swayWorld.xz, uSwayDir) * uSwayWavelength + uSwayTime * uSwaySpeed;
+  // uSwayCycle and uSwayFlutterCycle arrive as POSITIONS (in cycles), not as
+  // a clock and a rate, which is what lets the same shader run at 1.1 rad/s
+  // or at one sway per two bars — see systems/beatSync.js. The spatial term
+  // is untouched: a gust crossing the field is a distance, not a tempo.
+  float phase = dot(swayWorld.xz, uSwayDir) * uSwayWavelength + uSwayCycle * 6.2831853;
 
   float body = sin(phase);
-  float flutter = sin(phase * 2.7 + uSwayTime * uSwayFlutterSpeed) * uSwayFlutter * swayT;
+  float flutter = sin(phase * 2.7 + uSwayFlutterCycle * 6.2831853) * uSwayFlutter * swayT;
 
   vec2 push = uSwayDir * (body * uSwayAmplitude + flutter) * mask * bladeY;
   transformed.xz += push;
@@ -148,14 +152,13 @@ export function attachGrassSway(material, heightFallback = 1) {
   material.userData.__swayAttached = true;
 
   const u = {
-    uSwayTime: { value: 0 },
+    uSwayCycle: { value: 0 },
+    uSwayFlutterCycle: { value: 0 },
     uSwayAmplitude: { value: 0.09 },
     uSwayStiffness: { value: 1.8 },
-    uSwaySpeed: { value: 1.1 },
     uSwayWavelength: { value: 0.35 },
     uSwayDir: { value: new THREE.Vector2(1, 0) },
     uSwayFlutter: { value: 0.025 },
-    uSwayFlutterSpeed: { value: 3.7 },
     uSwayBend: { value: 1 },
     uSwayHeight: { value: heightFallback },
   };
@@ -189,11 +192,29 @@ export function attachGrassSway(material, heightFallback = 1) {
  */
 export function updateGrassSway(rawDt) {
   if (CONFIG.grass?.sway?.enabled === false) return;
+  const cfg = CONFIG.grass?.sway ?? {};
+  // Advanced ONCE, then broadcast. Every clump answers to the same config, so
+  // there is nothing per-material to track — the thing that makes a field look
+  // like a field rather than like one plant repeated is the spatial term in the
+  // shader (see uSwayWavelength), not a per-clump clock.
+  //
+  // Both rates are authored in radians/sec, so they divide by 2π to become the
+  // cycles/sec the free path wants. Wrap 1: each cycle is read by a single
+  // sin(), so a full turn is the whole period.
+  swayCycle = advanceCycles(swayCycle, cfg.speedSync, (cfg.speed ?? 1.1) / TWO_PI, rawDt, 1);
+  flutterCycle = advanceCycles(
+    flutterCycle, cfg.flutterSync, (cfg.flutterSpeed ?? 3.7) / TWO_PI, rawDt, 1);
   for (const m of attached) {
     const u = m.userData.__swayUniforms;
-    if (u) u.uSwayTime.value += rawDt;
+    if (!u) continue;
+    u.uSwayCycle.value = swayCycle;
+    u.uSwayFlutterCycle.value = flutterCycle;
   }
 }
+
+const TWO_PI = Math.PI * 2;
+let swayCycle = 0;
+let flutterCycle = 0;
 
 /**
  * Push CONFIG.grass.sway onto every attached material. Pure uniform writes, no
@@ -210,12 +231,12 @@ export function applyGrassSettings() {
     // instead of snapping it straight.
     u.uSwayAmplitude.value = cfg.enabled === false ? 0 : (cfg.amplitude ?? 0.09);
     u.uSwayStiffness.value = cfg.stiffness ?? 1.8;
-    u.uSwaySpeed.value = cfg.speed ?? 1.1;
     u.uSwayWavelength.value = cfg.wavelength ?? 0.35;
     u.uSwayDir.value.set(Math.cos(dir), Math.sin(dir));
     u.uSwayFlutter.value = cfg.enabled === false ? 0 : (cfg.flutter ?? 0.025);
-    u.uSwayFlutterSpeed.value = cfg.flutterSpeed ?? 3.7;
     u.uSwayBend.value = cfg.bend ?? 1;
+    // `speed` and `flutterSpeed` are NOT written here any more: they are rates,
+    // and the shader is handed positions. updateGrassSway owns both.
   }
 }
 

@@ -1,0 +1,531 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Seal Survivor — table editor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0f1418; --panel: #161d23; --line: #26313a; --text: #dfe8ee;
+    --dim: #8ba0af; --accent: #4fc3f7; --dirty: #f5c542; --bad: #ff6b6b;
+    --ok: #5ddc9a; --field: #0c1216;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa; --panel: #fff; --line: #dde4ea; --text: #17242e;
+      --dim: #5c7180; --accent: #0b7fb5; --dirty: #a9761a; --bad: #c92a2a;
+      --ok: #14804a; --field: #fff;
+    }
+  }
+  * { box-sizing: border-box; }
+  /* One scrolling region, the grid. Letting the page scroll too puts the
+     blurb under the sticky toolbar and gives you two scrollbars that both
+     look like they move the table. */
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+    height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+  }
+
+  header {
+    flex: none; z-index: 30; background: var(--panel);
+    border-bottom: 1px solid var(--line); padding: 10px 16px;
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  }
+  .tabs { display: flex; gap: 4px; }
+  .tab {
+    padding: 6px 12px; border-radius: 6px; border: 1px solid transparent;
+    background: none; color: var(--dim); cursor: pointer; font: inherit; font-weight: 500;
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--text); }
+  .tab .count { color: var(--dim); font-weight: 400; margin-left: 5px; }
+  .tab .dot { color: var(--dirty); margin-left: 5px; font-size: 15px; line-height: 0; }
+
+  .grow { flex: 1; }
+  input[type="search"] {
+    width: 180px; padding: 5px 9px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--field); color: var(--text); font: inherit;
+  }
+  button.action {
+    padding: 6px 13px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--field); color: var(--text); font: inherit; cursor: pointer;
+  }
+  button.action:hover:not(:disabled) { border-color: var(--accent); }
+  button.action:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06222f; font-weight: 600; }
+  @media (prefers-color-scheme: light) { button.primary { color: #fff; } }
+
+  .blurb { flex: none; margin: 0; padding: 12px 16px 4px; color: var(--dim); max-width: 78ch; }
+  .status { flex: none; margin: 0; padding: 0 16px 10px; min-height: 20px; color: var(--dim); }
+  .status.bad { color: var(--bad); }
+  .status.ok { color: var(--ok); }
+
+  /* No horizontal padding on the scroller: `left: 0` on the frozen id column
+     is relative to the padding box, so a 16px gutter is 16px of the scrolled
+     table showing through beside the column that is supposed to cover it. The
+     margin lives inside the edge cells instead. */
+  .scroller { flex: 1; min-height: 0; overflow: auto; padding: 0 0 25vh; }
+  th:first-child, td:first-child { padding-left: 16px; }
+  th:last-child, td:last-child { padding-right: 16px; }
+  table { border-collapse: separate; border-spacing: 0; }
+  th, td { border-bottom: 1px solid var(--line); padding: 0; white-space: nowrap; }
+  thead th {
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
+    text-align: left; padding: 7px 8px; font-weight: 600; color: var(--dim);
+    border-bottom: 1px solid var(--line); cursor: pointer; user-select: none;
+  }
+  thead th:hover { color: var(--text); }
+  thead th .arrow { color: var(--accent); }
+  th.sticky, td.sticky {
+    position: sticky; left: 0; z-index: 12; background: var(--bg);
+    border-right: 1px solid var(--line);
+  }
+  thead th.sticky { z-index: 20; }
+  tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  tbody tr:hover td.sticky { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+
+  td .cell {
+    width: 100%; border: 1px solid transparent; border-radius: 4px;
+    background: none; color: var(--text); font: inherit; padding: 5px 7px;
+  }
+  td .cell:hover { border-color: var(--line); }
+  td .cell:focus { outline: none; border-color: var(--accent); background: var(--field); }
+  td.num .cell { text-align: right; font-variant-numeric: tabular-nums; }
+  td.dirty .cell { border-color: var(--dirty); background: color-mix(in srgb, var(--dirty) 12%, transparent); }
+  td.bad .cell { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .cell::placeholder { color: var(--dim); opacity: .55; font-style: italic; }
+  td .cell[readonly] { color: var(--dim); cursor: default; }
+  td .cell[readonly]:hover { border-color: transparent; }
+
+  /* Widths have to out-specify `td .cell { width: 100% }` above, which is why
+     these carry the `td .cell` prefix rather than being bare classes. */
+  td .cell.w-num { width: 92px; }
+  td .cell.w-text { width: 190px; }
+  td .cell.w-wide { width: 340px; }
+  td .cell.w-id { width: 150px; }
+  td .cell.w-enum { width: 118px; }
+  td .cell.w-art { width: 172px; }
+
+  /* A caret, so a cell you can pick from doesn't read as a cell you must type
+     into. Same marker on the combo columns, which are both. */
+  select.cell, input[list] {
+    appearance: none; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--dim) 50%),
+                      linear-gradient(135deg, var(--dim) 50%, transparent 50%);
+    background-position: calc(100% - 13px) 50%, calc(100% - 8px) 50%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 22px;
+  }
+  input[list] { cursor: text; }
+  input[list]::-webkit-calendar-picker-indicator { opacity: 0; }
+
+  .artbtn {
+    display: flex; align-items: center; gap: 7px; cursor: pointer;
+    width: 100%; text-align: left; overflow: hidden;
+  }
+  .artbtn img { width: 22px; height: 22px; border-radius: 4px; flex: none; object-fit: cover; }
+  .artbtn .swatch { width: 22px; height: 22px; border-radius: 4px; flex: none; border: 1px dashed var(--line); }
+  .artbtn span { overflow: hidden; text-overflow: ellipsis; }
+
+  .rowdel {
+    border: none; background: none; color: var(--dim); cursor: pointer;
+    font-size: 15px; padding: 4px 8px; visibility: hidden;
+  }
+  tbody tr:hover .rowdel { visibility: visible; }
+  .rowdel:hover { color: var(--bad); }
+
+  dialog {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+    color: var(--text); padding: 0; max-width: 760px; width: 92vw;
+  }
+  dialog::backdrop { background: #0009; }
+  .dlg-head { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+  .dlg-head h2 { margin: 0; font-size: 14px; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 10px; padding: 16px; max-height: 66vh; overflow: auto; }
+  .art-opt { border: 2px solid transparent; border-radius: 9px; padding: 5px; background: none; color: var(--text); cursor: pointer; font: inherit; }
+  .art-opt:hover { border-color: var(--line); }
+  .art-opt[aria-current="true"] { border-color: var(--accent); }
+  .art-opt img, .art-opt .none {
+    width: 100%; aspect-ratio: 1; border-radius: 6px; display: block; object-fit: cover;
+  }
+  .art-opt .none { border: 1px dashed var(--line); display: grid; place-items: center; color: var(--dim); }
+  .art-opt small { display: block; margin-top: 4px; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+  .hint { color: var(--dim); font-size: 12px; }
+</style>
+
+<header>
+  <div class="tabs" id="tabs"></div>
+  <div class="grow"></div>
+  <input type="search" id="filter" placeholder="Filter rows…" autocomplete="off">
+  <button class="action" id="addRow" hidden>+ Add row</button>
+  <button class="action" id="revert" disabled>Revert</button>
+  <button class="action primary" id="save" disabled>Save</button>
+</header>
+
+<p class="blurb" id="blurb"></p>
+<p class="status" id="status"></p>
+<div class="scroller"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+
+<dialog id="artDlg">
+  <div class="dlg-head">
+    <h2>Card art</h2>
+    <span class="hint" id="artFor"></span>
+    <div class="grow"></div>
+    <button class="action" onclick="artDlg.close()">Close</button>
+  </div>
+  <div class="gallery" id="gallery"></div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let tables = [];      // as served, plus a pristine copy for dirty/revert
+let active = 0;
+let sortCol = null, sortDir = 1;
+let art = null;       // key -> {label, src}, fetched on first use
+
+const T = () => tables[active];
+const clone = (v) => JSON.parse(JSON.stringify(v));
+
+boot();
+
+async function boot() {
+  const r = await fetch('/api/tables');
+  const data = await r.json();
+  tables = data.tables.map((t) => ({ ...t, original: clone(t.rows) }));
+  renderTabs();
+  renderTable();
+
+  // Thumbnails are the entire reason the card art column is worth clicking, so
+  // they load in the background rather than waiting for the picker to open —
+  // half a megabyte of base64 over localhost, once.
+  loadArt().catch(() => {});
+
+  $('filter').oninput = renderBody;
+  $('save').onclick = save;
+  $('revert').onclick = revert;
+  $('addRow').onclick = addRow;
+  addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); }
+  });
+}
+
+function renderTabs() {
+  $('tabs').innerHTML = '';
+  tables.forEach((t, i) => {
+    const b = document.createElement('button');
+    b.className = 'tab';
+    b.setAttribute('aria-selected', i === active);
+    b.innerHTML = `${t.label}<span class="count">${t.rows.length}</span>${dirtyOf(t) ? '<span class="dot" title="unsaved changes">•</span>' : ''}`;
+    // No "unsaved changes" prompt: each table keeps its own edits in the page,
+    // so switching away loses nothing and confirming it would be a dialog
+    // about a non-event. The tab carries a dot instead, so an edit left
+    // unsaved on another table is still visible from here.
+    b.onclick = () => { active = i; sortCol = null; renderTabs(); renderTable(); };
+    $('tabs').append(b);
+  });
+}
+
+function renderTable() {
+  const t = T();
+  $('blurb').textContent = t.blurb;
+  $('addRow').hidden = !t.addRows;
+  status('');
+  renderHead();
+  renderBody();
+  markDirty();
+}
+
+function renderHead() {
+  const tr = document.createElement('tr');
+  T().columns.forEach((c) => {
+    const th = document.createElement('th');
+    if (c.key) th.className = 'sticky';
+    th.textContent = c.name;
+    if (sortCol === c.name) th.insertAdjacentHTML('beforeend', `<span class="arrow"> ${sortDir > 0 ? '▲' : '▼'}</span>`);
+    let tip = c.doc || '';
+    if (c.blank) tip += `\nBlank = ${c.blank}.`;
+    if (c.type === 'number' && c.min !== undefined) tip += `\nMinimum ${c.min}${c.integer ? ', whole numbers' : ''}.`;
+    if (tip) th.title = tip.trim();
+    th.onclick = () => {
+      sortDir = sortCol === c.name ? -sortDir : 1;
+      sortCol = c.name;
+      renderHead(); renderBody();
+    };
+    tr.append(th);
+  });
+  if (T().addRows) tr.append(document.createElement('th'));
+  $('thead').replaceChildren(tr);
+}
+
+// The view is sorted and filtered; the FILE is not. Save always writes rows in
+// their original order, so sorting a column to compare it never turns into a
+// hundred-line reshuffle in the diff.
+function visibleRows() {
+  const t = T();
+  const q = $('filter').value.trim().toLowerCase();
+  let idx = t.rows.map((_, i) => i);
+  if (q) idx = idx.filter((i) => Object.values(t.rows[i]).some((v) => String(v).toLowerCase().includes(q)));
+  if (sortCol) {
+    const num = t.columns.find((c) => c.name === sortCol)?.type === 'number';
+    idx.sort((a, b) => {
+      const x = t.rows[a][sortCol] ?? '', y = t.rows[b][sortCol] ?? '';
+      if (num) {
+        const nx = x === '' ? Infinity : Number(x), ny = y === '' ? Infinity : Number(y);
+        return (nx - ny) * sortDir;
+      }
+      return String(x).localeCompare(String(y)) * sortDir;
+    });
+  }
+  return idx;
+}
+
+function renderBody() {
+  const t = T();
+  const frag = document.createDocumentFragment();
+  for (const i of visibleRows()) {
+    const tr = document.createElement('tr');
+    tr.dataset.row = i;
+    t.columns.forEach((c) => tr.append(cellFor(c, i)));
+    if (t.addRows) {
+      const td = document.createElement('td');
+      const b = document.createElement('button');
+      b.className = 'rowdel'; b.textContent = '✕'; b.title = 'Delete this row';
+      b.onclick = () => {
+        if (!confirm(`Delete "${t.rows[i].id || 'this row'}"?`)) return;
+        t.rows.splice(i, 1);
+        renderTabs(); renderBody(); markDirty();
+      };
+      td.append(b);
+      tr.append(td);
+    }
+    frag.append(tr);
+  }
+  $('tbody').replaceChildren(frag);
+}
+
+function cellFor(c, i) {
+  const t = T();
+  const td = document.createElement('td');
+  if (c.key) td.className = 'sticky';
+  if (c.type === 'number') td.className += ' num';
+
+  const set = (v) => {
+    t.rows[i][c.name] = v;
+    paint(td, c, i);
+    markDirty();
+  };
+
+  let el;
+  if (c.type === 'enum') {
+    el = document.createElement('select');
+    el.className = 'cell w-enum';
+    for (const o of c.options) {
+      const opt = document.createElement('option');
+      opt.value = o;
+      opt.textContent = c.labels?.[o] ?? o;
+      el.append(opt);
+    }
+    el.value = c.options.includes(t.rows[i][c.name]) ? t.rows[i][c.name] : t.rows[i][c.name] || '';
+    el.onchange = () => set(el.value);
+  } else if (c.type === 'art') {
+    el = document.createElement('button');
+    el.className = 'cell artbtn w-art';
+    el.onclick = () => openArt(c, i);
+    paintArt(el, t.rows[i][c.name]);
+  } else {
+    el = document.createElement('input');
+    el.className = 'cell ' + (c.type === 'number' ? 'w-num' : c.key ? 'w-id' : c.wide ? 'w-wide' : 'w-text');
+    el.value = t.rows[i][c.name] ?? '';
+    el.placeholder = c.blank ? c.blank : '';
+    if (c.readonly) { el.readOnly = true; el.title = c.doc || ''; }
+    if (c.type === 'number') el.inputMode = 'decimal';
+    if (c.type === 'combo') {
+      // A dropdown you can also type into — the groups that exist are one
+      // click away, and a brand new one is still just typing.
+      const listId = `dl-${c.name}`;
+      if (!document.getElementById(listId)) {
+        const dl = document.createElement('datalist');
+        dl.id = listId;
+        for (const o of c.options) dl.insertAdjacentHTML('beforeend', `<option value="${o}">`);
+        document.body.append(dl);
+      }
+      el.setAttribute('list', listId);
+    }
+    el.oninput = () => set(el.value);
+    el.onkeydown = (e) => moveCell(e, td);
+  }
+
+  td.append(el);
+  paint(td, c, i);
+  return td;
+}
+
+// Up/down walks a column, which is how you actually read these tables — you
+// are comparing one creature's hp against the next, not filling a row in.
+function moveCell(e, td) {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  const tr = td.parentElement;
+  const col = [...tr.children].indexOf(td);
+  const next = e.key === 'ArrowUp' ? tr.previousElementSibling : tr.nextElementSibling;
+  const target = next?.children[col]?.querySelector('.cell');
+  if (!target) return;
+  e.preventDefault();
+  target.focus();
+  if (target.select) target.select();
+}
+
+function paint(td, c, i) {
+  const raw = String(T().rows[i][c.name] ?? '');
+  const was = String(T().original[i]?.[c.name] ?? '');
+  td.classList.toggle('dirty', raw !== was);
+
+  const err = validate(c, raw);
+  td.classList.toggle('bad', !!err);
+  const el = td.querySelector('.cell');
+  if (el) el.title = err || (c.doc || '');
+}
+
+// Mirrors parseNumber/parseBool in path/src/csvTable.js. Anything flagged here
+// is something the game would warn about in the console and then ignore —
+// which is exactly the class of mistake you want to see before you save, not
+// after wondering why the megalodon kept its old hp.
+function validate(c, raw) {
+  const v = raw.trim();
+  if (c.type === 'number') {
+    if (v === '') return c.required ? 'This field has no default in the game — a blank cell keeps the config.js value and warns.' : '';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return `"${raw}" isn't a number — the game will ignore this cell.`;
+    if (c.min !== undefined && n < c.min) return `Must be at least ${c.min} — the game will ignore this cell.`;
+    if (c.integer && !Number.isInteger(n)) return `Whole numbers only; the game floors this to ${Math.floor(n)}.`;
+    return '';
+  }
+  if (c.key && v === '') return 'A row with no id is skipped entirely.';
+  if (c.name === 'text' && v === '') return 'A quip with no text is ignored.';
+  return '';
+}
+
+function addRow() {
+  const t = T();
+  const rec = {};
+  t.header.forEach((h) => { rec[h] = ''; });
+  t.rows.push(rec);
+  $('filter').value = '';
+  sortCol = null;
+  renderTabs(); renderHead(); renderBody(); markDirty();
+  const last = $('tbody').lastElementChild?.querySelector('.cell');
+  last?.focus();
+}
+
+const dirtyOf = (t) => JSON.stringify(t.rows) !== JSON.stringify(t.original);
+const isDirty = () => dirtyOf(T());
+
+function markDirty() {
+  const dirty = isDirty();
+  renderTabs(); // so an unsaved edit on a table you've navigated away from still shows
+  $('save').disabled = !dirty;
+  $('revert').disabled = !dirty;
+  const bad = document.querySelectorAll('td.bad').length;
+  $('save').textContent = dirty ? (bad ? `Save (${bad} flagged)` : 'Save') : 'Saved';
+}
+
+function revert() {
+  const t = T();
+  if (!confirm('Throw away every change to this table since it loaded?')) return;
+  t.rows = clone(t.original);
+  renderTabs(); renderBody(); markDirty();
+  status('Reverted to what is on disk.');
+}
+
+async function save() {
+  const t = T();
+  if (!isDirty()) return;
+  $('save').disabled = true;
+  status('Saving…');
+  try {
+    const r = await fetch('/api/save', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ file: t.file, header: t.header, rows: t.rows, mtimeMs: t.mtimeMs }),
+    });
+    const out = await r.json();
+    if (!r.ok) { status(out.error, 'bad'); markDirty(); return; }
+    t.mtimeMs = out.mtimeMs;
+    t.original = clone(t.rows);
+    // What was changed is now what's on disk, so the highlight has to go —
+    // cleared in place rather than by re-rendering, which would take the
+    // caret out of the cell you were typing in. The `bad` flags stay: those
+    // are about the value, not about whether it has been written down.
+    document.querySelectorAll('td.dirty').forEach((td) => td.classList.remove('dirty'));
+    markDirty();
+    status(`Saved ${t.file}. The dev server picks it up on the next reload.`, 'ok');
+  } catch (err) {
+    status(String(err), 'bad');
+    markDirty();
+  }
+}
+
+function status(msg, kind = '') {
+  const el = $('status');
+  el.textContent = msg;
+  el.className = 'status ' + kind;
+}
+
+// --- card art ---------------------------------------------------------------
+
+function paintArt(btn, key) {
+  const meta = art?.[key];
+  btn.innerHTML = '';
+  if (key && meta) {
+    const img = document.createElement('img');
+    img.src = meta.src;
+    btn.append(img);
+  } else {
+    const sw = document.createElement('div');
+    sw.className = 'swatch';
+    btn.append(sw);
+  }
+  const label = document.createElement('span');
+  label.textContent = key || 'plain card';
+  if (!key) label.style.color = 'var(--dim)';
+  btn.append(label);
+}
+
+async function loadArt() {
+  if (art) return art;
+  art = await (await fetch('/api/cardart')).json();
+  // Thumbnails on the buttons only become possible once the gallery is loaded,
+  // so repaint the column the first time it is opened.
+  document.querySelectorAll('.artbtn').forEach((b) => {
+    const row = +b.closest('tr').dataset.row;
+    paintArt(b, T().rows[row].cardArt ?? '');
+  });
+  return art;
+}
+
+async function openArt(c, i) {
+  await loadArt();
+  const t = T();
+  $('artFor').textContent = `${t.rows[i].name || t.rows[i].id}`;
+  const g = $('gallery');
+  g.innerHTML = '';
+  for (const key of c.options) {
+    const b = document.createElement('button');
+    b.className = 'art-opt';
+    b.setAttribute('aria-current', (t.rows[i][c.name] || '') === key);
+    if (key && art[key]) {
+      b.innerHTML = `<img src="${art[key].src}" alt=""><small>${key}</small>`;
+    } else {
+      b.innerHTML = `<div class="none">none</div><small>plain card</small>`;
+    }
+    b.onclick = () => {
+      t.rows[i][c.name] = key;
+      $('artDlg').close();
+      renderBody();
+      markDirty();
+    };
+    g.append(b);
+  }
+  $('artDlg').showModal();
+}
+</script>

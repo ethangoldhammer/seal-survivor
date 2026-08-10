@@ -9,10 +9,13 @@
     "preview": "vite preview",
     "deploy": "npm run build && wrangler pages deploy dist --project-name=seal-survivor --branch=SealSurvivor-Main",
     "deploy:preview": "npm run build && wrangler pages deploy dist --project-name=seal-survivor --branch=preview",
+    "csv": "node tools/csv-editor.mjs",
+    "test:csv": "node tools/csv-editor-test.mjs",
     "placeholder": "node tools/make-placeholder-ship.mjs",
     "playtest": "node tools/playtest-report.mjs",
     "test:crowd": "node tools/apex-crowd-test.mjs",
     "test:upgrades": "node --import ./tools/vite-loader.mjs tools/upgrade-test.mjs",
+    "test:elements": "node --import ./tools/vite-loader.mjs tools/elements-test.mjs",
     "test:abilities": "node --import ./tools/vite-loader.mjs tools/ability-smoke.mjs",
     "test:octopus": "node --import ./tools/vite-loader.mjs tools/octopus-rig-test.mjs",
     "test:biolum": "node --import ./tools/vite-loader.mjs tools/biolum-test.mjs",
@@ -24,9 +27,14 @@
     "test:spriteglow": "node --import ./tools/vite-loader.mjs tools/sprite-glow-test.mjs",
     "test:rig": "node --import ./tools/vite-loader.mjs tools/seal-rig-test.mjs",
     "test:apexspring": "node --import ./tools/vite-loader.mjs tools/apex-spring-test.mjs",
+    "test:sharkswim": "node --import ./tools/vite-loader.mjs tools/shark-swim-test.mjs",
     "test:nightlife": "node --import ./tools/vite-loader.mjs tools/nightlife-test.mjs",
+    "test:waves": "node --import ./tools/vite-loader.mjs tools/wave-test.mjs",
+    "test:beat": "node --import ./tools/vite-loader.mjs tools/beat-sync-test.mjs",
+    "test:sky": "node --import ./tools/vite-loader.mjs tools/constellation-test.mjs",
+    "test:claw": "node --import ./tools/vite-loader.mjs tools/crab-claw-test.mjs",
     "ship": "node tools/ship.mjs",
-    "test": "npm run test:upgrades && npm run test:abilities && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:skin && npm run test:boats && npm run test:grass && npm run test:crabs && npm run test:strike && npm run test:rig && npm run test:apexspring && npm run test:nightlife && npm run test:ambient && npm run test:emissive && npm run test:bus && npm run test:sfxdebug && npm run test:menusound && npm run test:music && npm run test:chargefx && npm run test:damagefx && npm run test:quips && npm run test:particles && npm run test:touchglow && npm run test:spriteglow",
+    "test": "npm run test:upgrades && npm run test:elements && npm run test:abilities && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:skin && npm run test:boats && npm run test:grass && npm run test:crabs && npm run test:claw && npm run test:strike && npm run test:rig && npm run test:apexspring && npm run test:sharkswim && npm run test:nightlife && npm run test:waves && npm run test:beat && npm run test:sky && npm run test:ambient && npm run test:emissive && npm run test:bus && npm run test:sfxdebug && npm run test:menusound && npm run test:music && npm run test:chargefx && npm run test:damagefx && npm run test:quips && npm run test:particles && npm run test:touchglow && npm run test:spriteglow && npm run test:modelshare && npm run test:csv",
     "test:ambient": "node --import ./tools/vite-loader.mjs tools/ambient-test.mjs",
     "test:emissive": "node --import ./tools/vite-loader.mjs tools/emissive-flip-test.mjs",
     "sfx:atlas": "node --import ./tools/vite-loader.mjs tools/sfx-atlas.mjs",
@@ -38,14 +46,19 @@
     "test:chargefx": "node --import ./tools/vite-loader.mjs tools/charge-fx-test.mjs",
     "test:damagefx": "node --import ./tools/vite-loader.mjs tools/damage-fx-test.mjs",
     "test:particles": "node --import ./tools/vite-loader.mjs tools/particle-test.mjs",
-    "test:touchglow": "node --import ./tools/vite-loader.mjs tools/touch-glow-test.mjs"
+    "test:touchglow": "node --import ./tools/vite-loader.mjs tools/touch-glow-test.mjs",
+    "test:modelshare": "node --import ./tools/vite-loader.mjs tools/model-share-test.mjs"
   },
   "dependencies": {
     "@rive-app/canvas": "^2.39.2",
     "three": "^0.183.2"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.4.2",
+    "@gltf-transform/extensions": "^4.4.2",
+    "@gltf-transform/functions": "^4.4.2",
     "jsdom": "^30.0.1",
+    "meshoptimizer": "^1.2.0",
     "vite": "^6.0.0",
     "wrangler": "^4.120.0"
   }

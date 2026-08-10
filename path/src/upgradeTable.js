@@ -8,7 +8,9 @@
 // content, and content belongs in a table you can sort, fill down and diff.
 //
 // So upgrades.csv is the source of truth for those six fields. Open it in a
-// spreadsheet, edit, save; the dev server reloads the page and the new values
+// spreadsheet, in a text editor, or with `npm run csv` (a grid with the
+// columns typed — cardArt as a picker of the real images, enabled as a
+// dropdown); edit, save; the dev server reloads the page and the new values
 // are live. Nothing in the game writes back to it — the in-game Upgrades tab
 // is a read-only view of what this file produced.
 //

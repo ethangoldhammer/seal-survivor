@@ -1,0 +1,5 @@
+[
+  { "key": "grabber-current", "file": "octopus_rig.glb", "fit": 4.6, "forward": "-Z", "up": "-X", "tint": 11565776 },
+  { "key": "grabber-candidate", "file": "octopus.glb", "fit": 4.6, "forward": "-Z", "up": "-X", "tint": 11565776 },
+  { "key": "grabber-candidate-untinted", "file": "octopus.glb", "fit": 4.6, "forward": "-Z", "up": "-X" }
+]

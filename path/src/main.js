@@ -3,11 +3,15 @@ import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } fr
 import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin } from './systems/biolumSkin.js';
+import { updateBeatSync } from './systems/beatSync.js';
 import { reseatDecor } from './systems/decor.js';
 import { createWorld } from './world.js';
 import { midWater, bounds } from './arena.js';
 import { initInput, updateInput, clearPendingInput, input } from './input.js';
 import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, applyRecoil, rebuildShipBody } from './entities/player.js';
+import { projectileCount } from './stats.js';
+import { aoe, targeting } from './systems/scaling.js';
+import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, elementHitEvent } from './systems/elements.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight } from './entities/enemies.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
 import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, gulpPickups, setChumDifficulty } from './entities/pickups.js';
@@ -25,7 +29,7 @@ import { strikeState, tryStrike, restoreCharge, updateStrike, updateCharge, feed
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
-import { updateDayCycle, resetDayCycle, advanceClock, dayState } from './systems/daylight.js';
+import { updateDayCycle, resetDayCycle, advanceClock, dayState, setNightLock, nightLockedAt } from './systems/daylight.js';
 import { updateWeather, resetWeather } from './systems/weather.js';
 import { lightningStrikes } from './systems/lightning.js';
 import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
@@ -43,7 +47,7 @@ import { spawnSeagull, updateSeagulls, resetSeagulls } from './systems/seagull.j
 import { updateBoats, resetBoats, boats } from './systems/boats.js';
 import { damageDebris } from './systems/boatDebris.js';
 import { damageCrew, nearestFloatingCrew, eatCrew } from './systems/crew.js';
-import { updateEel, resetEel, resetEelBolts, currentEelStats, createEelCompanion, resetEelCompanion, rebuildEelCompanion } from './systems/eel.js';
+import { updateEel, resetEel, resetEelBolts, currentEelStats, createEelCompanion, resetEelCompanion, rebuildEelCompanion, spawnArcBolt } from './systems/eel.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, rebuildBelugaDrone } from './systems/beluga.js';
 import { updateSealTeam, resetSealTeam, rebuildSealTeam } from './systems/sealTeam.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, rebuildBakalarBoat } from './systems/bakalar.js';
@@ -267,12 +271,23 @@ function bindGlobalKeys() {
     // behind a level gate, which is not a thing you can art-direct against.
     //
     // Caps and gates are bypassed on purpose (that IS the feature), but the
-    // clock is left strictly alone: parking it would write `paused` and
-    // `scrubHour` into the live config, and the next tuner edit would save
-    // that to imported-tuning.json as though someone had chosen it. It says
-    // what time it is instead and lets you scrub, which is one drag away.
+    // clock is still left strictly alone HERE: parking it through `paused` and
+    // `scrubHour` writes those into the live config, and the next tuner edit
+    // would save them to imported-tuning.json as though someone had chosen a
+    // permanent midnight. Shift+N below is the way to get dark — it locks the
+    // clock in a place the tuning snapshot cannot see, and only in dev.
     if (e.key.toLowerCase() === 'n' && !isTypingTarget(e.target) && !e.repeat) {
-      spawnGlowLineup();
+      // The DEV test is INSIDE the branch, not around the whole handler, and
+      // it is what makes the night lock leave nothing behind: it is a
+      // compile-time constant, so the production build folds this to `false`,
+      // drops the call, and then tree-shakes setNightLock out of the bundle
+      // entirely. DEV_UI is not a substitute — it is true in production under
+      // `?tune`, which is exactly the door this must not be behind.
+      if (e.shiftKey && import.meta.env?.DEV) {
+        console.log(`[daylight] ${setNightLock(nightLockedAt() == null)}`);
+      } else if (!e.shiftKey) {
+        spawnGlowLineup();
+      }
     }
   });
 }
@@ -294,11 +309,15 @@ function spawnGlowLineup() {
     // screen; one placed deliberately inside the arena has already arrived.
     if (e) e.entering = false;
   });
-  const mul = nightlifeWeight();
+  // `true` = the GLOWING curve. Called bare this returned the daylight one,
+  // which is the opposite roster and made the hint below fire exactly backwards:
+  // at midnight the daylight weight is 0.08, so pressing N in full dark printed
+  // "the sun is up".
+  const mul = nightlifeWeight(true);
   console.log(
     `[nightlife] ${keys.join(', ')} — ${dayState.hours.toFixed(1)}h (${dayState.phase}), spawn weight x${mul.toFixed(2)}`
     + (mul > 0.5 ? '' : '\n  The sun is up, so the glow is additive over almost nothing and these will read as dark fish.'
-      + ' Freeze the clock and scrub to ~23h under The ocean in the ` panel to judge them.')
+      + ' Shift+N locks the clock at full dark (dev only, never persisted); Shift+N again hands it back.')
   );
 }
 
@@ -311,6 +330,13 @@ function handleTunerChange(path) {
   // to be re-seated by hand here or it hangs at the old floor height.
   if (path === '*' || path.startsWith('arena') || path.startsWith('camera')) { world.resize(); reseatDecor(); }
   if (path === '*' || path.startsWith('grid')) world.grid.build();
+  // The night sky's geometry IS its tuning — where the stars are, what is
+  // joined to what, how far the fractal grows — so most of that panel needs a
+  // rebuild rather than a uniform write. `star density` lives in the Sky panel
+  // but decides this field, so it has to come through here too.
+  if (path === '*' || path.startsWith('constellations') || path.startsWith('dayNight.stars')) {
+    world.constellations.build();
+  }
   // colors/caustics/godrays update in place every frame already via
   // world.updateColors, called from world.updateSurface — nothing to do here.
   if (path === '*' || path.startsWith('fx.maxParticles')) initParticles(world.scene);
@@ -407,6 +433,12 @@ function startGame() {
   resetGarlic();
   resetShrimpRing();
   resetStrike();
+  // Drops the rolled element AND clears any status still ticking on a
+  // creature carried into the new run — the statuses outlive the thing that
+  // applied them, so a re-roll without this leaves fish poisoned by the
+  // last run's numbers.
+  resetElements(world.scene);
+  clearStatuses(enemies);
   resetAimIndicator();
   // Must follow resetStrike: the input edge is what feeds tryStrike, so
   // clearing the charge state without clearing the pending press would just
@@ -451,6 +483,7 @@ function startGame() {
   resetOctoGrab(world.scene, player.mesh.position);
   resetOrcaPod(world.scene, player.mesh.position);
   world.grid.reset();
+  world.constellations.reset();
   refreshTuner();
 
   gameState.running = true;
@@ -604,6 +637,10 @@ function openLevelUp() {
 }
 
 function applyLevelChoice(choice) {
+  // A rolled card locks its variant in on the pick, not on the draw — the
+  // other two cards on screen may also have been offering Glow Up! rolls,
+  // and only the one actually taken should decide the run's element.
+  if (choice.rolledElement) commitElement(choice.rolledElement);
   addUpgrade(choice.id);
   // Timestamped, so the report can charge an ability only for the time it was
   // actually held — a pick taken at minute nine hasn't had a run to prove
@@ -664,7 +701,11 @@ function missileImpactFeedback(assetKey, x, y, dmg, projectile, targetRadius = 0
       color,
       // Off the target's own size, so it's big relative to the thing that just
       // took it — a fixed world radius came out smaller than the mussel.
-      radius: Math.max(cfg.minRadius ?? 2.2, targetRadius * (cfg.radiusScale ?? 3.2)),
+      // Splash Zone widens the detonation. The flash IS the missile's area
+      // effect — there is no separate blast test, the shell's own damage is
+      // the hit — so this is the one number that makes the card visible on
+      // the homing mussels.
+      radius: aoe(Math.max(cfg.minRadius ?? 2.2, targetRadius * (cfg.radiusScale ?? 3.2))),
       life: cfg.life ?? 0.17,
       glow: cfg.glow ?? 3.2,
     });
@@ -801,6 +842,10 @@ function processPendingSplashes() {
  */
 function onEnemyKilledFeedback(e, killEvent = null) {
   gameState.kills += 1;
+  // An infected host bursting. Queued inside elements.js rather than acted
+  // on here, because this runs from inside combat.js's own loop over
+  // `enemies` — the same reason `pendingSplashes` exists a few lines below.
+  onElementalHostKilled(e);
   // Credited to whatever last damaged this creature — the recorder tracks
   // that itself. A net haul does no damage at all, so it names itself.
   playtest.recordKill(e, killEvent === 'bakalarHaul' ? 'bakalar' : null);
@@ -821,7 +866,11 @@ function onEnemyKilledFeedback(e, killEvent = null) {
     });
   }
   // XP comes only from collecting the dropped orb, not from the kill itself.
-  spawnXpOrb(world.scene, e.mesh.position, e.def.xp, e.def.radius);
+  // e.xp, not e.def.xp — the value is per-instance, so a fish that drifted in
+  // during a lull between waves drops the quarter-value chum it was born with
+  // (see CONFIG.spawn.waves.lull). The orb itself is identical either way:
+  // same size, same heal, same charge refill, only the xp is scaled.
+  spawnXpOrb(world.scene, e.mesh.position, e.xp ?? e.def.xp, e.def.radius);
 
   const combo = comboMultiplierFor(strikeState);
   const { points, schoolWipe } = computeKillPoints(e, enemies, combo);
@@ -1062,7 +1111,10 @@ function fire() {
   const s = player.stats;
   const rapid = rapidFireTimer > 0;
   const fireRate = rapid ? s.fireRate / CONFIG.rapidFirePickup.fireRateMul : s.fireRate;
-  const shotCount = rapid ? Math.round(s.multishot * CONFIG.rapidFirePickup.multishotMul) : s.multishot;
+  // Clone Warz first, THEN the pickup's multiplier — so the temporary powerup
+  // multiplies the gun you actually have rather than the one you started with.
+  const pellets = projectileCount(s.multishot, s);
+  const shotCount = rapid ? Math.round(pellets * CONFIG.rapidFirePickup.multishotMul) : pellets;
   shootCooldown = fireRate;
 
   const dir = input.aim.clone().normalize();
@@ -1145,12 +1197,13 @@ function fireMissiles() {
   const dir = input.aim.clone().normalize();
   const rig = player.aimRig;
 
-  for (let i = 0; i < s.missileCount; i++) {
+  const shells = projectileCount(s.missileCount, s);
+  for (let i = 0; i < shells; i++) {
     // Fan them out at launch so a volley doesn't look like one fat missile,
     // PLUS per-missile random jitter on top so repeated volleys don't all
     // trace the same fixed fan. Homing pulls each back onto the target from
     // wherever it started, so the paths differ but the outcome doesn't.
-    const fan = (i - (s.missileCount - 1) / 2) * 0.3;
+    const fan = (i - (shells - 1) / 2) * 0.3;
     const jitter = (Math.random() * 2 - 1) * CONFIG.missile.launchSpread;
     const spread = fan + jitter;
     const cos = Math.cos(spread);
@@ -1193,7 +1246,7 @@ function fireMissiles() {
       homing: true,
       homingDelay: CONFIG.missile.homingDelay,
       turnRate: CONFIG.missile.turnRate,
-      acquireRadius: CONFIG.missile.acquireRadius,
+      acquireRadius: targeting(CONFIG.missile.acquireRadius),
     });
   }
   // Rotate which flipper the NEXT volley starts from, so an odd missile count
@@ -1259,7 +1312,8 @@ function fireScallops() {
   const dir = input.aim.clone().normalize();
   const rig = player.aimRig;
 
-  for (let i = 0; i < s.scallopCount; i++) {
+  const shells = projectileCount(s.scallopCount, s);
+  for (let i = 0; i < shells; i++) {
     const origin = emitPoint(rig, CONFIG.emitPoints.scallop, i, dir, player.mesh.position, muzzlePoint);
     // A full random heading rather than a cone around the aim. The card
     // promises a shell that goes wherever it likes, and biasing the launch
@@ -1293,7 +1347,7 @@ function fireScallops() {
   feedback('scallopLaunch', {
     x: player.mesh.position.x,
     y: player.mesh.position.y,
-    scale: Math.min(1.6, 0.7 + s.scallopCount * 0.12),
+    scale: Math.min(1.6, 0.7 + shells * 0.12),
   });
 }
 
@@ -1351,7 +1405,10 @@ function spawnShrapnel(atPos, strikeDamage) {
   const level = player.stats.shrapnelCount;
   if (level <= 0) return;
   const c = CONFIG.strike.shrapnel;
-  const n = c.count + c.countPerLevel * (level - 1);
+  // The base count is guaranteed positive here (level > 0 above), so the Clone
+  // Warz gate is already satisfied — routed through projectileCount anyway so
+  // there is exactly one place the bonus is spelled out.
+  const n = projectileCount(c.count + c.countPerLevel * (level - 1), player.stats);
   // A random offset for the WHOLE ring rather than per-fragment: the fragments
   // stay evenly spaced (so there are no bald patches to slip through) while
   // consecutive bursts don't land in an identical star pattern.
@@ -1868,8 +1925,35 @@ function animate(now) {
       onDebrisBroken: (x, y) => feedback('debrisBreak', { x, y }),
       // Somebody knocked off a deck.
       onCrewHit: (x, y) => feedback('crewHit', { x, y }),
+      // --- Glow Up! ---------------------------------------------------------
+      // The elemental half of a pellet landing. One event PER element — the
+      // burst's colour is the emitter's, so the four elements are four
+      // emitters and therefore four entries. `kind` is the element id, which
+      // is what builds the key.
+      onElementHit: (x, y, kind) => feedback(elementHitEvent(kind), { x, y }),
+      onArc: (fromX, fromY, toX, toY) => {
+        spawnArcBolt(world.scene, fromX, fromY, toX, toY);
+        feedback('elementArc', { x: toX, y: toY });
+      },
+      onFreeze: (x, y) => feedback('elementFreeze', { x, y }),
     });
     processPendingSplashes(); // safe now that resolveCombat's own loop has finished
+
+    // Elemental statuses — venom and infection ticking, chill thawing, the
+    // contagion creeping to neighbours, and the bursts queued by any infected
+    // host that died during combat above. Placed here for exactly the reason
+    // the splash queue is drained here: this both damages and REMOVES enemies,
+    // and doing that inside resolveCombat's own loop would shift the array
+    // under it.
+    // The seal wears the element it rolled — see updateElementSkin. Cheap: it
+    // returns immediately unless the level or the time of day has moved.
+    updateElementSkin(player.body);
+    updateElements(dt, world.scene, enemies, {
+      onEnemyDamaged: damageFrom('bioluminescence'),
+      onEnemyKilled: onEnemyKilledFeedback,
+      onBurst: (x, y, radius) => feedback('infectionBurst', { x, y, scale: Math.min(2, radius / 4) }),
+      onSpread: (fx, fy, tx, ty) => feedback('infectionSpread', { x: tx, y: ty, dirX: tx - fx, dirY: ty - fy }),
+    });
 
     // Sea garlic and the shrimp ring damage independently of gunfire.
     updateGarlic(dt, world.scene, player.mesh.position, player.stats.garlicLevel, enemies, {
@@ -1881,7 +1965,7 @@ function animate(now) {
       // fight rather than competing with it.
       onTick: (x, y, count) => feedback('garlicTick', { x, y, scale: Math.min(1.4, 0.6 + count * 0.12) }),
     });
-    updateShrimpRing(dt, world.scene, player.mesh.position, player.stats.shrimpCount, enemies, {
+    updateShrimpRing(dt, world.scene, player.mesh.position, projectileCount(player.stats.shrimpCount, player.stats), enemies, {
       onEnemyDamaged: damageFrom('shrimp'),
       onEnemyKilled: onEnemyKilledFeedback,
       onContact: (x, y) => feedback('shrimpHit', { x, y }),
@@ -2231,6 +2315,12 @@ function animate(now) {
   // Both must land before world.updateSurface, which paints what they decided.
   updateDayCycle(rawDt);
   updateWeather(rawDt);
+  // The musical clock every beat-synced shader reads, carried to now BEFORE
+  // any of them run. Once a frame rather than once per material: the transport
+  // position is the same answer for all of them, and a school of forty fish
+  // asking separately is forty trips through the audio clock for one number.
+  // See systems/beatSync.js. Raw dt, like the shaders that read it.
+  updateBeatSync(rawDt);
   // Same wall clock, same reasoning: the current is a property of the ocean,
   // not of the run. One uniform write per material — the bend itself is all
   // vertex shader, so this does not scale with how much grass is on screen.
@@ -2256,9 +2346,14 @@ function animate(now) {
     lightningStrikes.length = 0;
   }
   updateParticles(realDt);
-  // The camera is what turns a finger on the glass into a point in the water —
-  // see updateTouch in systems/grid.js.
-  world.grid.update(realDt, player.mesh.position, player.velocity, world.camera);
+  // The camera is what turns a finger on the glass into a point in the water,
+  // and the strike meter is what makes a charging finger grow — see updateTouch
+  // in systems/grid.js. Both are handed in rather than imported there.
+  world.grid.update(realDt, player.mesh.position, player.velocity, {
+    camera: world.camera,
+    charging: strikeState.charging,
+    charge: strikeState.pending,
+  });
   world.hexTiles.update(player.mesh.position);
   // The death shot: the frame closes in on the body and rides it down. Claimed
   // per frame, immediately before the camera update that consumes it — the

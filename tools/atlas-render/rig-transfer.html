@@ -1,0 +1,223 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>rig transfer</title>
+<style>body{margin:0;background:#111;color:#ddd;font:13px monospace}
+#log{padding:10px;white-space:pre-wrap}canvas{display:block;margin:8px auto;background:#222}</style>
+<div id="log">booting…</div>
+<script type="importmap">
+{"imports":{"three":"/three/build/three.module.js","three/addons/":"/three/examples/jsm/"}}
+</script>
+<script type="module">
+// Skins a DIFFERENT mesh to octopus_rig.glb's skeleton by nearest-point weight
+// transfer, then bends the arms to see whether the deformation tracks.
+//
+// This is the "what would the new octopus look like in the rig" question, and
+// it is worth stating up front that the measurement says it should not work:
+// searching all 24 axis-aligned rotations, the best overlap between the two
+// meshes is a mean vertex-to-surface distance of 0.0995 on a unit-box model
+// against a worst case of 0.2112. A real alignment shows up as one rotation
+// dramatically beating the rest; a 2x spread with two tied winners means there
+// is no orientation at which these two animals line up. They are not the same
+// creature in the same pose — the rig has six arms in a flat radial fan, this
+// has eight curled in eight directions.
+//
+// Transfer runs anyway, because a rendered failure is worth more than a
+// predicted one.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const SIZE = 512;
+const log = (m) => { document.getElementById('log').textContent += '\n' + m; };
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(2);
+renderer.setSize(SIZE, SIZE);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const ARMS = [
+  ['Bone001_06','Bone018_end_0119'], ['Bone019_024','Bone036_end_0120'],
+  ['Bone037_042','Bone054_end_0121'], ['Bone055_060','Bone072_end_0122'],
+  ['Bone073_078','Bone090_end_0123'], ['Bone091_096','Bone108_end_0124'],
+];
+
+const load = (f) => new GLTFLoader().loadAsync('/models/' + f).then((g) => g.scene);
+
+function scene3() {
+  const s = new THREE.Scene();
+  s.add(new THREE.HemisphereLight(0xbfd8e0, 0x2a3438, 2.1));
+  const k = new THREE.DirectionalLight(0xfff2e0, 2.6); k.position.set(-3, 4, 5); s.add(k);
+  const f = new THREE.DirectionalLight(0xcfe4ff, 0.9); f.position.set(4, 1, 3); s.add(f);
+  const r = new THREE.DirectionalLight(0xffffff, 1.2); r.position.set(1, 2, -5); s.add(r);
+  return s;
+}
+
+// Walk root->tip taking the first bone child each step.
+function chainOf(root, a, b) {
+  const out = [];
+  let cur = root.getObjectByName(a);
+  while (cur) { out.push(cur); if (cur.name === b) break; cur = cur.children.find((c) => c.isBone); }
+  return out;
+}
+
+async function main() {
+  const rigScene = await load('octopus_rig.glb');
+  const neuScene = await load('octopus.glb');
+  rigScene.updateMatrixWorld(true);
+  neuScene.updateMatrixWorld(true);
+
+  let rigSkin = null; rigScene.traverse((o) => { if (o.isSkinnedMesh && !rigSkin) rigSkin = o; });
+  let neuMesh = null; neuScene.traverse((o) => { if (o.isMesh && !neuMesh) neuMesh = o; });
+  log(`rig ${rigSkin.geometry.attributes.position.count} verts / ${rigSkin.skeleton.bones.length} bones`);
+  log(`new ${neuMesh.geometry.attributes.position.count} verts / 0 bones`);
+
+  // --- put both in one space -------------------------------------------------
+  // Unit box, centred, then the best rotation the 24-way search found (y-90).
+  const rigPos = rigSkin.geometry.attributes.position;
+  const rigBox = new THREE.Box3().setFromBufferAttribute(rigPos);
+  const rigC = rigBox.getCenter(new THREE.Vector3());
+  const rigS = rigBox.getSize(new THREE.Vector3());
+  const rigK = 1 / Math.max(rigS.x, rigS.y, rigS.z);
+
+  const neuPos = neuMesh.geometry.attributes.position;
+  const neuBox = new THREE.Box3().setFromBufferAttribute(neuPos);
+  const neuC = neuBox.getCenter(new THREE.Vector3());
+  const neuS = neuBox.getSize(new THREE.Vector3());
+  const neuK = 1 / Math.max(neuS.x, neuS.y, neuS.z);
+  const align = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+
+  // Rig verts in the shared frame, gridded for nearest lookup.
+  const rigPts = [];
+  const v = new THREE.Vector3();
+  for (let i = 0; i < rigPos.count; i++) {
+    v.fromBufferAttribute(rigPos, i).sub(rigC).multiplyScalar(rigK);
+    rigPts.push(v.clone());
+  }
+  const cell = 0.05, grid = new Map();
+  rigPts.forEach((p, i) => {
+    const k = `${Math.floor(p.x / cell)},${Math.floor(p.y / cell)},${Math.floor(p.z / cell)}`;
+    let b = grid.get(k); if (!b) grid.set(k, b = []); b.push(i);
+  });
+  const nearest = (p) => {
+    let best = -1, bd = Infinity;
+    const cx = Math.floor(p.x / cell), cy = Math.floor(p.y / cell), cz = Math.floor(p.z / cell);
+    for (let r = 0; r <= 10; r++) {
+      for (let x = cx - r; x <= cx + r; x++) for (let y = cy - r; y <= cy + r; y++) for (let z = cz - r; z <= cz + r; z++) {
+        if (r > 0 && Math.abs(x - cx) !== r && Math.abs(y - cy) !== r && Math.abs(z - cz) !== r) continue;
+        const b = grid.get(`${x},${y},${z}`); if (!b) continue;
+        for (const i of b) { const d = rigPts[i].distanceToSquared(p); if (d < bd) { bd = d; best = i; } }
+      }
+      if (best >= 0 && r > 0) break;
+    }
+    return best;
+  };
+
+  // --- transfer --------------------------------------------------------------
+  // New geometry rebuilt in the RIG's local space so the skeleton's bind
+  // matrices apply unchanged, carrying the nearest rig vertex's bone bindings.
+  const n = neuPos.count;
+  const P = new Float32Array(n * 3);
+  const SI = new Uint16Array(n * 4);
+  const SW = new Float32Array(n * 4);
+  const rigSI = rigSkin.geometry.attributes.skinIndex;
+  const rigSW = rigSkin.geometry.attributes.skinWeight;
+  let far = 0;
+  for (let i = 0; i < n; i++) {
+    v.fromBufferAttribute(neuPos, i).sub(neuC).multiplyScalar(neuK).applyQuaternion(align);
+    const j = nearest(v);
+    if (j < 0) continue;
+    if (rigPts[j].distanceTo(v) > 0.06) far++;
+    for (let k = 0; k < 4; k++) { SI[i * 4 + k] = rigSI.getComponent(j, k); SW[i * 4 + k] = rigSW.getComponent(j, k); }
+    // back into rig local space
+    const q = v.clone().divideScalar(rigK).add(rigC);
+    P[i * 3] = q.x; P[i * 3 + 1] = q.y; P[i * 3 + 2] = q.z;
+  }
+  log(`transferred: ${(far / n * 100).toFixed(0)}% of vertices took weights from a rig point further than 6% of the model away`);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  geo.setAttribute('uv', neuMesh.geometry.attributes.uv.clone());
+  geo.setAttribute('skinIndex', new THREE.BufferAttribute(SI, 4));
+  geo.setAttribute('skinWeight', new THREE.BufferAttribute(SW, 4));
+  geo.setIndex(neuMesh.geometry.index.clone());
+  geo.computeVertexNormals();
+
+  const mat = neuMesh.material.clone();
+  mat.side = THREE.DoubleSide;
+  mat.skinning = true;
+
+  async function shoot(key, bend, useOriginal, overrideGeo) {
+    const sc = scene3();
+    const src = await load('octopus_rig.glb');
+    src.updateMatrixWorld(true);
+    let sk = null; src.traverse((o) => { if (o.isSkinnedMesh && !sk) sk = o; });
+
+    let shown = sk;
+    if (!useOriginal) {
+      const nm = new THREE.SkinnedMesh(overrideGeo ?? geo, overrideGeo ? new THREE.MeshStandardMaterial({ color: 0xdddddd, side: THREE.DoubleSide }) : mat);
+      nm.frustumCulled = false;
+      sk.parent.add(nm);
+      nm.bind(sk.skeleton, sk.bindMatrix);
+      sk.visible = false;
+      shown = nm;
+    }
+    // Bend every arm: a constant per-bone rotation, which is what an IK solve
+    // ultimately produces anyway — the point is only whether the skin follows.
+    if (bend) {
+      for (const [a, b] of ARMS) {
+        for (const bone of chainOf(src, a, b)) {
+          bone.rotation.z += bend;
+        }
+      }
+    }
+    src.updateMatrixWorld(true);
+    sc.add(src);
+
+    const box = new THREE.Box3().setFromObject(shown);
+    const c = box.getCenter(new THREE.Vector3());
+    const s = box.getSize(new THREE.Vector3());
+    const span = Math.max(s.x, s.y, s.z) || 1;
+    src.position.sub(c);
+    const cam = new THREE.PerspectiveCamera(30, 1, span / 100, span * 20);
+    const d = span * 2.1;
+    cam.position.set(-d * 0.42, d * 0.30, d * 0.86);
+    cam.lookAt(0, 0, 0);
+    renderer.render(sc, cam);
+    const blob = await new Promise((r) => renderer.domElement.toBlob(r, 'image/png'));
+    await fetch('/shot/' + key + '.png', { method: 'POST', body: blob });
+    log(`${key} rendered`);
+  }
+
+  // CONTROL. The same transfer path run rig -> rig, where the nearest point to
+  // every vertex is itself. If this comes out clean the harness is sound and
+  // any mangling above is the transfer; if this is broken too, the harness is
+  // lying and nothing rendered here means anything.
+  {
+    const m = rigPos.count;
+    const P2 = new Float32Array(m * 3);
+    const SI2 = new Uint16Array(m * 4);
+    const SW2 = new Float32Array(m * 4);
+    for (let i = 0; i < m; i++) {
+      v.fromBufferAttribute(rigPos, i).sub(rigC).multiplyScalar(rigK);
+      const j = nearest(v);
+      for (let k = 0; k < 4; k++) { SI2[i * 4 + k] = rigSI.getComponent(j, k); SW2[i * 4 + k] = rigSW.getComponent(j, k); }
+      const q = v.clone().divideScalar(rigK).add(rigC);
+      P2[i * 3] = q.x; P2[i * 3 + 1] = q.y; P2[i * 3 + 2] = q.z;
+    }
+    const g2 = new THREE.BufferGeometry();
+    g2.setAttribute('position', new THREE.BufferAttribute(P2, 3));
+    g2.setAttribute('skinIndex', new THREE.BufferAttribute(SI2, 4));
+    g2.setAttribute('skinWeight', new THREE.BufferAttribute(SW2, 4));
+    g2.setIndex(rigSkin.geometry.index.clone());
+    g2.computeVertexNormals();
+    window.__controlGeo = g2;
+  }
+
+  await shoot('control-selfxfer', 0.10, false, window.__controlGeo);
+  await shoot('xfer-bind', 0, false);
+  await shoot('xfer-bent', 0.10, false);
+  await shoot('orig-bent', 0.10, true);
+  log('\nDONE');
+  window.__done = true;
+}
+main().catch((e) => { log('FAILED ' + e.message + '\n' + e.stack); window.__done = true; });
+</script>

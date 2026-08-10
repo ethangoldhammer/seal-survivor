@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { orbitTarget, springFollow } from './orbit.js';
+import { aoe, applyCompanionScale } from './scaling.js';
 
 // Dumbo Octopus — a companion that swims alongside the seal and charms
 // enemies. A charmed creature is PACIFIED and nothing more: it stops chasing,
@@ -69,7 +70,9 @@ export function currentDumboStats(level) {
   const c = CONFIG.dumbo;
   return {
     interval: Math.max(c.intervalFloor, c.interval - c.intervalPerLevel * (level - 1)),
-    range: c.range + c.rangePerLevel * (level - 1),
+    // The charm pulse is an area effect centred on the octopus, so it takes
+    // the full Splash Zone multiplier.
+    range: aoe(c.range + c.rangePerLevel * (level - 1)),
     duration: c.duration + c.durationPerLevel * (level - 1),
     // How many it can charm in one pulse — the stack's real payoff, since a
     // single charm at high enemy counts stops mattering quickly.
@@ -88,6 +91,7 @@ export function updateDumbo(dt, playerPos, level, enemiesList, clock, hooks = {}
   const to = orbitTarget(clock, playerPos, CONFIG.dumbo);
   springFollow(octoPos, octoVel, to, dt, CONFIG.dumbo.followSpring, CONFIG.dumbo.followDamping);
   octo.position.copy(octoPos);
+  applyCompanionScale(visual);
 
   // Heading on the OUTER object, mirror on the INNER one. Screen-plane
   // velocity only, so swinging through depth doesn't tip the model over.

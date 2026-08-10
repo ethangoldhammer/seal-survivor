@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { orbitTarget, springFollow } from './orbit.js';
+import { aoe, applyCompanionScale } from './scaling.js';
 
 // A drone that orbits the ship and periodically fires a bubble at the
 // nearest enemy. Unlike every other weapon in the game, a hit doesn't deal
@@ -58,8 +59,12 @@ export function resetBeluga(scene, playerPos) {
   bubbles.length = 0;
 }
 
+// Splash Zone widens the bubble. The bubble is a catch radius that happens to
+// be drawn, so this is the rare case where "how big is the effect" and "how
+// big is the picture" are literally the same number — see the scale note in
+// the spawn below, which keeps them that way.
 function currentBubbleRadius(level) {
-  return CONFIG.beluga.baseBubbleRadius + CONFIG.beluga.radiusPerLevel * (level - 1);
+  return aoe(CONFIG.beluga.baseBubbleRadius + CONFIG.beluga.radiusPerLevel * (level - 1));
 }
 
 // hooks: { onTrap(enemy) } — for feedback only, no damage/kill involved.
@@ -82,6 +87,7 @@ export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, ho
     const to = orbitTarget(clock, playerPos, CONFIG.beluga);
     springFollow(dronePos, droneVel, to, dt, CONFIG.beluga.followSpring, CONFIG.beluga.followDamping);
     drone.position.copy(dronePos);
+    applyCompanionScale(visual);
 
     // Heading on the OUTER object, mirror on the INNER one — see the note by
     // the declarations for why these can't share an object. Heading uses only
@@ -109,7 +115,13 @@ export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, ho
         const len = Math.hypot(dx, dy) || 1;
         const mesh = createVisual('trapBubble');
         const radius = currentBubbleRadius(level);
-        mesh.scale.setScalar(radius / 0.35); // asset's base radius is 0.35
+        // multiplyScalar, NOT setScalar. createVisual has just written the
+        // asset's per-model Size multiplier (the T-panel slider) into this
+        // scale; setScalar threw it away, so dragging the bubble's Size did
+        // nothing at all and the only way to make one bigger was to edit
+        // baseBubbleRadius. Multiplying keeps the slider live and still lands
+        // the gameplay radius on `radius` at a multiplier of 1.
+        mesh.scale.multiplyScalar(radius / 0.35); // asset's authored radius is 0.35
         mesh.position.copy(drone.position);
         scene.add(mesh);
         bubbles.push({ mesh, dirX: dx / len, dirY: dy / len, radius, life: CONFIG.beluga.life });

@@ -1,15 +1,19 @@
-import { watchSfx, gainToDb, isMuted } from '../systems/audio.js';
+import { watchSfx, gainToDb, isMuted, sfxVoiceLoad } from '../systems/audio.js';
 import { isTypingTarget } from './typing.js';
 
 // A live feed of every sound the game tries to make, toggled with 0.
 //
 // The thing it is actually for is the sounds that DON'T play. A missing sound
 // has half a dozen possible causes that all present identically as silence:
-// the name is wrong, the throttle ate it, the voice limit ate it, the mute key
-// is on, or the file never decoded and the synth fallback is playing something
-// that sounds nothing like what you loaded. Every one of those is a separate
-// row here, and none of them is visible any other way — playSfx has always
-// just returned.
+// the name is wrong, the throttle ate it, the mute key is on, or the file never
+// decoded and the synth fallback is playing something that sounds nothing like
+// what you loaded. Every one of those is a separate row here, and none of them
+// is visible any other way — playSfx has always just returned.
+//
+// `cut short` is the odd one out and reads differently: that sound DID play,
+// and was faded out early to give its voice slot to something newer. It is not
+// a failure, it is the concurrency cap working — but a run of them all naming
+// the same sound is how you find the event that is eating the budget.
 //
 // Repeats collapse rather than scroll. The basic shot fires several times a
 // second, so a raw log is a blur of one word; a counter on a held row is
@@ -39,6 +43,7 @@ const COLOR = {
   synth: 'rgba(232,236,243,0.78)', // played the fallback
   note: 'rgba(143,217,168,0.9)', // ambience and other non-one-shots
   gap: 'rgba(255,179,71,0.9)', // throttled
+  stolen: 'rgba(198,176,255,0.85)', // cut short to make room — it DID play
   voices: 'rgba(255,179,71,0.9)', // over the concurrency cap
   muted: 'rgba(232,236,243,0.35)',
   off: 'rgba(232,236,243,0.35)',
@@ -47,6 +52,7 @@ const COLOR = {
 
 const LABEL = {
   gap: 'throttled',
+  stolen: 'cut short',
   voices: 'no voice',
   muted: 'muted',
   off: 'audio off',
@@ -98,6 +104,11 @@ function setVisible(on) {
 function record(name, outcome, detail) {
   const now = performance.now();
   recent.push(now);
+  // `stolen` is deliberately in neither tally. The sound it names DID play —
+  // it was counted then — and the sound that took its slot is counted on its
+  // own row. Adding it to `dropped` would double-count a busy frame and make
+  // the headline number mean two different things at once, which is the
+  // failure this panel exists to avoid.
   if (outcome === 'gap' || outcome === 'voices' || outcome === 'unknown') dropped++;
   else if (outcome === 'sample' || outcome === 'synth') played++;
 
@@ -158,6 +169,7 @@ export function sfxDebugState() {
     visible,
     played,
     dropped,
+    voices: sfxVoiceLoad(),
     rate: recent.length,
     rows: rows.map((r) => ({ name: r.name, outcome: r.outcome, count: r.count, detail: r.detail })),
   };
@@ -181,7 +193,13 @@ export function updateSfxDebug() {
   if (rows.length !== before) dirty = true;
 
   const rate = recent.length;
-  const nextHead = `SFX   ${rate}/s   ${played} played   ${dropped} dropped${isMuted() ? '   MUTED' : ''}`;
+  // The voice load belongs on the header rather than in a row, because it is a
+  // LEVEL, not an event: "23/24" sitting pinned is the difference between a
+  // sound being cut for a good reason and the budget being permanently full,
+  // and that is invisible in a list of things that happened.
+  const load = sfxVoiceLoad();
+  const nextHead = `SFX   ${rate}/s   ${played} played   ${dropped} dropped\n`
+    + `voices ${load.active}/${load.cap}${isMuted() ? '   MUTED' : ''}`;
   if (head.textContent !== nextHead) head.textContent = nextHead;
 
   if (!dirty) return;

@@ -27,7 +27,12 @@
 // ---------------------------------------------------------------------------
 
 import './dom-stub.mjs';
-import { readFileSync } from 'node:fs';
+// crabpincer.glb (loaded by the EYE GLOW section) embeds its textures, and
+// GLTFLoader decodes them through createImageBitmap. Without a stub the parse
+// promise never settles and the script exits with "unsettled top-level await"
+// and no error at all.
+globalThis.createImageBitmap = async () => ({ width: 1, height: 1, close() {} });
+import { readFileSync, existsSync } from 'node:fs';
 import * as THREE from 'three';
 import {
   attachBiolumSkin, applyBiolumSkinSettings, updateBiolumSkin, instantiateBiolumSkin,
@@ -35,6 +40,7 @@ import {
 } from '../path/src/systems/biolumSkin.js';
 import * as THREE_NS from 'three';
 import { CONFIG, TUNER_SCHEMA, withoutInheritedPresetKeys } from '../path/src/config.js';
+import { updateBeatSync } from '../path/src/systems/beatSync.js';
 import { ASSETS } from '../path/src/assets.js';
 
 let failures = 0;
@@ -139,12 +145,23 @@ for (const [label, libKey] of [['lit (standard)', 'standard'], ['unlit (basic)',
   probe.material.onBeforeCompile(shader, {});
 
   check(`${label}: uniforms reached the shader`,
-    !!shader.uniforms.uBioPattern && !!shader.uniforms.uBioColorA && !!shader.uniforms.uBioTime);
+    !!shader.uniforms.uBioPattern && !!shader.uniforms.uBioColorA
+    && !!shader.uniforms.uBioCycle && !!shader.uniforms.uBioFlickerT);
   check(`${label}: vertex hook landed`,
     shader.vertexShader.includes('attribute vec3 aBioPos') &&
     shader.vertexShader.includes('vBioAxis = aBioAxis'));
   check(`${label}: glow is added to the final colour`,
     shader.fragmentShader.includes('gl_FragColor.rgb += bioRamp(bioHue)'));
+  // The eyes ride the same injection. Checked on BOTH materials because that
+  // is the entire reason they are a vertex attribute rather than an emissive
+  // map — an unlit creature has no emissive slot to put one in.
+  check(`${label}: the eye term landed`,
+    shader.fragmentShader.includes('gl_FragColor.rgb += uEyeColor')
+    && !!shader.uniforms.uEyeStrength && !!shader.uniforms.uEyeColor
+    && !!shader.uniforms.uEyeFalloff);
+  check(`${label}: aEyeGlow reaches the fragment stage`,
+    shader.vertexShader.includes('attribute float aEyeGlow')
+    && shader.vertexShader.includes('vEyeGlow = aEyeGlow'));
   // The one that would otherwise fail silently as a washed-out fish rather
   // than as a missing effect.
   check(`${label}: body darkening landed on the base colour`,
@@ -155,6 +172,152 @@ for (const [label, libKey] of [['lit (standard)', 'standard'], ['unlit (basic)',
     `${BIOLUM_PATTERNS.length} patterns, last is the else branch`);
   check(`${label}: the voronoi helper survived`,
     shader.fragmentShader.includes('vec3 bioVoronoi(vec3 p)'));
+}
+
+// --- eye glow ---------------------------------------------------------------
+// The attribute the crabs' eyes ride on. Baked from the SKELETON rather than
+// from a texture, because the eyes have no UV island to paint into and half
+// the creatures that want the effect are unlit and cannot take an emissive map
+// at all. See bakeEyeGlow.
+section('EYE GLOW');
+{
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+  const { resolve, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const MODEL = resolve(HERE, '../public/models/crabpincer.glb');
+
+  if (!existsSync(MODEL)) {
+    check('crabpincer.glb is on disk', false, MODEL);
+  } else {
+    const buf = readFileSync(MODEL);
+    const gltf = await new GLTFLoader().parseAsync(
+      buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '',
+    );
+    let skinned = null;
+    gltf.scene.traverse((o) => { if (o.isSkinnedMesh && !skinned) skinned = o; });
+    gltf.scene.updateMatrixWorld(true);
+
+    const STALKS = ASSETS.enemyWalkingCrab.eyeStalks;
+    check('the asset declares both eye stalks', STALKS?.length === 2,
+      STALKS ? STALKS.map((s2) => `${s2[0]}..${s2[s2.length - 1]}`).join(', ') : 'none');
+
+    const mat = new THREE_NS.MeshStandardMaterial();
+    attachBiolumSkin(mat, skinned, BASE_ONLY, 'z', STALKS);
+    const eye = skinned.geometry.attributes.aEyeGlow;
+    check('aEyeGlow was baked', !!eye, eye ? `${eye.count} verts` : '');
+
+    // Every bone name has to resolve. A typo bakes an all-zero attribute and
+    // the eyes simply never light — no error, no warning at runtime.
+    const bones = new Set(skinned.skeleton.bones.map((b) => b.name));
+    const missing = STALKS.flat().filter((n) => !bones.has(n));
+    check('every declared stalk bone is on the skeleton', missing.length === 0,
+      missing.length ? `missing: ${missing.join(', ')}` : `${STALKS.flat().length} bones, all present`);
+
+    let lit = 0;
+    let peak = 0;
+    for (let i = 0; i < eye.count; i++) {
+      const v = eye.getX(i);
+      if (v > 0.001) lit++;
+      peak = Math.max(peak, v);
+    }
+    // A handful of stalk vertices out of thousands. If this were most of the
+    // mesh the projection would be leaking onto the shell.
+    check('only the stalks are lit, not the body',
+      lit > 20 && lit < eye.count * 0.1,
+      `${lit} of ${eye.count} verts carry any glow (${(lit / eye.count * 100).toFixed(1)}%)`);
+    check('the ramp reaches full brightness at the tip', peak > 0.9,
+      `peak ${peak.toFixed(3)}`);
+
+    // THE POINT OF THE WHOLE THING: brighter at the tip than at the socket.
+    //
+    // Checked as a CORRELATION against each vertex's distance from the stalk's
+    // base bone, rather than by re-deriving the axis the way bakeEyeGlow does.
+    // Re-deriving it would make this tautological — it would pass just as
+    // happily against the version of the bake whose axis pointed at the model
+    // origin. Distance from a named bone is a fact about the rig instead, so
+    // the two only agree if the ramp is genuinely running up the stalk.
+    //
+    // Bind space, via the inverse bind matrix: the position attribute is in
+    // bind space and bone.matrixWorld is the current pose in world space.
+    const baseBone = skinned.skeleton.bones.findIndex((b) => b.name === 'Eye1L_02');
+    const bindBase = new THREE_NS.Vector3().setFromMatrixPosition(
+      new THREE_NS.Matrix4().copy(skinned.skeleton.boneInverses[baseBone]).invert(),
+    ).applyMatrix4(skinned.bindMatrixInverse);
+
+    // ONE STALK AT A TIME. Both eyes are lit and they are mirrored about the
+    // head, so a right-eye vertex's distance from the LEFT socket is not a
+    // position along any stalk — mixing them buries the signal in noise
+    // (measured: r=0.21 pooled, against r=1.00 on a stalk taken alone).
+    // Membership comes from the skin weights, the same way the bake picks it.
+    const si2 = skinned.geometry.attributes.skinIndex;
+    const sw2 = skinned.geometry.attributes.skinWeight;
+    const pos = skinned.geometry.attributes.position;
+    const v3 = new THREE_NS.Vector3();
+
+    const bindPosOf = (name) => {
+      const bi = skinned.skeleton.bones.findIndex((b) => b.name === name);
+      return new THREE_NS.Vector3().setFromMatrixPosition(
+        new THREE_NS.Matrix4().copy(skinned.skeleton.boneInverses[bi]).invert(),
+      ).applyMatrix4(skinned.bindMatrixInverse);
+    };
+
+    for (const stalk of STALKS) {
+      const ids = new Set(stalk.map((n) => skinned.skeleton.bones.findIndex((b) => b.name === n)));
+      const socket = bindPosOf(stalk[0]);
+      const ds = [];
+      const gs = [];
+      for (let i = 0; i < eye.count; i++) {
+        const gv = eye.getX(i);
+        if (gv <= 0.001) continue;
+        let w = 0;
+        for (let k = 0; k < 4; k++) if (ids.has(si2.getComponent(i, k))) w += sw2.getComponent(i, k);
+        if (w <= 0.001) continue;
+        ds.push(v3.fromBufferAttribute(pos, i).distanceTo(socket));
+        gs.push(gv);
+      }
+      const mean = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
+      const md = mean(ds);
+      const mg = mean(gs);
+      let num = 0;
+      let dd = 0;
+      let dg = 0;
+      for (let i = 0; i < ds.length; i++) {
+        num += (ds[i] - md) * (gs[i] - mg);
+        dd += (ds[i] - md) ** 2;
+        dg += (gs[i] - mg) ** 2;
+      }
+      const r = num / Math.sqrt((dd * dg) || 1);
+      check(`${stalk[0]}: glow rises with distance from the socket`, r > 0.6,
+        `Pearson r = ${r.toFixed(3)} over ${ds.length} verts`);
+    }
+
+    // ...and that it is a RAMP rather than a constant, which the correlation
+    // alone would not catch — a bake that lit every stalk vertex to exactly
+    // 1.0 has an undefined correlation, not a failing one.
+    //
+    // What this would catch: a bake that skipped the rescale in bakeEyeGlow.
+    // At 13% decimation the eye survives as a tight ball with no shaft behind
+    // it, so against the raw socket-to-tip length every vertex lands between
+    // 0.99 and 1.00 — a perfect correlation and a completely flat eye.
+    const all = [];
+    for (let i = 0; i < eye.count; i++) {
+      const gv = eye.getX(i);
+      if (gv > 0.001) all.push(gv);
+    }
+    check('the ramp varies rather than sitting at one value',
+      Math.min(...all) < 0.6 && Math.max(...all) > 0.9,
+      `${Math.min(...all).toFixed(3)}..${Math.max(...all).toFixed(3)} across ${all.length} lit verts`);
+
+    // A model that declares nothing must be untouched, or every fish in the
+    // roster pays for a feature only the crabs use.
+    const plain = makeBody();
+    attachBiolumSkin(plain.material, plain, BASE_ONLY);
+    const none = plain.geometry.attributes.aEyeGlow;
+    check('a model with no stalks bakes an all-zero attribute', !!none
+      && [...Array(none.count)].every((_, i) => none.getX(i) === 0),
+      `${none?.count ?? 0} verts, all 0 — the shader multiplies it out to nothing`);
+  }
 }
 
 // --- composition -----------------------------------------------------------
@@ -207,12 +370,23 @@ const u = mesh.material.userData.__bioSkinUniforms;
 
 CONFIG.biolumSkin.base.pattern = 'veins';
 CONFIG.biolumSkin.base.strength = 2.5;
+CONFIG.biolumSkin.base.glow = 1;
 CONFIG.biolumSkin.base.bodyDarken = 0.4;
 applyBiolumSkinSettings();
 check('the pattern index reached the uniform',
   u.uBioPattern.value === patternIndex('veins') && u.uBioPattern.value === 4,
   `veins = ${u.uBioPattern.value}`);
 check('strength reached the uniform', u.uBioStrength.value === 2.5);
+
+// `glow` is the family-wide bloom push, multiplied onto the per-species
+// strength. Two knobs rather than one because they are re-tuned at different
+// times: strength when the palettes move, glow when CONFIG.bloom does.
+CONFIG.biolumSkin.base.glow = 2;
+applyBiolumSkinSettings();
+check('glow multiplies strength rather than replacing it',
+  u.uBioStrength.value === 5, `${u.uBioStrength.value}`);
+CONFIG.biolumSkin.base.glow = 1;
+applyBiolumSkinSettings();
 
 CONFIG.biolumSkin.enabled = false;
 applyBiolumSkinSettings();
@@ -228,14 +402,15 @@ check('re-enabling restores both', u.uBioStrength.value === 2.5 && u.uBioBodyDar
 
 check('an unknown pattern name falls back to the first', patternIndex('nonsense') === 0);
 
-const t0 = u.uBioTime.value;
+const t0 = u.uBioDrift.value;
 updateBiolumSkin(0.5);
-check('update advances the pattern clock', u.uBioTime.value > t0);
+check('update advances the drift clock', u.uBioDrift.value > t0);
 
 // --- presets ---------------------------------------------------------------
 section('PRESETS');
 CONFIG.biolumSkin.base.pattern = 'blotches';
 CONFIG.biolumSkin.base.strength = 1.8;
+CONFIG.biolumSkin.base.glow = 1;
 CONFIG.biolumSkin.base.flickerAmp = 0;
 
 // A synthetic preset, because the layering has to be tested against a preset
@@ -292,34 +467,121 @@ for (let i = 0; i < 6; i++) {
   root.add(inst);
   roots.push({ root, inst });
   instantiateBiolumSkin(root);
-  phases.add(inst.material.userData.__bioSkinUniforms.uBioPhase.value);
+  phases.add(inst.material.userData.__bioSkinSeed);
 }
 check('each instance got its own material',
   roots.every(({ inst }) => inst.material !== template.material));
-check('and its own phase', phases.size === 6, `${phases.size} distinct phases from 6 spawns`);
-check('the template material is untouched',
-  template.material.userData.__bioSkinUniforms.uBioPhase.value === 0);
+check('and its own seed', phases.size === 6, `${phases.size} distinct seeds from 6 spawns`);
+check('the template material has no individual to be',
+  template.material.userData.__bioSkinSeed === undefined
+  && (template.material.userData.__bioSkinOffset ?? 0) === 0);
+
+// THE REGRESSION. The offset used to be stored ON the uniform and recomputed
+// as `phase = (phase % 100) * phaseSpread` every time settings were pushed —
+// and settings are pushed on every spawn and every slider move. At the shipped
+// spread of 0.5 that halved the whole school's spread each time, so a shoal
+// collapsed into lockstep after a dozen fish. Deriving from a stored SEED
+// makes the computation idempotent, which is what this checks.
+CONFIG.biolumSkin.presets.lantern.phaseSpread = 0.5;
+CONFIG.biolumSkin.presets.lantern.phaseSteps = 0;
+applyBiolumSkinSettings();
+const firstOffsets = roots.map(({ inst }) => inst.material.userData.__bioSkinOffset);
+for (let i = 0; i < 20; i++) applyBiolumSkinSettings();
+check('the phase offset survives repeated applies',
+  roots.every(({ inst }, i) => inst.material.userData.__bioSkinOffset === firstOffsets[i]),
+  'apply runs on every spawn — a compounding offset collapses a school into lockstep');
+check('...and the spread is honoured, not the raw seed',
+  firstOffsets.every((o) => o >= 0 && o <= 0.5),
+  `offsets ${firstOffsets.map((o) => o.toFixed(3)).join(', ')}`);
+
+// QUANTISED PHASE. A continuous random offset puts every fish a random
+// fraction of a beat off the grid, which undoes the division picker one
+// creature at a time. Snapping to slots is what keeps a school musical.
+CONFIG.biolumSkin.presets.lantern.phaseSpread = 1;
+CONFIG.biolumSkin.presets.lantern.phaseSteps = 4;
+applyBiolumSkinSettings();
+const quantised = roots.map(({ inst }) => inst.material.userData.__bioSkinOffset);
+check('phaseSteps snaps every individual onto a slot',
+  quantised.every((o) => Math.abs(o * 4 - Math.round(o * 4)) < 1e-9),
+  `offsets ${quantised.map((o) => o.toFixed(3)).join(', ')}`);
+check('...and the slots are still spread across the cycle',
+  new Set(quantised).size > 1, `${new Set(quantised).size} distinct slots from 6 spawns`);
 
 // phaseSpread 0 is the "judge the pattern" setting — it has to actually
 // collapse a school back into lockstep.
 CONFIG.biolumSkin.presets.lantern.phaseSpread = 0;
 applyBiolumSkinSettings();
 check('phaseSpread 0 collapses a school into lockstep',
-  roots.every(({ inst }) => inst.material.userData.__bioSkinUniforms.uBioPhase.value === 0));
+  roots.every(({ inst }) => inst.material.userData.__bioSkinOffset === 0));
 delete CONFIG.biolumSkin.presets.lantern.phaseSpread;
+delete CONFIG.biolumSkin.presets.lantern.phaseSteps;
 
 // An unparented instance must keep updating — this is the regression that
 // froze every creature's glow at whatever it had when it was created.
 CONFIG.biolumSkin.presets.lantern.strength = 3.7;
+// `glow` is the family-wide bloom push and multiplies onto strength, so it has
+// to be pinned for the uniform to be comparable against the number set above —
+// otherwise this reads as a broken instance whenever anyone retunes the glow.
+const lanternGlow = CONFIG.biolumSkin.presets.lantern.glow;
+CONFIG.biolumSkin.presets.lantern.glow = 1;
 applyBiolumSkinSettings();
 check('an unparented instance still receives settings',
   roots.every(({ inst }) => inst.material.userData.__bioSkinUniforms.uBioStrength.value === 3.7),
   'a creature is unparented between createVisual and being added to its container');
-const tBefore = roots[0].inst.material.userData.__bioSkinUniforms.uBioTime.value;
+if (lanternGlow === undefined) delete CONFIG.biolumSkin.presets.lantern.glow;
+else CONFIG.biolumSkin.presets.lantern.glow = lanternGlow;
+const tBefore = roots[0].inst.material.userData.__bioSkinUniforms.uBioDrift.value;
 updateBiolumSkin(0.5);
 check('and its clock still advances',
-  roots[0].inst.material.userData.__bioSkinUniforms.uBioTime.value > tBefore);
+  roots[0].inst.material.userData.__bioSkinUniforms.uBioDrift.value > tBefore);
 delete CONFIG.biolumSkin.presets.lantern.strength;
+
+// --- beat sync --------------------------------------------------------------
+section('BEAT SYNC');
+// The end-to-end version of what tools/beat-sync-test.mjs checks in isolation:
+// that the phase a MATERIAL ends up with really is derived from the transport,
+// and that two individuals with different seeds sit a whole slot apart rather
+// than a random fraction of one.
+{
+  const synced = makeBody();
+  attachBiolumSkin(synced.material, synced, BASE_ONLY);
+  CONFIG.biolumSkin.base.pulseSync = '1 bar';
+  CONFIG.biolumSkin.base.flickerSync = '1/4';
+  applyBiolumSkinSettings();
+  const su = synced.material.userData.__bioSkinUniforms;
+
+  // Frame-rate independence is the whole reason the phase is derived rather
+  // than integrated: one 0.6s step and six 0.1s steps must land in the same
+  // place, or a frame drop permanently shifts a creature off the beat.
+  updateBeatSync(0.6);
+  updateBiolumSkin(0.6);
+  const coarse = su.uBioCycle.value;
+  const fine = makeBody();
+  attachBiolumSkin(fine.material, fine, BASE_ONLY);
+  applyBiolumSkinSettings();
+  for (let i = 0; i < 6; i++) { updateBeatSync(0.0); updateBiolumSkin(0.1); }
+  check('a synced phase is frame-rate independent',
+    Math.abs(fine.material.userData.__bioSkinUniforms.uBioCycle.value - coarse) < 1e-6,
+    `${coarse.toFixed(5)} vs ${fine.material.userData.__bioSkinUniforms.uBioCycle.value.toFixed(5)}`);
+
+  // Drift is deliberately NOT synced — it translates through the noise rather
+  // than repeating, so there is no cycle to quantise.
+  const d0 = su.uBioDrift.value;
+  updateBiolumSkin(0.5);
+  check('drift keeps running on seconds, not on the grid', su.uBioDrift.value > d0);
+
+  // ...and 'free' has to still work, or the master switch is a one-way door.
+  CONFIG.biolumSkin.base.pulseSync = 'free';
+  applyBiolumSkinSettings();
+  const f0 = su.uBioCycle.value;
+  updateBiolumSkin(0.4);
+  check('a free phase still advances on dt', su.uBioCycle.value !== f0);
+  check('...and stays inside the wrap the shader needs',
+    su.uBioCycle.value >= 0 && su.uBioCycle.value < 2,
+    `${su.uBioCycle.value.toFixed(4)} (wrap 2, for the half-rate hue term)`);
+  delete CONFIG.biolumSkin.base.pulseSync;
+  delete CONFIG.biolumSkin.base.flickerSync;
+}
 
 // --- collection -------------------------------------------------------------
 section('COLLECTION');
@@ -382,8 +644,19 @@ section('SAVED SNAPSHOT');
 // that spawns at noon reads as a bug in the shader, and a night-gated creature
 // with no glow is a species nobody can see and no message saying why.
 {
+  // LUMINOUS assets, not merely patterned ones. The generator is also used as
+  // pigment now — the day crab's `carapace` is a dim static shell texture on a
+  // creature that must keep spawning in daylight — so "has a biolumSkin" no
+  // longer means "emits light". The preset says which it is; see
+  // CONFIG.biolumSkin.base.luminous.
+  const isLuminous = (preset) => {
+    const p = CONFIG.biolumSkin.presets[preset] ?? {};
+    return (p.luminous ?? CONFIG.biolumSkin.base.luminous ?? true) !== false;
+  };
   const glowAssets = new Set(
-    Object.entries(ASSETS).filter(([, d]) => d.biolumSkin).map(([k]) => k));
+    Object.entries(ASSETS)
+      .filter(([, d]) => d.biolumSkin && isLuminous(d.biolumSkin))
+      .map(([k]) => k));
   const glowCreatures = Object.entries(CONFIG.enemies)
     .filter(([, d]) => glowAssets.has(d.asset)).map(([k]) => k);
   const nightCreatures = Object.entries(CONFIG.enemies)
@@ -395,9 +668,13 @@ section('SAVED SNAPSHOT');
   check('and every night-gated creature actually glows',
     nightCreatures.every((k) => glowAssets.has(CONFIG.enemies[k].asset)),
     nightCreatures.join(', '));
-  check('every glowing asset names a preset that exists',
-    [...glowAssets].every((k) => ASSETS[k].biolumSkin in CONFIG.biolumSkin.presets),
-    [...glowAssets].map((k) => `${k}:${ASSETS[k].biolumSkin}`).join(', '));
+  // This one deliberately covers every PATTERNED asset, luminous or not: a
+  // typo'd preset name falls back to the base pattern in silence, and that is
+  // just as wrong on a crab's shell as on a lanternfish.
+  const patterned = Object.entries(ASSETS).filter(([, d]) => d.biolumSkin).map(([k]) => k);
+  check('every patterned asset names a preset that exists',
+    patterned.every((k) => ASSETS[k].biolumSkin in CONFIG.biolumSkin.presets),
+    patterned.map((k) => `${k}:${ASSETS[k].biolumSkin}`).join(', '));
   // The gate multiplies the spawn weight by 0 in daylight, so a glowing
   // creature is unreachable before dusk. Arriving at difficulty 0 would mean a
   // species that exists on paper and never once appears in a short run.

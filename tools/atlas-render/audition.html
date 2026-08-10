@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>grabber audition</title>
+<style>body{margin:0;background:#111;color:#ddd;font:13px monospace}
+#log{padding:10px;white-space:pre-wrap}canvas{display:block;margin:8px auto;background:#222}</style>
+<div id="log">booting…</div>
+<script type="importmap">
+{"imports":{"three":"/three/build/three.module.js","three/addons/":"/three/examples/jsm/"}}
+</script>
+<script type="module">
+// Auditions a candidate model in the octoGrabber slot: its asset basis, its
+// `fit`, its tint, and the GAME's camera rather than the atlas three-quarter.
+// The grabber is seen side-on in the entity XY plane, so that is what this
+// shows — the arms have to splay across the screen, not into it.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const SIZE = 512;
+const log = (m) => { document.getElementById('log').textContent += '\n' + m; };
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(2);
+renderer.setSize(SIZE, SIZE);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const AXES = { '+X':[1,0,0],'-X':[-1,0,0],'+Y':[0,1,0],'-Y':[0,-1,0],'+Z':[0,0,1],'-Z':[0,0,-1] };
+const v = (n) => new THREE.Vector3().fromArray(AXES[n] ?? AXES['+Z']);
+
+// EXACTLY the basis orientationQuaternion() builds in assets.js for
+// CONFIG.view === 'side' — copied rather than approximated, because the whole
+// question being asked here is which way the arms end up facing, and the atlas
+// renderer's own convention (forward -> screen right) is a different one. Under
+// this basis forward lands on entity +Y, up on -X, and the flank on +Z, so the
+// screen plane is XY and Z is depth into the picture.
+function orient(obj, forward, up) {
+  const f = v(forward).normalize();
+  const u = v(up).normalize();
+  const flank = new THREE.Vector3().crossVectors(f, u).normalize();
+  const basis = new THREE.Matrix4().makeBasis(u.clone().negate(), f.clone(), flank).transpose();
+  obj.applyMatrix4(basis);
+}
+
+function makeScene() {
+  const s = new THREE.Scene();
+  s.add(new THREE.HemisphereLight(0xbfd8e0, 0x2a3438, 2.1));
+  const key = new THREE.DirectionalLight(0xfff2e0, 2.6); key.position.set(-3, 4, 5); s.add(key);
+  const fill = new THREE.DirectionalLight(0xcfe4ff, 0.9); fill.position.set(4, 1, 3); s.add(fill);
+  const rim = new THREE.DirectionalLight(0xffffff, 1.2); rim.position.set(1, 2, -5); s.add(rim);
+  return s;
+}
+
+async function shoot(spec) {
+  const g = await new GLTFLoader().loadAsync('/models/' + spec.file);
+  const root = g.scene;
+
+  // fit: normalise the longest bbox axis, exactly as prepareModel does.
+  root.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  root.scale.multiplyScalar(spec.fit / (Math.max(size.x, size.y, size.z) || 1));
+
+  root.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    o.frustumCulled = false;
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      m.side = THREE.DoubleSide;
+      if (spec.tint != null) m.color = new THREE.Color(spec.tint);
+    }
+  });
+
+  const holder = new THREE.Group();
+  holder.add(root);
+  orient(holder, spec.forward, spec.up);
+  const scene = makeScene();
+  scene.add(holder);
+  holder.updateMatrixWorld(true);
+  box = new THREE.Box3().setFromObject(holder);
+  const c = box.getCenter(new THREE.Vector3());
+  holder.position.sub(c);
+  const s2 = box.getSize(new THREE.Vector3());
+  const span = Math.max(s2.x, s2.y) || 1;
+
+  // The GAME camera: straight down -Z at the XY plane. No three-quarter, because
+  // the question is what the player sees, and the whole point of the grabber's
+  // basis is how much arm lands in this plane.
+  const cam = new THREE.OrthographicCamera(-span * 0.62, span * 0.62, span * 0.62, -span * 0.62, 0.01, span * 20);
+  cam.position.set(0, 0, span * 3);
+  cam.lookAt(0, 0, 0);
+
+  renderer.render(scene, cam);
+  const blob = await new Promise((r) => renderer.domElement.toBlob(r, 'image/png'));
+  await fetch('/shot/' + spec.key + '.png', { method: 'POST', body: blob });
+  return `${spec.key}: ${s2.x.toFixed(2)} x ${s2.y.toFixed(2)} on screen, ${s2.z.toFixed(2)} deep`;
+}
+
+const specs = await (await fetch('/audition.json')).json();
+document.getElementById('log').textContent = `auditioning ${specs.length}`;
+for (const s of specs) {
+  try { log(await shoot(s)); } catch (e) { log(`${s.key} FAILED ${e.message}`); }
+}
+log('\nDONE');
+window.__done = true;
+</script>

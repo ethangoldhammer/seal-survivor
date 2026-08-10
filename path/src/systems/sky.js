@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { skyLight } from './daylight.js';
+import { STAR_FIELD_GLSL } from './starField.js';
 
 // The air band above the water line, as a two-stop vertical gradient plus a
 // star field. Same pattern as water.js and for the same reason: one fragment
@@ -25,6 +26,8 @@ const vertexShader = /* glsl */ `
 `;
 
 const fragmentShader = /* glsl */ `
+  ${STAR_FIELD_GLSL}
+
   uniform vec3 uZenith;
   uniform vec3 uHorizon;
   uniform float uCurve;
@@ -40,12 +43,6 @@ const fragmentShader = /* glsl */ `
   varying vec2 vUv;
   varying vec2 vWorldPos;
 
-  float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-  }
-
   void main() {
     // uv.y is 0 at the water line and 1 at the top of the frame. The curve
     // pushes the horizon colour up the frame — a real sky keeps its warm band
@@ -57,13 +54,18 @@ const fragmentShader = /* glsl */ `
     // survivors placed at a random point inside their own cell so the field
     // doesn't read as a lattice. Faded toward the horizon by the same t as
     // the gradient, because that's where the haze is.
+    //
+    // The placement is systems/starField.js — the same rule, in the same
+    // numbers, that systems/constellations.js walks on the CPU to decide where
+    // to hang the constellations. Those lines are strung between stars painted
+    // right here, and the moment the two formulas differ they stop being.
     if (uStars > 0.001) {
       vec2 g = vWorldPos * uStarDensity;
       vec2 cell = floor(g);
       vec2 f = fract(g);
-      float h = hash21(cell);
-      if (h > 0.90) {
-        vec2 at = vec2(hash21(cell + 1.7), hash21(cell + 3.1));
+      float h = starHash21(cell);
+      if (h > STAR_THRESHOLD) {
+        vec2 at = starOffset(cell);
         float d = length(f - at);
         float twinkle = 1.0 - uTwinkle * 0.5 * (1.0 + sin(uTime * 1.7 + h * 62.0));
         float dot_ = smoothstep(0.14, 0.0, d) * (0.4 + 0.6 * h);
@@ -84,7 +86,7 @@ const fragmentShader = /* glsl */ `
     // contour rings, and they show worst on exactly the wide flat dusk skies
     // the keyframes are proudest of. One quantisation step of per-pixel noise
     // is the entire fix, and it is invisible at this amplitude.
-    color += (hash21(gl_FragCoord.xy) - 0.5) * uDither;
+    color += (starHash21(gl_FragCoord.xy) - 0.5) * uDither;
 
     gl_FragColor = vec4(color, 1.0);
   }

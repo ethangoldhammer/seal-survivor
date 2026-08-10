@@ -2,8 +2,11 @@ import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { spawnProjectile } from '../entities/projectiles.js';
+import { player } from '../entities/player.js';
+import { projectileCount } from '../stats.js';
 import { emit } from '../entities/particles.js';
 import { bounds } from '../arena.js';
+import { aoe } from './scaling.js';
 
 // Oyster Blaster — a slow, heavy, bright pearl whose value is almost entirely
 // in what happens when it stops. On impact it cracks into glowing bomblets
@@ -54,7 +57,18 @@ export function firePearl(scene, origin, dir, level) {
     asset: 'pearl',
     source: 'oyster',
     spin: 3,
-    burst: { count: s.bomblets, damage: s.bombletDamage, blastRadius: s.blastRadius },
+    // Clone Warz buys bomblets, not pearls — the pearl is one heavy shot by
+    // design, and the card's promise ("+1 of everything you fire") is answered
+    // by the burst, which is where this weapon's projectiles actually are.
+    // Applied here rather than in currentOysterStats so that helper stays a
+    // pure level -> numbers function.
+    burst: {
+      count: projectileCount(s.bomblets, player.stats),
+      damage: s.bombletDamage,
+      // Splash Zone widens each bomblet's blast. Applied here with the count
+      // rather than in currentOysterStats, which stays a pure helper.
+      blastRadius: aoe(s.blastRadius),
+    },
   });
 }
 

@@ -84,6 +84,26 @@ const STYLES = `
     color: #e8ecf3; border-radius: 7px; padding: 8px; font-size: 11px; font-weight: 600;
     cursor: pointer; font-family: inherit; }
   .sv-t-btn:hover { border-color: #7ad7ff; color: #7ad7ff; }
+  /* A CHOICE is a wrapping row of pills rather than a <select>. Used for the
+     beat divisions, where the whole point is comparing options: a dropdown
+     hides eleven of its twelve entries behind a click, so auditioning "is this
+     better on 1/8 or on a bar" costs two interactions per comparison instead
+     of one. Twelve short labels fit in two lines, so all of them stay visible
+     and the current one is legible without opening anything. */
+  .sv-t-choice { display: flex; flex-wrap: wrap; gap: 4px; }
+  .sv-t-chip { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
+    color: rgba(232,236,243,0.6); border-radius: 5px; padding: 3px 7px; font-size: 10px;
+    font-weight: 600; font-family: inherit; cursor: pointer; line-height: 1.4;
+    font-variant-numeric: tabular-nums; }
+  .sv-t-chip:hover { border-color: #7ad7ff; color: #7ad7ff; }
+  .sv-t-chip.sv-t-on { background: rgba(122,215,255,0.18); border-color: #7ad7ff; color: #cdefff; }
+  /* A READOUT is derived text, never an input — what the numbers above it add
+     up to. Monospace and tabular so columns of figures line up down the panel
+     rather than jittering as values change. */
+  .sv-t-readout { font-size: 10px; line-height: 1.55; color: rgba(232,236,243,0.5);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap;
+    background: rgba(255,255,255,0.03); border-radius: 6px; padding: 6px 7px;
+    border-left: 2px solid rgba(122,215,255,0.35); }
 `;
 
 let stylesInjected = false;
@@ -159,7 +179,7 @@ export function buildTunerGroups(groups, onChange) {
     name.textContent = group.group;
     const count = document.createElement('span');
     count.className = 'sv-t-group-count';
-    count.textContent = String(group.items.length);
+    count.textContent = String(controlCount(group.items));
     h.append(caret, name, count);
 
     wrap.dataset.openKey = group.group;
@@ -268,7 +288,7 @@ export function buildSectionedTunerGroups(groups, order, onChange, scope = '') {
     if (!members.length) continue;
     const section = buildSection(title, scope, colors.get(title) ?? '');
     section.body.appendChild(buildTunerGroups(members, onChange));
-    section.setCount(members.reduce((n, g) => n + g.items.length, 0));
+    section.setCount(members.reduce((n, g) => n + controlCount(g.items), 0));
     frag.appendChild(section.el);
   }
   return frag;
@@ -317,10 +337,78 @@ export function setGroupsExpanded(root, expanded) {
   persistOpenGroups();
 }
 
+// What a collapsed header claims is hiding under it. Readouts are excluded:
+// they are derived text, and counting them makes a group of six sliders
+// announce itself as eight things to tune.
+function controlCount(items) {
+  return items.reduce((n, i) => n + (i.type === 'readout' ? 0 : 1), 0);
+}
+
 export function buildRow(item, onChange) {
   injectStyles();
   const row = document.createElement('div');
   row.className = 'sv-t-row';
+
+  // Derived text — no path, no input, nothing to persist. `lines()` is called
+  // fresh on every refresh, so a readout can report on values that live
+  // several groups away (the bloom threshold, the BPM) and still be current.
+  if (item.type === 'readout') {
+    const head = document.createElement('div');
+    head.className = 'sv-t-head';
+    const name = document.createElement('span');
+    name.className = 'sv-t-name';
+    name.textContent = item.label ?? '';
+    head.append(name);
+    const out = document.createElement('div');
+    out.className = 'sv-t-readout';
+    row.append(head, out);
+    const entry = { item, readout: out };
+    rows.push(entry);
+    paintReadout(entry);
+    return row;
+  }
+
+  // Button picker — a wrapping row of pills, all options visible at once.
+  // Same config contract as the dropdown below (a list of string `options`);
+  // the difference is entirely about how fast you can compare them.
+  if (item.type === 'choice') {
+    const head = document.createElement('div');
+    head.className = 'sv-t-head';
+    const name = document.createElement('span');
+    name.className = 'sv-t-name';
+    name.textContent = item.label ?? item.path.split('.').slice(-1)[0];
+    head.append(name);
+
+    const bar = document.createElement('div');
+    bar.className = 'sv-t-choice';
+    const chips = [];
+    const paint = () => {
+      const v = getPath(CONFIG, item.path);
+      for (const c of chips) c.classList.toggle('sv-t-on', c.dataset.value === String(v));
+    };
+    for (const opt of item.options) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'sv-t-chip';
+      chip.dataset.value = opt;
+      chip.textContent = opt;
+      chip.addEventListener('click', () => {
+        setPath(CONFIG, item.path, opt);
+        paint();
+        onChange?.(item.path);
+        // Divisions feed the timing readouts a few rows down, so those have to
+        // be repainted here — nothing else is watching this value change.
+        refreshReadouts();
+        saveTuningToStorage();
+      });
+      chips.push(chip);
+      bar.appendChild(chip);
+    }
+    paint();
+    row.append(head, bar);
+    rows.push({ item, chips, paintChoice: paint });
+    return row;
+  }
 
   // Dropdown (e.g. the post-processing preset).
   if (item.options) {
@@ -342,6 +430,7 @@ export function buildRow(item, onChange) {
     select.addEventListener('change', () => {
       setPath(CONFIG, item.path, select.value);
       onChange?.(item.path);
+      refreshReadouts();
       saveTuningToStorage();
     });
     row.append(head, select);
@@ -362,6 +451,7 @@ export function buildRow(item, onChange) {
     swatch.addEventListener('input', () => {
       setPath(CONFIG, item.path, cssToHex(swatch.value));
       onChange?.(item.path);
+      refreshReadouts();
       saveTuningToStorage();
     });
     row2.append(name, swatch);
@@ -380,6 +470,7 @@ export function buildRow(item, onChange) {
     box.addEventListener('change', () => {
       setPath(CONFIG, item.path, box.checked);
       onChange?.(item.path);
+      refreshReadouts();
       saveTuningToStorage();
     });
     const span = document.createElement('span');
@@ -416,6 +507,7 @@ export function buildRow(item, onChange) {
   slider.addEventListener('input', () => {
     sync();
     onChange?.(item.path);
+    refreshReadouts();
     saveTuningToStorage();
   });
 
@@ -429,6 +521,10 @@ export function buildRow(item, onChange) {
 // cycling the post preset.
 export function refreshTunerRows() {
   for (const r of rows) {
+    // Readouts first: they have no `path`, so anything reading one off the
+    // item would be walking undefined.
+    if (r.readout) { paintReadout(r); continue; }
+    if (r.paintChoice) { r.paintChoice(); continue; }
     const v = getPath(CONFIG, r.item.path);
     if (r.select) { r.select.value = v; continue; }
     if (r.box) { r.box.checked = !!v; continue; }
@@ -436,6 +532,34 @@ export function refreshTunerRows() {
     r.slider.value = v;
     r.val.textContent = formatValue(v);
   }
+}
+
+/**
+ * Repaint the derived rows and nothing else.
+ *
+ * Called from every control's change handler, because a readout summarises
+ * values that are NOT the row above it — the bloom check reads three colour
+ * swatches, two sliders and CONFIG.bloom, and the timing rows read the BPM
+ * from a different section entirely. Cheap enough to run unconditionally: it
+ * touches only the handful of readout rows, not the several hundred sliders.
+ */
+export function refreshReadouts() {
+  for (const r of rows) {
+    if (r.readout) paintReadout(r);
+  }
+}
+
+function paintReadout(entry) {
+  let lines = [];
+  try {
+    lines = entry.item.lines?.() ?? [];
+  } catch (err) {
+    // A readout is a diagnostic. It must never be the thing that takes the
+    // panel down — a half-built config during an import would otherwise throw
+    // on every frame of the rebuild.
+    lines = [`(readout failed: ${err?.message ?? err})`];
+  }
+  entry.readout.textContent = (Array.isArray(lines) ? lines : [lines]).join('\n');
 }
 
 export function formatValue(v) {

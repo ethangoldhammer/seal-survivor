@@ -106,6 +106,12 @@ export const touchSlots = Array.from({ length: TOUCH_SLOTS }, () => ({
   id: null, // browser touch identifier, or null while the slot is free
   x: 0,
   y: 0,
+  // Is THIS finger winding up a strike? Either route counts — the third-touch
+  // finger and a double-tap-and-hold thumb both charge the same meter, and the
+  // grid grows whichever one is doing it. Derived every frame in updateInput
+  // rather than latched at touchdown: it is a view of state that lives in the
+  // sticks and in strikeTouchId, and a copy of that could go stale.
+  charging: false,
 }));
 
 const DEADZONE = 0.15;
@@ -329,7 +335,23 @@ function moveTouchSlot(t, rect) {
 // was, rather than snapping to the origin on the way down.
 function releaseTouchSlot(t) {
   const slot = touchSlotById(t.identifier);
-  if (slot) slot.id = null;
+  if (!slot) return;
+  slot.id = null;
+  slot.charging = false;
+}
+
+// Which fingers are winding up a strike, recomputed from the sticks and
+// strikeTouchId. Note this is per FINGER, unlike touchStrikeDown() below, which
+// is the OR the strike meter reads: the grid has to grow the finger that is
+// actually doing it, not light all five because one of them is.
+function markChargingSlots() {
+  for (const slot of touchSlots) {
+    slot.charging =
+      slot.id !== null &&
+      (slot.id === strikeTouchId ||
+        (!!sticks.move?.charging && sticks.move.id === slot.id) ||
+        (!!sticks.aim?.charging && sticks.aim.id === slot.id));
+  }
 }
 
 function stickById(id) {
@@ -385,7 +407,10 @@ function clearSticks() {
   suppressStrikeRelease = false;
   // Freed, not repositioned: whatever the grid is showing under these fingers
   // fades out from where they were, exactly as a normal lift does.
-  for (const slot of touchSlots) slot.id = null;
+  for (const slot of touchSlots) {
+    slot.id = null;
+    slot.charging = false;
+  }
 }
 
 /** Is a touch winding up a strike right now — either route. */
@@ -787,6 +812,9 @@ export function updateInput(camera, playerPos) {
   if (touchStrike && !touchStrikePrev) strikeRequested = true;
   touchStrikePrev = touchStrike;
   if (touchStrike) anyStrikeDown = true;
+  // Right here, off the same read: the grid grows the finger that is charging,
+  // and it should be looking at the state this frame's strike meter used.
+  markChargingSlots();
 
   input.strike = strikeRequested;
   strikeRequested = false;

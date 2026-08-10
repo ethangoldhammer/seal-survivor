@@ -52,19 +52,27 @@ const pressKey = (key) => { for (const fn of keyHandlers) fn({ key, target: null
 // --- the fake graph --------------------------------------------------------
 
 class Param {
-  constructor(v = 0) { this.value = v; }
+  constructor(v = 0) { this.value = v; this.ramps = []; }
   setValueAtTime() { return this; }
   setTargetAtTime() { return this; }
-  exponentialRampToValueAtTime() { return this; }
+  // Recorded, so the steal test can prove a cut voice is FADED rather than
+  // hard-stopped — an instant cut is a click, which is the one outcome worse
+  // than the sound it made room for.
+  exponentialRampToValueAtTime(v, t) { this.ramps.push({ v, t }); return this; }
   cancelScheduledValues() { return this; }
 }
 const node = (extra = {}) => ({ connect(d) { return d; }, disconnect() {}, ...extra });
 
 let now = 0;
+// Every stop() the graph is given, so a steal is visible as a source being
+// stopped early rather than at the end of its own envelope — and every gain,
+// so the fade that precedes it is visible too.
+const stops = [];
+const gains = [];
 class FakeCtx {
   constructor() { this.sampleRate = 48000; this.state = 'running'; this.destination = node(); }
   get currentTime() { return now; }
-  createGain() { return node({ gain: new Param(1) }); }
+  createGain() { const g = node({ gain: new Param(1) }); gains.push(g); return g; }
   createBiquadFilter() { return node({ type: 'lowpass', frequency: new Param(1), Q: new Param(1) }); }
   createConvolver() { return node({ buffer: null }); }
   createWaveShaper() { return node({ curve: null, oversample: 'none' }); }
@@ -75,8 +83,11 @@ class FakeCtx {
     });
   }
   createBuffer(ch, len) { return { numberOfChannels: ch, length: len, getChannelData: () => new Float32Array(len) }; }
-  createBufferSource() { return node({ buffer: null, playbackRate: new Param(1), loop: false, start() {}, stop() {} }); }
-  createOscillator() { return node({ type: 'sine', frequency: new Param(1), detune: new Param(0), start() {}, stop() {} }); }
+  createBufferSource() { return node({ buffer: null, playbackRate: new Param(1), loop: false, start() {}, stop(t) { stops.push(t); } }); }
+  createOscillator() { return node({ type: 'sine', frequency: new Param(1), detune: new Param(0), start() {}, stop(t) { stops.push(t); } }); }
+  // A sampled take is a full second long here — deliberately much longer than
+  // dbgSynth's 0.05s decay, so the two paths cannot be confused for each other
+  // when the voice budget is being measured in real lengths.
   async decodeAudioData(bytes) { return { duration: 1, src: bytes?.src ?? null }; }
   resume() { return Promise.resolve(); }
 }
@@ -86,8 +97,6 @@ globalThis.window.clearInterval = () => {};
 globalThis.window.setTimeout = (fn, ms) => { pendingTimers.push({ fn, at: wall + (ms ?? 0) }); return 0; };
 const pendingTimers = [];
 let wall = 0;
-// The voice-slot release in playSfx runs on a real timer. Advancing it by hand
-// is what lets the concurrency check below be deterministic.
 const advanceWall = (ms) => {
   wall += ms;
   for (let i = pendingTimers.length - 1; i >= 0; i--) {
@@ -124,13 +133,17 @@ await audio.preloadSamples();
 dbg.initSfxDebug();
 initFeedback(null);
 
-// playSfx holds a voice slot for the length of each sound and releases it on a
-// timer. Nothing here advances that timer on its own, so without draining
-// between sections the concurrency cap fills up and every later check gets
-// "no voice" instead of whatever it was actually testing. Reset takes the
-// panel down and back up, which now clears the tally too.
+// playSfx holds a voice slot for as long as each sound really sounds, retiring
+// it against ctx.currentTime. Nothing here moves that clock on its own, so
+// without winding it between sections the budget fills up and every later check
+// measures a stolen voice instead of whatever it was actually testing. Five
+// seconds clears everything: the longest voice in this bank is a one-second
+// sample. Reset takes the panel down and back up, which clears the tally too.
 function freshPanel() {
+  now += 5;
   advanceWall(5000);
+  stops.length = 0;
+  gains.length = 0;
   dbg.setSfxDebugVisible(false);
   dbg.setSfxDebugVisible(true);
 }
@@ -204,17 +217,73 @@ check('the one that got through is a separate row', st.rows.some((r) => r.outcom
 check('dropped counts the throttled pair', st.dropped === 2, `${st.dropped}`);
 updateFeedback(1); // clear the throttle for anything after this
 
-// The voice cap. maxConcurrent is a hard early return with no warning at all.
+section('The voice cap steals rather than refusing');
+// Past the cap the NEW sound plays and an old one is faded out under it. The
+// other way round — which is what this did for a long time — silently drops
+// the hit you just caused in favour of a tail that is already spent, and it is
+// why a wave clear used to take every other sound in the game down with it.
 freshPanel();
 const capWas = CONFIG.audio.maxConcurrent;
 CONFIG.audio.maxConcurrent = 3;
 for (let i = 0; i < 8; i++) audio.playSfx('dbgSynth', 1);
 st = dbg.sfxDebugState();
-const voiceRow = st.rows.find((r) => r.outcome === 'voices');
-check('running out of voices is reported', !!voiceRow);
-check('for every shot that was refused', voiceRow?.count === 5, `x${voiceRow?.count} of 8 fired`);
+check('every shot still plays', st.played === 8, `${st.played} of 8`);
+check('and none is counted as dropped', st.dropped === 0, `${st.dropped} dropped`);
+const stolenRow = st.rows.find((r) => r.outcome === 'stolen');
+check('the cut voices are reported', !!stolenRow);
+check('one per shot past the cap', stolenRow?.count === 5, `x${stolenRow?.count} of 8 fired`);
+check('named for the voice that LOST, not the one that played',
+  stolenRow?.name === 'dbgSynth', stolenRow?.name);
+check('and the budget is left full, not overdrawn',
+  st.voices.active === 3 && st.voices.cap === 3, `${st.voices.active}/${st.voices.cap}`);
+
+// A steal has to be a FADE, or it is a click — and a click is more noticeable
+// than the sound it made room for. dbgSynth's own envelope ends at now + 0.05
+// and its nodes stop at now + 0.10; a stolen voice ramps to silence at
+// now + STEAL_FADE (0.03) and stops at now + 0.04. Both timings are checked,
+// because the ramp alone would still click if the node kept running and the
+// stop alone would click without it.
+const faded = gains.filter((g) => g.gain.ramps.some(
+  (r) => r.v <= 0.0001 && Math.abs(r.t - (now + 0.03)) < 1e-9,
+));
+check('a stolen voice is ramped to silence first', faded.length === 5, `${faded.length} faded`);
+const early = stops.filter((t) => Math.abs(t - (now + 0.04)) < 1e-9);
+check('then stopped, once the fade has landed', early.length === 5, `${early.length} early stops`);
 CONFIG.audio.maxConcurrent = capWas;
-advanceWall(2000); // let the held voice slots expire
+
+section('A cap of zero is still a real off switch');
+// The one case where refusing is right: with no budget at all there is nothing
+// to steal, and the sound has to be reported as dropped rather than played.
+freshPanel();
+CONFIG.audio.maxConcurrent = 0;
+audio.playSfx('dbgSynth', 1);
+st = dbg.sfxDebugState();
+check('nothing plays', st.played === 0);
+check('and it reads as no voice', st.rows[0]?.outcome === 'voices', st.rows[0]?.outcome);
+check('counted as dropped', st.dropped === 1);
+CONFIG.audio.maxConcurrent = capWas;
+
+section('The budget is spent in real lengths, not config decays');
+// The bug this replaced: the slot was held for `def.decay`, the SYNTH
+// fallback's envelope, even when a file was playing. dbgSample's take is a full
+// second; its decay says 0.05. Holding it for 0.15s would let seven of these
+// share one slot's worth of budget while all seven were audible — and holding
+// the 0.05s synth for a second would spend the budget on silence.
+freshPanel();
+audio.playSfx('dbgSample', 1);
+now += 0.15; // well past its 0.05 decay, the number the old code would have used
+check('a sampled voice is still held long after its config decay',
+  audio.sfxVoiceLoad().active === 1);
+now += 0.75; // 0.9 in — still inside the take
+check('and for as long as the take really runs', audio.sfxVoiceLoad().active === 1);
+now += 0.2; // past the sample's real 1.0s length
+check('released once the sample has really finished', audio.sfxVoiceLoad().active === 0);
+
+freshPanel();
+audio.playSfx('dbgSynth', 1);
+check('a synth voice is held while it rings', audio.sfxVoiceLoad().active === 1);
+now += 0.11; // past decay (0.05) + the tail its nodes are scheduled to stop on
+check('and released when its envelope is done', audio.sfxVoiceLoad().active === 0);
 
 section('Muting');
 freshPanel();

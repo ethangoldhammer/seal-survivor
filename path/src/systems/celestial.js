@@ -111,6 +111,58 @@ function makeWhitePixel() {
   return tex;
 }
 
+// The halo's falloff, straight out of haloFragment above: two summed lobes, a
+// tight core and a wide soft one. Needed on the CPU so `bloomRim` below can be
+// solved rather than guessed at.
+function haloFalloff(d) {
+  const r = Math.max(0, 1 - d);
+  return Math.pow(r, 2.6) * 0.65 + Math.pow(r, 9.0) * 0.35;
+}
+
+// Rec.709, matching the bright pass in systems/post.js exactly. This is the
+// coefficient set that makes a cold body far dimmer to bloom than it looks:
+// blue counts for 7%, green for 72%.
+function relLuminance(hex) {
+  const n = hex >>> 0;
+  return 0.2126 * (((n >> 16) & 255) / 255)
+    + 0.7152 * (((n >> 8) & 255) / 255)
+    + 0.0722 * ((n & 255) / 255);
+}
+
+/**
+ * How strong the halo has to be for the corona to actually GLOW.
+ *
+ * `haloStrength` alone is a number you drag until it looks right, and it stops
+ * being right the moment anything around it moves: change `color` toward a
+ * deeper blue and the luminance the bright pass sees drops by two thirds;
+ * widen `halo` and the visible rim slides further down the falloff curve;
+ * retune CONFIG.bloom.threshold and every body needs redoing. Worse, the part
+ * of the halo you can see is the part the disc ISN'T covering, which is
+ * exactly where the falloff has already eaten most of it — so the slider lies
+ * about what it is doing.
+ *
+ * `bloomRim` states the thing actually wanted — "the corona's rim should sit
+ * this far past the bloom threshold" — and this solves for the strength that
+ * achieves it. 1.0 is exactly at the threshold; 1.6 is comfortably over.
+ *
+ * Only ever RAISES: a hand-tuned strength above the solve still wins, so this
+ * is a floor rather than an override and the slider keeps working. That also
+ * makes it safe against a saved tuning snapshot, which is the practical
+ * reason it exists — `haloStrength` is persisted in imported-tuning.json, so a
+ * new default in config.js would never reach a machine that has one.
+ */
+function haloStrengthFor(cfg) {
+  const base = cfg.haloStrength ?? 0.5;
+  const want = cfg.bloomRim ?? 0;
+  if (!(want > 0) || CONFIG.bloom?.enabled === false) return base;
+  const lum = relLuminance(cfg.color ?? 0xffffff);
+  // Where the disc's own edge lands on the halo quad — everything inside this
+  // is hidden behind the body, so it is the innermost visible ring.
+  const rim = haloFalloff(1 / Math.max(1, cfg.halo ?? 2));
+  const need = (CONFIG.bloom?.threshold ?? 0.55) * want / Math.max(1e-4, lum * rim);
+  return Math.max(base, need);
+}
+
 function makeDiscMaterial(plane, white) {
   return new THREE.ShaderMaterial({
     vertexShader: discVertex,
@@ -333,12 +385,19 @@ export function createCelestials(scene) {
       u.uColor.value.set(cfg.color);
       u.uBrightness.value = cfg.brightness;
       u.uMask.value = (cfg.maskToDisc ?? true) ? 1 : 0;
+      // How wide the circular alpha edge is, in disc radii. Config-driven
+      // rather than the constant it used to be because it is the one control
+      // that rescues hand-painted art: a disc that doesn't quite reach the
+      // frame, on a background that isn't quite transparent, leaves a bright
+      // rim between the paint and the mask, and widening the feather is what
+      // eats it. Nothing else in the rig can reach that ring.
+      u.uEdge.value = cfg.edgeFeather ?? 0.06;
     }
 
     const halo = body.halo;
     halo.scale.setScalar(cfg.size * (cfg.halo ?? 2) * (1 + 0.12 * touch));
     halo.material.uniforms.uColor.value.set(cfg.color);
-    halo.material.uniforms.uStrength.value = (cfg.haloStrength ?? 0.5) * flare;
+    halo.material.uniforms.uStrength.value = haloStrengthFor(cfg) * flare;
   }
 
   /**

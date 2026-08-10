@@ -56,6 +56,12 @@
 //     bioluminescent             no    only spawns once the sun is down
 //
 // One difficulty point is 20 seconds at the default spawn.difficultyPerSecond.
+//
+// `npm run csv` opens all of this as a grid with the columns typed — the
+// minimums below become validation, the optional defaults become placeholder
+// text, and spawnGroup becomes a dropdown you can still type into. It reads
+// REQUIRED/OPTIONAL/FLAGS straight out of this file, so a column added here
+// shows up there without a second edit.
 // ============================================================================
 
 import { parseBool, parseIdTable, parseNumber } from './csvTable.js';

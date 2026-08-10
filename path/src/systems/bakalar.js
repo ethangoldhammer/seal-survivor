@@ -3,6 +3,8 @@ import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { removeEnemy } from '../entities/enemies.js';
+import { aoe, companionDamage } from './scaling.js';
+import { advanceCycles } from './beatSync.js';
 
 // Bakalar's Boat — a friendly trawler that sails the surface on a timer,
 // dragging a net behind it. Anything the net sweeps through is caught, hauled
@@ -43,6 +45,10 @@ let sailing = false;
 let dir = 1;
 let clock = 0;
 let netMesh = null;
+// The beam bands' position, in cycles. Module scope rather than per-material:
+// there is exactly one boat, and the value has to survive the mesh being
+// rebuilt when the model is re-uploaded from the T panel.
+let bandCycle = 0;
 
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
@@ -89,12 +95,14 @@ const BEAM_VERT = `
 
 const BEAM_FRAG = `
   uniform vec3  uColor;
-  uniform float uTime;
   uniform float uIntensity;
   uniform float uTopWidth;    // beam width at the hull, as a fraction of the quad
   uniform float uEdgeFalloff; // >1 tightens the beam onto its axis
   uniform float uDepthFalloff;
-  uniform float uBandSpeed;
+  // The bands' position in CYCLES, advanced on the CPU so the beam can travel
+  // on a musical division instead of at a rate in seconds — see
+  // systems/beatSync.js.
+  uniform float uBandCycle;
   uniform float uBandCount;
   uniform float uBandAmount;
   uniform float uCoreBoost;
@@ -121,7 +129,14 @@ const BEAM_FRAG = `
     // The bands, travelling UP — the suction made visible. Sped up slightly
     // toward the hull so they appear to accelerate into the boat, which is
     // what the fish inside are actually doing.
-    float bands = sin((v * uBandCount - uTime * uBandSpeed * (0.7 + v * 0.6)) * 6.28318);
+    //
+    // That acceleration is why only ONE depth is exactly on the beat: the
+    // (0.7 + v*0.6) factor scales the phase, so the grid holds where it is 1
+    // (v = 0.5, the middle of the beam) and runs 30% fast at the hull. Keeping
+    // the taper and syncing its midpoint is the right trade — the alternative
+    // is a beam whose bands crawl at a uniform speed, which is the thing the
+    // taper was added to fix.
+    float bands = sin((v * uBandCount - uBandCycle * (0.7 + v * 0.6)) * 6.28318);
     bands = 1.0 + uBandAmount * bands;
 
     // A hot core down the axis, on top of the body. Without it the beam is
@@ -142,12 +157,11 @@ function makeBeamMaterial() {
     fragmentShader: BEAM_FRAG,
     uniforms: {
       uColor: { value: new THREE.Color(CONFIG.bakalar.netColor) },
-      uTime: { value: 0 },
       uIntensity: { value: b.intensity },
       uTopWidth: { value: b.topWidth },
       uEdgeFalloff: { value: b.edgeFalloff },
       uDepthFalloff: { value: b.depthFalloff },
-      uBandSpeed: { value: b.bandSpeed },
+      uBandCycle: { value: 0 },
       uBandCount: { value: b.bandCount },
       uBandAmount: { value: b.bandAmount },
       uCoreBoost: { value: b.coreBoost },
@@ -170,7 +184,7 @@ function applyBeamSettings() {
   u.uTopWidth.value = b.topWidth;
   u.uEdgeFalloff.value = b.edgeFalloff;
   u.uDepthFalloff.value = b.depthFalloff;
-  u.uBandSpeed.value = b.bandSpeed;
+  // uBandCycle is a POSITION, owned by the update below — not written here.
   u.uBandCount.value = b.bandCount;
   u.uBandAmount.value = b.bandAmount;
   u.uCoreBoost.value = b.coreBoost;
@@ -259,8 +273,12 @@ function bombStats(level) {
   const lv = Math.max(1, level);
   return {
     interval: Math.max(c.dropIntervalFloor, c.dropInterval - c.dropIntervalPerLevel * (lv - 1)),
-    radius: c.radius + c.radiusPerLevel * (lv - 1),
-    damage: c.damage + c.damagePerLevel * (lv - 1),
+    // Splash Zone widens the BLAST and Big Rigz makes it hit harder — but
+    // neither touches the net (netWidth/netDepth). The net is how the boat
+    // works; the bomb is the moment you watch. Widening the net as well
+    // would quietly turn one card into a second Bakalar upgrade.
+    radius: aoe(c.radius + c.radiusPerLevel * (lv - 1)),
+    damage: companionDamage(c.damage + c.damagePerLevel * (lv - 1)),
   };
 }
 
@@ -268,7 +286,9 @@ function dropBomb(scene, x, netTop, netBottom, level) {
   const c = CONFIG.bakalar.bomb;
   const mesh = createVisual('voicemailBomb');
   mesh.position.set(x, bounds.surfaceY, -0.1);
-  mesh.scale.setScalar(c.size / 0.72); // the asset's authored radius
+  // multiplyScalar, not setScalar — see the note in systems/beluga.js. This
+  // preserves the per-asset Size multiplier createVisual just applied.
+  mesh.scale.multiplyScalar(c.size / 0.72); // the asset's authored radius
   scene.add(mesh);
 
   bombs.push({
@@ -448,7 +468,10 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
   const netBottom = netTop - depth;
   netMesh.position.set(netCenterX, (netTop + netBottom) * 0.5, -0.15);
   netMesh.scale.set(halfWidth * 2, depth, 1);
-  netMesh.material.uniforms.uTime.value = clock;
+  // `bandSpeed` is already in cycles per second (the shader multiplies the
+  // whole term by 2π), so it needs no conversion. Wrap 1: one sin() reads it.
+  bandCycle = advanceCycles(bandCycle, c.beam.bandSync, c.beam.bandSpeed, dt, 1);
+  netMesh.material.uniforms.uBandCycle.value = bandCycle;
   applyBeamSettings();
 
   // --- catch: anything inside the net volume that isn't already held --------

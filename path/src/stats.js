@@ -64,6 +64,35 @@ export function baseStats() {
     maxOxygen: CONFIG.oxygen.max,
     oxygenRefillRate: CONFIG.oxygen.refillRateSurface,
 
+    // --- the four cross-cutting upgrades ------------------------------------
+    // These four don't own an ability of their own; they scale abilities the
+    // OTHER cards granted. That makes them the only stats in the block read
+    // from a dozen call sites rather than one, so each is deliberately a plain
+    // number with a neutral identity value — a run that never takes the card
+    // multiplies by 1 or adds 0, and every consuming site can stay unconditional.
+
+    // Clone Warz. Flat +N to every projectile count the player actually owns.
+    // Applied at the point of use rather than in apply(), because apply() runs
+    // in PICK ORDER: Clone Warz taken before Shrimp Ring would have nothing to
+    // add to. See projectileCount() below, which is the only way this should
+    // ever be read.
+    projectileBonus: 0,
+    // Splash Zone. Multiplies blast/aura/wave radii. `targetingMul` is the
+    // gentler half — how far abilities LOOK for something, as opposed to how
+    // far they reach once they've found it. Split because a card that widened
+    // acquisition as hard as it widens explosions turns every companion into a
+    // whole-arena sniper.
+    aoeMul: 1,
+    targetingMul: 1,
+    // Big Rigz. Companion body scale (visual AND hitbox, so the size is real)
+    // and the damage they do with it.
+    companionScale: 1,
+    companionDamageMul: 1,
+    // Glow Up!. Which element the seal is wearing is NOT here — it's a run
+    // identity rolled once on the card, and it lives on player.biolumElement.
+    // This is only how far the element has been levelled.
+    biolumLevel: 0,
+
     // Upgrade-gated systems — 0/false until the matching upgrade is taken.
     missileCount: 0,
     shrapnelCount: 0,
@@ -88,6 +117,23 @@ export function baseStats() {
     orcaLevel: 0,
     musselVolleyLevel: 0,
   };
+}
+
+// THE ONE WAY TO READ `projectileBonus`. Every site that spawns a countable
+// number of somethings routes its count through here.
+//
+// The gate on `base > 0` is the whole point and the reason this is a function
+// rather than an addition written out a dozen times: Clone Warz adds a shell
+// to weapons you HAVE. An ability you never picked has a base of 0 and stays
+// at 0, or one card would silently hand you a shrimp ring, a scallop and a
+// mussel barrage you never took — each of which would then start firing with
+// no model loaded and no feedback entry warmed.
+//
+// The basic shot is the one caller that can't be switched off, which is
+// correct: you always have the gun.
+export function projectileCount(base, s) {
+  if (!(base > 0)) return 0;
+  return base + (s?.projectileBonus ?? 0);
 }
 
 // Baseline growth, applied AFTER upgrades so the basic shot keeps pace as you

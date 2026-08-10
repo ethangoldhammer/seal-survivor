@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
+import { aoe } from './scaling.js';
 
 // A constant low-damage aura around the ship. The cloudy look is two layers
 // of value noise scrolling at different rates — cheap, no texture needed.
@@ -74,8 +75,13 @@ export function createGarlicVisual() {
   return mesh;
 }
 
+// Splash Zone applies here rather than at the call sites because the aura's
+// radius is read three times a frame — the mesh scale, the damage test, and
+// the tuner readout — and they must not be able to disagree about how big the
+// cloud is. The mesh is scaled by exactly this number, so the picture and the
+// hitbox are the same value by construction.
 export function currentGarlicRadius(garlicLevel) {
-  return CONFIG.garlic.baseRadius + garlicLevel * (CONFIG.garlic.radiusPerLevel ?? 1.2);
+  return aoe(CONFIG.garlic.baseRadius + garlicLevel * (CONFIG.garlic.radiusPerLevel ?? 1.2));
 }
 
 // hooks: { onEnemyDamaged(e, dmg), onEnemyKilled(e), onTick(x, y, count) }

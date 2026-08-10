@@ -5,6 +5,7 @@ import { removeEnemy } from '../entities/enemies.js';
 import { boats, damageBoat, hitsBoat } from './boats.js';
 import { nearestFloatingCrew, crewPosition, crewRadius, eatCrew } from './crew.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
+import { targeting, companionDamage, applyCompanionScale } from './scaling.js';
 
 // Orca Family — a pod of three that hunts the SURFACE BOATS specifically.
 //
@@ -34,7 +35,7 @@ export function podStats(level) {
   const c = CONFIG.orca;
   const lv = Math.max(1, level);
   return {
-    damage: c.damage + c.damagePerLevel * (lv - 1),
+    damage: companionDamage(c.damage + c.damagePerLevel * (lv - 1)),
     interval: Math.max(c.attackIntervalFloor, c.attackInterval - c.attackIntervalPerLevel * (lv - 1)),
     chargeSpeed: c.chargeSpeed + c.chargeSpeedPerLevel * (lv - 1),
   };
@@ -123,7 +124,8 @@ function formationPoint(m, playerPos, out) {
 // happens next" than going straight back to cruising.
 function acquire(m, enemiesList) {
   const c = CONFIG.orca;
-  const range2 = c.huntRange * c.huntRange;
+  // Splash Zone's gentle half: how far the pod will travel to find a boat.
+  const range2 = targeting(c.huntRange) ** 2;
   let best = null;
   let bestD2 = range2;
 
@@ -357,6 +359,7 @@ export function updateOrcaPod(dt, scene, playerPos, level, enemiesList, hooks = 
     m.pos.x += m.vel.x * dt;
     m.pos.y += m.vel.y * dt;
     m.root.position.copy(m.pos);
+    applyCompanionScale(m.visual);
     faceTravel(m, dt);
   }
 }

@@ -28,6 +28,7 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { attachBioluminescence } from '../path/src/systems/bioluminescence.js';
+import { updateBeatSync } from '../path/src/systems/beatSync.js';
 
 let failures = 0;
 const section = (n) => console.log(`\n${n}`);
@@ -139,9 +140,29 @@ check('setChannel writes only its own channel', u[0] === 0 && Math.abs(u[1] - 0.
   `[${u[0]}, ${u[1]}]`);
 handle.setChannel(99, 1);
 check('an out-of-range channel is ignored', u.length === 2);
-const t0 = handle.uniforms.uGlowTime.value;
-handle.update(0.5);
-check('update advances the shimmer clock', handle.uniforms.uGlowTime.value > t0);
+// The shimmer clock, both ways round. It ships beat-synced ('1 bar'), which
+// means it is derived from the beat transport rather than integrated from dt —
+// so a harness that never ticks updateBeatSync would see it frozen, and that
+// is the failure mode worth pinning: forgetting the call in main.js would stop
+// every synced effect in the game dead.
+{
+  const cycleOf = () => handle.uniforms.uGlowShimmerCycle.value;
+  handle.apply({ shimmerSync: '1 bar' });
+  handle.update(0.5);
+  check('a synced shimmer does not move on dt alone', cycleOf() === 0,
+    'it reads the transport, not the frame time');
+  updateBeatSync(0.5); // half a second of beats at the configured BPM
+  handle.update(0.5);
+  check('...and does move once the beat clock has been ticked', cycleOf() > 0,
+    `cycle ${cycleOf().toFixed(4)}`);
+
+  handle.apply({ shimmerSync: 'free' });
+  const t0 = cycleOf();
+  handle.update(0.5);
+  check('a free shimmer advances on dt', cycleOf() !== t0);
+  check('and stays inside one cycle', cycleOf() >= 0 && cycleOf() < 1,
+    `cycle ${cycleOf().toFixed(4)}`);
+}
 
 // --- per-channel colour ----------------------------------------------------
 // What the octopus's camouflage rides on: each arm wears the colour of what it

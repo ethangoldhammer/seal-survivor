@@ -4,6 +4,7 @@ import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { createAnimationController } from './animation.js';
+import { aoe, targeting } from './scaling.js';
 
 // SEAGULL BOMB — an attack run, not a projectile.
 //
@@ -33,6 +34,8 @@ const DIVE = 'boost';
 // How far past the arena edge a gull spawns and despawns.
 const OFFSCREEN_MARGIN = 4;
 
+const DEG = Math.PI / 180;
+
 const gulls = [];
 
 export function resetSeagulls(scene) {
@@ -56,7 +59,8 @@ function isCrabLike(e) {
 // than at whichever individual it happened to score first.
 function findCrabCluster(enemiesList) {
   const c = CONFIG.seagullBomb;
-  const r2 = c.clusterRadius * c.clusterRadius;
+  // Acquisition: how wide a knot of crabs counts as one pile worth diving on.
+  const r2 = targeting(c.clusterRadius) ** 2;
   let best = null;
   let bestCount = 0;
   for (const e of enemiesList) {
@@ -128,6 +132,9 @@ export function spawnSeagull(scene, enemiesList) {
     phaseTimer: c.flapTime,
     retargetTimer: 0,
     life: c.life,
+    // 0..1 through the rotation that cancels the stoop clip's baked pitch —
+    // see the heading block in updateSeagulls.
+    diveBlend: 0,
   };
   gulls.push(gull);
   return gull;
@@ -210,9 +217,30 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
 
     // Nose along the flight path. Model forward is mapped to the container's
     // +Y by the shared orientation code, hence the -90 degrees.
+    //
+    // ...minus the pitch the DIVE CLIP already contains. The two cruise clips
+    // are near-level poses, so aiming the container down the velocity vector is
+    // all they need. The stoop is not: it is authored as a tuck with the body
+    // already 84 degrees nose-down (ASSETS.seagull.subclips), so a container
+    // also aimed at the ground stacked the two and sent the gull down sideways.
+    // CONFIG.seagullBomb.divePitch takes it back out.
+    //
+    // Eased on the clip's own crossfade clock rather than applied the instant
+    // the phase flips, or the body would snap through 96 degrees on one frame
+    // while the tuck was still fading in.
+    const fade = Math.max(0.01, CONFIG.animation?.states?.boost?.fade ?? CONFIG.animation?.crossfade ?? 0.2);
+    g.diveBlend = Math.max(0, Math.min(1, g.diveBlend + (g.phase === 'dive' ? dt : -dt) / fade));
+
     if (Math.hypot(g.vx, g.vy) > 0.05) {
-      g.container.rotation.z = Math.atan2(g.vy, g.vx) - Math.PI / 2;
-      if (CONFIG.view === 'side') g.visual.rotation.y = g.vx < 0 ? Math.PI : 0;
+      // Both the flank flip and the correction's sign come off `dir` — the side
+      // the run entered from — and NOT off vx. A dive bleeds vx toward zero and
+      // steers across it, so reading the sign live lets it cross mid-plunge,
+      // which would mirror the bird and jump the correction by 192 degrees.
+      // The gull never turns around, so `dir` is the honest answer for both.
+      const flip = g.dir < 0 ? -1 : 1;
+      const correction = flip * g.diveBlend * (c.divePitch ?? 0) * DEG;
+      g.container.rotation.z = Math.atan2(g.vy, g.vx) - Math.PI / 2 + correction;
+      if (CONFIG.view === 'side') g.visual.rotation.y = g.dir < 0 ? Math.PI : 0;
     }
 
     // Impact — only while diving. A gull cruising over the water shouldn't
@@ -243,7 +271,7 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
             removeEnemy(scene, hitIndex);
           }
         }
-        hooks.onImpact?.(x, y, c.splashDamage, c.splashRadius);
+        hooks.onImpact?.(x, y, c.splashDamage, aoe(c.splashRadius));
         scene.remove(g.container);
         gulls.splice(i, 1);
         continue;

@@ -121,8 +121,11 @@ function pickPivot(hist, lit) {
 // MASK lands in public/. Paths are resolved against $HOME.
 //
 // Same shape as a GLB job, so everything downstream is unchanged.
+//
+// The seagull was a third entry and is deliberately not one any more — it wears
+// an outline instead of a mask now. ASSETS.seagull keeps the source path and the
+// `--lit 0.8` the art needs, so putting it back is a one-line revert here.
 const EXTERNAL = {
-  seagull: 'Documents/_C4D/_ASSETS/SEAGULL RAW FILES/Textures/T_Seagull_BaseColor.jpg',
   morayeel: 'Documents/_C4D/_ASSETS/_Nature/096438851-gymnothorax-javanicus/tex/MorayEel_Diffuse(Standard).png',
   // The exact file beluga.fbx names, as an unreachable `D:\artworks\…` path.
   beluga: 'Documents/_C4D/_ASSETS/_Nature/beluga-whale/textures/beluga_whale_diff.png',

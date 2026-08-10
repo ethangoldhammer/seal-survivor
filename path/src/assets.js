@@ -31,12 +31,16 @@ import { createRockGeometry, startTumble } from './systems/rocks.js';
 //            like steering, while rotating about the centre of mass makes
 //            the nose swing backwards through the turn.
 //   tint     hex, overrides the model's material colour (null = keep original)
-//   outline  { color, thickness } — draws a constant-width border around the
-//            silhouette via an inverted-hull shell (back faces only, pushed
+//   outline  { color, thickness, glow } — draws a constant-width border around
+//            the silhouette via an inverted-hull shell (back faces only, pushed
 //            out along the normal). Costs ONE extra draw call per mesh and no
 //            per-frame work, so it's cheap for a few objects and expensive
 //            only if used on something there are dozens of. Works on skinned
 //            models: the push happens after skinning, in the vertex shader.
+//            `glow` (default 1 = flat) multiplies the colour past 1.0 so the
+//            bloom bright-pass haloes the rim; `thickness` is in the OBJECT
+//            space the shader offsets in, so its scale is the source file's,
+//            not the world's — see the seagull for how to convert.
 //
 //   material optional overrides applied to every mesh's material:
 //            { roughness, metalness, emissive (hex), emissiveIntensity }
@@ -299,44 +303,75 @@ export const ASSETS = {
   },
   seagull: {
     model: '/models/seagull.fbx',
-    // Two-tone mask (--pure), not a composite: this file's own maps never
-    // reach the renderer, so the mask is built from the source base colour
-    // in the C4D library. See tools/make-emissive-masks.mjs EXTERNAL.
-    //
-    // Needs `--lit 0.8`, and the default 0.15 is badly wrong here. The gull's
-    // art sits at luminance p25=139 / p50=160 / p90=217, so the default pivot
-    // of 210 lands ABOVE the ninth decile: only the white body survived and
-    // the entire wing fan — the largest island on the sheet — thresholded to
-    // black, giving a bird that glowed on the body with dead wings. At 0.8
-    // the pivot drops to 125, which lights body, wings, head and tail while
-    // still holding the black wingtip band, the eye and the feet dark. That
-    // band is the whole point of masking this bird rather than letting it
-    // glow flat. Verified against the model's own UVs, not assumed: 0.6% of
-    // the mapped area falls on sheet background.
-    texture: { emissive: '/textures/emissive/seagull.png' },
     fit: 1.3,
     forward: '+Z', up: '+Y',
-    // One 24.77s "Take 001" with every animation baked end to end and no
-    // range markers. Rather than re-exporting it split, the ranges live here
-    // — see buildSubclips(). Frames are against the file's own 30fps.
+    // NO emissive mask, deliberately — a rim instead. This file's own maps
+    // never reach the renderer, so the bird is one flat colour and the mask
+    // was the only thing giving the silhouette any internal shape. It never
+    // paid for itself: the gull is a small shape crossing a bright sky at
+    // cruise altitude, where wingtip banding is below the size you can read
+    // and a border around the whole shape is not.
     //
-    // Boundaries were found by sampling per-bone motion energy plus wing and
-    // pelvis height across all 743 frames, so they land on the quiet joins
-    // between takes rather than on guesses:
-    //   0-225   grounded idle        400-425  takeoff
-    //   230-250 wing flare           430-479  glide (wings held, no motion)
-    //   300-400 ground cycle (loops) 480-520  flapping flight
-    //   525-560 climb                562-608  soar at altitude
-    //   615-645 dive (pelvis 21.9 -> 4.8)     662-743 landed
+    // To bring the mask back, it is one command — tools/make-emissive-masks.mjs
+    // against `~/Documents/_C4D/_ASSETS/SEAGULL RAW FILES/Textures/
+    // T_Seagull_BaseColor.jpg` with `--pure --lit 0.8`. Keep the 0.8: the art
+    // sits at luminance p25=139 / p50=160 / p90=217, so the tool's default
+    // pivot of 210 lands ABOVE the ninth decile and thresholds the entire wing
+    // fan — the largest island on the sheet — to black, giving a bird that
+    // glows on the body with dead wings. 0.8 drops the pivot to 125.
     //
-    // The dive range stops at 645 on purpose: 645-655 is the impact recovery,
-    // and the seagull system loops the dive until it actually hits something,
-    // so recovery frames in the loop would read as a stutter mid-plunge.
+    // The warm rim every companion carries rather than the cold hostile one —
+    // see bakalarBoat for why an ability creature never shares a colour with
+    // the things hunting you.
+    //
+    // THICKNESS IS OBJECT SPACE, i.e. the source file's units, and this one is
+    // 73.26 units across — the boats' 0.02 would be an invisible rim here.
+    // Measured rather than guessed: fit 1.3 over that bbox is a 1.77e-2 fit
+    // scale, and with the T-menu size multiplier at 9.54 one object unit is
+    // 0.169 world, so 0.71 buys a 0.12-world rim — the same width
+    // CONFIG.creatureOutline draws on a shark. It rides the size slider (the
+    // shell is baked into the template, before the per-instance multiplier),
+    // so a big move on the gull's size wants this renormalised.
+    outline: { color: 0xffd27a, thickness: 0.71, glow: 2.4 },
+    // One 24.77s "Take 001" with every animation baked end to end (743 frames,
+    // keyed on every one) and no range markers. Rather than re-exporting it
+    // split, the ranges live here — see buildSubclips(). Frames are against
+    // the file's own 30fps.
+    //
+    // The take, measured per frame off pelvis height, wingspan and body pitch
+    // (tail->head, where level flight reads -3.6 degrees):
+    //   0-225   grounded idle          400-425  takeoff
+    //   230-250 wing flare             430-470  GLIDE, wings held at full span
+    //   300-400 ground cycle           470-510  FLAP, exactly one wingbeat
+    //   512-558 climb and pitch over   560-610  STOOP, tucked and nose-down
+    //   611-615 the plunge itself      616-659  landing, bounce and flare
+    //   660-743 landed
+    //
+    // ONLY THESE THREE RANGES LOOP CLEANLY, and that is why they are these
+    // three. Every range here starts and ends on an IDENTICAL pose — measured
+    // seam of 0.00 total bone distance, so a repeat is invisible. The ranges
+    // this replaced were each cut mid-transition and seamed at 96 (glide), 443
+    // (flap) and 515 (dive) bone-units, i.e. every loop snapped through frames
+    // out of a neighbouring take: the glide opened on the tail of the takeoff
+    // flap and closed on the start of the next one, and the flap was offset ten
+    // frames from the wingbeat so it never closed at all.
+    //
+    // THE DIVE IS 560-610, NOT 615-645. What the old range caught was the
+    // landing: at 615 the bird is already on the ground (pelvis 4.76) and over
+    // the rest of the range it goes back UP, flaring and hopping. The actual
+    // stoop is the held pose before it — wings tucked to a third of full span
+    // (25 against 80) and the body pitched 84 degrees nose-down — which the
+    // artist animated IN PLACE, with the descent left to whatever drives the
+    // bird. 571-599 is the quiet middle of that hold; 600-610 is a dead frozen
+    // tail and 611-615 is the five-frame drop, neither of which loops.
+    //
+    // That baked nose-down pitch is not free — systems/seagull.js has to cancel
+    // it while aiming the body down its flight path. See CONFIG.seagullBomb.divePitch.
     subclipFps: 30,
     subclips: {
-      seagullGlide: [430, 479],
-      seagullFlap: [480, 520],
-      seagullDive: [615, 645],
+      seagullGlide: [430, 470],
+      seagullFlap: [470, 510],
+      seagullDive: [571, 599],
     },
     // The locomotion vocabulary is idle/swim/boost (systems/animation.js), so
     // the three flight states borrow those slots rather than the state machine
@@ -1185,8 +1220,15 @@ export const ASSETS = {
   // `boost` was mapped to a clip no crab is ever fast enough to reach.
   // Claws point +Z; the L/R leg pairs straddle X.
   enemyWalkingCrab: {
-    model: '/models/crabwalking.glb',
-    texture: { emissive: '/textures/emissive/crabwalking.jpg' },
+    // crabpincer.glb, built by tools/optimize-crab.mjs from an 8.64MB,
+    // 92,491-triangle download. It replaced crabwalking.glb for one reason: it
+    // has a claw that actually opens. It is also 1.09MB against the old crab's
+    // 2.74MB, at 12,012 triangles against 8,520 — the decimation paid for the
+    // upgrade and then some. The one place it costs more is the skeleton: 126
+    // bones against 42, on the creature that spawns in the biggest crowds.
+    model: '/models/crabpincer.glb',
+    // No emissive mask: this model ships none, and the daytime shell pattern
+    // (`carapace`) is doing that job procedurally anyway.
     fit: 2.8,
     // '+X' is the STRIDE axis (where the L/R leg pairs straddle), not the way
     // the crab faces — deliberately. With enemies.js pinning the heading for
@@ -1200,18 +1242,151 @@ export const ASSETS = {
     // the walk cycle, so the limbs settle back into the loop on their own.
     rig: {
       axis: 'z',
+      // EIGHT legs now, not six: this rig models all four pairs as legs where
+      // the old one made the rear pair a stub "arm" chain and left it out. Plus
+      // the two arms, so ten spring chains against eight.
       springChains: [
-        ['CATRigLLeg1_02', 'CATRigLLeg2_03', 'CATRigLLeg3_04', 'CATRigLLegAnkle_05'],
-        ['CATRigRLeg1_06', 'CATRigRLeg2_07', 'CATRigRLeg3_08', 'CATRigRLegAnkle_09'],
-        ['CATRigLLeg1_010', 'CATRigLLeg2_011', 'CATRigLLeg3_012', 'CATRigLLegAnkle_013'],
-        ['CATRigRLeg1_014', 'CATRigRLeg2_015', 'CATRigRLeg3_016', 'CATRigRLegAnkle_017'],
-        ['CATRigLLeg1_018', 'CATRigLLeg2_019', 'CATRigLLeg3_020', 'CATRigLLegAnkle_00'],
-        ['CATRigRLeg1_021', 'CATRigRLeg2_022', 'CATRigRLeg3_023', 'CATRigRLegAnkle_024'],
-        ['CATRigLArm1_026', 'CATRigLArm2_027', 'CATRigLArm3_028', 'CATRigLArmPalm_029'],
-        ['CATRigRArm1_031', 'CATRigRArm2_032', 'CATRigRArm3_033', 'CATRigRArmPalm_034'],
+        ['leg47L_010', 'leg46L_011', 'leg45L_012', 'leg44L_013', 'leg43L_014', 'leg42L_015', 'leg41L_016'],
+        ['leg37L_017', 'leg36L_018', 'leg35L_019', 'leg34L_020', 'leg33L_021', 'leg32L_022', 'leg31L_023'],
+        ['leg27L_024', 'leg26L_025', 'leg25L_026', 'leg24L_027', 'leg23L_028', 'leg22L_029', 'leg21L_030'],
+        ['leg17L_031', 'leg16L_032', 'leg15L_033', 'leg14L_034', 'leg13L_035', 'leg12L_036', 'leg11L_037'],
+        ['leg47R_061', 'leg46R_062', 'leg45R_063', 'leg44R_064', 'leg43R_065', 'leg42R_066', 'leg41R_067'],
+        ['leg37R_068', 'leg36R_069', 'leg35R_070', 'leg34R_071', 'leg33R_072', 'leg32R_073', 'leg31R_074'],
+        ['leg27R_075', 'leg26R_076', 'leg25R_077', 'leg24R_078', 'leg23R_079', 'leg22R_080', 'leg21R_081'],
+        ['leg17R_082', 'leg16R_083', 'leg15R_084', 'leg14R_085', 'leg13R_086', 'leg12R_087', 'leg11R_088'],
+        ['Shoulder2L_041', 'Hand1L_042', 'Hand2L_043', 'Hand3L_044'],
+        ['Shoulder2R_051', 'Hand1R_052', 'Hand2R_053', 'Hand3R_054'],
       ],
     },
+    // --- the chelipeds, as an IK rig ----------------------------------------
+    // THIS RIG HAS A REAL PINCER, which the crab that came before it did not.
+    // The wrist forks into two finger chains driving separate geometry —
+    // `Hand6` (fixed prong) and `Hand5 -> Hand7` (movable) — and rotating the
+    // movable one opens the tip-to-tip aperture from 9% of finger length to
+    // 33%, a measured +277%. So the pinch here is a JAW, not the scissor fake
+    // systems/crabClaw.js falls back to on a claw that cannot open.
+    // tools/crab-claw-probe.mjs reprints every number in this comment.
+    clawRig: {
+      // Bones run along their own local +Y on this rig (every child sits at
+      // (0, n, 0) in its parent) — NOT +X, which is what crabwalking.glb used.
+      // Getting this wrong points the IK effector sideways out of the wrist and
+      // the arm solves toward a spot beside the player.
+      tipAxis: '+Y',
+      tipLength: 0.06,
+      arms: [
+        // Rooted at the SHOULDER, which is where an arm actually swings from.
+        // That is only safe because systems/crabClaw.js restores the whole
+        // chain each frame: this clip keys rotation on 50 of the rig's 126
+        // bones and neither shoulder bone is among them, so a solver that
+        // treated the bone's current value as the clip's pose would creep
+        // further out on every pinch. Rooting at the first KEYED bone instead
+        // sidesteps that and costs half the rear-up — 0.137 of reach against
+        // 0.154, and the claw visibly stops lifting.
+        { root: 'ShoulderL_039', tip: 'Hand3L_044', jaw: 'Hand5L_047', sign: -1 },
+        { root: 'ShoulderR_049', tip: 'Hand3R_054', jaw: 'Hand5R_057', sign: 1 },
+      ],
+      // The finger hinge, and it needs OPPOSITE signs per side (above): this
+      // rig's arms are mirrored in world space rather than in their bone
+      // orientations, so one angle would open one claw and close the other.
+      // crabwalking.glb needed no signs for exactly the opposite reason.
+      // Measured per side rather than assumed from the naming.
+      jawAxis: 'x',
+      // Unused on this model — both arms declare a `jaw`, so the scissor path
+      // never runs. Kept so falling back to it stays a config change rather
+      // than a code one.
+      scissorAxis: 'z',
+    },
+    // The shell pattern. Static in daylight and quite dim — see the `carapace`
+    // preset for the three zeroes that make it a texture rather than an effect.
+    //
+    // This one KEEPS its baked emissive mask, unlike every other creature
+    // wearing a biolumSkin. The reason those drop theirs is that a moving
+    // pattern sliding under fixed hotspots reads as a texturing bug — but
+    // `carapace` sets flow, pulseAmp and flickerAmp all to 0, so nothing here
+    // moves relative to anything. A static pattern and a baked mask are just
+    // two layers of the same still image.
+    biolumSkin: 'carapace',
+    // NOT the derived axis. The bind-pose box is (0.476, 0.178, 0.321), so the
+    // longest-side rule picks X — and X on a crab runs from one claw to the
+    // OTHER, because a crab is wider than it is long. Derived, `tailBias` and
+    // `hueBias` would light one claw and darken the other. Declaring 'z' runs
+    // the gradient front-to-back, which is the axis the animal has: claws at
+    // one end, rear legs at the other. Every preset knob that reads the body
+    // axis depends on this.
+    // The eye stalks, for the per-vertex eye glow (systems/biolumSkin.js
+    // bakeEyeGlow). Base bone first, tip locator last — the ramp is a
+    // projection onto that line, so the order is the gradient's direction and
+    // reversing it lights the sockets instead of the eyes.
+    //
+    // Dots stripped, as everywhere the game names a bone: the raw glTF calls
+    // these Eye.1.L_02 and three.js sanitises node names on load.
+    eyeStalks: [
+      ['Eye1L_02', 'Eye2L_03', 'Eye3L_04', 'Eye3L_end_099'],
+      ['Eye1R_05', 'Eye2R_06', 'Eye3R_07', 'Eye3R_end_0100'],
+    ],
+    biolumAxis: 'z',
     shape: 'octahedron', radius: 0.6, color: 0xc9713f, unlit: true,
+  },
+
+  // The crab after dark. Same model, same rig, same claw — a different skin and
+  // a much darker body under it. Separate asset key rather than a flag, for the
+  // reason spelled out on enemyLanternRay: a material is shared across every
+  // clone of a key, so lighting `enemyWalkingCrab` would set every daytime crab
+  // on the seabed alight too.
+  enemyEmberCrab: {
+    // The same binary as the day crab, as ever — see enemyWalkingCrab for what
+    // crabpincer.glb is and what it replaced.
+    model: '/models/crabpincer.glb',
+    fit: 2.8,
+    forward: '+X', up: '+Y',
+    // Copied wholesale from enemyWalkingCrab. Both blocks have to agree: the
+    // claw driver and the animation springs resolve bones by name off whichever
+    // key spawned, so a variant that dropped these would walk with stiff legs
+    // and never raise a claw.
+    rig: {
+      axis: 'z',
+      springChains: [
+        ['leg47L_010', 'leg46L_011', 'leg45L_012', 'leg44L_013', 'leg43L_014', 'leg42L_015', 'leg41L_016'],
+        ['leg37L_017', 'leg36L_018', 'leg35L_019', 'leg34L_020', 'leg33L_021', 'leg32L_022', 'leg31L_023'],
+        ['leg27L_024', 'leg26L_025', 'leg25L_026', 'leg24L_027', 'leg23L_028', 'leg22L_029', 'leg21L_030'],
+        ['leg17L_031', 'leg16L_032', 'leg15L_033', 'leg14L_034', 'leg13L_035', 'leg12L_036', 'leg11L_037'],
+        ['leg47R_061', 'leg46R_062', 'leg45R_063', 'leg44R_064', 'leg43R_065', 'leg42R_066', 'leg41R_067'],
+        ['leg37R_068', 'leg36R_069', 'leg35R_070', 'leg34R_071', 'leg33R_072', 'leg32R_073', 'leg31R_074'],
+        ['leg27R_075', 'leg26R_076', 'leg25R_077', 'leg24R_078', 'leg23R_079', 'leg22R_080', 'leg21R_081'],
+        ['leg17R_082', 'leg16R_083', 'leg15R_084', 'leg14R_085', 'leg13R_086', 'leg12R_087', 'leg11R_088'],
+        ['Shoulder2L_041', 'Hand1L_042', 'Hand2L_043', 'Hand3L_044'],
+        ['Shoulder2R_051', 'Hand1R_052', 'Hand2R_053', 'Hand3R_054'],
+      ],
+    },
+    clawRig: {
+      tipAxis: '+Y',
+      tipLength: 0.06,
+      arms: [
+        { root: 'ShoulderL_039', tip: 'Hand3L_044', jaw: 'Hand5L_047', sign: -1 },
+        { root: 'ShoulderR_049', tip: 'Hand3R_054', jaw: 'Hand5R_057', sign: 1 },
+      ],
+      jawAxis: 'x',
+      scissorAxis: 'z',
+    },
+    // UNLIT, for the reason written out at length on enemyLanternRay: the glow
+    // is additive, and a lit shell angled at the key light beats the pattern.
+    modelUnlit: true,
+    biolumSkin: 'emberClaw',
+    // The eye stalks, for the per-vertex eye glow (systems/biolumSkin.js
+    // bakeEyeGlow). Base bone first, tip locator last — the ramp is a
+    // projection onto that line, so the order is the gradient's direction and
+    // reversing it lights the sockets instead of the eyes.
+    //
+    // Dots stripped, as everywhere the game names a bone: the raw glTF calls
+    // these Eye.1.L_02 and three.js sanitises node names on load.
+    eyeStalks: [
+      ['Eye1L_02', 'Eye2L_03', 'Eye3L_04', 'Eye3L_end_099'],
+      ['Eye1R_05', 'Eye2R_06', 'Eye3R_07', 'Eye3R_end_0100'],
+    ],
+    biolumAxis: 'z',
+    // Nearly black, so the ember in the seams is the only thing with a colour.
+    tint: 0x1a0f0c,
+    shape: 'octahedron', radius: 0.6, color: 0x1a0f0c, unlit: true,
   },
   // --- seabed decor --------------------------------------------------------
   // A clump of blades that bends in the current. Built by
@@ -1454,40 +1629,44 @@ export const ASSETS = {
     shape: 'cone', radius: 0.35, height: 1.5, color: 0xa8b8c0, unlit: true,
   },
 
-  enemyAnimatedCrab: {
-    model: '/models/animatedcrab.glb',
-    texture: { emissive: '/textures/emissive/animatedcrab.jpg' },
-    fit: 1.9,
-    forward: '+X', up: '+Y',
-    // 'Derecha'/'Izquierda' are right/left walk cycles (measured: Derecha
-    // carries the crab toward model +X, Izquierda toward -X). This walks on
-    // Derecha for EVERY locomotion state and gets the other direction by
-    // reversing playback, since a faceCamera creature never turns around —
-    // see entities/enemies.js.
-    //
-    // boost deliberately maps to Derecha too, not to Izquierda. The direction
-    // logic keys off `gaitTravel`, which describes Derecha; a state that
-    // quietly swapped in the opposite-handed clip would have the legs pushing
-    // backwards. That was harmless while crabs could never reach boost, but
-    // the difficulty speed ramp now takes a rushing crab past
-    // animation.boostThreshold late in a run. Izquierda is left unused.
-    animations: { idle: 'Derecha', swim: 'Derecha', boost: 'Derecha' },
-    // Same idea as the walking crab: six two-bone legs and two three-bone
-    // claws, springs only, so collisions have something to knock about.
-    rig: {
-      axis: 'z',
-      springChains: [
-        ['Pata1P1R_1', 'Pata1P2R_0'],
-        ['Pata2P1R_4', 'Pata2P2R_3'],
-        ['Pata3P1R_7', 'Pata3P2R_6'],
-        ['Pata1P1L_10', 'Pata1P2L_9'],
-        ['Pata2P1L_13', 'Pata2P2L_12'],
-        ['Pata3P1L_16', 'Pata3P2L_15'],
-        ['PinzaP1R_20', 'PinzaP2R_19', 'PinzaP3R_18'],
-        ['PinzaP1L_24', 'PinzaP2L_23', 'PinzaP3L_22'],
-      ],
-    },
-    shape: 'icosahedron', radius: 0.6, color: 0xd06a3a, unlit: true,
+
+  // Squid. Built by tools/build-squid.mjs from a STILL-RENDER obj, and it has
+  // no rig for the same reason the wasp in that library has none: OBJ carries
+  // no bones at all, and the only rig-capable sibling is a 2017 VRay .c4d. So
+  // the arms are frozen in the flare the artist posed them in, permanently.
+  // Everything below is chosen to make that pose WORK rather than to hide it.
+  //
+  // `forward: '+Z'` is baked rather than declared, unlike most entries here.
+  // The source pose runs diagonally through XZ — principal axis
+  // (0.582, 0.136, -0.802) — and no forward/up pair can express a diagonal, so
+  // the build tool rotates the mesh onto its own axis and this entry just names
+  // the result. That rotation is also why the raw file's 23.2 x 9.6 x 26.5
+  // bounding box is not worth reading: it is a corner-to-corner box around a
+  // streamlined animal. On its own axis the model is 0.475 x 0.252 x 1.000.
+  //
+  // +Z IS THE ARM END, not the mantle. A squid jets mantle-first to flee and
+  // swims arms-first to hunt, and this one is hunting — leading with the
+  // tentacles keeps its eyes and its grasping end pointed at what it is closing
+  // on, with the fins trailing where they read as propulsion. Mantle-first
+  // would send it at the seal tail-first with its face pointing home. The two
+  // ends measure within 5% of each other on every shape heuristic worth
+  // trying, so this was settled off a rendered plate, not off the geometry.
+  //
+  // `fit` scales the WHOLE length: at 2.8 that is ~1.6 units of mantle and
+  // ~1.2 of arm, which puts the body between the barracuda's 2.4-unit fish and
+  // the ray's 2.6 while the arms add reach that carries no hitbox.
+  enemySquid: {
+    model: '/models/squid.glb',
+    fit: 2.8,
+    // Origin at the head — where the arms meet the mantle, 42% back from the
+    // arm tips. This mesh's centre of mass sits inside the mantle, so at the
+    // default the squid would swing its whole arm bundle around a point behind
+    // its own eyes every time it corrected course.
+    pivot: 0.42,
+    forward: '+Z', up: '+Y',
+    // No clips — the source is one static mesh. The shared controller falls
+    // back to the procedural rig or to no motion, same as the barracuda.
+    shape: 'cone', radius: 0.4, height: 1.5, color: 0x86705b, unlit: true,
   },
 
   enemyOyster: {
@@ -1611,6 +1790,105 @@ async function loadModel(picked, url) {
   return new Promise((resolve, reject) => picked.loader.parse(buffer, '', resolve, reject));
 }
 
+// Nine files in ASSETS are named by more than one entry — fishpack.glb by three
+// (the meshIndex trio), oyster/fish/greatwhite/trawler/orca/stingray/crabpincer
+// by two each. THREE.Cache is off by default and loadModel goes straight to the
+// loader, so each entry used to fetch and PARSE its own copy: 13.4MB of
+// redundant transfer, and — because the second parse builds a second set of
+// THREE.Textures over a second decode of the same JPEG — a second full GPU
+// upload of textures the first entry had already resident. fishpack alone paid
+// for three.
+//
+// So parse once per URL and hand every entry an independent instance of that
+// one parse. What "independent" has to mean here is the whole subtlety:
+//
+//   NODES must be per-entry. prepareModel mutates the hierarchy it is given —
+//     isolateMesh deletes the meshes a meshIndex entry didn't ask for, and the
+//     fit/pivot maths writes scale and position onto the root.
+//   GEOMETRY must be per-entry. attachBiolumSkin (called from prepareModel)
+//     writes aBioPos/aBioAxis attributes onto the geometry, and the pairs
+//     sharing a file are not all alike: lanternfish is bioluminescent and fish
+//     is not, off one fish.glb; likewise lanternRay against stingray.
+//   TEXTURES must be per-entry OBJECTS over a SHARED image. setAssetRepeat and
+//     the texture panel write wrapS/repeat onto material.map for one asset key,
+//     which would otherwise reach through into the other entry's materials.
+//
+// That last one is why this shares Sources rather than Textures. Texture.copy
+// assigns `this.source = source.source` by reference, and WebGLTextures keys
+// its upload cache on the Source (`_sources.get(source)`) with a secondary key
+// built from the sampler settings — so two clones of one texture that still
+// agree on wrap/filter/flipY resolve to a single WebGLTexture and upload once.
+// Change the repeat on one asset afterwards and only that asset's cache key
+// moves, allocating a second GL texture for it alone. The sharing is real but
+// it is not a trap: it comes apart exactly where the tuner needs it to.
+const parsedModelCache = new Map(); // url -> Promise<{ source, animations }>
+
+function loadSharedModel(picked, url) {
+  let pending = parsedModelCache.get(url);
+  if (!pending) {
+    pending = loadModel(picked, url).then((result) => ({
+      // GLTFLoader puts clips on the result object and the scene under
+      // `.scene`; FBXLoader returns the Object3D itself with clips on it.
+      // Unwrap here so the cached shape is the same for both.
+      source: picked.unwrap(result),
+      animations: result.animations ?? [],
+    }));
+    parsedModelCache.set(url, pending);
+  }
+  return pending;
+}
+
+// Never hands back the cached parse itself, even to the first caller — the
+// master stays pristine so it does not matter which entry gets there first,
+// and preloadAssets drops the cache at the end so the master is collectable
+// (its Sources stay alive, held by the clones that are actually in the scene).
+//
+// Exported for tools/model-share-test.mjs, for the same reason installModel is:
+// preloadAssets fetches by URL and a terminal script has no way to serve that,
+// so the sharing rules above are only testable if the instancing step can be
+// called on a model the harness parsed itself.
+export function instantiateParsedModel(source) {
+  let skinned = false;
+  source.traverse((o) => { if (o.isSkinnedMesh) skinned = true; });
+  const copy = skinned ? skeletonClone(source) : source.clone(true);
+
+  // One texture used twice within a single model stays one texture within the
+  // clone of it — the isolation this needs is between ENTRIES, not between the
+  // slots of one entry.
+  const textures = new Map();
+  const cloneTexture = (t) => {
+    if (!t?.isTexture) return t;
+    let c = textures.get(t);
+    if (!c) {
+      c = t.clone();
+      // Texture.clone() leaves needsUpdate false, and must: the Source is
+      // already uploaded (or queued) by whoever else holds it, and flipping
+      // needsUpdate here would bump source.version and force every sharer to
+      // re-upload the image we just went to the trouble of sharing.
+      textures.set(t, c);
+    }
+    return c;
+  };
+  const cloneMaterial = (mat) => {
+    const m = mat.clone();
+    // FBX_TEXTURE_SLOTS is just the standard map-slot list; nothing about the
+    // sweep below is FBX-specific.
+    for (const slot of FBX_TEXTURE_SLOTS) {
+      if (m[slot]?.isTexture) m[slot] = cloneTexture(m[slot]);
+    }
+    return m;
+  };
+
+  copy.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    o.geometry = o.geometry.clone();
+    o.material = Array.isArray(o.material)
+      ? o.material.map(cloneMaterial)
+      : cloneMaterial(o.material);
+  });
+  return copy;
+}
+
 /**
  * Register an already-parsed model under an asset key, running it through the
  * same `prepareModel` the network path uses so it gets the identical fit,
@@ -1643,6 +1921,29 @@ export async function preloadAssets(onProgress) {
     onProgress?.(done / total);
   };
 
+  // Loose side-car textures have the same duplicate problem as the models —
+  // enemyOyster and scallopShell both name /textures/emissive/oyster.jpg — and
+  // TextureLoader caches nothing either. Same treatment: decode once, hand out
+  // clones over the shared Source. Keyed by flipY as well as URL because the
+  // caller sets flipY per ENTRY (from the model's format), and while a clone
+  // could carry its own value, two entries that disagree would each need their
+  // own upload anyway — keeping them in separate cache slots just makes that
+  // explicit instead of surprising.
+  const looseTextures = new Map();
+  const loadSharedTexture = async (url, flipY) => {
+    const cacheKey = `${url}|${flipY}`;
+    let pending = looseTextures.get(cacheKey);
+    if (!pending) {
+      pending = textureLoader.loadAsync(url).then((t) => {
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.flipY = flipY;
+        return t;
+      });
+      looseTextures.set(cacheKey, pending);
+    }
+    return (await pending).clone();
+  };
+
   await Promise.all([
     ...spriteEntries.map(async ([key, def]) => {
       try {
@@ -1655,11 +1956,13 @@ export async function preloadAssets(onProgress) {
       try {
         const picked = loaderFor(def.model);
         if (!picked) throw new Error(`no loader for ${def.model}`);
-        const result = await loadModel(picked, def.model);
-        // GLTFLoader puts clips on the result object; FBXLoader puts them
-        // directly on the returned Object3D. Either way, grab them before
-        // prepareModel restructures the hierarchy.
-        const clips = result.animations ?? [];
+        // Parsed at most once per URL however many entries name it; this is
+        // always our own instance of it. Clips are shared as-is: an
+        // AnimationClip is inert data that the per-entry AnimationMixer reads
+        // and never writes, and buildSubclips already clones before slicing.
+        const parsed = await loadSharedModel(picked, def.model);
+        const source = instantiateParsedModel(parsed.source);
+        const clips = parsed.animations;
         // Which way up a loaded-by-hand texture goes is a per-FORMAT decision,
         // not one convention for the whole roster. GLTFLoader sets
         // flipY = false on the maps it creates, because glTF UVs are top-left
@@ -1679,9 +1982,7 @@ export async function preloadAssets(onProgress) {
         let overrideTex = null;
         if (def.texture?.map) {
           try {
-            overrideTex = await textureLoader.loadAsync(def.texture.map);
-            overrideTex.colorSpace = THREE.SRGBColorSpace;
-            overrideTex.flipY = flipY;
+            overrideTex = await loadSharedTexture(def.texture.map, flipY);
           } catch (err) {
             console.warn(`[assets] "${key}" texture ${def.texture.map} failed to load — keeping the model's own texture.`, err?.message ?? err);
           }
@@ -1697,21 +1998,19 @@ export async function preloadAssets(onProgress) {
         let emissiveTex = null;
         if (def.texture?.emissive) {
           try {
-            emissiveTex = await textureLoader.loadAsync(def.texture.emissive);
-            emissiveTex.colorSpace = THREE.SRGBColorSpace;
-            // Not a hardcoded false: that is the glTF value, and it silently
-            // mirrored the mask on every FBX creature. A flipped mask still
-            // looks like a plausible mask, so it was measured rather than
-            // eyeballed — rasterising the seagull's own mapped UV triangles
-            // onto its art sheet puts 0.6% of the mapped area on sheet
-            // background the right way up and 24.1% the wrong way up.
+            // flipY is not a hardcoded false: that is the glTF value, and it
+            // silently mirrored the mask on every FBX creature. A flipped mask
+            // still looks like a plausible mask, so it was measured rather
+            // than eyeballed — rasterising the seagull's own mapped UV
+            // triangles onto its art sheet puts 0.6% of the mapped area on
+            // sheet background the right way up and 24.1% the wrong way up.
             // tools/uv-flip-check.mjs re-runs that on any model.
-            emissiveTex.flipY = flipY;
+            emissiveTex = await loadSharedTexture(def.texture.emissive, flipY);
           } catch (err) {
             console.warn(`[assets] "${key}" emissive mask ${def.texture.emissive} failed to load — it will fall back to uniform glow.`, err?.message ?? err);
           }
         }
-        loadedModels.set(key, prepareModel(picked.unwrap(result), def, clips, overrideTex, key, emissiveTex));
+        loadedModels.set(key, prepareModel(source, def, clips, overrideTex, key, emissiveTex));
       } catch (err) {
         console.warn(
           `[assets] "${key}" could not load ${def.model} — using the built-in shape instead.`,
@@ -1722,6 +2021,13 @@ export async function preloadAssets(onProgress) {
       }
     }),
   ]);
+
+  // The masters have done their job. Dropping them lets the duplicated node
+  // graphs and geometry be collected; the Sources they decoded stay alive
+  // through the texture clones now sitting on real materials, which is the
+  // whole point. Uploaded/restored models take their own path and never
+  // consult this cache, so there is nothing left to serve.
+  parsedModelCache.clear();
 
   if (total === 0) onProgress?.(1);
 }
@@ -2155,7 +2461,7 @@ function prepareModel(source, def, clips = [], overrideTex = null, label = '', e
       // place and for the same reason as the noise above — it survives tint,
       // glow and the emissive toggle, all of which write colours or uniforms
       // rather than rebuilding the material.
-      if (def.biolumSkin) attachBiolumSkin(m2, mesh, def.biolumSkin);
+      if (def.biolumSkin) attachBiolumSkin(m2, mesh, def.biolumSkin, def.biolumAxis ?? null);
       // Current-driven bend for seabed plants (CONFIG.grass.sway). `size.y` is
       // the clump's height in MODEL units, before `fit` reaches the node's
       // scale — the shader wants it there, both as the amplitude scale and as
@@ -2190,6 +2496,7 @@ function prepareModel(source, def, clips = [], overrideTex = null, label = '', e
   wrapper.userData.aimRig = def.aimRig ?? null;
   wrapper.userData.lookRig = def.lookRig ?? null;
   wrapper.userData.biteRig = def.biteRig ?? null;
+  wrapper.userData.clawRig = def.clawRig ?? null;
   wrapper.userData.animationNames = def.animations ?? {};
   return wrapper;
 }
@@ -2246,6 +2553,7 @@ export function createVisual(key) {
     inst.userData.aimRig = template.userData.aimRig;
     inst.userData.lookRig = template.userData.lookRig;
     inst.userData.biteRig = template.userData.biteRig;
+    inst.userData.clawRig = template.userData.clawRig;
     inst.userData.animationNames = template.userData.animationNames;
     if (sizeMul) inst.scale.multiplyScalar(sizeMul);
     // A glowing creature gets its OWN material here, unlike every other clone,
@@ -2479,7 +2787,14 @@ export function addOutlineShells(model, spec) {
 // every shell of every instance — see addOutlineShells' `spec.material`.
 export function makeOutlineMaterial(spec = {}) {
   const mat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(spec.color ?? 0x000000),
+    // `glow` multiplies the colour past 1.0, which only means anything because
+    // the scene renders to an HDR target: the bloom bright-pass then sees the
+    // true value instead of a pre-clamped white, so the rim throws light rather
+    // than being a brighter line. 1 — the default — is a flat border, which is
+    // what the boats want. systems/outlines.js computes the same product in
+    // applyLook rather than passing it here, so a static def block and a tuned
+    // rim mean the same thing by the same number.
+    color: new THREE.Color(spec.color ?? 0x000000).multiplyScalar(Math.max(0, spec.glow ?? 1)),
     side: THREE.BackSide,
   });
   // The uniform object is created HERE and handed to the shader, rather than

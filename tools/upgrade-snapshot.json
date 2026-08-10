@@ -1246,5 +1246,92 @@
         "orcaLevel": 106
       }
     ]
+  },
+  "projectileAmount": {
+    "cap": 3,
+    "perStack": [
+      {
+        "projectileBonus": 101
+      },
+      {
+        "projectileBonus": 102
+      },
+      {
+        "projectileBonus": 103
+      }
+    ]
+  },
+  "areaOfEffect": {
+    "cap": 5,
+    "perStack": [
+      {
+        "aoeMul": 118,
+        "targetingMul": 106
+      },
+      {
+        "aoeMul": 139.24,
+        "targetingMul": 112.36
+      },
+      {
+        "aoeMul": 164.3032,
+        "targetingMul": 119.1016
+      },
+      {
+        "aoeMul": 193.877776,
+        "targetingMul": 126.247696
+      },
+      {
+        "aoeMul": 228.775776,
+        "targetingMul": 133.822558
+      }
+    ]
+  },
+  "companionSize": {
+    "cap": 5,
+    "perStack": [
+      {
+        "companionScale": 115,
+        "companionDamageMul": 125
+      },
+      {
+        "companionScale": 132.25,
+        "companionDamageMul": 156.25
+      },
+      {
+        "companionScale": 152.0875,
+        "companionDamageMul": 195.3125
+      },
+      {
+        "companionScale": 174.900625,
+        "companionDamageMul": 244.140625
+      },
+      {
+        "companionScale": 201.135719,
+        "companionDamageMul": 305.175781
+      }
+    ]
+  },
+  "bioluminescence": {
+    "cap": 6,
+    "perStack": [
+      {
+        "biolumLevel": 101
+      },
+      {
+        "biolumLevel": 102
+      },
+      {
+        "biolumLevel": 103
+      },
+      {
+        "biolumLevel": 104
+      },
+      {
+        "biolumLevel": 105
+      },
+      {
+        "biolumLevel": 106
+      }
+    ]
   }
 }

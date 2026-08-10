@@ -8,6 +8,7 @@ import { orbitTarget, springFollow } from './orbit.js';
 import { setBiolumSkinVariant } from './biolumSkin.js';
 import { spawnProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
+import { companionDamage, companionScale, applyCompanionScale } from './scaling.js';
 
 // Seal Team — escort seals that swim the same tilted 3D ring the beluga drone
 // uses, spread evenly around it, ram anything that gets close, and break
@@ -217,7 +218,11 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {})
   if (want === 0) return;
 
   const cfg = CONFIG.sealTeam;
-  const damage = cfg.contactDamage + cfg.damagePerLevel * Math.max(0, level - 1);
+  const damage = companionDamage(cfg.contactDamage + cfg.damagePerLevel * Math.max(0, level - 1));
+  // Big Rigz: the escorts grow, and the ram radius grows with them. Applied
+  // to BOTH or the card is a lie — a seal twice the size that still has to
+  // touch you with its old hitbox looks like it is swimming through fish.
+  const bodyScale = companionScale();
   const evolved = level >= cfg.evolveLevel;
   if (teamLungeGate > 0) teamLungeGate -= dt;
 
@@ -245,6 +250,9 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {})
       springFollow(t.pos, t.vel, to, dt, cfg.followSpring, cfg.followDamping);
     }
     t.root.position.copy(t.pos);
+    // Big Rigz. Per frame rather than on level-up, so it also picks up a
+    // Size-slider change from the T panel without a rebuild.
+    applyCompanionScale(t.visual);
 
     if (evolved) updateEvolvedFire(t, dt, cfg, enemies, scene, hooks);
 
@@ -273,7 +281,7 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {})
       const e = enemies[j];
       const dx = e.mesh.position.x - t.pos.x;
       const dy = e.mesh.position.y - t.pos.y;
-      const reach = cfg.contactRadius + (e.radius ?? 0.5);
+      const reach = cfg.contactRadius * bodyScale + (e.radius ?? 0.5);
       if (dx * dx + dy * dy > reach * reach) continue;
 
       if ((t.cooldowns.get(e) ?? 0) > 0) continue;
