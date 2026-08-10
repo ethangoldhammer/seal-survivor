@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { bounds, WAVE } from '../arena.js';
+import { bounds, WAVE, sea } from '../arena.js';
 import { skyLight } from './daylight.js';
 
 // The water fill, replacing a flat rectangle. Everything — the three-stop
@@ -35,6 +35,7 @@ const fragmentShader = /* glsl */ `
   uniform float uBottomY;
   uniform float uWaveT;
   uniform float uWaveAmp;
+  uniform float uChop;
 
   uniform vec3 uShallow;
   uniform vec3 uMid;
@@ -73,7 +74,8 @@ const fragmentShader = /* glsl */ `
   float surfaceAt(float x) {
     return uSurfaceY
       + sin(x * ${WAVE.k1.toFixed(4)} + uWaveT * ${WAVE.w1.toFixed(4)}) * uWaveAmp
-      + sin(x * ${WAVE.k2.toFixed(4)} + uWaveT * ${WAVE.w2.toFixed(4)}) * uWaveAmp * ${WAVE.amp2.toFixed(4)};
+      + sin(x * ${WAVE.k2.toFixed(4)} + uWaveT * ${WAVE.w2.toFixed(4)}) * uWaveAmp * ${WAVE.amp2.toFixed(4)}
+      + sin(x * ${WAVE.k3.toFixed(4)} + uWaveT * ${WAVE.w3.toFixed(4)}) * uWaveAmp * ${WAVE.amp3.toFixed(4)} * uChop;
   }
 
   // Three interfering sine waves — a cheap, seamless stand-in for real
@@ -153,6 +155,7 @@ export function createWaterMaterial() {
       uBottomY: { value: -1 },
       uWaveT: { value: 0 },
       uWaveAmp: { value: 0 },
+      uChop: { value: 0 },
       uShallow: { value: new THREE.Color() },
       uMid: { value: new THREE.Color() },
       uDeep: { value: new THREE.Color() },
@@ -193,7 +196,11 @@ export function setWaterWaveTime(material, t) {
 export function updateWaterMaterial(material, clock) {
   const u = material.uniforms;
   u.uTime.value = clock;
-  u.uWaveAmp.value = CONFIG.arena.waveAmplitude;
+  // The LIVE sea state, not the config baseline: the weather multiplies the
+  // amplitude and mixes in the chop term, and a fill clipped to a different
+  // wave than the line drawn on it is a visible tear.
+  u.uWaveAmp.value = sea.amp;
+  u.uChop.value = sea.chop;
 
   u.uShallow.value.set(CONFIG.colors.waterShallow);
   u.uMid.value.set(CONFIG.colors.waterMid);

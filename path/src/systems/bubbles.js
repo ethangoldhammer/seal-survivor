@@ -20,9 +20,14 @@ import { emit } from '../entities/particles.js';
 
 let breathTimer = 0;
 let wakeCarry = 0; // fractional emissions carried between frames
+let chargeCarry = 0; // the same, for the wind-up vent
 
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
 }
 
 function nextBreathDelay() {
@@ -33,13 +38,16 @@ function nextBreathDelay() {
 export function resetBubbles() {
   breathTimer = nextBreathDelay();
   wakeCarry = 0;
+  chargeCarry = 0;
 }
 
 /**
  * @param rig      the player's aim rig (may be null for a model with no anchors)
  * @param velocity player velocity, as {x, y}
+ * @param charge   banked strike power, 0..1, or 0 when no strike is being wound
+ *                 up. Opens every emitter at once — see the vent below.
  */
-export function updateBubbles(dt, rig, velocity, aboveSurface) {
+export function updateBubbles(dt, rig, velocity, aboveSurface, charge = 0) {
   const cfg = CONFIG.bubbles;
   if (!cfg.enabled || !rig || aboveSurface) return;
 
@@ -97,5 +105,63 @@ export function updateBubbles(dt, rig, velocity, aboveSurface) {
     }
   } else {
     wakeCarry = 0;
+  }
+
+  // --- the wind-up vent -----------------------------------------------------
+  // Charging a strike opens the mouth and the tail together, hard, and harder
+  // the more power is banked. Its own path rather than a multiplier on the two
+  // above, because neither could carry it: breath fires on a 1-2 second timer
+  // and the wake switches off below `wake.minSpeed`, which is the state a
+  // wind-up usually IS — braking to a hold. This has to pour whether the seal
+  // is moving or not.
+  //
+  // Each half still obeys its own emitter switch above. Those switches name a
+  // PLACE bubbles come from, not a cadence, so a mouth turned off should stay
+  // off through a wind-up too — `charge.enabled` is the switch for this effect.
+  const cc = cfg.charge;
+  const ventMouth = cfg.breath.enabled !== false ? mouth : null;
+  const ventTail = cfg.wake.enabled !== false ? tail : null;
+  const wind = cc?.enabled === false ? 0 : Math.min(1, Math.max(0, charge || 0));
+  if (wind <= 0 || (!ventMouth && !ventTail)) {
+    chargeCarry = 0;
+    return;
+  }
+
+  chargeCarry += lerp(cc?.perSecondMin ?? 10, cc?.perSecondMax ?? 70, wind) * dt;
+  let bursts = Math.floor(chargeCarry);
+  // The remainder carries, the backlog does not: subtracting the whole count
+  // before the clamp is what keeps a hitch from being paid back over the
+  // following frames as a second of bubbles arriving late.
+  chargeCarry -= bursts;
+  bursts = Math.min(bursts, cc?.maxPerFrame ?? 6);
+  if (bursts <= 0) return;
+
+  const ventScale = lerp(cc?.scaleMin ?? 0.6, cc?.scaleMax ?? 1.9, wind);
+  // Behind the seal if it's still travelling, straight up if it isn't — a tail
+  // vent from a standstill has no "behind" to cast into, and bubbles rise
+  // anyway (the emitters carry positive gravity).
+  const inv = speed > 1e-4 ? -1 / speed : 0;
+  const tailX = inv !== 0 ? velocity.x * inv : 0;
+  const tailY = inv !== 0 ? velocity.y * inv : 1;
+
+  for (let i = 0; i < bursts; i++) {
+    if (ventMouth) {
+      emit('breathBubbles', ventMouth.x, ventMouth.y, {
+        dirX: 0,
+        dirY: 1,
+        vx: velocity.x,
+        vy: velocity.y,
+        scale: cfg.breath.scale * ventScale,
+      });
+    }
+    if (ventTail) {
+      emit('wakeBubbles', ventTail.x, ventTail.y, {
+        dirX: tailX,
+        dirY: tailY,
+        vx: velocity.x,
+        vy: velocity.y,
+        scale: cfg.wake.scale * ventScale,
+      });
+    }
   }
 }

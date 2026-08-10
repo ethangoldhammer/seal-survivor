@@ -1,13 +1,16 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
-import { bounds, updateBounds, surfaceHeightAt, setWaveTime } from './arena.js';
+import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT } from './arena.js';
 import { createGrid } from './systems/grid.js';
 import { createHexTiles } from './systems/hexTiles.js';
 import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime } from './systems/water.js';
 import { createSkyMaterial, updateSkyMaterial } from './systems/sky.js';
 import { createCelestials } from './systems/celestial.js';
 import { createClouds } from './systems/clouds.js';
-import { createRain } from './systems/weather.js';
+import { createRain, weatherState } from './systems/weather.js';
+import { createLightning } from './systems/lightning.js';
+import { createHorizonGlow } from './systems/horizon.js';
+import { refreshFlash, skyLight } from './systems/daylight.js';
 import { updateCineCamera, cineLens, cineEnabled } from './systems/cineCamera.js';
 
 // How far below the seabed the frame may travel, in world units, and equally
@@ -62,6 +65,8 @@ export function createWorld(container) {
   const celestials = createCelestials(scene);
   const clouds = createClouds(scene);
   const rain = createRain(scene);
+  const lightning = createLightning(scene);
+  const horizonGlow = createHorizonGlow(scene);
 
   // Sky, seabed and the depth-line grid keep their materials across rebuilds
   // so colour changes can update them in place every frame with no rebuild —
@@ -115,11 +120,16 @@ export function createWorld(container) {
 
     // The fill runs WAVE_HEADROOM above the still-water line and its shader
     // clips itself back down to the wave curve, so the top of the water rides
-    // the swell. The headroom is a fixed constant rather than a multiple of
-    // waveAmplitude because the amplitude is a live tuner slider and this
-    // geometry is only rebuilt on resize — it covers the slider's maximum (2)
-    // at the two sine terms' combined 1.5x, with room to spare.
-    const WAVE_HEADROOM = 4;
+    // the swell. Enough to contain the wave at its worst: the calm amplitude multiplied
+    // by everything a full storm can do to it, with every term of the formula
+    // in phase. Asked of arena.js rather than guessed at, because the guess
+    // (a fixed 4, sized for the amplitude slider alone) stops being right the
+    // moment the weather can multiply that amplitude — and the fill clips
+    // itself to the wave, so a crest past the top of the geometry is a hard
+    // horizontal cut across the sea. Safe to fix at build time: every path
+    // that changes these numbers goes through world.resize().
+    const stormAmp = CONFIG.arena.waveAmplitude * Math.max(1, CONFIG.weather?.sea?.amp ?? 1);
+    const WAVE_HEADROOM = maxWaveExcursion(stormAmp, 1) + 1.5;
     const waterH = seaH + WAVE_HEADROOM;
     const waterCY = bounds.surfaceY + WAVE_HEADROOM / 2 - seaH / 2;
     const waterMat = createWaterMaterial();
@@ -161,7 +171,7 @@ export function createWorld(container) {
     // Two units deeper than the camera is ever allowed to go, so the bottom
     // edge of the frame lands on seabed rather than on the seam.
     const skirt = FLOOR_OVERSCAN + 2;
-    seabedMesh = plane(w, 1.2 + skirt, CONFIG.colors.seabed, bounds.bottom + 0.6 - skirt / 2, -4);
+    seabedMesh = plane(w, SEABED_HEIGHT + skirt, CONFIG.colors.seabed, bounds.bottom + SEABED_HEIGHT / 2 - skirt / 2, -4);
     backdrop.add(seabedMesh);
 
     // Animated water surface.
@@ -174,7 +184,11 @@ export function createWorld(container) {
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    surfaceLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: CONFIG.colors.surface }));
+    // Transparent so the stroke can dissolve into the glow band at twilight —
+    // see updateColors. Opaque, there is nothing to hand the seam over to.
+    surfaceLine = new THREE.Line(geo, new THREE.LineBasicMaterial({
+      color: CONFIG.colors.surface, transparent: true,
+    }));
     surfaceLine.position.z = -3;
     backdrop.add(surfaceLine);
   }
@@ -202,7 +216,23 @@ export function createWorld(container) {
     clouds.update(dt);
     if (seabedMesh) seabedMesh.material.color.set(CONFIG.colors.seabed);
     if (depthLines) depthLines.material.color.set(CONFIG.colors.depthLine);
-    if (surfaceLine) surfaceLine.material.color.set(CONFIG.colors.surface);
+    if (surfaceLine) {
+      const hg = CONFIG.horizonGlow;
+      const tw = CONFIG.dayNight?.enabled ? skyLight.twilight : 0;
+      // Past 1 on purpose: the bright-pass is what gives the stroke a halo,
+      // and a line clamped to its own colour is the flat 1px rule this was
+      // meant to stop being.
+      surfaceLine.material.color.set(CONFIG.colors.surface)
+        .multiplyScalar(hg?.enabled ? (hg.lineGain ?? 1) : 1);
+      // ...and it steps aside as the sun crosses it. The hard edge is the
+      // thing that wants softening at sunset, so the glow band takes the seam
+      // over and the stroke comes back afterwards.
+      // A global dial for how present the hard stroke is, on top of the
+      // twilight dissolve — at low lineOpacity the seam is carried entirely
+      // by the fog band and there is no hard edge in the frame at all.
+      const base = hg?.enabled ? (hg.lineOpacity ?? 1) : 1;
+      surfaceLine.material.opacity = base * (1 - tw * (hg?.enabled ? (hg.lineTwilightFade ?? 0) : 0));
+    }
     if (waterMesh) updateWaterMaterial(waterMesh.material, waterClock);
   }
 
@@ -221,13 +251,50 @@ export function createWorld(container) {
     grid.build();
   }
 
+  // Set by main.js: what a flash SOUNDS like and what a strike DOES are
+  // gameplay, and world.js only owns where and when it is drawn.
+  let onLightning = null;
+  function setLightningHandler(fn) { onLightning = fn; }
+
   function updateSurface(dt) {
+    // THE SEA STATE, before anything at all. Four separate transcriptions of
+    // the wave read this — the JS one in arena.js and the GLSL copies in the
+    // water fill, the grid and the horizon fog — so it is published once, here,
+    // and every one of them reads the same numbers on the same frame. A fill
+    // clipped to a different wave than the line drawn on it is a visible tear.
+    const seaCfg = CONFIG.weather?.sea;
+    const swell = (CONFIG.weather?.enabled && seaCfg?.enabled !== false)
+      ? (weatherState.swell ?? 0)
+      : 0;
+    setSeaState(
+      CONFIG.arena.waveAmplitude * (1 + swell * ((seaCfg?.amp ?? 1) - 1)),
+      swell * (seaCfg?.chop ?? 0),
+    );
+
+    // The wave next, because three things below solve against it and all of
+    // them have to use the curve this frame draws rather than the last one's.
+    // A rough sea runs faster as well as higher — the same swell drives both,
+    // and speeding up a phase accumulator is smooth, so this can ride a live
+    // value without the surface ever jumping.
+    waveT += dt * CONFIG.arena.waveSpeed * (1 + swell * ((seaCfg?.speed ?? 1) - 1));
+
+    // Lightning BEFORE the paint. It is what RAISES the flash, and everything
+    // that renders the flash — the sky gradient, the caustics, the beams —
+    // reads it off the light bus during updateColors just below. Run after,
+    // and the bolt is drawn a full frame before the sky it lit up.
+    lightning.update(dt, waveT, onLightning);
+    refreshFlash();
+
+    // Same waveT as the fill's clip and the drawn line below, so all three
+    // sit on one curve. Before updateColors, which reads the twilight the
+    // glow is about to be drawn at.
+    horizonGlow.update(dt, waveT);
+
     updateColors(dt);
     if (!surfaceLine) return;
-    waveT += dt * CONFIG.arena.waveSpeed;
-    // After waveT advances and before the line geometry is rewritten from it,
-    // so a drop lands on the wave that is about to be drawn — a frame's worth
-    // of disagreement is a splash visibly hanging above (or inside) the water.
+    // Before the line geometry is rewritten from the same waveT, so a drop
+    // lands on the wave that is about to be drawn — a frame's worth of
+    // disagreement is a splash visibly hanging above (or inside) the water.
     rain.update(dt, waveT);
     // The grid clips itself to this same line, so it has to be told where the
     // wave is. Pushed from here rather than pulled in grid.update() because
@@ -477,5 +544,5 @@ export function createWorld(container) {
   resize();
   window.addEventListener('resize', resize);
 
-  return { scene, camera, renderer, resize, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, hexTiles, rain };
+  return { scene, camera, renderer, resize, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, hexTiles, rain, lightning, setLightningHandler };
 }

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { weatherState } from './weather.js';
+import { lightningState } from './lightning.js';
 
 // The clock, and the one place that turns a time of day into numbers the rest
 // of the game can use. Nothing else works out what time it is: the sky
@@ -46,8 +47,25 @@ export const skyLight = {
   y: 0,
   elevation: 0, // -1..1, of the dominant body
   night: 0, // 0 by day, 1 in full dark. Drives the stars.
+  // 0..1, peaking at the exact moment the sun crosses the water line and
+  // falling off either side of it. What sunrise and sunset have in common,
+  // as one number — `night` can't express it (it's mid-range at both dawn
+  // and dusk AND at every other point in between) and `phase` is a label,
+  // not a curve you can ramp anything against.
+  twilight: 0,
   isMoon: false,
+  // 0..1 lightning flash, republished here so consumers have ONE place to
+  // read the light from. The sky mixes toward white by it (a night sky
+  // multiplied by three is still a night sky — a flash has to whiten, not
+  // just brighten), and it also multiplies into `intensity` below so the
+  // caustics and the beams flare on the same frame.
+  flash: 0,
 };
+
+// The bus's brightness with the weather folded in but NOT the lightning —
+// the base a flash multiplies. Kept module-local so refreshFlash() below can
+// recompute from it repeatedly within one frame without compounding.
+let baseIntensity = 1;
 
 // Scratch, so a per-frame update allocates nothing.
 const cA = new THREE.Color();
@@ -173,6 +191,8 @@ export function updateDayCycle(dt) {
     skyLight.intensity = 1;
     skyLight.clear = 1;
     skyLight.night = 0;
+    skyLight.twilight = 0;
+    skyLight.flash = 0;
     skyLight.color.set(0xffffff);
     skyLight.zenith.set(CONFIG.colors.sky);
     skyLight.horizon.set(CONFIG.colors.sky);
@@ -223,11 +243,47 @@ export function updateDayCycle(dt) {
   // the last of the sunset rather than on top of it.
   skyLight.night = clamp01(-dayState.sun.elevation / 0.35);
 
+  // Symmetric about the horizon, so it does not care which way the sun is
+  // going — the softening it drives is the same at both ends of the day.
+  // Eased rather than linear: a straight ramp reaches half strength while
+  // the sun is still well clear of the water, which reads as a permanent
+  // haze rather than as a sunset.
+  const band = Math.max(0.02, cfg.twilightBand ?? 0.3);
+  const t = clamp01(1 - Math.abs(dayState.sun.elevation) / band);
+  skyLight.twilight = t * t * (3 - 2 * t);
+
   // Weather is the last word on brightness: a storm puts cloud between the
   // sky and the sea, which is a different thing from the sun being low, so it
   // multiplies in here rather than being baked into the keyframes.
   const storm = CONFIG.weather?.enabled ? (weatherState.intensity ?? 0) : 0;
-  skyLight.intensity = skyLight.clear * (1 - storm * (CONFIG.weather?.dim ?? 0));
+  baseIntensity = skyLight.clear * (1 - storm * (CONFIG.weather?.dim ?? 0));
+  refreshFlash();
+}
+
+/**
+ * Fold the current lightning flash into the bus.
+ *
+ * Split out of updateDayCycle for one reason: the flash is RAISED later in
+ * the frame than the clock is ticked (the bolt is spawned from the surface
+ * pass, see world.js), so a bus that only ever recomputed at the top of the
+ * frame would paint every strike one frame after the bolt it belongs to.
+ * world.js calls this the moment the bolt exists and before anything reads
+ * the bus, which puts the flash and the fork of light on the same frame.
+ *
+ * Recomputed from `baseIntensity` rather than multiplied into whatever is
+ * there, so calling it twice in a frame is harmless.
+ *
+ * Lightning is the last word on brightness, and it goes ON TOP of the
+ * storm's dimming rather than into it: the cloud that darkened the sky is
+ * the same cloud the bolt is inside, so a strike lights the darkest moment
+ * of a storm the hardest. Bounded, or a flash at midnight would blow the
+ * caustics past anything the tuning could pull back.
+ */
+export function refreshFlash() {
+  if (!CONFIG.dayNight?.enabled) { skyLight.flash = 0; return; }
+  skyLight.flash = CONFIG.weather?.enabled ? (lightningState.flash ?? 0) : 0;
+  const boost = 1 + skyLight.flash * (CONFIG.weather?.lightning?.flash?.lightBoost ?? 0);
+  skyLight.intensity = Math.min(1.6, baseIntensity * boost);
 }
 
 // Where the horizon actually is, in world units. One definition, shared by the

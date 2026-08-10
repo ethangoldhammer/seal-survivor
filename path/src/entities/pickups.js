@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG } from '../config.js';
+import { CONFIG, chumValueRamp } from '../config.js';
 import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { updateTumble } from '../systems/rocks.js';
@@ -9,6 +9,13 @@ export const pickups = [];
 // rather than a per-orb one: the orbs are meant to buzz at a common frequency
 // and are separated by phase, not by rate.
 let tellClock = 0;
+// How far into the run we are, for the early-chum holdback in CONFIG.xp.dropRamp.
+// Pushed in once a frame rather than passed per drop: orbs are spawned from four
+// places (a kill, an octopus pop, a bakalar bomb, a boat coming apart) and only
+// some of them have the run's difficulty to hand.
+let runDifficulty = 0;
+export function setChumDifficulty(d) { runDifficulty = d; }
+
 export const strikeOrbs = [];
 export const bubbleOrbs = [];
 export const rapidFireOrbs = [];
@@ -17,6 +24,7 @@ export function resetPickups(scene) {
   for (const p of pickups) scene.remove(p.mesh);
   pickups.length = 0;
   tellClock = 0;
+  runDifficulty = 0;
   for (const o of strikeOrbs) scene.remove(o.mesh);
   strikeOrbs.length = 0;
   for (const o of bubbleOrbs) scene.remove(o.mesh);
@@ -48,7 +56,10 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
   scene.add(mesh);
   pickups.push({
     mesh,
-    value: value * tier.xpMul,
+    // The holdback scales the xp only — the orb, its size, its heal and its
+    // refill of the charge meter are all untouched, so an early run is fed
+    // exactly as well as before and just levels slower. See CONFIG.xp.dropRamp.
+    value: value * tier.xpMul * chumValueRamp(runDifficulty),
     healMul: tier.healMul,
     vx: vel?.x ?? 0,
     vy: vel?.y ?? 0,
@@ -179,6 +190,12 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       p.vy = 0;
       p.mesh.position.x += (dx / dist) * CONFIG.pickups.magnetSpeed * dt;
       p.mesh.position.y += (dy / dist) * CONFIG.pickups.magnetSpeed * dt;
+    } else if (p.hoover) {
+      // IN A MOUTH: already moved this frame by whatever is eating it (see
+      // bitePickup), and neither sinking nor drifting on its own until it lets
+      // go. Ranked below the magnet on purpose — the player swimming over a
+      // crab's dinner takes it, which is the same precedence the crab's own
+      // aggro already uses when it drops the food to come for you.
     } else if (p.vx || p.vy) {
       // Still carrying a throw (boat chum, spilling out of a hull). Gravity
       // only applies in the air — below the water line it's drag alone, which
@@ -242,6 +259,13 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       p.mesh.position.x += p.shiverX;
       p.mesh.position.y += p.shiverY;
     }
+
+    // Consumed, not latched: whatever is eating this orb re-raises the flag
+    // every frame it is still eating (updateEnemies runs first), so an animal
+    // that dies, is bubbled, or simply changes its mind hands the orb straight
+    // back to gravity on the next frame rather than leaving it stuck in mid
+    // water where a mouth used to be.
+    p.hoover = false;
   }
 
   if (onStrikeOrb) updateOrbArray(dt, scene, player, strikeOrbs, 0, onStrikeOrb);
@@ -394,9 +418,36 @@ export function pickupAlive(p) {
 // Chew progress, 0..1. The orb shrinks as it goes, so a pile being eaten
 // reads at a glance instead of orbs just vanishing. Returns true once it's
 // finished and the orb has been removed.
-export function bitePickup(scene, p, amount) {
+//
+// `suck` is the visible half: { x, y, rate, dt } drags the orb toward a mouth
+// for as long as it is being eaten. Optional, and the shrink works exactly as
+// before without it — but with it the orb travels INTO the animal instead of
+// dwindling where it lies, which is the difference between "an orb vanished"
+// and "that crab took it". The pull is exponential on dt, so it is the same
+// motion at any framerate and never overshoots the mouth.
+//
+// It also raises `p.hoover` for the frame, which updatePickups reads as "not
+// yours to sink" — otherwise the orb's own settle would drag it straight back
+// down out of a shark's jaw on the same frame it was pulled up into it.
+export function bitePickup(scene, p, amount, suck = null) {
   const i = pickups.indexOf(p);
   if (i === -1) return false;
+  if (suck) {
+    const k = 1 - Math.exp(-(suck.rate ?? 6) * suck.dt);
+    p.mesh.position.x += (suck.x - p.mesh.position.x) * k;
+    p.mesh.position.y += (suck.y - p.mesh.position.y) * k;
+    // Depth too, or the last of the meal is wrong: creatures sit in their own
+    // depth lane, and an orb left on the play plane while the animal eating it
+    // is in front of that plane hangs visibly outside the mouth. Matching z
+    // puts the orb INSIDE the body, where an opaque mesh that writes depth
+    // occludes it — which is what "swallowed" looks like.
+    p.mesh.position.z += (suck.z - p.mesh.position.z) * k;
+    p.hoover = true;
+    // A throw still in flight would keep adding to the position underneath
+    // the pull and drag the orb back out of the mouth. Being eaten ends it.
+    p.vx = 0;
+    p.vy = 0;
+  }
   p.eaten = (p.eaten ?? 0) + amount;
   if (p.eaten < 1) {
     // Shrink toward a third of its size rather than to nothing — an orb that

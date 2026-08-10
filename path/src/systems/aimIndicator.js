@@ -8,9 +8,10 @@ import { CONFIG } from '../config.js';
 // Not to be confused with the dash corridor in the lens (see cineCamera.js).
 // They answer different questions and can legitimately disagree on screen:
 // this is where the GUN points (input.aim, the cursor or the right stick),
-// the corridor is where a released strike would TRAVEL (input.move, the left
-// stick). Aiming one way while swimming another is normal play, and seeing
-// both at once is the point.
+// the corridor is where a released strike would TRAVEL (halfway between the
+// swim and the aim — see strikeDirection in systems/strike.js). Aiming one way
+// while swimming another is normal play, and seeing both at once is the point;
+// the corridor then sits between this beam and the direction of travel.
 //
 // The reticle sits a fixed distance along the aim rather than on the cursor.
 // That is the correct model, not a shortcut: input.aim is a normalized

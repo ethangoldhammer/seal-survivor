@@ -8,12 +8,15 @@ import { buildHumanoidRig, bindHumanoidRig, aimBone, anchorToHips } from './huma
 
 // The man on the boat.
 //
-// He has three lives in one file. Standing on deck he is an ordinary animated
-// model playing an idle. Once the hull is holed he panics — the same walk
-// cycle at speed, pacing the deck, turning at the rail. And when the boat goes
-// up he stops being an animation at all: the mixer is switched off and a verlet
-// ragdoll takes his skeleton over, throws him off the blast, and lets the water
-// have him.
+// He has two lives in one file. Standing on deck he is an ordinary animated
+// model playing an idle, PARENTED TO THE HULL — so he rides its bob, its roll
+// and its heading exactly, because he is part of it. He does nothing else and
+// decides nothing: a boat being shot to pieces under him is not his business.
+//
+// Then something hits him — a bullet, a blast, or the seal itself coming
+// through the deck — and he stops being an animation at all: the mixer is
+// switched off, he is detached from the boat with his pose intact, and a verlet
+// ragdoll takes his skeleton over and lets the water have him.
 //
 // THE RAGDOLL DRIVES THE REAL BONES. The joints it drives were found by
 // measuring where the vertices each bone moves actually sit — see
@@ -289,25 +292,219 @@ function poseModelBody(figure) {
 }
 
 // ---------------------------------------------------------------------------
+// Where the deck is
+// ---------------------------------------------------------------------------
+
+// The height of the boat's own DECK at a given point along it, measured off
+// the hull geometry — not a hand-typed offset, which is how the crew ended up
+// standing in mid-air above a boat whose deck sits wherever that model's deck
+// happens to sit.
+//
+// Measured in the boat's LOCAL space, so it survives the hull's bob, roll and
+// heading for free, and cached per asset because it is a fact about the model.
+//
+// The hull's SURFACE AREA is dropped into a grid down the side of the boat,
+// and the deck at any point is the highest cell above the waterline holding a
+// real surface's worth of it.
+//
+// Area, not vertices and not width, for the same reason the wreckage is
+// measured by area (see boatDebris.js). Two cheaper rules were tried and both
+// put a man somewhere ridiculous: counting vertices stood him on the masthead,
+// because a mast's top face has as many corners as anything else; measuring
+// how far the geometry spreads across the beam stood him on top of the
+// trawler's gantry, whose two legs span the whole boat with nothing but air
+// between them. A square metre of deck is a square metre of deck.
+const DECK_BINS = 24;
+const DECK_COVERAGE = 1.0; // cells-worth of surface before you can stand on it
+const deckCache = new Map();
+
+function deckProfile(boat) {
+  const cached = deckCache.get(boat.assetKey);
+  if (cached !== undefined) return cached;
+
+  boat.mesh.updateMatrixWorld(true);
+  const toLocal = new THREE.Matrix4().copy(boat.mesh.matrixWorld).invert();
+  const local = new THREE.Matrix4();
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const cVec = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const ac = new THREE.Vector3();
+  const cross = new THREE.Vector3();
+  const p = new THREE.Vector3();
+
+  const tris = [];
+  let lo = Infinity;
+  let hi = -Infinity;
+  boat.mesh.traverse((o) => {
+    if (o.userData.__crew) return;
+    if (!o.isMesh || o.userData.__isOutline || !o.geometry?.attributes?.position) return;
+    local.multiplyMatrices(toLocal, o.matrixWorld);
+    const geo = o.geometry;
+    const pos = geo.attributes.position;
+    const index = geo.index;
+    const count = Math.floor((index ? index.count : pos.count) / 3);
+    for (let t = 0; t < count; t++) {
+      const i0 = index ? index.getX(t * 3) : t * 3;
+      const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+      const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+      a.fromBufferAttribute(pos, i0).applyMatrix4(local);
+      b.fromBufferAttribute(pos, i1).applyMatrix4(local);
+      cVec.fromBufferAttribute(pos, i2).applyMatrix4(local);
+      tris.push(a.x, a.y, a.z, b.x, b.y, b.z, cVec.x, cVec.y, cVec.z);
+      lo = Math.min(lo, a.x, b.x, cVec.x);
+      hi = Math.max(hi, a.x, b.x, cVec.x);
+    }
+  });
+  if (!tris.length || !(hi > lo)) {
+    deckCache.set(boat.assetKey, null);
+    return null;
+  }
+
+  const span = hi - lo;
+  const cell = span / DECK_BINS;
+  const cellArea = cell * cell;
+  const columns = Array.from({ length: DECK_BINS }, () => new Map());
+
+  for (let i = 0; i < tris.length; i += 9) {
+    a.set(tris[i], tris[i + 1], tris[i + 2]);
+    b.set(tris[i + 3], tris[i + 4], tris[i + 5]);
+    cVec.set(tris[i + 6], tris[i + 7], tris[i + 8]);
+    ab.subVectors(b, a);
+    ac.subVectors(cVec, a);
+    const area = cross.crossVectors(ab, ac).length() * 0.5;
+    if (!(area > 0)) continue;
+    // Spread over the cells it actually covers, or one long deck plank lands
+    // entirely on whichever cell held its centroid.
+    const samples = Math.min(24, Math.max(1, Math.ceil(area / cellArea)));
+    const share = area / samples;
+    for (let s = 0; s < samples; s++) {
+      let u = Math.random();
+      let v = Math.random();
+      if (u + v > 1) { u = 1 - u; v = 1 - v; }
+      p.copy(a).addScaledVector(ab, u).addScaledVector(ac, v);
+      const col = Math.min(DECK_BINS - 1, Math.max(0, Math.floor((p.x - lo) / cell)));
+      const row = Math.floor(p.y / cell);
+      const at = columns[col];
+      at.set(row, (at.get(row) ?? 0) + share);
+    }
+  }
+
+  const need = cellArea * DECK_COVERAGE;
+  const heights = columns.map((rows) => {
+    let best = null;
+    for (const [row, area] of rows) {
+      // Above the waterline. These hulls float half-submerged — a boat's own
+      // origin sits at the water — so the biggest surface under a point near
+      // the stern is often a piece of hull half a metre down, and standing on
+      // it put a fisherman up to his knees in the sea.
+      if (row < 0 || area < need) continue;
+      // The LOWEST surface above the water, not the highest: that is the main
+      // deck, which is where a crew works. Taking the highest put a man on the
+      // trawler's bridge roof, standing in the middle of its rigging.
+      if (best == null || row < best) best = row;
+    }
+    return best == null ? null : (best + 1) * cell;
+  });
+  const profile = { lo, span, heights };
+  deckCache.set(boat.assetKey, profile);
+  return profile;
+}
+
+// Deck height at a position along the hull, in the boat's local space.
+function deckAt(profile, x) {
+  if (!profile) return null;
+  const t = (x - profile.lo) / profile.span;
+  const b = Math.min(DECK_BINS - 1, Math.max(0, Math.floor(t * DECK_BINS)));
+  // Out from the requested bin until one of them has a surface. The bow and
+  // stern bins of a pointed hull can be too sparse to call.
+  for (let step = 0; step < DECK_BINS; step++) {
+    const left = profile.heights[b - step];
+    if (left != null) return left;
+    const right = profile.heights[b + step];
+    if (right != null) return right;
+  }
+  return null;
+}
+
+// Where on the boat people actually stand. Not evenly spaced along it — the
+// LOWEST decks first, kept apart from each other.
+//
+// Height is the whole ranking: the lowest surface above the water is the main
+// working deck, and the highest is a wheelhouse roof or the top of a gantry.
+// Spacing them evenly along the hull instead put one man out on the trawler's
+// aft structure, standing in the rigging.
+function pickSlots(profile, count) {
+  if (!profile) return null;
+  const cell = profile.span / DECK_BINS;
+  const all = [];
+  profile.heights.forEach((y, i) => {
+    if (y == null) return;
+    all.push({ x: profile.lo + (i + 0.5) * cell, y });
+  });
+  if (!all.length) return null;
+
+  // The main deck: everything within a cell of the lowest surface found. A
+  // wheelhouse roof is a place to stand, but not while there's deck free.
+  const lowest = Math.min(...all.map((s) => s.y));
+  let pool = all.filter((s) => s.y <= lowest + cell);
+  if (pool.length < count) pool = all;
+
+  // Then FARTHEST-POINT: start amidships and each next man goes wherever is
+  // furthest from everyone already placed. A minimum-gap rule was tried and
+  // fails the case it exists for — when the deck is short it has to give the
+  // gap up, and two men end up standing in each other, which one shot then
+  // takes both of.
+  const middle = profile.lo + profile.span / 2;
+  const taken = [pool.reduce((best, s) =>
+    (Math.abs(s.x - middle) < Math.abs(best.x - middle) ? s : best))];
+  while (taken.length < count && taken.length < pool.length) {
+    let best = null;
+    let bestGap = -1;
+    for (const spot of pool) {
+      if (taken.includes(spot)) continue;
+      const gap = Math.min(...taken.map((t) => Math.abs(t.x - spot.x)));
+      if (gap > bestGap) { bestGap = gap; best = spot; }
+    }
+    if (!best) break;
+    taken.push(best);
+  }
+  // Fewer places to stand than people: the rest double up, which is at least
+  // an honest answer to "there is one square metre of deck on this boat".
+  return taken;
+}
+
+export function clearDeckCache() {
+  deckCache.clear();
+}
+
+// ---------------------------------------------------------------------------
 // Spawning
 // ---------------------------------------------------------------------------
+
+const _feet = new THREE.Vector3();
 
 export function spawnCrewFor(scene, boat) {
   const c = cfg();
   if (c.enabled === false) return;
   const model = primeCrew();
-  const min = Math.max(0, Math.round((boat.isTrawler ? c.trawlerMin : c.min) ?? 1));
-  const max = Math.max(min, Math.round((boat.isTrawler ? c.trawlerMax : c.max) ?? 2));
-  const count = min + ((Math.random() * (max - min + 1)) | 0);
-  const spread = (boat.halfLength ?? 3) * (c.deckSpread ?? 0.6);
+  const count = Math.max(0, Math.round((boat.isTrawler ? c.trawlerCount : c.count) ?? 2));
+  if (!count) return;
+  const profile = deckProfile(boat);
+  const boatScale = boat.mesh.scale.x || 1;
+  // Along the hull in the BOAT's own units, so the spread means the same thing
+  // on a rowboat and on a trawler.
+  const spread = ((boat.halfLength ?? 3) / boatScale) * (c.deckSpread ?? 0.6);
+  const slots = pickSlots(profile, count);
 
   for (let i = 0; i < count; i++) {
-    const slot = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
-    const deckX = slot * spread + (Math.random() - 0.5) * spread * 0.25;
-    const deckY = (c.deckHeight ?? 0.5) * (boat.spawnScale ?? 1);
+    const spot = slots?.[i % slots.length];
+    const deckX = spot ? spot.x : ((count === 1 ? 0 : (i / (count - 1)) * 2 - 1) * spread);
+    // The boat's actual deck at that point, with the old hand-typed offset
+    // kept only for a hull the measurement can't read.
+    const deckY = spot?.y ?? deckAt(profile, deckX)
+      ?? ((c.deckHeight ?? 0.5) * (boat.spawnScale ?? 1)) / boatScale;
     const face = Math.random() < 0.5 ? 1 : -1;
-    const x = boat.mesh.position.x + deckX;
-    const y = boat.mesh.position.y + deckY;
 
     let body;
     let h;
@@ -326,11 +523,23 @@ export function spawnCrewFor(scene, boat) {
           footOffset: -model.originToFeet * scale,
           mixer: null,
           idle: null,
-          walk: null,
           playing: null,
         };
         attachClips(body, visual);
-        scene.add(visual);
+        // Tagged so the boat's own measurements can tell him from the boat.
+        // He is a CHILD of the hull, and the wreck cut and the deck profile
+        // both walk that hull's geometry — without this, a man standing on
+        // deck when a re-measure happens becomes part of the boat.
+        visual.userData.__crew = true;
+        // PARENTED TO THE HULL, not merely positioned near it every frame.
+        // The boat bobs, rolls with every hit, and sails; a man standing on it
+        // has to do all three exactly, and being a child of it is the only way
+        // that is exact rather than nearly. The counter-scale is because the
+        // trawler's mesh is scaled up and its crew is not — people are people.
+        visual.scale.setScalar(scale / boatScale);
+        visual.position.set(deckX, deckY + body.footOffset / boatScale, 0);
+        visual.rotation.y = face >= 0 ? 0 : Math.PI;
+        boat.mesh.add(visual);
       }
     }
     if (!body) {
@@ -339,7 +548,9 @@ export function spawnCrewFor(scene, boat) {
       h = (c.height ?? 1.25) * (0.9 + Math.random() * 0.2);
     }
 
-    const rig = buildRig(x, y, h ?? 1.25, face, body?.kind === 'model' ? body.model : null);
+    boat.mesh.updateMatrixWorld(true);
+    _feet.set(deckX, deckY, 0).applyMatrix4(boat.mesh.matrixWorld);
+    const rig = buildRig(_feet.x, _feet.y, h ?? 1.25, face, body?.kind === 'model' ? body.model : null);
     if (!body) {
       const kit = makeKit(h);
       body = buildBoxBody(rig, kit, h);
@@ -355,58 +566,38 @@ export function spawnCrewFor(scene, boat) {
       deckY,
       face,
       state: 'idle',
-      pace: face, // which way he is walking while panicking
-      panicFor: 0,
       life: 0,
       sway: Math.random() * Math.PI * 2,
       accumulator: 0,
       wet: false,
     };
     crew.push(figure);
-    // Stood on the deck NOW rather than on the first update. A model is added
-    // to the scene at the world origin, and one frame of a fisherman standing
-    // in open water at (0, 0) is one frame too many.
-    ride(figure, 0);
     if (figure.body.kind === 'boxes') poseBoxBody(figure);
   }
 }
 
-// The two clips, by the names the asset entry gives them. Driven from a plain
-// mixer rather than through createAnimationController: that controller is the
+// The idle, by the name the asset entry gives it. Driven from a plain mixer
+// rather than through createAnimationController: that controller is the
 // creature state machine — beat-synced idles, procedural fallbacks, spring
-// chains — and a man walking on a boat wants none of it.
+// chains — and a man standing on a boat wants none of it.
+//
+// Only the idle plays. The model ships a walk cycle too and the asset entry
+// still names it, so it is one line away if the crew ever needs to move about
+// the deck; nothing here runs it.
 function attachClips(body, visual) {
   const clips = visual.userData.clips ?? [];
   if (!clips.length) return;
   const names = visual.userData.animationNames ?? {};
-  const find = (key) => (names[key] ? THREE.AnimationClip.findByName(clips, names[key]) : null);
-  const idleClip = find('idle') ?? clips[0];
-  const walkClip = find('swim') ?? find('boost') ?? idleClip;
+  const idleClip = (names.idle ? THREE.AnimationClip.findByName(clips, names.idle) : null) ?? clips[0];
   body.mixer = new THREE.AnimationMixer(visual);
   body.idle = body.mixer.clipAction(idleClip);
-  body.walk = body.mixer.clipAction(walkClip);
-  for (const action of [body.idle, body.walk]) {
-    action.setLoop(THREE.LoopRepeat, Infinity);
-    action.enabled = true;
-  }
-  // Everyone aboard is at a different point in the loop, or a deck of three
-  // reads as one man rendered three times.
+  body.idle.setLoop(THREE.LoopRepeat, Infinity);
+  body.idle.enabled = true;
+  // Everyone aboard starts at a different point in the loop, or a deck of two
+  // reads as one man rendered twice.
   body.idle.time = Math.random() * idleClip.duration;
   body.idle.setEffectiveWeight(1).play();
   body.playing = 'idle';
-}
-
-function playClip(body, which, speed = 1) {
-  if (!body.mixer || body.playing === which) {
-    if (body.mixer && which === 'walk') body.walk.timeScale = speed;
-    return;
-  }
-  const from = body.playing === 'idle' ? body.idle : body.walk;
-  const to = which === 'idle' ? body.idle : body.walk;
-  to.timeScale = which === 'walk' ? speed : 1;
-  to.reset().setEffectiveWeight(1).play();
-  from.crossFadeTo(to, cfg().clipFade ?? 0.18, false);
-  body.playing = which;
 }
 
 export function resetCrew(scene) {
@@ -415,7 +606,10 @@ export function resetCrew(scene) {
 }
 
 function disposeFigure(scene, f) {
-  scene.remove(f.body.group);
+  // removeFromParent, not scene.remove: while aboard a figure is a CHILD OF
+  // THE BOAT, and asking the scene to remove it would leave it hanging off a
+  // hull that is itself on its way out.
+  f.body.group.removeFromParent();
   if (f.body.kind === 'boxes') {
     for (const g of f.body.geometries) g.dispose();
     f.body.kit.body.dispose();
@@ -432,10 +626,17 @@ function disposeFigure(scene, f) {
 // Leaving the boat
 // ---------------------------------------------------------------------------
 
+// The solver's fixed tick. 120Hz rather than the frame rate: a body knocked off
+// a deck by a seal at speed moves further in one 60Hz step than its shortest
+// bone is long, which no number of constraint iterations can tidy up
+// afterwards — halving the step is what actually fixes it, and this rig is
+// eleven points, so twice as many of them costs nothing worth counting.
+const SOLVER_STEP = 1 / 120;
+
 // Verlet stores velocity as the gap between this position and the last one, so
 // this is how you shove a ragdoll: move where it CAME FROM.
 function push(f, vx, vy, spin = 0) {
-  const step = 1 / 60;
+  const step = SOLVER_STEP;
   for (const p of f.rig.list) {
     p.px -= vx * step;
     p.py -= vy * step;
@@ -454,11 +655,16 @@ function push(f, vx, vy, spin = 0) {
 // Hand the skeleton over. Seeded from where the model ACTUALLY IS — mid-stride,
 // mid-panic, wherever the clip had him — so the ragdoll starts in the pose the
 // last animated frame ended on instead of snapping to a T.
-function goLimp(f) {
+function goLimp(f, scene) {
   if (f.state === 'ragdoll') return;
   f.state = 'ragdoll';
   f.boat = null;
   const body = f.body;
+  // Off the hull and into the world, keeping exactly where he already was.
+  // `attach` rather than `add` is the whole difference: it composes out the
+  // boat's transform, so a man thrown off a rolling, scaled trawler doesn't
+  // jump a metre sideways and double in size at the moment he lets go.
+  if (scene && body.group.parent && body.group.parent !== scene) scene.attach(body.group);
   if (body.kind !== 'model' || !body.mixer) return;
 
   body.group.updateMatrixWorld(true);
@@ -541,26 +747,16 @@ function goLimp(f) {
   body.group.rotation.z = 0;
 }
 
-// Over the side. `dir` is which way to jump.
-function bail(f, dir) {
-  const c = cfg();
-  goLimp(f);
-  push(f,
-    dir * (c.jumpOut ?? 3.4) * (0.7 + Math.random() * 0.6),
-    (c.jumpUp ?? 5.5) * (0.8 + Math.random() * 0.5),
-    (Math.random() - 0.5) * (c.jumpSpin ?? 4));
-}
-
 // The hull going up under them. Everyone still aboard is thrown, and anyone
 // already in the water nearby gets shoved too.
-export function blastCrew(x, y, radius, strength) {
+export function blastCrew(scene, x, y, radius, strength) {
   for (const f of crew) {
     const hips = f.rig.points.hips;
     const dx = hips.x - x;
     const dy = hips.y - y;
     const dist = Math.hypot(dx, dy);
     if (dist > radius) continue;
-    goLimp(f);
+    goLimp(f, scene);
     const power = strength * (1 - dist / Math.max(radius, 1e-3));
     const len = dist || 1;
     push(f,
@@ -570,6 +766,45 @@ export function blastCrew(x, y, radius, strength) {
       Math.abs(dy / len) * power * 0.5 + power * 0.7,
       (Math.random() - 0.5) * power * 0.8);
   }
+}
+
+// SOMETHING HIT HIM. A bullet, a blast, or the seal itself going through the
+// deck at speed — they're the same event from the crew's point of view: he was
+// standing there a moment ago and now he isn't.
+//
+// Nothing here consumes the shot or reports damage. A man is not cover, and he
+// has no health to speak of; the interesting part is entirely that he comes
+// off the boat.
+//
+// Returns how many were knocked off.
+export function damageCrew(scene, x, y, radius, opts = {}) {
+  if (!crew.length) return 0;
+  const c = cfg();
+  let hit = 0;
+  for (const f of crew) {
+    if (f.state === 'ragdoll') continue;
+    const hips = f.rig.points.hips;
+    const dx = hips.x - x;
+    const dy = hips.y - y;
+    // Measured against his body, not a point: `reach` is a torso's worth
+    // either side of the hips, so a shot at his head or his boots counts.
+    const reach = radius + f.height * (c.hitRadius ?? 0.45);
+    if (dx * dx + dy * dy > reach * reach) continue;
+
+    hit++;
+    goLimp(f, scene);
+    const len = Math.hypot(dx, dy) || 1;
+    const knock = (c.knock ?? 7) * (0.8 + Math.random() * 0.5);
+    push(f,
+      // Off the way the hit was going where the caller knows (a bullet), and
+      // away from the impact otherwise.
+      (opts.dirX ?? dx / len) * knock,
+      Math.abs(opts.dirY ?? dy / len) * knock * 0.5 + knock * 0.55,
+      (Math.random() - 0.5) * (c.knockSpin ?? 6));
+    emit('splash', hips.x, bounds.surfaceY, { scale: 0.3, dirX: 0, dirY: 1 });
+    opts.onCrewHit?.(hips.x, hips.y);
+  }
+  return hit;
 }
 
 // The boat this crew belonged to is gone. `exploded` false means it simply
@@ -583,8 +818,70 @@ export function releaseCrew(scene, boat, exploded) {
       crew.splice(i, 1);
       continue;
     }
-    goLimp(f);
+    goLimp(f, scene);
   }
+}
+
+// ---------------------------------------------------------------------------
+// A body in the water is food
+// ---------------------------------------------------------------------------
+//
+// Once he is off the boat and in the sea he stops being scenery and becomes the
+// best meal on the map: the seal eats him on contact, and the hunters — sharks
+// and the orca pod — will break off whatever they were doing to get to him.
+//
+// He is deliberately NOT an entry in `enemies`. He has no hp, no contact
+// damage and no AI; he is a floating object that several systems are allowed
+// to reach for. Everything below is that reach, and nothing else.
+
+// Is this one in the water and available? A man still standing on a deck is
+// not lunch, and neither is one still in the air on his way there.
+function afloat(f) {
+  return f.state === 'ragdoll' && !f.eaten && f.rig.points.hips.y < bounds.surfaceY;
+}
+
+// How big a target he is — the reach a mouth needs, from his own size.
+export function crewRadius(f) {
+  return f.height * ((cfg().food?.radius) ?? 0.35);
+}
+
+// The nearest body in the water to (x, y), or null. `maxDist` is the searcher's
+// own reach; the body's size is added to it.
+export function nearestFloatingCrew(x, y, maxDist) {
+  let best = null;
+  let bestD2 = Infinity;
+  for (const f of crew) {
+    if (!afloat(f)) continue;
+    const hips = f.rig.points.hips;
+    const dx = hips.x - x;
+    const dy = hips.y - y;
+    const reach = maxDist + crewRadius(f);
+    const d2 = dx * dx + dy * dy;
+    if (d2 > reach * reach || d2 >= bestD2) continue;
+    bestD2 = d2;
+    best = f;
+  }
+  return best;
+}
+
+export function crewPosition(f) {
+  return f.rig.points.hips;
+}
+
+// Eaten. Returns what the meal was worth, or null if this one was already
+// taken — two hunters can reach the same body on the same frame, and only one
+// of them can have it.
+export function eatCrew(scene, f) {
+  if (!f || f.eaten || !crew.includes(f)) return null;
+  const food = cfg().food ?? {};
+  const hips = f.rig.points.hips;
+  const at = { x: hips.x, y: hips.y, xp: food.xp ?? 12, healMul: food.healMul ?? 2.5 };
+  f.eaten = true;
+  emit('bite', at.x, at.y, { scale: 1.2 });
+  const i = crew.indexOf(f);
+  if (i !== -1) crew.splice(i, 1);
+  disposeFigure(scene, f);
+  return at;
 }
 
 // ---------------------------------------------------------------------------
@@ -682,37 +979,59 @@ function solve(f, step) {
     }
     // Collisions last, so the solver can't push a body back through the floor
     // on the same tick it was lifted out of it.
+    //
+    // EVERY clamp moves `px` with `p`. In verlet the velocity IS the gap
+    // between this position and the last one, so moving a point without
+    // moving where it came from doesn't stop it — it INVENTS the speed it
+    // would have needed to get there. A body thrown at the arena edge was
+    // being teleported a dozen units by this and coming out at 480 units a
+    // second, which is not a ragdoll, it is a bullet.
+    const edge = bounds.left + 1;
+    const far = bounds.right - 1;
+    const bounce = c.bounce ?? 0.2;
     for (const p of f.rig.list) {
       if (p.y < floor) {
+        const vy = p.y - p.py;
         p.y = floor;
+        p.py = floor + vy * bounce;
         // Ground friction, applied by dragging the previous position toward
         // the current one — a body landing on the seabed shouldn't skate.
         p.px += (p.x - p.px) * (c.floorFriction ?? 0.35);
       }
-      const edge = bounds.left + 1;
-      const far = bounds.right - 1;
-      if (p.x < edge) p.x = edge;
-      if (p.x > far) p.x = far;
+      if (p.x < edge) {
+        const vx = p.x - p.px;
+        p.x = edge;
+        p.px = edge + vx * bounce;
+      } else if (p.x > far) {
+        const vx = p.x - p.px;
+        p.x = far;
+        p.px = far + vx * bounce;
+      }
     }
   }
 
   // BONE LENGTHS GET THE LAST WORD. Everything above — the joint limits, the
-  // neck angle, the floor — is allowed to be approximate; a limb changing
-  // length is not, because that is the one artefact that reads as the model
-  // being broken rather than as a body being thrown about. An arm folded
-  // against the chest could otherwise end a tick 16% short, pulled in by the
-  // reach limit that was trying to push the hand back out.
-  for (const link of f.rig.links) {
-    const a = points[link.a];
-    const b = points[link.b];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const d = Math.hypot(dx, dy) || 1e-6;
-    const shift = ((d - link.rest) / d) * 0.5;
-    a.x += dx * shift;
-    a.y += dy * shift;
-    b.x -= dx * shift;
-    b.y -= dy * shift;
+  // neck angle, the floor, the arena wall — is allowed to be approximate; a
+  // limb changing length is not, because that is the one artefact that reads
+  // as the model being broken rather than as a body being thrown about. An arm
+  // folded against the chest could otherwise end a tick 16% short, pulled in
+  // by the reach limit that was trying to push the hand back out.
+  //
+  // Twice, because one pass leaves the last few links carrying the error the
+  // earlier ones pushed into them.
+  for (let pass = 0; pass < 2; pass++) {
+    for (const link of f.rig.links) {
+      const a = points[link.a];
+      const b = points[link.b];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const d = Math.hypot(dx, dy) || 1e-6;
+      const shift = ((d - link.rest) / d) * 0.5;
+      a.x += dx * shift;
+      a.y += dy * shift;
+      b.x -= dx * shift;
+      b.y -= dy * shift;
+    }
   }
 }
 
@@ -720,46 +1039,20 @@ function solve(f, step) {
 // Aboard
 // ---------------------------------------------------------------------------
 
-// While aboard, the figure is placed rather than simulated. Positions are
-// written straight into the verlet points as well, which means the motion of
-// the boat is ALREADY in the ragdoll the instant it lets go — a man who goes
-// over the side of a boat sailing left keeps going left, for free.
-function ride(f, dt) {
+// While aboard, the model needs nothing done to it at all — it is a child of
+// the boat, so the bob, the roll and the heading arrive for free. What this
+// does is keep the verlet points SHADOWING where he actually is, which is what
+// makes the handover seamless: the motion of the boat is already in the
+// ragdoll the instant it lets go, so a man knocked off a boat sailing left
+// keeps going left without anything having to remember to add that.
+function ride(f) {
   const boat = f.boat;
   if (!boat) return;
-  const c = cfg();
-  const spread = (boat.halfLength ?? 3) * (c.deckSpread ?? 0.6);
+  boat.mesh.updateMatrixWorld(true);
+  _feet.set(f.deckX, f.deckY, 0).applyMatrix4(boat.mesh.matrixWorld);
 
-  if (f.state === 'panic') {
-    // Pacing the deck, turning at the rail. This is the panic: the same walk
-    // cycle, faster, going nowhere.
-    f.deckX += f.pace * (c.panicSpeed ?? 2.2) * dt;
-    if (f.deckX > spread) { f.deckX = spread; f.pace = -1; }
-    if (f.deckX < -spread) { f.deckX = -spread; f.pace = 1; }
-    f.face = f.pace;
-    playClip(f.body, 'walk', c.panicClipSpeed ?? 1.9);
-  } else {
-    f.sway += dt * (c.swaySpeed ?? 2.2);
-    playClip(f.body, 'idle');
-  }
-
-  const lean = f.state === 'panic' ? 0 : Math.sin(f.sway) * (c.sway ?? 0.03);
-  const x = boat.mesh.position.x + f.deckX * (boat.dir >= 0 ? 1 : -1) + lean;
-  const y = boat.mesh.position.y + f.deckY;
-
-  if (f.body.kind === 'model') {
-    const g = f.body.group;
-    g.position.set(x, y + f.body.footOffset, 0);
-    // Turned to face the way he is going. The model is modelled facing +Z and
-    // oriented side-on by the asset entry, so this is the same 180° flip a
-    // boat sailing the other way gets.
-    g.rotation.y = f.face >= 0 ? 0 : Math.PI;
-    g.rotation.z = boat.mesh.rotation.z; // ride the hull's roll
-  }
-
-  // The verlet points shadow the animation, so the handover has somewhere to
-  // start even before goLimp reads the bones.
-  const pose = standingPose(x, y, f.height, f.face, f.body.kind === 'model' ? f.body.model : null);
+  const pose = standingPose(_feet.x, _feet.y, f.height, f.face,
+    f.body.kind === 'model' ? f.body.model : null);
   for (const [name, at] of Object.entries(pose)) {
     const p = f.rig.points[name];
     p.px = p.x;
@@ -774,35 +1067,19 @@ export function updateCrew(dt, scene) {
   const c = cfg();
   const life = c.life ?? 9;
   const fade = c.fade ?? 1.6;
-  const step = 1 / 60;
+  const step = SOLVER_STEP;
 
   for (let i = crew.length - 1; i >= 0; i--) {
     const f = crew[i];
 
+    // Aboard: he idles, and that is all he does. He comes off the boat when
+    // something hits him (damageCrew) or when the hull goes up under him
+    // (blastCrew) — never on his own initiative.
     if (f.state !== 'ragdoll') {
-      const boat = f.boat;
-      // The hull is clearly going down. Panic is measured on the boat's
-      // health, so a boat chipped at slowly empties gradually and one deleted
-      // in a single hit never gets the chance — its crew is thrown by the
-      // explosion instead (see blastCrew).
-      const hurt = boat && boat.hp / Math.max(boat.maxHp, 1e-3) <= (c.panicAt ?? 0.35);
-      if (hurt && f.state === 'idle') f.state = 'panic';
-      if (f.state === 'panic') {
-        f.panicFor += dt;
-        // Long enough on a boat that is plainly going down, and he takes his
-        // chances in the water instead.
-        const after = c.bailAfter ?? 4;
-        if (after > 0 && f.panicFor > after + Math.random() * (c.bailSpread ?? 0.9)) {
-          bail(f, boat.dir >= 0 ? -1 : 1);
-          emit('splash', f.rig.points.hips.x, bounds.surfaceY, { scale: 0.25, dirX: 0, dirY: 1 });
-        }
-      }
-      if (f.state !== 'ragdoll') {
-        ride(f, dt);
-        f.body.mixer?.update(dt);
-        if (f.body.kind === 'boxes') poseBoxBody(f);
-        continue;
-      }
+      ride(f);
+      f.body.mixer?.update(dt);
+      if (f.body.kind === 'boxes') poseBoxBody(f);
+      continue;
     }
 
     f.life += dt;
@@ -810,7 +1087,7 @@ export function updateCrew(dt, scene) {
     // Fixed timestep: a constraint solver run at whatever dt the frame happens
     // to be is a constraint solver that behaves differently on every machine,
     // and at a long frame it detonates.
-    f.accumulator = Math.min(f.accumulator + dt, step * 6);
+    f.accumulator = Math.min(f.accumulator + dt, step * 8);
     while (f.accumulator >= step) {
       solve(f, step);
       f.accumulator -= step;

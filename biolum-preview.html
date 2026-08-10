@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Bioluminescent skin — contact sheet</title>
+<style>
+  body { margin:0; background:#071019; color:#cfe6f2;
+         font:13px/1.45 'Inter', ui-sans-serif, system-ui, sans-serif; padding:12px 16px 24px; }
+  h1 { font-size:15px; margin:0 0 4px; letter-spacing:.02em; }
+  h2 { font-size:11px; margin:22px 0 8px; color:#7fd7ff; text-transform:uppercase; letter-spacing:.10em; }
+  h2 em { color:#7f9aac; font-style:normal; text-transform:none; letter-spacing:0; font-size:12px; margin-left:8px; }
+  p.note { margin:0 0 4px; color:#7f9aac; max-width:92ch; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; }
+  figure { margin:0; }
+  canvas { display:block; border-radius:5px; }
+  figcaption { padding-top:5px; font-size:12px; }
+  figcaption b { display:block; color:#e8f6ff; text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+  figcaption span { color:#7f9aac; font-size:11px; }
+  #log { white-space:pre-wrap; color:#6f8b9c; font:11px/1.5 ui-monospace, monospace; margin-top:20px; }
+</style>
+</head>
+<body>
+<h1>Bioluminescent skin — contact sheet</h1>
+<p class="note">The three glowing species, each on its own preset, through the real asset pipeline, the
+game's lighting rig and the game's own bloom, against the water colours the arena actually blends
+between. Rendered synchronously, one frame per tile — the filmstrips are how motion is shown, because
+there is no animation loop on this page. Everything here is on sliders:
+<code>`</code> → Look &amp; FX → Bioluminescence.</p>
+<div id="sheet"></div>
+<pre id="log"></pre>
+
+<script type="module">
+import * as THREE from 'three';
+import { CONFIG } from '/path/src/config.js';
+import { preloadAssets, createVisual, applyBiolumSkinSettings } from '/path/src/assets.js';
+import { updateBiolumSkin, BIOLUM_PATTERNS } from '/path/src/systems/biolumSkin.js';
+import { createPost } from '/path/src/systems/post.js';
+
+const W = 300, H = 190;
+
+// orientationQuaternion maps a side-view model's FORWARD onto world +Y, so a
+// creature straight out of createVisual is nose-up and the game's faceMotion
+// spins it about Z to its heading. -90° is "swimming right", which is the
+// only view in which a pattern down the body is legible at all.
+const SWIM_RIGHT = -Math.PI / 2;
+
+const out = document.getElementById('sheet');
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+
+// three reports shader compile failures through console.error, and a failed
+// compile still leaves a working-but-black canvas — so collect them, or a
+// broken shader looks exactly like a creature that simply isn't glowing.
+const errors = [];
+const realError = console.error.bind(console);
+console.error = (...a) => { errors.push(a.join(' ')); realError(...a); };
+
+await preloadAssets();
+
+// ONE renderer and one post chain for every tile, blitted into a 2D canvas per
+// cell. Sixty WebGL contexts would each get their own bloom buffers and their
+// own float precision, and then a difference between two tiles could be the
+// pattern or could be the context.
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+const post = createPost(renderer);
+
+const scene = new THREE.Scene();
+scene.add(new THREE.AmbientLight(0xffffff, CONFIG.lighting.ambient));
+const key = new THREE.DirectionalLight(0xffffff, CONFIG.lighting.keyIntensity);
+key.position.fromArray(CONFIG.lighting.keyPosition);
+scene.add(key);
+
+let camera = new THREE.PerspectiveCamera(32, W / H, 0.1, 200);
+let tileW = W, tileH = H;
+
+// The render target has to be resized with the canvas or the post chain keeps
+// blitting the previous tile's buffer, which shows up as a filmstrip whose
+// frames are all subtly the wrong aspect.
+function setTileSize(w, h) {
+  tileW = w; tileH = h;
+  renderer.setSize(w, h);
+  post.resize();
+  camera = new THREE.PerspectiveCamera(32, w / h, 0.1, 200);
+}
+setTileSize(W, H);
+
+function frame(object, pad = 1.6) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  camera.position.set(centre.x, centre.y, centre.z + Math.max(size.x, size.y * (tileW / tileH)) * pad + 1.2);
+  camera.lookAt(centre);
+}
+
+// The three water colours the depth gradient blends between, so "in context"
+// means the actual backdrop rather than an invented blue.
+const WATER = {
+  shallow: CONFIG.colors.waterShallow,
+  mid: CONFIG.colors.waterMid,
+  deep: CONFIG.colors.waterDeep,
+};
+const setWater = (c) => renderer.setClearColor(c, 1);
+setWater(WATER.mid);
+
+function section(title, note) {
+  const h = document.createElement('h2');
+  h.innerHTML = `${title}${note ? `<em>${note}</em>` : ''}`;
+  const row = document.createElement('div');
+  row.className = 'row';
+  out.append(h, row);
+  return row;
+}
+function tile(row, caption, sub) {
+  const cell = document.createElement('figure');
+  const canvas = document.createElement('canvas');
+  canvas.width = tileW; canvas.height = tileH;
+  canvas.getContext('2d').drawImage(renderer.domElement, 0, 0);
+  const cap = document.createElement('figcaption');
+  cap.innerHTML = `<b>${caption}</b>${sub ? `<span>${sub}</span>` : ''}`;
+  cell.append(canvas, cap);
+  row.appendChild(cell);
+}
+function shoot(row, caption, sub) {
+  applyBiolumSkinSettings();
+  post.render(scene, camera, 0);
+  tile(row, caption, sub);
+}
+
+// One of each, built once. `only` swaps which is in the scene, so every tile
+// is the same renderer, the same lights and the same post chain.
+const SPECIES = {
+  lanternfish: { asset: 'enemyLanternfish', preset: 'lantern', pad: 1.6 },
+  lanternRay: { asset: 'enemyLanternRay', preset: 'veil', pad: 1.5 },
+  abyssShark: { asset: 'enemyAbyssShark', preset: 'abyssHunter', pad: 1.4 },
+};
+for (const s of Object.values(SPECIES)) {
+  s.node = createVisual(s.asset);
+  s.node.rotation.z = SWIM_RIGHT;
+}
+let inScene = null;
+function only(name) {
+  if (inScene) scene.remove(inScene.node);
+  inScene = SPECIES[name];
+  scene.add(inScene.node);
+  frame(inScene.node, inScene.pad);
+  return inScene;
+}
+
+// Advanced to a fixed value so every still tile catches the breath and the
+// flicker at a comparable moment rather than wherever the clock happened to be.
+updateBiolumSkin(1.6);
+
+// A deep copy, because the presets are nested and a shallow one would let the
+// palette section below permanently repaint the config it borrowed from.
+const START = structuredClone(CONFIG.biolumSkin);
+const restore = () => { Object.assign(CONFIG.biolumSkin, structuredClone(START)); };
+
+// --- the three species, as shipped -----------------------------------------
+{
+  const row = section('The three species', 'each on its own preset, mid-water');
+  for (const [name, s] of Object.entries(SPECIES)) {
+    only(name);
+    const p = CONFIG.biolumSkin.presets[s.preset];
+    shoot(row, name, `${s.preset} — ${p.pattern}`);
+  }
+  // Side by side at one scale, which is the only way to judge whether three
+  // presets read as three different animals rather than one effect at three
+  // sizes.
+  const all = new THREE.Group();
+  for (const [i, s] of Object.values(SPECIES).entries()) {
+    const n = createVisual(s.asset);
+    n.rotation.z = SWIM_RIGHT;
+    n.position.x = (i - 1) * 4.5;
+    all.add(n);
+  }
+  if (inScene) scene.remove(inScene.node);
+  inScene = null;
+  scene.add(all);
+  setTileSize(620, 200);
+  frame(all, 1.15);
+  shoot(row, 'all three together', 'the read that matters — can you tell them apart?');
+  scene.remove(all);
+  setTileSize(W, H);
+}
+
+// --- every pattern, per species --------------------------------------------
+// The preset picks one; this is the menu it picked from, rendered on the body
+// that has to wear it. A pattern that reads on a fish can vanish on a wingspan.
+for (const [name, s] of Object.entries(SPECIES)) {
+  const row = section(`${name} — every pattern`, `preset "${s.preset}", pattern overridden per tile`);
+  only(name);
+  setTileSize(240, 155);
+  frame(s.node, s.pad);
+  for (const p of BIOLUM_PATTERNS) {
+    CONFIG.biolumSkin.presets[s.preset].pattern = p;
+    shoot(row, p, '');
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- every palette, per species --------------------------------------------
+const PALETTES = [
+  ['abyss', 0x00e5ff, 0x7b2dff, 0xffd166],
+  ['cold', 0x1de5c8, 0x2f6fd6, 0xbdf5ff],
+  ['ember', 0xff4d2e, 0xffa62b, 0xfff1a8],
+  ['toxic', 0x7cff3d, 0x00ffc8, 0xd6ff00],
+  ['bruise', 0xff2d95, 0x5b2bff, 0x00d4ff],
+  ['bone', 0xdfefff, 0x8fb4c8, 0xffffff],
+];
+{
+  const row = section('Palettes', 'the three-stop ramp, each species on its own pattern');
+  setTileSize(240, 155);
+  for (const [name, s] of Object.entries(SPECIES)) {
+    only(name);
+    frame(s.node, s.pad);
+    for (const [pname, a, b, c] of PALETTES) {
+      const p = CONFIG.biolumSkin.presets[s.preset];
+      p.colorA = a; p.colorB = b; p.colorC = c;
+      shoot(row, `${name} — ${pname}`, '');
+    }
+    restore();
+  }
+  setTileSize(W, H);
+}
+
+// --- flicker ----------------------------------------------------------------
+// Value noise in time, not a sine. Depth is how far the light drops out; rate
+// is how often. A still frame can only show the depth, so the row sweeps depth
+// and the filmstrip below sweeps time.
+{
+  const row = section('Flicker depth', 'the same instant, at four flicker depths');
+  only('lanternfish');
+  setTileSize(240, 155);
+  frame(SPECIES.lanternfish.node, SPECIES.lanternfish.pad);
+  for (const amp of [0, 0.3, 0.6, 1.0]) {
+    CONFIG.biolumSkin.presets.lantern.flickerAmp = amp;
+    shoot(row, `flickerAmp ${amp.toFixed(2)}`, amp === 0 ? 'perfectly steady' : '');
+  }
+  restore();
+  setTileSize(W, H);
+}
+{
+  const row = section('Flicker — in motion', 'flickerAmp 0.6, rate 5/s, 8 frames 0.09s apart');
+  only('lanternfish');
+  setTileSize(170, 140);
+  frame(SPECIES.lanternfish.node, SPECIES.lanternfish.pad);
+  CONFIG.biolumSkin.presets.lantern.flickerAmp = 0.6;
+  CONFIG.biolumSkin.presets.lantern.flickerRate = 5;
+  for (let i = 0; i < 8; i++) {
+    shoot(row, `t + ${(i * 0.09).toFixed(2)}s`, '');
+    updateBiolumSkin(0.09);
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- pulse, in motion -------------------------------------------------------
+// A travelling wave is the one pattern a still frame actively misrepresents:
+// a single tile of it looks like a fat static band.
+{
+  const row = section('Pulse — in motion', 'one full cycle, 8 frames');
+  only('abyssShark');
+  setTileSize(170, 140);
+  frame(SPECIES.abyssShark.node, SPECIES.abyssShark.pad);
+  CONFIG.biolumSkin.presets.abyssHunter.pattern = 'pulse';
+  const speed = CONFIG.biolumSkin.presets.abyssHunter.pulseSpeed;
+  const period = (Math.PI * 2) / (speed * 2);
+  for (let i = 0; i < 8; i++) {
+    shoot(row, `t + ${(i * period / 8).toFixed(2)}s`, i === 0 ? 'start of cycle' : '');
+    updateBiolumSkin(period / 8);
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- phase spread -----------------------------------------------------------
+// The one setting that needs a material per creature. Every fish in a school
+// gets its own random offset into the cycle; at 0 they collapse into unison,
+// which is worth seeing precisely because it looks wrong.
+{
+  const row = section('Phase spread across a school',
+    'nine fish — the same instant, the same preset, at two spreads');
+  setTileSize(420, 220);
+  // The single species shown by the previous section is still in the scene;
+  // leaving it there puts a shark through the middle of the school.
+  if (inScene) { scene.remove(inScene.node); inScene = null; }
+  for (const spread of [0, 1]) {
+    CONFIG.biolumSkin.presets.lantern.phaseSpread = spread;
+    CONFIG.biolumSkin.presets.lantern.flickerAmp = 0.7;
+    CONFIG.biolumSkin.presets.lantern.pulseAmp = 0.6;
+    const school = new THREE.Group();
+    for (let i = 0; i < 9; i++) {
+      const f = createVisual('enemyLanternfish');
+      f.position.set((i % 3) * 1.7 - 1.7, Math.floor(i / 3) * 1.05 - 1.05, (Math.random() - 0.5) * 1.2);
+      f.rotation.z = SWIM_RIGHT;
+      school.add(f);
+    }
+    scene.add(school);
+    frame(school, 1.15);
+    shoot(row, `phaseSpread ${spread}`,
+      spread === 0 ? 'lockstep — nine bodies, one animal' : 'each fish on its own beat');
+    scene.remove(school);
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- depth ------------------------------------------------------------------
+{
+  const row = section('Depth context', 'each species against the three stops of the water gradient');
+  setTileSize(240, 155);
+  for (const [name, s] of Object.entries(SPECIES)) {
+    only(name);
+    frame(s.node, s.pad);
+    for (const [wname, c] of Object.entries(WATER)) {
+      setWater(c);
+      shoot(row, `${name} — ${wname}`, '');
+    }
+  }
+  setWater(WATER.mid);
+  setTileSize(W, H);
+}
+
+// This page never saves, but it shares the module instance with anything else
+// on the origin, and leaving CONFIG on whatever the last tile used is a trap
+// for the next reader.
+restore();
+applyBiolumSkinSettings();
+
+log(`patterns: ${BIOLUM_PATTERNS.length}   presets: ${Object.keys(CONFIG.biolumSkin.presets).join(', ')}`);
+log(`compiled programs: ${renderer.info.programs.length}   gl error: ${renderer.getContext().getError()}`);
+log(errors.length ? `SHADER ERRORS:\n${errors.join('\n')}` : 'shader errors: none');
+</script>
+</body>
+</html>

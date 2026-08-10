@@ -3,15 +3,18 @@ import { bounds, depthFraction } from '../arena.js';
 import { getAudioContext } from './audio.js';
 
 // A loop player that changes tracks ON THE BEAT rather than the instant
-// something happens in game. When you level up, the upgrade loop is QUEUED —
-// it starts at the next loop boundary, so the current loop finishes cleanly
-// instead of being cut off mid-phrase. Meanwhile a low-pass sweeps the mix
+// something happens in game. When you level up, the next loop is QUEUED — it
+// starts when the loop that's playing has played all the way through, so a
+// phrase is never cut off half-finished. Meanwhile a low-pass sweeps the mix
 // down (the "you're in a menu" muffle), and sweeps back open when the run
 // resumes.
 //
-// Loop length comes from the configured BPM and beats-per-loop, not from the
-// audio file's duration, so a track that's slightly long or short still lines
-// up with the musical grid you told it to use.
+// The boundary a switch waits for is the END OF THE PLAYING FILE, not a beat
+// count. The BPM grid stays — it's what the animation system marches to — but
+// it is no longer what decides when a track changes: the two only agree if
+// every file is exactly `beatsPerLoop` long, and a file that's a fraction of a
+// second off (mp3s usually are) drifts a little further into the next loop on
+// every switch until the change lands in the middle of a bar.
 
 let ctx = null;
 let musicGain = null;
@@ -26,39 +29,106 @@ let bandWet = null;
 const tracks = new Map(); // name -> AudioBuffer
 let currentTrack = null;
 let queuedTrack = null;
-let loopStartTime = 0; // ctx time the current loop iteration began
-// ctx time playback started — the origin of the musical grid, and unlike
-// loopStartTime it never moves. See beatPhase().
-let gridAnchor = 0;
 let started = false;
 let pollTimer = null;
 let defaultsRequested = false;
 let pendingLevel = null; // level asked for via play() before any track was ready yet
+
+// --- transport -------------------------------------------------------------
+// Everything quantised runs on SCORE time — seconds of the track's own
+// timeline — rather than on the wall clock, because the two stop being the
+// same thing the moment the game dilates time. A loop played at 0.3x takes
+// three and a bit times as long in the room and is still ONE loop, so a
+// boundary worked out in wall seconds lands a third of the way into the next
+// one.
+//
+// `transportPos` is that score clock: advanced whenever anyone asks, by the
+// wall seconds since the last look times the rate we're actually hearing. The
+// beat grid and the loop boundary are both measured against it, and the only
+// place the answer turns back into wall time is the moment a switch is
+// scheduled — a conversion redone on every poll rather than once, far ahead,
+// because while the tape is still slowing down the boundary keeps moving.
+let transportPos = 0; // score seconds since play()
+let loopAnchor = 0; // transportPos at which the playing file last started over
+let lastTick = 0; // ctx time transportPos has been advanced to
 
 // A transport-wide multiplier ON TOP of CONFIG.music.playbackRate, owned by
 // the death dive: the tape drags to a halt as time dilates. Separate from the
 // configured rate rather than written into it, so the tuner's value is still
 // the value and a run that ends mid-drag doesn't leave the slider lying.
 let rateScale = 1;
+// The rate MODEL, mirroring what the AudioParam is doing: `rateNow` eases
+// toward `rateTarget` with time constant `rateTau`, which is exactly the curve
+// setTargetAtTime runs on the audio thread. Modelled rather than read back off
+// the param so the score clock integrates the rate the loop is really playing
+// at halfway through a drag — reading `.value` would work in a browser, but
+// this also keeps the whole transport testable without one.
+let rateNow = 1;
+let rateTarget = 1;
+let rateTau = 0;
 
-// Ramped rather than set: playbackRate is an AudioParam, and stepping it every
-// frame zippers audibly on a sustained loop. `glide` of 0 is the instant reset
-// startGame wants.
+function targetRate() {
+  return Math.max(0.05, (CONFIG.music.playbackRate ?? 1) * rateScale);
+}
+
+// Push the rate at the source node and keep the model in step. `glide` of 0 is
+// the instant reset startGame wants; anything above it ramps, because
+// playbackRate is an AudioParam and stepping it every frame zippers audibly on
+// a sustained loop.
+function writeRate(glide) {
+  advance();
+  rateTarget = targetRate();
+  if (!source || !ctx) {
+    rateNow = rateTarget;
+    rateTau = 0;
+    return;
+  }
+  if (glide > 0) {
+    source.playbackRate.setTargetAtTime(rateTarget, ctx.currentTime, glide);
+    rateTau = glide;
+  } else {
+    source.playbackRate.cancelScheduledValues(ctx.currentTime);
+    source.playbackRate.setValueAtTime(rateTarget, ctx.currentTime);
+    rateNow = rateTarget;
+    rateTau = 0;
+  }
+}
+
+// Carry the score clock up to now. Integrates with the average of the rate
+// before and after the ease so a long gap between calls (a backgrounded tab,
+// where the audio kept playing but nothing asked) doesn't bias the position.
+function advance() {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const dt = Math.max(0, now - lastTick);
+  lastTick = now;
+  if (dt === 0) return;
+  const before = rateNow;
+  if (rateTau > 0) {
+    rateNow += (rateTarget - rateNow) * (1 - Math.exp(-dt / rateTau));
+    if (Math.abs(rateTarget - rateNow) < 1e-4) { rateNow = rateTarget; rateTau = 0; }
+  } else {
+    rateNow = rateTarget;
+  }
+  if (started) transportPos += dt * (before + rateNow) * 0.5;
+}
+
 export function setMusicRateScale(scale, glide = 0.2) {
   rateScale = Math.max(0.05, Math.min(4, scale || 1));
-  if (!source || !ctx) return;
-  const target = Math.max(0.05, CONFIG.music.playbackRate * rateScale);
-  if (glide > 0) source.playbackRate.setTargetAtTime(target, ctx.currentTime, glide);
-  else source.playbackRate.setValueAtTime(target, ctx.currentTime);
+  writeRate(glide);
 }
 
 // The tempo you actually HEAR. `playbackRate` is applied to the source node
 // (see startSource), so a rate of 1.5 makes a 120bpm loop play at 180 — and
 // anything trying to move in time with the music has to follow that, not the
-// configured number. Exported so the animation system can march creatures to
-// the beat; see CONFIG.enemies.<key>.beatSync.
+// configured number. Mid-drag it follows the ramp rather than its destination,
+// so a creature marching to the beat decelerates with the track instead of
+// snapping to the rate the tape is still on its way to. Exported so the
+// animation system can march creatures to the beat; see
+// CONFIG.enemies.<key>.beatSync.
 export function currentBpm() {
-  return Math.max(1, CONFIG.music.bpm) * Math.max(0.01, CONFIG.music.playbackRate ?? 1) * rateScale;
+  advance();
+  return Math.max(1, CONFIG.music.bpm) * (started ? rateNow : targetRate());
 }
 
 // Seconds per beat at the audible tempo.
@@ -66,27 +136,42 @@ export function beatDuration() {
   return 60 / currentBpm();
 }
 
+// One loop of the BPM grid, in score seconds. This is the tuner's number and
+// the beat grid's — see loopSeconds() for the length a track switch waits on.
 export function loopDuration() {
   const beats = Math.max(1, CONFIG.music.beatsPerLoop);
   return (60 / Math.max(1, CONFIG.music.bpm)) * beats;
 }
 
-// Where we are on the beat grid right now, in fractional beats since the
-// transport started. The whole part is which beat; the FRACTION is what
-// anything moving in time with the music actually wants — it says where in
-// the bar a cycle should currently be, so a loop can be started mid-way and
-// still land its next peak on a beat.
+// How long one full pass of the loop that's PLAYING takes, in score seconds.
+// The file's own length is the truth here: "the loop has finished" means the
+// thing the player can hear has come back round, and that's where the buffer
+// wraps, whatever the BPM says. Falls back to the grid before anything has
+// loaded.
+function loopSeconds() {
+  const buffer = tracks.get(currentTrack);
+  if (buffer && buffer.duration > 0.05) return buffer.duration;
+  return loopDuration();
+}
+
+// Where we are on the beat grid right now, in fractional beats since playback
+// started. The whole part is which beat; the FRACTION is what anything moving
+// in time with the music actually wants — it says where in the bar a cycle
+// should currently be, so a loop can be started mid-way and still land its
+// next peak on a beat.
 //
-// Anchored to gridAnchor rather than loopStartTime because that one is
-// advanced by a whole loop every time the loop wraps (see pollQueue); phase
-// measured against it would reset every 32 beats.
+// Score time, so dilation stretches a beat rather than jumping the phase: with
+// wall elapsed divided by the CURRENT beat length, every rate change
+// retroactively rewrote how many beats had already gone by, and every creature
+// marching to the music twitched on the frame the death dive began.
 //
 // 0 while nothing is playing, which puts anything asking at the top of the
 // bar — the seal idling on the start menu before the audio context has been
 // unlocked animates from a clean phase rather than a random one.
 export function beatPhase() {
   if (!started || !ctx) return 0;
-  return (ctx.currentTime - gridAnchor) / beatDuration();
+  advance();
+  return transportPos / (60 / Math.max(1, CONFIG.music.bpm));
 }
 
 function ensureChain() {
@@ -190,39 +275,63 @@ export async function preloadDefaultTracks() {
 function startSource(name, when) {
   const buffer = tracks.get(name);
   if (!buffer) return;
-  stopSource();
+  advance();
+  // The outgoing loop plays right up to the boundary instead of being cut on
+  // the frame the switch was scheduled. The poll runs up to 120ms ahead of the
+  // boundary so the start is sample-accurate; stopping the old one there and
+  // then punched a hole in the last moment of the very phrase it had waited a
+  // whole loop to finish.
+  stopSource(when);
   source = ctx.createBufferSource();
   source.buffer = buffer;
+  // The whole file loops, however long it is. It used to be clipped to
+  // `beatsPerLoop` when it ran longer, which is what turned the one loop
+  // written as twelve bars into eight bars and a cut.
   source.loop = true;
-  // Loop the BUFFER over the musical loop length when the file is longer
-  // than one loop — keeps playback on the grid the BPM defines.
-  const dur = loopDuration();
-  if (buffer.duration > dur + 0.01) {
-    source.loopStart = 0;
-    source.loopEnd = dur;
-  }
-  source.playbackRate.value = Math.max(0.05, CONFIG.music.playbackRate * rateScale);
+  // Picks up the ramp in flight rather than snapping to the rate it's heading
+  // for: a track can change hands mid-dilation now that the music plays on
+  // through the death dive.
+  rateTarget = targetRate();
+  source.playbackRate.value = rateNow;
+  if (rateTau > 0) source.playbackRate.setTargetAtTime(rateTarget, ctx.currentTime, rateTau);
   source.connect(filter);
   source.start(when);
   currentTrack = name;
-  loopStartTime = when;
+  // `when` is normally a hair in the future — where the score clock will be by
+  // the time the first sample of the new file is actually heard.
+  loopAnchor = transportPos + Math.max(0, when - ctx.currentTime) * rateNow;
 }
 
-function stopSource() {
+// `at` is a ctx time to stop AT — used by a switch, so the old loop runs out
+// its last samples under the new one's first. Omitted, it stops now, which is
+// what the Stop button and a fresh run want.
+function stopSource(at = null) {
   if (!source) return;
-  try { source.stop(); } catch { /* already stopped */ }
-  source.disconnect();
+  const when = at != null && at > ctx.currentTime ? at : 0;
+  try { if (when > 0) source.stop(when); else source.stop(); } catch { /* already stopped */ }
+  // Disconnected on its own ended event rather than here: pulling the node out
+  // of the graph now would silence the very tail we just scheduled it to play.
+  const node = source;
+  if (when > 0) node.onended = () => node.disconnect();
+  else node.disconnect();
   source = null;
 }
 
-// Next loop boundary at or after `now` — this is what makes a switch land
-// musically instead of wherever the player happened to level up.
+// ctx time at which the playing file next comes back round — this is what
+// makes a switch land musically instead of wherever the player happened to
+// level up.
+//
+// The remainder is worked out in score seconds and converted to wall seconds
+// at the rate being heard RIGHT NOW, so a loop that's dragging returns a
+// proportionally later boundary. Under a ramp that answer keeps moving, which
+// is why pollQueue asks again every 40ms instead of trusting one far-ahead
+// prediction.
 export function nextBoundary(now = ctx?.currentTime ?? 0) {
-  const dur = loopDuration();
-  if (!started || dur <= 0) return now;
-  const elapsed = now - loopStartTime;
-  const loopsDone = Math.floor(elapsed / dur) + 1;
-  return loopStartTime + loopsDone * dur;
+  advance();
+  const period = loopSeconds();
+  if (!started || period <= 0) return now;
+  const into = (transportPos - loopAnchor) % period;
+  return now + (period - into) / Math.max(0.05, rateNow);
 }
 
 // Start playback at the loop appropriate for `level`. With nothing uploaded
@@ -242,9 +351,17 @@ export function play(level = 1) {
   queuedTrack = null;
   depthHeld = false;
   resumeUntil = 0;
-  startSource(slot, ctx.currentTime + 0.02);
-  // Beat 0 is where the first loop starts, not where play() was called.
-  gridAnchor = loopStartTime;
+  const when = ctx.currentTime + 0.02;
+  rateNow = rateTarget = targetRate();
+  rateTau = 0;
+  startSource(slot, when);
+  // Beat 0 is where the first loop starts, not where play() was called — and
+  // the score clock is parked until then, since `advance` floors its dt at
+  // zero. Set after startSource, which does its own anchoring for the mid-run
+  // case.
+  transportPos = 0;
+  loopAnchor = 0;
+  lastTick = when;
   started = true;
   // Open at the surface value; the first updateDepth call glides it to
   // wherever the player actually is.
@@ -270,14 +387,12 @@ export function queueTrack(name) {
 
 function pollQueue() {
   if (!ctx || !started) return;
-  const dur = loopDuration();
-  const now = ctx.currentTime;
-
-  // Keep loopStartTime tracking the current iteration so boundary math stays
-  // correct across long sessions.
-  while (now - loopStartTime >= dur) loopStartTime += dur;
-
+  // Carry the score clock forward even with nothing queued: it's what the beat
+  // grid reads, and 40ms steps keep the integration honest through a rate ramp
+  // whether or not anything is asking for the phase this frame.
+  advance();
   if (!queuedTrack) return;
+  const now = ctx.currentTime;
   const boundary = nextBoundary(now);
   // Schedule slightly ahead of the boundary so the switch is sample-accurate
   // rather than depending on when this poll happens to fire.
@@ -409,5 +524,8 @@ export function applyMusicSettings() {
   if (!ensureChain()) return;
   musicGain.gain.value = CONFIG.music.enabled ? CONFIG.music.volume : 0;
   filter.Q.value = CONFIG.music.resonance;
-  if (source) source.playbackRate.value = Math.max(0.05, CONFIG.music.playbackRate * rateScale);
+  // Through writeRate rather than assigned: a plain `.value =` is ignored
+  // outright while automation is scheduled, so dragging the rate slider during
+  // a dilation used to do nothing at all.
+  writeRate(0);
 }

@@ -4,6 +4,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { CONFIG } from './config.js';
 import { attachNoiseShader, applyNoiseSettings } from './systems/noiseShader.js';
+import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin } from './systems/biolumSkin.js';
 import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
 import { createRockGeometry, startTumble } from './systems/rocks.js';
 
@@ -868,6 +869,27 @@ export const ASSETS = {
     shape: 'cone', radius: 0.9, height: 2.6, color: 0x8b96a0, unlit: true,
   },
 
+  enemyAbyssShark: {
+    model: '/models/greatwhite.glb',
+    fit: 4.2,
+    pivot: 0.15, // turn about the head, not the belly
+    forward: '+Z', up: '+Y',
+    animations: { idle: 'Swim', swim: 'Swim', boost: 'Swim' },
+    // The great white's own biteRig, verified on that model and unchanged
+    // here — this is the same file, so the same bone and the same sign hold.
+    biteRig: { bone: 'Bone028_Armature_16', axis: 'x', openAngle: -0.5 },
+    // UNLIT, unlike the creatures these three copy. The glow is ADDITIVE, so
+    // anything the scene lights contributes on top of it — and on a broad flat
+    // body angled at the key light (the ray, measured: its dorsal surface
+    // washed all ten patterns into one pale smear) the lit contribution simply
+    // beats the pattern. Ignoring scene lights makes the creature's own light
+    // the only light on it, which is the whole proposition.
+    modelUnlit: true,
+    biolumSkin: 'abyssHunter',
+    tint: 0x141c24,
+    shape: 'cone', radius: 0.9, height: 2.6, color: 0x141c24, unlit: true,
+  },
+
   // --- schooling prey (behavior:'swarm', prey:true) ---
   enemyTrout: {
     model: '/models/trout.fbx',
@@ -920,6 +942,40 @@ export const ASSETS = {
     fit: 0.9, forward: '+Z', up: '+Y',
     pivot: 0.15, // turn about the head, not the belly
     shape: 'icosahedron', radius: 0.3, color: 0xd8c9a3, unlit: true,
+  },
+  // Same file as enemyFish, loaded as its OWN template — materials are shared
+  // across clones of one asset key, so injecting the glow here rather than
+  // into enemyFish is what keeps every ordinary fish dark.
+  //
+  // Deliberately ships no emissive mask, unlike enemyFish. The mask says
+  // "these texels of this fish are bright" and the pattern says the same
+  // thing in a different, moving voice; running both means the mask's fixed
+  // hotspots sit under the pattern and never move with it, which reads as a
+  // texturing bug rather than as two effects.
+  //
+  // The tint is much darker than the fish it copies, and that IS the effect:
+  // the glow is additive, so what the pattern is added TO decides whether it
+  // looks like light coming out of an animal or like a bright animal. The
+  // shader darkens further on top of this (biolumSkin.bodyDarken).
+  enemyLanternfish: {
+    model: '/models/fish.glb',
+    fit: 0.9,
+    pivot: 0.15, // turn about the head, not the belly
+    forward: '-X',
+    up: '+Y',
+    // UNLIT, unlike the creatures these three copy. The glow is ADDITIVE, so
+    // anything the scene lights contributes on top of it — and on a broad flat
+    // body angled at the key light (the ray, measured: its dorsal surface
+    // washed all ten patterns into one pale smear) the lit contribution simply
+    // beats the pattern. Ignoring scene lights makes the creature's own light
+    // the only light on it, which is the whole proposition.
+    modelUnlit: true,
+    biolumSkin: 'lantern',
+    tint: 0x1b2b3a,
+    shape: 'icosahedron',
+    radius: 0.35,
+    color: 0x1b2b3a,
+    unlit: true,
   },
 
   // --- seabed dwellers ---
@@ -974,10 +1030,17 @@ export const ASSETS = {
   grass: {
     model: '/models/grass.glb',
     fit: 3,
-    // Blades grow along model +Y and the clump spreads on XZ. No meaningful
-    // facing, so `forward` only decides which way the cards present; +Z puts
-    // the broad side of the clump toward the camera in the side-on view.
-    forward: '+Z', up: '+Y',
+    // Blades grow along model +Y and the clump spreads on XZ, but `forward`
+    // and `up` are NOT "which way is up in the file" — orientationQuaternion
+    // maps them into view space, and in the side view (CONFIG.view) it sends
+    // model FORWARD to world +Y and model UP to world -X. So the axis that
+    // has to be named `forward` is the one the blades grow along, and `up`
+    // gets the clump's width. The intuitive-looking '+Z'/'+Y' lays the whole
+    // stand on its side, pointing the blades into the screen.
+    //   forward '+Y' -> blades stand up   (model +Y  -> world +Y)
+    //   up      '-X' -> width across      (model +X  -> world +X)
+    //                   depth stays depth (model +Z  -> world +Z)
+    forward: '+Y', up: '-X',
     // Bending happens in the vertex shader in OBJECT space, so it follows this
     // orientation rather than fighting it. See systems/grassSway.js and
     // CONFIG.grass.sway.
@@ -1129,6 +1192,37 @@ export const ASSETS = {
       boost: 'Animal_3045_Rig|Animal_3045_Rig|Animal_3045_Rig|Animal_3045_Rig|Stingray_swim2',
     },
     shape: 'octahedron', radius: 0.6, color: 0x6b7f8f, unlit: true,
+  },
+
+  // The ray and the shark, each a copy of an existing creature wearing a
+  // different preset. Separate asset keys for the same reason the lanternfish
+  // is one: a material is shared across every clone of a key, so lighting
+  // `enemyStingray` would light every ordinary ray in the arena with it.
+  //
+  // Both drop their emissive mask where the original had one. A baked mask
+  // says "these texels are bright" and the pattern says the same thing in a
+  // moving voice; running both leaves fixed hotspots sitting under a pattern
+  // that slides past them, which reads as a texturing bug.
+  enemyLanternRay: {
+    model: '/models/stingray.glb',
+    fit: 2.6,
+    pivot: 0.2,
+    forward: '+Z', up: '+Y',
+    animations: {
+      idle: 'Animal_3045_Rig|Animal_3045_Rig|Animal_3045_Rig|Animal_3045_Rig|Stingray_swim',
+      swim: 'Animal_3045_Rig|Animal_3045_Rig|Animal_3045_Rig|Animal_3045_Rig|Stingray_swim',
+      boost: 'Animal_3045_Rig|Animal_3045_Rig|Animal_3045_Rig|Animal_3045_Rig|Stingray_swim2',
+    },
+    // UNLIT, unlike the creatures these three copy. The glow is ADDITIVE, so
+    // anything the scene lights contributes on top of it — and on a broad flat
+    // body angled at the key light (the ray, measured: its dorsal surface
+    // washed all ten patterns into one pale smear) the lit contribution simply
+    // beats the pattern. Ignoring scene lights makes the creature's own light
+    // the only light on it, which is the whole proposition.
+    modelUnlit: true,
+    biolumSkin: 'veil',
+    tint: 0x16242e,
+    shape: 'octahedron', radius: 0.6, color: 0x16242e, unlit: true,
   },
 
   enemySeaTurtle: {
@@ -1361,11 +1455,19 @@ export async function preloadAssets(onProgress) {
         // directly on the returned Object3D. Either way, grab them before
         // prepareModel restructures the hierarchy.
         const clips = result.animations ?? [];
+        // Which way up a loaded-by-hand texture goes is a per-FORMAT decision,
+        // not one convention for the whole roster. GLTFLoader sets
+        // flipY = false on the maps it creates, because glTF UVs are top-left
+        // origin; FBXLoader sets nothing, so an FBX keeps the THREE.Texture
+        // default of true. A texture we load ourselves has to match whatever
+        // the model's own maps did, or it renders vertically mirrored.
+        const flipY = /\.fbx$/i.test(def.model ?? '');
         let overrideTex = null;
         if (def.texture?.map) {
           try {
             overrideTex = await textureLoader.loadAsync(def.texture.map);
             overrideTex.colorSpace = THREE.SRGBColorSpace;
+            overrideTex.flipY = flipY;
           } catch (err) {
             console.warn(`[assets] "${key}" texture ${def.texture.map} failed to load — keeping the model's own texture.`, err?.message ?? err);
           }
@@ -1383,7 +1485,14 @@ export async function preloadAssets(onProgress) {
           try {
             emissiveTex = await textureLoader.loadAsync(def.texture.emissive);
             emissiveTex.colorSpace = THREE.SRGBColorSpace;
-            emissiveTex.flipY = false; // glTF UV convention, same as the model's own maps
+            // Not a hardcoded false: that is the glTF value, and it silently
+            // mirrored the mask on every FBX creature. A flipped mask still
+            // looks like a plausible mask, so it was measured rather than
+            // eyeballed — rasterising the seagull's own mapped UV triangles
+            // onto its art sheet puts 0.6% of the mapped area on sheet
+            // background the right way up and 24.1% the wrong way up.
+            // tools/uv-flip-check.mjs re-runs that on any model.
+            emissiveTex.flipY = flipY;
           } catch (err) {
             console.warn(`[assets] "${key}" emissive mask ${def.texture.emissive} failed to load — it will fall back to uniform glow.`, err?.message ?? err);
           }
@@ -1755,7 +1864,10 @@ function prepareModel(source, def, clips = [], overrideTex = null, label = '', e
     // A mesh's `.material` can be a single Material or an array of them
     // (multi-material meshes — seen in practice on some FBX exports), so
     // every step below has to handle both rather than assuming one shape.
-    const processMaterial = (mat) => {
+    // `mesh` is only read by attachBiolumSkin, which needs the GEOMETRY to
+    // normalise its pattern against the body's own bounding box — everything
+    // else here is a property of the material alone.
+    const processMaterial = (mat, mesh) => {
       // NOTE: deliberately NOT `def.unlit` — that flag belongs to the
       // procedural shape fallback and is set on nearly every entry in this
       // file, so honouring it here would flip almost every model in the game
@@ -1825,6 +1937,11 @@ function prepareModel(source, def, clips = [], overrideTex = null, label = '', e
       // that rebuilds a look — tint, glow and the emissive toggle all write
       // uniforms or colours, none of which disturb the injected shader.
       if (def.noiseShader) attachNoiseShader(m2);
+      // Procedural glow patterns (CONFIG.biolumSkin). Attached in the same
+      // place and for the same reason as the noise above — it survives tint,
+      // glow and the emissive toggle, all of which write colours or uniforms
+      // rather than rebuilding the material.
+      if (def.biolumSkin) attachBiolumSkin(m2, mesh, def.biolumSkin);
       // Current-driven bend for seabed plants (CONFIG.grass.sway). `size.y` is
       // the clump's height in MODEL units, before `fit` reaches the node's
       // scale — the shader wants it there, both as the amplitude scale and as
@@ -1836,7 +1953,12 @@ function prepareModel(source, def, clips = [], overrideTex = null, label = '', e
 
     model.traverse((o) => {
       if (!o.isMesh) return;
-      o.material = Array.isArray(o.material) ? o.material.map(processMaterial) : processMaterial(o.material);
+      // The array branch wraps rather than passing processMaterial straight to
+      // map: map's second argument is the INDEX, which would arrive where the
+      // mesh is expected.
+      o.material = Array.isArray(o.material)
+        ? o.material.map((m) => processMaterial(m, o))
+        : processMaterial(o.material, o);
     });
   }
 
@@ -1912,6 +2034,11 @@ export function createVisual(key) {
     inst.userData.biteRig = template.userData.biteRig;
     inst.userData.animationNames = template.userData.animationNames;
     if (sizeMul) inst.scale.multiplyScalar(sizeMul);
+    // A glowing creature gets its OWN material here, unlike every other clone,
+    // which shares the template's. That is the price of a per-individual
+    // flicker phase — nine fish on one uniform block breathe as one animal.
+    // The compiled shader is still shared; see instantiateBiolumSkin.
+    if (def.biolumSkin) instantiateBiolumSkin(inst);
     spawnDecorator?.(inst, key);
     return inst;
   }
@@ -2559,7 +2686,7 @@ function applyEmissiveMode(m) {
 // Flip every loaded asset between masked and uniform glow. Cheap enough to
 // call from a tuner checkbox — it only touches materials that actually have a
 // mask stashed, so assets without one are skipped rather than reset.
-export { applyNoiseSettings, applyGrassSettings };
+export { applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings };
 
 export function setEmissiveMapsEnabled(on) {
   if (!CONFIG.glow) CONFIG.glow = {};

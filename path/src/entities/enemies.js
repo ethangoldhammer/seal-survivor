@@ -1,9 +1,12 @@
 import * as THREE from 'three';
+import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
 import { CONFIG, difficultyRamp } from '../config.js';
 import { createVisual } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
 import { bounds, clampBelowSurface } from '../arena.js';
 import { nearestFloorPickup, bestChumTarget, refreshChumPiles, pickupAlive, bitePickup } from './pickups.js';
+import { deathState } from '../systems/deathDive.js';
+import { skyLight } from '../systems/daylight.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createHeadLook } from '../systems/headLook.js';
 import { recordSpawn } from '../systems/playtest.js';
@@ -55,9 +58,28 @@ export function resetEnemies(scene) {
 // Mass goes as radius squared (area, since this is a 2D playfield), so a
 // grown late-run crab shrugs off a fresh one rather than both bouncing
 // equally.
+//
+// This pass owns the CROWD as well as the collision. Two things ride along
+// with the contact test, both explained at CONFIG.crabPhysics:
+//
+//   depth   Bodies too far apart in z simply don't touch. Crabs spawn across
+//           a spread of depth lanes, so the ones in different lanes walk in
+//           front of and behind each other instead of everything queueing up
+//           on one line.
+//   stacks  Part of each contact's positional correction is redirected
+//           UPWARD for whichever body is already higher, and any pair
+//           overlapping horizontally records a support height for the upper
+//           one. Together with the gravity in updateEnemies that is the whole
+//           climbing behaviour — a crowd shoving toward the same pile of chum
+//           piles UP, and comes back down as soon as it stops shoving.
 function resolveCrabCollisions(dt, list) {
   const c = CONFIG.crabPhysics;
   if (!c?.enabled) return;
+
+  // Support is recomputed from scratch every frame — a crab whose neighbour
+  // walked out from under it has to fall, and a stale height would leave it
+  // standing on nothing.
+  for (const e of list) if (e.def.collides) e.supportY = -Infinity;
 
   for (let i = 0; i < list.length; i++) {
     const a = list[i];
@@ -73,7 +95,27 @@ function resolveCrabCollisions(dt, list) {
 
       const dx = b.mesh.position.x - a.mesh.position.x;
       const dy = b.mesh.position.y - a.mesh.position.y;
-      const want = (a.radius + b.radius) * (c.contactScale ?? 1);
+      const dz = b.mesh.position.z - a.mesh.position.z;
+      const sum = a.radius + b.radius;
+      // Different depth lanes: they overlap on screen and pass through each
+      // other, which is exactly the read we want — one crab in front of
+      // another rather than two crabs refusing to share a spot.
+      if (Math.abs(dz) > sum * (c.depthContact ?? 1)) continue;
+
+      // Standing on it. Recorded for ANY horizontally-overlapping pair, not
+      // just touching ones, so a crab that has climbed clear of the contact
+      // radius is still held up by the one underneath. The `dy` gate is what
+      // stops two crabs at the same height each claiming to be on top of the
+      // other and both being launched: a body has to have genuinely got above
+      // the other (the climb bias below is what carries it that far) before
+      // the support is real.
+      const stackRise = sum * (c.stackHeight ?? 0.6);
+      if (Math.abs(dx) < sum * (c.supportSpan ?? 0.85) && Math.abs(dy) > stackRise * 0.5) {
+        if (dy > 0) b.supportY = Math.max(b.supportY, a.mesh.position.y + stackRise);
+        else a.supportY = Math.max(a.supportY, b.mesh.position.y + stackRise);
+      }
+
+      const want = sum * (c.contactScale ?? 1);
       const d2 = dx * dx + dy * dy;
       if (d2 > want * want || d2 < 1e-9) continue;
 
@@ -89,10 +131,26 @@ function resolveCrabCollisions(dt, list) {
       const total = ma + mb;
       const pushA = (mb / total) * overlap * (c.positionCorrection ?? 0.5);
       const pushB = (ma / total) * overlap * (c.positionCorrection ?? 0.5);
-      a.mesh.position.x -= nx * pushA;
-      a.mesh.position.y -= ny * pushA;
-      b.mesh.position.x += nx * pushB;
-      b.mesh.position.y += ny * pushB;
+
+      // Which one climbs: whichever is already higher, and on a dead heat the
+      // lighter one — a stable tiebreak, so a pair at identical height doesn't
+      // swap climber every frame and vibrate in place.
+      const climberIsB = Math.abs(dy) > 1e-4 ? dy > 0 : b.radius < a.radius;
+      const climb = c.climbBias ?? 0;
+      // The climber's share of the correction is steered from "straight away
+      // from the other body" toward "straight up". The other body still takes
+      // the plain sideways shove, which is what it is being climbed off.
+      if (climberIsB) {
+        a.mesh.position.x -= nx * pushA;
+        a.mesh.position.y -= ny * pushA;
+        b.mesh.position.x += nx * (1 - climb) * pushB;
+        b.mesh.position.y += (ny * (1 - climb) + climb) * pushB;
+      } else {
+        a.mesh.position.x -= nx * (1 - climb) * pushA;
+        a.mesh.position.y += (-ny * (1 - climb) + climb) * pushA;
+        b.mesh.position.x += nx * pushB;
+        b.mesh.position.y += ny * pushB;
+      }
 
       // Closing speed along the normal. Only resolve if they're actually
       // approaching — separating pairs would otherwise get yanked back.
@@ -177,6 +235,44 @@ function steerTo(e, dx, dy, dt, responsiveness = 6, speedMul = 1) {
   const t = Math.min(1, responsiveness * dt);
   e.vx += (tvx - e.vx) * t;
   e.vy += (tvy - e.vy) * t;
+}
+
+// Everything that eats chum off the floor reads its numbers from one of two
+// blocks — a crab's sit-down meal (`crawl.feed`) or a hunter's gulp on the
+// pass (`hunt.scavenge`). They carry the same fields, so the chewing and the
+// hoovering are one code path; only the values differ.
+function feedConfig(e) {
+  return e.def.crawl?.feed ?? e.def.hunt?.scavenge ?? null;
+}
+
+// Where this creature's mouth is, in world space. Both offsets are MULTIPLES
+// OF ITS RADIUS, never world units: `radius` is derived from the scale the
+// visual actually spawned at (see spawnOne), so it already carries the asset's
+// size multiplier and whatever the run's growth has added. A hand-typed offset
+// here would be wrong by that factor and would silently re-break the next time
+// anyone touched the Look panel's size slider.
+const _mouth = { x: 0, y: 0 };
+function mouthPoint(e, cfg, out) {
+  let fx;
+  let fy;
+  if (e.def.faceCamera) {
+    // A crab is pinned broadside and walks sideways, so "forward" is only ever
+    // along screen X — and while it is parked and chewing (vx damped toward
+    // nothing) the last direction it walked is the honest answer.
+    //
+    // `gaitDir` is sign(vx) * gaitTravel, i.e. a PLAYBACK direction, not a
+    // heading — and this crab ships gaitTravel -1, so using it raw would put
+    // the mouth on the wrong side of the body. Multiplying the travel sign
+    // back out recovers the direction it was actually walking.
+    fx = Math.sign(e.vx) || Math.sign((e.gaitDir ?? 0) * (e.def.gaitTravel ?? 1)) || 1;
+    fy = 0;
+  } else {
+    const s = Math.hypot(e.vx, e.vy);
+    if (s > 1e-3) { fx = e.vx / s; fy = e.vy / s; } else { fx = Math.cos(e.heading); fy = Math.sin(e.heading); }
+  }
+  out.x = e.mesh.position.x + fx * e.radius * (cfg.mouthForward ?? 0);
+  out.y = e.mesh.position.y + fy * e.radius * (cfg.mouthForward ?? 0) + e.radius * (cfg.mouthRise ?? 0);
+  return out;
 }
 
 // Where this creature is looking, in world space. Stored on a reused vector
@@ -336,6 +432,28 @@ const BEHAVIORS = {
   // regardless of what it's steering toward.
   crawl(e, dt, ctx) {
     const g = e.def.crawl ?? {};
+
+    // THE PILE-ON. The seal is dead and sinking; everything else about a crab
+    // stops mattering. They drop the chum, ignore the wander, come from
+    // wherever they are and climb onto the body — the stacking in
+    // resolveCrabCollisions is what turns "everyone arrives" into a heap
+    // rather than a ring. See CONFIG.enemies.walkingCrab.crawl.corpse.
+    //
+    // They stop STEERING at `settleRange` and coast: past that point the
+    // contacts own the arrangement, and crabs still driving at a single point
+    // underneath each other would fight the collision response forever.
+    if (g.corpse && deathState.active) {
+      e.chumTarget = null;
+      e.eating = false;
+      if (ctx.dist > e.radius * (g.corpse.settleRange ?? 1.6)) {
+        steerTo(e, ctx.dirX, ctx.dirY, dt, 8, g.corpse.speedMul ?? 2);
+      } else {
+        e.vx *= 0.85;
+        e.vy *= 0.85;
+      }
+      return;
+    }
+
     // The player getting close to the seabed is a distinct trigger from
     // ordinary proximity — crabs "rush" with a wider aggro radius and a
     // burst of speed, rather than just noticing you a little sooner.
@@ -429,6 +547,28 @@ const BEHAVIORS = {
     // stretch into a bite. See triggerBite / CONFIG.bite.lunge.
     const speedMul = e.lungeTimer > 0 ? (CONFIG.bite.lunge.speedMul ?? 1) : 1;
 
+    // A BODY IN THE WATER OUTRANKS EVERYTHING. A hunter that can see one
+    // breaks off the player, the fish and whatever else it was doing — which
+    // is the point of sinking a boat: for a few seconds afterwards the sea
+    // stops being about you. Checked before the fish search rather than folded
+    // into it because it is not a tie-break, it is a priority.
+    const food = CONFIG.boats.crew?.food ?? {};
+    const body = nearestFloatingCrew(px, py, (food.huntRadius ?? 16) * e.spawnScale);
+    if (body) {
+      const at = crewPosition(body);
+      e.hunting = true;
+      e.preyTarget = null; // not an enemy — predation.js reads `humanTarget`
+      e.humanTarget = body;
+      setLookTarget(e, at.x, at.y);
+      const dx = at.x - px;
+      const dy = at.y - py;
+      const d = Math.hypot(dx, dy) || 1;
+      const avoid = crowdAvoid(crowdSelf(e), ctx.apex, CONFIG.apexCrowd);
+      steerTo(e, dx / d + avoid.x, dy / d + avoid.y, dt, 6, speedMul);
+      return;
+    }
+    e.humanTarget = null;
+
     // e.preyRadius is per-instance and shrinks with the run (CONFIG
     // .hunterRamp.preyFocus), which is most of what "gets more aggressive over
     // time" means here: the fish stop being enough of a distraction to keep
@@ -471,8 +611,60 @@ const BEHAVIORS = {
       return;
     }
 
-    e.hunting = false;
     e.preyTarget = null;
+    e.humanTarget = null;
+
+    // --- scavenging: chum it is already on top of ---------------------------
+    //
+    // Ranked below live fish and above the player, which is the order an
+    // opportunist actually works in: it won't cross the arena for a scrap, but
+    // it will break off you for one under its nose. `seekRadius` is what keeps
+    // that honest — it is small, unlike the crab's arena-wide one.
+    //
+    // A shark does NOT park and chew. It swims through the pile with its jaw
+    // open, the orb is hoovered in on the pass (see the chew block in
+    // updateEnemies), and `cooldown` then puts it back on the hunt. `maxChase`
+    // is the safety valve: a turn-limited body can orbit an orb it cannot
+    // quite line up on forever, and a shark doing laps around one scrap of
+    // chum is worse than one that never scavenged at all.
+    const sc = h.scavenge;
+    if (sc) {
+      e.scavengeCooldown = Math.max(0, (e.scavengeCooldown ?? 0) - dt);
+      if (e.chumTarget && !pickupAlive(e.chumTarget)) {
+        e.chumTarget = null;
+        e.eating = false;
+      }
+      if (e.chumTarget) {
+        e.chumChase = (e.chumChase ?? 0) + dt;
+        if (e.chumChase > (sc.maxChase ?? 5)) {
+          e.chumTarget = null;
+          e.eating = false;
+          e.scavengeCooldown = sc.cooldown ?? 4;
+        }
+      }
+      e.chumTimer = (e.chumTimer ?? 0) - dt;
+      if (!e.chumTarget && e.chumTimer <= 0 && e.scavengeCooldown <= 0) {
+        e.chumTimer = sc.reacquire ?? 0.5;
+        e.chumTarget = bestChumTarget(px, py, sc.seekRadius ?? 16, sc.distanceBias ?? 10);
+        e.chumChase = 0;
+      }
+
+      if (e.chumTarget) {
+        const ox = e.chumTarget.mesh.position.x;
+        const oy = e.chumTarget.mesh.position.y;
+        // `hunting` means "busy with something that isn't you" — it is what
+        // keeps a shark hoovering chum beside the player from also snapping at
+        // the player on the same frame.
+        e.hunting = true;
+        setLookTarget(e, ox, oy);
+        e.eating = Math.hypot(ox - px, oy - py) <= (sc.eatRange ?? 2.6);
+        // Swims straight through it either way — the gulp happens in passing.
+        steerTo(e, ox - px, oy - py, dt, 6, speedMul);
+        return;
+      }
+    }
+
+    e.hunting = false;
     const aggro = h.playerAggroRadius ?? Infinity;
     if (ctx.dist < aggro) {
       // Still LOOKS at the player even while circling — a shark holding the
@@ -589,6 +781,28 @@ function groupAtCap(def, counts = null) {
   return n >= cap;
 }
 
+// How welcome a bioluminescent creature is right now, as a multiplier on its
+// spawn weight. 0 while the sun is up, ramping to `night` across dusk.
+//
+// Reads skyLight.night rather than dayState.phase because a label can't be
+// ramped against — 'dusk' is either true or it isn't, and the whole point is
+// that the glowing schools fade in over the minute the sun spends going down.
+//
+// With the day/night cycle switched off the bus publishes night = 0 forever,
+// which would silently delete every nocturnal species from a run. A world
+// with no night can't be after sunset OR before it, so the gate stands down
+// entirely rather than picking one — the alternative is a creature nobody can
+// find and no message saying why.
+export function nightlifeWeight() {
+  const cfg = CONFIG.spawn.nightlife;
+  if (!cfg?.enabled) return 1;
+  if (!CONFIG.dayNight?.enabled) return cfg.night ?? 1;
+  const dusk = cfg.dusk ?? 0;
+  const dark = Math.max(dusk + 1e-4, cfg.dark ?? 1);
+  const t = Math.min(1, Math.max(0, (skyLight.night - dusk) / (dark - dusk)));
+  return (cfg.day ?? 0) + ((cfg.night ?? 1) - (cfg.day ?? 0)) * t;
+}
+
 function pickType(difficulty, playerLevel = 1) {
   // Per-type headcount, so `maxConcurrent` can keep any one species in check,
   // and the same walk tallies each `spawnGroup` for the family-wide cap.
@@ -599,6 +813,10 @@ function pickType(difficulty, playerLevel = 1) {
     const group = e.def?.spawnGroup;
     if (group != null) aliveGroup.set(group, (aliveGroup.get(group) ?? 0) + 1);
   }
+
+  // Worked out once for the whole walk rather than per creature: it's the same
+  // answer for all of them, and it reads the clock.
+  const nightMul = nightlifeWeight();
 
   const pool = [];
   let total = 0;
@@ -614,6 +832,10 @@ function pickType(difficulty, playerLevel = 1) {
     // outright, 2 makes it twice as likely as its weight would suggest.
     let w = ((def.weight ?? 0) + (def.weightPerDifficulty ?? 0) * difficulty) * (def.spawnRateMul ?? 1);
     if (def.maxWeight != null) w = Math.min(w, def.maxWeight);
+    // After the cap, not before: `maxWeight` is a ceiling on how common a
+    // species gets over a long run, and dusk is meant to scale the result of
+    // that curve rather than be clipped by it.
+    if (def.bioluminescent) w *= nightMul;
     if (w <= 0) continue;
     total += w;
     pool.push({ key, def, w });
@@ -650,7 +872,15 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
     def.maxGrowth ?? Infinity,
     1 + (def.scalePerDifficulty ?? 0) * difficulty
   );
-  if (growth !== 1) visual.scale.multiplyScalar(growth);
+  // Per-individual size jitter on top of the run's growth. A crowd of one
+  // species at one size reads as a repeated sprite, and since the hitbox is
+  // derived from the visual scale below, this makes a big crab a genuinely
+  // bigger target — and a heavier one, because CONFIG.crabPhysics takes mass
+  // from the radius. Clamped away from zero so a bad roll can't produce an
+  // inside-out model with a negative hitbox.
+  const variance = Math.max(0.2, 1 + (Math.random() * 2 - 1) * (def.scaleVariance ?? 0));
+  const sizeMul = growth * variance;
+  if (sizeMul !== 1) visual.scale.multiplyScalar(sizeMul);
 
   // The scale createVisual actually built this instance at, times whatever
   // growth the run has added. The asset's own `fit` is already baked into the
@@ -664,7 +894,17 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
   // collision test reads e.radius, never def.radius, for this reason.
   const radius = def.radius * spawnScale;
 
-  container.position.set(at.x, at.y, 0);
+  // Depth lane. The camera is orthographic, so z costs nothing in perspective
+  // — it only decides what draws in front of what, and (via `depthContact` in
+  // resolveCrabCollisions) which bodies are close enough to touch. That is
+  // what turns a converging swarm into a crowd with a front row and a back one
+  // instead of a single flat rank.
+  //
+  // Scaled by the radius this instance actually spawned at, so it is the same
+  // spread relative to the body at any size multiplier — see the note on
+  // enemies.walkingCrab.depthSpread for what a hand-typed value costs here.
+  const z = (Math.random() * 2 - 1) * (def.depthSpread ?? 0) * radius;
+  container.position.set(at.x, at.y, z);
   // Seabed dwellers ignore the edge spawn point's Y and settle on the floor,
   // so they appear where they belong rather than swimming down to it.
   if (def.floorSpawn) container.position.y = bounds.bottom + radius;
@@ -799,6 +1039,7 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
     // BEHAVIORS.hunt; read by the bite so a snap fires at the distance the
     // actual meal is rather than at a fixed radius.
     preyTarget: null,
+    humanTarget: null,
     // Per-instance aggression, baked at spawn — see CONFIG.hunterRamp.
     preyRadius,
     turnRate,
@@ -846,6 +1087,17 @@ function spawnOne(scene, key, def, difficulty, at, schoolId = null) {
     tumble: 0,
     tumbleVel: 0,
     bumpCooldown: 0,
+    // Rest pose, rolled once per individual (see the crowd-variation block on
+    // enemies.walkingCrab). `restLean` is the angle the locked broadside
+    // heading actually settles at, so the tumble spring rights the crab back
+    // to ITS own crooked stance rather than to a shared perfect vertical;
+    // `restYaw` turns it a little off-camera. A whole wave arriving at
+    // identical angles is most of what made them read as one repeated object.
+    restLean: (Math.random() * 2 - 1) * (def.restLean ?? 0),
+    restYaw: (Math.random() * 2 - 1) * (def.restYaw ?? 0),
+    // How high whatever this body is standing on holds it, or -Infinity for
+    // "nothing but the seabed". Rewritten every frame by resolveCrabCollisions.
+    supportY: -Infinity,
   });
 }
 
@@ -882,7 +1134,11 @@ function spawnPicked(scene, difficulty, playerLevel = 1) {
 // is gone. Kept because it is the general primitive for "put this exact
 // creature in the water", caps and all, and rewriting it is the tax on the
 // next marquee spawn.
-export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint()) {
+// `opts.ignoreCaps` skips the population limits but NOT the maxAlive ceiling.
+// One caller uses it: the crabs piling onto the corpse (systems/crabSpawner.js).
+// The caps below exist to keep a fight readable, and once the run is over
+// there is no fight — but maxAlive is a memory bound and binds regardless.
+export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(), opts = {}) {
   const def = CONFIG.enemies[key];
   if (!def) {
     console.warn(`[enemies] spawnNamed: unknown enemy key "${key}"`);
@@ -894,14 +1150,16 @@ export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint()) {
   // pickup pile, or just an unlucky spawn timer) can otherwise fire every
   // check with nothing capping the total.
   if (enemies.length >= CONFIG.spawn.maxAlive) return null;
-  if (def.maxConcurrent != null) {
-    const current = enemies.filter((e) => e.type === key).length;
-    if (current >= def.maxConcurrent) return null;
+  if (!opts.ignoreCaps) {
+    if (def.maxConcurrent != null) {
+      const current = enemies.filter((e) => e.type === key).length;
+      if (current >= def.maxConcurrent) return null;
+    }
+    // The family-wide cap binds here too, for the same reason: a marquee spawn
+    // arriving through this path and ignoring the apex allowance would be
+    // exactly the crowd the cap exists to prevent.
+    if (groupAtCap(def)) return null;
   }
-  // The family-wide cap binds here too, for the same reason: a marquee spawn
-  // arriving through this path and ignoring the apex allowance would be
-  // exactly the crowd the cap exists to prevent.
-  if (groupAtCap(def)) return null;
   spawnOne(scene, key, def, difficulty, at);
   return enemies[enemies.length - 1];
 }
@@ -998,7 +1256,13 @@ export function animateEnemiesIdle(dt) {
 // `onChumEaten(x, y, enemy)` fires the moment a crab finishes an orb, so
 // main.js can put a puff and a sound on it — the player needs to notice
 // resources leaving, not just find fewer orbs than they remembered.
-export function updateEnemies(dt, scene, playerPos, onChumEaten) {
+//
+// `onChumHoover(x, y, enemy)` fires REPEATEDLY while an orb is being sucked in,
+// at each feeder's own crumb rate — the "it is happening" to the other's "it
+// happened". Kept as a callback like its neighbour rather than reaching for
+// feedback() in here: this module owns creatures, and every sound, particle
+// and screen shake in the game is main.js's to place.
+export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
   clock += dt;
 
   // Pile sizes for the whole frame, so every scavenging crab reads one shared
@@ -1074,6 +1338,17 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten) {
       e.vy = 0;
     } else {
       (BEHAVIORS[e.def.behavior] ?? BEHAVIORS.chase)(e, dt, ctx);
+      // Crawlers fall. Nothing else in the game does — everything else swims,
+      // and a swimmer's steering IS its vertical position. A crab's isn't: it
+      // can now be shoved up onto another crab's back (see
+      // resolveCrabCollisions), and without a pull back down it would simply
+      // stay up there in open water. Gravity is what makes a stack a stack
+      // rather than a set of floating bodies: it collapses the moment the
+      // thing underneath moves out.
+      //
+      // Applied after the behavior so it adds to whatever the steering asked
+      // for, and integrated by the shared step below like any other velocity.
+      if (e.def.behavior === 'crawl') e.vy -= (CONFIG.crabPhysics?.gravity ?? 0) * dt;
     }
 
     // Snap at the player. Runs AFTER the behavior so `e.hunting` is this
@@ -1113,10 +1388,40 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten) {
     }
 
     // Seabed dwellers never rise more than a short hop above the floor,
-    // regardless of how the chase steering above pulled them.
+    // regardless of how the chase steering above pulled them — UNLESS they are
+    // standing on something. `groundHeight` is a limit on how high a crab may
+    // walk under its own power; it was never meant to cap how high one can be
+    // carried, and applied blindly it flattened every stack back into the
+    // amble band the moment it formed.
     if (e.def.behavior === 'crawl') {
-      const maxY = bounds.bottom + (e.def.crawl?.groundHeight ?? 2.5);
+      const cp = CONFIG.crabPhysics ?? {};
+      // What is holding this one up: another crab (written by
+      // resolveCrabCollisions), the dead seal, or the sand.
+      let support = Math.max(bounds.bottom + e.radius, e.supportY ?? -Infinity);
+      // The corpse is a surface too. Only while the run is actually over —
+      // during play the seal is something crabs walk INTO, not onto, and
+      // standing on a swimming player would look like a bug in the collision.
+      if (deathState.active && e.def.crawl?.corpse) {
+        const sum = e.radius + (player.stats?.hitRadius ?? 0.5);
+        const above = e.mesh.position.y - playerPos.y;
+        if (Math.abs(e.mesh.position.x - playerPos.x) < sum * (cp.supportSpan ?? 0.85)
+          && above > sum * (cp.corpseStackHeight ?? 0.45) * 0.5) {
+          support = Math.max(support, playerPos.y + sum * (cp.corpseStackHeight ?? 0.45));
+        }
+      }
+
+      const maxY = Math.max(bounds.bottom + (e.def.crawl?.groundHeight ?? 2.5), support);
       if (e.mesh.position.y > maxY) e.mesh.position.y = maxY;
+
+      if (e.mesh.position.y < support) {
+        // Climbed onto, rather than teleported onto. A support can appear a
+        // half-body above a crab in one frame (the animal underneath walked
+        // in), and snapping to it reads as a pop; easing up reads as scrambling
+        // over. Falling is NOT eased — that half is gravity's job above.
+        const rise = 1 - Math.exp(-(cp.supportRise ?? 9) * dt);
+        e.mesh.position.y += (support - e.mesh.position.y) * rise;
+        if (e.vy < 0) e.vy = 0; // landed: stop accumulating fall speed
+      }
     }
 
     // Broadside to the camera, walking sideways — the crab treatment.
@@ -1156,8 +1461,15 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten) {
       }
       // -90 degrees puts model +X on world +X, +Y up and +Z at the camera —
       // i.e. the identity pose — given the asset's forward:'+X', up:'+Y'.
-      e.mesh.rotation.z = -Math.PI / 2 + e.tumble;
-      e.visual.rotation.y = 0;
+      //
+      // `restLean` and `restYaw` are this individual's own crooked stance,
+      // rolled at spawn. The lean is added INSIDE the tumble spring's rest
+      // point rather than after it, so a knock rights the crab back to its own
+      // angle instead of to a shared vertical — a wave of crabs all snapping
+      // to the exact same pose after a bump was half of why they read as one
+      // repeated object.
+      e.mesh.rotation.z = -Math.PI / 2 + (e.restLean ?? 0) + e.tumble;
+      e.visual.rotation.y = e.restYaw ?? 0;
       if (Math.abs(e.vx) > 0.05) {
         e.gaitDir = Math.sign(e.vx) * (e.def.gaitTravel ?? 1);
         e.anim?.setPlaybackDirection(e.gaitDir);
@@ -1233,14 +1545,43 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten) {
     // Chewing. Applied here rather than inside the behavior so the actual
     // mutation of the pickups array happens once per crab per frame, at a
     // known point in the update, instead of from inside a steering function.
+    //
+    // One block for both feeders: a crab parked on an orb (`crawl.feed`) and a
+    // shark swallowing one on the pass (`hunt.scavenge`) differ only in their
+    // numbers, so they share the code and the config shape. See feedConfig.
     if (e.eating && e.chumTarget) {
-      const f = e.def.crawl?.feed;
+      const f = feedConfig(e);
       const eatTime = Math.max(0.05, f?.eatTime ?? 2);
-      if (bitePickup(scene, e.chumTarget, dt / eatTime)) {
+      // THE HOOVER. The orb is dragged into the mouth for the whole meal
+      // instead of shrinking where it lies — without this, an animal eating
+      // your chum looked exactly like chum despawning on its own. The mouth is
+      // measured off the eater's radius, which already carries whatever size
+      // multiplier the asset was built at, so this is right at any scale.
+      const hv = f?.hoover;
+      let suck = null;
+      if (hv) {
+        mouthPoint(e, hv, _mouth);
+        suck = { x: _mouth.x, y: _mouth.y, z: e.mesh.position.z, rate: hv.pull ?? 6, dt };
+      }
+      const finished = bitePickup(scene, e.chumTarget, dt / eatTime, suck);
+      if (hv && !finished) {
+        // Crumbs coming off it, on a per-animal rate rather than per frame:
+        // the emitter is tiny by design and a burst every frame from every
+        // feeding crab is a haze, not a trickle.
+        e.crumbTimer = (e.crumbTimer ?? 0) - dt;
+        if (e.crumbTimer <= 0) {
+          e.crumbTimer = 1 / Math.max(0.1, hv.crumbRate ?? 4);
+          onChumHoover?.(e.chumTarget.mesh.position.x, e.chumTarget.mesh.position.y, e);
+        }
+      }
+      if (finished) {
         onChumEaten?.(e.chumTarget.mesh.position.x, e.chumTarget.mesh.position.y, e);
         e.chumTarget = null;
         e.eating = false;
         e.chumTimer = 0; // free to pick the next orb immediately
+        // A shark goes back on the hunt after a mouthful; a crab (no
+        // `cooldown` in its feed block) carries straight on to the next orb.
+        if (f?.cooldown) e.scavengeCooldown = f.cooldown;
       }
     }
 

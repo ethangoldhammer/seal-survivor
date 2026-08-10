@@ -2,6 +2,7 @@ import { CONFIG } from '../config.js';
 import { isInvulnerable } from './strike.js';
 import { boats, damageBoat, hitsBoat } from './boats.js';
 import { damageDebris } from './boatDebris.js';
+import { damageCrew } from './crew.js';
 import { enemies, removeEnemy } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
@@ -111,6 +112,19 @@ export function resolveCombat(dt, scene, hooks) {
       b.pierce -= 1;
       if (destroyed) break;
     }
+  }
+
+  // --- player bullets vs the crew ------------------------------------------
+  // A man standing on a deck is not cover: the shot carries on to the hull
+  // behind him (this pass consumes nothing), it just takes him with it.
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const b = projectiles[i];
+    if (b.faction !== 'player') continue;
+    damageCrew(scene, b.mesh.position.x, b.mesh.position.y, b.radius, {
+      dirX: b.dir?.x,
+      dirY: b.dir?.y,
+      onCrewHit: (x, y) => hooks.onCrewHit?.(x, y),
+    });
   }
 
   // --- player bullets vs floating wreckage ---------------------------------

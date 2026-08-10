@@ -22,6 +22,13 @@ export const weatherState = {
   target: 0, // where the schedule wants intensity to be
   wind: 0, // -1..1, signed
   turbulence: 0, // 0..1, how gusty it is right now
+  // 0..1 SEA STATE, and deliberately not the same number as `intensity`.
+  // Water has mass: a squall does not raise a swell the instant it starts
+  // raining, and the sea is still heaving long after the last drop. This
+  // lags the storm in both directions and much harder on the way down —
+  // which is the whole reason it exists as a separate value rather than
+  // everything just reading `intensity`.
+  swell: 0,
   phase: 'clear', // clear | storm
   timer: 0, // seconds left in this phase
   peak: 0, // the intensity this storm tops out at
@@ -47,6 +54,7 @@ export function resetWeather() {
   weatherState.peak = 0;
   weatherState.wind = cfg?.wind?.base ?? 0;
   weatherState.turbulence = 0;
+  weatherState.swell = 0;
 }
 
 /**
@@ -59,6 +67,7 @@ export function updateWeather(dt) {
     weatherState.intensity = 0;
     weatherState.target = 0;
     weatherState.turbulence = 0;
+    weatherState.swell = 0;
     return;
   }
 
@@ -117,6 +126,24 @@ export function updateWeather(dt) {
   const strength = (w.calmGust ?? 0.35) + (1 - (w.calmGust ?? 0.35)) * weatherState.intensity;
   weatherState.wind = Math.max(-1, Math.min(1, (w.base ?? 0) + gust * (w.gust ?? 0.8) * strength));
   weatherState.turbulence = Math.min(1, Math.abs(gust) * strength);
+
+  // --- sea state ------------------------------------------------------------
+  // Chases the storm, slowly, and asymmetrically: a sea gets up over tens of
+  // seconds and takes minutes to lie back down. Linear rather than
+  // exponential so `buildTime` and `settleTime` mean what they say — the
+  // seconds to travel the whole range — instead of being time constants that
+  // have to be reasoned about.
+  const seaCfg = cfg.sea ?? {};
+  if (seaCfg.enabled === false) {
+    weatherState.swell = 0;
+  } else {
+    const rising = weatherState.intensity > weatherState.swell;
+    const secs = Math.max(0.1, rising ? (seaCfg.buildTime ?? 25) : (seaCfg.settleTime ?? 70));
+    const step = dt / secs;
+    const diff = weatherState.intensity - weatherState.swell;
+    weatherState.swell += Math.abs(diff) <= step ? diff : Math.sign(diff) * step;
+    weatherState.swell = Math.max(0, Math.min(1, weatherState.swell));
+  }
 }
 
 // ---------------------------------------------------------------------------

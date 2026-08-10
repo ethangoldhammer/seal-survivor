@@ -479,7 +479,7 @@ export function updatePlayer(dt, input) {
   // performance. This is also the last thing to touch the skeleton before the
   // frame renders, which is what makes the muzzles and bubble anchors it
   // publishes current rather than one frame stale.
-  updateAimRig(dt, input.aim, CONFIG.weapon.autofire || input.firing, player.chargePose);
+  updateAimRig(dt, input.aim, CONFIG.weapon.autofire, player.chargePose);
 
   player.hitThisFrame = false;
 }

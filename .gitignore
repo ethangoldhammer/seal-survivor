@@ -7,3 +7,9 @@ server/.wrangler
 # Recorded playtest runs — session data, not source. `npm run playtest`
 # reads this; delete it any time to start a fresh body of evidence.
 playtest/
+
+# The rendered sound atlas — a megabyte of it is base64'd audio, regenerated
+# by `npm run sfx:atlas`. The data file it is built from (tools/sfx-atlas.json)
+# IS tracked, because a diff of that is how you see what a change did to the
+# sound bank.
+tools/sfx-atlas.html

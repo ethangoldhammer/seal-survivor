@@ -17,9 +17,30 @@ import {
   savePlayerName,
   submitScore,
 } from '../systems/leaderboard.js';
+import { feedback } from '../systems/feedback.js';
 
 let callbacks = {};
 const el = {};
+
+// Menus answer back. Every clickable thing in the UI goes through here rather
+// than binding its own sounds, so a control added later is silent only if
+// somebody forgot this line — not because the two events drifted apart.
+//
+// `pointerenter` rather than `mouseenter`: the same binding then covers a
+// stylus and a first touch, and a touch that turns into a tap gets the hover
+// AND the click, which is the right pair for a menu you poked.
+//
+// Deliberately not `focus`. Focus moves for reasons the player did not cause —
+// a menu opening puts focus on the first card — and a sound on that is the
+// interface talking to itself. Keyboard and pad selection is voiced from
+// selectCard instead, where a real change of selection can be told from the
+// initial one.
+function bindMenuSounds(node) {
+  if (!node) return node;
+  node.addEventListener('pointerenter', () => feedback('uiHover'));
+  node.addEventListener('click', () => feedback('uiClick'));
+  return node;
+}
 let root = null;
 let splashPlayed = false;
 // The run being scored on the game-over screen, held here because submitting
@@ -224,12 +245,12 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
           Your uneaten chum bits float to the sea floor. Swim down to collect them for XP and health.<br/>
           Watch out for crabs! They gather in large numbers to scavenge your leftovers, and they will pinch ya.<br/>
           And don't forget to breathe. Realistic mammal needs are in full effect.<br/><br/>
-          Desktop: WASD to steer, mouse to aim, hold click to fire. Space to strike.<br/>
-          Mobile: drag to aim and fire. &nbsp;·&nbsp; Gamepad: sticks to move/aim, A to fire, any bumper or trigger to boost.
+          You fire on your own — just point. Desktop: WASD to steer, mouse to aim, hold click or Space to charge a strike.<br/>
+          Mobile: drag to aim, third finger to charge. &nbsp;·&nbsp; Gamepad: sticks to move/aim, any bumper or trigger to boost.
         </div>
         <div class="sv-label" id="svHighScoreLabel" style="margin-bottom:10px; display:none;">High score: <span id="svHighScore">0</span></div>
         <button class="sv-btn" id="svStartBtn">Start run</button>
-        <div class="sv-hint">\` tuning &nbsp;·&nbsp; T textures &nbsp;·&nbsp; P screen filter &nbsp;·&nbsp; M mute &nbsp;·&nbsp; Space strike &nbsp;·&nbsp; hold G gamepad info</div>
+        <div class="sv-hint">\` tuning &nbsp;·&nbsp; T textures &nbsp;·&nbsp; P screen filter &nbsp;·&nbsp; M mute &nbsp;·&nbsp; click / Space strike &nbsp;·&nbsp; hold G gamepad info</div>
       </div>
     </div>
 
@@ -279,11 +300,11 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
   // The start button is unreachable now that the splash goes straight into a
   // run, but it stays wired so the markup keeps working if it's ever shown
   // again while the Rive menus are being built.
-  document.getElementById('svStartBtn').addEventListener('click', () => {
+  bindMenuSounds(document.getElementById('svStartBtn')).addEventListener('click', () => {
     showHud();
     callbacks.onStart();
   });
-  document.getElementById('svRestartBtn').addEventListener('click', () => {
+  bindMenuSounds(document.getElementById('svRestartBtn')).addEventListener('click', () => {
     // No showHud() here, unlike the start button: the next run doesn't begin
     // on this click any more, it begins on the far side of the transition (see
     // onRestart in main.js), and revealing the HUD now would leave the dead
@@ -292,7 +313,7 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
     callbacks.onRestart();
   });
 
-  el.svNameSubmit.addEventListener('click', submitPendingRun);
+  bindMenuSounds(el.svNameSubmit).addEventListener('click', submitPendingRun);
   el.svNameInput.addEventListener('keydown', (e) => {
     // Enter submits, and stops there — without this the keypress also reaches
     // the splash/global handlers on window.
@@ -841,10 +862,19 @@ export function showLevelUp() {
       revealUpgradesOut();
       callbacks.onLevelChoice(choice);
     };
+    // Bound before `pick`, so the click is heard on the frame the card is
+    // chosen rather than after the dissolve has already started taking it away.
+    bindMenuSounds(card);
     card.addEventListener('click', pick);
+    // A card is a div, not a button, so Enter and Space do NOT get turned into
+    // a click by the browser — this calls pick() directly and the click
+    // listener above never runs. Hence the explicit sound here. The pad is a
+    // different case again: updateMenuNav confirms by calling .click(), which
+    // does dispatch, so it is already covered and must not be voiced twice.
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
+        feedback('uiClick');
         pick();
       }
     });
@@ -871,7 +901,15 @@ export function showLevelUp() {
 
 function selectCard(i) {
   if (!levelUpCards.length) return;
+  const previous = selectedIndex;
   selectedIndex = Math.max(0, Math.min(levelUpCards.length - 1, i));
+  // The pad and the keyboard get the same hover the mouse does — otherwise the
+  // menu is silent for anyone not using a pointer, which is most of a run on a
+  // controller. Only on a real MOVE: showLevelUp calls selectCard(0) to put the
+  // selection somewhere before the cards have finished arriving, and a blip on
+  // that is the menu announcing itself rather than answering the player.
+  // Stepping into the card you are already on is not a move either.
+  if (previous >= 0 && previous !== selectedIndex) feedback('uiHover');
   levelUpCards.forEach((card, n) => card.classList.toggle('sv-card-sel', n === selectedIndex));
   // Move real focus along with it, so Enter/Space keep working on whatever the
   // pad is pointing at and the two input methods can't disagree about which

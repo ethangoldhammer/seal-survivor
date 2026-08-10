@@ -16,7 +16,7 @@ import * as THREE from 'three';
 // the tip on that point" into "straighten along the aim" — which is what
 // pointing a flipper (or a snout) at something actually means.
 //
-// Two things keep that from tearing the skeleton apart:
+// Three things keep that from tearing the skeleton apart:
 //   maxBend  caps how far any ONE bone may travel from the keyframe it was
 //            given. CCD left alone will happily fold a joint through the
 //            body to shave off the last few degrees; this is the stop. It's
@@ -28,6 +28,12 @@ import * as THREE from 'three';
 //            are allowed to take. Mathematically the root is the cheapest
 //            place to move the tip a long way, but that reads as a shoulder
 //            dislocating, so the work is pushed out toward the tip.
+//   maxFold / maxTwist  where a bone may END UP, rather than how far it may
+//            travel to get there. Both of the above are relative to this
+//            frame's keyframe, and a clip that has already folded a joint most
+//            of the way leaves the solver free to close it the rest of the way
+//            — which is what pinches the skin over the joint. See the block
+//            above limitJoint.
 //
 // Everything is then slerped: the solved pose is smoothed frame to frame
 // (`smoothing`), and blended against the clip by a weight that itself eases
@@ -52,6 +58,13 @@ const _rest = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _bw = new THREE.Quaternion();
 const _pw = new THREE.Quaternion();
+const _rel = new THREE.Quaternion();
+const _twist = new THREE.Quaternion();
+const _swing = new THREE.Quaternion();
+const _clipTwist = new THREE.Quaternion();
+const _clipSwing = new THREE.Quaternion();
+const _clipRel = new THREE.Quaternion();
+const _inv = new THREE.Quaternion();
 
 export function axisVec(name, fallback = '+Y') {
   return new THREE.Vector3().fromArray(AXES[name] ?? AXES[fallback]);
@@ -74,6 +87,104 @@ export function softClamp(theta, max, soft) {
   if (theta <= knee) return theta;
   const span = max - knee;
   return max - span * Math.exp(-(theta - knee) / span);
+}
+
+// --- joint limits ----------------------------------------------------------
+//
+// maxBend caps how far a bone may travel from its keyframe, which stops the
+// solver from tearing a chain apart but says nothing about where the bone
+// ENDS UP. A joint the clip has already folded to 90 degrees is one the solver
+// may still push to 100 without breaking any limit it knows about, and at that
+// angle the skin over the joint stops being a surface: the flipper's armpit
+// closes and the mesh pinches. Measured, not guessed — tools/seal-rig-test.mjs
+// skins the seal in software and reads the triangle areas.
+//
+// So this is an ABSOLUTE limit, in two parts, both measured from the bone's
+// authored rest pose rather than from the identity (one of the seal's forearm
+// bones sits at 165 degrees of twist at rest — a rig's axis convention is not
+// a joint angle):
+//
+//   fold    how far the bone has swung off the axis it rests on.
+//   twist   how far it has spun about that axis. This is the one that has no
+//           business existing at all: rotating a bone about its own length
+//           barely moves the tip, so it buys the solver almost nothing, and it
+//           is exactly the rotation that wrings the skin out like a cloth.
+//
+// The rule is `never further than the animation already goes`:
+//
+//     out = min(in, max(clip, softClamp(in, limit)))
+//
+// Under the limit, nothing happens — the solver is free. Over it, the pose is
+// held at whatever the CLIP does, so the guard can only ever remove something
+// the solver added. It can't fight the animation, and it can't pull a bone off
+// a keyframe the artist chose. A rig with no limits configured is left alone.
+function angleOf(q) {
+  // 2*atan2 rather than 2*acos(w): near zero rotation acos loses most of its
+  // precision, and this runs on poses that are usually nearly identity.
+  const s = Math.hypot(q.x, q.y, q.z);
+  return 2 * Math.atan2(s, Math.abs(q.w));
+}
+
+// q = swing * twist, with twist about `axis`. Both come back normalised.
+function swingTwist(q, axis, swing, twist) {
+  const d = q.x * axis.x + q.y * axis.y + q.z * axis.z;
+  twist.set(axis.x * d, axis.y * d, axis.z * d, q.w);
+  const l = Math.hypot(twist.x, twist.y, twist.z, twist.w);
+  // A half turn perpendicular to the axis leaves no twist to speak of.
+  if (l < 1e-8) twist.identity();
+  else twist.set(twist.x / l, twist.y / l, twist.z / l, twist.w / l);
+  swing.copy(q).multiply(_inv.copy(twist).invert());
+}
+
+// Scale a rotation's angle to `want`, keeping its axis and its direction.
+function setAngle(q, want) {
+  const s = Math.hypot(q.x, q.y, q.z);
+  if (s < 1e-9) return; // no axis to speak of; it is already the identity
+  const half = want * 0.5;
+  const k = Math.sin(half) / s * (q.w < 0 ? -1 : 1);
+  q.set(q.x * k, q.y * k, q.z * k, Math.cos(half));
+}
+
+// The knee is fixed rather than exposed: `softness` is a look control on how
+// maxBend feels, and this is a safety stop. 0.9 keeps it out of the way until
+// the pose is nearly at the limit, then eases into it over the last tenth.
+const LIMIT_KNEE = 0.9;
+
+function limitOne(angle, clipAngle, max) {
+  if (max == null || max <= 0) return angle;
+  return Math.min(angle, Math.max(clipAngle, softClamp(angle, max, LIMIT_KNEE)));
+}
+
+/**
+ * Pull one bone's pose back inside the rig's joint limits, in place.
+ *
+ * `q` is the pose about to be written; `clipQ` is what the animation wrote for
+ * the same bone this frame, and sets the floor — see the note above.
+ */
+export function limitJoint(q, clipQ, restQ, axis, cfg) {
+  if (cfg.maxFold == null && cfg.maxTwist == null) return q;
+
+  _rel.copy(restQ).invert().multiply(q);
+  swingTwist(_rel, axis, _swing, _twist);
+  _clipRel.copy(restQ).invert().multiply(clipQ);
+  swingTwist(_clipRel, axis, _clipSwing, _clipTwist);
+
+  const fold = angleOf(_swing);
+  const twist = angleOf(_twist);
+  // A degenerate solve (a zero-length axis surviving a normalise, a bone
+  // scaled to nothing) reaches here as NaN, and NaN written to a bone collapses
+  // every vertex weighted to it into the origin — the worst pinch of all, and
+  // one no angle limit would catch, since every comparison against NaN is
+  // false. The clip's own pose is always a good pose; fall back to it.
+  if (!Number.isFinite(fold) || !Number.isFinite(twist)) return q.copy(clipQ);
+
+  const foldOut = limitOne(fold, angleOf(_clipSwing), cfg.maxFold);
+  const twistOut = limitOne(twist, angleOf(_clipTwist), cfg.maxTwist);
+  if (foldOut === fold && twistOut === twist) return q;
+
+  setAngle(_swing, foldOut);
+  setAngle(_twist, twistOut);
+  return q.copy(restQ).multiply(_swing).multiply(_twist).normalize();
 }
 
 export function smoothstep(edge0, edge1, x) {
@@ -113,6 +224,11 @@ export function buildChain(instance, def, fallbackTipAxis, label, minBones = 2) 
     tip: bones[n - 1],
     tipAxis: axisVec(def.tipAxis ?? fallbackTipAxis),
     tipLength: def.tipLength ?? 0,
+    // The pose the model was authored in. Captured here because here is the
+    // only moment it is on the bones: the chain is built straight after the
+    // instance is cloned, before any mixer has run. Every joint limit is
+    // measured from these — see limitJoint.
+    restQ: bones.map((b) => b.quaternion.clone()),
     // Three parallel poses per bone: what the clip wrote this frame, what the
     // solver wants, and the smoothed value actually applied.
     animQ: Array.from({ length: n }, () => new THREE.Quaternion()),
@@ -274,6 +390,10 @@ export function applyChainToPoint(chain, dt, cfg, weight, tipMul, target) {
       const wanted = chain.animQ[i].angleTo(bones[i].quaternion);
       const allowed = softClamp(wanted, cfg.maxBend, soft);
       chain.solvedQ[i].copy(chain.animQ[i]).rotateTowards(bones[i].quaternion, allowed);
+      // ...and then back inside the joint's own limits, which maxBend knows
+      // nothing about. Before the smoothing, so the pose eases into the stop
+      // rather than arriving at it.
+      limitJoint(chain.solvedQ[i], chain.animQ[i], chain.restQ[i], chain.tipAxis, cfg);
     }
 
     if (!chain.primed) {
@@ -286,6 +406,10 @@ export function applyChainToPoint(chain, dt, cfg, weight, tipMul, target) {
 
     for (let i = 0; i < n; i++) {
       bones[i].quaternion.copy(chain.animQ[i]).slerp(chain.smoothQ[i], weight);
+      // Again on the pose that is actually written. The two ends of that slerp
+      // are both legal, so this almost never has anything to do — but "almost
+      // never" is not the guarantee worth making about a mesh that pinches.
+      limitJoint(bones[i].quaternion, chain.animQ[i], chain.restQ[i], chain.tipAxis, cfg);
     }
   } else {
     // Fully released: the clip owns these bones again, and the next solve

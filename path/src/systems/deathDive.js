@@ -5,6 +5,7 @@ import { player } from '../entities/player.js';
 import { feedback } from './feedback.js';
 import { setSfxRateScale, openBusFilter } from './audio.js';
 import { setMusicRateScale } from './music.js';
+import { setAmbientRateScale } from './ambient.js';
 
 // The run doesn't end on the frame you die — it ends on the seabed.
 //
@@ -83,6 +84,11 @@ let sinkScale = 1;
 // wherever the sequence actually was rather than from a value we assumed.
 let restartClock = 0;
 let restartFrom = { scale: 1, zoom: 1, weight: 0 };
+// Set once the score card is up: from there on the dive no longer owns the
+// music's playback rate. Without it, the ramp back out on "try again" would
+// grab the track that has been sitting at pitch and yank it down to `minRate`
+// again before letting it go.
+let musicReleased = false;
 
 function smoothstep(t) {
   const x = Math.max(0, Math.min(1, t));
@@ -114,6 +120,7 @@ export function startDeathDive(finish) {
   elapsed = 0;
   settleClock = 0;
   swayClock = 0;
+  musicReleased = false;
 
   const c = cfg();
   // Whatever the seal was doing carries on, damped — a death mid-dash should
@@ -154,13 +161,36 @@ export function startDeathDive(finish) {
 // is the floor — the deepest part of the dilation is slow enough to turn a
 // loop into an unrecognisable rumble, and the drop is the effect, not the mud
 // at the bottom of it.
+//
+// Music only until the score card goes up — see releaseMusic. The one-shots
+// and the bed stay dilated the whole way, because they belong to the seabed
+// the body is still lying on.
 function setAudioRate(scale) {
   const c = cfg();
   if (c.audio?.enabled === false) return;
   const follow = c.audio?.follow ?? 1;
   const rate = Math.max(c.audio?.minRate ?? 0.3, 1 + (scale - 1) * follow);
-  setMusicRateScale(rate, c.audio?.glide ?? 0.25);
+  if (!musicReleased) setMusicRateScale(rate, c.audio?.glide ?? 0.25);
   setSfxRateScale(rate);
+  // The bed drags too. It's the slowest-moving thing in the mix, so it's
+  // where the tape running down reads most clearly.
+  setAmbientRateScale(rate, c.audio?.glide ?? 0.25);
+}
+
+// The tape winds back up to speed under the score card, over its own time
+// rather than the dive's — the drag-down was the last thing the run did, and
+// this is the first thing the screen after it does. Left as a plain glide with
+// no quantising: it's a pitch change, not a track change, and the loop
+// underneath it never stops.
+function releaseMusic() {
+  if (musicReleased) return;
+  musicReleased = true;
+  const c = cfg();
+  if (c.audio?.enabled === false) return;
+  // /3 because the glide is an exponential-approach time constant and a
+  // constant is ~95% of the way there after three of them — `restoreTime` is
+  // the number of seconds you actually wait to hear it back at pitch.
+  setMusicRateScale(1, Math.max(0, (c.audio?.restoreTime ?? 2.6) / 3));
 }
 
 /**
@@ -290,6 +320,10 @@ export function updateDeathDive(rawDt) {
 
     if (settleClock >= (c.settle ?? 0.5)) {
       deathState.phase = 'done';
+      // The track is still playing — it isn't stopped by the death any more —
+      // so hand its rate back before the card appears, or it sits at `minRate`
+      // under the score screen for as long as the player takes to type a name.
+      releaseMusic();
       const finish = onFinish;
       onFinish = null;
       finish?.();
@@ -397,6 +431,8 @@ export function resetDeathDive() {
   swayClock = 0;
   restartClock = 0;
   onFinish = null;
+  musicReleased = false;
   setMusicRateScale(1, 0);
   setSfxRateScale(1);
+  setAmbientRateScale(1, 0);
 }

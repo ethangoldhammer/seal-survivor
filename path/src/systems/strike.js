@@ -59,6 +59,69 @@ export function isInvulnerable() {
   return strikeState.invulnTimer > 0;
 }
 
+const TAU = Math.PI * 2;
+
+/**
+ * Where a strike released right now would GO — the one rule, so the corridor
+ * the lens draws and the impulse the dash gets can never disagree.
+ *
+ * Neither the swim direction nor the aim on its own was right. Launching along
+ * movement alone ignored the cursor entirely, so a strike could only ever go
+ * where you were already swimming; launching along aim alone fought the
+ * momentum you had committed to. The dash now splits the difference: the
+ * heading is the point HALFWAY between the two, so both hands steer it and
+ * neither one wins outright. Pull the stick and the cursor together and they
+ * agree; spread them and the dash goes between them, which is also the only
+ * reading a player can predict from what's on screen.
+ *
+ * Interpolated as an ANGLE rather than by normalising move + aim. The vector
+ * sum collapses to zero when the two are exactly opposed — the one case a
+ * player WILL hit, swimming away from what they're shooting at — and would
+ * hand back a NaN heading. Wrapping the delta into (-pi, pi] picks a side
+ * deterministically instead. It also makes the halfway an angular halfway
+ * regardless of how far the movement stick is pushed: a half-tilted stick
+ * steers the dash exactly as much as a full one, since it is only ever asked
+ * for a direction.
+ *
+ * A missing input hands the whole heading to the other: no movement means a
+ * strike from a standstill still goes at the cursor, and no aim leaves it
+ * along the swim. Both missing returns the zero vector — the caller checks it
+ * and doesn't fire.
+ *
+ * @param move  input.move — NOT normalized (analog magnitude survives).
+ * @param aim   input.aim — normalized in every path that writes it.
+ * @param out   optional target, so the per-frame prediction allocates nothing.
+ */
+export function strikeDirection(move, aim, out = { x: 0, y: 0 }) {
+  const mx = move?.x ?? 0, my = move?.y ?? 0;
+  const ax = aim?.x ?? 0, ay = aim?.y ?? 0;
+  const mLen = Math.hypot(mx, my);
+  const aLen = Math.hypot(ax, ay);
+
+  if (mLen <= 0.001) {
+    out.x = aLen > 0.001 ? ax / aLen : 0;
+    out.y = aLen > 0.001 ? ay / aLen : 0;
+    return out;
+  }
+  if (aLen <= 0.001) {
+    out.x = mx / mLen;
+    out.y = my / mLen;
+    return out;
+  }
+
+  const blend = Math.min(1, Math.max(0, CONFIG.strike.aimBlend ?? 0.5));
+  const swim = Math.atan2(my, mx);
+  // Wrapped into (-pi, pi] so the blend always takes the SHORT way round —
+  // without it, aim at 179 deg and swim at -179 deg would sweep the dash the
+  // long way through 358 deg and launch it backwards.
+  let delta = Math.atan2(ay, ax) - swim;
+  delta = ((delta + Math.PI) % TAU + TAU) % TAU - Math.PI;
+  const heading = swim + delta * blend;
+  out.x = Math.cos(heading);
+  out.y = Math.sin(heading);
+  return out;
+}
+
 // How much faster everything the player does gets while a chain is live —
 // dash speed, top speed and thrust all read this, and so does the dash's own
 // turn rate, so a fast combo curves just as tightly as a slow one.

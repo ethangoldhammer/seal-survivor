@@ -458,10 +458,11 @@ export function updateCineCamera(dt, ctx) {
   const amount = (pathCfg.enabled ?? true) ? p.path : 0;
   cineLens.pathAmount = amount;
   if (amount > 0.001) {
-    // Where the strike will actually GO, which is the movement stick and only
-    // falls back to aim from a standstill — the same rule tryStrike uses in
-    // main.js. Pointing this at the cursor instead would light up a path the
-    // dash isn't going to take, which is worse than not drawing one.
+    // Where the strike will actually GO — the halfway point between the swim
+    // and the aim, handed in by main.js from strikeDirection(), the same
+    // function the release itself calls. Pointing this at the cursor (or at
+    // the movement stick) instead would light up a path the dash isn't going
+    // to take, which is worse than not drawing one.
     const dx = ctx.dashDir?.x ?? 0;
     const dy = ctx.dashDir?.y ?? 0;
     const len = Math.hypot(dx, dy);

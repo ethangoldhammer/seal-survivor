@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { bounds, WAVE } from '../arena.js';
+import { bounds, WAVE, sea } from '../arena.js';
 import { hexMetrics, hexCorners, hexCellsIn } from './hexLattice.js';
 
 // The backdrop grid. Every node is displaced in the vertex shader by a ring
@@ -71,6 +71,7 @@ const fragmentShader = /* glsl */ `
   uniform float uSurfaceY;
   uniform float uWaveT;
   uniform float uWaveAmp;
+  uniform float uChop;
   uniform float uClip;    // 0 = draw everywhere, 1 = water only
 
   varying float vWarp;
@@ -82,7 +83,8 @@ const fragmentShader = /* glsl */ `
   float surfaceAt(float x) {
     return uSurfaceY
       + sin(x * ${WAVE.k1.toFixed(4)} + uWaveT * ${WAVE.w1.toFixed(4)}) * uWaveAmp
-      + sin(x * ${WAVE.k2.toFixed(4)} + uWaveT * ${WAVE.w2.toFixed(4)}) * uWaveAmp * ${WAVE.amp2.toFixed(4)};
+      + sin(x * ${WAVE.k2.toFixed(4)} + uWaveT * ${WAVE.w2.toFixed(4)}) * uWaveAmp * ${WAVE.amp2.toFixed(4)}
+      + sin(x * ${WAVE.k3.toFixed(4)} + uWaveT * ${WAVE.w3.toFixed(4)}) * uWaveAmp * ${WAVE.amp3.toFixed(4)} * uChop;
   }
 
   void main() {
@@ -206,6 +208,7 @@ export function createGrid(scene) {
         uSurfaceY: { value: bounds.surfaceY },
         uWaveT: { value: waveT },
         uWaveAmp: { value: CONFIG.arena.waveAmplitude },
+        uChop: { value: 0 },
         uClip: { value: CONFIG.grid.clipAtSurface ? 1 : 0 },
       },
     });
@@ -251,7 +254,10 @@ export function createGrid(scene) {
     material.uniforms.uOpacity.value = CONFIG.grid.opacity;
     material.uniforms.uWarpGain.value = CONFIG.grid.warpGain;
     material.uniforms.uSurfaceY.value = bounds.surfaceY;
-    material.uniforms.uWaveAmp.value = CONFIG.arena.waveAmplitude;
+    // The live sea state — see the same note in water.js. The grid clips to
+    // the water line too, so it has to be cut on the same curve.
+    material.uniforms.uWaveAmp.value = sea.amp;
+    material.uniforms.uChop.value = sea.chop;
     material.uniforms.uClip.value = CONFIG.grid.clipAtSurface ? 1 : 0;
 
     const speed = shipVel ? Math.hypot(shipVel.x, shipVel.y) : 0;

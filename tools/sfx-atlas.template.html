@@ -1,0 +1,1166 @@
+<title>Seal Survivor &mdash; Sound Atlas</title>
+
+<style>
+/* ---------------------------------------------------------------------------
+   Tokens. The accent is the game's own tuner cyan (#7ad7ff), the amber is the
+   Master FX bus row, the moss is the Ambient bed row -- so the atlas is
+   colour-coded the same way the T-panel is, and a sound's colour here means
+   what it means there.
+   Neutrals are pulled toward cyan rather than being flat grey, because the
+   whole subject is underwater.
+--------------------------------------------------------------------------- */
+:root {
+  --ground: #f0f4f7;
+  --surface: #ffffff;
+  --surface-2: #e7edf2;
+  --ink: #0f1a22;
+  --ink-2: #3c4c58;
+  --muted: #6b7d8b;
+  --line: #cfdae2;
+  --line-soft: #e2eaef;
+  --accent: #0d7fa8;
+  --accent-soft: rgba(13, 127, 168, 0.1);
+  --amber: #a86a12;
+  --amber-soft: rgba(168, 106, 18, 0.1);
+  --moss: #2c7d51;
+  --moss-soft: rgba(44, 125, 81, 0.1);
+  --alert: #b4364a;
+  --alert-soft: rgba(180, 54, 74, 0.09);
+
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --shadow: 0 1px 2px rgba(15, 26, 34, 0.06), 0 8px 24px rgba(15, 26, 34, 0.05);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #080d12;
+    --surface: #0f1720;
+    --surface-2: #16212b;
+    --ink: #dbe7f0;
+    --ink-2: #a3b6c4;
+    --muted: #6f8494;
+    --line: #22303c;
+    --line-soft: #18242e;
+    --accent: #7ad7ff;
+    --accent-soft: rgba(122, 215, 255, 0.12);
+    --amber: #ffb347;
+    --amber-soft: rgba(255, 179, 71, 0.12);
+    --moss: #8fd9a8;
+    --moss-soft: rgba(143, 217, 168, 0.12);
+    --alert: #ff8095;
+    --alert-soft: rgba(255, 128, 149, 0.12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+  }
+}
+
+/* The viewer's own toggle. Must beat the media query in BOTH directions, so
+   both are restated rather than only the dark one. */
+:root[data-theme="light"] {
+  --ground: #f0f4f7; --surface: #ffffff; --surface-2: #e7edf2;
+  --ink: #0f1a22; --ink-2: #3c4c58; --muted: #6b7d8b;
+  --line: #cfdae2; --line-soft: #e2eaef;
+  --accent: #0d7fa8; --accent-soft: rgba(13, 127, 168, 0.1);
+  --amber: #a86a12; --amber-soft: rgba(168, 106, 18, 0.1);
+  --moss: #2c7d51; --moss-soft: rgba(44, 125, 81, 0.1);
+  --alert: #b4364a; --alert-soft: rgba(180, 54, 74, 0.09);
+  --shadow: 0 1px 2px rgba(15, 26, 34, 0.06), 0 8px 24px rgba(15, 26, 34, 0.05);
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --ground: #080d12; --surface: #0f1720; --surface-2: #16212b;
+  --ink: #dbe7f0; --ink-2: #a3b6c4; --muted: #6f8494;
+  --line: #22303c; --line-soft: #18242e;
+  --accent: #7ad7ff; --accent-soft: rgba(122, 215, 255, 0.12);
+  --amber: #ffb347; --amber-soft: rgba(255, 179, 71, 0.12);
+  --moss: #8fd9a8; --moss-soft: rgba(143, 217, 168, 0.12);
+  --alert: #ff8095; --alert-soft: rgba(255, 128, 149, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px 96px; }
+
+/* --- type ---------------------------------------------------------------- */
+/* The rule the page runs on: anything that is a literal key in the codebase is
+   set in mono; anything a human wrote is set in sans. */
+code, .k { font-family: var(--mono); font-size: 0.92em; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+h1 {
+  font-size: clamp(30px, 5vw, 46px);
+  line-height: 1.05;
+  letter-spacing: -0.022em;
+  font-weight: 640;
+  margin: 0;
+  text-wrap: balance;
+}
+h2 {
+  font-size: 21px; font-weight: 620; letter-spacing: -0.012em;
+  margin: 0; text-wrap: balance;
+}
+h3 { font-size: 15px; font-weight: 620; margin: 0; }
+p { margin: 0; max-width: 68ch; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.lede { color: var(--ink-2); font-size: 16.5px; max-width: 66ch; }
+.note { color: var(--muted); font-size: 13px; max-width: 72ch; }
+
+/* --- header -------------------------------------------------------------- */
+header {
+  border-bottom: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, var(--accent-soft), transparent 62%),
+    var(--surface);
+  padding: 40px 0 0;
+  margin-bottom: 40px;
+}
+.head-inner { max-width: 1160px; margin: 0 auto; padding: 0 24px; display: flex; flex-direction: column; gap: 16px; }
+.head-top { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline; justify-content: space-between; }
+
+.meters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  overflow: hidden;
+  margin-top: 12px;
+}
+.meter { background: var(--surface); padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 2px; }
+.meter .v { font-family: var(--mono); font-size: 24px; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1.1; }
+.meter .l { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.meter.on-accent .v { color: var(--accent); }
+.meter.on-amber .v { color: var(--amber); }
+.meter.on-moss .v { color: var(--moss); }
+
+/* --- sections ------------------------------------------------------------ */
+section { margin-top: 56px; scroll-margin-top: 16px; }
+.sec-head { display: flex; flex-direction: column; gap: 6px; padding-bottom: 14px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+/* --- signal flow --------------------------------------------------------- */
+.flow { padding: 22px 20px 14px; overflow-x: auto; }
+.flow svg { display: block; min-width: 760px; width: 100%; height: auto; }
+.flow .box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; }
+.flow .box-accent { stroke: var(--accent); }
+.flow .box-amber { stroke: var(--amber); }
+.flow .box-moss { stroke: var(--moss); }
+.flow .wire { stroke: var(--line); stroke-width: 1.4; fill: none; }
+.flow .wire-accent { stroke: var(--accent); }
+.flow .wire-moss { stroke: var(--moss); }
+.flow .wire-dash { stroke-dasharray: 4 4; }
+.flow text { font-family: var(--mono); fill: var(--ink); font-size: 11px; }
+.flow .cap { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.08em; }
+.flow .val { fill: var(--ink-2); font-size: 9.5px; }
+
+/* --- health -------------------------------------------------------------- */
+.health { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.health .card { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.health h3 { display: flex; align-items: center; gap: 8px; }
+.health .tally { font-family: var(--mono); font-size: 11px; padding: 2px 7px; border-radius: 999px; }
+.tally.warn { color: var(--amber); background: var(--amber-soft); }
+.tally.ok { color: var(--moss); background: var(--moss-soft); }
+.tally.bad { color: var(--alert); background: var(--alert-soft); }
+.chiplist { display: flex; flex-wrap: wrap; gap: 5px; }
+.chiplist .k {
+  font-size: 11px; padding: 3px 7px; border-radius: 5px;
+  background: var(--surface-2); border: 1px solid var(--line-soft); color: var(--ink-2);
+}
+
+/* --- controls ------------------------------------------------------------ */
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+input[type="search"] {
+  font-family: var(--mono); font-size: 13px;
+  padding: 8px 11px; min-width: 230px; flex: 1 1 230px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px;
+}
+input[type="search"]:focus-visible, button:focus-visible, .row-head:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.filters { display: flex; gap: 5px; flex-wrap: wrap; }
+.filter {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.03em;
+  padding: 6px 10px; border-radius: 7px; cursor: pointer;
+  background: var(--surface); color: var(--muted);
+  border: 1px solid var(--line);
+}
+.filter:hover { color: var(--ink); border-color: var(--ink-2); }
+.filter[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+/* --- the bank ------------------------------------------------------------ */
+.bank { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); box-shadow: var(--shadow); }
+.bank-head, .row-head {
+  display: grid;
+  grid-template-columns: 34px minmax(150px, 1.5fr) 72px minmax(130px, 1.6fr) 96px 78px minmax(120px, 1.4fr);
+  gap: 12px; align-items: center;
+  padding: 9px 14px;
+}
+.bank-head {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.11em; text-transform: uppercase;
+  color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--line);
+}
+.row { border-bottom: 1px solid var(--line-soft); }
+.row:last-child { border-bottom: 0; }
+.row-head { width: 100%; text-align: left; background: none; border: 0; color: inherit; cursor: pointer; font: inherit; }
+.row-head:hover { background: var(--accent-soft); }
+.row[data-open="true"] .row-head { background: var(--surface-2); }
+.row-name { font-family: var(--mono); font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+
+.play {
+  width: 26px; height: 26px; border-radius: 50%; padding: 0;
+  display: grid; place-items: center; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--accent);
+}
+.play:hover { border-color: var(--accent); background: var(--accent-soft); }
+.play svg { width: 9px; height: 10px; fill: currentColor; }
+.play[data-state="ringing"] { border-color: var(--accent); background: var(--accent-soft); }
+
+.mode { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; padding: 2px 6px; border-radius: 4px; justify-self: start; }
+.mode.sample { color: var(--accent); background: var(--accent-soft); }
+.mode.synth { color: var(--muted); background: var(--surface-2); }
+
+.src { font-family: var(--mono); font-size: 11px; color: var(--ink-2); overflow-wrap: anywhere; line-height: 1.4; }
+.src .dim { color: var(--muted); }
+
+/* Gain as a bar as well as a number: which sounds sit loudest in the mix is
+   the thing you actually want to see, and 0.34 vs 0.26 does not read. */
+.gain { display: flex; align-items: center; gap: 7px; }
+.gain-track { flex: 1; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; min-width: 26px; }
+.gain-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+.gain .num { font-size: 11px; color: var(--ink-2); }
+
+.throttle { font-family: var(--mono); font-size: 11px; }
+.throttle.none { color: var(--muted); }
+.throttle.on { color: var(--amber); }
+
+.fired { font-family: var(--mono); font-size: 11px; color: var(--ink-2); overflow-wrap: anywhere; line-height: 1.4; }
+.fired .dim { color: var(--muted); }
+
+.detail { padding: 4px 14px 20px 60px; display: none; }
+.row[data-open="true"] .detail { display: block; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px; }
+.pairs { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--mono); font-size: 11.5px; align-items: baseline; }
+.pairs dt { color: var(--muted); }
+.pairs dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.evt { border-top: 1px solid var(--line-soft); padding-top: 8px; margin-top: 8px; }
+.evt:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+.evt-name { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+.evt-line { font-family: var(--mono); font-size: 11px; color: var(--ink-2); margin-top: 2px; }
+.sites { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+
+.empty { padding: 26px 14px; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+
+/* --- continuous ---------------------------------------------------------- */
+.cont { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.cont .card { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.cont h3 { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.badge { font-family: var(--mono); font-size: 10px; letter-spacing: 0.07em; padding: 2px 7px; border-radius: 999px; }
+.badge.music { color: var(--accent); background: var(--accent-soft); }
+.badge.ambient { color: var(--moss); background: var(--moss-soft); }
+.badge.flight { color: var(--amber); background: var(--amber-soft); }
+
+/* --- files --------------------------------------------------------------- */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
+table { border-collapse: collapse; width: 100%; min-width: 620px; }
+th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--line-soft); }
+thead th {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.11em; text-transform: uppercase;
+  color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--line); position: sticky; top: 0;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td.k, td.num { font-family: var(--mono); font-size: 11.5px; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
+tr.orphan td.k { color: var(--muted); }
+.used { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+.used.no { color: var(--amber); }
+
+footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line); }
+
+@media (max-width: 900px) {
+  .bank-head { display: none; }
+  .row-head { grid-template-columns: 34px 1fr; grid-auto-rows: min-content; row-gap: 4px; }
+  .row-head > .mode, .row-head > .src, .row-head > .gain, .row-head > .throttle, .row-head > .fired { grid-column: 2; }
+  .detail { padding-left: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+</style>
+
+<header>
+  <div class="head-inner">
+    <div class="head-top">
+      <div>
+        <div class="eyebrow">Seal Survivor &middot; audio</div>
+        <h1>The Sound Atlas</h1>
+      </div>
+      <div class="eyebrow" id="stamp"></div>
+    </div>
+    <p class="lede">
+      Every sound the game can make, what fires it, and where from &mdash; joined up from
+      <code>CONFIG.sfx</code>, <code>CONFIG.feedback</code>, the call sites in gameplay code,
+      the files in <code>public/sfx</code>, and the tuning file that quietly overrides all of it.
+      Press play on any row to hear it: the sampled sounds are embedded, and the synthesised ones
+      are rebuilt here by the game's own synth, through the game's own filter and reverb bus.
+    </p>
+    <div class="meters" id="meters"></div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section id="flow">
+    <div class="sec-head">
+      <div class="eyebrow">Signal flow</div>
+      <h2>Four kinds of sound, two chains out</h2>
+      <p class="note">
+        One-shots, the ambient bed and the projectile flight voices all land on the shared SFX bus,
+        so diving muffles them together. Music deliberately does not &mdash; it has its own filter,
+        its own depth range, and its own duck for the upgrade screen.
+      </p>
+    </div>
+    <div class="card flow" id="flowcard"></div>
+  </section>
+
+  <section id="health">
+    <div class="sec-head">
+      <div class="eyebrow">Wiring check</div>
+      <h2>What is loose</h2>
+      <p class="note">Regenerated from the config every time, so this is the state of the tree right now, not the last time anyone looked.</p>
+    </div>
+    <div class="health" id="healthgrid"></div>
+  </section>
+
+  <section id="bank">
+    <div class="sec-head">
+      <div class="eyebrow">The bank</div>
+      <h2>Every voice in <code>CONFIG.sfx</code></h2>
+      <p class="note">
+        A sound with files assigned plays those and ignores its synth settings entirely &mdash; the
+        synth block stays behind as the fallback if a file ever fails to decode, which is why it is
+        still worth reading. Open a row for the full recipe, the events that fire it, and the lines
+        of code they fire from. For the same information live, press <code>0</code> in a dev build:
+        the sound feed names each sound as it fires, which take of the set it picked, and &mdash;
+        the part this page cannot show you &mdash; the ones that were throttled, refused a voice,
+        or never existed.
+      </p>
+    </div>
+    <div class="controls">
+      <input type="search" id="q" placeholder="filter by sound, event, file or call site" aria-label="Filter sounds" />
+      <div class="filters" id="filters"></div>
+    </div>
+    <div class="bank">
+      <div class="bank-head">
+        <div></div><div>sound</div><div>source</div><div>files / recipe</div><div>gain</div><div>throttle</div><div>fired by</div>
+      </div>
+      <div id="rows"></div>
+    </div>
+  </section>
+
+  <section id="continuous">
+    <div class="sec-head">
+      <div class="eyebrow">Continuous sound</div>
+      <h2>The things that never stop</h2>
+      <p class="note">
+        Neither of these can be expressed as a <code>CONFIG.sfx</code> entry: a one-shot is fired
+        and forgotten, and these have their parameters rewritten while they sound.
+      </p>
+    </div>
+    <div class="cont" id="cont"></div>
+  </section>
+
+  <section id="files">
+    <div class="sec-head">
+      <div class="eyebrow">On disk</div>
+      <h2><code>public/sfx</code></h2>
+      <p class="note">Everything that ships, including the files nothing points at. Those still ship. Play them here before deciding whether to wire one in or delete it.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th></th><th>file</th><th>length</th><th>size</th><th>used by</th></tr>
+        </thead>
+        <tbody id="filerows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <p class="note">
+      Generated by <code>npm run sfx:atlas</code> from <code>tools/sfx-atlas.mjs</code>.
+      Nothing on this page is typed by hand &mdash; re-run it after any change to the sound bank
+      and republish. The companion data file is <code>tools/sfx-atlas.json</code>.
+    </p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var A = /*ATLAS_DATA*/null;
+  var $ = function (id) { return document.getElementById(id); };
+  var el = function (tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  var fmt = function (v, d) {
+    if (v == null) return "\u2014";
+    return Number(v).toFixed(d == null ? 2 : d);
+  };
+  var kb = function (bytes) { return (bytes / 1024).toFixed(0) + " KB"; };
+  var secs = function (s) { return s == null ? "\u2014" : s.toFixed(2) + "s"; };
+  var base = function (p) { return p.split("/").pop(); };
+
+  // --- header ---------------------------------------------------------------
+
+  $("stamp").textContent = "generated " + A.generatedAt.slice(0, 16).replace("T", " ") + " UTC";
+
+  var meters = [
+    ["sounds", A.counts.sounds, ""],
+    ["sampled", A.counts.sampled, "on-accent"],
+    ["synthesised", A.counts.synth, ""],
+    ["events", A.counts.events, ""],
+    ["call sites", A.counts.callSites, ""],
+    ["files", A.counts.files, ""],
+    ["unused files", A.counts.orphanFiles, A.counts.orphanFiles ? "on-amber" : "on-moss"]
+  ];
+  meters.forEach(function (m) {
+    var d = el("div", "meter " + m[2]);
+    d.appendChild(el("div", "v num", String(m[1])));
+    d.appendChild(el("div", "l", m[0]));
+    $("meters").appendChild(d);
+  });
+
+  // --- signal flow ----------------------------------------------------------
+  // Hand-placed rather than laid out: it is one fixed diagram of one fixed
+  // graph, and a layout engine for six boxes would be more code than the boxes.
+
+  var NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs) {
+    var n = document.createElementNS(NS, tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+  function box(svg, x, y, w, h, cls, title, sub) {
+    svg.appendChild(svgEl("rect", { x: x, y: y, width: w, height: h, rx: 6, "class": "box " + (cls || "") }));
+    var t = svgEl("text", { x: x + 11, y: y + (sub ? 20 : h / 2 + 4) });
+    t.textContent = title;
+    svg.appendChild(t);
+    if (sub) {
+      var s = svgEl("text", { x: x + 11, y: y + 35, "class": "val" });
+      s.textContent = sub;
+      svg.appendChild(s);
+    }
+  }
+  function wire(svg, d, cls) {
+    svg.appendChild(svgEl("path", { d: d, "class": "wire " + (cls || "") }));
+  }
+  function cap(svg, x, y, text) {
+    var t = svgEl("text", { x: x, y: y, "class": "cap" });
+    t.textContent = text;
+    svg.appendChild(t);
+  }
+
+  // One wide row, left to right, because that is what a signal chain is. The
+  // card scrolls rather than wrapping it: a folded signal path stops being
+  // readable as a path.
+  (function buildFlow() {
+    var svg = svgEl("svg", { viewBox: "0 0 1200 300", role: "img", "aria-label": "Audio signal flow" });
+    var comp = A.bus.comp || {};
+    var compOn = comp.enabled !== false;
+
+    cap(svg, 12, 20, "SOURCES");
+    box(svg, 12, 30, 176, 44, "box-accent", "one-shots", A.counts.sounds + " voices \u00b7 max " + A.bus.maxConcurrent + " at once");
+    var ambF = A.continuous.ambient;
+    var nClips = ambF.clips.length;
+    box(svg, 12, 86, 176, 44, "box-moss",
+      ambF.mode === "sporadic" ? "ambient calls" : "ambient bed",
+      nClips + (nClips === 1 ? " clip \u00b7 " : " clips \u00b7 ")
+        + (ambF.mode === "sporadic"
+          ? "~" + fmt(ambF.gapSeconds, 0) + "s apart"
+          : fmt(ambF.crossfade, 0) + "s crossfade"));
+    box(svg, 12, 142, 176, 44, "box-amber", "flight voices", "max " + A.continuous.flightGlobals.maxVoices + " \u00b7 per-frame params");
+    box(svg, 12, 216, 176, 44, "box-accent", "music", A.continuous.music.tracks.length + " loops \u00b7 " + A.continuous.music.bpm + "bpm");
+
+    // Everything but music converges on the SFX master gain.
+    wire(svg, "M188 52 H212 V128 H236");
+    wire(svg, "M188 108 H212");
+    wire(svg, "M188 164 H212 V128 H236");
+    box(svg, 236, 106, 132, 44, "", "master gain", "vol " + fmt(A.bus.masterVolume));
+
+    wire(svg, "M368 128 H412", "wire-accent");
+    box(svg, 412, 106, 150, 44, "box-amber", "bus filter", A.bus.filterType + " \u00b7 " + (A.bus.depth && A.bus.depth.enabled ? "depth-tracked" : fmt(A.bus.filterHz, 0) + " Hz"));
+
+    // Parallel dry / reverb send.
+    wire(svg, "M562 128 H584 V78 H606", "wire-accent");
+    wire(svg, "M584 128 V176 H606", "wire-accent wire-dash");
+    box(svg, 606, 58, 108, 40, "", "dry", fmt(Math.cos(A.bus.reverbMix * Math.PI / 2)));
+    box(svg, 606, 156, 108, 40, "", "reverb send", "mix " + fmt(A.bus.reverbMix));
+    cap(svg, 606, 214, "PARALLEL SEND \u2014 THE DRY TRANSIENT SURVIVES");
+
+    // Both halves meet again before the dynamics stage, so the compressor sees
+    // the whole bus rather than only the dry path.
+    wire(svg, "M714 78 H748 V128 H776", "wire-accent");
+    wire(svg, "M714 176 H748 V128", "wire-accent wire-dash");
+
+    box(svg, 776, 106, 120, 44, compOn ? "box-amber" : "", compOn ? "compressor" : "compressor",
+      compOn ? fmt(comp.ratio, 0) + ":1 over " + fmt(comp.threshold, 0) + " dB" : "bypassed \u00b7 unpatched");
+
+    wire(svg, "M896 128 H940", "wire-accent");
+    box(svg, 940, 106, 120, 44, "box-moss", "makeup + ceiling",
+      "x" + fmt(comp.makeup, 2) + " into " + fmt(comp.ceiling, 2));
+    cap(svg, 776, 174, "WHAT MAKES THE +24 dB GAIN SLIDERS SAFE");
+
+    wire(svg, "M1060 128 H1104", "wire-accent");
+    box(svg, 1104, 106, 56, 44, "box-accent", "out");
+
+    // Music reaches the speakers on its own chain, joining only at the output \u2014
+    // so it passes through none of the filter, reverb or dynamics above.
+    wire(svg, "M188 238 H1132 V150", "wire-accent");
+    cap(svg, 200, 232, "OWN FILTER, OWN DEPTH, OWN DUCK \u2014 NOT ON THE SFX BUS");
+
+    $("flowcard").appendChild(svg);
+
+    // The numbers behind the two boxes that are hardest to read off a diagram.
+    var spec = el("div");
+    spec.style.borderTop = "1px solid var(--line-soft)";
+    spec.style.marginTop = "14px";
+    spec.style.paddingTop = "14px";
+    spec.appendChild(el("div", "eyebrow", "Dynamics stage"));
+    var dl = el("dl", "pairs");
+    dl.style.marginTop = "8px";
+    [
+      ["compressor", compOn
+        ? fmt(comp.ratio, 1) + ":1 over " + fmt(comp.threshold, 0) + " dB, " + fmt(comp.knee, 0) + " dB knee"
+        : "off \u2014 unpatched, not neutralised, so it costs no latency either"],
+      ["attack / release", compOn ? fmt(comp.attack * 1000, 0) + " ms / " + fmt(comp.release * 1000, 0) + " ms" : null],
+      ["makeup", "x" + fmt(comp.makeup, 2) + "  (" + (comp.makeup > 0 ? (20 * Math.log10(comp.makeup)).toFixed(1) : "-inf") + " dB)"],
+      ["ceiling", fmt(comp.ceiling, 2) + " of full scale, bending from " + fmt(comp.ceiling * comp.ceilingKnee, 2)],
+      ["below that", "bit-exact \u2014 the ceiling touches peaks only, never the mix"],
+      ["anti-aliasing", comp.oversample || "2x"]
+    ].forEach(function (p) {
+      if (p[1] == null) return;
+      dl.appendChild(el("dt", null, p[0]));
+      dl.appendChild(el("dd", null, p[1]));
+    });
+    spec.appendChild(dl);
+    $("flowcard").appendChild(spec);
+  }());
+
+  // --- wiring check ---------------------------------------------------------
+
+  (function buildHealth() {
+    var p = A.problems;
+    var cards = [
+      {
+        title: "Files nothing points at",
+        list: p.orphanFiles,
+        tone: p.orphanFiles.length ? "warn" : "ok",
+        note: "In public/sfx and shipped in the build, but not named by any sound or the ambient bed. Audition them in the table at the bottom."
+      },
+      {
+        title: "Silent by design",
+        list: p.silentEvents,
+        tone: "ok",
+        note: "Events with a full visual and haptic treatment and sfx: null. Each one is a deliberate hole in the mix \u2014 something else is already carrying that frame."
+      },
+      {
+        title: "Events naming a missing sound",
+        list: p.danglingEvents.map(function (d) { return d.event + " \u2192 " + d.sfx; }),
+        tone: p.danglingEvents.length ? "bad" : "ok",
+        note: "playSfx returns early on an unknown name, so these fail silently and nothing warns."
+      },
+      {
+        title: "Sounds pointing at missing files",
+        list: p.missingFiles.map(function (d) { return d.sfx + " \u2192 " + base(d.path); }),
+        tone: p.missingFiles.length ? "bad" : "ok",
+        note: "The file 404s at load and the sound falls back to its synth settings, with one console warning at boot."
+      }
+    ];
+    cards.forEach(function (c) {
+      var card = el("div", "card");
+      var h = el("h3", null);
+      h.appendChild(el("span", null, c.title));
+      h.appendChild(el("span", "tally " + c.tone, c.list.length ? String(c.list.length) : "none"));
+      card.appendChild(h);
+      card.appendChild(el("p", "note", c.note));
+      if (c.list.length) {
+        var cl = el("div", "chiplist");
+        c.list.forEach(function (n) { cl.appendChild(el("span", "k", n)); });
+        card.appendChild(cl);
+      }
+      $("healthgrid").appendChild(card);
+    });
+  }());
+
+  // --- audio ----------------------------------------------------------------
+  // The game's own graph, rebuilt: master gain into a filter, then a parallel
+  // dry path and a convolution send, with an impulse generated the same way
+  // audio.js generates it. Kept faithful on purpose -- a preview through a bare
+  // destination would be a different sound from the one in the game, which is
+  // exactly the confusion this page is meant to end.
+
+  var ctx = null, master = null, decoded = {};
+
+  function audio() {
+    if (ctx) return ctx;
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    ctx = new C();
+    master = ctx.createGain();
+    master.gain.value = A.bus.masterVolume;
+    var filter = ctx.createBiquadFilter();
+    filter.type = A.bus.filterType || "lowpass";
+    filter.frequency.value = Math.max(20, A.bus.filterHz || 20000);
+    filter.Q.value = Math.max(0.0001, A.bus.filterQ || 1);
+    var dry = ctx.createGain(), wet = ctx.createGain(), conv = ctx.createConvolver();
+    var mix = Math.max(0, Math.min(1, A.bus.reverbMix || 0));
+    dry.gain.value = Math.cos(mix * Math.PI / 2);
+    wet.gain.value = Math.sin(mix * Math.PI / 2);
+    var len = Math.max(1, Math.floor(ctx.sampleRate * Math.max(0.05, A.bus.reverbSeconds || 1.6)));
+    var imp = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (var c = 0; c < 2; c++) {
+      var data = imp.getChannelData(c);
+      for (var i = 0; i < len; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, Math.max(0.1, A.bus.reverbDecay || 2));
+      }
+    }
+    conv.buffer = imp;
+
+    // The dynamics stage, same shape as systems/audio.js. Both halves of the
+    // reverb send meet at `sum` first so the compressor sees the whole bus.
+    var sum = ctx.createGain();
+    var makeup = ctx.createGain();
+    var shaper = ctx.createWaveShaper();
+    var cfg = A.bus.comp || {};
+    makeup.gain.value = cfg.makeup == null ? 1.6 : cfg.makeup;
+
+    // Same piecewise soft-clip the game builds: identity below the knee, then
+    // a tanh bend toward the ceiling. Duplicated rather than imported because
+    // this page is a single self-contained file, so it is kept short enough to
+    // read side by side with the original.
+    var ceiling = Math.max(0.05, Math.min(1, cfg.ceiling == null ? 0.95 : cfg.ceiling));
+    var knee = Math.max(0, Math.min(0.98, cfg.ceilingKnee == null ? 0.6 : cfg.ceilingKnee)) * ceiling;
+    var span = Math.max(1e-4, ceiling - knee);
+    var curve = new Float32Array(2048);
+    for (var j = 0; j < curve.length; j++) {
+      var x = (j / (curve.length - 1)) * 2 - 1;
+      var a = Math.abs(x);
+      curve[j] = Math.sign(x) * (a <= knee ? a : knee + span * Math.tanh((a - knee) / span));
+    }
+    shaper.curve = curve;
+    shaper.oversample = cfg.oversample || "2x";
+
+    master.connect(filter);
+    filter.connect(dry).connect(sum);
+    filter.connect(conv);
+    conv.connect(wet).connect(sum);
+    if (cfg.enabled !== false) {
+      var dyn = ctx.createDynamicsCompressor();
+      dyn.threshold.value = cfg.threshold == null ? -18 : cfg.threshold;
+      dyn.knee.value = cfg.knee == null ? 12 : cfg.knee;
+      dyn.ratio.value = cfg.ratio == null ? 3 : cfg.ratio;
+      dyn.attack.value = cfg.attack == null ? 0.005 : cfg.attack;
+      dyn.release.value = cfg.release == null ? 0.18 : cfg.release;
+      sum.connect(dyn).connect(makeup);
+    } else {
+      sum.connect(makeup);
+    }
+    makeup.connect(shaper).connect(ctx.destination);
+    return ctx;
+  }
+
+  function vary(amount) {
+    if (!amount) return 1;
+    var a = Math.min(0.9, Math.abs(amount));
+    return 1 + (Math.random() * 2 - 1) * a;
+  }
+  function envelope(gain, peak, decay, now) {
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+  }
+  function noiseBuffer(duration) {
+    var frames = Math.max(1, Math.floor(ctx.sampleRate * duration));
+    var buf = ctx.createBuffer(1, frames, ctx.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i = 0; i < frames; i++) d[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+
+  function playSample(url, def) {
+    var go = function (buf) {
+      var src = ctx.createBufferSource(), gain = ctx.createGain();
+      src.buffer = buf;
+      src.playbackRate.value = Math.max(0.05, vary(def.pitchVary));
+      gain.gain.value = def.gain == null ? 0.2 : def.gain;
+      var node = src;
+      if (def.filter) {
+        var f = ctx.createBiquadFilter();
+        f.type = "lowpass";
+        f.frequency.value = Math.max(80, def.filter * vary(def.filterVary));
+        src.connect(f);
+        node = f;
+      }
+      node.connect(gain).connect(master);
+      src.start(ctx.currentTime);
+    };
+    if (decoded[url]) { go(decoded[url]); return; }
+    // The data URI is already in the page, so this fetch never touches the
+    // network -- it is just the shortest route from base64 to an ArrayBuffer.
+    fetch(url).then(function (r) { return r.arrayBuffer(); }).then(function (b) {
+      return ctx.decodeAudioData(b);
+    }).then(function (buf) { decoded[url] = buf; go(buf); })["catch"](function (e) {
+      console.warn("could not decode", url, e);
+    });
+  }
+
+  function playSynth(def) {
+    var now = ctx.currentTime;
+    var pitchMul = vary(def.pitchVary), filterMul = vary(def.filterVary);
+    var decay = def.decay == null ? 0.2 : def.decay;
+    var gainValue = def.gain == null ? 0.2 : def.gain;
+    var tone = def.type === "blip" || def.type === "boom";
+    var noise = def.type === "noise" || def.type === "boom";
+    if (tone) {
+      var osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = def.wave || "sine";
+      var f = def.freq || [440, 220];
+      osc.frequency.setValueAtTime(Math.max(20, f[0] * pitchMul), now);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(20, f[1] * pitchMul), now + decay);
+      if (def.detune) osc.detune.value = (Math.random() * 2 - 1) * def.detune;
+      envelope(g, gainValue, decay, now);
+      osc.connect(g).connect(master);
+      osc.start(now);
+      osc.stop(now + decay + 0.05);
+    }
+    if (noise) {
+      var src = ctx.createBufferSource(), filt = ctx.createBiquadFilter(), ng = ctx.createGain();
+      src.buffer = noiseBuffer(decay + 0.05);
+      filt.type = "lowpass";
+      var cutoff = Math.max(80, (def.filter || 2000) * filterMul * pitchMul);
+      filt.frequency.setValueAtTime(cutoff, now);
+      filt.frequency.exponentialRampToValueAtTime(Math.max(80, cutoff * 0.25), now + decay);
+      envelope(ng, gainValue * (def.noise == null ? 1 : def.noise), decay, now);
+      src.connect(filt).connect(ng).connect(master);
+      src.start(now);
+      src.stop(now + decay + 0.05);
+    }
+  }
+
+  // A sound picks a different variation each time, never the same one twice
+  // running -- the same rule the game uses, and the reason several sounds have
+  // more than one take in the first place.
+  var lastPick = {};
+  function playSound(s, btn) {
+    if (!audio()) return;
+    if (ctx.state === "suspended") ctx.resume();
+    var playable = s.files.filter(function (f) { return A.audioData[f.path]; });
+    if (playable.length) {
+      var i = 0;
+      if (playable.length > 1) {
+        i = Math.floor(Math.random() * playable.length);
+        if (i === lastPick[s.name]) i = (i + 1) % playable.length;
+        lastPick[s.name] = i;
+      }
+      playSample(A.audioData[playable[i].path], s.synth);
+    } else {
+      playSynth(s.synth);
+    }
+    if (btn) {
+      btn.setAttribute("data-state", "ringing");
+      window.setTimeout(function () { btn.removeAttribute("data-state"); }, 260);
+    }
+  }
+
+  function playButton(label, onPlay) {
+    var b = el("button", "play");
+    b.type = "button";
+    b.setAttribute("aria-label", "Play " + label);
+    b.innerHTML = "<svg viewBox=\"0 0 9 10\" aria-hidden=\"true\"><path d=\"M0 0 L9 5 L0 10 Z\"/></svg>";
+    b.addEventListener("click", function (e) {
+      e.stopPropagation();
+      onPlay(b);
+    });
+    return b;
+  }
+
+  // --- the bank -------------------------------------------------------------
+
+  var eventsByName = {};
+  A.events.forEach(function (e) { eventsByName[e.name] = e; });
+  var maxGain = A.sfx.reduce(function (m, s) { return Math.max(m, s.synth.gain || 0); }, 0.01);
+
+  // The bank spans 0.05 to 4.0 -- a factor of eighty -- so a bar drawn as a
+  // fraction of the loudest sound leaves two thirds of the table at a
+  // one-pixel stub. Drawn in decibels against the loudest instead, floored at
+  // -40dB, which is both readable and the unit the thing is actually measured
+  // in. The number beside it stays the raw config value, because that is what
+  // you type into the tuner.
+  var DB_FLOOR = -40;
+  function dbOf(gain) {
+    if (!gain) return DB_FLOOR;
+    return Math.max(DB_FLOOR, 20 * Math.log10(gain / maxGain));
+  }
+  function dbWidth(gain) {
+    return Math.round(((dbOf(gain) - DB_FLOOR) / -DB_FLOOR) * 100);
+  }
+  function dbLabel(gain) {
+    var db = dbOf(gain);
+    if (db >= -0.05) return "the loudest in the bank";
+    if (db <= DB_FLOOR) return "at or below " + (-DB_FLOOR) + " dB down";
+    return fmt(-db, 1) + " dB below the loudest";
+  }
+
+  function recipe(s) {
+    if (s.files.length) {
+      return s.files.map(function (f) { return base(f.path) + "  " + secs(f.seconds); }).join("\n");
+    }
+    var d = s.synth, parts = [d.type];
+    if (d.wave) parts.push(d.wave);
+    if (d.freq) parts.push(d.freq[0] + "\u2192" + d.freq[1] + "Hz");
+    if (d.filter) parts.push("lp " + d.filter + "Hz");
+    return parts.join(" \u00b7 ") + "\ndecay " + fmt(d.decay) + "s";
+  }
+
+  function detailFor(s) {
+    var wrap = el("div", "detail");
+    var grid = el("div", "detail-grid");
+
+    // The recipe, in full.
+    var left = el("div");
+    left.appendChild(el("div", "eyebrow", s.files.length ? "Files, and the fallback under them" : "Synth recipe"));
+    var dl = el("dl", "pairs");
+    var rows = [
+      ["type", s.synth.type],
+      ["wave", s.synth.wave],
+      ["freq", s.synth.freq ? s.synth.freq[0] + " \u2192 " + s.synth.freq[1] + " Hz" : null],
+      ["filter", s.synth.filter ? s.synth.filter + " Hz" : null],
+      ["noise mix", s.synth.noise],
+      ["decay", fmt(s.synth.decay) + " s"],
+      ["gain", fmt(s.synth.gain) + "  (" + dbLabel(s.synth.gain) + ")"],
+      ["pitch vary", s.synth.pitchVary ? "\u00b1" + Math.round(s.synth.pitchVary * 100) + "%" : "none"],
+      ["filter vary", s.synth.filterVary ? "\u00b1" + Math.round(s.synth.filterVary * 100) + "%" : "none"],
+      ["detune", s.synth.detune ? "\u00b1" + s.synth.detune + " cents" : "none"]
+    ];
+    rows.forEach(function (r) {
+      if (r[1] == null || r[1] === "") return;
+      dl.appendChild(el("dt", null, r[0]));
+      dl.appendChild(el("dd", null, String(r[1])));
+    });
+    left.appendChild(dl);
+    if (s.files.length) {
+      var fl = el("div", "sites");
+      fl.textContent = s.files.map(function (f) {
+        return f.path + "  " + secs(f.seconds) + "  " + kb(f.bytes) + (f.exists ? "" : "  MISSING");
+      }).join("\n");
+      fl.style.whiteSpace = "pre-line";
+      fl.style.marginTop = "10px";
+      left.appendChild(fl);
+    }
+    grid.appendChild(left);
+
+    // Who plays it, and with what around it.
+    var right = el("div");
+    right.appendChild(el("div", "eyebrow", "Fired by"));
+    if (!s.firedBy.length) {
+      right.appendChild(el("p", "note", "No event in CONFIG.feedback plays this."));
+    }
+    s.firedBy.forEach(function (name) {
+      var e = eventsByName[name];
+      var box2 = el("div", "evt");
+      box2.appendChild(el("div", "evt-name", name));
+      var bits = [];
+      if (e.emit) bits.push("emit " + e.emit);
+      if (e.shake) bits.push("shake " + fmt(e.shake));
+      if (e.hitstop) bits.push("hitstop " + fmt(e.hitstop));
+      if (e.glow) bits.push("glow " + fmt(e.glow));
+      if (e.ripple) bits.push("ripple " + fmt(e.ripple.strength, 1) + "/r" + e.ripple.radius);
+      if (e.sfxMinGap) bits.push("min gap " + fmt(e.sfxMinGap) + "s");
+      box2.appendChild(el("div", "evt-line", bits.join(" \u00b7 ") || "sound only"));
+      if (e.haptic) box2.appendChild(el("div", "evt-line", "haptic " + e.haptic));
+      if (e.sites.length) {
+        var st = el("div", "sites", e.sites.map(function (x) { return x.file + ":" + x.line; }).join("  "));
+        box2.appendChild(st);
+      } else {
+        box2.appendChild(el("div", "sites", "no call site found \u2014 configured but never fired"));
+      }
+      right.appendChild(box2);
+    });
+    if (s.directSites.length) {
+      var d2 = el("div", "evt");
+      d2.appendChild(el("div", "evt-name", "played directly"));
+      d2.appendChild(el("div", "sites", s.directSites.map(function (x) { return x.file + ":" + x.line; }).join("  ")));
+      right.appendChild(d2);
+    }
+    grid.appendChild(right);
+
+    wrap.appendChild(grid);
+    return wrap;
+  }
+
+  var rowEls = A.sfx.map(function (s) {
+    var row = el("div", "row");
+    var head = el("button", "row-head");
+    head.type = "button";
+    head.setAttribute("aria-expanded", "false");
+
+    head.appendChild(playButton(s.name, function (b) { playSound(s, b); }));
+    head.appendChild(el("div", "row-name", s.name));
+
+    head.appendChild(el("div", "mode " + s.mode, s.mode === "sample" ? (s.variations > 1 ? s.variations + " takes" : "sample") : "synth"));
+
+    var src = el("div", "src");
+    src.style.whiteSpace = "pre-line";
+    src.textContent = recipe(s);
+    head.appendChild(src);
+
+    var g = el("div", "gain");
+    var track = el("div", "gain-track");
+    var fill = el("div", "gain-fill");
+    fill.style.width = dbWidth(s.synth.gain) + "%";
+    track.title = dbLabel(s.synth.gain);
+    track.appendChild(fill);
+    g.appendChild(track);
+    g.appendChild(el("span", "num", fmt(s.synth.gain)));
+    head.appendChild(g);
+
+    head.appendChild(el("div", "throttle " + (s.minGap ? "on" : "none"), s.minGap ? fmt(s.minGap) + "s" : "\u2014"));
+
+    var fired = el("div", "fired");
+    if (s.firedBy.length) fired.textContent = s.firedBy.join(", ");
+    else { fired.textContent = "nothing"; fired.className = "fired dim"; }
+    head.appendChild(fired);
+
+    row.appendChild(head);
+    row.appendChild(detailFor(s));
+
+    head.addEventListener("click", function () {
+      var open = row.getAttribute("data-open") === "true";
+      row.setAttribute("data-open", open ? "false" : "true");
+      head.setAttribute("aria-expanded", open ? "false" : "true");
+    });
+
+    // Everything the search box looks at, flattened once at build time.
+    var hay = [s.name, s.mode, s.firedBy.join(" ")];
+    s.files.forEach(function (f) { hay.push(f.path); });
+    s.firedBy.forEach(function (n) {
+      (eventsByName[n].sites || []).forEach(function (x) { hay.push(x.file); });
+    });
+    return { s: s, el: row, hay: hay.join(" ").toLowerCase() };
+  });
+
+  var rowsHost = $("rows");
+  rowEls.forEach(function (r) { rowsHost.appendChild(r.el); });
+  var emptyMsg = el("div", "empty", "Nothing matches.");
+  emptyMsg.style.display = "none";
+  rowsHost.appendChild(emptyMsg);
+
+  var FILTERS = [
+    ["all", function () { return true; }],
+    ["sampled", function (s) { return s.mode === "sample"; }],
+    ["synth", function (s) { return s.mode === "synth"; }],
+    ["throttled", function (s) { return !!s.minGap; }],
+    // Within 12dB of the loudest thing in the bank: the sounds that can mask
+    // another one, which is the only reason to ask the question.
+    ["loudest", function (s) { return dbOf(s.synth.gain) >= -12; }]
+  ];
+  var activeFilter = 0;
+  var query = "";
+
+  function apply() {
+    var test = FILTERS[activeFilter][1];
+    var shown = 0;
+    rowEls.forEach(function (r) {
+      var ok = test(r.s) && (!query || r.hay.indexOf(query) !== -1);
+      r.el.style.display = ok ? "" : "none";
+      if (ok) shown++;
+    });
+    emptyMsg.style.display = shown ? "none" : "";
+  }
+
+  FILTERS.forEach(function (f, i) {
+    var b = el("button", "filter", f[0]);
+    b.type = "button";
+    b.setAttribute("aria-pressed", i === 0 ? "true" : "false");
+    b.addEventListener("click", function () {
+      activeFilter = i;
+      Array.prototype.forEach.call($("filters").children, function (c, j) {
+        c.setAttribute("aria-pressed", i === j ? "true" : "false");
+      });
+      apply();
+    });
+    $("filters").appendChild(b);
+  });
+
+  $("q").addEventListener("input", function () {
+    query = this.value.trim().toLowerCase();
+    apply();
+  });
+
+  // --- continuous -----------------------------------------------------------
+
+  (function buildContinuous() {
+    var host = $("cont");
+    var m = A.continuous.music, amb = A.continuous.ambient;
+
+    function card(title, badgeCls, badge, note, pairs, extra) {
+      var c = el("div", "card");
+      var h = el("h3");
+      h.appendChild(el("span", null, title));
+      h.appendChild(el("span", "badge " + badgeCls, badge));
+      c.appendChild(h);
+      c.appendChild(el("p", "note", note));
+      var dl = el("dl", "pairs");
+      pairs.forEach(function (p) {
+        if (p[1] == null) return;
+        dl.appendChild(el("dt", null, p[0]));
+        dl.appendChild(el("dd", null, String(p[1])));
+      });
+      c.appendChild(dl);
+      if (extra) c.appendChild(extra);
+      host.appendChild(c);
+      return c;
+    }
+
+    card("Music", "music", m.enabled ? "playing" : "off",
+      "Beat-locked loops. A switch waits for the next loop boundary so a phrase is never cut off, and which loop is playing follows your level. On its own chain, so it does not duck with the sound effects.",
+      [
+        ["tempo", m.bpm + " bpm \u00b7 " + m.beatsPerLoop + " beats/loop"],
+        ["loops", m.tracks.length + " built in"],
+        ["advances", "every " + m.levelsPerSlot + " level" + (m.levelsPerSlot === 1 ? "" : "s")],
+        ["volume", fmt(m.volume)],
+        ["depth filter", fmt(m.depth.surfaceHz, 0) + " Hz at the surface \u2192 " + fmt(m.depth.deepHz, 0) + " Hz at the seabed"],
+        ["upgrade duck", fmt(m.duckedHz, 0) + " Hz"]
+      ]);
+
+    var clipList = el("div", "chiplist");
+    amb.clips.forEach(function (f) {
+      var chip = el("span", "k", base(f.path) + " \u00b7 " + secs(f.seconds));
+      clipList.appendChild(chip);
+    });
+    var sporadic = amb.mode === "sporadic";
+    var ambPairs = sporadic
+      ? [
+        ["clips", amb.clips.length + " of " + amb.slots + " slots"],
+        ["silence between", fmt(amb.gapSeconds, 0) + "s \u00b1" + Math.round(amb.gapVary * 100) + "%"],
+        ["fade in / out", fmt(amb.fadeSeconds, 1) + "s, clamped to fit the clip"],
+        ["length of an appearance", "the clip's own, played once"],
+        ["order", amb.shuffle ? "shuffle, never repeating" : "round robin"],
+        ["pitch vary", "\u00b1" + Math.round(amb.pitchVary * 100) + "% per appearance"],
+        ["volume", fmt(amb.volume)],
+        ["fade out", fmt(amb.fadeOut, 1) + "s at the end of a run"]
+      ]
+      : [
+        ["clips", amb.clips.length + " of " + amb.slots + " slots"],
+        ["hold", fmt(amb.holdSeconds, 0) + "s \u00b1" + Math.round(amb.holdVary * 100) + "%"],
+        ["crossfade", fmt(amb.crossfade, 1) + "s"],
+        ["order", amb.shuffle ? "shuffle, never repeating" : "round robin"],
+        ["pitch vary", "\u00b1" + Math.round(amb.pitchVary * 100) + "% per pass"],
+        ["volume", fmt(amb.volume)],
+        ["fade out", fmt(amb.fadeOut, 1) + "s at the end of a run"]
+      ];
+
+    var ambCard = card(sporadic ? "Ambient calls" : "Ambient bed", "ambient", amb.enabled ? "playing" : "off",
+      sporadic
+        ? "Sporadic rather than continuous: a clip fades up, plays through once, fades away, and the water is quiet until the next one. It does not loop \u2014 a call heard twice back to back reads as a tape rather than as an animal. Runs through the SFX bus, so it muffles as you dive."
+        : "One clip loops at a time and crossfades into the next on an equal-power curve, so the total level never dips through the switch. Runs through the SFX bus, so it muffles as you dive.",
+      ambPairs, amb.clips.length ? clipList : null);
+
+    if (sporadic) {
+      // The duty cycle is the number that decides whether this reads as
+      // atmosphere or as an effect, and it is not in the config anywhere -- it
+      // falls out of the clip lengths and the gap.
+      var total = amb.clips.reduce(function (n, f) { return n + (f.seconds || 0); }, 0);
+      var mean = amb.clips.length ? total / amb.clips.length : 0;
+      var duty = mean + amb.gapSeconds > 0 ? (mean / (mean + amb.gapSeconds)) * 100 : 0;
+      ambCard.appendChild(el("p", "note",
+        "Clips average " + fmt(mean, 1) + "s, so with a " + fmt(amb.gapSeconds, 0)
+        + "s gap something is sounding roughly " + Math.round(duty) + "% of the time."));
+    } else if (amb.clips.length === 1) {
+      ambCard.appendChild(el("p", "note", "With one clip loaded there is nothing to cross into, so it simply sustains on a seamless loop. Add a second in the Sound tab and the rotation starts."));
+    }
+
+    A.continuous.flight.forEach(function (v) {
+      card("Flight voice: " + v.name, "flight", v.enabled ? "live" : "off",
+        "Not a one-shot at all: a little synth per projectile whose pitch, brightness, pan and level are rewritten every frame from what that shell is doing. It fills the gap between the launch thump and the impact crack.",
+        [
+          ["tone", v.toneWave + " \u00b7 " + (v.toneHz ? v.toneHz[0] + "\u2013" + v.toneHz[1] + " Hz" : "\u2014")],
+          ["water noise", v.noiseHz ? v.noiseHz[0] + "\u2013" + v.noiseHz[1] + " Hz" : "\u2014"],
+          ["doppler", "\u00b1" + Math.round(v.doppler * 100) + "% of pitch"],
+          ["seeker warble", v.warbleHz ? v.warbleHz[0] + "\u2013" + v.warbleHz[1] + " Hz" : "\u2014"],
+          ["half-loud at", v.falloff + " world units"],
+          ["gain", fmt(v.gain)],
+          ["voices", "max " + A.continuous.flightGlobals.maxVoices + " at once"]
+        ]);
+    });
+  }());
+
+  // --- files ----------------------------------------------------------------
+
+  (function buildFiles() {
+    var host = $("filerows");
+    A.files.forEach(function (f) {
+      var tr = el("tr", f.usedBy.length ? "" : "orphan");
+      var tdPlay = el("td");
+      tdPlay.style.width = "44px";
+      var payload = A.audioData[f.path];
+      if (payload) {
+        tdPlay.appendChild(playButton(f.name, function () {
+          if (!audio()) return;
+          if (ctx.state === "suspended") ctx.resume();
+          // Raw, at unity: this is auditioning the FILE, not a sound, so no
+          // pitch variation and no per-sound gain is applied.
+          playSample(payload, { gain: 1 });
+        }));
+      }
+      tr.appendChild(tdPlay);
+      tr.appendChild(el("td", "k", f.name));
+      tr.appendChild(el("td", "num", secs(f.seconds)));
+      tr.appendChild(el("td", "num", kb(f.bytes)));
+      var used = el("td");
+      var span = el("span", "used" + (f.usedBy.length ? "" : " no"), f.usedBy.length ? f.usedBy.join(", ") : "nothing");
+      used.appendChild(span);
+      tr.appendChild(used);
+      host.appendChild(tr);
+    });
+  }());
+}());
+</script>

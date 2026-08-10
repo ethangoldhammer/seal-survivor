@@ -5,6 +5,7 @@ import { removeEnemy } from '../entities/enemies.js';
 import { buildChain, applyChainToPoint, measureReach } from './ikChain.js';
 import { springFollow } from './orbit.js';
 import { attachBioluminescence } from './bioluminescence.js';
+import { createBoneSpring } from './boneSpring.js';
 
 // Octopus Grabber — the only DEFENSIVE companion in the game, driven by the
 // real six-arm rig in /models/octopus_rig.glb.
@@ -52,6 +53,8 @@ const arms = []; // per-arm state, index-matched to `chains`
 
 const bodyPos = new THREE.Vector3();
 const bodyVel = new THREE.Vector3();
+const prevVel = new THREE.Vector3(); // last frame's velocity, for the drag impulse
+const _accel = new THREE.Vector3();
 const headTarget = new THREE.Vector3();
 let clock = 0;
 let jetClock = 0;
@@ -143,6 +146,14 @@ function buildChains() {
       lagVel: new THREE.Vector3(),
       stiffMul: 1 + bias * spread,
       glow: 0, // eased 0..1, drives this arm's bioluminescence channel
+      // Per-bone flow. Built over the DRIVEN bones only — the last entry of
+      // the run is the `_end` locator, and handing it to the spring would
+      // both waste a joint on something that deforms nothing and rob the last
+      // real bone of the child it needs to know which way it points.
+      spring: createBoneSpring(chain.bones.slice(0, -1), {
+        tipAxis: chain.tipAxis,
+        tipLength: chain.tipLength,
+      }),
     });
   });
 
@@ -340,6 +351,13 @@ export function updateOctoGrab(dt, scene, playerPos, level, enemiesList, hooks =
     bodyVel.y *= c.head.maxSpeed / speed;
   }
 
+  // Acceleration over this frame, in world units per second squared. Measured
+  // from the velocity CHANGE rather than read off the thrust term, so it also
+  // catches drag, the speed clamp and the arrival at station — every reason
+  // the body's motion changes should throw the arms, not just the jet.
+  _accel.subVectors(bodyVel, prevVel).divideScalar(Math.max(1e-4, dt));
+  prevVel.copy(bodyVel);
+
   bodyPos.x += bodyVel.x * dt;
   bodyPos.y += bodyVel.y * dt;
   body.position.set(bodyPos.x, bodyPos.y, 0.04);
@@ -477,7 +495,34 @@ export function updateOctoGrab(dt, scene, playerPos, level, enemiesList, hooks =
     arm.glow += (wantGlow - arm.glow) * (1 - Math.exp(-rate * dt));
     glowRig?.setChannel(arm.slot, arm.glow);
 
+    // IK writes the pose the arm is AIMING at...
     applyChainToPoint(arm.chain, dt, c.ik, arm.weight, 1, _target);
+
+    // ...and the spring immediately declines to keep up with it. Run second,
+    // because the solver's target is "wherever the pose already put this
+    // bone" — doing it the other way round would have the IK stamp straight
+    // over the flow every frame and nothing would ever lag.
+    const sp = c.spring;
+    if (arm.spring && sp.enabled !== false) {
+      // THE WHIP. The spring only reacts to the parent chain rotating, and an
+      // octopus sliding across the screen barely rotates at all — so without
+      // this the arms would hang perfectly still while the body flew about.
+      // Feeding body acceleration in as an impulse is what makes dragging it
+      // around throw the tentacles.
+      const mag = Math.min(sp.dragMax, _accel.length() * sp.dragGain);
+      if (mag > 1e-3) {
+        _dir.copy(_accel).divideScalar(_accel.length()).negate();
+        arm.spring.impulse(_dir, mag * dt, sp.tipBias);
+      }
+      // A steady downward push, so the bundle hangs and sways under its own
+      // weight rather than floating in a neutral star.
+      if (sp.droop > 0) {
+        _dir.set(0, -1, 0);
+        arm.spring.impulse(_dir, sp.droop * dt, sp.tipBias);
+      }
+
+      arm.spring.update(dt, sp, arm.state === 'idle' ? sp.weightIdle : sp.weightBusy);
+    }
   }
 
   if (glowRig) {
@@ -493,6 +538,8 @@ export function resetOctoGrab(scene, playerPos) {
   clock = 0;
   jetClock = 0;
   bodyVel.set(0, 0, 0);
+  prevVel.set(0, 0, 0);
+  _accel.set(0, 0, 0);
   // Placed BEFORE the arm loop, which seeds each lag vector on it — reading
   // bodyPos first would seed them at the previous run's position.
   bodyPos.set(
@@ -512,6 +559,7 @@ export function resetOctoGrab(scene, playerPos) {
     // dragged across the arena, with six tentacles pointing at nothing.
     arm.lag.set(bodyPos.x, bodyPos.y, 0);
     arm.lagVel.set(0, 0, 0);
+    arm.spring?.reset();
     glowRig?.setChannel(arm.slot, 0);
   }
 

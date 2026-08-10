@@ -53,11 +53,12 @@
 //     minPlayerLevel             0     hard level gate, independent of time
 //     spawnRateMul               1     0 disables the creature outright
 //     spawnGroup                 none  family-wide cap, see spawn.groupMaxAlive
+//     bioluminescent             no    only spawns once the sun is down
 //
 // One difficulty point is 20 seconds at the default spawn.difficultyPerSecond.
 // ============================================================================
 
-import { parseIdTable, parseNumber } from './csvTable.js';
+import { parseBool, parseIdTable, parseNumber } from './csvTable.js';
 
 const LABEL = 'enemies';
 const FILE = 'enemies.csv';
@@ -92,10 +93,23 @@ const OPTIONAL = {
   spawnRateMul: { min: 0 },
 };
 
+// Yes/no columns. These are the exception to the "flags stay in config.js"
+// rule at the top, and the test for the exception is whether the flag decides
+// WHEN a creature spawns or WHAT it is: `prey` and `canBreach` pair a creature
+// with its model and its code path, but `bioluminescent` sits next to
+// minDifficulty and minPlayerLevel as a third answer to "has this one's moment
+// arrived yet", and those all want to be read down a column together.
+//
+// Blank means no, unlike parseBool's own "blank is true" default — an empty
+// cell in a twenty-row table is the normal state of this column, not an
+// omission, and treating it as yes would make every creature nocturnal the
+// moment the column was added.
+const FLAGS = ['bioluminescent'];
+
 // Every field this file owns, in one place — config.js needs the same list to
 // strip these out of saved tuning, so that a snapshot can't quietly become a
 // second opinion on numbers the CSV is meant to decide.
-export const ENEMY_TABLE_FIELDS = [...Object.keys(REQUIRED), ...Object.keys(OPTIONAL), 'spawnGroup'];
+export const ENEMY_TABLE_FIELDS = [...Object.keys(REQUIRED), ...Object.keys(OPTIONAL), ...FLAGS, 'spawnGroup'];
 
 export function parseEnemyCsv(text, warn = console.warn) {
   return parseIdTable(text, LABEL, FILE, warn);
@@ -153,6 +167,13 @@ export function applyEnemyTable(enemies, base, rows, warn = console.warn) {
       if (n === null) continue; // unreadable; keep the built-in, warning sent
       if (n === undefined) delete def[field]; // blank: the game's default wins
       else def[field] = n;
+    }
+
+    for (const field of FLAGS) {
+      if (!(field in row)) continue;
+      const raw = String(row[field] ?? '').trim();
+      if (raw === '') delete def[field];
+      else def[field] = parseBool(raw, LABEL, id, field, warn);
     }
 
     if ('spawnGroup' in row) {

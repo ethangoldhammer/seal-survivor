@@ -51,6 +51,12 @@ let playerShells = [];
 export function attachPlayerOutline(body) {
   for (const shell of playerShells) shell.material?.dispose();
   playerShells = body ? addOutlineShells(body, { color: CONFIG.playerOutline?.color ?? 0xffffff }) : [];
+  // A new body comes up at the base look, so the wind-up state has to come up
+  // clear with it — a flare left running from the seal that was just replaced
+  // would decay onto shells that never saw the strike.
+  pulsePhase = 0;
+  flare = 0;
+  boosted = false;
   applyPlayerOutline();
 }
 
@@ -63,6 +69,123 @@ export function applyPlayerOutline() {
     shell.visible = cfg.enabled !== false;
     if (shell.material) applyLook(shell.material, cfg, accumulatedScale(shell));
   }
+}
+
+// ---------------------------------------------------------------------------
+// The player's rim, winding up a strike
+// ---------------------------------------------------------------------------
+//
+// A strike being charged throbs the rim and the release blows it out. It lives
+// here rather than in systems/strike.js because the shells and the one function
+// that interprets a look are here — anywhere else would need a second copy of
+// applyLook, which is exactly the drift this file exists to prevent.
+//
+// Everything is ADDED to whatever CONFIG.playerOutline currently says, read
+// fresh each frame. That is what lets the rim be dragged around in the tuner
+// mid-wind-up and keeps the pulse relative to the tuned look instead of
+// stamping over it with numbers of its own.
+//
+// See CONFIG.strike.charge.outline for what the knobs mean.
+
+let pulsePhase = 0; // 0..1 through the current throb
+let flare = 0; // the release burst, 1 -> 0 over flareTime
+let boosted = false; // was anything added last frame? (see the idle guard)
+
+// Scratch, reused: this runs every frame of a wind-up and applyLook only ever
+// reads it. Allocating a look object per frame would be garbage for nothing.
+const chargeLook = { color: 0xffffff, thickness: 0, glow: 1, opacity: 1 };
+
+/**
+ * Fire the release flare. Called on the frame a strike actually launches.
+ * @param power the banked power it launched with, 0..1 — a flick pops, a full
+ *   commitment detonates.
+ */
+export function flarePlayerOutline(power = 1) {
+  flare = Math.max(flare, Math.min(1, Math.max(0, power)));
+}
+
+export function resetPlayerOutlineCharge() {
+  pulsePhase = 0;
+  flare = 0;
+  if (boosted) {
+    boosted = false;
+    applyPlayerOutline();
+  }
+}
+
+/**
+ * @param dt    REAL seconds — the pulse is a readout of the button being held,
+ *              and a hit-stop should not stall it.
+ * @param power banked power of the wind-up in progress, 0..1, or 0 when nothing
+ *              is being held.
+ */
+export function updatePlayerOutline(dt, power) {
+  const cfg = CONFIG.playerOutline ?? {};
+  const pc = CONFIG.strike?.charge?.outline ?? {};
+  const off = pc.enabled === false || cfg.enabled === false;
+  const wind = off ? 0 : Math.min(1, Math.max(0, power || 0));
+
+  if (flare > 0) flare = Math.max(0, flare - dt / Math.max(0.01, pc.flareTime ?? 0.32));
+  if (off) flare = 0;
+
+  // Rate climbs with banked power — urgency reads as speed, and it keeps
+  // building after the brightness has run out of room to.
+  const hz = lerp(pc.hzMin ?? 2.2, pc.hzMax ?? 7.5, wind);
+  pulsePhase = (pulsePhase + dt * hz) % 1;
+
+  // A cosine rather than a sine, and the phase is zeroed the moment nothing is
+  // held, so every wind-up opens at the BOTTOM of a throb and swells out of it
+  // rather than starting halfway up one.
+  //
+  // What stops the rim JUMPING on the first frame is the other term: the whole
+  // boost rides `wind`, and banked power starts at zero and ramps, so the floor
+  // ramps in with it. The one case that does pop is resuming a wind-up that was
+  // released under `minFire` — power survives that release (see strike.js), so
+  // the rim comes back at the brightness that power has already bought. Which
+  // is the honest reading: the bank really is that big.
+  const wave = 0.5 - 0.5 * Math.cos(pulsePhase * TAU);
+  const depth = Math.min(1, Math.max(0, pc.pulseDepth ?? 0.55));
+  const throb = wind * (1 - depth + depth * wave);
+  // Squared, so the flare falls off its peak fast and then lingers — a linear
+  // decay reads as a dimmer switch rather than as something blowing off.
+  const burst = flare * flare;
+
+  const glowAdd = (pc.glowAdd ?? 5) * throb + (pc.flareGlow ?? 9) * burst;
+  const thickAdd = (pc.thicknessAdd ?? 0.06) * throb + (pc.flareThickness ?? 0.14) * burst;
+
+  // Idle: write the base look back ONCE and then do nothing at all. Without the
+  // latch this would push four materials' worth of colour every frame of a run
+  // in which nobody is charging anything, and — worse — would fight the tuner,
+  // overwriting a slider drag on the very next frame.
+  if (glowAdd <= 0 && thickAdd <= 0) {
+    pulsePhase = 0;
+    if (boosted) {
+      boosted = false;
+      applyPlayerOutline();
+    }
+    return;
+  }
+  boosted = true;
+
+  chargeLook.color = cfg.color ?? 0xffffff;
+  chargeLook.opacity = cfg.opacity ?? 1;
+  // Glow is the channel that blooms: it multiplies the colour past 1.0 into the
+  // HDR bright-pass, so this is a rim that throws light rather than a lighter
+  // blue one. Thickness swells alongside it because bloom alone haloes a line
+  // that is still the same width, and the wind-up should read as the seal
+  // getting BIGGER.
+  chargeLook.glow = (cfg.glow ?? 1) + glowAdd;
+  chargeLook.thickness = (cfg.thickness ?? 0) + thickAdd;
+
+  for (const shell of playerShells) {
+    if (shell.material) applyLook(shell.material, chargeLook, accumulatedScale(shell));
+  }
+}
+
+const TAU = Math.PI * 2;
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
 }
 
 // ---------------------------------------------------------------------------

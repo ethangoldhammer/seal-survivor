@@ -5,7 +5,7 @@ import { bounds } from '../arena.js';
 import { pickups, spawnXpOrb } from '../entities/pickups.js';
 import { recordSpawn } from './playtest.js';
 import { primeBoatDebris, spawnBoatDebris, updateBoatDebris, resetBoatDebris, blastDebris } from './boatDebris.js';
-import { spawnCrewFor, updateCrew, resetCrew, releaseCrew, blastCrew } from './crew.js';
+import { spawnCrewFor, updateCrew, resetCrew, releaseCrew, blastCrew, clearDeckCache } from './crew.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
@@ -31,6 +31,9 @@ export function resetBoats(scene) {
   attractorOrbs.length = 0;
   resetBoatDebris(scene);
   resetCrew(scene);
+  // The measured deck is a fact about the MODEL, so it survives a run — but
+  // not a model swapped underneath it from the T panel.
+  clearDeckCache();
   spawnTimer = randomBetween(CONFIG.boats.spawnMin, CONFIG.boats.spawnMax);
   clock = 0;
 }
@@ -348,7 +351,7 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
   const radius = (blast.radius ?? 9) * (b.isTrawler ? (blast.trawlerMul ?? 1.4) : 1);
   const strength = (blast.strength ?? 11) * (b.isTrawler ? (blast.trawlerMul ?? 1.4) : 1);
   blastDebris(b.mesh.position.x, b.mesh.position.y, radius, strength);
-  blastCrew(b.mesh.position.x, b.mesh.position.y, radius, strength);
+  blastCrew(scene, b.mesh.position.x, b.mesh.position.y, radius, strength);
 
   scene.remove(b.mesh);
   boats.splice(index, 1);

@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { boats, damageBoat, hitsBoat } from './boats.js';
+import { nearestFloatingCrew, crewPosition, crewRadius, eatCrew } from './crew.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 
 // Orca Family — a pod of three that hunts the SURFACE BOATS specifically.
@@ -56,7 +57,7 @@ function newMember(root, visual, anim, slot, pos) {
     pos: pos.clone(),
     vel: new THREE.Vector3(),
     state: 'cruise',
-    target: null, // { kind: 'boat' | 'fish', ref }
+    target: null, // { kind: 'human' | 'boat' | 'fish', ref }
     // Staggered from the start so all three don't breach the same hull on the
     // same frame — the pod should read as taking turns, not as a volley.
     cooldown: slot * 0.45,
@@ -106,12 +107,19 @@ function formationPoint(m, playerPos, out) {
   );
 }
 
-// Boat first, always. Fish only when the sea is clear of hulls.
+// A BODY IN THE WATER first, then a boat, then a fish.
+//
+// The order is the whole behaviour: sink a hull and the pod that sank it turns
+// around to eat the people who were on it, which is a better answer to "what
+// happens next" than going straight back to cruising.
 function acquire(m, enemiesList) {
   const c = CONFIG.orca;
   const range2 = c.huntRange * c.huntRange;
   let best = null;
   let bestD2 = range2;
+
+  const body = nearestFloatingCrew(m.pos.x, m.pos.y, c.huntRange);
+  if (body) return { kind: 'human', ref: body };
 
   for (const b of boats) {
     const dx = b.mesh.position.x - m.pos.x;
@@ -137,6 +145,10 @@ function acquire(m, enemiesList) {
 function targetAlive(target, enemiesList) {
   if (!target) return false;
   if (target.kind === 'boat') return boats.includes(target.ref);
+  // A body somebody else already ate — or one that has dissolved out — takes
+  // the pod straight back to cruising.
+  if (target.kind === 'human') return !!nearestFloatingCrew(
+    crewPosition(target.ref).x, crewPosition(target.ref).y, 0.01);
   return enemiesList.includes(target.ref);
 }
 
@@ -193,7 +205,9 @@ export function updateOrcaPod(dt, scene, playerPos, level, enemiesList, hooks = 
         if (found) { m.target = found; m.state = 'charge'; }
       }
     } else if (m.state === 'charge') {
-      const tp = m.target.ref.mesh.position;
+      const tp = m.target.kind === 'human'
+        ? crewPosition(m.target.ref)
+        : m.target.ref.mesh.position;
       _to.set(tp.x - m.pos.x, tp.y - m.pos.y, 0);
       const dist = _to.length() || 1e-4;
       _to.divideScalar(dist);
@@ -210,12 +224,17 @@ export function updateOrcaPod(dt, scene, playerPos, level, enemiesList, hooks = 
 
       const landed = m.target.kind === 'boat'
         ? hitsBoat(m.target.ref, m.pos.x, m.pos.y, c.hitRadius)
-        : dist <= c.hitRadius + m.target.ref.radius;
+        : dist <= c.hitRadius + (m.target.kind === 'human'
+          ? crewRadius(m.target.ref)
+          : m.target.ref.radius);
 
       if (landed) {
         hooks.onStrike?.(m.pos.x, m.pos.y);
 
-        if (m.target.kind === 'boat') {
+        if (m.target.kind === 'human') {
+          const meal = eatCrew(scene, m.target.ref);
+          if (meal) hooks.onCrewEaten?.(meal.x, meal.y);
+        } else if (m.target.kind === 'boat') {
           const index = boats.indexOf(m.target.ref);
           if (index >= 0) {
             const boat = m.target.ref;

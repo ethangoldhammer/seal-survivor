@@ -1,41 +1,46 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } from './config.js';
-import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetSignatureColor, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings } from './assets.js';
+import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetSignatureColor, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
+import { updateBiolumSkin } from './systems/biolumSkin.js';
+import { reseatDecor } from './systems/decor.js';
 import { createWorld } from './world.js';
 import { midWater, bounds } from './arena.js';
 import { initInput, updateInput, clearPendingInput, input } from './input.js';
 import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, applyRecoil, rebuildShipBody } from './entities/player.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy } from './entities/enemies.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, gulpPickups } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, gulpPickups, setChumDifficulty } from './entities/pickups.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake } from './systems/feedback.js';
-import { initAudio, unlockAudio, applyAudioBusSettings, updateBusDepth } from './systems/audio.js';
+import { initAudio, unlockAudio, applyAudioBusSettings, updateBusDepth, resetRepetition } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
-import { strikeState, tryStrike, restoreCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, strikeDirection } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
 import { updateDayCycle, resetDayCycle, advanceClock } from './systems/daylight.js';
 import { updateWeather, resetWeather } from './systems/weather.js';
+import { lightningStrikes } from './systems/lightning.js';
 import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
 import { updateProjectileTrails, clearProjectileTrails } from './systems/projectileTrails.js';
 import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from './systems/projectileVoices.js';
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
 import { createStrikeRing, updateStrikeRing } from './systems/strikeRing.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
-import { play as playMusic, stop as stopMusic, duckForUpgrade, sweepOpen, applyMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth } from './systems/music.js';
+import { play as playMusic, duckForUpgrade, sweepOpen, applyMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth } from './systems/music.js';
+import { startAmbient, stopAmbient, preloadAmbient } from './systems/ambient.js';
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
-import { updateCrabSpawner, resetCrabSpawner } from './systems/crabSpawner.js';
+import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls } from './systems/seagull.js';
 import { updateBoats, resetBoats, boats } from './systems/boats.js';
 import { damageDebris } from './systems/boatDebris.js';
+import { damageCrew, nearestFloatingCrew, eatCrew } from './systems/crew.js';
 import { updateEel, resetEel, resetEelBolts, currentEelStats, createEelCompanion, resetEelCompanion, rebuildEelCompanion } from './systems/eel.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, rebuildBelugaDrone } from './systems/beluga.js';
 import { updateSealTeam, resetSealTeam, rebuildSealTeam } from './systems/sealTeam.js';
@@ -45,7 +50,7 @@ import { createDumboOcto, updateDumbo, resetDumbo, rebuildDumboOcto } from './sy
 import { firePearl, burstPearl, updateOyster, resetOyster } from './systems/oyster.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab, rebuildOctoGrabber } from './systems/octoGrab.js';
 import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
-import { applyPlayerOutline, initCreatureOutlines, applyCreatureOutlines } from './systems/outlines.js';
+import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines } from './systems/outlines.js';
 import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginRestartTransition } from './systems/deathDive.js';
 import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime } from './systems/levelUpTime.js';
 import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
@@ -56,6 +61,7 @@ import { initTuner, refreshTuner, setTunerMeta } from './ui/tuner.js';
 import { initTexturePanel } from './ui/textures.js';
 import { initTypography, applyTypography } from './ui/typography.js';
 import { initGamepadDebug, updateGamepadDebug } from './ui/gamepadDebug.js';
+import { initSfxDebug, updateSfxDebug } from './ui/sfxDebug.js';
 import * as playtest from './systems/playtest.js';
 import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js';
 
@@ -88,6 +94,9 @@ initInput(world.renderer.domElement);
 initParticles(world.scene);
 initImpactFlashes(world.scene);
 initFeedback(world.grid);
+// What a flash sounds like and what a bolt does are gameplay; world.js only
+// owns where and when one is drawn. See onLightning below.
+world.setLightningHandler(onLightning);
 initAudio();
 initHaptics();
 
@@ -134,6 +143,10 @@ let simClock = 0; // free-running clock for the beluga drone's orbit
 let muzzleCursor = 0; // which flipper the next ALTERNATING volley starts from (missiles)
 const muzzlePoint = new THREE.Vector3(); // scratch — spawnProjectile copies it immediately
 const impulseDir = new THREE.Vector3(); // scratch — hit direction handed to the bone spring
+// Scratch for the per-frame "where would a strike go" prediction the lens
+// corridor is drawn along. Read and copied inside updateCamera on the same
+// frame it's written, so one object is enough.
+const dashPrediction = { x: 0, y: 0 };
 
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
@@ -169,6 +182,7 @@ async function boot() {
   // rather than only after the slider is next touched.
   applyNoiseSettings();
   applyGrassSettings();
+  applyBiolumSkinSettings();
   // Must come after the looks above (it reads the size multipliers to keep
   // rim width in world units) and before the first createVisual call below —
   // it hooks spawns, so anything built earlier would come up with no outline.
@@ -217,6 +231,7 @@ async function boot() {
   }, handleTunerChange);
   if (DEV_UI) bindGlobalKeys();
   if (DEV_UI) initGamepadDebug();
+  if (DEV_UI) initSfxDebug();
   if (DEV_UI) initPlaytestOverlay();
   setHighScore(highScore());
   showStartMenu();
@@ -251,7 +266,10 @@ function bindGlobalKeys() {
 // camera when those are what changed.
 function handleTunerChange(path) {
   recomputeStats();
-  if (path === '*' || path.startsWith('arena') || path.startsWith('camera')) world.resize();
+  // world.resize() called directly, so it does NOT fire the window resize
+  // event systems/decor.js listens on — anything standing on the seabed has
+  // to be re-seated by hand here or it hangs at the old floor height.
+  if (path === '*' || path.startsWith('arena') || path.startsWith('camera')) { world.resize(); reseatDecor(); }
   if (path === '*' || path.startsWith('grid')) world.grid.build();
   // colors/caustics/godrays update in place every frame already via
   // world.updateColors, called from world.updateSurface — nothing to do here.
@@ -266,6 +284,9 @@ function handleTunerChange(path) {
   // safe to fire from a slider's every input event.
   if (path === '*' || path.startsWith('sealShader')) applyNoiseSettings();
   if (path === '*' || path.startsWith('grass')) applyGrassSettings();
+  // Including the pattern dropdown — the pattern is a uniform, not a compile
+  // switch, so switching it repaints every fish already swimming.
+  if (path === '*' || path.startsWith('biolumSkin')) applyBiolumSkinSettings();
   // Also a pure material/uniform write on shells that already exist, so every
   // input event can drive it — no rebuild, and the toggle just hides them.
   if (path === '*' || path.startsWith('playerOutline')) applyPlayerOutline();
@@ -313,6 +334,11 @@ function startGame() {
 
   unlockAudio(); // browsers need a gesture before any sound can play
   preloadDefaultTracks(); // fetches the built-in loops once; no-op after the first call
+  preloadAmbient(); // same deal for the ambient bed's clips
+  // A death is the busiest the mix ever gets, so the repetition ducking is at
+  // its deepest right as the run ends. Cleared here or the first shots of the
+  // next run come out quiet for no reason the player can see.
+  resetRepetition();
   hideAllMenus();
   resetEnemies(world.scene);
   resetProjectiles(world.scene);
@@ -349,6 +375,9 @@ function startGame() {
   // A fresh run shouldn't inherit the death rumble from the last one.
   stopHaptics();
   resetBubbles();
+  // Same idea for the rim: a run that ended mid-flare shouldn't hand the next
+  // one a seal that opens lit and fades down.
+  resetPlayerOutlineCharge();
   // The first run of a session opens in the morning; after that the clock
   // keeps whatever time the last one ended at, unless dayNight.restartAtMorning
   // says otherwise. resetDayCycle knows which — see systems/daylight.js.
@@ -359,6 +388,10 @@ function startGame() {
   // storm. Drops still falling from the old run go with it.
   resetWeather();
   world.rain.reset();
+  // Bolts mid-flicker and any strike queued but not yet resolved. Without
+  // this a strike that landed on the frame the last run ended would resolve
+  // into the new one and kill whatever had just spawned.
+  world.lightning.reset();
   resetOxygenFx();
   resetCrabSpawner();
   resetSeagulls(world.scene);
@@ -388,6 +421,10 @@ function startGame() {
   // from the level it's handed, so running it first started every new run on
   // whatever loop the PREVIOUS run had climbed to.
   playMusic(gameState.level);
+  // Picks the rotation up where the last run's fade-out left it rather than
+  // restarting on clip one, so back-to-back runs don't all open on the same
+  // bed. See startAmbient.
+  startAmbient();
   // The opening shot: wide and barely tracking, easing into the normal follow
   // over the state's blend-out. No-op with the cinematic camera off.
   cineEvent('roundStart');
@@ -448,14 +485,18 @@ function killPlayer() {
   // B key is just noise in a player's console.
   if (DEV_UI) showPlaytestReport(playtest.endRun('death'));
   else playtest.endRun('death');
-  feedback('bigKill', { x: player.mesh.position.x, y: player.mesh.position.y, scale: 1.6 });
+  feedback('playerDeath', { x: player.mesh.position.x, y: player.mesh.position.y, scale: 1.6 });
 
   // The score isn't posted here — showGameOver takes the name first and
   // submits on confirm, then refreshes the high score itself.
   const toScoreScreen = () => {
-    // Held all the way through the dive so the drag-down IS the last thing the
-    // track does, rather than the music cutting out on the frame of the hit.
-    stopMusic();
+    // The music deliberately does NOT stop here. It rides the dive down like a
+    // tape stop, then winds back up to pitch under the score card and keeps
+    // looping through the name box and the high scores — dying ends the run,
+    // not the soundtrack. The rate hand-off is deathDive's releaseMusic.
+    // Fades rather than cuts, and over its own longer `fadeOut` — the water
+    // should still be there for a moment after the score is on screen.
+    stopAmbient();
     showGameOver(gameState);
   };
 
@@ -463,6 +504,13 @@ function killPlayer() {
     toScoreScreen();
     return;
   }
+  // The seabed notices. Crabs already down there switch to the corpse on their
+  // own (the `corpse` branch in the crawl behavior); this calls in the rest,
+  // who walk on from the wings and are drained by updateDeathPile in the death
+  // branch of the frame loop. Armed AFTER the no-dive early return above,
+  // because that path cuts straight to the score screen and would leave a wave
+  // queued with nothing left running to spawn it.
+  summonDeathPile();
   startDeathDive(toScoreScreen);
 }
 
@@ -655,22 +703,33 @@ function processPendingSplashes() {
       const dy = other.mesh.position.y - s.y;
       if (dx * dx + dy * dy > s.radius * s.radius) continue;
 
-      other.hp -= s.damage;
+      // `lethal` is not "a very large number" — a splash that has to kill
+      // whatever it touches asks for exactly the health that is left, so the
+      // playtest report still records an honest damage figure instead of an
+      // Infinity that poisons every average downstream of it.
+      const dealt = s.lethal ? Math.max(0, other.hp) : s.damage;
+      other.hp -= dealt;
       other.flash = CONFIG.fx.hitFlash;
       other.hitThisFrame = true;
-      playtest.recordDamage(s.source ?? 'splash', s.damage, other);
-      onEnemyDamagedFeedback(other, s.damage, other.mesh.position.x, other.mesh.position.y);
+      playtest.recordDamage(s.source ?? 'splash', dealt, other);
+      onEnemyDamagedFeedback(other, dealt, other.mesh.position.x, other.mesh.position.y);
       if (other.hp <= 0) {
         onEnemyKilledFeedback(other);
         removeEnemy(world.scene, i);
       }
     }
     // Anything going off in the water also breaks up the wreckage floating in
-    // it — a mussel landing in a debris field should clear it.
+    // it — a mussel landing in a debris field should clear it — and takes
+    // anybody standing in the blast off their boat.
     damageDebris(world.scene, s.x, s.y, s.radius, s.damage, {
       onDebrisBroken: (x, y) => feedback('debrisBreak', { x, y }),
     });
-    feedback('bigKill', { x: s.x, y: s.y, scale: 1.3 });
+    damageCrew(world.scene, s.x, s.y, s.radius);
+    // Opt-out, for blasts that bring their own. A lightning strike already
+    // fired `lightningStrike` the moment the bolt was drawn; stacking bigKill
+    // on top of it doubles the shake and adds the hit-stop that entry
+    // deliberately does not have.
+    if (s.feedback !== false) feedback('bigKill', { x: s.x, y: s.y, scale: 1.3 });
   }
   pendingSplashes.length = 0;
 
@@ -883,6 +942,50 @@ function collectChum(value, x, y, healMul = 1) {
 // permanent Rapid Fire upgrades and the temporary pickup feed in here and are
 // audible. Pellet count is not a parameter and must not become one — see
 // CONFIG.weapon.shotSfx.
+// A flash, of either kind. Fired from the weather's own clock, so it lands on
+// menus and through a death as well as during a run — the storm is the
+// world's, not the run's, and a sky that only thundered while you were alive
+// would give the game away.
+function onLightning(kind, x, y) {
+  if (kind === 'strike') feedback('lightningStrike', { x, y });
+  else feedback('thunder', { x, y });
+}
+
+// What a bolt reaching the water does. The creatures go through the same
+// radius-AoE queue as a pearl bomb or a seagull's dive — same kill path, same
+// orbs, same score, same food-chain link — with `lethal` set, so a shark with
+// most of its health left dies exactly like a minnow does.
+function resolveLightningStrike(strike) {
+  const cfg = CONFIG.weather.lightning;
+  pendingSplashes.push({
+    x: strike.x,
+    y: strike.y,
+    radius: cfg.killRadius,
+    damage: 0,
+    lethal: true,
+    exclude: null,
+    source: 'lightning',
+    feedback: false, // `lightningStrike` already fired when the bolt was drawn
+  });
+
+  // The seal. Off by default (see CONFIG.weather.lightning.playerDamage): an
+  // instant death out of an offscreen event nobody could read is the least
+  // fair thing in the game. Turned up, the surface becomes real danger in a
+  // storm — and the counterplay already exists, because the bolt only ever
+  // reaches what is near the top of the water.
+  const dmg = cfg.playerDamage ?? 0;
+  if (dmg > 0) {
+    const dx = player.mesh.position.x - strike.x;
+    const dy = player.mesh.position.y - strike.y;
+    if (dx * dx + dy * dy <= cfg.killRadius * cfg.killRadius) {
+      player.hp -= dmg;
+      playtest.recordPlayerDamage(dmg, 'lightning');
+      feedback('playerHit', { x: player.mesh.position.x, y: player.mesh.position.y });
+      if (player.hp <= 0 && !deathState.active) killPlayer();
+    }
+  }
+}
+
 function shotSfxOpts(interval) {
   const cfg = CONFIG.weapon.shotSfx ?? {};
   if (cfg.enabled === false) return undefined;
@@ -1319,6 +1422,9 @@ function animate(now) {
   // Reads the pad snapshot updateInput just took, so it must follow it. No-op
   // unless G is held.
   updateGamepadDebug();
+  // No-op unless the sound feed is up (0). Sits here rather than inside the
+  // pause gate so the ambient bed can still be watched from a menu.
+  updateSfxDebug();
   // Same ordering requirement. Outside the pause gate on purpose: the level-up
   // menu is only ever open WHILE paused, so gating this on !paused would mean
   // the pad could never drive it. No-op when no menu is up.
@@ -1327,6 +1433,8 @@ function animate(now) {
   if (gameState.running && !gameState.paused) {
     gameState.time += dt;
     gameState.difficulty = gameState.time * CONFIG.spawn.difficultyPerSecond;
+    // What a dropped orb is worth right now — see CONFIG.xp.dropRamp.
+    setChumDifficulty(gameState.difficulty);
     shootCooldown -= dt;
     missileCooldown -= dt;
     scallopCooldown -= dt;
@@ -1375,7 +1483,19 @@ function animate(now) {
     // Breath and wake bubbles, fired from the mouth and tail-tip anchors
     // updatePlayer just refreshed. Gameplay dt, not real dt: a hit-stop
     // should freeze the seal's exhale along with everything else.
-    updateBubbles(dt, player.aimRig, player.velocity, player.aboveSurface);
+    //
+    // The last argument opens BOTH emitters wide for a strike wind-up, scaled
+    // by the power banked so far. It follows the BUTTON rather than
+    // strikeState.charging, for the same reason `chumSealed` below does:
+    // charging goes false the instant the bar runs dry, and the venting must
+    // not cut out halfway through a hold the player is still committing to —
+    // it plateaus at whatever was banked instead. `pending` here is one frame
+    // old (updateCharge runs further down), which at 60fps is invisible and
+    // costs nothing to leave alone.
+    updateBubbles(
+      dt, player.aimRig, player.velocity, player.aboveSurface,
+      CONFIG.strike.enabled && input.strikeHeld ? strikeState.pending : 0,
+    );
 
     // Oxygen hitting zero drains health instead of an instant death — the
     // deplete/refill itself already happened inside updatePlayer, alongside
@@ -1425,7 +1545,10 @@ function animate(now) {
       onBoatDestroyed,
     });
 
-    const wantsToFire = CONFIG.weapon.autofire || input.firing;
+    // No trigger to pull any more — autofire is the whole answer. Kept as a
+    // named flag rather than inlined because it still gates which weapons run,
+    // and because turning it off in the tuner should silence all of them.
+    const wantsToFire = CONFIG.weapon.autofire;
     if (wantsToFire && shootCooldown <= 0 && input.aim.lengthSq() > 0.001) fire();
     if (wantsToFire && player.stats.missileCount > 0 && missileCooldown <= 0 && input.aim.lengthSq() > 0.001) fireMissiles();
     // Neither of these needs `wantsToFire`. The scallop is spat and forgotten
@@ -1492,13 +1615,15 @@ function animate(now) {
     // button down covers what it used to — hold through an empty bar and the
     // wind-up resumes by itself the moment food refills it.
     if (input.strikeRelease) {
-      // Strike launches along MOVEMENT (left stick / WASD), not aim. Dashing
-      // where you're pointing the cursor fought the movement you'd already
-      // committed to; dashing where you're steering is what the left stick
-      // is for. Falls back to aim only when you're stationary, so a strike
-      // from a standstill still goes somewhere sensible.
-      const dir = input.move.lengthSq() > 0.001 ? input.move.clone().normalize() : input.aim;
-      const fired = dir.lengthSq() > 0.001 && tryStrike(dir, player.stats);
+      // Strike launches BETWEEN the swim and the aim — the angular halfway
+      // point by default, so the left stick and the cursor each get half a
+      // say. Movement alone ignored where you were pointing; aim alone fought
+      // the momentum you'd committed to. One shared function with the corridor
+      // the lens drew during the wind-up, so the release goes exactly where
+      // the player was just shown it would. Returns the zero vector only when
+      // BOTH inputs are idle, which is the one case that shouldn't fire.
+      const dir = strikeDirection(input.move, input.aim);
+      const fired = (dir.x !== 0 || dir.y !== 0) && tryStrike(dir, player.stats);
       if (fired) {
         // Combo-scaled, same multiplier the speed ceiling in updatePlayer
         // uses — a dash fired deep in a chain launches harder, and the ceiling
@@ -1554,6 +1679,11 @@ function animate(now) {
           sfxOpts: { pitch: 1.18 - strikeState.power * 0.3 },
         });
         player.anim?.trigger('strike'); // roll clip, auto-returns to locomotion
+        // The rim blows off the body as the banked power leaves it — the top of
+        // the pulse that has been building for the whole wind-up. Scaled by the
+        // power actually spent, so a fizzle pops and a full commitment
+        // detonates. See CONFIG.strike.charge.outline.
+        flarePlayerOutline(strikeState.power);
 
         // THE GULP. The wind-up held the mouth shut while chum gathered around
         // the seal; this is the swallow. Runs after the strike's own feedback
@@ -1585,6 +1715,11 @@ function animate(now) {
     updateSpawning(dt, gameState, world.scene);
     updateEnemies(dt, world.scene, player.mesh.position, (x, y) => {
       feedback('chumEaten', { x, y, scale: 0.8 });
+    }, (x, y, e) => {
+      // Crumbs pulled off an orb on its way into a mouth. Thrown back along
+      // the eater's own motion so they stream off the food rather than puffing
+      // out of it — a shark hoovering on the pass leaves a wake of scraps.
+      feedback('chumHoover', { x, y, vx: -e.vx, vy: -e.vy, scale: 0.7 });
     });
 
     resolveCombat(dt, world.scene, {
@@ -1637,6 +1772,8 @@ function animate(now) {
       // landing; one coming apart gets its own, heavier crack.
       onDebrisHit: (x, y) => feedback('bulletHit', { x, y, scale: 0.8 }),
       onDebrisBroken: (x, y) => feedback('debrisBreak', { x, y }),
+      // Somebody knocked off a deck.
+      onCrewHit: (x, y) => feedback('crewHit', { x, y }),
     });
     processPendingSplashes(); // safe now that resolveCombat's own loop has finished
 
@@ -1711,6 +1848,7 @@ function animate(now) {
       onEnemyKilled: onEnemyKilledFeedback,
       onStrike: (x, y) => feedback('orcaStrike', { x, y }),
       onBoatHit: (boat, dmg, x, y) => feedback('orcaStrike', { x, y, scale: 1.3 }),
+      onCrewEaten: (x, y) => feedback('crewEaten', { x, y, scale: 0.9 }),
       onBoatDestroyed,
     });
     // Must follow updateEnemies for the same reason Bakalar's net does: a held
@@ -1796,11 +1934,43 @@ function animate(now) {
       );
     }
 
+    // A BODY IN THE WATER. The seal eats one on contact, and it pays out
+    // through the same collectChum every orb goes through — so the xp, the
+    // heal, the charge meter and the food chain all land exactly as they do
+    // for chum, because it IS chum, just a large piece of it.
+    {
+      const meal = nearestFloatingCrew(
+        player.mesh.position.x, player.mesh.position.y, player.stats.hitRadius);
+      if (meal) {
+        const at = eatCrew(world.scene, meal);
+        if (at) {
+          collectChum(at.xp, at.x, at.y, at.healMul);
+          feedback('crewEaten', { x: at.x, y: at.y });
+        }
+      }
+    }
+
+    // THE SEAL HIMSELF. Swimming or breaching through a boat's deck takes its
+    // crew off it — checked every frame rather than only mid-dash, because a
+    // seal arriving at speed is the same event to a man standing on a plank
+    // whether or not the strike button was involved.
+    damageCrew(
+      world.scene, player.mesh.position.x, player.mesh.position.y, player.stats.hitRadius,
+      {
+        dirX: player.velocity.x,
+        dirY: player.velocity.y,
+        onCrewHit: (x, y) => feedback('crewHit', { x, y }),
+      },
+    );
+
     // Sharks feed on fish whether or not the player is involved.
     resolvePredation(dt, world.scene, {
       onFishEaten: (fish, pred) => {
         feedback('bite', { x: fish.mesh.position.x, y: fish.mesh.position.y, vx: pred.vx, vy: pred.vy });
       },
+      // A hunter taking a body out of the water. The player gets nothing for
+      // it — that was their meal and something else had it.
+      onCrewEaten: (x, y) => feedback('crewEaten', { x, y, scale: 0.9 }),
     });
 
     updatePickups(
@@ -1855,7 +2025,13 @@ function animate(now) {
     // dilated `dt` as everything else, so the whole scene sinks together.
     updateEnemies(dt, world.scene, player.mesh.position, (x, y) => {
       feedback('chumEaten', { x, y, scale: 0.8 });
+    }, (x, y, e) => {
+      feedback('chumHoover', { x, y, vx: -e.vx, vy: -e.vy, scale: 0.7 });
     });
+    // The one thing that still SPAWNS after the run is over. Same dilated dt as
+    // the rest of the descent, so the arrivals slow with it instead of marching
+    // in at full speed under a slow-motion corpse.
+    updateDeathPile(dt, world.scene, gameState.difficulty, player.mesh.position);
     updateProjectiles(dt, world.scene, enemies);
     // The mix goes down with the body. This normally rides the player's depth
     // inside the run block above, so without it here the muffling froze at
@@ -1869,6 +2045,9 @@ function animate(now) {
       onFishEaten: (fish, pred) => {
         feedback('bite', { x: fish.mesh.position.x, y: fish.mesh.position.y, vx: pred.vx, vy: pred.vy });
       },
+      // A hunter taking a body out of the water. The player gets nothing for
+      // it — that was their meal and something else had it.
+      onCrewEaten: (x, y) => feedback('crewEaten', { x, y, scale: 0.9 }),
     });
   } else if (gameState.paused && levelUpState.active) {
     // The level-up freeze. Nothing above ran, so no creature steers, hunts,
@@ -1922,13 +2101,25 @@ function animate(now) {
   }
 
   updateStrikeRing(realDt, player.mesh.position, strikeState, gameState.running);
+  // The seal's own rim, throbbing through a wind-up and flaring on the release.
+  // Outside the pause gate alongside the ring, and on real time for the same
+  // reason: the pulse is a readout of a button being held, and a hit-stop
+  // freezing it mid-throb would read as the charge having stalled. The wind-up
+  // argument goes to 0 the moment a run isn't live, which eases the rim back to
+  // its tuned look on the game-over screen instead of leaving it lit.
+  updatePlayerOutline(
+    realDt,
+    gameState.running && !gameState.paused && CONFIG.strike.enabled && input.strikeHeld
+      ? strikeState.pending
+      : 0,
+  );
   // Real time, like the ring above: the indicator is a readout of where you
   // are pointing RIGHT NOW, and a hit-stop must not freeze it a frame behind
-  // the cursor. `wantsToFire` rather than input.firing, so autofire counts as
-  // firing and the beam doesn't sit at idle opacity for a whole run.
+  // the cursor. The guns run themselves, so this reads autofire rather than a
+  // trigger — otherwise the beam would sit at idle opacity for a whole run.
   updateAimIndicator(
     realDt, player.mesh.position, input.aim,
-    CONFIG.weapon.autofire || input.firing,
+    CONFIG.weapon.autofire,
     gameState.running && !gameState.paused,
   );
   updateProjectileTrails(realDt, world.scene, projectiles);
@@ -1950,10 +2141,26 @@ function animate(now) {
   // not of the run. One uniform write per material — the bend itself is all
   // vertex shader, so this does not scale with how much grass is on screen.
   updateGrassSway(rawDt);
+  // And the same again for the creatures that light themselves. Raw dt on
+  // purpose: a lanternfish's own glow has no business stopping because the
+  // game froze for 60ms on a hit.
+  updateBiolumSkin(rawDt);
 
   // Surface first: it advances the wave, and bubbles bursting at the water line
   // are solved against wherever the wave ended up this frame, not last frame's.
   world.updateSurface(realDt);
+  // Immediately after, because updateSurface is what spawns them. Drained
+  // unconditionally and only ACTED on during a live run: queued strikes that
+  // sat through a menu would otherwise all resolve on the frame it closed.
+  if (lightningStrikes.length) {
+    if (gameState.running && !gameState.paused && !deathState.active) {
+      for (const strike of lightningStrikes) resolveLightningStrike(strike);
+      // Safe to run here: the requirement is only that resolveCombat's loop
+      // over `enemies` has already finished, and it finished well above.
+      processPendingSplashes();
+    }
+    lightningStrikes.length = 0;
+  }
   updateParticles(realDt);
   world.grid.update(realDt, player.mesh.position, player.velocity);
   world.hexTiles.update(player.mesh.position);
@@ -1970,11 +2177,11 @@ function animate(now) {
   world.updateCamera(player.mesh.position, realDt, {
     velocity: player.velocity,
     aim: input.aim,
-    // Where a strike released THIS frame would actually go. Same rule
-    // tryStrike uses below — movement stick first, aim only from a standstill
-    // — because the corridor the lens draws has to be the line the dash will
-    // take, not the one the cursor is on.
-    dashDir: input.move.lengthSq() > 0.001 ? input.move : input.aim,
+    // Where a strike released THIS frame would actually go — literally the
+    // same function the release calls, not a copy of the rule, so the corridor
+    // and the dash cannot drift apart. Written into a reused object because
+    // this runs every frame.
+    dashDir: strikeDirection(input.move, input.aim, dashPrediction),
     chargePower: strikeState.pending,
     // The button, for the lens; the fuel-gated flag, for everything that a
     // dry meter really should stop. See the note in cineCamera.js.

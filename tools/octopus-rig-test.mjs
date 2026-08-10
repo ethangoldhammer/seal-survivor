@@ -205,22 +205,29 @@ function octoArmTip(i) {
   return v;
 }
 
-// Idle drift: hold the player still and watch a tip wander.
-let driftMin = Infinity;
-let driftMax = -Infinity;
-const samples = [];
-for (let i = 0; i < 420; i++) {
-  updateOctoGrab(dt, scene, player, 1, enemies, {});
-  if (i % 20 === 0 && i > 120) {
-    const t = tipOf(0);
-    samples.push(t.clone());
-    driftMin = Math.min(driftMin, t.y);
-    driftMax = Math.max(driftMax, t.y);
+// A BECALMED octopus holds still. This asserts the absence of an idle
+// animation, which is a deliberate design choice rather than an oversight: all
+// arm motion is meant to come from how the body actually moves, so a body that
+// is not moving produces arms that are not moving. An earlier pass asserted
+// the opposite — that idle tips wander — and that check was removed rather
+// than loosened, because a sine playing under a stationary creature is exactly
+// the decorated-stick look this is trying to get away from.
+//
+// (CONFIG.octoGrab.idleAmp turns a wander back on for a resting octopus; it
+// defaults to 0.)
+function tipSpreadOver(frames, target) {
+  const seen = [];
+  for (let i = 0; i < frames; i++) {
+    updateOctoGrab(dt, scene, target, 1, enemies, {});
+    if (i % 20 === 0 && i > 120) seen.push(tipOf(0).clone());
   }
+  let s = 0;
+  for (const a of seen) for (const b of seen) s = Math.max(s, a.distanceTo(b));
+  return s;
 }
-let spread = 0;
-for (const a of samples) for (const b of samples) spread = Math.max(spread, a.distanceTo(b));
-check('an idle tip drifts rather than sitting still', spread > 0.35, `${spread.toFixed(2)} units of wander`);
+const stillSpread = tipSpreadOver(420, player);
+check('a stationary octopus holds its arms still (no idle animation)',
+  stillSpread < 0.05, `${stillSpread.toFixed(3)} units of wander`);
 
 // Drag: yank the station a long way and check the arms LAG the body rather
 // than translating rigidly with it.
@@ -230,13 +237,63 @@ const bodyBefore = octo.position.clone();
 const tipBefore = tipOf(0);
 const yank = { x: player.x + 26, y: player.y };
 for (let i = 0; i < 18; i++) updateOctoGrab(dt, scene, yank, 1, enemies, {});
-const bodyMoved = octo.position.distanceTo(bodyBefore);
-const tipMoved = tipOf(0).distanceTo(tipBefore);
-check('the body accelerates away', bodyMoved > 0.5, `body moved ${bodyMoved.toFixed(2)}`);
-// A rigid bundle would move exactly with the body. Lagging means the tip
-// covers visibly less ground over the same window.
-check('the tips lag behind the body (secondary motion)',
-  tipMoved < bodyMoved * 0.92, `tip ${tipMoved.toFixed(2)} vs body ${bodyMoved.toFixed(2)}`);
+const bodyDelta = octo.position.clone().sub(bodyBefore);
+const tipDelta = tipOf(0).clone().sub(tipBefore);
+check('the body accelerates away', bodyDelta.length() > 0.5, `body moved ${bodyDelta.length().toFixed(2)}`);
+
+// A RIGID bundle would move exactly with the body — same vector, so the
+// residual between the two displacements would be ~0. Loose arms decouple from
+// it, and it does not matter which direction they decouple in: lagging behind
+// and whipping past are both the tentacle declining to move as one piece with
+// the mantle. Measuring the residual rather than a signed comparison is what
+// makes this check independent of which of the two happens to dominate.
+const residual = tipDelta.clone().sub(bodyDelta).length() / Math.max(1e-4, bodyDelta.length());
+check('the tips move independently of the body', residual > 0.25,
+  `${(residual * 100).toFixed(0)}% of the body's motion is not shared by the tip`);
+
+// CURVATURE — the direct test of "stick vs flagellum". A rigid arm has all its
+// bones in a line, so the turning angle between consecutive segments is ~0
+// everywhere. A flowing one bends along its length, and a travelling wave
+// means the bend is DISTRIBUTED rather than concentrated in one hinge.
+function armCurvature(armIndex) {
+  const spec = rig.arms[armIndex];
+  const root = octo.getObjectByName(spec.root);
+  const tip = octo.getObjectByName(spec.tip);
+  const chain = [];
+  let cur = tip;
+  while (cur && cur !== root) { chain.unshift(cur); cur = cur.parent; }
+  chain.unshift(root);
+
+  const pts = chain.map((b) => {
+    const v = new THREE.Vector3();
+    b.getWorldPosition(v);
+    return v;
+  });
+
+  let total = 0;
+  let worst = 0;
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  for (let i = 1; i < pts.length - 1; i++) {
+    a.subVectors(pts[i], pts[i - 1]);
+    b.subVectors(pts[i + 1], pts[i]);
+    if (a.lengthSq() < 1e-9 || b.lengthSq() < 1e-9) continue;
+    const ang = a.normalize().angleTo(b.normalize());
+    total += ang;
+    worst = Math.max(worst, ang);
+  }
+  return { total, worst, joints: pts.length - 2 };
+}
+
+// Measured mid-manoeuvre, while the wave is actually travelling.
+for (let i = 0; i < 10; i++) updateOctoGrab(dt, scene, { x: player.x - 20, y: player.y + 8 }, 1, enemies, {});
+const curve = armCurvature(0);
+check('the arm bends along its length rather than staying straight',
+  curve.total > 0.6, `${curve.total.toFixed(2)} rad total over ${curve.joints} joints`);
+// The distinction between a flowing tentacle and a stick with one elbow in it.
+check('the bend is spread along the arm, not one hinge',
+  curve.worst < curve.total * 0.7,
+  `worst joint ${curve.worst.toFixed(2)} of ${curve.total.toFixed(2)} rad`);
 
 // --- bioluminescence on the real arms --------------------------------------
 console.log('\nARM GLOW');

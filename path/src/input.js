@@ -1,10 +1,15 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 
+// There is no `firing` here any more. The seal shoots on its own — see
+// CONFIG.weapon.autofire, which is now the only thing that decides whether the
+// guns are live. Every input that used to pull the trigger (click, gamepad A, a
+// hard push on the touch aim stick) went to the strike meter instead, because a
+// button you have to hold down to keep shooting is a button you can't spend on
+// anything else.
 export const input = {
   move: new THREE.Vector2(0, 0),
   aim: new THREE.Vector2(1, 0),
-  firing: false,
   strike: false, // edge-triggered — true for exactly one frame per press
   // The strike is a charge-up now: the press starts the meter filling, and it
   // is the RELEASE that launches the dash (see systems/strike.js). So the
@@ -40,8 +45,16 @@ const STRIKE_BUTTONS = [4, 5, 6, 7];
 const strikeButtonHeld = {};
 let domElement = null;
 const mouseNDC = new THREE.Vector2(0, 0);
-let mouseDown = false;
+// The mouse's charge input, joining the same OR as Space and the four shoulder
+// buttons. ANY button counts — left is the one to reach for, but with autofire
+// there's nothing else a click could mean, so right and middle charge too
+// rather than being quietly inert.
+let mouseStrikeHeld = false;
 let hasMouse = false;
+// Which buttons are physically down, by `MouseEvent.button`. Tracked as a set
+// rather than a single flag: press left, press right, release right should keep
+// charging, and a boolean would drop the meter on the first let-go.
+const mouseButtonsDown = new Set();
 
 // --- touch: two floating virtual sticks ------------------------------------
 // Fingers are tracked by `identifier`, never by position in the touches list.
@@ -134,19 +147,31 @@ export function initInput(canvas) {
   });
   canvas.addEventListener('mousedown', (e) => {
     hasMouse = true;
-    mouseDown = true;
+    // Raise the press edge here rather than in updateInput, the way Space does:
+    // the event IS the edge, and a click that opens and closes inside one frame
+    // would be invisible to a poll of `mouseStrikeHeld` alone.
+    if (!mouseButtonsDown.size) strikeRequested = true;
+    mouseButtonsDown.add(e.button);
+    mouseStrikeHeld = true;
     updateMouseNDC(e.clientX, e.clientY);
   });
-  window.addEventListener('mouseup', () => {
-    mouseDown = false;
+  window.addEventListener('mouseup', (e) => {
+    mouseButtonsDown.delete(e.button);
+    mouseStrikeHeld = mouseButtonsDown.size > 0;
   });
+  // Otherwise a right-button charge opens the browser's context menu on top of
+  // the game, which both hides the wind-up and swallows the mouseup that
+  // launches.
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   window.addEventListener('blur', () => {
-    mouseDown = false;
     keys.up = keys.down = keys.left = keys.right = false;
     // Backgrounding the tab mid-drag never delivers the touchend. If a strike
     // was winding up, drop it rather than launching — losing focus is not a
-    // let-go, and the same reasoning as touchcancel applies.
-    const wasCharging = touchStrikeDown();
+    // let-go, and the same reasoning as touchcancel applies. A held mouse
+    // button is in the same boat: the mouseup lands on whatever took focus.
+    const wasCharging = touchStrikeDown() || mouseStrikeHeld;
+    mouseButtonsDown.clear();
+    mouseStrikeHeld = false;
     clearSticks();
     if (wasCharging) suppressStrikeRelease = true;
   });
@@ -339,14 +364,18 @@ export function clearPendingInput() {
   // release (and so launch a strike) on the first frame of the new run.
   spaceHeld = false;
   strikeHeldPrev = anyStrikeDown;
-  mouseDown = false;
+  // Zeroed rather than sampled, for the same reason as Space: there's no way to
+  // ask which mouse buttons are down, and a mouseup still to come will empty the
+  // set anyway. This matters more now that the click IS the strike — the click
+  // on "Start run" is still down as the first frame renders.
+  mouseButtonsDown.clear();
+  mouseStrikeHeld = false;
   // The tap that dismissed the splash or the score card is still down; adopting
   // it as a stick anchor would have the run open with a thumb already deflected
   // from wherever the button happened to be.
   clearSticks();
   keys.up = keys.down = keys.left = keys.right = false;
   input.move.set(0, 0);
-  input.firing = false;
   input.strike = false;
   input.strikeHeld = anyStrikeDown;
   input.strikeRelease = false;
@@ -636,8 +665,8 @@ export function updateInput(camera, playerPos) {
     }
   }
 
-  // Aim stick. Magnitude only decides whether to fire (below) — the direction
-  // is what aiming wants, at any deflection.
+  // Aim stick. Direction only — the guns run themselves now, so there's no
+  // threshold to cross and any deflection at all just re-points the seal.
   const aimMag = readStick(sticks.aim, aimVec);
   if (!aimed && aimMag) {
     input.aim.copy(aimVec);
@@ -661,22 +690,17 @@ export function updateInput(camera, playerPos) {
   }
 
   // --- firing ---
-  // A only, on the pad. Every bumper and trigger is boost now (see below), so
-  // RT is no longer available here.
-  input.firing = false;
-  if (pad?.buttons[0]?.pressed) input.firing = true;
-  // The aim stick doubles as the trigger: push it past `fireAt` and you shoot.
-  // A threshold of its own, well above the aim deadzone, so the ship can be
-  // re-pointed with a nudge without opening fire.
-  if (aimMag >= (CONFIG.touch.fireAt ?? 0.35)) input.firing = true;
-  if (mouseDown) input.firing = true;
+  // Nothing to read: the guns are on a timer of their own (CONFIG.weapon
+  // .autofire). Gamepad A used to fire and is now left alone on purpose rather
+  // than reassigned to the strike — it is also the menu confirm, so the press
+  // that picks a level-up card would start a charge on the way out.
 
   // --- strike (edge-triggered: true for exactly one frame per press) ---
   // All four shoulder inputs — LB, RB, LT, RT — boost, so either index finger
   // can do it without thinking about which. Edge-triggered per button rather
   // than per group: holding LT and then tapping RT should give you a second
   // boost, which a single OR'd "any of them is down" flag would swallow.
-  let anyStrikeDown = spaceHeld;
+  let anyStrikeDown = spaceHeld || mouseStrikeHeld;
   for (const b of STRIKE_BUTTONS) {
     const down = !!pad?.buttons[b]?.pressed;
     if (down && !strikeButtonHeld[b]) strikeRequested = true;

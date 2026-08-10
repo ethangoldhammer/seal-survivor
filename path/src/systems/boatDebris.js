@@ -58,7 +58,7 @@ function cfg() {
 function stampOf(root, scale) {
   let stamp = null;
   root.traverse((o) => {
-    if (stamp || !o.isMesh || !o.geometry) return;
+    if (stamp || o.userData.__crew || !o.isMesh || !o.geometry) return;
     const mat = Array.isArray(o.material) ? o.material[0] : o.material;
     stamp = `${o.geometry.uuid}|${mat?.uuid ?? 'none'}`;
   });
@@ -75,6 +75,9 @@ function bakedParts(root) {
   const local = new THREE.Matrix4();
   const parts = [];
   root.traverse((o) => {
+    // The crew stand ON the boat as children of it (see systems/crew.js), and
+    // a wreck made partly of fisherman is not the wreck we want.
+    if (o.userData.__crew) return;
     if (!o.isMesh || !o.geometry?.attributes?.position) return;
     local.multiplyMatrices(inv, o.matrixWorld);
     const geometry = o.geometry.clone().applyMatrix4(local);

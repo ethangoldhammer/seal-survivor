@@ -13,6 +13,19 @@ export const bounds = {
   height: 50,
 };
 
+// How much visible seabed sits above bounds.bottom. world.js builds the floor
+// plane so its TOP edge lands exactly here (the rest of that plane is a skirt
+// hanging below, covering the death dive's camera overshoot). Anything planted
+// ON the floor has to agree with it, so the number lives here rather than
+// being written once in the backdrop and once in whatever stands on it.
+export const SEABED_HEIGHT = 1.2;
+
+// World Y of the seabed surface — where a plant's roots or a crab's feet go.
+// A function, not a constant: bounds.bottom moves on every resize.
+export function seabedTopY() {
+  return bounds.bottom + SEABED_HEIGHT;
+}
+
 export function updateBounds(aspect) {
   const h = CONFIG.arena.viewHeight;
   const air = h * CONFIG.arena.surfaceFromTop;
@@ -36,7 +49,43 @@ export function midWater() {
 // truth — world.js walks the surface geometry through `surfaceHeightAt`, and
 // the grid shader clips against the same numbers by injecting WAVE into its
 // GLSL, so the drawn line and anything cut to it cannot drift apart.
-export const WAVE = { k1: 0.25, w1: 2.0, k2: 0.11, w2: -1.3, amp2: 0.5 };
+// k3/w3/amp3 are the CHOP: a third, shorter, faster term that only appears in
+// heavy weather. Weighted by `sea.chop`, which is 0 in a calm — so on a clear
+// day the formula is exactly the two-term wave it has always been, and the
+// storm adds to it rather than replacing it.
+export const WAVE = {
+  k1: 0.25, w1: 2.0,
+  k2: 0.11, w2: -1.3, amp2: 0.5,
+  k3: 0.63, w3: 3.4, amp3: 0.45,
+};
+
+// THE LIVE SEA STATE. `CONFIG.arena.waveAmplitude` is the calm-water baseline;
+// this is what the water is actually doing right now, after the weather has
+// had its say (see world.updateSurface, which is the only writer).
+//
+// It exists because the wave formula has FOUR copies — this one, plus a GLSL
+// transcription in the water fill, the grid and the horizon fog — and every
+// one of them used to read the config value independently. The moment the
+// amplitude became a live number rather than a constant, four independent
+// readers meant four chances to be a frame out of step, and a fill clipped to
+// a different wave than the line drawn on it is a visible tear.
+export const sea = {
+  amp: CONFIG.arena.waveAmplitude,
+  chop: 0, // 0..1, how much of the storm term is mixed in
+};
+
+export function setSeaState(amp, chop) {
+  sea.amp = amp;
+  sea.chop = chop;
+}
+
+// The furthest the surface can stray from the still line at the CURRENT
+// settings — every term at once, all in phase. Whoever sizes geometry that has
+// to contain the wave asks this rather than guessing a headroom, because the
+// guess stops being right the moment a storm multiplies the amplitude.
+export function maxWaveExcursion(amp = sea.amp, chop = 1) {
+  return amp * (1 + WAVE.amp2 + WAVE.amp3 * chop);
+}
 
 // Where the wave is RIGHT NOW. world.updateSurface advances it and publishes it
 // here once a frame; the grid and the water fill still have it pushed into their
@@ -49,10 +98,11 @@ export function setWaveTime(t) {
   waveTime = t;
 }
 
-export function surfaceHeightAt(x, waveT = waveTime, amp = CONFIG.arena.waveAmplitude) {
+export function surfaceHeightAt(x, waveT = waveTime, amp = sea.amp, chop = sea.chop) {
   return bounds.surfaceY
     + Math.sin(x * WAVE.k1 + waveT * WAVE.w1) * amp
-    + Math.sin(x * WAVE.k2 + waveT * WAVE.w2) * amp * WAVE.amp2;
+    + Math.sin(x * WAVE.k2 + waveT * WAVE.w2) * amp * WAVE.amp2
+    + Math.sin(x * WAVE.k3 + waveT * WAVE.w3) * amp * WAVE.amp3 * chop;
 }
 
 // Clamp a position into the arena and reflect velocity off whichever walls it

@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { enemies, removeEnemy, triggerBite } from '../entities/enemies.js';
+import { crewPosition, crewRadius, eatCrew } from './crew.js';
 
 // Sharks feed on fish on their own, with no involvement from the player. This
 // is the one place enemies interact with each other, so the whole food chain
@@ -41,6 +42,32 @@ export function resolvePredation(dt, scene, hooks) {
       const dy = prey.mesh.position.y - pred.mesh.position.y;
       if (dx * dx + dy * dy <= reach * reach) triggerBite(pred);
     }
+  }
+
+  // --- bodies in the water --------------------------------------------------
+  // The hunt behaviour steers at one (see BEHAVIORS.hunt); this is where the
+  // mouth closes. Its own pass, before the fish, because a hunter that has
+  // committed to a body should not be distracted by a minnow drifting past on
+  // the way in.
+  const food = CONFIG.boats.crew?.food ?? {};
+  for (const pred of predators) {
+    const body = pred.humanTarget;
+    if (!body) continue;
+    const at = crewPosition(body);
+    const reach = (food.biteRange ?? 1.4) * pred.spawnScale + crewRadius(body);
+    const dx = at.x - pred.mesh.position.x;
+    const dy = at.y - pred.mesh.position.y;
+    if (dx * dx + dy * dy > reach * reach) {
+      // Still on the way. Open the jaws at the same lead the fish get.
+      if (CONFIG.bite?.enabled && pred.biteCooldown <= 0
+        && dx * dx + dy * dy <= (reach * (CONFIG.bite.lead ?? 1)) ** 2) triggerBite(pred);
+      continue;
+    }
+    const meal = eatCrew(scene, body);
+    pred.humanTarget = null;
+    if (!meal) continue; // somebody else got there first
+    triggerBite(pred);
+    hooks.onCrewEaten?.(meal.x, meal.y, pred);
   }
 
   for (const pred of predators) {

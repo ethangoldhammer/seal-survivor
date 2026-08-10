@@ -29,9 +29,12 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uHorizon;
   uniform float uCurve;
   uniform float uDim;
+  uniform float uFlash;
+  uniform vec3 uFlashColor;
   uniform float uStars;
   uniform float uStarDensity;
   uniform float uTwinkle;
+  uniform float uDither;
   uniform float uTime;
 
   varying vec2 vUv;
@@ -68,7 +71,22 @@ const fragmentShader = /* glsl */ `
       }
     }
 
-    gl_FragColor = vec4(color * uDim, 1.0);
+    color *= uDim;
+
+    // Lightning. A MIX toward the flash colour rather than a multiply, and
+    // that distinction is the whole effect: a night sky is near-black, and
+    // scaling near-black by any amount leaves it near-black. The sky has to
+    // go pale for a moment, not merely less dark.
+    color = mix(color, uFlashColor, clamp(uFlash, 0.0, 1.0));
+
+    // Dither. This is a two-stop ramp across a fifth of the screen landing in
+    // an 8-bit composite with no tonemapping — the textbook case for visible
+    // contour rings, and they show worst on exactly the wide flat dusk skies
+    // the keyframes are proudest of. One quantisation step of per-pixel noise
+    // is the entire fix, and it is invisible at this amplitude.
+    color += (hash21(gl_FragCoord.xy) - 0.5) * uDither;
+
+    gl_FragColor = vec4(color, 1.0);
   }
 `;
 
@@ -82,9 +100,12 @@ export function createSkyMaterial() {
       uHorizon: { value: new THREE.Color(CONFIG.colors.sky) },
       uCurve: { value: 1.35 },
       uDim: { value: 1 },
+      uFlash: { value: 0 },
+      uFlashColor: { value: new THREE.Color(0xdce8ff) },
       uStars: { value: 0 },
       uStarDensity: { value: 0.55 },
       uTwinkle: { value: 0.7 },
+      uDither: { value: 0.005 },
       uTime: { value: 0 },
     },
   });
@@ -104,6 +125,7 @@ export function updateSkyMaterial(material, clock) {
     u.uZenith.value.set(CONFIG.colors.sky);
     u.uHorizon.value.set(CONFIG.colors.sky);
     u.uDim.value = 1;
+    u.uFlash.value = 0;
     u.uStars.value = 0;
     return u.uHorizon.value;
   }
@@ -117,10 +139,16 @@ export function updateSkyMaterial(material, clock) {
   // skyLight.intensity whole would darken dusk twice over.
   u.uDim.value = skyLight.clear > 0.0001 ? skyLight.intensity / skyLight.clear : 1;
 
+  // The flash rides the light bus like everything else, so the sky doesn't
+  // need to know lightning exists — only that the bus went bright.
+  u.uFlash.value = skyLight.flash;
+  u.uFlashColor.value.set(CONFIG.weather?.lightning?.flash?.color ?? 0xdce8ff);
+
   const stars = cfg.stars;
   u.uStars.value = stars?.enabled ? (stars.intensity ?? 0) * skyLight.night : 0;
   u.uStarDensity.value = stars?.density ?? 0.55;
   u.uTwinkle.value = stars?.twinkle ?? 0.7;
+  u.uDither.value = CONFIG.horizonGlow?.skyDither ?? 0.005;
 
   return u.uHorizon.value;
 }

@@ -5,73 +5,142 @@ import {
 } from '../assets.js';
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
 import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
-import { buildTunerGroups, buildExpandAllToggle } from './tunerControls.js';
+import { buildSection, buildSectionedTunerGroups, buildExpandAllToggle } from './tunerControls.js';
 import { isTypingTarget } from './typing.js';
-import { playSfx, unlockAudio, loadSampleFromFile, clearSample, hasSample, sampleCount, onSamplesChanged, reloadSample, getAudioContext, applyAudioBusSettings } from '../systems/audio.js';
+import { playSfx, unlockAudio, loadSampleFromFile, clearSample, hasSample, sampleCount, onSamplesChanged, reloadSample, getAudioContext, applyAudioBusSettings, busReduction, gainToDb, dbToGain, DB_FLOOR } from '../systems/audio.js';
 import { describeHaptic, previewHaptic, testHaptic, hapticsAvailable } from '../systems/haptics.js';
 import { uploadAsset } from '../systems/assetUpload.js';
 import { emit } from '../entities/particles.js';
 import { loadTrackFromFile, hasTrack, clearTrack, play as playMusic, stop as stopMusic, loopDuration, onTracksChanged } from '../systems/music.js';
+import {
+  startAmbient, stopAmbient, resetAmbient, reloadAmbient, applyAmbientSettings,
+  loadAmbientFromFile, clearAmbientClip, hasAmbientClip, onAmbientClipsChanged, ambientState,
+  skipAmbientClip,
+} from '../systems/ambient.js';
 
 // Curated rather than every ASSETS key: particles and the like are tiny FX
 // that don't benefit from a texture, so they're left out to reduce clutter. Everything that swims — every companion, and every species with an
 // entry in CONFIG.enemies — gets a row, because tint/emissive/glow are how you
 // tell two creatures sharing one model apart, and a creature with no row here
 // has no way to be recoloured at all.
-const EDITABLE = [
-  // --- the seal and its companions ---
-  ['ship', 'Seal (ship)'],
-  ['sealTeam', 'Seal team escort (ability)'],
-  ['belugaDrone', 'Beluga (ability)'],
-  ['eelCompanion', 'Eel companion (ability)'],
-  ['seagull', 'Seagull bomb (ability)'],
-  ['starfish', 'Starfish (ability)'],
-  ['shrimp', 'Shrimp (ability, upload in main tuner)'],
-  ['dumboOcto', 'Dumbo octopus (ability)'],
-  ['octoGrabber', 'Octopus grabber (ability)'],
-  ['orcaFriend', 'Orca family (ability)'],
-  // --- boats, pickups, projectiles ---
-  ['boat', 'Boat'],
-  ['trawler', 'Trawler'],
-  ['bakalarBoat', "Bakalar's boat (ability)"],
-  ['attractorOrb', 'Attractor orb'],
-  ['xpOrb', 'Chum bit (XP pickup)'],
-  ['bubbleOrb', 'Bubble (oxygen)'],
-  ['strikeOrb', 'Strike orb'],
-  ['rapidFireOrb', 'Rapid-fire orb'],
-  ['trapBubble', 'Beluga bubble'],
-  ['bullet', 'Bullet'],
-  ['missile', 'Missile'],
-  ['scallopShell', 'Scallop squirter (ability)'],
-  ['pearl', 'Oyster pearl (ability)'],
-  ['pearlBomblet', 'Pearl bomblet (ability)'],
-  ['voicemailBomb', "Bakalar's voicemail bomb"],
-  ['bounceShot', 'Bounce shot'],
-  ['shrapnel', 'Strike shrapnel'],
-  ['enemyBullet', 'Enemy bullet'],
-  // --- predators ---
-  ['enemyShark', 'Shark'],
-  ['enemyGreatWhite', 'Great White'],
-  ['enemyMegalodon', 'Megalodon'],
-  ['enemyMightyMeg', 'Mighty Meg'],
-  ['enemyOrca', 'Orca'],
-  ['enemyBarracuda', 'Barracuda'],
-  ['enemyOtter', 'Otter'],
-  ['enemyDolphin', 'Dolphin'],
-  // --- schooling prey ---
-  ['enemyFish', 'Coral fish'],
-  ['enemyTrout', 'Trout'],
-  ['enemyTang', 'Tang'],
-  ['enemyReeffish', 'Reef fish'],
-  ['enemyFishPackA', 'Fish pack A'],
-  ['enemyFishPackB', 'Fish pack B'],
-  ['enemyFishPackC', 'Fish pack C'],
-  // --- drifters, crawlers and traps ---
-  ['enemyStingray', 'Stingray'],
-  ['enemySeaTurtle', 'Sea turtle'],
-  ['enemyWalkingCrab', 'Walking crab'],
-  ['enemyAnimatedCrab', 'Animated crab'],
-  ['enemyOyster', 'Oyster'],
+// The sections are what you actually navigate by: 48 model rows is four
+// screens of scrolling, and "where's the megalodon" has no answer in a flat
+// list except dragging past everything. These headers were already here as
+// comments — they now collapse, which is the only reason the comments were
+// worth reading in the first place.
+const EDITABLE_SECTIONS = [
+  ['Seal & companions', [
+    ['ship', 'Seal (ship)'],
+    ['sealTeam', 'Seal team escort (ability)'],
+    ['belugaDrone', 'Beluga (ability)'],
+    ['eelCompanion', 'Eel companion (ability)'],
+    ['seagull', 'Seagull bomb (ability)'],
+    ['starfish', 'Starfish (ability)'],
+    ['shrimp', 'Shrimp (ability, upload in main tuner)'],
+    ['dumboOcto', 'Dumbo octopus (ability)'],
+    ['octoGrabber', 'Octopus grabber (ability)'],
+    ['orcaFriend', 'Orca family (ability)'],
+  ]],
+  ['Boats', [
+    ['boat', 'Boat'],
+    ['trawler', 'Trawler'],
+    ['bakalarBoat', "Bakalar's boat (ability)"],
+  ]],
+  ['Pickups', [
+    ['attractorOrb', 'Attractor orb'],
+    ['xpOrb', 'Chum bit (XP pickup)'],
+    ['bubbleOrb', 'Bubble (oxygen)'],
+    ['strikeOrb', 'Strike orb'],
+    ['rapidFireOrb', 'Rapid-fire orb'],
+    ['trapBubble', 'Beluga bubble'],
+  ]],
+  ['Weapons & projectiles', [
+    ['bullet', 'Bullet'],
+    ['missile', 'Missile'],
+    ['scallopShell', 'Scallop squirter (ability)'],
+    ['pearl', 'Oyster pearl (ability)'],
+    ['pearlBomblet', 'Pearl bomblet (ability)'],
+    ['voicemailBomb', "Bakalar's voicemail bomb"],
+    ['bounceShot', 'Bounce shot'],
+    ['shrapnel', 'Strike shrapnel'],
+    ['enemyBullet', 'Enemy bullet'],
+  ]],
+  ['Apex predators', [
+    ['enemyShark', 'Shark'],
+    ['enemyGreatWhite', 'Great White'],
+    ['enemyMegalodon', 'Megalodon'],
+    ['enemyMightyMeg', 'Mighty Meg'],
+    ['enemyOrca', 'Orca'],
+    ['enemyBarracuda', 'Barracuda'],
+    ['enemyOtter', 'Otter'],
+    ['enemyDolphin', 'Dolphin'],
+  ]],
+  ['Fish & schools', [
+    ['enemyFish', 'Coral fish'],
+    ['enemyTrout', 'Trout'],
+    ['enemyTang', 'Tang'],
+    ['enemyReeffish', 'Reef fish'],
+    ['enemyFishPackA', 'Fish pack A'],
+    ['enemyFishPackB', 'Fish pack B'],
+    ['enemyFishPackC', 'Fish pack C'],
+  ]],
+  ['Drifters & crawlers', [
+    ['enemyStingray', 'Stingray'],
+    ['enemySeaTurtle', 'Sea turtle'],
+    ['enemyWalkingCrab', 'Walking crab'],
+    ['enemyAnimatedCrab', 'Animated crab'],
+    ['enemyOyster', 'Oyster'],
+  ]],
+];
+
+// The same list in the two shapes appendSectioned() wants: membership by id,
+// and the label each row is titled with.
+const MODEL_SECTIONS = EDITABLE_SECTIONS.map(([title, entries]) => [title, entries.map(([key]) => key)]);
+const MODEL_LABELS = new Map(EDITABLE_SECTIONS.flatMap(([, entries]) => entries));
+
+// Which sections each Look & Sound tab shows, and in what order. Order is
+// roughly "what you reach for most" first, not alphabetical. A group tagged
+// with a section missing from these lists still renders, under "More" — see
+// buildSectionedTunerGroups.
+const SECTION_ORDER = {
+  companions: ['Your weapon', 'Strike & movement', 'Escorts', 'Auras & orbits', 'Thrown & launched'],
+  enemies: ['Apex predators', 'Fish & schools', 'Crabs & crawlers', 'Boats', 'Spawning & difficulty', 'Look & motion'],
+};
+
+// Sound and Haptics are two views of ONE list of events — CONFIG.sfx is what a
+// hit sounds like, CONFIG.feedback is what it feels like, and they name the
+// same moments. So they share one set of sections: find "sealRam" under
+// Escorts on either tab, in the same place. The two key sets aren't identical
+// (feedback has events that reuse another's sound, like chumEaten borrowing
+// bite), so each tab keeps only the ids it actually has.
+const EVENT_SECTIONS = [
+  ['Your weapon', ['shoot', 'hit', 'bulletHit', 'kill', 'bigKill', 'bounce', 'missileLaunch', 'missileImpact']],
+  ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'breach', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'bubblePop', 'oxygenWarn']],
+  ['Strike & food chain', ['strike', 'strikeChain', 'foodChain']],
+  ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'levelUp']],
+  ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaTrap', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
+  ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
+  ['Thrown & launched', ['seagullDive', 'scallopLaunch', 'scallopJet', 'pearlShot', 'pearlBurst', 'bakalarHaul', 'bakalarBombDrop', 'bakalarBombBlast']],
+  ['Boats', ['debrisBreak', 'boatExplosion', 'crewEaten', 'crewHit']],
+];
+
+const EMITTER_SECTIONS = [
+  ['Your weapon', ['muzzle', 'sparks', 'bounce', 'explosion', 'bigExplosion', 'missileLaunch', 'missileTrail', 'missileImpact']],
+  ['The seal', ['boost', 'playerHit', 'bite', 'splash', 'breathBubbles', 'wakeBubbles', 'bubbleBurst']],
+  ['Pickups & progression', ['pickup', 'chumCrumbs', 'levelUp']],
+  ['The ocean', ['rainSplash', 'silt']],
+];
+
+// Upgrade cards, sorted by what taking one gives you rather than by the row
+// order in upgrades.csv. Same section names as the Companions tab, so "which
+// card grants the eel" and "what does the eel do" are one word apart.
+const UPGRADE_SECTIONS = [
+  ['Your weapon', ['rapidFire', 'heavyRounds', 'multishot', 'pierce', 'velocity', 'homingMissile', 'bounceShot']],
+  ['Strike & movement', ['maxSpeed', 'overboost', 'strikePower', 'strikeDash', 'strikeShrapnel', 'strikeCharge', 'breachChain']],
+  ['Survivability', ['vitality', 'regen', 'magnet', 'oxygenMax', 'oxygenRefill']],
+  ['Escorts', ['sealTeam', 'electricEel', 'beluga', 'dumbo', 'octoGrab', 'orcaFamily']],
+  ['Auras & orbits', ['seaGarlic', 'shrimpRing', 'calamari']],
+  ['Thrown & launched', ['starfish', 'seagullBomb', 'scallopSquirter', 'oysterBlaster', 'bakalar']],
 ];
 
 
@@ -151,6 +220,14 @@ const STYLES = `
     border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 4px 6px; font-size: 10px; }
   .sv-sfx-val { font-size: 9px; color: rgba(232,236,243,0.6); width: 44px; flex-shrink: 0;
     text-align: right; font-variant-numeric: tabular-nums; }
+  /* A flex child defaults to min-width:auto, and a range input's intrinsic
+     width is wider than the space left in a 300px panel once the label and the
+     value readout have taken theirs — so these rows were pushing their own
+     numbers off the right edge (81 of them on the Sound tab). Letting them
+     shrink fixes it. Pre-dates the sections; their 11px indent is what made it
+     impossible to miss. */
+  .sv-sfx-field input[type=range], .sv-sfx-field select,
+  .sv-tex-glowrow input[type=range], .sv-tex-repeat input[type=range] { min-width: 0; }
 `;
 
 let panel = null;
@@ -186,6 +263,43 @@ export function refreshUpgradeTable() {
 // `onTuningChanged` is the same handler the ` tuner uses — the Companions and
 // Enemies tabs hold real tuner controls, so a slider there has to rebuild the
 // grid or resize the camera exactly like it would on the other panel.
+// Fill a tab with rows sorted into collapsible sections, plus the
+// expand/collapse-all toggle above them. `sections` is [[title, ids]] in the
+// order they should appear; `keys` is what the config actually holds right now.
+//
+// The two are checked against each other rather than trusted: an id listed in a
+// section but missing from the config is skipped (a sound can be deleted), and
+// an id in the config that no section claims lands in a trailing "More". That
+// second half is the important one — adding a sound to CONFIG.sfx and
+// forgetting to file it here leaves it reachable and visibly unfiled, instead
+// of building a panel that silently cannot edit it.
+function appendSectioned(container, scope, sections, keys, makeRow) {
+  const present = new Set(keys);
+  const claimed = new Set();
+  const plan = [];
+  for (const [title, ids] of sections) {
+    const mine = ids.filter((id) => present.has(id));
+    for (const id of mine) claimed.add(id);
+    if (mine.length) plan.push([title, mine]);
+  }
+  const unfiled = keys.filter((id) => !claimed.has(id));
+  if (unfiled.length) plan.push(['More', unfiled]);
+
+  const body = document.createElement('div');
+  for (const [title, ids] of plan) {
+    const section = buildSection(title, scope);
+    for (const id of ids) section.body.appendChild(makeRow(id));
+    section.setCount(ids.length);
+    body.appendChild(section.el);
+  }
+
+  const bar = document.createElement('div');
+  bar.className = 'sv-tex-expand-row';
+  bar.appendChild(buildExpandAllToggle(body));
+  container.append(bar, body);
+  return body;
+}
+
 export function initTexturePanel(onAssetChanged, onTuningChanged) {
   const style = document.createElement('style');
   style.textContent = STYLES;
@@ -220,26 +334,32 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
   document.body.appendChild(panel);
 
   const creaturesPanel = panel.querySelector('#svTexPanelCreatures');
-  for (const [key, label] of EDITABLE) {
-    const row = buildCreatureRow(key, label, onAssetChanged);
-    creaturesPanel.appendChild(row.el);
+  appendSectioned(creaturesPanel, 'models', MODEL_SECTIONS, [...MODEL_LABELS.keys()], (key) => {
+    const row = buildCreatureRow(key, MODEL_LABELS.get(key), onAssetChanged);
     rows.set(key, row);
-  }
+    return row.el;
+  });
 
+  // The bus, the music chain and the ambient bed are the three things on this
+  // tab that aren't one event's sound, so they get their own section at the
+  // top. They used to sit above the sections, always open — three of the
+  // tallest rows in the panel (the music row alone lists 15 loop slots), which
+  // meant a screen and a half of scrolling before the first sound effect.
   const soundPanel = panel.querySelector('#svTexPanelSound');
-  soundPanel.appendChild(buildBusRow());
-  soundPanel.appendChild(buildMusicRow());
-  for (const name of Object.keys(CONFIG.sfx)) {
-    soundPanel.appendChild(buildSfxRow(name));
-  }
+  const soundBody = appendSectioned(soundPanel, 'sound', EVENT_SECTIONS, Object.keys(CONFIG.sfx), buildSfxRow);
+  const master = buildSection('Mix, music & ambience', 'sound');
+  master.body.append(buildBusRow(), buildMusicRow(), buildAmbientRow());
+  master.setCount(3);
+  // Prepended after the fact rather than threaded through appendSectioned:
+  // expand-all reads the DOM when clicked, not when built, so it picks this up
+  // like any other section.
+  soundBody.prepend(master.el);
 
   const hapticsPanel = panel.querySelector('#svTexPanelHaptics');
   buildHapticsPanel(hapticsPanel);
 
   const particlesPanel = panel.querySelector('#svTexPanelParticles');
-  for (const name of Object.keys(CONFIG.emitters)) {
-    particlesPanel.appendChild(buildEmitterRow(name));
-  }
+  appendSectioned(particlesPanel, 'particles', EMITTER_SECTIONS, Object.keys(CONFIG.emitters), buildEmitterRow);
 
   upgradesPanelEl = panel.querySelector('#svTexPanelUpgrades');
   upgradesPanelEl.appendChild(buildUpgradeTable());
@@ -261,9 +381,12 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
     el.appendChild(note);
 
     // Same collapsed-by-default groups as the ` panel, with the same
-    // open-everything escape hatch above them.
+    // open-everything escape hatch above them — sorted here into named
+    // sections, which the flat ` panel has no equivalent of.
     const groupsEl = document.createElement('div');
-    groupsEl.appendChild(buildTunerGroups(TUNER_SCHEMA.filter((g) => g.panel === tag), onTuningChanged));
+    groupsEl.appendChild(buildSectionedTunerGroups(
+      TUNER_SCHEMA.filter((g) => g.panel === tag), SECTION_ORDER[tag], onTuningChanged, tag,
+    ));
 
     const expandAll = document.createElement('div');
     expandAll.className = 'sv-tex-expand-row';
@@ -803,10 +926,10 @@ function buildHapticsPanel(container) {
   container.appendChild(globals);
   refreshStatus();
 
-  for (const name of Object.keys(CONFIG.feedback)) {
-    if (!CONFIG.feedback[name].sfx) continue;
-    container.appendChild(buildHapticRow(name));
-  }
+  // Same sections as the Sound tab, off the same list — an event you tuned the
+  // sound of is under the same header when you come to tune its rumble.
+  appendSectioned(container, 'haptics', EVENT_SECTIONS,
+    Object.keys(CONFIG.feedback).filter((name) => CONFIG.feedback[name].sfx), buildHapticRow);
 }
 
 // Rows whose magnitude is derived rather than authored, so changing the
@@ -1009,6 +1132,62 @@ function buildHapticRow(event) {
 // each with a Test button that plays it immediately through the real synth.
 // ---------------------------------------------------------------------------
 
+// A level control, mapped in DECIBELS rather than in the linear gain it
+// stores.
+//
+// The gain sliders used to run 0..4 linearly, and both halves of that were
+// wrong. Four was not enough — several samples are authored 20dB below the rest
+// of the bank and were still too quiet pinned at the top — and a linear track
+// wastes almost all of its travel: doubling the loudness from 2 to 4 gets half
+// the slider, while everything between silence and half volume is crammed into
+// the first eighth.
+//
+// dB fixes both at once. The range below is 64dB wide, every dB is the same
+// distance along the track, and the top is +24dB (a gain of ~15.8) which is
+// four times the old ceiling. What gets STORED is unchanged — a plain linear
+// multiplier — so nothing downstream and no saved tuning has to know.
+// The conversion itself lives in systems/audio.js, so the panel and the engine
+// cannot drift apart on what a level means.
+const DB_MIN = DB_FLOOR;
+const DB_MAX = 24;
+
+const clampDb = (gain) => Math.min(DB_MAX, gainToDb(gain));
+
+function dbSlider(container, label, value, onInput) {
+  const read = typeof value === 'function' ? value : () => value;
+  const show = (gain) => (gain > 0 ? `${clampDb(gain) >= 0 ? '+' : ''}${clampDb(gain).toFixed(1)}` : 'off');
+
+  const row = document.createElement('div');
+  row.className = 'sv-sfx-field';
+  const lab = document.createElement('label');
+  lab.textContent = label;
+  lab.title = `${label} — in dB. 0 is unity; the readout is decibels, the stored value is a linear multiplier.`;
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = DB_MIN; input.max = DB_MAX; input.step = 0.5;
+  input.value = clampDb(read());
+  const val = document.createElement('span');
+  val.className = 'sv-sfx-val';
+  const paint = () => {
+    const gain = read();
+    val.textContent = show(gain);
+    val.title = `x${Number(gain).toFixed(3)}`;
+  };
+  paint();
+  input.addEventListener('input', () => {
+    onInput(dbToGain(Number(input.value)));
+    paint();
+    saveTuningToStorage();
+  });
+  row.append(lab, input, val);
+  container.appendChild(row);
+
+  if (typeof value === 'function') {
+    texRows.push(() => { input.value = clampDb(read()); paint(); });
+  }
+  return input;
+}
+
 // Every control in the Sound, Haptics and Particles tabs is one of these.
 //
 // `value` may be a number OR a getter. A getter also registers the row for
@@ -1062,45 +1241,52 @@ function buildUpgradeTable() {
   note.textContent = 'Upgrades are edited in path/src/upgrades.csv — open it in a spreadsheet, save, and reload the page. This is a read-only view of what that file loaded, so you can check an edit landed. What an upgrade DOES is its apply() function in config.js and is only ever code.';
   wrap.appendChild(note);
 
-  for (const u of CONFIG.upgrades) {
-    const row = document.createElement('div');
-    row.className = 'sv-sfx-row';
-    row.style.opacity = u.enabled === false ? '0.45' : '1';
-
-    const head = document.createElement('div');
-    head.className = 'sv-sfx-name';
-    const idSpan = document.createElement('span');
-    idSpan.className = 'sv-sfx-type';
-    idSpan.textContent = u.id;
-    head.appendChild(idSpan);
-    if (u.enabled === false) {
-      const off = document.createElement('span');
-      off.className = 'sv-sfx-type';
-      off.textContent = 'not offered';
-      head.appendChild(off);
-    }
-    row.appendChild(head);
-    wrap.appendChild(row);
-
-    const field = (label, value) => {
-      const el = document.createElement('div');
-      el.className = 'sv-sfx-field';
-      const lab = document.createElement('label');
-      lab.textContent = label;
-      const val = document.createElement('span');
-      val.className = 'sv-up-value';
-      val.textContent = value;
-      el.append(lab, val);
-      row.appendChild(el);
-    };
-
-    field('name', u.name);
-    field('desc', u.desc);
-    field('max stacks', u.maxStacks ?? '∞');
-    field('card art', u.cardArt ?? '—');
-  }
+  // Sectioned by what the card gives you, not by csv row order — the file is
+  // append-only in practice, so its order is the history of when each card was
+  // written, which is no help at all when you're checking the weapon cards.
+  const byId = new Map(CONFIG.upgrades.map((u) => [u.id, u]));
+  appendSectioned(wrap, 'upgrades', UPGRADE_SECTIONS, [...byId.keys()], (id) => buildUpgradeRow(byId.get(id)));
 
   return wrap;
+}
+
+function buildUpgradeRow(u) {
+  const row = document.createElement('div');
+  row.className = 'sv-sfx-row';
+  row.style.opacity = u.enabled === false ? '0.45' : '1';
+
+  const head = document.createElement('div');
+  head.className = 'sv-sfx-name';
+  const idSpan = document.createElement('span');
+  idSpan.className = 'sv-sfx-type';
+  idSpan.textContent = u.id;
+  head.appendChild(idSpan);
+  if (u.enabled === false) {
+    const off = document.createElement('span');
+    off.className = 'sv-sfx-type';
+    off.textContent = 'not offered';
+    head.appendChild(off);
+  }
+  row.appendChild(head);
+
+  const field = (label, value) => {
+    const el = document.createElement('div');
+    el.className = 'sv-sfx-field';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    const val = document.createElement('span');
+    val.className = 'sv-up-value';
+    val.textContent = value;
+    el.append(lab, val);
+    row.appendChild(el);
+  };
+
+  field('name', u.name);
+  field('desc', u.desc);
+  field('max stacks', u.maxStacks ?? '∞');
+  field('card art', u.cardArt ?? '—');
+
+  return row;
 }
 
 // Master FX bus — one filter and one reverb every SFX runs through. Sits at
@@ -1183,6 +1369,96 @@ function buildBusRow() {
   slider(el, 'at seabed', 200, 20000, 100, () => depth().deepHz ?? 5000, (v) => { depth().deepHz = v; changed(); });
   slider(el, 'depth glide', 0.01, 1.5, 0.01, () => depth().smoothing ?? 0.15, (v) => { depth().smoothing = v; changed(); });
 
+  // --- repetition -----------------------------------------------------------
+  // Not on the bus at all — it is a per-sound gain applied before anything
+  // reaches the bus — but it lives here because it is the other half of "why
+  // is the mix loud", and tuning one without the other is guesswork.
+  const rep = () => (CONFIG.audio.repetition ??= {});
+  const repChanged = () => { saveTuningToStorage(); };
+
+  const repHead = document.createElement('div');
+  repHead.className = 'sv-tex-divider sv-tex-upload-status';
+  repHead.textContent = 'Repetition. Each rapid repeat of the SAME sound plays quieter than the one before, recovering when it stops firing. This is what keeps a wall of hits reading as a wall rather than as static. Press 0 in game to watch it work.';
+  el.appendChild(repHead);
+
+  const repRow = document.createElement('div');
+  repRow.className = 'sv-sfx-field';
+  const repLab = document.createElement('label');
+  repLab.textContent = 'crowding';
+  const repBox = document.createElement('input');
+  repBox.type = 'checkbox';
+  repBox.checked = rep().enabled !== false;
+  repBox.addEventListener('change', () => { rep().enabled = repBox.checked; repChanged(); });
+  repRow.append(repLab, repBox);
+  el.appendChild(repRow);
+
+  slider(el, 'recovery', 0.05, 2, 0.05, () => rep().recovery ?? 0.5, (v) => { rep().recovery = v; });
+  slider(el, 'strength', 0, 2, 0.05, () => rep().strength ?? 0.35, (v) => { rep().strength = v; });
+  dbSlider(el, 'floor', () => rep().floor ?? 0.25, (v) => { rep().floor = v; });
+  slider(el, 'gap jitter', 0, 0.9, 0.01, () => CONFIG.audio.sfxGapJitter ?? 0.35, (v) => { CONFIG.audio.sfxGapJitter = v; });
+
+  // --- dynamics -------------------------------------------------------------
+  const comp = () => (bus().comp ??= {});
+
+  const compHead = document.createElement('div');
+  compHead.className = 'sv-tex-divider sv-tex-upload-status';
+  compHead.textContent = 'Compressor, makeup and ceiling. The ceiling is what makes the per-sound gain sliders safe to drive — below it nothing is touched, above it peaks bend instead of clipping.';
+  el.appendChild(compHead);
+
+  const compRow = document.createElement('div');
+  compRow.className = 'sv-sfx-field';
+  const compLab = document.createElement('label');
+  compLab.textContent = 'compress';
+  compLab.title = 'Light glue compression across the whole SFX bus';
+  const compBox = document.createElement('input');
+  compBox.type = 'checkbox';
+  compBox.checked = comp().enabled !== false;
+  // The gain-reduction readout. A compressor you can't see working is a
+  // compressor nobody can tune — this is the only way to tell "threshold too
+  // low, everything is squashed" from "threshold too high, doing nothing".
+  const reduction = document.createElement('span');
+  reduction.className = 'sv-sfx-val';
+  reduction.style.width = 'auto';
+  reduction.textContent = 'idle';
+  compBox.addEventListener('change', () => { comp().enabled = compBox.checked; changed(); });
+  compRow.append(compLab, compBox, reduction);
+  el.appendChild(compRow);
+
+  // Polled rather than driven off the frame loop: this panel is dev-only, the
+  // number only has to be readable, and the game loop should not be carrying a
+  // debug readout. Skipped entirely while the panel is hidden.
+  window.setInterval(() => {
+    if (!el.offsetParent) return;
+    const db = busReduction();
+    reduction.textContent = db < -0.1 ? `${db.toFixed(1)} dB` : 'idle';
+    reduction.style.color = db < -12 ? '#ffb347' : '';
+  }, 150);
+
+  slider(el, 'threshold', -60, 0, 1, () => comp().threshold ?? -18, (v) => { comp().threshold = v; changed(); });
+  slider(el, 'knee', 0, 40, 1, () => comp().knee ?? 12, (v) => { comp().knee = v; changed(); });
+  slider(el, 'ratio', 1, 20, 0.5, () => comp().ratio ?? 3, (v) => { comp().ratio = v; changed(); });
+  slider(el, 'attack', 0, 0.2, 0.001, () => comp().attack ?? 0.005, (v) => { comp().attack = v; changed(); });
+  slider(el, 'release', 0.01, 1, 0.01, () => comp().release ?? 0.18, (v) => { comp().release = v; changed(); });
+  dbSlider(el, 'makeup', () => comp().makeup ?? 1.6, (v) => { comp().makeup = v; changed(); });
+  slider(el, 'ceiling', 0.1, 1, 0.01, () => comp().ceiling ?? 0.95, (v) => { comp().ceiling = v; changed(); });
+  slider(el, 'ceil knee', 0, 0.98, 0.01, () => comp().ceilingKnee ?? 0.6, (v) => { comp().ceilingKnee = v; changed(); });
+
+  const osRow = document.createElement('div');
+  osRow.className = 'sv-sfx-field';
+  const osLab = document.createElement('label');
+  osLab.textContent = 'oversamp';
+  osLab.title = 'Anti-aliasing for the ceiling curve. Higher costs CPU and sounds cleaner when the bus is driven hard.';
+  const osSel = document.createElement('select');
+  for (const o of ['none', '2x', '4x']) {
+    const opt = document.createElement('option');
+    opt.value = o; opt.textContent = o;
+    osSel.appendChild(opt);
+  }
+  osSel.value = comp().oversample ?? '2x';
+  osSel.addEventListener('change', () => { comp().oversample = osSel.value; changed(); });
+  osRow.append(osLab, osSel);
+  el.appendChild(osRow);
+
   // Audition through the bus without waiting for the right thing to happen
   // in game.
   const testRow = document.createElement('div');
@@ -1222,7 +1498,7 @@ function buildMusicRow() {
 
   const note = document.createElement('div');
   note.className = 'sv-tex-upload-status';
-  note.textContent = `${CONFIG.music.slots} loops ship built in (747 Cocktails). Upload a file to replace any slot for this session, or Clear to silence it. Which one plays follows your level (every ${CONFIG.music.levelsPerSlot} levels moves to the next FILLED slot, so gaps are skipped). Switches wait for the next loop boundary, never cutting a loop off mid-phrase. The low-pass opens as you level, and ducks while the upgrade screen is open.`;
+  note.textContent = `${CONFIG.music.slots} loops ship built in (747 Cocktails). Upload a file to replace any slot for this session, or Clear to silence it. Which one plays follows your level (every ${CONFIG.music.levelsPerSlot} levels moves to the next FILLED slot, so gaps are skipped). A switch waits for the file that's playing to reach its end, however long it is, so a loop is never cut off half-finished — and it waits in the track's own time, so a loop dragging through the death dive still gets to finish. The bpm/loop figures above are the beat grid the animation marches to, not the switch point. The low-pass opens as you level, and ducks while the upgrade screen is open.`;
   el.appendChild(note);
 
   for (let i = 1; i <= CONFIG.music.slots; i++) {
@@ -1318,6 +1594,194 @@ function buildMusicRow() {
   return el;
 }
 
+// The ambient bed — the clip rotation and the shape of the crossfade between
+// them. Sits directly under the music row because the two are the only
+// continuous sounds in the game and they're tuned against each other; the
+// one-shot rows below are a different job entirely.
+function buildAmbientRow() {
+  const el = document.createElement('div');
+  el.className = 'sv-sfx-row';
+  el.style.borderColor = 'rgba(150,255,190,0.3)';
+
+  const amb = () => (CONFIG.ambient ??= {});
+  const changed = () => { applyAmbientSettings(); saveTuningToStorage(); };
+
+  const head = document.createElement('div');
+  head.className = 'sv-sfx-name';
+  const title = document.createElement('span');
+  title.textContent = 'Ambient bed';
+  const info = document.createElement('span');
+  info.className = 'sv-sfx-type';
+  const refreshInfo = () => {
+    const s = ambientState();
+    const n = `${s.clips.length} clip${s.clips.length === 1 ? '' : 's'}`;
+    info.textContent = s.mode === 'sporadic'
+      ? `${n} · sporadic, ~${Math.round(amb().gapSeconds ?? 22)}s apart`
+      : (s.clips.length < 2 ? `${n} · no cycle` : `${n} · ${Math.round(amb().holdSeconds ?? 34)}s hold`);
+  };
+  refreshInfo();
+  head.append(title, info);
+  el.appendChild(head);
+
+  const note = document.createElement('div');
+  note.className = 'sv-tex-upload-status';
+  note.textContent = 'Two modes, chosen by the gap slider. Above zero it is SPORADIC: a clip fades up, plays once, fades away, and the water is quiet until the next one. At zero it is a CONTINUOUS bed — one clip looping at a time, crossfading into the next every hold. Either way it runs through the master FX bus above, so it ducks underwater with the sound effects, unlike music.';
+  el.appendChild(note);
+
+  for (let i = 0; i < (amb().slots ?? 6); i++) {
+    const row = document.createElement('div');
+    row.className = 'sv-sfx-field';
+    const lab = document.createElement('label');
+    lab.style.width = '46px';
+    lab.textContent = `clip ${i + 1}`;
+    const file = document.createElement('input');
+    file.type = 'file';
+    file.accept = 'audio/*';
+    file.style.display = 'none';
+    const up = document.createElement('button');
+    up.className = 'sv-tex-btn';
+    const clr = document.createElement('button');
+    clr.className = 'sv-tex-btn';
+    clr.textContent = 'Clear';
+    const status = document.createElement('span');
+    status.className = 'sv-sfx-val';
+    status.style.width = 'auto';
+
+    // A slot's label depends on two things that land at different times: what
+    // the config says is in it (immediately) and whether that file has decoded
+    // (after the fetch). Read both, and re-read on the decode.
+    const refresh = () => {
+      const src = (amb().srcs ?? [])[i] ?? null;
+      up.textContent = src ? 'Replace' : 'Upload';
+      if (!src) status.textContent = '—';
+      else status.textContent = hasAmbientClip(src) ? src.split('/').pop().slice(0, 14) : 'not loaded yet';
+    };
+    refresh();
+    const unsubscribe = onAmbientClipsChanged(refresh);
+
+    up.addEventListener('click', () => file.click());
+    file.addEventListener('change', async () => {
+      const f = file.files?.[0];
+      if (!f) return;
+      unlockAudio();
+      status.textContent = 'loading…';
+      // Save to disk FIRST so the slot can hold the real path rather than a
+      // session-only handle — the tuning file is what survives a reload, and a
+      // path it can't resolve next boot is worse than no clip at all.
+      const src = await uploadAsset('sfx', f);
+      const key = src ?? `session:${f.name}`;
+      const ok = await loadAmbientFromFile(key, f);
+      if (!ok) { status.textContent = 'failed'; return; }
+      (amb().srcs ??= [])[i] = key;
+      resetAmbient();
+      await reloadAmbient();
+      startAmbient();
+      saveTuningToStorage();
+      refreshInfo();
+      refresh();
+      if (!src) status.textContent = `${f.name.slice(0, 9)} (session)`;
+    });
+    clr.addEventListener('click', async () => {
+      const src = (amb().srcs ?? [])[i] ?? null;
+      if (src) clearAmbientClip(src);
+      (amb().srcs ??= [])[i] = null;
+      resetAmbient();
+      await reloadAmbient();
+      startAmbient();
+      saveTuningToStorage();
+      refreshInfo();
+      refresh();
+    });
+    // Nothing here unmounts, so the subscription lives as long as the panel —
+    // held only so the intent is on the page next to the thing it feeds.
+    void unsubscribe;
+
+    row.append(lab, up, clr, file, status);
+    el.appendChild(row);
+  }
+
+  slider(el, 'volume', 0, 1, 0.01, () => amb().volume ?? 0.4, (v) => { amb().volume = v; applyAmbientSettings(); });
+
+  // The mode switch, and the reason it's the first timing control: everything
+  // below it only applies to one mode or the other, and which one is live is
+  // decided here.
+  const gapSlider = slider(el, 'gap', 0, 120, 1, () => amb().gapSeconds ?? 22, (v) => {
+    amb().gapSeconds = v;
+    refreshInfo();
+    refreshModeHints();
+  });
+  gapSlider.title = 'Seconds of silence between clips. 0 turns the sporadic mode off and gives a continuous crossfading bed instead.';
+  slider(el, 'gap vary', 0, 0.9, 0.01, () => amb().gapVary ?? 0.55, (v) => { amb().gapVary = v; });
+  slider(el, 'fade', 0.1, 10, 0.1, () => amb().fadeSeconds ?? 1.8, (v) => { amb().fadeSeconds = v; });
+
+  const holdRow = slider(el, 'hold', 4, 120, 1, () => amb().holdSeconds ?? 34, (v) => { amb().holdSeconds = v; refreshInfo(); });
+  const holdVaryRow = slider(el, 'hold vary', 0, 0.8, 0.01, () => amb().holdVary ?? 0.25, (v) => { amb().holdVary = v; });
+  const crossRow = slider(el, 'crossfade', 0.2, 20, 0.1, () => amb().crossfade ?? 7, (v) => { amb().crossfade = v; });
+
+  // A slider that does nothing is worse than one that isn't there, so the three
+  // continuous-only controls say so rather than sitting live and inert while
+  // sporadic mode ignores them.
+  const refreshModeHints = () => {
+    const off = (amb().gapSeconds ?? 0) > 0;
+    for (const input of [holdRow, holdVaryRow, crossRow]) {
+      const row = input.parentElement;
+      row.style.opacity = off ? '0.4' : '';
+      input.disabled = off;
+      input.title = off ? 'Continuous mode only — ignored while gap is above zero' : '';
+    }
+  };
+  refreshModeHints();
+
+  slider(el, 'pitch var', 0, 0.3, 0.01, () => amb().pitchVary ?? 0.04, (v) => { amb().pitchVary = v; });
+  slider(el, 'fade out', 0.1, 8, 0.1, () => amb().fadeOut ?? 1.6, (v) => { amb().fadeOut = v; });
+
+  const orderRow = document.createElement('div');
+  orderRow.className = 'sv-sfx-field';
+  const orderLab = document.createElement('label');
+  orderLab.textContent = 'order';
+  const shuffleBox = document.createElement('input');
+  shuffleBox.type = 'checkbox';
+  shuffleBox.checked = amb().shuffle !== false;
+  const orderHint = document.createElement('span');
+  orderHint.className = 'sv-sfx-val';
+  orderHint.style.width = 'auto';
+  const refreshOrder = () => { orderHint.textContent = shuffleBox.checked ? 'shuffle' : 'in order'; };
+  refreshOrder();
+  shuffleBox.addEventListener('change', () => { amb().shuffle = shuffleBox.checked; refreshOrder(); changed(); });
+  orderRow.append(orderLab, shuffleBox, orderHint);
+  el.appendChild(orderRow);
+
+  // Audition without waiting for a run — and without a 34-second wait to hear
+  // the one thing worth auditioning, which is the crossfade. "Skip" forces the
+  // next switch immediately.
+  const testRow = document.createElement('div');
+  testRow.className = 'sv-sfx-field';
+  const testLab = document.createElement('label');
+  testLab.textContent = 'preview';
+  const playBtn = document.createElement('button');
+  playBtn.className = 'sv-tex-btn';
+  playBtn.textContent = 'Play';
+  playBtn.addEventListener('click', async () => {
+    unlockAudio();
+    await reloadAmbient();
+    startAmbient();
+    refreshInfo();
+  });
+  const skipBtn = document.createElement('button');
+  skipBtn.className = 'sv-tex-btn';
+  skipBtn.textContent = 'Skip';
+  skipBtn.title = 'Bring the next clip in now, instead of waiting out the gap or the hold';
+  skipBtn.addEventListener('click', () => { unlockAudio(); skipAmbientClip(); });
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'sv-tex-btn';
+  stopBtn.textContent = 'Stop';
+  stopBtn.addEventListener('click', () => stopAmbient());
+  testRow.append(testLab, playBtn, skipBtn, stopBtn);
+  el.appendChild(testRow);
+
+  return el;
+}
+
 // What this sound is configured to use, independent of whether the audio
 // context has decoded it yet.
 function configuredSrcs(def) {
@@ -1389,10 +1853,10 @@ function buildSfxRow(name) {
   }
 
   slider(el, 'decay', 0.02, 1.5, 0.01, () => def.decay ?? 0.2, (v) => { def.decay = v; });
-  // Up to 4x: master volume sits at 0.2, so there's plenty of headroom before
-  // anything clips, and several sounds were already pinned at the old ceiling
-  // of 1 with nowhere left to go.
-  slider(el, 'gain', 0, 4, 0.01, () => def.gain ?? 0.2, (v) => { def.gain = v; });
+  // In dB, and up to +24 — see dbSlider. The headroom to drive a sound this
+  // hard comes from the ceiling on the master bus above; without that, the
+  // top of this track would be a click rather than a loud sound.
+  dbSlider(el, 'gain', () => def.gain ?? 0.2, (v) => { def.gain = v; });
   // Every sound gets randomized variation so repeats don't phase into one
   // flat tone. Pickups ship with a wide spread, weapons a tight one.
   slider(el, 'pitch var', 0, 0.5, 0.01, () => def.pitchVary ?? 0, (v) => { def.pitchVary = v; });

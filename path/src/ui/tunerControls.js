@@ -15,11 +15,16 @@ const STYLES = `
      now so it's keyboard-reachable and announces its state. */
   .sv-t-groupwrap { border-bottom: 1px solid rgba(255,255,255,0.06); }
   .sv-t-groupwrap:last-child { border-bottom: none; }
+  /* Colour comes from the section above via --sv-sec-soft, falling back to the
+     original blue where a group has no section (nothing does today, but the
+     fallback is what keeps buildTunerGroups usable on its own). */
   .sv-t-group { display: flex; align-items: center; gap: 7px; width: 100%;
     font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
-    color: #7ad7ff; font-weight: 600; font-family: inherit; text-align: left;
+    color: var(--sv-sec-soft, #7ad7ff); font-weight: 600; font-family: inherit; text-align: left;
     background: none; border: none; padding: 10px 0; margin: 0; cursor: pointer; }
-  .sv-t-group:hover { color: #b6e8ff; }
+  /* brightness() rather than a second hardcoded colour — the hover has to work
+     for whatever hue the section brought with it. */
+  .sv-t-group:hover { filter: brightness(1.3); }
   .sv-t-caret { flex-shrink: 0; font-size: 9px; line-height: 1; opacity: 0.75;
     transition: transform 0.12s ease; }
   .sv-t-groupwrap.sv-t-open .sv-t-caret { transform: rotate(90deg); }
@@ -30,6 +35,30 @@ const STYLES = `
     color: rgba(232,236,243,0.3); font-variant-numeric: tabular-nums; }
   .sv-t-groupbody { display: none; padding: 2px 0 12px; }
   .sv-t-groupwrap.sv-t-open .sv-t-groupbody { display: block; }
+  /* A section is the level above a group: a named run of groups (or of model
+     rows) inside one tab. Each carries its own hue in --sv-sec, so the main
+     tuner's 46 groups read as seven families you can find by colour before
+     you've read a word — the header, the groups under it and the rule down
+     their left edge are all the same colour. Uncoloured sections fall back to
+     the old white header on blue groups. (No backticks in here: this block
+     lives inside a template literal.) */
+  .sv-t-section { border-bottom: 1px solid rgba(255,255,255,0.12); }
+  .sv-t-section:last-child { border-bottom: none; }
+  .sv-t-sectionhead { display: flex; align-items: center; gap: 8px; width: 100%;
+    font-size: 12px; letter-spacing: 0.04em; color: var(--sv-sec, #e8ecf3); font-weight: 600;
+    font-family: inherit; text-align: left; background: none; border: none;
+    padding: 11px 0; margin: 0; cursor: pointer; }
+  .sv-t-sectionhead:hover { filter: brightness(1.25); }
+  .sv-t-section-name { flex: 1; }
+  .sv-t-section-count { flex-shrink: 0; font-size: 10px; font-weight: 500;
+    color: rgba(232,236,243,0.3); font-variant-numeric: tabular-nums; }
+  .sv-t-sectionbody { display: none; padding: 0 0 10px 10px;
+    border-left: 1px solid var(--sv-sec-dim, rgba(255,255,255,0.07)); margin-bottom: 4px; }
+  .sv-t-section.sv-t-open .sv-t-sectionbody { display: block; }
+  /* Direct child only — a group's own caret lives deeper inside an open
+     section, and a descendant selector here would rotate it while its group
+     is still shut. */
+  .sv-t-section.sv-t-open > .sv-t-sectionhead > .sv-t-caret { transform: rotate(90deg); }
   .sv-t-allbtn { background: none; border: none; padding: 0; cursor: pointer; font-family: inherit;
     font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600;
     color: rgba(232,236,243,0.4); }
@@ -72,10 +101,12 @@ function injectStyles() {
 // whichever panel didn't trigger the change showing stale values.
 const rows = [];
 
-// Which group headers are expanded, by group name (names are unique across
-// TUNER_SCHEMA). Kept in its own localStorage key, well away from the tuning
-// snapshot — collapsing a header is a view preference, not an edit, and must
-// never end up written into imported-tuning.json.
+// Which headers are expanded, by key: a group's own name (unique across
+// TUNER_SCHEMA), or `section:<name>` for the section level above it — prefixed
+// so a section and a group that happen to share a name don't toggle together.
+// Kept in its own localStorage key, well away from the tuning snapshot —
+// collapsing a header is a view preference, not an edit, and must never end up
+// written into imported-tuning.json.
 const OPEN_KEY = 'svTunerOpenGroups';
 let openGroups = null;
 
@@ -131,6 +162,7 @@ export function buildTunerGroups(groups, onChange) {
     count.textContent = String(group.items.length);
     h.append(caret, name, count);
 
+    wrap.dataset.openKey = group.group;
     const isOpen = open.has(group.group);
     wrap.classList.toggle('sv-t-open', isOpen);
     h.setAttribute('aria-expanded', String(isOpen));
@@ -150,6 +182,98 @@ export function buildTunerGroups(groups, onChange) {
   return frag;
 }
 
+// One named run of groups (or of anything else — the Models tab fills sections
+// with creature rows). Returns the wrapper to append and the body to fill; the
+// caller sets the count once it knows how much went in, because a collapsed
+// header that doesn't say how much is under it is the thing that makes you
+// open all six to find one.
+//
+// `scope` is the tab the section belongs to. The section names repeat across
+// tabs on purpose — "Escorts" means the same thing on Sound as on Companions —
+// so without a scope in the key, expanding one would expand its namesakes on
+// every other tab, and Expand-all on a 41-sound tab would quietly unfold five
+// others you weren't looking at.
+export function buildSection(title, scope = '', color = '') {
+  injectStyles();
+  const open = openSet();
+  const key = scope ? `section:${scope}:${title}` : `section:${title}`;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'sv-t-section';
+  wrap.dataset.openKey = key;
+  if (color) {
+    // Three steps of the one hue: the header at full strength, the group
+    // headers under it a touch softer so the two levels still separate, and the
+    // rule down the body's edge faint enough to be a boundary rather than a
+    // stripe. Derived here rather than in CSS so there's one place to read the
+    // palette from, and no dependency on color-mix().
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+    wrap.style.setProperty('--sv-sec', color);
+    wrap.style.setProperty('--sv-sec-soft', `rgba(${r},${g},${b},0.82)`);
+    wrap.style.setProperty('--sv-sec-dim', `rgba(${r},${g},${b},0.3)`);
+  }
+
+  const body = document.createElement('div');
+  body.className = 'sv-t-sectionbody';
+
+  const h = document.createElement('button');
+  h.type = 'button';
+  h.className = 'sv-t-sectionhead';
+  const caret = document.createElement('span');
+  caret.className = 'sv-t-caret';
+  caret.textContent = '▶';
+  const name = document.createElement('span');
+  name.className = 'sv-t-section-name';
+  name.textContent = title;
+  const count = document.createElement('span');
+  count.className = 'sv-t-section-count';
+  h.append(caret, name, count);
+
+  const isOpen = open.has(key);
+  wrap.classList.toggle('sv-t-open', isOpen);
+  h.setAttribute('aria-expanded', String(isOpen));
+
+  h.addEventListener('click', () => {
+    const nowOpen = !wrap.classList.contains('sv-t-open');
+    wrap.classList.toggle('sv-t-open', nowOpen);
+    h.setAttribute('aria-expanded', String(nowOpen));
+    if (nowOpen) open.add(key);
+    else open.delete(key);
+    persistOpenGroups();
+  });
+
+  wrap.append(h, body);
+  return { el: wrap, body, setCount: (n) => (count.textContent = String(n)) };
+}
+
+// Sort a tab's groups into the sections it declares, in the order it declares
+// them, and build the lot. `order` decides what shows and in what sequence;
+// anything tagged with a section the tab doesn't list — or tagged with none at
+// all — lands in a trailing "More" rather than silently vanishing from the UI,
+// which is how a new group ends up with no way to reach it.
+// `order` is either plain section names or [name, colour] pairs — the ` panel
+// colours its seven families, the Look & Sound tabs so far don't.
+export function buildSectionedTunerGroups(groups, order, onChange, scope = '') {
+  const OTHER = 'More';
+  const colors = new Map(order.map((s) => (Array.isArray(s) ? s : [s, ''])));
+  const bySection = new Map([...colors.keys()].map((s) => [s, []]));
+  for (const group of groups) {
+    const key = bySection.has(group.section) ? group.section : OTHER;
+    if (!bySection.has(key)) bySection.set(key, []);
+    bySection.get(key).push(group);
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const [title, members] of bySection) {
+    if (!members.length) continue;
+    const section = buildSection(title, scope, colors.get(title) ?? '');
+    section.body.appendChild(buildTunerGroups(members, onChange));
+    section.setCount(members.reduce((n, g) => n + g.items.length, 0));
+    frag.appendChild(section.el);
+  }
+  return frag;
+}
+
 // A one-click "open everything" escape hatch, for when you'd rather scroll the
 // whole panel the way it used to be — or want to scan every value at once.
 // Its label tracks the panel, including headers toggled individually, so it
@@ -160,7 +284,7 @@ export function buildExpandAllToggle(root) {
   btn.type = 'button';
   btn.className = 'sv-t-allbtn';
 
-  const anyClosed = () => !!root.querySelector('.sv-t-groupwrap:not(.sv-t-open)');
+  const anyClosed = () => !!root.querySelector('[data-open-key]:not(.sv-t-open)');
   const syncLabel = () => (btn.textContent = anyClosed() ? 'Expand all' : 'Collapse all');
 
   btn.addEventListener('click', () => {
@@ -174,18 +298,21 @@ export function buildExpandAllToggle(root) {
   return btn;
 }
 
-// Open or close every group in a panel at once, and remember it. Used by the
-// panels' own expand/collapse-all buttons.
+// Open or close every collapsible header in a panel at once — sections and the
+// groups inside them — and remember it. Used by the panels' own
+// expand/collapse-all buttons. Driven off data-open-key so both levels are
+// handled by one loop and neither can be left half-toggled: expanding sections
+// but not groups would look like the button did nothing.
 export function setGroupsExpanded(root, expanded) {
   const open = openSet();
-  for (const wrap of root.querySelectorAll('.sv-t-groupwrap')) {
+  for (const wrap of root.querySelectorAll('[data-open-key]')) {
     wrap.classList.toggle('sv-t-open', expanded);
-    const h = wrap.querySelector('.sv-t-group');
-    const label = wrap.querySelector('.sv-t-group-name')?.textContent;
+    const h = wrap.querySelector('.sv-t-group, .sv-t-sectionhead');
     h?.setAttribute('aria-expanded', String(expanded));
-    if (!label) continue;
-    if (expanded) open.add(label);
-    else open.delete(label);
+    const key = wrap.dataset.openKey;
+    if (!key) continue;
+    if (expanded) open.add(key);
+    else open.delete(key);
   }
   persistOpenGroups();
 }

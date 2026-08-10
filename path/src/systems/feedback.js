@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { emit } from '../entities/particles.js';
-import { playSfx, vibrate } from './audio.js';
+import { playSfx, vibrate, noteSfx } from './audio.js';
 import { playHaptic } from './haptics.js';
 
 // Every juicy thing in the game goes through here. One call site per event, and
@@ -108,9 +108,23 @@ export function feedback(event, at = {}) {
     const gap = def.sfxMinGap ?? 0;
     if (gap > 0) {
       const pending = sfxGaps.get(event);
-      if (pending) pending.scale = Math.max(pending.scale, scale);
-      else {
-        sfxGaps.set(event, { left: gap, scale });
+      if (pending) {
+        pending.scale = Math.max(pending.scale, scale);
+        // Swallowed by the throttle. Reported rather than dropped in silence,
+        // because "I can only hear one of these" and "only one of these is
+        // firing" are different bugs with the same symptom, and this is the
+        // only place they can be told apart.
+        noteSfx(def.sfx, 'gap', { text: event });
+      } else {
+        // Jittered rather than exact. A fixed gap turns a sustained burst into
+        // a perfectly periodic click train, and a periodic train of identical
+        // clicks is heard as a PITCH — which is exactly the "static" a hit
+        // sound develops when it fires twenty times a second. Breaking the
+        // phase lock costs nothing and turns the same density back into
+        // texture. See CONFIG.audio.sfxGapJitter.
+        const jitter = CONFIG.audio?.sfxGapJitter ?? 0;
+        const wobble = jitter ? 1 + (Math.random() * 2 - 1) * Math.min(0.9, jitter) : 1;
+        sfxGaps.set(event, { left: gap * wobble, scale });
         playSfx(def.sfx, Math.min(1.6, scale), at.sfxOpts);
       }
     } else {

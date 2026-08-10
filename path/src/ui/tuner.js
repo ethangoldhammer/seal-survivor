@@ -1,9 +1,10 @@
 import { CONFIG, TUNER_SCHEMA, DEFAULTS, saveTuningToStorage, loadTuningFromStorage, clearSavedTuning, importTuning, setTuningSaveErrorHandler, resetConfigToDefaults } from '../config.js';
-import { buildTunerGroups, buildExpandAllToggle, refreshTunerRows } from './tunerControls.js';
+import { buildSectionedTunerGroups, buildExpandAllToggle, refreshTunerRows } from './tunerControls.js';
 import { refreshUpgradeTable, refreshTexturePanelRows } from './textures.js';
 import { isTypingTarget } from './typing.js';
 
 // The ` panel: everything in TUNER_SCHEMA that ISN'T tagged for another panel.
+//
 // Groups tagged `panel: 'companions'` or `panel: 'enemies'` render in the Look
 // & Sound panel (T) instead, next to the models and upgrade table they belong
 // with — this panel was one flat scroll of 43 groups, and finding e.g. Seal
@@ -11,6 +12,23 @@ import { isTypingTarget } from './typing.js';
 //
 // The controls themselves come from tunerControls.js, shared with that panel,
 // so a slider works and saves the same way wherever it's shown.
+
+// The panel's seven families, in the order they appear, each with the hue its
+// headers and its left rule take. Colour is doing real work here rather than
+// decorating: 46 group headers in one column all read as one list, and the
+// question you arrive with is almost always "which family" — audio, the world,
+// the camera — before it is "which group". The hues are spread far enough
+// apart to survive being seen one at a time, in a strip 300px wide, and are
+// bright enough on the near-black panel to keep the headers legible.
+const SECTIONS = [
+  ['Gameplay',              '#7ad7ff'],
+  ['The ocean',             '#4fe0c0'],
+  ['Camera',                '#c9a6ff'],
+  ['Creature rigging',      '#a6e05a'],
+  ['Look & FX',             '#ff8fb1'],
+  ['Interface & controls',  '#ffc46b'],
+  ['Audio',                 '#ee87e0'],
+];
 
 const STYLES = `
   .sv-tuner { position: fixed; top: 0; right: 0; bottom: 0; width: 300px; z-index: 30;
@@ -56,7 +74,9 @@ export function initTuner(onChange) {
   // the toggle is built — the toggle reads the container to label itself, and
   // an empty one looks fully expanded.
   const groupsEl = document.createElement('div');
-  groupsEl.appendChild(buildTunerGroups(TUNER_SCHEMA.filter((g) => !g.panel), onChange));
+  groupsEl.appendChild(buildSectionedTunerGroups(
+    TUNER_SCHEMA.filter((g) => !g.panel), SECTIONS, onChange, 'tuner',
+  ));
 
   const expandAll = document.createElement('div');
   expandAll.className = 'sv-t-expand-row';

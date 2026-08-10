@@ -184,6 +184,13 @@ sniper: {
 Spawn odds are weighted: `weight + weightPerDifficulty × difficulty`, clamped by
 `maxWeight`. Difficulty rises 1.0 every 20 seconds by default.
 
+Three things can hold a creature back, and they ask different questions:
+`minDifficulty` asks how long the run has gone on, `minPlayerLevel` asks how
+strong the seal is, and the `bioluminescent` column of `enemies.csv` asks what
+time it is — a creature tagged there stays out of the pool until the sun goes
+down, fades in across dusk, and is held back again at dawn. It is the only one
+of the three that can go back to "not yet". See `CONFIG.spawn.nightlife`.
+
 Behaviors are `'chase'`, `'keepDistance'`, `'orbit'`, `'swarm'` and `'hunt'`.
 New ones go in the `BEHAVIORS` map in `path/src/entities/enemies.js` — write a
 function that sets a desired velocity, reference it by name.
