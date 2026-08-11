@@ -107,7 +107,11 @@ export function createWallRocks(scene) {
     const headY = bounds.surfaceY + (cfg.aboveWater ?? 5);
     const span = Math.max(1, headY - footY);
     const count = Math.max(1, Math.round(cfg.count ?? 26));
-    const [rMin, rMax] = cfg.size ?? [1.6, 4.4];
+    // A [smallest, largest] range — the spread is what stops the face reading
+    // as one boulder repeated. config.js owns the shape of this (healTunedShapes
+    // repairs a saved snapshot that holds a bare number); the guard is only so
+    // that scenery can never again take the whole boot down before first frame.
+    const [rMin, rMax] = Array.isArray(cfg.size) ? cfg.size : [1.6, 4.4];
 
     const parts = [];
     const m = new THREE.Matrix4();

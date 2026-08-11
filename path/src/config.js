@@ -10629,7 +10629,12 @@ export const TUNER_SCHEMA = [
       { path: 'arena.airScale', min: 1, max: 8, step: 0.1, label: 'jump ceiling (x sky)' },
       { path: 'wallRocks.enabled', type: 'bool', label: 'rocks on the walls' },
       { path: 'wallRocks.count', min: 0, max: 80, step: 1, label: 'boulders per wall' },
-      { path: 'wallRocks.size', min: 0.5, max: 9, step: 0.1, label: 'boulder size' },
+      // Two sliders, because `size` is a [smallest, largest] RANGE — the spread
+      // between them is what stops the face reading as one repeated boulder.
+      // A single slider here wrote a bare number over the pair, and the
+      // destructure in wallRocks.js then threw before the first frame.
+      { path: 'wallRocks.size.0', min: 0.5, max: 9, step: 0.1, label: 'boulder size (smallest)' },
+      { path: 'wallRocks.size.1', min: 0.5, max: 9, step: 0.1, label: 'boulder size (largest)' },
       { path: 'wallRocks.roughness', min: 0, max: 0.8, step: 0.02, label: 'boulder lumpiness' },
       { path: 'wallRocks.aboveWater', min: 0, max: 20, step: 0.5, label: 'shore above water' },
       { path: 'wallRocks.color', type: 'color', label: 'rock colour' },
@@ -10709,6 +10714,35 @@ function pruneUnknownEnemies() {
   }
 }
 
+// A saved snapshot outranks the literal in this file, so a tuner slider aimed
+// at the wrong SHAPE of value doesn't just save a bad number — it changes the
+// type of that field for every load afterwards, and the file it came from
+// can't correct it. `wallRocks.size` is a [smallest, largest] pair that was
+// briefly bound to a single slider; the scalar it wrote destructured to
+// `undefined` in wallRocks.js and took the whole boot down before the first
+// frame, on disk AND in localStorage, with no way to reach the tuner to undo
+// it. Healed at every merge path so the next save writes the pair back and
+// the stored copies repair themselves.
+//
+// Kept narrow on purpose: an audit of all 1460 tuner paths against the
+// defaults in this file found `wallRocks.size` to be the only scalar control
+// pointed at an array, and it now has two sliders. This is the net under it.
+function healNumberPair(obj, key, fallback) {
+  const v = obj?.[key];
+  if (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite)) return;
+  // A bare number reads as the LARGEST of the pair, keeping the default's
+  // proportional spread — that's the end of the range a "size" slider is
+  // reaching for, and it keeps the variety the range exists to give.
+  const healed = Number.isFinite(v) ? [v * (fallback[0] / fallback[1]), v] : [...fallback];
+  if (!obj) return;
+  obj[key] = healed;
+  console.warn(`[config] saved tuning had "${key}" as ${JSON.stringify(v)} where a [min, max] pair belongs — using ${JSON.stringify(healed)}.`);
+}
+
+function healTunedShapes() {
+  healNumberPair(CONFIG.wallRocks, 'size', [1.6, 4.4]);
+}
+
 function deepMerge(target, source) {
   if (!source || typeof source !== 'object') return;
   for (const key of Object.keys(source)) {
@@ -10765,6 +10799,7 @@ for (const key of Object.keys(diskTuning)) {
   }
 }
 pruneUnknownEnemies();
+healTunedShapes();
 
 // The CSV is applied AFTER the merge, at every load path, so the file always
 // wins over a saved snapshot. It has to be this way round: saved tuning is
@@ -11192,6 +11227,7 @@ export function loadTuningFromStorage() {
       }
     }
     pruneUnknownEnemies();
+    healTunedShapes();
     linkCrabVariants();
     applyUpgradesFromTable();
     applyEnemiesFromTable();
@@ -11216,6 +11252,7 @@ export function importTuning(rawSnapshot) {
     }
   }
   pruneUnknownEnemies();
+  healTunedShapes();
   linkCrabVariants();
   applyUpgradesFromTable();
   applyEnemiesFromTable();
