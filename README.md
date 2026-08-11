@@ -265,6 +265,42 @@ is one line in the diff.
 | `maxStacks` | how many times it can be taken. **Blank means unlimited.** |
 | `enabled` | `FALSE` removes it from the offer pool. Blank means enabled. |
 | `cardArt` | a level-up image key, or blank for the plain card background. |
+| `sfx` | a key from `CONFIG.sfx`, played when this card is **taken**. Blank uses the shared level-up sound. |
+
+#### `{placeholders}` in a description
+
+`desc` is a template. `{effect}` does not hold a copy of the number — it RUNS
+the upgrade's own `apply()` and describes what actually moved, so a card and
+the code behind it cannot disagree:
+
+```
+desc: "{effect}"                 ->  "+25% fire rate"
+desc: "Bullets pierce {effect}"  ->  "Bullets pierce +1 enemy"
+desc: "Shrimp go round: {effect}" -> "Shrimp go round: +3 orbiting shrimp"
+```
+
+Change `s.fireRate *= 0.75` to `0.7` and every card, tooltip and Upgrades-tab
+row that quotes it changes too. The last example is the one that shows why this
+is measured rather than parsed: Shrimp Ring's first pick opens the ring at
+`CONFIG.shrimpRing.baseCount`, and `{effect}` reads the branch that actually
+ran rather than the `+1` the other stacks give.
+
+| token | resolves to |
+| --- | --- |
+| `{effect}` | what this card grants, measured. Stack-aware — the 3rd Coiled Spring quotes the 3rd stack. |
+| `{effect:2}` | the same for a specific stack number. |
+| `{total}` | everything the stacks you own add up to, including this one. |
+| `{name}` | the card name from the `name` column. |
+| `{level}` | which stack this card would be. 1 for the first. |
+| `{owned}` | how many you already have. |
+| `{stacks}` | the `maxStacks` cap, or "unlimited" when blank. |
+| `{cfg:weapon.damage}` | any number from `CONFIG`, so a tuned value quotes itself. |
+
+A token that isn't one of these is **left on the card** as literal
+`{whoops}` and warns, because a blank where a number should be reads as a
+rendering bug while the token spelled out points at the cell with the typo in
+it. `npm run csv` shows the resolved line live under the cell as you type it,
+at both the first card and the last stack.
 
 Nothing in the game writes back to it, so it's yours to edit freely — the
 Upgrades tab of the **T** panel is a read-only view of what the file loaded,

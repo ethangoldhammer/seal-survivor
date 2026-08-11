@@ -277,8 +277,19 @@ export function chumRefillMul() {
   const c = CONFIG.strike.charge;
   const falloff = c.chainRefillFalloff ?? 1;
   if (falloff >= 1) return 1;
-  const depth = strikeState.chainTimer > 0 ? strikeState.chainCount : 0;
-  return Math.max(c.chainRefillFloor ?? 0, Math.pow(falloff, depth));
+  return Math.max(c.chainRefillFloor ?? 0, Math.pow(falloff, liveChain()));
+}
+
+/**
+ * How deep the chain is RIGHT NOW, in whole links, or 0 if there isn't one.
+ *
+ * `chainCount` is left standing after the window expires (see updateStrike),
+ * so it is not the number to read on its own — the discount above and the
+ * night sky's reach both want a chain that is over to count as no chain, and
+ * both used to spell that out for themselves.
+ */
+export function liveChain() {
+  return strikeState.chainTimer > 0 ? strikeState.chainCount : 0;
 }
 
 /**

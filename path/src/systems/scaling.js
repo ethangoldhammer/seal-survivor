@@ -52,6 +52,20 @@ export function companionScale() {
   return player.stats?.companionScale ?? 1;
 }
 
+/**
+ * Damage from a THROWN or LAUNCHED ability — mussels, scallops, starfish,
+ * ricochets, the shrimp ring, the mussel barrage, oyster pearls.
+ *
+ * Their damage lives in `CONFIG.<ability>` rather than in the stat block,
+ * because each is that ability's own number. This is the one run-scoped
+ * multiplier over all of them, and today the only thing that writes it is
+ * rarity: most of those upgrades add a COUNT, a count cannot take a 1.25x, so a
+ * high-tier projectile card pays into this instead (see systems/rarity.js).
+ */
+export function abilityDamage(damage) {
+  return damage * (player.stats?.abilityDamageMul ?? 1);
+}
+
 /** Companion damage — the other half of Big Rigz. */
 export function companionDamage(damage) {
   return damage * (player.stats?.companionDamageMul ?? 1);

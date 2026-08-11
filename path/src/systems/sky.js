@@ -15,11 +15,9 @@ import { STAR_FIELD_GLSL } from './starField.js';
 
 const vertexShader = /* glsl */ `
   uniform vec2 uCenter;
-  varying vec2 vUv;
   varying vec2 vWorldPos;
 
   void main() {
-    vUv = uv;
     vWorldPos = position.xy + uCenter;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
@@ -39,15 +37,26 @@ const fragmentShader = /* glsl */ `
   uniform float uTwinkle;
   uniform float uDither;
   uniform float uTime;
+  uniform float uSurfaceY;
+  uniform float uAirH;
 
-  varying vec2 vUv;
   varying vec2 vWorldPos;
 
   void main() {
-    // uv.y is 0 at the water line and 1 at the top of the frame. The curve
-    // pushes the horizon colour up the frame — a real sky keeps its warm band
-    // thin and the interesting part is where it meets the zenith.
-    float t = pow(clamp(vUv.y, 0.0, 1.0), uCurve);
+    // Height above the water line, normalised against the FRAME's air band —
+    // NOT against the plane's own uv. The plane runs all the way up to the
+    // arena ceiling so there is sky to see when a strike throws the seal up
+    // there (arena.airScale), and reading uv.y meant the whole two-stop ramp
+    // was stretched over that ceiling: at airScale 3 the visible fifth of the
+    // screen only ever showed the bottom third of the gradient, so the zenith
+    // never appeared in frame and every sky washed out to its horizon colour.
+    //
+    // Clamped, so the air above the frame is flat zenith rather than a ramp
+    // that keeps going — which is what a sky does anyway.
+    float h = clamp((vWorldPos.y - uSurfaceY) / max(uAirH, 0.0001), 0.0, 1.0);
+    // The curve pushes the horizon colour up the frame — a real sky keeps its
+    // warm band thin and the interesting part is where it meets the zenith.
+    float t = pow(h, uCurve);
     vec3 color = mix(uHorizon, uZenith, t);
 
     // Stars, on a jittered grid: one candidate per cell, most cells empty, the
@@ -92,6 +101,36 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
+// Headroom above the arena ceiling for the sky plane. The ceiling is reachable
+// by the camera to the unit, so a flush plane shows its own top edge the first
+// time a punch or a shake lands at the top of a breach.
+export const SKY_OVERSCAN = 8;
+
+/**
+ * How big the sky plane is and what its gradient is measured against — the two
+ * numbers that must NOT be the same one.
+ *
+ * The plane spans the ARENA's air, so there is sky to see wherever the seal can
+ * be thrown (arena.airScale). The gradient spans the FRAME's air, so the ramp
+ * from horizon to zenith is the thing you actually look at. Tying the gradient
+ * to the plane, as this did until the ceiling became independent, stretches a
+ * two-stop ramp over ground that is off screen: at airScale 3 the visible fifth
+ * of the sky only reached a third of the way up the gradient and every sky
+ * washed out to its horizon colour.
+ *
+ * Pure, so the invariant is testable without a GL context.
+ */
+export function skyPlaneMetrics(view) {
+  const airH = view.top - view.surfaceY;
+  const height = airH + SKY_OVERSCAN;
+  return {
+    height,
+    centerY: view.surfaceY + height / 2,
+    // What the gradient is normalised against.
+    gradientAirH: Math.max(1, view.frameTop - view.surfaceY),
+  };
+}
+
 export function createSkyMaterial() {
   return new THREE.ShaderMaterial({
     vertexShader,
@@ -101,6 +140,11 @@ export function createSkyMaterial() {
       uZenith: { value: new THREE.Color(CONFIG.colors.sky) },
       uHorizon: { value: new THREE.Color(CONFIG.colors.sky) },
       uCurve: { value: 1.35 },
+      // World-space, written by world.js on every resize. The gradient is a
+      // function of the frame, the plane is a function of the arena, and these
+      // two are what keep them from being the same number.
+      uSurfaceY: { value: 0 },
+      uAirH: { value: 1 },
       uDim: { value: 1 },
       uFlash: { value: 0 },
       uFlashColor: { value: new THREE.Color(0xdce8ff) },

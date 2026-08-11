@@ -150,7 +150,9 @@ export function createLightning(scene) {
     const alpha = [];
 
     const xStart = xEnd + randomBetween(-1, 1) * b.leanX;
-    const yStart = bounds.top + b.overscan;
+    // Above the FRAME. A bolt struck from the arena ceiling (arena.airScale)
+    // would spend most of its length off screen and arrive as a stub.
+    const yStart = bounds.frameTop + b.overscan;
     const trunkStart = pts.length;
     boltPath(xStart, yStart, xEnd, yEnd, Math.max(2, b.segments | 0), b.jitter, pts);
     for (let i = trunkStart; i < pts.length; i += 4) alpha.push(1, 1);
@@ -237,7 +239,7 @@ export function createLightning(scene) {
           }
         } else {
           flashBase = Math.max(flashBase, f.flicker ?? 0.45);
-          onEvent?.('flicker', 0, bounds.top);
+          onEvent?.('flicker', 0, bounds.frameTop);
         }
       }
     }

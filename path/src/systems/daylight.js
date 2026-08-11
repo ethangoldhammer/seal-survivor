@@ -262,9 +262,16 @@ function skyKeys(hour) {
 // Where a body sits on the shared ellipse. `phase` is 0 at sunrise, so the
 // sun gets 0 and the moon gets half a turn — polar opposites, by construction.
 function place(body, angle, size, horizonRange) {
-  const airH = Math.max(1, bounds.top - bounds.surfaceY);
+  // The FRAME's air band, not the arena's. The sun's arc is framing — hung
+  // off the raised ceiling (arena.airScale) it would climb out of the shot
+  // and only ever be seen at dawn and dusk.
+  const airH = Math.max(1, bounds.frameTop - bounds.surfaceY);
   const orbit = CONFIG.dayNight.orbit;
-  const rx = (bounds.width / 2) * orbit.radiusX;
+  // Off the FRAME, not the arena walls. The sun is framing, not geography —
+  // it wants to rise and set at the edges of the shot. Hung off bounds.width
+  // instead, a widened arena (arena.widthScale) would swing sunrise out past
+  // where the camera can pan and the disc would only ever be seen at noon.
+  const rx = (bounds.frameWidth / 2) * orbit.radiusX;
   const ry = airH * orbit.radiusY;
   const horizonY = bounds.surfaceY + orbit.centerY;
 

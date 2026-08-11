@@ -133,6 +133,9 @@ audio.unlockAudio();
 initFeedback(null);
 
 const ui = await import('../path/src/ui/ui.js');
+// The floor tier's id, asked of the ladder rather than hardcoded — rarities.csv
+// decides how many rungs there are and what the bottom one is called.
+const { baseRarity: rarityFloor } = await import('../path/src/systems/rarity.js');
 
 const drain = () => { const out = heard.slice(); heard.length = 0; return out; };
 const drainDropped = () => { const out = dropped.slice(); dropped.length = 0; return out; };
@@ -160,11 +163,69 @@ drain(); // initUI itself must not have made any noise
 section('Opening the level-up menu');
 ui.showLevelUp();
 let sounds = drain();
-check('a menu opening is silent', sounds.length === 0,
-  sounds.length ? `heard ${sounds.join(', ')} — selectCard(0) is talking to itself` : '');
+// The menu opens with EXACTLY ONE sound: the rarity sting for the best tier on
+// the table. It used to open silent, and the rule that mattered was that
+// selectCard(0) must not voice a selection the player did not make — that rule
+// still holds, and is what the second check below is really testing.
+//
+// One sting rather than three: they would smear, and the two quieter ones would
+// be inaudible under the loudest anyway.
+const stings = sounds.filter((n) => n.startsWith('rarity'));
+check('opening announces the best tier on the table, once', stings.length === 1,
+  stings.length ? stings.join(', ') : 'nothing played — bestRarity() found no tier on the dealt cards');
+check('...and the menu says nothing else', sounds.length === stings.length,
+  sounds.length > stings.length ? `also heard ${sounds.filter((n) => !n.startsWith('rarity')).join(', ')} — selectCard(0) is talking to itself` : '');
 
-const cards = [...document.getElementById('svCards').children];
+// The cards, not their slots. Each card is wrapped in a .sv-card-slot so its
+// rarity bloom has an unclipped element to hang off (see ui.js) — the click
+// and hover listeners are still on the card itself, and dispatching at the
+// slot would reach none of them.
+const cards = [...document.getElementById('svCards').querySelectorAll('.sv-card')];
 check('cards were built', cards.length >= 2, `${cards.length} cards`);
+
+section('Rarity on the card');
+// The ring and the bloom are the whole visible half of rarity, and both are
+// applied as inline style from rarities.csv — so "the tier was rolled" and "the
+// tier is on screen" are two different claims and only the second one matters.
+// A clip-path eats an outer border AND a drop-shadow on the same element, so
+// the ring is an inset stroke on the card and the bloom is a filter on its
+// unclipped wrapper; this checks each landed where it has to.
+{
+  const slots = [...document.getElementById('svCards').querySelectorAll('.sv-card-slot')];
+  check('every card has a slot to bloom from', slots.length === cards.length,
+    `${slots.length} slots, ${cards.length} cards`);
+
+  const tagged = cards.filter((c) => c.dataset.rarity);
+  check('every card was dealt a tier', tagged.length === cards.length,
+    cards.map((c) => c.dataset.rarity || '?').join(', '));
+
+  const ringed = cards.filter((c) => {
+    const col = c.style.getPropertyValue('--sv-ring');
+    const w = c.style.getPropertyValue('--sv-ring-w');
+    return /^#[0-9a-f]{6}$/i.test(col) && parseFloat(w) > 0;
+  });
+  check('every card carries a coloured ring', ringed.length === cards.length,
+    cards.map((c) => c.style.getPropertyValue('--sv-ring') || 'none').join(' '));
+
+  // The bloom is the one thing that must NOT be uniform: the floor tier is a
+  // ring and nothing else, which is what lets a green one read as an event.
+  const floorId = rarityFloor();
+  for (const c of cards) {
+    const slot = c.parentElement;
+    const hasGlow = (slot.style.filter || '').includes('drop-shadow');
+    if (c.dataset.rarity === floorId) {
+      check(`the floor tier (${floorId}) has a ring and no bloom`, !hasGlow, slot.style.filter || 'no filter');
+    } else {
+      check(`${c.dataset.rarity} blooms`, hasGlow, slot.style.filter || 'no filter');
+    }
+  }
+
+  // Rank has to be on the element too, or nothing downstream can order tiers
+  // without re-deriving the ladder.
+  check('rank rides along for anything that needs to order them',
+    cards.every((c) => Number.isFinite(Number(c.dataset.rarityRank))),
+    cards.map((c) => c.dataset.rarityRank).join(', '));
+}
 
 section('Hovering');
 settle();
@@ -189,7 +250,7 @@ settle();
 // binding on 'click' alone leaves the whole keyboard path mute.
 ui.showLevelUp();
 drain();
-const fresh = [...document.getElementById('svCards').children];
+const fresh = [...document.getElementById('svCards').querySelectorAll('.sv-card')];
 key(fresh[0], 'Enter');
 sounds = drain();
 check('Enter on a card is heard', only(sounds, 'uiClick') === 1, `x${only(sounds, 'uiClick')}`);
@@ -197,7 +258,7 @@ check('exactly once, not twice', only(sounds, 'uiClick') === 1);
 
 ui.showLevelUp();
 drain();
-const spaceCards = [...document.getElementById('svCards').children];
+const spaceCards = [...document.getElementById('svCards').querySelectorAll('.sv-card')];
 key(spaceCards[0], ' ');
 sounds = drain();
 check('Space too', only(sounds, 'uiClick') === 1, `x${only(sounds, 'uiClick')}`);
@@ -206,7 +267,7 @@ section('Mouse confirm');
 settle();
 ui.showLevelUp();
 drain();
-const clickCards = [...document.getElementById('svCards').children];
+const clickCards = [...document.getElementById('svCards').querySelectorAll('.sv-card')];
 clickCards[0].click();
 sounds = drain();
 check('clicking a card is heard once', only(sounds, 'uiClick') === 1, `x${only(sounds, 'uiClick')}`);

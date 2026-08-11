@@ -28,6 +28,10 @@
 //              Upgrades tab, it just stops being dealt. See below for why
 //              this is a column rather than a slider.
 //   cardArt    a key from LEVELUP_IMAGE_KEYS. Blank means the plain card.
+//   sfx        a key from CONFIG.sfx, played when this card is TAKEN. Blank
+//              means the card is voiced by the shared `levelUp` feedback like
+//              every other one — which is the right answer for most of them.
+//              Set it on the cards that deserve their own arrival.
 //
 // Fields deliberately NOT here: `perLevelName` and `levelDescs`, which are
 // per-stack display rules on two upgrades and don't flatten into a row.
@@ -71,7 +75,7 @@ function parseWeight(raw, id, warn) {
 // back to its config.js values instead of keeping whichever edit was last
 // applied. That reversibility is the whole reason `base` is captured at boot
 // rather than read back off the objects being mutated.
-export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = console.warn) {
+export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = console.warn, sfxKeys = []) {
   const seen = new Set();
 
   for (const u of upgrades) {
@@ -83,6 +87,7 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
       u.enabled = b.enabled;
       u.weight = b.weight;
       u.cardArt = b.cardArt;
+      u.sfx = b.sfx;
     }
 
     const row = rows.get(u.id);
@@ -104,6 +109,20 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
       else {
         u.cardArt = null;
         warn(`[${LABEL}] "${u.id}" asks for card art "${art}", which isn't one of the level-up images — the card will use the plain background. Valid keys: ${imageKeys.join(', ')}`);
+      }
+    }
+
+    // Same contract as cardArt: an unknown key falls back to the shared
+    // level-up sound rather than to silence. A card that made no noise when
+    // taken would read as a broken pick, and the warning is what tells you it
+    // was a typo rather than a design choice.
+    if ('sfx' in row) {
+      const key = String(row.sfx ?? '').trim();
+      if (!key) u.sfx = null;
+      else if (!sfxKeys.length || sfxKeys.includes(key)) u.sfx = key;
+      else {
+        u.sfx = null;
+        warn(`[${LABEL}] "${u.id}" asks for sound "${key}", which isn't a key in CONFIG.sfx — the card will use the standard level-up sound.`);
       }
     }
   }

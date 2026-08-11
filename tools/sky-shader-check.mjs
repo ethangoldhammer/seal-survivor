@@ -70,7 +70,7 @@ const PREFIX_FRAG = `precision highp float;
 // place it must not be.
 const PROGRAMS = [
   ['stars', starMat, ['uCycle', 'uBloom', 'uSize', 'uNight', 'uHaze']],
-  ['links', linkMat, ['uRipples[0]', 'uTouch[0]', 'uCycle', 'uTravel', 'uBend', 'uBendMax', 'uWarpGain', 'uNight']],
+  ['links', linkMat, ['uRipples[0]', 'uTouch[0]', 'uCycle', 'uTravel', 'uBend', 'uBendMax', 'uChain', 'uWarpGain', 'uNight']],
   ['sky gradient', skyMat, ['uStars', 'uStarDensity', 'uZenith', 'uHorizon']],
 ];
 

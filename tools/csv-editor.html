@@ -128,6 +128,62 @@
   .artbtn .swatch { width: 22px; height: 22px; border-radius: 4px; flex: none; border: 1px dashed var(--line); }
   .artbtn span { overflow: hidden; text-overflow: ellipsis; }
 
+  .soundbtn {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    width: 100%; text-align: left; overflow: hidden;
+  }
+  .soundbtn .tag {
+    flex: none; font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  .soundbtn span.nm { overflow: hidden; text-overflow: ellipsis; }
+  .playbtn {
+    flex: none; border: none; background: none; cursor: pointer;
+    color: var(--accent); font-size: 12px; padding: 2px 5px; border-radius: 4px;
+  }
+  .playbtn:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .playbtn[disabled] { color: var(--dim); opacity: .4; cursor: default; background: none; }
+
+  /* A templated cell is the input, a token menu, and the line the card will
+     actually read once the placeholders resolve. */
+  .tmpl { display: flex; flex-direction: column; gap: 1px; }
+  .tmpl-row { display: flex; align-items: center; }
+  .tokenbtn {
+    flex: none; border: none; background: none; color: var(--dim);
+    cursor: pointer; font-size: 14px; padding: 3px 6px; border-radius: 4px;
+  }
+  .tokenbtn:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .preview {
+    font-size: 11px; font-style: italic; color: var(--dim);
+    padding: 0 7px 4px; max-width: 340px; white-space: normal; line-height: 1.35;
+  }
+  .preview.err { color: var(--bad); font-style: normal; }
+  .preview b { color: var(--accent); font-weight: 600; font-style: normal; }
+
+  .tokenmenu {
+    position: fixed; z-index: 60; background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 9px; padding: 5px;
+    box-shadow: 0 12px 32px #0006; max-width: 430px; max-height: 60vh; overflow: auto;
+  }
+  .tokenmenu button {
+    display: block; width: 100%; text-align: left; border: none; background: none;
+    color: var(--text); font: inherit; padding: 6px 9px; border-radius: 6px; cursor: pointer;
+  }
+  .tokenmenu button:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+  .tokenmenu code { color: var(--accent); font-size: 12px; }
+  .tokenmenu small { display: block; color: var(--dim); font-size: 11px; margin-top: 1px; }
+
+  .soundlist { padding: 8px; max-height: 62vh; overflow: auto; }
+  .sound-opt {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    border: 1px solid transparent; border-radius: 7px; background: none;
+    color: var(--text); font: inherit; padding: 6px 9px; cursor: pointer;
+  }
+  .sound-opt:hover { border-color: var(--line); }
+  .sound-opt[aria-current="true"] { border-color: var(--accent); }
+  .sound-opt .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .sound-opt .detail { color: var(--dim); font-size: 11px; }
+
   .rowdel {
     border: none; background: none; color: var(--dim); cursor: pointer;
     font-size: 15px; padding: 4px 8px; visibility: hidden;
@@ -177,6 +233,17 @@
   <div class="gallery" id="gallery"></div>
 </dialog>
 
+<dialog id="soundDlg">
+  <div class="dlg-head">
+    <h2>Sound</h2>
+    <span class="hint" id="soundFor"></span>
+    <div class="grow"></div>
+    <input type="search" id="soundFilter" placeholder="Filter…" autocomplete="off">
+    <button class="action" onclick="soundDlg.close()">Close</button>
+  </div>
+  <div class="soundlist" id="soundlist"></div>
+</dialog>
+
 <script>
 const $ = (id) => document.getElementById(id);
 let tables = [];      // as served, plus a pristine copy for dirty/revert
@@ -200,6 +267,7 @@ async function boot() {
   // they load in the background rather than waiting for the picker to open —
   // half a megabyte of base64 over localhost, once.
   loadArt().catch(() => {});
+  loadSounds().catch(() => {});
 
   $('filter').oninput = renderBody;
   $('save').onclick = save;
@@ -333,6 +401,11 @@ function cellFor(c, i) {
     el.className = 'cell artbtn w-art';
     el.onclick = () => openArt(c, i);
     paintArt(el, t.rows[i][c.name]);
+  } else if (c.type === 'sound') {
+    el = document.createElement('button');
+    el.className = 'cell soundbtn w-text';
+    el.onclick = () => openSound(c, i);
+    paintSound(el, t.rows[i][c.name]);
   } else {
     el = document.createElement('input');
     el.className = 'cell ' + (c.type === 'number' ? 'w-num' : c.key ? 'w-id' : c.wide ? 'w-wide' : 'w-text');
@@ -354,6 +427,31 @@ function cellFor(c, i) {
     }
     el.oninput = () => set(el.value);
     el.onkeydown = (e) => moveCell(e, td);
+  }
+
+  // A templated column gets the token menu and the resolved line underneath.
+  // The preview is the whole point of a measured {effect}: you cannot read
+  // "{effect}" and know whether the card will say 25% or 30%, so the editor
+  // has to answer that while you are still typing.
+  if (c.templated) {
+    const wrap = document.createElement('div');
+    wrap.className = 'tmpl';
+    const row = document.createElement('div');
+    row.className = 'tmpl-row';
+    const tokens = document.createElement('button');
+    tokens.className = 'tokenbtn';
+    tokens.textContent = '⊕';
+    tokens.title = 'Insert a {placeholder}';
+    tokens.onclick = () => openTokens(tokens, el, set);
+    const preview = document.createElement('div');
+    preview.className = 'preview';
+    row.append(el, tokens);
+    wrap.append(row, preview);
+    td.append(wrap);
+    el.addEventListener('input', () => schedulePreview(td, c, i));
+    schedulePreview(td, c, i);
+    paint(td, c, i);
+    return td;
   }
 
   td.append(el);
@@ -501,6 +599,203 @@ async function loadArt() {
     paintArt(b, T().rows[row].cardArt ?? '');
   });
   return art;
+}
+
+// --- sounds -----------------------------------------------------------------
+
+let sounds = null;                  // [{key, kind, file, detail}]
+let soundsByKey = new Map();
+let audio = null;                   // one player, so a second preview cuts the first
+
+async function loadSounds() {
+  if (sounds) return sounds;
+  const r = await fetch('/api/sounds');
+  sounds = (await r.json()).sounds ?? [];
+  soundsByKey = new Map(sounds.map((s) => [s.key, s]));
+  document.querySelectorAll('.soundbtn').forEach((b) => {
+    const row = +b.closest('tr').dataset.row;
+    paintSound(b, T().rows[row].sfx ?? '');
+  });
+  return sounds;
+}
+
+function play(file) {
+  if (!file) return;
+  if (audio) { audio.pause(); audio = null; }
+  audio = new Audio(`/api/sound?file=${encodeURIComponent(file.split('/').pop())}`);
+  audio.play().catch(() => {});
+}
+
+function paintSound(btn, key) {
+  const s = soundsByKey.get(key);
+  btn.innerHTML = '';
+  const name = document.createElement('span');
+  name.className = 'nm';
+  name.textContent = key || 'level-up';
+  if (!key) name.style.color = 'var(--dim)';
+  btn.append(name);
+  if (s?.kind === 'synth') {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = 'synth';
+    tag.title = 'Generated in the browser — nothing to preview here.';
+    btn.append(tag);
+  } else if (s?.file) {
+    const p = document.createElement('span');
+    p.className = 'playbtn';
+    p.textContent = '▶';
+    p.title = `Play ${s.detail}`;
+    // Not a nested <button> — this lives inside the cell button, and a button
+    // in a button is invalid HTML that browsers silently unnest.
+    p.onclick = (e) => { e.stopPropagation(); play(s.file); };
+    btn.append(p);
+  }
+}
+
+async function openSound(c, i) {
+  await loadSounds();
+  const t = T();
+  $('soundFor').textContent = t.rows[i].name || t.rows[i].id;
+  const list = $('soundlist');
+  const current = t.rows[i][c.name] || '';
+
+  const draw = () => {
+    const q = $('soundFilter').value.trim().toLowerCase();
+    list.innerHTML = '';
+    const rows = [{ key: '', kind: 'none', detail: 'the shared level-up sound' }, ...sounds]
+      .filter((s) => !q || s.key.toLowerCase().includes(q) || (s.detail || '').toLowerCase().includes(q));
+    for (const s of rows) {
+      const b = document.createElement('button');
+      b.className = 'sound-opt';
+      b.setAttribute('aria-current', current === s.key);
+      b.innerHTML = `<span class="nm">${s.key || '— none'}</span><span class="detail">${s.detail ?? ''}</span>`;
+      if (s.file) {
+        const p = document.createElement('span');
+        p.className = 'playbtn';
+        p.textContent = '▶';
+        p.onclick = (e) => { e.stopPropagation(); play(s.file); };
+        b.append(p);
+      } else if (s.kind === 'synth') {
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = 'synth';
+        b.append(tag);
+      }
+      b.onclick = () => {
+        t.rows[i][c.name] = s.key;
+        $('soundDlg').close();
+        renderBody();
+        markDirty();
+      };
+      list.append(b);
+    }
+  };
+
+  $('soundFilter').oninput = draw;
+  $('soundFilter').value = '';
+  draw();
+  $('soundDlg').showModal();
+}
+
+// --- {placeholders} ---------------------------------------------------------
+
+let tokenDefs = null;
+
+async function openTokens(anchor, input, set) {
+  if (!tokenDefs) tokenDefs = (await (await fetch('/api/tokens')).json()).tokens ?? [];
+  document.querySelector('.tokenmenu')?.remove();
+  if (!tokenDefs.length) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'tokenmenu';
+  for (const t of tokenDefs) {
+    const b = document.createElement('button');
+    b.innerHTML = `<code></code><small></small>`;
+    b.querySelector('code').textContent = t.token;
+    b.querySelector('small').textContent = t.help;
+    b.onclick = () => {
+      // Inserted at the caret, so a token can be dropped into the middle of a
+      // sentence rather than only appended to it.
+      const at = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? at;
+      input.value = input.value.slice(0, at) + t.token + input.value.slice(end);
+      const caret = at + t.token.length;
+      set(input.value);
+      input.focus();
+      input.setSelectionRange(caret, caret);
+      menu.remove();
+    };
+    menu.append(b);
+  }
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.min(r.left, innerWidth - menu.offsetWidth - 12)}px`;
+  menu.style.top = `${Math.min(r.bottom + 4, innerHeight - menu.offsetHeight - 12)}px`;
+  setTimeout(() => addEventListener('pointerdown', function away(e) {
+    if (!menu.contains(e.target)) { menu.remove(); removeEventListener('pointerdown', away); }
+  }), 0);
+}
+
+// Debounced per cell: the preview measures an upgrade by running its apply(),
+// and doing that on every keystroke of a sentence is a round trip per letter.
+const previewTimers = new WeakMap();
+function schedulePreview(td, c, i) {
+  clearTimeout(previewTimers.get(td));
+  previewTimers.set(td, setTimeout(() => renderPreview(td, c, i), 220));
+}
+
+async function renderPreview(td, c, i) {
+  const out = td.querySelector('.preview');
+  if (!out) return;
+  const t = T();
+  const raw = t.rows[i][c.name] ?? '';
+  // Nothing to resolve: the cell already reads as what the card will say.
+  if (!raw.includes('{')) { out.textContent = ''; out.className = 'preview'; return; }
+
+  try {
+    const r = await fetch('/api/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: t.rows[i].id, desc: raw, maxStacks: t.rows[i].maxStacks }),
+    });
+    const data = await r.json();
+    if (data.available === false) {
+      out.textContent = 'start with `npm run csv` to preview {placeholders}';
+      out.className = 'preview';
+      return;
+    }
+    if (data.error) { out.textContent = data.error; out.className = 'preview err'; return; }
+    out.className = data.warnings?.length ? 'preview err' : 'preview';
+    out.innerHTML = '';
+
+    const line = (label, text) => {
+      const d = document.createElement('div');
+      d.append(label);
+      const b = document.createElement('b');
+      b.textContent = text;
+      d.append(b);
+      out.append(d);
+    };
+    line('1st card: ', data.text);
+    // Only when the two ends actually read differently — on a card whose text
+    // doesn't move with its stack, a second identical line is noise.
+    if (data.later) line(data.capped ? `at max (${data.laterStack}): ` : `at ${data.laterStack}: `, data.later);
+
+    for (const w of data.warnings ?? []) {
+      const d = document.createElement('div');
+      d.textContent = w.replace(/^\[upgrades\]\s*/, '');
+      out.append(d);
+    }
+    if (data.stale) {
+      out.className = 'preview err';
+      const d = document.createElement('div');
+      d.textContent = `⚠ ${data.stale}`;
+      out.append(d);
+    }
+  } catch (err) {
+    out.textContent = String(err);
+    out.className = 'preview err';
+  }
 }
 
 async function openArt(c, i) {

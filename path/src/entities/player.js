@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { baseStats, applyLevelGrowth } from '../stats.js';
+import { applyWithRarity, baseRarity } from '../systems/rarity.js';
 import { createVisual } from '../assets.js';
 import { bounds, clampToArena, midWater } from '../arena.js';
 import { feedback } from '../systems/feedback.js';
@@ -143,8 +144,14 @@ export function rebuildShipBody() {
 export function recomputeStats() {
   const s = baseStats();
 
-  for (const id of player.upgrades) {
-    CONFIG.upgrades.find((u) => u.id === id)?.apply(s);
+  // `player.upgrades` holds { id, rarity } rather than bare ids, because the
+  // tier a card was DEALT at is part of what that pick is worth and has to
+  // survive every recompute — the block is rebuilt from scratch on each
+  // level-up and on every tuner nudge, so a rarity kept anywhere else would be
+  // thrown away several times a minute.
+  for (const pick of player.upgrades) {
+    const u = CONFIG.upgrades.find((x) => x.id === pick.id);
+    if (u) applyWithRarity(u, s, pick.rarity);
   }
 
   // Baseline growth applied AFTER upgrades — see stats.js for the why.
@@ -155,8 +162,8 @@ export function recomputeStats() {
   return s;
 }
 
-export function addUpgrade(id) {
-  player.upgrades.push(id);
+export function addUpgrade(id, rarity = null) {
+  player.upgrades.push({ id, rarity: rarity ?? baseRarity() });
   const beforeHp = player.stats.maxHp;
   const beforeO2 = player.stats.maxOxygen;
   recomputeStats();
@@ -176,7 +183,7 @@ export function availableUpgrades() {
     // the offer pool entirely, without deleting it from config.
     if (u.enabled === false) return false;
     if (u.maxStacks == null) return true;
-    return player.upgrades.filter((id) => id === u.id).length < u.maxStacks;
+    return player.upgrades.filter((p) => p.id === u.id).length < u.maxStacks;
   });
 }
 

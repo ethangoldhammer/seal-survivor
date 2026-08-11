@@ -93,6 +93,19 @@ export function baseStats() {
     // This is only how far the element has been levelled.
     biolumLevel: 0,
 
+    // Damage dealt by THROWN and LAUNCHED abilities — mussels, scallops,
+    // starfish, ricochets, the shrimp ring, the mussel barrage, oyster pearls.
+    // Their damage lives in CONFIG.<ability> rather than here, because each is
+    // that ability's own number rather than a property of the seal; this is the
+    // one run-scoped multiplier over the top of all of them.
+    //
+    // It exists because of rarity. Most of those upgrades add a COUNT, and a
+    // count can't take a 1.25x — so a high-rarity Scallop Squirter pays into
+    // this instead of into a fractional shell (see systems/rarity.js). Nothing
+    // else writes it today, which is why it is 1 in every run that never sees a
+    // rare projectile card.
+    abilityDamageMul: 1,
+
     // Upgrade-gated systems — 0/false until the matching upgrade is taken.
     missileCount: 0,
     shrapnelCount: 0,
@@ -118,6 +131,33 @@ export function baseStats() {
     musselVolleyLevel: 0,
   };
 }
+
+// ============================================================================
+// WHICH STATS ARE WHOLE NUMBERS.
+//
+// Every field here is a COUNT or a LEVEL INDEX: how many shrimp are in the
+// ring, how many stacks of Sea Garlic you have. A fractional one is either
+// meaningless or actively broken — `sealTeamLevel: 2.4` resolves to two seals
+// and silently throws the 0.4 away, and `multishot: 1.2` fires one pellet.
+//
+// The rarity system is the only thing that reads this, and it reads it to know
+// what NOT to touch: a high-rarity card amplifies the continuous half of what
+// its apply() did and pays the rest out somewhere else entirely. See
+// systems/rarity.js.
+//
+// Listed explicitly rather than sniffed from the value, because the test is
+// "is this field conceptually a count", not "does it happen to hold an integer
+// right now" — `pierce` is 0 in a fresh block and so is `regenPerSec`, and
+// exactly one of them may take a fraction.
+// ============================================================================
+export const INTEGER_STATS = new Set([
+  'multishot', 'pierce', 'missileCount', 'shrapnelCount', 'shrimpCount',
+  'scallopCount', 'bounceMaxBounces', 'projectileBonus',
+  'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'starfishLevel',
+  'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
+  'dumboLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'musselVolleyLevel',
+  'biolumLevel',
+]);
 
 // THE ONE WAY TO READ `projectileBonus`. Every site that spawns a countable
 // number of somethings routes its count through here.

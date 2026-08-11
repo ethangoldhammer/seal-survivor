@@ -175,9 +175,19 @@ function pushRun(pts, x1, y1, x2, y2, sub) {
   }
 }
 
+// The lattice is generated across the WALLS but only up to the FRAME's top,
+// never the arena ceiling. `clipAtSurface` throws away everything above the
+// water line in the fragment shader, so lattice built up into the jump ceiling
+// (arena.airScale) is vertices paid for and then discarded — at the shipped
+// airScale 3 that is three times the air band, for nothing on screen. Width is
+// different and is NOT trimmed: that is all underwater, and all drawn.
+function gridRect() {
+  return { left: bounds.left, right: bounds.right, top: bounds.frameTop, bottom: bounds.bottom };
+}
+
 function squarePoints(spacing, sub) {
   const pts = [];
-  const { left, right, top, bottom } = bounds;
+  const { left, right, top, bottom } = gridRect();
 
   // Horizontal runs, subdivided so warped lines curve instead of kinking.
   for (let y = bottom; y <= top + 0.001; y += spacing) {
@@ -207,7 +217,7 @@ function hexPoints(spacing, sub) {
   const seen = new Set();
   // hexCellsIn already overscans by a full cell on every side, which is enough
   // for a warped edge to stay off-screen — no extra margin needed here.
-  for (const cell of hexCellsIn(bounds, m, 0)) {
+  for (const cell of hexCellsIn(gridRect(), m, 0)) {
     const corners = hexCorners(cell.x, cell.y, m.R);
     for (let k = 0; k < 6; k++) {
       const [x1, y1] = corners[k];

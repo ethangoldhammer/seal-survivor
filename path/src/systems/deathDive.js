@@ -135,7 +135,12 @@ export function startDeathDive(finish) {
   // already waiting. The further it has to fall, the faster it falls: gravity
   // and terminal velocity scale together, so the body still reaches its
   // terminal speed in the same moment, it's just a higher one.
-  const span = Math.max(1, bounds.top - floorY());
+  // Measured against the FRAME's ceiling, not the arena's. This is a pacing
+  // curve tuned on the fall from the water line, and dividing by a raised
+  // ceiling (arena.airScale) silently flattens it — a surface death loses
+  // about 14% of its sink rate for air nothing usually dies in. A death up
+  // in that air just pins the ratio at 1, which is the right answer anyway.
+  const span = Math.max(1, bounds.frameTop - floorY());
   const drop = Math.max(0, player.mesh.position.y - floorY());
   sinkScale = 1 + ((c.depthBoost ?? 2.2) - 1) * Math.min(1, drop / span);
 

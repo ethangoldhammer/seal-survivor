@@ -5,12 +5,13 @@ import { createGrid } from './systems/grid.js';
 import { createConstellations } from './systems/constellations.js';
 import { createHexTiles } from './systems/hexTiles.js';
 import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime } from './systems/water.js';
-import { createSkyMaterial, updateSkyMaterial } from './systems/sky.js';
+import { createSkyMaterial, updateSkyMaterial, skyPlaneMetrics } from './systems/sky.js';
 import { createCelestials } from './systems/celestial.js';
 import { createClouds } from './systems/clouds.js';
 import { createRain, weatherState } from './systems/weather.js';
 import { createLightning } from './systems/lightning.js';
 import { createHorizonGlow } from './systems/horizon.js';
+import { createWallRocks } from './systems/wallRocks.js';
 import { refreshFlash, skyLight } from './systems/daylight.js';
 import { updateCineCamera, cineLens, cineEnabled } from './systems/cineCamera.js';
 
@@ -20,6 +21,11 @@ import { updateCineCamera, cineLens, cineEnabled } from './systems/cineCamera.js
 // what the backdrop covers and you see the bare scene background under the
 // ocean floor. Only the death dive's framing ever spends it (see focusCamera).
 const FLOOR_OVERSCAN = 7;
+
+// Vertices per world unit along the drawn water line, taken from what the
+// frame used to get (140 across 92.4 units) so a default-width arena builds
+// the same curve it always did.
+const SURFACE_SEGMENTS_PER_UNIT = 140 / 92.4;
 
 export function createWorld(container) {
   const scene = new THREE.Scene();
@@ -58,6 +64,9 @@ export function createWorld(container) {
   const warpGrid = createGrid(scene);
   const constellations = createConstellations(scene);
   const hexTiles = createHexTiles(scene);
+  // Outside the backdrop group: it owns its own rebuild off `bounds`, same as
+  // the grid, and disposeBackdrop would take its merged geometry with it.
+  const wallRocks = createWallRocks(scene);
 
   // ONE PUNCH, BOTH BACKDROPS. Everything juicy in the game already rings the
   // grid — kills, chain reactions, trawlers going up, a finger landing on the
@@ -132,10 +141,19 @@ export function createWorld(container) {
     const airH = bounds.top - bounds.surfaceY;
     const seaH = bounds.surfaceY - bounds.bottom;
 
+    // The sky plane covers the ARENA's air, all the way to the jump ceiling,
+    // plus overscan. The ceiling is exactly as high as the camera can pan, so
+    // sized flush the plane's top edge sits precisely on the frame's — and a
+    // camera shake or a punch at the top of a breach would show the scene
+    // background above it. The GRADIENT inside it is a different measurement
+    // and reads the frame; see uAirH.
+    const sky = skyPlaneMetrics(bounds);
     const skyMat = createSkyMaterial();
-    skyMat.uniforms.uCenter.value.set(0, bounds.surfaceY + airH / 2);
-    skyMesh = new THREE.Mesh(new THREE.PlaneGeometry(w, airH), skyMat);
-    skyMesh.position.set(0, bounds.surfaceY + airH / 2, -6);
+    skyMat.uniforms.uCenter.value.set(0, sky.centerY);
+    skyMat.uniforms.uSurfaceY.value = bounds.surfaceY;
+    skyMat.uniforms.uAirH.value = sky.gradientAirH;
+    skyMesh = new THREE.Mesh(new THREE.PlaneGeometry(w, sky.height), skyMat);
+    skyMesh.position.set(0, sky.centerY, -6);
     backdrop.add(skyMesh);
 
     // The fill runs WAVE_HEADROOM above the still-water line and its shader
@@ -194,8 +212,14 @@ export function createWorld(container) {
     seabedMesh = plane(w, SEABED_HEIGHT + skirt, CONFIG.colors.seabed, bounds.bottom + SEABED_HEIGHT / 2 - skirt / 2, -4);
     backdrop.add(seabedMesh);
 
-    // Animated water surface.
-    const segs = 140;
+    // Animated water surface. The segment COUNT follows the width rather than
+    // being fixed at the 140 that used to span the frame: the chop term of the
+    // wave has a ~10-unit wavelength, and across a widened arena a fixed count
+    // stretched each segment until the drawn line was sampling it about seven
+    // times a cycle. The line then facets — and, worse, visibly separates from
+    // the water fill beside it, which evaluates the same wave per PIXEL in
+    // GLSL and does not coarsen with the arena.
+    const segs = Math.max(140, Math.ceil(bounds.width * SURFACE_SEGMENTS_PER_UNIT));
     const pos = new Float32Array((segs + 1) * 3);
     for (let i = 0; i <= segs; i++) {
       pos[i * 3] = bounds.left + (bounds.width * i) / segs;
@@ -266,9 +290,13 @@ export function createWorld(container) {
   function resize() {
     const aspect = window.innerWidth / window.innerHeight;
     updateBounds(aspect);
-    camera.left = bounds.left;
-    camera.right = bounds.right;
-    camera.top = bounds.top;
+    // The frustum is the FRAME, not the arena. They are the same rectangle at
+    // arena.widthScale / airScale 1; above that the walls and the ceiling sit
+    // outside the frustum and the gap is what the camera is free to pan
+    // across (see clampFocus). The floor is shared — it is both.
+    camera.right = bounds.frameWidth / 2;
+    camera.left = -camera.right;
+    camera.top = bounds.frameTop;
     camera.bottom = bounds.bottom;
     camera.near = -100;
     camera.far = 200;
@@ -276,9 +304,10 @@ export function createWorld(container) {
     renderer.setSize(window.innerWidth, window.innerHeight);
     buildBackdrop();
     grid.build();
-    // The field is generated across the frame's own bounds, so a resize is a
+    // Both are generated across the arena's own bounds, so a resize is a
     // rebuild — same as the grid, and for the same reason.
     constellations.build();
+    wallRocks.build();
   }
 
   // Set by main.js: what a flash SOUNDS like and what a strike DOES are
@@ -548,6 +577,16 @@ export function createWorld(container) {
     } else if (CONFIG.camera.followPlayer) {
       const t = 1 - Math.pow(1 - CONFIG.camera.followLerp, dt * 60);
       camera.position.x += (targetPos.x - camera.position.x) * t;
+    } else if (bounds.width > camera.right - camera.left) {
+      // A widened arena (arena.widthScale > 1) with neither the rig nor
+      // followPlayer running. Pinned at 0 the camera would let the seal swim
+      // straight off the side of the screen and fight a wall it cannot see,
+      // so it has to track — clamped, so the frame still never runs past the
+      // water plane onto the bare scene background.
+      const t = 1 - Math.pow(1 - CONFIG.camera.followLerp, dt * 60);
+      const at = clampFocus(targetPos.x, targetPos.y, camera.zoom);
+      camera.position.x += (at.x - viewCentre().x - camera.position.x) * t;
+      camera.position.y = 0;
     } else {
       camera.position.x = 0;
       camera.position.y = 0;
@@ -578,5 +617,5 @@ export function createWorld(container) {
   resize();
   window.addEventListener('resize', resize);
 
-  return { scene, camera, renderer, resize, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, constellations, hexTiles, rain, lightning, setLightningHandler };
+  return { scene, camera, renderer, resize, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, constellations, hexTiles, wallRocks, rain, lightning, setLightningHandler };
 }

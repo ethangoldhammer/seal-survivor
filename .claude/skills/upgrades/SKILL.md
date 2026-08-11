@@ -14,7 +14,8 @@ Work out which layers the request touches before editing anything.
 
 | Layer | File | Holds | Symptom of editing the wrong one |
 |---|---|---|---|
-| **Content** | `path/src/upgrades.csv` | `name`, `desc`, `maxStacks`, `enabled`, `weight`, `cardArt` | — |
+| **Content** | `path/src/upgrades.csv` | `name`, `desc`, `maxStacks`, `enabled`, `weight`, `cardArt`, `sfx` | — |
+| **Card wording** | `path/src/upgradeText.js` | the `{placeholder}` vocabulary and the English name of every stat | A new stat renders on the card as its raw variable name |
 | **Mechanic** | `path/src/config.js` (`CONFIG.upgrades`, ~line 3420) | `apply(s)`, `perLevelName`, `levelDescs` | Editing `name`/`desc`/`maxStacks` here does nothing; the CSV overwrites them at boot |
 | **Behavior** | `path/src/systems/<ability>.js` | what the ability does per frame | Stat exists, card is takeable, nothing happens in the water |
 | **Juice** | `CONFIG.feedback` + `feedback('event')` call sites | particles, shake, hitstop, glow, ripple, sfx, haptic | Ability works, feels like nothing |
@@ -22,6 +23,14 @@ Work out which layers the request touches before editing anything.
 `apply(s)` mutates the stat block seeded in `path/src/stats.js`. Any new field
 an upgrade touches must be seeded there first, or the first stack reads
 `undefined` and every arithmetic result is `NaN`.
+
+**A new stat needs a label.** `desc` can say `{effect}`, which measures the
+upgrade by running its `apply()` and describes what moved — so a stat with no
+entry in `STAT_TEXT` (`path/src/upgradeText.js`) renders on the card as its raw
+variable name. `npm run test:text` fails on exactly that, and it is the check to
+run after adding a field to `stats.js`. Prefer `{effect}` over a hand-typed
+number in any new description: a typed "+25%" is a second copy of the
+multiplier with nothing holding the two together.
 
 ## Order of work
 
@@ -94,6 +103,15 @@ Set these after the numbers pass, not while chasing them.
 **Card art** is the `cardArt` column of `upgrades.csv`. The value must be a key
 from `LEVELUP_IMAGE_KEYS` in `config.js` (~line 3536); anything else falls back
 to a plain card and the harness fails the row.
+
+**A card's own arrival sound** is the `sfx` column — a key from `CONFIG.sfx`,
+played on top of the click when the card is taken. Blank means the shared
+`levelUp` feedback, which is right for most of them; set it on the cards worth
+hearing arrive. An unknown key falls back to the shared sound and warns.
+
+Both columns are pickers in `npm run csv` — card art as a gallery of the thirty
+real hex images, `sfx` as the sound bank with a play button on every sampled
+voice — which is faster than typing a key and checking it against a list.
 
 **Juice** is one `feedback('event', { x, y, scale })` call per event, with
 everything it does described in `CONFIG.feedback` (~line 1883). Adding a new

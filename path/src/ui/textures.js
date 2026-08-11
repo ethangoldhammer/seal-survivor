@@ -5,6 +5,7 @@ import {
 } from '../assets.js';
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
 import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
+import { expandDesc } from '../upgradeText.js';
 import { buildSection, buildSectionedTunerGroups, buildExpandAllToggle } from './tunerControls.js';
 import { isTypingTarget } from './typing.js';
 import { playSfx, unlockAudio, loadSampleFromFile, clearSample, hasSample, sampleCount, onSamplesChanged, reloadSample, getAudioContext, applyAudioBusSettings, busReduction, gainToDb, dbToGain, DB_FLOOR } from '../systems/audio.js';
@@ -1282,7 +1283,10 @@ function buildUpgradeRow(u) {
   };
 
   field('name', u.name);
-  field('desc', u.desc);
+  // Expanded at `owned: 0` — the Upgrades tab is a roster, so every row
+  // answers "what does the first one of these give me". The level-up card
+  // itself asks the same question about the stack it is actually offering.
+  field('desc', expandDesc(u.desc, u, { owned: 0 }));
   field('max stacks', u.maxStacks ?? '∞');
   field('card art', u.cardArt ?? '—');
 
@@ -1806,13 +1810,23 @@ function buildSfxRow(name) {
   const el = document.createElement('div');
   el.className = 'sv-sfx-row';
 
+  // Which half of playSfx this entry actually goes through. A sampled sound
+  // ignores `type`, `wave`, `freq`, `noise`, `detune` and `decay` entirely —
+  // the file supplies the waveform and its own length — so showing those
+  // sliders was offering controls that silently do nothing. That is not a
+  // cosmetic problem: `decay` used to set the voice-slot hold time, so it LOOKED
+  // like it did something, and the number it held was wrong for every sampled
+  // sound in the bank. `filter`, `gain`, `pitchVary` and `filterVary` all still
+  // apply to a sample, and stay.
+  const synth = !!def.type;
+
   const head = document.createElement('div');
   head.className = 'sv-sfx-name';
   const nameSpan = document.createElement('span');
   nameSpan.textContent = name;
   const typeSpan = document.createElement('span');
   typeSpan.className = 'sv-sfx-type';
-  typeSpan.textContent = def.type;
+  typeSpan.textContent = def.type ?? 'sample';
   const testBtn = document.createElement('button');
   testBtn.className = 'sv-tex-btn';
   testBtn.textContent = 'Test';
@@ -1845,14 +1859,18 @@ function buildSfxRow(name) {
     slider(el, 'freq hi', 20, 2000, 5, () => def.freq?.[1] ?? 220, (v) => { def.freq = [def.freq?.[0] ?? v, v]; });
   }
 
-  if (def.type === 'noise' || def.type === 'boom') {
+  // A sample only gets the filter row if the entry already routes through one —
+  // adding a lowpass to a sound that never had one is a different edit from
+  // adjusting the one it has, and the row would otherwise appear on all 54.
+  if (def.type === 'noise' || def.type === 'boom' || (!synth && def.filter != null)) {
     slider(el, 'filter', 80, 6000, 20, () => def.filter ?? 2000, (v) => { def.filter = v; });
   }
   if (def.type === 'boom') {
     slider(el, 'noise mix', 0, 1, 0.02, () => def.noise ?? 0.5, (v) => { def.noise = v; });
   }
 
-  slider(el, 'decay', 0.02, 1.5, 0.01, () => def.decay ?? 0.2, (v) => { def.decay = v; });
+  // Synth only: a sample's length is the file's, measured at decode.
+  if (synth) slider(el, 'decay', 0.02, 1.5, 0.01, () => def.decay ?? 0.2, (v) => { def.decay = v; });
   // In dB, and up to +24 — see dbSlider. The headroom to drive a sound this
   // hard comes from the ceiling on the master bus above; without that, the
   // top of this track would be a click rather than a loud sound.
@@ -1860,9 +1878,10 @@ function buildSfxRow(name) {
   // Every sound gets randomized variation so repeats don't phase into one
   // flat tone. Pickups ship with a wide spread, weapons a tight one.
   slider(el, 'pitch var', 0, 0.5, 0.01, () => def.pitchVary ?? 0, (v) => { def.pitchVary = v; });
-  if (def.type === 'noise' || def.type === 'boom') {
+  if (def.type === 'noise' || def.type === 'boom' || (!synth && def.filter != null)) {
     slider(el, 'filt var', 0, 0.6, 0.01, () => def.filterVary ?? 0, (v) => { def.filterVary = v; });
   }
+  // Detune is an oscillator parameter. There is no oscillator on the sample path.
   if (def.type === 'blip' || def.type === 'boom') {
     slider(el, 'detune', 0, 80, 1, () => def.detune ?? 0, (v) => { def.detune = v; });
   }

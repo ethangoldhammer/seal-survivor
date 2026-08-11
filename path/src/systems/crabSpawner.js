@@ -11,24 +11,48 @@ import { enemies, spawnNamed, nightlifeWeight } from '../entities/enemies.js';
 // deliberately so: a second place to set how often a crab appears is a second
 // place for it to disagree with the table.
 //
-// This is the SECOND door crabs come through, not the only one — enemies.csv
-// gives them a spawnRateMul so the ordinary weighted pool sends them too, and
-// that pool applies its own nightlife weighting. What this file adds is the
-// chum-pile swarm: leave orbs on the seabed and a wave walks on to eat them.
-// The changeover is applied here as well so a summoned wave matches whatever
-// the sky is doing, rather than being all day-crabs at midnight.
+// THIS FILE IS THE ONLY DOOR CRABS COME THROUGH. Every crab row ships
+// spawnRateMul 0, so the ordinary weighted pool never draws one — chum on the
+// seabed is what summons them, and that is the design rather than an accident
+// of tuning. Putting them in the pool as well was tried and reverted: it made
+// crabs ambient wildlife and quietly removed the reason to leave a pile alone.
 //
-// Both doors are capped by CONFIG.spawn.groupMaxAlive.crab, which is what
-// stops the two adding up to twice the intended crowd.
+// Because the pool never sees them, the pool's nightlife weighting never
+// touches them either, so the day/night changeover has to be applied here.
+// CONFIG.spawn.groupMaxAlive.crab bounds the family across both variants.
 //
 // Read fresh each call rather than cached: the CSV is re-applied live when the
 // file changes, and a cached roster would keep spawning a crab whose row had
 // just been deleted.
 // ---------------------------------------------------------------------------
+let warnedNoFamily = false;
+
 function crabFamily() {
   const out = [];
   for (const [key, def] of Object.entries(CONFIG.enemies)) {
     if (def?.spawnGroup === 'crab') out.push({ key, def });
+  }
+  if (out.length) return out;
+
+  // NOTHING MATCHED, which must never mean "no crabs". The old version of this
+  // file named 'walkingCrab' directly and so could not fail; reading the family
+  // out of the table is better in every way except this one, because the table
+  // is data and data can arrive wrong — a CSV that failed to parse, a column
+  // renamed, or a dev page whose module graph reloaded config.js without
+  // reloading this file, leaving the two looking at different CONFIG objects.
+  // Every one of those turns "crabs are summoned by chum" into silence with no
+  // error anywhere.
+  //
+  // `behavior === 'crawl'` is the fallback because it is a fact about the
+  // creature that lives in config.js next to the code that reads it, so it
+  // cannot go missing at the same time the CSV column does.
+  for (const [key, def] of Object.entries(CONFIG.enemies)) {
+    if (def?.behavior === 'crawl') out.push({ key, def });
+  }
+  if (!warnedNoFamily) {
+    warnedNoFamily = true;
+    console.warn('[crabSpawner] no enemy row carries spawnGroup "crab" — enemies.csv may not have '
+      + `applied. Falling back to behavior 'crawl': ${out.map((c) => c.key).join(', ') || 'nothing at all'}.`);
   }
   return out;
 }

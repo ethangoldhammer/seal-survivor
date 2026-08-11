@@ -3,7 +3,9 @@ import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { drawUpgrades } from '../upgradeTable.js';
+import { expandDesc } from '../upgradeText.js';
 import { rollElementFor, elementCardName, elementCardDesc } from '../systems/elements.js';
+import { rollRarity, rarityById, rarityRank, bestRarity } from '../systems/rarity.js';
 import quipsCsv from '../quips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
@@ -21,6 +23,7 @@ import {
   submitScore,
 } from '../systems/leaderboard.js';
 import { feedback } from '../systems/feedback.js';
+import { playSfx } from '../systems/audio.js';
 
 let callbacks = {};
 const el = {};
@@ -132,14 +135,34 @@ const STYLES = `
     clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
     cursor: pointer; transition: filter 0.15s ease, transform 0.15s ease; text-align: center; }
   .sv-card:hover { filter: brightness(1.25) saturate(1.15); transform: scale(1.04); }
-  /* clip-path cuts off any outline, so focus is shown with an inner glow. */
-  .sv-card:focus-visible { filter: brightness(1.3); box-shadow: inset 0 0 0 3px #7ad7ff; }
+  /* THE RARITY SLOT. A card's rarity has to be drawn as a stroke and a bloom,
+     and the card itself is a clip-path hexagon — which eats both. A clip-path
+     removes an outer border outright, and CSS applies filter BEFORE clipping,
+     so a drop-shadow on the card is clipped away with it.
+     So the bloom lives out here, on an unclipped wrapper: the filter renders
+     the clipped card first and then blooms the hex silhouette it produced.
+     The stroke goes the other way and is drawn INSIDE the card as an inset
+     shadow — the same trick the focus ring below has always used, for the same
+     reason. Set inline per card from the tier's colour, because the ladder
+     comes out of rarities.csv and a fixed class per tier could not survive a
+     row being renamed or added. */
+  .sv-card-slot { display: block; line-height: 0; }
+  /* clip-path cuts off any outline, so focus is shown with an inner glow.
+     Composed from custom properties so the rarity ring and the selection ring
+     can coexist: the tier owns the outer few pixels, the selection sits just
+     inside it. Written as one box-shadow list rather than two rules, since a
+     second rule would replace the first outright. */
+  .sv-card { box-shadow: inset 0 0 0 var(--sv-ring-w, 0px) var(--sv-ring, transparent); }
+  .sv-card:focus-visible { filter: brightness(1.3);
+    box-shadow: inset 0 0 0 var(--sv-ring-w, 0px) var(--sv-ring, transparent),
+                inset 0 0 0 calc(var(--sv-ring-w, 0px) + 4px) #7ad7ff; }
   /* Gamepad selection. Same look as focus above, but as a class: a pad press
      is not a focus event, and :focus-visible is the browser's guess about
      whether to show a ring at all. Written after :hover and at equal
      specificity so the highlight survives the mouse resting on another card. */
   .sv-card.sv-card-sel { filter: brightness(1.3) saturate(1.15); transform: scale(1.04);
-    box-shadow: inset 0 0 0 3px #7ad7ff; }
+    box-shadow: inset 0 0 0 var(--sv-ring-w, 0px) var(--sv-ring, transparent),
+                inset 0 0 0 calc(var(--sv-ring-w, 0px) + 4px) #7ad7ff; }
   .sv-card-overlay { position: absolute; inset: 0; pointer-events: none; }
   /* Text is confined to the hex's inscribed box and centred both ways, so a
      long upgrade name can't spill past the angled edges. The inset matches
@@ -817,7 +840,7 @@ function revealScoreCardIn() {
 
 // Which stack of `choice` this card would be — 1 for the first one taken.
 function nextStack(choice) {
-  return player.upgrades.filter((id) => id === choice.id).length + 1;
+  return player.upgrades.filter((p) => p.id === choice.id).length + 1;
 }
 
 // An upgrade with `perLevelName` numbers its card: "Seal Team 1", "Seal Team
@@ -837,11 +860,61 @@ function cardName(choice) {
 
 // `levelDescs` swaps the description at a specific stack, so a card that
 // changes what it does at level N can say so on the card that grants it.
+//
+// Whichever string wins, it goes through expandDesc last: {effect} and friends
+// are written in upgrades.csv, in levelDescs and in the element descriptions
+// alike, and a placeholder that worked on one card and not another would be
+// the kind of inconsistency nobody could hold in their head. `owned` is what
+// makes {effect} answer for THIS card rather than for the first one — the
+// third Coiled Spring quotes the third stack's numbers.
 function cardDesc(choice) {
-  if (choice.rolledElement) {
-    return elementCardDesc(choice.rolledElement, nextStack(choice)) ?? choice.desc;
-  }
-  return choice.levelDescs?.[nextStack(choice)] ?? choice.desc;
+  const owned = nextStack(choice) - 1;
+  const raw = choice.rolledElement
+    ? (elementCardDesc(choice.rolledElement, nextStack(choice)) ?? choice.desc)
+    : (choice.levelDescs?.[nextStack(choice)] ?? choice.desc);
+  return expandDesc(raw, choice, { owned, warn: console.warn });
+}
+
+// How far through the run the rarity odds have travelled, 0..1.
+//
+// Player level rather than elapsed time: the roll happens on the level-up
+// screen, which is the one moment the player is being asked to care, and a run
+// that levels slowly has earned its odds staying low. Time would hand a
+// stalled run the same legendary chances as a thriving one.
+function rarityProgress() {
+  const cap = Math.max(2, CONFIG.rarityRampLevel ?? 20);
+  return Math.min(1, Math.max(0, (player.level - 1) / (cap - 1)));
+}
+
+// Paint one card's tier: an inset stroke on the card, a bloom on its wrapper.
+//
+// Both inline, because the ladder is defined in rarities.csv — a class per tier
+// would be a second copy of the table in the stylesheet, and it could not
+// survive a row being renamed, recoloured or added, which is the whole point of
+// the file being editable.
+function applyRarityStyle(slot, card, rarityId) {
+  const tier = rarityById(rarityId);
+  if (!tier) return;
+  const cfg = CONFIG.rarityCard ?? {};
+  const hex = `#${(tier.color >>> 0).toString(16).padStart(6, '0')}`;
+
+  card.style.setProperty('--sv-ring', hex);
+  card.style.setProperty('--sv-ring-w', `${cfg.ringWidth ?? 3}px`);
+
+  // Two passes, not one. A single wide shadow reads as fog around the card; the
+  // tight one gives the edge itself a hot line, and it is the pair that reads
+  // as "this thing is lit" rather than "this thing is blurry".
+  const glow = tier.glow ?? 0;
+  slot.style.filter = glow > 0
+    ? `drop-shadow(0 0 ${(cfg.glowTight ?? 5) * glow}px ${hex}) drop-shadow(0 0 ${(cfg.glowRadius ?? 16) * glow}px ${hex})`
+    : '';
+
+  // For anything that wants to style or test against the tier without
+  // re-deriving it — including the harness, which asserts the ring is actually
+  // on the card rather than merely computed.
+  slot.dataset.rarity = tier.id;
+  card.dataset.rarity = tier.id;
+  card.dataset.rarityRank = String(rarityRank(tier.id));
 }
 
 // The cards currently on screen, in visual order, and which one the pad has
@@ -854,18 +927,34 @@ export function showLevelUp() {
   const picks = drawUpgrades(pool, CONFIG.upgradeChoices);
 
   el.svCards.innerHTML = '';
+  // The tiers actually DEALT this level-up. Collected as the cards are built
+  // rather than read back off `picks`, which holds the shared CONFIG.upgrades
+  // entries — the roll lives on the per-card copy, and reading the defs here
+  // silently found no rarity at all and never played the sting.
+  const dealt = [];
   for (const def of picks) {
     // An upgrade declaring `roll` picks its variant HERE, at draw time, so the
     // card can show what it is offering. Rolled onto a SHALLOW COPY rather than
     // onto the CONFIG entry itself: config.js is the shared definition, and
     // writing this frame's roll into it would leak the variant into the tuner's
     // Upgrades tab and into the next draw.
+    // The tier is rolled here too, and onto the same copy, for the same reason:
+    // it belongs to THIS DEAL of this card, not to the upgrade. The odds slide
+    // from the early column to the late one across the run — see rollRarity.
+    const rarity = rollRarity(rarityProgress());
     const choice = def.roll === 'biolumElement'
-      ? { ...def, rolledElement: rollElementFor() }
-      : def;
+      ? { ...def, rolledElement: rollElementFor(), rarity }
+      : { ...def, rarity };
+
+    // An unclipped wrapper the bloom can hang off — see the CSS.
+    const slot = document.createElement('div');
+    slot.className = 'sv-card-slot';
+
     const card = document.createElement('div');
     card.className = 'sv-card';
     card.tabIndex = 0;
+    applyRarityStyle(slot, card, rarity);
+    dealt.push(choice);
 
     // `cardArt` comes off the upgrade itself — the `cardArt` column of
     // upgrades.csv, validated against LEVELUP_IMAGE_KEYS when the file loads,
@@ -898,6 +987,12 @@ export function showLevelUp() {
       // stops the mouse; this stops the pad and the keyboard, which reach the
       // card without going through pointer-events at all.
       if (menuLocked) return;
+      // The card's own voice, if its `sfx` column names one. On TOP of the
+      // click rather than instead of it: the click is the button answering,
+      // this is the upgrade arriving. Everything without a column entry stays
+      // on the shared `levelUp` feedback that main.js fires, so this is opt-in
+      // per card and silence here is the normal case.
+      if (choice.sfx) playSfx(choice.sfx);
       levelUpCards = [];
       // Dissolves out rather than vanishing, and the choice is filed on this
       // frame regardless: the run comes back to life behind the cards while
@@ -921,20 +1016,32 @@ export function showLevelUp() {
         pick();
       }
     });
-    el.svCards.appendChild(card);
+    slot.appendChild(card);
+    el.svCards.appendChild(slot);
   }
   // Reveal first: the cards have no layout while the menu is display:none, so
   // measuring before this point reads zeroes.
   el.svLevelUpMenu.classList.remove('sv-hidden');
-  for (const card of el.svCards.children) fitCardText(card);
+  for (const card of el.svCards.querySelectorAll('.sv-card')) fitCardText(card);
 
   // Gamepad navigation. The selection starts on the first card so there's
   // always something A can confirm, and the pad's buttons are re-baselined so
   // the fire button being held right now doesn't pick it instantly.
-  levelUpCards = [...el.svCards.children];
+  // The cards, not the slots — everything downstream (selection class, focus,
+  // the arrow-key geometry) acts on the card itself.
+  levelUpCards = [...el.svCards.querySelectorAll('.sv-card')];
   selectedIndex = -1;
   resetMenuInput();
   selectCard(0);
+
+  // ONE sting, for the best tier on the table. Three would smear, and the two
+  // quieter ones would be inaudible under the loudest anyway — so the menu
+  // announces the best thing on offer and says nothing about the rest.
+  // Fired before the reveal rather than after it: the sound is what makes you
+  // look at the cards, so it has to arrive with them starting to appear, not
+  // half a second after they have landed.
+  const best = rarityById(bestRarity(dealt));
+  if (best?.sfx) playSfx(best.sfx);
 
   // Last, once everything is built, laid out and selected: the reveal masks
   // the finished menu, and a card added after it started would appear whole

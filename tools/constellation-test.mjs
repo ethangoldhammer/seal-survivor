@@ -53,8 +53,9 @@ import { CONFIG } from '../path/src/config.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
 import { STAR_THRESHOLD, starsIn } from '../path/src/systems/starField.js';
 import {
-  createConstellations, buildConstellationField,
+  createConstellations, buildConstellationField, countLive,
 } from '../path/src/systems/constellations.js';
+import { chainReachAt } from '../path/src/systems/constellationReach.js';
 import { updateDayCycle, skyLight } from '../path/src/systems/daylight.js';
 import { updateBeatSync, beatsNow, divisionBeats } from '../path/src/systems/beatSync.js';
 
@@ -163,9 +164,18 @@ section('LINKS');
     `${links.length} edges, ${seen.size} distinct`);
   check('no star links to itself',
     links.every((e) => e.x1 !== e.x2 || e.y1 !== e.y2));
-  check('no link is longer than the reach',
-    links.every((e) => Math.hypot(e.x2 - e.x1, e.y2 - e.y1) <= CFG.linkRadius + 1e-9),
-    `longest ${Math.max(...links.map((e) => Math.hypot(e.x2 - e.x1, e.y2 - e.y1))).toFixed(2)} of ${CFG.linkRadius}`);
+  // BUILT and DRAWN are two different sets now that the food chain widens the
+  // sky: the buffers are made at the deepest chain's reach and most of them
+  // wait. The reach claim belongs to what is drawn AT REST.
+  const resting = links.filter((e) => Math.hypot(e.x2 - e.x1, e.y2 - e.y1) <= CFG.linkRadius
+    && e.rank < CFG.links);
+  check('no link drawn at rest is longer than the resting reach',
+    resting.every((e) => Math.hypot(e.x2 - e.x1, e.y2 - e.y1) <= CFG.linkRadius + 1e-9),
+    `longest ${Math.max(...resting.map((e) => Math.hypot(e.x2 - e.x1, e.y2 - e.y1))).toFixed(2)} of ${CFG.linkRadius}`);
+  check('and none built is longer than the deepest chain could ask for',
+    links.every((e) => Math.hypot(e.x2 - e.x1, e.y2 - e.y1) <= chainReachAt(Infinity, CFG).radius + 1e-9),
+    `longest built ${Math.max(...links.map((e) => Math.hypot(e.x2 - e.x1, e.y2 - e.y1))).toFixed(2)}`
+    + ` of ${chainReachAt(Infinity, CFG).radius.toFixed(1)}`);
 
   // Bright end first, so the travelling bloom always runs from the more
   // prominent star toward the fainter one.
@@ -177,10 +187,16 @@ section('LINKS');
   });
   check('every link runs bright end first', backwards.length === 0, `${backwards.length} backwards`);
 
+  // Both switches are about the RESTING sky — with the chain on, a build still
+  // makes the links a deep combo would want, and they stay dark until it earns
+  // them. Turning the chain off as well is what empties the buffers outright.
   const noLinks = buildConstellationField({ ...CFG, links: 0 }, bounds);
-  check('links 0 draws none', noLinks.counts.links === 0);
+  check('links 0 draws none at rest', noLinks.counts.resting === 0);
   const tight = buildConstellationField({ ...CFG, linkRadius: 0.01 }, bounds);
-  check('a reach of nothing draws none either', tight.counts.links === 0);
+  check('a reach of nothing draws none either', tight.counts.resting === 0);
+  const flat = { ...CFG, chain: { ...CFG.chain, enabled: false } };
+  check('and with the chain off, links 0 builds nothing at all',
+    buildConstellationField({ ...flat, links: 0 }, bounds).counts.links === 0);
 }
 
 // --- fractal ----------------------------------------------------------------
@@ -454,6 +470,136 @@ section('REACH — an explosion in the water has to ring the sky');
   check('the ring buffer recycles the oldest slot',
     U.uRipples.value.every((v) => Number.isFinite(v.x)),
     `${U.uRipples.value.length} slots`);
+}
+
+// --- the food chain ---------------------------------------------------------
+section('CHAIN — a combo widens the sky, without rebuilding a thing');
+
+{
+  const rest = chainReachAt(0, CFG);
+  const most = chainReachAt(Infinity, CFG);
+  const live = (level) => countLive(field.edges, level, CFG);
+
+  console.log(`  reach ${rest.radius.toFixed(1)} -> ${most.radius.toFixed(1)} units,`
+    + ` ${rest.links.toFixed(1)} -> ${most.links.toFixed(1)} links per star`);
+  console.log(`  built ${field.counts.links} links, ${field.counts.resting} lit at rest,`
+    + ` ${live(most.depth) - field.counts.branches} at full chain`);
+
+  check('a resting sky draws fewer links than were built',
+    field.counts.resting < field.counts.links,
+    `${field.counts.resting} of ${field.counts.links} — the rest are waiting on a chain`);
+  check('a deeper chain never lights FEWER links',
+    [0, 1, 2, 3, 5, 8, 12, 40].every((l, i, a) => i === 0 || live(l) >= live(a[i - 1])),
+    [0, 2, 5, 8, 40].map((l) => `${l}:${live(l)}`).join(' '));
+  check('and a deep one lights strictly more than a resting sky',
+    live(most.depth) > live(0), `${live(0)} -> ${live(most.depth)}`);
+
+  // THE ONE THAT MATTERS. The geometry is built once, at the deepest reach the
+  // config allows. If the builder and the shader disagree about what that is,
+  // the extra links are simply never made and the reward for a long chain is
+  // an empty sky — a failure with no error and no visible cause.
+  check('the deepest chain is fully served by what was built',
+    live(most.depth) === live(most.depth + 50),
+    'nothing the shader can ask for is missing from the buffers');
+  const built = Math.max(...field.edges.filter((e) => e.gen === 0)
+    .map((e) => Math.hypot(e.x2 - e.x1, e.y2 - e.y1)));
+  check('no built link is longer than the deepest reach',
+    built <= most.radius + 1e-9, `longest ${built.toFixed(1)} of ${most.radius.toFixed(1)}`);
+  const ranks = field.edges.filter((e) => e.gen === 0).map((e) => e.rank);
+  check('and none ranks past what the deepest chain allows',
+    Math.max(...ranks) < most.links, `top rank ${Math.max(...ranks)}, allowed ${most.links}`);
+
+  // At rest the field must be exactly what it was before any of this existed:
+  // the `links` nearest neighbours within `linkRadius`, and nothing else.
+  const naive = field.edges.filter((e) => e.gen === 0
+    && Math.hypot(e.x2 - e.x1, e.y2 - e.y1) <= CFG.linkRadius && e.rank < CFG.links).length;
+  check('a resting sky is exactly the plain nearest-neighbour graph',
+    field.counts.resting === naive,
+    `${naive} links within ${CFG.linkRadius} at rank < ${CFG.links}`);
+
+  // The fractal belongs to its anchor star, not to how well the seal is eating.
+  const branches = field.edges.filter((e) => e.gen > 0);
+  check('the fractal is not gated by the chain',
+    [0, 3, 99].every((l) => countLive(branches, l, CFG) === branches.length),
+    `all ${branches.length} branches lit at every depth`);
+
+  // The gate is a smoothstep on span and a clamp on rank, so both have to be
+  // monotonic in the level or a chain could take links AWAY as it deepened.
+  const reaches = [0, 1, 2, 4, 8, 99].map((l) => chainReachAt(l, CFG).radius);
+  check('reach is monotonic in the chain depth',
+    reaches.every((r, i) => i === 0 || r >= reaches[i - 1]), reaches.map((r) => r.toFixed(0)).join(' '));
+  check('and it stops growing at maxLevel rather than running away',
+    chainReachAt(CFG.chain.maxLevel, CFG).radius === chainReachAt(1e6, CFG).radius,
+    `capped at ${most.radius.toFixed(1)} units`);
+
+  // Switching it off has to give back exactly the old sky, not a wider one.
+  const off = { ...CFG, chain: { ...CFG.chain, enabled: false } };
+  check('turning the chain off leaves the resting sky untouched',
+    chainReachAt(9, off).radius === CFG.linkRadius
+    && chainReachAt(9, off).links === CFG.links);
+}
+
+{
+  // The eased level, as update() runs it: asymmetric, and it must actually
+  // arrive rather than creeping at 99% forever.
+  const sky = createConstellations(new THREE.Scene());
+  const u = sky.group.children[0].material.uniforms;
+  updateDayCycle(0); // night, from the scrub above
+  sky.setChain(6);
+  let frames = 0;
+  while (u.uChain.value.x < chainReachAt(6, CFG).radius - 0.05 && frames < 600) {
+    sky.update(1 / 60, {});
+    frames++;
+  }
+  check('the sky opens to a chain of 6 within a second',
+    frames > 1 && frames < 60, `${frames} frames (${(frames / 60).toFixed(2)}s)`);
+  const opened = frames;
+
+  sky.setChain(0);
+  frames = 0;
+  while (u.uChain.value.x > CFG.linkRadius + 0.05 && frames < 1200) {
+    sky.update(1 / 60, {});
+    frames++;
+  }
+  check('and closes again when the chain lapses',
+    frames < 1200, `${frames} frames (${(frames / 60).toFixed(2)}s)`);
+  check('...more slowly than it opened — the reward arrives, the loss lingers',
+    frames > opened, `${opened} frames open vs ${frames} closed`);
+
+  // An exponential ease never arrives on its own, so there is a snap at the
+  // bottom. Without it the sky sits fractionally open for the rest of the run
+  // and every link near the resting reach flickers on the smoothstep's edge.
+  let settle = 0;
+  while (sky.stats().chain !== 0 && settle < 1200) { sky.update(1 / 60, {}); settle++; }
+  check('and settles EXACTLY back to the resting reach rather than creeping',
+    sky.stats().chain === 0 && Math.abs(u.uChain.value.x - CFG.linkRadius) < 1e-9,
+    `snapped home after ${((frames + settle) / 60).toFixed(2)}s`);
+  check('reset drops the chain on the spot',
+    (sky.setChain(8), sky.update(1 / 60, {}), sky.reset(), sky.stats().chain === 0));
+
+  // A chain deeper than maxLevel must not bank reach the sky cannot spend.
+  // Un-clamped, the level would climb past the cap and then have to drain back
+  // down through the unusable part before anything on screen began to close —
+  // a sky that stayed wide open for a second after the combo died, for longer
+  // the better the combo was.
+  const closeFrom = (depth) => {
+    sky.reset();
+    sky.setChain(depth);
+    for (let i = 0; i < 900; i++) sky.update(1 / 60, {});
+    const settled = sky.stats().chain;
+    sky.setChain(0);
+    let n = 0;
+    while (sky.stats().chain !== 0 && n < 2000) { sky.update(1 / 60, {}); n++; }
+    return { settled, n };
+  };
+  const capped = closeFrom(CFG.chain.maxLevel);
+  const over = closeFrom(CFG.chain.maxLevel + 20);
+  check('a chain past maxLevel banks no reach it cannot spend',
+    Math.abs(over.settled - CFG.chain.maxLevel) < 1e-6,
+    `settled at ${over.settled.toFixed(3)}, cap ${CFG.chain.maxLevel}`);
+  check('...so a 28-chain closes in exactly the time an 8-chain does',
+    over.n === capped.n, `${over.n} frames vs ${capped.n}`);
+  sky.dispose();
 }
 
 // --- geometry ---------------------------------------------------------------

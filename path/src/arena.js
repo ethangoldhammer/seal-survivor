@@ -3,6 +3,18 @@ import { CONFIG } from './config.js';
 // The playfield is a vertical slice of ocean. Water surface sits at y = 0;
 // positive y is air, negative y is water. Bounds are recomputed on resize so
 // the surface always lands at `surfaceFromTop` of the screen height.
+//
+// left/right/width/top are the ARENA — where the walls and the ceiling are,
+// which is what almost everything in the game means when it asks about the
+// world. `frameWidth` and `frameTop` are the FRAME: what the camera sees at
+// zoom 1. They were the same numbers until `arena.widthScale` / `airScale`,
+// and are still equal at 1; above that the arena is bigger than the frame and
+// the camera pans across the difference. Anything that means "the screen"
+// rather than "the ocean" wants the frame pair.
+//
+// The FLOOR is deliberately not in that list: bounds.bottom is the frame's
+// bottom edge and the arena's floor at once, because the death dive already
+// spends the space below it (see FLOOR_OVERSCAN in world.js).
 export const bounds = {
   left: -40,
   right: 40,
@@ -11,6 +23,8 @@ export const bounds = {
   surfaceY: 0,
   width: 80,
   height: 50,
+  frameWidth: 80,
+  frameTop: 10,
 };
 
 // How much visible seabed sits above bounds.bottom. world.js builds the floor
@@ -31,12 +45,31 @@ export function updateBounds(aspect) {
   const air = h * CONFIG.arena.surfaceFromTop;
 
   bounds.surfaceY = 0;
-  bounds.top = air;
   bounds.bottom = -(h - air);
-  bounds.right = (h * aspect) / 2;
+  bounds.height = h;
+
+  // The frame first — what the camera sees at zoom 1.
+  bounds.frameWidth = h * aspect;
+  bounds.frameTop = air;
+
+  // Then the walls and the ceiling, pushed out beyond it. Both cost a camera
+  // that can follow, and the cinematic rig already pans and clamps in x and y
+  // for the shot, so what they really cost is that the rig has somewhere to
+  // go — see clampFocus in world.js.
+  const wide = Math.max(1, CONFIG.arena.widthScale ?? 1);
+  bounds.right = (bounds.frameWidth * wide) / 2;
   bounds.left = -bounds.right;
   bounds.width = bounds.right - bounds.left;
-  bounds.height = h;
+
+  // THE CEILING, and it is a real one: clampToArena stops the seal dead at
+  // bounds.top, so this is the height a breach is allowed to reach and not a
+  // decoration. `surfaceFromTop` cannot do this job — it is a share of the
+  // frame, so buying air with it spends water depth one for one, and the
+  // frame is only 52 units tall to begin with. A strike dash wants far more
+  // sky than the frame has: measured, straight up off a 46 u/s dash reaches
+  // 15.1 units, and more than 70 deep in a combo.
+  const tall = Math.max(1, CONFIG.arena.airScale ?? 1);
+  bounds.top = air * tall;
   return bounds;
 }
 

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
+import { abilityDamage } from './scaling.js';
 
 // One entry per orbiting instance: { mesh, angleOffset, cooldowns: Map<enemy, secondsLeft> }
 let instances = [];
@@ -83,11 +84,14 @@ export function updateShrimpRing(dt, scene, playerPos, shrimpCount, enemiesList,
       const combined = reach + e.radius;
       if (dx * dx + dy * dy > combined * combined) continue;
 
-      e.hp -= CONFIG.shrimpRing.contactDamage;
+      // Read once, so the hit and the number reported to the feedback layer
+      // cannot disagree about how hard the shrimp hit.
+      const dmg = abilityDamage(CONFIG.shrimpRing.contactDamage);
+      e.hp -= dmg;
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
       inst.cooldowns.set(e, CONFIG.shrimpRing.contactCooldown);
-      hooks.onEnemyDamaged?.(e, CONFIG.shrimpRing.contactDamage);
+      hooks.onEnemyDamaged?.(e, dmg);
       // At the shrimp, not the enemy — the ring is a fixed radius around the
       // player, so contacts happening out on that circle is the read.
       hooks.onContact?.(worldX, worldY);

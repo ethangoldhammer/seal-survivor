@@ -10,7 +10,7 @@ import { midWater, bounds } from './arena.js';
 import { initInput, updateInput, clearPendingInput, input } from './input.js';
 import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, applyRecoil, rebuildShipBody } from './entities/player.js';
 import { projectileCount } from './stats.js';
-import { aoe, targeting } from './systems/scaling.js';
+import { aoe, targeting, abilityDamage } from './systems/scaling.js';
 import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, elementHitEvent } from './systems/elements.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight } from './entities/enemies.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
@@ -25,7 +25,7 @@ import { createPost } from './systems/post.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { fireMusselBarrage } from './systems/musselVolley.js';
-import { strikeState, tryStrike, restoreCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, strikeDirection } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, liveChain, strikeDirection } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -330,6 +330,8 @@ function handleTunerChange(path) {
   // to be re-seated by hand here or it hangs at the old floor height.
   if (path === '*' || path.startsWith('arena') || path.startsWith('camera')) { world.resize(); reseatDecor(); }
   if (path === '*' || path.startsWith('grid')) world.grid.build();
+  // The shore is geometry, not uniforms, so every knob on it needs a rebuild.
+  if (path === '*' || path.startsWith('wallRocks')) world.wallRocks.build();
   // The night sky's geometry IS its tuning — where the stars are, what is
   // joined to what, how far the fractal grows — so most of that panel needs a
   // rebuild rather than a uniform write. `star density` lives in the Sky panel
@@ -641,7 +643,10 @@ function applyLevelChoice(choice) {
   // other two cards on screen may also have been offering Glow Up! rolls,
   // and only the one actually taken should decide the run's element.
   if (choice.rolledElement) commitElement(choice.rolledElement);
-  addUpgrade(choice.id);
+  // The tier the card was DEALT at rides along with the pick — see
+  // recomputeStats, which replays every held upgrade at the rarity it arrived
+  // with rather than at whatever the ladder says today.
+  addUpgrade(choice.id, choice.rarity);
   // Timestamped, so the report can charge an ability only for the time it was
   // actually held — a pick taken at minute nine hasn't had a run to prove
   // itself and shouldn't be ranked as if it had.
@@ -1235,7 +1240,7 @@ function fireMissiles() {
       origin,
       dir: launchDir,
       faction: 'player',
-      damage: CONFIG.missile.damage,
+      damage: abilityDamage(CONFIG.missile.damage),
       speed: CONFIG.missile.speed * speedJitter,
       life: CONFIG.missile.life,
       radius: CONFIG.missile.radius,
@@ -1326,7 +1331,7 @@ function fireScallops() {
       origin,
       dir: launchDir,
       faction: 'player',
-      damage: c.damage,
+      damage: abilityDamage(c.damage),
       speed: c.speed,
       life: c.life,
       radius: c.radius,
@@ -1375,7 +1380,7 @@ function fireBounce() {
     origin: emitPoint(player.aimRig, CONFIG.emitPoints.bounce, 0, dir, player.mesh.position, muzzlePoint),
     dir,
     faction: 'player',
-    damage: CONFIG.bounce.damage,
+    damage: abilityDamage(CONFIG.bounce.damage),
     speed: CONFIG.bounce.speed,
     life: s.bounceLife,
     radius: CONFIG.bounce.radius,
@@ -1462,7 +1467,7 @@ function fireStarfish() {
     origin,
     dir,
     faction: 'player',
-    damage: CONFIG.starfish.damage,
+    damage: abilityDamage(CONFIG.starfish.damage),
     speed: CONFIG.starfish.speed,
     life: CONFIG.starfish.life,
     radius: CONFIG.starfish.baseRadius * stats.scale,
@@ -2321,6 +2326,16 @@ function animate(now) {
   // asking separately is forty trips through the audio clock for one number.
   // See systems/beatSync.js. Raw dt, like the shaders that read it.
   updateBeatSync(rawDt);
+  // How deep the food chain is, for the night sky to reach by — every link
+  // strings the constellations further across the sky and lets each star hold
+  // more neighbours (see systems/constellations.js). Handed in rather than
+  // imported there, for the reason grid.js gives about the charge meter: a
+  // backdrop wants one number, not a dependency on combat. Pushed EVERY frame
+  // from the live chain rather than fired once per link, so the reach retracts
+  // exactly when the chain window expires instead of on a second timer that
+  // would drift from the real one the first time anyone tuned `chainWindow`.
+  // Above world.updateSurface, which is what paints it.
+  world.constellations.setChain(liveChain());
   // Same wall clock, same reasoning: the current is a property of the ocean,
   // not of the run. One uniform write per material — the bend itself is all
   // vertex shader, so this does not scale with how much grass is on screen.

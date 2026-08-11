@@ -126,7 +126,10 @@ export function createClouds(scene) {
     offset.y += 0.04 * (cfg.scale ?? 0.05) * dt;
 
     const w = bounds.width * 1.2;
-    const h = Math.max(1, bounds.top - bounds.surfaceY);
+    // Clouds belong in the sky you can SEE. Stretched to the arena ceiling
+    // (arena.airScale) the layer thins out over ground it mostly cannot be
+    // looked at, and the visible band is what it was tuned against.
+    const h = Math.max(1, bounds.frameTop - bounds.surfaceY);
     mesh.scale.set(w, h, 1);
     mesh.position.set(0, bounds.surfaceY + h / 2, Z);
 

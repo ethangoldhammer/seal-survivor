@@ -48,6 +48,7 @@ const COLOR = {
   muted: 'rgba(232,236,243,0.35)',
   off: 'rgba(232,236,243,0.35)',
   unknown: 'rgba(255,128,149,0.95)', // no such sound — always a bug
+  missing: 'rgba(255,128,149,0.95)', // named files, none loaded — also a bug
 };
 
 const LABEL = {
@@ -57,6 +58,7 @@ const LABEL = {
   muted: 'muted',
   off: 'audio off',
   unknown: 'NO SUCH SOUND',
+  missing: 'NO FILE LOADED',
 };
 
 export function initSfxDebug() {
@@ -109,7 +111,7 @@ function record(name, outcome, detail) {
   // own row. Adding it to `dropped` would double-count a busy frame and make
   // the headline number mean two different things at once, which is the
   // failure this panel exists to avoid.
-  if (outcome === 'gap' || outcome === 'voices' || outcome === 'unknown') dropped++;
+  if (outcome === 'gap' || outcome === 'voices' || outcome === 'unknown' || outcome === 'missing') dropped++;
   else if (outcome === 'sample' || outcome === 'synth') played++;
 
   // Held rows are keyed by what makes two events "the same event" to a reader:

@@ -470,7 +470,16 @@ export async function preloadSamples() {
     // kept, and an entry that lost all of them falls back to the synth.
     const ok = decoded.filter(Boolean);
     if (ok.length) buffers.set(name, ok);
-    else console.warn(`[audio] "${name}" has no usable samples — using the synth instead.`);
+    // Two different failures, and they need different words. An entry that
+    // still has a synth behind it will make A sound, just not the right one;
+    // one that doesn't will make none at all, and that is worth shouting about
+    // because on a deployed build it is the only warning there is.
+    else if (CONFIG.sfx[name]?.type) {
+      console.warn(`[audio] "${name}" has no usable samples — using the synth instead.`);
+    } else {
+      console.error(`[audio] "${name}" has no usable samples and no synth fallback — it will be SILENT. `
+        + `Check that these files are deployed: ${sources.join(', ')}`);
+    }
   }
   notifySamplesChanged();
 }
@@ -505,6 +514,57 @@ export async function reloadSample(name) {
   else buffers.delete(name);
   lastPick.delete(name);
   notifySamplesChanged();
+}
+
+// --- trailing silence -------------------------------------------------------
+// How long a buffer actually makes a sound for, which is NOT how long it runs.
+//
+// A voice slot is held for as long as its buffer plays, so a file exported with
+// padding on the end spends that budget playing nothing. This bank is full of
+// it: every Seal_*.mp3 carries exactly 1.03s of digital silence after the last
+// sample, which is a batch-export artifact rather than anything anyone chose.
+// On `shoot` — 1.14s of file for 0.12s of seal, fired six times a second and
+// not throttled — that is around six voices permanently held for silence, out
+// of a budget of 32. Across the sampled bank it is 36% of everything.
+//
+// Scanned BACKWARDS and stopped at the first sample with signal in it, so a
+// file with no padding costs one comparison and a padded one costs only the
+// padding. Measured once per buffer and cached.
+//
+// Nothing is copied or re-encoded — the assets are untouched. The buffer still
+// plays exactly as authored; we simply stop the node and release the slot at
+// the point where it stopped being audible.
+const SILENCE_FLOOR = 10 ** (-60 / 20); // -60 dBFS is silence for this purpose
+const audibleCache = new WeakMap();
+
+function audibleSeconds(buffer) {
+  const cached = audibleCache.get(buffer);
+  if (cached !== undefined) return cached;
+  // A buffer from a stub or a browser that hands back something exotic: fall
+  // back to the full length rather than guessing at zero and eating the sound.
+  if (typeof buffer.getChannelData !== 'function' || !(buffer.length > 0)) {
+    return buffer.duration;
+  }
+  const channels = [];
+  for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+  let last = -1;
+  for (let i = buffer.length - 1; i >= 0; i--) {
+    let loud = false;
+    for (const data of channels) {
+      if (Math.abs(data[i]) > SILENCE_FLOOR) { loud = true; break; }
+    }
+    if (loud) { last = i; break; }
+  }
+  // A file with no signal anywhere is a broken asset, not a short one. Treat it
+  // as full length so it behaves exactly as it did before rather than silently
+  // becoming a zero-length voice that is impossible to notice.
+  const seconds = last < 0
+    ? buffer.duration
+    // A few ms past the last sample, so the release never clips the final cycle
+    // of a tail that decays smoothly into the floor.
+    : Math.min(buffer.duration, (last + 1) / buffer.sampleRate + 0.01);
+  audibleCache.set(buffer, seconds);
+  return seconds;
 }
 
 // Pick a variation, never the same one twice running. With a single sample
@@ -726,9 +786,28 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
   const sample = pickSample(name);
   // Playback rate IS tape speed, so a sample pitched up is correspondingly
   // shorter. This is the number the voice budget is spent in, so it has to be
-  // what the sound will actually do rather than what its config says.
+  // what the sound will actually do rather than what its config says — and
+  // `audibleSeconds`, not `duration`, because the tail of most of these files
+  // is silence and silence should not cost a voice.
   const rate = Math.max(0.05, pitchMul);
-  const length = sample ? sample.duration / rate : decay + SYNTH_TAIL;
+  const length = sample ? audibleSeconds(sample) / rate : decay + SYNTH_TAIL;
+
+  const wantsTone = def.type === 'blip' || def.type === 'boom';
+  const wantsNoise = def.type === 'noise' || def.type === 'boom';
+
+  // No sample AND no synth to fall back on. For an entry that names files this
+  // means every one of them failed to load, and the deployed site is where that
+  // happens — a missing asset on Pages comes back 200 with index.html in it, so
+  // the decode fails and only the boot warning ever says so.
+  //
+  // Checked BEFORE the cap, or a sound that is never going to be audible would
+  // steal a voice from one that is — the worst possible trade.
+  //
+  // Called out rather than left as silence. This used to be covered by a synth
+  // blip that sounded nothing like the file, which is its own kind of lie: the
+  // sound was "working" and simply wrong. A red row naming it is the outcome
+  // that actually sends you to the right place.
+  if (!sample && !wantsTone && !wantsNoise) { noteSfx(name, 'missing'); return; }
 
   // Past the cap, the new sound wins and the one with the least left to play
   // gets faded out under it. `stealVoice` only comes back empty when the cap is
@@ -769,6 +848,10 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
     }
     node.connect(gain).connect(master);
     src.start(now);
+    // Stopped where the sound ends rather than where the file does. Everything
+    // past this point is the export's padding, and running a node through it
+    // costs a mixer slot for no audible reason.
+    src.stop(now + length);
     voice.gains.push(gain);
     voice.sources.push(src);
     return;
@@ -779,9 +862,6 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
   // to tell those apart; the boot warning already does, and what matters live
   // is that this sound is NOT the file you think it is.
   noteSfx(name, 'synth', { gain: gainValue, pitch: pitchMul, rep });
-
-  const wantsTone = def.type === 'blip' || def.type === 'boom';
-  const wantsNoise = def.type === 'noise' || def.type === 'boom';
 
   if (wantsTone) {
     const osc = ctx.createOscillator();

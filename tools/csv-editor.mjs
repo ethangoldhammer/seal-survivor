@@ -27,10 +27,10 @@
 // ============================================================================
 
 import { createServer } from 'node:http';
-import { readFile, writeFile, stat } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, extname, basename } from 'node:path';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.CSV_EDITOR_PORT || 5177);
@@ -102,6 +102,88 @@ const CARD_ART_KEYS = extractStringArray(configSrc, 'LEVELUP_IMAGE_KEYS');
 const SPAWN_GROUPS = extractObjectKeys(configSrc, 'groupMaxAlive');
 
 // ---------------------------------------------------------------------------
+// THE GAME ITSELF, loaded on demand.
+//
+// Two things this editor can only get by RUNNING the game's code rather than
+// reading it: the sound bank (CONFIG.sfx, whose entries carry their sample
+// paths) and the {effect} preview (which measures an upgrade by calling its
+// apply()). Both need config.js, which needs Vite's `?raw` and JSON imports —
+// hence the loader on the npm script.
+//
+// Loaded lazily and allowed to fail. Without it the editor is exactly what it
+// was before: the grid still works, the sound column falls back to the files
+// on disk, and the desc preview just doesn't appear. A tool for editing tables
+// must not refuse to open because a preview couldn't be built.
+// Node caches a module graph for the life of the process and there is no
+// honest way to invalidate config.js's dependencies from inside it. So rather
+// than serving a preview that is quietly out of date — the exact failure
+// {effect} exists to prevent — the editor watches the files its measurement
+// depends on and says so when one of them has moved under it.
+const GAME_SOURCES = ['path/src/config.js', 'path/src/stats.js', 'path/src/upgradeText.js'];
+let loadedAt = 0;
+
+async function gameIsStale() {
+  if (!loadedAt) return false;
+  for (const f of GAME_SOURCES) {
+    try {
+      const st = await stat(join(ROOT, f));
+      if (st.mtimeMs > loadedAt) return f;
+    } catch { /* a file that isn't there can't be stale */ }
+  }
+  return false;
+}
+
+let gamePromise = null;
+function game() {
+  if (!gamePromise) {
+    gamePromise = Promise.all([
+      import('../path/src/config.js'),
+      import('../path/src/upgradeText.js'),
+    ]).then(([cfg, text]) => { loadedAt = Date.now(); return { CONFIG: cfg.CONFIG, ...text }; })
+      .catch((err) => {
+        console.warn(`  note: couldn't load the game for sound names and {effect} previews — ${err.message}`);
+        console.warn('        (run via "npm run csv" so the Vite loader is in place)');
+        return null;
+      });
+  }
+  return gamePromise;
+}
+
+// The sound bank as a pickable list: every key in CONFIG.sfx, tagged with
+// whether there is an actual file behind it that the editor can play. A synth
+// voice has no sample to preview — it is generated in the browser's audio
+// graph — so it is offered without a play button rather than with one that
+// does nothing.
+async function soundList() {
+  const g = await game();
+  const files = await sfxFiles();
+  if (!g?.CONFIG?.sfx) {
+    // No game: offer the raw files, so the column is still pickable.
+    return files.map((f) => ({ key: f, kind: 'file', file: `/sfx/${f}` }));
+  }
+  return Object.entries(g.CONFIG.sfx).map(([key, v]) => {
+    const src = v?.srcs?.[0] ?? v?.src ?? null;
+    const sampled = typeof src === 'string' && src.startsWith('/sfx/');
+    return {
+      key,
+      kind: sampled ? 'sample' : 'synth',
+      file: sampled ? src : null,
+      takes: Array.isArray(v?.srcs) ? v.srcs.length : (src ? 1 : 0),
+      detail: sampled ? basename(src) : `${v?.type ?? 'synth'} voice`,
+    };
+  });
+}
+
+async function sfxFiles() {
+  try {
+    const names = await readdir(join(ROOT, 'public/sfx'));
+    return names.filter((n) => ['.mp3', '.wav', '.ogg', '.m4a'].includes(extname(n).toLowerCase())).sort();
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // COLUMN PROSE
 //
 // The one thing that can't be extracted: what a column MEANS, and what the
@@ -137,7 +219,8 @@ const DOCS = {
   'upgrades.csv': {
     id: 'Must match an id in CONFIG.upgrades. The join key — renaming it here orphans the row.',
     name: 'Card title. Blank keeps the built-in name.',
-    desc: 'Card body text. Blank keeps the built-in description.',
+    desc: 'Card body text. Blank keeps the built-in description. Takes {placeholders} — see the ⊕ button in the cell.',
+    sfx: 'Sound played when this card is TAKEN, on top of the click. Blank uses the shared level-up sound.',
     maxStacks: 'How many times it can be taken. BLANK MEANS UNLIMITED.',
     enabled: 'FALSE removes it from the offer pool. Blank means enabled.',
     weight: 'How likely this is, relative to the other rows. Blank = 1. 0 is never dealt but still shows in the Upgrades tab.',
@@ -163,7 +246,7 @@ const BLANK_MEANS = {
     minDifficulty: '0', minPlayerLevel: '0', spawnRateMul: '1',
     spawnGroup: 'no group', bioluminescent: 'no',
   },
-  'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card' },
+  'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up' },
   'quips.csv': { enabled: 'enabled', weight: '1' },
 };
 
@@ -224,7 +307,14 @@ function columnSpec(file, name, rows) {
   if (name === 'weight') return { ...base, type: 'number', min: 0 };
   if (name === 'maxStacks') return { ...base, type: 'number', min: 1, integer: true };
   if (name === 'cardArt') return { ...base, type: 'art', options: ['', ...CARD_ART_KEYS] };
-  if (name === 'desc' || name === 'text') return { ...base, type: 'text', wide: true };
+  // Options are fetched when the picker opens rather than shipped with the
+  // table: the bank is 54 entries and the point of the picker is hearing them,
+  // which is a request either way.
+  if (name === 'sfx') return { ...base, type: 'sound' };
+  // `templated` turns on the {placeholder} affordances — an insert menu and a
+  // live preview of what the card will actually read.
+  if (name === 'desc') return { ...base, type: 'text', wide: true, templated: true };
+  if (name === 'text') return { ...base, type: 'text', wide: true };
   return base;
 }
 
@@ -380,6 +470,66 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/api/cardart') {
       return json(res, 200, cardArt());
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/sounds') {
+      return json(res, 200, { sounds: await soundList() });
+    }
+
+    // Audio for the preview button. Confined to public/sfx by rebuilding the
+    // path from the basename — the query string is the one thing here that a
+    // page could put anything into, and this endpoint reads files.
+    if (req.method === 'GET' && url.pathname === '/api/sound') {
+      const name = basename(url.searchParams.get('file') || '');
+      const files = await sfxFiles();
+      if (!files.includes(name)) return json(res, 404, { error: `No such sound: ${name}` });
+      const bytes = await readFile(join(ROOT, 'public/sfx', name));
+      res.writeHead(200, { 'content-type': 'audio/mpeg', 'cache-control': 'no-store' });
+      return res.end(bytes);
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/tokens') {
+      const g = await game();
+      return json(res, 200, { tokens: g?.TOKENS ?? [], available: !!g });
+    }
+
+    // What a desc will actually read on the card. The whole reason {effect} is
+    // measured rather than typed is that nobody can evaluate it by looking at
+    // it, so the editor has to show the answer.
+    if (req.method === 'POST' && url.pathname === '/api/preview') {
+      const body = JSON.parse(await readBody(req));
+      const g = await game();
+      if (!g) return json(res, 200, { text: null, available: false });
+      const u = g.CONFIG.upgrades.find((x) => x.id === body.id);
+      if (!u) return json(res, 200, { text: null, error: `No upgrade with id "${body.id}" in config.js.` });
+      const warnings = [];
+      // Against a COPY: expandDesc doesn't mutate, but this process holds the
+      // same CONFIG the preview measures against, and handing it a live entry
+      // to an id that also owns an apply() is not a risk worth taking.
+      //
+      // maxStacks comes from the ROW being edited rather than from config.js,
+      // so an unsaved change to the cap is reflected in the preview beside it.
+      const cap = body.maxStacks == null || body.maxStacks === '' ? null : Number(body.maxStacks);
+      const probe = { ...u, maxStacks: Number.isFinite(cap) ? cap : null };
+      const render = (owned) => g.expandDesc(body.desc ?? '', probe, { owned, warn: (m) => warnings.push(m) });
+
+      // Both ends of the card, because they are different cards. {effect} on
+      // the first Coiled Spring and on the fourth quote different stacks, and
+      // {total} is degenerate at zero owned — it can only ever equal {effect}
+      // there, which makes a correct token look broken.
+      const first = render(0);
+      const laterStack = Number.isFinite(cap) && cap > 1 ? cap : (cap === 1 ? 1 : 5);
+      const later = laterStack > 1 ? render(laterStack - 1) : null;
+      const stale = await gameIsStale();
+      return json(res, 200, {
+        text: first,
+        later: later === first ? null : later,
+        laterStack,
+        capped: Number.isFinite(cap) && cap > 1,
+        warnings: [...new Set(warnings)],
+        available: true,
+        stale: stale ? `${stale} changed since this editor started — restart "npm run csv" to preview against it` : null,
+      });
     }
 
     if (req.method === 'POST' && url.pathname === '/api/save') {

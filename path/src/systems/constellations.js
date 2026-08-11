@@ -5,6 +5,7 @@ import { skyLight } from './daylight.js';
 import { advanceCycles, phaseOffset } from './beatSync.js';
 import { touchSlots, TOUCH_SLOTS } from '../input.js';
 import { starsIn, STAR_THRESHOLD } from './starField.js';
+import { chainReachAt } from './constellationReach.js';
 
 // THE NIGHT SKY, as the backdrop grid's opposite number.
 //
@@ -296,17 +297,45 @@ const linkVertex = /* glsl */ `
   attribute float aPhase;
   attribute float aRun;  // 0..1 along the link, from the brighter end
   attribute float aSpan; // the link's rest length, world units
+  attribute float aRank; // which nearest-neighbour it was, 0 = closest
   attribute float aGen;
 
   uniform float uBend;
   uniform float uBendMax;
+  uniform vec4 uChain; // x = reach, y = reach fade, z = links per star, w = glow
 
   varying float vBloom;
   varying float vWarp;
   varying vec2 vPos;
   varying float vGen;
+  varying float vLive;
+
+  // THE FOOD CHAIN, as a gate on the geometry that is already there.
+  //
+  // Every link of a chain widens the sky: the reach grows, and each star is
+  // allowed to hold more neighbours. Both are uniforms, so a combo re-wires the
+  // constellations without touching a buffer — the edges were all built at the
+  // deepest chain's reach and most of them are simply waiting.
+  //
+  // Two gates, because they are two different claims. REACH is how far a star
+  // can see, and it lets in the long links across empty sky. LINKS is how many
+  // it will hold, and it lets in the extra neighbours of stars that were
+  // already crowded. A chain that only grew the radius would do nothing at all
+  // inside a dense cluster, which is exactly where the eye is.
+  float chainLive() {
+    float byReach = 1.0 - smoothstep(uChain.x - uChain.y, uChain.x, aSpan);
+    // Fractional on purpose: the newest neighbour fades up as the chain
+    // climbs rather than snapping in on a whole number.
+    float byRank = clamp(uChain.z - aRank, 0.0, 1.0);
+    // Generation 0 is a constellation link between two stars and the only
+    // family the chain governs. The fractal is a property of its anchor star,
+    // not of how well the seal is eating, so it stays put.
+    return mix(1.0, byReach * byRank, step(vGen, 0.5));
+  }
 
   void main() {
+    vGen = aGen;
+    vLive = chainLive();
     float anchored = sin(3.14159265 * clamp(aRun, 0.0, 1.0));
 
     vec2 raw = skyWarp(position.xy) * uBend;
@@ -324,7 +353,6 @@ const linkVertex = /* glsl */ `
     vBloom = bloomAt(aPhase + aGen * uGenDelay + aRun * uTravel);
     vWarp = length(disp);
     vPos = p;
-    vGen = aGen;
 
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, position.z, 1.0);
   }
@@ -340,13 +368,19 @@ const linkFragment = /* glsl */ `
   uniform float uNight;
   uniform float uWarpGain;
   uniform vec4 uBloom;
+  uniform vec4 uChain; // w = the extra brightness a live chain lends
 
   varying float vBloom;
   varying float vWarp;
   varying vec2 vPos;
   varying float vGen;
+  varying float vLive;
 
   void main() {
+    // A link the food chain has not reached yet is not drawn at all. Discarded
+    // rather than left to add zero, because most of this geometry is waiting
+    // most of the time and additive blending would still have it walked.
+    if (vLive <= 0.001) discard;
     float lift = aboveWater(vPos);
     if (lift <= 0.0) discard;
 
@@ -360,9 +394,15 @@ const linkFragment = /* glsl */ `
     // different kinds of line rather than as one messy web.
     vec3 base = mix(uLinkColor, uFractalColor, step(0.5, vGen));
 
+    // The chain's own glow rides on top. A deep combo doesn't only wire more
+    // of the sky together, it burns what is already wired a little hotter —
+    // otherwise the newest, longest, faintest links are the only evidence and
+    // they arrive at the edge of the frame.
+    float lit = (uBloom.y + uBloom.z * heat) * (1.0 + uChain.w);
+
     gl_FragColor = vec4(
       mix(base, uHotColor, heat),
-      clamp((uBloom.y + uBloom.z * heat) * uLinkOpacity * uNight * lift, 0.0, 1.0)
+      clamp(lit * uLinkOpacity * uNight * lift * vLive, 0.0, 1.0)
     );
   }
 `;
@@ -399,7 +439,7 @@ function scrambler(seed) {
 function linkStars(stars, radius, per) {
   const edges = [];
   if (per <= 0 || radius <= 0) return edges;
-  const seen = new Set();
+  const byKey = new Map();
   const near = [];
 
   for (let i = 0; i < stars.length; i++) {
@@ -416,18 +456,27 @@ function linkStars(stars, radius, per) {
     for (let k = 0; k < Math.min(per, near.length); k++) {
       const j = near[k].j;
       const key = i < j ? `${i}|${j}` : `${j}|${i}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      // The rank kept for a shared edge is the LOWER of the two ends'. An edge
+      // that is one star's fourth-nearest and another's first is a first-order
+      // link: whichever end was sure of it would have drawn it at rest.
+      const already = byKey.get(key);
+      if (already) {
+        already.rank = Math.min(already.rank, k);
+        continue;
+      }
       const b = stars[j];
       const [from, to] = a.seed >= b.seed ? [a, b] : [b, a];
-      edges.push({
+      const edge = {
         x1: from.x, y1: from.y, x2: to.x, y2: to.y,
-        seed: from.seed, phase: from.phase, gen: 0,
-      });
+        seed: from.seed, phase: from.phase, gen: 0, rank: k,
+      };
+      byKey.set(key, edge);
+      edges.push(edge);
     }
   }
   return edges;
 }
+
 
 /**
  * The fractal. A branch grown out of an anchor star: `branches` children fanned
@@ -499,6 +548,7 @@ function pushRun(out, edge, sub) {
     out.phase.push(edge.phase, edge.phase);
     out.run.push(t0, t1);
     out.span.push(span, span);
+    out.rank.push(edge.rank ?? 0, edge.rank ?? 0);
     out.gen.push(edge.gen, edge.gen);
   }
 }
@@ -558,7 +608,12 @@ export function buildConstellationField(cfg = CONFIG.constellations ?? {}, view 
   }
   for (const s of stars) s.scale = 0.55 + 0.45 * s.bright;
 
-  const edges = linkStars(stars, cfg.linkRadius ?? 10, Math.round(cfg.links ?? 2));
+  // Built at the reach the DEEPEST chain would ask for, not the resting one.
+  // Every edge past the resting reach is dark until the food chain gets there
+  // (see the chain gate in linkVertex), which is what lets a combo widen the
+  // sky for the price of a uniform write instead of a rebuild mid-fight.
+  const most = chainReachAt(Infinity, cfg);
+  const edges = linkStars(stars, most.radius, Math.round(most.links));
 
   // The fractals grow from the brightest of the promoted stars, so the trees
   // hang off the anchors of the constellations rather than off some second,
@@ -581,10 +636,25 @@ export function buildConstellationField(cfg = CONFIG.constellations ?? {}, view 
       field: field.length,
       stars: stars.length,
       tips: out.stars.length,
-      links: edges.length,
+      links: edges.length, // every one BUILT — most are dark at rest
+      resting: countLive(edges, 0, cfg), // and this is what is drawn with no chain
       branches: out.edges.length,
     },
   };
+}
+
+/**
+ * How many links are lit at a given depth of chain. The shader's gate, in JS —
+ * the tuner prints it and the harness asserts on it, and neither of them can
+ * see a uniform.
+ */
+export function countLive(edges, level, cfg = CONFIG.constellations ?? {}) {
+  const { radius, links } = chainReachAt(level, cfg);
+  return edges.filter((e) => {
+    if (e.gen > 0) return true; // the fractal is not the chain's business
+    const span = Math.hypot(e.x2 - e.x1, e.y2 - e.y1);
+    return span <= radius && (e.rank ?? 0) < links;
+  }).length;
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +671,15 @@ export function createConstellations(scene) {
   let cursor = 0;
   let bloomCycle = 0;
   let waveT = 0;
+  // The food chain, as the sky sees it. `chainTarget` is what the strike
+  // system currently says (whole links, pushed in by main.js); `chainLevel` is
+  // what the sky has actually got to, eased toward it. The gap between them is
+  // the effect: a chain landing pulls the constellations open over a few
+  // frames instead of teleporting a new web into the sky, and a chain lapsing
+  // lets them close slowly rather than snapping shut on the same frame the
+  // window expires.
+  let chainTarget = 0;
+  let chainLevel = 0;
 
   const ripples = new Array(MAX_RIPPLES).fill(0).map(() => new THREE.Vector3());
   const rippleParams = new Array(MAX_RIPPLES).fill(0).map(() => new THREE.Vector2());
@@ -648,6 +727,7 @@ export function createConstellations(scene) {
     uWarpGain: { value: 1.5 },
     uBend: { value: 1 },
     uBendMax: { value: 0.3 },
+    uChain: { value: new THREE.Vector4(10, 2.5, 2, 0) },
   };
 
   function dispose() {
@@ -723,7 +803,7 @@ export function createConstellations(scene) {
 
     // --- the links ----------------------------------------------------------
     const sub = Math.max(1, Math.floor(cfg.subdivisions ?? 4));
-    const runs = { pos: [], phase: [], run: [], span: [], gen: [] };
+    const runs = { pos: [], phase: [], run: [], span: [], rank: [], gen: [] };
     for (const edge of field.edges) pushRun(runs, edge, sub);
 
     if (runs.pos.length) {
@@ -732,6 +812,7 @@ export function createConstellations(scene) {
       geo.setAttribute('aPhase', new THREE.Float32BufferAttribute(runs.phase, 1));
       geo.setAttribute('aRun', new THREE.Float32BufferAttribute(runs.run, 1));
       geo.setAttribute('aSpan', new THREE.Float32BufferAttribute(runs.span, 1));
+      geo.setAttribute('aRank', new THREE.Float32BufferAttribute(runs.rank, 1));
       geo.setAttribute('aGen', new THREE.Float32BufferAttribute(runs.gen, 1));
 
       linkMesh = new THREE.LineSegments(geo, new THREE.ShaderMaterial({
@@ -866,6 +947,28 @@ export function createConstellations(scene) {
     u.uWarpGain.value = cfg.warpGain ?? 1.5;
     u.uBend.value = cfg.bend ?? 1;
     u.uBendMax.value = Math.max(0, cfg.bendMax ?? 0.3);
+
+    // THE FOOD CHAIN. Eased rather than stepped, and asymmetrically: the sky
+    // opens faster than it closes, because the opening is the reward and the
+    // closing is the absence of one.
+    const chain = cfg.chain ?? {};
+    const max = Math.max(1, chainReachAt(Infinity, cfg).depth);
+    // Clamped BEFORE the ease, not after. A twelve-deep chain against a
+    // maxLevel of eight would otherwise ease up to twelve, sit clamped at
+    // eight while it drained back down through the four levels the sky cannot
+    // use, and read as a reach that stayed open long after the combo died.
+    const target = Math.min(chainTarget, max);
+    const rate = target > chainLevel ? (chain.attack ?? 6) : (chain.release ?? 1.8);
+    chainLevel += (target - chainLevel) * (1 - Math.exp(-Math.max(0, rate) * rawDt));
+    if (target === 0 && chainLevel < 0.002) chainLevel = 0;
+
+    const reach = chainReachAt(chainLevel, cfg);
+    u.uChain.value.set(
+      reach.radius,
+      Math.max(0.01, chain.fade ?? 2.5),
+      reach.links,
+      (chain.glow ?? 0) * Math.min(1, reach.depth / max),
+    );
     u.uColor.value.set(cfg.color ?? 0xbcd8ff);
     u.uHotColor.value.set(cfg.hotColor ?? 0xfff2cc);
     u.uLinkColor.value.set(cfg.linkColor ?? 0x2f5f96);
@@ -886,9 +989,28 @@ export function createConstellations(scene) {
     updateTouch(rawDt, view);
   }
 
+  /**
+   * How deep the food chain is right now, in whole links.
+   *
+   * Pushed in by main.js rather than read off strikeState here, for the reason
+   * grid.js gives about the same numbers: systems/strike.js pulls the whole
+   * enemy graph in behind it, and a backdrop wants one number, not a
+   * dependency on combat.
+   *
+   * Set EVERY FRAME from the live chain, not fired once per link. That is what
+   * makes the reach retract exactly when the chain window expires, rather than
+   * on a second timer here that would drift from the real one the first time
+   * anyone tuned `chainWindow`.
+   */
+  function setChain(depth) {
+    chainTarget = Number.isFinite(depth) ? Math.max(0, depth) : 0;
+  }
+
   function reset() {
     for (let i = 0; i < MAX_RIPPLES; i++) rippleParams[i].set(0, 1);
     cursor = 0;
+    chainTarget = 0;
+    chainLevel = 0;
     for (let i = 0; i < MAX_TOUCH; i++) {
       touch[i].set(0, 0, 1, 0);
       touchOwner[i] = null;
@@ -905,7 +1027,8 @@ export function createConstellations(scene) {
     update,
     reset,
     setWaveTime,
+    setChain,
     group,
-    stats: () => ({ ...counts }),
+    stats: () => ({ ...counts, chain: chainLevel }),
   };
 }

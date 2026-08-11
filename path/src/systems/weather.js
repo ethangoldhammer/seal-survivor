@@ -240,7 +240,10 @@ export function createRain(scene) {
     // side of the screen.
     const margin = Math.abs(weatherState.wind) * cfg.drift * 1.5 + 4;
     px[i] = bounds.left - margin + Math.random() * (bounds.width + margin * 2);
-    py[i] = bounds.top + Math.random() * 3;
+    // Sown just above the FRAME. Started at the arena ceiling instead, a
+    // drop would fall three times as far, live three times as long, and the
+    // buffer would saturate long before the storm looked any heavier.
+    py[i] = bounds.frameTop + Math.random() * 3;
     vy[i] = -randomIn(cfg.speed, 36);
     vx[i] = 0;
     len[i] = randomIn(cfg.length, 1.2);
@@ -289,7 +292,15 @@ export function createRain(scene) {
     clock += dt;
 
     if (on) {
-      carry += cfg.perSecond * weatherState.intensity * dt;
+      // `perSecond` is a DENSITY, read as "this much rain on screen", so it
+      // is scaled by how much wider than the frame the arena runs. Drops are
+      // sown across the whole width but only a frame of it is ever watched,
+      // so without this a widened arena (arena.widthScale) spreads the same
+      // budget thinner and a downpour turns into drizzle. Bounded by `cap`
+      // below either way, and a drop lives about a third of a second, so
+      // there is a long way to go before the buffer is the limit.
+      const spread = bounds.width / Math.max(1, bounds.frameWidth);
+      carry += cfg.perSecond * spread * weatherState.intensity * dt;
       // Hard cap per frame: a tab restored after a minute in the background
       // hands us one enormous dt, and without this that frame tries to spawn
       // a minute of rain at once.

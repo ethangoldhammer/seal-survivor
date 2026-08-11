@@ -1,39 +1,39 @@
-id,name,desc,maxStacks,enabled,weight,cardArt
-rapidFire,Supa Dupa Seal,+25% fire rate,,TRUE,1,Beach_001
-heavyRounds,André the Giant,I love your movies :) +40% projectile damage. ,,TRUE,1,Beach_002
-overboost,None,,,FALSE,1,Beach_003
-maxSpeed,Speedy Seal,+20% max speed,,TRUE,1,OpeanOcean_001
-multishot,Pocket Full of Stones,+1 projectile,99,TRUE,1,OpeanOcean_002
-pierce,Pierce,Bullets pierce +1 enemy,4,FALSE,1,OpeanOcean_003
-vitality,Healthy Pup!,+30 max HP,,TRUE,1,Beach_001
-magnet,C.H.U.M.,+50% pickup and chum gulp radius,,TRUE,1,Beach_002
-regen,Talkin Bout Regeneration,+0.5 HP/sec,,TRUE,1,Beach_003
-velocity,Seal the Deal,+30% projectile speed,,TRUE,1,OpeanOcean_003
-homingMissile,Homing Mussels,+1 seeking mussel,15,TRUE,1,OpeanOcean_001
-seaGarlic,Sea Garlic,It's like garlic to a vampire. For for fish.,9,TRUE,1,Beach_001
-shrimpRing,Shrimp Ring,+1 orbiting shrimp,15,TRUE,1,Beach_001
-bounceShot,Bouncing Baby Guppies,"All balls, no pit. ",6,TRUE,1,Beach_002
-electricEel,Electric Eel Friend,Chain lightning! In eel form!,8,TRUE,1,Beach_003
-starfish,Starfish Shuriken,Rapid thrown starfish.,8,TRUE,1,OpeanOcean_001
-seagullBomb,Seagull Bomb,Dive Bomb to the Crab Layer!,8,TRUE,1,OpeanOcean_002
-sealTeam,Seal Team,+1 escort seal. Rams and lunges at enemies.,6,TRUE,1,OpeanOcean_001
-beluga,Baby Beluga Bubble Blaster,Trap enemies in a bubble.,8,TRUE,1,OpeanOcean_003
-strikePower,Chain Gang,"+35% strike damage, chains hit harder",5,TRUE,1,GreatWhite
-strikeDash,Your Dasher is On The Way!,Strikes go harder.,5,TRUE,1,Reef_002
-strikeShrapnel,The Bone Zone,Charge strike explodes with sea shrapnel.,6,TRUE,1,TidePool_001
-strikeCharge,Epic Seal Time,"Strike charges faster, and chum refills more of the meter",4,TRUE,1,TidePool_002
-breachChain,Big Willy Style,Surface breach extends a chain!,3,TRUE,1,TidePool_003
-oxygenMax,Breathe Deep ,+30 max oxygen,5,TRUE,1,Beach_003
-oxygenRefill,Breathwork,Yogi time. +40% surface refill speed,5,TRUE,1,Reef_002
-bakalar,Bakalar's Boat,Giant net filled with giant bombs. How am I driving? Call 707-EXIT-FLU,8,TRUE,1,TidePool_001
-calamari,Calamari Ring,Rings of fried squid pulse outward…,8,TRUE,1,VampireSquid
-dumbo,Dumbo Octopus,Charms nearby enemies with it's cute self.,8,TRUE,1,DumboOctopus
-scallopSquirter,Scallop Squirter,Sea Salad Scallop Shooter TM,12,TRUE,1,SeaAnemone
-oysterBlaster,Oyster Blaster,Glowing pearls that burst into shiny bomblets.,8,TRUE,1,Periwinkles
-octoGrab,Octopus Grabber,Tentacles reel fish in. ,8,TRUE,1,Octopus
-orcaFamily,Orca Family,Three orcas hunt the boats up top. ,6,TRUE,1,Humpback
-musselVolley,Mussel Barrage,"Full-charge strike fires a barrage of homing mussels",5,TRUE,1,Octopus
-projectileAmount,Clone Warz,+1 of everything you fire,3,TRUE,0.5,Sardines
-areaOfEffect,Splash Zone,"+18% blast, aura and wave size",5,TRUE,0.6,Reef_003
-companionSize,Big Rigz,"Rolling with the homies. +15% companion size, +25% companion damage",5,TRUE,0.6,Humpback
-bioluminescence,Glow Up!,Your shots and strike carry an element.,6,TRUE,0.8,AnglerFish
+id,name,desc,maxStacks,enabled,weight,cardArt,sfx
+rapidFire,Supa Dupa Seal,+25% fire rate,,TRUE,1,Beach_001,
+heavyRounds,André the Giant,I love your movies :) +40% projectile damage. ,,TRUE,1,Beach_002,
+overboost,None,,,FALSE,1,Beach_003,
+maxSpeed,Speedy Seal,+20% max speed,,TRUE,1,OpeanOcean_001,
+multishot,Pocket Full of Stones,+1 projectile,99,TRUE,1,OpeanOcean_002,
+pierce,Pierce,Bullets pierce +1 enemy,4,FALSE,1,OpeanOcean_003,
+vitality,Healthy Pup!,+30 max HP,,TRUE,1,Beach_001,
+magnet,C.H.U.M.,+50% pickup and chum gulp radius,,TRUE,1,Beach_002,
+regen,Talkin Bout Regeneration,+0.5 HP/sec,,TRUE,1,Beach_003,
+velocity,Seal the Deal,+30% projectile speed,,TRUE,1,OpeanOcean_003,
+homingMissile,Homing Mussels,+1 seeking mussel,15,TRUE,1,OpeanOcean_001,
+seaGarlic,Sea Garlic,It's like garlic to a vampire. For for fish.,9,TRUE,1,Beach_001,
+shrimpRing,Shrimp Ring,+1 orbiting shrimp,15,TRUE,1,Beach_001,
+bounceShot,Bouncing Baby Guppies,"All balls, no pit. ",6,TRUE,1,Beach_002,
+electricEel,Electric Eel Friend,Chain lightning! In eel form!,8,TRUE,1,Beach_003,
+starfish,Starfish Shuriken,Rapid thrown starfish.,8,TRUE,1,OpeanOcean_001,
+seagullBomb,Seagull Bomb,Dive Bomb to the Crab Layer!,8,TRUE,1,OpeanOcean_002,
+sealTeam,Seal Team,+1 escort seal. Rams and lunges at enemies.,6,TRUE,1,OpeanOcean_001,
+beluga,Baby Beluga Bubble Blaster,Trap enemies in a bubble.,8,TRUE,1,OpeanOcean_003,
+strikePower,Chain Gang,"+35% strike damage, chains hit harder",5,TRUE,1,GreatWhite,
+strikeDash,Your Dasher is On The Way!,Strikes go harder.,5,TRUE,1,Reef_002,
+strikeShrapnel,The Bone Zone,Charge strike explodes with sea shrapnel.,6,TRUE,1,TidePool_001,
+strikeCharge,Epic Seal Time,"Strike charges faster, and chum refills more of the meter",4,TRUE,1,TidePool_002,
+breachChain,Big Willy Style,Surface breach extends a chain!,3,TRUE,1,TidePool_003,
+oxygenMax,Breathe Deep ,+30 max oxygen,5,TRUE,1,Beach_003,
+oxygenRefill,Breathwork,Yogi time. +40% surface refill speed,5,TRUE,1,Reef_002,
+bakalar,Bakalar's Boat,Giant net filled with giant bombs. How am I driving? Call 707-EXIT-FLU,8,TRUE,1,TidePool_001,
+calamari,Calamari Ring,Rings of fried squid pulse outward…,8,TRUE,1,VampireSquid,
+dumbo,Dumbo Octopus,Charms nearby enemies with it's cute self.,8,TRUE,1,DumboOctopus,
+scallopSquirter,Scallop Squirter,Sea Salad Scallop Shooter TM,12,TRUE,1,SeaAnemone,
+oysterBlaster,Oyster Blaster,Glowing pearls that burst into shiny bomblets.,8,TRUE,1,Periwinkles,
+octoGrab,Octopus Grabber,Tentacles reel fish in. ,8,TRUE,1,Octopus,
+orcaFamily,Orca Family,Three orcas hunt the boats up top. ,6,TRUE,1,Humpback,
+musselVolley,Mussel Barrage,"Full-charge strike fires a barrage of homing mussels",5,TRUE,1,Octopus,
+projectileAmount,Clone Warz,+1 of everything you fire,3,TRUE,0.5,Sardines,
+areaOfEffect,Splash Zone,"+18% blast, aura and wave size",5,TRUE,0.6,Reef_003,
+companionSize,Big Rigz,"Rolling with the homies. +15% companion size, +25% companion damage",5,TRUE,0.6,Humpback,
+bioluminescence,Glow Up!,Your shots and strike carry an element.,6,TRUE,0.8,AnglerFish,

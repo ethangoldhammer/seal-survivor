@@ -6,7 +6,7 @@ import { player } from '../entities/player.js';
 import { projectileCount } from '../stats.js';
 import { emit } from '../entities/particles.js';
 import { bounds } from '../arena.js';
-import { aoe } from './scaling.js';
+import { aoe, abilityDamage } from './scaling.js';
 
 // Oyster Blaster — a slow, heavy, bright pearl whose value is almost entirely
 // in what happens when it stops. On impact it cracks into glowing bomblets
@@ -50,7 +50,7 @@ export function firePearl(scene, origin, dir, level) {
     origin,
     dir,
     faction: 'player',
-    damage: s.damage,
+    damage: abilityDamage(s.damage),
     speed: c.speed,
     life: c.life,
     radius: c.radius,
@@ -64,7 +64,7 @@ export function firePearl(scene, origin, dir, level) {
     // pure level -> numbers function.
     burst: {
       count: projectileCount(s.bomblets, player.stats),
-      damage: s.bombletDamage,
+      damage: abilityDamage(s.bombletDamage),
       // Splash Zone widens each bomblet's blast. Applied here with the count
       // rather than in currentOysterStats, which stays a pure helper.
       blastRadius: aoe(s.blastRadius),

@@ -1,7 +1,9 @@
 import importedTuning from './imported-tuning.json';
 import upgradesCsv from './upgrades.csv?raw';
+import raritiesCsv from './rarities.csv?raw';
 import enemiesCsv from './enemies.csv?raw';
 import { parseUpgradeCsv, applyUpgradeTable } from './upgradeTable.js';
+import { parseRarityCsv, buildRarities, checkRaritySfx } from './rarityTable.js';
 // A leaf module on purpose — see the note at the top of it. The tuner's beat
 // pickers are built from the same list systems/beatSync.js interprets, and
 // config.js cannot import beatSync (beatSync imports CONFIG).
@@ -10,6 +12,7 @@ import { BEAT_DIVISIONS, divisionBeatsIn, nearestDivisionIn } from './beatDivisi
 // no imports of its own, so the tuner can count the field it is about to build
 // without config.js having to import the system that builds it.
 import { STAR_THRESHOLD, starsIn } from './systems/starField.js';
+import { chainReachAt } from './systems/constellationReach.js';
 import {
   parseEnemyCsv, applyEnemyTable, captureEnemyBase, withoutEnemyTableFields,
 } from './enemyTable.js';
@@ -35,12 +38,51 @@ export const CONFIG = {
   arena: {
     viewHeight: 52, // world units visible top to bottom
     surfaceFromTop: 0.2, // water line, as a fraction of screen height
+    // How much WIDER than the frame the walls sit, 1 = flush with the screen
+    // edge (how it was before this knob existed). Above 1 the ocean runs off
+    // past both sides and the camera pans to follow — the only way to get
+    // more room to swim sideways without zooming the whole game out, because
+    // the frame's width is `viewHeight * aspect` and nothing else.
+    //
+    // It buys travel, not density: spawn rate, concurrent caps and every
+    // creature budget are per-second numbers that know nothing about the
+    // arena, so a wider ocean is the same pressure arriving from further out.
+    // At 2 a flat-out crossing takes 6.7s instead of 3.7s.
+    widthScale: 2,
+    // How much higher than the frame the CEILING sits, as a multiple of the
+    // visible air band. The ceiling is real — clampToArena stops a breach
+    // dead at it — and at 1 it sat 9.4 units up, which a plain straight-up
+    // strike dash overshoots by 5.7 units and a combo'd one by sixty. So this
+    // is the knob that stops jumps getting caught; `surfaceFromTop` only
+    // moves the water line within the frame and pays for air with depth.
+    airScale: 3,
     wallRestitution: 0.5, // 0 = stick to wall, 1 = perfect bounce
     airGravity: 29.5, // >0 arcs you back down after breaching the surface
     showDepthLines: true,
     depthLineSpacing: 6,
     waveAmplitude: 0.35,
     waveSpeed: 0.8,
+  },
+
+  // ---------------------------------------------------------------------------
+  // WALL ROCKS — the boundary, drawn (systems/wallRocks.js).
+  //
+  // Scenery only. The wall itself is clampToArena and always has been; this is
+  // what makes it legible now that `arena.widthScale` has moved it off the
+  // edge of the screen and into open water. Rebuilt on resize, from a fixed
+  // seed, so it is the same shore every time.
+  wallRocks: {
+    enabled: true,
+    seed: 1337,
+    count: 26,        // boulders per wall
+    size: [1.6, 4.4], // radius range, world units
+    taper: 0.35,      // how much smaller they get toward the top, 0..1
+    roughness: 0.32,  // vertex displacement, 0 is a smooth ball
+    detail: 1,        // icosahedron subdivisions; 2 quadruples the vertex count
+    bury: 2.5,        // units of the stack sunk below the seabed
+    aboveWater: 5,    // how far the shore breaks the surface
+    z: -2.2,          // behind the swimming plane, in front of the seabed
+    color: 0x0d2230,
   },
 
   // ---------------------------------------------------------------------------
@@ -629,11 +671,49 @@ export const CONFIG = {
       spikeWidth: 5.5, // higher = thinner arms
 
       // --- the connections ----------------------------------------------------
-      links: 2, // nearest neighbours each star reaches for
-      linkRadius: 11, // and how far it will reach, in world units
+      links: 2, // nearest neighbours each star reaches for AT REST
+      linkRadius: 11, // and how far it will reach, in world units, at rest
       linkColor: 0x2f5f96,
       linkOpacity: 0.45,
       subdivisions: 4, // segments per link; higher = curvier under a ripple
+
+      // --- the food chain -----------------------------------------------------
+      // THE SKY ANSWERS THE FOOD CHAIN. Every link of a chain (see onChainHit
+      // in main.js — a dash landing, an orb taken, a breach) reaches the
+      // constellations further across the sky and lets each star hold more
+      // neighbours, so a long combo visibly wires the night together and a
+      // lapsed one lets it fall dark again.
+      //
+      // Nothing is rebuilt for this. The geometry is made once, at the reach
+      // the DEEPEST chain would ask for, and the extra links sit dark until the
+      // two numbers below let them in — a combo costs one uniform write, not an
+      // allocation and a buffer upload in the middle of a fight.
+      //
+      // The two gates are two different claims, and both are needed. `reach` is
+      // how far a star can see, which is what strings the long links across
+      // empty sky; `links` is how many it will hold, which is what lights up a
+      // dense cluster — where the eye already is, and where a wider radius on
+      // its own would change nothing.
+      chain: {
+        enabled: true,
+        // Per link of chain. At 0.22 a five-deep chain is reaching 2.1x as far
+        // as a resting sky, and at maxLevel it is 2.8x.
+        reach: 0.22,
+        // Extra neighbours per star per link of chain — fractional, so they
+        // fade up as the chain climbs instead of snapping in on whole numbers.
+        // 2 at rest, 6 at the top.
+        links: 0.5,
+        maxLevel: 8, // reach and count stop growing here; the build is sized on it
+        fade: 2.5, // world units a link fades in over as the reach passes it
+        // Extra brightness on the links already lit, at maxLevel. A deep chain
+        // shouldn't only add faint new lines at the edge of the frame — it
+        // should burn what is already there a little hotter.
+        glow: 0.4,
+        // Asymmetric on purpose: the sky opens faster than it closes, because
+        // the opening is the reward and the closing is only its absence.
+        attack: 6, // per-second rate the reach grows at
+        release: 1.8, // ...and falls back at once the chain window lapses
+      },
 
       // --- the fractal --------------------------------------------------------
       // A branch grown out of the brightest stars: `branches` children fanned
@@ -5488,7 +5568,7 @@ export const CONFIG = {
         '/sfx/Seal_Shoot_04.mp3',
         '/sfx/Seal_Shoot_05.mp3',
         '/sfx/Seal_Shoot_06.mp3',
-      ], type: 'blip',  wave: 'square',   freq: [900, 260],  decay: 0.09, gain: 0.16, pitchVary: 0.04, detune: 14 },
+      ], gain: 0.16, pitchVary: 0.04 },
       hit:       { src: null, type: 'noise', filter: 2600,     decay: 0.08, gain: 0.20, pitchVary: 0.10, filterVary: 0.20 },
       // Thunder, synthesised rather than sampled — there is no thunder in the
       // sfx library and `boom` is already exactly the right shape for it: a
@@ -5517,7 +5597,7 @@ export const CONFIG = {
         '/sfx/Seal_PlayerHit_07.mp3',
         '/sfx/Seal_PlayerHit_08.mp3',
         '/sfx/Seal_PlayerHit__09.mp3',
-      ], type: 'boom',  freq: [320, 70],  decay: 0.3,  gain: 0.4,  noise: 0.6, filter: 1100, pitchVary: 0.08, filterVary: 0.15 },
+      ], gain: 0.4, filter: 1100, pitchVary: 0.08, filterVary: 0.15 },
       // The player dying. Was borrowing `bigKill` — the sound of killing
       // something, played at the moment you are the thing that died. Long,
       // because the death dive that follows it is long: the body sinks for
@@ -5531,7 +5611,7 @@ export const CONFIG = {
         '/sfx/Seal_Death_01.mp3',
         '/sfx/Seal_Death_02.mp3',
         '/sfx/Seal_PlayerDeath_03.mp3',
-      ], type: 'boom',  freq: [200, 40],  decay: 0.9,  gain: 2.2,  noise: 0.6, filter: 900, pitchVary: 0.06, filterVary: 0.15 },
+      ], gain: 2.2, filter: 900, pitchVary: 0.06, filterVary: 0.15 },
       bite:      { src: null, type: 'noise', filter: 1200,     decay: 0.18, gain: 0.26, pitchVary: 0.14, filterVary: 0.25 },
       // The hoover, not the bite: darker, softer and shorter than `bite`, so a
       // crab working through an orb sits under the fight instead of on top of
@@ -5551,7 +5631,7 @@ export const CONFIG = {
       // One take, so `pitchVary` does more work here than anywhere else in the
       // table — it is the only thing keeping a repeated breach from reading as a
       // loop.
-      breach:    { srcs: ['/sfx/Seal_Breach_01.mp3'], type: 'noise', filter: 3400, decay: 0.34, gain: 1.0, pitchVary: 0.14, filterVary: 0.22 },
+      breach:    { srcs: ['/sfx/Seal_Breach_01.mp3'], gain: 1.0, filter: 3400, pitchVary: 0.14, filterVary: 0.22 },
       bounce:    { src: null, type: 'blip',  wave: 'sine',     freq: [300, 120],  decay: 0.12, gain: 0.14, pitchVary: 0.16 },
       // The body hitting the seabed. Low and dull with the noise doing most of
       // the work — sand, not stone. It plays through the death dive's rate
@@ -5575,7 +5655,7 @@ export const CONFIG = {
         '/sfx/Seal_Boost_02.mp3',
         '/sfx/Seal_Boost_03.mp3',
         '/sfx/Seal_Boost_04.mp3',
-      ], type: 'boom',  freq: [520, 90],  decay: 0.28, gain: 1.51, noise: 0.35, filter: 2200, pitchVary: 0.12, filterVary: 0.15 },
+      ], gain: 1.51, filter: 2200, pitchVary: 0.12, filterVary: 0.15 },
       strikeChain: { src: null, type: 'blip', wave: 'sawtooth', freq: [420, 1500], decay: 0.22, gain: 0.28, pitchVary: 0.05 },
       // The FOOD CHAIN! announcement. Pitched up per link by the caller like
       // `strikeChain` is, so a deep chain climbs — but where that one is a thin
@@ -5590,7 +5670,7 @@ export const CONFIG = {
         '/sfx/Seal_FoodChain_01.mp3',
         '/sfx/Seal_FoodChain_02.mp3',
         '/sfx/Seal_FoodChain_03.mp3',
-      ], type: 'boom',  freq: [180, 620],  decay: 0.42, gain: 0.65, noise: 0.25, filter: 2200, pitchVary: 0, filterVary: 0.1 },
+      ], gain: 0.65, filter: 2200, pitchVary: 0, filterVary: 0.1 },
       // --- oxygen -------------------------------------------------------------
       // The warning beep's pitch is driven, not random — it climbs as oxygen
       // runs out (see CONFIG.oxygen.fx.beepPitchRise), so how close you are to
@@ -5703,7 +5783,7 @@ export const CONFIG = {
         '/sfx/Seal_ScallopSquirt_01.mp3',
         '/sfx/Seal_ScallopSquirt_02.mp3',
         '/sfx/Seal_ScallopSquirt_03.mp3',
-      ], type: 'noise', filter: 1900, decay: 0.16, gain: 0.8, pitchVary: 0.14, filterVary: 0.25 },
+      ], gain: 0.8, filter: 1900, pitchVary: 0.14, filterVary: 0.25 },
       scallopJet:    { src: null, type: 'noise', filter: 2600, decay: 0.09, gain: 0.05, pitchVary: 0.22, filterVary: 0.30 },
 
       // Pearls. A hard glassy tick going out, a bright sparkle coming back.
@@ -5738,14 +5818,37 @@ export const CONFIG = {
         '/sfx/HG_UI_Blip_Menu_Blicky-converted.mp3',
         '/sfx/HG_UI_Blip_Menu_Terminal-converted.mp3',
         '/sfx/HG_UI_Blip_Menu_Spat-converted.mp3',
-      ], type: 'blip', wave: 'sine', freq: [1400, 1100], decay: 0.05, gain: 0.68, pitchVary: 0.06 },
+      ], gain: 0.68, pitchVary: 0.06 },
       // And the commit. Two takes rather than four: a confirmation wants an
       // identity, and too much variation stops it reading as the same answer
       // every time. Both are matched to within a fifth of a dB.
       uiClick:   { srcs: [
         '/sfx/HG_UI_Blip_Menu_Tappies-converted.mp3',
         '/sfx/HG_UI_Blip_Menu_Static-converted.mp3',
-      ], type: 'blip', wave: 'triangle', freq: [900, 1500], decay: 0.09, gain: 1.0, pitchVary: 0.03 },
+      ], gain: 1.0, pitchVary: 0.03 },
+
+      // --- the rarity stings --------------------------------------------------
+      // ONE of these plays as the level-up menu opens, for the best tier on the
+      // table (see bestRarity). They are a LADDER and have to be heard as one:
+      // the same gesture climbing in pitch, length and weight, so "that was a
+      // better one than last time" is legible before you have read a single
+      // card.
+      //
+      // `rarityCommon` is deliberately absent from rarities.csv's sfx column by
+      // default and left here only so a project that wants a floor-tier tick
+      // has something to point at. Most level-ups in a run are floor-tier, and
+      // a sound on those is the interface announcing that nothing happened.
+      //
+      // Synthesised rather than sampled on purpose: what matters is that the
+      // five are unmistakably the same sound at five heights, and five separate
+      // takes would each have their own character fighting that.
+      rarityCommon:    { src: null, type: 'blip', wave: 'triangle', freq: [420, 560],  decay: 0.1,  gain: 0.06, pitchVary: 0.04 },
+      rarityUncommon:  { src: null, type: 'blip', wave: 'triangle', freq: [520, 780],  decay: 0.16, gain: 0.11, pitchVary: 0.03 },
+      rarityRare:      { src: null, type: 'blip', wave: 'sine',     freq: [620, 1080], decay: 0.26, gain: 0.15, pitchVary: 0.02 },
+      // The top two get a longer tail and a wider interval — the reach of the
+      // sweep is what separates "good" from "drop everything".
+      rarityEpic:      { src: null, type: 'blip', wave: 'sine',     freq: [700, 1560], decay: 0.4,  gain: 0.19, pitchVary: 0.02 },
+      rarityLegendary: { src: null, type: 'blip', wave: 'sine',     freq: [780, 2340], decay: 0.62, gain: 0.24, pitchVary: 0.01 },
       // The keystroke. Synthesised rather than sampled — this is the one menu
       // sound with no file behind it, because what it needs is to be tiny and
       // slightly different every time, and that is exactly what the synth path
@@ -7429,25 +7532,25 @@ export const CONFIG = {
   },
 
   upgrades: [
-    { id: 'rapidFire', name: 'Rapid Fire', desc: '+25% fire rate', apply: (s) => { s.fireRate *= 0.75; } },
-    { id: 'heavyRounds', name: 'Heavy Rounds', desc: '+40% bullet damage', apply: (s) => { s.damage *= 1.4; } },
-    { id: 'overboost', name: 'Overboost', desc: '+30% recoil boost', apply: (s) => { s.recoil *= 1.3; } },
-    { id: 'maxSpeed', name: 'Redline', desc: '+20% max speed', apply: (s) => { s.maxSpeed *= 1.2; } },
-    { id: 'multishot', name: 'Multishot', desc: '+1 projectile', apply: (s) => { s.multishot += 1; }, maxStacks: 6 },
-    { id: 'pierce', name: 'Railgun', desc: 'Bullets pierce +1 enemy', apply: (s) => { s.pierce += 1; }, maxStacks: 4 },
-    { id: 'vitality', name: 'Vitality', desc: '+30 max HP', apply: (s) => { s.maxHp += 30; } },
+    { id: 'rapidFire', family: 'gun', name: 'Rapid Fire', desc: '+25% fire rate', apply: (s) => { s.fireRate *= 0.75; } },
+    { id: 'heavyRounds', family: 'gun', name: 'Heavy Rounds', desc: '+40% bullet damage', apply: (s) => { s.damage *= 1.4; } },
+    { id: 'overboost', family: 'gun', name: 'Overboost', desc: '+30% recoil boost', apply: (s) => { s.recoil *= 1.3; } },
+    { id: 'maxSpeed', family: 'utility', name: 'Redline', desc: '+20% max speed', apply: (s) => { s.maxSpeed *= 1.2; } },
+    { id: 'multishot', family: 'gun', name: 'Multishot', desc: '+1 projectile', apply: (s) => { s.multishot += 1; }, maxStacks: 6 },
+    { id: 'pierce', family: 'gun', name: 'Railgun', desc: 'Bullets pierce +1 enemy', apply: (s) => { s.pierce += 1; }, maxStacks: 4 },
+    { id: 'vitality', family: 'utility', name: 'Vitality', desc: '+30 max HP', apply: (s) => { s.maxHp += 30; } },
     // Scales the gulp with the magnet deliberately: both are "how far the
     // seal's mouth reaches", and splitting them would mean an Attractor that
     // widened the passive sweep while the strike's own mouthful stayed the
     // size it was on the first card.
-    { id: 'magnet', name: 'Magnet', desc: '+50% pickup radius', apply: (s) => { s.pickupRadius *= 1.5; s.chumGulpRadius *= 1.5; } },
-    { id: 'regen', name: 'Regeneration', desc: '+0.5 HP/sec', apply: (s) => { s.regenPerSec += 0.5; } },
-    { id: 'velocity', name: 'Hot Rounds', desc: '+30% bullet speed', apply: (s) => { s.speed *= 1.3; } },
-    { id: 'homingMissile', name: 'Homing Missile', desc: '+1 seeking missile per volley', apply: (s) => { s.missileCount = (s.missileCount ?? 0) + 1; }, maxStacks: 5 },
-    { id: 'seaGarlic', name: 'Sea Garlic', desc: 'Damaging aura, +radius per level', apply: (s) => { s.garlicLevel = (s.garlicLevel ?? 0) + 1; }, maxStacks: 6 },
+    { id: 'magnet', family: 'utility', name: 'Magnet', desc: '+50% pickup radius', apply: (s) => { s.pickupRadius *= 1.5; s.chumGulpRadius *= 1.5; } },
+    { id: 'regen', family: 'utility', name: 'Regeneration', desc: '+0.5 HP/sec', apply: (s) => { s.regenPerSec += 0.5; } },
+    { id: 'velocity', family: 'gun', name: 'Hot Rounds', desc: '+30% bullet speed', apply: (s) => { s.speed *= 1.3; } },
+    { id: 'homingMissile', family: 'projectile', name: 'Homing Missile', desc: '+1 seeking missile per volley', apply: (s) => { s.missileCount = (s.missileCount ?? 0) + 1; }, maxStacks: 5 },
+    { id: 'seaGarlic', family: 'aoe', name: 'Sea Garlic', desc: 'Damaging aura, +radius per level', apply: (s) => { s.garlicLevel = (s.garlicLevel ?? 0) + 1; }, maxStacks: 6 },
     // First pick opens the ring at `baseCount` — one lone shrimp circling reads
     // as a bug rather than an orbital weapon. Every stack after that is +1.
-    { id: 'shrimpRing', name: 'Shrimp Ring', desc: '+1 orbiting shrimp',
+    { id: 'shrimpRing', family: 'projectile', name: 'Shrimp Ring', desc: '+1 orbiting shrimp',
       apply: (s) => { s.shrimpCount = s.shrimpCount ? s.shrimpCount + 1 : CONFIG.shrimpRing.baseCount; },
       // Not interpolated from `baseCount`: this literal is built before CONFIG
       // is assigned, so the number can't be read here.
@@ -7456,54 +7559,54 @@ export const CONFIG = {
     // reason bounceShot reads maxBouncesPerLevel: the card's promise is "a
     // barrage of N", and N lives in one place so the tuner slider and the
     // description can't drift apart.
-    { id: 'musselVolley', name: 'Mussel Barrage', desc: 'Full-charge strike fires a barrage of homing mussels',
+    { id: 'musselVolley', family: 'projectile', name: 'Mussel Barrage', desc: 'Full-charge strike fires a barrage of homing mussels',
       apply: (s) => { s.musselVolleyLevel = (s.musselVolleyLevel ?? 0) + 1; }, maxStacks: 5,
       perLevelName: true,
       levelDescs: { 1: 'Full-charge strike fires 8 homing mussels at once' } },
-    { id: 'bounceShot', name: 'Ricochet Rounds', desc: 'Chaining shot: +fire rate, +lifespan, +bounces', apply: (s) => {
+    { id: 'bounceShot', family: 'projectile', name: 'Ricochet Rounds', desc: 'Chaining shot: +fire rate, +lifespan, +bounces', apply: (s) => {
         s.bounceLevel = (s.bounceLevel ?? 0) + 1;
         s.bounceFireRate = (s.bounceFireRate ?? CONFIG.bounce.fireRate) * 0.88;
         s.bounceLife = (s.bounceLife ?? CONFIG.bounce.life) + 0.6;
         s.bounceMaxBounces = (s.bounceMaxBounces ?? CONFIG.bounce.maxBounces) + CONFIG.bounce.maxBouncesPerLevel;
       }, maxStacks: 6 },
-    { id: 'electricEel', name: 'Electric Eel', desc: 'Chain lightning: +area, +damage, +max chain', apply: (s) => { s.eelLevel = (s.eelLevel ?? 0) + 1; }, maxStacks: 8 },
-    { id: 'starfish', name: 'Starfish Shuriken', desc: 'Rapid thrown starfish: +fire rate, +size', apply: (s) => { s.starfishLevel = (s.starfishLevel ?? 0) + 1; }, maxStacks: 8 },
-    { id: 'seagullBomb', name: 'Seagull Bomb', desc: 'Homing dive-bombers vs. crabs: +fire rate', apply: (s) => { s.seagullLevel = (s.seagullLevel ?? 0) + 1; }, maxStacks: 8 },
+    { id: 'electricEel', family: 'aoe', name: 'Electric Eel', desc: 'Chain lightning: +area, +damage, +max chain', apply: (s) => { s.eelLevel = (s.eelLevel ?? 0) + 1; }, maxStacks: 8 },
+    { id: 'starfish', family: 'projectile', name: 'Starfish Shuriken', desc: 'Rapid thrown starfish: +fire rate, +size', apply: (s) => { s.starfishLevel = (s.starfishLevel ?? 0) + 1; }, maxStacks: 8 },
+    { id: 'seagullBomb', family: 'aoe', name: 'Seagull Bomb', desc: 'Homing dive-bombers vs. crabs: +fire rate', apply: (s) => { s.seagullLevel = (s.seagullLevel ?? 0) + 1; }, maxStacks: 8 },
     // `perLevelName` numbers the card by the stack it's offering — "Seal Team
     // 1", then "Seal Team 2" — so which one you're being offered is on the
     // card instead of in your head. `levelDescs` overrides the description at
     // a given stack, which is how the evolution announces itself rather than
     // arriving as a surprise on an identically-worded card.
-    { id: 'sealTeam', name: 'Seal Team', desc: '+1 escort seal. Rams and lunges at enemies.',
+    { id: 'sealTeam', family: 'companion', name: 'Seal Team', desc: '+1 escort seal. Rams and lunges at enemies.',
       perLevelName: true,
       levelDescs: { 6: 'EVOLVE: the whole squad opens fire while it orbits.' },
       apply: (s) => { s.sealTeamLevel = (s.sealTeamLevel ?? 0) + 1; }, maxStacks: 6 },
-    { id: 'beluga', name: 'Baby Beluga', desc: 'Bubble drone traps enemies: +bubble size', apply: (s) => { s.belugaLevel = (s.belugaLevel ?? 0) + 1; }, maxStacks: 8 },
+    { id: 'beluga', family: 'companion', name: 'Baby Beluga', desc: 'Bubble drone traps enemies: +bubble size', apply: (s) => { s.belugaLevel = (s.belugaLevel ?? 0) + 1; }, maxStacks: 8 },
 
     // --- strike line --------------------------------------------------------
     // These scale the dash, which until now had no per-run scaling at all —
     // every strike number was read straight off CONFIG. The stats they mutate
     // are seeded from CONFIG in recomputeStats(), same as the bounce fields, so
     // the tuner sliders still act as the base value.
-    { id: 'strikePower', name: 'Killer Instinct', desc: '+35% strike damage, chains hit harder', apply: (s) => {
+    { id: 'strikePower', family: 'strike', name: 'Killer Instinct', desc: '+35% strike damage, chains hit harder', apply: (s) => {
         s.strikeDamage *= 1.35;
         // Compounding on top of a base above 1, so each stack widens the gap
         // between a one-off strike and a long chain rather than just adding
         // flat damage twice.
         s.strikeChainMul = 1 + (s.strikeChainMul - 1) * 1.3;
       }, maxStacks: 5 },
-    { id: 'strikeDash', name: 'Slipstream', desc: 'Strike dashes faster and further', apply: (s) => {
+    { id: 'strikeDash', family: 'strike', name: 'Slipstream', desc: 'Strike dashes faster and further', apply: (s) => {
         s.strikeDashSpeed *= 1.22;
         s.strikeDashDuration *= 1.12;
       }, maxStacks: 5 },
-    { id: 'strikeShrapnel', name: 'Bone Shrapnel', desc: 'Strike hits burst fragments outward: +fragments', apply: (s) => { s.shrapnelCount = (s.shrapnelCount ?? 0) + 1; }, maxStacks: 6 },
+    { id: 'strikeShrapnel', family: 'strike', name: 'Bone Shrapnel', desc: 'Strike hits burst fragments outward: +fragments', apply: (s) => { s.shrapnelCount = (s.shrapnelCount ?? 0) + 1; }, maxStacks: 6 },
     // The rhythm upgrade. Both halves of the loop get faster: less time
     // winding a strike up by hand, and a bigger bite out of the meter per
     // chum, so fewer orbs are needed to earn each FOOD CHAIN link. Stacked
     // fully this turns a ~1s wind-up into ~0.37s and drops the orbs-per-link
     // from 5 to 3 — the difference between striking deliberately and
     // striking on the beat.
-    { id: 'strikeCharge', name: 'Coiled Spring', desc: 'Strike charges faster, and chum refills more of the meter',
+    { id: 'strikeCharge', family: 'strike', name: 'Coiled Spring', desc: 'Strike charges faster, and chum refills more of the meter',
       perLevelName: true,
       apply: (s) => {
         s.strikeChargeTime *= 0.78;
@@ -7515,18 +7618,18 @@ export const CONFIG = {
     // per breach rather than shortening the cooldown, so the ceiling stays
     // "how often you can get out of the water", not "how fast you can skim
     // the water line" — see CONFIG.strike.chainOn.cooldowns.breach.
-    { id: 'breachChain', name: 'Porpoising', desc: 'Breaching the surface extends your food chain: +links per breach',
+    { id: 'breachChain', family: 'strike', name: 'Porpoising', desc: 'Breaching the surface extends your food chain: +links per breach',
       perLevelName: true,
       apply: (s) => { s.breachChainLevel = (s.breachChainLevel ?? 0) + 1; }, maxStacks: 3 },
 
     // --- oxygen line --------------------------------------------------------
-    { id: 'oxygenMax', name: 'Deep Lungs', desc: '+30 max oxygen', apply: (s) => { s.maxOxygen += 30; }, maxStacks: 5 },
-    { id: 'oxygenRefill', name: 'Second Wind', desc: '+40% surface refill speed', apply: (s) => { s.oxygenRefillRate *= 1.4; }, maxStacks: 5 },
+    { id: 'oxygenMax', family: 'utility', name: 'Deep Lungs', desc: '+30 max oxygen', apply: (s) => { s.maxOxygen += 30; }, maxStacks: 5 },
+    { id: 'oxygenRefill', family: 'utility', name: 'Second Wind', desc: '+40% surface refill speed', apply: (s) => { s.oxygenRefillRate *= 1.4; }, maxStacks: 5 },
 
     // --- new companions -----------------------------------------------------
-    { id: 'bakalar', name: "Bakalar's Boat", desc: 'Trawler drags a net that hauls fish away: +net size, +sailings', apply: (s) => { s.bakalarLevel = (s.bakalarLevel ?? 0) + 1; }, maxStacks: 8 },
-    { id: 'calamari', name: 'Calamari Ring', desc: 'Shockwave sweeps outward: +damage, +radius, +rate', apply: (s) => { s.calamariLevel = (s.calamariLevel ?? 0) + 1; }, maxStacks: 8 },
-    { id: 'dumbo', name: 'Dumbo Octopus', desc: 'Charms enemies harmless: +targets, +duration', apply: (s) => { s.dumboLevel = (s.dumboLevel ?? 0) + 1; }, maxStacks: 8 },
+    { id: 'bakalar', family: 'companion', name: "Bakalar's Boat", desc: 'Trawler drags a net that hauls fish away: +net size, +sailings', apply: (s) => { s.bakalarLevel = (s.bakalarLevel ?? 0) + 1; }, maxStacks: 8 },
+    { id: 'calamari', family: 'aoe', name: 'Calamari Ring', desc: 'Shockwave sweeps outward: +damage, +radius, +rate', apply: (s) => { s.calamariLevel = (s.calamariLevel ?? 0) + 1; }, maxStacks: 8 },
+    { id: 'dumbo', family: 'companion', name: 'Dumbo Octopus', desc: 'Charms enemies harmless: +targets, +duration', apply: (s) => { s.dumboLevel = (s.dumboLevel ?? 0) + 1; }, maxStacks: 8 },
 
     // --- shellfish line -----------------------------------------------------
     // Two takes on the homing mussel, deliberately pulling in opposite
@@ -7536,11 +7639,11 @@ export const CONFIG = {
     // the mussel never would and arrives from angles you didn't aim at. Count
     // rather than level, same as the mussel, because "how many are loose in
     // the water" IS the upgrade.
-    { id: 'scallopSquirter', name: 'Scallop Squirter', desc: '+1 wild scallop', apply: (s) => { s.scallopCount = (s.scallopCount ?? 0) + 1; }, maxStacks: 12 },
+    { id: 'scallopSquirter', family: 'projectile', name: 'Scallop Squirter', desc: '+1 wild scallop', apply: (s) => { s.scallopCount = (s.scallopCount ?? 0) + 1; }, maxStacks: 12 },
     // Levelled rather than counted: the pearl's payload is what grows, not the
     // number in the air. See CONFIG.oyster — stacks buy more shrapnel pearls
     // per burst and a wider burst, so the ceiling is the size of one impact.
-    { id: 'oysterBlaster', name: 'Oyster Blaster', desc: 'Pearls burst into glowing bomblets: +bomblets, +radius', apply: (s) => { s.oysterLevel = (s.oysterLevel ?? 0) + 1; }, maxStacks: 8 },
+    { id: 'oysterBlaster', family: 'projectile', name: 'Oyster Blaster', desc: 'Pearls burst into glowing bomblets: +bomblets, +radius', apply: (s) => { s.oysterLevel = (s.oysterLevel ?? 0) + 1; }, maxStacks: 8 },
 
     // --- grapple / escort ---------------------------------------------------
     // The only DEFENSIVE companion in the game. Every other one adds output;
@@ -7548,14 +7651,14 @@ export const CONFIG = {
     // cannot touch you (see systems/octoGrab.js). Stacks add arms, so it reads
     // as "how many things can be held at once" — which is exactly the stat
     // that matters when a school closes in.
-    { id: 'octoGrab', name: 'Octopus Grabber', desc: '+1 tentacle. Held fish deal no damage.',
+    { id: 'octoGrab', family: 'companion', name: 'Octopus Grabber', desc: '+1 tentacle. Held fish deal no damage.',
       perLevelName: true,
       apply: (s) => { s.octoGrabLevel = (s.octoGrabLevel ?? 0) + 1; }, maxStacks: 8 },
     // A pod, not a count — all three orcas arrive on the first pick and stacks
     // make them hit harder and hunt more often. Splitting the pod across
     // levels would mean the first card bought a lone orca, and a lone orca is
     // not what the fantasy is.
-    { id: 'orcaFamily', name: 'Orca Family', desc: 'Three orcas hunt enemy boats: +damage, +speed', apply: (s) => { s.orcaLevel = (s.orcaLevel ?? 0) + 1; }, maxStacks: 6 },
+    { id: 'orcaFamily', family: 'companion', name: 'Orca Family', desc: 'Three orcas hunt enemy boats: +damage, +speed', apply: (s) => { s.orcaLevel = (s.orcaLevel ?? 0) + 1; }, maxStacks: 6 },
 
     // --- the cross-cutting four ----------------------------------------------
     // Every upgrade above this line grants or deepens ONE ability. These four
@@ -7571,19 +7674,19 @@ export const CONFIG = {
     // projectileCount() — see stats.js. Deliberately flat rather than a
     // percentage: +1 shrimp on a ring of three and +1 pellet per fin are both
     // legible from the seat, where "+22% projectiles" is not.
-    { id: 'projectileAmount', name: 'Clone Warz', desc: '+1 of everything you fire',
+    { id: 'projectileAmount', family: 'projectile', name: 'Clone Warz', desc: '+1 of everything you fire',
       perLevelName: true,
       apply: (s) => { s.projectileBonus += 1; }, maxStacks: 3 },
 
     // Splash Zone. Two multipliers, not one — see stats.js for why reach and
     // acquisition are split, and why acquisition moves so much less.
-    { id: 'areaOfEffect', name: 'Splash Zone', desc: '+18% blast, aura and wave size',
+    { id: 'areaOfEffect', family: 'aoe', name: 'Splash Zone', desc: '+18% blast, aura and wave size',
       perLevelName: true,
       apply: (s) => { s.aoeMul *= 1.18; s.targetingMul *= 1.06; }, maxStacks: 5 },
 
     // Big Rigz. Scale is applied to the mesh AND the contact radius, so the
     // size is a real hitbox rather than a bigger picture of the same animal.
-    { id: 'companionSize', name: 'Big Rigz', desc: '+15% companion size, +25% companion damage',
+    { id: 'companionSize', family: 'companion', name: 'Big Rigz', desc: '+15% companion size, +25% companion damage',
       perLevelName: true,
       apply: (s) => { s.companionScale *= 1.15; s.companionDamageMul *= 1.25; }, maxStacks: 5 },
 
@@ -7591,13 +7694,63 @@ export const CONFIG = {
     // card — ui.js asks systems/elements.js for it, so which element you're
     // being offered is on the card before you commit. The roll happens once per
     // run: every later stack deepens the element already carried.
-    { id: 'bioluminescence', name: 'Glow Up!', desc: 'Your shots and strike carry an element',
+    { id: 'bioluminescence', family: 'gun', name: 'Glow Up!', desc: 'Your shots and strike carry an element',
       perLevelName: true,
       roll: 'biolumElement',
       apply: (s) => { s.biolumLevel += 1; }, maxStacks: 6 },
   ],
 
   upgradeChoices: 3,
+
+  // ---------------------------------------------------------------------------
+  // RARITY — the tier a dealt card is rolled at.
+  //
+  // These are FALLBACKS ONLY. rarities.csv is the whole definition (see
+  // rarityTable.js); this list exists so the game still deals cards if the file
+  // is missing or empty, and so the ladder has a shape before the CSV is
+  // parsed. Editing names or colours here does nothing — the CSV overwrites the
+  // lot at boot, which is the same contract upgrades.csv has for the display
+  // half of an upgrade.
+  //
+  // ROW ORDER IS TIER ORDER. The first is the floor and must have statMul 1.
+  // ---------------------------------------------------------------------------
+  rarities: [
+    { id: 'common', name: 'Common', color: 0xb8c2cc, glow: 0, statMul: 1, weightEarly: 70, weightLate: 18, sfx: 'rarityCommon' },
+    { id: 'uncommon', name: 'Uncommon', color: 0x5ee07a, glow: 0.35, statMul: 1.12, weightEarly: 22, weightLate: 26, sfx: 'rarityUncommon' },
+    { id: 'rare', name: 'Rare', color: 0x4aa8ff, glow: 0.7, statMul: 1.25, weightEarly: 6, weightLate: 28, sfx: 'rarityRare' },
+    { id: 'epic', name: 'Epic', color: 0xb565ff, glow: 1.1, statMul: 1.45, weightEarly: 1.6, weightLate: 19, sfx: 'rarityEpic' },
+    { id: 'legendary', name: 'Legendary', color: 0xffb020, glow: 1.6, statMul: 1.7, weightEarly: 0.4, weightLate: 9, sfx: 'rarityLegendary' },
+  ],
+
+  // What fraction of a tier's multiplier an INTEGER-ONLY upgrade gets paid,
+  // through its family's continuous stat, since its own count can't take a
+  // fraction. See payFamily in systems/rarity.js for why this is well under 1.
+  rarityPayout: 0.35,
+
+  // The player level at which the rarity odds have fully crossed from the
+  // `weightEarly` column to `weightLate`. Level rather than elapsed time
+  // because the roll happens on the level-up screen, which is the one moment
+  // the player is being asked to care — and because a run that levels slowly
+  // has earned its odds staying low.
+  rarityRampLevel: 20,
+
+  // How the rarity ring is drawn. The card is a clip-path hexagon, and a
+  // clip-path eats both an outer border and a drop-shadow on the same element
+  // — so the ring is an INSET stroke (the trick the focus state already used)
+  // and the bloom lives on a wrapper that isn't clipped. See ui.js.
+  rarityCard: {
+    // Ring thickness in px. The selection highlight is drawn as a second ring
+    // just inside this one, so the two read as "which tier" and "which card"
+    // rather than fighting for the same edge.
+    ringWidth: 3,
+    // Bloom, in px, at glow 1. Each tier's `glow` column scales it, so the
+    // floor tier at 0 has a ring and no bloom at all.
+    glowRadius: 16,
+    // ...and a second, tighter pass so a high tier has a hot edge as well as a
+    // halo. One big soft shadow alone reads as fog rather than as the card
+    // being lit.
+    glowTight: 5,
+  },
 
   // NOTE: the display fields above (name, desc, maxStacks, enabled) and each
   // upgrade's card art are OVERWRITTEN at boot from upgrades.csv, which is the
@@ -8048,6 +8201,31 @@ function beatGridReadout() {
 //
 // The counts are real: this walks the same placement rule the system does,
 // over the frame each aspect ratio would actually build.
+// What a food chain buys the sky, printed beside the sliders that decide it.
+//
+// The build is sized on `maxLevel`, so these rows are the only place the COST
+// of a deep chain is visible: raising it does not change what a resting sky
+// looks like, it quietly makes more geometry that stays dark all run.
+function chainReachReadout() {
+  const cfg = CONFIG.constellations ?? {};
+  if (cfg.chain?.enabled === false) {
+    return ['off — the sky is the same width however deep the chain goes'];
+  }
+  const rest = chainReachAt(0, cfg);
+  const most = chainReachAt(Infinity, cfg);
+  const lines = [`no chain: reach ${rest.radius.toFixed(1)} units · ${rest.links.toFixed(1)} links per star`];
+  for (const level of [2, 5, most.depth]) {
+    if (level > most.depth) continue;
+    const at = chainReachAt(level, cfg);
+    lines.push(`chain ${String(level).padStart(2)}: reach ${at.radius.toFixed(1)} (x${(at.radius / rest.radius).toFixed(2)})`
+      + ` · ${at.links.toFixed(1)} links per star`
+      + (level === most.depth ? '  <- the whole build is sized here' : ''));
+  }
+  const grow = (most.radius / Math.max(0.001, rest.radius)) * (most.links / Math.max(0.001, rest.links));
+  lines.push(`a full chain is roughly ${grow.toFixed(1)}x the link geometry of a resting sky`);
+  return lines;
+}
+
 function constellationReadout() {
   const cfg = CONFIG.constellations ?? {};
   if (!cfg.enabled) return ['off — only the sky shader’s own dots are drawn'];
@@ -8061,7 +8239,10 @@ function constellationReadout() {
   const lines = [`one cell per ${(1 / Math.max(0.01, density)).toFixed(2)} units · sky band ${air.toFixed(1)} tall`];
   let thinnest = Infinity;
   for (const [name, aspect] of [['landscape 16:9', 16 / 9], ['phone 9:19.5', 9 / 19.5]]) {
-    const half = (CONFIG.arena.viewHeight * aspect) / 2;
+    // The field is built across the ARENA, so a widened one really does have
+    // more sky to fill — count it that way or this under-reports exactly when
+    // the extra width is what rescued a thin field.
+    const half = (CONFIG.arena.viewHeight * aspect * Math.max(1, CONFIG.arena.widthScale ?? 1)) / 2;
     const field = starsIn(
       { left: -half - margin, right: half + margin, bottom: 0, top: air + margin },
       density,
@@ -8482,11 +8663,24 @@ export const TUNER_SCHEMA = [
       { path: 'constellations.haloAmount', min: 0, max: 1.5, step: 0.05, label: 'star halo' },
       { path: 'constellations.haze', min: 0.2, max: 12, step: 0.2, label: 'horizon fade (units)' },
       // --- the connections ---
-      { path: 'constellations.links', min: 0, max: 5, step: 1, label: 'links per star' },
-      { path: 'constellations.linkRadius', min: 1, max: 30, step: 0.5, label: 'link reach' },
+      { path: 'constellations.links', min: 0, max: 5, step: 1, label: 'links per star (at rest)' },
+      { path: 'constellations.linkRadius', min: 1, max: 30, step: 0.5, label: 'link reach (at rest)' },
       { path: 'constellations.linkColor', type: 'color', label: 'link colour' },
       { path: 'constellations.linkOpacity', min: 0, max: 1, step: 0.05, label: 'link brightness' },
       { path: 'constellations.subdivisions', min: 1, max: 12, step: 1, label: 'link segments (curviness)' },
+      // --- the food chain ---
+      // What a combo buys, printed as it is dragged: the two rows below change
+      // how much geometry is BUILT, so the readout is the only way to see that
+      // a maxLevel of 12 is costing four hundred links that are dark all run.
+      { type: 'readout', label: 'what a chain buys', lines: () => chainReachReadout() },
+      { path: 'constellations.chain.enabled', type: 'bool', label: 'food chain widens the sky' },
+      { path: 'constellations.chain.reach', min: 0, max: 1, step: 0.02, label: 'extra reach per chain link (x)' },
+      { path: 'constellations.chain.links', min: 0, max: 2, step: 0.1, label: 'extra links per star per chain link' },
+      { path: 'constellations.chain.maxLevel', min: 1, max: 16, step: 1, label: 'chain depth it stops growing at' },
+      { path: 'constellations.chain.glow', min: 0, max: 2, step: 0.05, label: 'extra link glow at full chain' },
+      { path: 'constellations.chain.fade', min: 0.1, max: 10, step: 0.1, label: 'new links fade in over (units)' },
+      { path: 'constellations.chain.attack', min: 0.5, max: 20, step: 0.5, label: 'how fast the sky opens' },
+      { path: 'constellations.chain.release', min: 0.2, max: 10, step: 0.1, label: '...and closes again' },
       // --- the fractal ---
       { path: 'constellations.fractal.enabled', type: 'bool', label: 'fractal branches' },
       { path: 'constellations.fractal.anchors', min: 0, max: 1, step: 0.05, label: 'share of stars that grow one' },
@@ -10431,6 +10625,14 @@ export const TUNER_SCHEMA = [
     items: [
       { path: 'arena.viewHeight', min: 20, max: 120, step: 2 },
       { path: 'arena.surfaceFromTop', min: 0, max: 0.6, step: 0.01, label: 'water line' },
+      { path: 'arena.widthScale', min: 1, max: 4, step: 0.05, label: 'arena width (x frame)' },
+      { path: 'arena.airScale', min: 1, max: 8, step: 0.1, label: 'jump ceiling (x sky)' },
+      { path: 'wallRocks.enabled', type: 'bool', label: 'rocks on the walls' },
+      { path: 'wallRocks.count', min: 0, max: 80, step: 1, label: 'boulders per wall' },
+      { path: 'wallRocks.size', min: 0.5, max: 9, step: 0.1, label: 'boulder size' },
+      { path: 'wallRocks.roughness', min: 0, max: 0.8, step: 0.02, label: 'boulder lumpiness' },
+      { path: 'wallRocks.aboveWater', min: 0, max: 20, step: 0.5, label: 'shore above water' },
+      { path: 'wallRocks.color', type: 'color', label: 'rock colour' },
       { path: 'arena.waveAmplitude', min: 0, max: 2, step: 0.05 },
     ],
   },
@@ -10531,12 +10733,18 @@ const UPGRADE_BASE = new Map(CONFIG.upgrades.map((u) => [
   // reads as 1. Listed rather than omitted so the reset contract is visible —
   // a row that loses its weight column goes back to this, not to whatever the
   // last edit set.
-  { name: u.name, desc: u.desc, maxStacks: u.maxStacks, enabled: u.enabled, weight: undefined, cardArt: null },
+  { name: u.name, desc: u.desc, maxStacks: u.maxStacks, enabled: u.enabled, weight: undefined, cardArt: null, sfx: null },
 ]));
 
 // Parsed once — the file can't change without a page reload, since it's the
 // dev server that notices the write.
 const UPGRADE_ROWS = parseUpgradeCsv(upgradesCsv);
+
+// The rarity ladder's built-ins, captured before the CSV replaces them — the
+// fallback buildRarities() falls back to, per field, and the whole table if the
+// file turns out to be empty.
+const RARITY_BASE = CONFIG.rarities.map((r) => ({ ...r }));
+const RARITY_ROWS = parseRarityCsv(raritiesCsv);
 
 // The same pair for the creature roster. `captureEnemyBase` runs HERE, above
 // the merge below, for exactly the reason UPGRADE_BASE does: it has to hold
@@ -10613,7 +10821,14 @@ const STORAGE_KEY = 'deep-run-tuning-v2';
 // upgrade still DOES the same thing, it's just named/described/capped
 // differently.
 export function applyUpgradesFromTable() {
-  applyUpgradeTable(CONFIG.upgrades, UPGRADE_BASE, UPGRADE_ROWS, LEVELUP_IMAGE_KEYS);
+  applyUpgradeTable(CONFIG.upgrades, UPGRADE_BASE, UPGRADE_ROWS, LEVELUP_IMAGE_KEYS, console.warn, Object.keys(CONFIG.sfx ?? {}));
+  // The rarity ladder rides along on the same call for the same reason: this
+  // runs after every path that merges saved tuning in, and a saved snapshot
+  // from before a CSV edit must not outlive the file. Note the ARRAY IS
+  // REPLACED rather than mutated in place — rarities.csv defines how many tiers
+  // exist, so a row added to the file has to be able to add a rung.
+  CONFIG.rarities = buildRarities(RARITY_ROWS, RARITY_BASE);
+  checkRaritySfx(CONFIG.rarities, Object.keys(CONFIG.sfx ?? {}));
 }
 
 // The roster's equivalent, and it has to be called in all the same places for

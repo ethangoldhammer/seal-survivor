@@ -146,7 +146,15 @@ const before = dayState.hours;
 const seconds = 30;
 for (let i = 0; i < Math.round(seconds / dt); i++) updateDayCycle(dt);
 const expected = (seconds * CONFIG.dayNight.scale * (CONFIG.dayNight.rate ?? 1)) / 3600;
-const moved = dayState.hours - before;
+// Taken around the dial rather than as a plain subtraction, because the clock
+// this section seeds from is the WALL clock: run the suite between 23:00 and
+// midnight and the hour hand crosses 24 during these 30 seconds, wraps to 0,
+// and a raw difference reports -23h of travel for an hour of movement. The
+// check then failed for one hour in every twenty-four, on an unchanged tree,
+// which is the same "run it again" lesson the seeding above exists to stop
+// teaching — just on a clock instead of a die. `expected` is an hour, so
+// there is no ambiguity about which way round the dial to read it.
+const moved = (((dayState.hours - before) % 24) + 24) % 24;
 check('...then runs on at the configured rate, not at real time',
   Math.abs(moved - expected) < 1e-3,
   `${seconds}s of play moved the clock ${moved.toFixed(2)}h, expected ${expected.toFixed(2)}h`);

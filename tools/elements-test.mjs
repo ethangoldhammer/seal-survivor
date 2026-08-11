@@ -24,12 +24,13 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
-import { baseStats, projectileCount } from '../path/src/stats.js';
+import { baseStats, projectileCount, INTEGER_STATS } from '../path/src/stats.js';
 import { player } from '../path/src/entities/player.js';
 import { skyLight } from '../path/src/systems/daylight.js';
 import { aoe, targeting, companionDamage } from '../path/src/systems/scaling.js';
 import { currentGarlicRadius } from '../path/src/systems/garlic.js';
 import { currentCalamariStats } from '../path/src/systems/calamari.js';
+import { rarities, rollRarity, rarityMul, applyWithRarity, bestRarity } from '../path/src/systems/rarity.js';
 import {
   rollElementFor, commitElement, resetElements, activeElement,
   applyElementalHit, updateElements, onEnemyKilled, nightFactor,
@@ -524,6 +525,165 @@ function dealtAtNight() {
   setup({ element: 'venom', level: 3, night: 1 });
   const e = fakeEnemy(0, 0);
   return applyElementalHit(scene, e, 100, [e], noHooks);
+}
+
+// ===========================================================================
+section('RARITY — the ladder');
+// ===========================================================================
+{
+  const tiers = rarities();
+  check('the ladder has tiers', tiers.length >= 2, `${tiers.length} tiers`);
+  check('the floor tier is exactly neutral', tiers[0].statMul === 1,
+    `${tiers[0].id} at ${tiers[0].statMul}x`);
+  check('...and does not glow, so the other tiers can mean something',
+    (tiers[0].glow ?? 0) === 0, `glow ${tiers[0].glow}`);
+
+  let climbs = true;
+  for (let i = 1; i < tiers.length; i++) if (tiers[i].statMul < tiers[i - 1].statMul) climbs = false;
+  check('every rung is worth more than the one below it', climbs,
+    tiers.map((r) => r.statMul).join(' < '));
+
+  const colours = new Set(tiers.map((r) => r.color));
+  check('no two tiers share a colour', colours.size === tiers.length);
+
+  // Every tier above the floor must be announceable, or the ladder is audible
+  // for some tiers and silent for others with nothing to say which.
+  const voiced = tiers.slice(1).every((r) => r.sfx && CONFIG.sfx[r.sfx]);
+  check('every tier above the floor has a real sound', voiced,
+    tiers.slice(1).map((r) => r.sfx).join(', '));
+}
+
+// ===========================================================================
+section('RARITY — the roll');
+// ===========================================================================
+{
+  const ids = rarities().map((r) => r.id);
+  const top = ids[ids.length - 1];
+
+  // Sampled rather than reasoned about. A weighted walk is exactly the kind of
+  // code that looks right and quietly never reaches its last row.
+  const sample = (progress, n = 40000) => {
+    let seed = 12345;
+    const rng = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const counts = Object.fromEntries(ids.map((id) => [id, 0]));
+    for (let i = 0; i < n; i++) counts[rollRarity(progress, rng)] += 1;
+    return counts;
+  };
+
+  const early = sample(0);
+  const late = sample(1);
+
+  check('every tier is reachable at full progress',
+    ids.every((id) => late[id] > 0), ids.map((id) => `${id}:${late[id]}`).join(' '));
+  check('the floor tier dominates the opening', early[ids[0]] / 40000 > 0.5,
+    `${(early[ids[0]] / 400).toFixed(1)}% common early`);
+  check('...and stops dominating by the end', late[ids[0]] / 40000 < 0.35,
+    `${(late[ids[0]] / 400).toFixed(1)}% common late`);
+  check('the top tier is genuinely rare early', early[top] / 40000 < 0.02,
+    `${(early[top] / 400).toFixed(2)}% legendary early`);
+  check('...and reachable late', late[top] / 40000 > 0.03,
+    `${(late[top] / 400).toFixed(1)}% legendary late`);
+
+  // The ramp has to be monotonic per tier, or "odds improve as the run goes on"
+  // is only true at the two ends the config states.
+  const mid = sample(0.5);
+  check('the top tier climbs the whole way, not just at the ends',
+    early[top] < mid[top] && mid[top] < late[top],
+    `${early[top]} -> ${mid[top]} -> ${late[top]}`);
+
+  check('bestRarity picks the top of a hand',
+    bestRarity([{ rarity: ids[0] }, { rarity: top }, { rarity: ids[1] }]) === top);
+  check('...and copes with a hand that has none', bestRarity([{}, {}]) === null);
+}
+
+// ===========================================================================
+section('RARITY — what a tier is worth');
+// ===========================================================================
+{
+  const ids = rarities().map((r) => r.id);
+  const top = ids[ids.length - 1];
+  const find = (id) => CONFIG.upgrades.find((u) => u.id === id);
+
+  const run = (upgradeId, rarity) => {
+    const s = baseStats();
+    applyWithRarity(find(upgradeId), s, rarity);
+    return s;
+  };
+
+  // --- continuous: amplified ---
+  const hpCommon = run('vitality', ids[0]).maxHp;
+  const hpTop = run('vitality', top).maxHp;
+  const base = baseStats().maxHp;
+  check('a top-tier flat bonus is bigger', hpTop > hpCommon,
+    `+${(hpCommon - base).toFixed(0)} -> +${(hpTop - base).toFixed(0)} hp`);
+  check('...by exactly the tier multiplier',
+    Math.abs((hpTop - base) / (hpCommon - base) - rarityMul(top)) < 1e-9);
+
+  // The one that a naive `result * mul` gets backwards: fire rate is seconds
+  // between shots, so the upgrade IMPROVES it by making it smaller.
+  const frCommon = run('rapidFire', ids[0]).fireRate;
+  const frTop = run('rapidFire', top).fireRate;
+  check('an upgrade that improves by going DOWN still improves', frTop < frCommon,
+    `${frCommon.toFixed(3)}s -> ${frTop.toFixed(3)}s between shots`);
+
+  // --- integer: never fractional ---
+  const msTop = run('multishot', top);
+  check('a count is never left fractional', Number.isInteger(msTop.multishot),
+    `multishot ${msTop.multishot}`);
+  const garlicTop = run('seaGarlic', top);
+  check('...nor is a level index', Number.isInteger(garlicTop.garlicLevel),
+    `garlicLevel ${garlicTop.garlicLevel}`);
+
+  // ...and every integer stat, across every upgrade and every tier. This is the
+  // check that catches a new upgrade touching a count that INTEGER_STATS does
+  // not know about, which would otherwise surface as a fractional shrimp.
+  let fractional = [];
+  for (const u of CONFIG.upgrades) {
+    for (const id of ids) {
+      const s = baseStats();
+      applyWithRarity(u, s, id);
+      for (const k of INTEGER_STATS) {
+        if (!Number.isInteger(s[k])) fractional.push(`${u.id}@${id}.${k}=${s[k]}`);
+      }
+    }
+  }
+  check('no upgrade at any tier produces a fractional count', !fractional.length,
+    fractional.slice(0, 3).join(', ') || 'all 38 upgrades, all tiers');
+
+  // --- integer-only upgrades get paid through their family ---
+  const shrimpCommon = run('shrimpRing', ids[0]);
+  const shrimpTop = run('shrimpRing', top);
+  check('a count-only card still pays something at a high tier',
+    shrimpTop.abilityDamageMul > shrimpCommon.abilityDamageMul,
+    `abilityDamageMul ${shrimpCommon.abilityDamageMul.toFixed(3)} -> ${shrimpTop.abilityDamageMul.toFixed(3)}`);
+  check('...and the same number of shrimp', shrimpTop.shrimpCount === shrimpCommon.shrimpCount,
+    `${shrimpTop.shrimpCount} shrimp either way`);
+
+  const garlicPaid = run('seaGarlic', top);
+  check('an AOE count card pays into AOE', garlicPaid.aoeMul > 1,
+    `aoeMul ${garlicPaid.aoeMul.toFixed(3)}`);
+  const orcaPaid = run('orcaFamily', top);
+  check('a companion count card pays into companion damage', orcaPaid.companionDamageMul > 1,
+    `companionDamageMul ${orcaPaid.companionDamageMul.toFixed(3)}`);
+
+  // The payout must be a substitute for the amplification, not a jackpot.
+  check('the payout is well under the tier multiplier',
+    garlicPaid.aoeMul < rarityMul(top),
+    `${garlicPaid.aoeMul.toFixed(3)} vs ${rarityMul(top)}`);
+
+  // --- every upgrade declares a family ---
+  const noFamily = CONFIG.upgrades.filter((u) => !u.family).map((u) => u.id);
+  check('every upgrade declares a family', !noFamily.length, noFamily.join(', ') || '38 of 38');
+
+  // --- the floor tier changes nothing at all ---
+  let drift = [];
+  for (const u of CONFIG.upgrades) {
+    const a = baseStats(); applyWithRarity(u, a, ids[0]);
+    const b = baseStats(); u.apply(b);
+    for (const k in b) if (a[k] !== b[k]) drift.push(`${u.id}.${k}`);
+  }
+  check('the floor tier is byte-identical to a bare apply()', !drift.length,
+    drift.slice(0, 3).join(', ') || 'all 38 upgrades');
 }
 
 console.log(failures ? `\nFAIL — ${failures} problem(s)` : '\nPASS — all checks');

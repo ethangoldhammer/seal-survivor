@@ -1,0 +1,6 @@
+id,name,color,glow,statMul,weightEarly,weightLate,sfx
+common,Common,#b8c2cc,0,1,70,18,rarityCommon
+uncommon,Uncommon,#5ee07a,0.35,1.12,22,26,rarityUncommon
+rare,Rare,#4aa8ff,0.7,1.25,6,28,rarityRare
+epic,Epic,#b565ff,1.1,1.45,1.6,19,rarityEpic
+legendary,Legendary,#ffb020,1.6,1.7,0.4,9,rarityLegendary

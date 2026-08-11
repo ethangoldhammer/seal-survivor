@@ -1437,6 +1437,13 @@ function spawnPicked(scene, difficulty, playerLevel = 1, wave = FLAT_WAVE) {
     let made = 0;
     for (let i = 0; i < n; i++) {
       if (enemies.length >= CONFIG.spawn.maxAlive) break;
+      // The family cap re-checked per BODY, not just once for the pick.
+      // pickType tests it before choosing, so a pick made with a family nearly
+      // full was free to overshoot it by most of a group — measured at a cap of
+      // ten fielding twelve, back when the crabs briefly spawned in groups.
+      // Nothing capped spawns in groups today; this keeps that from being a
+      // silent trap for whatever does next.
+      if (groupAtCap(def)) break;
       spawnOne(scene, key, def, difficulty, {
         x: anchor.x + (Math.random() - 0.5) * spread * 2,
         y: anchor.y + (Math.random() - 0.5) * spread * 2,

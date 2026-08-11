@@ -88,7 +88,20 @@ class FakeCtx {
   // A sampled take is a full second long here — deliberately much longer than
   // dbgSynth's 0.05s decay, so the two paths cannot be confused for each other
   // when the voice budget is being measured in real lengths.
-  async decodeAudioData(bytes) { return { duration: 1, src: bytes?.src ?? null }; }
+  //
+  // `/sfx/padded.mp3` is the shape the real bank is in: 0.2s of sound followed
+  // by 0.8s of digital silence, the way every Seal_*.mp3 was exported.
+  async decodeAudioData(bytes) {
+    const src = bytes?.src ?? null;
+    if (src !== '/sfx/padded.mp3') return { duration: 1, src };
+    const rate = 48000;
+    const data = new Float32Array(rate);
+    for (let i = 0; i < 0.2 * rate; i++) data[i] = Math.sin(i / 20) * 0.5;
+    return {
+      duration: 1, src, sampleRate: rate, length: rate, numberOfChannels: 1,
+      getChannelData: () => data,
+    };
+  }
   resume() { return Promise.resolve(); }
 }
 globalThis.window.AudioContext = FakeCtx;
@@ -108,7 +121,7 @@ const advanceWall = (ms) => {
 let perf = 0;
 globalThis.performance = { now: () => perf };
 
-const SERVED = new Set(['/sfx/a.mp3', '/sfx/b.mp3']);
+const SERVED = new Set(['/sfx/a.mp3', '/sfx/b.mp3', '/sfx/padded.mp3']);
 globalThis.fetch = async (url) => (SERVED.has(url)
   ? { ok: true, status: 200, arrayBuffer: async () => ({ src: url }) }
   : { ok: false, status: 404 });
@@ -124,6 +137,11 @@ const dbg = await import('../path/src/ui/sfxDebug.js');
 // A tiny bank: one sampled sound with two takes, one synth-only.
 CONFIG.sfx.dbgSample = { srcs: ['/sfx/a.mp3', '/sfx/b.mp3'], type: 'blip', wave: 'sine', freq: [400, 200], decay: 0.05, gain: 1 };
 CONFIG.sfx.dbgSynth = { src: null, type: 'blip', wave: 'sine', freq: [400, 200], decay: 0.05, gain: 0.5 };
+// An entry that names a file and has NO synth behind it — the shape every
+// sampled sound now has. `fetch` refuses this path, so it stands in for the
+// case that actually happens: the asset is missing from a deployed build.
+CONFIG.sfx.dbgOrphan = { srcs: ['/sfx/missing.mp3'], gain: 0.5, pitchVary: 0 };
+CONFIG.sfx.dbgPadded = { srcs: ['/sfx/padded.mp3'], gain: 0.5, pitchVary: 0 };
 CONFIG.feedback.dbgThrottled = { emit: null, shake: 0, sfx: 'dbgSynth', sfxMinGap: 0.5 };
 
 // initAudio is what registers the mute key; unlockAudio only builds the graph.
@@ -251,6 +269,33 @@ const early = stops.filter((t) => Math.abs(t - (now + 0.04)) < 1e-9);
 check('then stopped, once the fade has landed', early.length === 5, `${early.length} early stops`);
 CONFIG.audio.maxConcurrent = capWas;
 
+section('A sampled sound whose file never loaded');
+// Sampled entries no longer carry a synth fallback, so this case is silence
+// unless it is reported. It has to be LOUD: on a deployed build a missing asset
+// comes back 200 with index.html in it, the decode fails, and the only other
+// signal is one console line at boot.
+freshPanel();
+audio.playSfx('dbgOrphan', 1);
+st = dbg.sfxDebugState();
+check('it is called out, not silently skipped', st.rows[0]?.outcome === 'missing', st.rows[0]?.outcome);
+check('and counted as dropped', st.dropped === 1);
+check('not counted as played', st.played === 0);
+check('and it holds no voice — nothing is sounding',
+  audio.sfxVoiceLoad().active === 0, `${audio.sfxVoiceLoad().active} held`);
+
+// The important half: it must not be able to evict a sound that IS audible.
+freshPanel();
+const orphanCap = CONFIG.audio.maxConcurrent;
+CONFIG.audio.maxConcurrent = 2;
+audio.playSfx('dbgSynth', 1);
+audio.playSfx('dbgSynth', 1);
+for (let i = 0; i < 5; i++) audio.playSfx('dbgOrphan', 1);
+st = dbg.sfxDebugState();
+check('a silent sound never steals a voice from a real one',
+  !st.rows.some((r) => r.outcome === 'stolen'), 'nothing was cut');
+check('and the two real voices are still held', audio.sfxVoiceLoad().active === 2);
+CONFIG.audio.maxConcurrent = orphanCap;
+
 section('A cap of zero is still a real off switch');
 // The one case where refusing is right: with no budget at all there is nothing
 // to steal, and the sound has to be reported as dropped rather than played.
@@ -284,6 +329,30 @@ audio.playSfx('dbgSynth', 1);
 check('a synth voice is held while it rings', audio.sfxVoiceLoad().active === 1);
 now += 0.11; // past decay (0.05) + the tail its nodes are scheduled to stop on
 check('and released when its envelope is done', audio.sfxVoiceLoad().active === 0);
+
+section('Trailing silence does not cost a voice');
+// The bank is full of files padded out on export — every Seal_*.mp3 carries
+// 1.03s of digital silence after the last sample, and `shoot` is 1.14s of file
+// for 0.12s of seal. Holding a slot for the file's length spent 36% of the
+// whole budget playing nothing, which is what kept the cap pinned even after it
+// was raised. dbgPadded is 1.0s long with sound only in the first 0.2s.
+freshPanel();
+audio.playSfx('dbgPadded', 1);
+check('it plays', dbg.sfxDebugState().rows[0]?.outcome === 'sample');
+now += 0.15;
+check('the voice is held while there is sound', audio.sfxVoiceLoad().active === 1);
+now += 0.1; // 0.25s in: past the audio, still 0.75s of file left to run
+check('and released once the audio stops, not once the FILE stops',
+  audio.sfxVoiceLoad().active === 0, `${audio.sfxVoiceLoad().active} still held at 0.25s of a 1.0s file`);
+
+// A file with no padding must be unaffected — the trim has to be measured, not
+// assumed, or it would cut the tail off everything that was exported tightly.
+freshPanel();
+audio.playSfx('dbgSample', 1); // duration 1, no channel data to scan
+now += 0.5;
+check('an unpadded sample still holds its full length', audio.sfxVoiceLoad().active === 1);
+now += 0.6;
+check('and releases at the end of it', audio.sfxVoiceLoad().active === 0);
 
 section('Muting');
 freshPanel();
