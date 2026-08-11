@@ -430,7 +430,11 @@ export function createPost(renderer) {
     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, type: THREE.HalfFloatType,
   });
 
-  // Bloom runs at half resolution — cheap, and the blur hides the softness.
+  // Bloom runs BELOW full resolution — cheap, and the blur hides the softness.
+  // How far below is CONFIG.bloom.divisor; see the note there. Every pass in
+  // renderBloom pays this twice over, once in fragments and once in the
+  // bandwidth of reading a HalfFloat target, so it is the cheapest large win
+  // in the whole pipeline.
   const bloomOpts = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, type: THREE.HalfFloatType };
   const bloomA = new THREE.WebGLRenderTarget(1, 1, bloomOpts);
   const bloomB = new THREE.WebGLRenderTarget(1, 1, bloomOpts);
@@ -510,16 +514,29 @@ export function createPost(renderer) {
     u.uBleed.value = preset.bleed ?? 0;
   }
 
+  // Called every frame from the game loop. setSize is a no-op when the numbers
+  // haven't moved (three compares before reallocating), which is what lets the
+  // divisor below be a live tuner slider rather than a reload-only setting.
   function resize() {
     const w = Math.max(1, Math.floor(renderer.domElement.width));
     const h = Math.max(1, Math.floor(renderer.domElement.height));
     sceneTarget.setSize(w, h);
-    const bw = Math.max(1, Math.floor(w / 2));
-    const bh = Math.max(1, Math.floor(h / 2));
+    // Clamped to 2 at the low end: the bright-pass reads the full-res scene, so
+    // a divisor of 1 would run the whole ping-pong at full resolution for a
+    // buffer nobody ever sees sharp.
+    const div = Math.max(2, Math.round(CONFIG.bloom.divisor ?? 4));
+    const bw = Math.max(1, Math.floor(w / div));
+    const bh = Math.max(1, Math.floor(h / div));
     bloomA.setSize(bw, bh);
     bloomB.setSize(bw, bh);
-    defocusA.setSize(bw, bh);
-    defocusB.setSize(bw, bh);
+    // The tilt-shift stays at HALF whatever the bloom does. It is mixed into
+    // the picture directly rather than added as a halo, so its resolution is
+    // visible in a way the glow's is not — a quarter-res defocus reads as a
+    // low-res copy of the scene fading in at the edges of frame.
+    const dw = Math.max(1, Math.floor(w / 2));
+    const dh = Math.max(1, Math.floor(h / 2));
+    defocusA.setSize(dw, dh);
+    defocusB.setSize(dw, dh);
     finalUniforms.uResolution.value.set(w, h);
   }
 
@@ -715,8 +732,33 @@ export function createPost(renderer) {
     renderer.render(finalPass.scene, camera);
   }
 
+  // Compile programs for `group` exactly as they will be compiled when the game
+  // renders them — which means doing it with the scene target BOUND.
+  //
+  // That binding is the whole reason this lives in post.js rather than in the
+  // warm-up system. three folds the current render target's colour space into
+  // the program cache key (LinearSRGB for any ordinary target, the renderer's
+  // outputColorSpace when the target is null), so a warm-up run against the
+  // default framebuffer produces a DIFFERENT key from the one the game asks for
+  // a frame later. Every program would be compiled twice: once here, and once
+  // again mid-run at exactly the moment the warm-up existed to protect. It
+  // fails silently — the warm-up appears to work, takes just as long, and buys
+  // nothing.
+  //
+  // `world.scene` is passed as the target scene so the lights come from the
+  // real scene: the light counts are in the cache key too.
+  async function warm(group, camera, scene) {
+    const previous = renderer.getRenderTarget();
+    renderer.setRenderTarget(sceneTarget);
+    try {
+      await renderer.compileAsync(group, camera, scene);
+    } finally {
+      renderer.setRenderTarget(previous);
+    }
+  }
+
   applyPreset(CONFIG.post.preset);
   resize();
 
-  return { render, resize, cyclePreset, applyPreset };
+  return { render, resize, cyclePreset, applyPreset, warm };
 }

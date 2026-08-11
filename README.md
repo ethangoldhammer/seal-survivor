@@ -975,8 +975,11 @@ path/src/
     grid.js            the warping backdrop grid
     audio.js           synthesised sfx + haptics
     post.js            CRT / VHS / VGA screen filters
+    shaderWarmup.js    compiles every program during load, not mid-fight
+    instancedPool.js   one draw per shape for the things there are hundreds of
   ui/
     ui.js              HUD and menus
+    loading.js         the boot progress bar
     tuner.js           live tuning panel
 public/
   models/              drop .glb / .gltf / .fbx here

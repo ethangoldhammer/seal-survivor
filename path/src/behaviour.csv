@@ -1,0 +1,61 @@
+id,value,min,max,notes
+enemies.fish.swarm.cohesion,2.2,0,10,The school
+enemies.fish.swarm.separation,5,0,15,The school
+enemies.fish.swarm.alignment,1.6,0,10,The school
+enemies.fish.swarm.towardPlayer,1.1,0,10,The school
+enemies.fish.swarm.fleeFromPredators,9.5,0,20,The school
+enemies.fish.group.max,14,1,30,school size max
+enemies.shark.hunt.preyRadius,18,0,60,Sharks
+enemies.shark.hunt.healPerMeal,8,0,60,Sharks
+enemies.orca.hunt.biteCooldown,1,0.2,4,orca seconds per meal
+enemies.orca.hunt.growPerMeal,0.02,0,0.06,orca growth per meal
+enemies.orca.hunt.maxGrow,1.3,1,2.5,orca max size (x)
+enemies.orca.hunt.preyRadius,24,0,60,orca prey radius
+enemies.orca.hunt.maxOverheal,1.6,1,4,orca max overheal (x)
+apexCrowd.enabled,1,,,apex predators share the player
+apexCrowd.feedingSlots,2,1,6,apex allowed on the player
+apexCrowd.standoff,7,2,20,apex circling distance
+apexCrowd.standoffJitter,2.5,0,8,apex circling spread
+apexCrowd.circleStrength,1,0,2,apex circling vs closing
+apexCrowd.feedTurn,4.5,0.5,15,seconds before the pack rotates
+apexCrowd.avoidGap,3.2,1,6,apex personal space (x radii)
+apexCrowd.avoidStrength,1.5,0,4,apex avoidance strength
+bite.enabled,1,,,hunters snap their jaws
+bite.lead,2.2,1,5,open mouth this far out (x reach)
+bite.playerReach,1.35,0.5,3,bite-at-player reach (x contact)
+bite.cooldown,1.1,0.2,4,fallback bite cooldown (s)
+bite.jaw.openTime,0.16,0.02,0.6,jaw gape time (s)
+bite.jaw.holdTime,0.07,0,0.5,jaw held open (s)
+bite.jaw.closeTime,0.08,0.02,0.6,jaw snap-shut time (s)
+bite.lunge.enabled,1,,,lunge into the bite
+bite.lunge.speedMul,1.85,1,4,lunge speed (x)
+bite.lunge.duration,0.4,0.05,1.5,lunge length (s)
+hunterRamp.enabled,1,,,hunters get more aggressive over time
+hunterRamp.preyFocus,0.04,0,0.2,fish distraction shed per 20s
+hunterRamp.preyFocusMin,0.3,0,1,min fish distraction left (x)
+hunterRamp.turnRate,0.02,0,0.08,hunter turn growth per 20s
+hunterRamp.turnRateMax,3.05,1,4,hunter turn growth cap (x)
+enemies.walkingCrab.crawl.floorRushHeight,10.5,1,20,crab rush trigger height
+enemies.walkingCrab.crawl.rushSpeedMul,2.5,1,4,crab rush speed mult
+enemies.walkingCrab.crawl.feed.seekRadius,60,0,60,chum seek radius
+enemies.walkingCrab.crawl.feed.eatRange,1.1,0.3,5,chum eat range
+enemies.walkingCrab.crawl.feed.eatTime,2.2,0.2,12,seconds to eat one orb
+enemies.walkingCrab.crawl.feed.distanceBias,18,2,80,pile pull half-distance
+enemies.walkingCrab.crawl.feed.hoover.pull,5.5,0,20,crab suction
+enemies.walkingCrab.crawl.feed.hoover.crumbRate,4,0,20,crab crumbs/sec
+enemies.shark.hunt.scavenge.seekRadius,16,0,60,shark chum notice range
+enemies.shark.hunt.scavenge.eatRange,2.6,0.5,8,shark gulp range
+enemies.shark.hunt.scavenge.eatTime,0.45,0.1,4,shark seconds per orb
+enemies.shark.hunt.scavenge.cooldown,3,0,20,shark seconds off the chum
+enemies.shark.hunt.scavenge.maxChase,3.5,0.5,15,shark gives up after (s)
+enemies.shark.hunt.scavenge.hoover.pull,9,0,30,shark suction
+enemies.walkingCrab.crawl.corpse.speedMul,2.2,1,5,rush-the-corpse speed (x)
+enemies.walkingCrab.crawl.corpse.settleRange,1.6,0.5,6,stop steering within (x radius)
+enemies.shark.hunt.lateral.climbRange,15,4,40,shark: flat until this far out
+enemies.shark.hunt.lateral.climbFull,5.5,1,20,shark: full climb inside this
+enemies.shark.hunt.lateral.climbFloor,0.12,0,1,shark: climb allowed at range
+enemies.shark.hunt.lateral.climbEase,0.9,0.1,6,shark: how fast the climb opens
+enemies.shark.hunt.lateral.weavePeriod,5.6,1,16,shark: seconds per weave
+enemies.shark.hunt.lateral.weaveAmp,2.4,0,10,shark: head swing
+enemies.shark.hunt.lateral.weaveBody,0.1,0,0.6,shark: weave reaching the body
+enemies.shark.hunt.lateral.wanderPitch,0.14,0,1,shark: idle wander pitch

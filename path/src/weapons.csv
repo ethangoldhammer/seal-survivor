@@ -1,0 +1,15 @@
+id,value,min,max,notes
+weapon.autofire,1,,,autofire
+missile.fireRate,1.7,0.2,3,missile fire rate
+missile.damage,30,1,80,missile damage
+missile.turnRate,8.2,0.5,12,missile turn rate
+missile.speed,14,4,40,missile speed
+missile.homingDelay,0.18,0,1,missile straight-flight time
+bounce.fireRate,0.86,0.1,2,bounce base fire rate
+bounce.damage,8,1,60,bounce damage
+bounce.life,3,0.5,8,bounce base lifespan
+bounce.maxBounces,2,0,10,bounce base max bounces
+bounce.maxBouncesPerLevel,2,0,6,bounce +bounces per level
+bounce.chainRange,14,0,40,bounce chain seek range
+bounce.chainLock,0.06,0,0.4,bounce chain re-hit lock
+bounce.chainSpeedGain,1.05,0.8,1.3,bounce chain speed gain

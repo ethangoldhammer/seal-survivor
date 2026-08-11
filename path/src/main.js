@@ -14,7 +14,7 @@ import { aoe, targeting, abilityDamage } from './systems/scaling.js';
 import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, elementHitEvent } from './systems/elements.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight } from './entities/enemies.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, gulpPickups, setChumDifficulty } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, gulpPickups, setChumDifficulty, flushPickupInstances } from './entities/pickups.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
@@ -22,6 +22,8 @@ import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShak
 import { initAudio, unlockAudio, applyAudioBusSettings, updateBusDepth, resetRepetition } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
+import { warmShaders, warmPipeline } from './systems/shaderWarmup.js';
+import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { fireMusselBarrage } from './systems/musselVolley.js';
@@ -162,7 +164,12 @@ boot();
 
 async function boot() {
   const loading = showLoading();
-  await preloadAssets();
+  // Assets are the first two thirds of the bar and the shader warm-up is the
+  // last third. Not a measurement — the split is a judgement about which half
+  // feels longer, and the warm-up's own share is smoothed inside that third.
+  const ASSET_SHARE = 0.66;
+  loading.setPhase('Filling the ocean');
+  await preloadAssets((p) => loading.setProgress(p * ASSET_SHARE));
   // Uploaded models must be in place BEFORE initPlayer and the ability
   // singletons build their meshes below, or they'd start life holding the
   // built-in model and only pick up the upload when something rebuilt them.
@@ -194,8 +201,6 @@ async function boot() {
   // it hooks spawns, so anything built earlier would come up with no outline.
   initCreatureOutlines();
 
-  loading.remove();
-
   garlicMesh = createGarlicVisual();
   world.scene.add(garlicMesh);
   shrimpGroup = createShrimpRingVisual();
@@ -217,6 +222,25 @@ async function boot() {
 
   initPlayer(world.scene);
   player.mesh.position.set(0, midWater(), 0);
+
+  // LAST, and deliberately after every singleton above is in the scene: this
+  // spends seconds up front so the run doesn't spend them one stall at a time.
+  // See systems/shaderWarmup.js — the seal, the abilities and the backdrop are
+  // covered by the pipeline frame, and everything that spawns later by the
+  // compile pass. Wrapped so a warm-up that cannot run never blocks boot: the
+  // worst case is the hitching we had before it existed.
+  loading.setPhase('Warming the glass');
+  try {
+    await warmShaders(
+      post, world.scene, world.camera, world.renderer,
+      (p) => loading.setProgress(ASSET_SHARE + p * (1 - ASSET_SHARE)),
+    );
+    warmPipeline(post, world.scene, world.camera);
+  } catch (err) {
+    console.warn('[boot] shader warm-up skipped —', err?.message ?? err);
+  }
+  loading.setProgress(1);
+  loading.remove();
 
   initUI({ onStart: startGame, onRestart: restartRun, onLevelChoice: applyLevelChoice });
   initTypography();
@@ -244,16 +268,6 @@ async function boot() {
   world.renderer.setAnimationLoop(animate);
 }
 
-function showLoading() {
-  const div = document.createElement('div');
-  div.style.cssText =
-    'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
-    'color:rgba(232,236,243,0.5);font:500 13px/1 Inter,system-ui,sans-serif;' +
-    'letter-spacing:0.08em;text-transform:uppercase;z-index:20;';
-  div.textContent = 'Loading';
-  document.body.appendChild(div);
-  return div;
-}
 
 function bindGlobalKeys() {
   window.addEventListener('keydown', (e) => {
@@ -2415,6 +2429,14 @@ function animate(now) {
     world.camera.position.x += (Math.random() - 0.5) * shake;
     world.camera.position.y += (Math.random() - 0.5) * shake;
   }
+
+  // Chum is drawn from an instance buffer, and nothing in it is drawn until
+  // the frame's transforms are copied across. Here rather than at the end of
+  // updatePickups, and OUTSIDE the pause gate, because half a dozen systems can
+  // still move an orb after that call returns — a crab chewing one, a shark
+  // hoovering one, the gulp on a strike release — and a menu opening must not
+  // leave the seabed frozen a frame behind where the orbs actually are.
+  flushPickupInstances();
 
   updateParticleScale(world.camera, world.renderer);
   post.resize();

@@ -2,6 +2,9 @@ import importedTuning from './imported-tuning.json';
 import upgradesCsv from './upgrades.csv?raw';
 import raritiesCsv from './rarities.csv?raw';
 import enemiesCsv from './enemies.csv?raw';
+import spawningCsv from './spawning.csv?raw';
+import weaponsCsv from './weapons.csv?raw';
+import behaviourCsv from './behaviour.csv?raw';
 import { parseUpgradeCsv, applyUpgradeTable } from './upgradeTable.js';
 import { parseRarityCsv, buildRarities, checkRaritySfx } from './rarityTable.js';
 // A leaf module on purpose — see the note at the top of it. The tuner's beat
@@ -15,7 +18,9 @@ import { STAR_THRESHOLD, starsIn } from './systems/starField.js';
 import { chainReachAt } from './systems/constellationReach.js';
 import {
   parseEnemyCsv, applyEnemyTable, captureEnemyBase, withoutEnemyTableFields,
+  ENEMY_TABLE_FIELDS,
 } from './enemyTable.js';
+import { createPathTable, stripAllTables } from './pathTable.js';
 
 // ============================================================================
 // CONFIG — every gameplay number lives here. Nothing else hardcodes balance.
@@ -542,8 +547,12 @@ export const CONFIG = {
       // can't drop a sun of some unrelated size into the sky (assets carry their
       // own scale, and hand-matching it is a trap).
       //
-      // Everything below the water line is CLIPPED, not faded: a setting sun is
-      // cut off by the horizon rather than dissolving through it.
+      // The DISC is cut off by the horizon rather than dissolving through it —
+      // by the water fill itself, which is opaque and clips to the wave, so the
+      // cut rides the swell. The HALO is the other way round: it fades out over
+      // `haloFade` as it comes down to the water, because a wide additive glow
+      // that simply stops leaves a hard edge wherever it stops. See the note at
+      // the top of systems/celestial.js.
       sun: {
         size: 5.2, // world units across the disc
         color: 0xfff0c8,
@@ -554,6 +563,14 @@ export const CONFIG = {
         // sun is half in the water is the one that should flare.
         horizonGlow: 1.7,
         horizonRange: 1.6, // how far (in disc radii) off the line still counts
+        // World units the halo takes to come up to full strength above the
+        // water line. This is the anti-seam control: the glow is worth around
+        // 0.9 in linear at the crossing, and however correct the place you stop
+        // it, stopping it in one pixel is a hard horizontal edge across a fifth
+        // of the frame. Sized against CONFIG.horizonGlow.up (the fog band's own
+        // reach) so the two read as one piece of haze rather than as a glow
+        // sitting in front of a bank. 0 is the hard cut this replaced.
+        haloFade: 4.5,
         texture: null,
         model: null,
         // Fold the disc's circular edge into the art's alpha. On by default
@@ -605,6 +622,9 @@ export const CONFIG = {
         bloomRim: 1.6,
         horizonGlow: 1.5,
         horizonRange: 1.6,
+        // Shorter than the sun's, in proportion to the smaller, dimmer halo it
+        // has to dissolve — see `haloFade` on the sun.
+        haloFade: 3.2,
         // Painted moon. If the file isn't there the rig warns once and falls
         // back to the placeholder disc, so this path is safe to keep set.
         texture: '/textures/sky/moon.webp',
@@ -7462,6 +7482,20 @@ export const CONFIG = {
     threshold: 0.55, // luminance above which pixels start to glow
     intensity: 0.9, // steady base glow strength
     radius: 3, // blur iterations — higher = wider, softer glow (costs more)
+    // How far below full resolution the glow is built. 2 = half, 4 = quarter.
+    //
+    // This is the single cheapest knob in the renderer: every pass in
+    // renderBloom (one bright-pass plus `radius` x 2 blurs) is paid per pixel
+    // of THIS buffer, so 4 costs a quarter of what 2 does. The output is
+    // blurred and then added on top of a sharp image, which is why the
+    // resolution it was built at is close to invisible.
+    //
+    // It is not free of look, though, and the direction surprises people: the
+    // blur steps in TEXELS, so a bigger divisor makes each tap reach further
+    // across the screen and the glow comes out WIDER at the same `radius`.
+    // Going 2 -> 4 roughly doubles the spread. Halve `radius` alongside it to
+    // land back where you were — and that is a second saving on top.
+    divisor: 4,
     pulseStrength: 1.4, // how much an impact pulse multiplies intensity
     pulseDecay: 3.5, // higher = pulses snap back to baseline faster
     // Global multiplier on every particle's own `glow` value (see
@@ -8369,164 +8403,6 @@ function biolumSkinGroups() {
 
 export const TUNER_SCHEMA = [
   {
-    group: 'Movement',
-    section: 'Gameplay',
-    items: [
-      { path: 'player.thrust', min: 0, max: 40, step: 0.5 },
-      { path: 'player.friction', min: 0.8, max: 1, step: 0.005 },
-      { path: 'player.maxSpeed', min: 5, max: 80, step: 1 },
-      { path: 'weapon.recoil', min: 0, max: 40, step: 0.5, label: 'recoil boost' },
-      { path: 'arena.airGravity', min: 0, max: 40, step: 0.5, label: 'gravity above water' },
-    ],
-  },
-  {
-    group: 'Weapon',
-    section: 'Gameplay',
-    items: [
-      { path: 'weapon.fireRate', min: 0.03, max: 1.2, step: 0.01 },
-      { path: 'weapon.damage', min: 0.5, max: 100, step: 0.5 },
-      { path: 'weapon.speed', min: 5, max: 80, step: 1 },
-      { path: 'weapon.multishot', min: 1, max: 12, step: 1, label: 'multishot (per fin)' },
-      { path: 'weapon.finSpread', min: 0, max: 0.4, step: 0.005, label: 'spread within one fin' },
-      { path: 'weapon.spread', min: 0, max: 0.6, step: 0.01, label: 'spread (no fin rig)' },
-      { path: 'weapon.pierce', min: 0, max: 8, step: 1 },
-      { path: 'weapon.shotSfx.enabled', type: 'bool', label: 'shot sound tracks fire rate' },
-      { path: 'weapon.shotSfx.pitchRise', min: 0, max: 1.5, step: 0.05, label: 'shot pitch rise when fast' },
-      { path: 'weapon.shotSfx.maxRateRatio', min: 1.5, max: 8, step: 0.1, label: 'fire rate ratio for full rise' },
-      { path: 'weapon.shotSfx.fitDecay', type: 'bool', label: 'trim shot tail to fit the gap' },
-      { path: 'weapon.shotSfx.decayHeadroom', min: 0.2, max: 1, step: 0.05, label: 'how much of the gap the tail may fill' },
-      { path: 'feedback.bulletHit.sfxMinGap', min: 0, max: 0.4, step: 0.01, label: 'min gap between impact sounds' },
-    ],
-  },
-  {
-    group: 'Survivability',
-    section: 'Gameplay',
-    items: [
-      { path: 'player.maxHp', min: 20, max: 500, step: 10 },
-      { path: 'player.regenPerSec', min: 0, max: 10, step: 0.1 },
-      { path: 'player.pickupRadius', min: 1, max: 20, step: 0.5 },
-    ],
-  },
-  // The stat sliders that used to head these two groups (fish speed, shark
-  // hp/speed/turnRate/weightPerDifficulty) are gone: those fields belong to
-  // enemies.csv now, and a slider writing the same number from a second place
-  // is how the two end up disagreeing. What's left is the flocking and
-  // pursuit FEEL, which is the half you genuinely want to drag while the game
-  // is moving — and which stays saved tuning.
-  {
-    group: 'The school',
-    panel: 'enemies',
-    section: 'Fish & schools',
-    items: [
-      { path: 'enemies.fish.swarm.cohesion', min: 0, max: 10, step: 0.1 },
-      { path: 'enemies.fish.swarm.separation', min: 0, max: 15, step: 0.1 },
-      { path: 'enemies.fish.swarm.alignment', min: 0, max: 10, step: 0.1 },
-      { path: 'enemies.fish.swarm.towardPlayer', min: 0, max: 10, step: 0.1 },
-      { path: 'enemies.fish.swarm.fleeFromPredators', min: 0, max: 20, step: 0.5 },
-      { path: 'enemies.fish.group.max', min: 1, max: 30, step: 1, label: 'school size max' },
-    ],
-  },
-  {
-    group: 'Sharks',
-    panel: 'enemies',
-    section: 'Apex predators',
-    items: [
-      { path: 'enemies.shark.hunt.preyRadius', min: 0, max: 60, step: 1 },
-      { path: 'enemies.shark.hunt.healPerMeal', min: 0, max: 60, step: 1 },
-      // The orca's feeding profile, exposed because it was the one apex whose
-      // numbers ran away and there was no way to see or fix that from in game.
-      // Growth is what makes a fed one look enormous: maxGrow multiplies a
-      // body that is already radius x the asset's own size multiplier.
-      { path: 'enemies.orca.hunt.biteCooldown', min: 0.2, max: 4, step: 0.05, label: 'orca seconds per meal' },
-      { path: 'enemies.orca.hunt.growPerMeal', min: 0, max: 0.06, step: 0.002, label: 'orca growth per meal' },
-      { path: 'enemies.orca.hunt.maxGrow', min: 1, max: 2.5, step: 0.05, label: 'orca max size (x)' },
-      { path: 'enemies.orca.hunt.preyRadius', min: 0, max: 60, step: 1, label: 'orca prey radius' },
-      { path: 'enemies.orca.hunt.maxOverheal', min: 1, max: 4, step: 0.1, label: 'orca max overheal (x)' },
-      // Crowding — see CONFIG.apexCrowd and systems/apexCrowd.js.
-      { path: 'apexCrowd.enabled', type: 'bool', label: 'apex predators share the player' },
-      { path: 'apexCrowd.feedingSlots', min: 1, max: 6, step: 1, label: 'apex allowed on the player' },
-      { path: 'apexCrowd.standoff', min: 2, max: 20, step: 0.5, label: 'apex circling distance' },
-      { path: 'apexCrowd.standoffJitter', min: 0, max: 8, step: 0.5, label: 'apex circling spread' },
-      { path: 'apexCrowd.circleStrength', min: 0, max: 2, step: 0.05, label: 'apex circling vs closing' },
-      { path: 'apexCrowd.feedTurn', min: 0.5, max: 15, step: 0.5, label: 'seconds before the pack rotates' },
-      { path: 'apexCrowd.avoidGap', min: 1, max: 6, step: 0.1, label: 'apex personal space (x radii)' },
-      { path: 'apexCrowd.avoidStrength', min: 0, max: 4, step: 0.1, label: 'apex avoidance strength' },
-    ],
-  },
-  {
-    group: 'Biting & aggression',
-    panel: 'enemies',
-    section: 'Apex predators',
-    items: [
-      { path: 'bite.enabled', type: 'bool', label: 'hunters snap their jaws' },
-      { path: 'bite.lead', min: 1, max: 5, step: 0.1, label: 'open mouth this far out (x reach)' },
-      { path: 'bite.playerReach', min: 0.5, max: 3, step: 0.05, label: 'bite-at-player reach (x contact)' },
-      { path: 'bite.cooldown', min: 0.2, max: 4, step: 0.05, label: 'fallback bite cooldown (s)' },
-      // The jaw driver's own timing. Every one of these is per-BITE, not per
-      // second, so the whole snap is openTime + holdTime + closeTime long.
-      { path: 'bite.jaw.openTime', min: 0.02, max: 0.6, step: 0.01, label: 'jaw gape time (s)' },
-      { path: 'bite.jaw.holdTime', min: 0, max: 0.5, step: 0.01, label: 'jaw held open (s)' },
-      { path: 'bite.jaw.closeTime', min: 0.02, max: 0.6, step: 0.01, label: 'jaw snap-shut time (s)' },
-      { path: 'bite.lunge.enabled', type: 'bool', label: 'lunge into the bite' },
-      { path: 'bite.lunge.speedMul', min: 1, max: 4, step: 0.05, label: 'lunge speed (x)' },
-      { path: 'bite.lunge.duration', min: 0.05, max: 1.5, step: 0.05, label: 'lunge length (s)' },
-      // Behavioural difficulty ramp — see CONFIG.hunterRamp. Baked at spawn,
-      // so moving these only affects hunters that appear afterwards.
-      { path: 'hunterRamp.enabled', type: 'bool', label: 'hunters get more aggressive over time' },
-      { path: 'hunterRamp.preyFocus', min: 0, max: 0.2, step: 0.005, label: 'fish distraction shed per 20s' },
-      { path: 'hunterRamp.preyFocusMin', min: 0, max: 1, step: 0.05, label: 'min fish distraction left (x)' },
-      { path: 'hunterRamp.turnRate', min: 0, max: 0.08, step: 0.002, label: 'hunter turn growth per 20s' },
-      { path: 'hunterRamp.turnRateMax', min: 1, max: 4, step: 0.05, label: 'hunter turn growth cap (x)' },
-    ],
-  },
-  {
-    group: 'Difficulty',
-    panel: 'enemies',
-    section: 'Spawning & difficulty',
-    items: [
-      { path: 'spawn.difficultyPerSecond', min: 0.005, max: 0.3, step: 0.005 },
-      { path: 'spawn.baseInterval', min: 0.1, max: 4, step: 0.05 },
-      { path: 'spawn.minInterval', min: 0.05, max: 2, step: 0.05 },
-      { path: 'spawn.countPerDifficulty', min: 0, max: 3, step: 0.05 },
-      // Max drawn from the sum of the apex species' own maxConcurrent values
-      // (27), so the top of the range is "no group cap at all" and anything
-      // below it actually binds.
-      { path: 'spawn.groupMaxAlive.apex', min: 0, max: 27, step: 1, label: 'max sharks/whales on screen' },
-      // The nocturnal gate. Both thresholds are on the same 0..1 darkness the
-      // stars ride, so scrubbing the clock (Sky panel) and dragging these two
-      // is how you find the moment the lights should come on.
-      { path: 'spawn.nightlife.enabled', type: 'bool', label: 'the night has its own cast' },
-      { path: 'spawn.nightlife.dusk', min: 0, max: 1, step: 0.01, label: 'darkness the changeover starts at' },
-      { path: 'spawn.nightlife.dark', min: 0, max: 1, step: 0.01, label: 'darkness it completes at' },
-      { path: 'spawn.nightlife.glowing.day', min: 0, max: 1, step: 0.01, label: 'glowing: daytime rate (x)' },
-      { path: 'spawn.nightlife.glowing.night', min: 0, max: 3, step: 0.05, label: 'glowing: night rate (x)' },
-      { path: 'spawn.nightlife.daylight.day', min: 0, max: 3, step: 0.05, label: 'everything else: daytime rate (x)' },
-      // The one that decides whether night is a different ocean or the same
-      // one with lights in it. Low, and the sharks go with the tangs.
-      { path: 'spawn.nightlife.daylight.night', min: 0, max: 1, step: 0.01, label: 'everything else: night rate (x)' },
-      // Compounding per difficulty point (20s by default), so small numbers
-      // move a lot: 0.05 is x2.2 at five minutes and x4.3 at ten. The caps
-      // are multipliers on the species' base stat.
-      { path: 'spawn.ramp.hp', min: 0, max: 0.15, step: 0.005, label: 'enemy hp growth per 20s' },
-      { path: 'spawn.ramp.hpMax', min: 1, max: 30, step: 0.5, label: 'enemy hp growth cap (x)' },
-      { path: 'spawn.ramp.damage', min: 0, max: 0.15, step: 0.005, label: 'enemy damage growth per 20s' },
-      { path: 'spawn.ramp.damageMax', min: 1, max: 12, step: 0.25, label: 'enemy damage growth cap (x)' },
-      { path: 'spawn.ramp.speed', min: 0, max: 0.06, step: 0.001, label: 'enemy speed growth per 20s' },
-      { path: 'spawn.ramp.speedMax', min: 1, max: 4, step: 0.05, label: 'enemy speed growth cap (x)' },
-      // The xp curve sits in this panel rather than with the weapons: how fast
-      // levels arrive is a difficulty knob, and it is only ever tuned while
-      // looking at the spawn numbers directly above it.
-      { path: 'xp.first', min: 5, max: 60, step: 1, label: 'xp for level 2' },
-      { path: 'xp.mul', min: 1.05, max: 2.2, step: 0.01, label: 'xp growth, levels 1-5' },
-      { path: 'xp.midMul', min: 1.05, max: 2.2, step: 0.01, label: 'xp growth, mid levels' },
-      { path: 'xp.midFrom', min: 2, max: 20, step: 1, label: 'mid band starts at level' },
-      { path: 'xp.lateMul', min: 1.05, max: 2.2, step: 0.01, label: 'xp growth, late levels' },
-      { path: 'xp.lateFrom', min: 5, max: 40, step: 1, label: 'late band starts at level' },
-      { path: 'xp.dropRamp.start', min: 0.2, max: 1, step: 0.05, label: 'early chum xp (x, 1 = off)' },
-      { path: 'xp.dropRamp.fullAt', min: 1, max: 30, step: 0.5, label: 'full chum xp at difficulty' },
-    ],
-  },
-  {
     group: 'Ocean colors',
     section: 'The ocean',
     items: [
@@ -8620,6 +8496,7 @@ export const TUNER_SCHEMA = [
       { path: 'dayNight.sun.bloomRim', min: 0, max: 4, step: 0.05, label: 'sun corona bloom (0 = off)' },
       { path: 'dayNight.sun.horizonGlow', min: 0, max: 5, step: 0.1, label: 'sun horizon flare' },
       { path: 'dayNight.sun.horizonRange', min: 0.2, max: 5, step: 0.1, label: 'sun flare reach' },
+      { path: 'dayNight.sun.haloFade', min: 0, max: 12, step: 0.1, label: 'sun glow dissolve into the sea' },
       { path: 'dayNight.sun.maskToDisc', type: 'bool', label: 'crop sun art to a circle' },
       { path: 'dayNight.sun.edgeFeather', min: 0.01, max: 0.5, step: 0.01, label: 'sun edge feather' },
       { path: 'dayNight.moon.size', min: 0.5, max: 20, step: 0.1, label: 'moon size' },
@@ -8630,6 +8507,7 @@ export const TUNER_SCHEMA = [
       { path: 'dayNight.moon.bloomRim', min: 0, max: 4, step: 0.05, label: 'moon corona bloom (0 = off)' },
       { path: 'dayNight.moon.horizonGlow', min: 0, max: 5, step: 0.1, label: 'moon horizon flare' },
       { path: 'dayNight.moon.horizonRange', min: 0.2, max: 5, step: 0.1, label: 'moon flare reach' },
+      { path: 'dayNight.moon.haloFade', min: 0, max: 12, step: 0.1, label: 'moon glow dissolve into the sea' },
       { path: 'dayNight.moon.maskToDisc', type: 'bool', label: 'crop moon art to a circle' },
       { path: 'dayNight.moon.edgeFeather', min: 0.01, max: 0.5, step: 0.01, label: 'moon edge feather' },
       // What the moon's disc and halo are actually worth to the bright pass.
@@ -8902,12 +8780,6 @@ export const TUNER_SCHEMA = [
     panel: 'companions',
     section: 'Your weapon',
     items: [
-      { path: 'weapon.autofire', type: 'bool', label: 'autofire' },
-      { path: 'missile.fireRate', min: 0.2, max: 3, step: 0.05, label: 'missile fire rate' },
-      { path: 'missile.damage', min: 1, max: 80, step: 1, label: 'missile damage' },
-      { path: 'missile.turnRate', min: 0.5, max: 12, step: 0.1, label: 'missile turn rate' },
-      { path: 'missile.speed', min: 4, max: 40, step: 1, label: 'missile speed' },
-      { path: 'missile.homingDelay', min: 0, max: 1, step: 0.02, label: 'missile straight-flight time' },
       { path: 'missile.launchFlashScale', min: 0, max: 4, step: 0.1, label: 'missile launch flash size' },
       { path: 'emitters.missileLaunch.count', min: 1, max: 80, step: 1, label: 'launch flash particles' },
       { path: 'emitters.missileLaunch.glow', min: 0, max: 10, step: 0.1, label: 'launch flash glow' },
@@ -8949,14 +8821,6 @@ export const TUNER_SCHEMA = [
       { path: 'flightSfx.missile.lifeRise', min: 0, max: 1.5, step: 0.02, label: 'pitch climb over flight' },
       { path: 'flightSfx.missile.falloff', min: 2, max: 60, step: 1, label: 'mussel distance falloff' },
       { path: 'flightSfx.missile.panAmount', min: 0, max: 1, step: 0.05, label: 'mussel stereo width' },
-      { path: 'bounce.fireRate', min: 0.1, max: 2, step: 0.02, label: 'bounce base fire rate' },
-      { path: 'bounce.damage', min: 1, max: 60, step: 1, label: 'bounce damage' },
-      { path: 'bounce.life', min: 0.5, max: 8, step: 0.1, label: 'bounce base lifespan' },
-      { path: 'bounce.maxBounces', min: 0, max: 10, step: 1, label: 'bounce base max bounces' },
-      { path: 'bounce.maxBouncesPerLevel', min: 0, max: 6, step: 1, label: 'bounce +bounces per level' },
-      { path: 'bounce.chainRange', min: 0, max: 40, step: 0.5, label: 'bounce chain seek range' },
-      { path: 'bounce.chainLock', min: 0, max: 0.4, step: 0.01, label: 'bounce chain re-hit lock' },
-      { path: 'bounce.chainSpeedGain', min: 0.8, max: 1.3, step: 0.01, label: 'bounce chain speed gain' },
       { path: 'bounce.comboPitchStep', min: 0, max: 3, step: 0.05, label: 'bounce combo pitch step (semitones)' },
       { path: 'bounce.comboPitchMax', min: 0, max: 36, step: 1, label: 'bounce combo pitch cap (semitones)' },
       { path: 'bounce.comboScaleStep', min: 0, max: 0.6, step: 0.01, label: 'bounce combo fx growth' },
@@ -9417,17 +9281,6 @@ export const TUNER_SCHEMA = [
     panel: 'enemies',
     section: 'Crabs & crawlers',
     items: [
-      { path: 'crabSpawn.enabled', type: 'bool', label: 'pile-triggered crabs' },
-      { path: 'crabSpawn.pileThreshold', min: 1, max: 40, step: 1 },
-      { path: 'crabSpawn.orbsPerCrab', min: 1, max: 20, step: 1 },
-      { path: 'crabSpawn.maxCrabsPerWave', min: 1, max: 15, step: 1 },
-      { path: 'crabSpawn.checkInterval', min: 0.5, max: 15, step: 0.5 },
-      { path: 'crabSpawn.floorHeight', min: 0.3, max: 8, step: 0.1 },
-      { path: 'enemies.walkingCrab.crawl.floorRushHeight', min: 1, max: 20, step: 0.5, label: 'crab rush trigger height' },
-      { path: 'enemies.walkingCrab.crawl.rushSpeedMul', min: 1, max: 4, step: 0.1, label: 'crab rush speed mult' },
-      { path: 'enemies.walkingCrab.crawl.feed.seekRadius', min: 0, max: 60, step: 1, label: 'chum seek radius' },
-      { path: 'enemies.walkingCrab.crawl.feed.eatRange', min: 0.3, max: 5, step: 0.1, label: 'chum eat range' },
-      { path: 'enemies.walkingCrab.crawl.feed.eatTime', min: 0.2, max: 12, step: 0.1, label: 'seconds to eat one orb' },
       // How crabs scale over a run used to be five sliders here
       // (scalePerDifficulty, maxGrowth, hpPerDifficulty,
       // contactDamagePerDifficulty, speedPerDifficulty). They're columns in
@@ -9436,10 +9289,6 @@ export const TUNER_SCHEMA = [
       // --- gait tempo ---
       { path: 'enemies.walkingCrab.beatSync.beatsPerStride', min: 0.25, max: 8, step: 0.25, label: 'beats per crab footfall' },
       // --- how crabs find and reach the chum ---
-      { path: 'enemies.walkingCrab.crawl.feed.seekRadius', min: 5, max: 150, step: 5, label: 'chum seek range' },
-      { path: 'enemies.walkingCrab.crawl.feed.distanceBias', min: 2, max: 80, step: 1, label: 'pile pull half-distance' },
-      { path: 'crabSpawn.spawnMargin', min: 0, max: 15, step: 0.5, label: 'offscreen spawn margin' },
-      { path: 'crabSpawn.clusterRadius', min: 1, max: 20, step: 0.5, label: 'what counts as one pile' },
       // --- the pinch (systems/crabClaw.js) ---
       // `windup` is the one that changes how the crab FEELS rather than how it
       // looks: it is the whole window a player has to read the attack and move,
@@ -9493,21 +9342,7 @@ export const TUNER_SCHEMA = [
       { path: 'enemies.walkingCrab.restLean', min: 0, max: 0.6, step: 0.02, label: 'crab rest lean (+/- rad)' },
       { path: 'enemies.walkingCrab.restYaw', min: 0, max: 1, step: 0.02, label: 'crab turn off-camera (+/- rad)' },
       // --- hoovering the chum ---
-      { path: 'enemies.walkingCrab.crawl.feed.hoover.pull', min: 0, max: 20, step: 0.5, label: 'crab suction' },
-      { path: 'enemies.walkingCrab.crawl.feed.hoover.crumbRate', min: 0, max: 20, step: 0.5, label: 'crab crumbs/sec' },
-      { path: 'enemies.shark.hunt.scavenge.seekRadius', min: 0, max: 60, step: 1, label: 'shark chum notice range' },
-      { path: 'enemies.shark.hunt.scavenge.eatRange', min: 0.5, max: 8, step: 0.1, label: 'shark gulp range' },
-      { path: 'enemies.shark.hunt.scavenge.eatTime', min: 0.1, max: 4, step: 0.05, label: 'shark seconds per orb' },
-      { path: 'enemies.shark.hunt.scavenge.cooldown', min: 0, max: 20, step: 0.5, label: 'shark seconds off the chum' },
-      { path: 'enemies.shark.hunt.scavenge.maxChase', min: 0.5, max: 15, step: 0.5, label: 'shark gives up after (s)' },
-      { path: 'enemies.shark.hunt.scavenge.hoover.pull', min: 0, max: 30, step: 0.5, label: 'shark suction' },
       // --- the pile-on ---
-      { path: 'crabSpawn.deathPile.enabled', type: 'bool', label: 'crabs pile on the corpse' },
-      { path: 'crabSpawn.deathPile.count', min: 0, max: 30, step: 1, label: 'crabs called in on death' },
-      { path: 'crabSpawn.deathPile.maxCrabs', min: 1, max: 40, step: 1, label: 'pile-on ceiling' },
-      { path: 'crabSpawn.deathPile.spawnWindow', min: 0.1, max: 8, step: 0.1, label: 'pile-on arrival window (s)' },
-      { path: 'enemies.walkingCrab.crawl.corpse.speedMul', min: 1, max: 5, step: 0.1, label: 'rush-the-corpse speed (x)' },
-      { path: 'enemies.walkingCrab.crawl.corpse.settleRange', min: 0.5, max: 6, step: 0.1, label: 'stop steering within (x radius)' },
     ],
   },
   {
@@ -9602,14 +9437,6 @@ export const TUNER_SCHEMA = [
       // Shark cruise — see the `lateral` block on enemies.shark. On the base
       // shark only; the rest of the family carries its own copy, which is the
       // same arrangement every other per-creature block here uses.
-      { path: 'enemies.shark.hunt.lateral.climbRange', min: 4, max: 40, step: 1, label: 'shark: flat until this far out' },
-      { path: 'enemies.shark.hunt.lateral.climbFull', min: 1, max: 20, step: 0.5, label: 'shark: full climb inside this' },
-      { path: 'enemies.shark.hunt.lateral.climbFloor', min: 0, max: 1, step: 0.02, label: 'shark: climb allowed at range' },
-      { path: 'enemies.shark.hunt.lateral.climbEase', min: 0.1, max: 6, step: 0.05, label: 'shark: how fast the climb opens' },
-      { path: 'enemies.shark.hunt.lateral.weavePeriod', min: 1, max: 16, step: 0.2, label: 'shark: seconds per weave' },
-      { path: 'enemies.shark.hunt.lateral.weaveAmp', min: 0, max: 10, step: 0.2, label: 'shark: head swing' },
-      { path: 'enemies.shark.hunt.lateral.weaveBody', min: 0, max: 0.6, step: 0.01, label: 'shark: weave reaching the body' },
-      { path: 'enemies.shark.hunt.lateral.wanderPitch', min: 0, max: 1, step: 0.02, label: 'shark: idle wander pitch' },
     ],
   },
   {
@@ -9929,26 +9756,15 @@ export const TUNER_SCHEMA = [
       { path: 'typography.retroGlow', min: 0, max: 3, step: 0.1 },
     ],
   },
-  {
-    group: 'Spawn rates',
-    panel: 'enemies',
-    section: 'Spawning & difficulty',
-    items: Object.keys(CONFIG.enemies).map((key) => ({
-      path: `enemies.${key}.spawnRateMul`,
-      min: 0, max: 4, step: 0.05,
-      label: `${key} rate (0 = off)`,
-    })),
-  },
-  {
-    group: 'Spawn level gates',
-    panel: 'enemies',
-    section: 'Spawning & difficulty',
-    items: Object.keys(CONFIG.enemies).map((key) => ({
-      path: `enemies.${key}.minPlayerLevel`,
-      min: 0, max: 30, step: 1,
-      label: `${key} unlocks at lvl`,
-    })),
-  },
+  // 'Spawn rates' and 'Spawn level gates' USED TO BE HERE — fifty generated
+  // sliders, one per creature, for `spawnRateMul` and `minPlayerLevel`.
+  //
+  // Both are columns in enemies.csv, and applyEnemyTable() runs at boot, on
+  // Reset and whenever the CSV changes. So every one of those sliders moved a
+  // number the table then silently put back: dragging shark's rate to 0.123
+  // and re-applying the table returned it to 1. Fifty controls that looked
+  // live and were not. They are edited in the Creatures table, which is the
+  // only place that can actually hold them.
   {
     group: 'Boats & trawlers',
     panel: 'enemies',
@@ -10484,6 +10300,10 @@ export const TUNER_SCHEMA = [
       { path: 'bloom.threshold', min: 0.1, max: 1, step: 0.02, label: 'glow threshold' },
       { path: 'bloom.intensity', min: 0, max: 3, step: 0.05, label: 'glow amount' },
       { path: 'bloom.radius', min: 1, max: 8, step: 1, label: 'glow spread' },
+      // A performance control that happens to have a look. See the note on
+      // bloom.divisor — higher is cheaper AND wider, so it trades against
+      // `glow spread` directly above rather than standing on its own.
+      { path: 'bloom.divisor', min: 2, max: 8, step: 1, label: 'glow resolution (higher = cheaper)' },
       { path: 'bloom.pulseStrength', min: 0, max: 4, step: 0.1, label: 'impact pulse amount' },
       { path: 'bloom.pulseDecay', min: 0.5, max: 10, step: 0.1, label: 'impact pulse snap-back' },
       { path: 'bloom.particleOverdrive', min: 0, max: 8, step: 0.1, label: 'particle glow overdrive' },
@@ -10786,6 +10606,42 @@ const RARITY_ROWS = parseRarityCsv(raritiesCsv);
 const ENEMY_BASE = captureEnemyBase(CONFIG.enemies);
 const ENEMY_ROWS = parseEnemyCsv(enemiesCsv);
 
+// THE PATH TABLES — the balance numbers, keyed by a dotted CONFIG path. See
+// pathTable.js for why these are files rather than sliders. Captured here for
+// the same reason the two above are: the base must hold what config.js
+// declares, not what a snapshot last set, and it is what a row DELETED from a
+// CSV falls back to.
+//
+// `behaviour.csv` may write under `enemies`, which enemies.csv also writes —
+// so it carries a veto for the flat per-creature columns that table owns. That
+// is not hypothetical tidiness: the tuner shipped 50 sliders for
+// `enemies.*.spawnRateMul` and `enemies.*.minPlayerLevel` that enemies.csv
+// silently overwrote on every apply, and this is what stops the CSVs growing
+// the same disagreement.
+function enemyCsvOwns(id) {
+  const m = /^enemies\.[A-Za-z0-9_]+\.([A-Za-z0-9_]+)$/.exec(id);
+  if (m && ENEMY_TABLE_FIELDS.includes(m[1])) {
+    return `enemies.csv already owns the "${m[1]}" column, and applyEnemyTable would overwrite this on the next apply.`;
+  }
+  return null;
+}
+
+const PATH_TABLES = [
+  createPathTable({
+    label: 'spawning', file: 'spawning.csv', text: spawningCsv,
+    roots: ['spawn', 'crabSpawn', 'xp'],
+  }),
+  createPathTable({
+    label: 'weapons', file: 'weapons.csv', text: weaponsCsv,
+    roots: ['weapon', 'missile', 'bounce'],
+  }),
+  createPathTable({
+    label: 'behaviour', file: 'behaviour.csv', text: behaviourCsv,
+    roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies'], forbid: enemyCsvOwns,
+  }),
+];
+const PATH_BASES = PATH_TABLES.map((t) => t.captureBase(CONFIG));
+
 // Project tuning imported from another session — merged before DEFAULTS so
 // Reset and fresh loads match the exported values.
 const diskTuning = withoutTableOwnedKeys(importedTuning);
@@ -10807,6 +10663,7 @@ healTunedShapes();
 // one you just edited is the one you expect to see.
 applyUpgradesFromTable();
 applyEnemiesFromTable();
+applyPathTables();
 
 // Everything the tuner, the Look & Sound panel or the Reset button can touch
 // gets saved — and this list is what decides that. It used to be written out
@@ -10873,6 +10730,13 @@ export function applyUpgradesFromTable() {
 // still ordinary saved tuning and still merge normally.
 export function applyEnemiesFromTable() {
   applyEnemyTable(CONFIG.enemies, ENEMY_BASE, ENEMY_ROWS);
+}
+
+// The path tables' equivalent, called everywhere the other two are and for the
+// same reason: the file is what you just edited, so it has to win over both a
+// cached snapshot and a Reset.
+export function applyPathTables() {
+  PATH_TABLES.forEach((t, i) => t.apply(CONFIG, PATH_BASES[i]));
 }
 
 // The night crab walks, feeds and piles on EXACTLY like the day crab, because
@@ -10955,7 +10819,11 @@ function withoutTableOwnedKeys(snapshot) {
     const { maxConcurrent, ...audio } = rest.audio;
     rest.audio = audio;
   }
-  return rest;
+  // The spawn knobs, which spawning.csv now owns outright. Every snapshot
+  // written before that table existed still carries them, and a saved value
+  // beats a config.js default — left in, editing the CSV would appear to do
+  // nothing at all. LAST, so it sees everything the strips above left behind.
+  return stripAllTables(rest, PATH_TABLES);
 }
 
 // Fields inside a saved snapshot that config.js owns outright.
@@ -11042,6 +10910,7 @@ export function resetConfigToDefaults() {
   }
   applyUpgradesFromTable();
   applyEnemiesFromTable();
+  applyPathTables();
 }
 
 // Stamped into every snapshot so the two copies can be ordered on load.
@@ -11071,8 +10940,13 @@ function tuningSnapshot() {
   // inherits it, which is the same value by a different route. That is what a
   // diff means, and it is the trade the enemies table already makes.
   snapshot.biolumSkin = withoutInheritedPresetKeys(CONFIG.biolumSkin);
-  snapshot[SAVED_AT] = Date.now();
-  return snapshot;
+  // The spawn knobs go out the same way they come in — spawning.csv owns them,
+  // so writing them here would give them a second home that could disagree
+  // with the file. Both halves are needed: stripping only on load would leave
+  // the snapshot quietly accumulating them again on every save.
+  const stripped = stripAllTables(snapshot, PATH_TABLES);
+  stripped[SAVED_AT] = Date.now();
+  return stripped;
 }
 
 // Drop every preset key that merely restates `base`. Returns a new object; the
@@ -11256,6 +11130,7 @@ export function importTuning(rawSnapshot) {
   linkCrabVariants();
   applyUpgradesFromTable();
   applyEnemiesFromTable();
+  applyPathTables();
 }
 
 export function clearSavedTuning() {

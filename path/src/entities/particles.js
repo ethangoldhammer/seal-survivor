@@ -157,6 +157,55 @@ const tracked = [];
 // Well above what breath and wake produce together at full tilt.
 const MAX_TRACKED = 256;
 
+// --- uploading only what changed --------------------------------------------
+//
+// A bare `needsUpdate = true` costs the WHOLE buffer: three's updateBuffer
+// falls back to `bufferSubData(0, array)` whenever an attribute carries no
+// update ranges. Across these ten attributes at the shipped capacity of 8000
+// that is ~530KB re-uploaded in every frame anything was emitted — which, in a
+// fight, is every frame. A burst only ever writes a contiguous run of slots,
+// so it can say so instead.
+//
+// EVERY write path in this file has to go through here or clear the ranges
+// itself. Ranges and a blanket flag do not mix: if one path adds a range and
+// another sets needsUpdate without adding one, the second path's write is
+// silently dropped, because the presence of ANY range switches the upload to
+// partial for that attribute.
+
+// The whole of one attribute, as a range. See the note in markRange's overflow
+// branch for why this is a range and not a cleared list.
+function markWhole(attr) {
+  attr.addUpdateRange(0, attr.array.length);
+  attr.needsUpdate = true;
+}
+
+function markRange(start, n) {
+  if (n >= capacity) {
+    // Wrapped clean past itself, so every slot was touched. Written as an
+    // explicit whole-buffer RANGE rather than by clearing the ranges: three
+    // merges overlapping ranges before uploading, so this absorbs anything
+    // added before or after it in the same frame. Clearing would only win
+    // until the next emit added a range, at which point the upload would
+    // quietly go back to being partial and this burst would be half-written.
+    for (const attr of Object.values(attrs)) markWhole(attr);
+    return;
+  }
+  const end = start + n;
+  // The ring buffer wraps, so a run can be one span or two.
+  const spans = end <= capacity
+    ? [[start, n]]
+    : [[start, capacity - start], [0, end - capacity]];
+  for (const attr of Object.values(attrs)) {
+    const size = attr.itemSize;
+    // Ranges are measured in ARRAY ELEMENTS, not in vertices — a vec3 slot
+    // three wide starts at index*3. Getting this wrong uploads a third of the
+    // burst and leaves the rest as whatever the last owner of those slots put
+    // there, which reads as particles spawning at stale positions.
+    for (const [s, c] of spans) attr.addUpdateRange(s * size, c * size);
+    attr.needsUpdate = true;
+  }
+}
+
 export function initParticles(scene) {
   disposeParticles(scene);
 
@@ -268,6 +317,9 @@ export function emit(name, x, y, opts = {}) {
 
   const color = new THREE.Color();
 
+  // Where this burst's run of slots begins, for the upload range below.
+  const firstIdx = cursor % capacity;
+
   for (let i = 0; i < count; i++) {
     const idx = cursor % capacity;
     cursor += 1;
@@ -354,7 +406,7 @@ export function emit(name, x, y, opts = {}) {
     }
   }
 
-  for (const attr of Object.values(attrs)) attr.needsUpdate = true;
+  markRange(firstIdx, count);
 }
 
 // Solve every tracked bubble's position and burst the ones that have broken
@@ -397,6 +449,11 @@ function updateSurfacePops() {
     // Killed outright rather than left to fade: a bubble that has burst is
     // gone, and one still drifting up through its own spray is the tell.
     attrs.aStart.array[p.idx] = -1e9;
+    // One slot, one float — aStart is the only attribute this write touches,
+    // so it doesn't go through markRange. Still a RANGE rather than a bare flag:
+    // an emit earlier in the frame has probably already put ranges on this
+    // attribute, and a rangeless write alongside them would be dropped.
+    attrs.aStart.addUpdateRange(p.idx, 1);
     attrs.aStart.needsUpdate = true;
     (pops ??= []).push({ x, y: surf, name: p.pop });
     tracked[i] = tracked[tracked.length - 1];
@@ -438,7 +495,13 @@ export function updateParticles(dt) {
 export function resetParticles() {
   if (!geometry) return;
   for (let i = 0; i < capacity; i++) attrs.aStart.array[i] = -1e9;
-  attrs.aStart.needsUpdate = true;
+  // A whole-buffer range, not a cleared list. This runs from the start/restart
+  // handler, OUTSIDE the frame loop, and the very next frame emits (the seal
+  // starts breathing immediately) — so by upload time this attribute will be
+  // carrying that burst's range too. A merged whole-buffer range still uploads
+  // everything; a cleared list would have been overruled by it, and the last
+  // run's particles would come back to life in the new one.
+  markWhole(attrs.aStart);
   cursor = 0;
   tracked.length = 0;
 }

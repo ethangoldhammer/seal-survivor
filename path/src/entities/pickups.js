@@ -3,6 +3,26 @@ import { CONFIG, chumValueRamp } from '../config.js';
 import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { updateTumble } from '../systems/rocks.js';
+import { createInstancedPool } from '../systems/instancedPool.js';
+
+// Chum is drawn as instances, not as 140 separate meshes — see
+// systems/instancedPool.js. The orb objects themselves are unchanged: the pool
+// hands back the same Mesh createVisual built, so every `p.mesh.position` and
+// `p.mesh.scale` below reads exactly as it did when it was in the scene.
+//
+// Built lazily against whichever scene the first orb is spawned into, because
+// this module is imported long before world.scene exists.
+let orbPool = null;
+function pool(scene) {
+  if (!orbPool) orbPool = createInstancedPool(scene, 'chum');
+  return orbPool;
+}
+
+// Once a frame, late — after gulps, bites, magnets and the sink have all had
+// their turn at the positions. Nothing is drawn until this runs.
+export function flushPickupInstances() {
+  orbPool?.flush();
+}
 
 export const pickups = [];
 // Drives the shiver on chum waiting inside a sealed mouth. One shared clock
@@ -21,7 +41,7 @@ export const bubbleOrbs = [];
 export const rapidFireOrbs = [];
 
 export function resetPickups(scene) {
-  for (const p of pickups) scene.remove(p.mesh);
+  orbPool?.reset();
   pickups.length = 0;
   tellClock = 0;
   runDifficulty = 0;
@@ -51,9 +71,16 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
   // so writing tier colour here writes it GLOBALLY — which would stomp any
   // tint set in the texture panel a frame later. Only apply the tier colour
   // when the player hasn't picked their own.
+  //
+  // Instancing does not change this and deliberately doesn't fix it: the
+  // InstancedMesh draws with that same shared material, so this line reaches
+  // every orb exactly as it did when each was its own mesh. Per-orb tier
+  // colours are now POSSIBLE for the first time — see setColor in
+  // systems/instancedPool.js — but they would be a change of look, not of
+  // performance, and this pass is the latter.
   const userTint = CONFIG.assetLooks?.xpOrb?.tint;
   if (mesh.material?.color && userTint == null) mesh.material.color.set(tier.color);
-  scene.add(mesh);
+  pool(scene).acquire(mesh);
   pickups.push({
     mesh,
     // The holdback scales the xp only — the orb, its size, its heal and its
@@ -68,7 +95,7 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
   // Orbs settle on the seabed and would otherwise pile up all run.
   while (pickups.length > CONFIG.pickups.maxAlive) {
     const oldest = pickups.shift();
-    scene.remove(oldest.mesh);
+    orbPool?.release(oldest.mesh);
   }
 }
 
@@ -234,7 +261,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
     // instead (see gulpPickups and CONFIG.strike.charge.gulp).
     if (!sealed && dist < CONFIG.pickups.collectRadius) {
       onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul);
-      scene.remove(p.mesh);
+      orbPool?.release(p.mesh);
       pickups.splice(i, 1);
       continue;
     }
@@ -296,7 +323,7 @@ export function gulpPickups(scene, x, y, radius, onCollect) {
     const dy = p.mesh.position.y - y;
     if (dx * dx + dy * dy > r2) continue;
     onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul);
-    scene.remove(p.mesh);
+    orbPool?.release(p.mesh);
     pickups.splice(i, 1);
     n++;
   }
@@ -456,7 +483,7 @@ export function bitePickup(scene, p, amount, suck = null) {
     p.mesh.scale.setScalar((p.baseScale ??= p.mesh.scale.x) * t);
     return false;
   }
-  scene.remove(p.mesh);
+  orbPool?.release(p.mesh);
   pickups.splice(i, 1);
   return true;
 }

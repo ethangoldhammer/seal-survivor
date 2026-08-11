@@ -2566,7 +2566,7 @@
     "enabled": true,
     "pattern": "hex",
     "clipAtSurface": true,
-    "spacing": 1,
+    "spacing": 2,
     "subdivisions": 4,
     "lineWidth": 1,
     "opacity": 0.8,

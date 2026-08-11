@@ -226,6 +226,17 @@ const DOCS = {
     weight: 'How likely this is, relative to the other rows. Blank = 1. 0 is never dealt but still shows in the Upgrades tab.',
     cardArt: 'Hex background for the card. Blank means the plain card.',
   },
+  // The three path-keyed tables share one column contract, so the docs are
+  // written once and pointed at rather than copied into places that drift.
+  'weapons.csv': { __sharedWith: 'spawning.csv' },
+  'behaviour.csv': { __sharedWith: 'spawning.csv' },
+  'spawning.csv': {
+    id: 'A dotted path into CONFIG. This is the join key — a path that matches nothing is reported and skipped, so a typo cannot silently do nothing.',
+    value: 'The value itself. On/off settings are 1 or 0. The TYPE comes from config.js, so this can change what a setting is SET to but never what it IS \u2014 a nonsense value keeps the built-in and warns rather than taking the boot down.',
+    min: 'Documentation only, and the range this editor lets the slider cover. The game does not clamp to it.',
+    max: 'Documentation only, and the range this editor lets the slider cover. The game does not clamp to it.',
+    notes: 'What the setting does. Free text — nothing reads it.',
+  },
   'quips.csv': {
     id: 'A short handle for the row. Never shown to the player — it exists so a reworded line keeps its identity in a diff.',
     text: 'The game-over headline itself.',
@@ -248,6 +259,11 @@ const BLANK_MEANS = {
   },
   'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up' },
   'quips.csv': { enabled: 'enabled', weight: '1' },
+  // A blank spawn value means "leave the built-in alone", NOT zero — zero
+  // would switch a system off, which is the opposite of leaving it alone.
+  'spawning.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
+  'weapons.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
+  'behaviour.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
 };
 
 // ---------------------------------------------------------------------------
@@ -269,6 +285,26 @@ export const TABLES = [
     addRows: false,
   },
   {
+    file: 'path/src/spawning.csv',
+    label: 'Spawning',
+    blurb: 'What arrives and how often — the whole spawn system on one screen. These were thirty sliders on the ` tuner; a spawn rate is judged over minutes and against the other rates, which is a table\u2019s job, not a slider\u2019s.',
+    // Every row joins to a path in config.js. A new row without a matching
+    // setting is reported and skipped, so adding one here does nothing.
+    addRows: false,
+  },
+  {
+    file: 'path/src/weapons.csv',
+    label: 'Weapons',
+    blurb: 'The balance half of the seal\u2019s weapons \u2014 rate, damage, speed, lifespan, chaining. These pair with upgrades.csv, which multiplies exactly these numbers; the trails, impact flashes and flight SFX stay on the ` tuner where you judge them by eye.',
+    addRows: false,
+  },
+  {
+    file: 'path/src/behaviour.csv',
+    label: 'Behaviour',
+    blurb: 'How creatures hunt, school, scavenge and press you \u2014 per-creature behaviour blocks plus the shared bite, hunter-ramp and apex-crowd settings, which were scattered across four tuner sections.',
+    addRows: false,
+  },
+  {
     file: 'path/src/quips.csv',
     label: 'Death quips',
     blurb: 'The game-over headline. This table joins to nothing in code, so new lines are just new rows — add away.',
@@ -278,16 +314,42 @@ export const TABLES = [
 
 const BY_FILE = new Map(TABLES.map((t) => [t.file, t]));
 
+// The path-keyed tables all share one column contract: id, value, min, max,
+// notes. Listed once so adding a fourth is a one-line change.
+const PATH_TABLE_FILES = new Set([
+  'path/src/spawning.csv', 'path/src/weapons.csv', 'path/src/behaviour.csv',
+]);
+
 // Decide what control a column gets. Columns the game has no opinion about
 // fall through to a text box, which is why an unknown column is harmless.
 function columnSpec(file, name, rows) {
   // DOCS and BLANK_MEANS are keyed by bare filename; `file` is the repo path.
   const base_ = file.split('/').pop();
-  const doc = DOCS[base_]?.[name];
+  // The path tables share one contract, so their docs are written once and
+  // pointed at rather than copied into three places that could drift.
+  const docs = DOCS[base_]?.__sharedWith ? DOCS[DOCS[base_].__sharedWith] : DOCS[base_];
+  const doc = docs?.[name];
   const blank = BLANK_MEANS[base_]?.[name];
   const base = { name, doc, blank, type: 'text' };
 
   if (name === 'id') return { ...base, type: 'text', readonly: !BY_FILE.get(file).addRows, key: true };
+
+  if (PATH_TABLE_FILES.has(file)) {
+    // `value` is the only editable cell. It is typed per ROW rather than per
+    // column, which no other table here needs: this file mixes numbers with
+    // on/off settings, and the row's own min/max carry the range. A row whose
+    // current value reads as yes/no gets the enum; everything else is a number
+    // bounded by its own min/max columns.
+    // Everything is a NUMBER here, on/off settings included: they are written
+    // 1/0 rather than yes/no so this one column can be typed once. The actual
+    // type still comes from config.js — spawnTable coerces 1 to true only
+    // where the built-in it is replacing is a boolean — so the file cannot
+    // change what a setting IS, only what it is set to.
+    if (name === 'value') return { ...base, type: 'number', required: true };
+    // The bounds and the prose are reference material, not settings — editable
+    // so the file can document itself, but never something the game reads.
+    return { ...base, type: 'text' };
+  }
 
   if (file === 'path/src/enemies.csv') {
     const num = ENEMY_REQUIRED[name] || ENEMY_OPTIONAL[name];

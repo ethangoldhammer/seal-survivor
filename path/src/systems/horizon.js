@@ -224,7 +224,17 @@ export function createHorizonGlow(scene) {
     // once — how far the fog reaches, how thick it is, how much it emits, and
     // how much of the sky's own colour it takes. With the day cycle off it is
     // simply 0 and this collapses to the plain bank.
-    const tw = CONFIG.dayNight?.enabled ? skyLight.twilight : 0;
+    //
+    // The MAX of the two horizon curves, not `twilight` alone. They are measured
+    // in different units and the elevation one is about half as wide (see
+    // skyLight.horizonBody), so keying the cover to `twilight` meant the band
+    // widened for the crossing and had eased most of the way off again while a
+    // disc was still sitting in the water — which is precisely the hour either
+    // side of sunrise and sunset, and precisely where the seam was worst. The
+    // cover has to outlast the thing it is covering.
+    const tw = CONFIG.dayNight?.enabled
+      ? Math.max(skyLight.twilight, skyLight.horizonBody)
+      : 0;
     const spread = 1 + tw * (cfg.twilightSpread ?? 0);
     const boost = 1 + tw * (cfg.twilightBoost ?? 0);
 

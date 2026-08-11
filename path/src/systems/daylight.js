@@ -53,6 +53,15 @@ export const skyLight = {
   // and dusk AND at every other point in between) and `phase` is a label,
   // not a curve you can ramp anything against.
   twilight: 0,
+  // 0..1, how much a BODY is straddling the water line — the widest of the two
+  // horizonMix values. Sibling of `twilight` and deliberately not the same
+  // number: `twilight` is measured in elevation (`twilightBand`) and is about
+  // the COLOUR of the sky, while this is measured in disc radii
+  // (`sun.horizonRange`) and is about a disc physically overlapping the water.
+  // The second one is roughly twice as wide, and anything drawing over the
+  // place where a body meets the sea has to last as long as the overlap does
+  // rather than as long as the sunset does — see systems/horizon.js.
+  horizonBody: 0,
   isMoon: false,
   // 0..1 lightning flash, republished here so consumers have ONE place to
   // read the light from. The sky mixes toward white by it (a night sky
@@ -317,6 +326,7 @@ export function updateDayCycle(dt) {
     skyLight.clear = 1;
     skyLight.night = 0;
     skyLight.twilight = 0;
+    skyLight.horizonBody = 0;
     skyLight.flash = 0;
     skyLight.color.set(0xffffff);
     skyLight.zenith.set(CONFIG.colors.sky);
@@ -380,6 +390,11 @@ export function updateDayCycle(dt) {
   const band = Math.max(0.02, cfg.twilightBand ?? 0.3);
   const t = clamp01(1 - Math.abs(dayState.sun.elevation) / band);
   skyLight.twilight = t * t * (3 - 2 * t);
+
+  // The other horizon curve. A max rather than a sum or a pick: both bodies sit
+  // on opposite points of one ellipse, so they cross at the same instant and
+  // this is simply whichever has the wider reach — no branch on which one is up.
+  skyLight.horizonBody = Math.max(dayState.sun.horizonMix, dayState.moon.horizonMix);
 
   // Weather is the last word on brightness: a storm puts cloud between the
   // sky and the sea, which is a different thing from the sun being low, so it

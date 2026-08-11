@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { createConstellations } from '../path/src/systems/constellations.js';
 import { createSkyMaterial } from '../path/src/systems/sky.js';
+import { createCelestials } from '../path/src/systems/celestial.js';
 
 const scene = new THREE.Scene();
 const sky = createConstellations(scene);
@@ -41,8 +42,22 @@ const starMat = sky.group.children.find((c) => c.isMesh && !c.isLineSegments)?.m
 const linkMat = sky.group.children.find((c) => c.isLineSegments)?.material;
 const skyMat = createSkyMaterial();
 
+// The sun's two quads. Both carry hand-written GLSL and the halo now injects
+// the WAVE constants into a surfaceAt() of its own, which is the kind of string
+// interpolation that fails as a compile error and takes the whole backdrop with
+// it — including the one failure mode a JS-level test cannot see at all, a
+// stray backtick in a shader comment ending the template literal.
+const bodies = createCelestials(scene);
+const sunRig = bodies.group.children[0];
+const haloMat = sunRig?.children.find((c) => c.renderOrder === -12)?.material;
+const discMat = sunRig?.children.find((c) => c.renderOrder === -11)?.material;
+
 if (!starMat || !linkMat) {
   console.error('constellations built no geometry — is CONFIG.constellations.enabled off?');
+  process.exit(1);
+}
+if (!haloMat || !discMat) {
+  console.error('celestials built no quads — has the rig stopped being halo(-12) + disc(-11)?');
   process.exit(1);
 }
 
@@ -53,6 +68,8 @@ const OUT = process.argv[2] ?? path.join(
 // three's own prefix, cut down to what these shaders actually reference.
 const PREFIX_VERT = `precision highp float;
 uniform mat4 modelViewMatrix;
+uniform mat4 modelMatrix;
+uniform mat4 viewMatrix;
 uniform mat4 projectionMatrix;
 attribute vec3 position;
 attribute vec2 uv;
@@ -72,6 +89,10 @@ const PROGRAMS = [
   ['stars', starMat, ['uCycle', 'uBloom', 'uSize', 'uNight', 'uHaze']],
   ['links', linkMat, ['uRipples[0]', 'uTouch[0]', 'uCycle', 'uTravel', 'uBend', 'uBendMax', 'uChain', 'uWarpGain', 'uNight']],
   ['sky gradient', skyMat, ['uStars', 'uStarDensity', 'uZenith', 'uHorizon']],
+  // uWaveAmp and uFade are the load-bearing pair: if either is optimised out
+  // the halo has stopped meeting the wave and the flat cut is back.
+  ['sun halo', haloMat, ['uColor', 'uStrength', 'uFade', 'uSurfaceY', 'uWaveT', 'uWaveAmp', 'uChop']],
+  ['sun disc', discMat, ['uMap', 'uUseMap', 'uMask', 'uColor', 'uBrightness', 'uEdge']],
 ];
 
 const html = `<!doctype html><meta charset="utf-8"><title>night sky shader check</title>

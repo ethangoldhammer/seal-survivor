@@ -1,0 +1,40 @@
+id,value,min,max,notes
+spawn.difficultyPerSecond,0.09,0.005,0.3,How fast the run ramps. 1 difficulty point = 20s at 0.05.
+spawn.baseInterval,1.4,0.1,4,Seconds between spawn ticks at difficulty 0.
+spawn.minInterval,0.35,0.05,2,Floor on that interval however long the run gets.
+spawn.countPerDifficulty,0.35,0,3,Extra creatures per tick per difficulty point.
+spawn.maxAlive,220,20,400,Hard ceiling on bodies on screen. EVERY spawner bails at it - including the crab summoner.
+spawn.groupMaxAlive.apex,8,0,27,Max sharks/whales on screen at once.
+spawn.nightlife.enabled,1,0,1,Whether the sun going down swaps the cast. 0 = one roster all run.
+spawn.nightlife.dusk,0.05,0,1,Darkness the day/night changeover starts at.
+spawn.nightlife.dark,0.45,0,1,Darkness it completes at.
+spawn.nightlife.glowing.day,0,0,1,Spawn rate multiplier for glowing creatures in daylight.
+spawn.nightlife.glowing.night,1,0,3,Spawn rate multiplier for glowing creatures at night.
+spawn.nightlife.daylight.day,1,0,3,Spawn rate multiplier for everything else in daylight.
+spawn.nightlife.daylight.night,0.08,0,1,Spawn rate multiplier for everything else at night. Not 0 - a few stragglers still come.
+spawn.ramp.hp,0.1,0,0.15,Roster-wide enemy hp growth per 20s.
+spawn.ramp.hpMax,30,1,30,Cap on that hp growth (x).
+spawn.ramp.damage,0.04,0,0.15,Roster-wide enemy damage growth per 20s.
+spawn.ramp.damageMax,4,1,12,Cap on that damage growth (x).
+spawn.ramp.speed,0.013,0,0.06,Roster-wide enemy speed growth per 20s.
+spawn.ramp.speedMax,1.9,1,4,Cap on that speed growth (x).
+crabSpawn.enabled,1,0,1,Whether chum on the seabed summons crabs at all.
+crabSpawn.pileThreshold,6,1,40,Settled orbs needed before a wave is called. THE main dial on how often you see crabs.
+crabSpawn.orbsPerCrab,3,1,20,Each orb over the threshold buys 1/this of an extra crab.
+crabSpawn.maxCrabsPerWave,5,1,15,Ceiling on one wave however big the pile is.
+crabSpawn.checkInterval,3,0.5,15,Seconds between pile checks.
+crabSpawn.floorHeight,1,0.3,8,How close to the seabed an orb counts as being on the floor. Orbs settle 0.8 above it.
+crabSpawn.spawnMargin,3,0,15,How far off-screen crabs walk on from.
+crabSpawn.clusterRadius,6,1,20,How close two orbs must be to count as one pile.
+crabSpawn.deathPile.enabled,1,0,1,Whether crabs swarm the corpse when the run ends.
+crabSpawn.deathPile.count,9,0,30,How many are called in on death.
+crabSpawn.deathPile.maxCrabs,22,1,40,Ceiling on the pile-on including crabs already out.
+crabSpawn.deathPile.spawnWindow,1.6,0.1,8,Seconds they straggle in over. All at once reads as a spawn.
+xp.first,10,5,60,xp for level 2
+xp.mul,1.35,1.05,2.2,xp growth; levels 1-5
+xp.midMul,1.6,1.05,2.2,xp growth; mid levels
+xp.midFrom,6,2,20,mid band starts at level
+xp.lateMul,1.42,1.05,2.2,xp growth; late levels
+xp.lateFrom,17,5,40,late band starts at level
+xp.dropRamp.start,0.5,0.2,1,early chum xp (x; 1 = off)
+xp.dropRamp.fullAt,16,1,30,full chum xp at difficulty

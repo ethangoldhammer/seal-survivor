@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CONFIG } from '../config.js';
+import { bounds, WAVE, sea } from '../arena.js';
 import { dayState, horizonY } from './daylight.js';
 
 // The sun and the moon. Two identical rigs riding the ellipse in daylight.js
@@ -15,36 +16,93 @@ import { dayState, horizonY } from './daylight.js';
 // rather than trusted to arrive at the right size, because authored assets
 // never do.
 //
-// Below the water line they are CLIPPED, not faded — a real clipping plane at
-// the horizon, so the disc is cut by a straight edge exactly where the water
-// starts and the halo is cut with it. That's what a setting sun does, and it
-// means the halo can be as wide as you like without lighting up the sea from
-// underneath once the body has gone down.
+// WHERE THEY GET CUT, which is the whole difficulty of a body at the horizon.
+//
+// This used to be a real THREE.Plane at horizonY(), shared by every material
+// here, on the reasoning that the disc should be "cut by a straight edge
+// exactly where the water starts". The premise is false: the water does not
+// start at horizonY(), it starts at the WAVE, which is up to half a unit either
+// side of it in a calm and nearly two in a storm. So the plane cut a straight
+// line across a curved sea — and in every trough it left the cut hanging in
+// open air above the water, a hard horizontal edge that did not move with the
+// swell. Measured at 77/255 in one pixel row an hour after sunrise, brightest
+// exactly when the horizon fog had already eased off (see below).
+//
+// There is no plane now, and nothing needs one:
+//
+//   THE DISC is cut by the WATER FILL, which is opaque, sits in front of these
+//     at z=-5.4 (see world.js) and clips itself to the wave per pixel. That is
+//     the same edge the drawn surface line traces, so a half-set sun is cut on
+//     the curve the sea is actually drawn at, crests included.
+//   THE HALO dissolves into that same wave over `haloFade` world units, in the
+//     shader below. It has to be a soft fade rather than a cut for the reason
+//     the fog band exists at all: this is a wide additive glow, and ending one
+//     abruptly puts a hard edge in the frame wherever it ends, however correct
+//     the place it ends is. Fading it to nothing AT the water line means the
+//     seam is left carrying exactly the contrast it carries at noon, and the
+//     glow above it is a ramp rather than a step.
+//
+// Both keep what the plane was actually for — no glow lighting the sea from
+// underneath once the body has gone down — because both reach zero at the water
+// and the fill covers everything below it.
 
 const Z = -5.5; // in front of the sky plane (-6), behind everything else
+
+// ---------------------------------------------------------------------------
+// Shared by the disc and the halo, so both quads are positioned by exactly the
+// same arithmetic.
+//
+// World position out of the MODEL MATRIX, not `position.xy` plus a centre: both
+// rigs are unit quads stretched by their transform, so the raw position only
+// ever spans +/-0.5 and every fragment would solve the wave at the same point —
+// the halo would meet one flat water line across its whole width. Same trap,
+// and the same fix, as systems/horizon.js.
+//
+// The disc's fragment shader ignores vWorldPos; it costs one interpolator and
+// keeps the two rigs on one vertex program.
+// ---------------------------------------------------------------------------
+const bodyVertex = /* glsl */ `
+  varying vec2 vUv;
+  varying vec2 vWorldPos;
+
+  void main() {
+    vUv = uv;
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorldPos = world.xy;
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+// The wave function again, injected from the same WAVE constants the fill, the
+// grid and the fog band use — so the halo dissolves into the curve the sea is
+// drawn at rather than into one of its own. Every value carries a decimal point
+// because GLSL ES will not coerce int to float; see the identical note in
+// water.js.
+const WAVE_GLSL = /* glsl */ `
+  uniform float uSurfaceY;
+  uniform float uWaveT;
+  uniform float uWaveAmp;
+  uniform float uChop;
+
+  float surfaceAt(float x) {
+    return uSurfaceY
+      + sin(x * ${WAVE.k1.toFixed(4)} + uWaveT * ${WAVE.w1.toFixed(4)}) * uWaveAmp
+      + sin(x * ${WAVE.k2.toFixed(4)} + uWaveT * ${WAVE.w2.toFixed(4)}) * uWaveAmp * ${WAVE.amp2.toFixed(4)}
+      + sin(x * ${WAVE.k3.toFixed(4)} + uWaveT * ${WAVE.w3.toFixed(4)}) * uWaveAmp * ${WAVE.amp3.toFixed(4)} * uChop;
+  }
+`;
 
 // ---------------------------------------------------------------------------
 // The placeholder disc. A soft-edged circle on a unit quad — the same quad a
 // .webp would land on, so swapping art in changes the material and nothing
 // else about the rig.
-// ---------------------------------------------------------------------------
-const discVertex = /* glsl */ `
-  varying vec2 vUv;
-  #include <clipping_planes_pars_vertex>
-
-  void main() {
-    vUv = uv;
-    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-    gl_Position = projectionMatrix * mvPosition;
-    #include <clipping_planes_vertex>
-  }
-`;
-
+//
 // One shader for both the placeholder and flat art — a .webp is the same quad
 // with uUseMap turned on. Worth keeping them on one material rather than
 // swapping in a MeshBasicMaterial: the disc keeps its circular mask, its
 // tint and its >1 brightness (which is what pushes it past the bloom
 // threshold), so swapping the art in doesn't quietly change how it lights.
+// ---------------------------------------------------------------------------
 const discFragment = /* glsl */ `
   uniform sampler2D uMap;
   uniform float uUseMap;
@@ -54,10 +112,8 @@ const discFragment = /* glsl */ `
   uniform float uBrightness;
   uniform float uEdge;
   varying vec2 vUv;
-  #include <clipping_planes_pars_fragment>
 
   void main() {
-    #include <clipping_planes_fragment>
     float d = length(vUv * 2.0 - 1.0);
     float edge = smoothstep(1.0, 1.0 - uEdge, d);
 
@@ -87,19 +143,37 @@ const discFragment = /* glsl */ `
 // The halo. Two falloff lobes summed — a tight core and a wide soft bloom —
 // because a single power curve is either a hard ring or a grey smudge.
 // Additive, so it lifts whatever sky it's over instead of flattening it.
+//
+// ...and it meets the sea by DISSOLVING into it, not by stopping at it. See the
+// note at the top of the file: the amount of light being taken away at the
+// water line is around 0.9 in linear, which is most of the frame's range, and
+// removing that in one pixel is a hard edge wherever you do it. Spread over
+// `uFade` the same subtraction is a ramp of about five 8-bit steps per pixel —
+// steeper than the sky gradient, but a gradient, which is what a glow is.
 // ---------------------------------------------------------------------------
 const haloFragment = /* glsl */ `
   uniform vec3 uColor;
   uniform float uStrength;
+  uniform float uFade;
   varying vec2 vUv;
-  #include <clipping_planes_pars_fragment>
+  varying vec2 vWorldPos;
+
+  ${WAVE_GLSL}
 
   void main() {
-    #include <clipping_planes_fragment>
+    // Zero AT the wave and below it, full uFade units above. Anchored to the
+    // wave rather than to the still line so the glow is thinnest exactly where
+    // the water is, whichever way the swell has gone — a fade solved against
+    // the flat line is a straight edge again, just a softer one.
+    // (No backticks in here: this whole shader is a JS template literal and one
+    // would end the string, with the error reported against a comment.)
+    float meet = smoothstep(0.0, max(uFade, 0.0001), vWorldPos.y - surfaceAt(vWorldPos.x));
+    if (meet <= 0.0) discard;
+
     float d = length(vUv * 2.0 - 1.0);
     float r = max(0.0, 1.0 - d);
     float a = pow(r, 2.6) * 0.65 + pow(r, 9.0) * 0.35;
-    gl_FragColor = vec4(uColor * a * uStrength, 1.0);
+    gl_FragColor = vec4(uColor * a * uStrength * meet, 1.0);
   }
 `;
 
@@ -163,9 +237,9 @@ function haloStrengthFor(cfg) {
   return Math.max(base, need);
 }
 
-function makeDiscMaterial(plane, white) {
+function makeDiscMaterial(white) {
   return new THREE.ShaderMaterial({
-    vertexShader: discVertex,
+    vertexShader: bodyVertex,
     fragmentShader: discFragment,
     uniforms: {
       uMap: { value: white },
@@ -178,37 +252,29 @@ function makeDiscMaterial(plane, white) {
     },
     transparent: true,
     depthWrite: false,
-    // ShaderMaterial opts INTO clipping — without this three never hands the
-    // shader its clippingPlanes uniform and the includes above compile to
-    // nothing.
-    clipping: true,
-    clippingPlanes: [plane],
   });
 }
 
-function makeHaloMaterial(plane) {
+function makeHaloMaterial() {
   return new THREE.ShaderMaterial({
-    vertexShader: discVertex,
+    vertexShader: bodyVertex,
     fragmentShader: haloFragment,
     uniforms: {
       uColor: { value: new THREE.Color(0xffffff) },
       uStrength: { value: 0.5 },
+      uFade: { value: 4.5 },
+      uSurfaceY: { value: 0 },
+      uWaveT: { value: 0 },
+      uWaveAmp: { value: 0.35 },
+      uChop: { value: 0 },
     },
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
-    clipping: true,
-    clippingPlanes: [plane],
   });
 }
 
 export function createCelestials(scene) {
-  // One plane, shared by every material here. Normal +Y with constant
-  // -horizonY keeps the half-space above the water line; the constant is
-  // rewritten each frame so a resize (which moves the water line) can't leave
-  // the clip and the orbit disagreeing.
-  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-
   const group = new THREE.Group();
   group.position.z = Z;
   scene.add(group);
@@ -221,7 +287,7 @@ export function createCelestials(scene) {
   function makeBody() {
     const root = new THREE.Group();
 
-    const halo = new THREE.Mesh(quad, makeHaloMaterial(plane));
+    const halo = new THREE.Mesh(quad, makeHaloMaterial());
     halo.position.z = -0.1;
     // Negative, and below every other transparent thing in the game (outline
     // shells sit at -1, particles at 10): these are BACKDROP. renderOrder is
@@ -229,7 +295,7 @@ export function createCelestials(scene) {
     // would draw the sun over the creatures in front of it.
     halo.renderOrder = -12;
 
-    const disc = new THREE.Mesh(quad, makeDiscMaterial(plane, white));
+    const disc = new THREE.Mesh(quad, makeDiscMaterial(white));
     disc.renderOrder = -11;
 
     root.add(halo, disc);
@@ -246,19 +312,6 @@ export function createCelestials(scene) {
   }
 
   const bodies = { sun: makeBody(), moon: makeBody() };
-
-  // Everything a loaded model brings with it has to be clipped too, or a .glb
-  // sun keeps shining out of the seabed.
-  function clipAll(object) {
-    object.traverse((o) => {
-      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
-      for (const m of mats) {
-        m.clippingPlanes = [plane];
-        m.clipShadows = false;
-        m.needsUpdate = true;
-      }
-    });
-  }
 
   function clearArt(body) {
     if (!body.art) return;
@@ -324,8 +377,9 @@ export function createCelestials(scene) {
       loader.load(cfg.model, (gltf) => {
         // A newer path was set while this was in flight — drop it.
         if (token !== body.token) return;
+        // No clipping to apply: a model is cut by the water fill in front of it
+        // like the placeholder disc is. See the note at the top of the file.
         const pivot = unitPivot(gltf.scene);
-        clipAll(pivot);
         body.art = pivot;
         body.root.add(pivot);
       }, undefined, (err) => {
@@ -356,7 +410,7 @@ export function createCelestials(scene) {
     });
   }
 
-  function updateBody(body, state, cfg) {
+  function updateBody(body, state, cfg, waveT) {
     loadArt(body, cfg);
 
     // Bigger and brighter the moment the disc straddles the water line. The
@@ -366,9 +420,10 @@ export function createCelestials(scene) {
     const flare = 1 + (cfg.horizonGlow ?? 0) * touch;
 
     body.root.position.set(state.x, state.y, 0);
-    // state.y IS the world height: the layer carries no vertical offset (see
-    // update), so this test and the world-space clipping plane are looking at
-    // the same number and cannot disagree.
+    // A cull, not a look: below this the whole halo is under the water line and
+    // the fill covers every pixel of it. state.y IS the world height — the
+    // layer carries no vertical offset (see update) — so this and the orbit are
+    // reading the same number and cannot disagree.
     body.root.visible = state.y > horizonY() - cfg.size * (cfg.halo ?? 2) * 0.5;
     if (!body.root.visible) return;
 
@@ -396,8 +451,22 @@ export function createCelestials(scene) {
 
     const halo = body.halo;
     halo.scale.setScalar(cfg.size * (cfg.halo ?? 2) * (1 + 0.12 * touch));
-    halo.material.uniforms.uColor.value.set(cfg.color);
-    halo.material.uniforms.uStrength.value = haloStrengthFor(cfg) * flare;
+    const hu = halo.material.uniforms;
+    hu.uColor.value.set(cfg.color);
+    hu.uStrength.value = haloStrengthFor(cfg) * flare;
+    // How far above the water the glow takes to come up to full. The one number
+    // that decides whether the horizon has an edge on it: at 0 this is the hard
+    // cut it replaced, and it wants to be comparable to the fog band's own
+    // reach (CONFIG.horizonGlow.up) so the two read as one piece of haze.
+    hu.uFade.value = Math.max(0, cfg.haloFade ?? 4.5);
+    // The wave the glow dissolves into, refreshed from the LIVE sea state and
+    // the caller's waveT — the same curve the fill clips to and the line is
+    // drawn on. Solved a frame late, or against a calm amplitude while a storm
+    // is running, the glow slides against the water instead of meeting it.
+    hu.uSurfaceY.value = bounds.surfaceY;
+    hu.uWaveT.value = waveT;
+    hu.uWaveAmp.value = sea.amp;
+    hu.uChop.value = sea.chop;
   }
 
   /**
@@ -408,8 +477,12 @@ export function createCelestials(scene) {
    *   sun would visibly buzz through every explosion.
    *
    *   Horizontal only. There is no camY, by design — see below.
+   *
+   * @param waveT the surface clock, so the halos dissolve into the same swell
+   *   the fill clips to and the drawn line traces. Solved against a different
+   *   wave, the glow slides along the water instead of meeting it.
    */
-  function update(camX = 0) {
+  function update(camX = 0, waveT = 0) {
     const cfg = CONFIG.dayNight;
     group.visible = !!cfg?.enabled;
     if (!group.visible) return;
@@ -423,8 +496,8 @@ export function createCelestials(scene) {
     //
     // X ONLY. The vertical axis gets no parallax at all, and that is not a
     // simplification — a vertical offset is actively wrong here, because the
-    // horizon this sky is measured against does not move. horizonY() is the
-    // water line in WORLD space and the clipping plane is pinned to it, so
+    // horizon this sky is measured against does not move. The water line is a
+    // WORLD-space curve and the halo's fade is solved against it per pixel, so
     // offsetting the layer in Y slides the sun up and down past a fixed
     // horizon: dive twenty units and a low sun visibly sets, surface again
     // and it rises. Height above the horizon is what encodes the time of day,
@@ -441,10 +514,9 @@ export function createCelestials(scene) {
     const keep = 1 - Math.max(0, Math.min(1, orbit.parallax ?? 1));
     group.position.set(camX * keep, 0, orbit.depth ?? Z);
 
-    plane.constant = -horizonY();
-    updateBody(bodies.sun, dayState.sun, cfg.sun);
-    updateBody(bodies.moon, dayState.moon, cfg.moon);
+    updateBody(bodies.sun, dayState.sun, cfg.sun, waveT);
+    updateBody(bodies.moon, dayState.moon, cfg.moon, waveT);
   }
 
-  return { update, group, horizonPlane: plane };
+  return { update, group };
 }

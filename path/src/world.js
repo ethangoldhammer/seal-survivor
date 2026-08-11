@@ -230,8 +230,15 @@ export function createWorld(container) {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     // Transparent so the stroke can dissolve into the glow band at twilight —
     // see updateColors. Opaque, there is nothing to hand the seam over to.
+    //
+    // depthWrite OFF, and that is the half that makes the dissolve work. The
+    // fog band sits behind this at z=-3.2 and draws AFTER it (renderOrder 1 vs
+    // 0, and renderOrder is compared before depth in three's transparent sort),
+    // so a line writing depth punches its own width straight through the fog:
+    // fading the stroke out then uncovered the raw seam instead of handing it
+    // over, which is the exact opposite of what lineTwilightFade is for.
     surfaceLine = new THREE.Line(geo, new THREE.LineBasicMaterial({
-      color: CONFIG.colors.surface, transparent: true,
+      color: CONFIG.colors.surface, transparent: true, depthWrite: false,
     }));
     surfaceLine.position.z = -3;
     backdrop.add(surfaceLine);
@@ -256,7 +263,10 @@ export function createWorld(container) {
     // this runs also carries the frame's shake. One frame behind, like the
     // grid and the hex tiles, and at a fifteenth of the camera's speed that
     // is not a thing anyone can see.
-    celestials.update(camAnchor.x);
+    // waveT, because the halos dissolve into the water line per pixel. Safe to
+    // read here: updateSurface advances it before it calls this, so this is the
+    // curve being drawn on this frame rather than the previous one's.
+    celestials.update(camAnchor.x, waveT);
     // No parallax on this one, and that is not an oversight. The sky plane's
     // own star field is painted from vWorldPos on a mesh that never moves, so
     // it is welded to the world; the constellations are drawn between those

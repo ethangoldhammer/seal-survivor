@@ -335,5 +335,97 @@ check('the tracker kills the slot when a bubble pops', killed > 0,
 check('bubble emitters name a burst to leave behind',
   !!CONFIG.emitters.breathBubbles.surfacePop && !!CONFIG.emitters.wakeBubbles.surfacePop);
 
+// ===========================================================================
+// UPLOADS: only the slots that changed
+// ===========================================================================
+//
+// A bare `needsUpdate` makes three re-send the entire attribute — ~530KB across
+// these ten buffers at the shipped capacity, in every frame anything was
+// emitted. emit() writes a contiguous run, so it declares one.
+//
+// The failure this guards is silent in the worst way: ranges are measured in
+// ARRAY ELEMENTS, so a vec3 attribute given vertex indices uploads the first
+// third of the burst and leaves the rest holding whatever the previous owner of
+// those slots wrote. Nothing throws; particles just appear in last burst's
+// positions. So the check is coverage of the exact indices written, per
+// attribute, at each attribute's own item size.
+section('Uploads: only the slots that changed');
+
+// Union of an attribute's declared ranges, as a set of array elements.
+function covered(attr) {
+  const set = new Set();
+  for (const r of attr.updateRanges) for (let i = r.start; i < r.start + r.count; i++) set.add(i);
+  return set;
+}
+
+function clearRanges() {
+  for (const a of Object.values(A)) a.clearUpdateRanges();
+}
+
+resetParticles();
+clearRanges();
+const wrote = burst('explosion', 3, -4);
+let mismatched = [];
+for (const [name, attr] of Object.entries(A)) {
+  const cov = covered(attr);
+  for (const slot of wrote) {
+    for (let k = 0; k < attr.itemSize; k++) {
+      if (!cov.has(slot * attr.itemSize + k)) { mismatched.push(`${name}[${slot}.${k}]`); break; }
+    }
+  }
+}
+check('every written element is inside a declared range', mismatched.length === 0,
+  mismatched.length ? `missed ${mismatched.slice(0, 4).join(', ')}` : `${wrote.length} slots x 10 attributes`);
+
+// And that it is a RANGE, not the whole buffer dressed up as one — the entire
+// point is not re-sending 8000 slots to change 46.
+const posCovered = covered(A.position).size;
+check('and the range is the burst, not the buffer',
+  posCovered < A.position.array.length / 4,
+  `${posCovered} of ${A.position.array.length} floats`);
+
+// THE WRAP. The ring buffer hands out slots modulo capacity, so a burst that
+// starts near the end straddles the join and needs two ranges. One range from
+// `start` to `start + count` would run off the end of the buffer — three
+// happily uploads a short read there, and the particles that wrapped never get
+// their data.
+resetParticles();
+const capacity = A.aStart.count;
+// Park the cursor a known distance from the end. emit() advances it by exactly
+// round(def.count * scale) per call, so the walk is arithmetic rather than a
+// search — and `scale` is how the count is set, since the emitter's own count
+// is a tuned number this test has no business depending on.
+const per = (n) => n / CONFIG.emitters.explosion.count;
+const STRIDE = 100;
+for (let i = 0; i < Math.floor((capacity - 50) / STRIDE); i++) emit('explosion', 0, -4, { scale: per(STRIDE) });
+emit('explosion', 0, -4, { scale: per((capacity - 50) % STRIDE) }); // now exactly 50 from the end
+clearRanges();
+emit('explosion', 0, -4, { scale: per(STRIDE) }); // 50 slots at the end, 50 at the start
+const wrapped = A.position.updateRanges.length;
+check('a burst that straddles the join declares two ranges', wrapped === 2,
+  `${wrapped} range(s)`);
+const wrapCov = covered(A.position);
+let wrapOk = true;
+for (const r of A.position.updateRanges) {
+  if (r.start < 0 || r.start + r.count > A.position.array.length) wrapOk = false;
+}
+check('and neither range runs off the end of the buffer', wrapOk,
+  `${A.position.updateRanges.map((r) => `${r.start}+${r.count}`).join(' ')} of ${A.position.array.length}`);
+check('the two together still cover the whole burst', wrapCov.size === STRIDE * 3,
+  `${wrapCov.size / 3} of ${STRIDE} slots`);
+
+// A wipe has to survive an emit landing after it. resetParticles runs from the
+// start/restart handler, outside the frame loop, and the next frame emits
+// immediately — so by upload time the attribute is carrying that burst's range
+// too. Declared as a whole-buffer range, three merges the two and still sends
+// everything; cleared instead, the burst's range would win and the previous
+// run's particles would come back to life.
+resetParticles();
+burst('muzzle', 0, 0);
+const startCov = covered(A.aStart);
+check('a reset still uploads the whole buffer when an emit follows it',
+  startCov.size === A.aStart.array.length,
+  `${startCov.size} of ${A.aStart.array.length} floats`);
+
 console.log(`\n${failures ? `${failures} FAILURE(S)` : 'all checks passed'}`);
 process.exit(failures ? 1 : 0);
