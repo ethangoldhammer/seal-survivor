@@ -122,6 +122,15 @@ export function createInstancedPool(scene, name = 'instances') {
     if (slot !== last) {
       g.proxies[slot] = g.proxies[last];
       g.proxies[slot].userData.__poolSlot = slot;
+      // Its colour has to travel with it. The matrix is rewritten from the
+      // mesh every flush and heals itself; the colour is written by whoever
+      // owns it, whenever they feel like it, so a moved instance that kept the
+      // dead orb's entry wears it until that owner happens to write again.
+      if (g.colored) {
+        const c = g.mesh.instanceColor.array;
+        c.copyWithin(slot * 3, last * 3, last * 3 + 3);
+        g.colorDirty = true;
+      }
     }
     g.proxies.pop();
     mesh.userData.__poolKey = null;
@@ -132,16 +141,12 @@ export function createInstancedPool(scene, name = 'instances') {
     }
   }
 
-  /**
-   * Per-instance tint. Without this every orb of one asset shares a single
-   * material colour, so the last one to spawn decided the colour of all of
-   * them — which is why spawnXpOrb used to be able to set a tier colour only
-   * when the player had not tinted the asset themselves.
-   */
-  function setColor(mesh, hex) {
+  // Attach the colour attribute the first time anything asks for a per-instance
+  // colour. Returns the group, or null for a mesh this pool isn't holding.
+  function colored(mesh) {
     const key = mesh?.userData?.__poolKey;
     const g = key && groups.get(key);
-    if (!g) return;
+    if (!g) return null;
     if (!g.colored) {
       g.colored = true;
       g.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(g.capacity * 3), 3);
@@ -151,13 +156,49 @@ export function createInstancedPool(scene, name = 'instances') {
       // colour. White is the identity.
       g.mesh.instanceColor.array.fill(1);
     }
+    return g;
+  }
+
+  /**
+   * Per-instance tint. Without this every orb of one asset shares a single
+   * material colour, so the last one to spawn decided the colour of all of
+   * them — which is why spawnXpOrb used to be able to set a tier colour only
+   * when the player had not tinted the asset themselves.
+   */
+  function setColor(mesh, hex) {
+    const g = colored(mesh);
+    if (!g) return;
     // Through Color rather than by unpacking the hex by hand: `set` applies
     // the renderer's colour management, so this lands in the same working
     // space material.color would have, and a tier colour doesn't come out
     // brighter as an instance than it did as a mesh.
     _color.set(hex);
     _color.toArray(g.mesh.instanceColor.array, mesh.userData.__poolSlot * 3);
-    g.mesh.instanceColor.needsUpdate = true;
+    g.colorDirty = true;
+  }
+
+  /**
+   * Per-instance BRIGHTNESS: a grey multiplier over whatever colour the shared
+   * material is already carrying, rather than a colour of its own. Hue is left
+   * exactly where the material (and the texture panel's tint and glow slider)
+   * put it, so this stacks with all of them instead of overwriting them.
+   *
+   * Above 1 it drives the colour past white. That is not wasted on an 8-bit
+   * clamp: the scene renders to a HalfFloat target, so the bloom bright-pass
+   * sees the true value (see systems/post.js and CONFIG.bloom.threshold) and
+   * the instance gets a real halo. It is the same mechanism the per-asset glow
+   * slider uses on an unlit material — only per orb instead of per material.
+   *
+   * Cheap enough to call every frame for every instance: it writes three
+   * floats and marks the group, and flush() sends the live range once.
+   */
+  function setGlow(mesh, mul) {
+    const g = colored(mesh);
+    if (!g) return;
+    const i = mesh.userData.__poolSlot * 3;
+    const c = g.mesh.instanceColor.array;
+    c[i] = c[i + 1] = c[i + 2] = mul;
+    g.colorDirty = true;
   }
 
   /**
@@ -179,6 +220,14 @@ export function createInstancedPool(scene, name = 'instances') {
         // most of a megabyte of matrices to move a dozen orbs.
         g.mesh.instanceMatrix.addUpdateRange(0, n * 16);
         g.mesh.instanceMatrix.needsUpdate = true;
+        // Colours are uploaded here rather than inside setGlow for the same
+        // reason: the proximity glow rewrites every live orb every frame, and
+        // one ranged upload beats a hundred and forty whole-buffer ones.
+        if (g.colorDirty) {
+          g.mesh.instanceColor.addUpdateRange(0, n * 3);
+          g.mesh.instanceColor.needsUpdate = true;
+          g.colorDirty = false;
+        }
       }
     }
   }
@@ -200,5 +249,5 @@ export function createInstancedPool(scene, name = 'instances') {
     return { instances, draws: groups.size };
   }
 
-  return { acquire, release, setColor, flush, reset, stats };
+  return { acquire, release, setColor, setGlow, flush, reset, stats };
 }

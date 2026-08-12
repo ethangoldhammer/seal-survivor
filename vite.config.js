@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import { writeFile, mkdir, appendFile } from 'node:fs/promises';
+import { writeFile, mkdir, appendFile, readdir, stat, unlink } from 'node:fs/promises';
 import { resolve, extname, basename, dirname } from 'node:path';
 
 const TUNING_FILE = resolve(import.meta.dirname, 'path/src/imported-tuning.json');
@@ -178,8 +178,160 @@ function tuningWriter() {
   };
 }
 
+// THE SOUND LIBRARY — what is actually on disk, and removing what isn't used.
+//
+// The workbench needs to show every file in public/sfx, not just the ones some
+// config entry happens to point at: a file nothing references is invisible
+// from inside the game and ships anyway. The browser cannot read a directory,
+// so the dev server has to say.
+//
+// Deleting is the reason this is written defensively. It only ever touches
+// public/sfx, only names that survive safeName (no traversal, no directories),
+// and only extensions the uploader would have accepted in the first place —
+// the same gate uploads go through, pointed the other way.
+function sfxLibrary() {
+  const SFX_DIR = resolve(PUBLIC_DIR, 'sfx');
+
+  return {
+    name: 'seal-survivor-sfx-library',
+    apply: 'serve',
+
+    configureServer(server) {
+      server.middlewares.use('/__sfx-list', async (req, res) => {
+        try {
+          const names = await readdir(SFX_DIR);
+          const files = [];
+          for (const name of names) {
+            if (!UPLOAD_EXTS.has(extname(name).toLowerCase())) continue;
+            const info = await stat(resolve(SFX_DIR, name));
+            files.push({ file: name, src: `/sfx/${name}`, kb: Math.round(info.size / 1024) });
+          }
+          files.sort((a, b) => a.file.localeCompare(b.file));
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ files }));
+        } catch (err) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: String(err?.message ?? err), files: [] }));
+        }
+      });
+
+      server.middlewares.use('/__sfx-delete', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end('POST only');
+          return;
+        }
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 200_000) req.destroy(); });
+        req.on('end', async () => {
+          const deleted = [];
+          const refused = [];
+          try {
+            const { files } = JSON.parse(body || '{}');
+            for (const raw of Array.isArray(files) ? files : []) {
+              // Whatever the client sends, only a bare filename in public/sfx
+              // can ever be reached. safeName strips directories outright, so
+              // "../../path/src/config.js" becomes a filename that does not
+              // exist rather than a path that does.
+              const name = safeName(String(raw).split('/').pop());
+              if (!name) { refused.push(raw); continue; }
+              try {
+                await unlink(resolve(SFX_DIR, name));
+                deleted.push(name);
+                server.config.logger.info(`[sfx] deleted public/sfx/${name}`);
+              } catch {
+                refused.push(name);
+              }
+            }
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ deleted, refused }));
+          } catch (err) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+          }
+        });
+      });
+    },
+  };
+}
+
+// HOLD RELOADS — a latch the game can throw to stop the page bouncing.
+//
+// Vite has no HMR handlers anywhere in this app, so any source change falls
+// through to a full page reload. That is normally what you want. It is exactly
+// what you don't want while a stage is set up: a run in progress, creatures
+// cleared, sliders where you left them — all of it thrown away because
+// something edited a file somewhere else in the tree. With more than one agent
+// working in the repo at once that is not an occasional annoyance, it is every
+// few seconds.
+//
+// So the panel latches this on while it is open, and every hot update is
+// swallowed and counted instead of applied. Nothing is lost — the count comes
+// back to the client so the bar can say the page is stale and offer a reload
+// on your terms rather than on the file watcher's.
+//
+// Same mechanism the tuning writer above already uses for its own three files
+// (return [] from handleHotUpdate and Vite sends nothing). This one is just
+// pointed at everything, and only while asked.
+//
+// NOT done in the browser, though every guide suggests it: the usual trick is
+// to throw inside a `vite:beforeFullReload` listener, and in this version of
+// Vite the client awaits those listeners through Promise.allSettled — the
+// throw is swallowed and the reload happens anyway. The only place that can
+// actually stop it is the server, before the message is sent.
+// Exported so tools/stage-test.mjs can drive the hooks directly. Booting a
+// real dev server to test this is not an option: this repo's dev server writes
+// imported-tuning.json, and a second one racing the live session would
+// overwrite whatever was being tuned in it.
+export function reloadHold() {
+  let holding = false;
+  const pending = new Set();
+
+  const report = (server) => {
+    server.ws.send('stage:pending', { holding, count: pending.size, files: [...pending].map((f) => basename(f)) });
+  };
+
+  return {
+    name: 'seal-survivor-reload-hold',
+    apply: 'serve',
+
+    handleHotUpdate(ctx) {
+      if (!holding) return;
+      // The three the tuning writer above already swallows are not staleness —
+      // they are this session's own housekeeping. imported-tuning.json is
+      // rewritten on every slider drag, so counting it would have the bar
+      // announcing that the page had gone stale several times a second while
+      // you tuned, naming the file you were tuning.
+      if (ctx.file === TUNING_FILE || ctx.file === PLAYTEST_FILE || ctx.file.startsWith(PUBLIC_DIR)) return [];
+      pending.add(ctx.file);
+      report(ctx.server);
+      return [];
+    },
+
+    configureServer(server) {
+      server.ws.on('stage:hold', (data, client) => {
+        holding = !!data?.hold;
+        if (!holding) pending.clear();
+        // Straight back to the client that asked, so the bar can confirm the
+        // latch actually landed rather than assuming it did.
+        client.send('stage:pending', { holding, count: pending.size, files: [] });
+      });
+
+      // A page that reloads while the latch is on would otherwise leave the
+      // server holding for a client that no longer exists — and every
+      // subsequent edit would be swallowed with nothing on screen to say so,
+      // which looks exactly like Vite having died. A fresh connection is
+      // always a fresh page, so the latch resets with it.
+      server.ws.on('connection', () => {
+        holding = false;
+        pending.clear();
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [tuningWriter()],
+  plugins: [tuningWriter(), sfxLibrary(), reloadHold()],
   server: {
     // Vite has no built-in PORT support — without this it always takes 5173
     // (then walks upward when that's busy), which means a harness that hands

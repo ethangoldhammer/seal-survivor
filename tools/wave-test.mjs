@@ -37,6 +37,7 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
+import { inSpawnGroup } from '../path/src/enemyTable.js';
 import { enemies, resetEnemies, removeEnemy, updateSpawning } from '../path/src/entities/enemies.js';
 import { waveState, updateWaves, resetWaves, waveSpawn, lullEligible } from '../path/src/systems/waves.js';
 import { computeKillPoints } from '../path/src/systems/scoring.js';
@@ -201,7 +202,7 @@ const excluded = Object.entries(CONFIG.enemies).filter(([, def]) => !lullEligibl
 check('the lull pool is not empty', eligible.length > 0, eligible.join(', ') || 'none');
 check('...and is small fish only', eligible.every((k) => CONFIG.enemies[k].radius <= W.lull.maxRadius && CONFIG.enemies[k].prey),
   `radii ${eligible.map((k) => CONFIG.enemies[k].radius).join(', ')} (max ${W.lull.maxRadius})`);
-check('no apex predator is in it', !eligible.some((k) => CONFIG.enemies[k].spawnGroup === 'apex'),
+check('no apex predator is in it', !eligible.some((k) => inSpawnGroup(CONFIG.enemies[k], 'apex')),
   `excluded: ${excluded.slice(0, 8).join(', ')}${excluded.length > 8 ? ` +${excluded.length - 8}` : ''}`);
 check('nothing that hunts is in it', !eligible.some((k) => CONFIG.enemies[k].hunt));
 
@@ -263,8 +264,8 @@ const badInCalm = [...calmTypes].filter((k) => !lullEligible(CONFIG.enemies[k]))
 
 check('a calm spawns nothing but small fish', badInCalm.length === 0,
   badInCalm.length ? `found ${badInCalm.join(', ')}` : `${[...calmTypes].join(', ')}`);
-check('...and a surge brings the predators back', [...surgeTypes].some((k) => CONFIG.enemies[k]?.spawnGroup === 'apex'),
-  `${[...surgeTypes].filter((k) => CONFIG.enemies[k]?.spawnGroup === 'apex').join(', ') || 'none — the roster never opens up'}`);
+check('...and a surge brings the predators back', [...surgeTypes].some((k) => inSpawnGroup(CONFIG.enemies[k], 'apex')),
+  `${[...surgeTypes].filter((k) => inSpawnGroup(CONFIG.enemies[k], 'apex')).join(', ') || 'none — the roster never opens up'}`);
 check('a calm still spawns SOMETHING — respite, not a dead arena',
   calms.every((p) => p.spawned > 0),
   `per calm: ${calms.map((p) => p.spawned).join(', ')}`);

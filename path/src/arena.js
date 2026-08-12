@@ -66,8 +66,11 @@ export function updateBounds(aspect) {
   // decoration. `surfaceFromTop` cannot do this job — it is a share of the
   // frame, so buying air with it spends water depth one for one, and the
   // frame is only 52 units tall to begin with. A strike dash wants far more
-  // sky than the frame has: measured, straight up off a 46 u/s dash reaches
-  // 15.1 units, and more than 70 deep in a combo.
+  // sky than the frame has: measured (npm run test:gravity), straight up off a
+  // 46 u/s dash now reaches 28.0 units, and more than 70 deep in a combo. It
+  // was 16.4 before the air stopped applying the seal's WATER drag to a jump —
+  // real air is nearly frictionless, so an honest arc goes almost twice as
+  // high off the same launch, and at airScale 3 this clears it by 3.2 units.
   const tall = Math.max(1, CONFIG.arena.airScale ?? 1);
   bounds.top = air * tall;
   return bounds;

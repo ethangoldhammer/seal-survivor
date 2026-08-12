@@ -275,6 +275,57 @@ export function buildChain(instance, def, fallbackTipAxis, label, minBones = 2) 
   };
 }
 
+// A point somewhere ALONG a chain rather than at its tip: `s` is 0 at the root
+// joint and 1 at the tip point tipWorld returns. For emitters that should trail
+// a whole limb — the seal's tail wake — instead of firing out of one spot.
+//
+// Walked by ARC LENGTH, not by joint index. The seal's tail is one long bone
+// into two short ones — measured at rest, the three segments run roughly
+// 0.44 : 0.10 : 0.16 — so stepping per joint would put two thirds of an even
+// spread inside the last quarter of the tail and leave the long root bone bare.
+//
+// Nothing is cached: bone world matrices are whatever the last pose left, which
+// is the point — a lagging tail's samples lag with it.
+const _nodeA = new THREE.Vector3();
+const _nodeB = new THREE.Vector3();
+
+// Node i of the chain's polyline: the bones' own origins, then the tip past the
+// last one.
+function chainNode(chain, i, out) {
+  return i < chain.bones.length
+    ? chain.bones[i].getWorldPosition(out)
+    : tipWorld(chain, out, 1);
+}
+
+export function chainPoint(chain, s, out) {
+  const n = chain.bones.length; // ...and n + 1 nodes, counting the tip
+
+  let total = 0;
+  chainNode(chain, 0, _nodeA);
+  for (let i = 1; i <= n; i++) {
+    total += _nodeA.distanceTo(chainNode(chain, i, _nodeB));
+    _nodeA.copy(_nodeB);
+  }
+  if (total < 1e-6) return chainNode(chain, 0, out); // a chain collapsed to a point
+
+  const want = Math.min(1, Math.max(0, s)) * total;
+  let walked = 0;
+  chainNode(chain, 0, _nodeA);
+  for (let i = 1; i <= n; i++) {
+    chainNode(chain, i, _nodeB);
+    const len = _nodeA.distanceTo(_nodeB);
+    // `i === n` catches the tip exactly, and covers float drift putting the
+    // last segment's end a hair short of the total we measured a moment ago.
+    if (walked + len >= want || i === n) {
+      const t = len > 1e-6 ? (want - walked) / len : 0;
+      return out.copy(_nodeA).lerp(_nodeB, Math.min(1, Math.max(0, t)));
+    }
+    walked += len;
+    _nodeA.copy(_nodeB);
+  }
+  return out;
+}
+
 // Total length of a chain in world units, out to its tip point. Measured
 // every frame rather than configured or cached: it survives the `fit` scale,
 // the per-asset size slider, a model swap, and clips that animate bone

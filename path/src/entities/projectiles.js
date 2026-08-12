@@ -1,8 +1,10 @@
 import * as THREE from 'three';
+import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { createAnimationController } from '../systems/animation.js';
 import { updateTumble } from '../systems/rocks.js';
+import { markWeight, markedTargets } from '../systems/marks.js';
 
 // One list for both sides — `faction` decides who a bullet can hurt. Two
 // optional behaviors layer on top of the base fly-in-a-straight-line bullet:
@@ -20,6 +22,7 @@ export function spawnProjectile(scene, {
   chain = false, chainRange = 0, chainLock = 0, chainSpeedGain = 1,
   jet = false, jetInterval = [0.2, 0.4], jetSpeed = [10, 18], jetTurn = 2.4, jetDrag = 2,
   spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false, burst = null,
+  gravityScale = 1, chill = null,
 }) {
   const mesh = createVisual(asset ?? (faction === 'player' ? 'bullet' : 'enemyBullet'));
   mesh.position.copy(origin);
@@ -85,6 +88,12 @@ export function spawnProjectile(scene, {
     // clump for the first fifth of a second.
     jetTimer: 0,
 
+    // How much of CONFIG.arena.gravity this shot feels ABOVE THE WATER, as a
+    // multiplier. 1 is a stone: it falls exactly like the seal that threw it.
+    // 0 opts a shot out entirely — for something that has no business falling
+    // rather than for something that would merely look better not falling.
+    gravityScale,
+
     spin, // radians/sec, purely visual
     orient, // face the direction of travel each frame
     splashDamage, // AoE dealt to OTHER nearby enemies on the first hit (see main.js)
@@ -94,6 +103,12 @@ export function spawnProjectile(scene, {
     // systems/oyster.js; projectiles.js itself never acts on it, because a
     // bullet has no business knowing what a bomblet is.
     burst,
+    // Ice this shot puts on what it hits: { slow, duration, freezeFor }, or
+    // null for the overwhelming majority that carry none. Applied in
+    // combat.js through systems/elements.js, which owns what chill IS — this
+    // is a payload description, exactly like `burst` above, and projectiles.js
+    // never acts on it either.
+    chill,
   });
 }
 
@@ -123,15 +138,33 @@ function updateJet(p, dt) {
 }
 
 function updateHoming(p, dt, enemiesList) {
-  if (!p.target || p.target.hp <= 0) {
+  // A target the seal has PAINTED (systems/marks.js) counts as closer than it
+  // is, so a shell picks the marked shark over the minnow beside it. This is
+  // the payoff for a strike that couldn't hurt what it rammed: the seal spots,
+  // the ordnance follows. `markWeight` returns 1 for everything unmarked, so
+  // an un-upgraded run behaves exactly as it always did.
+  if (!p.target || p.target.hp <= 0 || !p.target.mesh?.parent) {
     let best = null;
     let bestD = p.acquireRadius;
     for (const e of enemiesList) {
       if (p.targetType && e.type !== p.targetType) continue;
       const dx = e.mesh.position.x - p.mesh.position.x;
       const dy = e.mesh.position.y - p.mesh.position.y;
-      const d = Math.hypot(dx, dy);
+      const d = Math.hypot(dx, dy) * markWeight(e);
       if (d < bestD) { bestD = d; best = e; }
+    }
+    // Hulls are not in the enemy list and are not normally something a homing
+    // shell goes looking for. A MARKED one is: the seal swam up and headbutted
+    // it, which is as clear an instruction as this game has. Only marked ones,
+    // so nothing changes about how mussels behave around ordinary boats.
+    if (!p.targetType) {
+      for (const t of markedTargets()) {
+        if (!t.mesh?.parent || (t.hp != null && t.hp <= 0)) continue;
+        const dx = t.mesh.position.x - p.mesh.position.x;
+        const dy = t.mesh.position.y - p.mesh.position.y;
+        const d = Math.hypot(dx, dy) * markWeight(t);
+        if (d < bestD) { bestD = d; best = t; }
+      }
     }
     p.target = best;
   }
@@ -229,6 +262,38 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
     if (p.homingDelay > 0) p.homingDelay -= dt;
     if (p.homing && p.homingDelay <= 0) updateHoming(p, dt, enemiesList);
     if (p.jet && updateJet(p, dt)) onJet?.(p);
+
+    // GRAVITY, and only above the water. Below the line the sea carries a
+    // shell — which is why a bullet crosses the arena flat and always has —
+    // and the instant it breaks the surface there is nothing holding it up any
+    // more, so it falls on exactly the curve the seal that fired it falls on.
+    //
+    // `dir` and `speed` ARE this thing's velocity, kept split because every
+    // other behaviour in here writes one or the other: homing rewrites the
+    // heading, a bounce reflects it, a clap sets the speed. So gravity has to
+    // go out to a velocity and come back as a pair. That round trip is also
+    // what puts the arc into `orient` for free — a falling shell noses over
+    // and follows its curve down instead of sliding sideways along it.
+    //
+    // Exempt: anything under power. A missile with its motor lit and a scallop
+    // clapping its way across the sky are not in free fall, and it could not
+    // work anyway — updateHoming above rewrites `dir` from the target angle
+    // every frame, so a fall folded into it would be gone by the next one.
+    const powered = p.homing || p.jet;
+    if (!powered && p.gravityScale > 0 && p.mesh.position.y > bounds.surfaceY) {
+      const g = CONFIG.arena.gravity * (CONFIG.arena.projectileGravity ?? 1) * p.gravityScale;
+      const vx = p.dir.x * p.speed;
+      const vy = p.dir.y * p.speed - g * dt;
+      const sp = Math.hypot(vx, vy);
+      // A shot thrown straight up passes through a frame where its velocity
+      // cancels to nothing; it keeps its last heading rather than dividing by
+      // zero, and the next frame's gravity points it down.
+      if (sp > 1e-4) {
+        p.dir.x = vx / sp;
+        p.dir.y = vy / sp;
+        p.speed = sp;
+      }
+    }
 
     p.mesh.position.x += p.dir.x * p.speed * dt;
     p.mesh.position.y += p.dir.y * p.speed * dt;

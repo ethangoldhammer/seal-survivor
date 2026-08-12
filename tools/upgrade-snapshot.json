@@ -780,6 +780,89 @@
       }
     ]
   },
+  "club": {
+    "cap": 6,
+    "perStack": [
+      {
+        "clubLevel": 101
+      },
+      {
+        "clubLevel": 102
+      },
+      {
+        "clubLevel": 103
+      },
+      {
+        "clubLevel": 104
+      },
+      {
+        "clubLevel": 105
+      },
+      {
+        "clubLevel": 106
+      }
+    ]
+  },
+  "clubThrow": {
+    "cap": 5,
+    "perStack": [
+      {
+        "clubThrowLevel": 101
+      },
+      {
+        "clubThrowLevel": 102
+      },
+      {
+        "clubThrowLevel": 103
+      },
+      {
+        "clubThrowLevel": 104
+      },
+      {
+        "clubThrowLevel": 105
+      }
+    ]
+  },
+  "clubBoom": {
+    "cap": 5,
+    "perStack": [
+      {
+        "clubBoomLevel": 101
+      },
+      {
+        "clubBoomLevel": 102
+      },
+      {
+        "clubBoomLevel": 103
+      },
+      {
+        "clubBoomLevel": 104
+      },
+      {
+        "clubBoomLevel": 105
+      }
+    ]
+  },
+  "clubIce": {
+    "cap": 5,
+    "perStack": [
+      {
+        "clubIceLevel": 101
+      },
+      {
+        "clubIceLevel": 102
+      },
+      {
+        "clubIceLevel": 103
+      },
+      {
+        "clubIceLevel": 104
+      },
+      {
+        "clubIceLevel": 105
+      }
+    ]
+  },
   "starfish": {
     "cap": 8,
     "perStack": [
@@ -894,23 +977,23 @@
     "cap": 5,
     "perStack": [
       {
-        "strikeDamage": 135,
+        "strikeDamage": 115,
         "strikeChainMul": 129.7
       },
       {
-        "strikeDamage": 182.25,
+        "strikeDamage": 130,
         "strikeChainMul": 168.31
       },
       {
-        "strikeDamage": 246.0375,
+        "strikeDamage": 145,
         "strikeChainMul": 218.503
       },
       {
-        "strikeDamage": 332.150625,
+        "strikeDamage": 160,
         "strikeChainMul": 283.7539
       },
       {
-        "strikeDamage": 448.403344,
+        "strikeDamage": 175,
         "strikeChainMul": 368.58007
       }
     ]
@@ -919,22 +1002,27 @@
     "cap": 5,
     "perStack": [
       {
+        "strikeDamage": 105,
         "strikeDashSpeed": 122,
         "strikeDashDuration": 112
       },
       {
+        "strikeDamage": 110,
         "strikeDashSpeed": 148.84,
         "strikeDashDuration": 125.44
       },
       {
+        "strikeDamage": 115,
         "strikeDashSpeed": 181.5848,
         "strikeDashDuration": 140.4928
       },
       {
+        "strikeDamage": 120,
         "strikeDashSpeed": 221.533456,
         "strikeDashDuration": 157.351936
       },
       {
+        "strikeDamage": 125,
         "strikeDashSpeed": 270.270816,
         "strikeDashDuration": 176.234168
       }
@@ -944,21 +1032,27 @@
     "cap": 6,
     "perStack": [
       {
+        "strikeDamage": 105,
         "shrapnelCount": 101
       },
       {
+        "strikeDamage": 110,
         "shrapnelCount": 102
       },
       {
+        "strikeDamage": 115,
         "shrapnelCount": 103
       },
       {
+        "strikeDamage": 120,
         "shrapnelCount": 104
       },
       {
+        "strikeDamage": 125,
         "shrapnelCount": 105
       },
       {
+        "strikeDamage": 130,
         "shrapnelCount": 106
       }
     ]
@@ -967,18 +1061,22 @@
     "cap": 4,
     "perStack": [
       {
+        "strikeDamage": 105,
         "strikeChargeTime": 78,
         "strikeChumRefill": 100.04
       },
       {
+        "strikeDamage": 110,
         "strikeChargeTime": 60.84,
         "strikeChumRefill": 100.08
       },
       {
+        "strikeDamage": 115,
         "strikeChargeTime": 47.4552,
         "strikeChumRefill": 100.12
       },
       {
+        "strikeDamage": 120,
         "strikeChargeTime": 37.015056,
         "strikeChumRefill": 100.16
       }
@@ -988,12 +1086,15 @@
     "cap": 3,
     "perStack": [
       {
+        "strikeDamage": 105,
         "breachChainLevel": 101
       },
       {
+        "strikeDamage": 110,
         "breachChainLevel": 102
       },
       {
+        "strikeDamage": 115,
         "breachChainLevel": 103
       }
     ]

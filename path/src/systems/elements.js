@@ -3,7 +3,8 @@ import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { player } from '../entities/player.js';
 import { skyLight } from './daylight.js';
-import { attachBiolumSkin, instantiateBiolumSkin, setBiolumSkinVariant } from './biolumSkin.js';
+import { setNoiseGlow, setNoiseGlowPulse, clearNoiseGlow } from './noiseShader.js';
+import { advanceCycles } from './beatSync.js';
 
 // ============================================================================
 // GLOW UP! — the seal's bioluminescence, and the only ELEMENT in the game.
@@ -125,7 +126,63 @@ export function elementPower() {
   if (!n?.enabled || !CONFIG.dayNight?.enabled) return 1;
   const floor = Math.min(1, Math.max(0, n.dayPower ?? 0));
   const t = Math.pow(nightFactor(), Math.max(0.05, n.blendGamma ?? 1));
-  return floor + (1 - floor) * t;
+  // A MAX, not a sum: the surge below is "the element is fully awake", and
+  // adding it to a night that is already awake would push past 1 and quietly
+  // make every status stronger after dark than the tuning says. At midnight a
+  // surge is worth nothing, which is correct — it is a way of borrowing the
+  // night, not of doubling it.
+  return Math.max(floor + (1 - floor) * t, surge);
+}
+
+// ---------------------------------------------------------------------------
+// BORROWED NIGHT — the moon's half of CONFIG.dayNight.pass.
+//
+// Fly through the moon and the seal comes out lit: for a few seconds the
+// element runs at full dark-hour power whatever the clock says. This is the
+// whole synergy, and it is deliberately worth exactly nothing to a run that
+// never took Glow Up! — every reader of `elementPower` is already gated on
+// there being an element at all.
+//
+// Module state for the same reason `element` is: recomputeStats() rebuilds the
+// stat block on every level-up and every tuner nudge, and a surge living there
+// would be cancelled by opening the upgrade screen.
+//
+// A CEILING rather than a stack. Two passes inside seven seconds extend the
+// window; they do not make a brighter-than-night element, because there is no
+// such thing — see the max in elementPower above.
+let surge = 0; // 0..1, how awake the sky has made it
+let surgeLeft = 0; // seconds remaining at full, before the fade
+let surgeFade = 0; // ...and how long the fade itself takes
+
+/**
+ * @param seconds how long to hold it fully awake. The fade out is a quarter of
+ *   that again on top, because an element that snapped off would read as the
+ *   ability breaking rather than as the light going.
+ */
+export function surgeElement(seconds) {
+  if (!(seconds > 0)) return false;
+  // Nothing to wake up. Reported rather than silently held, so a caller can
+  // skip the juice for a synergy the player hasn't got.
+  if (!element || !cfg().enabled) return false;
+  surge = 1;
+  surgeLeft = Math.max(surgeLeft, seconds);
+  surgeFade = Math.max(surgeFade, seconds * 0.25);
+  return true;
+}
+
+/** How awake the sky has made the element, 0..1. For the readouts. */
+export function elementSurge() {
+  return surge;
+}
+
+function fadeSurge(dt) {
+  if (surge <= 0) return;
+  if (surgeLeft > 0) {
+    surgeLeft = Math.max(0, surgeLeft - dt);
+    return;
+  }
+  surge = Math.max(0, surge - dt / Math.max(0.05, surgeFade));
+  if (surge <= 0) surgeFade = 0;
 }
 
 function nightDamageMul() {
@@ -314,14 +371,36 @@ function applyVenom(enemy, share) {
 }
 
 // --- chill ------------------------------------------------------------------
-function applyChill(enemy, share, hooks, x, y) {
-  const e = elementCfg('chill');
-  if (!e) return;
-  const lv = level();
-  const per = ((e.slowPerHit ?? 0.16) + (e.slowPerHitPerLevel ?? 0) * (lv - 1)) * share;
+
+/**
+ * PUT ICE ON A BODY. The one implementation of what chill IS — slow that
+ * accumulates, saturates, and locks the thing solid when it does.
+ *
+ * Exported because chill is no longer only an element. The ice club applies
+ * the same status from a completely different system (systems/club.js), and
+ * the alternative was a second set of fields that meant "slowed" — which the
+ * enemy integrator, the crab collider and every targeting scan would each have
+ * had to learn about separately.
+ *
+ * The SHAPE stays here (how far slow may stack, where it saturates, that a
+ * freeze spends it) while the AMOUNTS come from the caller, because those are
+ * the caller's balance: an element scales on its own level, a club on the
+ * club's.
+ *
+ * @param enemy
+ * @param amount   slow to add, 0..1
+ * @param duration seconds the slow lasts before it thaws
+ * @param freezeFor seconds a saturating hit locks the body for
+ * @param hooks    { onFreeze(x, y) }
+ * @returns true if THIS hit saturated and froze the body. Cold Snap has no
+ *   damage of its own, so a freeze is the only output it has — the caller
+ *   records it as a control event, which is the whole reason this returns.
+ */
+export function chillEnemy(enemy, amount, duration, freezeFor, hooks, x, y) {
+  const e = elementCfg('chill') ?? {};
   const max = e.maxSlow ?? 0.7;
-  enemy.chillSlow = Math.min(max, (enemy.chillSlow ?? 0) + per);
-  enemy.chillTimer = (e.duration ?? 2.5) * nightDurationMul();
+  enemy.chillSlow = Math.min(max, (enemy.chillSlow ?? 0) + amount);
+  enemy.chillTimer = Math.max(enemy.chillTimer ?? 0, duration);
 
   // Saturation locks it outright, reusing `trapTimer` — the beluga's field.
   // Reused on purpose: "held, inert, harmless" is a concept every system in the
@@ -329,8 +408,7 @@ function applyChill(enemy, share, hooks, x, y) {
   // be a second thing for the crab collider, the predation pass and the
   // targeting scans to each learn about separately.
   if (enemy.chillSlow >= max * (e.freezeAt ?? 0.98)) {
-    const dur = (e.freezeDuration ?? 0.9) + (e.freezeDurationPerLevel ?? 0) * (lv - 1);
-    enemy.trapTimer = Math.max(enemy.trapTimer ?? 0, dur * nightDurationMul());
+    enemy.trapTimer = Math.max(enemy.trapTimer ?? 0, freezeFor);
     // Spent. Without this the fish thaws straight back into the frozen state on
     // the next pellet and never moves again, which is a stun-lock rather than
     // an element.
@@ -339,6 +417,39 @@ function applyChill(enemy, share, hooks, x, y) {
       enemy.chillTimer = 0;
     }
     hooks?.onFreeze?.(x, y);
+    return true;
+  }
+  return false;
+}
+
+function applyChill(enemy, share, hooks, x, y) {
+  const e = elementCfg('chill');
+  if (!e) return;
+  const lv = level();
+  const per = ((e.slowPerHit ?? 0.16) + (e.slowPerHitPerLevel ?? 0) * (lv - 1)) * share;
+  const dur = (e.freezeDuration ?? 0.9) + (e.freezeDurationPerLevel ?? 0) * (lv - 1);
+  chillEnemy(enemy, per, (e.duration ?? 2.5) * nightDurationMul(),
+    dur * nightDurationMul(), hooks, x, y);
+}
+
+/**
+ * Thaw everything that is carrying chill.
+ *
+ * ITS OWN PASS, ahead of every gate in updateElements, and that is the whole
+ * point of it: chill can now be put on a body by something that has nothing to
+ * do with the run's element (the ice club), and the decay used to sit inside a
+ * loop that is skipped outright when no element was rolled. A body chilled on
+ * an elementless run would have stayed slowed for the rest of the run — the
+ * slow is read as `chillTimer > 0`, so nothing else would ever have cleared it.
+ */
+export function thawChilled(dt, enemiesList) {
+  for (const e of enemiesList) {
+    if (!(e.chillTimer > 0)) continue;
+    e.chillTimer -= dt;
+    // Thaw gradually rather than snapping back to full speed: the slow decays
+    // with its own timer so a fish that has stopped being shot visibly picks
+    // its speed back up.
+    if (e.chillTimer <= 0) { e.chillTimer = 0; e.chillSlow = 0; }
   }
 }
 
@@ -395,6 +506,13 @@ export function onEnemyKilled(enemy) {
  *          onSpread(fromX, fromY, toX, toY) }
  */
 export function updateElements(dt, scene, enemiesList, hooks = {}) {
+  // BEFORE both gates. Chill is not only an element any more — see thawChilled.
+  thawChilled(dt, enemiesList);
+  // Also before the gates, and for a related reason: a surge left burning by a
+  // config switched off mid-run would never run down, and would still be there
+  // multiplying the element the moment it came back on.
+  fadeSurge(dt);
+
   if (!cfg().enabled) return;
 
   updateMotes(dt, scene);
@@ -406,13 +524,7 @@ export function updateElements(dt, scene, enemiesList, hooks = {}) {
     const e = enemiesList[i];
     let dead = false;
 
-    if (e.chillTimer > 0) {
-      e.chillTimer -= dt;
-      // Thaw gradually rather than snapping back to full speed: the slow decays
-      // with its own timer so a fish that has stopped being shot visibly picks
-      // its speed back up.
-      if (e.chillTimer <= 0) { e.chillTimer = 0; e.chillSlow = 0; }
-    }
+    // (chill thaws in thawChilled, at the top of this function)
 
     if (e.venomTimer > 0) {
       e.venomTimer -= dt;
@@ -656,96 +768,113 @@ function updateMotes(dt, scene) {
 // your run — is invisible except in the damage numbers, and you have to
 // remember which element you rolled.
 //
-// This reuses the escort seals' `biolumSkin` preset rather than authoring a
-// new one: the escorts are the same seal model, so that preset is already
-// tuned for this body (see CONFIG.biolumSkin.presets.escort), and the element's
-// own colours are stamped over it as a per-individual VARIANT — the same
-// mechanism that makes six escorts six visibly different animals.
+// IT LIGHTS THE MARKINGS THE SEAL ALREADY HAS. furseal.glb ships no texture,
+// so the seal's whole surface is the procedural mottling in
+// systems/noiseShader.js (CONFIG.sealShader) — that pattern IS the animal, and
+// the player has been looking at it since the first frame of the run.
+// setNoiseGlow makes its BRIGHT patches emit in the element's colour and
+// leaves everything else exactly where it was, so a glowing seal is
+// recognisably the same seal.
 //
-// Restamped only when something about the look actually changed. The stamp
-// walks every live skin material, so doing it per frame would be a full sweep
-// sixty times a second to write values that are identical on fifty-nine of
-// them. The night level is bucketed for the same reason: it moves continuously
-// all run, and repainting on every imperceptible change is the same cost for
-// no visible difference.
+// WHAT THIS REPLACED, and why, because the alternative is the obvious one:
+// this used to attach a `biolumSkin` — the system built for glowing creatures
+// — to the player and stamp the escort preset onto it. Three things were
+// wrong with that, and all three were visible:
+//
+//   1. A SECOND PATTERN. The skin generates its own field ('veins'), unrelated
+//      to the mottling underneath, so the light ran in shapes the seal did not
+//      have. It read as a decal rather than as the animal lighting up.
+//   2. THE BODY WENT DARK. A biolum skin multiplies the base colour down
+//      (`bodyDarken`) so light reads as light. On a seal already mottled
+//      near-black by its own noise, at night, against dark water, that is a
+//      seal you cannot find.
+//   3. IT COULD NOT BE UNDONE. instantiateBiolumSkin clones the material per
+//      individual, and Material.clone() copies neither onBeforeCompile nor the
+//      live uniform objects — so the clone silently LOST the noise shader
+//      (permanently: the JSON-copied userData still claimed it was attached),
+//      and every following run inherited the clone.
+//
+// Restamped only when something about the look actually changed — the night
+// level is bucketed, because it moves continuously all run and repainting on
+// every imperceptible change is the same picture for the cost of a sweep.
 // ===========================================================================
 
-// The body the skin is currently attached to, NOT a boolean. The seal's mesh is
-// swapped in place whenever its model or Size changes from the T panel
-// (rebuildShipBody), and a flag would say "already attached" about a body that
-// no longer exists — the new seal would come back unpainted and stay that way
-// for the rest of the run, which is indistinguishable from the element having
-// stopped working.
+// The body the glow is currently written onto, NOT a boolean. The seal's mesh
+// is swapped in place whenever its model or Size changes from the T panel
+// (rebuildShipBody), and a flag would say "already lit" about a body that no
+// longer exists — the new seal would come back dark and stay that way for the
+// rest of the run, which is indistinguishable from the element having stopped
+// working.
 let skinnedBody = null;
 let skinKey = '';
+// The breath, in cycles. Derived through advanceCycles so `pulseSync` can lock
+// it to the music the same way every other glow in the game does — see
+// systems/beatSync.js.
+let glowCycle = 0;
 
-export function updateElementSkin(body) {
+/**
+ * @param body   the seal's visual root
+ * @param rawDt  unscaled seconds. Raw, not the hitstop-scaled dt: the seal's
+ *               own light doesn't hold its breath because the game froze for
+ *               60ms on a hit.
+ */
+export function updateElementSkin(body, rawDt = 0) {
   const s = cfg().skin;
   if (!body || !element || s?.enabled === false || !cfg().enabled) return;
   const lv = level();
   if (lv <= 0) return;
 
-  if (skinnedBody !== body) {
-    body.traverse((o) => {
-      if (!o.isMesh || !o.material) return;
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      for (const m of mats) attachBiolumSkin(m, o, 'escort');
-    });
-    // Per-instance materials, so stamping the variant below paints THIS seal
-    // rather than every clone of the ship asset.
-    instantiateBiolumSkin(body);
-    skinnedBody = body;
-    skinKey = ''; // force a restamp onto the new body's materials
-  }
+  // Every frame, and deliberately ahead of the early-out below: the breath is
+  // the one part of this that is never idle. One uniform write.
+  glowCycle = advanceCycles(glowCycle, s?.pulseSync, (s?.pulseSpeed ?? 1.6) / (Math.PI * 2), rawDt, 1);
+  setNoiseGlowPulse(body, 1 + (s?.pulseAmp ?? 0.3) * Math.sin(glowCycle * Math.PI * 2));
 
-  // Bucketed so a continuously-moving sun doesn't restamp every material every
-  // frame — see the note above. 32 rather than the original 8 because this now
-  // drives a CROSSFADE and not just a brightness: at 8 the dusk hand-over is
-  // nine visible steps over about forty seconds of real time, which reads as
-  // the glow stuttering on. At 32 it restamps a bit under once a second
-  // through the transition and is smooth, and still costs nothing at noon or
-  // midnight where the value is pinned.
+  // Bucketed so a continuously-moving sun doesn't restamp every frame — see
+  // the note above. 32 rather than 8 because this drives a FADE and not just a
+  // brightness: at 8 the dusk hand-over is nine visible steps over about forty
+  // seconds of real time, which reads as the glow stuttering on. At 32 it
+  // restamps a bit under once a second through the transition and is smooth,
+  // and still costs nothing at noon or midnight where the value is pinned.
   const power = Math.round(elementPower() * 32) / 32;
   const night = Math.round(nightFactor() * 8) / 8;
   const key = `${element}:${lv}:${night}:${power}`;
-  if (key === skinKey) return;
+  // The body check is what survives a model swap from the tuner: same element,
+  // same level, same sky, different materials underneath.
+  if (key === skinKey && skinnedBody === body) return;
   skinKey = key;
+  skinnedBody = body;
 
-  const colour = elementColor();
   const strength = ((s?.strength ?? 1.4) + (s?.strengthPerLevel ?? 0) * (lv - 1))
     * (1 + ((s?.nightStrengthMul ?? 1) - 1) * night)
-    // ...and then all the way to nothing in daylight.
+    // ...and all the way to nothing in daylight. At power 0 the shader's own
+    // branch drops out and the seal is an ordinary mottled animal again —
+    // which is the whole crossfade, with nothing left over to undo.
     * power;
 
-  setBiolumSkinVariant(body, {
-    pattern: s?.pattern ?? 'veins',
-    scale: s?.scale ?? 0.28,
+  setNoiseGlow(body, {
+    color: elementColor(),
+    // A near-white core on the hottest patches, so the light reads as light
+    // coming out of the seal rather than as a coloured wash over it.
+    tipColor: s?.tipColor ?? 0xffffff,
+    white: s?.white ?? 0.35,
     coverage: s?.coverage ?? 0.3,
     contrast: s?.contrast ?? 2.2,
-    // THE CROSSFADE. `bodyDarken` is what the glow sits on: the biolum skin
-    // multiplies the seal's base colour down so light reads as light rather
-    // than as a bright animal. Easing it back to 1 as the power drops hands
-    // the body back to the procedural noise shader underneath (CONFIG
-    // .sealShader, systems/noiseShader.js) at exactly the rate the glow
-    // leaves — so dawn is one continuous dissolve from a glowing seal to an
-    // ordinary mottled one, rather than the glow winking out and leaving a
-    // suspiciously dark animal behind.
-    //
-    // Nothing here touches the noise shader itself. Its uniforms are global to
-    // every material carrying it and driven straight off the tuner, so fading
-    // them for the player would fade them everywhere and fight the slider.
-    // Undarkening is the same crossfade from the other end, and it is free.
-    bodyDarken: 1 + ((s?.bodyDarken ?? 0.5) - 1) * power,
-    pulseAmp: s?.pulseAmp ?? 0.3,
-    pulseSpeed: s?.pulseSpeed ?? 1.6,
+    // `patchScale`, not `scale` — see the note in CONFIG.biolum.skin. The
+    // obvious name still holds a stale value from the pattern this replaced.
+    scale: s?.patchScale ?? 5,
     strength,
-    // Two stops of the element's own colour and a near-white top, so the
-    // pattern reads as light coming out of the seal rather than as paint. A
-    // three-stop ramp all in one hue collapses to a flat wash at this size.
-    colorA: colour,
-    colorB: colour,
-    colorC: 0xffffff,
   });
+}
+
+/**
+ * Force the next updateElementSkin to restamp.
+ *
+ * For the tuner: the stamp is skipped unless the element, the level or the sky
+ * moved, and none of those move when someone drags 'seal glow'. Without this
+ * the sliders under Glow Up! appear dead until the next sunset.
+ */
+export function invalidateElementSkin() {
+  skinKey = '';
 }
 
 // ===========================================================================
@@ -754,12 +883,21 @@ export function updateElementSkin(body) {
 
 export function resetElements(scene) {
   element = null;
-  // The skin is re-attached from scratch on the next run that rolls an
-  // element. Not cleared off the body here — resetPlayer rebuilds nothing, and
-  // a seal still wearing last run's colour for the frame before the first pick
-  // is invisible next to the run actually restarting.
+  // THE GLOW COMES OFF THE SEAL, not just out of this module's bookkeeping.
+  // Nothing rebuilds the body between runs and nothing rebuilds the ship
+  // asset's materials at all, so the uniforms written last run are still on
+  // the GPU: without this a run that ended lit up green opens lit up green,
+  // keeps the last run's night brightness, and stays that way until the new
+  // run happens to roll Glow Up! again. Clearing here rather than waiting for
+  // updateElementSkin is the point — that function returns immediately while
+  // `element` is null, so it is exactly the path that cannot fix this.
+  clearNoiseGlow();
   skinnedBody = null;
   skinKey = '';
+  glowCycle = 0;
+  surge = 0;
+  surgeLeft = 0;
+  surgeFade = 0;
   pendingBursts.length = 0;
   for (const mo of motes) scene?.remove(mo.mesh);
   motes.length = 0;

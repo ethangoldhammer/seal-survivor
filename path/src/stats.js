@@ -45,7 +45,16 @@ export function baseStats() {
     // multipliers (minFire, damageMul*, reachMul*) deliberately stay on CONFIG
     // — they define what the mechanic IS, and an upgrade that moved them would
     // change the shape of the curve rather than the player's place on it.
-    strikeDamage: CONFIG.strike.damage,
+    // THE STRIKE'S DAMAGE — spent as one small blast at the point of release
+    // (see CONFIG.strike.burst), and only trickled onto contact if
+    // `contactShare` is dialled up. Starts small and climbs with every card in
+    // the strike family.
+    //
+    // Deliberately NOT seeded from CONFIG.strike.damage: that one is the
+    // nominal strike the riders (Bone Shrapnel, Glow Up!) measure themselves
+    // against, it is the number the tuner has always written, and sharing it
+    // would put a slider in a fight with this.
+    strikeDamage: CONFIG.strike.burst.damage,
     strikeChainMul: CONFIG.strike.chainDamageMul,
     strikeDashSpeed: CONFIG.strike.dashSpeed,
     strikeDashDuration: CONFIG.strike.dashDuration,
@@ -129,6 +138,10 @@ export function baseStats() {
     octoGrabLevel: 0,
     orcaLevel: 0,
     musselVolleyLevel: 0,
+    clubLevel: 0,
+    clubThrowLevel: 0,
+    clubBoomLevel: 0,
+    clubIceLevel: 0,
   };
 }
 
@@ -156,7 +169,7 @@ export const INTEGER_STATS = new Set([
   'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'starfishLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
   'dumboLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'musselVolleyLevel',
-  'biolumLevel',
+  'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel',
 ]);
 
 // THE ONE WAY TO READ `projectileBonus`. Every site that spawns a countable

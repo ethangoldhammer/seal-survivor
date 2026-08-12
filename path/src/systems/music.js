@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { musicScale } from './settings.js';
 import { bounds, depthFraction } from '../arena.js';
 import { getAudioContext } from './audio.js';
 
@@ -184,7 +185,11 @@ function ensureChain() {
     // Starts wide open; updateDepth takes it from here once a run begins.
     filter.frequency.value = CONFIG.music.surfaceHz;
     filter.Q.value = CONFIG.music.resonance;
-    musicGain.gain.value = CONFIG.music.volume;
+    // The player's scale folded in from the FIRST sample, not just from the
+    // next applyMusicSettings — the chain is built when music starts, which is
+    // after loadSettings(), so a muted player would otherwise hear the opening
+    // bar at full authored volume before anything re-stamped this.
+    musicGain.gain.value = CONFIG.music.volume * musicScale();
 
     // source -> filter (depth lowpass) -> [ dry ------------> ] -> musicGain
     //                                     [ bandpass -> wet -> ]
@@ -520,9 +525,26 @@ export function setBandpass(amount) {
   bandpass.Q.setTargetAtTime(0.7 + a * Math.max(0, (cfg.musicQ ?? 3.6) - 0.7), now, 0.06);
 }
 
+/**
+ * Re-apply only the PLAYER's half of the music level — the Audio tab's master,
+ * music and mute. Cheap enough for every step of a slider drag: one gain write.
+ *
+ * Separate from applyMusicSettings for the same reason audio.js splits
+ * applyPlayerAudioSettings out of applyAudioBusSettings: that one also restamps
+ * the filter Q and re-issues the playback rate, and a volume slider has no
+ * business touching either.
+ */
+export function applyPlayerMusicSettings() {
+  if (!musicGain) return;
+  musicGain.gain.value = CONFIG.music.enabled ? CONFIG.music.volume * musicScale() : 0;
+}
+
 export function applyMusicSettings() {
   if (!ensureChain()) return;
-  musicGain.gain.value = CONFIG.music.enabled ? CONFIG.music.volume : 0;
+  // The authored level times the player's own (Audio tab), with mute folded
+  // into the scale. A separate node would be tidier but the music chain is
+  // built once and this is the gain everything else already writes to.
+  musicGain.gain.value = CONFIG.music.enabled ? CONFIG.music.volume * musicScale() : 0;
   filter.Q.value = CONFIG.music.resonance;
   // Through writeRate rather than assigned: a plain `.value =` is ignored
   // outright while automation is scheduled, so dragging the rate slider during

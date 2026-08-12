@@ -624,7 +624,9 @@ export function updateBoatDebris(dt, scene) {
       d.vy = Math.max(d.vy - (c.waterGravity ?? 5) * dt, -(c.sinkSpeed ?? 1.4));
       d.av.multiplyScalar(Math.exp(-(c.spinDamp ?? 1.8) * dt));
     } else {
-      d.vy -= (c.gravity ?? 24) * dt;
+      // In the air a chunk of hull is in free fall like everything else up
+      // there — same number as the seal and the shells, from arena.gravity.
+      d.vy -= CONFIG.arena.gravity * dt;
     }
 
     pos.x += d.vx * dt;

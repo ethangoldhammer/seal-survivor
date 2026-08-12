@@ -122,6 +122,10 @@ export const STAT_TEXT = {
   octoGrabLevel:      { label: 'octopus grabber', kind: 'level', unlock: 'tentacles that reel fish in' },
   orcaLevel:          { label: 'orca family', kind: 'level', unlock: 'three orcas hunting the boats' },
   musselVolleyLevel:  { label: 'mussel barrage', kind: 'level', unlock: 'a barrage on a full-charge strike' },
+  clubLevel:          { label: 'club', kind: 'level', unlock: 'a club on each fin tip' },
+  clubThrowLevel:     { label: 'thrown club', kind: 'level', unlock: 'hurled homing clubs on a strike' },
+  clubBoomLevel:      { label: 'club blast', kind: 'level', unlock: 'every club hit detonates' },
+  clubIceLevel:       { label: 'club ice', kind: 'level', unlock: 'every club hit chills, and freezes when it saturates' },
 };
 
 // ---------------------------------------------------------------------------

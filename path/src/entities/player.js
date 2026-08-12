@@ -262,9 +262,12 @@ export function updatePlayer(dt, input) {
     }
   }
 
-  // Breaching the surface is free; gravity above it is opt-in (default 0).
-  if (CONFIG.arena.airGravity > 0 && pos.y > bounds.surfaceY) {
-    player.velocity.y -= CONFIG.arena.airGravity * dt;
+  // Breaching the surface is free; what happens after it is gravity, and it is
+  // the SAME gravity every shot the seal fires feels once it leaves the water
+  // (CONFIG.arena.gravity — see the note there for where 29.7 comes from).
+  const airborne = pos.y > bounds.surfaceY;
+  if (airborne && CONFIG.arena.gravity > 0) {
+    player.velocity.y -= CONFIG.arena.gravity * dt;
   }
 
   // The strike dash gets its own, higher ceiling for the length of the dash.
@@ -279,7 +282,15 @@ export function updatePlayer(dt, input) {
   const speed = player.velocity.length();
   if (speed > ceiling) player.velocity.multiplyScalar(ceiling / speed);
 
-  player.velocity.multiplyScalar(Math.pow(s.friction, dt * 60));
+  // Drag, and WHICH drag depends on what the seal is in. `friction` is the
+  // water's — 0.98 per frame, i.e. 70% of your speed gone every second, which
+  // is about right for a body moving through water and completely wrong for
+  // one moving through air. Applying it above the surface too was what made a
+  // breach feel weighted down: the arc lost its horizontal run on the way up
+  // and dropped nearly straight back in, so the jump read as short no matter
+  // what gravity was set to. Air is nearly frictionless by comparison, so the
+  // arc up there is now the ballistic curve gravity alone describes.
+  player.velocity.multiplyScalar(Math.pow(airborne ? CONFIG.arena.airDrag : s.friction, dt * 60));
 
   pos.x += player.velocity.x * dt;
   pos.y += player.velocity.y * dt;

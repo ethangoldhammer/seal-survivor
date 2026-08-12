@@ -35,7 +35,9 @@ import {
   rollElementFor, commitElement, resetElements, activeElement,
   applyElementalHit, updateElements, onEnemyKilled, nightFactor,
   elementCardName, elementCardDesc, clearStatuses, elementHitEvent, elementPower,
+  updateElementSkin,
 } from '../path/src/systems/elements.js';
+import { attachNoiseShader } from '../path/src/systems/noiseShader.js';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -406,6 +408,57 @@ section('LIFECYCLE');
   const hp = survivor.hp;
   for (let i = 0; i < 120; i++) updateElements(dt, scene, [survivor], noHooks);
   check('...so nothing keeps ticking afterward', survivor.hp === hp);
+}
+
+// ===========================================================================
+section('THE SEAL PUTS THE GLOW DOWN AT RUN START');
+// ===========================================================================
+// The bug this is here for: the glow is UNIFORMS ON A MATERIAL, and nothing
+// between runs rebuilds either the seal's body or the ship asset's materials.
+// resetElements clearing its own module state is not enough — updateElementSkin
+// returns immediately while `element` is null, so it is precisely the path that
+// cannot take the light back off. A run that ended lit up green opened lit up
+// green, at the last run's night brightness, until something happened to roll
+// Glow Up! again.
+{
+  // A stand-in for the seal's body: one mesh wearing the noise shader, which is
+  // the only thing the glow is written onto.
+  const body = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial();
+  attachNoiseShader(mat);
+  body.add(new THREE.Mesh(new THREE.BufferGeometry(), mat));
+  const u = mat.userData.__noiseUniforms;
+
+  check('the seal starts unlit', u.uNoiseGlowStrength.value === 0);
+  // What the skin looks like BEFORE any element — the thing the glow must not
+  // disturb. Read rather than compared against CONFIG, because whether
+  // applySettings has run is not what this is asking about.
+  const skinBefore = u.uNoiseStrength.value;
+
+  setup({ element: 'venom', level: 3 });
+  skyLight.night = 1;
+  skyLight.twilight = 0;
+  updateElementSkin(body, dt);
+  const lit = u.uNoiseGlowStrength.value;
+  check('taking Glow Up! lights it', lit > 0, `strength ${lit.toFixed(2)}`);
+  check('...in the element\'s colour, not the pattern\'s',
+    u.uNoiseGlowColor.value.getHex() === CONFIG.biolum.elements.venom.color,
+    `#${u.uNoiseGlowColor.value.getHexString()}`);
+  // The old path multiplied the body's own colour DOWN to make a second
+  // pattern legible, which is how a seal disappeared into dark water.
+  check('...and the seal itself is not darkened to make it show',
+    u.uNoiseStrength.value === skinBefore,
+    `the skin under the glow is untouched (${skinBefore})`);
+
+  resetElements(scene);
+  check('a run restart takes the glow back off the material',
+    u.uNoiseGlowStrength.value === 0,
+    'nothing rebuilds the seal between runs, so this is the only thing that can');
+
+  // ...and the next run's first frames must not put it back by themselves.
+  for (let i = 0; i < 10; i++) updateElementSkin(body, dt);
+  check('...and it stays off until something rolls the element again',
+    u.uNoiseGlowStrength.value === 0);
 }
 
 // ===========================================================================

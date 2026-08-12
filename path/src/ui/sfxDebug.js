@@ -43,6 +43,7 @@ const COLOR = {
   synth: 'rgba(232,236,243,0.78)', // played the fallback
   note: 'rgba(143,217,168,0.9)', // ambience and other non-one-shots
   gap: 'rgba(255,179,71,0.9)', // throttled
+  far: 'rgba(255,179,71,0.9)', // lost its slot to closer sounds
   stolen: 'rgba(198,176,255,0.85)', // cut short to make room — it DID play
   voices: 'rgba(255,179,71,0.9)', // over the concurrency cap
   muted: 'rgba(232,236,243,0.35)',
@@ -53,6 +54,10 @@ const COLOR = {
 
 const LABEL = {
   gap: 'throttled',
+  // Not "no voice": the budget had room for it, it was simply the furthest
+  // thing asking. Worth its own word, because the fix is different — a wall of
+  // these is the arena being loud a long way off, not the cap being too small.
+  far: 'too far',
   stolen: 'cut short',
   voices: 'no voice',
   muted: 'muted',
@@ -111,7 +116,8 @@ function record(name, outcome, detail) {
   // own row. Adding it to `dropped` would double-count a busy frame and make
   // the headline number mean two different things at once, which is the
   // failure this panel exists to avoid.
-  if (outcome === 'gap' || outcome === 'voices' || outcome === 'unknown' || outcome === 'missing') dropped++;
+  if (outcome === 'gap' || outcome === 'far' || outcome === 'voices'
+    || outcome === 'unknown' || outcome === 'missing') dropped++;
   else if (outcome === 'sample' || outcome === 'synth') played++;
 
   // Held rows are keyed by what makes two events "the same event" to a reader:

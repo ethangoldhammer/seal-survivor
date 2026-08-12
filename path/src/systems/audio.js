@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { setSetting, settings, sfxScale } from './settings.js';
 import { depthFraction } from '../arena.js';
 import { isTypingTarget } from '../ui/typing.js';
 
@@ -47,6 +48,49 @@ let unlocked = false;
 // instead of sixty setTimeouts a second.
 const voices = [];
 
+// --- the listener -----------------------------------------------------------
+// Where the ear is, in world units. The seal, not the camera — the camera lags
+// behind it, and the same reasoning applies here as to the mussel's pan (see
+// systems/projectileVoices.js).
+//
+// This exists so the voice budget can be spent on the fight IN FRONT OF YOU.
+// Everything above ranks voices by time alone, which is blind to the one thing
+// that actually decides whether a sound matters: a crab dying at the far wall
+// and a crab dying on top of you are the same event, the same sound and the
+// same length, and only one of them is worth a slot.
+let listenerX = 0;
+let listenerY = 0;
+
+export function setSfxListener(x, y) {
+  if (Number.isFinite(x)) listenerX = x;
+  if (Number.isFinite(y)) listenerY = y;
+}
+
+// A sound's rank in the budget, as a whole band: 0 is the far edge of the arena
+// (first to be cut) and `bands - 1` is on top of the player (never cut).
+//
+// BANDS rather than a raw distance, and that is the whole design. Ranking on
+// distance alone would throw away the rule below it — a voice with two
+// milliseconds left is nearly free to cut whatever else is true of it — because
+// no two distances are ever equal, so distance would decide every comparison on
+// its own. Quantising means "about as close" is a real state, and inside it the
+// old least-left-to-play rule still runs.
+//
+// A sound with NO position is not a place in the world at all — a UI click, a
+// level-up, the death — and takes the top band. So this mechanism can only ever
+// take from the world, never from the interface.
+export function sfxBand(x, y) {
+  const p = CONFIG.audio.priority ?? {};
+  const bands = Math.max(1, Math.round(p.bands ?? 4));
+  const top = bands - 1;
+  if (p.enabled === false || x == null || y == null) return top;
+  const near = Math.max(0, p.nearRadius ?? 18);
+  const far = Math.max(near + 0.001, p.farRadius ?? 70);
+  const d = Math.hypot(x - listenerX, y - listenerY);
+  const t = 1 - Math.min(1, Math.max(0, (d - near) / (far - near)));
+  return Math.round(t * top);
+}
+
 // Seconds to fade a stolen voice out over. A hard stop mid-waveform is a click
 // — an instantaneous edge is broadband — and a click is far more noticeable
 // than the sound it was meant to make room for. 30ms is under the ear's
@@ -73,7 +117,10 @@ export function onSamplesChanged(cb) {
 function notifySamplesChanged() {
   for (const cb of sampleListeners) cb();
 }
-let muted = false;
+// Mute lives in the player's settings rather than in a module flag here, so
+// the M key and the pause menu's toggle are the same switch and can never
+// disagree about which way it is thrown. It also survives a reload now, which
+// a local `let` never did — muting and then refreshing used to come back loud.
 
 // A global playback-rate multiplier on every one-shot, used by the death dive
 // to slow the sound down with the picture (see systems/deathDive.js). Applied
@@ -291,7 +338,27 @@ export function applyAudioBusSettings() {
     ceilingShaper.oversample = c.oversample ?? '2x';
   }
 
-  if (master) master.gain.value = CONFIG.audio.masterVolume;
+  if (master) master.gain.value = masterGain();
+}
+
+// The authored level times the player's own. Mute is folded in by sfxScale, so
+// it reaches CONTINUOUS voices too — the mussel's flight voice and the strike
+// wind-up ride this gain and used to keep sounding straight through a mute,
+// because the old flag was only ever checked at the top of playSfx.
+function masterGain() {
+  return CONFIG.audio.masterVolume * sfxScale();
+}
+
+/**
+ * Re-apply the player's audio settings to the live bus. Cheap enough to call
+ * on every step of a volume slider — it is one gain write.
+ *
+ * Separate from applyAudioBusSettings, which rebuilds the impulse response and
+ * the ceiling curve when its signatures change: dragging a volume slider has no
+ * business going anywhere near either of those.
+ */
+export function applyPlayerAudioSettings() {
+  if (master) master.gain.value = masterGain();
 }
 
 // Called every frame with the player's Y, mirroring the music filter — diving
@@ -353,7 +420,8 @@ export function watchSfx(cb) {
 
 /**
  * @param name    the CONFIG.sfx key
- * @param outcome 'sample' | 'synth' | 'gap' | 'stolen' | 'voices' | 'muted' | 'unknown' | 'off' | 'note'
+ * @param outcome 'sample' | 'synth' | 'gap' | 'far' | 'stolen' | 'voices' | 'muted'
+ *                | 'unknown' | 'missing' | 'off' | 'note'
  * @param detail  optional { take, takes, gain, text }
  */
 export function noteSfx(name, outcome, detail) {
@@ -414,7 +482,9 @@ export function isAudioLive() {
 
 export function initAudio() {
   window.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() === 'm' && !isTypingTarget(e.target)) muted = !muted;
+    if (e.key.toLowerCase() === 'm' && !isTypingTarget(e.target)) {
+      setSetting('audio.muted', !settings.audio.muted);
+    }
   });
 }
 
@@ -426,7 +496,7 @@ export function unlockAudio() {
     if (!Ctx) return;
     ctx = new Ctx();
     master = ctx.createGain();
-    master.gain.value = CONFIG.audio.masterVolume;
+    master.gain.value = masterGain();
     buildBus();
     unlocked = true;
     preloadSamples();
@@ -656,26 +726,34 @@ function retireFinishedVoices(now) {
   }
 }
 
-// Make room for one more, and return whose slot it was.
+// Which voice is worth the least, or -1 when there is nothing playing.
 //
-// The victim is the voice with the LEAST LEFT TO PLAY, not the oldest one.
-// Oldest-first is the usual rule and it is the wrong one here, because this
-// bank mixes 50ms blips with a 9-second death: the oldest voice is routinely
-// the one with the most tail still to come, so stealing it punches an audible
-// hole in the mix to save a sound that was nearly over anyway. Taking the
-// closest to finishing is the strictly smallest loss available — often the last
-// few milliseconds of something, which is inaudible under the sound that
-// replaces it.
-function stealVoice(now) {
-  if (!voices.length) return null;
+// Two rules, in order:
+//
+//   FURTHEST FIRST   the lowest band goes, because a sound happening across the
+//                    arena is worth less than one happening on top of you
+//                    whatever else is true of it. See sfxBand.
+//   THEN LEAST LEFT  inside a band, the voice with the least still to play.
+//                    Oldest-first is the usual rule and it is the wrong one
+//                    here, because this bank mixes 50ms blips with a 9-second
+//                    death: the oldest voice is routinely the one with the most
+//                    tail still to come, so stealing it punches an audible hole
+//                    in the mix to save a sound that was nearly over anyway.
+//                    Taking the closest to finishing is the strictly smallest
+//                    loss available — often the last few milliseconds of
+//                    something, inaudible under the sound that replaces it.
+//
+// With priority off, or with nothing positioned, every band is the same and
+// this is exactly the least-left-to-play rule it was before.
+function worstVoiceIndex() {
+  if (!voices.length) return -1;
   let pick = 0;
   for (let i = 1; i < voices.length; i++) {
-    if (voices[i].endsAt < voices[pick].endsAt) pick = i;
+    const v = voices[i];
+    const best = voices[pick];
+    if (v.band < best.band || (v.band === best.band && v.endsAt < best.endsAt)) pick = i;
   }
-  const victim = voices[pick];
-  voices.splice(pick, 1);
-  releaseVoice(victim, now);
-  return victim;
+  return pick;
 }
 
 // Fade a voice out and stop its sources. Wrapped because both halves throw on
@@ -723,6 +801,8 @@ function vary(amount) {
 //   pitch     extra pitch multiplier ON TOP of the per-sound random variation
 //             (kill sounds use this to drop in pitch for bigger enemies)
 //   decayMul  stretches the tail (bigger enemies boom for longer)
+//   x, y      where in the world it happened, for the voice budget to rank it
+//             by. Omit for anything that isn't a place — UI, level-up, death.
 // Decode an uploaded audio file (mp3/wav/ogg) and use it for `name` from now
 // on. Returns false if it couldn't be decoded, leaving the synth fallback in
 // place rather than silently muting that sound.
@@ -759,7 +839,7 @@ export function sampleCount(name) {
 }
 
 export function playSfx(name, volumeScale = 1, opts = {}) {
-  if (muted) { noteSfx(name, 'muted'); return; }
+  if (isMuted()) { noteSfx(name, 'muted'); return; }
   if (!unlocked || !ctx || !CONFIG.audio.enabled) { noteSfx(name, 'off'); return; }
   const def = CONFIG.sfx[name];
   // Nothing warns about this at runtime — playSfx has always just returned —
@@ -809,20 +889,32 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
   // that actually sends you to the right place.
   if (!sample && !wantsTone && !wantsNoise) { noteSfx(name, 'missing'); return; }
 
-  // Past the cap, the new sound wins and the one with the least left to play
-  // gets faded out under it. `stealVoice` only comes back empty when the cap is
-  // zero or below — which is a deliberate off switch, and the one case where
-  // refusing is still the right answer.
+  // How near the player this happened, as a band — see sfxBand.
+  const band = sfxBand(opts.x, opts.y);
+
+  // Past the cap, something has to lose. The new sound is no longer guaranteed
+  // to be the winner: it wins against anything further away than it is, and
+  // loses to a bus full of sounds that are all closer.
   if (voices.length >= CONFIG.audio.maxConcurrent) {
-    const victim = stealVoice(now);
-    if (!victim) { noteSfx(name, 'voices'); return; }
+    const pick = worstVoiceIndex();
+    // Nothing to take. Only reachable with a cap of zero or below, which is a
+    // deliberate off switch and the one case where refusing outright is still
+    // the right answer.
+    if (pick < 0) { noteSfx(name, 'voices'); return; }
+    const victim = voices[pick];
+    // Everything sounding is closer to the player than this is, so this is the
+    // one that goes. Before the bands existed the newest sound always won, and
+    // that is how a far-wall kill could cut the hit landing in your face.
+    if (victim.band > band) { noteSfx(name, 'far'); return; }
+    voices.splice(pick, 1);
+    releaseVoice(victim, now);
     // Reported against the voice that LOST, not the one that played, because
     // "what got cut" is the question — a run of these naming one sound is the
     // shape of a budget being eaten by one event.
     noteSfx(victim.name, 'stolen');
   }
 
-  const voice = { name, endsAt: now + length, gains: [], sources: [] };
+  const voice = { name, band, endsAt: now + length, gains: [], sources: [] };
   voices.push(voice);
 
   if (sample) {
@@ -947,5 +1039,5 @@ function toMsPattern(pattern) {
 }
 
 export function isMuted() {
-  return muted;
+  return settings.audio.muted;
 }

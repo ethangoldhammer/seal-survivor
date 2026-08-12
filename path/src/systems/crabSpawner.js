@@ -1,7 +1,8 @@
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { countFloorPickups, bestChumTarget } from '../entities/pickups.js';
-import { enemies, spawnNamed, nightlifeWeight } from '../entities/enemies.js';
+import { bossLockout, enemies, spawnNamed, nightlifeWeight } from '../entities/enemies.js';
+import { inSpawnGroup } from '../enemyTable.js';
 
 // ---------------------------------------------------------------------------
 // WHICH CRAB. The family is whatever enemies.csv puts in spawnGroup 'crab',
@@ -30,7 +31,7 @@ let warnedNoFamily = false;
 function crabFamily() {
   const out = [];
   for (const [key, def] of Object.entries(CONFIG.enemies)) {
-    if (def?.spawnGroup === 'crab') out.push({ key, def });
+    if (inSpawnGroup(def, 'crab')) out.push({ key, def });
   }
   if (out.length) return out;
 
@@ -63,7 +64,7 @@ function crabFamily() {
 function crabCount() {
   let n = 0;
   for (const e of enemies) {
-    if (CONFIG.enemies[e.type]?.spawnGroup === 'crab') n++;
+    if (inSpawnGroup(CONFIG.enemies[e.type], 'crab')) n++;
   }
   return n;
 }
@@ -214,10 +215,30 @@ export function updateCrabSpawner(dt, scene, difficulty) {
   const n = Math.min(desired, maxConcurrent - crabCount(), CONFIG.spawn.maxAlive - enemies.length);
   if (n <= 0) return;
 
+  // A BOSS FIGHT IS NOT A CHUM PILE. The weighted pool is locked to minions
+  // while a boss is in the water, and this is the game's other source of
+  // creatures — left ungated, the crabs would be the one thing that carried on
+  // walking in, and the clear-out would look broken specifically because the
+  // seabed is where the player is farming.
+  //
+  // The test is on the DRAW rather than on the wave, so a crab variant tagged
+  // `bossMinion` in enemies.csv still turns up: a draw that comes back with a
+  // non-escort is skipped instead of substituted, which keeps the day/night
+  // mix pickCrab exists to produce honest rather than quietly re-rolling it
+  // into whichever variant happens to be flagged.
+  //
+  // Deliberately NOT inside pickCrab: the death pile-on draws from the same
+  // function, and a player who dies to a boss leaves it in the water — gating
+  // there would mean the corpse gets no crabs at all, which is a different
+  // system's whole point.
+  const lockout = bossLockout();
+
   // Drawn per crab rather than once for the wave, so a wave that lands during
   // dusk arrives visibly mixed instead of all-one-kind.
   for (let i = 0; i < n; i++) {
     const key = pickCrab(difficulty);
-    if (key) spawnNamed(scene, key, difficulty, edgeFloorPoint());
+    if (!key) continue;
+    if (lockout && !CONFIG.enemies[key]?.bossMinion) continue;
+    spawnNamed(scene, key, difficulty, edgeFloorPoint());
   }
 }

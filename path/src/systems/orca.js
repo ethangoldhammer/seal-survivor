@@ -6,6 +6,7 @@ import { boats, damageBoat, hitsBoat } from './boats.js';
 import { nearestFloatingCrew, crewPosition, crewRadius, eatCrew } from './crew.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { targeting, companionDamage, applyCompanionScale } from './scaling.js';
+import { markWeight } from './marks.js';
 
 // Orca Family — a pod of three that hunts the SURFACE BOATS specifically.
 //
@@ -132,10 +133,17 @@ function acquire(m, enemiesList) {
   const body = nearestFloatingCrew(m.pos.x, m.pos.y, c.huntRange);
   if (body) return { kind: 'human', ref: body };
 
+  // A hull the seal has RAMMED is the one the pod goes for, even with a nearer
+  // boat in reach — the mark is the player pointing (see systems/marks.js), and
+  // the pod is the heaviest thing they can point at. Weighted rather than
+  // sorted into its own pass so an unmarked boat right on top of an orca can
+  // still win, which is what stops the pod swimming past a hull to reach a
+  // mark on the far side of the arena.
   for (const b of boats) {
     const dx = b.mesh.position.x - m.pos.x;
     const dy = b.mesh.position.y - m.pos.y;
-    const d2 = dx * dx + dy * dy;
+    const w = markWeight(b);
+    const d2 = (dx * dx + dy * dy) * w * w;
     if (d2 < bestD2) { bestD2 = d2; best = { kind: 'boat', ref: b }; }
   }
   if (best) return best;
@@ -144,7 +152,8 @@ function acquire(m, enemiesList) {
     if (e.radius < c.fallbackMinRadius) continue;
     const dx = e.mesh.position.x - m.pos.x;
     const dy = e.mesh.position.y - m.pos.y;
-    const d2 = dx * dx + dy * dy;
+    const w = markWeight(e);
+    const d2 = (dx * dx + dy * dy) * w * w;
     if (d2 < bestD2) { bestD2 = d2; best = { kind: 'fish', ref: e }; }
   }
   return best;

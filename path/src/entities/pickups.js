@@ -4,6 +4,7 @@ import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { updateTumble } from '../systems/rocks.js';
 import { createInstancedPool } from '../systems/instancedPool.js';
+import { magnetRadius, magnetSpeed, magnetDistance } from '../systems/chumMagnet.js';
 
 // Chum is drawn as instances, not as 140 separate meshes — see
 // systems/instancedPool.js. The orb objects themselves are unchanged: the pool
@@ -25,16 +26,52 @@ export function flushPickupInstances() {
 }
 
 export const pickups = [];
-// Drives the shiver on chum waiting inside a sealed mouth. One shared clock
-// rather than a per-orb one: the orbs are meant to buzz at a common frequency
-// and are separated by phase, not by rate.
-let tellClock = 0;
+// Drives the shiver on chum waiting inside a sealed mouth, and the shimmer on
+// chum the seal is closing on. One shared clock rather than a per-orb one: the
+// orbs are meant to buzz at a common frequency and are separated by phase, not
+// by rate.
+let orbClock = 0;
 // How far into the run we are, for the early-chum holdback in CONFIG.xp.dropRamp.
 // Pushed in once a frame rather than passed per drop: orbs are spawned from four
 // places (a kill, an octopus pop, a bakalar bomb, a boat coming apart) and only
 // some of them have the run's difficulty to hand.
 let runDifficulty = 0;
 export function setChumDifficulty(d) { runDifficulty = d; }
+
+// How bright one orb should be at `dist` from the seal, as a multiplier on the
+// colour it is already wearing — 1 leaves it exactly as it renders today. See
+// CONFIG.pickups.glow for what each knob is for.
+//
+// `reach` is the player's CURRENT pickup radius, so the halo grows with the
+// magnet. `clock` and `phase` drive the shimmer; pass 0 for both to read the
+// steady value at a distance, which is what the test does.
+//
+// Pure, and exported, because the ramp is the whole design here: everything
+// that can go wrong with it (a halo that reaches the far wall, a lift that
+// arrives too late to turn for, a pulse that dips an orb DARKER than the ones
+// around it) is visible in the numbers alone.
+export function chumGlowAt(dist, reach, clock = 0, phase = 0) {
+  const g = CONFIG.pickups?.glow;
+  if (!g?.enabled) return 1;
+  const near = g.near ?? 1;
+  const far = g.far ?? 1;
+  const outer = Math.max(0.01, (reach || 0) * (g.radius ?? 3));
+  // 0 at the rim, 1 on top of the orb. Distances past the rim clamp to 0 and
+  // cost nothing beyond the multiply.
+  const t = Math.max(0, Math.min(1, 1 - dist / outer));
+  const ramp = Math.pow(t, Math.max(0.01, g.curve ?? 1));
+  let mul = far + (near - far) * ramp;
+  const depth = g.pulse?.depth ?? 0;
+  if (depth > 0) {
+    // Scaled by the ramp as well as added to it: an orb out at the rim is
+    // steady, and the shimmer arrives with the brightness rather than being a
+    // separate thing that starts somewhere else.
+    mul *= 1 + depth * ramp * Math.sin(clock * (g.pulse.hz ?? 1.6) * Math.PI * 2 + phase);
+  }
+  // Never below zero — a negative multiplier is a black orb, and `depth` is a
+  // slider somebody will push.
+  return Math.max(0, mul);
+}
 
 export const strikeOrbs = [];
 export const bubbleOrbs = [];
@@ -43,7 +80,7 @@ export const rapidFireOrbs = [];
 export function resetPickups(scene) {
   orbPool?.reset();
   pickups.length = 0;
-  tellClock = 0;
+  orbClock = 0;
   runDifficulty = 0;
   for (const o of strikeOrbs) scene.remove(o.mesh);
   strikeOrbs.length = 0;
@@ -81,6 +118,13 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
   const userTint = CONFIG.assetLooks?.xpOrb?.tint;
   if (mesh.material?.color && userTint == null) mesh.material.color.set(tier.color);
   pool(scene).acquire(mesh);
+  // Lit from its first frame rather than from its first update. The group takes
+  // a DIFFERENT shader program the moment any instance colour exists, so an orb
+  // that spawns after updatePickups has already run for the frame would render
+  // once through a program the game then compiles again and never uses — a
+  // link stall mid-fight, for a frame nobody sees. Starting at the resting
+  // value costs one write and means the pool is only ever asked for the one.
+  orbPool.setGlow(mesh, CONFIG.pickups.glow?.far ?? 1);
   pickups.push({
     mesh,
     // The holdback scales the xp only — the orb, its size, its heal and its
@@ -139,9 +183,19 @@ function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect) {
   const dy = player.mesh.position.y - orb.mesh.position.y;
   const dist = Math.hypot(dx, dy) || 0.0001;
 
-  if (dist < player.stats.pickupRadius) {
-    orb.mesh.position.x += (dx / dist) * CONFIG.pickups.magnetSpeed * dt;
-    orb.mesh.position.y += (dy / dist) * CONFIG.pickups.magnetSpeed * dt;
+  // The RANGE test uses the corridor distance while dashing; the PULL still
+  // aims at the seal itself. Those are two different questions — "is this in
+  // reach" and "which way is the mouth" — and conflating them would drag orbs
+  // toward a point on the dash line rather than toward the animal.
+  const speed = player.velocity?.length?.() ?? 0;
+  const reach = magnetDistance(
+    player.mesh.position.x, player.mesh.position.y,
+    orb.mesh.position.x, orb.mesh.position.y, speed,
+  );
+  if (reach < magnetRadius(player.stats, speed)) {
+    const pull = magnetSpeed(speed) * dt;
+    orb.mesh.position.x += (dx / dist) * pull;
+    orb.mesh.position.y += (dy / dist) * pull;
   }
 
   if (dist < CONFIG.pickups.collectRadius) {
@@ -175,7 +229,11 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
   // What the release would take if it fired right now — that is the radius
   // worth telegraphing, not the magnet's.
   const tellRadius = sealed ? (player.stats.chumGulpRadius ?? 0) : 0;
-  tellClock += dt;
+  // Hoisted: the magnet state is a property of the SEAL, not of each orb, and
+  // resolving it per orb would ask the same question 140 times a frame.
+  const sealSpeed = player.velocity?.length?.() ?? 0;
+  const reachNow = magnetRadius(player.stats, sealSpeed);
+  orbClock += dt;
 
   for (let i = pickups.length - 1; i >= 0; i--) {
     const p = pickups[i];
@@ -209,14 +267,22 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // seconds long drops a mid-water pile clean out of the radius it was
       // telegraphing. Anything already resting on the seabed was going nowhere
       // anyway, so this only ever holds the ones in open water.
-    } else if (!sealed && dist < player.stats.pickupRadius) {
+    } else if (!sealed && magnetDistance(
+      player.mesh.position.x, player.mesh.position.y,
+      p.mesh.position.x, p.mesh.position.y, sealSpeed,
+    ) < reachNow) {
       // The magnet outranks any throw still in flight, and cancels it — an orb
       // the player swam away from should go back to sinking, not pick its old
       // arc back up.
       p.vx = 0;
       p.vy = 0;
-      p.mesh.position.x += (dx / dist) * CONFIG.pickups.magnetSpeed * dt;
-      p.mesh.position.y += (dy / dist) * CONFIG.pickups.magnetSpeed * dt;
+      // Pulled at the state's own speed. While dashing that is deliberately
+      // FASTER THAN THE DASH: at the flat 14 against a 46 u/s dash an orb not
+      // directly ahead falls behind at 32 u/s and can never arrive, so a wider
+      // striking radius on its own would have collected nothing extra.
+      const pull = magnetSpeed(sealSpeed) * dt;
+      p.mesh.position.x += (dx / dist) * pull;
+      p.mesh.position.y += (dy / dist) * pull;
     } else if (p.hoover) {
       // IN A MOUTH: already moved this frame by whatever is eating it (see
       // bitePickup), and neither sinking nor drifting on its own until it lets
@@ -230,7 +296,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // second instead of letting the throw run on into a fall.
       const toss = CONFIG.pickups.toss ?? {};
       const underwater = p.mesh.position.y < bounds.surfaceY;
-      if (!underwater) p.vy -= (toss.gravity ?? 9) * dt;
+      if (!underwater) p.vy -= CONFIG.arena.gravity * dt;
       const drag = Math.exp(-(underwater ? (toss.waterDrag ?? 4.5) : (toss.airDrag ?? 1.2)) * dt);
       p.vx *= drag;
       p.vy *= drag;
@@ -266,10 +332,12 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       continue;
     }
 
-    // The other half of the telegraph: a shiver in place. Geometric on purpose
-    // — orb materials are SHARED across every instance (see spawnXpOrb), so a
-    // flash written to a colour or an emissive would light up every orb in the
-    // arena rather than the ones about to be eaten.
+    // The other half of the telegraph: a shiver in place. Geometric because a
+    // buzz is what "spoken for" looks like — and, until the per-instance glow
+    // below existed, because it had to be: orb materials are SHARED across
+    // every instance (see spawnXpOrb), so a flash written to the material's
+    // colour lights every orb in the arena rather than the ones about to be
+    // eaten. A tell written through setGlow is now possible; this isn't it.
     //
     // Per-orb phase, or a pile shivers in lockstep and reads as one object
     // wobbling instead of a dozen loose bits rattling.
@@ -278,7 +346,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // Same Nyquist limit the wind-up tremble lives under (see
       // CONFIG.strike.charge.vibrate): past ~20Hz at 60fps this aliases into a
       // slow wobble, which reads as broken rather than as urgent.
-      const w = tellClock * (tell.hz ?? 18) * Math.PI * 2 + phase;
+      const w = orbClock * (tell.hz ?? 18) * Math.PI * 2 + phase;
       p.shiverX = Math.cos(w) * tell.shiver;
       // Beaten against a different multiple so it buzzes in a little figure
       // rather than sliding back and forth along one line.
@@ -286,6 +354,29 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       p.mesh.position.x += p.shiverX;
       p.mesh.position.y += p.shiverY;
     }
+
+    // THE PULL: brighter the closer the seal is, so a scattered pile lights up
+    // as it comes into reach instead of waiting to be noticed. Written to the
+    // orb's own instance rather than to the material every orb shares — that
+    // is the whole reason this can exist at all (see CONFIG.pickups.glow and
+    // setGlow in systems/instancedPool.js).
+    //
+    // `dist` is this frame's distance, measured before the magnet moved either
+    // of them; at magnet speed that is under a quarter of a unit of lag on a
+    // 12-unit halo, and using it costs nothing where re-measuring would cost a
+    // second hypot per orb per frame.
+    //
+    // Separate phase from the shiver's: they run at rates an order of
+    // magnitude apart, and sharing one would tie a 1.6Hz shimmer's starting
+    // point to an 18Hz buzz's.
+    // `reachNow`, not the base radius: the halo's whole job is "this is in
+    // reach", so it has to widen with the reach. A halo pinned to the base
+    // while a dash reaches twice as far would light up a fraction of the food
+    // the dash is actually about to take.
+    orbPool?.setGlow(p.mesh, chumGlowAt(
+      dist, reachNow, orbClock,
+      (p.glowPhase ??= Math.random() * Math.PI * 2),
+    ));
 
     // Consumed, not latched: whatever is eating this orb re-raises the flag
     // every frame it is still eating (updateEnemies runs first), so an animal

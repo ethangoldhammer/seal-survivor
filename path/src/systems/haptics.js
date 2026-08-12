@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { rumbleScale } from './settings.js';
 import { getActivePad } from '../input.js';
 
 // Controller rumble.
@@ -352,6 +353,13 @@ function fire(pulse, scale) {
  */
 export function playHaptic(spec, scale = 1) {
   if (!spec || !CONFIG.haptics.enabled) return;
+  // The player's own strength, on top of whatever the caller computed. Folded
+  // into `scale` rather than checked as a switch so the OFF case and the 30%
+  // case are the same code path — off is simply a scale of zero, and it drops
+  // out here before any voice, timer or actuator call is made.
+  const wanted = rumbleScale();
+  if (wanted <= 0) return;
+  scale *= wanted;
 
   const pulses = toPulses(spec);
   if (!pulses.length) return;

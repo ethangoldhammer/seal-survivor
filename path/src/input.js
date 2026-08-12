@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
+import { actionForKey, stickDeadzone } from './systems/settings.js';
 
 // There is no `firing` here any more. The seal shoots on its own — see
 // CONFIG.weapon.autofire, which is now the only thing that decides whether the
@@ -28,6 +29,13 @@ export const menuInput = {
   x: 0,
   y: 0,
   confirm: false,
+  // Start, edge-triggered. Opens the pause menu from a run and closes it
+  // again — it is the button every player already tries. It is also in
+  // CONFIRM_BUTTONS, which is not a conflict as long as whoever consumes this
+  // re-baselines the menu input when the pause state changes: resetMenuInput
+  // adopts the held Start rather than zeroing it, so the same press cannot
+  // also confirm whatever the cursor opened onto.
+  pause: false,
 };
 
 const keys = { up: false, down: false, left: false, right: false };
@@ -114,10 +122,16 @@ export const touchSlots = Array.from({ length: TOUCH_SLOTS }, () => ({
   charging: false,
 }));
 
-const DEADZONE = 0.15;
-// A menu step should take a deliberate push, so it asks for more of the stick
-// than steering does — otherwise the drift that's harmless in gameplay walks
-// the selection across the cards on its own.
+// The gameplay deadzone is a player setting now (Controls tab) — worn sticks
+// drift by wildly different amounts, and 0.15 is a guess about a specific pad.
+// Read through stickDeadzone() at every use rather than cached here, so
+// dragging the slider in the pause menu takes effect on the next frame.
+//
+// MENU_DEADZONE below stays a constant on purpose: it is not about the
+// hardware, it is about a menu step needing a deliberate push — otherwise the
+// drift that's harmless in gameplay walks the selection across the cards on
+// its own, and tying it to the gameplay setting would let a low deadzone do
+// exactly that.
 const MENU_DEADZONE = 0.5;
 const MENU_REPEAT_DELAY = 0.42; // seconds held before the first repeat
 const MENU_REPEAT_RATE = 0.13; // seconds between repeats after that
@@ -478,22 +492,40 @@ export function clearPendingInput() {
   input.strikeRelease = false;
 }
 
+// The arrow keys, which are NOT rebindable and always steer. Kept as a fixed
+// alternate rather than folded into the bindings so there is always a way to
+// move: the pause menu can rebind WASD into a tangle, and a player who has
+// done that has to still be able to reach the menu and undo it.
+const FIXED_MOVE = { arrowup: 'up', arrowdown: 'down', arrowleft: 'left', arrowright: 'right' };
+
 function setKey(e, down) {
   const k = e.key.toLowerCase();
-  if (k === 'w' || k === 'arrowup') keys.up = down;
-  if (k === 's' || k === 'arrowdown') keys.down = down;
-  if (k === 'a' || k === 'arrowleft') keys.left = down;
-  if (k === 'd' || k === 'arrowright') keys.right = down;
-  // Space charges a strike. The keydown edge (guarded against auto-repeat)
-  // starts the meter; `spaceHeld` is what keeps it filling, and the keyup is
-  // what launches. Held state has to be tracked separately from the edge —
-  // key auto-repeat fires keydown over and over, so counting those as "still
-  // held" would work, but a key released while the window was unfocused would
-  // never arrive and the meter would fill forever.
-  if (k === ' ') {
+  // The player's binding first, then the fixed arrows. Two lookups rather than
+  // one merged map because a rebind must be able to move `up` off W without
+  // also being able to take the arrow key away from it.
+  const action = actionForKey(k) ?? FIXED_MOVE[k] ?? null;
+
+  if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
+    keys[action] = down;
+    return;
+  }
+  // The strike charges. The keydown edge (guarded against auto-repeat) starts
+  // the meter; `spaceHeld` is what keeps it filling, and the keyup is what
+  // launches. Held state has to be tracked separately from the edge — key
+  // auto-repeat fires keydown over and over, so counting those as "still held"
+  // would work, but a key released while the window was unfocused would never
+  // arrive and the meter would fill forever.
+  //
+  // Still called `spaceHeld` because Space is still the default and every
+  // other reference in this file reads that way; what it means now is "the
+  // strike KEY, whatever it is bound to, is down".
+  if (action === 'strike') {
     if (down && !e.repeat) strikeRequested = true;
     spaceHeld = down;
   }
+  // 'pause' is deliberately not handled here. It stops the run and opens a
+  // menu, which is main.js's business — this file only turns devices into
+  // per-frame state and has no idea a menu exists.
 }
 
 function updateMouseNDC(clientX, clientY) {
@@ -575,7 +607,7 @@ function getGamepad() {
   let firstConnected = null;
   let sticky = null;
   let mostActive = null;
-  let peak = DEADZONE;
+  let peak = stickDeadzone();
 
   for (const p of pads) {
     if (!p?.connected) continue;
@@ -638,6 +670,13 @@ let menuHeldX = 0;
 let menuHeldY = 0;
 let menuRepeatAt = 0;
 let confirmHeld = false;
+// Start's own held state, tracked separately from `confirmHeld` even though
+// Start is one of the confirm buttons. They have to be able to disagree:
+// opening the pause menu re-baselines confirm (so the opening press can't also
+// activate a row), and if that same call also cleared this one, the release
+// would arm a second pause toggle and the menu would shut again on let-go.
+let pauseHeld = false;
+const PAUSE_BUTTON = 9; // Start, Standard Gamepad
 
 // One axis of the pad reduced to -1 / 0 / +1, from either the D-pad or the
 // stick. The D-pad wins: if it's pressed the player means exactly that step.
@@ -680,6 +719,10 @@ function updateMenuInput(pad) {
   const down = CONFIRM_BUTTONS.some((b) => !!pad?.buttons[b]?.pressed);
   menuInput.confirm = down && !confirmHeld;
   confirmHeld = down;
+
+  const pauseDown = !!pad?.buttons[PAUSE_BUTTON]?.pressed;
+  menuInput.pause = pauseDown && !pauseHeld;
+  pauseHeld = pauseDown;
 }
 
 // Call when a menu opens. A is also the fire button, so the player is usually
@@ -699,14 +742,20 @@ export function resetMenuInput() {
   menuInput.x = 0;
   menuInput.y = 0;
   menuInput.confirm = false;
+  // NOT re-baselined here. This is called on the frame the pause menu opens,
+  // and Start is what opened it — adopting "Start is down" as the baseline
+  // would be right, but the edge has ALREADY been consumed by the toggle this
+  // frame and `pauseHeld` is already true from that same poll. Touching it
+  // here would only be able to break the pairing, never fix it.
 }
 
 // Rescale a stick axis so it ramps from 0 at the deadzone edge to 1 at full
 // deflection, instead of snapping to the deadzone value.
 function applyDeadzone(v) {
   const a = Math.abs(v);
-  if (a <= DEADZONE) return 0;
-  return Math.sign(v) * ((a - DEADZONE) / (1 - DEADZONE));
+  const dz = stickDeadzone();
+  if (a <= dz) return 0;
+  return Math.sign(v) * ((a - dz) / (1 - dz));
 }
 
 const worldPoint = new THREE.Vector3();
@@ -755,7 +804,7 @@ export function updateInput(camera, playerPos) {
   if (pad) {
     const rx = pad.axes[2] ?? 0;
     const ry = pad.axes[3] ?? 0;
-    if (Math.hypot(rx, ry) > DEADZONE) {
+    if (Math.hypot(rx, ry) > stickDeadzone()) {
       input.aim.set(rx, -ry).normalize();
       aimed = true;
       lastAimDevice = 'gamepad';

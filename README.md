@@ -24,7 +24,7 @@ which takes a minute or two. So the normal loop is edit, check with
 `npm run dev`, commit, push.
 
 Deployed builds ship without the authoring UI — no `` ` `` tuner, no T panel, no
-G/B overlays, no P/X/N debug keys. Adding `?tune` to the URL brings them all back,
+G/B/U overlays, no P/X/N debug keys. Adding `?tune` to the URL brings them all back,
 so tuning against the live build still works without a rebuild.
 
 Two escape hatches, for when git isn't the right path:
@@ -206,9 +206,85 @@ ordinary way, or tag a predator instead, which is what `abyssShark` is.
 
 To look at the glowing variants without waiting for the spawner to offer them —
 the rarest is two per arena behind a level gate — press **`N`** in game. It puts
-one of each tagged creature in a row beside the seal and logs the hour, so you
-can compare the presets side by side. Judge them after dark: the glow is
-additive, so in daylight they read as dark fish.
+one of each tagged creature in a row beside the seal and logs everything driving
+each one's glow — pattern, drift, breath, flicker, phase spread. Judge them after
+dark: the glow is additive, so in daylight they read as dark fish. **`Shift+N`**
+locks the clock at full dark (dev only, never persisted).
+
+### Why the glow is tuned against 1.0
+
+The pattern is **added** to an LDR composite that **clips at 1.0**, and both
+animated channels die above that line:
+
+> The breath is `1 + pulseAmp * sin(...)`, so the core swings between
+> `strength*glow*(1-pulseAmp)` and `strength*glow*(1+pulseAmp)`. If the *trough*
+> is already over 1.0 the whole cycle is white — the clock runs, the uniform
+> changes every frame, the pixels never move. Turning `pulseAmp` up makes it
+> worse, pushing the peak deeper in while the trough stays above.
+>
+> The same clip eats the pattern's *shape*: the add is `mask * strength`, so
+> everywhere `mask > 1/(strength*glow)` is the same white. What pans is then the
+> edge of a silhouette, not a texture.
+
+The presets were originally tuned by eye against bloom and every one landed
+above the clip — the lanternfish ran **3.20 .. 4.80** with only the bottom 25% of
+its mask carrying detail. They have since been rescaled by a single shared
+factor, so relative brightness is unchanged and each core now sits near 1.0:
+
+| preset | core swing | pattern detail | feature turnover | crosses the body |
+|---|---|---|---|---|
+| `lantern` | 0.86 .. 1.30 | 93% | 1.7s | 30.3s |
+| `reefGlow` | 0.78 .. 1.38 | 93% | 3.3s | 11.1s |
+| `dartGlow` | 0.84 .. 1.32 | 93% | 3.3s | 18.5s |
+| `veil` | 0.60 .. 1.24 | 100% | 11.1s | 26.5s |
+| `abyssHunter` | 0.71 .. 1.88 | 77% | 3.3s | 6.1s |
+| `emberClaw` | 0.77 .. 1.50 | 88% | 3.3s | 12.8s |
+
+### The school wave
+
+One term in the shader is sampled in **world space** rather than in the animal's
+own bind pose: a slow noise field filling the water, which every glowing
+creature reads at wherever it happens to be floating. A shoal drifting through
+it lights a few fish at a time, in the order the water reaches them, so the
+school reads as one organism instead of nine animals that happen to be nearby.
+
+It modulates **brightness, not the pattern** — sampling the markings themselves
+in world space would drag them across each body as it swam, which looks like a
+texture sliding off a model. And its travel clock is **global**: every material
+is handed the same value on the same frame, and it deliberately does *not* pick
+up the per-individual phase offset that keeps the breath out of lockstep. A
+per-material clock there would give every fish a private wave, which is exactly
+not a field. `biolumSkin.base.schoolSpeed` is the current, so it exists only on
+the base; `schoolAmp` and `schoolScale` resolve per preset, so a seabed crawler
+can opt out (`carapace` does).
+
+`stripes` is the exception to all of the above: its bands **travel**, head to
+tail, one full body length per breath cycle (9.1s on the abyss shark's `4 bars`).
+The phase subtracts the breath clock from the axis rather than adding a term,
+which makes it a pure translation — and the band count is rounded to a whole
+number so the clock's wrap at 2 lands on an exact number of turns. Without that
+rounding the pattern snaps sideways every wrap; `npm run test:glowphase` proves
+both, including a positive control showing the un-rounded count jumping by 0.56.
+
+Pan speed has two numbers that disagree, and the second is the one people mean.
+`flow` is a rate through the *noise field* (features ≈ 1 unit) applied after the
+divide by `scale`, so a fine-grained pattern crawls across the body far slower
+than its churn suggests — `speckle` samples at **4x** frequency, which is why
+`lantern` sets its own `flow` instead of taking the base.
+
+`strength`, `glow` and `flow` are owned by **config.js and deliberately absent
+from `imported-tuning.json`**. They used to be in both, and that was the bug: a
+tuner save had copied `glow: 2` into all six presets, so `base.glow` — the one
+knob documented as moving the whole family's bloom — was shadowed everywhere and
+dragging it did nothing. `npm run test:glowphase` fails if the snapshot
+re-acquires any of the three, naming which file won.
+
+**`Alt+N`** spawns the lineup with the breath forced into view — brightness only,
+rates untouched. **`Alt+Shift+N`** exaggerates drift ~8x to confirm the pan is
+wired up in about a second; unlike `Alt+N` it is deliberately dishonest about
+rate and says so in the console. Both size themselves against each creature's own
+palette and `glow` rather than a hardcoded strength, so they can't quietly stop
+clearing the clip when those move.
 
 "What time it is" starts as the player's own: the clock opens at the device's
 local time of day (`dayNight.startFromSystemClock`) and then runs forward at
@@ -241,6 +317,38 @@ the source of truth for the display fields, and it overwrites whatever the
 config entry says — the values above are only the fallback for an id the CSV
 doesn't mention. See [Editing upgrades](#editing-upgrades).
 
+### Trying an upgrade without waiting for the deal
+
+Press **`U`** in game. Every upgrade in the table, with a `+1` that hands it to
+the seal on the spot and a `−` that takes a stack back.
+
+The point is that a card is three draws out of forty weighted rows, so seeing
+the sixth stack of one ability means playing until the deal happens to offer it
+six times — and an upgrade with `enabled` set to `FALSE` in `upgrades.csv` can
+never be dealt at all, so before this there was no way to see a half-built one
+in the water. Those are listed too, marked **NOT DEALT**.
+
+Two things the game normally rolls for you are yours to pick:
+
+- **Tier** — the rarity a card is dealt at rides along with the pick forever and
+  scales it by `statMul`, so Common Multishot and Legendary Multishot are
+  different upgrades. The chips are the rows of `rarities.csv`.
+- **Glow** — Glow Up! rolls one element per run and never re-rolls, so the
+  picker is the only way to see infection without restarting runs until it
+  comes up. It locks once the run has committed one, because `commitElement` is
+  a one-way door.
+
+Grants go through the same door a real pick does — `commitElement`, then
+`addUpgrade` with a tier, then `recomputeStats` — so what you're looking at is
+what a run would actually produce, and it survives the next level-up rather
+than being wiped by the rebuild. The footer prints the stats that moved.
+Removing a stack rolls the numbers back exactly; a companion already in the
+water may take a beat to catch up. Granted picks are recorded on the run and
+the run is stamped `debugGranted`, so a stacked-deck run is still tellable from
+a real one in `playtest/runs.jsonl`.
+
+Dev only, like the rest of the panels. `npm run test:updebug` covers it.
+
 ### Editing upgrades
 
 **`path/src/upgrades.csv`** — one row per upgrade, edited in a spreadsheet, any
@@ -249,8 +357,8 @@ are live.
 
 `npm run csv` serves a grid of all three tables at
 [localhost:5177](http://localhost:5177), with the columns typed: `cardArt` is a
-picker showing the thirty real hex images, `enabled` and `bioluminescent` are
-dropdowns, `spawnGroup` offers the groups that exist while still letting you
+picker showing the thirty real hex images, `enabled`, `bioluminescent` and
+`bossMinion` are dropdowns, `spawnGroup` offers the groups that exist while still letting you
 type a new one, and a number the game would reject turns red before you save
 rather than warning in the console after. It reads those rules out of
 `enemyTable.js` and `config.js` at startup, so it cannot drift into enforcing
@@ -815,6 +923,94 @@ server is the authority and truncates anything longer, so raising only the
 client lets players type a name the board then silently cuts. Changing it means
 redeploying the worker, not just rebuilding the game.
 
+## Sharks come in ones, and every 8-12 levels one comes with a name
+
+Two halves of the same idea: a shark should read as a threat you are dealing
+with, not as weather.
+
+**The shark cap.** `spawnGroup` in `enemies.csv` now takes a LIST of families
+separated by spaces, and every cap named binds. All six sharks carry
+`apex shark`: `apex` is the old shared allowance for big rigged bodies (orca,
+dolphin and the rest, capped at 8), and `shark` is a much tighter one —
+`CONFIG.spawn.groupMaxAlive.shark` is **2**. Before this, eight apex slots
+divided among seven shark species allowed a perfectly legal shiver of six, none
+of them individually over any limit. Measured over ten minutes at difficulty 20
+with the real spawner (`npm run test:boss`), the water now spends about half
+the run with no shark at all, a third with one, and a sixth with two.
+
+**The boss.** Every 8-12 levels — rolled fresh each time, so you cannot count
+down to it — `systems/boss.js` puts one `bossShark` in the water: a megalodon's
+body at `CONFIG.boss.sizeMul` (1.6x, radius ~8 against the arena's 80-unit
+width), with a red health bar and its name across the top of the screen for as
+long as it lives. It is paced in LEVELS rather than seconds because the
+difficulty clock already scales everything else; levelling fast is what brings
+the wall sooner.
+
+It is an ordinary creature everywhere it can be: `bossShark` is a row in
+`enemies.csv` like anything else (hp, damage, xp — edit it there), it carries
+the same `apex shark` tags so a boss fight is never *also* a shiver, and it
+sits in the spawn pool at `weight: 0` so the level trigger is the only thing
+that can send one. `CONFIG.boss` holds the cadence and the size.
+
+The name comes from **`path/src/bossNames.csv`**, which is name PARTS rather
+than names — eight prefixes, eight roots and ten epithets are hundreds of
+sharks:
+
+| column | meaning |
+| --- | --- |
+| `id` | a short handle. Must be unique; never shown. |
+| `slot` | `prefix` (`Gore`) + `root` (`maw`) make the name; `epithet` (`the Devourer`) follows it. |
+| `text` | the part, used with exactly the capitalisation typed. |
+| `enabled` | `FALSE` takes it out of rotation. Blank means enabled. |
+| `weight` | how likely, relative to the other rows *in the same slot*. |
+
+Add rows in a spreadsheet or with `npm run csv`. A file with no prefixes or no
+roots falls back to one fixed name rather than to a blank health bar; a file
+with no epithets is simply a shorter name.
+
+### The water empties for a boss
+
+A boss has to *read* as the biggest thing in the ocean, and it cannot while it
+shares the frame with thirty fish, a shiver and a crab pile — the player can't
+tell which of the forty bodies is the fight. So when one arrives:
+
+- everything already in the water turns for the nearest wall and **swims out**,
+  under its own power, and is removed as it crosses the edge. Nothing dies:
+  no chum, no xp, no kill credit. The clear-out is not a screen wipe.
+- **nothing new spawns** until the boss is dead — the weighted pool *and* the
+  chum-pile crab waves, which are the game's two sources of creatures.
+
+**Which creatures stay is the `bossMinion` column of `enemies.csv`.** Put `yes`
+in it and that species is an escort: the ones already swimming are left alone,
+and it is the only thing the pool may send for the length of the fight.
+
+With nothing tagged — which is how it ships — a boss fight is a duel. Tag
+`fish` and you get a boss with a shoal around it; tag `emberCrab` and the
+seabed keeps working under the fight.
+
+Two deliberate exceptions:
+
+- **Creatures that cannot swim stay put.** The oyster's `speed` is 0, so
+  marking it would produce a creature flagged as leaving that never moves and
+  is therefore never removed. Shoving it out instead would read as a physics
+  bug, not as an animal getting out of the way.
+- **Boats and seagulls are untouched.** They're weather rather than sea life,
+  they're on their own timers outside the enemy roster, and clearing them was
+  not asked for. Say the word if a boss fight should empty the sky too.
+
+`CONFIG.boss.clearOut` holds the switch and the exit speed. Turn `enabled` off
+and bosses arrive into a normal ocean again.
+
+> This is also what finally made the `leaving` flag work for anything other
+> than the sea turtle. Two halves of it were missing: the steer that turns a
+> departing creature toward open water lived *inside* the drift behaviour, so
+> a marked shark just carried on hunting; and the arena's side walls clamp
+> every swimmer a radius inside the edge, which is the line the removal sweep
+> waits for — so even one that did turn could never cross it. The turtle was
+> the only user and it has a rigid body, which opens its own walls. Both are
+> now general: `leaving` steers ahead of every behaviour, and clamps
+> vertical-only, exactly mirroring `entering`.
+
 ## The game-over headline
 
 The line above your score is drawn from **`path/src/quips.csv`**, one row per
@@ -947,9 +1143,44 @@ jitter, colour bleed, posterise, pixelate, noise and vignette. They're all the
 same shader with different uniforms, so presets can be mixed rather than being
 mutually exclusive. Cycle them with **P**, or pick one in the tuning panel.
 
+## The pause menu, and player settings vs. authored tuning
+
+**Esc** (or **Start** on a pad) pauses a run and opens the settings panel:
+Audio, Video and Controls. Everything in it lives in
+`path/src/systems/settings.js` and is saved per-browser under its own
+`localStorage` key.
+
+It is deliberately a **separate layer from `CONFIG`**, and that separation is
+the whole design rather than tidiness. Saved tuning snapshots whole `CONFIG`
+sections — `audio`, `bloom`, `render` and `haptics` among them — so a volume
+slider that wrote `CONFIG.audio.masterVolume` would be picked up by the next
+tuner edit, written into `imported-tuning.json`, committed, and shipped to
+everybody. And it would win, because a saved value beats a config.js default.
+One player turning the music down would turn it down for the whole game.
+
+So nothing in the pause menu writes to `CONFIG`. Each setting is a **scale** or
+an **override** applied where the authored value is consumed:
+
+| Setting | How it reaches the game |
+| --- | --- |
+| Master / SFX / Music / Mute | multiplied into the SFX bus gain and the music gain |
+| Resolution | multiplies the authored pixel-ratio cap (`CONFIG.render.pixelRatio`) — it can ask for less, never more |
+| Screen filter, Bloom | override `CONFIG.post.preset` / `CONFIG.bloom.enabled`, defaulting to whatever the build ships |
+| Screen shake | multiplies the camera offset, at the point the camera moves |
+| Key bindings, Deadzone, Vibration | read live by `input.js` and `haptics.js` |
+
+Turn everything back to its default and the game is exactly the authored build
+again: every scale is 1 and every override is null. `npm run test:pause` is
+what holds that true, along with the clamping that keeps a hand-edited profile
+from putting a `NaN` into a gain node.
+
+**M** and **P** now write the player setting rather than `CONFIG`, so the
+hotkey and the menu are the same switch. The arrow keys always steer, whatever
+the bindings say — that is the way back from a binding you have tangled.
+
 ## Controls
 
-**`** tuning panel · **P** screen filter · **M** mute
+**Esc** pause & settings · **`** tuning panel · **P** screen filter · **M** mute
 
 ## Layout
 
@@ -977,6 +1208,7 @@ path/src/
     post.js            CRT / VHS / VGA screen filters
     shaderWarmup.js    compiles every program during load, not mid-fight
     instancedPool.js   one draw per shape for the things there are hundreds of
+    perfLog.js         frame-time distribution, printed at the end of a run
   ui/
     ui.js              HUD and menus
     loading.js         the boot progress bar

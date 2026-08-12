@@ -1,5 +1,7 @@
+import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { emit } from '../entities/particles.js';
+import { chainPoint } from './ikChain.js';
 
 // Bubbles off the seal itself, anchored to bones rather than to the body's
 // centre — the mouth breathes and the tail leaves a wake, so both emitters
@@ -17,10 +19,17 @@ import { emit } from '../entities/particles.js';
 //            tail isn't working hard enough to cavitate and it stops
 //            entirely, which is what keeps a drifting seal from trailing
 //            bubbles it isn't earning.
+//
+// The wake is not one point. See wakeOrigin below: each burst is born either
+// off one of the two hind FLIPPER TIPS or somewhere along the tail, so the
+// trail comes off the whole back half of the animal.
+
+const _pt = new THREE.Vector3();
 
 let breathTimer = 0;
 let wakeCarry = 0; // fractional emissions carried between frames
 let chargeCarry = 0; // the same, for the wind-up vent
+let wakeSide = 0; // alternates the flipper a burst comes off
 
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
@@ -39,6 +48,56 @@ export function resetBubbles() {
   breathTimer = nextBreathDelay();
   wakeCarry = 0;
   chargeCarry = 0;
+  wakeSide = 0;
+}
+
+// --- where a wake bubble is born -------------------------------------------
+//
+// Water leaves a swimming seal off the ENDS of the things pushing it, so this
+// picks a fresh point per burst instead of pouring everything out of one
+// anchor. Two kinds of place, split by `tailShare`:
+//
+//   a flipper tip — all four, stepped through in turn. The front pair are the
+//     rig's muzzles, which sit on the outermost skinned vertex of each flipper
+//     (see systems/aimRig.js — the same points the muzzle flash comes off, so
+//     the shot and its bubbles agree). The hind pair are the `finL`/`finR`
+//     anchors, just past the trailing edge of the webbing. The tail anchor that
+//     used to carry all of this lands on the ankle joint the hind flippers hang
+//     off — the wake came out of the BASE of the fins.
+//
+//   along the tail — sampled down the tail chain, crowded toward the tip by
+//     `tipBias`, because that is how much of the tail is actually moving: the
+//     root barely travels and the tip whips.
+//
+// Returns a live object with .x/.y — either an anchor, a muzzle, or the scratch
+// vector — so nothing is copied per burst. Callers read it and emit at once.
+//
+// Degrades in the order tips -> tail chain -> the plain `tail` anchor -> null,
+// so a model with no fin anchors, and any caller passing a hand-built rig,
+// behaves exactly as it did before.
+const _tips = []; // reused per call; wakeOrigin is on the emission path
+
+function wakeOrigin(rig, cfg) {
+  _tips.length = 0;
+  for (const m of rig.muzzles ?? []) _tips.push(m);
+  if (rig.anchors.finL) _tips.push(rig.anchors.finL);
+  if (rig.anchors.finR) _tips.push(rig.anchors.finR);
+  const chain = rig.tail;
+
+  // With no tips to shed off, the tail carries the whole wake rather than
+  // `tailShare` of it.
+  if (chain && (_tips.length === 0 || Math.random() < (cfg.tailShare ?? 0))) {
+    // u^(1/(1+bias)) skews a uniform draw toward 1 — at the shipped bias of 3
+    // half the samples land in the last sixth of the tail. bias 0 is an even
+    // spread, and no value of it can push a sample off the end.
+    const s = Math.pow(Math.random(), 1 / (1 + Math.max(0, cfg.tipBias ?? 0)));
+    return chainPoint(chain, s, _pt);
+  }
+  // Stepped rather than drawn at random: four tips picked uniformly leave
+  // visible gaps and clumps at this burst rate, and the whole point is that
+  // every limb is trailing something.
+  if (_tips.length > 0) return _tips[wakeSide++ % _tips.length];
+  return rig.anchors.tail || null;
 }
 
 /**
@@ -74,9 +133,11 @@ export function updateBubbles(dt, rig, velocity, aboveSurface, charge = 0) {
     }
   }
 
-  // --- tail wake ------------------------------------------------------------
-  const tail = rig.anchors.tail;
-  if (cfg.wake.enabled && tail && speed >= cfg.wake.minSpeed) {
+  // --- the wake -------------------------------------------------------------
+  // Off all four flipper tips and along the tail — see wakeOrigin.
+  const hasWake = !!(rig.muzzles?.length || rig.anchors.finL || rig.anchors.finR
+    || rig.tail || rig.anchors.tail);
+  if (cfg.wake.enabled && hasWake && speed >= cfg.wake.minSpeed) {
     // Rate ramps with speed rather than switching on at full strength, so
     // crossing minSpeed fades the wake in instead of popping it.
     const ramp = Math.min(1, (speed - cfg.wake.minSpeed) / Math.max(0.01, maxSpeed - cfg.wake.minSpeed));
@@ -93,7 +154,12 @@ export function updateBubbles(dt, rig, velocity, aboveSurface, charge = 0) {
       const dirX = velocity.x * inv;
       const dirY = velocity.y * inv;
       for (let i = 0; i < bursts; i++) {
-        emit('wakeBubbles', tail.x, tail.y, {
+        // Re-picked per burst, not per frame: that is what spreads consecutive
+        // bursts across both flippers and down the tail instead of moving one
+        // emitter around.
+        const from = wakeOrigin(rig, cfg.wake);
+        if (!from) break;
+        emit('wakeBubbles', from.x, from.y, {
           // Cast off BEHIND the seal, along the reverse of travel.
           dirX,
           dirY,
@@ -120,9 +186,9 @@ export function updateBubbles(dt, rig, velocity, aboveSurface, charge = 0) {
   // off through a wind-up too — `charge.enabled` is the switch for this effect.
   const cc = cfg.charge;
   const ventMouth = cfg.breath.enabled !== false ? mouth : null;
-  const ventTail = cfg.wake.enabled !== false ? tail : null;
+  const ventWake = cfg.wake.enabled !== false && hasWake;
   const wind = cc?.enabled === false ? 0 : Math.min(1, Math.max(0, charge || 0));
-  if (wind <= 0 || (!ventMouth && !ventTail)) {
+  if (wind <= 0 || (!ventMouth && !ventWake)) {
     chargeCarry = 0;
     return;
   }
@@ -154,14 +220,19 @@ export function updateBubbles(dt, rig, velocity, aboveSurface, charge = 0) {
         scale: cfg.breath.scale * ventScale,
       });
     }
-    if (ventTail) {
-      emit('wakeBubbles', ventTail.x, ventTail.y, {
-        dirX: tailX,
-        dirY: tailY,
-        vx: velocity.x,
-        vy: velocity.y,
-        scale: cfg.wake.scale * ventScale,
-      });
+    if (ventWake) {
+      // Same picker the wake uses, so a wind-up vents off the flipper tips and
+      // down the tail rather than out of one point.
+      const from = wakeOrigin(rig, cfg.wake);
+      if (from) {
+        emit('wakeBubbles', from.x, from.y, {
+          dirX: tailX,
+          dirY: tailY,
+          vx: velocity.x,
+          vy: velocity.y,
+          scale: cfg.wake.scale * ventScale,
+        });
+      }
     }
   }
 }

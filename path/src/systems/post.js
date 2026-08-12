@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { FILTER_OPTIONS, bloomEnabled, setSetting, screenFilter } from './settings.js';
 import { feedbackState } from './feedback.js';
 import { suffocationPixelSize } from './oxygenFx.js';
 import { cineLens } from './cineCamera.js';
@@ -93,6 +94,7 @@ const fragmentShader = /* glsl */ `
   uniform float uPathWidth;
   uniform float uPathFeather;
   uniform float uPathVignette;
+  uniform float uKnee;
 
   uniform float uFlare;
   uniform float uFlareSpacing;
@@ -400,6 +402,41 @@ const fragmentShader = /* glsl */ `
       color *= 1.0 - uPathVignette * lane;
     }
 
+    // ------------------------------------------------------------------
+    // SOFT SHOULDER — the last thing that happens, so nothing downstream can
+    // push a channel back over 1.
+    //
+    // The scene target is HalfFloat and the overdrive sliders deliberately
+    // drive colours past 1 (see the note at the top). That survives all the
+    // way to here, and then this write goes to an 8-bit framebuffer where each
+    // channel truncates INDEPENDENTLY. A warm (6.96, 6.58, 4.59) does not
+    // become a brighter amber, it becomes (1,1,1) — flat white with the hue
+    // gone, and every value above it looks identical.
+    //
+    // NORMALISED ON THE PEAK CHANNEL, NOT ON LUMINANCE, which is the one part
+    // of this worth arguing about. Luminance is the obvious choice and it does
+    // not work: blue carries a Rec.709 weight of 0.0722, so a saturated blue
+    // at (0, 0, 3) has a luminance of 0.22, sails under any sensible knee
+    // untouched, and clips its blue channel anyway. The peak channel is what
+    // actually decides whether anything truncates.
+    //
+    // All three channels are then scaled by ONE factor, so hue and saturation
+    // are exactly preserved — the colour dims toward the knee instead of
+    // sliding toward white. Compressing per channel would fix the clipping and
+    // still wash the colour out, which is the thing being fixed.
+    //
+    // The curve is identity below the knee and asymptotic to 1 above it, and
+    // it is C1 continuous at the join (the exponential's slope there is
+    // exactly 1), so there is no visible seam where it engages.
+    if (uKnee > 0.0) {
+      float peak = max(color.r, max(color.g, color.b));
+      if (peak > uKnee) {
+        float range = max(1e-4, 1.0 - uKnee);
+        float rolled = uKnee + range * (1.0 - exp(-(peak - uKnee) / range));
+        color *= rolled / peak;
+      }
+    }
+
     gl_FragColor = vec4(color, 1.0);
   }
 `;
@@ -493,6 +530,7 @@ export function createPost(renderer) {
     uPathWidth: { value: 0.1 },
     uPathFeather: { value: 0.18 },
     uPathVignette: { value: 0 },
+    uKnee: { value: 0 },
   };
   const finalPass = makeFullscreenPass(fragmentShader, finalUniforms);
 
@@ -591,12 +629,32 @@ export function createPost(renderer) {
     u.uVignette.value = Math.min(1.2, u.uVignette.value + cineLens.vignette);
   }
 
+  // What is actually on screen: the player's pick from the pause menu, or the
+  // authored preset when they have never made one. Resolved at every use
+  // rather than cached, because both halves can move — the tuner changes the
+  // authored value and the Video tab changes the override.
+  function activePreset() {
+    return screenFilter(CONFIG.post.preset);
+  }
+
+  function bloomOn() {
+    return bloomEnabled(CONFIG.bloom.enabled);
+  }
+
+  // P cycles the filter. It writes the PLAYER'S setting, not CONFIG.post.preset
+  // — which is what it used to do, and that was a quiet leak: the tuner
+  // snapshots whole CONFIG sections, so idly pressing P and then touching any
+  // slider wrote whatever filter you happened to land on into
+  // imported-tuning.json as though it were an authoring decision.
+  //
+  // Cycles the same list the Video tab offers, so the key and the menu can't
+  // disagree about what the options are.
   function cyclePreset() {
-    const names = Object.keys(CONFIG.postPresets);
-    const i = names.indexOf(CONFIG.post.preset);
-    CONFIG.post.preset = names[(i + 1) % names.length];
-    applyPreset(CONFIG.post.preset);
-    return CONFIG.post.preset;
+    const at = FILTER_OPTIONS.indexOf(activePreset());
+    const next = FILTER_OPTIONS[(at + 1) % FILTER_OPTIONS.length];
+    setSetting('video.filter', next);
+    applyPreset(next);
+    return next;
   }
 
   function renderBloom() {
@@ -667,6 +725,11 @@ export function createPost(renderer) {
   function render(sceneToRender, sceneCamera, dt) {
     clock += dt;
     finalUniforms.uTime.value = clock;
+    // The soft shoulder. Read every frame rather than at boot, so dragging it
+    // in the tuner is live — and read UNCONDITIONALLY, unlike the cinecam
+    // uniforms above, because clipping happens whether or not a lens is
+    // active. 0 disables it and restores the old hard clip exactly.
+    finalUniforms.uKnee.value = Math.min(0.99, Math.max(0, CONFIG.bloom?.knee ?? 0));
 
     // Bloom and the CRT/VHS preset system are independent toggles — either
     // can run without the other. Only skip the whole pipeline (a plain
@@ -682,7 +745,7 @@ export function createPost(renderer) {
     const cine = CONFIG.cinecam?.enabled && cineLens.active
       && (cineLens.defocus > 0 || cineLens.flare > 0 || cineLens.droplets > 0
           || cineLens.vignette > 0 || cineLens.pathVignette > 0);
-    const postActive = CONFIG.post.enabled || CONFIG.bloom.enabled || suffocation > 1 || cine;
+    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 1 || cine;
     if (!postActive) {
       renderer.setRenderTarget(null);
       renderer.render(sceneToRender, sceneCamera);
@@ -692,7 +755,7 @@ export function createPost(renderer) {
     // 'off' zeroes every screen-filter uniform, so bloom can run completely
     // standalone with no CRT/VHS artifacts riding along when that system
     // itself is toggled off.
-    applyPreset(CONFIG.post.enabled ? CONFIG.post.preset : 'off');
+    applyPreset(CONFIG.post.enabled ? activePreset() : 'off');
 
     // Whichever is chunkier wins, rather than adding: vhs and vga already
     // pixelate a little, and summing would mean the blackout hits harder on
@@ -711,12 +774,12 @@ export function createPost(renderer) {
     // even when bloom itself is switched off — the bright pass is what finds
     // the flare sources, and it's the same work either way. Only the additive
     // glow in the composite is gated on `bloom.enabled`.
-    const wantBloomBuffer = CONFIG.bloom.enabled || finalUniforms.uFlare.value > 0;
+    const wantBloomBuffer = bloomOn() || finalUniforms.uFlare.value > 0;
     if (wantBloomBuffer) {
       const bloomResult = renderBloom();
       finalUniforms.tBloom.value = bloomResult.texture;
     }
-    if (CONFIG.bloom.enabled) {
+    if (bloomOn()) {
       // Impact pulses temporarily push the glow brighter, on top of the
       // steady base intensity from the slider.
       finalUniforms.uBloomIntensity.value = CONFIG.bloom.intensity * (1 + feedbackState.glowPulse * CONFIG.bloom.pulseStrength);
@@ -757,7 +820,7 @@ export function createPost(renderer) {
     }
   }
 
-  applyPreset(CONFIG.post.preset);
+  applyPreset(activePreset());
   resize();
 
   return { render, resize, cyclePreset, applyPreset, warm };

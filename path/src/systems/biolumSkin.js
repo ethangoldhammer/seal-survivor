@@ -122,6 +122,28 @@ uniform float uBioBodyDarken;
 uniform vec3  uBioColorA;
 uniform vec3  uBioColorB;
 uniform vec3  uBioColorC;
+// THE SCHOOL WAVE — the one term in this shader sampled in WORLD space.
+//
+// Everything else is deliberately body-local, so a pattern belongs to an
+// animal and swims with it. This is the opposite on purpose: a slow noise
+// field filling the water, which each creature reads at wherever it happens to
+// be floating. A shoal drifting through it lights up a few fish at a time, in
+// the order the water reaches them, and reads as one organism rather than as
+// nine animals that happen to be nearby.
+//
+// It modulates BRIGHTNESS, not the pattern. Sampling the pattern itself in
+// world space would drag the markings across each body as it swam, which looks
+// like a texture sliding off a model — the failure the bind-pose note at the
+// top of this file exists to prevent.
+//
+// uBioSchoolT is a distance, not a cycle, and it is GLOBAL: every material is
+// handed the same value on the same frame (see updateBiolumSkin). A per-
+// material clock here would give every fish its own private wave, which is
+// exactly not a field.
+uniform float uBioSchoolAmp;   // 0 = off. How deep the field dips a creature.
+uniform float uBioSchoolScale; // world units per noise feature
+uniform float uBioSchoolT;     // how far the field has travelled, in world units
+varying vec3  vBioWorld;
 varying vec3  vBioPos;
 varying float vBioAxis;
 varying float vEyeGlow;
@@ -325,7 +347,28 @@ const FRAG_BODY = `
       // Warped by fbm before the sine, which is the difference between bands
       // that follow the animal and bands ruled across it with a straightedge.
       float warp = bioFbm(bp * 0.6 + drift) * 1.6;
-      float s = sin(vBioAxis * 6.2831 * max(0.5, 3.0 / max(0.05, uBioScale)) + warp);
+
+      // TRAVELLING, head to tail. The breath clock is subtracted from the
+      // AXIS rather than added to the phase, which translates the whole band
+      // pattern along the body: at cycle 1 every band sits exactly where its
+      // neighbour was, so one full traverse takes exactly one breath. Before
+      // this the bands were pinned to the body and only the warp above moved,
+      // so they shimmered in place and never went anywhere.
+      //
+      // Riding uBioCycle rather than a clock of its own is what keeps a shoal
+      // from marching in lockstep: that clock already carries each
+      // individual's phase offset, and it is the same one the brightness
+      // breathes on, so a band arrives as the body swells.
+      //
+      // WHY THE BAND COUNT IS ROUNDED TO A WHOLE NUMBER. uBioCycle wraps at
+      // 2, and the jump it makes there shifts this phase by two times the
+      // band count in turns. That is invisible only when the band count is an
+      // integer; at the raw 3.0/scale (5.45 on the shark) the wrap would snap
+      // the whole pattern sideways every few seconds. Same reasoning as the
+      // wrap note in the pulse branch below. Rounding also makes the bands
+      // fit the animal, with no half-stripe left over at the tail.
+      float bands = max(1.0, floor(3.0 / max(0.05, uBioScale) + 0.5));
+      float s = sin((vBioAxis - uBioCycle) * 6.2831853 * bands + warp);
       bioMaskV = bioMask(s * 0.5 + 0.5);
       bioHue = vBioAxis * uBioHueSpread + 0.5;
     } else if (uBioPattern == 4) {   // veins
@@ -410,6 +453,24 @@ const FRAG_BODY = `
     // Mixed toward rather than multiplied in, so amp 0 is exactly "off" and
     // no flicker maths can dim a creature that asked for none.
     breathe *= mix(1.0, bioFlicker(uBioFlickerT), uBioFlickerAmp);
+
+    // THE SCHOOL WAVE, over the top of both — see the note by its uniforms.
+    // The field travels along X, which is the long axis of a side-on arena and
+    // the direction a shoal drifts, so the wave arrives at one end of a school
+    // and leaves at the other rather than switching all of it on at once.
+    //
+    // Mixed toward, like the flicker, so amp 0 is bit-for-bit "no wave" and a
+    // creature that opts out cannot be dimmed by a field it is not in.
+    if (uBioSchoolAmp > 0.0) {
+      // Both the position and the travel are divided by the same scale, so
+      // uBioSchoolT stays honest about its unit: world units of water, not
+      // noise features. Retuning the scale then changes how BIG the wave is
+      // without also changing how fast it crosses the arena.
+      float schoolScale = max(0.5, uBioSchoolScale);
+      vec3 wp = vBioWorld / schoolScale;
+      float field = bioFbm(vec3(wp.x - uBioSchoolT / schoolScale, wp.y, wp.z)) * 0.5 + 0.5;
+      breathe *= mix(1.0, field, uBioSchoolAmp);
+    }
 
     gl_FragColor.rgb += bioRamp(bioHue) * (bioMaskV * uBioStrength * breathe);
   }
@@ -590,6 +651,11 @@ function freshUniforms() {
     uBioColorA: { value: new THREE.Color(0x00e5ff) },
     uBioColorB: { value: new THREE.Color(0x7b2dff) },
     uBioColorC: { value: new THREE.Color(0xffd166) },
+    // The world-space school wave. Amp 0 by default so a creature whose
+    // preset says nothing about it is bit-for-bit unaffected.
+    uBioSchoolAmp: { value: 0 },
+    uBioSchoolScale: { value: 7 },
+    uBioSchoolT: { value: 0 },
     // The eyes, independent of the body pattern — see the note where these are
     // used in FRAG_BODY. Strength 0 by default so every creature that does not
     // declare eye stalks is bit-for-bit unaffected.
@@ -626,12 +692,21 @@ function inject(material, u) {
     Object.assign(shader.uniforms, u);
 
     shader.vertexShader = shader.vertexShader
+      // vEyeGlow is declared HERE as well as in GLSL (which only reaches the
+      // fragment stage). Writing an undeclared varying is not a silent no-op:
+      // it fails the VERTEX shader outright — 'vEyeGlow' : undeclared
+      // identifier — so the program never links and every creature wearing a
+      // glow skin renders as nothing at all. The seal, the lanternfish, both
+      // crabs and the escort squad all went invisible on one missing line, and
+      // the only trace was a console message behind a game that still ran.
       .replace('#include <common>', `#include <common>
 attribute vec3 aBioPos;
 attribute float aBioAxis;
 attribute float aEyeGlow;
 varying vec3 vBioPos;
-varying float vBioAxis;`)
+varying float vBioAxis;
+varying float vEyeGlow;
+varying vec3 vBioWorld;`)
       // After <begin_vertex>: the attributes are per-vertex constants so the
       // position makes no difference to them, but sitting after that chunk
       // keeps this clear of the outline shells' rim push, which rewrites
@@ -639,7 +714,14 @@ varying float vBioAxis;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
   vBioPos = aBioPos;
   vBioAxis = aBioAxis;
-  vEyeGlow = aEyeGlow;`);
+  vEyeGlow = aEyeGlow;
+  // Where this fragment actually is in the ocean, for the world-space school
+  // wave. Taken from the pre-skin position on purpose: it is read at a scale
+  // of several world units, so the centimetres a skinned tail adds are noise,
+  // and reading it here costs one matrix multiply instead of chasing the
+  // skinning chunks that rewrite the transformed position further down.
+  // (No backticks in this string, ever — see the note in FRAG_BODY.)
+  vBioWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${GLSL}`)
@@ -956,6 +1038,12 @@ export function applyBiolumSkinSettings() {
     u.uBioColorB.value.set(cfg.colorB ?? 0x7b2dff);
     u.uBioColorC.value.set(cfg.colorC ?? 0xffd166);
 
+    // The school wave. Resolved per material like everything else, so a preset
+    // CAN opt out (the crab on the seabed is not in the water column with the
+    // shoals), but the travel itself is global — see updateBiolumSkin.
+    u.uBioSchoolAmp.value = off ? 0 : (cfg.schoolAmp ?? 0);
+    u.uBioSchoolScale.value = Math.max(0.5, cfg.schoolScale ?? 7);
+
     // THE EYES. Follows `biolumSkin.enabled` (so the master switch still turns
     // everything off) but NOT the pattern's own `strength` — the day crab's
     // shell is pigment with no glow at all and its eyes still light up. See
@@ -1009,6 +1097,18 @@ export function applyBiolumSkinSettings() {
  * the note on `instances`.
  */
 export function updateBiolumSkin(rawDt) {
+  // THE ONE CLOCK THAT IS NOT PER-MATERIAL. The school wave is a field in the
+  // water, so every creature has to read the same field at the same instant —
+  // advancing it inside the loop below, or storing it on each material's own
+  // clock, would hand every fish a private wave and the whole effect would
+  // collapse into "each animal flickers on its own". A fish spawning at minute
+  // nine has to join the wave already in progress, which it does for free by
+  // reading a value that never belonged to it.
+  //
+  // World units per second, from the shared base — one ocean, one current.
+  const schoolSpeed = CONFIG.biolumSkin?.base?.schoolSpeed ?? 0;
+  schoolTravel += rawDt * schoolSpeed;
+
   for (const m of liveMaterials()) {
     const u = m.userData.__bioSkinUniforms;
     if (!u) continue;
@@ -1032,11 +1132,21 @@ export function updateBiolumSkin(rawDt) {
     clock.flick = advanceCycles(
       clock.flick, cfg.flickerSync, cfg.flickerRate ?? 2.5, rawDt, FLICKER_WRAP);
     u.uBioFlickerT.value = clock.flick + (m.userData.__bioSkinFlickOffset ?? 0);
+
+    // The shared field position — deliberately NOT offset per individual, for
+    // the same reason it is not advanced per individual.
+    u.uBioSchoolT.value = schoolTravel;
   }
 }
 
 const EMPTY = {};
 const TWO_PI = Math.PI * 2;
+
+// How far the world-space school field has drifted, in world units. Module
+// scope because it belongs to the ocean rather than to any creature in it.
+// Never wrapped: it is a translation through noise, so there is no cycle to
+// come back round to, and float32 stays comfortable for hours at these rates.
+let schoolTravel = 0;
 // The flicker's noise coordinate has to stay a large WHOLE number at the wrap,
 // or floor() jumps mid-step and every creature blinks on the same frame. 4096
 // steps is over ten minutes at a fast flicker, and keeps float32 precision

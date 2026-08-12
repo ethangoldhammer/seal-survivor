@@ -5,10 +5,10 @@ import { removeEnemy } from '../entities/enemies.js';
 import { bounds } from '../arena.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { orbitTarget, springFollow } from './orbit.js';
-import { setBiolumSkinVariant } from './biolumSkin.js';
 import { spawnProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 import { companionDamage, companionScale, applyCompanionScale } from './scaling.js';
+import { markWeight } from './marks.js';
 
 // Seal Team — escort seals that swim the same tilted 3D ring the beluga drone
 // uses, spread evenly around it, ram anything that gets close, and break
@@ -33,23 +33,20 @@ let clock = 0;
 // Shared across the squad so only one seal is ever out of formation at a time.
 let teamLungeGate = 0;
 
-// One escort's body. `slot` is its index in the squad, and it is what picks
-// the seal's procedural skin — see CONFIG.sealTeam.skin. By index rather than
-// at random so a seal's identity is stable across a run: the third member is
-// always the purple one, which is the entire point of telling them apart.
+// One escort's body. Nothing here paints it: the squad wears the SAME
+// procedural mottling the player does (`noiseShader: true` on the sealTeam
+// asset, driven by CONFIG.sealShader), so every escort shares the template's
+// material and every one of them is recognisably the player's own animal.
 //
-// createVisual has already given this clone its OWN material (assets.js calls
-// instantiateBiolumSkin for any asset carrying `biolumSkin`), so stamping a
-// variant here paints this seal and no other. Doing it before that clone
-// exists would write onto the shared template and repaint the whole squad.
-function buildSeal(slot) {
+// It used to stamp a per-member `biolumSkin` variant here — a different
+// pattern and palette per squad index. That told them apart, but at the cost
+// of six differently-coloured glowing animals orbiting a seal that looked like
+// none of them. Telling WHICH seal broke formation is now the lunge's job (it
+// leaves the ring and dashes), not the paint's.
+function buildSeal() {
   const root = new THREE.Group();
   const visual = createVisual('sealTeam');
   root.add(visual);
-  const skin = CONFIG.sealTeam.skin;
-  if (skin?.enabled !== false && skin?.variants?.length) {
-    setBiolumSkinVariant(visual, skin.variants[slot % skin.variants.length]);
-  }
   const anim = CONFIG.animation.enabled ? createAnimationController(visual) : null;
   return { root, visual, anim };
 }
@@ -73,7 +70,7 @@ function newMember(root, visual, anim, pos, vel) {
 // seal without disturbing the ones already swimming.
 function resize(scene, count, playerPos) {
   while (team.length < count) {
-    const { root, visual, anim } = buildSeal(team.length);
+    const { root, visual, anim } = buildSeal();
     // Spawn on the player so a newly-earned seal swims OUT to its slot rather
     // than popping into position.
     const pos = new THREE.Vector3(playerPos.x, playerPos.y, 0);
@@ -102,9 +99,7 @@ export function rebuildSealTeam(scene) {
   for (const t of team) scene.remove(t.root);
   team.length = 0;
   for (let i = 0; i < count; i++) {
-    // Same slot as before the swap, so a re-uploaded model doesn't reshuffle
-    // which seal wears which skin.
-    const { root, visual, anim } = buildSeal(i);
+    const { root, visual, anim } = buildSeal();
     root.position.copy(saved[i].pos);
     scene.add(root);
     team.push(newMember(root, visual, anim, saved[i].pos, saved[i].vel));
@@ -127,7 +122,11 @@ function nearestEnemy(enemies, pos, range) {
     if (e.hp <= 0) continue;
     const dx = e.mesh.position.x - pos.x;
     const dy = e.mesh.position.y - pos.y;
-    const d = dx * dx + dy * dy;
+    // Squared distance, so the mark's pull is squared with it — the escorts
+    // break formation for whatever the player just rammed in preference to
+    // whatever drifted closest. See systems/marks.js.
+    const w = markWeight(e);
+    const d = (dx * dx + dy * dy) * w * w;
     if (d < bestD) { bestD = d; best = e; }
   }
   return best;

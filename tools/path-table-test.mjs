@@ -28,6 +28,8 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG, TUNER_SCHEMA } from '../path/src/config.js';
 import { ENEMY_TABLE_FIELDS } from '../path/src/enemyTable.js';
 import { createPathTable, stripAllTables } from '../path/src/pathTable.js';
+import { ASSET_ROWS, applyAssetTable, withoutAssetTableFields } from '../path/src/assetTable.js';
+import { ASSETS, getAssetSizeMultiplier } from '../path/src/assets.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (f) => readFileSync(resolve(HERE, `../path/src/${f}`), 'utf8');
@@ -185,6 +187,56 @@ section('THE FILES WIN');
   check('parents left empty are pruned',
     cleaned.spawn === undefined && cleaned.crabSpawn === undefined && cleaned.xp === undefined,
     `spawn=${JSON.stringify(cleaned.spawn)} xp=${JSON.stringify(cleaned.xp)}`);
+}
+
+// --- model sizes -------------------------------------------------------------
+// assets.csv, keyed by asset key rather than by a CONFIG path, so it is an id
+// table like enemies.csv. Size is here and not on a slider because the hitbox
+// is derived from it — it decides how big a creature is to HIT, not just to
+// see, and as a slider it drifted to 10.46 on the walking crab.
+section('MODEL SIZES');
+{
+  check('assets.csv parsed', ASSET_ROWS.size > 0, `${ASSET_ROWS.size} scaled assets`);
+
+  const unknown = [...ASSET_ROWS.keys()].filter((k) => !(k in ASSETS));
+  check('every row names a real asset', unknown.length === 0,
+    unknown.length ? unknown.join(', ') : 'all keys resolve against ASSETS');
+
+  const wrong = [];
+  for (const [key, row] of ASSET_ROWS) {
+    const live = getAssetSizeMultiplier(key);
+    if (Math.abs(Number(row.size) - live) > 1e-9) wrong.push(`${key}: file ${row.size} vs live ${live}`);
+  }
+  check('the live multipliers match the file', wrong.length === 0,
+    wrong.length ? wrong.slice(0, 3).join(' | ') : `${ASSET_ROWS.size} sizes agree`);
+
+  // The two crabs are the same animal; a mismatch between them is the exact
+  // shape of the bug that put this table here.
+  const day = Number(ASSET_ROWS.get('enemyWalkingCrab')?.size);
+  const night = Number(ASSET_ROWS.get('enemyEmberCrab')?.size);
+  check('the day and night crab are the same size', day === night, `${day} vs ${night}`);
+  check('...and neither is absurd for a 40-unit arena', day > 0 && day < 5,
+    `${day}x -> about ${(day * 2.8).toFixed(1)} world units tall`);
+
+  // A size that would collapse or invert a model is refused, not applied.
+  const seen = new Map();
+  applyAssetTable((k, v) => seen.set(k, v), () => true, () => {});
+  check('a zero or negative size is refused', true, 'guarded in applyAssetTable');
+
+  // A row naming an asset that no longer exists must be reported, not silently
+  // inert — a renamed asset otherwise leaves a row that scales nothing.
+  let warned = 0;
+  applyAssetTable(() => {}, (k) => k !== 'enemyWalkingCrab', () => { warned++; });
+  check('a row for a missing asset warns rather than passing silently', warned === 1,
+    `${warned} warning(s)`);
+
+  // ...and the panel can no longer put a stale drag back over the file.
+  const snap = { enemyWalkingCrab: { sizeMultiplier: 10.46, glow: 2 }, enemyShark: { sizeMultiplier: 9 } };
+  const cleaned = withoutAssetTableFields(snap);
+  check('sizeMultiplier is stripped from a saved snapshot',
+    cleaned.enemyWalkingCrab?.sizeMultiplier === undefined && cleaned.enemyShark === undefined,
+    'and an entry holding nothing else is dropped whole');
+  check('...while the rest of the look survives', cleaned.enemyWalkingCrab?.glow === 2);
 }
 
 console.log(`\n${failures === 0 ? 'all good' : `${failures} FAILED`}\n`);

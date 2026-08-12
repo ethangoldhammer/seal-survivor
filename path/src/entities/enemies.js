@@ -12,6 +12,8 @@ import { createHeadLook } from '../systems/headLook.js';
 import { recordSpawn } from '../systems/playtest.js';
 import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
 import { updateWaves, waveSpawn, resetWaves, lullEligible } from '../systems/waves.js';
+import { inSpawnGroup, spawnGroupsOf } from '../enemyTable.js';
+import { RigidBody, addBody, removeBody } from '../systems/rigidBody.js';
 
 // Above this, a creature's hp means "invincible scenery" rather than a real
 // pool anyone is meant to chew through (the sea turtle ships 1e9). Only the
@@ -26,8 +28,201 @@ export const enemies = [];
 let spawnTimer = 0;
 let nextSchoolId = 1;
 
+// ---------------------------------------------------------------------------
+// THE STRIKE, as the rest of the roster experiences it
+// ---------------------------------------------------------------------------
+//
+// Two halves, and both live here rather than in systems/strike.js because both
+// are things a CREATURE does: big bodies get shoved (applyKnockback), and small
+// ones get out of the way (the fright term in `swarm`).
+//
+// Written in by main.js every frame instead of imported from the strike system,
+// which would wire a cycle — strike.js already imports removeEnemy from this
+// file. A plain setter also keeps the whole behaviour testable from Node: a
+// harness can declare a strike anywhere it likes without a player, an input
+// stack or a frame.
+const strikeThreat = { active: false, x: 0, y: 0, dirX: 1, dirY: 0, power: 0, dashing: false };
+
+/**
+ * Tell the roster where the seal's strike is.
+ *
+ * @param t {active, x, y, dirX, dirY, power, dashing} — `power` is banked
+ *   charge 0..1, `dashing` distinguishes a strike in flight from one being
+ *   wound up (a wind-up frightens at `scare.chargeShare` of full strength).
+ *   Pass nothing to clear it.
+ */
+export function setStrikeThreat(t = null) {
+  strikeThreat.active = !!t?.active;
+  if (!strikeThreat.active) return;
+  strikeThreat.x = t.x ?? 0;
+  strikeThreat.y = t.y ?? 0;
+  strikeThreat.dirX = t.dirX ?? 0;
+  strikeThreat.dirY = t.dirY ?? 0;
+  strikeThreat.power = Math.min(1, Math.max(0, t.power ?? 0));
+  strikeThreat.dashing = !!t.dashing;
+}
+
+/**
+ * Shove a body. This is what a strike does instead of damage: an impulse held
+ * SEPARATE from the creature's own velocity, because vx/vy is not a shared
+ * channel — a turn-limited hunter assigns it outright every frame (see
+ * steerTo), a flocking fish blends toward a boids sum, and a crab has gravity
+ * added to it. Anything written into vx/vy is therefore erased before it can
+ * move a shark an inch, which is exactly the bug this avoids: the knock is
+ * added at the integrator instead, so it lands identically on all three.
+ *
+ * Divided by size, so the same ram that sends a minnow tumbling only leans on
+ * a megalodon. `pivotRadius` is the body that takes it unmodified.
+ *
+ * @param e      the creature
+ * @param dirX,dirY  unit direction to push along (the dash's heading)
+ * @param power  banked charge of the strike, 0..1
+ */
+export function applyKnockback(e, dirX, dirY, power = 1) {
+  const k = CONFIG.strike?.knockback ?? {};
+  if (k.enabled === false || !e) return 0;
+
+  const len = Math.hypot(dirX, dirY);
+  if (len < 1e-6) return 0;
+
+  const p = Math.min(1, Math.max(0, power));
+  const scale = (k.powerMin ?? 0.45) + ((k.powerMax ?? 1.3) - (k.powerMin ?? 0.45)) * p;
+  const pivot = Math.max(0.05, k.pivotRadius ?? 0.8);
+  // HOW BIG THE ANIMAL IS, not how big its model was scaled to. Emphatically
+  // NOT `e.radius`: that is the hitbox, and the hitbox deliberately carries the
+  // tuner's per-asset Size slider (see spawnOne — a shark's asset alone is
+  // 2.66x). Dividing by it made an art decision the loudest term in the
+  // physics, and the giveaway is the hammerhead: authored BIGGER than the
+  // shark (1.3 vs 1.2) but with no Size multiplier on its asset, so it was
+  // shoved 2.4x FURTHER than the smaller animal. Nothing in the fiction or the
+  // tuning asked for that.
+  //
+  // The authored radius times `sizeMul` instead — the run's growth times this
+  // individual's own size roll, with the asset's scale factored out — so a
+  // late-run shark and a big roll still resist more than a runt. That is the
+  // same "is this a big one for its species" rule a rigid body's mass already
+  // uses (see attachRigidBody), and `pivotRadius` is a number in that same
+  // authored scale. Both being radii is what kept the mismatch invisible.
+  const size = (e.def?.radius ?? e.radius ?? pivot) * (e.sizeMul ?? 1);
+  // Below pivot size everything takes the full shove — a minnow is not thrown
+  // twice as far as a slightly bigger minnow, it is simply thrown.
+  const mass = Math.max(1, size / pivot) ** (k.massExp ?? 1);
+  const push = ((k.speed ?? 26) * scale) / mass;
+
+  // A body takes it as a REAL impulse instead: it keeps the velocity (rather
+  // than the decaying position offset below), it tumbles, it bounces off the
+  // walls, and it can hand what it hits an impulse of its own. That is the
+  // whole difference between a shark being shoved off its line and a turtle
+  // being fired across the arena.
+  //
+  // It also gets its OWN launch speed rather than the size-divided push above.
+  // That divisor exists to stop big creatures being thrown around, and this is
+  // a big creature that is entirely meant to be — run through the same formula
+  // a turtle would come off a full-charge strike at walking pace.
+  if (e.body) {
+    const profile = CONFIG.physics?.[e.body.kind] ?? {};
+    const launch = (profile.strikeImpulse ?? 30) * scale;
+    // WHERE ALONG THE SHELL IT CAUGHT. The impulse itself is along the dash,
+    // so a contact point on that same line has no lever arm and produces no
+    // roll at all — the turtle would fly dead flat. The seal does not arrive
+    // perfectly on centre, so the contact is offset across the shell, and how
+    // far off-centre it caught is what decides which way and how hard it goes
+    // end over end.
+    const r = e.body.radius;
+    const off = (Math.random() * 2 - 1) * r;
+    // A fixed impulse rather than a fixed speed, so SIZE RESISTS: `launch` is
+    // what a nominal one leaves at, and a boulder of a turtle leaves at less
+    // in proportion to its mass. Capped at the nominal mass on the way down
+    // for the same reason the creature knock has a `pivotRadius` — below the
+    // standard size a body is simply thrown, rather than a runt being fired
+    // off at six times the speed of anything else in the ocean.
+    const impulse = launch * Math.min(e.body.mass, profile.mass ?? e.body.mass);
+    e.body.applyImpulse(
+      (dirX / len) * impulse,
+      (dirY / len) * impulse,
+      e.mesh.position.x - (dirX / len) * r - (dirY / len) * off,
+      e.mesh.position.y - (dirY / len) * r + (dirX / len) * off,
+    );
+    if (e.anim?.impulse) {
+      const kick = (k.boneImpulse ?? 2.6) * scale;
+      if (kick > 0) {
+        _bump.set(dirX / len, dirY / len, 0);
+        e.anim.impulse(_bump, kick);
+      }
+    }
+    return launch;
+  }
+
+  e.knockX = (e.knockX ?? 0) + (dirX / len) * push;
+  e.knockY = (e.knockY ?? 0) + (dirY / len) * push;
+
+  // The two dressings a body already has for being hit: the skeleton flinch
+  // every creature carries, and the tumble that only bodies which roll (crabs)
+  // do anything with. Both scaled by the same shove, so a flick and a
+  // full-commitment ram don't look alike.
+  const kick = (k.boneImpulse ?? 2.6) * scale;
+  if (kick > 0 && e.anim?.impulse) {
+    _bump.set(dirX / len, dirY / len, 0);
+    e.anim.impulse(_bump, kick);
+  }
+  // Only bodies that ROLL. `tumble` is read exactly once, under `faceCamera`
+  // (the crabs) — everything else has its rotation assigned from its velocity
+  // every frame, so spinning a shark here would accumulate a number that is
+  // overwritten before it can be seen and never spent.
+  if (e.def?.faceCamera) {
+    e.tumbleVel = (e.tumbleVel ?? 0) + (k.spin ?? 5) * scale * (Math.random() < 0.5 ? -1 : 1);
+  }
+  return push;
+}
+
+// The speed above which a simulated creature counts as LAUNCHED rather than
+// swimming. Read off its own profile so a heavier body could be given a lower
+// bar without the integrator knowing which creature it is holding.
+function launchSpeed(e) {
+  return CONFIG.physics?.[e.body.kind]?.launchSpeed ?? 4;
+}
+
+/**
+ * A flying body barging through a crowd. Every creature it passes takes the
+ * turtle's own heading as a shove and nothing else — no damage, ever, so a
+ * punt can never turn into a stealth weapon that the upgrade balance has not
+ * accounted for.
+ *
+ * Once per victim per launch, tracked in a WeakSet on the flying body: the
+ * alternative is an impulse every frame of contact, which at 60fps stacks into
+ * a shove an order of magnitude larger than the one that started it. The set
+ * is dropped when the body settles, so the next punt hits the same crowd
+ * again.
+ */
+function plowThrough(e, dt) {
+  const power = CONFIG.physics?.[e.body.kind]?.plow ?? 0;
+  if (power <= 0) return;
+  const speed = e.body.speed();
+  if (speed < 1e-3) return;
+  const dx = e.body.vx / speed;
+  const dy = e.body.vy / speed;
+  const hit = e.plowed ?? (e.plowed = new WeakSet());
+
+  for (const other of enemies) {
+    // Never another simulated body: those meet properly in the solver, with
+    // both masses and a real bounce, and shoving one here as well would count
+    // the same collision twice.
+    if (other === e || other.body) continue;
+    if (hit.has(other)) continue;
+    const sum = e.radius + other.radius;
+    const ox = other.mesh.position.x - e.mesh.position.x;
+    const oy = other.mesh.position.y - e.mesh.position.y;
+    if (ox * ox + oy * oy > sum * sum) continue;
+    hit.add(other);
+    applyKnockback(other, dx, dy, power);
+  }
+}
+
 export function resetEnemies(scene) {
-  for (const e of enemies) scene.remove(e.mesh);
+  for (const e of enemies) {
+    if (e.body) removeBody(e.body);
+    scene.remove(e.mesh);
+  }
   enemies.length = 0;
   spawnTimer = 0;
   nextSchoolId = 1;
@@ -457,7 +652,7 @@ function crowdSelf(e) {
       x: 0, y: 0, radius: 1, feeding: false, orbitDir: 1, standoffDist: null, feedTimer: 0, e,
       // Only the tagged bodies queue for a feeding slot. Everything else that
       // hunts (the otter) still steers around them, but closes as it always did.
-      inCrowd: e.def.spawnGroup === 'apex',
+      inCrowd: inSpawnGroup(e.def, 'apex'),
     };
   }
   v.x = e.mesh.position.x;
@@ -477,10 +672,12 @@ const apexViews = [];
 function refreshApexCrowd(dt, playerPos) {
   apexViews.length = 0;
   for (const e of enemies) {
-    // The tag is the contract: `spawnGroup: 'apex'` is already what the
-    // population cap uses to mean "big body competing for the same screen",
-    // and it's the same set that should be competing for the same player.
-    if (e.def.spawnGroup !== 'apex') continue;
+    // The tag is the contract: `spawnGroup` carrying 'apex' is already what
+    // the population cap uses to mean "big body competing for the same
+    // screen", and it's the same set that should be competing for the same
+    // player. A creature may carry more than one group (the sharks are
+    // "apex shark"), so this asks for membership rather than equality.
+    if (!inSpawnGroup(e.def, 'apex')) continue;
     if (e.trapTimer > 0 || e.charmTimer > 0) continue; // held: not in the running
     apexViews.push(crowdSelf(e));
   }
@@ -576,13 +773,53 @@ const BEHAVIORS = {
       }
     }
 
+    // AND FLEE THE STRIKE. A school that held station while a seal wound one
+    // up was free food; this is what turns a strike into something you have to
+    // aim AHEAD of a school rather than at it.
+    //
+    // Centred `lead` units up the corridor rather than on the seal, so the
+    // fish clear the line the dash is about to travel instead of merely
+    // stepping away from where it started — the same reading the wind-up lens
+    // is already painting for the player.
+    //
+    // Deliberately another term in the boids sum rather than a shove: they
+    // break and re-form as a school, which is what makes a strike through a
+    // scattering shoal feel like fish and not like billiards.
+    const sc = CONFIG.strike?.scare;
+    let bolt = 0;
+    if (sc?.enabled !== false && strikeThreat.active && (sc?.strength ?? 0) > 0) {
+      const lead = sc.lead ?? 2.5;
+      const tx = strikeThreat.x + strikeThreat.dirX * lead;
+      const ty = strikeThreat.y + strikeThreat.dirY * lead;
+      const dx = px - tx;
+      const dy = py - ty;
+      const d = Math.hypot(dx, dy);
+      const reach = sc.radius ?? 7;
+      if (d > 1e-4 && d < reach) {
+        // A wind-up is a threat in proportion to how much of it has been
+        // banked; a dash in flight is the whole thing.
+        const commit = strikeThreat.dashing
+          ? 1
+          : (sc.chargeShare ?? 0.7) * strikeThreat.power;
+        const fright = (1 - d / reach) * commit;
+        ax += (dx / d) * fright * (sc.strength ?? 12);
+        ay += (dy / d) * fright * (sc.strength ?? 12);
+        // The panic weight above only buys a HEADING — steerTo normalises the
+        // sum it is handed, so a fish pointed away from a strike still swims
+        // away at its cruising speed. This is the bolt: fright is worth real
+        // speed, so a school actually clears the corridor instead of ambling
+        // out of it. See CONFIG.strike.scare.speedMul.
+        bolt = fright * (sc.speedMul ?? 0.9);
+      }
+    }
+
     const w = sw.wander ?? 0;
     if (w > 0) {
       ax += Math.cos(ctx.time * 1.7 + e.phase) * w;
       ay += Math.sin(ctx.time * 2.3 + e.phase) * w;
     }
 
-    steerTo(e, ax, ay, dt, sw.responsiveness ?? 4);
+    steerTo(e, ax, ay, dt, sw.responsiveness ?? 4, 1 + bolt);
   },
 
   // Stays near the seabed rather than swimming freely — chases the player
@@ -914,10 +1151,11 @@ const BEHAVIORS = {
     const airborne = e.mesh.position.y > bounds.surfaceY;
 
     if (airborne) {
-      // Ballistic: no steering at all, just gravity. Killing thrust here is
-      // what makes the arc read as a committed leap rather than swimming
-      // through the sky.
-      e.vy -= (p.gravity ?? 26) * dt;
+      // Ballistic: no steering at all, just gravity — arena.gravity, the same
+      // one the seal and every shot in the air answer to, so a dolphin's leap
+      // and a breach are visibly the same arc. Killing thrust here is what
+      // makes it read as a committed leap rather than swimming through the sky.
+      e.vy -= CONFIG.arena.gravity * dt;
       return;
     }
 
@@ -964,6 +1202,28 @@ const BEHAVIORS = {
   // doing rather than the turtle hunting them down.
   drift(e, dt, ctx) {
     const d = e.def.drift ?? {};
+
+    // IT WAS ONLY PASSING THROUGH. A turtle cannot be killed, so without this
+    // it is not a visitor at all — every one that ever wandered in is still
+    // there at minute ten, holding a slot in the population budget forever and
+    // slowly filling the ocean with furniture. So it stays a while and then
+    // makes for open water, which is also the only exit a creature nothing in
+    // the game can hurt is ever going to take.
+    //
+    // The clock does NOT run while the body is flying: a turtle in mid-punt is
+    // the thing the player is currently using, and having it decide to leave
+    // halfway across the arena reads as the game deleting your toy.
+    if (!e.leaving && e.stayTimer < Infinity) {
+      if (!(e.body && e.body.speed() > (CONFIG.physics?.[e.body.kind]?.launchSpeed ?? 4))) {
+        e.stayTimer -= dt;
+      }
+      if (e.stayTimer <= 0) e.leaving = true;
+    }
+
+    // The `leaving` steer itself is no longer here — it is at the behaviour
+    // dispatch in updateEnemies, so that EVERY creature can be sent away and
+    // not just the one behaviour that invented the idea. See steerOut.
+
     e.wanderTimer -= dt;
     if (e.wanderTimer <= 0) {
       e.wanderTimer = d.wanderChange ?? 4;
@@ -973,29 +1233,112 @@ const BEHAVIORS = {
   },
 };
 
+// Out the nearest side, and no more of whatever it was doing. `exitSpeed`
+// because a turtle's drift speed of 1.6 would take the better part of half a
+// minute to cross the water it has left — leaving has to look like a decision.
+//
+// The per-creature `drift.exitSpeed` still wins where it is set, so the turtle
+// keeps the pace it was tuned at; the boss clear-out's own speed is the
+// fallback for the ten species that never had one.
+function steerOut(e, dt) {
+  const out = e.mesh.position.x < 0 ? -1 : 1;
+  const speed = e.def.drift?.exitSpeed ?? CONFIG.boss?.clearOut?.exitSpeed ?? 3;
+  steerTo(e, out, 0, dt, 2, speed);
+}
+
+// ---------------------------------------------------------------------------
+// Boss fights clear the water
+// ---------------------------------------------------------------------------
+// Asked of the LIVE ROSTER rather than of systems/boss.js, which is what keeps
+// this file from importing that one — boss.js already imports this one, and
+// the pair would be a cycle. It is also the more honest question: what matters
+// to spawning is whether there is a boss IN THE WATER, and the roster is the
+// only thing that knows for certain. A boss leaves the list by being killed,
+// by a run reset, or by anything else that removes a creature, and none of
+// those routes owes anyone a callback.
+function bossInWater() {
+  for (const e of enemies) if (e.isBoss) return true;
+  return false;
+}
+
+/** Is the ocean currently under a boss's spawn lockout? */
+export function bossLockout() {
+  return CONFIG.boss?.clearOut?.enabled !== false && bossInWater();
+}
+
+/**
+ * Send everything that is not part of this fight away. Called once, by
+ * systems/boss.js, on the frame a boss arrives.
+ *
+ * Nothing is deleted here and nothing dies: each creature is marked `leaving`,
+ * turns for the nearest wall under its own power, and is removed by the sweep
+ * at the end of updateEnemies as it crosses the edge. No chum, no xp, no kill
+ * credit — the ocean got out of the way, the player did not clear it.
+ *
+ * @returns how many were sent away, for the caller's log.
+ */
+export function clearForBoss(boss = null) {
+  const cfg = CONFIG.boss?.clearOut ?? {};
+  if (cfg.enabled === false) return 0;
+  let sent = 0;
+  for (const e of enemies) {
+    if (e === boss || e.isBoss) continue;
+    if (e.leaving) continue; // already on its way; don't re-count it
+    if (cfg.keepMinions !== false && e.def?.bossMinion) continue;
+    // ANYTHING THAT CANNOT SWIM IS NOT ASKED TO. The oyster's speed is 0 — it
+    // is a shellfish on the seabed, scenery with a hitbox — and steerTo scales
+    // by the species speed, so marking it would produce a creature that is
+    // flagged as leaving, never moves, and is therefore never removed by the
+    // sweep: a permanent occupant that also suppresses nothing and helps
+    // nobody. Giving it a shove instead would be worse, because an oyster
+    // gliding sideways out of the arena at five units a second reads as a
+    // physics bug rather than as an animal getting out of the way.
+    //
+    // A handful of oysters sitting still through a boss fight is the correct
+    // picture: they are not the crowd the clear-out is about.
+    if (!(e.speed > 0.01)) continue;
+    // The sea turtle DOES go, and it is the one that most needs to: it cannot
+    // be killed, so left behind it is a permanent obstacle in a fight nobody
+    // chose to have it in. It already knows how to leave — this only brings
+    // its exit forward.
+    e.leaving = true;
+    sent += 1;
+  }
+  return sent;
+}
+
 // ---------------------------------------------------------------------------
 // Spawning
 // ---------------------------------------------------------------------------
 
-// Is this creature's FAMILY already full? A second ceiling above the species'
-// own `maxConcurrent`, so a roster of individually-rare big predators can't
-// stack into a crowd on the technicality that none of them is individually
-// over its limit. See CONFIG.spawn.groupMaxAlive.
+// Is any of this creature's FAMILIES already full? A second ceiling above the
+// species' own `maxConcurrent`, so a roster of individually-rare big predators
+// can't stack into a crowd on the technicality that none of them is
+// individually over its limit. See CONFIG.spawn.groupMaxAlive.
+//
+// A creature may belong to several families at once (the sharks are
+// "apex shark": big rigged bodies AND sharks), and EVERY cap it names binds —
+// the tightest one is what actually decides. That is the whole point of the
+// second tag: the apex allowance is about how much screen the big bodies take
+// between them, and the shark allowance is about how many SHARKS a fight is
+// meant to be, which is a much smaller number.
 //
 // `counts` is the headcount pickType already built while walking the enemy
 // list; pass null and this counts for itself, which is what the one-off
 // spawnNamed path does rather than make every caller keep a tally.
 function groupAtCap(def, counts = null) {
-  const group = def.spawnGroup;
-  if (group == null) return false;
-  const cap = CONFIG.spawn.groupMaxAlive?.[group];
-  if (cap == null) return false;
-  let n = counts?.get(group) ?? 0;
-  if (!counts) {
-    n = 0;
-    for (const e of enemies) if (e.def?.spawnGroup === group) n += 1;
+  const groups = spawnGroupsOf(def);
+  for (const group of groups) {
+    const cap = CONFIG.spawn.groupMaxAlive?.[group];
+    if (cap == null) continue;
+    let n = counts?.get(group) ?? 0;
+    if (!counts) {
+      n = 0;
+      for (const e of enemies) if (inSpawnGroup(e.def, group)) n += 1;
+    }
+    if (n >= cap) return true;
   }
-  return n >= cap;
+  return false;
 }
 
 // How welcome a creature is right now, as a multiplier on its spawn weight.
@@ -1039,13 +1382,15 @@ export function nightlifeWeight(glowing) {
 // ahead of the weight maths rather than scaling it.
 function pickType(difficulty, playerLevel = 1, lull = false) {
   // Per-type headcount, so `maxConcurrent` can keep any one species in check,
-  // and the same walk tallies each `spawnGroup` for the family-wide cap.
+  // and the same walk tallies each `spawnGroup` for the family-wide cap. A
+  // creature in two families counts once against each of them.
   const alive = new Map();
   const aliveGroup = new Map();
   for (const e of enemies) {
     alive.set(e.type, (alive.get(e.type) ?? 0) + 1);
-    const group = e.def?.spawnGroup;
-    if (group != null) aliveGroup.set(group, (aliveGroup.get(group) ?? 0) + 1);
+    for (const group of spawnGroupsOf(e.def)) {
+      aliveGroup.set(group, (aliveGroup.get(group) ?? 0) + 1);
+    }
   }
 
   // Both curves worked out once for the whole walk rather than per creature:
@@ -1053,9 +1398,19 @@ function pickType(difficulty, playerLevel = 1, lull = false) {
   const glowMul = nightlifeWeight(true);
   const dayMul = nightlifeWeight(false);
 
+  // While a boss is in the water only its minions are sent. Worked out once
+  // for the whole walk rather than per creature — it is a scan of the roster.
+  //
+  // An empty pool is a legitimate answer, the same way a lull's is: with
+  // nothing tagged `bossMinion` in enemies.csv a boss fight is a duel, which
+  // is the default and the thing this was asked for. The caller already treats
+  // "nothing to send" as nothing to send.
+  const lockout = bossLockout();
+
   const pool = [];
   let total = 0;
   for (const [key, def] of Object.entries(CONFIG.enemies)) {
+    if (lockout && !def.bossMinion) continue;
     if (difficulty < (def.minDifficulty ?? 0)) continue;
     // Hard level gate, independent of the time-based difficulty curve: a
     // creature with minPlayerLevel simply cannot appear until the player
@@ -1305,6 +1660,13 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     orbitDir: Math.random() < 0.5 ? -1 : 1,
     wanderTimer: Math.random() * 2,
     wanderAngle: heading,
+    // How long this one is staying, and whether it has already turned for open
+    // water. Infinity for everything without a `stay` — the rest of the roster
+    // leaves the arena by dying. See BEHAVIORS.drift.
+    stayTimer: def.drift?.stay != null
+      ? def.drift.stay + (Math.random() * 2 - 1) * (def.drift.stayJitter ?? 0)
+      : Infinity,
+    leaving: false,
     phase: Math.random() * Math.PI * 2,
     schoolId,
     biteTimer: 0,
@@ -1354,6 +1716,13 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // anything touched it.
     spawnScale,
     baseScale: 1,
+    // How big this individual is RELATIVE to its species — the run's growth
+    // times its own size roll, with the asset's own scale factored out. That
+    // distinction matters: spawnScale is an absolute number that includes the
+    // model's fit and the tuner's Size slider (the turtle's asset alone is
+    // 3.08x), so anything wanting "is this a big one for a turtle" has to read
+    // this instead. A rigid body's mass does — see attachRigidBody.
+    sizeMul,
     radius,
     anim,
     hitThisFrame: false,
@@ -1399,6 +1768,10 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // angular velocity. Both spring back to zero — see the collision block.
     tumble: 0,
     tumbleVel: 0,
+    // The seal's shove, kept apart from vx/vy so no behaviour can overwrite it
+    // before it has moved the body. See applyKnockback.
+    knockX: 0,
+    knockY: 0,
     bumpCooldown: 0,
     // Rest pose, rolled once per individual (see the crowd-variation block on
     // enemies.walkingCrab). `restLean` is the angle the locked broadside
@@ -1411,7 +1784,54 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // How high whatever this body is standing on holds it, or -Infinity for
     // "nothing but the seabed". Rewritten every frame by resolveCrabCollisions.
     supportY: -Infinity,
+    // A simulated body, for the handful of creatures that get knocked around
+    // instead of killed. Null for everything else, and every read of it is
+    // guarded — see attachRigidBody.
+    body: null,
   });
+
+  if (def.rigidBody) attachRigidBody(enemies[enemies.length - 1], def.rigidBody);
+}
+
+// Give a creature a real body. `profile` names the block under CONFIG.physics
+// the numbers come from, so a second creature can be made throwable by adding
+// a profile and one field on its def rather than by touching this file.
+function attachRigidBody(e, profile) {
+  const p = CONFIG.physics?.[profile] ?? {};
+  e.body = addBody(new RigidBody({
+    kind: profile,
+    shape: 'circle',
+    owner: e,
+    object: e.mesh,
+    radius: e.radius,
+    // MASS GOES WITH THE SHELL. `mass` is what a nominal one weighs; a body
+    // that spawned half again as big is heavier by the square of that, the
+    // same rule the crab crowd uses (CONFIG.crabPhysics reads mass off the
+    // radius). Without it a scaleVariance of 0.6 would be a paint job: every
+    // turtle from the runt to the boulder would take the same punt, fly the
+    // same distance and hit a hull for the same damage.
+    mass: (p.mass ?? 3) * Math.pow(e.sizeMul ?? 1, p.massExp ?? 2),
+    drag: p.drag ?? 0.6,
+    angularDrag: p.angularDrag ?? 0.8,
+    righting: p.righting ?? 4.5,
+    rightingDamping: p.rightingDamping ?? 2.2,
+    spin: p.spin ?? 1.6,
+    restitution: p.restitution ?? null,
+    // It stays in the ocean, and it BOUNCES off the edges of it rather than
+    // being clamped: the clamps in the integrator are skipped for bodies
+    // precisely so this can own that job.
+    walls: true,
+    wallRestitution: p.wallRestitution ?? 0.55,
+    // A full turn is upright — see wrapAngle. This is what lets it cartwheel
+    // and still settle the short way round.
+    wrap: true,
+    // It rights itself once it has STOPPED, not while it is still flying:
+    // the same speed that means "launched" to the integrator means "leave the
+    // spring off" to the body.
+    rightingSpeed: p.launchSpeed ?? 4,
+  }));
+  e.body.place(e.mesh.position.x, e.mesh.position.y);
+  e.body.restAngle = e.mesh.rotation.z;
 }
 
 // `wave` is this tick's answer from systems/waves.js — which roster is open,
@@ -1479,7 +1899,19 @@ export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(CONFIG.en
   // has to remember to, since a good enough trigger condition (e.g. a big
   // pickup pile, or just an unlucky spawn timer) can otherwise fire every
   // check with nothing capping the total.
-  if (enemies.length >= CONFIG.spawn.maxAlive) return null;
+  // `overfill` is the one door through maxAlive, and exactly one caller has a
+  // right to it: the boss.
+  //
+  // maxAlive is a memory bound rather than a design one, so a single body over
+  // it costs nothing — and refusing here costs the entire feature. A boss
+  // arrives when the LEVEL says so, in an ocean that is at its most crowded
+  // precisely because the player has been farming their way to that level; the
+  // arrival then silently does not happen, the retry finds the arena just as
+  // full on the next frame, and the marquee spawn of the run is skipped
+  // altogether. It is also self-correcting the moment it is used: the first
+  // thing a boss does is send everything else home (see clearForBoss), so the
+  // overshoot lasts a few seconds and ends well under the cap.
+  if (enemies.length >= CONFIG.spawn.maxAlive && !opts.overfill) return null;
   if (!opts.ignoreCaps) {
     if (def.maxConcurrent != null) {
       const current = enemies.filter((e) => e.type === key).length;
@@ -1688,12 +2120,36 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
     // which one is holding it, so overlapping sources each expire on their own
     // schedule instead of one masking the other.
     if (e.charmTimer > 0) e.charmTimer = Math.max(0, e.charmTimer - dt);
-    if (e.trapTimer > 0 || e.charmTimer > 0) {
-      if (e.trapTimer > 0) e.trapTimer = Math.max(0, e.trapTimer - dt);
+    if (e.trapTimer > 0) e.trapTimer = Math.max(0, e.trapTimer - dt);
+    // LAUNCHED. A body travelling faster than it could ever swim is not
+    // swimming — it is cargo, and it stops steering until it has slowed down
+    // to something it could have done under its own power. Without this the
+    // turtle paddles serenely along its wander heading while cartwheeling
+    // across the arena, which reads as an animation playing on a moving
+    // object rather than as an animal that has been hit by a truck.
+    const launched = e.body ? e.body.speed() > launchSpeed(e) : false;
+    if (launched) {
+      // Its own swimming bleeds off rather than being zeroed, so the moment it
+      // slows back down it is already moving the way it was pointed.
+      const bleed = Math.exp(-2.5 * dt);
+      e.vx *= bleed;
+      e.vy *= bleed;
+    } else if (e.trapTimer > 0 || e.charmTimer > 0) {
       e.vx = 0;
       e.vy = 0;
     } else {
-      (BEHAVIORS[e.def.behavior] ?? BEHAVIORS.chase)(e, dt, ctx);
+      // Settled: forget who the last launch barged through, so the next punt
+      // into the same school shoves it again.
+      if (e.plowed) e.plowed = null;
+      // LEAVING BEATS EVERY BEHAVIOUR. A creature on its way out has stopped
+      // being a fish with a job — it is not hunting, wandering, orbiting or
+      // holding a band any more, it is going. This used to live inside the
+      // drift behaviour, which meant `leaving` did nothing at all for the
+      // other nine: the sweep that removes a departed creature is global, so
+      // marking a shark as leaving simply left it hunting you forever while
+      // the code that was supposed to send it away looked like it existed.
+      if (e.leaving) steerOut(e, dt);
+      else (BEHAVIORS[e.def.behavior] ?? BEHAVIORS.chase)(e, dt, ctx);
       // Crawlers fall. Nothing else in the game does — everything else swims,
       // and a swimmer's steering IS its vertical position. A crab's isn't: it
       // can now be shoved up onto another crab's back (see
@@ -1730,10 +2186,49 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
     const chill = e.chillTimer > 0 ? 1 - e.chillSlow : 1;
     e.mesh.position.x += e.vx * chill * dt;
     e.mesh.position.y += e.vy * chill * dt;
+
+    // THE SEAL'S SHOVE, integrated on top of whatever the steering asked for
+    // and decaying exponentially back to nothing. Added here rather than into
+    // vx/vy for the reason applyKnockback spells out: three different
+    // behaviours own that field in three different ways, and two of them
+    // assign it outright.
+    //
+    // NOT scaled by `chill`: the shove is the seal's momentum arriving, not
+    // the creature's own swimming, and a frozen body should if anything slide
+    // further. It is also what makes a chilled shark still visibly get hit.
+    if (e.knockX || e.knockY) {
+      e.mesh.position.x += e.knockX * dt;
+      e.mesh.position.y += e.knockY * dt;
+      const drop = Math.exp(-(CONFIG.strike?.knockback?.decay ?? 5.5) * dt);
+      e.knockX *= drop;
+      e.knockY *= drop;
+      if (Math.abs(e.knockX) < 0.01) e.knockX = 0;
+      if (Math.abs(e.knockY) < 0.01) e.knockY = 0;
+    }
+    // A SIMULATED BODY takes over from here. Its own swimming has already been
+    // integrated above, so this hands the result to the body as "where my
+    // locomotion left me"; the physics step (systems/rigidBody.js, run once
+    // per frame from the game loop) adds the shove, resolves what it hit,
+    // bounces it off the arena and writes the position back onto the mesh.
+    //
+    // The clamps below are skipped for exactly that reason: they would fight
+    // the body's own walls, and a clamp beats a bounce — the creature would be
+    // parked against the surface with its velocity still pointing up.
+    if (e.body) {
+      e.body.place(e.mesh.position.x, e.mesh.position.y);
+      // The walls open once it has turned for open water, and close again if
+      // anything changes its mind — a body that could leave whenever it liked
+      // would be one strike away from being punted out of the arena.
+      e.body.escaping = e.leaving;
+      // BOWLING. A body travelling at speed shoves whatever it passes through
+      // — no damage, so this can never quietly become a second damage source,
+      // but a punted turtle scattering a school on its way to a hull is the
+      // cheapest chain reaction in the game and the one that reads best.
+      if (launched) plowThrough(e, dt);
     // `canBreach` creatures are allowed above the water line — the porpoise
     // arc IS the jump, and clamping here would flatten it against the
     // surface. They still get the horizontal/floor limits below.
-    if (e.entering) {
+    } else if (e.entering) {
       // Still walking on from the wings: vertical limits only. Once it is
       // fully inside the walls it becomes a normal, boxed-in creature — and
       // because the flag only ever clears, it can't slip back out later.
@@ -1741,6 +2236,18 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
       if (e.mesh.position.x > bounds.left + e.radius && e.mesh.position.x < bounds.right - e.radius) {
         e.entering = false;
       }
+    } else if (e.leaving) {
+      // ON ITS WAY OUT — the exact mirror of `entering`, and for the same
+      // reason: the side walls have to open or there is nowhere to go.
+      //
+      // This is what the `leaving` flag was missing. The sweep that removes a
+      // departed creature waits for it to cross the arena edge, and the wall
+      // clamp here pins every swimmer a radius inside that edge — so a marked
+      // creature swam into the wall and stayed there forever, alive and
+      // unremovable. It looked like it worked, because the one creature that
+      // ever used the flag (the sea turtle) has a rigid body, and a body opens
+      // its own walls through `escaping` a few lines above.
+      clampVertical(e.mesh.position, e.radius);
     } else if (e.def.canBreach) {
       const r = e.radius;
       if (e.mesh.position.y < bounds.bottom + r) e.mesh.position.y = bounds.bottom + r;
@@ -1840,8 +2347,20 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
       }
     } else if (e.def.faceMotion) {
       if (Math.hypot(e.vx, e.vy) > 0.05) {
-        e.mesh.rotation.z = Math.atan2(e.vy, e.vx) - Math.PI / 2;
-        if (CONFIG.view === 'side') e.visual.rotation.y = e.vx < 0 ? Math.PI : 0;
+        const heading = Math.atan2(e.vy, e.vx) - Math.PI / 2;
+        // With a body, the heading is the REST pose the physics roll is laid
+        // on top of (see RigidBody.restAngle) — assigning rotation.z here
+        // instead would erase the tumble every frame, which is the one thing
+        // that must survive. It is also frozen while the body is flying: a
+        // turtle cartwheeling across the arena has no business snapping to
+        // face its own drift, and the angle it holds is exactly what the
+        // righting spring is visibly unwinding back to.
+        if (e.body) {
+          if (!launched) e.body.restAngle = heading;
+        } else {
+          e.mesh.rotation.z = heading;
+        }
+        if (CONFIG.view === 'side' && !launched) e.visual.rotation.y = e.vx < 0 ? Math.PI : 0;
       }
     } else if (e.def.spin) {
       e.visual.rotation.z += dt * e.def.spin;
@@ -2044,11 +2563,29 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
       }
     }
   }
+
+  // GONE. Anything that swam out under its own power, removed after the loop
+  // above rather than from inside it: that loop is a for-of over this very
+  // array, so splicing mid-pass would skip the creature standing behind the
+  // one that left. No death, no chum, no kill credit — it did not die, it
+  // went somewhere else.
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (!e.leaving) continue;
+    const margin = e.radius + 4;
+    if (e.mesh.position.x < bounds.left - margin || e.mesh.position.x > bounds.right + margin) {
+      removeEnemy(scene, i);
+    }
+  }
 }
 
 export function removeEnemy(scene, index) {
   const e = enemies[index];
   if (!e) return;
+  // The body outlives the creature otherwise: the physics world holds its own
+  // reference, so a body left behind is an invisible obstacle in the water
+  // that other bodies keep bouncing off.
+  if (e.body) removeBody(e.body);
   scene.remove(e.mesh);
   enemies.splice(index, 1);
 }

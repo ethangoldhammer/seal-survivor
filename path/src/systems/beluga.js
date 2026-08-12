@@ -23,7 +23,7 @@ let visual = null;
 let fireTimer = 0;
 const dronePos = new THREE.Vector3();
 const droneVel = new THREE.Vector3();
-const bubbles = []; // { mesh, dir, life }
+const bubbles = []; // { mesh, dir, life, popLeft, baseScale }
 
 function buildDrone() {
   const root = new THREE.Group();
@@ -67,7 +67,42 @@ function currentBubbleRadius(level) {
   return aoe(CONFIG.beluga.baseBubbleRadius + CONFIG.beluga.radiusPerLevel * (level - 1));
 }
 
-// hooks: { onTrap(enemy) } — for feedback only, no damage/kill involved.
+// A bubble that has caught something doesn't disappear on the frame it
+// touched — it holds on the creature, strobes, swells and then bursts. The
+// catch is the one event in this ability, and it used to be told entirely by
+// the absence of the thing that told it.
+//
+// The strobe is `mesh.visible`, NOT material opacity. Every trap bubble in
+// flight is a clone sharing one material (see createVisual — primitives don't
+// clone theirs), so fading one would fade all of them, including the ones
+// still travelling. `visible` is per-object and free.
+function updatePop(b, dt, scene, hooks) {
+  const cfg = CONFIG.beluga;
+  b.popLeft -= dt;
+
+  if (b.popLeft <= 0) {
+    scene.remove(b.mesh);
+    // Reported at the bubble's position rather than the creature's: by now
+    // they are the same point, and this way the burst can't chase a body that
+    // was killed or hauled away during the hold.
+    hooks.onPop?.(b.mesh.position.x, b.mesh.position.y);
+    return true; // done — caller drops it
+  }
+
+  const hold = Math.max(0.0001, cfg.popFlicker);
+  const t = 1 - b.popLeft / hold; // 0 at the catch, 1 at the burst
+  const swell = 1 + (cfg.popSwell - 1) * t * t; // slow, then a rush at the end
+  b.mesh.scale.copy(b.baseScale).multiplyScalar(swell);
+  // Floor of the elapsed time in half-cycles: on, off, on, off. Driven off
+  // elapsed time rather than a per-frame toggle so the rate is the authored
+  // one at any framerate.
+  b.mesh.visible = Math.floor(t * hold * cfg.popFlickerHz * 2) % 2 === 0;
+  return false;
+}
+
+// hooks: { onTrap(enemy), onPop(x, y) } — for feedback only, no damage/kill
+// involved. onTrap is the moment of the catch, onPop the bubble bursting a
+// beat later; see CONFIG.beluga.popFlicker.
 export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, hooks) {
   if (!drone) return;
 
@@ -124,13 +159,30 @@ export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, ho
         mesh.scale.multiplyScalar(radius / 0.35); // asset's authored radius is 0.35
         mesh.position.copy(drone.position);
         scene.add(mesh);
-        bubbles.push({ mesh, dirX: dx / len, dirY: dy / len, radius, life: CONFIG.beluga.life });
+        bubbles.push({
+          mesh, dirX: dx / len, dirY: dy / len, radius, life: CONFIG.beluga.life,
+          // Null until it catches something. The authored scale is kept as it
+          // was at spawn because the swell multiplies it — reading it back off
+          // the mesh mid-flicker would compound frame on frame.
+          popLeft: null,
+          baseScale: mesh.scale.clone(),
+        });
       }
     }
   }
 
   for (let i = bubbles.length - 1; i >= 0; i--) {
     const b = bubbles[i];
+
+    // A bubble that has already caught something is inert: it stops travelling
+    // and stops catching. Without the second half, a bubble sitting on a fish
+    // for its whole flicker keeps sweeping the crowd and can seal a second one
+    // it never touched.
+    if (b.popLeft !== null) {
+      if (updatePop(b, dt, scene, hooks)) bubbles.splice(i, 1);
+      continue;
+    }
+
     b.mesh.position.x += b.dirX * CONFIG.beluga.speed * dt;
     b.mesh.position.y += b.dirY * CONFIG.beluga.speed * dt;
     b.life -= dt;
@@ -144,11 +196,23 @@ export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, ho
       if (dx * dx + dy * dy > reach * reach) continue;
       e.trapTimer = CONFIG.beluga.trapDuration;
       hooks.onTrap?.(e);
+      // Snapped onto the creature so the flicker — and the burst at the end of
+      // it — happen ON the fish that was caught, not at the point of contact,
+      // which for anything bigger than the bubble is off to one side of it.
+      b.mesh.position.copy(e.mesh.position);
+      b.mesh.position.z = 0;
+      b.popLeft = Math.max(0, CONFIG.beluga.popFlicker ?? 0);
       hit = true;
       break;
     }
 
-    if (hit || b.life <= 0) {
+    // A catch starts the flicker; running out of air just ends it. Only the
+    // second one is removed here — see the pop branch at the top of the loop.
+    if (hit) {
+      // A hold of zero is the old instant vanish, and it still has to burst
+      // rather than being deleted in silence.
+      if (updatePop(b, 0, scene, hooks)) bubbles.splice(i, 1);
+    } else if (b.life <= 0) {
       scene.remove(b.mesh);
       bubbles.splice(i, 1);
     }

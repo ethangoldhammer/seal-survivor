@@ -42,6 +42,7 @@ import * as THREE_NS from 'three';
 import { CONFIG, TUNER_SCHEMA, withoutInheritedPresetKeys } from '../path/src/config.js';
 import { updateBeatSync } from '../path/src/systems/beatSync.js';
 import { ASSETS } from '../path/src/assets.js';
+import { pulseDemoFor, panDemoFor } from '../path/src/systems/glowDebug.js';
 
 let failures = 0;
 const section = (n) => console.log(`\n${n}`);
@@ -162,6 +163,38 @@ for (const [label, libKey] of [['lit (standard)', 'standard'], ['unlit (basic)',
   check(`${label}: aEyeGlow reaches the fragment stage`,
     shader.vertexShader.includes('attribute float aEyeGlow')
     && shader.vertexShader.includes('vEyeGlow = aEyeGlow'));
+
+  // EVERY VARYING THIS MODULE WRITES IS DECLARED IN THE STAGE THAT WRITES IT.
+  //
+  // The regression: `vEyeGlow = aEyeGlow;` shipped without a matching
+  // `varying float vEyeGlow;` in the VERTEX shader — the declaration existed
+  // only in GLSL, which is injected into the fragment stage. That is not a
+  // silent no-op like a missed hook, it is a compile error ('vEyeGlow' :
+  // undeclared identifier), so the program never links and EVERY creature
+  // wearing a glow skin renders as nothing at all: the lanternfish, the ray,
+  // the shark and both crabs, on one missing line.
+  //
+  // Every check above passed while that was true, because each one asks
+  // whether a string landed. This asks whether the result is a shader.
+  //
+  // Keyed on `varying = attribute` assignments rather than a hardcoded list,
+  // so the next attribute anyone pipes through is covered without an edit —
+  // and three's own chunks are still unresolved #includes here, so their
+  // varyings are correctly out of scope.
+  {
+    const written = [...shader.vertexShader.matchAll(/^\s*(\w+)\s*=\s*(a[A-Z]\w*)\s*;/gm)];
+    const undeclared = written.filter(([, name]) =>
+      !new RegExp(`varying\\s+\\w+\\s+${name}\\b`).test(shader.vertexShader));
+    check(`${label}: every varying the vertex stage writes is declared there`,
+      written.length >= 3 && undeclared.length === 0,
+      undeclared.length
+        ? `undeclared: ${undeclared.map(([, n]) => n).join(', ')} — the vertex shader will not compile`
+        : `${written.map(([, n]) => n).join(', ')}`);
+    // ...and that the fragment stage can still read them, which is the other
+    // half of a varying and the half the old code had.
+    check(`${label}: ...and the fragment stage declares them too`,
+      written.every(([, name]) => new RegExp(`varying\\s+\\w+\\s+${name}\\b`).test(shader.fragmentShader)));
+  }
   // The one that would otherwise fail silently as a washed-out fish rather
   // than as a missing effect.
   check(`${label}: body darkening landed on the base colour`,
@@ -683,58 +716,91 @@ section('SAVED SNAPSHOT');
     glowCreatures.map((k) => `${k}@${CONFIG.enemies[k].minDifficulty}`).join(', '));
 }
 
-// --- per-seal variants ------------------------------------------------------
-// The seal team is the one asset that varies its look PER INDIVIDUAL rather
-// than per species: one model, one shared `escort` preset, and a different
-// pattern and palette stamped onto each squad member. The failure this guards
-// is the obvious one — stamping the shared template instead of the instance
-// clone, which repaints the entire squad the same colour and looks exactly
-// like the variants "not working" rather than like a leak.
-section('PER-SEAL VARIANTS');
+// --- per-instance variants --------------------------------------------------
+// setBiolumSkinVariant stamps ONE individual's material, over the top of its
+// species preset. Its live caller is the Alt+N glow lineup in main.js, which
+// forces PULSE_DEMO / PAN_DEMO onto the creatures it spawns so a breath that
+// is clipping can be seen at all (systems/glowDebug.js).
+//
+// The failure this guards is the obvious one — stamping the shared template
+// instead of the instance clone, which repaints every creature of that species
+// and looks exactly like the demo "not working" rather than like a leak.
+//
+// (The seal team used to be the headline caller: a different pattern and
+// palette per squad member. The escorts now wear the player's own noise
+// mottling instead — see systems/noiseShader.js — so the variant path is the
+// debug lineup's alone.)
+section('PER-INSTANCE VARIANTS');
 {
-  const seals = [];
+  const lit = [];
   const tpl = makeBody();
-  attachBiolumSkin(tpl.material, tpl, 'escort');
-  const variants = CONFIG.sealTeam.skin.variants;
+  attachBiolumSkin(tpl.material, tpl, 'lantern');
+  // Both demos now SIZE THEMSELVES against the creature they are stamped on —
+  // strength is derived from that preset's `glow` and palette rather than
+  // hardcoded, so a shared constant would no longer describe either of them.
+  // See strengthForCeiling in systems/glowDebug.js.
+  const lanternCfg = { ...CONFIG.biolumSkin.base, ...CONFIG.biolumSkin.presets.lantern };
+  const pulseDemo = pulseDemoFor(lanternCfg);
+  const panDemo = panDemoFor(lanternCfg);
+  const variants = [pulseDemo, panDemo];
 
-  for (let i = 0; i < variants.length; i++) {
+  for (const variant of variants) {
     const root = new THREE_NS.Group();
     const inst = new THREE_NS.Mesh(tpl.geometry, tpl.material);
     root.add(inst);
     instantiateBiolumSkin(root);
-    setBiolumSkinVariant(root, variants[i % variants.length]);
-    seals.push(inst);
+    setBiolumSkinVariant(root, variant);
+    lit.push(inst);
   }
 
-  const patterns = new Set(seals.map((s) => s.material.userData.__bioSkinUniforms.uBioPattern.value));
-  check('every seal in the squad wears a different pattern',
-    patterns.size === variants.length, `${patterns.size} distinct from ${variants.length} seals`);
+  const lantern = CONFIG.biolumSkin.presets.lantern;
+  const u = (m) => m.material.userData.__bioSkinUniforms;
+  // Each demo drops strength to its own derived value — the pan demo aims a
+  // little lower than the pulse one, since it has no breath to clip — so the
+  // stamp is proved per variant, against the TEMPLATE, which keeps the
+  // preset's own value.
+  const expected = [pulseDemo, panDemo].map((v) => v.strength * (lantern.glow ?? 1));
+  check('a stamped individual takes the variant\'s value, not the preset\'s',
+    lit.every((s, i) => Math.abs(u(s).uBioStrength.value - expected[i]) < 1e-9)
+    && expected.every((e) => Math.abs(u(tpl).uBioStrength.value - e) > 1e-9),
+    `${lit.map((s) => u(s).uBioStrength.value.toFixed(3)).join(', ')} vs template ${u(tpl).uBioStrength.value.toFixed(3)}`);
 
-  const colors = new Set(seals.map((s) => s.material.userData.__bioSkinUniforms.uBioColorA.value.getHexString()));
-  check('...and a different colour', colors.size === variants.length,
-    `${colors.size} distinct from ${variants.length} seals`);
+  // ...and two individuals off the same template disagree, which is the whole
+  // reason the stamp is per-material: the pulse demo opens the breath right up
+  // and the pan demo holds it still.
+  check('two individuals off one template can disagree',
+    u(lit[0]).uBioPulseAmp.value === pulseDemo.pulseAmp
+    && u(lit[1]).uBioPulseAmp.value === panDemo.pulseAmp,
+    `${lit.map((s) => u(s).uBioPulseAmp.value).join(' vs ')}`);
 
   // The leak check. If the variant were stamped on the template, this would be
-  // whichever seal was built last instead of the preset's own pattern.
+  // whichever individual was built last instead of the preset's own value.
   check('the shared template is not repainted by any of them',
     tpl.material.userData.__bioSkinVariant === undefined
     && tpl.material.userData.__bioSkinUniforms.uBioPattern.value
-       === patternIndex(CONFIG.biolumSkin.presets.escort.pattern));
+       === patternIndex(lantern.pattern));
 
   // A variant is a LAYER, not a replacement: anything it doesn't mention still
-  // has to come from the preset, or every variant would silently reset the
-  // squad's shared look back to `base`.
-  const escort = CONFIG.biolumSkin.presets.escort;
+  // has to come from the preset, or every stamp would silently reset the
+  // creature's shared look back to `base`.
   check('a variant layers over the preset rather than replacing it',
-    seals.every((s) => s.material.userData.__bioSkinUniforms.uBioBodyDarken.value === escort.bodyDarken),
-    `bodyDarken ${escort.bodyDarken} survives on all ${seals.length}`);
-
-  // The tuner's off switch has to genuinely collapse them, since that is the
-  // only way to judge the shared preset.
-  const before = seals[0].material.userData.__bioSkinUniforms.uBioPattern.value;
-  check('the variants are what is doing it, not the preset',
-    before !== patternIndex(escort.pattern) || variants[0].pattern === escort.pattern);
+    lit.every((s) => s.material.userData.__bioSkinUniforms.uBioBodyDarken.value === lantern.bodyDarken),
+    `bodyDarken ${lantern.bodyDarken} survives on all ${lit.length}`);
 }
+
+// The escorts left the glow system entirely: they wear CONFIG.sealShader, the
+// player's own procedural mottling, so `biolumSkin` on that asset would be a
+// second unrelated pattern painted over the first.
+//
+// The preset clause is the half that needs a test. `escort` is still in every
+// saved snapshot on disk, and a deep merge adds keys it finds, so without
+// pruneUnknownGlowPresets it comes back as a group the tuner never built —
+// which is what 'every preset in the config has a tuner group' above would
+// catch, one section too late to say why.
+check('the seal team wears the player\'s noise, not a glow skin',
+  ASSETS.sealTeam.noiseShader === true && ASSETS.sealTeam.biolumSkin === undefined
+  && CONFIG.biolumSkin.presets.escort === undefined,
+  `noiseShader=${ASSETS.sealTeam.noiseShader}, biolumSkin=${ASSETS.sealTeam.biolumSkin}, escort preset=${CONFIG.biolumSkin.presets.escort ? 'resurrected' : 'gone'}`);
 
 check('the lanternfish still schools like the fish it copies',
   !!CONFIG.enemies.lanternfish?.swarm && CONFIG.enemies.lanternfish?.behavior === 'swarm');

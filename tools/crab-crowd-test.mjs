@@ -162,7 +162,15 @@ function overlapPush(zGap) {
 }
 const samePush = overlapPush(0);
 const lanePush = overlapPush(5);
-check('two crabs sharing a depth lane shove each other apart', samePush > 0.4, `+${samePush.toFixed(2)} in one frame`);
+// MEASURED IN CRAB RADII, not world units. The shove scales with the body, and
+// the body scales with assets.csv's size multiplier — so an absolute threshold
+// silently becomes a test of that tuning value. It did: this read `> 0.4` and
+// passed only because the walking crab had drifted to 10.46x; at a sane 2.3x
+// the same working shove measures 0.35 and the check failed for no reason
+// connected to collisions at all.
+const crabR = crabAt(0, FLOOR + 1).radius;
+check('two crabs sharing a depth lane shove each other apart', samePush > crabR * 0.15,
+  `+${samePush.toFixed(2)} in one frame = ${(samePush / crabR).toFixed(2)} of a ${crabR.toFixed(2)} radius`);
 check('...and crabs in different lanes pass through instead', lanePush < samePush * 0.25,
   `+${lanePush.toFixed(2)} against +${samePush.toFixed(2)} same-lane`);
 

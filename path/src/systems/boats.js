@@ -6,6 +6,7 @@ import { pickups, spawnXpOrb } from '../entities/pickups.js';
 import { recordSpawn } from './playtest.js';
 import { primeBoatDebris, spawnBoatDebris, updateBoatDebris, resetBoatDebris, blastDebris } from './boatDebris.js';
 import { spawnCrewFor, updateCrew, resetCrew, releaseCrew, blastCrew, clearDeckCache } from './crew.js';
+import { RigidBody, addBody, removeBody, blastBodies } from './rigidBody.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
@@ -25,7 +26,10 @@ function randomBetween(a, b) {
 }
 
 export function resetBoats(scene) {
-  for (const b of boats) scene.remove(b.mesh);
+  for (const b of boats) {
+    if (b.body) removeBody(b.body);
+    scene.remove(b.mesh);
+  }
   boats.length = 0;
   for (const o of attractorOrbs) scene.remove(o.mesh);
   attractorOrbs.length = 0;
@@ -133,7 +137,7 @@ function spawnBoat(scene, difficulty) {
   // rate against.
   recordSpawn(hp);
 
-  boats.push({
+  const boat = {
     mesh,
     isTrawler,
     assetKey,
@@ -150,22 +154,51 @@ function spawnBoat(scene, difficulty) {
     offsetY,
     radius: Math.hypot(halfLength, halfHeight) + Math.hypot(offsetX, offsetY),
     spawnScale,
-    // Where the boat has sailed to, kept apart from mesh.position so the hit
-    // recoil below can offset the rendered hull without the sailing motion
-    // integrating the recoil back into its own course.
-    sailX: x,
     phase: Math.random() * Math.PI * 2,
     flash: 0,
-    // Hit reaction state — see updateBoats.
-    knockX: 0,
-    knockY: 0,
-    rock: 0,
-    rockVel: 0,
-  });
+    // The hull is a simulated body now — see systems/rigidBody.js. Its
+    // position, its roll and its recoil all live in there, which is what lets
+    // a turtle punted into it move it for real instead of playing a flinch at
+    // it. What stays here is everything a hull is that a body is not: hp, a
+    // catch, a crew, a heading it is trying to hold.
+    body: null,
+  };
+  boats.push(boat);
+
+  const p = CONFIG.physics?.boat ?? {};
+  boat.body = addBody(new RigidBody({
+    kind: 'boat',
+    shape: 'box',
+    owner: boat,
+    object: mesh,
+    halfLength,
+    halfHeight,
+    offsetX: boat.offsetX,
+    offsetY,
+    // The trawler is heavier as well as tougher, so the same turtle that
+    // launches a rowboat only leans on it.
+    mass: (p.mass ?? 14) * (isTrawler ? (p.trawlerMass ?? 2.4) : 1),
+    // No linear drag: horizontal motion is `thrust` chasing the sailing speed
+    // and vertical is the buoyancy spring, both applied every frame in
+    // updateBoats. A drag term on top would only fight them.
+    drag: p.drag ?? 0,
+    angularDrag: p.angularDrag ?? 2.2,
+    righting: p.righting ?? 42,
+    rightingDamping: p.rightingDamping ?? 5,
+    spin: p.spin ?? 2.6,
+    restitution: p.restitution ?? null,
+    // NO CAPSIZE WHILE IT FLOATS: going over is what SINKING looks like, and a
+    // hull that is still alive has not earned it. See damageBoat.
+    maxAngle: CONFIG.boats.hitReaction.maxRoll ?? 0.55,
+    // Sails straight through the arena walls — leaving is how a boat despawns.
+    walls: false,
+  }));
+  boat.body.place(x, bounds.surfaceY);
+  boat.body.vx = dir * boat.speed;
 
   // Someone has to be sailing it. They ride the deck from here and get off it
   // themselves once the hull is in trouble — see systems/crew.js.
-  spawnCrewFor(scene, boats[boats.length - 1]);
+  spawnCrewFor(scene, boat);
 }
 
 export function spawnAttractorOrb(scene, pos) {
@@ -191,37 +224,30 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
     }
   }
 
-  const react = CONFIG.boats.hitReaction;
+  const phys = CONFIG.physics?.boat ?? {};
 
   for (let i = boats.length - 1; i >= 0; i--) {
     const b = boats[i];
-    b.sailX += b.dir * b.speed * dt;
 
-    // Hit reaction. Boats have no skeleton and no clips, so the spring-driven
-    // flinch the creatures get isn't available to them — this is the
-    // equivalent, built from the only things a rigid hull has: it gets shoved
-    // along the shot, rolls from the impact, and pops in scale. Recoil decays
-    // exponentially back to zero, and the roll is a damped spring so the hull
-    // rocks and settles rather than snapping back level.
-    if (b.knockX !== 0 || b.knockY !== 0) {
-      const decay = Math.exp(-react.knockDecay * dt);
-      b.knockX *= decay;
-      b.knockY *= decay;
-      if (Math.abs(b.knockX) < 1e-4) b.knockX = 0;
-      if (Math.abs(b.knockY) < 1e-4) b.knockY = 0;
-    }
-    if (b.rock !== 0 || b.rockVel !== 0) {
-      b.rockVel += (-react.rockStiffness * b.rock - react.rockDamping * b.rockVel) * dt;
-      b.rock += b.rockVel * dt;
-      if (Math.abs(b.rock) < 1e-4 && Math.abs(b.rockVel) < 1e-4) { b.rock = 0; b.rockVel = 0; }
-    }
+    // THRUST. A hull under way is not on a rail any more: it holds its sailing
+    // speed by accelerating toward it, so anything that shoves it costs it
+    // real ground — a punted boat coasts backwards, slows, and gets back under
+    // way — while a hull nothing has touched still crosses the arena at
+    // exactly the speed it always did.
+    b.body.addAcceleration((b.dir * b.speed - b.body.vx) * (phys.thrust ?? 0.9), 0);
 
-    b.mesh.position.x = b.sailX + b.knockX;
-    // Ride the surface with a gentle bob rather than sitting on a flat line.
-    b.mesh.position.y = bounds.surfaceY
-      + Math.sin(clock * CONFIG.boats.bobSpeed + b.phase) * CONFIG.boats.bobAmount
-      + b.knockY;
-    b.mesh.rotation.z = Math.sin(clock * CONFIG.boats.bobSpeed * 0.7 + b.phase) * 0.08 + b.rock;
+    // BUOYANCY. The bob is the rest height, and the hull is sprung to it
+    // rather than pinned at it, so a boat driven down into the water surges
+    // back up through the line and rocks it off. Damped, or it never stops.
+    const rest = bounds.surfaceY
+      + Math.sin(clock * CONFIG.boats.bobSpeed + b.phase) * CONFIG.boats.bobAmount;
+    b.body.addAcceleration(0, (rest - b.body.y) * (phys.buoyancy ?? 30)
+      - b.body.vy * (phys.buoyancyDamping ?? 4.2));
+
+    // The gentle roll of a boat on the water. This is the body's REST angle;
+    // whatever the physics has done to it is laid on top by the step itself
+    // (see RigidBody.writeBack), which is why nothing here touches rotation.
+    b.body.restAngle = Math.sin(clock * CONFIG.boats.bobSpeed * 0.7 + b.phase) * 0.08;
 
     if (b.flash > 0) {
       b.flash = Math.max(0, b.flash - dt);
@@ -232,10 +258,14 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
     }
 
     // Sailed off the far side — despawn quietly, no reward. Its crew goes with
-    // it: they're still standing on a boat that just left the arena.
+    // it: they're still standing on a boat that just left the arena. Measured
+    // off the body rather than off a course it was following, so a hull that
+    // was punted out of the arena counts as gone the same way one that sailed
+    // out does.
     const margin = b.radius + 5;
-    if (b.sailX < bounds.left - margin || b.sailX > bounds.right + margin) {
+    if (b.body.x < bounds.left - margin || b.body.x > bounds.right + margin) {
       releaseCrew(scene, b, false);
+      removeBody(b.body);
       scene.remove(b.mesh);
       boats.splice(i, 1);
     }
@@ -271,40 +301,106 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
   }
 }
 
+/**
+ * THE SEAL HITS THE HULL. A shove, not a shot — so it deliberately does not go
+ * through damageBoat's damage-scaled recoil: a ram deals almost nothing at base
+ * (see CONFIG.strike.contactDamage) and would produce a nudge, while what it
+ * should produce is the boat visibly jumping.
+ *
+ * Damage, if any, is the caller's business; this is purely the reaction, so a
+ * strike can jostle a hull it cannot yet hurt. The roll comes from where the
+ * seal actually hit — bow, stern or amidships — through the same torque
+ * formula bullets use, which is what makes hitting an end spin it and hitting
+ * the middle bounce it.
+ *
+ * @param boat   the hull
+ * @param dirX,dirY  the dash's heading
+ * @param power  banked charge of the strike, 0..1
+ * @param at     where the contact happened, for the lever arm
+ */
+export function jostleBoat(boat, dirX, dirY, power = 1, at = null) {
+  if (!boat?.body) return;
+  const len = Math.hypot(dirX, dirY) || 1;
+  // Scaled by charge the same way everything else the strike does is. The
+  // trawler's extra weight is in its MASS now rather than in a resist factor,
+  // so one number does that job for every impulse a hull can take — a ram, a
+  // shot, a blast, a turtle — instead of each source remembering to divide.
+  const punch = (CONFIG.physics?.boat?.strikeImpulse ?? 130)
+    * Math.min(1, Math.max(0, power));
+  boat.body.applyImpulse(
+    (dirX / len) * punch,
+    (dirY / len) * punch,
+    at ? at.x : null,
+    at ? at.y : null,
+  );
+  boat.flash = CONFIG.fx.hitFlash;
+}
+
+/**
+ * SOMETHING HIT THE HULL — a real body, at a real speed, resolved by the
+ * physics step rather than aimed by anything. The impulse is already spent by
+ * the time this runs (the solver bounced both of them); what this adds is the
+ * damage, priced off the impact speed the solver measured.
+ *
+ * A hull is dangerous to hit and cheap to be hit BY, so this deliberately
+ * runs only for a boat: a turtle that lands on a rowboat wrecks it, and the
+ * rowboat does nothing back to the turtle, which cannot be hurt anyway.
+ *
+ * @param body   the hull's body (whichever side of the collision it was)
+ * @param hit    the solver's report: { speed, impulse, x, y }
+ * @returns the damage dealt, or 0 for a bump
+ */
+export function impactBoat(scene, body, hit, hooks = {}) {
+  const boat = body?.owner;
+  const index = boats.indexOf(boat);
+  if (index < 0) return 0;
+
+  const imp = CONFIG.physics?.impact ?? {};
+  boat.flash = CONFIG.fx.hitFlash;
+  // WHETHER it hurts is a speed question — a turtle drifting into a hull is a
+  // bump however heavy it is. HOW MUCH is an impulse question, because that is
+  // the one that knows the difference between the runt and the boulder: with
+  // scaleVariance on the turtle those differ by an order of magnitude in mass,
+  // and a damage priced on speed alone would charge them the same.
+  if (hit.speed <= (imp.minSpeed ?? 6)) return 0;
+
+  const at = { x: hit.x, y: hit.y };
+  const damage = Math.min(imp.maxDamage ?? 120, hit.impulse * (imp.damagePerImpulse ?? 0.5));
+  // `recoil: false` — the shove has already been applied by the solver, and
+  // letting damageBoat add its own on top would count one collision twice:
+  // the hull would leap away from a hit it has already reacted to.
+  damageBoat(scene, index, damage, hooks, null, at, false);
+  return damage;
+}
+
 // Called from combat when a bullet hits a boat. `dir` is the shot's travel
 // direction, so the recoil goes the way the bullet was going — without it the
 // hull would pop in place with no sense of where the hit came from.
-export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = null) {
+// `recoil` is how a caller says "the shove has already happened" — see
+// impactBoat, where the physics solver has bounced the hull before the damage
+// is even worked out.
+export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = null, recoil = true) {
   const b = boats[index];
   if (!b) return false;
   b.hp -= amount;
   b.flash = CONFIG.fx.hitFlash;
 
-  const react = CONFIG.boats.hitReaction;
   // Damage-scaled and capped, the same way the creatures' hit impulse is: a
-  // chip of splash nudges the hull, a big hit visibly staggers it. Heavier
-  // boats move less for the same hit.
-  const punch = Math.min(react.max, amount * react.perDamage) / (b.isTrawler ? react.trawlerResist : 1);
-  const len = dir ? (Math.hypot(dir.x, dir.y) || 1) : 1;
-  const fx = dir ? (dir.x / len) * punch : 0;
-  const fy = dir ? (dir.y / len) * punch : punch;
-  b.knockX += fx;
-  b.knockY += fy;
-
-  // Roll is the torque of that impulse about the hull's centre — the 2D cross
-  // product of the lever arm with the force. Deriving it from where the shot
-  // actually landed is what makes shooting the bow rock the boat differently
-  // from shooting the stern, and it works for a flat horizontal shot too,
-  // which a formula reading only the shot's vertical component does not.
-  // Divided by the hull's half-length so a long trawler doesn't spin further
-  // than a rowboat purely for having a longer lever arm.
-  if (at) {
-    const rx = at.x - b.mesh.position.x;
-    const ry = at.y - b.mesh.position.y;
-    const torque = rx * fy - ry * fx;
-    b.rockVel += (torque / Math.max(b.halfLength, 1e-3)) * react.rockPerHit;
-  } else {
-    b.rockVel += punch * react.rockPerHit;
+  // chip of splash nudges the hull, a big hit visibly staggers it. The hull's
+  // own mass is what makes a trawler move less for the same hit, and the lever
+  // arm from `at` is what makes a shot to the bow roll it differently from one
+  // to the stern — both now the body's job (see RigidBody.applyImpulse), which
+  // is the same arithmetic this used to do by hand.
+  const phys = CONFIG.physics?.boat ?? {};
+  if (recoil) {
+    const punch = Math.min(phys.maxDamageImpulse ?? 26, amount * (phys.damageImpulse ?? 1.1));
+    const len = dir ? (Math.hypot(dir.x, dir.y) || 1) : 1;
+    b.body?.applyImpulse(
+      dir ? (dir.x / len) * punch : 0,
+      dir ? (dir.y / len) * punch : punch,
+      at ? at.x : null,
+      at ? at.y : null,
+    );
   }
 
   if (b.hp > 0) return false;
@@ -352,7 +448,17 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
   const strength = (blast.strength ?? 11) * (b.isTrawler ? (blast.trawlerMul ?? 1.4) : 1);
   blastDebris(b.mesh.position.x, b.mesh.position.y, radius, strength);
   blastCrew(scene, b.mesh.position.x, b.mesh.position.y, radius, strength);
+  // AND EVERYTHING ELSE THAT FLOATS. The same impulse the wreckage and the
+  // crew take, handed to the physics world: the turtle that was drifting past
+  // is thrown clear, and any hull inside the radius is rocked and shoved —
+  // which is a chain, because that hull can now reach a third one.
+  //
+  // Excluding this boat's own body is not optional: it is still registered
+  // for the two lines it takes to remove it, and a body blasted from a point
+  // exactly at its own centre gets a zero-length direction.
+  blastBodies(b.mesh.position.x, b.mesh.position.y, radius, strength, b.body);
 
+  if (b.body) removeBody(b.body);
   scene.remove(b.mesh);
   boats.splice(index, 1);
   return true;

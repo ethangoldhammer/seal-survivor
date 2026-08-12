@@ -11,6 +11,7 @@ import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { menuInput, resetMenuInput } from '../input.js';
 import { mountRiveSplash } from './riveSplash.js';
+import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import {
   fetchGlobalBoard,
   highScore,
@@ -95,6 +96,26 @@ const STYLES = `
   .sv-pbar-hp { background: #4dd0a8; }
   .sv-pbar-o2 { background: #6fd3ff; }
   .sv-pbar-o2.sv-o2-low { background: #ff5566; }
+
+  /* THE BOSS BAR (systems/boss.js). Top centre, clear of the xp strip and of
+     both HUD corners. It is deliberately NOT a bar over the creature's head:
+     a boss this size spends half the fight partly off screen, and a floating
+     bar would vanish exactly when you most want to know how the fight is
+     going. Red and only red — nothing else in the HUD is, so the bar reads as
+     "the thing trying to kill you" without needing a label saying so. */
+  .sv-bossbar { position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
+    width: min(560px, 62vw); pointer-events: none; text-align: center; }
+  .sv-boss-name { font-size: 13px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: #ffd7d7; margin-bottom: 5px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 12px rgba(255,60,60,0.55); }
+  .sv-boss-track { height: 9px; background: rgba(4,6,12,0.62); border-radius: 5px;
+    overflow: hidden; box-shadow: 0 0 0 1px rgba(255,86,102,0.45), 0 0 18px rgba(255,40,60,0.22); }
+  /* Width is set per frame from the boss's hp, so the transition is a smoothing
+     pass over a value that is already correct — short enough that a burst of
+     damage still reads as a hit. */
+  .sv-boss-fill { height: 100%; width: 100%; border-radius: 5px;
+    background: linear-gradient(90deg, #ff2f45, #ff6a5a);
+    box-shadow: 0 0 12px rgba(255,60,70,0.8); transition: width 0.12s linear; }
 
   /* Score toasts: one per kill, floating up from where the fish died. */
   .sv-toast { position: absolute; font-size: 13px; font-weight: 700;
@@ -244,7 +265,7 @@ const STYLES = `
   }
 `;
 
-export function initUI({ onStart, onRestart, onLevelChoice }) {
+export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart }) {
   callbacks = { onStart, onRestart, onLevelChoice };
 
   const style = document.createElement('style');
@@ -276,6 +297,14 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
       <!-- strike charges are drawn as a ring around the ship (systems/strikeRing.js) -->
     </div>
 
+    <!-- Outside .sv-hud on purpose: that is a flex row of corner panels, and a
+         centred full-width banner inside it would be a third item fighting the
+         other two for space. -->
+    <div class="sv-bossbar sv-hidden" id="svBossBar">
+      <div class="sv-boss-name" id="svBossName"></div>
+      <div class="sv-boss-track"><div class="sv-boss-fill" id="svBossFill"></div></div>
+    </div>
+
     <div class="sv-center" id="svStartMenu">
       <div class="sv-menu">
         <div class="sv-title">Seal Survivor</div>
@@ -290,7 +319,7 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
         </div>
         <div class="sv-label" id="svHighScoreLabel" style="margin-bottom:10px; display:none;">High score: <span id="svHighScore">0</span></div>
         <button class="sv-btn" id="svStartBtn">Start run</button>
-        <div class="sv-hint">\` tuning &nbsp;·&nbsp; T textures &nbsp;·&nbsp; P screen filter &nbsp;·&nbsp; M mute &nbsp;·&nbsp; click / Space strike &nbsp;·&nbsp; hold G gamepad info</div>
+        <div class="sv-hint">Esc pause &amp; settings &nbsp;·&nbsp; \` tuning &nbsp;·&nbsp; T textures &nbsp;·&nbsp; P screen filter &nbsp;·&nbsp; M mute &nbsp;·&nbsp; click / Space strike &nbsp;·&nbsp; hold G gamepad info</div>
       </div>
     </div>
 
@@ -326,12 +355,19 @@ export function initUI({ onStart, onRestart, onLevelChoice }) {
     'svHud', 'svHpBar', 'svO2Bar', 'svXpBar', 'svLevel', 'svTime', 'svScore',
     'svStartMenu', 'svLevelUpMenu', 'svLevelUpBox', 'svGameOverMenu', 'svCards', 'svGameOverStats',
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
+    'svBossBar', 'svBossName', 'svBossFill',
     'svHighScoreLabel', 'svHighScore', 'svRapidFirePanel', 'svRapidFireTime',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
     'svGameOverTitle',
   ]) {
     el[id] = document.getElementById(id);
   }
+
+  // Built into the same layer as everything else, and handed the reveal so it
+  // dissolves like the other surfaces. AFTER the markup above is in the tree —
+  // it appends its own overlay to `root`, and the order decides which sits on
+  // top of which when two are somehow up at once.
+  initPauseMenu({ root, reveal: runReveal, revealSeconds, onResume, onRestart: onPauseRestart });
 
   // Every surface's tiles, built while the browser is otherwise idle — see
   // warmReveals. Nothing waits on it; a menu that somehow beats it just pays
@@ -492,6 +528,10 @@ function prefersReducedMotion() {
 
 export function hideAllMenus() {
   el.svStartMenu.classList.add('sv-hidden');
+  // Restarting from inside the pause menu is a real route (its own button), so
+  // this has to take the menu down with everything else — otherwise the new
+  // run opens with the settings panel still sitting over it.
+  hidePauseMenu();
   cancelReveal('upgrades');
   clearMask(el.svLevelUpMenu, el.svLevelUpBox);
   setMenuLocked(false);
@@ -740,7 +780,7 @@ function runReveal(name, { target, inner, from, to, seconds, onDone }) {
 // The splash is first because it's the first one needed, and by some margin.
 export function warmReveals() {
   if (!supportsMask() || prefersReducedMotion()) return;
-  const queue = ['splash', 'upgrades', 'scoreCard'];
+  const queue = ['splash', 'upgrades', 'scoreCard', 'pause'];
   const build = () => {
     const name = queue.shift();
     if (!name) return;
@@ -763,6 +803,17 @@ export function warmReveals() {
 function schedule(fn) {
   if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 4000 });
   else setTimeout(fn, 120);
+}
+
+// --- lending the reveal out --------------------------------------------------
+// The pause menu is a surface like any other and should dissolve like one, but
+// it lives in its own module (ui/pauseMenu.js) because it is several hundred
+// lines of settings rows that have nothing to do with anything else in here.
+// Handed the two functions it needs rather than importing them back, which
+// would make the two files a cycle for the sake of one call.
+function revealSeconds(name, direction) {
+  const c = revealCfg(name);
+  return direction === 'out' ? c.outTime : c.inTime;
 }
 
 // --- the surfaces -----------------------------------------------------------
@@ -1191,6 +1242,24 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
   } else if (el.svRapidFirePanel) {
     el.svRapidFirePanel.style.display = 'none';
   }
+}
+
+// --- the boss bar ---------------------------------------------------------
+// Driven from the frame loop like the rest of the HUD. `banner` is
+// systems/boss.js's own view of what is in the water ({ name, frac }), or null
+// for "no boss" — which is also what the death and restart paths pass, so the
+// bar can never outlive the fight it belongs to.
+export function updateBossBar(banner) {
+  if (!el.svBossBar) return;
+  if (!banner) {
+    el.svBossBar.classList.add('sv-hidden');
+    return;
+  }
+  el.svBossBar.classList.remove('sv-hidden');
+  // Guarded because this runs every frame and the name changes once per boss:
+  // writing textContent unconditionally re-lays-out the line for nothing.
+  if (el.svBossName.textContent !== banner.name) el.svBossName.textContent = banner.name;
+  el.svBossFill.style.width = `${Math.max(0, Math.min(1, banner.frac)) * 100}%`;
 }
 
 // --- score toasts ---------------------------------------------------------

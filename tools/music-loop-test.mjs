@@ -353,5 +353,99 @@ for (let i = 0; i < 90; i++) {
 check('the way back out leaves it alone', lowest > pitchBeforeRestart * 0.95,
   `dipped to ${lowest.toFixed(1)}bpm from ${pitchBeforeRestart.toFixed(1)}`);
 
+// ---------------------------------------------------------------------------
+// The music chain runs to ctx.destination on its OWN gain — it is not
+// downstream of the SFX master — so nothing about the Audio tab reaches it
+// unless music.js is told. It was not: the score played straight through a
+// mute at full authored volume, which is the loudest thing in the mix and so
+// read as the whole menu doing nothing.
+//
+// Asserted on the gain node the graph actually ends on, found by walking the
+// live source's outputs, rather than on a value music.js reports about itself.
+section("The player's Audio tab reaches the score");
+const settings = await import('../path/src/systems/settings.js');
+const { applyPlayerMusicSettings } = music;
+
+// source -> filter -> band gain -> musicGain -> destination
+function musicGainNode() {
+  const seen = new Set();
+  const walk = (node) => {
+    if (!node || seen.has(node)) return null;
+    seen.add(node);
+    for (const out of node.outputs ?? []) {
+      if (out.kind === 'destination') return node;
+      const found = walk(out);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(lastLoop());
+}
+
+reset();
+CONFIG.music.enabled = true;
+CONFIG.music.volume = 0.8;
+settings.resetSettings('audio');
+music.play(1);
+run(0.5);
+const gainNode = musicGainNode();
+check('the music gain is the node feeding the destination', !!gainNode && gainNode.kind === 'gain');
+const level = () => gainNode.gain.value;
+// Restamped rather than read straight off `play`: the chain in this module was
+// built by an earlier section, before CONFIG.music.volume was moved here, and
+// in the game an authored change arrives through the tuner's applyMusicSettings
+// exactly like this.
+applyPlayerMusicSettings();
+check('at defaults it is the authored volume', near(level(), 0.8, 1e-6), String(level()));
+
+settings.setSetting('audio.music', 0.5);
+applyPlayerMusicSettings();
+check('the music slider scales it', near(level(), 0.8 * 0.5, 1e-6), String(level()));
+
+settings.setSetting('audio.master', 0.5);
+applyPlayerMusicSettings();
+check('master multiplies on top', near(level(), 0.8 * 0.5 * 0.5, 1e-6), String(level()));
+
+settings.setSetting('audio.muted', true);
+applyPlayerMusicSettings();
+check('mute silences the score outright', level() === 0, String(level()));
+
+settings.setSetting('audio.muted', false);
+applyPlayerMusicSettings();
+check('and unmute restores the same level', near(level(), 0.8 * 0.25, 1e-6), String(level()));
+
+// The other bus, for the comparison: everything synthesised or sampled sits on
+// getSfxBus(), and that one was already wired up. Asserted here so a later
+// change that breaks ONE of the two buses is still a failing test.
+const sfxBus = audio.getSfxBus();
+settings.setSetting('audio.sfx', 0.5);
+audio.applyPlayerAudioSettings();
+check('the effects slider scales the SFX bus',
+  near(sfxBus.gain.value, CONFIG.audio.masterVolume * 0.5 * 0.5, 1e-6), String(sfxBus.gain.value));
+settings.setSetting('audio.muted', true);
+audio.applyPlayerAudioSettings();
+check('and mute silences it', sfxBus.gain.value === 0, String(sfxBus.gain.value));
+
+// The chain is built when music STARTS, which is long after loadSettings() —
+// so a player who muted last session has to be muted on the OPENING BAR, not
+// from their first slider move afterwards. A second copy of the module is the
+// only way to watch the chain get built: the first one's is already up, and
+// this shares the same settings, audio context and CONFIG.
+settings.setSetting('audio.muted', true);
+music.stop();
+sources.length = 0;
+now += 1;
+const fresh = await import('../path/src/systems/music.js?rebuild');
+await fresh.loadTrackFromFile('1', { name: 'loop1', arrayBuffer: async () => ({ seconds: SHORT }) });
+fresh.play(1);
+run(0.5);
+check('a chain built while muted comes up silent', musicGainNode()?.gain.value === 0,
+  `${musicGainNode()?.gain.value} — the opening bar used to play at the authored ${CONFIG.music.volume}`);
+fresh.stop();
+
+settings.resetSettings('audio');
+CONFIG.music.volume = 0.8;
+applyPlayerMusicSettings();
+
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

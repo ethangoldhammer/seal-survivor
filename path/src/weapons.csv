@@ -13,3 +13,75 @@ bounce.maxBouncesPerLevel,2,0,6,bounce +bounces per level
 bounce.chainRange,14,0,40,bounce chain seek range
 bounce.chainLock,0.06,0,0.4,bounce chain re-hit lock
 bounce.chainSpeedGain,1.05,0.8,1.3,bounce chain speed gain
+shrimpRing.baseCount,3,0,12,shrimp in the ring at level 1
+shrimpRing.contactDamage,12,0,30,shrimp contact damage
+shrimpRing.contactCooldown,0.4,0.05,2,shrimp per-shrimp re-hit delay
+scallop.fireRate,1.45,0.2,10,scallop seconds between flights
+scallop.damage,48,1,120,scallop damage
+scallop.life,9,0.5,20,scallop seconds before it sinks
+scallop.maxBounces,6,0,20,scallop wall bounces
+oyster.fireRate,1.05,0.2,8,oyster seconds between pearls
+oyster.fireRatePerLevel,0.08,0,0.5,oyster cadence gain per level
+oyster.fireRateFloor,0.6,0.1,4,oyster fastest allowed cadence
+oyster.damage,30,1,120,oyster pearl impact damage
+oyster.damagePerLevel,7,0,40,oyster pearl damage per level
+oyster.bomblets,5,1,20,oyster bomblets per burst
+oyster.bombletsPerLevel,1,0,5,oyster bomblets per level
+oyster.bombletDamage,24,1,80,oyster bomblet damage
+oyster.bombletDamagePerLevel,6,0,30,oyster bomblet damage per level
+oyster.bombletBlastRadius,2.4,0.5,12,oyster bomblet blast radius — must stay ABOVE max bomblet travel (see CONFIG.oyster)
+oyster.bombletBlastRadiusPerLevel,0.18,0,2,oyster blast radius per level
+seagullBomb.baseFireRate,2.3,0.5,10,seagull seconds between runs at level 1
+seagullBomb.fireRatePerLevel,0.85,0.5,1,seagull fire rate mult per level
+seagullBomb.damage,87,1,150,seagull direct hit damage
+seagullBomb.splashDamage,41,0,80,seagull splash damage
+seagullBomb.splashRadius,5.2,0.5,10,seagull splash radius
+eel.fireRate,2,0.2,4,eel seconds between zaps
+eel.baseDamage,32,1,80,eel damage per hop
+eel.damagePerLevel,7,0,30,eel damage per level
+eel.baseChainRadius,12.5,1,20,eel chain radius
+eel.radiusPerLevel,1.2,0,5,eel chain radius per level
+eel.baseMaxChain,5,1,15,eel hops at level 1
+eel.chainPerLevel,1,0,5,eel hops per level
+eel.initialRange,30,2,40,eel reach of the first zap
+sealTeam.maxSeals,6,1,12,escort squad size cap
+sealTeam.contactDamage,24,0,80,escort ram damage
+sealTeam.damagePerLevel,8,0,30,escort ram damage per level
+sealTeam.contactRadius,1.05,0.2,4,escort ram reach
+sealTeam.contactCooldown,0.4,0.05,3,escort per-target re-hit delay
+sealTeam.evolveLevel,4,1,12,level the squad opens fire — must be under the card's maxStacks or it never fires
+sealTeam.evolved.fireRate,1.1,0.1,5,escort gun fire rate
+sealTeam.evolved.damageMul,0.7,0.1,3,escort gun damage x player
+sealTeam.evolved.range,16,2,40,escort gun range
+beluga.fireRate,1.8,0.3,8,beluga seconds between bubbles
+beluga.speed,15,2,30,beluga bubble speed
+beluga.life,4,0.5,10,beluga bubble lifespan
+beluga.trapDuration,5.2,0.5,10,beluga seconds a catch is held
+beluga.baseBubbleRadius,0.5,0.1,2,beluga bubble size
+beluga.radiusPerLevel,0.24,0,0.5,beluga bubble size per level
+club.damage,6,0,40,club whack damage — a CHIP on purpose; the carom is the payload
+club.damagePerLevel,2.5,0,20,club whack damage per level
+club.length,2.4,0.5,6,club reach fin tip to head
+club.lengthPerLevel,0.4,0,2,club reach per level
+club.headRadius,0.6,0.1,2,club head contact radius
+club.contactCooldown,0.45,0.05,2,club per-body re-hit delay
+club.launchSpeed,38,5,90,club launch speed of a struck body
+club.dashLaunchMul,1.5,1,4,club dash launch multiplier
+club.ricochetDamage,18,0,60,club carom damage per body hit
+club.ricochetDamagePerLevel,5,0,20,club carom damage per level
+club.maxBounces,3,0,10,club carom bounces
+club.bouncesPerLevel,1,0,4,club carom bounces per level
+clubThrow.countAtMin,1,0,8,hurler clubs at a flick
+clubThrow.countAtFull,7,1,16,hurler clubs at a full charge
+clubThrow.countPerLevel,2,0,4,hurler clubs per level
+clubThrow.damageMul,1.6,0.1,4,hurler damage x the melee club
+clubThrow.pierce,1,0,6,hurler bodies pierced
+clubBoom.damage,14,0,60,powder keg blast damage
+clubBoom.damagePerLevel,6,0,20,powder keg damage per level
+clubBoom.radius,3.1,0.5,12,powder keg blast radius
+clubBoom.radiusPerLevel,0.55,0,3,powder keg radius per level
+clubIce.slowPerHit,0.2,0,0.7,cold snap slow added per hit
+clubIce.slowPerHitPerLevel,0.06,0,0.3,cold snap slow per level
+clubIce.duration,3.2,0.2,10,cold snap seconds before it thaws
+clubIce.freezeFor,1,0,5,cold snap freeze on saturation
+clubIce.freezeForPerLevel,0.2,0,1,cold snap freeze per level

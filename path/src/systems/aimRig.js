@@ -15,7 +15,9 @@ import { buildChain, applyChain, coneGate, tipWorld } from './ikChain.js';
 //      Not IK — that's systems/boneSpring.js, shared with the creatures whose
 //      models shipped with no animation at all.
 //   4. Publish world-space emit points — flipper tips, the mouth and the end
-//      of the tail — which weapons fire from and the bubbles come off.
+//      of the tail — which weapons fire from and the bubbles come off. These
+//      sit ON the skin, at measured points, and are NOT the IK effectors the
+//      chains above aim with; see the muzzles in createAimRig.
 //
 // This runs AFTER the AnimationMixer has written the frame's pose, and it
 // only ever writes to bones named in ASSETS.<key>.aimRig. Everything the clip
@@ -45,7 +47,14 @@ export function createAimRig(instance) {
 
   const tipAxis = def.tipAxis ?? '+Y';
   const fins = (def.fins ?? [])
-    .map((d, i) => buildChain(instance, d, tipAxis, `aimRig fin chain "${d.name ?? i}"`))
+    .map((d, i) => {
+      const chain = buildChain(instance, d, tipAxis, `aimRig fin chain "${d.name ?? i}"`);
+      // Where the FLIPPER ENDS, as opposed to where the solver aims. See the
+      // muzzle block in update() — these are two different questions and used
+      // to share one answer.
+      if (chain) chain.muzzleLength = d.muzzleLength ?? chain.tipLength;
+      return chain;
+    })
     .filter(Boolean);
   const head = def.head ? buildChain(instance, def.head, tipAxis, 'aimRig head chain') : null;
   const tail = def.tail ? buildChain(instance, def.tail, tipAxis, 'aimRig tail chain') : null;
@@ -70,7 +79,15 @@ export function createAimRig(instance) {
   if (fins.length === 0 && !head && !tail && anchorDefs.length === 0) return null;
 
   // Live objects, updated in place — callers hold these, not copies.
-  const muzzles = fins.map((c) => c.point);
+  //
+  // A muzzle is NOT the chain's tip point. `chain.point` is the IK effector:
+  // the thing the solver puts on a target placed `reach` chain-lengths away,
+  // which is why it sits past the end of the limb — you aim a flipper by
+  // straightening it along the aim, and an effector short of the skin would
+  // fight the joint limits for the last few degrees. Fine for aiming, wrong
+  // for anything you can SEE: the flash, the bullet and the club were all
+  // hanging in open water off the end of the flipper.
+  const muzzles = fins.map(() => new THREE.Vector3());
   const anchors = {};
   for (const a of anchorDefs) anchors[a.name] = new THREE.Vector3();
 
@@ -117,6 +134,19 @@ export function createAimRig(instance) {
 
       finWeight = easeWeight(finWeight, { ...finCfg, enabled: finCfg.enabled && finCfg.ik }, engaged, suppressed, hasAim, dt);
       for (const chain of fins) applyChain(chain, dt, finCfg, finWeight, finCfg.tipLengthMul ?? 1, _aim);
+
+      // ...and then the muzzles, off the same posed bones but at the asset's
+      // MEASURED skin edge rather than at the effector. Read after the solve,
+      // which leaves the world matrices fresh (see applyChain).
+      const muzzleMul = finCfg.muzzleLengthMul ?? 1;
+      for (let i = 0; i < fins.length; i++) {
+        const chain = fins[i];
+        // tipWorld measures in units of the chain's own tipLength, so this is
+        // the ratio that lands it on muzzleLength instead. A chain with no
+        // tipLength has no axis to walk down; its muzzle is the last joint.
+        const along = chain.tipLength > 1e-6 ? (chain.muzzleLength * muzzleMul) / chain.tipLength : 0;
+        tipWorld(chain, muzzles[i], along);
+      }
 
       if (head) {
         // `glance` is how far the head has given up on the aim (0 while the
@@ -253,10 +283,19 @@ export function emitPointCount(rig, source) {
   return 0;
 }
 
-// World-space firing point for origin `index` of `source`, nudged a little way
-// down the aim so the projectile clears the limb instead of being born inside
-// it. Returns `fallback` itself (not a copy) when the point isn't available,
-// which is how callers tell the two cases apart.
+// World-space firing point for origin `index` of `source`. ON the geometry by
+// default — the end of the flipper, the snout, the tip of the tail — because
+// every one of these points already sits at the outside edge of the animal and
+// a shot has nothing left to clear.
+//
+// `muzzleNudge` can still push it further down the aim, and is 0. It replaces
+// `muzzleOffset`, which was 0.35: stacked on an effector that already overshot
+// the skin, that hung the muzzle flash an eighth of the seal's own length out
+// in open water. The rename is deliberate — a saved tuning value outranks a
+// config default, so the old field could not simply be re-defaulted.
+//
+// Returns `fallback` itself (not a copy) when the point isn't available, which
+// is how callers tell the two cases apart.
 export function emitPoint(rig, source, index, aimDir, fallback, out) {
   const cfg = CONFIG.fins;
   const count = emitPointCount(rig, source);
@@ -265,10 +304,12 @@ export function emitPoint(rig, source, index, aimDir, fallback, out) {
   if (source === 'fins') out.copy(rig.muzzles[((index % count) + count) % count]);
   else out.copy(rig.anchors[source]);
 
-  if (aimDir) {
-    out.x += aimDir.x * cfg.muzzleOffset;
-    out.y += aimDir.y * cfg.muzzleOffset;
+  const nudge = cfg.muzzleNudge ?? 0;
+  if (aimDir && nudge !== 0) {
+    out.x += aimDir.x * nudge;
+    out.y += aimDir.y * nudge;
   }
+
   // The two flippers sit on opposite sides of the seal, which in side view is
   // pure camera depth — invisible, but enough to sort a projectile behind the
   // water plane. Flattening onto the body's z keeps every emit point firing

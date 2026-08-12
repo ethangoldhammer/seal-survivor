@@ -1,6 +1,6 @@
 import {
   getAssetMaterials, setAssetTexture, setAssetTint, setAssetRepeat, hasCustomTexture,
-  setAssetEmissive, setAssetGlow, supportsEmissive, setAssetSizeMultiplier,
+  setAssetEmissive, setAssetGlow, supportsEmissive, getAssetSizeMultiplier,
   loadUploadedAsset, isSpriteFile, setAssetEmissiveMask, assetEmissiveMaskState,
 } from '../assets.js';
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
@@ -8,8 +8,7 @@ import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
 import { expandDesc } from '../upgradeText.js';
 import { buildSection, buildSectionedTunerGroups, buildExpandAllToggle } from './tunerControls.js';
 import { isTypingTarget } from './typing.js';
-import { playSfx, unlockAudio, loadSampleFromFile, clearSample, hasSample, sampleCount, onSamplesChanged, reloadSample, getAudioContext, applyAudioBusSettings, busReduction, gainToDb, dbToGain, DB_FLOOR } from '../systems/audio.js';
-import { describeHaptic, previewHaptic, testHaptic, hapticsAvailable } from '../systems/haptics.js';
+import { playSfx, unlockAudio, applyAudioBusSettings, busReduction, gainToDb, dbToGain, DB_FLOOR } from '../systems/audio.js';
 import { uploadAsset } from '../systems/assetUpload.js';
 import { emit } from '../entities/particles.js';
 import { loadTrackFromFile, hasTrack, clearTrack, play as playMusic, stop as stopMusic, loopDuration, onTracksChanged } from '../systems/music.js';
@@ -63,6 +62,7 @@ const EDITABLE_SECTIONS = [
     ['pearlBomblet', 'Pearl bomblet (ability)'],
     ['voicemailBomb', "Bakalar's voicemail bomb"],
     ['bounceShot', 'Bounce shot'],
+    ['club', 'Fin club (ability)'],
     ['shrapnel', 'Strike shrapnel'],
     ['enemyBullet', 'Enemy bullet'],
   ]],
@@ -108,28 +108,13 @@ const SECTION_ORDER = {
   enemies: ['Apex predators', 'Fish & schools', 'Crabs & crawlers', 'Boats', 'Spawning & difficulty', 'Look & motion'],
 };
 
-// Sound and Haptics are two views of ONE list of events — CONFIG.sfx is what a
-// hit sounds like, CONFIG.feedback is what it feels like, and they name the
-// same moments. So they share one set of sections: find "sealRam" under
-// Escorts on either tab, in the same place. The two key sets aren't identical
-// (feedback has events that reuse another's sound, like chumEaten borrowing
-// bite), so each tab keeps only the ids it actually has.
-const EVENT_SECTIONS = [
-  ['Your weapon', ['shoot', 'hit', 'bulletHit', 'kill', 'bigKill', 'bounce', 'missileLaunch', 'missileImpact']],
-  ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'breach', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'bubblePop', 'oxygenWarn']],
-  ['Strike & food chain', ['strike', 'strikeChain', 'foodChain']],
-  ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'levelUp']],
-  ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaTrap', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
-  ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
-  ['Thrown & launched', ['seagullDive', 'scallopLaunch', 'scallopJet', 'pearlShot', 'pearlBurst', 'bakalarHaul', 'bakalarBombDrop', 'bakalarBombBlast']],
-  ['Boats', ['debrisBreak', 'boatExplosion', 'crewEaten', 'crewHit']],
-];
 
 const EMITTER_SECTIONS = [
   ['Your weapon', ['muzzle', 'sparks', 'bounce', 'explosion', 'bigExplosion', 'missileLaunch', 'missileTrail', 'missileImpact']],
   ['The seal', ['boost', 'playerHit', 'bite', 'splash', 'breathBubbles', 'wakeBubbles', 'bubbleBurst']],
   ['Pickups & progression', ['pickup', 'chumCrumbs', 'levelUp']],
-  ['The ocean', ['rainSplash', 'silt']],
+  ['Escorts', ['trapPop']],
+  ['The ocean', ['rainSplash', 'silt', 'sunPass', 'moonPass']],
 ];
 
 // Upgrade cards, sorted by what taking one gives you rather than by the row
@@ -317,8 +302,7 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
         <div class="sv-tex-tab" data-tab="companions">Companions</div>
         <div class="sv-tex-tab" data-tab="enemies">Enemies</div>
         <div class="sv-tex-tab" data-tab="upgrades">Upgrades</div>
-        <div class="sv-tex-tab" data-tab="sound">Sound</div>
-        <div class="sv-tex-tab" data-tab="haptics">Haptics</div>
+        <div class="sv-tex-tab" data-tab="sound">Mix</div>
         <div class="sv-tex-tab" data-tab="particles">Particles</div>
       </div>
     </div>
@@ -328,7 +312,6 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
       <div class="sv-tex-panel" id="svTexPanelEnemies"></div>
       <div class="sv-tex-panel" id="svTexPanelUpgrades"></div>
       <div class="sv-tex-panel" id="svTexPanelSound"></div>
-      <div class="sv-tex-panel" id="svTexPanelHaptics"></div>
       <div class="sv-tex-panel" id="svTexPanelParticles"></div>
     </div>
   `;
@@ -341,23 +324,27 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
     return row.el;
   });
 
-  // The bus, the music chain and the ambient bed are the three things on this
-  // tab that aren't one event's sound, so they get their own section at the
-  // top. They used to sit above the sections, always open — three of the
-  // tallest rows in the panel (the music row alone lists 15 loop slots), which
-  // meant a screen and a half of scrolling before the first sound effect.
+  // What is left of the old Sound tab once the per-event rows moved to the
+  // workbench (F): the three things here that were never one event's sound.
+  // The bus colours every voice, the music chain is on its own graph entirely,
+  // and the ambient bed is a continuous sound with no event behind it — none
+  // of the three has a row in an event-first panel to live in.
+  //
+  // The 67 voice rows and the whole Haptics tab are gone. They were a second
+  // place to edit the same numbers, and a second place is a place to disagree:
+  // that tab listed voices while Haptics listed events, so `kill` appeared in
+  // both under different identities and neither showed what the other did.
   const soundPanel = panel.querySelector('#svTexPanelSound');
-  const soundBody = appendSectioned(soundPanel, 'sound', EVENT_SECTIONS, Object.keys(CONFIG.sfx), buildSfxRow);
   const master = buildSection('Mix, music & ambience', 'sound');
   master.body.append(buildBusRow(), buildMusicRow(), buildAmbientRow());
   master.setCount(3);
-  // Prepended after the fact rather than threaded through appendSectioned:
-  // expand-all reads the DOM when clicked, not when built, so it picks this up
-  // like any other section.
-  soundBody.prepend(master.el);
+  soundPanel.appendChild(master.el);
 
-  const hapticsPanel = panel.querySelector('#svTexPanelHaptics');
-  buildHapticsPanel(hapticsPanel);
+  const moved = document.createElement('div');
+  moved.className = 'sv-tex-upload-status';
+  moved.style.marginTop = '12px';
+  moved.textContent = 'Per-sound levels, samples, rumble and everything else an event does are in the Feel workbench — press F.';
+  soundPanel.appendChild(moved);
 
   const particlesPanel = panel.querySelector('#svTexPanelParticles');
   appendSectioned(particlesPanel, 'particles', EMITTER_SECTIONS, Object.keys(CONFIG.emitters), buildEmitterRow);
@@ -401,7 +388,6 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
     enemies: 'svTexPanelEnemies',
     upgrades: 'svTexPanelUpgrades',
     sound: 'svTexPanelSound',
-    haptics: 'svTexPanelHaptics',
     particles: 'svTexPanelParticles',
   };
   for (const tab of panel.querySelectorAll('.sv-tex-tab')) {
@@ -429,7 +415,8 @@ function reapplyLook(key, look) {
   if (look.emissive != null) setAssetEmissive(key, look.emissive);
   if (look.glow != null && look.glow !== 1) setAssetGlow(key, look.glow);
   if (look.repeatX !== 1 || look.repeatY !== 1) setAssetRepeat(key, look.repeatX, look.repeatY);
-  if (look.sizeMultiplier !== 1) setAssetSizeMultiplier(key, look.sizeMultiplier);
+  // Size is assets.csv's — see the read-only row below. Re-pushing it here
+  // would put a stale snapshot value back over the file.
   // Explicit choices only — null means "follow the global", and re-pushing it
   // would pin the model to whatever the global happened to be at the time.
   if (look.emissiveMask != null) setAssetEmissiveMask(key, look.emissiveMask);
@@ -631,44 +618,28 @@ function buildCreatureRow(key, label, onAssetChanged) {
   }
 
 
-  // Size — a runtime scale multiplier. Applies to future spawns; anything
-  // already on screen keeps its current size (same as the model-upload
-  // limitation below it, both are tuning tools, not a retroactive resize).
+  // Size — READ ONLY, and deliberately so. It used to be a slider here.
+  //
+  // It is not a look: the hitbox is derived from the visual scale, so this
+  // decides how big a creature is to HIT as well as to see. That makes it a
+  // balance number, and balance numbers live in a table where they can be read
+  // against each other. Left as a slider it drifted exactly the way live
+  // tuning drifts — the walking crab reached 10.46, a crab 29 world units tall
+  // in a 40-unit arena, while its own night variant sat at 2.42 and nothing in
+  // the repo recorded that either was intended.
+  //
+  // Shown rather than hidden, because "where is the size control" is the first
+  // question anyone opening this panel will have.
   const sizeDivider = document.createElement('div');
   sizeDivider.className = 'sv-tex-divider';
   const sizeRow = document.createElement('div');
   sizeRow.className = 'sv-tex-glowrow';
   const sizeLabel = document.createElement('label');
   sizeLabel.textContent = 'Size';
-  const sizeSlider = document.createElement('input');
-  sizeSlider.type = 'range';
-  sizeSlider.min = '0.02'; sizeSlider.max = '25'; sizeSlider.step = '0.02'; sizeSlider.value = look.sizeMultiplier;
-  // A pure slider across a 0.02-25 range is too imprecise for fine control
-  // near 1x (most of the travel ends up dedicated to the extreme tail) — a
-  // direct number input alongside it gives exact values regardless.
-  const sizeNumber = document.createElement('input');
-  sizeNumber.type = 'number';
-  sizeNumber.min = '0.001'; sizeNumber.step = '0.01';
-  sizeNumber.value = look.sizeMultiplier;
-  sizeNumber.className = 'sv-tex-size-number';
   const sizeVal = document.createElement('span');
   sizeVal.className = 'sv-tex-variant-name';
-  sizeVal.textContent = '(new spawns)';
-  const applySize = (v) => {
-    look.sizeMultiplier = v;
-    setAssetSizeMultiplier(key, v);
-    sizeSlider.value = Math.min(25, Math.max(0.02, v));
-    sizeNumber.value = v;
-    saveTuningToStorage();
-    onAssetChanged?.(key);
-  };
-  sizeSlider.addEventListener('input', () => applySize(Number(sizeSlider.value)));
-  sizeNumber.addEventListener('change', () => {
-    const v = Number(sizeNumber.value);
-    if (Number.isFinite(v) && v > 0) applySize(v);
-  });
-  sizeRow.append(sizeLabel, sizeSlider, sizeNumber, sizeVal);
-  if (look.sizeMultiplier !== 1) setAssetSizeMultiplier(key, look.sizeMultiplier);
+  sizeVal.textContent = `${getAssetSizeMultiplier(key)}x — edit in assets.csv (npm run csv)`;
+  sizeRow.append(sizeLabel, sizeVal);
 
   // 3D model / 2D sprite upload — replaces this asset's mesh with an uploaded
   // .glb / .gltf / .fbx, or with a flat quad cut to an uploaded image's aspect
@@ -762,11 +733,8 @@ function buildCreatureRow(key, label, onAssetChanged) {
     repeatX.value = 1;
     repeatY.value = 1;
     setAssetRepeat(key, 1, 1);
-    setAssetSizeMultiplier(key, null);
-    look.sizeMultiplier = 1;
-    sizeSlider.value = 1;
-    sizeNumber.value = 1;
-    sizeVal.textContent = '(new spawns)';
+    // Size is NOT reset: this button clears the look, and size is not a look.
+    // It also has no controls left here to clear.
     if (emissiveSwatch) { setAssetEmissive(key, null); emissiveSwatch.value = '#000000'; }
     if (glowSlider) { setAssetGlow(key, null); glowSlider.value = '1'; }
     delete CONFIG.assetLooks[key];
@@ -779,354 +747,6 @@ function buildCreatureRow(key, label, onAssetChanged) {
   return { el, dot };
 }
 
-// ---------------------------------------------------------------------------
-// Haptics tab — one row per feedback event that has a sound, mirroring the
-// Sound tab next door. Same reasoning as that tab existing at all: rumble is
-// authored by feel, not by reading numbers, so every row carries a Test
-// button that fires the real pattern through the real pad.
-//
-// Why "events with a sound" and not every event: an event with no `sfx` is
-// one that was deliberately made silent (missileLaunchExtra is the shells
-// after the first in a volley), and giving those a rumble would undo that
-// decision in the one channel that can't be mixed down.
-//
-// The awkward part this tab exists to hide is that a haptic can be written
-// two ways — a bare millisecond pattern, which is what older saved tuning
-// holds, or explicit { duration, magnitude } pulses. A ms pattern has no
-// magnitude of its own; haptics.js derives one from the pulse length. So the
-// magnitude slider shows that DERIVED value, marked auto, and the moment you
-// move it the event is rewritten in explicit-pulse form with everything else
-// preserved. Nothing changes underfoot until you actually edit it.
-// ---------------------------------------------------------------------------
-
-function buildHapticsPanel(container) {
-  const note = document.createElement('div');
-  note.className = 'sv-tex-upload-status';
-  note.style.marginBottom = '10px';
-  note.textContent =
-    'Controller rumble, one row per event that makes a sound. Duration is how long the motor runs; strength is how hard. Test fires it on the pad right now — connect a controller and press a button first, or the browser will not hand the pad over. Events marked auto take their strength from their length until you move the slider.';
-  container.appendChild(note);
-
-  const status = document.createElement('div');
-  status.className = 'sv-tex-upload-status';
-  status.style.marginBottom = '10px';
-  const refreshStatus = () => {
-    status.textContent = !CONFIG.haptics.enabled
-      ? 'Haptics are switched off — turn them back on in the ` tuner, under Feel.'
-      : hapticsAvailable()
-        ? 'Pad connected and able to rumble.'
-        : 'No pad with rumble detected. Rows still edit and save; Test will do nothing until one is connected.';
-  };
-  refreshStatus();
-  // Cheap enough to re-check whenever the panel is looked at, and the alternative
-  // is a stale "no pad" line sitting there after you plug one in.
-  window.addEventListener('gamepadconnected', refreshStatus);
-  window.addEventListener('gamepaddisconnected', refreshStatus);
-  container.appendChild(status);
-
-  // Global shaping first — these scale every row below, so reading them after
-  // the per-event numbers would be backwards.
-  const globals = document.createElement('div');
-  globals.className = 'sv-sfx-row';
-  globals.style.borderColor = 'rgba(122,215,255,0.3)';
-  const gHead = document.createElement('div');
-  gHead.className = 'sv-sfx-name';
-  const gTitle = document.createElement('span');
-  gTitle.textContent = 'Global shaping';
-  const gKind = document.createElement('span');
-  gKind.className = 'sv-sfx-type';
-  gKind.textContent = 'all events';
-  const gTest = document.createElement('button');
-  gTest.className = 'sv-tex-btn';
-  gTest.textContent = 'Test';
-  gTest.addEventListener('click', () => testHaptic());
-  const gRight = document.createElement('div');
-  gRight.style.display = 'flex';
-  gRight.style.gap = '6px';
-  gRight.style.alignItems = 'center';
-  gRight.append(gKind, gTest);
-  gHead.append(gTitle, gRight);
-  globals.appendChild(gHead);
-
-  const h = () => CONFIG.haptics;
-  const mix = () => (h().mixing ??= {});
-  // Haptics touch nothing in the audio graph, so unlike the Sound tab's rows
-  // this only needs to persist.
-  const changed = () => saveTuningToStorage();
-
-  // Mixing first — whether events stack changes what every number below it
-  // means, so it can't sit at the bottom of the list.
-  const mixRow = document.createElement('div');
-  mixRow.className = 'sv-sfx-field';
-  const mixLab = document.createElement('label');
-  mixLab.textContent = 'stacking';
-  mixLab.title = 'Sum overlapping events instead of letting the loudest replace the rest';
-  const mixBox = document.createElement('input');
-  mixBox.type = 'checkbox';
-  mixBox.checked = mix().enabled !== false;
-  const mixHint = document.createElement('span');
-  mixHint.className = 'sv-sfx-val';
-  mixHint.style.width = 'auto';
-  const syncMixHint = () => {
-    mixHint.textContent = mixBox.checked
-      ? 'events add up'
-      : 'loudest wins (old feel)';
-  };
-  syncMixHint();
-  mixBox.addEventListener('change', () => {
-    mix().enabled = mixBox.checked;
-    syncMixHint();
-    changed();
-  });
-  mixRow.append(mixLab, mixBox, mixHint);
-  globals.appendChild(mixRow);
-
-  const sumRow = document.createElement('div');
-  sumRow.className = 'sv-sfx-field';
-  const sumLab = document.createElement('label');
-  sumLab.textContent = 'sum law';
-  const sumSel = document.createElement('select');
-  for (const [v, text] of [['soft', 'soft — loud wins, quiet still adds'],
-                           ['linear', 'linear — plain sum, pins early'],
-                           ['max', 'max — replace (old behaviour)']]) {
-    const o = document.createElement('option');
-    o.value = v; o.textContent = text;
-    sumSel.appendChild(o);
-  }
-  sumSel.value = mix().sumMode ?? 'soft';
-  sumSel.addEventListener('change', () => { mix().sumMode = sumSel.value; changed(); });
-  sumRow.append(sumLab, sumSel);
-  globals.appendChild(sumRow);
-
-  // The knob that decides whether a stream of repeats reads as taps or as one
-  // continuous bed: a voice lives (its duration + this), so repeats fuse once
-  // that exceeds the gap between them.
-  slider(globals, 'tail ms', 0, 400, 5, () => mix().release ?? 70, (v) => { mix().release = v; });
-
-  texRows.push(() => {
-    mixBox.checked = mix().enabled !== false;
-    sumSel.value = mix().sumMode ?? 'soft';
-    syncMixHint();
-  });
-
-  slider(globals, 'strength', 0, 2, 0.05, () => h().intensity ?? 1, (v) => { h().intensity = v; });
-  slider(globals, 'low motor', 0, 1, 0.05, () => h().strongRatio ?? 1, (v) => { h().strongRatio = v; });
-  slider(globals, 'high motor', 0, 1, 0.05, () => h().weakRatio ?? 0.45, (v) => { h().weakRatio = v; });
-  slider(globals, 'min ms', 0, 120, 5, () => h().minDuration ?? 20, (v) => { h().minDuration = v; });
-  // These three only affect events still on a millisecond pattern — nothing
-  // with an authored magnitude reads them at all. Said plainly, because a
-  // slider that does nothing to most of the table needs to explain itself.
-  const autoNote = document.createElement('div');
-  autoNote.className = 'sv-tex-upload-status';
-  autoNote.style.marginTop = '8px';
-  autoNote.textContent = 'The three below shape the auto strength curve — they only affect rows still marked auto.';
-  globals.appendChild(autoNote);
-  slider(globals, 'auto full at', 5, 150, 5, () => h().fullAtMs ?? 45, (v) => { h().fullAtMs = v; refreshAllAuto(); });
-  slider(globals, 'auto curve', 0.2, 2, 0.05, () => h().curve ?? 0.6, (v) => { h().curve = v; refreshAllAuto(); });
-  slider(globals, 'auto floor', 0, 0.6, 0.01, () => h().floor ?? 0.15, (v) => { h().floor = v; refreshAllAuto(); });
-  container.appendChild(globals);
-  refreshStatus();
-
-  // Same sections as the Sound tab, off the same list — an event you tuned the
-  // sound of is under the same header when you come to tune its rumble.
-  appendSectioned(container, 'haptics', EVENT_SECTIONS,
-    Object.keys(CONFIG.feedback).filter((name) => CONFIG.feedback[name].sfx), buildHapticRow);
-}
-
-// Rows whose magnitude is derived rather than authored, so changing the
-// global curve can update the numbers they're showing.
-const autoRows = [];
-
-function refreshAllAuto() {
-  for (const fn of autoRows) fn();
-}
-
-function buildHapticRow(event) {
-  const def = CONFIG.feedback[event];
-  const el = document.createElement('div');
-  el.className = 'sv-sfx-row';
-
-  const head = document.createElement('div');
-  head.className = 'sv-sfx-name';
-  const nameSpan = document.createElement('span');
-  nameSpan.textContent = event;
-  const kind = document.createElement('span');
-  kind.className = 'sv-sfx-type';
-  const testBtn = document.createElement('button');
-  testBtn.className = 'sv-tex-btn';
-  testBtn.textContent = 'Test';
-  testBtn.addEventListener('click', () => previewHaptic(def.haptic));
-  const right = document.createElement('div');
-  right.style.display = 'flex';
-  right.style.gap = '6px';
-  right.style.alignItems = 'center';
-  right.append(kind, testBtn);
-  head.append(nameSpan, right);
-  el.appendChild(head);
-
-  // An event with no haptic at all still gets a row — that's the whole point
-  // of listing by sound rather than by what happens to be authored. Editing
-  // one seeds a pattern rather than writing into nothing.
-  const pulses = () => describeHaptic(def.haptic);
-  const isAuto = () => {
-    const p = pulses();
-    return p.length > 0 && p[0].magnitude == null;
-  };
-
-  const refreshKind = () => {
-    const p = pulses();
-    if (!p.length) { kind.textContent = 'none'; return; }
-    kind.textContent = `${p.length} pulse${p.length > 1 ? 's' : ''}${isAuto() ? ' · auto' : ''}`;
-  };
-  refreshKind();
-
-  // Writing ANY field converts the whole event to explicit pulses, carrying
-  // the current resolved values across, so a ms pattern's feel is preserved
-  // exactly at the moment you start editing it rather than snapping to some
-  // default.
-  const toExplicit = () => {
-    const p = pulses();
-    if (!p.length) return [{ duration: 30, magnitude: 0.5, delay: 0 }];
-    // `gap`, never `delay` — see describeHaptic. `delay` is absolute and
-    // writing it back walks the tail later on every edit.
-    return p.map((q) => ({ duration: q.duration, magnitude: q.resolved, delay: q.gap }));
-  };
-
-  const first = () => pulses()[0] ?? { duration: 30, resolved: 0.5, delay: 0 };
-
-  const durSlider = slider(el, 'duration', 0, 200, 1, () => first().duration, (v) => {
-    const next = toExplicit();
-    next[0].duration = v;
-    def.haptic = next;
-    refreshKind();
-    syncMag();
-  });
-  durSlider.title = 'Milliseconds the motor runs for this pulse';
-
-  // Magnitude needs its own read-back, because for an auto row the number
-  // shown is a function of duration and moves when duration does.
-  const magRow = document.createElement('div');
-  magRow.className = 'sv-sfx-field';
-  const magLab = document.createElement('label');
-  magLab.textContent = 'strength';
-  magLab.title = 'How hard the motor runs, 0 to 1';
-  const magInput = document.createElement('input');
-  magInput.type = 'range';
-  magInput.min = 0; magInput.max = 1; magInput.step = 0.01;
-  const magVal = document.createElement('span');
-  magVal.className = 'sv-sfx-val';
-  const syncMag = () => {
-    const p = first();
-    magInput.value = p.resolved;
-    magVal.textContent = p.resolved.toFixed(2) + (isAuto() ? ' a' : '');
-  };
-  syncMag();
-  magInput.addEventListener('input', () => {
-    const next = toExplicit();
-    next[0].magnitude = Number(magInput.value);
-    def.haptic = next;
-    magVal.textContent = Number(magInput.value).toFixed(2);
-    refreshKind();
-    saveTuningToStorage();
-  });
-  magRow.append(magLab, magInput, magVal);
-  el.appendChild(magRow);
-
-  // The tail. Most events are one pulse; the heavy ones (strike, calamari,
-  // the eel discharge) are two, and the second is what stops them reading as
-  // a flat buzz. Exposed as "tail" rather than as a pulse list because two is
-  // as far as any of this needs to go, and a general pulse editor would be a
-  // lot of UI for a shape nothing uses.
-  const tailLen = () => pulses()[1]?.duration ?? 0;
-  const tailSlider = slider(el, 'tail ms', 0, 200, 1, () => tailLen(), (v) => {
-    const next = toExplicit();
-    if (v <= 0) next.length = Math.min(next.length, 1);
-    else if (next.length > 1) next[1].duration = v;
-    else next.push({ duration: v, magnitude: Math.min(0.4, (next[0].magnitude ?? 0.5) * 0.4), delay: 0 });
-    def.haptic = next;
-    refreshKind();
-    syncTail();
-  });
-  tailSlider.title = 'A second, softer pulse after the first — 0 for none';
-
-  const tailMagRow = document.createElement('div');
-  tailMagRow.className = 'sv-sfx-field';
-  const tailMagLab = document.createElement('label');
-  tailMagLab.textContent = 'tail str';
-  const tailMagInput = document.createElement('input');
-  tailMagInput.type = 'range';
-  tailMagInput.min = 0; tailMagInput.max = 1; tailMagInput.step = 0.01;
-  const tailMagVal = document.createElement('span');
-  tailMagVal.className = 'sv-sfx-val';
-  const syncTail = () => {
-    const p = pulses()[1];
-    const on = !!p && p.duration > 0;
-    tailMagInput.disabled = !on;
-    tailMagInput.style.opacity = on ? '1' : '0.35';
-    tailMagInput.value = on ? p.resolved : 0;
-    tailMagVal.textContent = on ? p.resolved.toFixed(2) : '—';
-  };
-  syncTail();
-  tailMagInput.addEventListener('input', () => {
-    const next = toExplicit();
-    if (next.length > 1) {
-      next[1].magnitude = Number(tailMagInput.value);
-      def.haptic = next;
-      tailMagVal.textContent = Number(tailMagInput.value).toFixed(2);
-      saveTuningToStorage();
-    }
-  });
-  tailMagRow.append(tailMagLab, tailMagInput, tailMagVal);
-  el.appendChild(tailMagRow);
-
-  // Off switch. Nulling the haptic is a legitimate authored choice — some
-  // events genuinely should not be felt — so it needs to be reachable
-  // without dragging duration to zero and hoping that means the same thing.
-  const offRow = document.createElement('div');
-  offRow.className = 'sv-sfx-field';
-  const offLab = document.createElement('label');
-  offLab.textContent = 'enabled';
-  const offBox = document.createElement('input');
-  offBox.type = 'checkbox';
-  offBox.checked = pulses().length > 0;
-  let stashed = null;
-  offBox.addEventListener('change', () => {
-    if (offBox.checked) {
-      def.haptic = stashed ?? [{ duration: 30, magnitude: 0.5, delay: 0 }];
-    } else {
-      stashed = def.haptic;
-      def.haptic = null;
-    }
-    durSlider.value = first().duration;
-    refreshKind();
-    syncMag();
-    syncTail();
-    saveTuningToStorage();
-  });
-  offRow.append(offLab, offBox);
-  el.appendChild(offRow);
-
-  if (isAuto()) {
-    autoRows.push(() => {
-      if (!isAuto()) return; // converted to explicit since — nothing to track
-      syncMag();
-      syncTail();
-    });
-  }
-
-  // The two magnitude sliders and the on/off box are hand-built rather than
-  // going through slider(), so they register their own refresh — without it a
-  // Reset would restore the duration (which IS a slider()) while leaving the
-  // strength beside it showing the value that was just thrown away.
-  texRows.push(() => {
-    refreshKind();
-    syncMag();
-    syncTail();
-    offBox.checked = pulses().length > 0;
-  });
-
-  return el;
-}
 
 // ---------------------------------------------------------------------------
 // Sound tab — one row per CONFIG.sfx entry, fields shown depend on its type,
@@ -1786,265 +1406,6 @@ function buildAmbientRow() {
   return el;
 }
 
-// What this sound is configured to use, independent of whether the audio
-// context has decoded it yet.
-function configuredSrcs(def) {
-  if (Array.isArray(def.srcs) && def.srcs.length) return def.srcs.filter(Boolean);
-  return def.src ? [def.src] : [];
-}
-
-// Samples are only decoded once audio unlocks (which needs a user gesture), so
-// counting decoded buffers made every sound read "synth" if you opened this
-// panel before starting a run — even with files assigned and saved. Report
-// what's CONFIGURED, and say separately when it hasn't been decoded yet.
-function describeSamples(def, name) {
-  const configured = configuredSrcs(def).length;
-  if (!configured) return 'synth';
-  const loaded = sampleCount(name);
-  if (!loaded) return `${configured} file(s) · not loaded yet`;
-  return `${loaded} sample(s)`;
-}
-
-function buildSfxRow(name) {
-  const def = CONFIG.sfx[name];
-  const el = document.createElement('div');
-  el.className = 'sv-sfx-row';
-
-  // Which half of playSfx this entry actually goes through. A sampled sound
-  // ignores `type`, `wave`, `freq`, `noise`, `detune` and `decay` entirely —
-  // the file supplies the waveform and its own length — so showing those
-  // sliders was offering controls that silently do nothing. That is not a
-  // cosmetic problem: `decay` used to set the voice-slot hold time, so it LOOKED
-  // like it did something, and the number it held was wrong for every sampled
-  // sound in the bank. `filter`, `gain`, `pitchVary` and `filterVary` all still
-  // apply to a sample, and stay.
-  const synth = !!def.type;
-
-  const head = document.createElement('div');
-  head.className = 'sv-sfx-name';
-  const nameSpan = document.createElement('span');
-  nameSpan.textContent = name;
-  const typeSpan = document.createElement('span');
-  typeSpan.className = 'sv-sfx-type';
-  typeSpan.textContent = def.type ?? 'sample';
-  const testBtn = document.createElement('button');
-  testBtn.className = 'sv-tex-btn';
-  testBtn.textContent = 'Test';
-  testBtn.addEventListener('click', () => { unlockAudio(); playSfx(name, 1); });
-  const headRight = document.createElement('div');
-  headRight.style.display = 'flex';
-  headRight.style.gap = '6px';
-  headRight.style.alignItems = 'center';
-  headRight.append(typeSpan, testBtn);
-  head.append(nameSpan, headRight);
-  el.appendChild(head);
-
-  if (def.type === 'blip' || def.type === 'boom') {
-    const waveRow = document.createElement('div');
-    waveRow.className = 'sv-sfx-field';
-    const waveLabel = document.createElement('label');
-    waveLabel.textContent = 'wave';
-    const waveSelect = document.createElement('select');
-    for (const w of ['sine', 'square', 'triangle', 'sawtooth']) {
-      const opt = document.createElement('option');
-      opt.value = w; opt.textContent = w;
-      waveSelect.appendChild(opt);
-    }
-    waveSelect.value = def.wave ?? 'sine';
-    waveSelect.addEventListener('change', () => { def.wave = waveSelect.value; saveTuningToStorage(); });
-    waveRow.append(waveLabel, waveSelect);
-    el.appendChild(waveRow);
-
-    slider(el, 'freq lo', 20, 2000, 5, () => def.freq?.[0] ?? 440, (v) => { def.freq = [v, def.freq?.[1] ?? v]; });
-    slider(el, 'freq hi', 20, 2000, 5, () => def.freq?.[1] ?? 220, (v) => { def.freq = [def.freq?.[0] ?? v, v]; });
-  }
-
-  // A sample only gets the filter row if the entry already routes through one —
-  // adding a lowpass to a sound that never had one is a different edit from
-  // adjusting the one it has, and the row would otherwise appear on all 54.
-  if (def.type === 'noise' || def.type === 'boom' || (!synth && def.filter != null)) {
-    slider(el, 'filter', 80, 6000, 20, () => def.filter ?? 2000, (v) => { def.filter = v; });
-  }
-  if (def.type === 'boom') {
-    slider(el, 'noise mix', 0, 1, 0.02, () => def.noise ?? 0.5, (v) => { def.noise = v; });
-  }
-
-  // Synth only: a sample's length is the file's, measured at decode.
-  if (synth) slider(el, 'decay', 0.02, 1.5, 0.01, () => def.decay ?? 0.2, (v) => { def.decay = v; });
-  // In dB, and up to +24 — see dbSlider. The headroom to drive a sound this
-  // hard comes from the ceiling on the master bus above; without that, the
-  // top of this track would be a click rather than a loud sound.
-  dbSlider(el, 'gain', () => def.gain ?? 0.2, (v) => { def.gain = v; });
-  // Every sound gets randomized variation so repeats don't phase into one
-  // flat tone. Pickups ship with a wide spread, weapons a tight one.
-  slider(el, 'pitch var', 0, 0.5, 0.01, () => def.pitchVary ?? 0, (v) => { def.pitchVary = v; });
-  if (def.type === 'noise' || def.type === 'boom' || (!synth && def.filter != null)) {
-    slider(el, 'filt var', 0, 0.6, 0.01, () => def.filterVary ?? 0, (v) => { def.filterVary = v; });
-  }
-  // Detune is an oscillator parameter. There is no oscillator on the sample path.
-  if (def.type === 'blip' || def.type === 'boom') {
-    slider(el, 'detune', 0, 80, 1, () => def.detune ?? 0, (v) => { def.detune = v; });
-  }
-
-  // Upload an audio file to replace the synthesized sound. Pitch/filter
-  // variation above still applies to it (playbackRate doubles as pitch for
-  // a sample), and clearing falls straight back to the synth.
-  const sampleRow = document.createElement('div');
-  sampleRow.className = 'sv-sfx-field';
-  const sampleLabel = document.createElement('label');
-  sampleLabel.textContent = 'sample';
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = 'audio/*';
-  fileInput.style.display = 'none';
-  const upBtn = document.createElement('button');
-  upBtn.className = 'sv-tex-btn';
-  upBtn.textContent = hasSample(name) ? 'Add another' : 'Upload';
-
-  // This row is built at boot, before preloadSamples has fetched anything, so
-  // the labels above are provisional — refresh them when loading lands. A
-  // manual upload or clear takes the row over for good, so a late-finishing
-  // preload can't stomp on what you just did.
-  let userTouchedSample = false;
-  const unsubscribeSamples = onSamplesChanged(() => {
-    if (userTouchedSample) return;
-    sampleStatus.textContent = describeSamples(def, name);
-    upBtn.textContent = configuredSrcs(def).length ? 'Add another' : 'Upload';
-  });
-  const clrBtn = document.createElement('button');
-  clrBtn.className = 'sv-tex-btn';
-  clrBtn.textContent = 'Synth';
-  clrBtn.title = 'Drop the uploaded sample and go back to the synthesized sound';
-  const sampleStatus = document.createElement('span');
-  sampleStatus.className = 'sv-sfx-val';
-  sampleStatus.style.width = 'auto';
-  sampleStatus.textContent = describeSamples(def, name);
-
-  upBtn.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', async () => {
-    const file = fileInput.files?.[0];
-    if (!file) return;
-    userTouchedSample = true;
-    unsubscribeSamples();
-    unlockAudio();
-    sampleStatus.textContent = 'loading…';
-    // Append rather than replace: uploading several takes for one sound
-    // builds a variation set, and playSfx picks a different one each time.
-    const ok = await loadSampleFromFile(name, file, { append: true });
-    if (ok) {
-      // Decoding succeeded, so it's worth keeping: write it into public/sfx
-      // and add it to this entry's `srcs`. That's the same field a
-      // hand-edited config uses, so it reloads on every future boot instead
-      // of living only in this tab's memory.
-      const src = await uploadAsset('sfx', file);
-      if (src) {
-        if (!Array.isArray(def.srcs)) def.srcs = def.src ? [def.src] : [];
-        if (!def.srcs.includes(src)) def.srcs.push(src);
-        def.src = null; // superseded by the array
-        saveTuningToStorage();
-        sampleStatus.textContent = `${sampleCount(name)} sample(s)`;
-      } else {
-        sampleStatus.textContent = `${sampleCount(name)} (session)`;
-      }
-    } else {
-      sampleStatus.textContent = 'failed — synth';
-    }
-    upBtn.textContent = 'Add another';
-  });
-  clrBtn.addEventListener('click', () => {
-    userTouchedSample = true;
-    unsubscribeSamples();
-    clearSample(name);
-    // Drop the saved file references too, or the next boot would reload them
-    // and the synth would never come back.
-    def.src = null;
-    def.srcs = [];
-    saveTuningToStorage();
-    sampleStatus.textContent = 'synth';
-    upBtn.textContent = 'Upload';
-  });
-  sampleRow.append(sampleLabel, upBtn, clrBtn, fileInput, sampleStatus);
-  el.appendChild(sampleRow);
-
-  // One line per loaded variation, each removable on its own. Clearing the
-  // whole set was the only option before, which is useless when a set of five
-  // has two you don't want — you had to wipe it and re-upload the keepers.
-  const variationList = document.createElement('div');
-  variationList.className = 'sv-sfx-variations';
-  el.appendChild(variationList);
-
-  function renderVariations() {
-    variationList.replaceChildren();
-    const srcs = Array.isArray(def.srcs) ? def.srcs : (def.src ? [def.src] : []);
-    // Render even a single entry. Hiding the list below two meant a sound
-    // with exactly one sample showed its filename nowhere at all, which
-    // reads as "my upload vanished" even though it's saved and working.
-    for (let i = 0; i < srcs.length; i++) {
-      const src = srcs[i];
-      const line = document.createElement('div');
-      line.className = 'sv-sfx-variation';
-
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'sv-sfx-variation-name';
-      nameSpan.textContent = src.split('/').pop();
-      nameSpan.title = src;
-
-      // Audition this one specifically. playSfx picks at random, so without
-      // this there'd be no way to tell which file you're about to remove.
-      const playOne = document.createElement('button');
-      playOne.className = 'sv-tex-btn';
-      playOne.textContent = '▶';
-      playOne.title = 'Play just this variation';
-      playOne.addEventListener('click', async () => {
-        unlockAudio();
-        try {
-          const ctx = getAudioContext();
-          const res = await fetch(src);
-          const buf = await ctx.decodeAudioData(await res.arrayBuffer());
-          const node = ctx.createBufferSource();
-          const gain = ctx.createGain();
-          gain.gain.value = def.gain ?? 0.3;
-          node.buffer = buf;
-          node.connect(gain).connect(ctx.destination);
-          node.start();
-        } catch (err) {
-          console.warn(`[audio] could not audition ${src} —`, err?.message ?? err);
-        }
-      });
-
-      const del = document.createElement('button');
-      del.className = 'sv-tex-btn';
-      del.textContent = '×';
-      del.title = 'Remove this variation';
-      del.addEventListener('click', async () => {
-        userTouchedSample = true;
-        unsubscribeSamples();
-        def.srcs = srcs.filter((_, j) => j !== i);
-        def.src = null;
-        saveTuningToStorage();
-        // Rebuild from the trimmed list rather than splicing the decoded
-        // buffers by index — a variation that failed to decode would have
-        // put the two out of step.
-        await reloadSample(name);
-        const n = sampleCount(name);
-        sampleStatus.textContent = n ? `${n} sample(s)` : 'synth';
-        upBtn.textContent = n ? 'Add another' : 'Upload';
-        renderVariations();
-      });
-
-      line.append(nameSpan, playOne, del);
-      variationList.appendChild(line);
-    }
-  }
-  renderVariations();
-
-  // Keep the list in step when samples finish loading at boot, or when the
-  // whole set is cleared.
-  clrBtn.addEventListener('click', () => renderVariations());
-  onSamplesChanged(() => { if (!userTouchedSample) renderVariations(); });
-
-  return el;
-}
 
 function pairSlider(container, label, min, max, step, pair, onInput) {
   const row = document.createElement('div');

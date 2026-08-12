@@ -48,9 +48,11 @@ import { fileURLToPath } from 'node:url';
 
 import { CONFIG } from '../path/src/config.js';
 import { installModel, createVisual } from '../path/src/assets.js';
-import { createAimRig } from '../path/src/systems/aimRig.js';
+import { createAimRig, emitPoint } from '../path/src/systems/aimRig.js';
 import { createAnimationController } from '../path/src/systems/animation.js';
-import { limitJoint } from '../path/src/systems/ikChain.js';
+import { limitJoint, chainPoint } from '../path/src/systems/ikChain.js';
+import { updateBubbles, resetBubbles } from '../path/src/systems/bubbles.js';
+import { initParticles, resetParticles, particleCount } from '../path/src/entities/particles.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODEL = resolve(HERE, '../public/models/furseal.glb');
@@ -324,6 +326,267 @@ section('LIMITS — the three rules, on their own');
   const nan = limitJoint(new THREE.Quaternion(NaN, NaN, NaN, NaN), at(0.4, 0), rest, axis, cfg);
   check('a degenerate solve falls back to the clip rather than writing NaN',
     Number.isFinite(nan.x + nan.y + nan.z + nan.w) && Math.abs(foldOf(nan) - 0.4) < 1e-6);
+}
+
+// ===========================================================================
+// THE WAKE — which bit of the seal the bubbles are born on
+//
+// Not a look test. The claim is geometric and the model can settle it: the
+// wake used to pour out of `anchors.tail`, which measures out at the ankle
+// joint BOTH hind flippers hang off — the base of the fins. These checks
+// pin it to the tips instead, and pin the tail's share of it to a spread down
+// the chain rather than a second point emitter.
+// ===========================================================================
+
+section('WAKE — the emitters sit on the ends of the limbs');
+{
+  // A settled swim pose, then frozen: nothing below advances the clip, so the
+  // anchors and the tail's bones stay exactly where these checks read them.
+  rig.reset();
+  body.quaternion.identity();
+  aim.set(1, 0);
+  for (let i = 0; i < 90; i++) { anim.update(dt, 'swim', false); rig.update(dt, aim, { engaged: true }); }
+
+  const A = rig.anchors;
+  check('both hind flipper tips are published', !!(A.finL && A.finR),
+    Object.keys(A).join(', '));
+
+  // --- the front flippers: the muzzle is ON the skin ------------------------
+  //
+  // The one that can only be settled by skinning: `rig.muzzles` used to BE
+  // `chain.point`, the IK effector, which lives past the end of the limb on
+  // purpose — so the muzzle flash, the bullet and the club all hung in open
+  // water off the flipper. Nothing in the rig can tell you that. The vertices
+  // can.
+  {
+    // The outermost vertex each hand bone drives, and where it ends up in the
+    // pose above. `applyBoneTransform` gives mesh space; matrixWorld finishes
+    // the job.
+    const outermost = (boneName) => {
+      const bone = body.getObjectByName(boneName);
+      const m = fixtures[0].mesh;
+      const p = m.geometry.attributes.position;
+      const si = m.geometry.attributes.skinIndex;
+      const sw = m.geometry.attributes.skinWeight;
+      const v = new THREE.Vector3();
+      let best = -Infinity;
+      let world = null;
+      for (let i = 0; i < p.count; i++) {
+        m.applyBoneTransform(i, v.fromBufferAttribute(p, i));
+        const w = v.clone().applyMatrix4(m.matrixWorld);
+        for (let k = 0; k < 4; k++) {
+          if (sw.getComponent(i, k) < 0.4) continue;
+          if (m.skeleton.bones[si.getComponent(i, k)] !== bone) continue;
+          const y = bone.worldToLocal(w.clone()).y; // down the bone's length
+          if (y > best) { best = y; world = w.clone(); }
+        }
+      }
+      return { world, wrist: bone.getWorldPosition(new THREE.Vector3()) };
+    };
+
+    const flat = (a, b) => Math.hypot(a.x - b.x, a.y - b.y); // what the camera sees
+    for (const [i, boneName] of [[0, 'hand_L_014'], [1, 'hand_R_018']]) {
+      const { world, wrist } = outermost(boneName);
+      const muzzle = rig.muzzles[i];
+      const effector = rig.fins[i].point;
+      const toSkin = wrist.distanceTo(world);
+      const toMuzzle = wrist.distanceTo(muzzle);
+      check(`${boneName}: the muzzle is inside the flipper's own skin`,
+        toMuzzle <= toSkin && toMuzzle > toSkin * 0.85,
+        `${toMuzzle.toFixed(2)} out of a ${toSkin.toFixed(2)} flipper`);
+      check(`${boneName}: ...and the aim effector still reaches past it`,
+        wrist.distanceTo(effector) > toMuzzle * 1.15,
+        `effector ${wrist.distanceTo(effector).toFixed(2)} vs muzzle ${toMuzzle.toFixed(2)}`);
+
+      // What a shot actually fires from, which is the thing that was visibly
+      // wrong: on screen it sat half a world unit off the end of the fin.
+      const fired = emitPoint(rig, 'fins', i, new THREE.Vector3(1, 0, 0), body.position, new THREE.Vector3());
+      check(`${boneName}: a shot leaves from the edge of the geometry`,
+        flat(fired, world) < 0.2, `${flat(fired, world).toFixed(2)} from the outermost vertex, on screen`);
+    }
+  }
+
+  if (A.finL && A.finR) {
+    // Measured against each flipper's OWN joints: how far past the ankle the
+    // anchor sits, in the direction the shin points. "Past the ankle" is what
+    // makes it a tip rather than a base, and it is the one claim that holds in
+    // every pose — deliberately not "further back than the tail", which the
+    // swim clip breaks: it poses the two hind flippers asymmetrically enough
+    // that the right one sits slightly AHEAD of the tail tip while the left
+    // trails it by 0.8. (Which is also why the wake alternates between them
+    // rather than picking one.)
+    const at = (n) => body.getObjectByName(n).getWorldPosition(new THREE.Vector3());
+    const side = (anchor, footN, legN) => {
+      const foot = at(footN);
+      const shin = foot.clone().sub(at(legN));
+      const len = shin.length(); // before normalize() eats it
+      return { past: anchor.clone().sub(foot).dot(shin.normalize()), shin: len };
+    };
+    const L = side(A.finL, 'foot_L_022', 'leg_L_021');
+    const R = side(A.finR, 'foot_R_025', 'leg_R_024');
+    check('each fin anchor sits out past its own ankle, down the flipper',
+      L.past > L.shin * 0.5 && R.past > R.shin * 0.5,
+      `${L.past.toFixed(2)} / ${R.past.toFixed(2)} past the joint, on a ${L.shin.toFixed(2)} shin`);
+    // ...and it is nowhere near the point the wake used to pour out of.
+    check('...well clear of the tail anchor the wake used to come from',
+      A.finL.distanceTo(A.tail) > L.past && A.finR.distanceTo(A.tail) > R.past,
+      `${A.finL.distanceTo(A.tail).toFixed(2)} / ${A.finR.distanceTo(A.tail).toFixed(2)} away`);
+  }
+
+  // The sampler itself, deterministically: `s` has to be a fraction of ARC
+  // LENGTH down the chain, or "most at the tip" is measured against the wrong
+  // ruler. The seal's tail is 0.63 / 0.14 / 0.23 of its length in three
+  // segments, so a per-joint walk would show up here as a staircase.
+  if (rig.tail) {
+    const nodes = [
+      ...rig.tail.bones.map((b) => b.getWorldPosition(new THREE.Vector3())),
+      rig.tail.point.clone(),
+    ];
+    const cum = [0];
+    for (let i = 1; i < nodes.length; i++) cum.push(cum[i - 1] + nodes[i - 1].distanceTo(nodes[i]));
+    const total = cum[cum.length - 1];
+    // Arc position of a point known to lie ON the polyline: the nearest
+    // segment, plus how far along it the point falls.
+    const arcOf = (p) => {
+      let best = Infinity;
+      let arc = 0;
+      for (let i = 1; i < nodes.length; i++) {
+        const seg = nodes[i].clone().sub(nodes[i - 1]);
+        const t = Math.min(1, Math.max(0, p.clone().sub(nodes[i - 1]).dot(seg) / seg.lengthSq()));
+        const d = p.distanceTo(nodes[i - 1].clone().addScaledVector(seg, t));
+        if (d < best) { best = d; arc = cum[i - 1] + t * seg.length(); }
+      }
+      return arc / total;
+    };
+
+    const out = new THREE.Vector3();
+    let worst = 0;
+    for (let i = 0; i <= 20; i++) {
+      const s = i / 20;
+      worst = Math.max(worst, Math.abs(arcOf(chainPoint(rig.tail, s, out)) - s));
+    }
+    check('a chain sample lands at its own fraction of the tail\'s LENGTH',
+      worst < 0.01, `worst ${(worst * 100).toFixed(1)}% off over 21 samples`);
+    check('...ending exactly on the root and the tip',
+      chainPoint(rig.tail, 0, out).distanceTo(nodes[0]) < 1e-6
+      && chainPoint(rig.tail, 1, out).distanceTo(rig.tail.point) < 1e-6);
+    check('...and no value of s can walk off the end',
+      chainPoint(rig.tail, -5, out).distanceTo(nodes[0]) < 1e-6
+      && chainPoint(rig.tail, 9, out).distanceTo(rig.tail.point) < 1e-6);
+  }
+}
+
+section('WAKE — where the bursts are actually born');
+{
+  const scene2 = new THREE.Scene();
+  initParticles(scene2);
+  const pos = scene2.children[0].geometry.attributes.position.array;
+
+  const W = CONFIG.bubbles.wake;
+  const wasBreath = CONFIG.bubbles.breath.enabled;
+  const wasShare = W.tailShare;
+  const wasBias = W.tipBias;
+  const random = Math.random;
+  try {
+    // Breath off: the mouth's puffs land in the same buffer and would show up
+    // as a third cluster with nothing to do with the wake.
+    CONFIG.bubbles.breath.enabled = false;
+    // Seeded, because every check below is a distribution. Averaging a Monte
+    // Carlo run against a fixed stream is the difference between a test that
+    // fails when the code breaks and one that fails on a Tuesday.
+    let s = 0x9e3779b9;
+    Math.random = () => {
+      s |= 0; s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+
+    // The pose stays frozen (see above), so every burst is comparable against
+    // one set of anchor positions.
+    const velocity = { x: CONFIG.player.maxSpeed, y: 0 };
+    function wakePoints(seconds = 2) {
+      resetBubbles();
+      resetParticles();
+      for (let t = 0; t < seconds; t += dt) updateBubbles(dt, rig, velocity, false, 0);
+      const out = [];
+      for (let i = 0; i < particleCount(); i++) out.push(new THREE.Vector2(pos[i * 3], pos[i * 3 + 1]));
+      return out;
+    }
+
+    const A = rig.anchors;
+    const near = (p, a, eps = 1e-4) => Math.hypot(p.x - a.x, p.y - a.y) < eps;
+    // All four: the two muzzles on the front flippers' skin edge, then the two
+    // hind flipper anchors.
+    const tips = [...rig.muzzles, A.finL, A.finR];
+
+    W.tailShare = 0;
+    {
+      const pts = wakePoints();
+      const per = tips.map((t) => pts.filter((p) => near(p, t)).length);
+      check('with the tail\'s share at 0 every bubble is born on a flipper tip',
+        pts.length > 0 && per.reduce((a, b) => a + b, 0) === pts.length,
+        `${per.reduce((a, b) => a + b, 0)} of ${pts.length}`);
+      check('...spread over all four limbs, not one of them',
+        per.every((n) => n > pts.length * 0.15),
+        `fore ${per[0]}/${per[1]}, hind ${per[2]}/${per[3]}`);
+      // The regression this whole change is about.
+      check('...and none of them out of the ankle the fins hang off',
+        pts.every((p) => !near(p, A.tail, 0.02)), `${pts.filter((p) => near(p, A.tail, 0.02)).length} at the old anchor`);
+    }
+
+    W.tailShare = 1;
+    {
+      // Where each burst sits along the tail, 0 at the root joint and 1 at the
+      // tip. The chain is all but straight in this pose (arc length is within
+      // 1% of the root-to-tip line), so the distance from the root reads as the
+      // fraction directly — the sampler's own arc-length behaviour is pinned
+      // exactly, above.
+      const root = rig.tail.bones[0].getWorldPosition(new THREE.Vector3());
+      const span = root.distanceTo(rig.tail.point);
+      const along = () => wakePoints().map((p) => Math.hypot(p.x - root.x, p.y - root.y) / span);
+      // Share of the bursts in each quarter of the tail, root first. Quartiles
+      // rather than a min or a max: the extremes of ~46 bursts are noise even
+      // on a fixed seed, and the shape is the claim.
+      const quarters = (f) => [0, 1, 2, 3].map((q) =>
+        f.filter((v) => v >= q / 4 && v < (q + 1) / 4 + (q === 3 ? 1e-6 : 0)).length / f.length);
+
+      const biased = quarters(along());
+      check('the tail\'s share is crowded to the tip',
+        biased[3] > 0.5 && biased[3] > biased[0] * 4,
+        `quarters root->tip: ${biased.map((v) => (v * 100).toFixed(0) + '%').join(' ')}`);
+
+      W.tipBias = 0;
+      const even = quarters(along());
+      check('...and tipBias 0 spreads them down the whole chain instead',
+        even.every((v) => v > 0.12 && v < 0.4),
+        `quarters root->tip: ${even.map((v) => (v * 100).toFixed(0) + '%').join(' ')}`);
+      check('...which is a real difference, not a re-labelling',
+        even[3] < biased[3] * 0.6, `${(even[3] * 100).toFixed(0)}% vs ${(biased[3] * 100).toFixed(0)}% at the tip`);
+      W.tipBias = wasBias;
+    }
+
+    W.tailShare = wasShare;
+    {
+      // The shipped split, and the budget: moving the emitters around must not
+      // quietly multiply how many bubbles a second of swimming costs.
+      const pts = wakePoints();
+      const onTips = pts.filter((p) => tips.some((t) => near(p, t))).length / pts.length;
+      check('the shipped split lands near tailShare',
+        Math.abs((1 - onTips) - W.tailShare) < 0.1,
+        `${((1 - onTips) * 100).toFixed(0)}% off the tail, tailShare ${W.tailShare}`);
+
+      const perBurst = Math.max(1, Math.round(CONFIG.emitters.wakeBubbles.count * W.scale));
+      const expected = W.perSecond * perBurst * 2; // two seconds at top speed
+      check('and one burst is still one burst — the rate is unchanged',
+        Math.abs(pts.length - expected) < expected * 0.1, `${pts.length} particles vs ~${expected}`);
+    }
+  } finally {
+    Math.random = random;
+    CONFIG.bubbles.breath.enabled = wasBreath;
+    W.tailShare = wasShare;
+    W.tipBias = wasBias;
+  }
 }
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);

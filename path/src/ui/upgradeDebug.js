@@ -1,0 +1,473 @@
+import { CONFIG } from '../config.js';
+import { player, addUpgrade, recomputeStats } from '../entities/player.js';
+import { rarities, baseRarity, rarityById } from '../systems/rarity.js';
+import { rollElementFor, commitElement, activeElement } from '../systems/elements.js';
+import { expandDesc } from '../upgradeText.js';
+import * as playtest from '../systems/playtest.js';
+import { isTypingTarget } from './typing.js';
+
+// ---------------------------------------------------------------------------
+// THE UPGRADE PANEL — press U.
+//
+// Hands the seal any upgrade in the table, right now, without waiting for the
+// level-up screen to offer it. The reason this needs to exist is the offer
+// itself: a card is three draws out of forty weighted rows, so trying the sixth
+// stack of one specific ability means playing until the deal happens to hand it
+// to you six times. That is not a way to look at an ability, and it is much
+// worse for the ones you most want to look at — anything gated behind
+// `enabled: FALSE` in upgrades.csv cannot be dealt AT ALL, so a half-built
+// upgrade currently has no way to be seen in the water at all before it ships.
+//
+// It goes through the same door the real pick does — commitElement, then
+// addUpgrade with a tier, then recomputeStats — rather than writing stats
+// directly. Anything that writes `player.stats` itself is testing a stat block
+// that the game will overwrite on the next level-up: recomputeStats() rebuilds
+// from base and replays `player.upgrades` every time, so a hand-poked number
+// survives until the next card and then silently vanishes. Going through
+// addUpgrade means what you are looking at is what a real run would produce.
+//
+// WHAT THE PANEL LETS YOU CHOOSE that the game rolls for you:
+//
+//   RARITY    the tier a card was dealt at rides along with the pick forever
+//             (see recomputeStats), and statMul makes the same upgrade a
+//             different upgrade at the top of the ladder. Picking the tier is
+//             the difference between "try Multishot" and "try the Multishot
+//             someone will actually complain about".
+//   ELEMENT   Glow Up! rolls one element per run and never re-rolls. Without a
+//             picker, seeing infection means restarting runs until the roll
+//             gives it to you.
+//
+// REMOVING. Click a held row's minus to hand one stack back. This rolls the
+// STAT BLOCK back exactly — it is the same replay-from-base — but it does not
+// promise to unwind everything an ability has already put in the water: a
+// companion that has spawned stays until whatever owns it syncs its count from
+// stats. Numbers are trustworthy immediately; bodies may take a beat.
+//
+// DEV ONLY. Wired behind DEV_UI in main.js next to the rest of the panels, so
+// no player build has a key that grants upgrades.
+// ---------------------------------------------------------------------------
+
+const ALL = '(all)';
+const ROLL = '(roll)';
+
+let panel = null;
+let listEl = null;
+let headEl = null;
+let footEl = null;
+let statusEl = null;
+let rarityRow = null;
+let elementRow = null;
+let familyRow = null;
+let visible = false;
+
+// What the next grant will be. `rarity` starts at the floor tier so a plain
+// click gives you the card as it is most often dealt, not as it is best.
+let rarity = null;
+let element = ROLL;
+let family = ALL;
+let status = '';
+
+// Set by main.js — the run clock, for the playtest record. Passed in rather
+// than imported because `gameState` is a local in main.js, and a panel reaching
+// into the game loop's own state would be a worse dependency than a getter.
+let runTime = () => 0;
+
+const C = {
+  dim: 'rgba(232,236,243,0.45)',
+  text: 'rgba(232,236,243,0.88)',
+  ok: '#7ee081',
+  warn: '#ffc861',
+  off: 'rgba(232,236,243,0.3)',
+};
+
+export function initUpgradeDebug(getTime = null) {
+  if (typeof getTime === 'function') runTime = getTime;
+  rarity = baseRarity();
+
+  panel = document.createElement('div');
+  panel.id = 'svUpgradeDebug';
+  // Left-hand side: the sound feed and the balance panel both live on the
+  // right, and this is the one panel you want open AT THE SAME TIME as the
+  // balance panel — grant an ability, watch its damage share move.
+  panel.style.cssText =
+    'position:fixed;left:12px;top:12px;bottom:12px;width:min(430px,40vw);z-index:32;display:none;'
+    + 'flex-direction:column;border-radius:10px;overflow:hidden;'
+    + 'background:rgba(5,6,10,0.94);border:1px solid rgba(232,236,243,0.16);'
+    + `color:${C.text};font:500 11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;`;
+
+  headEl = document.createElement('div');
+  headEl.style.cssText =
+    'padding:8px 10px;flex:0 0 auto;border-bottom:1px solid rgba(232,236,243,0.12);'
+    + 'background:rgba(232,236,243,0.04);';
+  panel.appendChild(headEl);
+
+  const controls = document.createElement('div');
+  controls.style.cssText =
+    'padding:7px 10px;flex:0 0 auto;display:flex;flex-direction:column;gap:5px;'
+    + 'border-bottom:1px solid rgba(232,236,243,0.12);';
+  // All three rows are filled in by render() rather than here, because all
+  // three carry a selection: a chip built once keeps the highlight it was born
+  // with, and the row would go on showing the family you picked first.
+  rarityRow = row('tier');
+  elementRow = row('glow');
+  familyRow = row('show');
+  controls.append(rarityRow.wrap, elementRow.wrap, familyRow.wrap);
+  panel.appendChild(controls);
+
+  listEl = document.createElement('div');
+  listEl.style.cssText = 'flex:1 1 auto;overflow:auto;padding:4px 6px;';
+  panel.appendChild(listEl);
+
+  footEl = document.createElement('div');
+  footEl.style.cssText =
+    'display:flex;align-items:center;gap:6px;padding:7px 10px;flex:0 0 auto;'
+    + 'border-top:1px solid rgba(232,236,243,0.12);background:rgba(232,236,243,0.04);';
+  const clear = button('Clear all', () => {
+    const n = player.upgrades.length;
+    player.upgrades.length = 0;
+    recomputeStats();
+    status = `cleared ${n} pick${n === 1 ? '' : 's'}`;
+    render();
+  });
+  statusEl = document.createElement('div');
+  statusEl.dataset.status = '1';
+  // The line that answers "what did that do" after a click, so it gets the
+  // width: ellipsis rather than wrap, because a long stat diff pushing the
+  // buttons around would move the thing you are about to click again.
+  statusEl.style.cssText =
+    `flex:1 1 auto;color:${C.dim};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+  footEl.append(clear, statusEl);
+  panel.appendChild(footEl);
+
+  document.body.appendChild(panel);
+
+  window.addEventListener('keydown', (e) => {
+    if (isTypingTarget(e.target) || e.repeat) return;
+    if (e.key?.toLowerCase() !== 'u') return;
+    setVisible(!visible);
+  });
+}
+
+// A labelled row of chips. `content` lets the family row build its own buttons
+// before the row exists; tier and element are filled in by render(), because
+// both depend on state that changes while the panel is open.
+function row(label, content = null) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;align-items:center;gap:5px;flex-wrap:wrap;';
+  const tag = document.createElement('div');
+  tag.style.cssText = `color:${C.dim};letter-spacing:0.1em;font-size:9px;width:34px;flex:0 0 auto;`;
+  tag.textContent = label.toUpperCase();
+  wrap.appendChild(tag);
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;';
+  if (content) body.append(...content);
+  wrap.appendChild(body);
+  return { wrap, body };
+}
+
+// Derived from the table rather than listed here: `family` decides which damage
+// bucket an upgrade pays into (see rarity.js), and a hardcoded list would
+// quietly drop a new family instead of showing it.
+function familyChips() {
+  const families = [ALL, ...new Set(CONFIG.upgrades.map((u) => u.family).filter(Boolean))];
+  return families.map((f) => chip(f, () => family === f, () => { family = f; render(); }));
+}
+
+function chip(label, isOn, onClick, color = null) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.dataset.chip = label;
+  b.addEventListener('click', onClick);
+  b.style.cssText =
+    'padding:2px 7px;border-radius:4px;cursor:pointer;font:inherit;font-size:10px;'
+    + 'letter-spacing:0.03em;background:transparent;color:inherit;'
+    + 'border:1px solid rgba(232,236,243,0.16);';
+  // Painted here rather than on a class, so a tier chip can carry the tier's
+  // own colour out of rarities.csv — the same reason the cards do it inline.
+  const on = isOn();
+  b.dataset.on = on ? '1' : '';
+  if (on) {
+    const hex = color ?? 'rgba(232,236,243,0.9)';
+    b.style.borderColor = hex;
+    b.style.color = hex;
+    b.style.background = 'rgba(232,236,243,0.1)';
+  } else if (color) {
+    b.style.color = `${color}`;
+    b.style.opacity = '0.5';
+  }
+  return b;
+}
+
+function button(label, onClick) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.addEventListener('click', onClick);
+  b.style.cssText =
+    'padding:4px 8px;border-radius:5px;cursor:pointer;'
+    + 'background:rgba(232,236,243,0.08);border:1px solid rgba(232,236,243,0.16);'
+    + 'color:inherit;font:inherit;font-size:10px;letter-spacing:0.04em;';
+  return b;
+}
+
+function setVisible(on) {
+  visible = on;
+  panel.style.display = on ? 'flex' : 'none';
+  // Rendered on open rather than every frame. Nothing here moves on its own —
+  // the only things that change the list are this panel's own buttons and a
+  // level-up, and reopening after a level-up re-reads the counts.
+  if (on) render();
+}
+
+// ---------------------------------------------------------------------------
+// GRANTING
+// ---------------------------------------------------------------------------
+
+function elementIds() {
+  return Object.keys(CONFIG.biolum?.elements ?? {});
+}
+
+function owned(id) {
+  return player.upgrades.filter((p) => p.id === id).length;
+}
+
+function atCap(def) {
+  return def.maxStacks != null && owned(def.id) >= def.maxStacks;
+}
+
+/**
+ * Hand the seal one stack of `id`.
+ *
+ * Exported because it is useful from the console too, and because it is the
+ * half worth testing — the panel is buttons around this function.
+ *
+ * The cap is respected. An upgrade past its maxStacks is a state no run can
+ * reach, so a bug found there is a bug nobody can hit, and the apply() chains
+ * that step a level counter (`bounceLevel`, `garlicLevel`) read off tables
+ * sized to the cap — walking past the end tells you nothing true.
+ */
+export function grantUpgrade(id, { rarity: tier = null, element: elementId = null } = {}) {
+  const def = CONFIG.upgrades.find((u) => u.id === id);
+  if (!def) {
+    console.warn(`[upgrades] no upgrade called '${id}'`);
+    return null;
+  }
+  if (atCap(def)) return null;
+
+  // The element is locked in BEFORE the stat block is rebuilt, exactly as
+  // applyLevelChoice does it: the first Glow Up! stack scales whatever element
+  // the run is carrying, and committing after the recompute would apply stack
+  // one to nothing.
+  if (def.roll === 'biolumElement') {
+    const pick = elementId && elementId !== ROLL ? elementId : rollElementFor();
+    commitElement(pick);
+  }
+
+  const before = { ...player.stats };
+  addUpgrade(def.id, tier ?? baseRarity());
+
+  // Recorded so THIS RUN's balance panel attributes the ability's damage
+  // instead of filing it under an upgrade the player never took. The run is
+  // also stamped: a run with granted upgrades is not a playtest, and the
+  // stored .jsonl is pooled across sessions, so it has to be possible to tell
+  // the two apart later rather than wondering why one run had everything.
+  if (playtest.isRecording()) {
+    playtest.recordUpgrade(def.id, runTime());
+    const run = playtest.currentRun();
+    if (run) run.debugGranted = true;
+  }
+
+  return { def, before, after: { ...player.stats } };
+}
+
+/** Hand one stack back. Returns false if none was held. */
+export function revokeUpgrade(id) {
+  // The LAST one taken, so removing a stack from a ladder undoes the most
+  // recent rung rather than the tier the first pick arrived at.
+  let i = -1;
+  for (let n = 0; n < player.upgrades.length; n++) if (player.upgrades[n].id === id) i = n;
+  if (i < 0) return false;
+  player.upgrades.splice(i, 1);
+  recomputeStats();
+  return true;
+}
+
+// What actually moved. Only the numbers, and only the ones that changed — a
+// dump of the whole stat block is forty lines nobody reads, and the question
+// being asked at the moment you click a card is "what did that do".
+function diff(before, after) {
+  const out = [];
+  for (const key of Object.keys(after)) {
+    const a = before[key];
+    const b = after[key];
+    if (typeof b !== 'number' || typeof a !== 'number' || a === b) continue;
+    out.push(`${key} ${fmt(a)}→${fmt(b)}`);
+  }
+  return out;
+}
+
+function fmt(n) {
+  if (!Number.isFinite(n)) return String(n);
+  if (Number.isInteger(n)) return String(n);
+  return n.toFixed(Math.abs(n) < 1 ? 3 : 2);
+}
+
+// ---------------------------------------------------------------------------
+// RENDER
+// ---------------------------------------------------------------------------
+
+function render() {
+  if (!panel) return;
+
+  const held = player.upgrades.length;
+  headEl.textContent = '';
+  const title = document.createElement('div');
+  title.style.cssText = 'letter-spacing:0.14em;font-size:10px;opacity:0.65;';
+  title.textContent = 'UPGRADES — GRANT ANY';
+  const sub = document.createElement('div');
+  sub.style.cssText = `color:${C.dim};margin-top:2px;`;
+  const glow = activeElement();
+  sub.textContent = `level ${player.level}  ·  ${held} pick${held === 1 ? '' : 's'} held`
+    + (glow ? `  ·  glow: ${glow}` : '');
+  headEl.append(title, sub);
+
+  // TIER. Every row of rarities.csv, in ladder order, in its own colour.
+  rarityRow.body.textContent = '';
+  for (const tier of rarities()) {
+    const hex = `#${((tier.color ?? 0xffffff) >>> 0).toString(16).padStart(6, '0')}`;
+    rarityRow.body.appendChild(
+      chip(tier.id, () => rarity === tier.id, () => { rarity = tier.id; render(); }, hex),
+    );
+  }
+
+  // GLOW. Hidden entirely once the run has committed an element — commitElement
+  // is a one-way door by design, and a picker that silently does nothing is
+  // worse than no picker.
+  elementRow.body.textContent = '';
+  const committed = activeElement();
+  if (committed) {
+    const locked = document.createElement('div');
+    locked.style.cssText = `color:${C.dim};font-size:10px;`;
+    locked.textContent = `${committed} — locked for this run`;
+    elementRow.body.appendChild(locked);
+  } else {
+    for (const id of [ROLL, ...elementIds()]) {
+      const hex = id === ROLL ? null
+        : `#${((CONFIG.biolum.elements[id].color ?? 0xffffff) >>> 0).toString(16).padStart(6, '0')}`;
+      elementRow.body.appendChild(
+        chip(id, () => element === id, () => { element = id; render(); }, hex),
+      );
+    }
+  }
+
+  familyRow.body.textContent = '';
+  familyRow.body.append(...familyChips());
+
+  // THE LIST. Table order, not alphabetical: upgrades.csv is the order the
+  // designer put them in, and a list that reorders itself is one you have to
+  // re-read every time.
+  listEl.textContent = '';
+  const rows = CONFIG.upgrades.filter((u) => family === ALL || u.family === family);
+  for (const def of rows) listEl.appendChild(upgradeRow(def));
+
+  statusEl.textContent = status;
+  statusEl.title = status;
+}
+
+function upgradeRow(def) {
+  const have = owned(def.id);
+  const capped = atCap(def);
+
+  const wrap = document.createElement('div');
+  wrap.dataset.upgrade = def.id;
+  wrap.style.cssText =
+    'display:flex;align-items:flex-start;gap:8px;padding:5px 6px;border-radius:6px;'
+    + `background:${have ? 'rgba(126,224,129,0.07)' : 'transparent'};`
+    + 'border-bottom:1px solid rgba(232,236,243,0.06);';
+
+  const text = document.createElement('div');
+  text.style.cssText = 'flex:1 1 auto;min-width:0;';
+
+  const name = document.createElement('div');
+  name.style.cssText = `color:${have ? C.ok : C.text};`;
+  const cap = def.maxStacks != null ? `/${def.maxStacks}` : '';
+  name.textContent = `${def.name}${have || def.maxStacks != null ? `  ${have}${cap}` : ''}`;
+  // `enabled: FALSE` upgrades are the ones this panel is most for — they cannot
+  // be dealt at all — so they are listed and grantable, and merely marked.
+  if (def.enabled === false) {
+    const off = document.createElement('span');
+    off.style.cssText = `color:${C.warn};font-size:9px;margin-left:6px;letter-spacing:0.08em;`;
+    off.textContent = 'NOT DEALT';
+    name.appendChild(off);
+  }
+
+  const desc = document.createElement('div');
+  desc.style.cssText = `color:${C.dim};font-size:10px;`;
+  // The description for the stack this click would GRANT, not for the first
+  // one — the same expandDesc the card uses, with the same `owned`, so what the
+  // panel promises and what the card promises can't drift.
+  desc.textContent = expandDesc(def.levelDescs?.[have + 1] ?? def.desc, def, { owned: have });
+
+  const id = document.createElement('div');
+  id.style.cssText = `color:${C.off};font-size:9px;`;
+  id.textContent = `${def.id}${def.family ? ` · ${def.family}` : ''}`;
+
+  text.append(name, desc, id);
+
+  const buttons = document.createElement('div');
+  buttons.style.cssText = 'display:flex;gap:4px;flex:0 0 auto;';
+  const minus = button('−', () => {
+    if (revokeUpgrade(def.id)) {
+      status = `−1 ${def.name} (now ${owned(def.id)})`;
+      render();
+    }
+  });
+  minus.style.padding = '2px 8px';
+  minus.style.visibility = have ? 'visible' : 'hidden';
+  const plus = button(capped ? 'max' : '+1', () => {
+    const result = grantUpgrade(def.id, { rarity, element });
+    if (!result) return;
+    const moved = diff(result.before, result.after);
+    status = `+1 ${def.name} [${rarityById(rarity)?.name ?? rarity}] — `
+      + (moved.length ? moved.join('  ') : 'no stat change (ability state)');
+    render();
+  });
+  plus.style.padding = '2px 8px';
+  if (capped) {
+    plus.disabled = true;
+    plus.style.opacity = '0.35';
+    plus.style.cursor = 'default';
+  }
+  buttons.append(minus, plus);
+
+  wrap.append(text, buttons);
+  return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// For the harness, and for anything that wants the panel open without a
+// keyboard. Same reasoning as sfxDebugState(): the behaviour worth testing is
+// the granting, and none of it should have to be read back out of the DOM.
+// ---------------------------------------------------------------------------
+
+export function setUpgradeDebugVisible(on) {
+  if (panel) setVisible(!!on);
+}
+
+export function upgradeDebugState() {
+  return {
+    visible,
+    rarity,
+    element,
+    family,
+    status,
+    held: player.upgrades.map((p) => ({ id: p.id, rarity: p.rarity })),
+  };
+}
+
+/** Panel state the keyboard also drives, so a test can set it without a click. */
+export function setUpgradeDebugChoice({ rarity: tier, element: elementId, family: fam } = {}) {
+  if (tier !== undefined) rarity = tier;
+  if (elementId !== undefined) element = elementId;
+  if (fam !== undefined) family = fam;
+  if (visible) render();
+}

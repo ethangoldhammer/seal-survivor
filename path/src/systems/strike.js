@@ -1,27 +1,53 @@
 import { CONFIG } from '../config.js';
-import { removeEnemy } from '../entities/enemies.js';
+import { removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { applyElementalHit } from './elements.js';
+import { markTarget } from './marks.js';
 
 // The strike is a CHARGE-UP. Holding the button fills a single meter (about a
 // second from empty); releasing spends it and gives the ship a strong
-// velocity impulse toward the aim direction; any enemy touched during the
-// short dash window takes damage and extends the "chain" — landing another
-// strike within `chainWindow` of the last hit keeps the chain going and
-// scales damage up further. How hard you charged sets both the damage and the
-// dash's REACH, so a full-charge strike travels far enough to plough through
-// what it just killed.
+// velocity impulse toward the aim direction. How hard you charged sets both
+// the force and the dash's REACH, so a full-charge strike travels far enough
+// to plough through a whole crowd.
+//
+// A STRIKE IS NOT AN ATTACK until you buy it one. What a base dash does is
+// SHOVE: anything it touches is knocked off its line (applyKnockback), anything
+// big enough is PAINTED for the homing weapons (systems/marks.js), and the
+// release hoovers up every chum orb in reach. What damage it has goes off as a
+// small BLAST at the point of release — see strikeBurst() below and
+// CONFIG.strike.burst — rather than being smeared across whatever the dash
+// clipped on the way past. The strike-family cards in CONFIG.upgrades each add
+// a slice of real bite to it.
+//
+// That is the shape of the whole mechanic: the seal is repositioning, feeding
+// and spotting, and the mussels, the squad and the pod are what kills. A run
+// that pours picks into the strike line turns it back into a weapon.
 //
 // That reach is the point, because the meter refills by EATING: every chum
 // swallowed inside the combo window puts some back, and the moment it crosses
 // to full again that scores a FOOD CHAIN link and leaves you charged for the
 // next strike. Charge -> strike -> eat -> strike is a cycle that powers
-// itself for as long as there is food in the water.
+// itself for as long as there is food in the water. A dash CONNECTING is no
+// longer one of those links (CONFIG.strike.chainOn.strikeHit, default off):
+// the chain is paid for in food, and a shove is not a meal.
 //
-// EACH LINK COSTS MORE THAN THE LAST. A mouthful is worth less the deeper the
-// chain already is (see chumRefillMul), so holding a long combo means finding
-// progressively more food inside each window rather than the same amount over
-// and over. That is the whole gate on the chain: it is not a timer you outrun,
-// it is an appetite that grows.
+// THE BAR IS COUNTED IN PIPS, AND ONE CHUM IS ALWAYS EXACTLY ONE PIP.
+//
+// This replaced a compounding discount (`chainRefillFalloff`) that made a
+// mouthful worth 0.20 of the bar, then 0.164, then 0.134, with nothing on
+// screen saying so. The bar filled at a different rate every link for reasons
+// the player could not see, which is the single thing that made it read as
+// unpredictable.
+//
+// EACH LINK STILL COSTS MORE THAN THE LAST — the escalation just moved onto
+// the ring. A link adds a PIP (see pipCount), so link one is five mouthfuls,
+// link two is six, link three seven. Identical intent, except the price is now
+// a countable thing the player can look at rather than an exponent. Capped at
+// `maxPips`, which is what `chainRefillFloor` used to do.
+//
+// The pip count is DERIVED from the refill rather than configured beside it:
+// pips = round(1 / strikeChumRefill). That keeps Coiled Spring meaningful
+// without a second knob — the card raises the refill, which lowers the pip
+// count, taking a link from five mouthfuls to three exactly as its text says.
 //
 // The chain also survives on things that aren't dash hits — emptying a school,
 // breaching the surface with Porpoising taken; see chainStrike() and
@@ -39,8 +65,30 @@ export const strikeState = {
   dashTimeLeft: 0,
   dashDuration: 0, // what this dash's length was set to, for the i-frames
   dashDir: { x: 1, y: 0 },
+  // TWO CHAIN COUNTERS, BOTH FED BY PIPS, DELIBERATELY DIFFERENT GRAINS.
+  //
+  //   chainPips  every mouthful eaten inside the window. Drives the MULTIPLIER
+  //              — speed, damage, score — so the reward climbs with each orb
+  //              rather than jumping once a bar.
+  //   chainCount whole BARS filled inside the window. Drives the PRICE (a link
+  //              adds a pip) and the FOOD CHAIN! banner, so the ceremony and
+  //              the cost escalation stay rare and legible.
+  //
+  // Splitting them is what made the chain reachable at all. It used to be one
+  // counter that only moved when the bar topped off, which meant sustaining a
+  // chain required emptying AND refilling the bar inside chainWindow — a
+  // strike plus six mouthfuls in 1.1 seconds, or five to ten orbs a second.
+  // Nothing on screen said so, which is why it was impossible to work out by
+  // playing. Now ONE ORB keeps the chain alive; filling the bar is what makes
+  // it louder.
+  chainPips: 0,
   chainCount: 0,
   chainTimer: 0,
+  // Has the bar reached FULL since the last release? This is what arms the
+  // next strike to score a FOOD CHAIN link — see tryStrike. It is a latch, not
+  // a level: the bar can be topped off and then partly burnt by a wind-up, and
+  // the food was still eaten.
+  barFilledSinceStrike: false,
   invulnTimer: 0, // >0 = contact damage is ignored (see combat.js)
 };
 
@@ -60,6 +108,76 @@ function lerp(a, b, t) {
 export function powerDamageMul() {
   const c = CONFIG.strike.charge;
   return lerp(c.damageMulMin, c.damageMulMax, strikeState.power);
+}
+
+/**
+ * What the strike's RIDERS are worth — Bone Shrapnel's fragments and Glow Up!'s
+ * elemental half, both of which are authored as a fraction of "a strike".
+ *
+ * They cannot ride the ram's own damage any more. That number opens the run as
+ * a chip (CONFIG.strike.contactDamage) and only becomes real once the strike
+ * line has been bought into, so a fragment scaled to it would leave two cards
+ * doing nothing on the runs that took them first. They ride the NOMINAL strike
+ * instead — CONFIG.strike.damage, the number those fractions were tuned
+ * against — carried up by the same charge and chain multipliers as the hit.
+ *
+ * The max() is what keeps a fully-invested strike line honest: once the ram
+ * genuinely hits harder than the nominal, the riders go up with it rather than
+ * being capped at the value they started from.
+ *
+ * @param dealt  what the ram actually took off this body
+ * @param stats  the run's stat block (unused today; kept so a future
+ *               per-run rider scale has somewhere obvious to land)
+ */
+export function riderDamage(dealt, stats = null) {
+  const nominal = (CONFIG.strike.damage ?? 0) * powerDamageMul() * chainDamageMul(stats);
+  return Math.max(dealt, nominal);
+}
+
+/**
+ * THE RELEASE BURST — what a strike is actually worth, in one place.
+ *
+ * Damage and reach both ride the banked power through the same curves the dash
+ * itself does, so a flick pops around the seal and a full commitment clears a
+ * body's width of water. Splash Zone widens it like any other blast; it does
+ * NOT widen the damage, which is what `aoeMul` has always meant.
+ *
+ * Returned rather than applied because the blast is the caller's to resolve:
+ * damage-in-a-radius already exists in main.js (the same queue every splash in
+ * the game goes through, which is what makes this hit wreckage and crew as well
+ * as fish), and the strike system has no business owning a second copy of it.
+ *
+ * Reads `strikeState.power`, i.e. what the dash was BOUGHT with — so the number
+ * is the same whether it is asked for on the release frame or afterwards.
+ *
+ * @param stats the run's stat block
+ * @returns {{damage: number, radius: number}} zero damage if the burst is off.
+ */
+export function strikeBurst(stats) {
+  const b = CONFIG.strike.burst ?? {};
+  if (b.enabled === false) return { damage: 0, radius: 0 };
+  const damage = (stats?.strikeDamage ?? 0) * powerDamageMul() * chainDamageMul(stats);
+  const reach = (b.radius ?? 3)
+    * lerp(1, b.radiusPowerMul ?? 1.5, strikeState.power)
+    * (stats?.aoeMul ?? 1);
+  return { damage, radius: reach };
+}
+
+/**
+ * Has this dash already connected with `target`, and if not, claim it.
+ *
+ * The creature loop below has always had this bookkeeping internally; the boat
+ * pass in main.js needs exactly the same answer, and a hull is not in the
+ * enemy list. Exported rather than duplicated so "once per dash" means one
+ * thing — and so the set is cleared by the same tryStrike() that starts the
+ * dash, which a second copy living in main.js would keep missing.
+ *
+ * @returns true if this is the first contact of the dash with that target.
+ */
+export function claimDashHit(target) {
+  if (!target || hitThisDash.has(target)) return false;
+  hitThisDash.add(target);
+  return true;
 }
 
 export function isInvulnerable() {
@@ -134,14 +252,19 @@ export function strikeDirection(move, aim, out = { x: 0, y: 0 }) {
 // turn rate, so a fast combo curves just as tightly as a slow one.
 // 1 when no chain is running.
 export function comboSpeedMul() {
-  if (strikeState.chainCount < 1 || strikeState.chainTimer <= 0) return 1;
+  // Reads the fractional pip depth, so the seal speeds up with every mouthful
+  // instead of stepping up once a bar. `comboSpeedPerLevel` is unchanged and
+  // still means "per link" — see chainLevel().
+  const level = chainLevel();
+  if (level <= 0) return 1;
   return Math.min(
     CONFIG.strike.comboSpeedMax,
-    1 + CONFIG.strike.comboSpeedPerLevel * strikeState.chainCount,
+    1 + CONFIG.strike.comboSpeedPerLevel * level,
   );
 }
 
 let orbTimer = 0;
+let pipCooldown = 0; // seconds until the next queued pip tick may be heard
 const hitThisDash = new Set();
 // source name -> seconds until that source may add another link. A chain
 // source can arrive in bursts — a magnet sweep collects six orbs inside one
@@ -165,11 +288,16 @@ export function resetStrike() {
   strikeState.active = false;
   strikeState.dashTimeLeft = 0;
   strikeState.dashDuration = 0;
+  strikeState.chainPips = 0;
   strikeState.chainCount = 0;
   strikeState.chainTimer = 0;
+  strikeState.barFilledSinceStrike = false;
+  lastReleaseLink = 0;
   strikeState.invulnTimer = 0;
   hitThisDash.clear();
   chainGaps.clear();
+  pipQueue.length = 0;
+  pipCooldown = 0;
   orbTimer = randomBetween(CONFIG.strike.orbSpawnMin, CONFIG.strike.orbSpawnMax);
 }
 
@@ -238,7 +366,53 @@ export function tryStrike(aimDir, stats) {
   // been the one strike in the game that ended with you exposed.
   strikeState.invulnTimer = duration + CONFIG.strike.invulnTail;
   hitThisDash.clear();
+
+  // ---- THE FOOD CHAIN IS SCORED HERE, ON THE RELEASE --------------------
+  //
+  // It used to fire the moment the bar crossed full, which is why nobody could
+  // tell what they had done: the link happened TO you, on a passive threshold,
+  // at a moment you weren't doing anything. Scoring it on the release makes the
+  // chain a chain of STRIKES — caused by an action, landing on the same frame
+  // as the dash, in one moment instead of two disconnected ones.
+  //
+  // The condition is exactly "I refilled the bar, and I'm spending it again
+  // before the window closed":
+  //
+  //   barFilledSinceStrike   the bar reached full since the last release, i.e.
+  //                          this strike was genuinely paid for in food.
+  //   chainTimer > 0         a previous strike opened the window and it is
+  //                          still running.
+  //
+  // NOT "inside the previous dash", which is what it sounds like it should be
+  // and is a trap: a dash lasts 0.13-0.48s, reaching minFire takes 0.35s of
+  // holding, and holding SEALS THE MOUTH. There is no room in a dash to both
+  // eat a bar and wind up a strike. The window the dash opens is the container.
+  const scored = strikeState.barFilledSinceStrike && strikeState.chainTimer > 0;
+  strikeState.barFilledSinceStrike = false;
+  lastReleaseLink = scored ? chainStrike('strikeRelease') : 0;
+
+  // Every release opens or refreshes the window, link or not. Without this the
+  // FIRST strike of a chain would leave no window behind, eating would not
+  // count as feeding, and a chain could never start at all.
+  if (strikeState.chainTimer <= 0) strikeState.chainTimer = CONFIG.strike.chainWindow;
+
   return true;
+}
+
+// The chain scored by the most recent release, waiting to be reported. Held
+// rather than returned because tryStrike's boolean is "did a dash launch",
+// which the caller branches on for the impulse — widening it to an object
+// would touch every call site to say something only one of them cares about.
+let lastReleaseLink = 0;
+
+/**
+ * The FOOD CHAIN link the last release scored, or 0. Clears on read, so a
+ * caller that forgets to check cannot replay an old link on the next strike.
+ */
+export function consumeStrikeLink() {
+  const n = lastReleaseLink;
+  lastReleaseLink = 0;
+  return n;
 }
 
 /**
@@ -251,33 +425,144 @@ export function tryStrike(aimDir, stats) {
  * Crossing is what counts, not merely being full: topping up an already-full
  * bar is not an achievement, and without the `wasFull` guard a single orb
  * arriving every frame against a full bar would score a link every frame.
+ *
+ * Also books every PIP BOUNDARY this fill crossed, for the tick that plays per
+ * pip. Queued rather than fired here — see `pipQueue` below.
  */
-function fillMeter(amount) {
+function fillMeter(amount, stats = null) {
   const wasFull = strikeState.charge >= 1;
-  strikeState.charge = Math.min(1, strikeState.charge + amount);
-  return isFeeding() && !wasFull && strikeState.charge >= 1;
+  const before = strikeState.charge;
+  strikeState.charge = Math.min(1, snapToPip(strikeState.charge + amount, stats));
+  notePips(before, strikeState.charge, stats);
+  const crossed = !wasFull && strikeState.charge >= 1;
+  // Arms the NEXT release to score a link. Deliberately not gated on
+  // isFeeding(): topping the bar off while no chain is running is what sets up
+  // the strike that opens one, and requiring a live window here would mean the
+  // first link of every chain could never be armed.
+  if (crossed) strikeState.barFilledSinceStrike = true;
+  return isFeeding() && crossed;
 }
 
 /**
- * What one chum is worth RIGHT NOW, as a multiplier on stats.strikeChumRefill.
+ * Land exactly on a pip boundary when we are within a rounding error of one.
  *
- * Every link already on the chain makes the next mouthful count for less, so
- * each successive link takes more chum than the one before it — link one is
- * five chum at the default refill, link two about six, link three about seven.
- * Floored, or a deep chain ends up needing a bar's worth of food that isn't in
- * the water and dies to arithmetic instead of to anything the player did.
+ * WITHOUT THIS, "one chum is one pip" IS QUIETLY FALSE at most chain depths.
+ * A pip is 1/n, and n additions of 1/n do not reach 1 in floating point for
+ * most n: six sixths lands on 0.9999999999999999, so a six-pip bar took SEVEN
+ * mouthfuls, a seven-pip bar took eight, and a ten-pip bar took eleven. Only
+ * depths whose reciprocals happen to sum cleanly (5, 4, 3) were honest.
+ *
+ * That is precisely the unpredictability the pips replaced the compounding
+ * falloff to remove, arriving by a different route — and it is invisible
+ * without counting orbs, because the bar looks full either way and the last
+ * mouthful just doesn't fire the link.
+ *
+ * The epsilon is per-PIP rather than absolute so it stays correct as n grows,
+ * and it is far tighter than the smallest real fill (a pip at the 12-pip cap
+ * is 0.083) so it can never round a genuine part-pip up to a whole one.
+ */
+function snapToPip(value, stats) {
+  const n = pipCount(stats);
+  const pips = value * n;
+  const nearest = Math.round(pips);
+  return Math.abs(pips - nearest) < 1e-6 ? nearest / n : value;
+}
+
+// PIP TICKS ARE QUEUED, NEVER FIRED FROM THE FILL.
+//
+// A magnet sweep collects six orbs inside ONE frame — the same pile-up
+// `chainGaps` above exists for. Six ticks on one frame is a chord, and the one
+// thing the tick has to say is "that is another pip", six times.
+//
+// So crossings go in a queue that drains on a floor (`pipGap`), which turns a
+// sweep into an ascending run instead. The queue is bounded: a huge gulp can
+// only ever be worth a bar's worth of pips, and anything past `maxPips` of
+// backlog is dropped from the FRONT so the run always ends on the pip that
+// actually filled the bar.
+const pipQueue = [];
+
+function notePips(before, after, stats) {
+  const n = pipCount(stats);
+  const from = Math.floor(before * n + 1e-6);
+  const to = Math.floor(after * n + 1e-6);
+  const crossed = Math.max(0, to - from);
+  if (!crossed) return;
+
+  for (let i = from; i < to; i++) pipQueue.push({ index: i + 1, total: n });
+  const cap = CONFIG.strike.charge.maxPips ?? 12;
+  if (pipQueue.length > cap) pipQueue.splice(0, pipQueue.length - cap);
+}
+
+/**
+ * ONE MOUTHFUL, BOOKED AGAINST THE CHAIN. This is what keeps a chain alive.
+ *
+ * DELIBERATELY NOT TIED TO A PIP CROSSING, and that distinction is the whole
+ * point: chainPips counts FOOD EATEN, the bar counts FUEL STORED, and they are
+ * different resources. Booking this off the bar instead would put a hole in
+ * the rule exactly where the player is doing best — with a full bar, every
+ * further mouthful crosses no pip, so "keep eating to keep the chain" would
+ * quietly stop being true and the chain would lapse mid-feast.
+ *
+ * Still gated on isFeeding(), so the ENTRY condition is untouched: a chain is
+ * opened by a dash exactly as before, and cruising over a stray orb does not
+ * silently start one. What changed is only what keeps it going.
+ */
+function noteChainMouthful(count = 1) {
+  if (!isFeeding()) return;
+  strikeState.chainPips += count;
+  strikeState.chainTimer = CONFIG.strike.chainWindow;
+}
+
+/** How many pip ticks are waiting to be heard. For the tests and the tuner. */
+export function pendingPips() {
+  return pipQueue.length;
+}
+
+/**
+ * HOW MANY PIPS THE BAR IS DIVIDED INTO RIGHT NOW.
+ *
+ * The base count is derived from the refill rather than configured next to it
+ * — pips = round(1 / strikeChumRefill) — so one chum is always exactly one
+ * pip and the two can never drift apart. Coiled Spring raises the refill and
+ * the pip count falls out of it: 0.20 is five pips, four stacks reach 0.36 and
+ * three pips, which is the "from 5 to 3" the card's own note promises.
+ *
+ * Every LIVE link adds `chainPipsPerLink` on top. That is the whole cost
+ * escalation, and unlike the exponent it replaced it is a number on the ring.
  *
  * Reads the LIVE chain: `chainCount` is left standing until the window expires
  * (see updateStrike), so an expired chain has to be discounted here or the
  * first mouthful of the next combo would still be paying the last one's price.
  *
- * Exported so the HUD and the tuner can show the same number the meter uses.
+ * @param stats the run's stat block; omitted falls back to the CONFIG default,
+ *              which is what the tuner and the tests read.
  */
-export function chumRefillMul() {
+export function pipCount(stats = null) {
   const c = CONFIG.strike.charge;
-  const falloff = c.chainRefillFalloff ?? 1;
-  if (falloff >= 1) return 1;
-  return Math.max(c.chainRefillFloor ?? 0, Math.pow(falloff, liveChain()));
+  const refill = Math.max(0.02, stats?.strikeChumRefill ?? c.chumRefill ?? 0.2);
+  const base = Math.max(1, Math.round(1 / refill));
+  const add = Math.round((c.chainPipsPerLink ?? 1) * liveChain());
+  return Math.max(1, Math.min(c.maxPips ?? 12, base + add));
+}
+
+/** What one chum is worth, as a fraction of the whole bar. Always one pip. */
+export function pipValue(stats = null) {
+  return 1 / pipCount(stats);
+}
+
+/**
+ * What one chum is worth RIGHT NOW, as a multiplier on the BASE mouthful.
+ *
+ * Kept because the HUD, the tuner and the strike tests all ask this question,
+ * but it is now a REPORT rather than the rule: the pip count is the rule, and
+ * this divides out to whatever ratio that implies. A chain-free bar returns 1,
+ * which is the invariant the tests pin.
+ */
+export function chumRefillMul(stats = null) {
+  const c = CONFIG.strike.charge;
+  const refill = Math.max(0.02, stats?.strikeChumRefill ?? c.chumRefill ?? 0.2);
+  const base = Math.max(1, Math.round(1 / refill));
+  return pipValue(stats) * base;
 }
 
 /**
@@ -293,6 +578,47 @@ export function liveChain() {
 }
 
 /**
+ * THE MULTIPLIER'S DEPTH, in links — and it is FRACTIONAL.
+ *
+ * This is what "the chain piggybacks on the pips" means in one function. The
+ * depth is mouthfuls divided by the mouthfuls a bar holds, so five orbs is
+ * exactly one link's worth of multiplier and every single orb moves it by a
+ * fifth. Every consumer — comboSpeedMul, the damage exponent, the score
+ * multiplier — reads this instead of the bar counter.
+ *
+ * Fractional is the whole trick, and it is why NOT ONE tuning constant had to
+ * be rescaled: `comboSpeedPerLevel`, `chainDamageMul` and
+ * `comboMultiplierPerChain` still mean exactly what they meant per link. They
+ * simply accrue smoothly now instead of jumping when a bar happens to top off.
+ *
+ * Measured against the BASE pip count, not the current one. The live count
+ * grows as links land (that is the price escalation), and dividing by a moving
+ * number would make the multiplier fall backwards the instant a link was
+ * scored — you would earn a link and get slower.
+ */
+export function chainLevel(stats = null) {
+  if (strikeState.chainTimer <= 0) return 0;
+  const c = CONFIG.strike.charge;
+  const refill = Math.max(0.02, stats?.strikeChumRefill ?? c.chumRefill ?? 0.2);
+  const perLevel = Math.max(1, Math.round(1 / refill));
+  return strikeState.chainPips / perLevel;
+}
+
+/**
+ * The chain's damage multiplier — one place, so the three call sites that used
+ * to spell out the same `Math.pow` can't drift apart.
+ *
+ * The `- 1` offset is inherited and deliberate: the first bar's worth of food
+ * opens the chain and pays no damage bonus, exactly as link 1 never did. It is
+ * a config value now so the "your first mouthful already hits harder" version
+ * is one number away.
+ */
+export function chainDamageMul(stats) {
+  const offset = CONFIG.strike.chainLevelOffset ?? 1;
+  return Math.pow(stats?.strikeChainMul ?? 1, Math.max(0, chainLevel(stats) - offset));
+}
+
+/**
  * A chum orb swallowed. ALWAYS puts fuel back — food is the bar's only source,
  * so gating this on anything would be a way to strand the player with an empty
  * bar. Returns true only when it topped the bar off inside a live combo, which
@@ -300,7 +626,13 @@ export function liveChain() {
  */
 export function feedChum(stats) {
   if (!CONFIG.strike.enabled) return false;
-  return fillMeter(stats.strikeChumRefill * chumRefillMul());
+  // Booked before the fill, and regardless of whether the bar has room — see
+  // noteChainMouthful. A full bar must not be a hole in the chain rule.
+  noteChainMouthful();
+  // Exactly one pip. Not `strikeChumRefill` directly: the pip count is rounded
+  // off it, so paying the raw fraction would leave the bar landing a hair
+  // short of a boundary and the last pip needing a second orb to close.
+  return fillMeter(pipValue(stats), stats);
 }
 
 // One link of the FOOD CHAIN. Starts a chain if none is running, extends the
@@ -331,6 +663,16 @@ export function chainStrike(source, links = 1) {
   if (!CONFIG.strike.enabled) return 0;
   const on = CONFIG.strike.chainOn;
   if (!on?.[source]) return 0;
+  // `chumFull` and `strikeRelease` are the SAME link seen at two moments — the
+  // bar reaching full, and the strike that spends it. With both live, one turn
+  // of the cycle scores two links: the price jumps by two pips and the banner
+  // double-fires.
+  //
+  // Enforced here rather than left to the config default because a saved tuning
+  // snapshot outranks that default (any value in imported-tuning.json wins), so
+  // a `chumFull: true` captured before the release trigger existed would
+  // silently double-score forever. The structural rule cannot be out-voted.
+  if (source === 'chumFull' && on.strikeRelease) return 0;
   if (chainGaps.has(source)) return 0;
 
   const gap = on.cooldowns?.[source] ?? 0;
@@ -350,8 +692,13 @@ export function chainStrike(source, links = 1) {
  * feedChum: it reached the chain through the meter, which is the only route
  * orbs have now.
  */
-export function restoreCharge() {
-  const filled = fillMeter(1);
+export function restoreCharge(stats = null) {
+  // One pickup, one mouthful against the chain. A blue orb's identity is the
+  // FUEL it hands over — a whole bar of it — not the combo; crediting it a
+  // bar's worth of multiplier would make the orb the best combo tool in the
+  // game and the eating beside the point.
+  noteChainMouthful();
+  const filled = fillMeter(1, stats);
   // An orb caught mid-dash is meant to read as "go again, right now" — so it
   // also refreshes the chain window. Without this you could grab the pickup
   // that lets you keep going and still watch the combo lapse while the dash
@@ -363,7 +710,24 @@ export function restoreCharge() {
   return filled;
 }
 
-// hooks: { onEnemyDamaged(e, dmg), onEnemyKilled(e), onChainHit(chainCount) }
+/**
+ * PART of a meter, from something that isn't an orb — currently the sun (see
+ * CONFIG.dayNight.pass.sun.charge).
+ *
+ * Separate from restoreCharge above rather than a fraction argument on it,
+ * because they are different promises: an orb fills the meter outright and
+ * that is its whole identity, while this hands over a share of one and lands
+ * wherever the pips say it lands. Same return contract as feedChum and
+ * restoreCharge — true only when it was the thing that TOPPED the meter off
+ * inside a live combo, which is what earns the caller a FOOD CHAIN link.
+ */
+export function addCharge(amount, stats = null) {
+  if (!(amount > 0)) return false;
+  return fillMeter(amount, stats);
+}
+
+// hooks: { onEnemyDamaged(e, dmg), onEnemyKilled(e), onChainHit(chainCount),
+//          onPip(index, total) }
 // Returns { spawnOrb } — true on the frame the orb timer fires, so the caller
 // can do the actual spawning.
 //
@@ -376,7 +740,24 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
   // what makes food the resource rather than time.
   if (strikeState.chainTimer > 0) {
     strikeState.chainTimer -= dt;
-    if (strikeState.chainTimer <= 0) strikeState.chainCount = 0;
+    if (strikeState.chainTimer <= 0) {
+      // Clamped, not left negative: `chainTimer` is read as a 0..window
+      // fraction by the ring's chain arc, and a negative would draw backwards.
+      strikeState.chainTimer = 0;
+      // Both counters die with the window, together. Leaving chainPips
+      // standing would carry the last combo's multiplier into the next one.
+      strikeState.chainCount = 0;
+      strikeState.chainPips = 0;
+    }
+  }
+  // Drain one pip tick per `pipGap`, so a magnet sweep comes out as a rising
+  // run rather than a chord. One per frame at most — the floor is the whole
+  // point, and draining the backlog in a while-loop would undo it.
+  pipCooldown -= dt;
+  if (pipQueue.length && pipCooldown <= 0) {
+    const pip = pipQueue.shift();
+    pipCooldown = CONFIG.strike.charge.pipGap ?? 0.055;
+    hooks?.onPip?.(pip.index, pip.total);
   }
   // Run down the per-source chain throttles. Deleting the entry is what
   // re-arms the source, so an idle one costs nothing until it next fires.
@@ -399,30 +780,91 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       const reach = stats.hitRadius + e.radius + 0.3;
       if (dx * dx + dy * dy > reach * reach) continue;
 
-      // A dash landing on an enemy is the original chain source and needs no
-      // switch or cooldown — `hitThisDash` already caps it at one link per
-      // creature per dash.
-      extendChain();
+      // A dash connecting used to be the original chain source. It is off by
+      // default now — the FOOD chain is bought with food, and a ram feeds
+      // nobody — but it stays routed through the same switchable table as
+      // every other source so turning it back on is one flag.
+      // `hitThisDash` already caps it at one link per creature per dash, hence
+      // no cooldown.
+      const chain = chainStrike('strikeHit');
 
       // Two independent multipliers, and they are meant to compound: how hard
       // you charged THIS strike, and how deep the chain already is. That
       // product is the whole reward curve — a full-charge strike landing on
       // link six is worth several times either one alone.
-      const mul = Math.pow(stats.strikeChainMul, strikeState.chainCount - 1);
-      const dmg = stats.strikeDamage * powerDamageMul() * mul;
+      //
+      // `liveChain()` rather than the raw counter: with the hit no longer
+      // scoring its own link, the depth this reads is whatever the FOOD is
+      // paying for, and an expired chain has to count as no chain.
+      const mul = chainDamageMul(stats);
+      // A ram deals nothing at the shipped `contactShare` of 0 — the strike's
+      // damage went off where it was released. The flash and the pop still
+      // fire: something the size of a seal just hit this creature at dash
+      // speed, and a body that visibly gets knocked across the screen without
+      // so much as flinching reads as a missed collision rather than as a
+      // shove.
+      let dmg = stats.strikeDamage * powerDamageMul() * mul * (CONFIG.strike.contactShare ?? 0);
 
-      e.hp -= dmg;
+      // THE PREY CULL — the seal eats the little ones by swimming through them.
+      //
+      // Without this the dash killed NOTHING (contactShare ships at 0), so
+      // ploughing through a school produced no bodies and therefore no chum,
+      // and the food chain was gated on weapons the strike doesn't own. "Dash
+      // through a school, get a mouthful per fish" is the loop the whole system
+      // is described as being, and it simply wasn't happening.
+      //
+      // Scoped by the SAME size rule the mark uses (see markTarget), and that
+      // shared boundary is the point: a body is either small enough to eat or
+      // big enough to paint, never both. Everything above the line still just
+      // gets shoved and marked, so "a strike is not a weapon" holds for
+      // everything that actually threatens you — this only formalises that a
+      // seal the size of a seal eats minnows.
+      const cull = CONFIG.strike.preyCull ?? {};
+      if (cull.enabled !== false && e.def.radius < (cull.maxRadius ?? CONFIG.strike.mark?.minRadius ?? 0.65)) {
+        // Outright, not a damage number: a fish this size dies to any strike at
+        // any charge, and routing it through hp would make the cull depend on
+        // the difficulty ramp scaling that hp up out of reach mid-run.
+        dmg = Math.max(dmg, e.hp);
+      }
+
+      if (dmg > 0) e.hp -= dmg;
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
       hitThisDash.add(e);
-      hooks.onEnemyDamaged?.(e, dmg);
-      hooks.onChainHit?.(strikeState.chainCount);
+
+      // THE SHOVE — what a base strike actually does. Along the dash's own
+      // heading, not along the line between the bodies: the seal is a
+      // battering ram travelling in one direction, and pushing radially would
+      // make a glancing clip on the way past throw a shark sideways.
+      applyKnockback(e, strikeState.dashDir.x, strikeState.dashDir.y, strikeState.power);
+
+      // Only when there is damage to report. A zero handed to the damage hook
+      // would file a zero-point hit against the strike in the playtest report
+      // and fire a hit burst sized to nothing — the ram announces itself
+      // through onRam below, which is sized by COMMITMENT rather than by
+      // damage precisely because there usually isn't any.
+      if (dmg > 0) hooks.onEnemyDamaged?.(e, dmg);
+      hooks.onRam?.(e, strikeState.power);
+      if (chain) hooks.onChainHit?.(chain);
+
+      // AND THE MARK. Anything big enough to shrug the shove off is painted
+      // for the homing weapons instead — see systems/marks.js for why that is
+      // the ram's real payload. markTarget answers "was this one worth
+      // painting" itself and returns false for a minnow, so the size rule
+      // lives in one place rather than being spelled out at every call site.
+      if (markTarget(e)) hooks.onMarked?.(e);
 
       // The seal itself is elemental, not just its bullets — so the dash
       // carries it too, at CONFIG.biolum.strikeFraction. Discounted because a
       // dash through six fish applies six statuses on one frame, and at full
       // strength that makes the gun the card is nominally about irrelevant.
-      applyElementalHit(scene, e, dmg, enemiesList, hooks, CONFIG.biolum?.strikeFraction ?? 0.5);
+      //
+      // Measured off the NOMINAL strike rather than off `dmg`: the ram's own
+      // damage starts as a chip, and an element scaled to that would make Glow
+      // Up! do nothing on a seal that hadn't also bought the strike line. Both
+      // riders (this and the shrapnel main.js spawns) answer to
+      // CONFIG.strike.damage, which is what that field is now for.
+      applyElementalHit(scene, e, riderDamage(dmg, stats), enemiesList, hooks, CONFIG.biolum?.strikeFraction ?? 0.5);
 
       if (e.hp <= 0) {
         hooks.onEnemyKilled?.(e);

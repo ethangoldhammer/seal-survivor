@@ -205,6 +205,7 @@ const DOCS = {
     contactDamagePerDifficulty: 'Contact damage gained per difficulty point.',
     scalePerDifficulty: 'Visual + hitbox growth over a run.',
     maxGrowth: 'Cap on scalePerDifficulty.',
+    scaleVariance: 'Per-individual size jitter, +/- this fraction, rolled once at spawn. The hitbox follows the visual, so it is a real spread of body sizes — and for the sea turtle, which has a rigid body, a spread of masses with it.',
     xp: 'XP orb value on death.',
     weight: 'Spawn weight, relative to the rest of the roster.',
     weightPerDifficulty: 'Spawn weight gained per difficulty point.',
@@ -215,6 +216,7 @@ const DOCS = {
     spawnRateMul: 'Spawn rate multiplier. 0 disables the creature outright.',
     spawnGroup: 'Family-wide headcount cap, see CONFIG.spawn.groupMaxAlive.',
     bioluminescent: 'Only spawns once the sun is down.',
+    bossMinion: 'Stays in the water during a boss fight. Everything without this swims out when a boss arrives, and only minions spawn until it is dead.',
   },
   'upgrades.csv': {
     id: 'Must match an id in CONFIG.upgrades. The join key — renaming it here orphans the row.',
@@ -228,6 +230,11 @@ const DOCS = {
   },
   // The three path-keyed tables share one column contract, so the docs are
   // written once and pointed at rather than copied into places that drift.
+  'assets.csv': {
+    id: 'The ASSET key from assets.js \u2014 not a creature id. One asset can back several creatures, and plenty (grass, boats, the escorts) are not creatures at all.',
+    size: 'Spawn scale for this model. Applies to FUTURE spawns; anything already on screen keeps the size it was created at. The hitbox is derived from it, so a bigger model is a genuinely bigger target.',
+    notes: 'Free text \u2014 nothing reads it.',
+  },
   'weapons.csv': { __sharedWith: 'spawning.csv' },
   'behaviour.csv': { __sharedWith: 'spawning.csv' },
   'spawning.csv': {
@@ -243,6 +250,14 @@ const DOCS = {
     enabled: 'FALSE takes it out of rotation. Blank means enabled.',
     weight: 'Likelihood relative to the other rows. Blank = 1, 0 is never shown.',
   },
+  'bossNames.csv': {
+    id: 'A short handle for the row. Never shown to the player — it exists so a reworded part keeps its identity in a diff.',
+    slot: 'Which PART of the name this is: prefix ("Gore") + root ("maw") make the name, epithet ("the Devourer") follows it. Any other value is ignored, loudly.',
+    text: 'The part itself, used with exactly the capitalisation typed here — prefixes are capitalised, roots are not, and an epithet carries its own article.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    weight: 'Likelihood relative to the other rows IN THE SAME SLOT. Blank = 1, 0 is never used.',
+    notes: 'Free text — nothing reads it.',
+  },
 };
 
 // What the game falls back to when the cell is empty, shown as placeholder
@@ -253,17 +268,20 @@ const BLANK_MEANS = {
     // column tooltip, which is where a placeholder that clips belongs anyway.
     speedVariance: '0', speedPerDifficulty: '0', turnRate: 'pivots',
     contactDamagePerDifficulty: '0', scalePerDifficulty: '0', maxGrowth: '∞',
+    scaleVariance: '0',
     weightPerDifficulty: '0', maxWeight: '∞', maxConcurrent: '∞',
     minDifficulty: '0', minPlayerLevel: '0', spawnRateMul: '1',
-    spawnGroup: 'no group', bioluminescent: 'no',
+    spawnGroup: 'no group', bioluminescent: 'no', bossMinion: 'no',
   },
   'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up' },
   'quips.csv': { enabled: 'enabled', weight: '1' },
+  'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },
   // A blank spawn value means "leave the built-in alone", NOT zero — zero
   // would switch a system off, which is the opposite of leaving it alone.
   'spawning.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
   'weapons.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
   'behaviour.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
+  'assets.csv': { size: '1 (unscaled)', notes: '—' },
 };
 
 // ---------------------------------------------------------------------------
@@ -305,9 +323,21 @@ export const TABLES = [
     addRows: false,
   },
   {
+    file: 'path/src/assets.csv',
+    label: 'Model sizes',
+    blurb: 'How big each model spawns. This is not a look \u2014 the hitbox is derived from the visual scale, so it decides how big a creature is to HIT as well as to see. An asset with no row here spawns unscaled.',
+    addRows: false,
+  },
+  {
     file: 'path/src/quips.csv',
     label: 'Death quips',
     blurb: 'The game-over headline. This table joins to nothing in code, so new lines are just new rows — add away.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/bossNames.csv',
+    label: 'Boss names',
+    blurb: 'What the giant shark is called. These are PARTS, not names — a prefix, a root and an epithet are drawn separately, so eight of each is hundreds of sharks. Joins to nothing in code; add away.',
     addRows: true,
   },
 ];
@@ -333,6 +363,11 @@ function columnSpec(file, name, rows) {
   const base = { name, doc, blank, type: 'text' };
 
   if (name === 'id') return { ...base, type: 'text', readonly: !BY_FILE.get(file).addRows, key: true };
+
+  if (file === 'path/src/assets.csv') {
+    if (name === 'size') return { ...base, type: 'number', min: 0.001, required: true };
+    return { ...base, type: 'text' };
+  }
 
   if (PATH_TABLE_FILES.has(file)) {
     // `value` is the only editable cell. It is typed per ROW rather than per
@@ -365,6 +400,11 @@ function columnSpec(file, name, rows) {
     return base;
   }
 
+  // A closed list, unlike enemies.csv's spawnGroup combo above: an unknown
+  // slot is not a new kind of name part, it is a part that never appears.
+  if (file === 'path/src/bossNames.csv' && name === 'slot') {
+    return { ...base, type: 'enum', options: ['prefix', 'root', 'epithet'] };
+  }
   if (name === 'enabled') return { ...base, type: 'enum', options: ['', 'TRUE', 'FALSE'], labels: { '': '—  (enabled)' } };
   if (name === 'weight') return { ...base, type: 'number', min: 0 };
   if (name === 'maxStacks') return { ...base, type: 'number', min: 1, integer: true };

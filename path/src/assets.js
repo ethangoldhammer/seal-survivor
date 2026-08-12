@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { CONFIG } from './config.js';
+import { applyAssetTable } from './assetTable.js';
 import { attachNoiseShader, applyNoiseSettings } from './systems/noiseShader.js';
 import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin } from './systems/biolumSkin.js';
 import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
@@ -139,20 +140,37 @@ export const ASSETS = {
     // `fins` are the two front flippers, listed shoulder-out but WITHOUT
     // `shoulder_*` itself — rotating the shoulder drags the chest skinning
     // with it, and three bones is already more than enough articulation to
-    // point a flipper. Their tips are the bullet muzzles.
+    // point a flipper. Their tips are the bullet muzzles — see `muzzleLength`
+    // below, which is where the flipper ends rather than where it aims.
     //
     // `head` stops at head_07 rather than continuing into mouth_08: mouth_08
     // is the jaw, and rotating it to aim would leave the seal gaping. The
     // effector is a point out at the snout instead.
     //
     // `anchors` are read-only — world points published each frame for the
-    // bubble emitters, no IK. The tail anchor is the last tail bone's tip,
-    // which is where a wake should come off.
+    // bubble emitters, no IK.
+    //
+    // `finL`/`finR` are the ENDS of the two hind flippers, which is where the
+    // wake sheds. Measured rather than guessed: the skin `foot_*_0xx` drives
+    // runs 0.00 to 0.26 down the bone's own +Y, so +0.24 sits a hair past the
+    // trailing edge of the webbing. The tail anchor at the end of `tail02` is
+    // 0.16 SHORT of that and off to the middle — it lands on the ankle joint
+    // both flippers hang off, so a wake fired from it came out of the base of
+    // the fins rather than off their tips.
     aimRig: {
       tipAxis: '+Y',
+      // `tipLength` is the AIM effector — deliberately past the skin, since
+      // pointing a flipper means straightening it along the aim and an effector
+      // short of the tip fights the joint limits for the last few degrees.
+      //
+      // `muzzleLength` is where the flipper actually ENDS, and is what the
+      // flash, the bullet, the club and the fin bubbles come off. Measured on
+      // the skin: the vertices `hand_*` drives run 0.00 to 0.187 down the
+      // bone's own +Y, so 0.185 sits on the outermost of them. The two were one
+      // number until the flash was visibly detached from the flipper.
       fins: [
-        { name: 'left', bones: ['uparm_L_012', 'arm_L_013', 'hand_L_014'], tipLength: 0.26 },
-        { name: 'right', bones: ['uparm_R_016', 'arm_R_017', 'hand_R_018'], tipLength: 0.26 },
+        { name: 'left', bones: ['uparm_L_012', 'arm_L_013', 'hand_L_014'], tipLength: 0.26, muzzleLength: 0.185 },
+        { name: 'right', bones: ['uparm_R_016', 'arm_R_017', 'hand_R_018'], tipLength: 0.26, muzzleLength: 0.185 },
       ],
       head: { bones: ['neck01_05', 'neck02_06', 'head_07'], tipLength: 0.19 },
       // Not IK — this chain gets damped-spring lag so the tail trails the
@@ -163,7 +181,13 @@ export const ASSETS = {
       tail: { bones: ['tail00_019', 'tail01_020', 'tail02_023'], tipLength: 0.16 },
       anchors: {
         mouth: { bone: 'mouth_08', offset: [0, 0.14, 0] },
+        // Still the tail tip, and still what CONFIG.emitPoints 'tail' fires
+        // from. The bubbles no longer use it on this model — see finL/finR
+        // above — but it stays the sane fallback for one that has no fin
+        // anchors, and starfish are thrown from it.
         tail: { bone: 'tail02_023', offset: [0, 0.16, 0] },
+        finL: { bone: 'foot_L_022', offset: [0, 0.24, 0] },
+        finR: { bone: 'foot_R_025', offset: [0, 0.24, 0] },
       },
     },
     shape: 'cone', // a cone already points +Y, the game's forward axis
@@ -407,6 +431,15 @@ export const ASSETS = {
     fit: 1.3,
     pivot: 0.15, // turn about the head, not the belly
     forward: '+Z', up: '+Y',
+    // The player's material, copied deliberately rather than left to the
+    // file's own. sealhelper.glb ships the same untextured near-white body the
+    // furseal does, but at the exporter's defaults (roughness 1, no emissive),
+    // so without this the escorts take the light differently from the animal
+    // they are escorting — a flatter, chalkier seal, which reads as a
+    // different species before the noise pattern even gets a say. These are
+    // the DEFAULTS: the Look panel's saved emissive and glow still layer on
+    // top, exactly as they do for `ship`.
+    material: { roughness: 0.55, metalness: 0.05, emissive: 0x0a2233, emissiveIntensity: 0.15 },
     // The same state vocabulary the player's furseal uses, so an escort reads
     // as the same animal: water clips below the surface, land clips above it,
     // and a roll for the direction-reversal spin. This rig has 7 of the
@@ -424,11 +457,27 @@ export const ASSETS = {
       bark: 'Seal_Rig|Seal_Rig|Seal_Rig|clapping',
       death: 'Seal_Rig|Seal_Rig|Seal_Rig|sleep',
     },
-    // Procedural glow, and the one asset in the game that varies it PER
-    // INDIVIDUAL: systems/sealTeam.js stamps a different pattern and palette
-    // onto each squad member's own material (see CONFIG.sealTeam.skin), so
-    // five escorts built from one model read as five different animals.
-    biolumSkin: 'escort',
+    // The player's own surface, not a glow. sealhelper.glb ships no texture
+    // either, so the escorts wear the same procedural mottling the furseal
+    // does (CONFIG.sealShader) and read as the same animal swimming beside
+    // you — which is the whole claim the upgrade makes. See
+    // systems/noiseShader.js.
+    //
+    // They stay UNLIT: setNoiseGlow and setNoiseChargeGlow are scoped to the
+    // player's root, so Glow Up! and the charge meter light the seal you are
+    // steering and nothing else. Previously the squad wore a `biolumSkin`
+    // preset with a different colour per member, which made six escorts read
+    // as six unrelated glowing fish rather than as your own seals.
+    //
+    // ONE `size` CAN COVER BOTH BODIES ONLY BECAUSE THE TWO FILES AGREE ON
+    // UNITS. The noise is sampled at the bind-pose vertex, in raw model units,
+    // before `fit` reaches a parent's scale — so a model exported at a
+    // different scale would show the same setting as confetti or as one flat
+    // blob. Measured: furseal.glb is 1.68 units long, sealhelper.glb 1.47, so
+    // the escorts carry 37 features down the body against the player's 42.
+    // Swap either model for one exported in centimetres and this needs a
+    // per-asset divisor, not a nudge of CONFIG.sealShader.size.
+    noiseShader: true,
     shape: 'cone', radius: 0.3, height: 0.8, color: 0xbfe6ff, unlit: true,
   },
 
@@ -608,6 +657,47 @@ export const ASSETS = {
   // light, built as a shape rather than a model so the blink can drive its
   // colour directly (see systems/bakalar.js).
   voicemailBomb: { shape: 'sphere', radius: 0.72, color: 0x2a2118, unlit: true },
+
+  // The fin-tip club (systems/club.js). Procedural for now — a stretched oval
+  // reads as a length of driftwood at the size this thing swings at, and every
+  // number the weapon uses is in CONFIG.club rather than in the geometry.
+  //
+  // Built to receive an uploaded model, which is what the shape below is a
+  // placeholder for:
+  //   * `fit` is the club's length at scale 1, and is deliberately the same
+  //     number as CONFIG.club.length — the hitbox is the config value, so a
+  //     model normalised to anything else would swing a stick visibly longer
+  //     or shorter than the one doing the hitting.
+  //   * `oval` stretches along +Y, which is art-forward, so the shaft already
+  //     lies along the direction club.js rotates it to. An imported model that
+  //     comes out crossways wants `forward: '+Y', up: '-Z'` instead.
+  //   * where the GRIP sits along the model is a property of the art, not of
+  //     the weapon, so it's CONFIG.club.gripOffset rather than an offset here.
+  club: {
+    model: '/models/club.glb',
+    // DERIVED, not copied. This was the literal 2.2 while CONFIG.club.length
+    // was also 2.2, which is fine right up until the length moves — and now
+    // that weapons.csv owns the reach it moves without anyone touching this
+    // file. Reading it keeps the two from ever disagreeing. Safe at module
+    // scope: config.js has no import back to here, so CONFIG (and the path
+    // table already applied over it) is built by the time this evaluates.
+    fit: CONFIG.club.length,
+    // MEASURED, not guessed (tools/inspect-club.mjs): the shaft lies along z,
+    // spanning -0.5 (the fat HEAD) to 0 (the grip), so grip -> head points
+    // down -Z. That is the club's "forward", because forward is the direction
+    // the weapon is swung.
+    forward: '-Z', up: '+Y',
+    // AND THIS IS THE WHOLE ATTACHMENT. createVisual recentres every model on
+    // its centre of mass, which for a club is a third of the way up the shaft
+    // — hang that off a fin and the flipper grips the weapon by its waist.
+    // `pivot` is measured from the nose, so 1 is the far end from the head:
+    // the grip. The club now rotates about the point the seal is holding.
+    pivot: 1,
+    // radius * elongate * 2 == CONFIG.club.length, derived for the same reason
+    // `fit` is. The fallback shape is sized to the same reach the model is
+    // fitted to, so the wood you see is the reach that hits either way.
+    shape: 'oval', radius: CONFIG.club.length / 10, elongate: 5, color: 0x8a6b47, unlit: true,
+  },
 
   // Strike shrapnel: small, pale, and short-lived. Reads as bone rather than
   // as another bullet, which matters when a dash through a school throws
@@ -1208,6 +1298,42 @@ export const ASSETS = {
     radius: 0.35,
     color: 0x1b2b3a,
     unlit: true,
+  },
+
+  // Two more glowing schoolers, so a night is not one shoal repeated. Both
+  // follow the lanternfish's recipe exactly and only the parts that MUST
+  // differ do: their own asset key (materials are shared per key, so reusing
+  // enemyTang here would light every daytime tang with it), their own preset,
+  // and a tint dark enough that the additive pattern is the brightest thing on
+  // the body.
+  //
+  // Deliberately built on models already in the roster rather than new art.
+  // The night reads by PATTERN and COLOUR at gameplay distance — silhouette
+  // barely registers on a 0.4-unit fish — so a second palette on a familiar
+  // body buys a new species far more cheaply than a new mesh would.
+  enemyGlowTang: {
+    model: '/models/tang.glb',
+    fit: 1.1,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    animations: { idle: 'ArmatureAction', swim: 'ArmatureAction', boost: 'ArmatureAction' },
+    // No `texture.emissive`, unlike the daytime tang it copies: a baked mask
+    // and a generated pattern are two answers to "which bits of this fish are
+    // bright", and the fixed one sits under the moving one looking like a bug.
+    modelUnlit: true,
+    biolumSkin: 'reefGlow',
+    tint: 0x14232b,
+    shape: 'icosahedron', radius: 0.35, color: 0x14232b, unlit: true,
+  },
+  enemyGlowDarter: {
+    model: '/models/fishpack.glb', meshIndex: 1,
+    fit: 1.3,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    modelUnlit: true,
+    biolumSkin: 'dartGlow',
+    tint: 0x1a1526,
+    shape: 'icosahedron', radius: 0.38, color: 0x1a1526, unlit: true,
   },
 
   // --- seabed dwellers ---
@@ -2323,7 +2449,15 @@ function buildSubclips(clips, def, label) {
   return out;
 }
 
-function prepareModel(source, def, clips = [], overrideTex = null, label = '', emissiveTex = null) {
+// Exported for the harnesses only. `fit`, `pivot` and the orientation basis
+// are pure geometry, and the alternative to running the real function over the
+// real file is a test that recomputes the same arithmetic and therefore only
+// ever proves it agrees with itself. Nothing in the game calls this by name —
+// it goes through createVisual — so this is a window, not an entry point.
+// See tools/club-test.mjs, which uses it to check the club really is gripped
+// at its handle; Node cannot fetch a model, so createVisual there silently
+// returns the procedural fallback instead.
+export function prepareModel(source, def, clips = [], overrideTex = null, label = '', emissiveTex = null) {
   const model = source;
   clips = buildSubclips(clips, def, label);
 
@@ -2858,6 +2992,21 @@ export function assetBaseColor(key) {
   return ASSETS[key]?.color ?? null;
 }
 
+// Sizes come from assets.csv, applied AFTER the saved looks above so the file
+// wins over anything a snapshot still carries. Exported and called from the
+// same places, so a CSV edit takes effect on the next apply rather than only
+// on a cold boot.
+export function applyAssetSizesFromTable() {
+  applyAssetTable(setAssetSizeMultiplier, (key) => key in ASSETS);
+}
+
+// Applied at MODULE LOAD, not only from applySavedAssetLooks(). The file is
+// the source of truth for spawn size, so it has to be true from the moment
+// anything can call createVisual — not merely once whatever boot path happens
+// to call the saved-looks hook has run. The call inside that hook stays, so a
+// re-apply after a CSV edit still lands.
+applyAssetSizesFromTable();
+
 export function applySavedAssetLooks() {
   const looks = CONFIG.assetLooks ?? {};
   for (const [key, look] of Object.entries(looks)) {
@@ -2873,13 +3022,14 @@ export function applySavedAssetLooks() {
       if (look.repeatX != null && (look.repeatX !== 1 || look.repeatY !== 1)) {
         setAssetRepeat(key, look.repeatX, look.repeatY);
       }
-      if (look.sizeMultiplier != null && look.sizeMultiplier !== 1) {
-        setAssetSizeMultiplier(key, look.sizeMultiplier);
-      }
+      // `sizeMultiplier` is deliberately NOT read here any more — assets.csv
+      // owns it (see assetTable.js). A snapshot still carries the field, and
+      // applying it would put the last slider drag back over the file.
     } catch (err) {
       console.warn(`[assets] could not apply saved look for "${key}" —`, err?.message ?? err);
     }
   }
+  applyAssetSizesFromTable();
 }
 
 export async function restoreUploadedModels() {

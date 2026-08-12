@@ -218,23 +218,33 @@ function chumToFill(depth) {
   return n;
 }
 
+// The appetite is PIPS now, not a compounding discount — one chum is always
+// exactly one pip, and a link adds a pip rather than shrinking the mouthful.
+// The depth-by-depth arithmetic lives in npm run test:meter; what is checked
+// here is the shape the rest of the game depends on.
 const costs = [0, 1, 2, 3, 4, 5].map(chumToFill);
-check(`the first link costs the base ${Math.ceil(1 / CONFIG.strike.charge.chumRefill)} chum`,
-  costs[0] === Math.ceil(1 / CONFIG.strike.charge.chumRefill), `costs [${costs}]`);
+check(`the first link costs the base ${Math.round(1 / CONFIG.strike.charge.chumRefill)} chum`,
+  costs[0] === Math.round(1 / CONFIG.strike.charge.chumRefill), `costs [${costs}]`);
 check('no link is ever cheaper than the one before it',
   costs.every((c, i) => i === 0 || c >= costs[i - 1]), `costs [${costs}]`);
-// The failure this is really guarding: a falloff so gentle that rounding eats
-// it and the "ramp" is five identical numbers.
+// The failure this is really guarding: an escalation so gentle that rounding
+// eats it and the "ramp" is five identical numbers.
 check('and it is a real ramp, not a rounding wobble',
   costs[3] > costs[0] && costs[5] > costs[3], `costs [${costs}]`);
+// One pip per link, exactly — the ramp is now a straight line by construction,
+// which is the readability the compounding version could not offer.
+check('each link costs exactly one chum more than the last',
+  costs.every((c, i) => i === 0 || c === costs[i - 1] + 1), `costs [${costs}]`);
 
-const floor = CONFIG.strike.charge.chainRefillFloor;
-check('the floor stops a deep chain running away',
-  chumToFill(60) <= Math.ceil(costs[0] / floor) + 1,
-  `${chumToFill(60)} chum at depth 60, floored at ${floor}`);
+// The cap doing what chainRefillFloor used to: without one a deep chain
+// reaches a bar that cannot practically be filled and the combo dies to
+// arithmetic rather than to anything the player did.
+const cap = CONFIG.strike.charge.maxPips;
+check('the cap stops a deep chain running away',
+  chumToFill(60) === cap, `${chumToFill(60)} chum at depth 60, capped at ${cap}`);
 
-// The counter is left standing until the window expires, so the discount has
-// to read the TIMER as well or the next combo opens paying the last one's bill.
+// The counter is left standing until the window expires, so the price has to
+// read the TIMER as well or the next combo opens paying the last one's bill.
 resetStrike();
 strikeState.chainCount = 6;
 strikeState.chainTimer = 0;

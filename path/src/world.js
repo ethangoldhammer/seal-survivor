@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
+import { resolutionScale } from './systems/settings.js';
 import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT } from './arena.js';
 import { createGrid } from './systems/grid.js';
 import { createConstellations } from './systems/constellations.js';
@@ -38,7 +39,34 @@ export function createWorld(container) {
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  // How many real pixels a screen pixel is worth — see CONFIG.render. A CAP on
+  // the display's own ratio rather than a multiplier of it, so raising it can
+  // never ask a 1x display for pixels it doesn't have.
+  //
+  // Floored well below 1 rather than at it: undersampling is a legitimate
+  // setting on a machine that cannot hold the frame rate any other way, and
+  // this is the knob that buys the most. Zero would be a black screen.
+  // The player's Resolution setting scales the AUTHORED cap rather than
+  // replacing it: authoring decides the game never asks a display for more
+  // than 2x, and a player on a machine that cannot hold the frame rate can ask
+  // for less than that — but not for more, which would be a request for pixels
+  // the panel may not have.
+  function renderScale() {
+    const cap = (CONFIG.render?.pixelRatio ?? 2) * resolutionScale();
+    return Math.max(0.25, Math.min(window.devicePixelRatio || 1, cap));
+  }
+
+  // setPixelRatio re-runs setSize against the size three already has, with
+  // updateStyle off — so the canvas keeps its CSS size and only the drawing
+  // buffer changes, which is exactly the trade. post.js sizes its targets off
+  // domElement.width every frame and picks the new buffer up on the next one;
+  // the particle point scale reads domElement.height for the same reason. So
+  // nothing else has to be told.
+  function applyRenderScale() {
+    renderer.setPixelRatio(renderScale());
+  }
+  applyRenderScale();
   // Per-material clipping planes, used by exactly one thing: the horizon that
   // cuts the sun and moon off at the water line (see systems/celestial.js).
   // Materials that don't ask for a plane are unaffected.
@@ -266,7 +294,14 @@ export function createWorld(container) {
     // waveT, because the halos dissolve into the water line per pixel. Safe to
     // read here: updateSurface advances it before it calls this, so this is the
     // curve being drawn on this frame rather than the previous one's.
-    celestials.update(camAnchor.x, waveT);
+    //
+    // The FRAME goes with it — the sun and moon are fitted into the shot, and
+    // the shot is an asymmetric frustum at a zoom that moves (viewCentre is 15
+    // units below the camera at the default framing, so "the camera's y" is not
+    // the middle of what you can see). Built from the same banked anchor as the
+    // drift above, so both are measured against the framing rather than against
+    // the shake.
+    celestials.update(camAnchor.x, waveT, framedView(), dt);
     // No parallax on this one, and that is not an oversight. The sky plane's
     // own star field is painted from vWorldPos on a mesh that never moves, so
     // it is welded to the world; the constellations are drawn between those
@@ -312,6 +347,11 @@ export function createWorld(container) {
     camera.far = 200;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    // After setSize, which resets the drawing buffer to the new CSS size at
+    // the ratio three is holding. Re-asserted rather than left alone because
+    // dragging a window between displays changes devicePixelRatio, and the cap
+    // has to be re-applied to a ratio that moved.
+    applyRenderScale();
     buildBackdrop();
     grid.build();
     // Both are generated across the arena's own bounds, so a resize is a
@@ -479,6 +519,24 @@ export function createWorld(container) {
     };
   }
 
+  // What is on screen right now, in world units, as a centre and two half
+  // extents. The two facts it exists to fold together: the frustum's centre is
+  // NOT the camera's position (it sits `viewCentre` below it, which at the
+  // default framing is fifteen units), and the zoom shrinks the extents about
+  // that centre rather than about the camera. Anything asking "would this be
+  // cropped?" needs both, and getting either wrong is an answer that is right
+  // at zoom 1 and quietly wrong everywhere else.
+  //
+  // Measured from the BANKED framing (camAnchor), not camera.position, for the
+  // reason camAnchor exists at all: by the time this is read the caller has
+  // shaken the camera, and a frame that jittered would push the sky around in
+  // antiphase to every explosion.
+  function framedView() {
+    const c = viewCentre();
+    const half = halfExtents(camera.zoom);
+    return { x: camAnchor.x + c.x, y: camAnchor.y + c.y, halfW: half.w, halfH: half.h };
+  }
+
   // Where a focus point is allowed to be: at least a half-frame in from each
   // wall, so the frame never runs past the water plane onto the bare scene
   // background. The floor is the one exception — FLOOR_OVERSCAN of seabed
@@ -627,5 +685,5 @@ export function createWorld(container) {
   resize();
   window.addEventListener('resize', resize);
 
-  return { scene, camera, renderer, resize, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, constellations, hexTiles, wallRocks, rain, lightning, setLightningHandler };
+  return { scene, camera, renderer, resize, applyRenderScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, constellations, hexTiles, wallRocks, rain, lightning, setLightningHandler };
 }

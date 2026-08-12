@@ -6,7 +6,7 @@ import { damageCrew } from './crew.js';
 import { enemies, removeEnemy } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
-import { applyElementalHit } from './elements.js';
+import { applyElementalHit, chillEnemy } from './elements.js';
 
 // A chaining shot (the bounce weapon) spends one of its bounces to ricochet off
 // whatever it just hit and carry on, instead of being consumed by the impact.
@@ -61,6 +61,16 @@ export function resolveCombat(dt, scene, hooks) {
       // with its elemental half still counts as the kill.
       if (b.source === 'gun') {
         applyElementalHit(scene, e, b.damage, enemies, hooks);
+      }
+
+      // A shot that carries ice (the ice club's thrown variant). Its own
+      // channel rather than a second element: the run's element is a thing you
+      // rolled and this is a thing you built, and a card should not be able to
+      // overwrite the element the player is already playing. Before the death
+      // check, so a club that finishes a fish still reads as having frozen it.
+      if (b.chill) {
+        chillEnemy(e, b.chill.slow, b.chill.duration, b.chill.freezeFor, hooks,
+          e.mesh.position.x, e.mesh.position.y);
       }
 
       if (e.hp <= 0) {

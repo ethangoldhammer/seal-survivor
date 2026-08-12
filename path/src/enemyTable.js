@@ -46,13 +46,23 @@
 //     contactDamagePerDifficulty 0
 //     scalePerDifficulty         0     visual+hitbox growth over a run
 //     maxGrowth                  ∞     cap for the above
+//     scaleVariance              0     per-individual size jitter, +/- this
+//                                      fraction. The hitbox follows the visual
+//                                      (see spawnOne), so it is a real spread
+//                                      of body sizes, not a paint job — and
+//                                      for a creature with a rigid body it is
+//                                      a spread of MASSES too.
 //     weightPerDifficulty        0     spawn weight gained per difficulty
 //     maxWeight                  ∞     cap for the above
 //     maxConcurrent              ∞     per-species headcount
 //     minDifficulty              0     difficulty before it can appear at all
 //     minPlayerLevel             0     hard level gate, independent of time
 //     spawnRateMul               1     0 disables the creature outright
-//     spawnGroup                 none  family-wide cap, see spawn.groupMaxAlive
+//     spawnGroup                 none  family-wide cap, see spawn.groupMaxAlive.
+//                                      More than one group per creature is
+//                                      legal — separate them with spaces
+//                                      ("apex shark") and EVERY cap named
+//                                      binds. See spawnGroupsOf below.
 //     bioluminescent             no    only spawns once the sun is down
 //
 // One difficulty point is 20 seconds at the default spawn.difficultyPerSecond.
@@ -91,6 +101,7 @@ const OPTIONAL = {
   contactDamagePerDifficulty: { min: 0 },
   scalePerDifficulty: { min: 0 },
   maxGrowth: { min: 0 },
+  scaleVariance: { min: 0 },
   weightPerDifficulty: { min: 0 },
   maxWeight: { min: 0 },
   maxConcurrent: { min: 1, integer: true },
@@ -110,7 +121,15 @@ const OPTIONAL = {
 // cell in a twenty-row table is the normal state of this column, not an
 // omission, and treating it as yes would make every creature nocturnal the
 // moment the column was added.
-const FLAGS = ['bioluminescent'];
+// `bossMinion` passes the same test. It decides WHEN a creature spawns — it is
+// the only thing allowed in the water while a boss is alive, and everything
+// without it is sent away when one arrives — so it belongs down the column
+// next to minDifficulty and minPlayerLevel rather than in config.js.
+//
+// Blank means no, which is the answer that makes an unedited table behave the
+// way the feature was asked for: a boss fight clears the ocean. Fill in the
+// column to keep a species around as an escort.
+const FLAGS = ['bioluminescent', 'bossMinion'];
 
 // Every field this file owns, in one place — config.js needs the same list to
 // strip these out of saved tuning, so that a snapshot can't quietly become a
@@ -119,6 +138,47 @@ export const ENEMY_TABLE_FIELDS = [...Object.keys(REQUIRED), ...Object.keys(OPTI
 
 export function parseEnemyCsv(text, warn = console.warn) {
   return parseIdTable(text, LABEL, FILE, warn);
+}
+
+// ---------------------------------------------------------------------------
+// Which families a creature belongs to
+// ---------------------------------------------------------------------------
+// `spawnGroup` started as one string and one cap. It is now a LIST, because a
+// shark is two things at once: one of the big rigged bodies competing for
+// screen (the `apex` allowance, which also holds the orca and the dolphin) and
+// one of the SHARKS, which want a much tighter ceiling of their own — six
+// sharks is legal under an apex cap of eight and reads as a shiver rather than
+// as a threat.
+//
+// Kept as a space-separated string rather than a real array because the value
+// comes out of a spreadsheet cell: a comma would have to be quoted (and a
+// hand-edit that forgets the quotes silently splits the row), and the csv
+// editor's dropdown still offers the single-group values it always did.
+//
+// Every cap named binds — a creature is blocked if ANY of its families is
+// full. Parsed on every call and deliberately not cached: applyEnemyTable
+// rewrites `def.spawnGroup` in place whenever the CSV is re-applied, and a
+// cache keyed on the def would then be answering for the previous file.
+const NO_GROUPS = [];
+
+export function spawnGroupsOf(def) {
+  const raw = def?.spawnGroup;
+  if (!raw) return NO_GROUPS;
+  // Commas as well as spaces: a `spawnGroup` written "apex,shark" in a quoted
+  // cell is the obvious other way to type this, and silently treating that as
+  // one group named "apex,shark" would cap nothing at all.
+  return String(raw).split(/[\s,]+/).filter(Boolean);
+}
+
+// The membership test every caller wants. Reads as the `=== 'apex'` it
+// replaced, and is the only thing that should be asking.
+export function inSpawnGroup(def, group) {
+  const raw = def?.spawnGroup;
+  if (!raw) return false;
+  // Fast path: the overwhelmingly common case is a single group, and this runs
+  // per creature per frame in the apex crowd walk.
+  if (raw === group) return true;
+  return spawnGroupsOf(def).includes(group);
 }
 
 // Capture what config.js itself declares for the fields this table owns, so a

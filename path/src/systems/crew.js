@@ -918,7 +918,10 @@ function limitBend(a, b, c, minDot) {
 function solve(f, step) {
   const c = cfg();
   const points = f.rig.points;
-  const gravity = c.gravity ?? 22;
+  // A body in the air falls at the world's rate (arena.gravity), the same one
+  // the seal and the ordnance use; `buoyancy` below is what makes the water a
+  // different place rather than a second gravity constant.
+  const gravity = CONFIG.arena.gravity;
   const waterY = bounds.surfaceY;
   const floor = bounds.bottom + (c.floorClearance ?? 0.3);
 

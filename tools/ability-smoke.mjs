@@ -38,6 +38,7 @@ import { updateOrcaPod, resetOrcaPod } from '../path/src/systems/orca.js';
 import { burstPearl, updateOyster, resetOyster } from '../path/src/systems/oyster.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from '../path/src/entities/projectiles.js';
 import { eelCfg } from '../path/src/systems/eel.js';
+import { createBelugaDrone, updateBeluga, resetBeluga } from '../path/src/systems/beluga.js';
 import { weatherState } from '../path/src/systems/weather.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, suctionAt, __beamShader } from '../path/src/systems/bakalar.js';
 import { fireMusselBarrage, barrageCount, barrageDamage } from '../path/src/systems/musselVolley.js';
@@ -403,6 +404,112 @@ section('BAKALAR TRACTOR BEAM');
   CONFIG.bakalar.bomb.enabled = bombWas;
   check('both an axis fish and a rim fish are hauled out', hauled === 2, `${hauled} of 2`);
 }
+
+// --- baby beluga ------------------------------------------------------------
+// The catch, which is now two beats rather than one: the bubble touches a fish
+// and seals it, holds and strobes, then bursts. Every part of that is invisible
+// to a screenshot — the browser preview suspends rAF — and the failure modes
+// are all silent (a bubble that never bursts leaks a mesh into the scene; one
+// that pops on the same frame as the seal collapses the telegraph back to what
+// it was before).
+section('BABY BELUGA');
+enemies.length = 0;
+const belugaDrone = createBelugaDrone();
+scene.add(belugaDrone);
+resetBeluga(scene, { x: 0, y: 0 });
+
+// Right on top of the drone's orbit, so the first shot connects quickly.
+const caught = fakeEnemy(CONFIG.beluga.orbitRadius, 0, 0.5, 9999);
+enemies.push(caught);
+
+let traps = 0;
+let pops = 0;
+let popAt = null;
+const belugaHooks = {
+  onTrap: () => { traps++; },
+  onPop: (x, y) => { pops++; popAt = { x, y }; },
+};
+const tickBeluga = (frames, clockFrom = 0) => {
+  for (let i = 0; i < frames; i++) {
+    updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, (clockFrom + i) * dt, belugaHooks);
+  }
+};
+
+// Long enough for at least one fire cycle plus the whole flicker.
+const belugaFrames = Math.ceil((CONFIG.beluga.fireRate + CONFIG.beluga.life + CONFIG.beluga.popFlicker + 0.5) / dt);
+let framesToTrap = 0;
+for (let i = 0; i < belugaFrames && traps === 0; i++) {
+  updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, i * dt, belugaHooks);
+  framesToTrap++;
+}
+check('the drone fires and traps a fish', traps === 1, `${traps} trap(s)`);
+check('the fish is held', caught.trapTimer > 0, `trapTimer ${caught.trapTimer.toFixed(2)}`);
+
+// THE FLICKER. The bubble has to still be in the scene after the catch, and it
+// has to be strobing — a held bubble that stays solidly visible is the same
+// non-event as no hold at all.
+const bubbleMeshes = () => scene.children.filter((o) => o.name === 'trapBubble');
+check('the caught bubble is still in the water', bubbleMeshes().length === 1,
+  `${bubbleMeshes().length} bubble(s)`);
+
+const held = bubbleMeshes()[0];
+const heldScale = held.scale.x;
+let visibleFrames = 0;
+let hiddenFrames = 0;
+let peakScale = heldScale;
+const holdFrames = Math.ceil(CONFIG.beluga.popFlicker / dt);
+for (let i = 0; i < holdFrames && pops === 0; i++) {
+  if (held.visible) visibleFrames++; else hiddenFrames++;
+  peakScale = Math.max(peakScale, held.scale.x);
+  tickBeluga(1, framesToTrap + i);
+}
+check('it strobes rather than sitting there', visibleFrames > 0 && hiddenFrames > 0,
+  `${visibleFrames} on / ${hiddenFrames} off`);
+check('it swells before it goes', peakScale > heldScale * 1.05,
+  `${heldScale.toFixed(3)} -> ${peakScale.toFixed(3)}`);
+
+// ...and then it has to actually burst, and take its mesh with it.
+tickBeluga(4, framesToTrap + holdFrames);
+check('the bubble bursts', pops === 1, `${pops} pop(s)`);
+check('the burst lands on the fish it caught',
+  popAt && Math.hypot(popAt.x - caught.mesh.position.x, popAt.y - caught.mesh.position.y) < 0.01,
+  popAt ? `(${popAt.x.toFixed(2)}, ${popAt.y.toFixed(2)})` : 'never fired');
+check('nothing is left in the scene', bubbleMeshes().length === 0,
+  `${bubbleMeshes().length} orphan(s)`);
+
+// The pop event drives real feedback, so a name that isn't in the tables is a
+// console warning at runtime and a silent trap forever.
+check('the burst has a feedback event', !!CONFIG.feedback.belugaPop);
+check('...whose emitter exists', !!CONFIG.emitters[CONFIG.feedback.belugaPop?.emit],
+  `emit "${CONFIG.feedback.belugaPop?.emit}"`);
+check('...and whose sound exists', !!CONFIG.sfx[CONFIG.feedback.belugaPop?.sfx],
+  `sfx "${CONFIG.feedback.belugaPop?.sfx}"`);
+// A held bubble is inert. Without that it keeps sweeping the crowd for the
+// whole flicker and seals a second fish it never touched. Deliberately stops
+// short of the next shot — a bubble the drone fired afterwards catching a
+// second fish is the ability working, not the bug this is looking for.
+enemies.length = 0;
+resetBeluga(scene, { x: 0, y: 0 });
+traps = 0;
+pops = 0;
+const crowd = [];
+for (let i = 0; i < 6; i++) crowd.push(fakeEnemy(CONFIG.beluga.orbitRadius + i * 0.35, 0, 0.5, 9999));
+enemies.push(...crowd);
+let crowdFrames = 0;
+const crowdLimit = Math.ceil((CONFIG.beluga.fireRate - CONFIG.beluga.popFlicker - 0.1) / dt);
+for (let i = 0; i < crowdLimit && traps === 0; i++) {
+  updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, i * dt, belugaHooks);
+  crowdFrames++;
+}
+for (let i = 0; i < holdFrames + 6; i++) {
+  updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, (crowdFrames + i) * dt, belugaHooks);
+}
+check('one bubble catches exactly one fish', traps === 1, `${traps} trap(s) in a crowd`);
+check('...and bursts once', pops === 1, `${pops} pop(s)`);
+for (const e of crowd) e.trapTimer = 0;
+enemies.length = 0;
+resetBeluga(scene, { x: 0, y: 0 });
+scene.remove(belugaDrone);
 
 // --- mussel barrage ---------------------------------------------------------
 // The one ability with no update() — it fires once, from the strike release —

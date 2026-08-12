@@ -334,5 +334,185 @@ CONFIG.audio.repetition.enabled = true;
 
 audio.watchSfx(null);
 
+// ---------------------------------------------------------------------------
+// PRIORITY. Which sound wins when they can't all be heard. Every property here
+// is one you cannot hear going wrong — a sound that loses a slot makes no
+// noise, so the only symptom of the rule being backwards is the vague sense
+// that the mix is thin in a fight, which is exactly what it sounded like when
+// the newest sound always won.
+// ---------------------------------------------------------------------------
+
+section('Priority bands');
+CONFIG.audio.priority = { enabled: true, nearRadius: 18, farRadius: 70, bands: 4 };
+audio.setSfxListener(0, 0);
+const TOP = CONFIG.audio.priority.bands - 1;
+
+check('a sound on the player is top band', audio.sfxBand(0, 0) === TOP, `band ${audio.sfxBand(0, 0)}`);
+check('and so is anything inside the near radius', audio.sfxBand(17, 0) === TOP);
+check('the far wall is bottom band', audio.sfxBand(90, 0) === 0, `band ${audio.sfxBand(90, 0)}`);
+check('and nothing is below it, however far', audio.sfxBand(100000, 0) === 0);
+let monotonicBand = true;
+for (let d = 0; d < 120; d += 0.5) if (audio.sfxBand(d + 0.5, 0) > audio.sfxBand(d, 0)) monotonicBand = false;
+check('bands never rise with distance', monotonicBand);
+check('distance is radial, not horizontal', audio.sfxBand(0, 90) === 0 && audio.sfxBand(0, 17) === TOP);
+// The listener is the seal, so it moves. A band read against a stale listener
+// would rank the whole arena against wherever the player last was.
+audio.setSfxListener(80, 0);
+check('the bands follow the listener', audio.sfxBand(80, 0) === TOP && audio.sfxBand(0, 0) === 0);
+audio.setSfxListener(0, 0);
+// UI, level-up, the death: not a place in the world, and never expendable.
+check('a sound with no position is top band', audio.sfxBand(null, null) === TOP);
+
+section('The voice budget spends itself on what is close');
+CONFIG.sfx.prioTest = { src: null, type: 'blip', wave: 'sine', freq: [400, 200], decay: 1, gain: 1 };
+CONFIG.audio.repetition.enabled = false; // gain isn't what's under test here
+const outcomes = [];
+audio.watchSfx((name, outcome) => outcomes.push({ name, outcome }));
+const CAP = 8;
+CONFIG.audio.maxConcurrent = CAP;
+const drainOutcomes = () => { const out = outcomes.slice(); outcomes.length = 0; return out; };
+// Every voice is a full second long and the clock does not move inside a fill,
+// so nothing retires on its own and the cap is genuinely full.
+const fill = (n, x) => { for (let i = 0; i < n; i++) audio.playSfx('prioTest', 1, { x, y: 0 }); };
+const last = (o) => o[o.length - 1]?.outcome;
+
+// A bus full of far-wall sounds, and a hit lands on the seal.
+audio.playSfx('prioTest', 1); // clear any leftovers from the sections above
+now += 2;
+fill(CAP, 90);
+drainOutcomes();
+audio.playSfx('prioTest', 1, { x: 0, y: 0 });
+let o = drainOutcomes();
+check('a near sound takes a far one\'s slot', o.some((e) => e.outcome === 'stolen'),
+  o.map((e) => e.outcome).join(', '));
+check('and is heard', last(o) === 'synth');
+
+// The reverse, which is the case that used to go wrong: the newest sound won
+// no matter where it was, so a kill across the arena could cut the hit landing
+// on your nose.
+now += 2;
+fill(CAP, 0);
+drainOutcomes();
+audio.playSfx('prioTest', 1, { x: 90, y: 0 });
+o = drainOutcomes();
+check('a far sound does NOT cut a bus full of near ones', !o.some((e) => e.outcome === 'stolen'),
+  o.map((e) => e.outcome).join(', '));
+check('it is dropped as too far instead', last(o) === 'far');
+check('and the near voices all survive', audio.sfxVoiceLoad().active === CAP);
+
+// The rule that was there before priority, which has to still run INSIDE a
+// band — otherwise quantising distance would quietly replace it. Two sounds of
+// different lengths, so the victim can be named rather than just counted.
+CONFIG.sfx.prioLong = { ...CONFIG.sfx.prioTest, decay: 3 };
+CONFIG.sfx.prioShort = { ...CONFIG.sfx.prioTest, decay: 0.1 };
+const stolenName = (list) => list.find((e) => e.outcome === 'stolen')?.name ?? 'nothing';
+
+now += 4;
+audio.playSfx('prioLong', 1, { x: 0, y: 0 });
+for (let i = 1; i < CAP; i++) audio.playSfx('prioShort', 1, { x: 0, y: 0 });
+drainOutcomes();
+audio.playSfx('prioTest', 1, { x: 0, y: 0 });
+o = drainOutcomes();
+check('inside a band the voice with least left to play is the one cut',
+  stolenName(o) === 'prioShort', `cut ${stolenName(o)}`);
+
+// Across bands it is the other way round: distance outranks the tail, so the
+// long sound at the far wall goes before the short one at your ear. This is
+// the pair of checks that pins the ORDER of the two rules — either on its own
+// passes with them swapped.
+now += 4;
+audio.playSfx('prioLong', 1, { x: 90, y: 0 });
+for (let i = 1; i < CAP; i++) audio.playSfx('prioShort', 1, { x: 0, y: 0 });
+drainOutcomes();
+audio.playSfx('prioTest', 1, { x: 0, y: 0 });
+o = drainOutcomes();
+check('across bands the further voice goes first, tail or no tail',
+  stolenName(o) === 'prioLong', `cut ${stolenName(o)}`);
+
+// A menu click during a firefight must never lose to the firefight.
+now += 2;
+fill(CAP, 0);
+drainOutcomes();
+audio.playSfx('prioTest', 1);
+o = drainOutcomes();
+check('a positionless sound is never the one dropped', last(o) === 'synth',
+  o.map((e) => e.outcome).join(', '));
+
+// With the mechanism off, the old behaviour exactly: newest wins, wherever it
+// is. This is the switch that has to work if the whole idea turns out to be
+// wrong in play.
+now += 2;
+CONFIG.audio.priority.enabled = false;
+fill(CAP, 0);
+drainOutcomes();
+audio.playSfx('prioTest', 1, { x: 90, y: 0 });
+o = drainOutcomes();
+check('switched off, the newest sound wins again', last(o) === 'synth',
+  o.map((e) => e.outcome).join(', '));
+CONFIG.audio.priority.enabled = true;
+
+audio.watchSfx(null);
+CONFIG.audio.repetition.enabled = true;
+
+// ---------------------------------------------------------------------------
+// THE THROTTLE. `sfxMinGap` keeps one sound per window per event, and this is
+// where most of what the overlay counts as "dropped" is actually lost — a busy
+// frame throws far more away here than the voice cap ever does. Which one it
+// keeps is the whole question.
+// ---------------------------------------------------------------------------
+
+section('The throttle keeps the closest hit, not the first');
+const { initFeedback, feedback, updateFeedback } = await import('../path/src/systems/feedback.js');
+initFeedback(null);
+CONFIG.audio.maxConcurrent = 10000; // the cap is a different mechanism
+CONFIG.audio.sfxGapJitter = 0; // a jittered window can't be reasoned about
+CONFIG.feedback.prioEvent = { sfx: 'prioTest', sfxMinGap: 0.5 };
+const played = [];
+audio.watchSfx((name, outcome) => { if (outcome === 'synth' || outcome === 'sample') played.push(name); });
+const heardCount = () => { const n = played.length; played.length = 0; return n; };
+
+// Twelve pellets landing across the arena on one frame. The first to resolve
+// is at the far wall, and before this change it held the window shut against
+// everything closer.
+initFeedback(null);
+feedback('prioEvent', { x: 90, y: 0 });
+check('the first hit in a window is heard', heardCount() === 1);
+feedback('prioEvent', { x: 85, y: 0 });
+check('another one just as far away is swallowed', heardCount() === 0);
+feedback('prioEvent', { x: 0, y: 0 });
+check('but one landing on the player breaks the window open', heardCount() === 1);
+feedback('prioEvent', { x: 90, y: 0 });
+feedback('prioEvent', { x: 40, y: 0 });
+check('and the window is re-armed at the closer distance', heardCount() === 0);
+
+// The bound that keeps this a throttle rather than a hole in one: a window can
+// only be broken by something strictly closer, so the bands cap how many times
+// it can happen however many events pile in.
+initFeedback(null);
+for (let i = 0; i < 200; i++) feedback('prioEvent', { x: 90 - (i % 100), y: 0 });
+check('two hundred hits in one window still only make a handful of sounds',
+  heardCount() <= CONFIG.audio.priority.bands, `${CONFIG.audio.priority.bands} bands`);
+
+// An event with no position is exactly as throttled as it always was.
+initFeedback(null);
+feedback('prioEvent', {});
+feedback('prioEvent', {});
+feedback('prioEvent', {});
+check('a positionless event still gets one sound per window', heardCount() === 1);
+
+// And the window still expires on time — the distance rule must not become the
+// only way to hear a second one.
+initFeedback(null);
+feedback('prioEvent', { x: 0, y: 0 });
+heardCount();
+updateFeedback(0.3);
+feedback('prioEvent', { x: 0, y: 0 });
+check('the window is still shut halfway through', heardCount() === 0);
+updateFeedback(0.3);
+feedback('prioEvent', { x: 0, y: 0 });
+check('and open again once it has run out', heardCount() === 1);
+
+audio.watchSfx(null);
+
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

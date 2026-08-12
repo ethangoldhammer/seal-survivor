@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { emit } from '../entities/particles.js';
-import { playSfx, vibrate, noteSfx } from './audio.js';
+import { playSfx, vibrate, noteSfx, sfxBand } from './audio.js';
 import { playHaptic } from './haptics.js';
 
 // Every juicy thing in the game goes through here. One call site per event, and
@@ -108,9 +108,28 @@ export function feedback(event, at = {}) {
   // hit in the burst would have made.
   if (def.sfx) {
     const gap = def.sfxMinGap ?? 0;
+    // Where this one happened, so the mixer can rank it against everything else
+    // sounding — and so the throttle below can tell a hit on top of the player
+    // from one across the arena. An event with no position at all (UI, level-up)
+    // is left exactly as it was: `sfxBand` calls that the top band, and there is
+    // nothing for playSfx to read.
+    const positioned = at.x !== undefined || at.y !== undefined;
+    const sfxOpts = positioned ? { ...at.sfxOpts, x, y } : at.sfxOpts;
+    const band = sfxBand(positioned ? x : null, positioned ? y : null);
     if (gap > 0) {
       const pending = sfxGaps.get(event);
-      if (pending) {
+      // The throttle keeps ONE sound per window, and this is what decides which
+      // one. First-come-wins is the obvious rule and it is the wrong one: with
+      // twelve pellets landing across the arena on the same frame, the hit you
+      // hear was whichever happened to be resolved first, so a point-blank
+      // impact spent the whole window silent behind a crab at the far wall.
+      //
+      // So a call from a nearer band breaks the window open and re-arms it at
+      // its own distance. Since it can only ever be broken by something CLOSER,
+      // a window can be re-opened at most (bands - 1) times however many events
+      // pile into it — the rate stays bounded, and what survives is the closest
+      // hit rather than the first.
+      if (pending && band <= pending.band) {
         pending.scale = Math.max(pending.scale, scale);
         // Swallowed by the throttle. Reported rather than dropped in silence,
         // because "I can only hear one of these" and "only one of these is
@@ -126,11 +145,11 @@ export function feedback(event, at = {}) {
         // texture. See CONFIG.audio.sfxGapJitter.
         const jitter = CONFIG.audio?.sfxGapJitter ?? 0;
         const wobble = jitter ? 1 + (Math.random() * 2 - 1) * Math.min(0.9, jitter) : 1;
-        sfxGaps.set(event, { left: gap * wobble, scale });
-        playSfx(def.sfx, Math.min(1.6, scale), at.sfxOpts);
+        sfxGaps.set(event, { left: gap * wobble, scale, band });
+        playSfx(def.sfx, Math.min(1.6, scale), sfxOpts);
       }
     } else {
-      playSfx(def.sfx, Math.min(1.6, scale), at.sfxOpts);
+      playSfx(def.sfx, Math.min(1.6, scale), sfxOpts);
     }
   }
   if (def.haptic) {
