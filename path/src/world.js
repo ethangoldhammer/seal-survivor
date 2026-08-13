@@ -71,6 +71,18 @@ export function createWorld(container) {
   // cuts the sun and moon off at the water line (see systems/celestial.js).
   // Materials that don't ask for a plane are unaffected.
   renderer.localClippingEnabled = true;
+
+  // three zeroes renderer.info at the top of EVERY render() call, and post.js
+  // makes a dozen of them per frame — the scene, a bright pass, the blur
+  // ping-pong, the composite. So `info.render.calls` read after a frame reports
+  // whatever the LAST pass drew, which is the fullscreen composite triangle:
+  // one. The readout said "1 draws" all through a fight with 195 creatures in
+  // the water, which is not a number that is slightly off, it is a different
+  // number entirely.
+  //
+  // Off, so the counts accumulate across every pass of a frame. main.js reads
+  // them at the top of the next frame and resets by hand — see the note there.
+  renderer.info.autoReset = false;
   container.appendChild(renderer.domElement);
 
   const ambient = new THREE.AmbientLight(0xffffff, CONFIG.lighting.ambient);
@@ -309,7 +321,10 @@ export function createWorld(container) {
     // of the camera's speed would visibly walk off its own field. It gets the
     // camera only so a finger on the glass can be resolved into the sky.
     constellations.update(dt, { camera });
-    clouds.update(dt);
+    // The cloud decks parallax off the same banked anchor the sun and moon do
+    // — each layer at its own rate, which is the whole reason there are
+    // several of them. See CONFIG.weather.clouds.layers.
+    clouds.update(dt, camAnchor.x);
     if (seabedMesh) seabedMesh.material.color.set(CONFIG.colors.seabed);
     if (depthLines) depthLines.material.color.set(CONFIG.colors.depthLine);
     if (surfaceLine) {

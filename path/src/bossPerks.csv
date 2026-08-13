@@ -1,0 +1,5 @@
+id,enabled,weight,cooldown,windup,duration,speed,radius,damage,notes
+lunge,,1,5.5,0.7,0.9,34,,2,"Winds up in place, then dashes. speed=dash u/s, damage=contact multiplier while dashing."
+electric,,1,,,,,9,16,"A permanent crackling field. radius=aura reach in world units, damage=dps inside it."
+teleport,,0.9,7,0.45,0.35,,13,,"Blinks out and back in near the player. radius=how far from the player it lands, duration=time spent gone."
+phase,,0.9,9,0.5,3.5,,,,"Goes near-invisible. duration=seconds unseen, windup=the flicker on either side of it."

@@ -5,6 +5,9 @@ bounceShot,1.58,
 bubbleOrb,2.84,
 bullet,1.2,
 club,1,size is CONFIG.club.length at 1 - the hitbox is the config value
+clubBoom,1,Powder Keg club - same model as club - keep equal
+clubIce,1,Cold Snap club - same model as club - keep equal
+clubThrow,1,Hurler thrown club - same model as club - keep equal
 dumboOcto,1.9,
 eelCompanion,1.5,
 enemyAbyssShark,2.62,night variant of enemyGreatWhite - keep these two equal

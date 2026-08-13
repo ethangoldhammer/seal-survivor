@@ -978,23 +978,23 @@
     "perStack": [
       {
         "strikeDamage": 115,
-        "strikeChainMul": 129.7
+        "strikeChainMul": 117.82
       },
       {
         "strikeDamage": 130,
-        "strikeChainMul": 168.31
+        "strikeChainMul": 138.8476
       },
       {
         "strikeDamage": 145,
-        "strikeChainMul": 218.503
+        "strikeChainMul": 163.660168
       },
       {
         "strikeDamage": 160,
-        "strikeChainMul": 283.7539
+        "strikeChainMul": 192.938998
       },
       {
         "strikeDamage": 175,
-        "strikeChainMul": 368.58007
+        "strikeChainMul": 227.488018
       }
     ]
   },

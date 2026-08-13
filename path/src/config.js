@@ -640,7 +640,27 @@ export const CONFIG = {
       // that simply stops leaves a hard edge wherever it stops. See the note at
       // the top of systems/celestial.js.
       sun: {
-        size: 5.2, // world units across the disc
+        // HOW BIG IT IS ON SCREEN, as a fraction of the VISIBLE SKY — the air
+        // band between the water line and the top of the frame. 0.7 is a disc
+        // seven tenths as tall as the sky above the sea, which at the default
+        // framing is 7.3 world units against the 5.2 this used to be.
+        //
+        // Stated against the frame rather than in world units because "big
+        // enough" is a statement about the shot: the same 5.2 units is a
+        // different sun on a phone than on a monitor, and every judgement about
+        // it was being made by eye on one screen. It is also why the number is
+        // new rather than a bigger `size` — `size` is in every saved tuning
+        // snapshot, and a snapshot beats config.js. Same reason as
+        // `orbit.drift`; see the note there.
+        //
+        // THE ARC COMES DOWN AS THIS GOES UP. daylight.js measures the orbit
+        // over the band the body's CENTRE can occupy (the air band less its own
+        // radius), so a bigger sun rides a lower arc and stays inside the frame
+        // instead of being cropped through the middle of the day. Past about
+        // 0.8 there is not enough sky left for it to visibly leave the horizon
+        // at noon — which is a look, but it is not a day.
+        frameSize: 0.7,
+        size: 5.2, // world units across the disc — the fallback if frameSize is 0
         color: 0xfff0c8,
         brightness: 1.25, // >1 pushes past the bloom threshold and blooms
         halo: 3.4, // glow diameter, as a multiple of `size`
@@ -677,7 +697,12 @@ export const CONFIG = {
         edgeFeather: 0.06, // width of that alpha edge, in disc radii
     },
       moon: {
-        size: 3.4,
+        // A fraction of the visible sky, like the sun's — see the long note
+        // there. Kept at roughly three quarters of the sun's share, which is
+        // the proportion the two have always had; the moon is the one carrying
+        // painted art, so it is the one that gains most from the size.
+        frameSize: 0.52,
+        size: 3.4, // the fallback if frameSize is 0
         color: 0xcfe2ff,
         // Above 1, like the sun, and for a reason the sun does not have: the
         // painted moon is DARK. Its mid grey is around 0.45 in sRGB, which the
@@ -1286,12 +1311,11 @@ export const CONFIG = {
         playerDamage: 0,
     },
 
-      // CLOUDS — a stub, on purpose. There is no cloud layer yet: this is a
-      // noise field over the sky band that darkens with the storm and slides
-      // with the wind, which is enough to read as overcast from a distance.
-      // When real clouds arrive they belong in systems/clouds.js alongside
-      // this, reading the same two numbers; the overlay then becomes the
-      // bottom layer of that stack rather than something to tear out.
+      // CLOUDS — a STACK of noise bands at different distances, which is what
+      // gives the sky its depth. The flat keys here are the shared look every
+      // layer starts from (they are what the single overlay this grew out of
+      // was tuned to); `layers` is the stack itself, and a layer overrides only
+      // the fields that make it that layer.
       clouds: {
         enabled: true,
         color: 0x0a1220,
@@ -1301,6 +1325,71 @@ export const CONFIG = {
         scale: 0.055, // noise cells per world unit
         drift: 3.2, // world units/sec of scroll at wind = 1
         base: 0.12, // a little haze even in clear weather
+
+        // ---------------------------------------------------------------------
+        // THE STACK, far to near. Read the `drift` column down the list and you
+        // are reading the parallax ladder the whole game hangs off:
+        //
+        //   0.04  the sun, the moon and the stars   (dayNight.orbit.drift)
+        //   0.09  the overcast haze, barely off the sky itself
+        //   0.16  cirrus
+        //   0.26  the main deck
+        //   0.52  low scud, visibly nearer than the deck behind it
+        //   1.00  the sea, the seal and everything you can touch
+        //
+        // The gaps WIDEN going forward, which is what perspective does: the
+        // difference between two distant things is small and the difference
+        // between two near ones is not. Bunch them and the stack reads as one
+        // deck with noise on it.
+        //
+        // `drift` is the same number the celestial layer uses: how far the deck
+        // slides across the FRAME per unit of camera motion. The gaps between
+        // the rungs are what read as distance — four layers at the same rate
+        // are one layer with more overdraw.
+        //
+        // `y` and `height` are fractions of the VISIBLE air band (the frame's,
+        // not the arena ceiling's), so a deck at y 0.8 sits four fifths of the
+        // way up the sky you can actually see, and `height` is the altitude
+        // range it occupies. `feather` is how much of that thickness is the
+        // fade at each end — there is no hard edge available here, by
+        // construction: the alpha reaches zero at the quad's own edges.
+        //
+        // `skyTint` mixes the layer toward the horizon's colour for the hour,
+        // which is what makes a deck catch the sunset and go black at midnight
+        // instead of being a fixed blue-grey pasted over both.
+        //
+        // `storm` is its share of the weather: the haze IS the storm and takes
+        // all of it, while the high wisps barely notice one. `base` is what it
+        // carries on a clear day.
+        layers: [
+          // The overcast haze — the layer this system used to be, kept at the
+          // back where it belongs. Nearly welded to the sky, tall enough to
+          // cover the whole visible band, and the only one that closes over
+          // completely in a storm.
+          { name: 'haze', drift: 0.09, y: 0.55, height: 1.5, feather: 0.4,
+            scale: 0.05, opacity: 0.55, coverage: 0.42, skyTint: 0.25,
+            base: 0.1, storm: 1, speed: 0.6 },
+          // Cirrus. Thin, high, stretched wide by a small `scale` (fewer, wider
+          // noise cells) and barely there — this is the layer you notice only
+          // when it crosses the moon.
+          { name: 'cirrus', drift: 0.16, y: 0.88, height: 0.5, feather: 0.45,
+            scale: 0.028, opacity: 0.3, coverage: 0.3, softness: 0.42,
+            skyTint: 0.8, base: 0.55, storm: 0.3, speed: 0.8 },
+          // The main deck. The one that actually reads as cloud: mid-sky, the
+          // most opaque of the three, and the one whose motion sells the
+          // parallax because it is big enough to track by eye.
+          { name: 'deck', drift: 0.26, y: 0.62, height: 0.62, feather: 0.35,
+            scale: 0.055, opacity: 0.42, coverage: 0.34, softness: 0.34,
+            skyTint: 0.6, base: 0.4, storm: 0.7, speed: 1 },
+          // Low scud, just above the water line. Fastest, smallest and
+          // thinnest: torn wisps blowing past between you and the deck, which
+          // is what puts anything at all in the gap between the sky and the
+          // sea. Kept clear of the horizon band itself (`y` well above 0) so it
+          // never fights the fog at the water line.
+          { name: 'scud', drift: 0.52, y: 0.3, height: 0.34, feather: 0.45,
+            scale: 0.11, opacity: 0.26, coverage: 0.22, softness: 0.4,
+            skyTint: 0.75, base: 0.35, storm: 0.5, speed: 1.6 },
+        ],
     },
     },
 
@@ -1607,6 +1696,11 @@ export const CONFIG = {
     // ---------------------------------------------------------------------------
     club: {
       enabled: true,
+      // AUTHORING ONLY. Puts a club in each fin without the upgrade being
+      // taken, so a model, a tint or a flop curve can be judged without
+      // rolling the card first. It is not a balance switch — with this on,
+      // every run starts armed. Off by default.
+      alwaysOn: false,
       // --- the flail -----------------------------------------------------
       // THE FINS SWING THIS WEAPON. There is no rate here, because there is no
       // clock: each club chases the direction its own flipper is pointing
@@ -2179,7 +2273,23 @@ export const CONFIG = {
       // "About a second" — long enough to swim into the chum a kill just
       // dropped, short enough that a combo has to be actively fed.
       chainWindow: 1.0, // seconds after a link to land the next one
-      chainDamageMul: 1.15, // damage multiplier added per chain step
+      // WHAT A LINK COSTS, as a fraction of the bar.
+      //
+      // 1.0 is "refill the whole bar between strikes", which is what this
+      // shipped as and what made the chain hard to reach in ordinary play: five
+      // chum, a wind-up and a release, all inside the window. At 0.6 a link is
+      // three mouthfuls on a five-pip bar.
+      //
+      // The escalation is untouched — the fraction is taken of the LIVE pip
+      // count, which still grows by one per link. The ladder goes 3, 4, 5, 5,
+      // 6, 6 where it used to be 5, 6, 7, 8, 9, 10.
+      linkBarFraction: 0.6,
+      // Start the combo window when the DASH ENDS rather than when it was
+      // released. A dash runs up to 0.48s, so the old behaviour spent nearly
+      // half a window on the stretch the player is committed and cannot act —
+      // and punished full-commitment strikes hardest. false restores it.
+      windowFromDashEnd: true,
+      chainDamageMul: 1.11, // damage multiplier added per chain step (weapons.csv owns it)
       // How many links' worth of food buys NO multiplier — the opening stake.
       // 1 is the inherited behaviour: the first bar's worth of eating opens the
       // chain and pays nothing, exactly as link 1 never did. Drop it to 0 and
@@ -2628,6 +2738,15 @@ export const CONFIG = {
       speed: 15,
       life: 4,
       trapDuration: 5.2,
+      // Levelling used to buy width and nothing else, so the eighth stack of a
+      // card whose whole promise is "these ones are out of the fight" held them
+      // no longer than the first. Both of these are weapons.csv's — the numbers
+      // here are only what the table overwrites at load.
+      durationPerLevel: 0.7,
+      // How many creatures a single bubble may seal. The shot covers an area;
+      // sealing one fish out of the three it visibly swallowed reads as the
+      // ability misfiring.
+      maxCatch: 3,
       baseBubbleRadius: 0.5,
       radiusPerLevel: 0.24,
       orbitRadius: 1.8,
@@ -2648,14 +2767,25 @@ export const CONFIG = {
       followDamping: 5.5,
       bobAmount: 0.35,
       // THE TRAP, TELEGRAPHED. A catch used to be the bubble vanishing on the
-      // frame it touched a fish, which is the least legible thing a hit can do
-      // — the one object that explains what just happened is gone before the
-      // eye lands on it. So the bubble now HOLDS on the creature for a beat,
-      // strobing, and then bursts. Two beats, two sounds: `belugaTrap` as it
-      // closes, `belugaPop` as it goes.
-      popFlicker: 0.22,   // seconds the caught bubble hangs and strobes
-      popFlickerHz: 24,   // on/off cycles per second during that hold
-      popSwell: 1.45,     // how far it inflates before it bursts, x its size
+      // frame it touched a fish — the least legible thing a hit can do, since
+      // the one object that explains what just happened is gone before the eye
+      // lands on it, and for the next five seconds a trapped creature looked
+      // exactly like a creature that had stopped for its own reasons.
+      //
+      // Now the bubble CLOSES around the catch and stays there for the whole
+      // hold. Three beats, and the middle one is most of the ability:
+      //   catch   `belugaTrap` — the shell seals in `sealTime`, bulging once
+      //   hold    a fish visibly inside a bubble, breathing
+      //   release `belugaPop` — it strobes a warning, then bursts
+      // Everything here is look-and-feel. How LONG it holds and how much it
+      // catches are gameplay and live in weapons.csv.
+      sealTime: 0.18,     // seconds to contract from the shot onto the creature
+      sealSwell: 1.35,    // the bulge on the way, x its size
+      fitPad: 1.5,        // how much bigger than the creature the shell sits
+      wobble: 0.05,       // breathing depth while held, x its size
+      wobbleHz: 1.6,      // ...and its rate
+      warnFlicker: 0.9,   // seconds before release that it starts strobing
+      flickerHz: 18,      // on/off cycles per second at the start of the warning
       // No droneScale here anymore — the beluga model's own `fit` (in
       // assets.js) already sizes it correctly. A second multiplier on top of
       // an already-correctly-scaled model was quietly halving it; the T-menu's
@@ -6458,6 +6588,34 @@ export const CONFIG = {
     },
     },
 
+    // ---------------------------------------------------------------------------
+    // THE BUBBLE FILM — the Fresnel shell any asset marked `shell: true` wears.
+    // The beluga's trap bubble is the only one today. See makeShellMaterial in
+    // assets.js for what each number does to the shader; in short:
+    //
+    //   you looking straight at it   ->  coreAlpha (nearly nothing)
+    //   the silhouette               ->  rimAlpha, brightened by rimBoost
+    //
+    // These are look controls, not gameplay, which is why they live here and on
+    // a slider rather than in weapons.csv with the catch radius.
+    // ---------------------------------------------------------------------------
+    bubbleShell: {
+      // How tightly the bright edge hugs the silhouette. Low values wash the
+      // whole ball; high values shrink it to a wire loop and the bubble stops
+      // reading as a volume.
+      power: 2.6,
+      // How much of the film you see facing you. This is the number that makes
+      // it a bubble rather than a marble — it wants to be nearly zero, and the
+      // creature inside is meant to be plainly visible through it.
+      coreAlpha: 0.07,
+      rimAlpha: 0.92,
+      // Overdrive on the rim colour. Past 1.0 it is HDR and blooms.
+      rimBoost: 2.4,
+      // The tight highlight riding on top of the rim — the thing that reads as
+      // a surface with a thickness rather than a halo.
+      sheen: 0.4,
+    },
+
     audio: {
       enabled: true,
       masterVolume: 0.55,
@@ -9216,7 +9374,17 @@ export const CONFIG = {
         // Compounding on top of a base above 1, so each stack widens the gap
         // between a one-off strike and a long chain rather than just adding
         // flat damage twice.
-        s.strikeChainMul = 1 + (s.strikeChainMul - 1) * 1.3;
+        //
+        // 1.3 was a DOUBLE exponential and it broke the game. The widening
+        // compounds over stacks and the result is then raised to the number of
+        // links: at 5 stacks it took the per-link multiplier to 1.59, which
+        // over a 12-link chain is 415x. Playtest logs showed Strike doing 95%
+        // of a run's damage in 4 of 11 runs, and 9.87x return against every
+        // other card. 1.18 keeps the shape — every stack still widens the gap,
+        // a long chain is still the payoff — at 1.25 per link and 14x over the
+        // same 12 links. Anything here is multiplied by itself a dozen times;
+        // treat a change of 0.05 as enormous.
+        s.strikeChainMul = 1 + (s.strikeChainMul - 1) * 1.18;
       }, maxStacks: 5 },
     { id: 'strikeDash', family: 'strike', name: 'Slipstream', desc: 'Strike dashes faster and further', apply: (s) => {
         s.strikeDashSpeed *= 1.22;
@@ -10128,7 +10296,11 @@ export const TUNER_SCHEMA = [
       // and all.
       { path: 'dayNight.orbit.keepInFrame', min: 0, max: 1, step: 0.05, label: 'keep sun/moon in frame' },
       { path: 'dayNight.orbit.framePad', min: 0.5, max: 3, step: 0.05, label: 'frame clearance (x disc radius)' },
-      { path: 'dayNight.sun.size', min: 0.5, max: 20, step: 0.1, label: 'sun size' },
+      // A fraction of the VISIBLE SKY, not world units — and the arc drops as
+      // it rises so the disc stays in frame (see dayNight.sun.frameSize). The
+      // old `size` path is gone: it is in every saved snapshot at 5.2, which is
+      // why the field had to be a new one to change at all.
+      { path: 'dayNight.sun.frameSize', min: 0.1, max: 1.2, step: 0.01, label: 'sun size (x visible sky)' },
       { path: 'dayNight.sun.color', type: 'color', label: 'sun colour' },
       { path: 'dayNight.sun.brightness', min: 0, max: 3, step: 0.05, label: 'sun brightness' },
       { path: 'dayNight.sun.halo', min: 1, max: 8, step: 0.1, label: 'sun halo size' },
@@ -10139,7 +10311,7 @@ export const TUNER_SCHEMA = [
       { path: 'dayNight.sun.haloFade', min: 0, max: 12, step: 0.1, label: 'sun glow dissolve into the sea' },
       { path: 'dayNight.sun.maskToDisc', type: 'bool', label: 'crop sun art to a circle' },
       { path: 'dayNight.sun.edgeFeather', min: 0.01, max: 0.5, step: 0.01, label: 'sun edge feather' },
-      { path: 'dayNight.moon.size', min: 0.5, max: 20, step: 0.1, label: 'moon size' },
+      { path: 'dayNight.moon.frameSize', min: 0.1, max: 1.2, step: 0.01, label: 'moon size (x visible sky)' },
       { path: 'dayNight.moon.color', type: 'color', label: 'moon colour' },
       { path: 'dayNight.moon.brightness', min: 0, max: 3, step: 0.05, label: 'moon brightness' },
       { path: 'dayNight.moon.halo', min: 1, max: 8, step: 0.1, label: 'moon halo size' },
@@ -10360,10 +10532,13 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
-    group: 'Clouds (overlay stub)',
+    // The shared look every deck starts from. A layer that doesn't state one of
+    // these inherits it, so these four are how you change the WEATHER; the
+    // group below is how you change the DEPTH.
+    group: 'Clouds — the whole sky',
     section: 'The ocean',
     items: [
-      { path: 'weather.clouds.enabled', type: 'bool', label: 'cloud overlay' },
+      { path: 'weather.clouds.enabled', type: 'bool', label: 'clouds' },
       { path: 'weather.clouds.color', type: 'color', label: 'cloud colour' },
       { path: 'weather.clouds.opacity', min: 0, max: 1, step: 0.02, label: 'opacity at full storm' },
       { path: 'weather.clouds.base', min: 0, max: 1, step: 0.02, label: 'haze on a clear day' },
@@ -10371,6 +10546,32 @@ export const TUNER_SCHEMA = [
       { path: 'weather.clouds.softness', min: 0.02, max: 1, step: 0.02, label: 'edge softness' },
       { path: 'weather.clouds.scale', min: 0.005, max: 0.3, step: 0.005, label: 'noise scale' },
       { path: 'weather.clouds.drift', min: 0, max: 30, step: 0.2, label: 'scroll with wind' },
+    ],
+  },
+  {
+    // ONE ROW PER DECK, far to near. `drift` is the ladder — 0.04 is the sun,
+    // 1 is the sea, and these four live in between. Drag two of them to the
+    // same number and the depth between them is gone, which is the fastest way
+    // to see what this group is for.
+    group: 'Clouds — the layers',
+    section: 'The ocean',
+    items: [
+      ...[0, 1, 2, 3].flatMap((i) => {
+        const name = CONFIG.weather?.clouds?.layers?.[i]?.name ?? `layer ${i}`;
+        return [
+          { path: `weather.clouds.layers.${i}.drift`, min: 0, max: 1, step: 0.01, label: `${name} — distance (drift)` },
+          { path: `weather.clouds.layers.${i}.y`, min: 0, max: 1.2, step: 0.01, label: `${name} — height in the sky` },
+          { path: `weather.clouds.layers.${i}.height`, min: 0.05, max: 2, step: 0.05, label: `${name} — thickness` },
+          { path: `weather.clouds.layers.${i}.feather`, min: 0.02, max: 0.5, step: 0.01, label: `${name} — edge fade` },
+          { path: `weather.clouds.layers.${i}.opacity`, min: 0, max: 1, step: 0.02, label: `${name} — opacity` },
+          { path: `weather.clouds.layers.${i}.coverage`, min: 0, max: 1, step: 0.02, label: `${name} — coverage` },
+          { path: `weather.clouds.layers.${i}.scale`, min: 0.005, max: 0.3, step: 0.005, label: `${name} — noise scale` },
+          { path: `weather.clouds.layers.${i}.skyTint`, min: 0, max: 1, step: 0.05, label: `${name} — lit by the sky` },
+          { path: `weather.clouds.layers.${i}.base`, min: 0, max: 1, step: 0.02, label: `${name} — on a clear day` },
+          { path: `weather.clouds.layers.${i}.storm`, min: 0, max: 1, step: 0.05, label: `${name} — share of the storm` },
+          { path: `weather.clouds.layers.${i}.speed`, min: 0, max: 4, step: 0.1, label: `${name} — wind speed` },
+        ];
+      }),
     ],
   },
   {
@@ -10630,6 +10831,7 @@ export const TUNER_SCHEMA = [
     section: 'Auras & orbits',
     items: [
       { path: 'club.enabled', type: 'bool', label: 'club system' },
+      { path: 'club.alwaysOn', type: 'bool', label: 'show clubs without the upgrade (authoring)' },
       { path: 'club.stiffness', min: 2, max: 200, step: 1, label: 'flail: how hard it chases the fin' },
       { path: 'club.damping', min: 0.5, max: 30, step: 0.1, label: 'flail: how fast the wobble dies' },
       { path: 'club.maxSwing', min: 4, max: 80, step: 1, label: 'flail: swing speed ceiling' },
@@ -10721,14 +10923,12 @@ export const TUNER_SCHEMA = [
       { path: 'strike.dashSpeed', min: 10, max: 100, step: 2 },
       { path: 'strike.dashDuration', min: 0.05, max: 1, step: 0.01, label: 'dash duration (before charge)' },
       { path: 'strike.invulnTail', min: 0, max: 1, step: 0.01, label: 'i-frames after the dash ends' },
-      { path: 'strike.damage', min: 5, max: 150, step: 5, label: 'nominal strike (shrapnel/element measure from this)' },
       { path: 'strike.burst.enabled', type: 'bool', label: 'release burst' },
       { path: 'strike.burst.damage', min: 0, max: 80, step: 1, label: 'burst: damage before upgrades' },
       { path: 'strike.burst.radius', min: 0.5, max: 14, step: 0.25, label: 'burst: radius' },
       { path: 'strike.burst.radiusPowerMul', min: 1, max: 4, step: 0.05, label: 'burst: radius at full charge' },
       { path: 'strike.burst.knock', min: 0, max: 2, step: 0.05, label: 'burst: outward shove' },
       { path: 'strike.contactShare', min: 0, max: 1, step: 0.05, label: 'ram: share of that damage dealt on contact' },
-      { path: 'strike.cardDamage', min: 0, max: 30, step: 1, label: 'strike damage added per strike card' },
       { path: 'strike.powerShare', min: 1, max: 8, step: 1, label: 'card slices Killer Instinct pays' },
       { path: 'strike.knockback.enabled', type: 'bool', label: 'ram: knock enemies back' },
       { path: 'strike.knockback.speed', min: 0, max: 80, step: 1, label: 'ram: knockback speed' },
@@ -10758,7 +10958,6 @@ export const TUNER_SCHEMA = [
       { path: 'strike.scare.chargeShare', min: 0, max: 2, step: 0.05, label: 'scare: share of that while winding up' },
       { path: 'strike.scare.lead', min: 0, max: 12, step: 0.5, label: 'scare: centred this far up the corridor' },
       { path: 'strike.chainWindow', min: 0.2, max: 3, step: 0.05 },
-      { path: 'strike.chainDamageMul', min: 1, max: 2, step: 0.02 },
       { path: 'strike.dashTurnRate', min: 0, max: 30, step: 0.5, label: 'dash turn rate (higher = tighter)' },
       { path: 'strike.aimBlend', min: 0, max: 1, step: 0.05, label: 'dash heading: swim (0) -> aim (1)' },
       { path: 'strike.dashFaceLerp', min: 1, max: 40, step: 0.5, label: 'dash facing snap' },
@@ -11004,6 +11203,8 @@ export const TUNER_SCHEMA = [
       { path: 'pickups.magnet.striking.corridorAhead', min: 0, max: 20, step: 0.5, label: 'striking: corridor ahead' },
       // --- the chain's multiplier ---
       { path: 'strike.chainLevelOffset', min: 0, max: 3, step: 0.25, label: 'chain: free links before the multiplier starts' },
+      { path: 'strike.linkBarFraction', min: 0.1, max: 1, step: 0.05, label: 'chain: bar-fraction a link costs (1 = a whole bar)' },
+      { path: 'strike.windowFromDashEnd', type: 'bool', label: 'chain: window starts when the dash ends' },
       { path: 'pickups.tiers.0.xpMul', min: 0.1, max: 3, step: 0.05, label: 'small orb xp mult' },
       { path: 'pickups.tiers.0.healMul', min: 0.1, max: 3, step: 0.05, label: 'small orb heal mult' },
       { path: 'pickups.tiers.2.xpMul', min: 0.1, max: 4, step: 0.05, label: 'big orb xp mult' },
@@ -11437,6 +11638,13 @@ export const TUNER_SCHEMA = [
       { path: 'bubbles.charge.perSecondMax', min: 1, max: 160, step: 1, label: 'wind-up: bubble rate at full' },
       { path: 'bubbles.charge.scaleMin', min: 0.1, max: 3, step: 0.05, label: 'wind-up: bubble size at start' },
       { path: 'bubbles.charge.scaleMax', min: 0.1, max: 4, step: 0.05, label: 'wind-up: bubble size at full' },
+      // The beluga's trap shell. Pure uniform writes — drag them with a bubble
+      // on screen and it changes under the cursor.
+      { path: 'bubbleShell.coreAlpha', min: 0, max: 1, step: 0.01, label: 'trap bubble: see-through in the middle' },
+      { path: 'bubbleShell.rimAlpha', min: 0, max: 1, step: 0.01, label: 'trap bubble: edge opacity' },
+      { path: 'bubbleShell.power', min: 0.2, max: 8, step: 0.1, label: 'trap bubble: how tight the edge is' },
+      { path: 'bubbleShell.rimBoost', min: 0, max: 8, step: 0.1, label: 'trap bubble: edge glow' },
+      { path: 'bubbleShell.sheen', min: 0, max: 2, step: 0.05, label: 'trap bubble: highlight' },
     ],
   },
   {
@@ -11782,11 +11990,16 @@ export const TUNER_SCHEMA = [
     panel: 'companions',
     section: 'Escorts',
     items: [
-      // 0 on the hold is the old behaviour — the bubble disappears on contact —
-      // and the burst still fires, so this is a look control, not an on/off.
-      { path: 'beluga.popFlicker', min: 0, max: 1, step: 0.01, label: 'caught: flicker for (s)' },
-      { path: 'beluga.popFlickerHz', min: 2, max: 60, step: 1, label: 'caught: flicker rate (per s)' },
-      { path: 'beluga.popSwell', min: 1, max: 3, step: 0.05, label: 'caught: swells to (x)' },
+      // The shell around a held creature. How long it holds is weapons.csv's.
+      { path: 'beluga.fitPad', min: 1, max: 3, step: 0.05, label: 'caught: shell size vs the fish' },
+      { path: 'beluga.sealTime', min: 0.02, max: 1, step: 0.01, label: 'caught: closes over (s)' },
+      { path: 'beluga.sealSwell', min: 1, max: 3, step: 0.05, label: 'caught: bulge as it closes (x)' },
+      { path: 'beluga.wobble', min: 0, max: 0.4, step: 0.01, label: 'held: breathing depth' },
+      { path: 'beluga.wobbleHz', min: 0, max: 6, step: 0.1, label: 'held: breathing rate' },
+      // 0 turns the warning off — the bubble then bursts with no notice, which
+      // is legible but gives you nothing to react to.
+      { path: 'beluga.warnFlicker', min: 0, max: 4, step: 0.05, label: 'release: warn for (s)' },
+      { path: 'beluga.flickerHz', min: 2, max: 60, step: 1, label: 'release: warning flicker rate' },
       { path: 'beluga.orbitRadius', min: 0.5, max: 5, step: 0.1 },
       { path: 'beluga.orbitDepth', min: 0, max: 6, step: 0.1, label: 'orbit depth (3D)' },
       { path: 'beluga.orbitSpeed', min: -4, max: 4, step: 0.1 },
@@ -12658,7 +12871,7 @@ const PATH_TABLES = [
     // scallop's jet) is deliberately still on a slider in the same block. See
     // pathTable.js: strip() is per-ROW, so those sliders keep working.
     roots: ['weapon', 'missile', 'bounce', 'shrimpRing', 'scallop', 'oyster', 'seagullBomb',
-      'eel', 'sealTeam', 'beluga', 'club', 'clubThrow', 'clubBoom', 'clubIce'],
+      'eel', 'sealTeam', 'beluga', 'club', 'clubThrow', 'clubBoom', 'clubIce', 'strike'],
   }),
   createPathTable({
     label: 'behaviour', file: 'behaviour.csv', text: behaviourCsv,

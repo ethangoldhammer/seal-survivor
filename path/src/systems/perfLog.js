@@ -55,15 +55,50 @@ let spikes = 0;
 let runClock = 0; // seconds of wall time since the run started
 let recording = false;
 let lastStamp = 0;
-// [{ ms, at }], worst first, capped at WORST_KEPT.
+// [{ ms, at, why }], worst first, capped at WORST_KEPT.
 let worst = [];
+
+// --- what a hitch WAS -------------------------------------------------------
+//
+// Counting hitches says the game stutters, which anybody playing it already
+// knew. The useful question is which of the three one-off costs a stuttering
+// frame was paying, because they have three different fixes and are otherwise
+// indistinguishable after the fact:
+//
+//   a PROGRAM appeared   three linked a shader on this frame. A first draw the
+//                        warm-up did not cover.
+//   a TEXTURE appeared   three uploaded an image. Also a first draw, but the
+//                        fix is different — an upload can be scheduled, a link
+//                        mostly cannot.
+//   NEITHER              not a first-draw cost at all: GC, a paging driver, or
+//                        genuinely expensive work on that frame.
+//
+// three keeps both counts on renderer.info, so this is two integers a frame and
+// the deltas across a hitch are the attribution.
+let lastPrograms = 0;
+let lastTextures = 0;
+let hitchCompile = 0;
+let hitchUpload = 0;
+let hitchNeither = 0;
+let programsAdded = 0;
+let texturesAdded = 0;
+
+// The fourth answer, and the one the other three were hiding: the JS heap.
+// A collection is the only thing that makes used heap go DOWN, so a stall on a
+// frame where it dropped is the collector and a stall where it didn't is real
+// work on that frame. Without this, both land in "neither" and look identical.
+// Chrome only; 0 means the browser doesn't expose it and the split is skipped.
+let lastHeap = 0;
+let hitchGC = 0;
+let heapFreed = 0;   // total bytes reclaimed across the run
+let heapPeak = 0;
 
 /**
  * Begin recording. Called when a run starts, not at boot — boot is a loading
  * screen and a shader warm-up, and folding those into a run's distribution
  * would put a 3000ms frame at the top of every report forever.
  */
-export function perfRunStart(stamp = performance.now()) {
+export function perfRunStart(stamp = performance.now(), programs = 0, textures = 0, heap = 0) {
   histogram.fill(0);
   recent.fill(0);
   recentAt = 0;
@@ -76,6 +111,17 @@ export function perfRunStart(stamp = performance.now()) {
   runClock = 0;
   worst = [];
   lastStamp = stamp;
+  lastPrograms = programs;
+  lastTextures = textures;
+  hitchCompile = 0;
+  hitchUpload = 0;
+  hitchNeither = 0;
+  programsAdded = 0;
+  texturesAdded = 0;
+  lastHeap = heap;
+  hitchGC = 0;
+  heapFreed = 0;
+  heapPeak = heap;
   recording = true;
 }
 
@@ -87,10 +133,27 @@ export function perfStop() {
  * One frame. Takes the rAF timestamp and does its own subtraction — see the
  * note at the top about why it cannot take the loop's dt.
  */
-export function perfFrame(stamp) {
+export function perfFrame(stamp, programs = lastPrograms, textures = lastTextures, heap = lastHeap) {
   if (!recording) return;
   const ms = stamp - lastStamp;
   lastStamp = stamp;
+
+  // Deltas first, and consumed whether or not this frame turns out to be a
+  // hitch — otherwise a compile on a fast frame would still be sitting in the
+  // delta when the next slow frame came along, and get blamed for it.
+  const newPrograms = Math.max(0, programs - lastPrograms);
+  const newTextures = Math.max(0, textures - lastTextures);
+  lastPrograms = programs;
+  lastTextures = textures;
+  programsAdded += newPrograms;
+  texturesAdded += newTextures;
+
+  // Only a collection returns memory. Anything above the noise floor is one —
+  // a megabyte, so a shrinking retained set doesn't read as a collection.
+  const collected = heap > 0 && lastHeap - heap > 1048576;
+  if (collected) heapFreed += lastHeap - heap;
+  if (heap > heapPeak) heapPeak = heap;
+  lastHeap = heap;
 
   // The first frame of a run measures from perfRunStart to here, which spans
   // the menu teardown and every reset in startGame — real work, but not a
@@ -110,14 +173,26 @@ export function perfFrame(stamp) {
   recentAt = (recentAt + 1) % WINDOW;
   if (recentFilled < WINDOW) recentFilled++;
 
-  if (ms >= HITCH_MS) hitches++;
+  let why = '';
+  if (ms >= HITCH_MS) {
+    hitches++;
+    // Compile wins the tie when both landed on one frame: a link is the more
+    // expensive of the two by a wide margin, and a first draw usually pulls its
+    // textures in on the same frame it compiles its program.
+    if (newPrograms > 0) { hitchCompile++; why = 'compile'; }
+    else if (newTextures > 0) { hitchUpload++; why = 'upload'; }
+    // Ranked below the two first-draw costs: a compile allocates, so a frame
+    // that did both is still best described by the compile.
+    else if (collected) { hitchGC++; why = 'gc'; }
+    else { hitchNeither++; why = 'other'; }
+  }
   if (ms >= SPIKE_MS) spikes++;
 
   if (ms > worstMs) worstMs = ms;
   // Kept sorted and short, so this is a handful of comparisons on the rare
   // frames that qualify and a single one on every other.
   if (worst.length < WORST_KEPT || ms > worst[worst.length - 1].ms) {
-    worst.push({ ms, at: runClock });
+    worst.push({ ms, at: runClock, why });
     worst.sort((a, b) => b.ms - a.ms);
     if (worst.length > WORST_KEPT) worst.length = WORST_KEPT;
   }
@@ -160,6 +235,17 @@ export function perfSummary() {
     worstMs,
     hitches,
     spikes,
+    // What the hitches WERE. These three sum to `hitches`.
+    hitchCompile,
+    hitchUpload,
+    hitchGC,
+    hitchNeither,
+    heapFreedMB: heapFreed / 1048576,
+    heapPeakMB: heapPeak / 1048576,
+    // And the totals, for context: 40 programs linked across a run is a
+    // warm-up that missed 40 programs, however they were distributed.
+    programsAdded,
+    texturesAdded,
     worst: worst.slice(),
   };
 }
@@ -187,9 +273,12 @@ export function perfRunReport(label = 'run', extra = '') {
     `[perf] ${label} — ${clock(s.seconds)}, ${s.frames.toLocaleString()} frames, ${fps.toFixed(1)} fps mean${extra ? ` · ${extra}` : ''}`,
     `       median ${s.medianMs}ms · p95 ${s.p95Ms}ms · p99 ${s.p99Ms}ms · worst ${s.worstMs.toFixed(0)}ms`,
     `       hitches (>${HITCH_MS}ms): ${s.hitches}  ·  spikes (>${SPIKE_MS}ms): ${s.spikes}`,
+    `       of those: ${s.hitchCompile} shader link · ${s.hitchUpload} texture upload · ${s.hitchGC} collection · ${s.hitchNeither} none of those`,
+    `       built this run: ${s.programsAdded} programs, ${s.texturesAdded} textures`
+      + (s.heapPeakMB > 0 ? `  ·  heap peak ${s.heapPeakMB.toFixed(0)}MB, ${s.heapFreedMB.toFixed(0)}MB collected` : ''),
   ];
   if (s.worst.length) {
-    lines.push(`       worst frames: ${s.worst.map((w) => `${w.ms.toFixed(0)}ms @ ${clock(w.at)}`).join(' · ')}`);
+    lines.push(`       worst frames: ${s.worst.map((w) => `${w.ms.toFixed(0)}ms @ ${clock(w.at)}${w.why ? ` (${w.why})` : ''}`).join(' · ')}`);
   }
   // p99 is the number to watch across a change, not the mean: a fix that
   // removes stalls barely moves the average and halves this.

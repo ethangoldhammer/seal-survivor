@@ -211,6 +211,22 @@ export function createClawDriver(instance) {
   }
 
   return {
+    // Back to idle, with both arms released. For a RECYCLED body (see
+    // acquireVisual in assets.js): a crab that died mid-pinch would otherwise
+    // hand its half-closed claw and its unfinished clock to whatever spawns
+    // into that body next — and since `strike()` ignores a re-fire while a
+    // pinch is live, the new crab could not even start its own until the dead
+    // one's had played out.
+    reset() {
+      t = -1;
+      connected = false;
+      spent = false;
+      for (const arm of arms) {
+        arm.weight = 0;
+        arm.chainWritten = false;
+      }
+    },
+
     // Begin a pinch. Re-firing mid-pinch is ignored rather than restarting —
     // the opposite of the jaw's behaviour, and deliberately so: the caller
     // rate-limits a bite, but a crab's strike is driven by proximity, and a

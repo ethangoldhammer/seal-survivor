@@ -35,12 +35,21 @@ import * as THREE from 'three';
 import { createConstellations } from '../path/src/systems/constellations.js';
 import { createSkyMaterial } from '../path/src/systems/sky.js';
 import { createCelestials } from '../path/src/systems/celestial.js';
+import { createClouds } from '../path/src/systems/clouds.js';
 
 const scene = new THREE.Scene();
 const sky = createConstellations(scene);
 const starMat = sky.group.children.find((c) => c.isMesh && !c.isLineSegments)?.material;
 const linkMat = sky.group.children.find((c) => c.isLineSegments)?.material;
 const skyMat = createSkyMaterial();
+
+// The cloud decks. Built lazily by their own update (there is one material per
+// layer and the layer count comes from config), so the stack has to be run once
+// before there is anything to compile. All layers share one shader; the first
+// one is the whole program.
+const clouds = createClouds(scene);
+clouds.update(1 / 60, 0);
+const cloudMat = clouds.layers[0]?.material;
 
 // The sun's two quads. Both carry hand-written GLSL and the halo now injects
 // the WAVE constants into a surfaceAt() of its own, which is the kind of string
@@ -54,6 +63,10 @@ const discMat = sunRig?.children.find((c) => c.renderOrder === -11)?.material;
 
 if (!starMat || !linkMat) {
   console.error('constellations built no geometry — is CONFIG.constellations.enabled off?');
+  process.exit(1);
+}
+if (!cloudMat) {
+  console.error('clouds built no layers — is CONFIG.weather.clouds.layers empty or weather off?');
   process.exit(1);
 }
 if (!haloMat || !discMat) {
@@ -93,6 +106,10 @@ const PROGRAMS = [
   // the halo has stopped meeting the wave and the flat cut is back.
   ['sun halo', haloMat, ['uColor', 'uStrength', 'uFade', 'uSurfaceY', 'uWaveT', 'uWaveAmp', 'uChop']],
   ['sun disc', discMat, ['uMap', 'uUseMap', 'uMask', 'uColor', 'uBrightness', 'uEdge']],
+  // uFeather is the load-bearing one here: it is the alpha window that takes
+  // each deck to nothing at its own quad edges, and a driver optimising it out
+  // means the flat horizontal cut across the sky is back.
+  ['cloud deck', cloudMat, ['uColor', 'uOpacity', 'uCoverage', 'uSoftness', 'uOffset', 'uSpan', 'uScale', 'uFeather']],
 ];
 
 const html = `<!doctype html><meta charset="utf-8"><title>night sky shader check</title>

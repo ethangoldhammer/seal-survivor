@@ -93,6 +93,16 @@ export function createHeadLook(instance) {
   return {
     head,
 
+    // Release the head outright. The weight eases toward its target every
+    // frame and would converge on its own within a fifth of a second, so this
+    // exists for the one case where that is a fifth of a second too long: a
+    // RECYCLED body (see acquireVisual in assets.js), where the creature that
+    // spawns into it would open its life staring wherever the last one died
+    // looking, then swing round.
+    reset() {
+      weight = 0;
+    },
+
     /**
      * @param target  world-space point to look at, or null to release. The
      *   caller passes whatever the creature is actually steering toward, so

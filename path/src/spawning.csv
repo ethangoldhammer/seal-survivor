@@ -2,7 +2,7 @@ id,value,min,max,notes
 spawn.difficultyPerSecond,0.09,0.005,0.3,How fast the run ramps. 1 difficulty point = 20s at 0.05.
 spawn.baseInterval,1.4,0.1,4,Seconds between spawn ticks at difficulty 0.
 spawn.minInterval,0.35,0.05,2,Floor on that interval however long the run gets.
-spawn.countPerDifficulty,0.35,0,3,Extra creatures per tick per difficulty point.
+spawn.countPerDifficulty,0.28,0,3,Extra creatures per tick per difficulty point.
 spawn.maxAlive,220,20,400,Hard ceiling on bodies on screen. EVERY spawner bails at it - including the crab summoner.
 spawn.groupMaxAlive.apex,8,0,27,Max sharks/whales on screen at once.
 spawn.nightlife.enabled,1,0,1,Whether the sun going down swaps the cast. 0 = one roster all run.
@@ -12,9 +12,9 @@ spawn.nightlife.glowing.day,0,0,1,Spawn rate multiplier for glowing creatures in
 spawn.nightlife.glowing.night,1,0,3,Spawn rate multiplier for glowing creatures at night.
 spawn.nightlife.daylight.day,1,0,3,Spawn rate multiplier for everything else in daylight.
 spawn.nightlife.daylight.night,0.08,0,1,Spawn rate multiplier for everything else at night. Not 0 - a few stragglers still come.
-spawn.ramp.hp,0.1,0,0.15,Roster-wide enemy hp growth per 20s.
+spawn.ramp.hp,0.075,0,0.15,Roster-wide enemy hp growth per 20s.
 spawn.ramp.hpMax,30,1,30,Cap on that hp growth (x).
-spawn.ramp.damage,0.04,0,0.15,Roster-wide enemy damage growth per 20s.
+spawn.ramp.damage,0.028,0,0.15,Roster-wide enemy damage growth per 20s.
 spawn.ramp.damageMax,4,1,12,Cap on that damage growth (x).
 spawn.ramp.speed,0.013,0,0.06,Roster-wide enemy speed growth per 20s.
 spawn.ramp.speedMax,1.9,1,4,Cap on that speed growth (x).

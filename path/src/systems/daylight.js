@@ -268,6 +268,28 @@ function skyKeys(hour) {
   return { a, b, t };
 }
 
+/**
+ * HOW BIG A BODY IS, in world units — the one answer, shared by the orbit that
+ * has to fit it into the sky and the rig that draws it.
+ *
+ * `frameSize` is a fraction of the VISIBLE AIR BAND: 1 would be a sun exactly
+ * as tall as the sky above the water line. That is the useful way to say it —
+ * "how big is it on screen" is the actual requirement, the air band is the
+ * thing it has to fit inside, and stated this way it survives a resize and a
+ * change of aspect ratio without being re-judged.
+ *
+ * `size`, the raw world-unit number, is still read when `frameSize` is 0 or
+ * missing. It also has to stay declared: it is in every saved tuning snapshot,
+ * and saved tuning beats config.js — which is the same reason `frameSize` is a
+ * NEW field rather than a new default for the old one. See the note on
+ * `dayNight.orbit.drift`.
+ */
+export function bodySize(cfg) {
+  const airH = Math.max(1, bounds.frameTop - bounds.surfaceY);
+  const frac = cfg?.frameSize;
+  return frac > 0 ? airH * frac : (cfg?.size ?? 1);
+}
+
 // Where a body sits on the shared ellipse. `phase` is 0 at sunrise, so the
 // sun gets 0 and the moon gets half a turn — polar opposites, by construction.
 function place(body, angle, size, horizonRange) {
@@ -281,7 +303,14 @@ function place(body, angle, size, horizonRange) {
   // instead, a widened arena (arena.widthScale) would swing sunrise out past
   // where the camera can pan and the disc would only ever be seen at noon.
   const rx = (bounds.frameWidth / 2) * orbit.radiusX;
-  const ry = airH * orbit.radiusY;
+  // THE ARC IS MEASURED OVER THE BAND THE BODY'S CENTRE CAN OCCUPY, which is
+  // the air band less its own radius — so the top of the disc lands where the
+  // top of a point-sized body used to, and a bigger sun arcs lower rather than
+  // climbing out through the top of the frame. Without this, `radiusY` means
+  // something different for every size: at the old 0.74 a sun of five units
+  // fitted with a hair to spare and one of nine was cropped for four hours
+  // either side of noon, with nothing in the tuner saying why.
+  const ry = Math.max(1, airH - size * 0.5) * orbit.radiusY;
   const horizonY = bounds.surfaceY + orbit.centerY;
 
   // -cos so the body rises on the LEFT and sets on the right, matching the
@@ -351,8 +380,8 @@ export function updateDayCycle(dt) {
 
   // --- the bodies -----------------------------------------------------------
   const angle = ((clock - cfg.orbit.riseHour) / 24) * TAU;
-  place(dayState.sun, angle, cfg.sun.size, cfg.sun.horizonRange);
-  place(dayState.moon, angle + Math.PI, cfg.moon.size, cfg.moon.horizonRange);
+  place(dayState.sun, angle, bodySize(cfg.sun), cfg.sun.horizonRange);
+  place(dayState.moon, angle + Math.PI, bodySize(cfg.moon), cfg.moon.horizonRange);
   // cos is positive on the rising half of the ellipse and negative on the
   // falling half — the sun's x velocity, in effect.
   dayState.rising = Math.cos(angle) > 0;

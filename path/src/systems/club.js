@@ -8,6 +8,7 @@ import { chillEnemy } from './elements.js';
 import { player } from '../entities/player.js';
 import { projectileCount } from '../stats.js';
 import { abilityDamage, aoe, targeting } from './scaling.js';
+import { recordControl } from './playtest.js';
 
 // ---------------------------------------------------------------------------
 // THE CLUB — a weapon lashed to the fin tips, swung by THE FINS THEMSELVES.
@@ -92,8 +93,33 @@ export function createClubVisual() {
   return group;
 }
 
-function addClub() {
-  const mesh = createVisual('club');
+/**
+ * Which club assets the run is actually holding, in fin order.
+ *
+ * THE VARIANTS HAVE TO BE VISIBLE. Powder Keg and Cold Snap are riders — they
+ * add no weapon of their own — so a run that took them looked exactly like a
+ * run that had not, and there was no way to tell from the water what you were
+ * swinging. Each owned variant now puts its own club in a fin, round-robin
+ * across however many fins there are, so owning two means seeing one of each
+ * rather than the higher-priority one twice.
+ *
+ * Falls back to the base club when no variant is owned, which is also what a
+ * run with the base card alone should look like.
+ */
+export function clubAssetsFor(levels = {}) {
+  const owned = [];
+  if (levels.boom > 0) owned.push('clubBoom');
+  if (levels.ice > 0) owned.push('clubIce');
+  if (levels.throw > 0) owned.push('clubThrow');
+  return owned.length ? owned : ['club'];
+}
+
+// Build one club mesh and measure it. Split out from addClub because a socket
+// can be handed a DIFFERENT club later — the frame a variant card is taken —
+// and that swap needs exactly this and none of the socket state around it.
+function buildClubMesh(asset = 'club') {
+  const mesh = createVisual(asset);
+  mesh.userData.clubAsset = asset;
   // The scale createVisual just wrote is `fit` normalisation times the asset's
   // own size multiplier from assets.csv. Stash it and multiply, rather than
   // setScalar-ing over the top of it every frame: assigning would throw the
@@ -114,6 +140,11 @@ function addClub() {
   mesh.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(mesh);
   mesh.userData.clubGripLocal = Math.max(0, -box.min.y);
+  return mesh;
+}
+
+function addClub(asset = 'club') {
+  const mesh = buildClubMesh(asset);
   group.add(mesh);
   clubs.push({
     mesh,
@@ -142,9 +173,33 @@ function removeClub() {
   if (c) group.remove(c.mesh);
 }
 
-function syncCount(desired) {
-  while (clubs.length < desired) addClub();
+/**
+ * Make the sockets match the fins AND the cards.
+ *
+ * Rebuilds a club whose asset has changed, which is what makes a variant show
+ * up the moment its card is taken rather than on the next run — the mesh is
+ * built once at spawn and there is no other point where a level-up could reach
+ * it. Cheap: the comparison is a string, and the rebuild only fires on the one
+ * frame the owned set actually moves.
+ */
+function syncCount(desired, assets = ['club']) {
+  while (clubs.length < desired) addClub(assets[clubs.length % assets.length]);
   while (clubs.length > desired) removeClub();
+
+  for (let i = 0; i < clubs.length; i++) {
+    const want = assets[i % assets.length];
+    const club = clubs[i];
+    if (club.mesh.userData.clubAsset === want) continue;
+    // Swap the mesh, keep the socket. The spring state, the respawn timer and
+    // the re-hit locks all belong to the FIN, not to the lump of wood in it —
+    // rebuilding the whole entry would snap a mid-swing club back to rest and
+    // hand a thrown fin its club back early.
+    group.remove(club.mesh);
+    const mesh = buildClubMesh(want);
+    group.add(mesh);
+    mesh.visible = club.armed;
+    club.mesh = mesh;
+  }
 }
 
 // --- the numbers, per level ------------------------------------------------
@@ -455,7 +510,11 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // A bare number still works, and is what every harness and the tuner pass
   // when they only care about the base weapon.
   const lv = typeof levels === 'number' ? { club: levels } : (levels ?? {});
-  const level = Math.max(0, Math.floor(lv.club ?? 0));
+  // `alwaysOn` is an AUTHORING switch, not a balance one: it puts clubs in the
+  // fins without the card so a model, a tint or a flop curve can be judged
+  // without rolling the upgrade first. Off by default — with it on, every run
+  // starts armed.
+  const level = Math.max(c.alwaysOn ? 1 : 0, Math.floor(lv.club ?? 0));
   const blast = clubBlast(Math.max(0, Math.floor(lv.boom ?? 0)));
   const ice = clubIce(Math.max(0, Math.floor(lv.ice ?? 0)));
   const active = !!c?.enabled && level > 0;
@@ -483,7 +542,9 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // weapon with nothing to hang off, which is a silent no-op by design — the
   // same degradation every emit point in the game already does.
   const tips = rig?.muzzles ?? [];
-  syncCount(tips.length);
+  // Which club each fin is holding — one per owned variant, so the cards are
+  // legible from the water rather than only from the pause screen.
+  syncCount(tips.length, clubAssetsFor({ boom: lv.boom, ice: lv.ice, throw: lv.throw }));
   if (clubs.length === 0) {
     // Nothing to hang the weapon off this frame — a model being swapped in the
     // T-menu, or a rig that hasn't resolved yet. Anything ALREADY thrown still
@@ -644,7 +705,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       // whack still reads as having been frozen by it, and the blast is
       // collected at the point of contact rather than wherever the body ends
       // up after being thrown.
-      if (ice) chillEnemy(e, ice.slow, ice.duration, ice.freezeFor, hooks, ex, ey);
+      if (ice && chillEnemy(e, ice.slow, ice.duration, ice.freezeFor, hooks, ex, ey)) recordControl('clubIce');
       const blastHere = blast;
 
       // Scaled by how hard this club is actually travelling. A clip through a
@@ -739,7 +800,7 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
       // be delivered by a shark, so it freezes and it detonates like any other
       // — which is what makes the two cards worth taking alongside the base
       // club rather than only alongside the thrown one.
-      if (ice) chillEnemy(other, ice.slow, ice.duration, ice.freezeFor, hooks, cx, cy);
+      if (ice && chillEnemy(other, ice.slow, ice.duration, ice.freezeFor, hooks, cx, cy)) recordControl('clubIce');
       // Both bodies pay. The one that was standing there takes the collision;
       // the one being thrown takes a smaller share of it, so a long carom
       // eventually kills the projectile too rather than leaving one
@@ -910,7 +971,12 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
       life: c.life,
       radius: c.radius,
       pierce: c.pierce,
-      asset: 'club',
+      // The thrown club's OWN key, so a Hurler shell reads as one in flight
+      // and has somewhere for its own model to land later. It carries the
+      // riders' damage but not their colour: a thrown club is a thrown club
+      // whichever variants the run also took, and tinting it three ways would
+      // make the throw ambiguous rather than informative.
+      asset: 'clubThrow',
       scale: c.scale,
       // End over end, the way a thrown club goes. `spin` wins over `orient` in
       // projectiles.js, which is right here: a club that stayed nose-on to its

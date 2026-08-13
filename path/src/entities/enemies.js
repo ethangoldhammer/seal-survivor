@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
 import { CONFIG, difficultyRamp } from '../config.js';
-import { createVisual } from '../assets.js';
+import { acquireVisual, releaseVisual } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
 import { bounds, clampBelowSurface } from '../arena.js';
 import { nearestFloorPickup, bestChumTarget, refreshChumPiles, pickupAlive, bitePickup } from './pickups.js';
@@ -221,6 +221,9 @@ function plowThrough(e, dt) {
 export function resetEnemies(scene) {
   for (const e of enemies) {
     if (e.body) removeBody(e.body);
+    // Same as removeEnemy: a run ending is the biggest single handover there
+    // is, and the next run opens by spawning the same species back out again.
+    releaseVisual(e.visual);
     scene.remove(e.mesh);
   }
   enemies.length = 0;
@@ -1476,7 +1479,12 @@ function edgeSpawnPoint(def = null) {
 function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   const { schoolId = null, xpMul = 1 } = opts;
   const container = new THREE.Group();
-  const visual = createVisual(def.asset ?? key);
+  // Recycled where possible — see acquireVisual in assets.js. A creature's body
+  // is the single most expensive thing a spawn allocates (a cloned bone
+  // hierarchy, a Skeleton and its bone texture), and at two to four kills a
+  // second the churn was costing more in collection pauses than the spawn ever
+  // cost to build.
+  const visual = acquireVisual(def.asset ?? key);
   container.add(visual);
 
   // Creatures that grow over a run: later spawns come in bigger than the
@@ -1573,26 +1581,63 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   if (hp < UNKILLABLE_HP) recordSpawn(hp);
 
   // Any model with clips or a procedural rig gets a controller; static
+  // THE DRIVERS RIDE WITH THE BODY. Each of these binds to a specific bone
+  // hierarchy, so a recycled body can keep the ones it was built with instead
+  // of the spawn allocating a fresh mixer, an action per state and three rig
+  // solvers every time a creature arrives.
+  //
+  // That is the other half of the pooling. With the bodies recycled, the
+  // remaining spikes in a measured run all fell inside one seven-second window
+  // — the busiest stretch of the game, 469 spawns and 299 kills in thirty
+  // seconds — and these were what was still being built fifteen times a second
+  // in it.
+  //
+  // Cached on the visual rather than in a map keyed by it: they are only ever
+  // valid for that exact hierarchy, so anything that can hand out a body has to
+  // hand out its drivers too, and a field makes that impossible to get wrong.
+  // clearVisualPool drops both together for the same reason.
+  const rigs = visual.userData.__rigs ??= {};
+
   // shapes and unrigged models (e.g. the reef fish) simply don't.
   // Trap enemies use their own one-shot attack mixer below instead of the
   // continuous idle/swim/boost controller (they don't have those states).
   const hasAnimSource = def.behavior !== 'trap' && (visual.userData?.clips?.length || visual.userData?.rig);
-  const anim = hasAnimSource ? createAnimationController(visual) : null;
+  if (hasAnimSource && !rigs.anim) rigs.anim = createAnimationController(visual);
+  const anim = hasAnimSource ? rigs.anim : null;
+  // Back to clean idle locomotion. Without it a recycled body keeps the pose it
+  // died in — 'death' clamps on its last frame and never expires on its own —
+  // so the next creature would spawn already dead. This reset exists for the
+  // seal's restart and does exactly the same job here.
+  anim?.reset();
 
   // Head-look, for the models that declare a chain for it (the sharks and the
   // orca). Null for everything else, and every call site tolerates that.
-  const look = def.behavior !== 'trap' ? createHeadLook(visual) : null;
+  if (def.behavior !== 'trap' && rigs.look === undefined) rigs.look = createHeadLook(visual);
+  const look = def.behavior !== 'trap' ? rigs.look : null;
+  look?.reset();
 
   // Procedural jaw, for the hunters whose file ships no bite clip — which is
   // all of them except megalodon. Skipped when the controller already has a
   // real `bite` action, so the authored clip owns the jaw rather than getting
   // a second rotation piled on top of the one it is already writing.
-  const jaw = anim?.clipCoverage?.bite ? null : createJawDriver(visual);
+  // Whether a jaw is WANTED is decided per spawn; only the driver is cached.
+  // One asset can back several roster entries, and they need not agree — a
+  // `trap` entry has no animation controller at all, so it always wants the
+  // procedural jaw, while a sibling entry with a real bite action must not have
+  // one. Caching the decision rather than the driver would give whichever
+  // spawned first the casting vote, and the loser would either lose its jaw or
+  // get a second rotation piled on the clip already writing that bone.
+  const wantJaw = !anim?.clipCoverage?.bite;
+  if (wantJaw && rigs.jaw === undefined) rigs.jaw = createJawDriver(visual);
+  const jaw = wantJaw ? (rigs.jaw ?? null) : null;
+  jaw?.reset();
 
   // The crab's telegraphed pinch. Null for everything that declares no
   // clawRig, which is every creature but the two crabs — see systems/
   // crabClaw.js for why the gesture has to be manufactured rather than played.
-  const claw = createClawDriver(visual);
+  if (rigs.claw === undefined) rigs.claw = createClawDriver(visual);
+  const claw = rigs.claw;
+  claw?.reset();
 
   // Behavioural difficulty ramp, baked per instance for the same reason
   // hp/damage/speed above are: `def` is one object shared by every member of
@@ -1623,10 +1668,23 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     const clipName = def.animations?.attack;
     const clip = clipName ? THREE.AnimationClip.findByName(visual.userData.clips, clipName) : null;
     if (clip) {
-      attackMixer = new THREE.AnimationMixer(visual);
-      attackAction = attackMixer.clipAction(clip);
-      attackAction.loop = THREE.LoopOnce;
-      attackAction.clampWhenFinished = true;
+      // Cached on the body like the drivers above, and keyed by CLIP NAME —
+      // two roster entries can share an asset and trap with different
+      // animations, and a mixer built for one clip would silently play that
+      // clip for the other.
+      const cached = rigs.attack;
+      if (cached && cached.name === clipName) {
+        ({ mixer: attackMixer, action: attackAction } = cached);
+        // clampWhenFinished holds the last frame, so a recycled trap would
+        // spawn mid-snap with its jaws already shut.
+        attackAction.stop();
+      } else {
+        attackMixer = new THREE.AnimationMixer(visual);
+        attackAction = attackMixer.clipAction(clip);
+        attackAction.loop = THREE.LoopOnce;
+        attackAction.clampWhenFinished = true;
+        rigs.attack = { name: clipName, mixer: attackMixer, action: attackAction };
+      }
     }
   }
 
@@ -2586,6 +2644,13 @@ export function removeEnemy(scene, index) {
   // reference, so a body left behind is an invisible obstacle in the water
   // that other bodies keep bouncing off.
   if (e.body) removeBody(e.body);
+  // The body goes back to the pool rather than to the garbage collector. This
+  // is also where the leak was: scene.remove takes a mesh out of the graph, and
+  // WebGL frees nothing on JS garbage collection, so every dead creature's bone
+  // texture stayed resident for the life of the page — 1,466 of them by the end
+  // of a nine-minute run. A pooled body is never disposed because it is never
+  // thrown away; one past the cap is disposed properly on the way out.
+  releaseVisual(e.visual);
   scene.remove(e.mesh);
   enemies.splice(index, 1);
 }

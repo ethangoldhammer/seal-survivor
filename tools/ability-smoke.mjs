@@ -30,7 +30,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
-import { installModel } from '../path/src/assets.js';
+import { installModel, createVisual } from '../path/src/assets.js';
 import { enemies } from '../path/src/entities/enemies.js';
 import { boats } from '../path/src/systems/boats.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab } from '../path/src/systems/octoGrab.js';
@@ -38,7 +38,7 @@ import { updateOrcaPod, resetOrcaPod } from '../path/src/systems/orca.js';
 import { burstPearl, updateOyster, resetOyster } from '../path/src/systems/oyster.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from '../path/src/entities/projectiles.js';
 import { eelCfg } from '../path/src/systems/eel.js';
-import { createBelugaDrone, updateBeluga, resetBeluga } from '../path/src/systems/beluga.js';
+import { createBelugaDrone, updateBeluga, resetBeluga, trapSeconds } from '../path/src/systems/beluga.js';
 import { weatherState } from '../path/src/systems/weather.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, suctionAt, __beamShader } from '../path/src/systems/bakalar.js';
 import { fireMusselBarrage, barrageCount, barrageDamage } from '../path/src/systems/musselVolley.js';
@@ -406,12 +406,13 @@ section('BAKALAR TRACTOR BEAM');
 }
 
 // --- baby beluga ------------------------------------------------------------
-// The catch, which is now two beats rather than one: the bubble touches a fish
-// and seals it, holds and strobes, then bursts. Every part of that is invisible
-// to a screenshot — the browser preview suspends rAF — and the failure modes
-// are all silent (a bubble that never bursts leaks a mesh into the scene; one
-// that pops on the same frame as the seal collapses the telegraph back to what
-// it was before).
+// The catch is three beats now: the bubble closes on a fish, HOLDS around it
+// for as long as the trap lasts, warns, then bursts. All of it is invisible to
+// a screenshot — the browser preview suspends rAF — and every failure mode is
+// silent. A shell that never bursts leaks a mesh into the scene and follows a
+// recycled body around; one that bursts on contact collapses the whole thing
+// back to the vanishing bubble it replaced; and a catch radius that doesn't
+// match the drawn one is only visible as fish swimming through a bubble.
 section('BABY BELUGA');
 enemies.length = 0;
 const belugaDrone = createBelugaDrone();
@@ -429,49 +430,83 @@ const belugaHooks = {
   onTrap: () => { traps++; },
   onPop: (x, y) => { pops++; popAt = { x, y }; },
 };
-const tickBeluga = (frames, clockFrom = 0) => {
+// updateEnemies is what runs the hold down in the real game, and it isn't in
+// this harness — so the tick does that part itself. Without it the trap never
+// expires and the release half of the test waits forever.
+let belugaClock = 0;
+const tickBeluga = (frames) => {
   for (let i = 0; i < frames; i++) {
-    updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, (clockFrom + i) * dt, belugaHooks);
+    for (const e of enemies) if (e.trapTimer > 0) e.trapTimer = Math.max(0, e.trapTimer - dt);
+    updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, belugaClock, belugaHooks);
+    belugaClock += dt;
   }
 };
 
-// Long enough for at least one fire cycle plus the whole flicker.
-const belugaFrames = Math.ceil((CONFIG.beluga.fireRate + CONFIG.beluga.life + CONFIG.beluga.popFlicker + 0.5) / dt);
-let framesToTrap = 0;
-for (let i = 0; i < belugaFrames && traps === 0; i++) {
-  updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, i * dt, belugaHooks);
-  framesToTrap++;
-}
+// Long enough for a fire cycle and the bubble's whole flight.
+const belugaFrames = Math.ceil((CONFIG.beluga.fireRate + CONFIG.beluga.life + 0.5) / dt);
+for (let i = 0; i < belugaFrames && traps === 0; i++) tickBeluga(1);
 check('the drone fires and traps a fish', traps === 1, `${traps} trap(s)`);
-check('the fish is held', caught.trapTimer > 0, `trapTimer ${caught.trapTimer.toFixed(2)}`);
+check('the fish is held for the level-1 duration',
+  Math.abs(caught.trapTimer - CONFIG.beluga.trapDuration) < 0.1,
+  `trapTimer ${caught.trapTimer.toFixed(2)} of ${CONFIG.beluga.trapDuration}`);
+// Levelling has to buy uptime, not just width — the card is taken up to 8
+// times and every stack past the first used to hold for exactly as long.
+check('levelling holds them longer', trapSeconds(4) > trapSeconds(1),
+  `${trapSeconds(1).toFixed(1)}s -> ${trapSeconds(4).toFixed(1)}s at level 4`);
 
-// THE FLICKER. The bubble has to still be in the scene after the catch, and it
-// has to be strobing — a held bubble that stays solidly visible is the same
-// non-event as no hold at all.
+// THE SHELL. It has to still be there — that is the entire point of the
+// change: a trapped fish is a fish visibly inside a bubble, for the whole hold.
 const bubbleMeshes = () => scene.children.filter((o) => o.name === 'trapBubble');
-check('the caught bubble is still in the water', bubbleMeshes().length === 1,
+check('the bubble stays, wrapped around the catch', bubbleMeshes().length === 1,
   `${bubbleMeshes().length} bubble(s)`);
 
-const held = bubbleMeshes()[0];
-const heldScale = held.scale.x;
+const shell = bubbleMeshes()[0];
+// Closing takes sealTime, so give it that plus a frame before measuring the fit.
+tickBeluga(Math.ceil(CONFIG.beluga.sealTime / dt) + 2);
+const shellRadius = 0.35 * shell.scale.x; // 0.35 is the asset's authored radius
+check('it closes to fit the creature',
+  Math.abs(shellRadius - caught.radius * CONFIG.beluga.fitPad) < 0.15,
+  `${shellRadius.toFixed(2)} vs ${(caught.radius * CONFIG.beluga.fitPad).toFixed(2)} wanted`);
+
+// It rides the fish. Trapped creatures are frozen, but a rigid body can still
+// shove one, and a shell left behind at the point of contact is a bubble
+// floating next to a fish rather than around it.
+caught.mesh.position.set(caught.mesh.position.x + 3, caught.mesh.position.y - 2, 0);
+tickBeluga(1);
+check('the shell follows the body it is wrapped around',
+  shell.position.distanceTo(caught.mesh.position) < 0.001,
+  `${shell.position.distanceTo(caught.mesh.position).toFixed(3)} apart`);
+
+// Held, but not frozen solid: it breathes.
+let breathMin = Infinity;
+let breathMax = 0;
+for (let i = 0; i < Math.ceil(1 / (CONFIG.beluga.wobbleHz * dt)); i++) {
+  breathMin = Math.min(breathMin, shell.scale.x);
+  breathMax = Math.max(breathMax, shell.scale.x);
+  tickBeluga(1);
+}
+check('it breathes while it holds', breathMax > breathMin * 1.01,
+  `${breathMin.toFixed(3)} - ${breathMax.toFixed(3)}`);
+
+// THE WARNING. Run down to the last stretch of the hold and it must strobe —
+// this is the player's cue that a fish is about to be back in the fight.
+caught.trapTimer = CONFIG.beluga.warnFlicker * 0.5;
 let visibleFrames = 0;
 let hiddenFrames = 0;
-let peakScale = heldScale;
-const holdFrames = Math.ceil(CONFIG.beluga.popFlicker / dt);
-for (let i = 0; i < holdFrames && pops === 0; i++) {
-  if (held.visible) visibleFrames++; else hiddenFrames++;
-  peakScale = Math.max(peakScale, held.scale.x);
-  tickBeluga(1, framesToTrap + i);
+for (let i = 0; i < Math.ceil(CONFIG.beluga.warnFlicker * 0.4 / dt) && pops === 0; i++) {
+  tickBeluga(1);
+  if (shell.visible) visibleFrames++; else hiddenFrames++;
 }
-check('it strobes rather than sitting there', visibleFrames > 0 && hiddenFrames > 0,
+check('it warns before it lets go', visibleFrames > 0 && hiddenFrames > 0,
   `${visibleFrames} on / ${hiddenFrames} off`);
-check('it swells before it goes', peakScale > heldScale * 1.05,
-  `${heldScale.toFixed(3)} -> ${peakScale.toFixed(3)}`);
 
-// ...and then it has to actually burst, and take its mesh with it.
-tickBeluga(4, framesToTrap + holdFrames);
-check('the bubble bursts', pops === 1, `${pops} pop(s)`);
-check('the burst lands on the fish it caught',
+// ...and then bursts, on the fish, taking its mesh with it. Stopped on the
+// burst frame rather than run past it: the moment the hold ends the fish is a
+// target again, and the next bubble the drone fires is a trapBubble mesh in
+// the scene that has nothing to do with whether this shell cleaned up.
+for (let i = 0; i < Math.ceil((CONFIG.beluga.warnFlicker + 0.5) / dt) && pops === 0; i++) tickBeluga(1);
+check('the shell bursts when the hold ends', pops === 1, `${pops} pop(s)`);
+check('the burst lands on the fish it held',
   popAt && Math.hypot(popAt.x - caught.mesh.position.x, popAt.y - caught.mesh.position.y) < 0.01,
   popAt ? `(${popAt.x.toFixed(2)}, ${popAt.y.toFixed(2)})` : 'never fired');
 check('nothing is left in the scene', bubbleMeshes().length === 0,
@@ -484,32 +519,87 @@ check('...whose emitter exists', !!CONFIG.emitters[CONFIG.feedback.belugaPop?.em
   `emit "${CONFIG.feedback.belugaPop?.emit}"`);
 check('...and whose sound exists', !!CONFIG.sfx[CONFIG.feedback.belugaPop?.sfx],
   `sfx "${CONFIG.feedback.belugaPop?.sfx}"`);
-// A held bubble is inert. Without that it keeps sweeping the crowd for the
-// whole flicker and seals a second fish it never touched. Deliberately stops
-// short of the next shot — a bubble the drone fired afterwards catching a
-// second fish is the ability working, not the bug this is looking for.
+
+// A CREATURE THAT DIES INSIDE ITS BUBBLE. The shell holds a direct reference to
+// an enemy, and a dead one's body goes back to the visual pool and is handed to
+// the next spawn — so a shell that doesn't notice would ride a different animal
+// around the arena for the rest of the hold.
 enemies.length = 0;
 resetBeluga(scene, { x: 0, y: 0 });
 traps = 0;
 pops = 0;
+const doomed = fakeEnemy(CONFIG.beluga.orbitRadius, 0, 0.5, 9999);
+enemies.push(doomed);
+for (let i = 0; i < belugaFrames && traps === 0; i++) tickBeluga(1);
+check('a fish is caught to kill', traps === 1, `${traps} trap(s)`);
+enemies.length = 0; // killed: spliced out from under the shell
+tickBeluga(2);
+check('killing the catch bursts its bubble', pops === 1, `${pops} pop(s)`);
+check('...and leaves nothing behind', bubbleMeshes().length === 0,
+  `${bubbleMeshes().length} orphan(s)`);
+
+// ONE SHOT, A SCHOOL. The bubble is drawn far wider than one fish, and sealing
+// only the first thing it touched read as a miss on everything else inside it.
+resetBeluga(scene, { x: 0, y: 0 });
+traps = 0;
+pops = 0;
 const crowd = [];
-for (let i = 0; i < 6; i++) crowd.push(fakeEnemy(CONFIG.beluga.orbitRadius + i * 0.35, 0, 0.5, 9999));
+for (let i = 0; i < 6; i++) crowd.push(fakeEnemy(CONFIG.beluga.orbitRadius, i * 0.3, 0.3, 9999));
 enemies.push(...crowd);
-let crowdFrames = 0;
-const crowdLimit = Math.ceil((CONFIG.beluga.fireRate - CONFIG.beluga.popFlicker - 0.1) / dt);
-for (let i = 0; i < crowdLimit && traps === 0; i++) {
-  updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, i * dt, belugaHooks);
-  crowdFrames++;
-}
-for (let i = 0; i < holdFrames + 6; i++) {
-  updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, (crowdFrames + i) * dt, belugaHooks);
-}
-check('one bubble catches exactly one fish', traps === 1, `${traps} trap(s) in a crowd`);
-check('...and bursts once', pops === 1, `${pops} pop(s)`);
-for (const e of crowd) e.trapTimer = 0;
+for (let i = 0; i < belugaFrames && traps === 0; i++) tickBeluga(1);
+check('one bubble seals a cluster, up to its cap', traps === CONFIG.beluga.maxCatch,
+  `${traps} of ${CONFIG.beluga.maxCatch}`);
+check('...each in its own shell', bubbleMeshes().length === traps,
+  `${bubbleMeshes().length} shell(s) for ${traps} fish`);
+
 enemies.length = 0;
 resetBeluga(scene, { x: 0, y: 0 });
+check('a reset takes every shell with it', bubbleMeshes().length === 0,
+  `${bubbleMeshes().length} orphan(s)`);
 scene.remove(belugaDrone);
+
+// THE FILM. The bubble's Fresnel shell is injected GLSL, and this cannot
+// compile it — no Node harness can, and that is exactly the danger: a GLSL
+// error links no program and the mesh renders as NOTHING, which looks like the
+// bubble was never spawned. (Compile it for real the way the memory describes:
+// esbuild an entry that imports assets.js, serve it, render one frame.)
+//
+// What IS checkable here is the class of mistake that caused the last silent
+// invisibility: a varying written in one stage and declared in the other. Both
+// stages are run through the real onBeforeCompile against three's own
+// MeshBasicMaterial source, so a chunk name that changes under a three upgrade
+// shows up as a replacement that no longer lands.
+{
+  const film = createVisual('trapBubble');
+  const shader = {
+    uniforms: {},
+    vertexShader: THREE.ShaderLib.basic.vertexShader,
+    fragmentShader: THREE.ShaderLib.basic.fragmentShader,
+  };
+  check('the bubble asset carries a shell material', typeof film.material?.onBeforeCompile === 'function');
+  film.material.onBeforeCompile?.(shader);
+  check('the vertex hook landed', shader.vertexShader.includes('vShellN = normalize'));
+  check('the fragment hook landed', shader.fragmentShader.includes('shellRim'));
+  check('...and it replaced diffuseColor rather than adding a second one',
+    (shader.fragmentShader.match(/vec4 diffuseColor = vec4\(/g) ?? []).length === 1);
+  check('every shell uniform is bound',
+    ['uShellPower', 'uShellCore', 'uShellRim', 'uShellBoost', 'uShellSheen']
+      .every((u) => shader.uniforms[u] && typeof shader.uniforms[u].value === 'number'));
+  // The generic guard: anything the vertex stage ASSIGNS to must be declared in
+  // the vertex stage. three's own varyings live in unresolved #include chunks
+  // at this point, so they stay correctly out of scope.
+  const injectedVert = shader.vertexShader.match(/^\s*(v[A-Z]\w*) = /gm) ?? [];
+  const undeclared = injectedVert
+    .map((line) => line.trim().split(' ')[0])
+    .filter((name) => name.startsWith('vShell'))
+    .filter((name) => !new RegExp(`varying[^;]*\\b${name}\\b`).test(shader.vertexShader));
+  check('no varying is written in a stage that never declared it',
+    undeclared.length === 0, undeclared.join(', ') || 'all declared');
+  // Both faces, and no depth write — a bubble you cannot see the far wall of,
+  // or that z-rejects the fish it is wrapped around, is a marble.
+  check('the film draws both walls and hides nothing behind it',
+    film.material.side === THREE.DoubleSide && film.material.transparent && !film.material.depthWrite);
+}
 
 // --- mussel barrage ---------------------------------------------------------
 // The one ability with no update() — it fires once, from the strike release —

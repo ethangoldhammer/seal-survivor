@@ -70,6 +70,12 @@ export const SOURCE_UPGRADES = {
   club: { upgrades: ['club'], label: 'Driftwood Club' },
   clubThrow: { upgrades: ['clubThrow'], label: 'Hurler' },
   clubBoom: { upgrades: ['clubBoom'], label: 'Powder Keg' },
+  // These two were dealing real damage under a tag no upgrade claimed, which
+  // meant zero stack-minutes, which meant a return of 0.00x that no amount of
+  // over- or under-tuning could ever move. Same failure the SOURCE_ALIAS note
+  // below describes for the boat's bomb — see that comment.
+  musselVolley: { upgrades: ['musselVolley'], label: 'Mussel Barrage' },
+  bioluminescence: { upgrades: ['bioluminescence'], label: 'Glow Up!' },
   eel: { upgrades: ['electricEel'], label: 'Electric Eel' },
   sealTeam: { upgrades: ['sealTeam'], label: 'Seal Team' },
   calamari: { upgrades: ['calamari'], label: 'Calamari Ring' },
@@ -80,6 +86,10 @@ export const SOURCE_UPGRADES = {
   // don't show up as dead weight in a damage table they can't compete in.
   beluga: { upgrades: ['beluga'], label: 'Baby Beluga', control: true },
   dumbo: { upgrades: ['dumbo'], label: 'Dumbo Octopus', control: true },
+  octoGrab: { upgrades: ['octoGrab'], label: 'Octopus Grabber', control: true },
+  // Cold Snap deals no damage at all — a freeze is its entire output, so
+  // chillEnemy reports saturation and club.js records it here.
+  clubIce: { upgrades: ['clubIce'], label: 'Cold Snap', control: true },
   // Bakalar's boat does both: the net hauls (control events) and the bomb
   // deals damage. One pick pays for both, so they share a row — see
   // SOURCE_ALIAS.
@@ -658,6 +668,29 @@ export function formatAggregateReport(agg) {
       String(Math.round(r.dpsPerStackMinute)).padStart(15),
       String(r.runs).padStart(6),
     ].join(''));
+  }
+  // The damage table above skips `damage <= 0`, which is every control ability
+  // — so without this block the octopus, the beluga, the dumbo and Cold Snap
+  // are absent from the ONLY report anyone runs. formatRunReport has had this
+  // table since the start; the aggregate never grew one, so four cards have
+  // been unjudgeable here no matter how many runs were logged.
+  const control = agg.abilities.filter((r) => r.events > 0);
+  if (control.length) {
+    L.push('');
+    // No `return` column on purpose: efficiency is damage share over
+    // investment share, so it is 0.00x for everything here by construction —
+    // and a 0.00x printed next to an ability reads as "dead pick" when the
+    // truth is "deals no damage on purpose". Events per stack-minute is the
+    // comparable number for these.
+    L.push('  control            events  per stack-min  runs');
+    for (const r of control) {
+      L.push([
+        `  ${r.label.padEnd(18)}`,
+        String(Math.round(r.events)).padStart(6),
+        safeDiv(r.events, r.stackMinutes).toFixed(1).padStart(15),
+        String(r.runs).padStart(6),
+      ].join(''));
+    }
   }
   L.push('');
   if (!agg.flags.length) {

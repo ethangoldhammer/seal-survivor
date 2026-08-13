@@ -77,7 +77,11 @@ const fragmentShader = /* glsl */ `
         vec2 at = starOffset(cell);
         float d = length(f - at);
         float twinkle = 1.0 - uTwinkle * 0.5 * (1.0 + sin(uTime * 1.7 + h * 62.0));
-        float dot_ = smoothstep(0.14, 0.0, d) * (0.4 + 0.6 * h);
+        // STAR_RADIUS rather than a literal: starOffset keeps every star at
+        // least this far inside its own cell, and the two numbers being the
+        // same one is what stops the dot being sliced flat by the cell edge.
+        // See systems/starField.js.
+        float dot_ = smoothstep(STAR_RADIUS, 0.0, d) * (0.4 + 0.6 * h);
         color += vec3(0.85, 0.9, 1.0) * dot_ * uStars * max(twinkle, 0.0) * t;
       }
     }

@@ -39,7 +39,7 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
-import { updateDayCycle, dayState, horizonY } from '../path/src/systems/daylight.js';
+import { updateDayCycle, dayState, horizonY, bodySize } from '../path/src/systems/daylight.js';
 import { createCelestials, celestialFrame, clearCelestialFlares } from '../path/src/systems/celestial.js';
 import { updateCelestialPass, resetCelestialPass, passState } from '../path/src/systems/celestialPass.js';
 
@@ -119,11 +119,45 @@ section('DRIFT — the sky barely moves');
 }
 
 // ===========================================================================
+section('SIZE — big on screen, and still in the sky');
+// ===========================================================================
+{
+  const airH = bounds.frameTop - bounds.surfaceY;
+  const sun = bodySize(CONFIG.dayNight.sun);
+  const moon = bodySize(CONFIG.dayNight.moon);
+  check('the size is stated against the visible sky', CONFIG.dayNight.sun.frameSize > 0,
+    `sun ${(CONFIG.dayNight.sun.frameSize * 100).toFixed(0)}% of a ${airH.toFixed(1)}-unit air band = ${sun.toFixed(2)} units`);
+  check('...and it is bigger than the world-unit fallback it replaced',
+    sun > CONFIG.dayNight.sun.size && moon > CONFIG.dayNight.moon.size,
+    `sun ${CONFIG.dayNight.sun.size} -> ${sun.toFixed(2)}, moon ${CONFIG.dayNight.moon.size} -> ${moon.toFixed(2)}`);
+  check('the sun still out-sizes the moon', sun > moon,
+    `${sun.toFixed(2)} vs ${moon.toFixed(2)}`);
+
+  // THE ARC HAS TO COME DOWN AS THE BODY GROWS, or a bigger sun is simply a
+  // cropped one for the four hours either side of noon. Asserted at the hour it
+  // is highest, against the raw orbit — the frame fit is not allowed to be what
+  // rescues this, because at the surface (the horizon in shot) it may not move
+  // a body at all.
+  atHour(12);
+  const top = dayState.sun.y + sun / 2;
+  check('a full-sized sun clears the top of the frame at noon', top < bounds.frameTop,
+    `disc tops out at ${top.toFixed(2)}, frame top ${bounds.frameTop.toFixed(2)}`);
+  check('...and is still properly clear of the water', dayState.sun.y - sun / 2 > 0,
+    `bottom edge at ${(dayState.sun.y - sun / 2).toFixed(2)}`);
+
+  // The positive control: the same body on the OLD arc rule (the whole air
+  // band, regardless of how big the thing riding it is) would have been cut.
+  const legacyY = airH * CONFIG.dayNight.orbit.radiusY;
+  check('the old arc rule would have cropped it', legacyY + sun / 2 > bounds.frameTop,
+    `would have topped out at ${(legacyY + sun / 2).toFixed(2)}`);
+}
+
+// ===========================================================================
 section('THE FRAME FIT — a body stays in the shot');
 // ===========================================================================
 {
   const orbit = CONFIG.dayNight.orbit;
-  const pad = (CONFIG.dayNight.sun.size * 0.5) * orbit.framePad;
+  const pad = (bodySize(CONFIG.dayNight.sun) * 0.5) * orbit.framePad;
 
   // Zoomed in hard, at the hour the sun is furthest out along the arc. This is
   // the cinematic push-in that used to crop it.
@@ -228,12 +262,17 @@ section('THE TRIGGER ZONE — going through it');
   check('speed scales how big the pass reads', fast > slow && fast <= pass.speedScale.max,
     `${slow.toFixed(2)} at rest, ${fast.toFixed(2)} flat out`);
 
-  // A body under the water is drawn by nothing and covered by the fill, and the
-  // seal swims through that patch of sea constantly.
+  // A body under the water is covered by the fill, and the seal swims through
+  // that patch of sea constantly. Note this is a different question from
+  // whether the rig DRAWS anything there: a set body can still have half a halo
+  // above the water line, which is worth drawing and is not worth flying
+  // through. Getting those two confused is what made this check fail the first
+  // time the moon got bigger — a wider halo made a body 5 units under the sea
+  // "visible" and armed a zone nobody could see.
   resetCelestialPass();
   frame(12, 0, 0); // sun up, moon down
   const moon = celestialFrame.moon;
-  check('the moon is down at noon', !moon.visible, `visible = ${moon.visible}`);
+  check('the moon is down at noon', !moon.visible, `centre at y=${moon.y.toFixed(1)}`);
   const before = hits.length;
   updateCelestialPass(1 / 60, { x: moon.x, y: moon.y, speed: 30 }, hooks);
   check('...and swimming through where it would be fires nothing',

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CONFIG } from '../config.js';
 import { bounds, WAVE, sea } from '../arena.js';
-import { dayState, horizonY } from './daylight.js';
+import { dayState, horizonY, bodySize } from './daylight.js';
 
 // The sun and the moon. Two identical rigs riding the ellipse in daylight.js
 // on opposite points of it, so which one is up is never a decision anything
@@ -549,7 +549,13 @@ export function createCelestials(scene) {
     const passCfg = CONFIG.dayNight?.pass ?? {};
 
     const orbit = CONFIG.dayNight.orbit;
-    const radius = cfg.size * 0.5;
+    // THE one size, resolved by daylight.js — the same number the orbit sized
+    // its arc against. Read here rather than off cfg.size directly because
+    // `frameSize` (a fraction of the visible sky) is what the tuner writes now,
+    // and a rig scaling a disc by one number while the arc was placed by
+    // another is a sun that fits the frame everywhere except where it is drawn.
+    const size = bodySize(cfg);
+    const radius = size * 0.5;
     // How much clearance the fit keeps, in disc radii: 1 is the disc exactly
     // touching the edge, above it leaves a margin of the halo showing too.
     const at = fitToFrame(
@@ -566,7 +572,7 @@ export function createCelestials(scene) {
     // the fill covers every pixel of it. `at.y` IS the world height the body is
     // drawn at, so this and the trigger zone published below are reading one
     // number and cannot disagree about whether the sun is up.
-    body.root.visible = at.y > horizonY() - cfg.size * (cfg.halo ?? 2) * 0.5;
+    body.root.visible = at.y > horizonY() - size * (cfg.halo ?? 2) * 0.5;
 
     const zone = celestialFrame[which];
     zone.x = at.x;
@@ -576,14 +582,20 @@ export function createCelestials(scene) {
     // properly in the light for it to count, not clipping the rim.
     zone.trigger = radius * Math.max(0, passCfg.radius ?? 0.7);
     zone.color = cfg.color;
-    zone.visible = body.root.visible;
+    // NOT `body.root.visible`, which is the DRAW cull and asks a wider question
+    // — a body whose disc has set can still have half a halo above the water,
+    // and that is worth drawing. It is not worth flying through: the disc is
+    // under the fill, there is nothing on screen there, and the seal swims
+    // through that patch of sea constantly. So the zone is armed by the body
+    // being UP, the same test dayState.above makes.
+    zone.visible = at.y > horizonY();
 
     if (!body.root.visible) return;
 
     // `art` is only ever a MODEL now — flat art rides the disc itself, so the
     // quad is still the target when a .webp is in place.
     const target = body.art ?? body.disc;
-    target.scale.setScalar(cfg.size * (target.userData.unitScale ?? 1));
+    target.scale.setScalar(size * (target.userData.unitScale ?? 1));
 
     // A model carries its own materials and its own idea of colour; tinting it
     // from here would fight whatever it was authored with. The quad — with or
@@ -609,7 +621,7 @@ export function createCelestials(scene) {
 
     const halo = body.halo;
     const flareCfg = CONFIG.dayNight?.pass?.flare ?? {};
-    halo.scale.setScalar(cfg.size * (cfg.halo ?? 2)
+    halo.scale.setScalar(size * (cfg.halo ?? 2)
       * (1 + 0.12 * touch + shine * (flareCfg.swell ?? 0.18)));
     const hu = halo.material.uniforms;
     hu.uColor.value.set(cfg.color);

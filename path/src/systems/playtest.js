@@ -211,7 +211,7 @@ function closeBucket(now) {
  * Finish and file the run. Returns it, so the caller can hand it straight to
  * the overlay. `reason` is 'death' | 'quit' | 'restart'.
  */
-export function endRun(reason = 'death') {
+export function endRun(reason = 'death', extra = null) {
   if (!run) return null;
   // The final partial bucket counts — the last 20 seconds of a run are the
   // ones that killed you, and dropping them would hide exactly the spike
@@ -223,6 +223,18 @@ export function endRun(reason = 'death') {
   }
   run.endReason = reason;
   run.finalStacks = { ...stacks };
+  // Whatever the caller wants filed alongside the run — in practice the frame
+  // time distribution (systems/perfLog.js). It rides HERE rather than being
+  // recorded by this module because a run's frame times are a property of the
+  // machine it was played on, not of the balance data this recorder exists for
+  // — but they belong in the same record, because "the run where the boat
+  // exploded" and "the run with the 300ms frame" have to be the same row for
+  // either to explain the other.
+  //
+  // It also makes the numbers READABLE without a browser: runs.jsonl is on
+  // disk, so a frame-time report can be looked at from a terminal instead of
+  // being trapped in a console someone has to be sitting in front of.
+  if (extra) Object.assign(run, extra);
   last = run;
   const finished = run;
   run = null;

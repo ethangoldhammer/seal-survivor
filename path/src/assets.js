@@ -499,7 +499,13 @@ export const ASSETS = {
     animations: { idle: 'MorayEelRigging|MorayEelRigging|Main|Layer0', swim: 'MorayEelRigging|MorayEelRigging|Main|Layer0', boost: 'MorayEelRigging|MorayEelRigging|Main|Layer0' },
     shape: 'icosahedron', radius: 0.4, color: 0x9fe8ff, unlit: true,
   },
-  trapBubble: { shape: 'sphere', radius: 0.35, color: 0xaeefff, opacity: 0.55, unlit: true },
+  // `shell` is the Fresnel film — see makeShellMaterial. Opacity is 1 here
+  // because the shader owns the alpha now (CONFIG.bubbleShell.coreAlpha is the
+  // 0.55 this used to be, and it applies to the middle of the bubble only);
+  // it stays non-null so the material is still built transparent.
+  // Segments up from the default: the rim is a silhouette effect, and a coarse
+  // sphere shows its facets exactly where this draws its brightest line.
+  trapBubble: { shape: 'sphere', radius: 0.35, segments: 32, color: 0xaeefff, opacity: 1, unlit: true, shell: true },
 
   // Bakalar's trawler — the same hull as the hostile `trawler`, deliberately
   // NOT the same entry: this one is yours, so it keeps a warm outline instead
@@ -673,8 +679,34 @@ export const ASSETS = {
   //     comes out crossways wants `forward: '+Y', up: '-Z'` instead.
   //   * where the GRIP sits along the model is a property of the art, not of
   //     the weapon, so it's CONFIG.club.gripOffset rather than an offset here.
+  // THE FOUR CLUBS. One model, four entries — see clubVariantAsset below.
+  //
+  // Separate asset KEYS rather than one key tinted at spawn, and that is the
+  // point of the arrangement: a key is the unit the T-menu uploads against and
+  // the unit assets.csv sizes, so each variant already has its own row waiting
+  // for its own model. Until that art exists they all name the same file and
+  // differ only in colour, which is enough to tell them apart in the water and
+  // is a one-line change per variant later.
+  //
+  // `tint` is doing the work, and it is NOT the `color` field below it:
+  // `color` only ever reaches the procedural fallback SHAPE. A loaded model
+  // with no tint renders in its own file material, which for club.glb is
+  // untextured pure white lit by the scene — which is exactly why these could
+  // not be seen.
   club: {
     model: '/models/club.glb',
+    // THE SHAFT is driftwood on every variant — a club is a club, and what
+    // tells them apart is the business end. `headTint` paints only the head
+    // (see paintHeadTint); `headFrom` is measured, not eyeballed: 0.6 is where
+    // this model's shaft flares from radius 0.015 to 0.028.
+    tint: 0x8a6b47,   // driftwood
+    headTint: 0x6f5436, // base club: a darker band of the same wood
+    headFrom: 0.6,
+    modelUnlit: true, // flat, so scene lighting can neither wash it out nor black it
+    // Thickness is in SOURCE units, and this model is 0.5 long by 0.07 across
+    // — the boats' 0.02 would be a rim a third the width of the shaft.
+    // Measured for this file rather than copied from another one.
+    outline: { color: 0x1a1208, thickness: 0.006 },
     // DERIVED, not copied. This was the literal 2.2 while CONFIG.club.length
     // was also 2.2, which is fine right up until the length moves — and now
     // that weapons.csv owns the reach it moves without anyone touching this
@@ -1815,6 +1847,39 @@ export const ASSETS = {
   particle: { shape: 'sphere', radius: 0.08, color: 0xffffff, unlit: true },
 };
 
+// --- the club variants -----------------------------------------------------
+//
+// Derived from `club` rather than written out four times, so the things that
+// make a club a club — the grip pivot, the forward axis, the fit that ties the
+// drawing to the reach it hits with — can only ever be changed in one place.
+// Four hand-copied entries is four chances for one of them to keep a stale
+// pivot and be held by its middle.
+//
+// Each is a real asset key, which is what buys the arrangement its future: the
+// T-menu uploads per key and assets.csv sizes per key, so dropping a distinct
+// model on Cold Snap later is a drag and a row, with no code change at all.
+// Today they all name the same file and differ only in colour.
+for (const [key, headTint] of [
+  ['clubBoom', 0xd94a2b],   // Powder Keg — ember
+  ['clubIce', 0x7fd4f5],    // Cold Snap — ice
+  ['clubThrow', 0xe0c070],  // Hurler — bound in pale cord
+]) {
+  ASSETS[key] = {
+    ...ASSETS.club,
+    // THE SHAFT STAYS BROWN. Only the head carries the variant, which is what
+    // makes the set read as four clubs rather than four differently-coloured
+    // sticks — and it keeps the silhouette honest, since the wood is the part
+    // the seal is actually holding.
+    headTint,
+    // The fallback SHAPE has no head to speak of (it is one oval), so its flat
+    // colour takes the head's tint instead: a variant whose model failed to
+    // load still says which variant it is, which is exactly the moment you
+    // most need to know.
+    color: headTint,
+    outline: { ...ASSETS.club.outline },
+  };
+}
+
 const loadedModels = new Map();
 const geometryCache = new Map();
 const materialCache = new Map();
@@ -2616,6 +2681,8 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
     });
   }
 
+  if (def.headTint != null) paintHeadTint(model, def);
+
   if (def.outline) addOutlineShells(model, def.outline);
 
   const orient = new THREE.Group();
@@ -2724,6 +2791,152 @@ export function createVisual(key) {
   }
   spawnDecorator?.(mesh, key);
   return mesh;
+}
+
+// ---------------------------------------------------------------------------
+// RECYCLING A VISUAL
+//
+// createVisual is not cheap and it is not only CPU. A skinned clone gets its
+// own Skeleton, and every Skeleton allocates its own bone texture — three's
+// computeBoneTexture builds a DataTexture of the matrix palette — so a spawn is
+// a cloned bone hierarchy, a mixer, AND a GPU texture. removeEnemy used to drop
+// all of it on the floor: scene.remove and a splice, no dispose, and WebGL does
+// not free on JS garbage collection.
+//
+// Measured on a real run: textures created came to 1.00 per kill (1.16 and 0.92
+// across two runs), renderer.info.memory.textures climbed to 1,466 over nine
+// minutes and never came down, and the frame-time record showed 199 of 224
+// hitches were neither a shader link nor a texture upload — the signature of
+// the garbage, not of the allocation. Spikes tracked the KILL RATE and not the
+// creature count: the smoothest run of four had 195 creatures alive and 0.7
+// kills a second, the worst had 4.6.
+//
+// So a dead creature's body is kept and handed to the next one that needs it.
+// Nothing is disposed because nothing is thrown away.
+//
+// THE RESET IS A SNAPSHOT, not a list of fields. Systems reach into these
+// hierarchies from everywhere — a boss scales the visual, statuses hang motes
+// off it, a rig hides a sub-mesh — and a reset written as "the things I could
+// think of" is a reset that goes stale the first time somebody adds a system.
+// Recording every node's local transform once, at birth, and restoring the lot
+// is mechanical, and it cannot fall behind code it knows nothing about.
+// ---------------------------------------------------------------------------
+
+const visualPool = new Map();
+// Per key, because the pool exists to absorb a school dying at once and not to
+// hold the whole roster resident forever. Past this a body really is disposed.
+const POOL_PER_KEY = 24;
+
+function captureRest(visual) {
+  const order = [];
+  visual.traverse((o) => order.push(o));
+  const t = new Float32Array(order.length * 10);
+  const vis = new Uint8Array(order.length);
+  for (let i = 0; i < order.length; i++) {
+    const o = order[i];
+    o.position.toArray(t, i * 10);
+    o.quaternion.toArray(t, i * 10 + 3);
+    o.scale.toArray(t, i * 10 + 7);
+    vis[i] = o.visible ? 1 : 0;
+  }
+  visual.userData.__rest = { order, nodes: new Set(order), t, vis };
+}
+
+// Put a used body back the way it was born. Returns false if it can't be
+// trusted, in which case the caller builds a fresh one — a reset that is unsure
+// is worth exactly nothing, and a clone is only expensive, not wrong.
+function resetVisual(visual) {
+  const rest = visual.userData?.__rest;
+  if (!rest) return false;
+
+  // Anything hung on the body after birth — a status mote, a net, a marker —
+  // goes first. Collected before removing, because removing detaches subtrees
+  // and traversal would lose its place.
+  let strays = null;
+  visual.traverse((o) => { if (!rest.nodes.has(o)) (strays ??= []).push(o); });
+  if (strays) for (const s of strays) s.parent?.remove(s);
+
+  const { order, t, vis } = rest;
+  for (let i = 0; i < order.length; i++) {
+    const o = order[i];
+    // A node that was taken out of the hierarchy entirely means somebody
+    // restructured this body, and the snapshot no longer describes it.
+    if (i > 0 && !o.parent) return false;
+    o.position.fromArray(t, i * 10);
+    o.quaternion.fromArray(t, i * 10 + 3);
+    o.scale.fromArray(t, i * 10 + 7);
+    o.visible = vis[i] === 1;
+    o.matrixWorldNeedsUpdate = true;
+  }
+  return true;
+}
+
+// The bone texture is the only GPU resource a clone owns — geometry and
+// materials belong to the template and are shared with every other instance, so
+// disposing those would take the asset out from under everything on screen.
+function disposeVisual(visual) {
+  visual.traverse((o) => { if (o.isSkinnedMesh) o.skeleton?.dispose(); });
+}
+
+/**
+ * A body for a new creature: a recycled one if there is one, otherwise a fresh
+ * clone. Drop-in for createVisual.
+ */
+export function acquireVisual(key) {
+  const free = visualPool.get(key);
+  while (free?.length) {
+    const used = free.pop();
+    if (resetVisual(used)) return used;
+    // Unrecoverable — better disposed than handed out in an unknown state.
+    disposeVisual(used);
+  }
+  const fresh = createVisual(key);
+  captureRest(fresh);
+  return fresh;
+}
+
+/**
+ * Hand a body back. Safe on anything, including a visual this never issued —
+ * which is what lets the caller release unconditionally instead of tracking
+ * which creatures came from the pool.
+ */
+export function releaseVisual(visual) {
+  if (!visual) return false;
+  visual.parent?.remove(visual);
+  const key = visual.name;
+  if (!key || !visual.userData?.__rest) {
+    disposeVisual(visual);
+    return false;
+  }
+  // Hidden while it waits. A system holding a stale reference to a creature
+  // that just died can then still write to it without anything appearing on
+  // screen — the reset clears the flag on the way back out.
+  visual.visible = false;
+  let free = visualPool.get(key);
+  if (!free) { free = []; visualPool.set(key, free); }
+  if (free.length >= POOL_PER_KEY) {
+    disposeVisual(visual);
+    return false;
+  }
+  free.push(visual);
+  return true;
+}
+
+/**
+ * Empty the pool. Anything that rebuilds an asset — a model upload, a look
+ * change — invalidates every body already built from it, and a recycled one
+ * would come back wearing the old asset.
+ */
+export function clearVisualPool() {
+  for (const free of visualPool.values()) for (const v of free) disposeVisual(v);
+  visualPool.clear();
+}
+
+/** Bodies waiting, per key. Diagnostics only. */
+export function visualPoolStats() {
+  const out = {};
+  for (const [key, free] of visualPool) if (free.length) out[key] = free.length;
+  return out;
 }
 
 function cloneSafe(template) {
@@ -2879,6 +3092,97 @@ function stripGLBTextureRefs(arrayBuffer) {
 // species shares the one material, so a colour, glow or thickness edit — or
 // switching the whole thing off — reaches every one already swimming, without
 // anything having to hunt down live instances.
+// ---------------------------------------------------------------------------
+// TWO-TONE PAINT — a shaft in one colour and a head in another, on a model that
+// ships as ONE mesh with ONE material.
+//
+// Vertex colours rather than a second material, because splitting the mesh
+// would mean two draw calls and a seam to keep aligned; the colour lives on the
+// geometry, which instantiateParsedModel already clones per asset key, so the
+// four club variants cannot bleed into each other.
+//
+// PER TRIANGLE, ON A NON-INDEXED COPY, and that is the whole subtlety. Measured
+// on club.glb: the shaft is a bare cylinder with vertices only at its two ENDS
+// — nothing along its length. Colour that per vertex and the grip's brown and
+// the head's colour interpolate across every pixel between them, so instead of
+// a brown handle you get a full-length gradient. Duplicating the shared
+// vertices (toNonIndexed) lets each triangle carry one flat colour, which is
+// what puts a hard edge exactly where the head begins.
+//
+// `headFrom` is a fraction along `forward`, 0 at the grip and 1 at the head. For
+// the club it is 0.6, which is where the shaft measurably starts to flare (mean
+// radius 0.015 -> 0.028) rather than a number picked by eye.
+function paintHeadTint(model, def) {
+  const spec = def.forward ?? '+Z';
+  const axis = spec.slice(-1).toLowerCase();
+  const towardHead = spec.startsWith('-') ? -1 : 1;
+  const shaftColor = new THREE.Color(def.tint ?? 0xffffff);
+  const headColor = new THREE.Color(def.headTint);
+  const headFrom = def.headFrom ?? 0.6;
+
+  model.updateMatrixWorld(true);
+  const toModel = new THREE.Matrix4().copy(model.matrixWorld).invert();
+  const meshes = [];
+  model.traverse((o) => {
+    if ((o.isMesh || o.isSkinnedMesh) && o.geometry?.attributes?.position) meshes.push(o);
+  });
+  if (meshes.length === 0) return;
+
+  // Bounds along the axis first, over every mesh together: the split has to be
+  // measured against the whole model, not against whichever part is being
+  // walked, or a two-part model paints each piece on its own scale.
+  const v = new THREE.Vector3();
+  const local = new Map();
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const mesh of meshes) {
+    const m = new THREE.Matrix4().multiplyMatrices(toModel, mesh.matrixWorld);
+    local.set(mesh, m);
+    const pos = mesh.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m);
+      if (v[axis] < lo) lo = v[axis];
+      if (v[axis] > hi) hi = v[axis];
+    }
+  }
+  const span = (hi - lo) || 1;
+
+  for (const mesh of meshes) {
+    if (mesh.geometry.index) mesh.geometry = mesh.geometry.toNonIndexed();
+    const m = local.get(mesh);
+    const pos = mesh.geometry.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+
+    for (let tri = 0; tri < pos.count; tri += 3) {
+      // The triangle's own position along the shaft, from its centroid — so a
+      // face straddling the split lands wholly on one side instead of being
+      // half-shaded.
+      let t = 0;
+      for (let k = 0; k < 3; k++) {
+        v.fromBufferAttribute(pos, tri + k).applyMatrix4(m);
+        t += towardHead > 0 ? (v[axis] - lo) / span : (hi - v[axis]) / span;
+      }
+      const c = (t / 3) >= headFrom ? headColor : shaftColor;
+      for (let k = 0; k < 3; k++) {
+        colors[(tri + k) * 3] = c.r;
+        colors[(tri + k) * 3 + 1] = c.g;
+        colors[(tri + k) * 3 + 2] = c.b;
+      }
+    }
+    mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    for (const mat of (Array.isArray(mesh.material) ? mesh.material : [mesh.material])) {
+      if (!mat) continue;
+      mat.vertexColors = true;
+      // The colours are IN the attribute now, so the material has to go
+      // neutral — three multiplies the two together, and leaving the tint on
+      // `color` would square the shaft's brown and darken the whole club.
+      mat.color?.setRGB(1, 1, 1);
+      mat.needsUpdate = true;
+    }
+  }
+}
+
 export function addOutlineShells(model, spec) {
   const shared = spec.material ?? null;
   const targets = [];
@@ -3677,6 +3981,119 @@ function getMaterial(key, def) {
   const mat = def.unlit === false ? new THREE.MeshStandardMaterial(opts) : new THREE.MeshBasicMaterial(opts);
   mat.userData.__originalMap = null;
   mat.userData.__originalColor = def.color ?? 0xffffff;
+  if (def.shell) makeShellMaterial(mat);
   materialCache.set(key, mat);
   return mat;
+}
+
+// ---------------------------------------------------------------------------
+// FAKE GLASS. `shell: true` on an asset turns its flat translucent ball into
+// something that reads as a bubble.
+//
+// The trick is that a real bubble is not evenly see-through: it is a thin film,
+// so you look through almost nothing where it faces you and through a long
+// slice of film where it turns away — which is why the edge is bright and the
+// middle is not there at all. That is a Fresnel term, and one dot product buys
+// the whole read. A uniform 55% alpha instead reads as a fogged marble: the
+// same veil over the creature inside as over empty water, with a hard circular
+// edge that says "sphere" rather than "surface".
+//
+// Deliberately NOT a physical transmission material. This has to survive on a
+// phone in a crowd of thirty, it has to work on the unlit MeshBasicMaterial
+// every primitive asset here already uses, and — the part a real refraction
+// would fight — the creature inside must stay legible. This is a look, not
+// optics.
+// ---------------------------------------------------------------------------
+
+// Every live shell material, so a tuner edit reaches the ones already on
+// screen. A Set rather than a walk of ASSETS: getMaterial caches one material
+// per key, and this holds exactly those.
+const shellMaterials = new Set();
+
+// The one place the injected GLSL lives. Kept as a plain string rather than
+// spread across .replace() calls so the whole shader can be read at once — and
+// with NO backtick anywhere in it, including in the comments, since a backtick
+// inside a template literal ends the string and reports itself as a syntax
+// error somewhere else entirely.
+const SHELL_FRAGMENT = `
+  // Facing-ness, folded so it is the same on both faces of the sphere: the
+  // far wall of a bubble is film too, and abs() is what lets one material
+  // draw both without the back half inverting.
+  float shellFace = 1.0 - abs(dot(normalize(vShellN), normalize(vShellV)));
+  float shellRim = pow(clamp(shellFace, 0.0, 1.0), uShellPower);
+  // A second, much tighter band right at the silhouette. Without it the rim is
+  // a soft halo — a glow around a ball — and with it there is a bright line ON
+  // the surface, which is what sells a film with a thickness.
+  float shellSheen = pow(clamp(shellFace, 0.0, 1.0), uShellPower * 4.0) * uShellSheen;
+  vec4 diffuseColor = vec4(
+    // Multiplied past 1.0 on purpose: the scene renders to an HDR target, so
+    // the rim is what bloom's bright-pass picks up while the body stays under
+    // threshold. See CONFIG.bloom.
+    diffuse * (1.0 + shellRim * uShellBoost + shellSheen * 3.0),
+    clamp(opacity * mix(uShellCore, uShellRim, shellRim) + shellSheen, 0.0, 1.0)
+  );
+`;
+
+function makeShellMaterial(mat) {
+  mat.transparent = true;
+  // A bubble you can see the far side of, and see a fish THROUGH. Depth
+  // writing is what would stop both: the near wall would z-reject the far one
+  // and the creature it is wrapped around, and a bubble that hides what it
+  // caught is worse than no bubble at all.
+  mat.depthWrite = false;
+  mat.side = THREE.DoubleSide;
+
+  // Owned here rather than pulled off `shader.uniforms` afterwards, for the
+  // same reason the outline shells own theirs: onBeforeCompile does not run
+  // until this material is first rendered, so anything written before the
+  // first bubble reaches the screen — every boot value, and any tuner edit
+  // made while none are in the water — would be dropped on the floor.
+  mat.userData.__shell = {
+    uShellPower: { value: 2.6 },
+    uShellCore: { value: 0.06 },
+    uShellRim: { value: 0.95 },
+    uShellBoost: { value: 2.2 },
+    uShellSheen: { value: 0.35 },
+  };
+
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, mat.userData.__shell);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vShellN;\nvarying vec3 vShellV;')
+      // AFTER project_vertex, which is where `mvPosition` is defined — it is a
+      // local of the chunk's scope, not a varying, so this cannot be hoisted
+      // any earlier. `normalMatrix` and `normal` are default uniforms/attributes
+      // and are available in every material, lit or not.
+      .replace('#include <project_vertex>',
+        '#include <project_vertex>\n\tvShellN = normalize(normalMatrix * normal);\n\tvShellV = normalize(-mvPosition.xyz);');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>',
+        '#include <common>\nuniform float uShellPower;\nuniform float uShellCore;\nuniform float uShellRim;'
+        + '\nuniform float uShellBoost;\nuniform float uShellSheen;\nvarying vec3 vShellN;\nvarying vec3 vShellV;')
+      // Replaces the line that DECLARES diffuseColor, so everything downstream
+      // — the map, the tint, the alpha test — still runs on top of it exactly
+      // as it would have. Injecting after <map_fragment> instead would throw
+      // away any texture the Look panel put on the bubble.
+      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', SHELL_FRAGMENT);
+  };
+
+  shellMaterials.add(mat);
+  applyBubbleShellSettings();
+  return mat;
+}
+
+// Push CONFIG.bubbleShell onto every shell material. Pure uniform writes on an
+// already-compiled shader, so this is safe to call from a slider's every input
+// event — see handleTunerChange in main.js.
+export function applyBubbleShellSettings() {
+  const cfg = CONFIG.bubbleShell ?? {};
+  for (const mat of shellMaterials) {
+    const u = mat.userData.__shell;
+    if (!u) continue;
+    u.uShellPower.value = Math.max(0.1, cfg.power ?? 2.6);
+    u.uShellCore.value = cfg.coreAlpha ?? 0.06;
+    u.uShellRim.value = cfg.rimAlpha ?? 0.95;
+    u.uShellBoost.value = cfg.rimBoost ?? 2.2;
+    u.uShellSheen.value = cfg.sheen ?? 0.35;
+  }
 }

@@ -1,11 +1,14 @@
+import './dom-stub.mjs';
+import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import {
   strikeState, resetStrike, feedChum, updateStrike, restoreCharge,
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
-  chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink,
+  chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips,
 } from '../path/src/systems/strike.js';
 import { magnetRadius, magnetSpeed, magnetDistance, magnetState } from '../path/src/systems/chumMagnet.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
+import { updatePickups, resetPickups, spawnXpOrb } from '../path/src/entities/pickups.js';
 
 // ============================================================================
 // THE BOOST METER — the pip economy and the tick that reports it.
@@ -31,10 +34,17 @@ function check(label, cond) {
 }
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
 
-// A stat block shaped like recomputeStats' output, for the fields this reads.
+// A stat block shaped like recomputeStats' output. `strikeDashDuration` is not
+// optional: tryStrike multiplies by it, and leaving it out makes the dash NaN
+// seconds long — which never ends, so `active` sticks true and isFeeding()
+// silently returns true for the rest of the file. A missing field here is a
+// harness that props up the thing it is testing.
 const stats = (refill = CONFIG.strike.charge.chumRefill) => ({
   strikeChumRefill: refill,
   strikeChargeTime: CONFIG.strike.charge.time,
+  strikeDashDuration: CONFIG.strike.dashDuration,
+  strikeDashSpeed: CONFIG.strike.dashSpeed,
+  strikeChainMul: CONFIG.strike.chainDamageMul,
 });
 
 // updateStrike wants a scene, a position and an enemy list; none are touched
@@ -360,13 +370,14 @@ check('  ...and it opens the window so eating starts counting',
 
 // Eat a bar's worth, then strike again inside the window.
 strikeState.charge = 0;
-for (let i = 0; i < pipCount(stats()); i++) feedChum(stats());
-check('a full bar arms the next release', strikeState.barFilledSinceStrike === true);
+for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
+check(`${linkPips(stats())} mouthfuls arm the next release (a ${pipCount(stats())}-pip bar)`,
+  strikeState.pipsSinceStrike >= linkPips(stats()));
 strikeState.pending = 1;
 check('the second strike fires', tryStrike(dir, stats()) === true);
 const link1 = consumeStrikeLink();
 check('  ...and THIS one scores the link', link1 === 1);
-check('  ...clearing the latch behind it', strikeState.barFilledSinceStrike === false);
+check('  ...clearing the counter behind it', strikeState.pipsSinceStrike === 0);
 check('  ...and the link only reads once', consumeStrikeLink() === 0);
 
 console.log('\nSTRIKING WITHOUT EATING SCORES NOTHING');
@@ -382,15 +393,15 @@ console.log('\nEATING WITHOUT STRIKING SCORES NOTHING EITHER');
 resetStrike();
 strikeState.pending = 1; tryStrike(dir, stats()); consumeStrikeLink();
 strikeState.charge = 0;
-for (let i = 0; i < pipCount(stats()); i++) feedChum(stats());
-check('filling the bar alone scores no link', strikeState.chainCount === 0);
-check('  ...it only arms one', strikeState.barFilledSinceStrike === true);
+for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
+check('eating alone scores no link', strikeState.chainCount === 0);
+check('  ...it only arms one', strikeState.pipsSinceStrike >= linkPips(stats()));
 
 console.log('\nTHE WINDOW STILL HAS TO BE OPEN');
 resetStrike();
 strikeState.pending = 1; tryStrike(dir, stats()); consumeStrikeLink();
 strikeState.charge = 0;
-for (let i = 0; i < pipCount(stats()); i++) feedChum(stats());
+for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
 strikeState.active = false;
 tick(CONFIG.strike.chainWindow + 0.05);          // let it lapse
 check('the window lapsed', strikeState.chainTimer <= 0);
@@ -408,7 +419,7 @@ const wasChumFull = CONFIG.strike.chainOn.chumFull;
 CONFIG.strike.chainOn.chumFull = true;           // as a stale snapshot would
 strikeState.pending = 1; tryStrike(dir, stats()); consumeStrikeLink();
 strikeState.charge = 0;
-for (let i = 0; i < pipCount(stats()); i++) feedChum(stats());
+for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
 check('chumFull is suppressed while strikeRelease is on',
   chainStrike('chumFull') === 0);
 strikeState.pending = 1; tryStrike(dir, stats());
@@ -515,6 +526,135 @@ check(`the ring re-cut from ${before6} to ${pipCount(stats())} pips`,
   U.uPips.value === pipCount(stats()));
 check('  ...and a full bar is still fully lit, with no slide',
   litPips() === pipCount(stats()));
+
+// ============================================================================
+// YOU CAN STILL JUST SWIM INTO CHUM.
+//
+// The corridor rewrote the magnet's RANGE test, which is the one place a
+// regression here would hide: get it wrong and pickup quietly becomes
+// dash-only, which no other check would notice because every other test in
+// this file drives the model directly rather than through updatePickups.
+//
+// So this runs the real pickup system end to end — spawn an orb, put a seal
+// near it, step frames, see whether it goes down.
+// ============================================================================
+
+console.log('\nA PLAIN PASS HOOVERS CHUM IN — no dash required');
+const scene = new THREE.Scene();
+const seal = (x, y, vx, vy, sealed = false) => ({
+  mesh: { position: new THREE.Vector3(x, y, 0) },
+  velocity: new THREE.Vector2(vx, vy),
+  chumSealed: sealed,
+  stats: { pickupRadius: CONFIG.player.pickupRadius, chumGulpRadius: 5 },
+});
+function collects(orbX, player, maxFrames = 400) {
+  resetPickups(scene);
+  resetStrike();
+  spawnXpOrb(scene, new THREE.Vector3(orbX, 0, 0), 2, 0.4);
+  let got = 0, f = 0;
+  while (got === 0 && f < maxFrames) {
+    updatePickups(1 / 60, scene, player, () => { got++; }, () => {}, () => {}, () => {});
+    f++;
+  }
+  return got > 0;
+}
+const baseR = CONFIG.player.pickupRadius;
+
+check('standing still, an orb inside the radius is drawn in',
+  collects(baseR * 0.7, seal(0, 0, 0, 0)));
+check('swimming past, an orb inside the radius is drawn in',
+  collects(baseR * 0.9, seal(0, 0, 5, 0)));
+check('swimming straight over one takes it immediately',
+  collects(0.3, seal(0, 0, 10, 0)));
+// The radius has to still MEAN something, or "hoover" is just "collect all".
+check('an orb well outside the radius is left alone',
+  !collects(baseR * 2.5, seal(0, 0, 0, 0)));
+// The one deliberate exception, unchanged: a wind-up seals the mouth and the
+// release gulps the lot instead (CONFIG.strike.charge.gulp).
+check('a wind-up still seals the mouth',
+  !collects(baseR * 0.7, seal(0, 0, 0, 0, true)));
+
+console.log('\nTHE CORRIDOR ONLY EVER ADDS REACH, NEVER TAKES IT');
+// magnetDistance swaps to a capsule while dashing. If that could ever return
+// MORE than the radial distance, dashing would collect less than drifting —
+// the exact regression this section exists to rule out.
+resetStrike();
+let corridorShrank = 0;
+for (let ang = 0; ang < 32; ang++) {
+  for (const d of [1, 3, 6, 12]) {
+    const ox = Math.cos((ang / 32) * Math.PI * 2) * d;
+    const oy = Math.sin((ang / 32) * Math.PI * 2) * d;
+    strikeState.active = false;
+    const plain = magnetDistance(0, 0, ox, oy, 0);
+    strikeState.active = true;
+    strikeState.dashDir = { x: 1, y: 0 };
+    const dashing = magnetDistance(0, 0, ox, oy, 0);
+    if (dashing > plain + 1e-9) corridorShrank++;
+  }
+}
+strikeState.active = false;
+check('dashing never reads an orb as further away than drifting does',
+  corridorShrank === 0);
+check('and not dashing is exactly the plain radial distance',
+  near(magnetDistance(0, 0, 3, 4, 0), 5, 1e-9));
+
+// ============================================================================
+// THE LOOSENING — a link costs a FRACTION of the bar, and the window is time
+// the player can actually use.
+// ============================================================================
+
+console.log('\nA LINK COSTS LESS THAN A WHOLE BAR');
+resetStrike();
+const frac = CONFIG.strike.linkBarFraction;
+check('the fraction is a real discount', frac < 1);
+check(`a ${pipCount(stats())}-pip bar links for ${linkPips(stats())} mouthfuls`,
+  linkPips(stats()) < pipCount(stats()));
+check('but never for free', linkPips(stats()) >= 1);
+
+// The escalation has to survive the discount — a link still has to cost more
+// than the one before it, or the chain has no ceiling at all.
+const ladder = [];
+resetStrike();
+for (let link = 0; link <= 5; link++) {
+  strikeState.chainCount = link;
+  strikeState.chainTimer = link > 0 ? CONFIG.strike.chainWindow : 0;
+  ladder.push(linkPips(stats()));
+}
+resetStrike();
+console.log(`          cost ladder: [${ladder}]  (was [5,6,7,8,9,10])`);
+check('the ladder never goes backwards',
+  ladder.every((v, i) => i === 0 || v >= ladder[i - 1]));
+check('  ...and still climbs overall', ladder[5] > ladder[0]);
+
+console.log('\nTHE WINDOW STARTS WHEN THE DASH ENDS, NOT AT THE RELEASE');
+// A dash runs up to 0.48s. Starting the clock at the release spent nearly half
+// a 1.1s window on the stretch the seal is committed and cannot act — and
+// punished the biggest strikes hardest, since they dash longest.
+resetStrike();
+strikeState.pending = 1;
+tryStrike(dir, stats());
+consumeStrikeLink();
+const dashLen = strikeState.dashDuration;
+check('the dash has real length', dashLen > 0.1);
+// Run the dash out, eating nothing.
+let t = 0;
+while (strikeState.active && t < 5) { tick(1 / 60); t += 1 / 60; }
+check('the dash ended', !strikeState.active);
+check('  ...and a FULL window is left, not the remainder',
+  near(strikeState.chainTimer, CONFIG.strike.chainWindow, 0.02));
+check(`  ...where the old behaviour would have left ~${(CONFIG.strike.chainWindow - dashLen).toFixed(2)}s`,
+  strikeState.chainTimer > CONFIG.strike.chainWindow - dashLen + 0.01);
+
+console.log('\nEATING SINCE THE LAST STRIKE IS WHAT COUNTS — and it resets');
+// The counter is ungated so the rule stays "food eaten since your last
+// strike". The reset on release is what stops that being a hoarding exploit.
+resetStrike();
+for (let i = 0; i < 20; i++) feedChum(stats());   // graze with no window open
+check('grazing banks progress', strikeState.pipsSinceStrike === 20);
+strikeState.pending = 1;
+tryStrike(dir, stats());
+check('  ...but the release spends it all', strikeState.pipsSinceStrike === 0);
+check('  ...so a hoard cannot buy two links', consumeStrikeLink() === 0);
 
 console.log(`\n${checks - failures}/${checks} checks passed\n`);
 process.exit(failures ? 1 : 0);

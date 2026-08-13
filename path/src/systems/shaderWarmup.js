@@ -50,17 +50,15 @@ const BATCH = 6;
  * @param post    the post pipeline — its `warm` binds the right render target
  * @param scene   world.scene, for its lights
  * @param camera  world.camera
- * @param renderer for the texture uploads, which compiling does NOT cover
  * @param onProgress (0..1)
  */
-export async function warmShaders(post, scene, camera, renderer, onProgress) {
+export async function warmShaders(post, scene, camera, onProgress) {
   // Every asset the game can build, not just the ones that spawn. The extras
   // are close to free: three caches programs by key, so forty assets sharing
   // three material configurations compile three times, not forty. Filtering
   // this list by "can it appear mid-run" would be a maintenance burden that
   // buys nothing and goes stale the first time a creature is added.
   const keys = Object.keys(ASSETS);
-  const uploaded = new Set();
 
   for (let i = 0; i < keys.length; i += BATCH) {
     const group = new THREE.Group();
@@ -86,25 +84,26 @@ export async function warmShaders(post, scene, camera, renderer, onProgress) {
       console.warn('[warmup] compile batch failed —', err?.message ?? err);
     }
 
-    // Textures are a SEPARATE stall and compiling does not touch them: three
-    // uploads an image the first time a draw needs it, so a 2048-square mask
-    // arriving with the first megalodon is its own hitch on the same frame the
-    // program used to be. Deduped by texture, because assets share them.
-    group.traverse((o) => {
-      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
-      for (const m of mats) {
-        for (const value of Object.values(m)) {
-          if (!value?.isTexture || uploaded.has(value)) continue;
-          uploaded.add(value);
-          try {
-            renderer.initTexture(value);
-          } catch (err) {
-            console.warn('[warmup] texture upload failed —', err?.message ?? err);
-          }
-        }
-      }
-    });
-
+    // TEXTURES ARE DELIBERATELY NOT UPLOADED HERE.
+    //
+    // They were, briefly, on the reasoning that a 2048-square mask arriving
+    // with the first megalodon is its own stall on the same frame the program
+    // used to be. That reasoning is true and the cure was worse: the roster
+    // carries 49 megapixels of texture, which is ~196MB as RGBA8 and ~260MB
+    // once three builds the mipmaps, and an initTexture sweep makes ALL of it
+    // resident from boot — including every asset that never spawns in a given
+    // run, which lazily would have cost nothing.
+    //
+    // Past a device's texture budget that does not fail, it PAGES: the driver
+    // evicts and re-uploads under you for the rest of the session, which is
+    // continuous hitching rather than one stall, and it lands on every device
+    // rather than on the slow ones. A phone has the tightest budget and was
+    // the clearest tell — it had been the machine that ran WELL.
+    //
+    // Programs are the part with evidence behind them: a link is tens of
+    // milliseconds and happens exactly once per program, so warming them is a
+    // straight trade. An upload is neither.
+    //
     // Not disposed — see the note at the top. Emptying the group is enough;
     // what stays alive is the templates' geometry and materials, which were
     // alive before this ran.

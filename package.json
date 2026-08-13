@@ -13,6 +13,7 @@
     "test:csv": "node tools/csv-editor-test.mjs",
     "placeholder": "node tools/make-placeholder-ship.mjs",
     "playtest": "node tools/playtest-report.mjs",
+    "perf": "node tools/perf-runs.mjs",
     "test:crowd": "node tools/apex-crowd-test.mjs",
     "test:upgrades": "node --import ./tools/vite-loader.mjs tools/upgrade-test.mjs",
     "test:elements": "node --import ./tools/vite-loader.mjs tools/elements-test.mjs",
@@ -43,7 +44,7 @@
     "test:tables": "node --import ./tools/vite-loader.mjs tools/path-table-test.mjs",
     "test:pause": "node tools/pause-menu-test.mjs",
     "ship": "node tools/ship.mjs",
-    "test": "npm run test:upgrades && npm run test:updebug && npm run test:elements && npm run test:abilities && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:skin && npm run test:boats && npm run test:grass && npm run test:crabs && npm run test:claw && npm run test:club && npm run test:tables && npm run test:strike && npm run test:impact && npm run test:meter && npm run test:physics && npm run test:gravity && npm run test:rig && npm run test:apexspring && npm run test:sharkswim && npm run test:nightlife && npm run test:glowphase && npm run test:waves && npm run test:boss && npm run test:width && npm run test:beat && npm run test:sky && npm run test:celestial && npm run test:horizon && npm run test:ambient && npm run test:emissive && npm run test:bus && npm run test:sfxdebug && npm run test:menusound && npm run test:music && npm run test:chargefx && npm run test:damagefx && npm run test:quips && npm run test:particles && npm run test:touchglow && npm run test:spriteglow && npm run test:modelshare && npm run test:instancing && npm run test:perf && npm run test:chumglow && npm run test:csv && npm run test:text && npm run test:pause && npm run test:stage",
+    "test": "npm run test:upgrades && npm run test:updebug && npm run test:elements && npm run test:abilities && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:skin && npm run test:boats && npm run test:grass && npm run test:crabs && npm run test:claw && npm run test:club && npm run test:tables && npm run test:prune && npm run test:strike && npm run test:impact && npm run test:meter && npm run test:physics && npm run test:gravity && npm run test:rig && npm run test:apexspring && npm run test:sharkswim && npm run test:nightlife && npm run test:glowphase && npm run test:waves && npm run test:boss && npm run test:width && npm run test:beat && npm run test:sky && npm run test:celestial && npm run test:nightsky && npm run test:horizon && npm run test:ambient && npm run test:emissive && npm run test:bus && npm run test:sfxdebug && npm run test:menusound && npm run test:music && npm run test:chargefx && npm run test:damagefx && npm run test:quips && npm run test:particles && npm run test:touchglow && npm run test:spriteglow && npm run test:modelshare && npm run test:instancing && npm run test:perf && npm run test:pool && npm run test:chumglow && npm run test:csv && npm run test:text && npm run test:pause && npm run test:stage",
     "test:ambient": "node --import ./tools/vite-loader.mjs tools/ambient-test.mjs",
     "test:emissive": "node --import ./tools/vite-loader.mjs tools/emissive-flip-test.mjs",
     "glow": "node --import ./tools/vite-loader.mjs tools/glow-audit.mjs",
@@ -65,8 +66,11 @@
     "test:text": "node --import ./tools/vite-loader.mjs tools/upgrade-text-test.mjs",
     "test:club": "node --import ./tools/vite-loader.mjs tools/club-test.mjs",
     "test:celestial": "node --import ./tools/vite-loader.mjs tools/celestial-test.mjs",
+    "test:nightsky": "node --import ./tools/vite-loader.mjs tools/night-sky-test.mjs",
     "test:boss": "node --import ./tools/vite-loader.mjs tools/boss-test.mjs",
-    "test:stage": "node tools/stage-test.mjs"
+    "test:stage": "node tools/stage-test.mjs",
+    "test:prune": "node --import ./tools/vite-loader.mjs tools/config-prune-test.mjs",
+    "test:pool": "node --import ./tools/vite-loader.mjs tools/visual-pool-test.mjs"
   },
   "dependencies": {
     "@rive-app/canvas": "^2.39.2",

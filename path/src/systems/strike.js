@@ -84,11 +84,19 @@ export const strikeState = {
   chainPips: 0,
   chainCount: 0,
   chainTimer: 0,
-  // Has the bar reached FULL since the last release? This is what arms the
-  // next strike to score a FOOD CHAIN link — see tryStrike. It is a latch, not
-  // a level: the bar can be topped off and then partly burnt by a wind-up, and
-  // the food was still eaten.
-  barFilledSinceStrike: false,
+  // MOUTHFULS EATEN SINCE THE LAST RELEASE. This is what arms the next strike
+  // to score a FOOD CHAIN link — see tryStrike and linkPips().
+  //
+  // It replaced a "did the bar reach full" latch, which demanded a WHOLE bar
+  // between strikes and was the single thing making the chain hard to reach in
+  // ordinary play: five chum, then a wind-up, then a release, all inside the
+  // window. A count lets the price be a FRACTION of the bar.
+  //
+  // Counted whether or not a window is open, because "food eaten since your
+  // last strike" is the rule a player can actually hold in their head. There is
+  // no hoarding exploit in that: it resets on every release, so eating twenty
+  // orbs while cruising still leaves the next strike at zero.
+  pipsSinceStrike: 0,
   invulnTimer: 0, // >0 = contact damage is ignored (see combat.js)
 };
 
@@ -291,7 +299,7 @@ export function resetStrike() {
   strikeState.chainPips = 0;
   strikeState.chainCount = 0;
   strikeState.chainTimer = 0;
-  strikeState.barFilledSinceStrike = false;
+  strikeState.pipsSinceStrike = 0;
   lastReleaseLink = 0;
   strikeState.invulnTimer = 0;
   hitThisDash.clear();
@@ -387,8 +395,9 @@ export function tryStrike(aimDir, stats) {
   // and is a trap: a dash lasts 0.13-0.48s, reaching minFire takes 0.35s of
   // holding, and holding SEALS THE MOUTH. There is no room in a dash to both
   // eat a bar and wind up a strike. The window the dash opens is the container.
-  const scored = strikeState.barFilledSinceStrike && strikeState.chainTimer > 0;
-  strikeState.barFilledSinceStrike = false;
+  const scored = strikeState.pipsSinceStrike >= linkPips(stats)
+    && strikeState.chainTimer > 0;
+  strikeState.pipsSinceStrike = 0;
   lastReleaseLink = scored ? chainStrike('strikeRelease') : 0;
 
   // Every release opens or refreshes the window, link or not. Without this the
@@ -435,11 +444,6 @@ function fillMeter(amount, stats = null) {
   strikeState.charge = Math.min(1, snapToPip(strikeState.charge + amount, stats));
   notePips(before, strikeState.charge, stats);
   const crossed = !wasFull && strikeState.charge >= 1;
-  // Arms the NEXT release to score a link. Deliberately not gated on
-  // isFeeding(): topping the bar off while no chain is running is what sets up
-  // the strike that opens one, and requiring a live window here would mean the
-  // first link of every chain could never be armed.
-  if (crossed) strikeState.barFilledSinceStrike = true;
   return isFeeding() && crossed;
 }
 
@@ -508,9 +512,29 @@ function notePips(before, after, stats) {
  * silently start one. What changed is only what keeps it going.
  */
 function noteChainMouthful(count = 1) {
+  // Ungated: progress toward the NEXT link is just food eaten since the last
+  // strike, whether or not a combo is currently running.
+  strikeState.pipsSinceStrike += count;
+  // The rest is the live chain, which does need a window open.
   if (!isFeeding()) return;
   strikeState.chainPips += count;
   strikeState.chainTimer = CONFIG.strike.chainWindow;
+}
+
+/**
+ * How many mouthfuls a link costs right now.
+ *
+ * A FRACTION of the bar rather than all of it — `linkBarFraction` at 0.6 means
+ * three chum on a five-pip bar instead of five. The escalation survives
+ * untouched because it is measured against the LIVE pip count, which grows by
+ * one per link: 3, 4, 5, 5, 6, 6 against the old 5, 6, 7, 8, 9, 10.
+ *
+ * Floored at 1 — a link has to cost at least one mouthful, or a strike with no
+ * eating at all would score one and the chain would be free.
+ */
+export function linkPips(stats = null) {
+  const frac = Math.max(0, Math.min(1, CONFIG.strike.linkBarFraction ?? 1));
+  return Math.max(1, Math.ceil(pipCount(stats) * frac));
 }
 
 /** How many pip ticks are waiting to be heard. For the tests and the tuner. */
@@ -770,7 +794,23 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
 
   if (strikeState.active) {
     strikeState.dashTimeLeft -= dt;
-    if (strikeState.dashTimeLeft <= 0) strikeState.active = false;
+    if (strikeState.dashTimeLeft <= 0) {
+      strikeState.active = false;
+      // THE WINDOW STARTS WHEN THE DASH ENDS, not when it was released.
+      //
+      // A dash runs 0.13-0.48s depending on charge, and during it the seal is
+      // committed — flying in one direction at 46 u/s, not choosing what to
+      // eat. Starting the clock at the release therefore spent up to 44% of a
+      // 1.1s window on the one stretch the player could not use it, and
+      // punished the biggest strikes hardest: commit fully, get the shortest
+      // window. Refreshing here makes the 1.1s time you can actually act in.
+      //
+      // Only ever extends: a chain kept alive by eating mid-dash has already
+      // set the timer to a full window, and this sets it to the same value.
+      if (CONFIG.strike.windowFromDashEnd !== false) {
+        strikeState.chainTimer = Math.max(strikeState.chainTimer, CONFIG.strike.chainWindow);
+      }
+    }
 
     for (let i = enemiesList.length - 1; i >= 0; i--) {
       const e = enemiesList[i];

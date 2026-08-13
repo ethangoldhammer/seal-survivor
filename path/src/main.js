@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } from './config.js';
-import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings } from './assets.js';
+import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, clearVisualPool } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { pulseDemoFor, panDemoFor, resolvedGlow, describeGlow } from './systems/glowDebug.js';
@@ -26,7 +26,7 @@ import { initAudio, unlockAudio, applyAudioBusSettings, applyPlayerAudioSettings
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
 import { warmShaders, warmPipeline } from './systems/shaderWarmup.js';
-import { perfFrame, perfRunStart, perfRunReport, perfWindow } from './systems/perfLog.js';
+import { perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary } from './systems/perfLog.js';
 import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
@@ -176,6 +176,32 @@ function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
 }
 
+// How many shader programs three has EVER built, not how many it is holding.
+//
+// `renderer.info.programs.length` is the live set, and it misses the case that
+// matters most: a recompile releases the old program and creates a new one, so
+// the length is unchanged and the delta reads zero. A run that rebuilds the
+// same shader two hundred times would report "no compiles" — which is exactly
+// the kind of silence that sent the last two investigations down the wrong
+// road. Program ids are handed out from a counter that only ever goes up, so
+// the highest one in the live set is the true total.
+function programsEverBuilt() {
+  const programs = world.renderer.info.programs;
+  if (!programs?.length) return 0;
+  let max = 0;
+  for (const p of programs) if (p.id > max) max = p.id;
+  return max + 1;
+}
+
+// Chrome only, and absent everywhere else — which is fine, because it is a
+// diagnostic and the code that reads it treats 0 as "don't know". A collection
+// is the one thing that makes this number go DOWN, so a stall on a frame where
+// the heap dropped is the collector, and a stall where it didn't is real work.
+// That is the distinction the "neither" bucket has been hiding.
+function heapUsed() {
+  return performance.memory?.usedJSHeapSize ?? 0;
+}
+
 boot();
 
 async function boot() {
@@ -252,7 +278,7 @@ async function boot() {
   // worst case is the hitching we had before it existed.
   try {
     await warmShaders(
-      post, world.scene, world.camera, world.renderer,
+      post, world.scene, world.camera,
       (p) => loading.setProgress(ASSET_SHARE + p * (1 - ASSET_SHARE)),
     );
     warmPipeline(post, world.scene, world.camera);
@@ -282,6 +308,11 @@ async function boot() {
   initTypography();
   if (DEV_UI) initTuner(handleTunerChange);
   if (DEV_UI) initTexturePanel((key) => {
+    // Recycled creature bodies were built from the asset as it WAS. A model
+    // upload or a look change rebuilds the template, and a pooled body handed
+    // out afterwards would come back wearing the old one — so the pool is
+    // emptied and the next spawn of every species clones fresh.
+    clearVisualPool();
     // Some ability meshes are singletons created once at boot, not
     // repeatedly cloned like an enemy — a size change needs an explicit
     // rebuild to actually show up, rather than only affecting future spawns.
@@ -563,6 +594,10 @@ function handleTunerChange(path) {
   // safe to fire from a slider's every input event.
   if (path === '*' || path.startsWith('sealShader')) applyNoiseSettings();
   if (path === '*' || path.startsWith('grass')) applyGrassSettings();
+  // Same again for the trap bubble's film. Its material is built on the first
+  // spawn and cached forever after, so this is the only thing that moves those
+  // uniforms once one has been in the water.
+  if (path === '*' || path.startsWith('bubbleShell')) applyBubbleShellSettings();
   // Including the pattern dropdown — the pattern is a uniform, not a compile
   // switch, so switching it repaints every fish already swimming.
   if (path === '*' || path.startsWith('biolumSkin')) applyBiolumSkinSettings();
@@ -622,7 +657,16 @@ function startGame() {
   // boot on purpose: boot is a loading screen and a shader warm-up, and the
   // multi-second frames those produce would sit at the top of the worst-frames
   // list for the rest of the session.
-  perfRunStart();
+  // Seeded with the counts as they stand NOW, so the run's totals are what it
+  // pulled in itself rather than everything the page has ever compiled — which
+  // includes the whole warm-up, and would make every first run look like a
+  // disaster and every later one look free.
+  perfRunStart(
+    performance.now(),
+    programsEverBuilt(),
+    world.renderer.info.memory.textures,
+    heapUsed(),
+  );
 
   unlockAudio(); // browsers need a gesture before any sound can play
   preloadDefaultTracks(); // fetches the built-in loops once; no-op after the first call
@@ -812,8 +856,23 @@ function killPlayer() {
   // The run is still recorded either way — only the console report and the B
   // overlay are authoring surfaces, and printing "press B" on a build with no
   // B key is just noise in a player's console.
-  if (DEV_UI) showPlaytestReport(playtest.endRun('death'));
-  else playtest.endRun('death');
+  // The frame-time record rides along with the run, so it lands in
+  // playtest/runs.jsonl on disk rather than only in a console someone has to
+  // be sitting in front of. A hitch is a property of a RUN — of what was in
+  // the water and how big the window was — and reading it next to the kills
+  // and the level is what turns "it stuttered" into "it stuttered while the
+  // trawler was breaking up".
+  const perfRecord = {
+    perf: perfSummary(),
+    render: {
+      draws: world.renderer.info.render.calls,
+      mpix: +((world.renderer.domElement.width * world.renderer.domElement.height) / 1e6).toFixed(2),
+      scale: +world.renderer.getPixelRatio().toFixed(2),
+      enemies: enemies.length,
+    },
+  };
+  if (DEV_UI) showPlaytestReport(playtest.endRun('death', perfRecord));
+  else playtest.endRun('death', perfRecord);
   // Frame times for the run just ended, alongside it. Printed at DEATH rather
   // than from showGameOver for the same reason the playtest report is: the
   // dive and the name box can sit open for minutes, and the recorder keeps
@@ -1938,10 +1997,24 @@ let lastTime = performance.now();
 
 function animate(now) {
   const stamp = now ?? performance.now();
+  // LAST frame's totals, read before anything resets them. renderer.info has
+  // autoReset off (see world.js), so these have accumulated across every pass
+  // post.js made — the scene, the bright pass, the blur ping-pong and the
+  // composite — rather than reporting only the last one.
+  const drawsLastFrame = world.renderer.info.render.calls;
+  world.renderer.info.reset();
+
   // Handed the STAMP, not rawDt, and deliberately before the clamp below —
   // see systems/perfLog.js. `Math.min(..., 0.05)` is correct for the
   // simulation and would record every hitch in the game as exactly 50ms.
-  perfFrame(stamp);
+  //
+  // The two counters are what let a spike be ATTRIBUTED rather than guessed at.
+  // A program appearing means three linked a shader on this frame; a texture
+  // appearing means it uploaded an image. Both are one-off costs paid the first
+  // time something is drawn, and both are invisible in a profile taken after
+  // the fact — but a 400ms frame that coincides with a new program is a
+  // different bug from a 400ms frame that coincides with neither.
+  perfFrame(stamp, programsEverBuilt(), world.renderer.info.memory.textures, heapUsed());
   const rawDt = Math.min((stamp - lastTime) / 1000, 0.05);
   lastTime = stamp;
 
@@ -2664,6 +2737,10 @@ function animate(now) {
       club: player.stats.clubLevel,
       boom: player.stats.clubBoomLevel,
       ice: player.stats.clubIceLevel,
+      // Passed for the LOOK, not for any behaviour of the swing: it decides
+      // whether a fin is holding a Hurler club. The throw itself is fired from
+      // the strike release, not from here.
+      throw: player.stats.clubThrowLevel,
     }, enemies, {
       rig: player.aimRig,
       // The VELOCITY, not the speed: the clubs stream out behind the direction

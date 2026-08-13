@@ -22,11 +22,37 @@
 // hundred stars over a landscape frame.
 export const STAR_THRESHOLD = 0.9;
 
+// HOW BIG A PAINTED STAR IS, in CELL units — the radius sky.js fades its dot
+// out over, and the reason the jitter below is inset rather than a plain 0..1.
+//
+// THE BUG THIS EXISTS TO KILL. The sky shader draws a star from its OWN cell
+// and nowhere else: it hashes the cell under the pixel, and if that cell has no
+// star, nothing is drawn there. So a star centred within one radius of its
+// cell's edge has the overhanging part of its dot simply not drawn — the
+// neighbouring cell never considers it — and what is left ends in a dead
+// straight vertical or horizontal line. Measured over 4853 stars: 49% of the
+// sky was clipped that way and the worst were bisected. It reads as a field of
+// half-moons and hard little edges, which at night is most of what there is to
+// look at.
+//
+// Two ways out. Sample the 3x3 neighbourhood per pixel (nine hashes instead of
+// one, for a background that covers a fifth of the screen), or keep every star
+// far enough inside its own cell that it never reaches the edge in the first
+// place. This is the second: it costs one multiply-add, and the field loses
+// nothing — the jitter still breaks the lattice, it just does it across the
+// middle 72% of each cell.
+//
+// Shared rather than written twice for the same reason the hash is: sky.js
+// fades the dot out over exactly this, so an inset that disagreed with the
+// radius would either leave the clip in place or gap the field.
+export const STAR_RADIUS = 0.14;
+
 // The GLSL half. sky.js includes this and then draws whatever it likes with
 // it; constellations.js doesn't need it (it places its geometry on the CPU),
 // but the numbers below have to be the same ones.
 export const STAR_FIELD_GLSL = /* glsl */ `
   #define STAR_THRESHOLD ${STAR_THRESHOLD}
+  #define STAR_RADIUS ${STAR_RADIUS.toFixed(4)}
 
   float starHash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -34,12 +60,14 @@ export const STAR_FIELD_GLSL = /* glsl */ `
     return fract(p.x * p.y);
   }
 
-  // Where inside its own cell this star sits, 0..1 on both axes. Two more
-  // hashes of the same cell, so it costs nothing and never has to be stored.
-  // Without it the field reads as a lattice, which is the one thing a sky
-  // must not look like.
+  // Where inside its own cell this star sits — STAR_RADIUS..1-STAR_RADIUS on
+  // both axes. Two more hashes of the same cell, so it costs nothing and never
+  // has to be stored. Without the jitter the field reads as a lattice, which is
+  // the one thing a sky must not look like; without the INSET half of it is
+  // clipped flat by the cell it lives in. See the note on STAR_RADIUS.
   vec2 starOffset(vec2 cell) {
-    return vec2(starHash21(cell + 1.7), starHash21(cell + 3.1));
+    vec2 j = vec2(starHash21(cell + 1.7), starHash21(cell + 3.1));
+    return STAR_RADIUS + (1.0 - 2.0 * STAR_RADIUS) * j;
   }
 `;
 
@@ -105,8 +133,13 @@ export function starsIn(rect, density, threshold = STAR_THRESHOLD) {
     for (let row = r0; row <= r1; row++) {
       const seed = starHash21(col, row);
       if (seed <= threshold) continue;
-      const x = (col + starHash21(col + 1.7, row + 1.7)) / d;
-      const y = (row + starHash21(col + 3.1, row + 3.1)) / d;
+      // The same inset the shader applies (starOffset above) — these two are
+      // one placement rule in two languages, and a constellation strung between
+      // stars a seventh of a cell away from the painted ones is the failure
+      // this whole module exists to prevent.
+      const inset = (h) => STAR_RADIUS + (1 - 2 * STAR_RADIUS) * h;
+      const x = (col + inset(starHash21(col + 1.7, row + 1.7))) / d;
+      const y = (row + inset(starHash21(col + 3.1, row + 3.1))) / d;
       if (x < rect.left || x > rect.right || y < rect.bottom || y > rect.top) continue;
       stars.push({ x, y, seed, spin: starHash21(col + 5.3, row + 9.7) });
     }

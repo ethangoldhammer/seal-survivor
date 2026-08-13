@@ -1,0 +1,3 @@
+id,enemy,sizeMul,weight,minLevel,enabled,notes
+bossShark,bossShark,1.6,1,0,,The original. A megalodon's body — available from the first boss of every run.
+bossOrca,bossOrca,1.5,1,15,,Faster and turns harder than the shark. Held back to level 15 so it reads as an escalation.

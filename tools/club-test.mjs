@@ -710,6 +710,65 @@ section('HURLER — the variant, thrown on a strike release');
   resetProjectiles(scene);
 }
 
+// ----------------------------------------------------------------- the variants
+
+section('VARIANTS — you can tell from the water what you are holding');
+
+{
+  const { clubAssetsFor } = await import('../path/src/systems/club.js');
+  const { ASSETS } = await import('../path/src/assets.js');
+
+  check('a plain run holds the base club', clubAssetsFor({}).join() === 'club');
+  check('Powder Keg puts its own club in a fin',
+    clubAssetsFor({ boom: 1 }).includes('clubBoom'));
+  check('Cold Snap puts its own club in a fin',
+    clubAssetsFor({ ice: 1 }).includes('clubIce'));
+  // Two variants must both be visible rather than one masking the other —
+  // there are two fins, so there is room, and "which of these am I running"
+  // is the question the whole arrangement exists to answer.
+  const both = clubAssetsFor({ boom: 1, ice: 1 });
+  check('...and owning two shows one of each', both.includes('clubBoom') && both.includes('clubIce'),
+    both.join(' + '));
+
+  // EVERY VARIANT IS THE SAME MODEL FOR NOW, and the fields that make a club
+  // hang right have to survive being derived — a variant that lost the grip
+  // pivot would be held by its middle, and that is invisible in a still.
+  for (const key of ['club', 'clubBoom', 'clubIce', 'clubThrow']) {
+    const def = ASSETS[key];
+    check(`${key}: same model, gripped at the handle`,
+      def?.model === ASSETS.club.model && def?.pivot === ASSETS.club.pivot
+        && def?.forward === ASSETS.club.forward && def?.fit === ASSETS.club.fit,
+      def?.model ?? 'MISSING');
+  }
+
+  // THE BUG THIS SECTION EXISTS FOR. club.glb ships an untextured pure-white
+  // material, and `color` in an asset def only ever reaches the procedural
+  // fallback shape — so a model entry with no `tint` renders as a white stick
+  // lit by the scene, which is why none of these could be seen. A tint is not
+  // decoration here; it is the only thing that colours a loaded model.
+  const heads = new Set();
+  for (const key of ['club', 'clubBoom', 'clubIce', 'clubThrow']) {
+    const def = ASSETS[key];
+    check(`${key}: has a tint, so the model is not left white`,
+      typeof def?.tint === 'number', def?.tint == null ? 'NO TINT' : `#${def.tint.toString(16)}`);
+    heads.add(def?.headTint);
+  }
+  // THE SHAFT IS SHARED, THE HEAD IS NOT. A club is a club — what tells the
+  // variants apart is the business end, and colouring the whole stick would
+  // make them read as four different weapons rather than one weapon's family.
+  const shafts = new Set(['club', 'clubBoom', 'clubIce', 'clubThrow'].map((k) => ASSETS[k].tint));
+  check('every variant keeps the same brown shaft', shafts.size === 1,
+    `${shafts.size} shaft colour(s)`);
+  check('...and no two variants share a head colour', heads.size === 4,
+    `${heads.size} distinct heads`);
+  // The split is a MEASURED fraction, not a guess: club.glb's shaft carries no
+  // vertices along its length, so the head has to start where the mesh
+  // actually flares or the paint smears down the handle.
+  check('...and the head starts where the model flares',
+    ASSETS.club.headFrom > 0.4 && ASSETS.club.headFrom < 0.8,
+    `headFrom ${ASSETS.club.headFrom}`);
+}
+
 // --------------------------------------------------------------- the real file
 
 section('THE MODEL — club.glb, through the real fitting path');

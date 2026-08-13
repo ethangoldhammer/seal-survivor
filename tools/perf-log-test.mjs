@@ -151,6 +151,64 @@ check('but the run still remembers it', perfSummary().worstMs > 190,
   `${perfSummary().worstMs.toFixed(0)}ms`);
 
 // ===========================================================================
+section('A stall is attributed, not just counted');
+
+// The whole point: "224 hitches" says the game stutters, which the player
+// already knew. Which of the four costs it was paying is what has a fix.
+const MB = 1048576;
+perfRunStart(0, 100, 50, 500 * MB);
+let t = 0;
+const tick = (ms, { programs = 100, textures = 50, heap = 500 * MB } = {}) => {
+  t += ms;
+  perfFrame(t, programs, textures, heap);
+};
+
+tick(16);
+tick(200, { programs: 101 });                 // a shader linked
+tick(16, { programs: 101 });
+tick(200, { programs: 101, textures: 51 });   // a texture uploaded
+tick(16, { programs: 101, textures: 51 });
+// A collection: the heap is the only one of the four that goes DOWN.
+tick(200, { programs: 101, textures: 51, heap: 400 * MB });
+tick(16, { programs: 101, textures: 51, heap: 400 * MB });
+// And a stall that is none of them — real work on that frame.
+tick(200, { programs: 101, textures: 51, heap: 400 * MB });
+
+s = perfSummary();
+check('a link is blamed on the link', s.hitchCompile === 1, `${s.hitchCompile}`);
+check('an upload on the upload', s.hitchUpload === 1, `${s.hitchUpload}`);
+check('a heap that fell on the collector', s.hitchGC === 1, `${s.hitchGC}`);
+check('and one that is none of the four stays unattributed', s.hitchNeither === 1, `${s.hitchNeither}`);
+check('the four sum to the hitch count',
+  s.hitchCompile + s.hitchUpload + s.hitchGC + s.hitchNeither === s.hitches,
+  `${s.hitchCompile}+${s.hitchUpload}+${s.hitchGC}+${s.hitchNeither} vs ${s.hitches}`);
+check('and the reclaimed total is reported', Math.round(s.heapFreedMB) === 100,
+  `${s.heapFreedMB.toFixed(0)}MB`);
+
+// The blind spot that hid a recompile storm for two rounds of investigation:
+// a RECOMPILE releases the old program and creates a new one, so the live
+// count is unchanged. main.js feeds the highest program id ever issued instead
+// of the array length, and the recorder must count that rise as a compile.
+perfRunStart(0, 100, 50, 0);
+t = 0;
+tick(16, { programs: 100, textures: 50, heap: 0 });
+tick(200, { programs: 140, textures: 50, heap: 0 }); // 40 rebuilt, net length 0
+s = perfSummary();
+check('forty programs rebuilt in a frame reads as a compile', s.hitchCompile === 1,
+  `compile ${s.hitchCompile}, other ${s.hitchNeither}`);
+check('and all forty are counted', s.programsAdded === 40, `${s.programsAdded}`);
+
+// No heap reading at all (Safari, iOS) must not turn every stall into a
+// collection — the split is skipped, not guessed.
+perfRunStart(0, 0, 0, 0);
+t = 0;
+tick(16);
+tick(200, { programs: 0, textures: 0, heap: 0 });
+s = perfSummary();
+check('a browser with no heap API attributes nothing to GC', s.hitchGC === 0,
+  `${s.hitchGC} — falls to "none of those" instead`);
+
+// ===========================================================================
 section('Not recording');
 
 perfStop();

@@ -1,8 +1,8 @@
 id,value,min,max,notes
 weapon.autofire,1,,,autofire
-missile.fireRate,1.7,0.2,3,missile fire rate
-missile.damage,30,1,80,missile damage
-missile.turnRate,8.2,0.5,12,missile turn rate
+missile.fireRate,1.15,0.2,3,missile fire rate
+missile.damage,52,1,80,missile damage
+missile.turnRate,9.5,0.5,12,missile turn rate
 missile.speed,14,4,40,missile speed
 missile.homingDelay,0.18,0,1,missile straight-flight time
 bounce.fireRate,0.86,0.1,2,bounce base fire rate
@@ -57,6 +57,8 @@ beluga.fireRate,1.8,0.3,8,beluga seconds between bubbles
 beluga.speed,15,2,30,beluga bubble speed
 beluga.life,4,0.5,10,beluga bubble lifespan
 beluga.trapDuration,5.2,0.5,10,beluga seconds a catch is held
+beluga.durationPerLevel,0.7,0,3,beluga extra seconds held per level
+beluga.maxCatch,3,1,8,beluga creatures one bubble can seal
 beluga.baseBubbleRadius,0.5,0.1,2,beluga bubble size
 beluga.radiusPerLevel,0.24,0,0.5,beluga bubble size per level
 club.damage,6,0,40,club whack damage — a CHIP on purpose; the carom is the payload
@@ -85,3 +87,6 @@ clubIce.slowPerHitPerLevel,0.06,0,0.3,cold snap slow per level
 clubIce.duration,3.2,0.2,10,cold snap seconds before it thaws
 clubIce.freezeFor,1,0,5,cold snap freeze on saturation
 clubIce.freezeForPerLevel,0.2,0,1,cold snap freeze per level
+strike.damage,40,1,200,strike nominal damage — what Bone Shrapnel and Glow Up! measure against
+strike.cardDamage,5,0,30,strike damage added per strike-family card
+strike.chainDamageMul,1.11,1,1.5,strike food-chain damage mult per link — COMPOUNDS over links AND over Killer Instinct stacks
