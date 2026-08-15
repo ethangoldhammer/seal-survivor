@@ -5,6 +5,7 @@ import { bounds } from '../arena.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { aoe, companionDamage } from './scaling.js';
 import { advanceCycles } from './beatSync.js';
+import { canHold } from './control.js';
 
 // Bakalar's Boat — a friendly trawler that sails the surface on a timer,
 // dragging a net behind it. Anything the net sweeps through is caught, hauled
@@ -477,6 +478,12 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
   // --- catch: anything inside the net volume that isn't already held --------
   for (const e of enemiesList) {
     if (caught.some((h) => h.enemy === e)) continue;
+    // The net passes over a boss. Refused at the CATCH rather than at the haul
+    // below, because a boss in `caught` would be dragged toward the surface
+    // with its steering intact — a worse picture than not catching it, and one
+    // where the net visibly holds something that is plainly not held. See
+    // systems/control.js.
+    if (!canHold(e)) continue;
     const ex = e.mesh.position.x;
     const ey = e.mesh.position.y;
     if (Math.abs(ex - netCenterX) > halfWidth + e.radius) continue;

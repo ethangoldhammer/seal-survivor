@@ -55,7 +55,18 @@ const warn = (name, cond, detail = '') => {
 // rather than derived, so adding an apex without rigging it fails here.
 const APEX = [
   'enemyShark', 'enemyGreatWhite', 'enemyAbyssShark', 'enemyHammerhead',
-  'enemyMegalodon', 'enemyMightyMeg', 'enemyOrca', 'enemyDolphin',
+  'enemyMegalodon', 'enemyMightyMeg', 'enemyDolphin',
+  // The orca is TWO bodies now — bossOrca rolls a bull or a cow per arrival
+  // (see `assets` on its def) — and they are the same skeleton wearing the
+  // same shared ORCA_RIG, so both are listed rather than one standing in for
+  // the other. A rig that resolved on the bull and not the cow would be a boss
+  // that swims correctly half the time.
+  'enemyOrcaBull', 'enemyOrcaCow',
+  // bossMosasaur's body. Listed for the same reason the orca pair is: its five
+  // chains are named off a rig whose bones are called Bone010_19, so a rename
+  // or a re-export that renumbers them would resolve nothing and simply leave a
+  // 27-unit animal swimming rigid.
+  'enemyMosasaur',
 ];
 
 // GLTFLoader decodes embedded textures through a blob: URL, which Node has no
@@ -346,7 +357,12 @@ console.log('\nCOST');
 {
   const CAPS = {
     enemyShark: 6, enemyGreatWhite: 4, enemyAbyssShark: 2, enemyHammerhead: 4,
-    enemyMegalodon: 2, enemyMightyMeg: 2, enemyOrca: 2, enemyDolphin: 4,
+    enemyMegalodon: 2, enemyMightyMeg: 2, enemyDolphin: 4,
+    enemyOrcaBull: 2, enemyOrcaCow: 2,
+    // A boss is a singleton — maxConcurrent 1 in enemies.csv — so its five
+    // chains are only ever paid for once, which is what makes four flippers
+    // affordable on this body and not on a wave creature.
+    enemyMosasaur: 1,
   };
   // The springs are timed by DIFFERENCE — the same update run with them on and
   // with them off — because controller.update also advances the mixer and the

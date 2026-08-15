@@ -4,7 +4,7 @@ import { CONFIG } from '../path/src/config.js';
 import {
   strikeState, resetStrike, feedChum, updateStrike, restoreCharge,
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
-  chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips,
+  chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips, cancelDash,
 } from '../path/src/systems/strike.js';
 import { magnetRadius, magnetSpeed, magnetDistance, magnetState } from '../path/src/systems/chumMagnet.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
@@ -364,7 +364,7 @@ resetStrike();
 // Strike one. Nothing eaten yet, so it scores nothing — it opens the window.
 strikeState.pending = 1;
 check('the opening strike fires', tryStrike(dir, stats()) === true);
-check('  ...but scores no link — nothing was eaten for it', consumeStrikeLink() === 0);
+check('  ...but scores no link — nothing was eaten for it', consumeStrikeLink().chain === 0);
 check('  ...and it opens the window so eating starts counting',
   strikeState.chainTimer > 0);
 
@@ -375,17 +375,17 @@ check(`${linkPips(stats())} mouthfuls arm the next release (a ${pipCount(stats()
   strikeState.pipsSinceStrike >= linkPips(stats()));
 strikeState.pending = 1;
 check('the second strike fires', tryStrike(dir, stats()) === true);
-const link1 = consumeStrikeLink();
+const link1 = consumeStrikeLink().chain;
 check('  ...and THIS one scores the link', link1 === 1);
 check('  ...clearing the counter behind it', strikeState.pipsSinceStrike === 0);
-check('  ...and the link only reads once', consumeStrikeLink() === 0);
+check('  ...and the link only reads once', consumeStrikeLink().chain === 0);
 
 console.log('\nSTRIKING WITHOUT EATING SCORES NOTHING');
 resetStrike();
 strikeState.pending = 1; tryStrike(dir, stats()); consumeStrikeLink();
 strikeState.pending = 1;
 tryStrike(dir, stats());
-check('a second strike on an unfed bar is not a link', consumeStrikeLink() === 0);
+check('a second strike on an unfed bar is not a link', consumeStrikeLink().chain === 0);
 
 console.log('\nEATING WITHOUT STRIKING SCORES NOTHING EITHER');
 // This is the whole change: the bar reaching full used to BE the link. Now it
@@ -407,7 +407,7 @@ tick(CONFIG.strike.chainWindow + 0.05);          // let it lapse
 check('the window lapsed', strikeState.chainTimer <= 0);
 strikeState.pending = 1;
 tryStrike(dir, stats());
-check('a fed strike after the window shut scores nothing', consumeStrikeLink() === 0);
+check('a fed strike after the window shut scores nothing', consumeStrikeLink().chain === 0);
 check('  ...but it opens a fresh window', strikeState.chainTimer > 0);
 
 console.log('\nONE TURN OF THE CYCLE IS EXACTLY ONE LINK');
@@ -424,7 +424,7 @@ check('chumFull is suppressed while strikeRelease is on',
   chainStrike('chumFull') === 0);
 strikeState.pending = 1; tryStrike(dir, stats());
 check('  ...so one refill-and-spend is one link, not two',
-  consumeStrikeLink() === 1 && strikeState.chainCount === 1);
+  consumeStrikeLink().chain === 1 && strikeState.chainCount === 1);
 CONFIG.strike.chainOn.chumFull = wasChumFull;
 
 console.log('\nTHE DASH EATS SMALL PREY, AND ONLY SMALL PREY');
@@ -654,7 +654,37 @@ check('grazing banks progress', strikeState.pipsSinceStrike === 20);
 strikeState.pending = 1;
 tryStrike(dir, stats());
 check('  ...but the release spends it all', strikeState.pipsSinceStrike === 0);
-check('  ...so a hoard cannot buy two links', consumeStrikeLink() === 0);
+check('  ...so a hoard cannot buy two links', consumeStrikeLink().chain === 0);
+
+console.log('\nBREAKING OUT OF A DASH STILL PAYS THE WINDOW');
+// The subtle one. The dash's end is where the combo window starts, so a cancel
+// that only cleared `active` would silently cost the player the window their
+// strike paid for — invisible until chains quietly stop being reachable after
+// any manual break-out. Both endings go through finishDash for that reason.
+resetStrike();
+strikeState.pending = 1;
+tryStrike(dir, stats());
+consumeStrikeLink();
+strikeState.chainTimer = 0;               // as if the window had lapsed
+check('mid-dash with no window', strikeState.active && strikeState.chainTimer === 0);
+cancelDash();
+check('breaking out ends the dash', !strikeState.active);
+check('  ...and opens a full window, same as running it out',
+  near(strikeState.chainTimer, CONFIG.strike.chainWindow, 1e-9));
+check('  ...and leaves the i-frames alone — they were paid for',
+  strikeState.invulnTimer > 0);
+
+// Running it out has to land in exactly the same place.
+resetStrike();
+strikeState.pending = 1;
+tryStrike(dir, stats());
+consumeStrikeLink();
+strikeState.chainTimer = 0;
+let g = 0;
+while (strikeState.active && g < 600) { tick(1 / 60); g++; }
+check('letting it run out opens the same window',
+  near(strikeState.chainTimer, CONFIG.strike.chainWindow, 0.02));
+check('cancelling twice is harmless', (cancelDash(), cancelDash(), !strikeState.active));
 
 console.log(`\n${checks - failures}/${checks} checks passed\n`);
 process.exit(failures ? 1 : 0);

@@ -136,7 +136,65 @@ export const LOCOMOTION_STATES = ['idle', 'swim', 'boost', 'surfaceIdle', 'surfa
 // should play out. Sharing one state would have meant one maxDuration for both.
 // Only megalodon.glb ships a clip for this; everything else bites through the
 // procedural jaw in systems/jaw.js instead.
-export const ONESHOT_STATES = ['strike', 'bite', 'hit', 'bark', 'death'];
+// 'celebrate' is the boss-kill victory lap. Only the Seal Team escorts have a
+// clip for it (sealhelper.glb's `clapping`) — the PLAYER's celebration is posed
+// procedurally instead, because the two seals are not the same skeleton and the
+// clip cannot be moved between them. See systems/celebrate.js, which owns the
+// whole performance and explains why.
+export const ONESHOT_STATES = ['strike', 'bite', 'hit', 'bark', 'celebrate', 'death'];
+
+/**
+ * WHICH BONES THE MIXER WILL ACTUALLY PUT BACK.
+ *
+ * The question any system that poses bones over a clip has to answer before it
+ * can hand them back, and it is not the obvious one. three.js's PropertyMixer
+ * skips its write whenever the value it computes matches the one it last wrote
+ * — a sound optimisation that assumes nothing else touched the bone. Overwrite
+ * one and that cache is stale, so the clip may never take it back.
+ *
+ * Which makes a SINGLE-KEYFRAME track a trap. It is a constant: written once,
+ * then skipped forever, so it is exactly as unrecoverable as a bone with no
+ * track at all — while looking perfectly well animated to any check that only
+ * asks whether a track exists. On furseal.glb the `swim` clip leaves five bones
+ * unkeyed AND pins four more (uparm_R_016, arm_R_017, hand_R_018, neck01_05)
+ * with one keyframe each, against 31 for head_07. The flipper that looked safe
+ * was the one that stuck 74 degrees out of place.
+ *
+ * A bone is owned only if EVERY locomotion clip this model has drives it with
+ * more than one keyframe — anything less and some state leaves it stranded.
+ *
+ * @returns Map of bone name -> { owned, keys: { state: keyframeCount } }.
+ *   Empty for a model with no clips, which correctly reports nothing as owned.
+ */
+export function trackCoverage(instance) {
+  const clips = instance?.userData?.clips ?? [];
+  const names = instance?.userData?.animationNames ?? {};
+  const out = new Map();
+
+  const locomotion = LOCOMOTION_STATES
+    .map((state) => ({ state, clip: names[state] && clips.find((c) => c.name === names[state]) }))
+    .filter((e) => e.clip);
+
+  const bones = [];
+  instance?.traverse?.((o) => { if (o.isBone) bones.push(o); });
+
+  for (const bone of bones) {
+    const keys = {};
+    for (const { state, clip } of locomotion) {
+      // Track names are `<boneName>.<property>`; one bone can carry several
+      // (rotation, position, scale) and the most-keyed of them is what decides
+      // whether the mixer keeps writing.
+      let most = 0;
+      for (const t of clip.tracks) {
+        if (t.name.startsWith(`${bone.name}.`)) most = Math.max(most, t.times.length);
+      }
+      keys[state] = most;
+    }
+    const owned = locomotion.length > 0 && locomotion.every(({ state }) => keys[state] > 1);
+    out.set(bone.name, { owned, keys });
+  }
+  return out;
+}
 
 export function createAnimationController(instance) {
   const clips = instance.userData.clips ?? [];
@@ -507,7 +565,18 @@ export function createAnimationController(instance) {
 
       const cfg = CONFIG.animation.states[state] ?? {};
       const speed = cfg.clipTimeScale ?? 1;
-      const full = (stateClipDuration[state] ?? 0.4) / Math.max(0.01, speed);
+      // WHERE IN THE CLIP TO OPEN. Almost every one-shot here wants frame 0,
+      // but an authored performance does not have to keep its point at the
+      // front: sealhelper.glb's `clapping` is 3.47s long and the flippers do
+      // not actually MEET until 1.66s (measured through the real mixer —
+      // tools/celebrate-test.mjs
+      // asserts it). Started at zero and capped like the other one-shots, the
+      // escorts would play a second of wind-up and hand back before the clap
+      // ever happened, which looks like the animation is broken rather than
+      // like a seal deciding not to clap.
+      const startAt = Math.max(0, Math.min(cfg.startAt ?? 0, (stateClipDuration[state] ?? 0) - 0.01));
+      const remaining = Math.max(0.05, (stateClipDuration[state] ?? 0.4) - startAt);
+      const full = remaining / Math.max(0.01, speed);
       // Cap how long this one-shot may hold locomotion. These source clips
       // are multi-second performances; without a cap the seal is locked out
       // of swimming for the whole thing, which looks like it's stuck.
@@ -519,7 +588,13 @@ export function createAnimationController(instance) {
       // one. Already running: let it continue and only the timer refreshes.
       // Finished: restart it, since a finished LoopOnce action contributes no
       // pose at all.
-      switchTo(state, !action.isRunning());
+      const restarted = !action.isRunning();
+      switchTo(state, restarted);
+      // After switchTo, which calls reset() and zeroes the time this is
+      // setting. Only on a restart: a one-shot already mid-play is deliberately
+      // left where it is (see above), and yanking it back to the offset every
+      // frame would pin it there exactly the way reset() used to.
+      if (restarted && startAt > 0) action.time = startAt;
       return true;
     },
 
@@ -620,6 +695,35 @@ export function createAnimationController(instance) {
     // .mjs, which asserts it against the model files.
     springCount: springs.length,
 
+    /**
+     * A snapshot of the machine RIGHT NOW, for ui/animDebug.js. Read-only and
+     * allocated fresh, so a panel holding onto one can't reach in and move the
+     * state it is describing.
+     *
+     * Everything here is otherwise invisible from outside: which locomotion
+     * state the caller last passed, which one-shot is holding the pose and how
+     * much of its budget is left, and whether the clip is running backwards or
+     * stretched to the beat. All four are decisions this file makes silently
+     * every frame, and "the seal is doing something I didn't ask for" has no
+     * other way to be answered than by reading them.
+     */
+    debugState() {
+      return {
+        locomotion: locomotionState,
+        showing: currentState,
+        oneShot: oneShot
+          ? { state: oneShot.state, timeLeft: oneShot.timeLeft, priority: oneShot.priority }
+          : null,
+        playbackDir,
+        beatSyncBeats,
+        // >0 while the flinch pulse is still bleeding off, which is additive on
+        // top of whatever else is playing and so is not an `oneShot`.
+        hitTimer,
+        clipTime: current?.time ?? 0,
+        clipLength: currentState ? (stateClipDuration[currentState] ?? 0) : 0,
+      };
+    },
+
     hasRealClips: !!mixer,
     availableStates: Object.keys(stateAction),
     clipCoverage: Object.fromEntries(
@@ -632,10 +736,20 @@ export function createAnimationController(instance) {
 // Speed thresholds -> locomotion state. `aboveSurface` picks the land/surface
 // variants, so a seal that breaches uses its out-of-water clips instead of
 // swimming through the air.
-export function stateForSpeed(speed, aboveSurface = false) {
+export function stateForSpeed(speed, aboveSurface = false, surfaceRest = 0) {
   if (aboveSurface) {
     return speed >= CONFIG.animation.moveThreshold ? 'surfaceMove' : 'surfaceIdle';
   }
+  // RESTING AT the surface, as opposed to flying above it. Without this,
+  // `surfaceIdle` was reachable only at the apex of a dead-vertical jump — a
+  // window of about 100ms, and of exactly ZERO once the seal had any sideways
+  // drift, because there is no drag up there to bleed it off. See
+  // CONFIG.surfaceRest for the measurements.
+  //
+  // Still gated on speed as well as on the caller's ramp: the ramp releases
+  // over a sixth of a second, and a seal already swimming away during that
+  // release should be swimming, not standing on the water.
+  if (surfaceRest > 0.001 && speed < CONFIG.animation.moveThreshold) return 'surfaceIdle';
   if (speed >= CONFIG.animation.boostThreshold) return 'boost';
   if (speed >= CONFIG.animation.moveThreshold) return 'swim';
   return 'idle';

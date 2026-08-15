@@ -79,11 +79,13 @@ registerHooks({
   resolve(spec, ctx, next) {
     if (spec === '@rive-app/canvas') return { url: 'stub:rive', format: 'module', shortCircuit: true };
     if (spec.endsWith('.riv?url')) return { url: 'stub:rivurl', format: 'module', shortCircuit: true };
+    // ui/riveRuntime.js imports the runtime's WASM by url, to keep it off unpkg.
+    if (spec.endsWith('.wasm?url')) return { url: 'stub:rivurl', format: 'module', shortCircuit: true };
     return next(spec, ctx);
   },
   load(url, ctx, next) {
     if (url === 'stub:rive') {
-      return { format: 'module', shortCircuit: true, source: 'export class Rive { constructor(){} on(){} play(){} cleanup(){} } export const EventType = {}; export const Layout = class {}; export const Fit = {}; export const Alignment = {};' };
+      return { format: 'module', shortCircuit: true, source: 'export class Rive { constructor(){} on(){} play(){} cleanup(){} } export const EventType = {}; export const Layout = class {}; export const Fit = {}; export const Alignment = {}; export const RuntimeLoader = { setWasmUrl(){} };' };
     }
     if (url === 'stub:rivurl') return { format: 'module', shortCircuit: true, source: 'export default "stub.riv";' };
     return next(url, ctx);
@@ -136,6 +138,10 @@ const ui = await import('../path/src/ui/ui.js');
 // The floor tier's id, asked of the ladder rather than hardcoded — rarities.csv
 // decides how many rungs there are and what the bottom one is called.
 const { baseRarity: rarityFloor } = await import('../path/src/systems/rarity.js');
+// The pad, written directly. updateMenuNav reads this object every frame, so
+// poking a direction into it is exactly what a stick push looks like from the
+// menu's side — and it needs no gamepad in jsdom.
+const { menuInput } = await import('../path/src/input.js');
 
 const drain = () => { const out = heard.slice(); heard.length = 0; return out; };
 const drainDropped = () => { const out = dropped.slice(); dropped.length = 0; return out; };
@@ -160,21 +166,70 @@ ui.initUI({
 });
 drain(); // initUI itself must not have made any noise
 
+// The deal (CONFIG.rarityCard.ignite) lights and voices one card at a time on
+// real timers, so anything that opens the menu has to let it finish before it
+// can trust what it hears next. Everything below the first section does that
+// through `finishDeal`.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const DEAL_MS = (CONFIG.upgradeChoices ?? 3) * (CONFIG.rarityCard.ignite.step * 1000) + 80;
+const finishDeal = async () => { await sleep(DEAL_MS); drain(); drainDropped(); };
+
 section('Opening the level-up menu');
 ui.showLevelUp();
 let sounds = drain();
-// The menu opens with EXACTLY ONE sound: the rarity sting for the best tier on
-// the table. It used to open silent, and the rule that mattered was that
-// selectCard(0) must not voice a selection the player did not make — that rule
-// still holds, and is what the second check below is really testing.
+// The menu opens with the FIRST STEP of the deal and nothing else: one pop,
+// plus the sting of the lowest tier on the table. The rest arrive one step
+// apart — see the next section.
 //
-// One sting rather than three: they would smear, and the two quieter ones would
-// be inaudible under the loudest anyway.
-const stings = sounds.filter((n) => n.startsWith('rarity'));
-check('opening announces the best tier on the table, once', stings.length === 1,
-  stings.length ? stings.join(', ') : 'nothing played — bestRarity() found no tier on the dealt cards');
-check('...and the menu says nothing else', sounds.length === stings.length,
-  sounds.length > stings.length ? `also heard ${sounds.filter((n) => !n.startsWith('rarity')).join(', ')} — selectCard(0) is talking to itself` : '');
+// The rule this has always really been testing is underneath: selectCard(0)
+// must not voice a selection the player did not make. A stray uiHover here
+// would land under the deal and be inaudible, which is exactly why it needs a
+// test rather than an ear.
+const opening = sounds.filter((n) => n === 'cardPop' || n.startsWith('rarity'));
+check('opening plays one pop', only(sounds, 'cardPop') === 1, `x${only(sounds, 'cardPop')}`);
+check('...and at most one sting with it', sounds.filter((n) => n.startsWith('rarity')).length <= 1,
+  sounds.filter((n) => n.startsWith('rarity')).join(', '));
+check('...and the menu says nothing else', sounds.length === opening.length,
+  sounds.length > opening.length ? `also heard ${sounds.filter((n) => !opening.includes(n)).join(', ')} — selectCard(0) is talking to itself` : '');
+
+section('The deal');
+{
+  // Which cards are lit RIGHT NOW, in dealt order. The whole point of the
+  // sequence is that this is never all-of-them-at-once on the opening frame:
+  // three cards blooming together says something was dealt and nothing about
+  // what.
+  const litNow = () => [...document.getElementById('svCards').querySelectorAll('.sv-card-slot')]
+    .map((s) => s.classList.contains('sv-lit'));
+  const openLit = litNow();
+  check('only one card is lit as the menu opens', openLit.filter(Boolean).length === 1,
+    openLit.map((b) => (b ? 'lit' : '-')).join(' '));
+
+  // ...and it is the WORST one. Lowest tier first is the whole shape of the
+  // sequence — read floor-upwards the hand is a build, and the best card on
+  // the table is the last thing that happens.
+  const ranks = [...document.getElementById('svCards').querySelectorAll('.sv-card')]
+    .map((c) => Number(c.dataset.rarityRank));
+  const firstLit = openLit.indexOf(true);
+  check('and it is the lowest tier dealt', ranks[firstLit] === Math.min(...ranks),
+    `lit rank ${ranks[firstLit]} of [${ranks.join(', ')}]`);
+
+  await sleep(DEAL_MS);
+  const rest = drain();
+  drainDropped();
+  check('every card ends up lit', litNow().every(Boolean), litNow().join(' '));
+  // One pop per card across the whole deal — the opening one plus the rest.
+  check('one pop per card', 1 + only(rest, 'cardPop') === ranks.length,
+    `${1 + only(rest, 'cardPop')} pops for ${ranks.length} cards`);
+  // The stings climb, because the cards do. A tier with no `sfx` column entry
+  // is skipped rather than pushing the order around, so this compares the
+  // ranks of what was heard rather than counting.
+  const { rarityById, rarityRank } = await import('../path/src/systems/rarity.js');
+  const heardRanks = [...sounds, ...rest].filter((n) => n.startsWith('rarity'))
+    .map((n) => CONFIG.rarities.find((r) => rarityById(r.id)?.sfx === n))
+    .filter(Boolean).map((r) => rarityRank(r.id));
+  const climbing = heardRanks.every((r, i) => i === 0 || r >= heardRanks[i - 1]);
+  check('the stings climb, lowest tier first', climbing, heardRanks.join(' -> '));
+}
 
 // The cards, not their slots. Each card is wrapped in a .sv-card-slot so its
 // rarity bloom has an unclipped element to hang off (see ui.js) — the click
@@ -207,24 +262,86 @@ section('Rarity on the card');
   check('every card carries a coloured ring', ringed.length === cards.length,
     cards.map((c) => c.style.getPropertyValue('--sv-ring') || 'none').join(' '));
 
-  // The bloom is the one thing that must NOT be uniform: the floor tier is a
-  // ring and nothing else, which is what lets a green one read as an event.
+  // The TIER's bloom is the one thing that must NOT be uniform: the floor tier
+  // is a ring and nothing else, which is what lets a green one read as an
+  // event. Sizes rather than a finished filter — the slot's filter is composed
+  // in the stylesheet from four passes (this tier's two, plus the white
+  // selection pair), so what a card contributes is how big its own blurs are.
   const floorId = rarityFloor();
   for (const c of cards) {
     const slot = c.parentElement;
-    const hasGlow = (slot.style.filter || '').includes('drop-shadow');
+    const tight = parseFloat(slot.style.getPropertyValue('--sv-glow-tight'));
+    const halo = parseFloat(slot.style.getPropertyValue('--sv-glow-halo'));
+    const sizes = `${tight}px / ${halo}px`;
     if (c.dataset.rarity === floorId) {
-      check(`the floor tier (${floorId}) has a ring and no bloom`, !hasGlow, slot.style.filter || 'no filter');
+      check(`the floor tier (${floorId}) has a ring and no bloom of its own`,
+        tight === 0 && halo === 0, sizes);
     } else {
-      check(`${c.dataset.rarity} blooms`, hasGlow, slot.style.filter || 'no filter');
+      check(`${c.dataset.rarity} blooms`, tight > 0 && halo > 0, sizes);
     }
   }
+
+  // ...and the SELECTION bloom is the one thing that must be. It is white and
+  // the same size on every card, so "which one am I on" never depends on which
+  // tier was dealt — the floor tier used to have nothing but a 4% scale to say
+  // it, because the only bloom on the menu was scaled by a `glow` that is 0 for
+  // exactly that tier.
+  const host = document.getElementById('svCards');
+  const selTight = parseFloat(host.style.getPropertyValue('--sv-sel-tight'));
+  const selHalo = parseFloat(host.style.getPropertyValue('--sv-sel-halo'));
+  check('the white selection bloom is set for the whole hand', selTight > 0 && selHalo > 0,
+    `${selTight}px / ${selHalo}px`);
+  check('...on the container, so no card can be dealt without one',
+    cards.every((c) => c.parentElement.parentElement === host));
 
   // Rank has to be on the element too, or nothing downstream can order tiers
   // without re-deriving the ladder.
   check('rank rides along for anything that needs to order them',
     cards.every((c) => Number.isFinite(Number(c.dataset.rarityRank))),
     cards.map((c) => c.dataset.rarityRank).join(', '));
+}
+
+section('Nothing is selected until you ask for it');
+// The menu used to open with the first card highlighted AND focused, so the
+// pad always had something to confirm. On a mouse that highlight never moves —
+// it points at a card the player never pointed at and sits there for the whole
+// menu. So the selection is now something an input CREATES.
+{
+  check('no card is highlighted on open',
+    cards.every((c) => !c.classList.contains('sv-card-sel')),
+    cards.map((c) => c.className).join(' | '));
+  check('...and none of them has been handed focus either',
+    !cards.includes(document.activeElement),
+    document.activeElement?.className || 'body');
+
+  // The first thing the pad says LANDS the selection rather than moving it.
+  // stepSelection measures from the selected card, so without this the first
+  // press reads centres[-1] and throws.
+  settle();
+  menuInput.x = 1;
+  ui.updateMenuNav();
+  menuInput.x = 0;
+  check('the first pad press puts the selection on the first card',
+    cards[0].classList.contains('sv-card-sel'),
+    cards.findIndex((c) => c.classList.contains('sv-card-sel')) + ' is selected');
+  check('...and it is heard, because the player asked for it',
+    only(drain(), 'uiHover') === 1);
+
+  // ...and from there it steps normally. stepSelection picks the nearest card
+  // in the direction pushed, which needs boxes to measure — jsdom lays nothing
+  // out and hands back all-zero rects, so every card would sit on top of every
+  // other and the step would fall through to the row wrap. One row, 210px
+  // apart, which is what the CSS actually produces.
+  cards.forEach((c, i) => {
+    c.getBoundingClientRect = () => ({ left: i * 214, top: 0, width: 210, height: 210,
+      right: i * 214 + 210, bottom: 210, x: i * 214, y: 0 });
+  });
+  settle();
+  menuInput.x = 1;
+  ui.updateMenuNav();
+  menuInput.x = 0;
+  check('the next press steps off it', cards[1].classList.contains('sv-card-sel'),
+    cards.findIndex((c) => c.classList.contains('sv-card-sel')) + ' is selected');
 }
 
 section('Hovering');
@@ -249,7 +366,8 @@ settle();
 // A card is a div. Enter is NOT turned into a click by the browser, so a
 // binding on 'click' alone leaves the whole keyboard path mute.
 ui.showLevelUp();
-drain();
+// Let the deal finish and go quiet, so what follows is the only thing heard.
+await finishDeal();
 const fresh = [...document.getElementById('svCards').querySelectorAll('.sv-card')];
 key(fresh[0], 'Enter');
 sounds = drain();
@@ -257,7 +375,8 @@ check('Enter on a card is heard', only(sounds, 'uiClick') === 1, `x${only(sounds
 check('exactly once, not twice', only(sounds, 'uiClick') === 1);
 
 ui.showLevelUp();
-drain();
+// Let the deal finish and go quiet, so what follows is the only thing heard.
+await finishDeal();
 const spaceCards = [...document.getElementById('svCards').querySelectorAll('.sv-card')];
 key(spaceCards[0], ' ');
 sounds = drain();
@@ -266,7 +385,8 @@ check('Space too', only(sounds, 'uiClick') === 1, `x${only(sounds, 'uiClick')}`)
 section('Mouse confirm');
 settle();
 ui.showLevelUp();
-drain();
+// Let the deal finish and go quiet, so what follows is the only thing heard.
+await finishDeal();
 const clickCards = [...document.getElementById('svCards').querySelectorAll('.sv-card')];
 clickCards[0].click();
 sounds = drain();
@@ -284,6 +404,67 @@ settle();
 const submit = document.getElementById('svNameSubmit');
 pointerEnter(submit);
 check('the name submit hovers', only(drain(), 'uiHover') === 1);
+
+section('The score card on a pad');
+// A controller player could reach the end of a run and have no way to start
+// another one: the pad drove the level-up cards and nothing else. Same rules as
+// the cards — nothing is highlighted until the player asks, and confirm goes
+// through the button's own click so the pad can't take a path the mouse can't.
+{
+  const padPress = (field) => {
+    menuInput[field] = field === 'x' || field === 'y' ? 1 : true;
+    ui.updateMenuNav();
+    menuInput[field] = field === 'x' || field === 'y' ? 0 : false;
+  };
+  const lit = () => [...document.querySelectorAll('#svGameOverMenu .sv-nav-sel')];
+
+  ui.showGameOver({ score: 4210, kills: 37, level: 6, time: 128 });
+  settle();
+  check('the card opens with nothing highlighted', lit().length === 0,
+    lit().map((c) => c.id).join(', '));
+
+  // Whatever is actually reachable, in DOM order — the trophy row only exists
+  // if a boss went down this run, so the first stop is not a fixed button.
+  const reachable = ['svTrophyShare', 'svTrophySave', 'svNameSubmit', 'svRestartBtn']
+    .map((id) => document.getElementById(id))
+    .filter((c) => c && !c.disabled && !c.closest('.sv-hidden'));
+  check('the card has controls to reach', reachable.length >= 2,
+    reachable.map((c) => c.id).join(', '));
+
+  padPress('y');
+  check('the first pad press lands on the first control',
+    lit().length === 1 && lit()[0] === reachable[0],
+    lit()[0]?.id || 'nothing');
+  check('...and is heard', only(drain(), 'uiHover') === 1);
+
+  settle();
+  padPress('y');
+  check('the next press steps down the card',
+    lit().length === 1 && lit()[0] === reachable[1], lit()[0]?.id || 'nothing');
+
+  // Either axis. The card is a column of one- and two-button rows, not a grid,
+  // so a player pushing whichever direction they thought of gets the same move.
+  settle();
+  padPress('x');
+  check('right steps too, on a card that has no grid to speak of',
+    lit()[0] === reachable[2] || lit()[0] === reachable[reachable.length - 1],
+    lit()[0]?.id || 'nothing');
+
+  // Confirm reaches the real handler — checked by the sound the button's own
+  // click binding makes, not by a spy on something this test wired up.
+  settle();
+  const target = lit()[0];
+  padPress('confirm');
+  check(`confirm clicks ${target.id}`, only(drain(), 'uiClick') === 1);
+
+  // And the whole thing is inert once the card is gone: updateMenuNav runs on
+  // every frame of the game, not just while a menu is up.
+  ui.hideAllMenus();
+  settle();
+  padPress('y');
+  padPress('confirm');
+  check('a hidden card ignores the pad', lit().length === 0 && drain().length === 0);
+}
 
 section('Nothing is bound twice');
 settle();

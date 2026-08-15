@@ -2,6 +2,11 @@ import { CONFIG } from '../config.js';
 import { removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { applyElementalHit } from './elements.js';
 import { markTarget } from './marks.js';
+import { hitCreature } from './hitShape.js';
+
+// Where the dash last connected on a body. Shared and consumed immediately —
+// see the note on combat.js's own `contact`.
+const strikeContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 
 // The strike is a CHARGE-UP. Holding the button fills a single meter (about a
 // second from empty); releasing spends it and gives the ship a strong
@@ -300,7 +305,9 @@ export function resetStrike() {
   strikeState.chainCount = 0;
   strikeState.chainTimer = 0;
   strikeState.pipsSinceStrike = 0;
-  lastReleaseLink = 0;
+  lastRelease.chain = 0;
+  lastRelease.hadFood = false;
+  lastRelease.hadWindow = false;
   strikeState.invulnTimer = 0;
   hitThisDash.clear();
   chainGaps.clear();
@@ -395,10 +402,15 @@ export function tryStrike(aimDir, stats) {
   // and is a trap: a dash lasts 0.13-0.48s, reaching minFire takes 0.35s of
   // holding, and holding SEALS THE MOUTH. There is no room in a dash to both
   // eat a bar and wind up a strike. The window the dash opens is the container.
-  const scored = strikeState.pipsSinceStrike >= linkPips(stats)
-    && strikeState.chainTimer > 0;
+  const hadFood = strikeState.pipsSinceStrike >= linkPips(stats);
+  const hadWindow = strikeState.chainTimer > 0;
   strikeState.pipsSinceStrike = 0;
-  lastReleaseLink = scored ? chainStrike('strikeRelease') : 0;
+  lastRelease.chain = (hadFood && hadWindow) ? chainStrike('strikeRelease') : 0;
+  // Kept alongside the result so the telemetry can say WHICH condition failed.
+  // A count of links alone cannot tell "never strikes" from "strikes constantly
+  // and never links", and those want opposite fixes.
+  lastRelease.hadFood = hadFood;
+  lastRelease.hadWindow = hadWindow;
 
   // Every release opens or refreshes the window, link or not. Without this the
   // FIRST strike of a chain would leave no window behind, eating would not
@@ -412,16 +424,21 @@ export function tryStrike(aimDir, stats) {
 // rather than returned because tryStrike's boolean is "did a dash launch",
 // which the caller branches on for the impulse — widening it to an object
 // would touch every call site to say something only one of them cares about.
-let lastReleaseLink = 0;
+const lastRelease = { chain: 0, hadFood: false, hadWindow: false };
 
 /**
- * The FOOD CHAIN link the last release scored, or 0. Clears on read, so a
- * caller that forgets to check cannot replay an old link on the next strike.
+ * What the last release did: the FOOD CHAIN link it scored (0 for none) and,
+ * when it scored nothing, which of the two conditions was missing.
+ *
+ * Clears the chain on read, so a caller that forgets to check cannot replay an
+ * old link on the next strike. The two flags are left alone — they are a
+ * description of an event that already happened, and the telemetry reads them
+ * on the same frame.
  */
 export function consumeStrikeLink() {
-  const n = lastReleaseLink;
-  lastReleaseLink = 0;
-  return n;
+  const out = { ...lastRelease };
+  lastRelease.chain = 0;
+  return out;
 }
 
 /**
@@ -639,7 +656,16 @@ export function chainLevel(stats = null) {
  */
 export function chainDamageMul(stats) {
   const offset = CONFIG.strike.chainLevelOffset ?? 1;
-  return Math.pow(stats?.strikeChainMul ?? 1, Math.max(0, chainLevel(stats) - offset));
+  const raw = Math.pow(stats?.strikeChainMul ?? 1, Math.max(0, chainLevel(stats) - offset));
+  // CAPPED, like its two siblings. comboSpeedMul stops at comboSpeedMax and the
+  // score multiplier at comboMaxMultiplier; this one was an unbounded
+  // exponential, which nobody noticed while chains were rare.
+  //
+  // They are not rare any more. Simulated against the chum rates in the real
+  // run logs (npm run sim:chain), a busy stretch reaches chain level ~38 —
+  // x49 strike damage, climbing with no ceiling at all. The cap is the missing
+  // third of a set, not a nerf to a deliberate design.
+  return Math.min(CONFIG.strike.chainDamageMax ?? Infinity, raw);
 }
 
 /**
@@ -750,6 +776,41 @@ export function addCharge(amount, stats = null) {
   return fillMeter(amount, stats);
 }
 
+/**
+ * END THE DASH — the one path, whether it ran out or was broken out of.
+ *
+ * Shared rather than duplicated because the dash's end does more than clear a
+ * flag: it is where the combo window starts. A cancel that only set `active`
+ * false would silently cost the player the window their strike paid for, which
+ * is invisible until a chain quietly stops being reachable after any manual
+ * break-out.
+ *
+ * THE WINDOW STARTS WHEN THE DASH ENDS, not when it was released. A dash runs
+ * 0.13-0.48s, and during it the seal is committed — flying in one direction at
+ * 46 u/s, not choosing what to eat. Starting the clock at the release spent up
+ * to 44% of a 1.1s window on the one stretch the player could not use it, and
+ * punished the biggest strikes hardest.
+ *
+ * Only ever EXTENDS the window: a chain kept alive by eating mid-dash has
+ * already set the timer to a full window, and this sets it to the same value.
+ *
+ * The i-frames are deliberately left running. They were bought with the same
+ * banked power the reach was, and taking them away for steering out of a bad
+ * line would make the break-out a punishment rather than a control.
+ */
+function finishDash() {
+  strikeState.active = false;
+  strikeState.dashTimeLeft = 0;
+  if (CONFIG.strike.windowFromDashEnd !== false) {
+    strikeState.chainTimer = Math.max(strikeState.chainTimer, CONFIG.strike.chainWindow);
+  }
+}
+
+/** Break out of a dash early — see the break-out branch in updatePlayer. */
+export function cancelDash() {
+  if (strikeState.active) finishDash();
+}
+
 // hooks: { onEnemyDamaged(e, dmg), onEnemyKilled(e), onChainHit(chainCount),
 //          onPip(index, total) }
 // Returns { spawnOrb } — true on the frame the orb timer fires, so the caller
@@ -795,30 +856,18 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
   if (strikeState.active) {
     strikeState.dashTimeLeft -= dt;
     if (strikeState.dashTimeLeft <= 0) {
-      strikeState.active = false;
-      // THE WINDOW STARTS WHEN THE DASH ENDS, not when it was released.
-      //
-      // A dash runs 0.13-0.48s depending on charge, and during it the seal is
-      // committed — flying in one direction at 46 u/s, not choosing what to
-      // eat. Starting the clock at the release therefore spent up to 44% of a
-      // 1.1s window on the one stretch the player could not use it, and
-      // punished the biggest strikes hardest: commit fully, get the shortest
-      // window. Refreshing here makes the 1.1s time you can actually act in.
-      //
-      // Only ever extends: a chain kept alive by eating mid-dash has already
-      // set the timer to a full window, and this sets it to the same value.
-      if (CONFIG.strike.windowFromDashEnd !== false) {
-        strikeState.chainTimer = Math.max(strikeState.chainTimer, CONFIG.strike.chainWindow);
-      }
+      finishDash();
     }
 
     for (let i = enemiesList.length - 1; i >= 0; i--) {
       const e = enemiesList[i];
       if (hitThisDash.has(e)) continue;
-      const dx = e.mesh.position.x - playerPos.x;
-      const dy = e.mesh.position.y - playerPos.y;
-      const reach = stats.hitRadius + e.radius + 0.3;
-      if (dx * dx + dy * dy > reach * reach) continue;
+      // Through the shared test, so a dash connects with the part of the
+      // animal the seal actually reached. On a boss that is the difference
+      // between ramming its flank and ramming a circle two metres off it —
+      // see systems/hitShape.js. `+ 0.3` was always the ram's own slack and
+      // stays exactly that.
+      if (!hitCreature(e, playerPos.x, playerPos.y, stats.hitRadius + 0.3, strikeContact)) continue;
 
       // A dash connecting used to be the original chain source. It is off by
       // default now — the FOOD chain is bought with food, and a ram feeds
@@ -883,8 +932,11 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // and fire a hit burst sized to nothing — the ram announces itself
       // through onRam below, which is sized by COMMITMENT rather than by
       // damage precisely because there usually isn't any.
-      if (dmg > 0) hooks.onEnemyDamaged?.(e, dmg);
-      hooks.onRam?.(e, strikeState.power);
+      if (dmg > 0) {
+        hooks.onEnemyDamaged?.(e, dmg, strikeContact.x, strikeContact.y,
+          strikeState.dashDir, null, strikeContact);
+      }
+      hooks.onRam?.(e, strikeState.power, strikeContact);
       if (chain) hooks.onChainHit?.(chain);
 
       // AND THE MARK. Anything big enough to shrug the shove off is painted

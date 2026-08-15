@@ -12,12 +12,16 @@ dumboOcto,1.9,
 eelCompanion,1.5,
 enemyAbyssShark,2.62,night variant of enemyGreatWhite - keep these two equal
 enemyBarracuda,1.78,
+enemyBossCrab,2.3,the king crab boss - same animal as enemyWalkingCrab so it takes the same size; the boss step is bosses.csv sizeMul on top
 enemyEmberCrab,2.3,same animal as enemyWalkingCrab - keep these two equal
+enemyGiantSquid,2,The kraken. 7.4 fit x this = 14.8 long - the family the other apex bodies are in. Measured by tools/boss-scale-check.mjs
 enemyGreatWhite,2.62,
 enemyLanternRay,3.1,night variant of enemyStingray - keep these two equal
 enemyMegalodon,2.3,
 enemyMightyMeg,2,
-enemyOrca,2.8,
+enemyMosasaur,2.3,"The mosasaur boss. Same multiplier as the megalodon on purpose - the two fit values (7.4 and 7.0) are what separate them, so this column stays comparable between the two biggest bodies. 7.4 x 2.3 = 17.0 on screen, and bossMosasaur's 1.6 takes it to 27.2. Measured by tools/boss-scale-check.mjs"
+enemyOrcaBull,2.8,The boss orca bull. Cut from the family file by tools/orca-split.mjs.
+enemyOrcaCow,2.8,The boss orca cow. bossOrca rolls between this and the bull per arrival.
 enemyOtter,2.28,
 enemyOyster,2.9,
 enemySeaTurtle,3.08,
@@ -26,6 +30,9 @@ enemyStingray,3.1,
 enemyWalkingCrab,2.3,matched to enemyEmberCrab; 2.3 reproduces the old crab's on-screen height on the new rig
 missile,2,
 octoGrabber,1.34,
+orcaFriendBull,1,The pod leader — Orca Family, slot 0.
+orcaFriendCalf,1,Orca Family, slot 2. Smallest of the three.
+orcaFriendCow,1,Orca Family, slot 1.
 rapidFireOrb,2.4,
 seagull,9.54,
 sealTeam,2.72,

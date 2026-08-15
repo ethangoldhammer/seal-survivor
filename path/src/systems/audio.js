@@ -193,6 +193,21 @@ function buildImpulse(seconds, decay) {
   return buf;
 }
 
+/**
+ * The same synthetic room, for anything that needs a tail of its own rather
+ * than a share of the bus send. The music's boss-kill hush is the one caller:
+ * it hangs its own convolver off the music chain (which never touches this
+ * bus — see systems/music.js) and would otherwise ship a second copy of the
+ * loop above, free to drift away from this one.
+ *
+ * Null before the context exists, which is every call made before the first
+ * user gesture unlocks audio.
+ */
+export function makeImpulse(seconds, decay) {
+  if (!ctx) return null;
+  return buildImpulse(seconds, decay);
+}
+
 // A soft-clip transfer curve, in two pieces:
 //
 //   |x| <= knee     y = x                                    (untouched)

@@ -23,6 +23,12 @@ import { chainPoint } from './ikChain.js';
 // The wake is not one point. See wakeOrigin below: each burst is born either
 // off one of the two hind FLIPPER TIPS or somewhere along the tail, so the
 // trail comes off the whole back half of the animal.
+//
+// A third cadence rides on top of both: THE WIND-UP VENT, at the bottom of
+// updateBubbles. It borrows the same two emitters and the same anchors, and
+// turns them into exhaust — thrown out the BACK of the seal, harder the more
+// power is banked. The burst that ends it lives in main.js, on the release
+// frame, because it belongs to the strike rather than to the breathing.
 
 const _pt = new THREE.Vector3();
 
@@ -105,8 +111,11 @@ function wakeOrigin(rig, cfg) {
  * @param velocity player velocity, as {x, y}
  * @param charge   banked strike power, 0..1, or 0 when no strike is being wound
  *                 up. Opens every emitter at once — see the vent below.
+ * @param forward  where the seal is POINTING, as a unit {x, y}, or null. Only the
+ *                 vent reads it, and only to find "behind" — see the jet there.
+ *                 Optional so a hand-built rig in a harness still runs.
  */
-export function updateBubbles(dt, rig, velocity, aboveSurface, charge = 0) {
+export function updateBubbles(dt, rig, velocity, aboveSurface, charge = 0, forward = null) {
   const cfg = CONFIG.bubbles;
   if (!cfg.enabled || !rig || aboveSurface) return;
 
@@ -203,34 +212,71 @@ export function updateBubbles(dt, rig, velocity, aboveSurface, charge = 0) {
   if (bursts <= 0) return;
 
   const ventScale = lerp(cc?.scaleMin ?? 0.6, cc?.scaleMax ?? 1.9, wind);
-  // Behind the seal if it's still travelling, straight up if it isn't — a tail
-  // vent from a standstill has no "behind" to cast into, and bubbles rise
-  // anyway (the emitters carry positive gravity).
-  const inv = speed > 1e-4 ? -1 / speed : 0;
-  const tailX = inv !== 0 ? velocity.x * inv : 0;
-  const tailY = inv !== 0 ? velocity.y * inv : 1;
+
+  // --- WHICH WAY THE VENT BLOWS ---------------------------------------------
+  // BEHIND THE ANIMAL. The head's share of this used to go straight up, which
+  // is right for a breath and wrong for a wind-up: the seal is a vehicle
+  // spooling up, and what says so is exhaust leaving the BACK of it. Up reads
+  // as idling.
+  //
+  // "Behind" comes from where the seal is POINTING, not from where it is going.
+  // A wind-up is usually a brake to a standstill (holding seals the mouth, so
+  // you stop and commit), and travel has no direction to reverse there —
+  // reversing velocity gave a jet that swung wildly as the last of the drift
+  // bled off and then gave up entirely. Facing is stable through all of it.
+  // Falls back to reverse travel, then to straight up, so a caller with no
+  // facing to hand behaves as this did before.
+  let backX = 0;
+  let backY = 0;
+  if (forward && (forward.x !== 0 || forward.y !== 0)) {
+    const fl = Math.hypot(forward.x, forward.y);
+    backX = -forward.x / fl;
+    backY = -forward.y / fl;
+  } else if (speed > 1e-4) {
+    backX = -velocity.x / speed;
+    backY = -velocity.y / speed;
+  } else {
+    backY = 1;
+  }
+  // Blended toward up rather than swung all the way round, because these are
+  // still bubbles: `backBias` at 1 is a pure thruster and at 0 is the old
+  // breath. Normalised, so the blend changes the ANGLE only — how hard the jet
+  // is thrown is `jetSpeed` below, and mixing the two would make a
+  // half-biased vent quietly weaker than either end of the range.
+  const bias = Math.min(1, Math.max(0, cc?.backBias ?? 0.85));
+  let ventX = backX * bias;
+  let ventY = backY * bias + (1 - bias);
+  const vl = Math.hypot(ventX, ventY);
+  if (vl > 1e-4) { ventX /= vl; ventY /= vl; } else { ventX = 0; ventY = 1; }
+  // And thrown, not let go of. Rides banked power like everything else about
+  // the vent, so a wind-up visibly spools up rather than switching on.
+  const jet = lerp(cc?.jetSpeedMin ?? 1.4, cc?.jetSpeedMax ?? 2.8, wind);
 
   for (let i = 0; i < bursts; i++) {
     if (ventMouth) {
       emit('breathBubbles', ventMouth.x, ventMouth.y, {
-        dirX: 0,
-        dirY: 1,
+        dirX: ventX,
+        dirY: ventY,
         vx: velocity.x,
         vy: velocity.y,
         scale: cfg.breath.scale * ventScale,
+        speedMul: jet,
       });
     }
     if (ventWake) {
       // Same picker the wake uses, so a wind-up vents off the flipper tips and
-      // down the tail rather than out of one point.
+      // down the tail rather than out of one point — and the same direction as
+      // the head's, so the whole animal streams one way instead of the nose
+      // and the tail disagreeing about where "back" is.
       const from = wakeOrigin(rig, cfg.wake);
       if (from) {
         emit('wakeBubbles', from.x, from.y, {
-          dirX: tailX,
-          dirY: tailY,
+          dirX: ventX,
+          dirY: ventY,
           vx: velocity.x,
           vy: velocity.y,
           scale: cfg.wake.scale * ventScale,
+          speedMul: jet,
         });
       }
     }

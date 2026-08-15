@@ -1,7 +1,7 @@
 import { CONFIG } from '../config.js';
 import { musicScale } from './settings.js';
 import { bounds, depthFraction } from '../arena.js';
-import { getAudioContext } from './audio.js';
+import { getAudioContext, makeImpulse } from './audio.js';
 
 // A loop player that changes tracks ON THE BEAT rather than the instant
 // something happens in game. When you level up, the next loop is QUEUED — it
@@ -26,6 +26,12 @@ let source = null;
 let bandpass = null;
 let bandDry = null;
 let bandWet = null;
+// The hush's reverb send. See hushMusic() at the bottom of this file.
+let tailSend = null;
+let tailVerb = null;
+let tailOut = null;
+let tailSignature = '';
+let hushed = false;
 
 const tracks = new Map(); // name -> AudioBuffer
 let currentTrack = null;
@@ -212,8 +218,31 @@ function ensureChain() {
     filter.connect(bandDry).connect(musicGain);
     filter.connect(bandpass).connect(bandWet).connect(musicGain);
     musicGain.connect(ctx.destination);
+
+    // THE TAIL, and note where it is plugged in: it taps the depth filter and
+    // goes STRAIGHT TO THE SPEAKERS, around musicGain rather than through it.
+    // That is the whole trick of the hush — musicGain is the thing being
+    // muted, so a send routed through it would be silenced by the very cut it
+    // exists to survive.
+    //
+    // Silent until a boss dies. The convolver only ever outputs what it has
+    // been fed, so a send sitting at zero costs one multiply per sample and
+    // rings out nothing.
+    tailSend = ctx.createGain();
+    tailSend.gain.value = 0;
+    tailVerb = ctx.createConvolver();
+    tailOut = ctx.createGain();
+    tailOut.gain.value = 0;
+    filter.connect(tailSend).connect(tailVerb).connect(tailOut);
+    tailOut.connect(ctx.destination);
   }
   return true;
+}
+
+// The level the music should be at when nothing is ducking it: the authored
+// volume times the player's own (Audio tab), with mute folded into the scale.
+function baseMusicGain() {
+  return CONFIG.music.enabled ? CONFIG.music.volume * musicScale() : 0;
 }
 
 export async function loadTrackFromFile(name, file) {
@@ -356,6 +385,11 @@ export function play(level = 1) {
   queuedTrack = null;
   depthHeld = false;
   resumeUntil = 0;
+  // A run started while the last one's boss-kill hush was still up would open
+  // MUTED — the cut is an automation ramp on the music gain, and starting a
+  // fresh source underneath it changes nothing about the gain it plays into.
+  // Cleared with no fade: this is frame one of a run, not the end of a beat.
+  releaseMusicHush(0);
   const when = ctx.currentTime + 0.02;
   rateNow = rateTarget = targetRate();
   rateTau = 0;
@@ -377,6 +411,9 @@ export function play(level = 1) {
 
 export function stop() {
   stopSource();
+  // Not left set behind a stopped transport: the next play() would find the
+  // gain still ramped to zero and the send still primed.
+  releaseMusicHush(0);
   started = false;
   queuedTrack = null;
   pendingLevel = null;
@@ -525,6 +562,130 @@ export function setBandpass(amount) {
   bandpass.Q.setTargetAtTime(0.7 + a * Math.max(0, (cfg.musicQ ?? 3.6) - 0.7), now, 0.06);
 }
 
+// ---------------------------------------------------------------------------
+// THE HUSH — the silence a boss dies into
+// ---------------------------------------------------------------------------
+// The loop is cut almost dead on the frame the last hit lands, and the last
+// moment of it is thrown into a long reverb that rings out over the held
+// close-up (systems/bossKill.js). What the player hears is the score stopping
+// and the room it was playing in carrying on without it — the biggest silence
+// the game has, and it is a silence with the music's own tail still in it.
+//
+// WHY A SEND AND NOT A FADE. Fading the loop out over four seconds is the
+// obvious version and it is not the same thing at all: the music would still
+// be PLAYING through the whole beat, quieter, still moving, still counting its
+// bars. What this does is stop the performance and keep the room — the send is
+// opened wide for a fraction of a second, which is the "last note" the tail is
+// built from, and then the transport is muted underneath it. The convolver
+// goes on outputting what it was fed for the length of the impulse, and
+// nothing else in the mix is playing.
+//
+// It also survives the tape drag on top of it. The kill shot drops the
+// playback rate at the same moment (see the `audio` block in CONFIG.boss.kill),
+// so the fraction of a second the send is given is a fraction of a second of
+// the loop ALREADY slowing down — the tail is built out of a note bending
+// downward, which is most of why it reads as the end of something.
+
+/**
+ * Cut the music and light the tail.
+ *
+ * @param opts.cut      seconds to mute the transport over. Short — this is a
+ *                      stop, not a fade — but not zero: an instant cut on a
+ *                      sustained loop is an audible click.
+ * @param opts.feed     seconds of music thrown into the reverb. This is the
+ *                      "last note", and it is the one number that changes what
+ *                      the tail is MADE of rather than how it sounds.
+ * @param opts.seconds  length of the impulse: how long the room rings.
+ * @param opts.decay    how fast it falls away. Higher is a smaller room.
+ * @param opts.level    tail level, against the music's own.
+ * @returns true if anything was lit. False means there was nothing playing, or
+ *          the player has the music off — either way the caller has no tail to
+ *          wait for and releaseMusicHush is still safe to call.
+ */
+export function hushMusic(opts = {}) {
+  if (!started || !ensureChain()) return false;
+  const base = baseMusicGain();
+  if (base <= 0) return false;
+
+  const now = ctx.currentTime;
+  const seconds = Math.max(0.2, opts.seconds ?? 4.5);
+  const decay = Math.max(0.1, opts.decay ?? 2.4);
+  // Rebuilt only when its shape changes — an impulse is a few hundred thousand
+  // random numbers, and a boss dies often enough that generating one per kill
+  // would be a hitch on the exact frame the game is holding still to be looked
+  // at.
+  const sig = `${seconds}|${decay}`;
+  if (sig !== tailSignature || !tailVerb.buffer) {
+    const buffer = makeImpulse(seconds, decay);
+    if (!buffer) return false;
+    tailVerb.buffer = buffer;
+    tailSignature = sig;
+  }
+
+  tailOut.gain.cancelScheduledValues(now);
+  tailOut.gain.setValueAtTime(base * Math.max(0, opts.level ?? 1.35), now);
+
+  // Open wide, then shut. The send taps the depth filter, which is UPSTREAM of
+  // the mute below, so what it hears is the loop at full level for exactly as
+  // long as this window is open regardless of what the dry path is doing.
+  const feed = Math.max(0.02, opts.feed ?? 0.28);
+  tailSend.gain.cancelScheduledValues(now);
+  tailSend.gain.setValueAtTime(Math.max(0, opts.send ?? 1), now);
+  tailSend.gain.linearRampToValueAtTime(0, now + feed);
+
+  const cut = Math.max(0.02, opts.cut ?? 0.22);
+  musicGain.gain.cancelScheduledValues(now);
+  musicGain.gain.setValueAtTime(base, now);
+  musicGain.gain.linearRampToValueAtTime(0, now + cut);
+
+  hushed = true;
+  return true;
+}
+
+/**
+ * Bring the loop back. Quick on purpose: the beat is over, the ocean is
+ * accelerating back to full speed, and the music arriving slowly behind it
+ * would leave the first seconds of live play sounding like the aftermath
+ * rather than like the next fight.
+ *
+ * The tail is faded out UNDER the returning music rather than left to finish:
+ * a room still ringing from a note the score has already moved on from is a
+ * smear over the top of it. Safe to call when nothing was hushed.
+ *
+ * @param fade seconds to bring the loop back over. 0 restores it instantly,
+ *             which is what a run reset wants.
+ */
+export function releaseMusicHush(fade = 0.35) {
+  if (!hushed) return;
+  hushed = false;
+  if (!ensureChain()) return;
+  const now = ctx.currentTime;
+  const base = baseMusicGain();
+
+  musicGain.gain.cancelScheduledValues(now);
+  if (fade > 0) {
+    musicGain.gain.setValueAtTime(musicGain.gain.value, now);
+    musicGain.gain.linearRampToValueAtTime(base, now + fade);
+  } else {
+    musicGain.gain.setValueAtTime(base, now);
+  }
+
+  tailSend.gain.cancelScheduledValues(now);
+  tailSend.gain.setValueAtTime(0, now);
+  tailOut.gain.cancelScheduledValues(now);
+  if (fade > 0) {
+    tailOut.gain.setValueAtTime(tailOut.gain.value, now);
+    tailOut.gain.linearRampToValueAtTime(0, now + fade * 2);
+  } else {
+    tailOut.gain.setValueAtTime(0, now);
+  }
+}
+
+/** Is the score currently cut? For the tuner readout and the tests. */
+export function musicHushed() {
+  return hushed;
+}
+
 /**
  * Re-apply only the PLAYER's half of the music level — the Audio tab's master,
  * music and mute. Cheap enough for every step of a slider drag: one gain write.
@@ -535,8 +696,8 @@ export function setBandpass(amount) {
  * business touching either.
  */
 export function applyPlayerMusicSettings() {
-  if (!musicGain) return;
-  musicGain.gain.value = CONFIG.music.enabled ? CONFIG.music.volume * musicScale() : 0;
+  if (!musicGain || hushed) return;
+  musicGain.gain.value = baseMusicGain();
 }
 
 export function applyMusicSettings() {
@@ -544,7 +705,14 @@ export function applyMusicSettings() {
   // The authored level times the player's own (Audio tab), with mute folded
   // into the scale. A separate node would be tidier but the music chain is
   // built once and this is the gain everything else already writes to.
-  musicGain.gain.value = CONFIG.music.enabled ? CONFIG.music.volume * musicScale() : 0;
+  //
+  // NOT while the hush has it. That is an automation ramp on this same param,
+  // and a plain `.value =` in the middle of one is either ignored outright or
+  // lands for a single frame before the ramp overwrites it — a volume slider
+  // dragged during a boss kill would un-mute the score for one frame of the
+  // silence the whole moment is built on. The release reads the level fresh,
+  // so a change made during the hush still arrives, one beat later.
+  if (!hushed) musicGain.gain.value = baseMusicGain();
   filter.Q.value = CONFIG.music.resonance;
   // Through writeRate rather than assigned: a plain `.value =` is ignored
   // outright while automation is scheduled, so dragging the rate slider during

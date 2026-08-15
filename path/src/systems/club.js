@@ -8,7 +8,13 @@ import { chillEnemy } from './elements.js';
 import { player } from '../entities/player.js';
 import { projectileCount } from '../stats.js';
 import { abilityDamage, aoe, targeting } from './scaling.js';
+import { canHold } from './control.js';
 import { recordControl } from './playtest.js';
+import { hitCreatureSegment } from './hitShape.js';
+
+// Where the wood last met a body. Shared and read immediately — see the note
+// on combat.js's own `contact`.
+const clubContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 
 // ---------------------------------------------------------------------------
 // THE CLUB — a weapon lashed to the fin tips, swung by THE FINS THEMSELVES.
@@ -344,22 +350,6 @@ function finAngle(rig, i, tip, playerPos) {
   return null;
 }
 
-// Squared distance from a point to a segment. Used twice per club per enemy —
-// once against the shaft as it stands, once against the path the head swept
-// since the last frame — so it earns being its own function.
-function segDistSq(px, py, ax, ay, bx, by) {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const len2 = dx * dx + dy * dy;
-  let t = len2 > 1e-9 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
-  t = t < 0 ? 0 : t > 1 ? 1 : t;
-  const cx = ax + dx * t;
-  const cy = ay + dy * t;
-  const ex = px - cx;
-  const ey = py - cy;
-  return ex * ex + ey * ey;
-}
-
 // ---------------------------------------------------------------------------
 // THE TWO RIDERS — Powder Keg and Cold Snap.
 //
@@ -464,11 +454,15 @@ function land(f) {
  * index captured earlier in the frame may already have been invalidated by an
  * earlier kill in the same frame.
  */
-function hurt(scene, e, dmg, enemiesList, hooks) {
+function hurt(scene, e, dmg, enemiesList, hooks, at = null) {
   e.hp -= dmg;
   e.flash = CONFIG.fx.hitFlash;
   e.hitThisFrame = true;
-  hooks.onEnemyDamaged?.(e, dmg);
+  // `at` is where the wood landed, when the caller knows. The blast path
+  // doesn't — a detonation catching a body several metres away has no contact
+  // point on it — and passes nothing, which leaves the feedback where it has
+  // always been: on the creature.
+  hooks.onEnemyDamaged?.(e, dmg, at?.x, at?.y, null, null, at);
   if (e.hp > 0) return false;
 
   hooks.onEnemyKilled?.(e);
@@ -510,13 +504,28 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // A bare number still works, and is what every harness and the tuner pass
   // when they only care about the base weapon.
   const lv = typeof levels === 'number' ? { club: levels } : (levels ?? {});
+  const boomLv = Math.max(0, Math.floor(lv.boom ?? 0));
+  const iceLv = Math.max(0, Math.floor(lv.ice ?? 0));
+  const throwLv = Math.max(0, Math.floor(lv.throw ?? 0));
+
   // `alwaysOn` is an AUTHORING switch, not a balance one: it puts clubs in the
   // fins without the card so a model, a tint or a flop curve can be judged
   // without rolling the upgrade first. Off by default — with it on, every run
   // starts armed.
-  const level = Math.max(c.alwaysOn ? 1 : 0, Math.floor(lv.club ?? 0));
-  const blast = clubBlast(Math.max(0, Math.floor(lv.boom ?? 0)));
-  const ice = clubIce(Math.max(0, Math.floor(lv.ice ?? 0)));
+  //
+  // ANY CLUB CARD ARMS THE SEAL, and this is the other half of that. The
+  // riders and the Hurler are deliberately takeable WITHOUT Driftwood Club —
+  // a card that can be dealt as a dead pick is worse than one that is merely
+  // better in the right build — but the weapon used to be gated on `lv.club`
+  // alone, which made them exactly that dead pick. A run that took Cold Snap
+  // and Powder Keg and no base card got no clubs at all: both cards did
+  // nothing, and there was nothing on screen to explain why. A variant on its
+  // own now swings a level-1 club, which is what its card has claimed all
+  // along.
+  const carried = (boomLv || iceLv || throwLv) ? 1 : 0;
+  const level = Math.max(c.alwaysOn ? 1 : 0, carried, Math.floor(lv.club ?? 0));
+  const blast = clubBlast(boomLv);
+  const ice = clubIce(iceLv);
   const active = !!c?.enabled && level > 0;
 
   group.visible = active;
@@ -544,7 +553,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   const tips = rig?.muzzles ?? [];
   // Which club each fin is holding — one per owned variant, so the cards are
   // legible from the water rather than only from the pause screen.
-  syncCount(tips.length, clubAssetsFor({ boom: lv.boom, ice: lv.ice, throw: lv.throw }));
+  syncCount(tips.length, clubAssetsFor({ boom: boomLv, ice: iceLv, throw: throwLv }));
   if (clubs.length === 0) {
     // Nothing to hang the weapon off this frame — a model being swapped in the
     // T-menu, or a rig that hasn't resolved yet. Anything ALREADY thrown still
@@ -684,19 +693,27 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       // the whole point of the class — to happen at all.
       if (flightFor(e)) continue;
 
-      const ex = e.mesh.position.x;
-      const ey = e.mesh.position.y;
-      const reach = headRadius + e.radius;
-      const reach2 = reach * reach;
       // Two tests, one weapon. The swept head path is what catches a fast
       // swing that would otherwise step straight over a small fish between
       // frames; the shaft as it currently stands is what lets the club connect
       // with something leaning on the seal, where the head is elsewhere on its
       // arc but the wood is right there. Either counts as a hit.
-      const sweptHit = segDistSq(ex, ey, club.prevHead.x, club.prevHead.y, club.head.x, club.head.y) <= reach2;
+      //
+      // Both go through the shared swept test, which is the circle every
+      // creature has always used except on a body carrying a measured shape —
+      // there, the swing is tested against the flesh, so clubbing a boss
+      // across the tail connects with the tail. See systems/hitShape.js.
+      const sweptHit = hitCreatureSegment(e, club.prevHead.x, club.prevHead.y, club.head.x, club.head.y, headRadius, clubContact);
       const shaftHit = !sweptHit && c.shaftHits
-        && segDistSq(ex, ey, _pivot.x, _pivot.y, club.head.x, club.head.y) <= (c.shaftRadius + e.radius) ** 2;
+        && hitCreatureSegment(e, _pivot.x, _pivot.y, club.head.x, club.head.y, c.shaftRadius, clubContact);
       if (!sweptHit && !shaftHit) continue;
+
+      // WHERE THE WOOD LANDED, and only then the body's own position as the
+      // fallback the circle path already produces. The riders below (the ice,
+      // the blast, the whack itself) all read this as "the point of contact",
+      // and on a boss the two are metres apart.
+      const ex = clubContact.x;
+      const ey = clubContact.y;
 
       club.cooldowns.set(e, c.contactCooldown);
       hooks.onWhack?.(ex, ey, swing);
@@ -711,12 +728,19 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       // Scaled by how hard this club is actually travelling. A clip through a
       // school at full whip hits for the card's number; a lazy drift into one
       // fish does a fraction of it.
-      const died = hurt(scene, e, damage * power, enemiesList, hooks);
+      const died = hurt(scene, e, damage * power, enemiesList, hooks, clubContact);
       if (blastHere) detonate(scene, ex, ey, blastHere, enemiesList, died ? null : e, hooks);
       if (died) continue;
 
-      // Survived the whack, so it goes flying. Mass matters here the same way
-      // it does for a strike's shove — a megalodon leans, a minnow sails.
+      // Survived the whack, so it goes flying — unless it is a boss, which
+      // takes the damage and keeps swimming. A flight is a HOLD: updateFlights
+      // tops up `trapTimer` for every frame of it, so a clubbed boss would be
+      // inert for the whole of CONFIG.club.flightTime however little the mass
+      // scaling actually moved it. See systems/control.js.
+      if (!canHold(e)) continue;
+
+      // Mass matters here the same way it does for a strike's shove — a
+      // megalodon leans, a minnow sails.
       const pivotR = Math.max(0.05, c.launchPivotRadius);
       const mass = Math.max(1, (e.radius ?? pivotR) / pivotR) ** c.launchMassExp;
       launch(e, throwX, throwY, launchSpeed / mass, level);
@@ -781,6 +805,19 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
     // at, and only the entries ABOVE it move.
     const ricochet = abilityDamage(c.ricochetDamage + c.ricochetDamagePerLevel * Math.max(0, level - 1));
     for (let j = enemiesList.length - 1; j >= 0 && f.bounces >= 0; j--) {
+      // THE LIST CAN SHRINK BY MORE THAN ONE PER PASS. Walking backwards is
+      // enough when the only thing that removes an entry is the hit itself,
+      // and `detonate` below is not that: a blast clears everything inside it,
+      // at whatever indices those bodies happen to sit, so the array can be
+      // several shorter by the time this comes round again. `j--` only steps
+      // back one, and the read then lands past the end and crashes on
+      // `other.mesh`.
+      //
+      // Clamped rather than guarded with a null check, so nothing gets skipped
+      // — anything that shuffled down is still visited, and `f.lock` is what
+      // stops a body being struck twice by the same carom.
+      if (j >= enemiesList.length) j = enemiesList.length - 1;
+      if (j < 0) break;
       const other = enemiesList[j];
       if (other === e || f.lock.has(other)) continue;
       const dx = other.mesh.position.x - p.x;

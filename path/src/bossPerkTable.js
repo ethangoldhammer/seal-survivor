@@ -1,0 +1,160 @@
+// ============================================================================
+// BOSS PERKS — the one special thing a boss can do, kept in bossPerks.csv.
+//
+// A boss with more health than a megalodon is a longer megalodon. The perk is
+// what makes each arrival a different FIGHT rather than a different number:
+// one boss closes distance in a way you have to read, one punishes standing
+// next to it, one refuses to be kited, one refuses to be tracked.
+//
+// EXACTLY ONE PER BOSS, and the first boss of a run has none. The first one is
+// the game teaching you what a boss is — a wall with a health bar and nothing
+// else to parse — and every one after it carries a perk. See rollBossPerk.
+//
+// THE PERK IS IN THE NAME. This table joins to bossNames.csv through its `id`:
+// a name row whose `perk` column says `electric` only ever appears on a boss
+// that has the electric perk, and the naming rule (see bossNameTable.js) makes
+// sure one of them lands. "Stormmaw the Everhungry" is the fight telling you
+// what it is before it reaches you, which is the only warning the player gets
+// and the reason the perk had to drive the name rather than sit next to it.
+//
+// Columns (order doesn't matter, unknown columns are ignored):
+//   id        which perk. Code joins to this — see PERK_IDS below — so a typo
+//             is a row the game has no behaviour for, and it is warned about.
+//   enabled   FALSE takes the perk out of rotation.
+//   weight    how likely RELATIVE TO THE OTHER PERKS. Blank means 1.
+//
+// The rest are that perk's numbers. Every perk uses some of them and leaves
+// the others blank; what each one MEANS is per perk, and is spelled out in the
+// row's own `notes` as well as here:
+//   cooldown  seconds between activations              (every perk that fires)
+//   windup    seconds of telegraph before it fires     (lunge, teleport, phase,
+//             and every shooter — the tell before a volley)
+//   duration  seconds the effect itself lasts          (lunge, teleport, phase;
+//             barrels — the fuse; turtles — how long an escort stays)
+//   speed     world units per second                   (lunge — the dash;
+//             the shooters — how fast the thing they fire travels)
+//   radius    world units                              (electric — the aura's
+//             reach; teleport — how far from the player it reappears;
+//             barrels — the blast; turtles — how far off the boss they hold)
+//   range     world units. How close the player has to be for a shooter to
+//             open fire at all. A boss that shoots across the whole arena is
+//             not a fight with a distance in it.
+//   count     how many of them per activation          (the shooters — shots
+//             per volley; turtles — how many escorts it keeps up)
+//   mul       a plain multiplier, and what it multiplies is the perk's own
+//             business: giant scales SIZE, swift scales SPEED. Kept apart from
+//             `speed` deliberately — that column is an absolute rate in world
+//             units, and a cell that meant "34 units a second" on one row and
+//             "1.4 times faster" on the next is the kind of column that gets
+//             mis-set once and is never noticed.
+//   damage    lunge: a multiplier on contact damage while dashing.
+//             electric: damage per second inside the aura.
+//             the shooters: damage per projectile.
+//
+// These are GAMEPLAY numbers, so they live here and not on a slider. Nothing
+// about a boss's threat should be adjustable from a panel that ships with the
+// game — the same rule weapons.csv follows.
+// ============================================================================
+
+import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
+
+const LABEL = 'bossPerks';
+const FILE = 'bossPerks.csv';
+
+// The perks systems/bossPerks.js actually implements. A row naming anything
+// else parses fine and would roll onto a boss that then does nothing special
+// while wearing a name that promises it does — so it is refused here, loudly.
+// Grouped by what they take away from the player, which is also the order they
+// were designed in — see the header of systems/bossPerks.js.
+export const PERK_IDS = [
+  // Distance
+  'lunge', 'electric', 'teleport', 'phase',
+  // The body itself
+  'giant', 'swift',
+  // Reach — the boss answering back across the gap the player is keeping
+  'eyebeam', 'barrels', 'spitfish', 'finfish',
+  // Company
+  'turtles',
+];
+
+// Every numeric column, and the floor each one is allowed to reach. Kept as
+// data so the parser can't drift from the doc comment above.
+const NUMBERS = {
+  cooldown: { min: 0 },
+  windup: { min: 0 },
+  duration: { min: 0 },
+  speed: { min: 0 },
+  radius: { min: 0 },
+  range: { min: 0 },
+  // Integer: half a projectile is not a thing a volley can contain, and a
+  // fractional count would silently floor somewhere downstream instead of
+  // being reported here where the row can be fixed.
+  count: { min: 0, integer: true },
+  // Floored at 0 rather than 1: a `mul` under 1 is legal and useful (a boss
+  // perk that makes it SMALLER and harder to hit is a fair design), and this
+  // table's job is to refuse nonsense, not to have opinions.
+  mul: { min: 0 },
+  damage: { min: 0 },
+};
+
+/** Parse the table into an array of perks, in file order. */
+export function parseBossPerkCsv(text, warn = console.warn) {
+  const rows = parseIdTable(text, LABEL, FILE, warn);
+  const out = [];
+
+  for (const [id, row] of rows) {
+    if (!PERK_IDS.includes(id)) {
+      warn(`[${LABEL}] "${id}" is not a perk the game implements (${PERK_IDS.join(', ')}) — `
+        + `the row is being ignored, because a boss cannot be given a power that has no code behind it.`);
+      continue;
+    }
+    if (!parseBool(row.enabled, LABEL, id, 'enabled', warn)) continue;
+
+    const w = parseNumber(row.weight, LABEL, id, 'weight', warn, { min: 0 });
+    const perk = { id, weight: w == null ? 1 : w };
+    for (const [field, opts] of Object.entries(NUMBERS)) {
+      const v = parseNumber(row[field], LABEL, id, field, warn, opts);
+      // Left as undefined rather than defaulted to 0 — a blank cell means
+      // "this perk doesn't use this number", and 0 is a real value for some of
+      // them (a cooldown of 0 is a perk that never stops firing). Each perk's
+      // implementation supplies its own fallback for what it actually reads.
+      if (v != null) perk[field] = v;
+    }
+    out.push(perk);
+  }
+
+  if (!out.length) {
+    warn(`[${LABEL}] ${FILE} has no usable rows — bosses will arrive with no perk at all.`);
+  }
+  return out;
+}
+
+/**
+ * Which perk this boss gets, or null for none.
+ *
+ * `defeatedPlusAlive` is how many bosses this run has already accounted for —
+ * so it is 0 for the first one. The first boss of a run is deliberately plain:
+ * a health bar, a name and a body the size of a bus is already a lot to read
+ * the first time, and a perk on top of it is the difference between a fight
+ * you learn and one you lose without knowing why. Every boss after it has one.
+ */
+export function rollBossPerk(perks, bossNumber, random = Math.random) {
+  if (!perks?.length) return null;
+  if ((bossNumber ?? 0) < 1) return null; // the first boss of the run
+
+  let total = 0;
+  for (const p of perks) total += p.weight > 0 ? p.weight : 0;
+  // Same contract as every other weighted pick in the project: a table whose
+  // weights are all 0 picks uniformly rather than returning nothing.
+  if (total <= 0) return perks[Math.floor(random() * perks.length)];
+
+  let roll = random() * total;
+  let last = perks[0];
+  for (const p of perks) {
+    if (p.weight <= 0) continue;
+    last = p;
+    roll -= p.weight;
+    if (roll <= 0) return p;
+  }
+  return last; // float drift ate the total
+}

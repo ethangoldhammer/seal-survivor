@@ -2,6 +2,7 @@ import {
   getAssetMaterials, setAssetTexture, setAssetTint, setAssetRepeat, hasCustomTexture,
   setAssetEmissive, setAssetGlow, supportsEmissive, getAssetSizeMultiplier,
   loadUploadedAsset, isSpriteFile, setAssetEmissiveMask, assetEmissiveMaskState,
+  lookLeader,
 } from '../assets.js';
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
 import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
@@ -31,7 +32,10 @@ import {
 const EDITABLE_SECTIONS = [
   ['Seal & companions', [
     ['ship', 'Seal (ship)'],
-    ['sealTeam', 'Seal team escort (ability)'],
+    // Colour, glow and texture come from the seal above — the escorts are the
+    // same animal, so they are one surface (LOOK_FOLLOWS in assets.js). The
+    // model upload and size on this row are still their own.
+    ['sealTeam', 'Seal team escort (colour follows the seal)'],
     ['belugaDrone', 'Beluga (ability)'],
     ['eelCompanion', 'Eel companion (ability)'],
     ['seagull', 'Seagull bomb (ability)'],
@@ -39,7 +43,9 @@ const EDITABLE_SECTIONS = [
     ['shrimp', 'Shrimp (ability, upload in main tuner)'],
     ['dumboOcto', 'Dumbo octopus (ability)'],
     ['octoGrabber', 'Octopus grabber (ability)'],
-    ['orcaFriend', 'Orca family (ability)'],
+    ['orcaFriendBull', 'Orca family — bull (ability)'],
+    ['orcaFriendCow', 'Orca family — cow (ability)'],
+    ['orcaFriendCalf', 'Orca family — calf (ability)'],
   ]],
   ['Boats', [
     ['boat', 'Boat'],
@@ -75,7 +81,8 @@ const EDITABLE_SECTIONS = [
     ['enemyHammerhead', 'Hammerhead'],
     ['enemyMegalodon', 'Megalodon'],
     ['enemyMightyMeg', 'Mighty Meg'],
-    ['enemyOrca', 'Orca'],
+    ['enemyOrcaBull', 'Orca boss — bull'],
+    ['enemyOrcaCow', 'Orca boss — cow'],
     ['enemyBarracuda', 'Barracuda'],
     ['enemyOtter', 'Otter'],
     ['enemyDolphin', 'Dolphin'],
@@ -425,7 +432,14 @@ function reapplyLook(key, look) {
   if (look.emissiveMask != null) setAssetEmissiveMask(key, look.emissiveMask);
 }
 
+// The stored look for `key` — which for a FOLLOWER is its leader's, not one of
+// its own. The escorts' row therefore drags the player's colour, and both
+// bodies move together; see LOOK_FOLLOWS in assets.js for why they are one
+// surface. Everything else on that row (the model upload, the size readout) is
+// still the escorts' own.
 function lookState(key) {
+  const lead = lookLeader(key);
+  if (lead !== key) return lookState(lead);
   if (!CONFIG.assetLooks[key]) {
     CONFIG.assetLooks[key] = {
       tint: null, emissive: null,
@@ -740,7 +754,10 @@ function buildCreatureRow(key, label, onAssetChanged) {
     // It also has no controls left here to clear.
     if (emissiveSwatch) { setAssetEmissive(key, null); emissiveSwatch.value = '#000000'; }
     if (glowSlider) { setAssetGlow(key, null); glowSlider.value = '1'; }
-    delete CONFIG.assetLooks[key];
+    // The LEADER's entry, so resetting a follower's row clears the look it was
+    // actually editing rather than deleting an empty object beside it and
+    // leaving the colour on screen. See lookState.
+    delete CONFIG.assetLooks[lookLeader(key)];
     saveTuningToStorage();
     onAssetChanged?.(key);
   });

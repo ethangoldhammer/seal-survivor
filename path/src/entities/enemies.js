@@ -9,24 +9,47 @@ import { deathState } from '../systems/deathDive.js';
 import { skyLight } from '../systems/daylight.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createHeadLook } from '../systems/headLook.js';
-import { recordSpawn } from '../systems/playtest.js';
+import { recordSpawn, SENTINEL_HP } from '../systems/playtest.js';
 import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
 import { updateWaves, waveSpawn, resetWaves, lullEligible } from '../systems/waves.js';
 import { inSpawnGroup, spawnGroupsOf } from '../enemyTable.js';
 import { RigidBody, addBody, removeBody } from '../systems/rigidBody.js';
+import { attachHitShape, releaseHitShape } from '../systems/hitShape.js';
 
 // Above this, a creature's hp means "invincible scenery" rather than a real
 // pool anyone is meant to chew through (the sea turtle ships 1e9). Only the
 // playtest pressure metric cares; combat treats it as an ordinary number.
-const UNKILLABLE_HP = 1e6;
+//
+// IMPORTED, not declared. This was its own `const UNKILLABLE_HP = 1e6` sitting
+// alongside playtest.js's identical `SENTINEL_HP` — two constants for one line,
+// which is one constant more than a line can have. They are the two halves of
+// the same rule (this one drops the SPAWN, playtest.js drops the DAMAGE), so a
+// change to either alone gives a creature that is scenery to the numerator and
+// a real animal to the denominator, and every clear rate in the report comes
+// out wrong with nothing to say why.
 import { createJawDriver } from '../systems/jaw.js';
 import { createClawDriver } from '../systems/crabClaw.js';
+import { rollBiolumSkinVariant } from '../systems/biolumSkin.js';
 import { player } from './player.js';
 
 export const enemies = [];
 
 let spawnTimer = 0;
 let nextSchoolId = 1;
+
+// THE HELD BREATH. Seconds for which nothing new may arrive, from any source.
+// systems/boss.js sets this in the moments before a boss enters — the water
+// going quiet is the loudest thing the game can do, and it is what turns the
+// arrival from a spawn into an entrance.
+//
+// A COUNTDOWN AND NOT A FLAG, on purpose. A boolean would need something to
+// remember to clear it, and the one thing in this file that reads it is the
+// thing that empties the ocean: a hold left latched by a code path nobody
+// thought about (a run reset mid-hush, a boss disabled in the tuner, an
+// exception between the set and the clear) is a sea that quietly never refills
+// again, with nothing on screen to say why. This expires on its own, and
+// boss.js re-arms it every frame for as long as it actually wants it.
+let spawnHold = 0;
 
 // ---------------------------------------------------------------------------
 // THE STRIKE, as the rest of the roster experiences it
@@ -229,6 +252,11 @@ export function resetEnemies(scene) {
   enemies.length = 0;
   spawnTimer = 0;
   nextSchoolId = 1;
+  spawnHold = 0;
+  // Spawner state like the two above it: a new run's first boss should get the
+  // full `firstDelay` before its water starts filling, not whatever was left
+  // on the clock when the last run ended.
+  bossSchoolTimer = 0;
   // The wave clock is spawner state like the timer above it, and resets with
   // it for the same reason: a new run has to open on its own first surge
   // rather than partway through the last one's.
@@ -1264,8 +1292,39 @@ function bossInWater() {
   return false;
 }
 
-/** Is the ocean currently under a boss's spawn lockout? */
+/**
+ * Hold every spawn in the game for `seconds`.
+ *
+ * A CLAIM, re-made every frame, exactly like world.focusCamera's hold on the
+ * frame and the sustained shake channel: the caller says how long it still
+ * wants, and letting go is simply not asking again. Zero is therefore a
+ * release and not a no-op — a max() latch would have meant the last frame of a
+ * hush could not cancel the hold it had itself set on the frame before, and
+ * the lockout would outlive the thing it was covering for by a frame or two.
+ *
+ * The countdown in updateSpawning is what drains a claim nobody renewed.
+ */
+export function holdSpawns(seconds = 0) {
+  spawnHold = Math.max(0, seconds);
+}
+
+/** Seconds of held breath left, for anything that wants to stage against it. */
+export function spawnHoldLeft() {
+  return spawnHold;
+}
+
+/**
+ * Is the ocean currently under a boss's spawn lockout?
+ *
+ * Two ways in, and they are different states wearing one name because every
+ * caller wants the same answer from both: the seconds BEFORE an arrival, when
+ * the water is deliberately emptying, and the whole fight after it. The one
+ * thing that differs is what may still come — during the fight the weighted
+ * pool is narrowed to escorts (see pickType), while a hold sends nothing at
+ * all, which updateSpawning enforces by returning before the pool is built.
+ */
 export function bossLockout() {
+  if (spawnHold > 0) return true;
   return CONFIG.boss?.clearOut?.enabled !== false && bossInWater();
 }
 
@@ -1413,7 +1472,16 @@ function pickType(difficulty, playerLevel = 1, lull = false) {
   const pool = [];
   let total = 0;
   for (const [key, def] of Object.entries(CONFIG.enemies)) {
-    if (lockout && !def.bossMinion) continue;
+    // THE FOOD DOES NOT STOP. A boss fight used to lock the pool to escorts,
+    // which meant the one fight in the game where you most need a full strike
+    // meter was also the only stretch with nothing in the water to eat — the
+    // player went in with whatever they had and finished on an empty bar.
+    //
+    // So the small fry keep coming. Not the roster — a boss fight is still not
+    // a shiver, and everything with teeth is still held back — just the things
+    // that are food, at the rate the lull sends them (see waveSpawn's
+    // `bossFoodMul`, which is what stops this becoming a free farm).
+    if (lockout && !def.bossMinion && !(CONFIG.boss?.clearOut?.keepFood !== false && lullEligible(def))) continue;
     if (difficulty < (def.minDifficulty ?? 0)) continue;
     // Hard level gate, independent of the time-based difficulty curve: a
     // creature with minPlayerLevel simply cannot appear until the player
@@ -1484,7 +1552,36 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // hierarchy, a Skeleton and its bone texture), and at two to four kills a
   // second the churn was costing more in collection pauses than the spawn ever
   // cost to build.
-  const visual = acquireVisual(def.asset ?? key);
+  // `assets` (plural) IS A LIST OF BODIES and one is rolled per spawn. That is
+  // how the boss orca arrives as either a bull or a cow off a single set of
+  // stats: one enemies.csv row, one name pool, one health bar, two animals. The
+  // alternative — a second archetype for the second model — would have meant
+  // tuning the same fight in two places and hoping they stayed level.
+  //
+  // A NEW KEY RATHER THAN A LIST IN `asset`, and that is the only way this
+  // could actually work. Saved tuning beats config.js in the merge, and every
+  // imported-tuning.json ever written carries `enemies.bossOrca.asset` as the
+  // string it used to be — so a list written into `asset` would be overwritten
+  // by the snapshot on load, for everybody who has ever opened the tuner, and
+  // the boss would spawn as an empty Object3D. Same move `everyLevels` made
+  // over `everyLevelsMin`/`Max`, for the same reason. `asset` still works and
+  // is still what every other creature uses.
+  //
+  // Resolved to a single key HERE and carried on the creature, because
+  // everything downstream that asks what this individual is made of (the
+  // hitbox, the recycler, the look) has to get the same answer as the body
+  // that was actually built. Reading the list again later would re-roll it.
+  const choices = Array.isArray(def.assets) ? def.assets.filter(Boolean) : null;
+  const assetKey = choices?.length
+    ? choices[(Math.random() * choices.length) | 0]
+    : (def.asset ?? key);
+  const visual = acquireVisual(assetKey);
+  // This individual's own palette, from skins.csv — a heap of crabs is nine
+  // shells rather than one repeated. Rolled here rather than inside
+  // acquireVisual because a RECYCLED body arrives still wearing the skin it
+  // died in; see rollBiolumSkinVariant. A no-op for every creature whose
+  // preset has no skins listed, which is all of them but the crabs.
+  rollBiolumSkinVariant(visual);
   container.add(visual);
 
   // Creatures that grow over a run: later spawns come in bigger than the
@@ -1578,7 +1675,7 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // pinned that whole window's clear rate at zero and would have had every
   // report blaming the difficulty ramp for a turtle. Hp this large is a flag,
   // not a quantity.
-  if (hp < UNKILLABLE_HP) recordSpawn(hp);
+  if (hp < SENTINEL_HP) recordSpawn(hp);
 
   // Any model with clips or a procedural rig gets a controller; static
   // THE DRIVERS RIDE WITH THE BODY. Each of these binds to a specific bone
@@ -1790,6 +1887,17 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // meant a beluga bubble landing on a charmed fish would cut the charm
     // short (or extend it) depending on which fired last.
     charmTimer: 0,
+    // --- the boss's own two fields (systems/boss.js, systems/bossPerks.js) ---
+    // Seconds of "cannot be hurt and cannot hurt you" left. Only ever non-zero
+    // on a boss making its entrance, but seeded on every creature for the same
+    // reason every timer here is: `undefined - dt` is NaN and a NaN timer never
+    // expires, so the one creature it is ever set on would become permanently
+    // untouchable if it were merely assumed to exist.
+    invuln: 0,
+    // Raised while a boss perk is driving the body directly. The behaviour
+    // dispatch below skips a creature carrying it — the perk owns vx/vy that
+    // frame — which is the same door `leaving` goes through.
+    perkDrive: false,
     // --- elemental status (Glow Up!, systems/elements.js) --------------------
     // Seeded here rather than created on first application, for the reason
     // every stat field is seeded in stats.js: `undefined - dt` is NaN, and a
@@ -1846,6 +1954,14 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // instead of killed. Null for everything else, and every read of it is
     // guarded — see attachRigidBody.
     body: null,
+    // A hitbox fitted to the flesh rather than to `radius`, for the handful of
+    // creatures big enough for the difference to be the fight. Null for
+    // everything else, and combat falls back to the circle — see
+    // systems/hitShape.js and `hitShape` on the def.
+    // The asset this individual was actually built from — see `assetKey` in
+    // spawnOne. Not `def.asset`, which may be a list.
+    assetKey,
+    hitShape: def.hitShape ? attachHitShape(visual, assetKey) : null,
   });
 
   if (def.rigidBody) attachRigidBody(enemies[enemies.length - 1], def.rigidBody);
@@ -1984,6 +2100,141 @@ export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(CONFIG.en
   return enemies[enemies.length - 1];
 }
 
+// ---------------------------------------------------------------------------
+// THE FORAGE — small schools during a boss fight
+// ---------------------------------------------------------------------------
+// A boss fight used to be a closed room. clearForBoss empties the water and
+// bossLockout keeps it empty, which is the right frame for the arrival and the
+// wrong one for the next ninety seconds: a boss has forty times the health of
+// anything else, the player's damage scales off chum, and there is no chum in
+// an empty ocean. The fight became a fixed-length dps check you could not
+// affect, and every upgrade that reads the water — the magnet, the scavengers,
+// the elements that need bodies to chain through — was dead for the duration.
+//
+// So the water gets a TRICKLE. Not the ordinary spawner turned back on, and
+// not escorts: a few small fish at a time, arriving on the far side of the
+// arena from the boss, which the player has to decide to go and get.
+//
+// THE DECISION IS THE FEATURE. The school is placed away from the boss on
+// purpose — leaving the fight to feed costs you the distance twice and a boss
+// with a head that never stops tracking you follows you the whole way (see
+// CONFIG.enemyLook.boss). Placing the fish AT the fight would have been a free
+// resource pickup inside the fight, which is the thing that had been missing
+// only in the sense that a slot machine is missing a lever.
+//
+// Separate from updateSpawning's own tap rather than a special case inside it:
+// this runs on its own cadence, at its own cap, while the ordinary spawner is
+// still fully locked out. Sharing the timer would have meant the trickle
+// speeding up with the difficulty curve, and a boss fight at difficulty 30
+// filling with fish faster than the player could clear them.
+let bossSchoolTimer = 0;
+
+// Which small fry may be sent, as a weighted pool. `lullEligible` is the
+// existing rule for "small enough to be a respite rather than a threat" (prey,
+// under a radius cap), reused rather than restated so a new little fish added
+// to enemies.csv joins the boss forage for free and a new shark can never
+// wander into it.
+function forageCandidates(difficulty, playerLevel) {
+  const pool = [];
+  for (const [key, def] of Object.entries(CONFIG.enemies)) {
+    if (!lullEligible(def)) continue;
+    if (difficulty < (def.minDifficulty ?? 0)) continue;
+    if (playerLevel < (def.minPlayerLevel ?? 0)) continue;
+    const w = (def.weight ?? 0) * (def.spawnRateMul ?? 1);
+    if (w <= 0) continue;
+    pool.push({ key, def, w });
+  }
+  return pool;
+}
+
+// A point on the far side of the arena from the boss, at a random depth.
+//
+// The SIDE is chosen from where the boss is rather than from where the player
+// is: the fish should be somewhere the fight is not, and the player is
+// (usually) at the fight. Depth stays random so the forage isn't a queue
+// arriving at one height.
+function forageSpawnPoint(boss) {
+  const margin = 1.5;
+  const depth = bounds.bottom + margin
+    + Math.random() * (bounds.surfaceY - bounds.bottom - margin * 2);
+  const bossX = boss?.mesh?.position?.x ?? 0;
+  const mid = (bounds.left + bounds.right) * 0.5;
+  // Strictly the opposite wall, not the further one by distance — a boss sat
+  // exactly on the midline would otherwise flip the answer frame to frame.
+  const x = bossX >= mid ? bounds.left + margin : bounds.right - margin;
+  return { x, y: depth };
+}
+
+/**
+ * One tick of the forage. Does nothing at all unless a boss is in the water
+ * and past its entrance.
+ *
+ * Ticked from updateSpawning so it stops with everything that stops spawning
+ * (the level-up cards, the death dive) and rides the same dt — a trickle that
+ * kept running behind an upgrade screen would have the player dismiss a card
+ * into a fresh school.
+ */
+function updateBossForage(dt, scene, difficulty, playerLevel) {
+  const cfg = CONFIG.boss?.schools ?? {};
+  if (cfg.enabled === false) return;
+
+  let boss = null;
+  let others = 0;
+  for (const e of enemies) {
+    if (e.isBoss) { boss = e; continue; }
+    // Anything on its way out is not company — the clear-out's stragglers are
+    // still in the list for a few seconds and would otherwise hold the cap
+    // shut for exactly as long as the fight took to start.
+    if (!e.leaving) others += 1;
+  }
+
+  // No boss: hold the timer at the ready so the first school of the NEXT fight
+  // arrives on `firstDelay` rather than instantly, however long the run has
+  // been going. A free-running timer would have a school waiting in the wings
+  // the moment a boss appeared.
+  if (!boss) { bossSchoolTimer = cfg.firstDelay ?? 6; return; }
+
+  // The entrance is a promise that nothing is happening. Fish swimming in
+  // under a boss's arrival ceremony reads as the water not having been cleared
+  // at all, which is the one beat this whole sequence is built to sell.
+  if (boss.invuln > 0) { bossSchoolTimer = cfg.firstDelay ?? 6; return; }
+
+  bossSchoolTimer -= dt;
+  if (bossSchoolTimer > 0) return;
+  bossSchoolTimer = Math.max(1, cfg.interval ?? 9);
+
+  if (others >= (cfg.maxAlive ?? 10)) return;
+  if (enemies.length >= CONFIG.spawn.maxAlive) return;
+
+  const pool = forageCandidates(difficulty, playerLevel);
+  if (!pool.length) return;
+  let total = 0;
+  for (const p of pool) total += p.w;
+  let roll = Math.random() * total;
+  let picked = pool[pool.length - 1];
+  for (const p of pool) { roll -= p.w; if (roll <= 0) { picked = p; break; } }
+
+  const { key, def } = picked;
+  const anchor = forageSpawnPoint(boss);
+  // A SCHOOL, not a fish — even for a species that normally arrives alone.
+  // The point of the trickle is a pocket of chum worth swimming to; one
+  // minnow on the far wall is a trip that doesn't pay for itself.
+  const min = cfg.minSize ?? 3;
+  const max = Math.max(min, cfg.maxSize ?? 5);
+  let n = min + Math.floor(Math.random() * (max - min + 1));
+  n = Math.min(n, (cfg.maxAlive ?? 10) - others, CONFIG.spawn.maxAlive - enemies.length);
+  if (n <= 0) return;
+
+  const id = nextSchoolId++;
+  const spread = def.group?.spread ?? (cfg.spread ?? 2.5);
+  for (let i = 0; i < n; i++) {
+    spawnOne(scene, key, def, difficulty, {
+      x: anchor.x + (Math.random() - 0.5) * spread * 2,
+      y: anchor.y + (Math.random() - 0.5) * spread * 2,
+    }, { schoolId: id, xpMul: cfg.xpMul ?? 1 });
+  }
+}
+
 export function updateSpawning(dt, gameState, scene) {
   const d = gameState.difficulty;
 
@@ -1995,6 +2246,31 @@ export function updateSpawning(dt, gameState, scene) {
   // stretch of the cycle would also slow down the cycle itself.
   updateWaves(dt, d);
   const wave = waveSpawn();
+
+  // THE HELD BREATH, ticked here rather than on main.js's frame delta so it
+  // stops with everything else this function stops with — a hush that ran
+  // down behind a level-up card would be spent on a menu, and the water would
+  // be filling again by the time the player was looking at it.
+  //
+  // Above the spawn timer, so the hold is not itself paused by a tick that
+  // hasn't come due, and returning outright rather than narrowing the pool:
+  // nothing arrives, not even the escorts a live boss allows.
+  if (spawnHold > 0) {
+    spawnHold = Math.max(0, spawnHold - dt);
+    return;
+  }
+
+  // While a boss is in the water the spawner is throttled rather than stopped:
+  // the pool above is already narrowed to escorts plus the small fry, and this
+  // is what decides how much of that trickles in. A fight should have something
+  // to eat in it without being the best farming window in the run.
+  const bossFood = bossLockout() ? (CONFIG.boss?.clearOut?.foodRateMul ?? 0.45) : 1;
+
+  // The boss forage. Below the hush (the water is meant to be emptying, and a
+  // school arriving into it would undo the clear-out in front of the player)
+  // and above the spawn timer, because it keeps its own cadence and the
+  // ordinary tap is locked out for the whole fight anyway.
+  updateBossForage(dt, scene, d, gameState.level ?? 1);
 
   spawnTimer -= dt;
   if (spawnTimer > 0) return;
@@ -2009,7 +2285,7 @@ export function updateSpawning(dt, gameState, scene) {
   // budget per tick, not by ticking faster than the spawner is meant to.
   spawnTimer = Math.max(
     CONFIG.spawn.minInterval,
-    (CONFIG.spawn.baseInterval - d * CONFIG.spawn.intervalPerDifficulty) / wave.rateMul
+    (CONFIG.spawn.baseInterval - d * CONFIG.spawn.intervalPerDifficulty) / (wave.rateMul * bossFood)
   );
 
   // Budget is in creatures, not spawn events: a school of 12 costs 12, so
@@ -2017,9 +2293,27 @@ export function updateSpawning(dt, gameState, scene) {
   let budget = 1 + Math.floor(d * CONFIG.spawn.countPerDifficulty);
   // Applied after the floor rather than folded into it, so waves switched off
   // (rateMul 1) leaves the original arithmetic bit-for-bit intact.
-  if (wave.rateMul !== 1) budget = Math.max(1, Math.round(budget * wave.rateMul));
+  if (wave.rateMul !== 1 || bossFood !== 1) budget = Math.max(1, Math.round(budget * wave.rateMul * bossFood));
+  // How full the water is allowed to be right now. Under maxAlive for the
+  // first stretch of a boss cycle and equal to it by the end — the wave is
+  // meant to BUILD after a fight, and a rate limit alone only decides how fast
+  // the same crowd assembles. See waveSpawn's aliveFrac.
+  //
+  // A ceiling on this tick's loop, not a cull: whatever is already in the
+  // water stays, exactly as it does through a calm.
+  let roomFor = wave.aliveFrac >= 1
+    ? CONFIG.spawn.maxAlive
+    : Math.min(CONFIG.spawn.maxAlive, Math.max(6, Math.round(CONFIG.spawn.maxAlive * wave.aliveFrac)));
+  // A HARD HEADCOUNT DURING A FIGHT, and a rate throttle is not a substitute
+  // for one: at 0.45x the water still fills, just more slowly, and a fight that
+  // runs a minute ends up with two hundred fish in it — which is the crowd the
+  // clear-out exists to remove, arriving through the back door. The cap is what
+  // keeps "something to eat" from becoming "the arena refilled during the boss".
+  if (bossFood !== 1) {
+    roomFor = Math.min(roomFor, Math.max(1, Math.round(CONFIG.boss?.clearOut?.foodMaxAlive ?? 9)));
+  }
   let guard = 12;
-  while (budget > 0 && guard-- > 0 && enemies.length < CONFIG.spawn.maxAlive) {
+  while (budget > 0 && guard-- > 0 && enemies.length < roomFor) {
     const made = spawnPicked(scene, d, gameState.level ?? 1, wave);
     if (made === 0) break;
     budget -= made;
@@ -2206,7 +2500,14 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
       // other nine: the sweep that removes a departed creature is global, so
       // marking a shark as leaving simply left it hunting you forever while
       // the code that was supposed to send it away looked like it existed.
-      if (e.leaving) steerOut(e, dt);
+      // A BOSS PERK BEATS EVEN LEAVING. `perkDrive` means systems/bossPerks.js
+      // has already written this frame's velocity — a wind-up holding the body
+      // still, or a dash committing it down a line — and running the creature's
+      // own steering on top would overwrite both. It sits above `leaving`
+      // rather than below it because the only creature that can carry it is
+      // the boss, and a boss is never leaving.
+      if (e.perkDrive) { /* velocity is the perk's this frame — see systems/bossPerks.js */ }
+      else if (e.leaving) steerOut(e, dt);
       else (BEHAVIORS[e.def.behavior] ?? BEHAVIORS.chase)(e, dt, ctx);
       // Crawlers fall. Nothing else in the game does — everything else swims,
       // and a swimmer's steering IS its vertical position. A crab's isn't: it
@@ -2473,7 +2774,23 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
     // neck is: a death animation should play as authored, not with the corpse
     // still tracking its lunch.
     if (e.look) {
-      e.look.update(dt, e.lookTarget, { suppressed: e.anim?.isPlayingOneShot() ?? false });
+      // A BOSS LOOKS AT THE PLAYER, whatever it is steering at.
+      //
+      // For every other hunter those are the same thing and the look target is
+      // the honest one: a shark that has decided to eat a mackerel should be
+      // looking at the mackerel. A boss has no second quarry — the water was
+      // emptied for it — and the moments it ISN'T steering at the player are
+      // exactly the ones where the head must not wander: mid-lunge it is
+      // committed to a line the player has already dodged out of, on a
+      // standoff arc it is deliberately swimming past them, and during the
+      // clear-out there is briefly nothing else in `lookTarget` at all. In all
+      // three the head staying locked on is what says the fight is still about
+      // you. See CONFIG.enemyLook.boss for the profile that carries it.
+      const target = e.isBoss ? playerPos : e.lookTarget;
+      e.look.update(dt, target, {
+        suppressed: e.anim?.isPlayingOneShot() ?? false,
+        boss: !!e.isBoss,
+      });
     }
 
     // Jaw last of all. It writes ONE bone, which is a child of the head chain
@@ -2650,6 +2967,11 @@ export function removeEnemy(scene, index) {
   // texture stayed resident for the life of the page — 1,466 of them by the end
   // of a nine-minute run. A pooled body is never disposed because it is never
   // thrown away; one past the cap is disposed properly on the way out.
+  // The measured hitbox rides the body, so it goes back to the pool with it —
+  // marked dead rather than dropped, because anything still holding a wound
+  // anchored to one of its spheres has to be able to tell that the animal it
+  // was stuck to is gone. See systems/hitShape.js.
+  releaseHitShape(e.hitShape);
   releaseVisual(e.visual);
   scene.remove(e.mesh);
   enemies.splice(index, 1);

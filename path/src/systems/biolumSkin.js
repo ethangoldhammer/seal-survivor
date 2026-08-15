@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { advanceCycles, phaseOffset } from './beatSync.js';
+import skinsCsv from '../skins.csv?raw';
+import { parseSkinCsv, buildSkins, rollSkin } from '../skinTable.js';
 
 // ============================================================================
 // BIOLUMINESCENT SKIN — procedural glow PATTERNS painted across a whole body.
@@ -90,6 +92,10 @@ export const BIOLUM_PATTERNS = [
   'flow', // domain-warped fbm — ink pulled through water
   'billow', // puffy rounded lobes
   'marble', // turbulence-folded veining
+  // --- the backdrop's own lattice, wrapped onto a body ---------------------
+  'lattice', // hex cells that spring apart on the breath — see bioHexEdge
+  // --- the model's own topology --------------------------------------------
+  'wireframe', // every triangle edge on the body, lit — see bakeEdges
 ];
 
 export function patternIndex(name) {
@@ -122,6 +128,14 @@ uniform float uBioBodyDarken;
 uniform vec3  uBioColorA;
 uniform vec3  uBioColorB;
 uniform vec3  uBioColorC;
+// THE SHELL BETWEEN THE MARKINGS. 'bodyDarken' takes the body down so the glow
+// reads as light coming out of it, and on an already-dark animal that lands on
+// black — the negative space of the pattern becomes a silhouette. This lifts it
+// back off the floor with a colour of its own: deep orange under an ember crab
+// is metal that has not cooled yet, rather than a hole in the water. 0 is off,
+// and off is bit-for-bit what shipped before it existed.
+uniform vec3  uBioShellColor;
+uniform float uBioShellGlow;
 // THE SCHOOL WAVE — the one term in this shader sampled in WORLD space.
 //
 // Everything else is deliberately body-local, so a pattern belongs to an
@@ -147,6 +161,7 @@ varying vec3  vBioWorld;
 varying vec3  vBioPos;
 varying float vBioAxis;
 varying float vEyeGlow;
+varying vec3  vBioEdge;
 uniform vec3 uEyeColor;
 uniform float uEyeStrength;
 uniform float uEyeFalloff;
@@ -278,6 +293,58 @@ vec3 bioVoronoi(vec3 p) {
     }
   }
   return vec3(f1, f2, id);
+}
+
+// THE HONEYCOMB, as a voronoi of a TRIANGULAR LATTICE with no jitter. The
+// borders between neighbouring points of a triangular lattice are exactly a
+// hex grid, so the cell-edge field is the same F2-F1 the 'net' pattern lights
+// its seams with, and the two answer to coverage/contrast identically. Reusing
+// that rather than a distance-to-hex-edge formula is the whole reason the
+// regular grid and the organic one look like the same skin.
+//
+// Returns:
+//   x  distance to the nearest cell centre
+//   y  distance to the second nearest — y-x is 0 exactly on an edge
+//   z  a 0..1 id for the cell, so neighbours can disagree about colour
+//
+// The 3x3 search is exhaustive for this lattice: with basis (1,0) and
+// (0.5, 0.866) every one of a cell's six neighbours is within +/-1 of it in
+// both axial coordinates.
+const float HEX_H = 0.86602540;
+
+vec3 bioHexEdge(vec2 p) {
+  float j = p.y / HEX_H;
+  float i = p.x - j * 0.5;
+  vec2 base = floor(vec2(i, j));
+  float f1 = 8.0;
+  float f2 = 8.0;
+  float id = 0.0;
+  for (int x = -1; x <= 1; x++) {
+    for (int y = -1; y <= 1; y++) {
+      vec2 cell = base + vec2(float(x), float(y));
+      vec2 centre = vec2(cell.x + cell.y * 0.5, cell.y * HEX_H);
+      float d = length(centre - p);
+      if (d < f1) { f2 = f1; f1 = d; id = bioHash1(vec3(cell, 0.0)); }
+      else if (d < f2) { f2 = d; }
+    }
+  }
+  return vec3(f1, f2, id);
+}
+
+// THE SPRING, lifted term for term from the backdrop grid's vertex shader
+// (systems/grid.js): a radial direction, a sine travelling outward from the
+// origin, and an exponential decay that puts the lattice back where it was.
+// Displacing the SAMPLE POINT before the cells are built is what makes the
+// cells themselves stretch and settle — brightening a static lattice on the
+// same clock reads as a light flashing, not as a mesh being shoved.
+//
+// 'age' is 0..1 within one ripple. Returns the displacement, so the caller can
+// use its length as the grid's own 'vWarp' heat.
+vec2 bioLatticeShove(vec2 q, float age, float amp) {
+  vec2 d = q + vec2(0.0, 0.0001); // origin is the body's centre in lattice space
+  float r = length(d) + 0.0001;
+  float wave = sin(r * 2.4 - age * 6.2831853 * 1.5) * exp(-age * 2.6);
+  return (d / r) * wave * amp;
 }
 
 // Three-stop ramp. 't' is 0..1 and comes either from a smooth noise field
@@ -415,7 +482,7 @@ const FRAG_BODY = `
       float b = bioBillow(bioWarp(bp + drift, uBioWarp * 0.5));
       bioMaskV = bioMask(1.0 - b * 1.8);
       bioHue = bioBillow(bp / max(0.05, uBioHueScale)) * 2.0 * uBioHueSpread + 0.3;
-    } else {                         // marble
+    } else if (uBioPattern == 9) {   // marble
       // Ink in water: bands whose coordinate is displaced by turbulence, so
       // the lines fold back on themselves instead of running parallel. The
       // classic marble formula, and the reason the warp is applied to the
@@ -426,6 +493,101 @@ const FRAG_BODY = `
       float band = sin((bp.x + bp.y * 0.35) * 6.2831 + turb * (1.0 + uBioWarp * 2.0));
       bioMaskV = bioMask(abs(band));
       bioHue = fract(turb * 0.4) * uBioHueSpread + 0.4;
+    } else if (uBioPattern == 10) {  // lattice
+      // THE BACKDROP'S GRID, WORN. Built in the model's own X/Y, which is the
+      // plane that faces the camera for every creature in the game — createVisual
+      // stands a body up along world +Y and nothing ever spins it about anything
+      // but Z — so the cells read as cells instead of as a grid seen edge-on.
+      // The small Z shear is what stops a rounded body looking printed: cells on
+      // the far side of the shell slide against the ones on the near side.
+      //
+      // The one pattern that ignores uBioDrift. Cells are anatomy here — plates
+      // on a shell — and a honeycomb sliding across a body it is supposed to be
+      // part of is the exact failure the bind-pose note at the top of this file
+      // exists to prevent. What moves instead is the SPRING below.
+      vec2 q = bp.xy + vec2(bp.z * 0.15, bp.z * -0.08);
+
+      // HOW FAR THE CELLS TRAVEL is 'warp'; WHETHER THEY TRAVEL AT ALL is the
+      // breath. That pairing is deliberate: a preset with pulseAmp 0 has
+      // declared itself static (see 'carapace', which is a shell texture on a
+      // daylight animal), and a lattice springing about on it would give the
+      // whole thing away exactly as a crawling mottle would. A luminous preset
+      // gets the ripple for free from the breath it already has.
+      //
+      // fract() of the cycle is one ripple per breath. uBioCycle wraps at 2, so
+      // the fract steps 1->0 twice a cycle-pair, and both steps land where the
+      // decay has already taken the wave to nothing — a new ripple starting,
+      // not a jump. The cycle carries this individual's phase offset, so a heap
+      // of crabs ripples in ones rather than as a single organism.
+      float age = fract(uBioCycle);
+      vec2 shove = bioLatticeShove(q, age, uBioWarp * uBioPulseAmp * 2.0);
+      vec3 h = bioHexEdge(q + shove);
+
+      // y-x is 0 on a border and grows inward. The x3 is the same normalisation
+      // 'net' needs and for the same reason: on this lattice the difference
+      // tops out near 0.33, so the raw field is near 1 over the whole cell and
+      // inverting it alone lights every plate solid instead of its seams.
+      bioMaskV = bioMask(1.0 - min((h.y - h.x) * 3.0, 1.0));
+      // The grid's 'vWarp' heat, on the same idea: the stretched part of the
+      // lattice is the bright part, so the ripple is visible as light travelling
+      // as well as as geometry moving.
+      bioMaskV *= 1.0 + length(shove) * 1.6;
+      bioHue = fract(h.z * 2.9) * uBioHueSpread + 0.5;
+    } else {                         // wireframe
+      // THE MODEL'S OWN TOPOLOGY, LIT. Every other pattern in this file is a
+      // field sampled on the body; this one is the body's triangulation, so it
+      // is the only look here that is different on every animal for free — a
+      // shark's edge flow and an orca's are different drawings because they are
+      // different meshes.
+      //
+      // Barycentric coordinates: each fragment carries how far it is from each
+      // of its triangle's three corners, and the SMALLEST of the three is the
+      // distance to the nearest edge. Zero on a body that never opted in (see
+      // bakeEdges), which is what the guard below detects.
+      // ALREADY A DISTANCE, in fractions of the body's longest side — the bake
+      // multiplied each barycentric coordinate by its triangle's own height, so
+      // the interpolated value IS the perpendicular distance to that edge and
+      // no derivative is needed. See bakeEdges for why that matters: the
+      // fwidth() version of this did not compile, and since every
+      // bioluminescent creature shares one program it would have taken every
+      // glowing animal in the ocean down with it rather than just the orca.
+      float dist = min(min(vBioEdge.x, vBioEdge.y), vBioEdge.z);
+      float declared = vBioEdge.x + vBioEdge.y + vBioEdge.z;
+
+      // CONSTANT WIDTH ON THE ANIMAL, which is the whole difference between a
+      // wireframe and a mess: a plain barycentric threshold draws hairlines
+      // across the big triangles and floods the small ones, and these are
+      // skinned bodies whose triangles change size as they swim. A real
+      // distance gives one line weight everywhere.
+      //
+      // The camera is orthographic, so constant on the animal is also constant
+      // on screen — there is no perspective divide to thin the far end.
+      //
+      // coverage is the line width and contrast is how hard it falls off — the
+      // same two knobs every other pattern uses, pointed at the only two things
+      // a line has. Scaled small because the unit here is the whole body: at
+      // 0.38 the line is about a thousandth of the animal's length.
+      float width = max(0.0004, uBioCoverage * 0.0025);
+      bioMaskV = 1.0 - smoothstep(width, width * (1.0 + uBioContrast), dist);
+
+      // The breath travels ALONG the body rather than pulsing the whole lattice
+      // at once, so a wireframe animal reads as charge running through it —
+      // which is the thing this look is for. Rides the axis the gradient
+      // already knows about, so it runs head to tail on anything.
+      float wave = sin((vBioAxis * 3.0 - uBioCycle) * 6.2831) * 0.5 + 0.5;
+      bioMaskV *= mix(1.0, wave, clamp(uBioPulseAmp, 0.0, 1.0));
+
+      // Hue walks along the body too, so the far end of the animal is a
+      // different colour from the near end rather than the whole cage being
+      // one tint.
+      bioHue = fract(vBioAxis * 1.7 + uBioDrift * 0.1) * uBioHueSpread;
+
+      // A body that did not declare biolumEdges has no barycentric attribute
+      // and would render as a solid glowing blob — every fragment reads
+      // distance 0, which is "on an edge" everywhere. Drawn as nothing instead:
+      // an animal that fails to light is a visible, findable mistake, and a
+      // solid one looks like a deliberate art choice.
+      bioMaskV *= step(0.5, declared);
     }
 
     // Head-to-tail bias. Positive concentrates light toward the tail,
@@ -473,6 +635,18 @@ const FRAG_BODY = `
     }
 
     gl_FragColor.rgb += bioRamp(bioHue) * (bioMaskV * uBioStrength * breathe);
+
+    // ...and the shell it sits on. Faded out where the pattern is bright, so
+    // the two never stack into white — the floor is what the animal looks like
+    // where the light ISN'T, which is exactly the complement of the mask.
+    //
+    // Deliberately does NOT breathe. The markings pulse because they are
+    // organs; a shell that brightened and dimmed along with them would read as
+    // the whole animal being lit from outside, and it also puts the pulse on
+    // every pixel of the silhouette rather than on the pattern.
+    if (uBioShellGlow > 0.0) {
+      gl_FragColor.rgb += uBioShellColor * (uBioShellGlow * (1.0 - clamp(bioMaskV, 0.0, 1.0)));
+    }
   }
 
   // THE EYES. Deliberately OUTSIDE the uBioStrength block above, and outside
@@ -597,6 +771,7 @@ export function attachBiolumSkin(material, mesh, preset = 'lantern', axisName = 
     geom.setAttribute('aBioAxis', new THREE.BufferAttribute(bioAxis, 1));
     geom.userData.__bioAxisName = axisName ?? 'auto';
     bakeEyeGlow(geom, mesh, eyeStalks);
+    bakeEdges(geom, mesh, longest);
   } else if ((geom.userData.__bioAxisName ?? 'auto') !== (axisName ?? 'auto')) {
     // The bake above is per GEOMETRY and the attributes are already there, so a
     // second attach asking for a different axis silently gets the first one's.
@@ -651,6 +826,10 @@ function freshUniforms() {
     uBioColorA: { value: new THREE.Color(0x00e5ff) },
     uBioColorB: { value: new THREE.Color(0x7b2dff) },
     uBioColorC: { value: new THREE.Color(0xffd166) },
+    // The shell between the markings. Strength 0 by default, so a preset that
+    // says nothing about it renders exactly as it did before this existed.
+    uBioShellColor: { value: new THREE.Color(0x000000) },
+    uBioShellGlow: { value: 0 },
     // The world-space school wave. Amp 0 by default so a creature whose
     // preset says nothing about it is bit-for-bit unaffected.
     uBioSchoolAmp: { value: 0 },
@@ -703,10 +882,12 @@ function inject(material, u) {
 attribute vec3 aBioPos;
 attribute float aBioAxis;
 attribute float aEyeGlow;
+attribute vec3 aBioEdge;
 varying vec3 vBioPos;
 varying float vBioAxis;
 varying float vEyeGlow;
-varying vec3 vBioWorld;`)
+varying vec3 vBioWorld;
+varying vec3 vBioEdge;`)
       // After <begin_vertex>: the attributes are per-vertex constants so the
       // position makes no difference to them, but sitting after that chunk
       // keeps this clear of the outline shells' rim push, which rewrites
@@ -715,6 +896,10 @@ varying vec3 vBioWorld;`)
   vBioPos = aBioPos;
   vBioAxis = aBioAxis;
   vEyeGlow = aEyeGlow;
+  // Barycentric, for the wireframe pattern. Zero on every body that did not
+  // opt in (an absent attribute reads as 0), which the pattern detects and
+  // reports rather than drawing a solid animal — see bakeEdges.
+  vBioEdge = aBioEdge;
   // Where this fragment actually is in the ocean, for the world-space school
   // wave. Taken from the pre-skin position on purpose: it is read at a scale
   // of several world units, so the centimetres a skinned tail adds are noise,
@@ -734,6 +919,104 @@ varying vec3 vBioWorld;`)
       .replace('#include <dithering_fragment>', `${FRAG_BODY}\n#include <dithering_fragment>`);
   };
   material.needsUpdate = true;
+}
+
+// --- the wireframe ----------------------------------------------------------
+// The `wireframe` pattern lights the MESH'S OWN EDGES: every triangle border on
+// the body becomes a filament, so the animal reads as a lattice of light rather
+// than as a lit surface. It is the one pattern here whose shape is the model's
+// topology instead of a noise field, which is exactly why it looks unlike
+// anything else in the water.
+//
+// IT NEEDS BARYCENTRIC COORDINATES, and those need one vertex per triangle
+// corner. A welded mesh shares a vertex between the triangles that meet at it,
+// and a shared vertex cannot be (1,0,0) for one of them and (0,1,0) for
+// another — so the geometry has to be split first. That is what `toNonIndexed`
+// does, and it roughly triples the vertex count: the orca goes 6,994 -> 33,714,
+// which is precisely the shape the source file shipped in before
+// tools/orca-split.mjs welded it to save four megabytes of download. The weld
+// is paid back on disk and the split is paid once here, in memory, on the
+// handful of bodies that opt in.
+//
+// OPT-IN PER ASSET (`biolumEdges: true`), NOT per pattern, and that is
+// deliberate. The pattern is a live slider — a preset can be switched to
+// `wireframe` while the game is running — and re-splitting geometry underneath
+// a creature that is already swimming is not something a slider should ever
+// do. So a body that declares it pays the split at load and can wear the
+// pattern; a body that does not gets a black pattern and one warning, which is
+// a legible failure rather than a mysterious hitch.
+function bakeEdges(geom, mesh, longest) {
+  if (!mesh?.userData?.__bioEdges && !geom.userData.__bioEdges) return;
+  if (geom.attributes.aBioEdge) return;
+  if (geom.index) {
+    console.warn('[biolumSkin] wireframe glow needs non-indexed geometry; call splitForEdges before attaching.');
+    return;
+  }
+  const pos = geom.attributes.position;
+  const n = pos.count;
+  const edge = new Float32Array(n * 3);
+
+  // NOT PLAIN BARYCENTRIC, and this is the whole trick. The obvious encoding is
+  // (1,0,0)/(0,1,0)/(0,0,1) per corner, with the shader turning the
+  // interpolated value into a screen-space width using fwidth(). That does not
+  // compile here: these shaders are GLSL ES 1.00, where the derivative
+  // functions need GL_OES_standard_derivatives, and an #extension directive has
+  // to precede every non-preprocessor token in the file — which is impossible
+  // from an injection point two hundred lines down somebody else's shader. It
+  // fails to compile on WebGL2 as readily as on WebGL1, and because every
+  // bioluminescent creature in the game shares ONE compiled program, the cost
+  // of that would not have been a wrong-looking orca. It would have been every
+  // glowing animal in the ocean rendering as nothing.
+  //
+  // So the distance is baked instead of derived. Each corner stores the
+  // TRIANGLE'S HEIGHT from that corner to the opposite edge; the interpolated
+  // value is then barycentric x height, which IS the perpendicular distance to
+  // that edge, in model units, for free. The shader takes the smallest of the
+  // three and compares it to a width. No derivatives, no extension, and it is
+  // exact rather than a one-pixel approximation.
+  //
+  // Normalised by the body's longest side, the same figure aBioPos uses, so
+  // `coverage` means "line width as a fraction of the animal's length" and
+  // reads the same on a 700-unit orca as on a 14-unit shark.
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const ac = new THREE.Vector3();
+  const cross = new THREE.Vector3();
+  for (let t = 0; t + 2 < n; t += 3) {
+    a.fromBufferAttribute(pos, t);
+    b.fromBufferAttribute(pos, t + 1);
+    c.fromBufferAttribute(pos, t + 2);
+    ab.subVectors(b, a);
+    ac.subVectors(c, a);
+    // Twice the area. Height from a corner = 2 * area / (opposite side length).
+    const twiceArea = cross.crossVectors(ab, ac).length();
+    const lenBC = c.distanceTo(b);
+    const lenCA = a.distanceTo(c);
+    const lenAB = b.distanceTo(a);
+    const h = (side) => (side > 1e-9 ? twiceArea / side / longest : 0);
+    edge[t * 3 + 0] = h(lenBC);       // corner a, opposite edge bc
+    edge[(t + 1) * 3 + 1] = h(lenCA); // corner b, opposite edge ca
+    edge[(t + 2) * 3 + 2] = h(lenAB); // corner c, opposite edge ab
+  }
+  geom.setAttribute('aBioEdge', new THREE.BufferAttribute(edge, 3));
+}
+
+/**
+ * Split a body's geometry so it can wear the wireframe pattern. Called from
+ * assets.js at install time for assets that declare `biolumEdges`, i.e. once
+ * per asset rather than once per creature — every clone shares the geometry.
+ */
+export function splitForEdges(root) {
+  root.traverse((o) => {
+    if (!o.isMesh || !o.geometry?.index) return;
+    const split = o.geometry.toNonIndexed();
+    o.geometry.dispose();
+    o.geometry = split;
+    o.geometry.userData.__bioEdges = true;
+    o.userData.__bioEdges = true;
+  });
 }
 
 // --- eye glow ---------------------------------------------------------------
@@ -899,6 +1182,7 @@ function bakeEyeGlow(geom, mesh, stalks) {
  * share a single compiled program.
  */
 export function instantiateBiolumSkin(root) {
+  const made = [];
   root.traverse((o) => {
     if (!o.isMesh || !o.material) return;
     const swap = (mat) => {
@@ -932,11 +1216,17 @@ export function instantiateBiolumSkin(root) {
       copy.userData.__bioSkinClock = { ...(mat.userData.__bioSkinClock ?? freshClock()) };
       inject(copy, u);
       instances.add(new WeakRef(copy));
+      made.push(copy);
       return copy;
     };
     o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
   });
-  applyBiolumSkinSettings();
+  // Only the clones just made — same argument as in setBiolumSkinVariant. This
+  // runs on every body built from scratch, and a global restamp here made a
+  // spawn's cost proportional to how many creatures were already on screen:
+  // measured at 120 alive, 190us to say that one new body exists, against 3us
+  // for the body itself.
+  if (made.length) applyBiolumSkinSettings(made);
 }
 
 /**
@@ -963,16 +1253,86 @@ export function instantiateBiolumSkin(root) {
  */
 export function setBiolumSkinVariant(root, variant) {
   if (!root || !variant) return;
+  // Only the materials this actually stamped are re-resolved. It used to push
+  // the whole config over EVERY live material — fine for the debug lineup,
+  // which stamps a handful of creatures once, and not fine at all now that
+  // this runs on every spawn: at four crabs a second with a hundred alive,
+  // a global restamp is four hundred materials and twenty-odd uniform writes
+  // each, per second, to say that one new body has a palette. Nothing else
+  // could have changed anyway.
+  const touched = [];
   root.traverse((o) => {
     if (!o.isMesh || !o.material) return;
     const stamp = (mat) => {
       if (!mat?.userData?.__bioSkin || !mat.userData.__bioSkinInstance) return;
       mat.userData.__bioSkinVariant = variant;
+      touched.push(mat);
     };
     if (Array.isArray(o.material)) o.material.forEach(stamp);
     else stamp(o.material);
   });
-  applyBiolumSkinSettings();
+  if (touched.length) applyBiolumSkinSettings(touched);
+}
+
+// ---------------------------------------------------------------------------
+// THE SKIN ROSTER — which variants exist, from skins.csv. See skinTable.js for
+// what a row means and why the list is a file rather than a tuner panel.
+//
+// Built once at module load, like the boss perks: the file is data the game
+// boots with, and rebuilding it per spawn would parse a CSV two to four times
+// a second at the rate crabs arrive.
+// ---------------------------------------------------------------------------
+
+// Is this preset LIGHT or PIGMENT? Resolved through `base` the same way every
+// other preset key is, so a preset that simply doesn't mention `luminous`
+// inherits the family's answer instead of counting as pigment.
+function presetIsNight(name) {
+  const root = CONFIG.biolumSkin ?? {};
+  const preset = root.presets?.[name];
+  if (!preset) return null; // config.js has never heard of it — see buildSkins
+  return (preset.luminous ?? root.base?.luminous ?? true) !== false;
+}
+
+const SKINS = buildSkins(parseSkinCsv(skinsCsv), { patterns: BIOLUM_PATTERNS, presetIsNight });
+
+/** The parsed roster, for the contact sheet and the tests. */
+export function skinRoster() {
+  return SKINS;
+}
+
+/** Which preset an already-built body is wearing, or null if it wears none. */
+export function biolumSkinPresetOf(root) {
+  let found = null;
+  root?.traverse?.((o) => {
+    if (found || !o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (m?.userData?.__bioSkin && m.userData.__bioSkinPreset) {
+        found = m.userData.__bioSkinPreset;
+        return;
+      }
+    }
+  });
+  return found;
+}
+
+/**
+ * Roll this individual's skin and stamp it. Called for every creature that
+ * spawns (entities/enemies.js, spawnOne).
+ *
+ * STAMPED ON EVERY SPAWN, not only on a fresh body, because bodies are POOLED
+ * — acquireVisual hands back a crab that already died once, still carrying the
+ * variant it wore then. Re-rolling is what keeps the heap mixed instead of
+ * gradually settling into whatever the first nine crabs of the run happened to
+ * roll.
+ *
+ * Returns the variant, or null for the creatures with no skins at all, which
+ * is every one of them but the crabs today.
+ */
+export function rollBiolumSkinVariant(root, rng = Math.random) {
+  const variant = rollSkin(SKINS, biolumSkinPresetOf(root), rng);
+  if (variant) setBiolumSkinVariant(root, variant);
+  return variant;
 }
 
 /**
@@ -985,7 +1345,7 @@ export function setBiolumSkinVariant(root, variant) {
  * creature at once while a preset still overrides it for the one species that
  * needs to disagree.
  */
-export function applyBiolumSkinSettings() {
+export function applyBiolumSkinSettings(only = null) {
   const root = CONFIG.biolumSkin ?? {};
   const off = root.enabled === false;
   const base = root.base ?? {};
@@ -999,7 +1359,10 @@ export function applyBiolumSkinSettings() {
     return hit;
   };
 
-  for (const m of liveMaterials()) {
+  // `only` is a list of materials to restamp instead of the whole roster —
+  // see setBiolumSkinVariant for why that matters now. A slider still passes
+  // nothing and moves everything.
+  for (const m of (only ?? liveMaterials())) {
     const u = m.userData.__bioSkinUniforms;
     if (!u) continue;
     const preset = resolve(m.userData.__bioSkinPreset ?? 'lantern');
@@ -1037,6 +1400,10 @@ export function applyBiolumSkinSettings() {
     u.uBioColorA.value.set(cfg.colorA ?? 0x00e5ff);
     u.uBioColorB.value.set(cfg.colorB ?? 0x7b2dff);
     u.uBioColorC.value.set(cfg.colorC ?? 0xffd166);
+    // Follows the master switch like everything additive: `enabled: false` has
+    // to leave an ordinary animal behind, not one still glowing at the seams.
+    u.uBioShellGlow.value = off ? 0 : (cfg.shellGlow ?? 0);
+    u.uBioShellColor.value.set(cfg.shellColor ?? 0x000000);
 
     // The school wave. Resolved per material like everything else, so a preset
     // CAN opt out (the crab on the seabed is not in the water column with the

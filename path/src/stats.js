@@ -126,6 +126,7 @@ export function baseStats() {
     bounceLife: CONFIG.bounce.life,
     bounceMaxBounces: CONFIG.bounce.maxBounces,
     eelLevel: 0,
+    laserEyesLevel: 0,
     starfishLevel: 0,
     seagullLevel: 0,
     belugaLevel: 0,
@@ -166,7 +167,7 @@ export function baseStats() {
 export const INTEGER_STATS = new Set([
   'multishot', 'pierce', 'missileCount', 'shrapnelCount', 'shrimpCount',
   'scallopCount', 'bounceMaxBounces', 'projectileBonus',
-  'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'starfishLevel',
+  'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'starfishLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
   'dumboLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'musselVolleyLevel',
   'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel',

@@ -1,0 +1,12 @@
+id,preset,gate,weight,enabled,pattern,colorA,colorB,colorC,shellColor,shellGlow,scale,warpMin,warpMax,notes
+shell,carapace,day,1,,,,,,,,,,,"The shipped wet-brown shell. Every look column blank = wear the preset exactly as it is."
+sand,carapace,day,1,,,#6b5636,#9c855a,#d8c79a,,,,,,"A pale beach crab — the shell the sand made."
+granite,carapace,day,1,,,#2f3a40,#5d6b6f,#9fb0ad,,,,,,"Cold grey stone. The one day shell with no warmth in it at all."
+ember,emberClaw,night,1,,,,,,,,,,,"The shipped dark-red shell with ember claws, over the preset's own deep-orange shellGlow."
+abyss,emberClaw,night,1,,,#00e5ff,#7b2dff,#ffd166,#2f6fff,,,,,"Cyan into violet — the deep-sea default the fish wear. Floor goes blue with it, at the same depth."
+cold,emberClaw,night,1,,,#1de5c8,#2f6fd6,#bdf5ff,#00c8ff,,,,,"Teal into ice."
+toxic,emberClaw,night,1,,,#7cff3d,#00ffc8,#d6ff00,#3dff2e,,,,,"Acid green. The loudest thing on the seabed."
+bruise,emberClaw,night,1,,,#ff2d95,#5b2bff,#00d4ff,#b02dff,,,,,"Magenta into violet into cyan."
+bone,emberClaw,night,1,,,#dfefff,#8fb4c8,#ffffff,#9fc4ff,,,,,"Pale and cold. Blooms harder than the rest — see the note in skinTable.js."
+lattice,emberClaw,night,1,,lattice,,,,,,0.16,1,3,"The backdrop grid, worn. scale 0.16 because the preset's 0.26 is three cells across the whole animal; warp is rolled per crab, so a heap ripples by different amounts."
+marble,emberClaw,night,1,,marble,,,,,,,,,"Turbulence-folded veining — the day shell's pattern, lit."

@@ -1,5 +1,11 @@
 [
   { "key": "grabber-current", "file": "octopus_rig.glb", "fit": 4.6, "forward": "-Z", "up": "-X", "tint": 11565776 },
   { "key": "grabber-candidate", "file": "octopus.glb", "fit": 4.6, "forward": "-Z", "up": "-X", "tint": 11565776 },
-  { "key": "grabber-candidate-untinted", "file": "octopus.glb", "fit": 4.6, "forward": "-Z", "up": "-X" }
+  { "key": "grabber-candidate-untinted", "file": "octopus.glb", "fit": 4.6, "forward": "-Z", "up": "-X" },
+
+  { "key": "squid-fY-uZ", "file": "giantsquid.glb", "fit": 6.0, "forward": "-Y", "up": "+Z" },
+  { "key": "squid-fY-uZneg", "file": "giantsquid.glb", "fit": 6.0, "forward": "-Y", "up": "-Z" },
+  { "key": "squid-fY-uX", "file": "giantsquid.glb", "fit": 6.0, "forward": "-Y", "up": "+X" },
+  { "key": "squid-fZneg-uXneg", "file": "giantsquid.glb", "fit": 6.0, "forward": "-Z", "up": "-X" },
+  { "key": "squid-fZ-uY", "file": "giantsquid.glb", "fit": 6.0, "forward": "+Z", "up": "+Y" }
 ]

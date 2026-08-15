@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { strikeState } from './strike.js';
+import { airPickupMul } from './airborne.js';
 
 // ============================================================================
 // THE MAGNET, PER STATE — how far the seal reaches for food, and how hard.
@@ -60,10 +61,18 @@ function tuning(state) {
   return m[state] ?? m.idle ?? { radiusMul: 1, speedMul: 1 };
 }
 
-/** The reach, in world units, for the state the seal is currently in. */
+/**
+ * The reach, in world units, for the state the seal is currently in.
+ *
+ * AIR TIME widens it on top of the state's own multiplier, and that rider is
+ * the one thing in CONFIG.airborne that is not simply a damage number. It is
+ * there because the orbs are IN the water and the seal is not: without it,
+ * time spent airborne is time spent not collecting, and a mechanic meant to
+ * feed the food chain would instead compete with it. See systems/airborne.js.
+ */
 export function magnetRadius(stats, speed) {
   const base = stats?.pickupRadius ?? CONFIG.player.pickupRadius ?? 3;
-  return base * (tuning(magnetState(speed)).radiusMul ?? 1);
+  return base * (tuning(magnetState(speed)).radiusMul ?? 1) * airPickupMul();
 }
 
 /** How fast an orb is dragged in, for the state the seal is currently in. */

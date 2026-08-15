@@ -240,6 +240,107 @@ factor, so relative brightness is unchanged and each core now sits near 1.0:
 | `abyssHunter` | 0.71 .. 1.88 | 77% | 3.3s | 6.1s |
 | `emberClaw` | 0.77 .. 1.50 | 88% | 3.3s | 12.8s |
 
+### Skins — one crab is not the next crab
+
+A **preset** says what a species looks like and is shared by every clone of an
+asset key; nine lanternfish wearing one pattern *is* the read for a school. A
+**skin** is the layer above it, rolled per individual at spawn and stamped on
+that body's own material. The crabs are what it is for: they arrive in crowds,
+they walk slowly enough to be looked at, and nine identical shells read as one
+sprite repeated.
+
+The roster is **`path/src/skins.csv`** — eleven rows today, three day and eight
+night, every one at weight 1:
+
+| preset | skins |
+|---|---|
+| `carapace` (day) | `shell` `sand` `granite` |
+| `emberClaw` (night) | `ember` `abyss` `cold` `toxic` `bruise` `bone` `lattice` `marble` |
+
+Blank cells **inherit from the preset**, which is what lets the shipped look be
+a row with nothing in it but an id (`shell`, `ember`). `weight` is relative
+within a preset — equal now, so the column is there to tilt the roster later
+without a code change. `warpMin`/`warpMax` give a value rolled **per crab**:
+`lattice` declares 1..3, so a heap of them springs by visibly different amounts.
+
+**The day/night gate is structural, not a rule anybody has to remember.** A skin
+only reaches a creature already wearing its preset, `carapace` is only worn by
+the day crab and `emberClaw` only by the night one, and
+`nightlife.glowing.day` is **0** — so the night crab cannot exist before dusk
+and a bone-white glowing crab at noon is unreachable rather than unlikely. The
+`gate` column states the same fact a second time so the two can be compared:
+a row that disagrees with its preset's `luminous` flag is dropped with a
+warning, not spawned at the wrong hour. `npm run test:skin` walks that whole
+chain, plus the quiet failures — a pattern name the shader has no branch for
+selects `blotches` in silence, because the uniform is an index.
+
+Why a CSV and not the tuner, when this is *look* and the preset it layers over
+is on sliders: because it is a **list**. The tuner's snapshot saves an array
+wholesale and merges it back over config.js on the next boot, so a variant added
+later would be shadowed forever by whatever list happened to be saved first.
+
+Rolling per spawn is not free and had to be made cheap. Bodies are **pooled**
+(`acquireVisual`), and the per-instance material clone survives pooling —
+`releaseVisual` only disposes the skeleton — so a recycled crab re-stamps a
+material that already exists: no allocation, and no recompile, because the
+pattern is a uniform index rather than a `#define`. It also means re-stamping
+on every spawn is *required*, not merely tidy: a body out of the pool arrives
+still wearing the skin it died in. What did cost real time was the restamp
+itself, which used to push the whole config over **every** live material —
+190µs at 120 creatures alive, against 3µs for the body being spawned. Both that
+path and `instantiateBiolumSkin` now re-resolve only the materials they
+touched.
+
+### The shell between the markings
+
+`bodyDarken` is what makes a glow read as light coming *out of* an animal
+rather than as a bright animal, and on a dark body after sunset it lands on
+black: everything the pattern doesn't touch becomes a silhouette. `shellGlow` adds
+a flat colour back into exactly that negative space, faded out where the mask is
+bright so the two never stack into white. Deep orange under an ember crab is
+metal that hasn't cooled; the same knob at a cold hue is a wet shell catching
+moonlight. It deliberately does **not** breathe — a shell pulsing with the
+markings reads as the animal being lit from outside.
+
+**Author `shellColor` saturated and let `shellGlow` make it dark**, exactly like the
+ramp. Reaching for a dark hex is the instinct and it produces nothing: colours
+are converted to linear on the way to the shader, so a deep brown is already
+near zero before this multiplies it. Measured on the night crab, `#5c1a08` at
+0.16 moved the shell by **3/255** — indistinguishable from the black it started
+from — where `#ff5a1e` at the same number is the colour that was wanted. It is
+0 on every preset but `emberClaw`: this is additive, so it lifts an animal's
+black point off the water's, and a fish meant to vanish into the dark has to be
+able to.
+
+### `lattice` — the backdrop grid, worn
+
+The eleventh pattern is the backdrop's warp grid (`systems/grid.js`) on an
+animal — the lattice the ripples and your own fingers shove about, wrapped onto
+a shell instead of hung behind the water. Cells are a
+voronoi of a **triangular lattice with no jitter**, whose borders are exactly a
+honeycomb — so the edge field is the same `F2-F1` that `net` lights its seams
+with, and both answer to `coverage`/`contrast` identically.
+
+The spring is `systems/grid.js`'s displacement term for term: a radial
+direction, a sine travelling outward, an exponential decay. It displaces the
+**sample point before the cells are built**, so the cells stretch and settle —
+brightening a static lattice on the same clock reads as a light flashing, not as
+a mesh being shoved. Amplitude is `warp × pulseAmp`, which is what makes it a
+dead-still shell on `carapace` (`pulseAmp` 0, a daylight animal wearing pigment)
+and a ripple once per breath on `emberClaw`, on that individual's own phase
+offset. It is also the one pattern that ignores `flow`: cells are anatomy, and a
+honeycomb sliding across the shell it belongs to is the failure bind-pose
+sampling exists to prevent.
+
+Feature size matters more here than on any other pattern — `emberClaw`'s own
+`scale` 0.26 is about three cells across the whole animal. The `lattice` skin
+sets 0.16.
+
+**`crab-skins.html`** is the contact sheet for all of it: the shipped roster,
+every pattern on both crabs, feature-size and palette sweeps, filmstrips of the
+ripple, and nine crabs rolled from `skins.csv` beside nine wearing the preset.
+Open it on the dev server.
+
 ### The school wave
 
 One term in the shader is sampled in **world space** rather than in the animal's
@@ -427,6 +528,36 @@ evolution).
 can carry *both* a 3D model path and a procedural fallback shape. If the model
 loads it wins; if it's missing or broken the game logs a warning and uses the
 shape. A bad asset never breaks the build.
+
+### Swapping the Rive file
+
+Two copies exist and only one of them ships:
+
+| | |
+|---|---|
+| `~/Documents/_DesignSystems/SealSurvivor/RIV/seal_survivor.riv` | what Rive exports |
+| **`path/src/ui/seal_survivor.riv`** | **what the game reads** |
+
+`ui/riveSplash.js` and `ui/bossBarRive.js` import the second one `?url`, so Vite
+hashes it into the bundle. Nothing in the build ever looks at Documents — a
+re-export that isn't copied across is invisible, because the editor keeps
+showing the new artwork and the game keeps shipping the old.
+
+```bash
+npm run riv          # install the latest export, with a validation pass
+npm run riv:watch    # ...and keep doing it, every time you re-export
+npm run riv -- --check   # validate, change nothing
+```
+
+It refuses an export that has stopped containing the names the code depends on
+— the two artboards and the three data-binding properties declared in
+`path/src/ui/riveContract.js`. Rename one of those in the editor and nothing
+fails to compile: the splash comes up blank, or the boss health bar draws
+perfectly and never moves. `npm run test:bossbar` re-checks the shipped copy, so
+a bad swap can't reach a deploy either.
+
+You can also just export straight to `path/src/ui/seal_survivor.riv` from Rive's
+export dialog and skip the copy — but then nothing validates it.
 
 ### Using a 3D model for the ship
 

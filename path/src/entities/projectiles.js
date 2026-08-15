@@ -8,7 +8,9 @@ import { markWeight, markedTargets } from '../systems/marks.js';
 
 // One list for both sides — `faction` decides who a bullet can hurt. Two
 // optional behaviors layer on top of the base fly-in-a-straight-line bullet:
-//   homing — re-aims toward the nearest live enemy, turn-rate limited
+//   homing — re-aims toward the nearest live enemy, turn-rate limited. An
+//            ENEMY-faction shot homes on the seal instead: see `chase`, and the
+//            note on updateHoming for why that could not be left implicit.
 //   bounce — reflects off the arena walls instead of flying past them,
 //            consuming one of a limited number of bounces each time
 //   chain  — survives hitting an enemy and ricochets on to the next one,
@@ -18,6 +20,12 @@ export const projectiles = [];
 export function spawnProjectile(scene, {
   origin, dir, faction, damage, speed, life, radius, pierce = 0, asset, source = null,
   homing = false, turnRate = 4, acquireRadius = Infinity, targetType = null, homingDelay = 0,
+  // Who a homing shot is FOR. Null means the enemy list, which is the seal's
+  // own ordnance and every homing shot that existed before the boat boss. A
+  // `{ mesh }` handed in here is followed instead, and never re-acquired —
+  // that is how an enemy missile chases the player rather than shopping around
+  // the creature list for whichever mackerel happens to be nearest.
+  chase = null,
   bounce = false, maxBounces = 0, restitution = 1,
   chain = false, chainRange = 0, chainLock = 0, chainSpeedGain = 1,
   jet = false, jetInterval = [0.2, 0.4], jetSpeed = [10, 18], jetTurn = 2.4, jetDrag = 2,
@@ -59,6 +67,7 @@ export function spawnProjectile(scene, {
     // was thrown at, THEN turns — instead of curving onto the target from the
     // first frame and hiding the throw.
     homingDelay,
+    chase,
     turnRate,
     acquireRadius,
     targetType, // e.g. 'walkingCrab' — restricts homing to only that enemy type
@@ -138,6 +147,21 @@ function updateJet(p, dt) {
 }
 
 function updateHoming(p, dt, enemiesList) {
+  // A SHOT WITH SOMETHING TO CHASE NEVER SHOPS AROUND. The re-acquire below
+  // walks the enemy list, which for an enemy-faction missile is a list of its
+  // own side — an unguided version of this perk spent its first flight
+  // circling the nearest mackerel, and it read as a bug in the boss rather
+  // than as a missile.
+  //
+  // Held even when the target is dead: the seal dying mid-flight ends the run,
+  // and a missile that switched to hunting fish on that frame would be the
+  // last thing on screen doing something inexplicable.
+  if (p.chase) {
+    if (!p.chase.mesh?.parent) return;
+    p.target = p.chase;
+    steerToward(p, dt);
+    return;
+  }
   // A target the seal has PAINTED (systems/marks.js) counts as closer than it
   // is, so a shell picks the marked shark over the minnow beside it. This is
   // the payoff for a strike that couldn't hurt what it rammed: the seal spots,
@@ -169,7 +193,14 @@ function updateHoming(p, dt, enemiesList) {
     p.target = best;
   }
   if (!p.target) return;
+  steerToward(p, dt);
+}
 
+// Turn toward `p.target`, no faster than the shot's own turn rate. Split out so
+// the chase path above and the acquire path below cannot drift apart — the turn
+// limit IS the counterplay for a homing shot (out-turn it and it overshoots),
+// and two copies of it is two places for that to stop being true.
+function steerToward(p, dt) {
   const dx = p.target.mesh.position.x - p.mesh.position.x;
   const dy = p.target.mesh.position.y - p.mesh.position.y;
   const desired = Math.atan2(dy, dx);

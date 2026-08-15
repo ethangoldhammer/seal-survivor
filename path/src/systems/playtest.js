@@ -62,6 +62,26 @@ function newBucket(t) {
     maxHpSum: 0,
     level: 1,
     stacks: {},
+    // --- THE FOOD CHAIN -----------------------------------------------------
+    // Recorded per bucket because "is the chain popping" is a question about
+    // RATE over a run, not a total: a run that chained hard for the first
+    // minute and never again reads identically to one that chained steadily,
+    // and they are completely different problems.
+    //
+    // The MISSES are the point. A link needs three things at once (food eaten,
+    // a window still open, a release that fires), and a total of links scored
+    // cannot tell you which one you keep failing — which is exactly the
+    // question that could not be answered from the logs the first time it was
+    // asked. Every release that could have scored and didn't is filed under
+    // the condition that stopped it.
+    strikes: 0,           // releases that actually fired a dash
+    links: 0,             // ...of which scored a FOOD CHAIN link
+    linkDepthSum: 0,      // sum of chain depth at each link, for a mean
+    maxChain: 0,          // deepest chain reached in this bucket
+    missNoFood: 0,        // fired, window open, but not enough eaten
+    missNoWindow: 0,      // fired with enough eaten, but the window had shut
+    missBoth: 0,          // fired having done neither
+    chumEaten: 0,         // mouthfuls, for the denominator on all of the above
   };
 }
 
@@ -107,11 +127,67 @@ export function beginRun(config = {}) {
   stacks = {};
 }
 
+/**
+ * The line between an hp figure and a PLACEHOLDER. At or above this, a number
+ * in the hp column is somebody writing "this does not break", and booking it
+ * as though it were a quantity is what poisoned the report. Not a gameplay
+ * clamp — nothing in this module feeds back into a run.
+ *
+ * `seaTurtle` carries hp 1000000000 in enemies.csv, which is how that species
+ * spells exactly that. It is not invulnerable in code, though: anything with
+ * `lethal` set asks for the health that is left (see processPendingSplashes),
+ * so one weather lightning bolt kills a turtle and books a billion damage
+ * against the hazard that did it. Eight turtles in one 346-second run put
+ * 8.1e9 in `dealtBySource`, which took every other ability in that difficulty
+ * band to a 0% share and a 0.00x return — the whole table read as if nothing
+ * but the sky had done anything.
+ *
+ * The spawn side was quietly worse. `recordSpawn` is the denominator of the
+ * clear rate and of the pressure curve, so a turtle arriving made that minute
+ * look like the arena had flooded with a billion hp of enemy nobody touched.
+ *
+ * DROPPED RATHER THAN CLAMPED, which is the second version of this. A ceiling
+ * cannot work here, and the arithmetic says so: it has to sit above the
+ * biggest legitimate hit, and with spawning.csv at `ramp.hpMax` 30 a bossShark
+ * is 82k at ten minutes and 212k at thirty — so any cap high enough to let
+ * that through still books more per turtle than a real ability manages in a
+ * whole run. There is no honest number to record for killing a placeholder.
+ * Zero is the honest one. The kill is still credited (see recordKill) and the
+ * spawn is still counted; it is only the hp that goes unbooked.
+ *
+ * The gap this sits in is enormous and checked by npm run test:ledger — real
+ * creatures are orders below it, sentinels orders above.
+ *
+ * RAISED FROM 1e6 when the bosses became walls. This line is not a tuning
+ * value, it is the gap between two populations — a creature with health, and
+ * somebody typing "unbreakable" in a number column — and 1e6 was a fine place
+ * to draw it while the biggest real animal in the game had 900 hp. It stopped
+ * being fine the moment bossBoat did: at 3,200 base and 260 a difficulty
+ * point it crosses 1e6 twenty-two minutes into a run, and the symptom would
+ * have been the ledger quietly deciding that the boat is scenery — its damage
+ * unbooked, its spawn uncounted, and every ability's share computed against a
+ * denominator with the biggest fight in the run missing from it. Exactly the
+ * failure the sea turtle caused, arriving from the other direction.
+ *
+ * 5e6, and it is pinned from both sides — this is not a round number because
+ * there is no room left for one. The turtle's 1e9 has to stay a hundred times
+ * clear of the line or the two populations are not separable at a glance,
+ * which caps it just under 1e7; the heaviest real creature has to stay under
+ * it for far longer than anybody plays, which floors it around 3e6 (bossBoat
+ * reaches 1.36e6 at thirty minutes). test:ledger checks both ends and states
+ * the upper one as a RUN LENGTH — nearly two hours of headroom — which is the
+ * only form of that margin anybody can judge.
+ */
+export const SENTINEL_HP = 5e6;
+
 /** Damage dealt BY the player's kit. `source` is a key of SOURCE_UPGRADES. */
 export function recordDamage(source, amount, target) {
   if (!run || !(amount > 0)) return;
-  add(bucket.dealtBySource, source, amount);
+  // Credit still moves even when the figure doesn't — whatever last touched a
+  // creature owns its kill, and a placeholder's death is still a death.
   if (target && typeof target === 'object') lastDamager.set(target, source);
+  if (amount >= SENTINEL_HP) return;
+  add(bucket.dealtBySource, source, amount);
 }
 
 /**
@@ -138,7 +214,13 @@ export function recordKill(target, source = null) {
  */
 export function recordSpawn(hp) {
   if (!run) return;
+  // The COUNT is always honest — a placeholder still occupies the arena, and
+  // dropping it here would corrupt the same curve this guard exists to protect.
   bucket.spawns += 1;
+  // The hp is not, for the same reason the damage side isn't — see SENTINEL_HP.
+  // This is the denominator of the clear rate, so one placeholder does not
+  // merely add noise, it decides what that minute looked like.
+  if (hp >= SENTINEL_HP) return;
   bucket.spawnHp += hp;
 }
 
@@ -156,6 +238,38 @@ export function recordPlayerDamage(amount, source = 'unknown') {
 export function recordControl(source, n = 1) {
   if (!run) return;
   add(run.controlEvents, source, n);
+}
+
+/**
+ * A strike RELEASE, and whether it scored a link.
+ *
+ * Called on every release that fires, including the ones that score nothing —
+ * a report built only from successes cannot distinguish "the player never
+ * strikes" from "the player strikes constantly and never links", and those
+ * want opposite fixes.
+ *
+ * @param chain   the chain depth after this release, or 0 if it scored nothing
+ * @param hadFood whether enough had been eaten since the last strike
+ * @param hadWindow whether the combo window was still open
+ */
+export function recordStrike(chain, hadFood, hadWindow) {
+  if (!run) return;
+  bucket.strikes += 1;
+  if (chain > 0) {
+    bucket.links += 1;
+    bucket.linkDepthSum += chain;
+    if (chain > bucket.maxChain) bucket.maxChain = chain;
+    return;
+  }
+  if (!hadFood && !hadWindow) bucket.missBoth += 1;
+  else if (!hadFood) bucket.missNoFood += 1;
+  else bucket.missNoWindow += 1;
+}
+
+/** One mouthful swallowed — the denominator for the chain's rate. */
+export function recordChum(n = 1) {
+  if (!run) return;
+  bucket.chumEaten += n;
 }
 
 export function recordUpgrade(id, t = 0) {

@@ -4,6 +4,7 @@ import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { orbitTarget, springFollow } from './orbit.js';
 import { aoe, applyCompanionScale } from './scaling.js';
+import { canHold } from './control.js';
 
 // Dumbo Octopus — a companion that swims alongside the seal and charms
 // enemies. A charmed creature is PACIFIED and nothing more: it stops chasing,
@@ -113,6 +114,11 @@ export function updateDumbo(dt, playerPos, level, enemiesList, clock, hooks = {}
   const candidates = [];
   for (const e of enemiesList) {
     if (e.charmTimer > 0) continue;
+    // A boss is not charmed. Out of the candidate list rather than refused
+    // after the sort, so a pulse with `targets: 2` still pacifies two fish
+    // instead of spending one of them on the one creature it cannot touch.
+    // See systems/control.js.
+    if (!canHold(e)) continue;
     const dx = e.mesh.position.x - octo.position.x;
     const dy = e.mesh.position.y - octo.position.y;
     const d2 = dx * dx + dy * dy;

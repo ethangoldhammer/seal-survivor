@@ -3,11 +3,18 @@ import { CONFIG } from '../config.js';
 import { bounds, WAVE, sea } from '../arena.js';
 import { skyLight } from './daylight.js';
 
-// The water fill, replacing a flat rectangle. Everything — the three-stop
-// depth gradient, the caustic veins, and the light beams — is one fragment
+// The water fill, replacing a flat rectangle. Everything — the depth gradient,
+// the caustic veins, and the light beams — is one fragment
 // shader over a single plane, driven entirely by world-space Y (depth) and X.
 // No textures, no CPU simulation: uniforms are refreshed from CONFIG every
 // frame, the same pattern the grid uses, so tuner sliders apply live.
+//
+// THE GRADIENT HAS TWO SHAPES and CONFIG.absorption.mix crossfades between
+// them. The original is two straight ramps through `waterMid`; the second is
+// Beer-Lambert extinction, which eats each channel at its own rate and is why
+// real deep water goes blue instead of just going dark. Both run between the
+// same authored endpoints, so the palette drives either one. See the config
+// block for the reasoning; the shader below only has to do the arithmetic.
 //
 // The plane itself runs some way ABOVE the still-water line (world.js sizes it
 // that way) and the shader cuts it back down to the wave curve, so the top of
@@ -42,6 +49,9 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uDeep;
   uniform float uStop1;
   uniform float uStop2;
+
+  uniform float uAbsorbMix;
+  uniform vec3 uAbsorb;
 
   uniform float uCausticsOn;
   uniform float uCausticsIntensity;
@@ -111,6 +121,22 @@ const fragmentShader = /* glsl */ `
       color = mix(uMid, uDeep, clamp(t, 0.0, 1.0));
     }
 
+    // Beer-Lambert: what SURVIVES the trip down is exp(-k * distance), per
+    // channel. At depth 0 nothing has been absorbed and this is exactly
+    // uShallow; at the floor each channel has decayed by its own coefficient
+    // toward uDeep, which is why the two curves share endpoints and disagree
+    // everywhere between.
+    //
+    // Behind a branch rather than folded into a mix() so that the default
+    // (mix = 0) costs the fill NOTHING. This plane covers most of the screen,
+    // so it is the one place where three unconditional exp() calls per
+    // fragment would be worth counting. The branch is on a uniform, so every
+    // fragment in the draw takes the same side of it.
+    if (uAbsorbMix > 0.0) {
+      vec3 transmitted = exp(-uAbsorb * depth);
+      color = mix(color, uDeep + (uShallow - uDeep) * transmitted, uAbsorbMix);
+    }
+
     if (uCausticsOn > 0.5) {
       float fade = pow(1.0 - depth, uCausticsFalloff);
       float c = caustics(vWorldPos * uCausticsScale, uTime * uCausticsSpeed);
@@ -161,6 +187,8 @@ export function createWaterMaterial() {
       uDeep: { value: new THREE.Color() },
       uStop1: { value: 0.3 },
       uStop2: { value: 0.7 },
+      uAbsorbMix: { value: 0 },
+      uAbsorb: { value: new THREE.Vector3(4, 1.5, 0.7) },
       uCausticsOn: { value: 1 },
       uCausticsIntensity: { value: 0.4 },
       uCausticsScale: { value: 0.16 },
@@ -207,6 +235,13 @@ export function updateWaterMaterial(material, clock) {
   u.uDeep.value.set(CONFIG.colors.waterDeep);
   u.uStop1.value = CONFIG.colors.zoneStops[0];
   u.uStop2.value = CONFIG.colors.zoneStops[1];
+
+  // Optional-chained like the day/night additions below it: this block is
+  // newer than the tuning files on disk, and a saved snapshot that predates it
+  // has no `absorption` key at all.
+  const ab = CONFIG.absorption;
+  u.uAbsorbMix.value = ab?.mix ?? 0;
+  u.uAbsorb.value.set(ab?.red ?? 4, ab?.green ?? 1.5, ab?.blue ?? 0.7);
 
   // Both the veins and the beams are the SAME light seen two ways — sunlight
   // refracted through a moving surface — so both ride the day/night light bus

@@ -7,11 +7,6 @@ enemies.fish.swarm.fleeFromPredators,9.5,0,20,The school
 enemies.fish.group.max,14,1,30,school size max
 enemies.shark.hunt.preyRadius,18,0,60,Sharks
 enemies.shark.hunt.healPerMeal,8,0,60,Sharks
-enemies.orca.hunt.biteCooldown,1,0.2,4,orca seconds per meal
-enemies.orca.hunt.growPerMeal,0.02,0,0.06,orca growth per meal
-enemies.orca.hunt.maxGrow,1.3,1,2.5,orca max size (x)
-enemies.orca.hunt.preyRadius,24,0,60,orca prey radius
-enemies.orca.hunt.maxOverheal,1.6,1,4,orca max overheal (x)
 apexCrowd.enabled,1,,,apex predators share the player
 apexCrowd.feedingSlots,2,1,6,apex allowed on the player
 apexCrowd.standoff,7,2,20,apex circling distance

@@ -15,7 +15,7 @@ import { aoe, targeting, abilityDamage } from './systems/scaling.js';
 import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement } from './systems/elements.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
-import { updateBoss, resetBoss, bossBanner } from './systems/boss.js';
+import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossState, capBossDamage } from './systems/boss.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
 import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, gulpPickups, setChumDifficulty, flushPickupInstances } from './entities/pickups.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
@@ -32,7 +32,7 @@ import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow } from './systems/club.js';
 import { fireMusselBarrage } from './systems/musselVolley.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, liveChain, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, liveChain, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -42,8 +42,14 @@ import { lightningStrikes } from './systems/lightning.js';
 import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
 import { playerDamageFx, updatePlayerDamageFx, resetPlayerDamageFx } from './systems/playerDamageFx.js';
 import { updateProjectileTrails, clearProjectileTrails } from './systems/projectileTrails.js';
+import { updateAirborne, resetAirborne, airRamp, airDamageMul, airFireRateMul, canAirJump, spendAirJump, slamFor } from './systems/airborne.js';
+import { updateBreachTrail, clearBreachTrail } from './systems/breachTrail.js';
+import { updateKrakenInk } from './systems/kraken.js';
 import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from './systems/projectileVoices.js';
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
+import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact } from './systems/bossImpact.js';
+import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
+import { tickHitShapes, initHitShapeDebug, updateHitShapeDebug } from './systems/hitShape.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from './systems/strikeRing.js';
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
@@ -69,6 +75,11 @@ import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
 import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines } from './systems/outlines.js';
 import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginRestartTransition } from './systems/deathDive.js';
 import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime } from './systems/levelUpTime.js';
+import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue } from './systems/bossKill.js';
+import { updateBeams, resetBeams } from './systems/beams.js';
+import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
+import { updateCelebration } from './systems/celebrate.js';
+import { captureBossShot, resetBossShot } from './systems/bossShot.js';
 import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
@@ -84,6 +95,7 @@ import { initTypography, applyTypography } from './ui/typography.js';
 import { initGamepadDebug, updateGamepadDebug } from './ui/gamepadDebug.js';
 import { initSfxDebug, updateSfxDebug } from './ui/sfxDebug.js';
 import { initUpgradeDebug } from './ui/upgradeDebug.js';
+import { initAnimDebug } from './ui/animDebug.js';
 import * as playtest from './systems/playtest.js';
 import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js';
 
@@ -115,6 +127,9 @@ const post = createPost(world.renderer);
 initInput(world.renderer.domElement);
 initParticles(world.scene);
 initImpactFlashes(world.scene);
+initBossImpacts(world.scene);
+initBossGibs(world.scene);
+initHitShapeDebug(world.scene);
 initMarks(world.scene);
 initFeedback(world.grid);
 // What a flash sounds like and what a bolt does are gameplay; world.js only
@@ -167,6 +182,7 @@ let simClock = 0; // free-running clock for the beluga drone's orbit
 let muzzleCursor = 0; // which flipper the next ALTERNATING volley starts from (missiles)
 const muzzlePoint = new THREE.Vector3(); // scratch — spawnProjectile copies it immediately
 const impulseDir = new THREE.Vector3(); // scratch — hit direction handed to the bone spring
+const faceDir = { x: 0, y: 1 }; // scratch — the seal's facing, read by the bubble vent
 // Scratch for the per-frame "where would a strike go" prediction the lens
 // corridor is drawn along. Read and copied inside updateCamera on the same
 // frame it's written, so one object is enough.
@@ -325,7 +341,9 @@ async function boot() {
     else if (key === 'dumboOcto') rebuildDumboOcto(world.scene);
     else if (key === 'bakalarBoat') rebuildBakalarBoat(world.scene);
     else if (key === 'octoGrabber') rebuildOctoGrabber(world.scene);
-    else if (key === 'orcaFriend') rebuildOrcaPod(world.scene);
+    // Any of the three pod bodies — the family is three different animals
+    // now (see systems/orca.js), and a swap on any one of them rebuilds the pod.
+    else if (key.startsWith('orcaFriend')) rebuildOrcaPod(world.scene);
   }, handleTunerChange);
   if (DEV_UI) bindGlobalKeys();
   if (DEV_UI) initGamepadDebug();
@@ -340,8 +358,14 @@ async function boot() {
   if (DEV_UI) initWorkbench();
   // The run clock is handed over rather than imported: `gameState` is a local
   // in here, and the panel only wants it to timestamp the playtest record.
-  if (DEV_UI) initUpgradeDebug(() => gameState.time);
+  // The second getter is for the panel's boss spawner — it needs somewhere to
+  // put the creature and the run's level to spawn it against. Same reasoning as
+  // the clock: both are locals here, and handing over accessors keeps the panel
+  // from importing the game loop's state.
+  if (DEV_UI) initUpgradeDebug(() => gameState.time, () => ({ scene: world.scene, gameState }));
   if (DEV_UI) initPlaytestOverlay();
+  // Reads the animation state machine out; poses nothing. See ui/animDebug.js.
+  if (DEV_UI) initAnimDebug();
   setHighScore(highScore());
 
   // `?sandbox` boots past the splash straight into a staged run — an ocean
@@ -462,6 +486,22 @@ function bindGlobalKeys() {
     // X: the hex-tile alignment overlay. Debug-only, nothing persisted.
     if (e.key.toLowerCase() === 'x' && !isTypingTarget(e.target) && !e.repeat) {
       world.hexTiles.toggle();
+    }
+    // Shift+L: deal a level-up NOW, without earning one.
+    //
+    // The cards announce themselves in a sequence that takes well under a
+    // second and is different for every hand (see CONFIG.rarityCard.ignite),
+    // and the only way to see it was to play up to a level and hope the roll
+    // gave you something above the floor tier. This deals a fresh hand on
+    // demand so the arrival can be watched — and re-watched — while its
+    // numbers are being tuned.
+    //
+    // A REAL deal, not a preview: the tiers are rolled the way they would be
+    // at this level and picking one grants it, the same as the upgrade debug
+    // panel's grant buttons. Dev only, so nothing here reaches a player.
+    if (DEV_UI && e.shiftKey && e.key.toLowerCase() === 'l'
+        && !isTypingTarget(e.target) && !e.repeat) {
+      showLevelUp();
     }
     // N: line up one of every bioluminescent creature beside the seal, so the
     // glow presets can be compared against each other instead of waiting for
@@ -680,15 +720,29 @@ function startGame() {
   // After resetEnemies, which is what actually clears the last run's boss out
   // of the water: this only drops the reference to it and rolls the level the
   // next one arrives at.
-  resetBoss();
+  resetBoss(world.scene);
   updateBossBar(null);
   resetProjectiles(world.scene);
   clearProjectileTrails(world.scene);
+  // The breach trail's ribbons and the air ramp they read. Both are per-run:
+  // a trail left recording from the last run would draw a stripe from wherever
+  // that seal died to wherever this one starts, and a stale ramp would hand
+  // the first shot of the run a bonus nobody earned.
+  clearBreachTrail(world.scene);
+  resetAirborne();
   // Must follow resetProjectiles: the voices are keyed by projectile, and a
   // shell removed without its voice being released leaves that voice running
   // — a mussel you can still hear hunting through the whole next run.
   clearProjectileVoices();
   clearImpactFlashes();
+  // Every mark riding a body, dropped with the bodies. A wound outlives its
+  // animal by design (it fades on its own clock, not the creature's), so a run
+  // reset is the one moment they have to be taken off the board by hand.
+  clearBossImpacts();
+  // And the wreckage of the last boss, which outlives its animal by design
+  // (it sinks on its own clock, not the creature's) and would otherwise be
+  // raining down through the opening seconds of the next run.
+  resetBossGibs();
   resetPickups(world.scene);
   resetParticles();
   // Before resetPlayer, which puts the seal back at midwater: this hands the
@@ -699,7 +753,17 @@ function startGame() {
   // started from a menu, but a level-up left half-dilated by a reload or a
   // restart would hand this one a world running at half speed.
   resetLevelUpTime();
-  // And for the third: the stage bends the clock too, and a run started with
+  // And for the third: a boss kill shot interrupted by a restart (the score
+  // screen is reachable from inside one, since gameplay stays live through it)
+  // would hand the new run a dilated clock and a frame still clamped to where
+  // the last seal was standing.
+  resetBossKill();
+  resetBeams(world.scene);
+  resetLaserEyes();
+  // The last run's trophy goes with it, or the death screen would offer this
+  // run's player a picture of somebody else's boss.
+  resetBossShot();
+  // And for the fourth: the stage bends the clock too, and a run started with
   // it still open would begin parked, in slow motion, with nothing spawning.
   resetStage();
   resetPlayer();
@@ -1057,15 +1121,21 @@ function missileImpactFeedback(assetKey, x, y, dmg, projectile, targetRadius = 0
 // onEnemyDamaged goes through here, so the playtest report can say what share
 // of a run's damage each upgrade actually produced.
 function damageFrom(source) {
-  return (e, dmg, x, y, dir, projectile) => {
+  return (e, dmg, x, y, dir, projectile, at) => {
     playtest.recordDamage(source, dmg, e);
-    onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile);
+    onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at);
   };
 }
 
 // Shared by every damage source (bullets, missiles, garlic, shrimp ring,
 // strikes, the eel) so a hit feels the same regardless of what caused it.
-function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile) {
+//
+// `at` is the contact from systems/hitShape.js when the hit came through a
+// measured body: where on the skin it landed, which way that surface faces,
+// and which sphere it was. Absent for everything else, and everything below
+// still works without it — a creature with a circle for a hitbox has no
+// surface to have landed on and gets exactly the feedback it always got.
+function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at = null) {
   // Shove the skeleton along the bullet's travel. For a creature with no
   // authored flinch clip (shark.glb ships no animation at all) this IS the
   // hit reaction — the spring that gives it its swim lag absorbs the kick and
@@ -1084,7 +1154,9 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile) {
   // small spark burst underneath a big flash just muddies it.
   // e.radius, not e.def.radius — the live one folds in the spawn scale, so a
   // big specimen of a small species gets the bigger blast.
-  const impact = missileImpactFeedback(e.def?.asset, x ?? e.mesh.position.x, y ?? e.mesh.position.y, dmg, projectile, e.radius);
+  // `e.assetKey`, not `e.def.asset` — a def may list several bodies and the
+  // flash takes its colour from the one this individual actually wears.
+  const impact = missileImpactFeedback(e.assetKey ?? e.def?.asset, x ?? e.mesh.position.x, y ?? e.mesh.position.y, dmg, projectile, e.radius);
 
   if (!impact) {
     feedback('bulletHit', {
@@ -1093,6 +1165,30 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile) {
       dirX: -(dir?.x ?? 0),
       dirY: -(dir?.y ?? 0),
       scale: Math.min(1.8, 0.6 + dmg / 30),
+    });
+  }
+
+  // AND, on a body big enough to have been measured, the break and the wound.
+  // Gated on the shape rather than on "is this the boss", which is the same
+  // gate the hitbox itself uses: the effect exists because there is a surface
+  // to put it on, and any creature that grows one gets it with no code here
+  // learning about it.
+  //
+  // ON TOP OF the generic hit rather than instead of it. The two are doing
+  // different jobs — `bulletHit` is the weapon's own report and is the same on
+  // every target, and this is the target's, drawn on its actual skin — and a
+  // boss that swallowed the ordinary hit feedback would feel LESS responsive
+  // to shoot than a reef fish.
+  if (at?.sphere && e.hitShape) {
+    spawnBossImpact(at, {
+      shape: e.hitShape,
+      // Against the animal's own health, not against a fixed number: the same
+      // pellet should read as a chip on a fresh boss and the effect should
+      // grow as the fight does. Square-rooted so the range is usable — a hit
+      // for a fiftieth of a bar and one for a fifth are 0.14 and 0.45 rather
+      // than 0.02 and 0.2, which is the difference between a scale that varies
+      // and one that is off until it is suddenly on.
+      scale: 0.55 + 2.2 * Math.sqrt(Math.min(1, dmg / Math.max(1, e.maxHp))),
     });
   }
 
@@ -1186,6 +1282,59 @@ function processPendingSplashes() {
  *   bookkeeping above, but it did not explode, and firing the haul event
  *   ALONGSIDE this one just played two sounds for one departure.
  */
+/**
+ * EVERY WAY THE PLAYER LOSES HEALTH, in one place.
+ *
+ * A named function rather than the inline hook it used to be, because there is
+ * now a second caller: the boss's electric aura (systems/bossPerks.js) is
+ * damage that does not come out of resolveCombat, and giving it its own
+ * subtraction would have been a second, quieter way to lose hp — one that
+ * skipped the playtest accounting, the hit flash, the tail impulse and the
+ * death check. Anything that hurts the seal should come through here.
+ */
+function onPlayerHit(dmg, dir, source = 'unknown') {
+  // THE ONE PLACE EVERY POINT OF DAMAGE ARRIVES — contact, shots, perks,
+  // blasts — which is why the boss's ceilings are applied here rather than at
+  // the sources. See capBossDamage: it trims a boss down to what it is allowed
+  // to take in one hit and in one second, and returns everything else exactly
+  // as it came. Ordinary wildlife is untouched.
+  //
+  // Before recordPlayerDamage, so the playtest ledger records what the player
+  // actually took. Filing the uncapped figure would leave every incoming-damage
+  // reading in the report describing a game nobody played.
+  dmg = capBossDamage(dmg, source, player.stats.maxHp, gameState.time);
+  if (!(dmg > 0)) return;
+  playtest.recordPlayerDamage(dmg, source);
+  player.hp -= dmg;
+  // Damage in, hit on screen out — see systems/playerDamageFx.js. It
+  // banks contact damage (which arrives as a per-frame slice of a rate,
+  // never as a number big enough to be worth showing on its own) and
+  // hands back the size of the hit on the frames it decides to show one.
+  // The gate used to live here as `dmg > 1`, which no contact rate in
+  // the game can clear at any framerate it runs at — so a shark eating
+  // you made no sound at all.
+  const shown = playerDamageFx(dmg, player.stats.maxHp, player.mesh.position);
+  if (shown > 0) {
+    player.hitThisFrame = true;
+    player.anim?.trigger('hit');
+    // Same shove the enemies get, on the one chain of the seal that's
+    // spring-driven rather than IK-driven. Sized by the whole banked hit
+    // rather than by this frame's slice of it, so a body chewing on you
+    // flicks the tail once and properly instead of never.
+    if (dir) {
+      const spring = CONFIG.animation.spring;
+      impulseDir.set(dir.x, dir.y, 0);
+      if (impulseDir.lengthSq() > 1e-8) {
+        player.aimRig?.tailImpulse(
+          impulseDir.normalize(),
+          Math.min(spring.impulseMax, shown * spring.impulsePerDamage),
+        );
+      }
+    }
+  }
+  if (player.hp <= 0 && !deathState.active) killPlayer();
+}
+
 function onEnemyKilledFeedback(e, killEvent = null) {
   gameState.kills += 1;
   // An infected host bursting. Queued inside elements.js rather than acted
@@ -1225,6 +1374,15 @@ function onEnemyKilledFeedback(e, killEvent = null) {
   // banked. The factor is still passed, but only to colour the toast as a
   // combo kill — it is no longer printed alongside the number.
   spawnScoreToast(world.camera, e.mesh.position.x, e.mesh.position.y, points, combo);
+
+  // A BOSS COMES APART. Here rather than in systems/boss.js, which is where
+  // every other part of the aftermath lives: that module finds out a boss died
+  // the frame AFTERWARDS, by noticing the creature has left the enemy list, and
+  // by then the body has gone back to the visual pool and its bones are posing
+  // somebody else. The chunks are sampled from the posed hitbox (see
+  // systems/bossGibs.js), so they have to be thrown while there is still a pose
+  // to sample. The camera can afford the extra frame; the body cannot.
+  if (e.isBoss) spawnBossGibs(e);
 
   const big = e.def.radius >= 1 || schoolWipe;
   // Bigger/tougher creatures drop in pitch and ring out longer, so a
@@ -1434,6 +1592,9 @@ function onCelestialPass(which, at) {
 // to earn each link, and that throttle scales with how much food is actually
 // in the water rather than with a timer.
 function onChumSwallowed(x, y) {
+  // The denominator for every chain rate in the report — links per strike means
+  // nothing without knowing whether there was any food to be had.
+  playtest.recordChum();
   if (!feedChum(player.stats)) return;
   // The bar just crossed to full — the seal flashes head to tail. Fired here
   // rather than inside chargeSkin's own update because "crossed" is an EVENT
@@ -1554,7 +1715,13 @@ function shotSfxOpts(interval) {
 function fire() {
   const s = player.stats;
   const rapid = rapidFireTimer > 0;
-  const fireRate = rapid ? s.fireRate / CONFIG.rapidFirePickup.fireRateMul : s.fireRate;
+  // `fireRate` is an INTERVAL, so both multipliers divide it — the same
+  // direction the rapid-fire pickup already went. Air time is folded in here
+  // rather than into the stat block because the ramp changes every frame and
+  // the block is only rebuilt on level-up; see the note at the top of
+  // systems/airborne.js. It is 1 for a seal in the water.
+  const fireRate = (rapid ? s.fireRate / CONFIG.rapidFirePickup.fireRateMul : s.fireRate)
+    / airFireRateMul();
   // Clone Warz first, THEN the pickup's multiplier — so the temporary powerup
   // multiplies the gun you actually have rather than the one you started with.
   const pellets = projectileCount(s.multishot, s);
@@ -1596,7 +1763,10 @@ function fire() {
         origin: emitPoint(rig, source, o, dir, player.mesh.position, muzzlePoint),
         dir: new THREE.Vector2(dir.x * cos - dir.y * sin, dir.x * sin + dir.y * cos),
         faction: 'player',
-        damage: s.damage,
+        // Air time rides the damage the same way it rides the cadence above.
+        // A seal shooting on the way down is a gun platform, and this is what
+        // makes that read as a decision rather than as a detour.
+        damage: s.damage * airDamageMul(),
         speed: s.speed,
         life: s.life,
         radius: s.radius,
@@ -2018,6 +2188,11 @@ function animate(now) {
   const rawDt = Math.min((stamp - lastTime) / 1000, 0.05);
   lastTime = stamp;
 
+  // A new frame, so every measured hitbox is stale again. Combat asks a boss's
+  // shape where it is once per projectile in range and this is what makes all
+  // but the first of those a stamp comparison — see systems/hitShape.js.
+  tickHitShapes();
+
   // The death dive is the one thing that runs on the WALL clock, because it's
   // what decides the clock everything else runs on: it returns the time scale
   // for the whole frame (1 while nobody is dying) and drives the ragdoll on
@@ -2033,9 +2208,17 @@ function animate(now) {
   // for it — the dive takes over a world that hasn't finished speeding up yet,
   // rather than one or the other being thrown away mid-ramp.
   //
-  // FIRST, so the dive below gets the last word on the playback rates in that
-  // overlap: both systems push the mix around every frame, and the one whose
-  // sequence is longer and louder should win the tie.
+  // ORDER IS THE TIE-BREAK, and the only thing it decides. Every one of these
+  // pushes the playback rates around on every frame it is live, so the LAST
+  // one called owns the mix wherever two overlap — and the one whose sequence
+  // is longer and louder should win that. Hence: the boss kill shot (a second
+  // and a half, and the only one gameplay stays live through) first, the
+  // level-up (open for as long as a card is being read) next, the death dive
+  // (the end of the run) last.
+  //
+  // The SCALES stack regardless of order — they are multiplied below — so this
+  // is purely about who is writing the rate on a frame where two are.
+  const killScale = updateBossKill(rawDt);
   const levelScale = updateLevelUpTime(rawDt);
   const deathScale = updateDeathDive(rawDt);
   // The stage's slow motion, multiplied in alongside the other two rather than
@@ -2044,7 +2227,12 @@ function animate(now) {
   // this call, on the raw clock, so "every half second" stays half a second
   // however far down the time slider is.
   const stageScale = updateStage(rawDt);
-  const realDt = rawDt * deathScale * levelScale * stageScale;
+  // All four multiplied together. The kill shot is the one gameplay stays LIVE
+  // through — the seal can still swim, and the water it is swimming in is what
+  // is being dilated — so it has to reach realDt like the rest rather than the
+  // gameplay delta below, or the shot would be a slow-motion ocean with a
+  // full-speed seal in the middle of it.
+  const realDt = rawDt * deathScale * levelScale * stageScale * killScale;
 
   // Shake and hit-stop run on real time; gameplay runs on scaled time. Fed the
   // RAW delta, not the dilated one: a hit-stop is measured in wall-clock
@@ -2063,7 +2251,12 @@ function animate(now) {
   // it's a stutter. The level-up ramp owns it for the same reason: the kill
   // that granted the level lands its hit-stop on the exact frame the ramp
   // starts, and the last thing that ramp needs is a hole in its first tenth.
-  const dt = deathState.active || levelUpState.active ? realDt : realDt * timeScale;
+  // The kill shot owns the clock for the same reason both of those do, and it
+  // is the case that most needs it: the blow that ends a boss is the biggest
+  // hit in the game and carries the longest hit-stop, landing on the exact
+  // frame this ramp begins. A freeze inside a slow motion is not a freeze, it
+  // is a hole in the first tenth of the shot.
+  const dt = deathState.active || levelUpState.active || bossKillState.active ? realDt : realDt * timeScale;
 
   updateInput(world.camera, player.mesh.position);
   // Reads the pad snapshot updateInput just took, so it must follow it. No-op
@@ -2133,6 +2326,71 @@ function animate(now) {
 
     updatePlayer(dt, input);
 
+    // AIR TIME. updatePlayer has just integrated the arc and set breachDir, so
+    // this is the first moment the ramp can be current — and it must be current
+    // before ANYTHING below reads a multiplier off it: the guns fire further
+    // down this same block, and a ramp one frame stale would pay the bonus for
+    // an arc the seal has already landed from. See systems/airborne.js.
+    updateAirborne(player);
+
+    // ...AND WHAT IT BOUGHT, cashed on the way back through the water line.
+    //
+    // Deliberately before the Porpoising check below rather than folded into
+    // it: the two are different rewards for different halves of the same jump.
+    // Porpoising pays for LEAVING (upward crossings, gated on a card); this
+    // pays for what you did once you were up there, it is base-game, and it
+    // lands on the way DOWN.
+    // The event fires on EVERY downward crossing; only the blast underneath it
+    // is conditional. Splitting those two was the point — player.js used to
+    // fire one `breach` in both directions, so the seal leaving the water and
+    // the seal arriving back through it were literally the same event, and the
+    // most athletic thing in the game had no landing. It now owns the upward
+    // half and this owns the downward one.
+    if (player.breachDir < 0) {
+      // Downward speed at the water line, as a positive number. Read here
+      // rather than inside slamFor so the system stays free of the velocity
+      // vector — it is handed numbers, like the rest of it.
+      const impact = Math.max(0, -player.velocity.y);
+      const slam = slamFor(player, impact);
+      const sx = player.mesh.position.x;
+      const sy = bounds.surfaceY;
+
+      if (slam && slam.damage > 0 && slam.radius > 0) {
+        // Through the same queue every blast in the game uses, so the slam
+        // breaks wreckage and takes crew off decks exactly like a pearl or a
+        // seagull bomb — and so the damage lands after the loops currently
+        // iterating `enemies` (see processPendingSplashes).
+        pendingSplashes.push({
+          x: sx,
+          y: sy,
+          damage: slam.damage,
+          radius: slam.radius,
+          exclude: null,
+          source: 'reentry',
+        });
+      }
+
+      // A crossing under `slam.minRamp` still lands — it just lands as water
+      // rather than as an event. Falling back to a speed-only scale rather
+      // than skipping the feedback: a seal that dips a flipper through the
+      // surface must still make a noise, or the mechanic reads as the splash
+      // being broken on small jumps.
+      const power = slam ? slam.power : 0;
+      // Pitched DOWN by how much air was banked, the same trick the kill
+      // sounds use to say how big the thing that died was: a full arc lands
+      // audibly heavier than a skim rather than merely louder.
+      feedback('reentry', {
+        x: sx,
+        y: sy,
+        dirX: 0,
+        dirY: 1,
+        vx: player.velocity.x,
+        vy: Math.abs(player.velocity.y),
+        scale: slam ? slam.scale : Math.min(1, 0.3 + impact / 30),
+        sfxOpts: { pitch: 1 / (0.85 + power * 0.4), decayMul: 1 + power * 0.5 },
+      });
+    }
+
     // Porpoising: leaving the water extends the food chain. Upward crossings
     // only — coming back down is the same surface a second time, and counting
     // it would make every jump worth two links for no extra skill. The
@@ -2195,9 +2453,19 @@ function animate(now) {
     // it plateaus at whatever was banked instead. `pending` here is one frame
     // old (updateCharge runs further down), which at 60fps is invisible and
     // costs nothing to leave alone.
+    //
+    // The last argument is where the seal is POINTING, which is the only thing
+    // the wind-up vent uses it for: exhaust leaves the back of the animal, and
+    // a wind-up is usually a standstill with no travel left to reverse. The
+    // art's forward is +Y, hence the quarter turn — same convention as the
+    // facing block in updatePlayer.
+    const faceAngle = player.mesh.rotation.z + Math.PI / 2;
+    faceDir.x = Math.cos(faceAngle);
+    faceDir.y = Math.sin(faceAngle);
     updateBubbles(
       dt, player.aimRig, player.velocity, player.aboveSurface,
       CONFIG.strike.enabled && input.strikeHeld ? strikeState.pending : 0,
+      faceDir,
     );
 
     // Oxygen hitting zero drains health instead of an instant death — the
@@ -2326,6 +2594,14 @@ function animate(now) {
       // the player was just shown it would. Returns the zero vector only when
       // BOTH inputs are idle, which is the one case that shouldn't fire.
       const dir = strikeDirection(input.move, input.aim);
+      // How fast the seal was ACTUALLY travelling as the button came up. Read
+      // before tryStrike, because the impulse below overwrites the velocity with
+      // the dash's — and the release burst inherits this one on purpose: it is
+      // the water the wind-up was held in being let go of, so it drifts with
+      // whatever drift there was. Inheriting the launch instead would fire the
+      // whole shell out the front as a single streak.
+      const releaseVx = player.velocity.x;
+      const releaseVy = player.velocity.y;
       const fired = (dir.x !== 0 || dir.y !== 0) && tryStrike(dir, player.stats);
       if (fired) {
         // THE FOOD CHAIN LINK, if this release earned one — a bar refilled
@@ -2336,8 +2612,13 @@ function animate(now) {
         // reason onChainHit fires before the kill events: hit-stop is rate
         // limited globally and the extension is the bigger of the two things
         // happening.
-        const link = consumeStrikeLink();
-        if (link) onChainHit(link, 'strikeRelease');
+        const rel = consumeStrikeLink();
+        if (rel.chain) onChainHit(rel.chain, 'strikeRelease');
+        // Filed whether or not it scored, WITH which condition failed. A log of
+        // links alone cannot tell "never strikes" from "strikes constantly and
+        // never links", and the first time this was asked about there was no
+        // chain data in the run log at all.
+        playtest.recordStrike(rel.chain, rel.hadFood, rel.hadWindow);
         // Combo-scaled, same multiplier the speed ceiling in updatePlayer
         // uses — a dash fired deep in a chain launches harder, and the ceiling
         // is already raised to let it.
@@ -2374,7 +2655,11 @@ function animate(now) {
             const by = player.mesh.position.y;
             pendingSplashes.push({
               x: bx, y: by,
-              damage: burst.damage,
+              // Air time on the strike's own damage, like the gun's. Damage
+              // only, not radius: reach is what the player is aiming with, and
+              // a blast that silently grew every time they were high up would
+              // make the one number they aim by unpredictable.
+              damage: burst.damage * airDamageMul(),
               radius: burst.radius,
               exclude: null,
               source: 'strike',
@@ -2456,6 +2741,21 @@ function animate(now) {
           scale: 0.7 + strikeState.power * 0.8,
           sfxOpts: { pitch: 1.18 - strikeState.power * 0.3 },
         });
+        // ...and the vent letting go, on the same frame. The wind-up has been
+        // pouring bubbles out the back of the seal for as long as the button was
+        // down; this is the pressure behind them leaving all at once, as a shell
+        // in every direction that is gone in a third of a second. Silent and
+        // shakeless — `strike` above owns those channels for this frame (see
+        // CONFIG.feedback.strikeVent).
+        //
+        // Scaled by the power actually spent, so a flick puffs and a full
+        // commitment bursts, and dragged along by the velocity the seal had
+        // BEFORE the impulse above.
+        feedback('strikeVent', {
+          x: player.mesh.position.x, y: player.mesh.position.y,
+          vx: releaseVx, vy: releaseVy,
+          scale: 0.5 + strikeState.power * 0.9,
+        });
         player.anim?.trigger('strike'); // roll clip, auto-returns to locomotion
         // The rim blows off the body as the banked power leaves it — the top of
         // the pulse that has been building for the whole wind-up. Scaled by the
@@ -2478,6 +2778,49 @@ function animate(now) {
             player.stats.chumGulpRadius, collectChum,
           );
         }
+      } else if (canAirJump(player)) {
+        // THE MID-AIR RELAUNCH — the double jump, on the release that would
+        // otherwise have done nothing at all.
+        //
+        // This branch is reachable exactly when the seal is airborne and the
+        // strike DIDN'T fire, which is almost always "not enough banked to
+        // reach minFire". That is the whole design: there is no second button
+        // and there should not be one, because the strike already IS the
+        // seal's launch and a second verb for the same idea is one more thing
+        // to learn for nothing. Spending an air jump here turns a fumbled
+        // release in the air into the most useful thing you can do with one.
+        //
+        // It costs no charge, on purpose. The bar is the food chain's economy
+        // (see systems/strike.js) and taking from it would mean every jump was
+        // a link you didn't score; the air jump has its own budget, refilled
+        // by re-entry, and `airJumps` is a scaling property in its own right.
+        const jump = spendAirJump(player, dir);
+        if (jump) {
+          player.velocity.x = jump.vx;
+          player.velocity.y = jump.vy;
+          // The dash's own ceiling for a moment, for exactly the reason the
+          // strike impulse needs it: updatePlayer clamps to maxSpeed before
+          // the position ever integrates, so without this the launch is cut
+          // back to swimming speed on the very next frame and the jump goes
+          // nowhere. Short — this is an impulse, not a dash.
+          player.dashTimer = Math.max(player.dashTimer, 0.12);
+          if (jump.invuln > 0) player.invuln = Math.max(player.invuln, jump.invuln);
+          // Rolled like a strike, and for the same reason: a body launching
+          // itself should look like it committed to it. Half the turns, since
+          // this is the cheaper move.
+          player.anim?.trigger('strike');
+          feedback('airJump', {
+            x: player.mesh.position.x,
+            y: player.mesh.position.y,
+            dirX: -jump.vx,
+            dirY: -jump.vy,
+            // Later jumps in the same breach are worth more (they stack into
+            // the ramp), so they read louder — the sound is the readout of a
+            // resource being spent down.
+            scale: 0.7 + player.airJumps * 0.25,
+            sfxOpts: { pitch: 1.15 + player.airJumps * 0.12 },
+          });
+        }
       }
     }
 
@@ -2498,7 +2841,48 @@ function animate(now) {
     // Right after the ordinary spawner, and on the same terms: it is a spawn
     // trigger, it only fires while the run is actually running, and it stops
     // with everything else when the level-up cards are up.
-    updateBoss(gameState, world.scene);
+    updateBoss(dt, gameState, world.scene);
+    // ...and then whatever that boss's perk does. Must sit between updateBoss
+    // and updateEnemies: a perk writes the velocity the integrator inside
+    // updateEnemies will step, so running it afterwards would land a frame
+    // late and be overwritten by the boss's own steering before it moved
+    // anything. See systems/bossPerks.js.
+    //
+    // Handed the same onPlayerHit resolveCombat gets, so an electric aura goes
+    // through the same i-frames, the same shove and the same playtest
+    // accounting as a bite rather than being a second, quieter way to lose hp.
+    // The seal's own eyes, BEFORE updateBeams so a beam lit this frame is
+    // resolved on the frame it was asked for rather than the next one.
+    setLaserAim(input.aim);
+    updateLaserEyes(dt, world.scene, player.mesh.position, player.stats.laserEyesLevel, input.aim);
+    // The beams the perks above just lit — and, once the seal owns a pair, its
+    // own. AFTER the perk update so a beam ignited this frame is placed, drawn
+    // and resolved on the same frame it was asked for: a frame of lag here is a
+    // line that visibly trails the head it comes out of.
+    updateBeams(dt, world.scene, {
+      enemies,
+      playerPos: player.mesh.position,
+      // The same radius resolveCombat measures a bite against, not a number
+      // typed here — the seal's hitbox grows with upgrades and a beam that used
+      // a constant would drift out of agreement with every other contact test.
+      playerRadius: player.stats.hitRadius,
+      hooks: {
+        onEnemyDamaged: damageFrom('beam'),
+        onEnemyKilled: onEnemyKilledFeedback,
+        // Through the same i-frames every other source of player damage goes
+        // through, for the reason the perk hook below says: a beam should not
+        // be the one attack in the game that ignores the seal's only defensive
+        // window.
+        onPlayerHit: (dmg, dir, source) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source); },
+      },
+    });
+    updateBossAbilities(dt, world.scene, player.mesh.position, {
+      // The i-frame check is here rather than inside the perk, for the same
+      // reason resolveCombat does it at each of its own damage sites: a dash
+      // through an aura should be a dash through an aura, not the one attack
+      // in the game that ignores the seal's only defensive window.
+      onPlayerHit: (dmg, dir, source) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source); },
+    });
 
     // WHAT THE SCHOOLS SEE COMING. Small fish break away from a strike — the
     // wind-up scatters them in proportion to how much is banked, the dash
@@ -2560,42 +2944,12 @@ function animate(now) {
     resolveCombat(dt, world.scene, {
       // Bullets, mussels, ricochets, starfish and shrapnel all land here; the
       // projectile carries the tag that tells them apart.
-      onEnemyDamaged: (e, dmg, x, y, dir, projectile) => {
+      onEnemyDamaged: (e, dmg, x, y, dir, projectile, at) => {
         playtest.recordDamage(projectile?.source ?? 'gun', dmg, e);
-        onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile);
+        onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at);
       },
       onProjectileChained: (p, x, y) => feedback('bounce', { x, y, ...bounceComboFx(p) }),
-      onPlayerHit: (dmg, dir, source = 'unknown') => {
-        playtest.recordPlayerDamage(dmg, source);
-        player.hp -= dmg;
-        // Damage in, hit on screen out — see systems/playerDamageFx.js. It
-        // banks contact damage (which arrives as a per-frame slice of a rate,
-        // never as a number big enough to be worth showing on its own) and
-        // hands back the size of the hit on the frames it decides to show one.
-        // The gate used to live here as `dmg > 1`, which no contact rate in
-        // the game can clear at any framerate it runs at — so a shark eating
-        // you made no sound at all.
-        const shown = playerDamageFx(dmg, player.stats.maxHp, player.mesh.position);
-        if (shown > 0) {
-          player.hitThisFrame = true;
-          player.anim?.trigger('hit');
-          // Same shove the enemies get, on the one chain of the seal that's
-          // spring-driven rather than IK-driven. Sized by the whole banked hit
-          // rather than by this frame's slice of it, so a body chewing on you
-          // flicks the tail once and properly instead of never.
-          if (dir) {
-            const spring = CONFIG.animation.spring;
-            impulseDir.set(dir.x, dir.y, 0);
-            if (impulseDir.lengthSq() > 1e-8) {
-              player.aimRig?.tailImpulse(
-                impulseDir.normalize(),
-                Math.min(spring.impulseMax, shown * spring.impulsePerDamage),
-              );
-            }
-          }
-        }
-        if (player.hp <= 0 && !deathState.active) killPlayer();
-      },
+      onPlayerHit,
       onEnemyKilled: onEnemyKilledFeedback,
       onBoatHit: (boat, dmg, x, y, projectile) => {
         playtest.recordDamage(projectile?.source ?? 'gun', dmg, boat);
@@ -2687,10 +3041,14 @@ function animate(now) {
         playtest.recordControl('beluga');
         feedback('belugaTrap', { x: e.mesh.position.x, y: e.mesh.position.y, scale: 1.1 });
       },
-      // The held bubble giving out, a beat after the catch. Its own event so
-      // the burst and its sound can be tuned against the seal that preceded
-      // them rather than being welded to it.
+      // A bubble giving out — either a bomblet going off or a held shell
+      // letting its creature go. Its own event so the burst and its sound can
+      // be tuned against the catch rather than being welded to it.
       onPop: (x, y) => feedback('belugaPop', { x, y }),
+      // The lobbed cluster coming apart into bomblets. Scaled up, because
+      // `trapPop` is authored for one small bubble failing and this is the big
+      // one that carried them all.
+      onSplit: (x, y) => feedback('belugaSplit', { x, y, scale: 1.4 }),
     });
     updateSealTeam(dt, world.scene, player.mesh.position, player.stats.sealTeamLevel, enemies, {
       onEnemyDamaged: damageFrom('sealTeam'),
@@ -2839,10 +3197,15 @@ function animate(now) {
       // damage-shaped thing: the hit feedback above is sized by damage, and a
       // five-point chip that visibly throws a shark across the screen needs to
       // sound like the throw, not like the chip.
-      onRam: (e, power) => {
+      // `at` is where the dash actually connected: on a measured body that is
+      // the point on its skin, and on everything else it is the point on the
+      // circle nearest the seal. Either is better than the creature's origin,
+      // which is what this used before — a ram into a megalodon's tail used to
+      // flash six units away, in the middle of an animal that is sixteen long.
+      onRam: (e, power, at) => {
         feedback('strikeRam', {
-          x: e.mesh.position.x,
-          y: e.mesh.position.y,
+          x: at?.x ?? e.mesh.position.x,
+          y: at?.y ?? e.mesh.position.y,
           scale: 0.7 + power * 0.7,
         });
       },
@@ -2978,6 +3341,13 @@ function animate(now) {
         if (filled) chargeCrossed();
       },
       (x, y) => {
+        // ...AND IT FEEDS THE METER. Every orb in the water now pays into the
+        // strike bar, not just the blue one: the meter is the game's second
+        // currency and a pickup that ignored it read as a pickup for a
+        // different game. The blue orb fills it outright (that is its whole
+        // identity); the other two pay a FRACTION, so they are a top-up rather
+        // than a substitute for eating. See CONFIG.strike.orbPipRefill.
+        if (addCharge(CONFIG.strike.orbPipRefill?.bubble ?? 0.25, player.stats)) chargeCrossed();
         // Pitched by how badly it was needed — a bubble grabbed while
         // suffocating pops low and fat, one grabbed on a full bar is a thin
         // little tick. Read BEFORE the refill, or every pop reports the bar
@@ -2993,6 +3363,9 @@ function animate(now) {
       },
       (x, y) => {
         rapidFireTimer = CONFIG.rapidFirePickup.duration;
+        // Same top-up as the bubble — see the note there. Slightly bigger,
+        // because this orb is rarer.
+        if (addCharge(CONFIG.strike.orbPipRefill?.rapidFire ?? 0.35, player.stats)) chargeCrossed();
         feedback('levelUp', { x, y, scale: 1.1 });
       }
     );
@@ -3120,6 +3493,22 @@ function animate(now) {
     updateAimRig(realDt, deathState.active ? null : input.aim, false, 0, deathState.active);
   }
 
+  // THE VICTORY LAP, and it goes here for two reasons.
+  //
+  // LAST, because it is the last word on the pose: the mixer and the aim rig
+  // both write an absolute pose every frame, so anything posing on top of them
+  // has to run after both or it is simply overwritten (same ordering rule as
+  // systems/crabClaw.js). Outside the pause gate too, alongside the strike
+  // ring, since the seal keeps celebrating over a level-up card.
+  //
+  // On rawDt, because the kill shot it is posing for drops the world to 0.12x:
+  // on the dilated clock the pose would advance about a tenth of a second by
+  // the time the trophy frame is grabbed and would never once be caught in a
+  // picture. The camera push in systems/bossKill.js is on the wall clock for
+  // exactly the same reason.
+  updateCelebration(rawDt);
+  player.celebrate?.update(rawDt);
+
   // `player.stats` so the ring knows how many pips the bar is cut into —
   // Coiled Spring changes that mid-run, and a ring reading the CONFIG default
   // would keep drawing five segments on a bar that now fills in three.
@@ -3146,6 +3535,47 @@ function animate(now) {
     gameState.running && !gameState.paused,
   );
   updateProjectileTrails(realDt, world.scene, projectiles);
+  // The RGB smear the seal drags through the air. Real time, like the trails
+  // above and for the same reason: the cloud is weather, and a hit-stop that
+  // froze it mid-billow would leave a kink in the paint. Outside the run gate
+  // entirely — the particles have to go on drifting and dying through the
+  // game-over screen rather than vanishing on the frame the seal dies mid-arc.
+  //
+  // The ramp is recomputed here rather than read off the singleton: this runs
+  // outside the pause gate, where the singleton is whatever the last live frame
+  // left in it, and a paused seal hanging in the air would otherwise stamp full
+  // brightness onto everything laid down behind the menu.
+  //
+  // The last argument is the emit gate, and it is the one thing here that DOES
+  // respect the run: drifting and dying belong to the air, but laying down new
+  // particles belongs to the seal, and a seal frozen behind the level-up cards
+  // isn't moving. Without it, eighty-five particles a second would all be born
+  // at the same coordinates and stack into one bright blob — and a corpse would
+  // go on painting its way down through the death dive.
+  updateBreachTrail(
+    realDt, world.scene, player, airRamp(player),
+    gameState.running && !gameState.paused,
+  );
+  // The ink the kraken leaves in the water — the breach trail's mirror, and it
+  // sits here for exactly the same reasons. Real time, because the cloud is
+  // water and a hit-stop that froze it mid-billow would leave a kink in it.
+  // Outside the run gate, because ink has to go on churning and dissolving
+  // after the boss dies and through the game-over screen; a cloud that vanished
+  // on the kill frame would undo the one thing that makes it ink.
+  //
+  // The last argument is the emit gate, and it is the one thing here that DOES
+  // respect the run: drifting belongs to the water, laying down new ink belongs
+  // to the animal, and a boss frozen behind the level-up cards is not moving.
+  // Without it a whole second of cloud stacks at one coordinate.
+  //
+  // The player is passed only so the ink can keep a readable bubble around the
+  // seal — see CONFIG.inkTrail.clearRadius, without which a boss whose entire
+  // job is filling the arena eventually makes the game unplayable rather than
+  // hard.
+  updateKrakenInk(
+    realDt, world.scene, player,
+    gameState.running && !gameState.paused,
+  );
   // Real time, like the trails and the particles above: a hit-stop shouldn't
   // stall a shell that's still in the air, and the flash it triggered has to
   // keep easing out rather than freezing mid-bloom on the frame it landed.
@@ -3153,6 +3583,20 @@ function animate(now) {
   // behind it and a lagging listener smears the pan.
   updateProjectileVoices(realDt, projectiles, player.mesh.position, gameState.running && !gameState.paused);
   updateImpactFlashes(realDt);
+  // Real time, for the same reason as the flashes: an impact effect that
+  // freezes during its own hit-stop is the one thing guaranteed to be on
+  // screen while everything else is held, and holding it too reads as a stall.
+  // This is also what drags each wound along with the bone it is stuck to.
+  updateBossImpacts(realDt);
+  // The wreckage of the last boss, and the one effect here that runs on the
+  // GAMEPLAY clock rather than the wall one: it is part of the world the kill
+  // shot is slowing down, and chunks hanging almost still in the dilated water
+  // while the frame holds on the seal is most of what the held beat has in it.
+  // Outside the run gate so a wreck still settles over a death — a player who
+  // dies in the same breath they win should not have the debris vanish — but
+  // frozen behind a menu like everything else the player can look at.
+  updateBossGibs(gameState.paused ? 0 : dt);
+  updateHitShapeDebug();
   // The lock-on reticles. Real time, like the flashes above: a mark is a
   // countdown the player is reading off the screen, and a hit-stop that froze
   // the pulse would make it look like the lock had dropped. The level-up
@@ -3220,6 +3664,13 @@ function animate(now) {
   // per frame, immediately before the camera update that consumes it — the
   // dive owns the timing, world.js owns the framing maths (and the clamp that
   // keeps the view inside the ocean).
+  // The kill shot's push-in, claimed the same way and on the same frame terms.
+  // BELOW the death dive's claim so a death that lands inside a victory takes
+  // the frame off it — a claim is last-writer-wins, and of the two shots only
+  // one has a run riding on it.
+  if (bossKillState.active) {
+    world.focusCamera(player.mesh.position, bossKillState.camZoom, bossKillState.camWeight);
+  }
   if (deathState.active) {
     world.focusCamera(player.mesh.position, deathState.camZoom, deathState.camWeight);
   }
@@ -3309,4 +3760,19 @@ function animate(now) {
     `${Math.round(1 / Math.max(realDt, 0.0001))} fps · worst ${pw.worstMs.toFixed(0)}ms · ${pw.hitches} drops · ${info.calls} draws · ${mpix.toFixed(1)} Mpix · ${enemies.length} enemies · ${projectiles.length} shots · ${particleCount()} bits · ${flightVoiceCount()} voices`
   );
   post.render(world.scene, world.camera, realDt);
+
+  // THE TROPHY, and it has to be here — on the line after the draw, inside the
+  // same frame. The renderer runs without `preserveDrawingBuffer` (see
+  // world.js), so the colour buffer is the browser's to throw away the moment
+  // this task yields: a grab from a timer, a promise or the next frame comes
+  // back blank. One frame per boss killed, and only while the kill shot is
+  // holding — see systems/bossShot.js.
+  if (bossKillShotDue()) {
+    captureBossShot(world.renderer.domElement, {
+      name: bossState.name,
+      level: gameState.level,
+      score: gameState.score,
+      time: gameState.time,
+    });
+  }
 }

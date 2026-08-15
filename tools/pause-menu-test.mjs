@@ -80,11 +80,13 @@ registerHooks({
   resolve(spec, ctx, next) {
     if (spec === '@rive-app/canvas') return { url: 'stub:rive', format: 'module', shortCircuit: true };
     if (spec.endsWith('.riv?url')) return { url: 'stub:rivurl', format: 'module', shortCircuit: true };
+    // ui/riveRuntime.js imports the runtime's WASM by url, to keep it off unpkg.
+    if (spec.endsWith('.wasm?url')) return { url: 'stub:rivurl', format: 'module', shortCircuit: true };
     return next(spec, ctx);
   },
   load(url, ctx, next) {
     if (url === 'stub:rive') {
-      return { format: 'module', shortCircuit: true, source: 'export class Rive { constructor(){} on(){} play(){} cleanup(){} } export const EventType = {}; export const Layout = class {}; export const Fit = {}; export const Alignment = {};' };
+      return { format: 'module', shortCircuit: true, source: 'export class Rive { constructor(){} on(){} play(){} cleanup(){} } export const EventType = {}; export const Layout = class {}; export const Fit = {}; export const Alignment = {}; export const RuntimeLoader = { setWasmUrl(){} };' };
     }
     if (url === 'stub:rivurl') return { format: 'module', shortCircuit: true, source: 'export default "stub.riv";' };
     return next(url, ctx);
@@ -432,10 +434,78 @@ check('...and leaves the other tabs alone', S.settings.audio.music === 0.25,
   'a single button that wiped all three would be the one misclick in here that costs real work');
 S.resetSettings();
 
+section('The pad drives it too');
+// The pad is POLLED, not listened to: main.js reads it once a frame and
+// updatePauseNav consumes whatever the poll left in menuInput. So a press here
+// is a flag set and one call, which is exactly what a frame looks like from
+// this module's side.
+{
+  const { menuInput } = await import('../path/src/input.js');
+  const padPress = (field) => {
+    menuInput[field] = field === 'x' || field === 'y' ? 1 : true;
+    pause.updatePauseNav();
+    menuInput[field] = field === 'x' || field === 'y' ? 0 : false;
+  };
+  const activeTab = () => document.querySelector('.sv-pm-tab.sv-pm-on').dataset.tab;
+  // Relative to wherever the menu happens to open, because it REMEMBERS the
+  // tab you were last on across a close — asserting "it opens on Audio" would
+  // be testing the order the sections above happen to run in.
+  const ids = Object.keys(S.SCHEMA);
+  const tabAfter = (steps) => ids[(ids.indexOf(startTab) + steps + ids.length * 2) % ids.length];
+
+  pause.showPauseMenu();
+  const startTab = activeTab();
+
+  // The bumpers, from wherever the cursor happens to be — which is the whole
+  // point of them. Walked down into the list first, so this is not secretly
+  // testing the tab strip's own left/right nudge.
+  padPress('y');
+  padPress('y');
+  const onRow = [...document.querySelectorAll('.sv-pm-sel')][0];
+  check('the cursor is down in the list, not on the strip', !!onRow && onRow.id !== 'svPauseTabs',
+    onRow ? `on ${onRow.id || onRow.className}` : 'nothing is selected at all');
+
+  padPress('tabNext');
+  check('RB switches tab from inside the list', activeTab() === tabAfter(1),
+    `${activeTab()}, wanted ${tabAfter(1)}`);
+  padPress('tabNext');
+  check('...and on to the one after that', activeTab() === tabAfter(2),
+    `${activeTab()}, wanted ${tabAfter(2)}`);
+  padPress('tabNext');
+  check('...and wraps rather than dead-ending', activeTab() === tabAfter(3),
+    `${activeTab()}, wanted ${tabAfter(3)} — ${ids.length} tabs`);
+  padPress('tabPrev');
+  check('LB goes the other way', activeTab() === tabAfter(2),
+    `${activeTab()}, wanted ${tabAfter(2)}`);
+  padPress('tabPrev');
+  check('...one tab at a time', activeTab() === tabAfter(1),
+    `${activeTab()}, wanted ${tabAfter(1)}`);
+
+  // B is the way out. Start already toggles the pause from main.js, so this is
+  // the second way, and it is the one a pad player reaches for first.
+  const before = resumed;
+  padPress('back');
+  check('B resumes the game', resumed === before + 1, `${resumed - before} call(s)`);
+  pause.hidePauseMenu();
+
+  // A closed menu must ignore the pad exactly as it ignores the keyboard —
+  // updatePauseNav runs every frame of the whole game, open or not.
+  const closedResumed = resumed;
+  const closedTab = activeTab();
+  padPress('back');
+  padPress('tabNext');
+  check('a closed menu ignores the pad', resumed === closedResumed && activeTab() === closedTab,
+    `${resumed - closedResumed} resume(s), tab ${activeTab()}`);
+}
+
 section('Resume and restart');
 pause.showPauseMenu();
+// Counted from HERE rather than from zero: B on the pad resumes too (see the
+// section above), so a total is a claim about what every earlier section did,
+// not about what this button does.
+const resumesBefore = resumed;
 [...document.querySelectorAll('#svPauseFoot .sv-btn')].find((b) => b.textContent === 'Resume').click();
-check('Resume calls back exactly once', resumed === 1, String(resumed));
+check('Resume calls back exactly once', resumed === resumesBefore + 1, `${resumed - resumesBefore}`);
 pause.hidePauseMenu();
 check('hiding clears the open flag', pause.isPauseOpen() === false);
 check('...and hides the element', hidden());

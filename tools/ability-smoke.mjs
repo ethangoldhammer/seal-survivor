@@ -406,29 +406,40 @@ section('BAKALAR TRACTOR BEAM');
 }
 
 // --- baby beluga ------------------------------------------------------------
-// The catch is three beats now: the bubble closes on a fish, HOLDS around it
-// for as long as the trap lasts, warns, then bursts. All of it is invisible to
-// a screenshot — the browser preview suspends rAF — and every failure mode is
-// silent. A shell that never bursts leaks a mesh into the scene and follows a
-// recycled body around; one that bursts on contact collapses the whole thing
-// back to the vanishing bubble it replaced; and a catch radius that doesn't
-// match the drawn one is only visible as fish swimming through a bubble.
+// The ability is a cluster bomb now, and it is four beats: a fat bubble is
+// lobbed and FLOATS, it splits into bomblets that scatter, each bomblet pops on
+// its own fuse, and whatever a pop covers is sealed in a shell for the hold.
+//
+// All of it is invisible to a screenshot — the browser preview suspends rAF —
+// and every failure mode here is silent. Bomblets that never pop leak meshes
+// into the scene forever; fuses that don't stagger collapse the cluster back
+// into one big bubble with extra steps; a shell that misses its creature's
+// death rides a recycled body around; and a catch radius that doesn't match the
+// drawn one is only ever visible as fish swimming through a bubble.
 section('BABY BELUGA');
 enemies.length = 0;
 const belugaDrone = createBelugaDrone();
 scene.add(belugaDrone);
 resetBeluga(scene, { x: 0, y: 0 });
 
-// Right on top of the drone's orbit, so the first shot connects quickly.
-const caught = fakeEnemy(CONFIG.beluga.orbitRadius, 0, 0.5, 9999);
-enemies.push(caught);
+// Split angles and both fuses are random, and half of what is asserted below is
+// about that randomness — so it runs on a fixed sequence rather than on however
+// the run happens to fall. Restored at the end of the section.
+const realRandom = Math.random;
+let rngState = 20260813;
+Math.random = () => {
+  rngState = (rngState * 1664525 + 1013904223) >>> 0;
+  return rngState / 4294967296;
+};
 
 let traps = 0;
 let pops = 0;
+let splits = 0;
 let popAt = null;
 const belugaHooks = {
   onTrap: () => { traps++; },
   onPop: (x, y) => { pops++; popAt = { x, y }; },
+  onSplit: () => { splits++; },
 };
 // updateEnemies is what runs the hold down in the real game, and it isn't in
 // this harness — so the tick does that part itself. Without it the trap never
@@ -441,11 +452,122 @@ const tickBeluga = (frames) => {
     belugaClock += dt;
   }
 };
+const bubbleMeshes = () => scene.children.filter((o) => o.name === 'trapBubble');
 
-// Long enough for a fire cycle and the bubble's whole flight.
-const belugaFrames = Math.ceil((CONFIG.beluga.fireRate + CONFIG.beluga.life + 0.5) / dt);
+// --- the lob ---------------------------------------------------------------
+// A target far enough out that nothing is caught: this half is about how the
+// shot MOVES, and a catch would end the flight early.
+const decoy = fakeEnemy(40, 0, 0.5, 9999);
+enemies.push(decoy);
+const bg = CONFIG.beluga;
+const fireFrames = Math.ceil((bg.fireRate + 0.2) / dt);
+
+for (let i = 0; i < fireFrames && bubbleMeshes().length === 0; i++) tickBeluga(1);
+check('the drone lobs one cluster', bubbleMeshes().length === 1,
+  `${bubbleMeshes().length} bubble(s)`);
+const cluster = bubbleMeshes()[0];
+const clusterRadius = 0.35 * cluster.scale.x; // 0.35 is the asset's authored radius
+
+// IT SLOWS DOWN. This is the legibility fix in one number — the shot has to
+// stop travelling and start floating, or it is the pellet it replaced.
+const launchedAt = cluster.position.clone();
+const step0 = cluster.position.clone();
+tickBeluga(1);
+const firstStep = cluster.position.distanceTo(step0);
+tickBeluga(Math.ceil(0.45 / dt));
+const beforeLate = cluster.position.clone();
+tickBeluga(1);
+const lateStep = cluster.position.distanceTo(beforeLate);
+check('drag turns the lob into a float', lateStep < firstStep * 0.5,
+  `${(firstStep / dt).toFixed(1)} -> ${(lateStep / dt).toFixed(1)} units/s after 0.45s`);
+// ...and the whole point of that: it can't cross the arena. Terminal distance
+// under exponential drag is speed/drag, and a shot that outran it would be the
+// pellet this replaced with extra steps.
+check('...so the shot stays in the water you can see',
+  cluster.position.distanceTo(launchedAt) < CONFIG.beluga.speed / CONFIG.beluga.drag,
+  `${cluster.position.distanceTo(launchedAt).toFixed(1)} of ${(CONFIG.beluga.speed / CONFIG.beluga.drag).toFixed(1)} units`);
+
+// IT WANDERS. Measured against a CONTROL run with the turbulence switched off,
+// because buoyancy also bends the path and a bare "it isn't a straight line"
+// check would pass on the rise alone.
+const pathWith = [];
+for (let i = 0; i < 12; i++) { pathWith.push(cluster.position.y); tickBeluga(1); }
+const turbWas = bg.turbulence;
+bg.turbulence = 0;
+resetBeluga(scene, { x: 0, y: 0 });
+belugaClock = 0;
+for (let i = 0; i < fireFrames && bubbleMeshes().length === 0; i++) tickBeluga(1);
+const calmLob = bubbleMeshes()[0];
+tickBeluga(Math.ceil(0.35 / dt) + 2);
+const pathCalm = [];
+for (let i = 0; i < 12; i++) { pathCalm.push(calmLob.position.y); tickBeluga(1); }
+bg.turbulence = turbWas;
+const wanderDelta = pathWith.reduce((a, y, i) => a + Math.abs(y - pathCalm[i]), 0) / pathWith.length;
+check('turbulence pushes it off the buoyant path', wanderDelta > 0.02,
+  `${wanderDelta.toFixed(3)} units off the calm-water control`);
+
+// --- the split -------------------------------------------------------------
+resetBeluga(scene, { x: 0, y: 0 });
+splits = 0;
+pops = 0;
+belugaClock = 0;
+for (let i = 0; i < fireFrames && bubbleMeshes().length === 0; i++) tickBeluga(1);
+// Long enough for the longest jittered split delay.
+for (let i = 0; i < Math.ceil(bg.splitDelay * (1 + bg.splitVary) / dt) + 2 && splits === 0; i++) tickBeluga(1);
+check('the cluster splits', splits === 1, `${splits} split(s)`);
+check('...into a full set of bomblets', bubbleMeshes().length === bg.splitCount,
+  `${bubbleMeshes().length} of ${bg.splitCount}`);
+const bomblets = bubbleMeshes();
+const bombletRadius = 0.35 * bomblets[0].scale.x;
+check('...each smaller than the cluster that carried them',
+  Math.abs(bombletRadius - clusterRadius * bg.bombletScale) < 0.05,
+  `${bombletRadius.toFixed(2)} vs ${(clusterRadius * bg.bombletScale).toFixed(2)} wanted`);
+
+// They have to go DIFFERENT WAYS. Five bomblets leaving on one heading is a
+// bigger bubble, not a cluster.
+const spawnAt = bomblets.map((m) => m.position.clone());
+tickBeluga(3);
+const bombletHeadings = bomblets.map((m, i) => Math.atan2(m.position.y - spawnAt[i].y, m.position.x - spawnAt[i].x));
+const bombletSpread = Math.max(...bombletHeadings) - Math.min(...bombletHeadings);
+check('the bomblets scatter', bombletSpread > 2, `${bombletSpread.toFixed(2)} rad across the set`);
+
+// ...and pop at DIFFERENT TIMES. Recorded per frame: all five landing on one
+// frame is the same failure as all five leaving on one heading.
+const popFrames = [];
+belugaHooks.onPop = (x, y) => { pops++; popAt = { x, y }; popFrames.push(belugaClock); };
+for (let i = 0; i < Math.ceil((bg.fuse * (1 + bg.fuseVary) + 0.3) / dt) && pops < bg.splitCount; i++) tickBeluga(1);
+check('every bomblet goes off', pops === bg.splitCount, `${pops} of ${bg.splitCount}`);
+check('...on staggered fuses rather than together',
+  new Set(popFrames.map((t) => t.toFixed(2))).size >= 3,
+  `${new Set(popFrames.map((t) => t.toFixed(2))).size} distinct moments`);
+// Counted against THESE bomblets rather than the scene: the drone is on its
+// own cadence and the next cluster may already be in the air, which says
+// nothing about whether this one cleaned up after itself.
+check('a spent cluster leaves nothing in the water',
+  bomblets.every((m) => m.parent === null),
+  `${bomblets.filter((m) => m.parent !== null).length} orphan(s)`);
+
+// The split's feedback event, same reasoning as the pop's below: a name that
+// isn't in the tables is a console warning and a silent beat.
+check('the split has a feedback event', !!CONFIG.feedback.belugaSplit);
+check('...and a sound of its own', !!CONFIG.sfx[CONFIG.feedback.belugaSplit?.sfx],
+  `sfx "${CONFIG.feedback.belugaSplit?.sfx}"`);
+
+// --- the catch -------------------------------------------------------------
+enemies.length = 0;
+resetBeluga(scene, { x: 0, y: 0 });
+traps = 0;
+pops = 0;
+belugaHooks.onPop = (x, y) => { pops++; popAt = { x, y }; };
+
+// Right on top of the drone's orbit, so a bomblet reaches it.
+const caught = fakeEnemy(CONFIG.beluga.orbitRadius, 0, 0.5, 9999);
+enemies.push(caught);
+
+// A whole cycle: fire, float, split, fuse.
+const belugaFrames = Math.ceil((bg.fireRate + bg.splitDelay * 2 + bg.fuse * 2 + 1) / dt);
 for (let i = 0; i < belugaFrames && traps === 0; i++) tickBeluga(1);
-check('the drone fires and traps a fish', traps === 1, `${traps} trap(s)`);
+check('a bomblet seals a fish', traps === 1, `${traps} trap(s)`);
 check('the fish is held for the level-1 duration',
   Math.abs(caught.trapTimer - CONFIG.beluga.trapDuration) < 0.1,
   `trapTimer ${caught.trapTimer.toFixed(2)} of ${CONFIG.beluga.trapDuration}`);
@@ -454,15 +576,23 @@ check('the fish is held for the level-1 duration',
 check('levelling holds them longer', trapSeconds(4) > trapSeconds(1),
   `${trapSeconds(1).toFixed(1)}s -> ${trapSeconds(4).toFixed(1)}s at level 4`);
 
-// THE SHELL. It has to still be there — that is the entire point of the
-// change: a trapped fish is a fish visibly inside a bubble, for the whole hold.
-const bubbleMeshes = () => scene.children.filter((o) => o.name === 'trapBubble');
-check('the bubble stays, wrapped around the catch', bubbleMeshes().length === 1,
-  `${bubbleMeshes().length} bubble(s)`);
+// THE SHELL. A trapped fish is a fish visibly inside a bubble, for the whole
+// hold — the only thing on screen that says it is out of the fight. Found by
+// position rather than by index: sibling bomblets from the same cluster are
+// still drifting and are the same mesh.
+const shell = bubbleMeshes().reduce((best, m) =>
+  (m.position.distanceTo(caught.mesh.position) < best.position.distanceTo(caught.mesh.position) ? m : best));
+check('the bubble stays, wrapped around the catch',
+  shell.position.distanceTo(caught.mesh.position) < clusterRadius,
+  `${shell.position.distanceTo(caught.mesh.position).toFixed(2)} from the fish`);
+// Let the sibling bomblets finish before anything below counts pops — they are
+// still drifting on their own fuses and each one is a `pops` of its own. The
+// drone can't fire again meanwhile: its only target is already held.
+tickBeluga(Math.ceil((bg.fuse * (1 + bg.fuseVary) + 0.3) / dt));
+pops = 0;
+check('the shell outlives the cluster that delivered it', bubbleMeshes().length === 1,
+  `${bubbleMeshes().length} bubble(s) left`);
 
-const shell = bubbleMeshes()[0];
-// Closing takes sealTime, so give it that plus a frame before measuring the fit.
-tickBeluga(Math.ceil(CONFIG.beluga.sealTime / dt) + 2);
 const shellRadius = 0.35 * shell.scale.x; // 0.35 is the asset's authored radius
 check('it closes to fit the creature',
   Math.abs(shellRadius - caught.radius * CONFIG.beluga.fitPad) < 0.15,
@@ -532,31 +662,47 @@ const doomed = fakeEnemy(CONFIG.beluga.orbitRadius, 0, 0.5, 9999);
 enemies.push(doomed);
 for (let i = 0; i < belugaFrames && traps === 0; i++) tickBeluga(1);
 check('a fish is caught to kill', traps === 1, `${traps} trap(s)`);
+tickBeluga(Math.ceil((bg.fuse * (1 + bg.fuseVary) + 0.3) / dt)); // let its siblings finish
+pops = 0;
 enemies.length = 0; // killed: spliced out from under the shell
 tickBeluga(2);
 check('killing the catch bursts its bubble', pops === 1, `${pops} pop(s)`);
 check('...and leaves nothing behind', bubbleMeshes().length === 0,
   `${bubbleMeshes().length} orphan(s)`);
 
-// ONE SHOT, A SCHOOL. The bubble is drawn far wider than one fish, and sealing
-// only the first thing it touched read as a miss on everything else inside it.
+// ONE POP, A SCHOOL. A bomblet is drawn far wider than a small fish, and
+// sealing only the first thing it touched read as a miss on everything else
+// inside it. Packed tight, so one bomblet covers the lot.
 resetBeluga(scene, { x: 0, y: 0 });
 traps = 0;
 pops = 0;
 const crowd = [];
-for (let i = 0; i < 6; i++) crowd.push(fakeEnemy(CONFIG.beluga.orbitRadius, i * 0.3, 0.3, 9999));
+for (let i = 0; i < 6; i++) crowd.push(fakeEnemy(CONFIG.beluga.orbitRadius, i * 0.2, 0.2, 9999));
 enemies.push(...crowd);
+// Attributed PER DETONATION rather than per frame: detonate() calls onTrap once
+// per creature and then onPop once, so the count standing at each pop is what
+// that one bomblet sealed. Counting over a frame instead measures however many
+// bomblets happened to share it, which is not what the cap governs.
+let thisPop = 0;
+const perPop = [];
+belugaHooks.onTrap = () => { traps++; thisPop++; };
+belugaHooks.onPop = () => { pops++; perPop.push(thisPop); thisPop = 0; };
 for (let i = 0; i < belugaFrames && traps === 0; i++) tickBeluga(1);
-check('one bubble seals a cluster, up to its cap', traps === CONFIG.beluga.maxCatch,
-  `${traps} of ${CONFIG.beluga.maxCatch}`);
-check('...each in its own shell', bubbleMeshes().length === traps,
-  `${bubbleMeshes().length} shell(s) for ${traps} fish`);
+check('one bomblet seals a whole cluster of fish',
+  Math.max(...perPop, 0) > 1, `best pop took ${Math.max(...perPop, 0)}`);
+check('...but never more than its cap',
+  perPop.every((n) => n <= CONFIG.beluga.maxCatch),
+  `${perPop.join('/')} against a cap of ${CONFIG.beluga.maxCatch}`);
+check('...each in its own shell',
+  bubbleMeshes().filter((m) => crowd.some((e) => m.position.distanceTo(e.mesh.position) < 0.001)).length === traps,
+  `${bubbleMeshes().length} bubble(s) in the water`);
 
 enemies.length = 0;
 resetBeluga(scene, { x: 0, y: 0 });
-check('a reset takes every shell with it', bubbleMeshes().length === 0,
+check('a reset takes every shell and bomblet with it', bubbleMeshes().length === 0,
   `${bubbleMeshes().length} orphan(s)`);
 scene.remove(belugaDrone);
+Math.random = realRandom;
 
 // THE FILM. The bubble's Fresnel shell is injected GLSL, and this cannot
 // compile it — no Node harness can, and that is exactly the danger: a GLSL

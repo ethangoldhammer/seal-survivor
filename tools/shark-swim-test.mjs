@@ -176,7 +176,11 @@ for (const type of SHARKS) {
 
 // --- the creatures that opted out are untouched ------------------------------
 console.log('\nCETACEANS ARE LEFT ALONE');
-for (const type of ['orca', 'dolphin', 'otter']) {
+// The wild orca used to be the third name here and is no longer in the roster
+// at all. The BOSS orca cannot stand in for it: it declares a lateral block
+// deliberately, so listing it would turn this check inside out and assert the
+// opposite of what it says. Dolphin and otter carry the claim.
+for (const type of ['dolphin', 'otter']) {
   check(`${type}: declares no lateral block`,
     CONFIG.enemies[type]?.hunt?.lateral == null);
 }
@@ -196,7 +200,7 @@ for (const type of ['orca', 'dolphin', 'otter']) {
   const cap = flat * Math.pow(free / flat, lc.climbFloor) * 1.35;
   check('shark: runs in flat while still horizontally distant', shark.ratio < cap,
     `${(shark.ratio * 100).toFixed(0)}% vertical, cap ${(cap * 100).toFixed(0)}%`);
-  for (const type of ['dolphin', 'orca']) {
+  for (const type of ['dolphin']) {
     const t = travel(run(type, away).path);
     check(`${type}: climbs freely where a shark would flatten`, t.ratio > shark.ratio * 2,
       `${(t.ratio * 100).toFixed(0)}% vertical against the shark's ${(shark.ratio * 100).toFixed(0)}%`);

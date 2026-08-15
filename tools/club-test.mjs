@@ -156,7 +156,7 @@ function freshRun() {
 // club is the only thing stepping here — the creatures are deliberately NOT
 // updated, so anything that moves was moved by the club and nothing else.
 function swing(seconds, {
-  level = 1, boom = 0, ice = 0, velocity = null, speed = 0, dashing = false,
+  level = 1, boom = 0, ice = 0, throwLevel = 0, velocity = null, speed = 0, dashing = false,
   rig = rigWithFins(), finSpin = 6, hooks = {},
 } = {}) {
   const frames = Math.round(seconds / dt);
@@ -165,7 +165,7 @@ function swing(seconds, {
   const vel = velocity ?? (speed ? { x: speed, y: 0 } : null);
   for (let i = 0; i < frames; i++) {
     rig.pose?.(i * dt * finSpin);
-    updateClub(dt, scene, playerPos, { club: level, boom, ice }, enemies,
+    updateClub(dt, scene, playerPos, { club: level, boom, ice, throw: throwLevel }, enemies,
       { rig, velocity: vel, dashing }, hooks);
   }
 }
@@ -719,6 +719,32 @@ section('VARIANTS — you can tell from the water what you are holding');
   const { ASSETS } = await import('../path/src/assets.js');
 
   check('a plain run holds the base club', clubAssetsFor({}).join() === 'club');
+
+  // A VARIANT ON ITS OWN STILL ARMS THE SEAL. Straight out of playtest/runs
+  // .jsonl, which recorded three real runs that took Cold Snap and Powder Keg
+  // and NO Driftwood Club: the weapon was gated on the base card's level, so
+  // those runs got no clubs at all and both picks did nothing. Every variant
+  // is takeable on its own by design, so every variant has to arm the fins on
+  // its own too.
+  for (const [label, levels] of [
+    ['Cold Snap alone', { ice: 1 }],
+    ['Powder Keg alone', { boom: 1 }],
+    ['Hurler alone', { throw: 1 }],
+    ['Keg + Snap, no base card', { boom: 1, ice: 1 }],
+  ]) {
+    freshRun();
+    const rig = rigWithFins(2);
+    const fish = spawnAt('fish', 1.4, -20);
+    const hp = fish.hp;
+    swing(1.2, { level: 0, boom: levels.boom ?? 0, ice: levels.ice ?? 0, rig, finSpin: 10,
+      velocity: { x: 9, y: 0 }, throwLevel: levels.throw ?? 0 });
+    const built = clubGroup.children.length;
+    check(`${label}: still puts clubs in the fins`, built > 0, `${built} club(s) built`);
+    if (levels.throw == null) {
+      check(`${label}: ...and they still hit`, fish.hp < hp,
+        `fish ${fish.hp.toFixed(1)} of ${hp.toFixed(1)} hp`);
+    }
+  }
   check('Powder Keg puts its own club in a fin',
     clubAssetsFor({ boom: 1 }).includes('clubBoom'));
   check('Cold Snap puts its own club in a fin',

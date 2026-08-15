@@ -55,17 +55,31 @@ class Param {
   setValueAtTime(v, t) { this.events.push({ kind: 'set', v, t }); return this; }
   setTargetAtTime(v, t, tau) { this.events.push({ kind: 'target', v, t, tau }); return this; }
   exponentialRampToValueAtTime(v, t) { this.events.push({ kind: 'set', v, t }); return this; }
+  // Modelled rather than snapped, like setTargetAtTime above and for the same
+  // reason: the boss-kill hush IS a pair of linear ramps, and a Param that
+  // jumped to the target would report the score already silent on the frame the
+  // cut began — which is the one thing the cut must not be.
+  linearRampToValueAtTime(v, t) { this.events.push({ kind: 'ramp', v, t }); return this; }
   cancelScheduledValues(t) { this.events = this.events.filter((e) => e.t < t); return this; }
   at(t) {
     const evs = [...this.events].sort((a, b) => a.t - b.t);
     let v = this.base;
+    // Where the last event left the value, which is what a linear ramp
+    // interpolates FROM.
+    let prevT = evs.length ? evs[0].t : 0;
     for (let i = 0; i < evs.length; i++) {
       const e = evs[i];
+      if (e.kind === 'ramp') {
+        if (t >= e.t) { v = e.v; prevT = e.t; continue; }
+        const span = Math.max(1e-9, e.t - prevT);
+        return v + (e.v - v) * Math.max(0, Math.min(1, (t - prevT) / span));
+      }
       if (e.t > t) break;
       // A target curve runs until the next event or until `t`, whichever first.
       const end = Math.min(t, evs[i + 1] ? evs[i + 1].t : t);
       if (e.kind === 'set') v = e.v;
       else v = e.v + (v - e.v) * Math.exp(-(end - e.t) / Math.max(1e-6, e.tau));
+      prevT = e.t;
     }
     return v;
   }
@@ -446,6 +460,104 @@ fresh.stop();
 settings.resetSettings('audio');
 CONFIG.music.volume = 0.8;
 applyPlayerMusicSettings();
+
+// ---------------------------------------------------------------------------
+// THE HUSH — what a boss dying sounds like.
+//
+// The score is cut almost dead on the killing blow and the last fraction of a
+// second of it is thrown into a long reverb that rings out over the held
+// close-up (systems/bossKill.js). Three ways that goes silently wrong, and
+// every one of them is only audible as "the music stopped working":
+//
+//   THE TAIL IS MUTED TOO   the send routed through the music gain instead of
+//                           around it, so the very cut it exists to survive
+//                           silences it. What the player gets is a hole.
+//   THE MUSIC NEVER RETURNS a hush left up by a restart, a death, or a run
+//                           started mid-beat. The transport is still playing,
+//                           into a gain ramped to zero — silent for the rest
+//                           of the session, with nothing failing anywhere.
+//   NOTHING IS FED          the send opened after the mute rather than before
+//                           it. The convolver only outputs what it has been
+//                           given, so a room fed silence rings out silence.
+section('A boss dies: the score cuts out and the room rings on');
+reset();
+CONFIG.music.enabled = true;
+music.play(1);
+run(1);
+
+const dryGain = musicGainNode();
+const filterNode = lastLoop().outputs[0];
+const sendNode = filterNode.outputs.find((n) => n.outputs?.[0]?.kind === 'convolver');
+const verbNode = sendNode?.outputs[0];
+const tailGain = verbNode?.outputs[0];
+
+check('the music has a reverb send off the depth filter', !!sendNode && !!verbNode);
+check('...and it reaches the speakers AROUND the mute, not through it',
+  !!tailGain && tailGain.outputs.some((n) => n.kind === 'destination')
+  && !tailGain.outputs.includes(dryGain),
+  tailGain ? tailGain.outputs.map((n) => n.kind).join(',') : 'no tail gain');
+check('it is silent until a boss dies', sendNode.gain.value === 0 && tailGain.gain.value === 0,
+  `send ${sendNode.gain.value}, tail ${tailGain.gain.value}`);
+
+const authored = CONFIG.music.volume;
+check('the score is playing at its own level before the kill', near(dryGain.gain.value, authored, 1e-6),
+  String(dryGain.gain.value));
+
+const lit = music.hushMusic({ cut: 0.2, feed: 0.3, seconds: 4, decay: 2, level: 1.3 });
+check('the kill lights the tail', lit === true && music.musicHushed() === true);
+check('the room is hit with the loop at full level, not with the cut',
+  near(sendNode.gain.value, 1, 1e-6), String(sendNode.gain.value));
+check('...and the impulse is as long as it was asked for',
+  verbNode.buffer?.length === Math.floor(48000 * 4), `${verbNode.buffer?.length} samples`);
+check('the cut has not already happened on the frame of the blow',
+  dryGain.gain.value > authored * 0.9, String(dryGain.gain.value));
+
+run(0.1);
+check('...but it is well under way a tenth of a second later',
+  dryGain.gain.value < authored * 0.6, String(dryGain.gain.value));
+run(0.25);
+check('the score is gone', dryGain.gain.value < 1e-6, String(dryGain.gain.value));
+check('...the room has stopped being fed', sendNode.gain.value < 1e-6, String(sendNode.gain.value));
+check('...and the tail is the only thing left playing', tailGain.gain.value > 0,
+  `${tailGain.gain.value.toFixed(3)} against a score at ${dryGain.gain.value}`);
+
+// A slider dragged during the silence must not punch a frame of music through
+// it — the gain is mid-automation, and a plain assignment either loses or wins
+// for exactly one frame.
+applyPlayerMusicSettings();
+check('a volume change during the beat does not break the silence',
+  dryGain.gain.value < 1e-6, String(dryGain.gain.value));
+
+music.releaseMusicHush(0.3);
+run(0.35);
+check('the music comes back up with the water', near(dryGain.gain.value, authored, 1e-3),
+  String(dryGain.gain.value));
+check('...and the room bows out under it rather than ringing over the top',
+  tailGain.gain.value < 0.5 * authored * 1.3, String(tailGain.gain.value));
+check('...and the hush lets go of the level', music.musicHushed() === false);
+
+// THE ONE THAT SILENCES A SESSION. A run restarted while the beat is still up
+// — the score screen is reachable from inside one — has to open with music.
+music.hushMusic({ cut: 0.2, feed: 0.3 });
+run(0.3);
+check('a run restarted mid-beat', dryGain.gain.value < 1e-6);
+music.play(1);
+run(0.05);
+check('...opens with its music, not into the last run\'s silence',
+  near(musicGainNode().gain.value, authored, 1e-6), String(musicGainNode().gain.value));
+check('...with nothing left ringing from a fight this player never had',
+  sendNode.gain.value === 0 && tailGain.gain.value === 0);
+
+// And with nothing playing there is nothing to hush — the caller is told so
+// rather than being left waiting on a tail that was never lit.
+music.stop();
+check('a hush with the transport stopped does nothing', music.hushMusic({}) === false);
+music.play(1);
+run(0.05);
+settings.setSetting('audio.muted', true);
+check('...and neither does one with the music muted', music.hushMusic({}) === false);
+settings.resetSettings('audio');
+music.stop();
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

@@ -100,6 +100,21 @@ const ENEMY_OPTIONAL = extractNumberSpecs(enemySrc, 'OPTIONAL');
 const ENEMY_FLAGS = extractStringArray(enemySrc, 'FLAGS');
 const CARD_ART_KEYS = extractStringArray(configSrc, 'LEVELUP_IMAGE_KEYS');
 const SPAWN_GROUPS = extractObjectKeys(configSrc, 'groupMaxAlive');
+// The perks the game actually implements, read out of the source rather than
+// listed here — a perk id is a join between three files, and a dropdown that
+// offered one the code has no behaviour for would be the editor inviting the
+// exact typo the parser refuses.
+const PERK_IDS = extractStringArray(readSrc('bossPerkTable.js'), 'PERK_IDS');
+// ...and the boss archetypes, read out of bosses.csv itself, so the `bosses`
+// column offers what is actually in the roster today.
+const idsFromCsv = (rel) => {
+  try {
+    const rows = readFileSync(resolve(ROOT, rel), 'utf8').trim().split(/\r?\n/);
+    return rows.slice(1).map((l) => l.split(',')[0].trim()).filter(Boolean);
+  } catch { return []; }
+};
+const BOSS_IDS = idsFromCsv('path/src/bosses.csv');
+const ENEMY_IDS = idsFromCsv('path/src/enemies.csv');
 
 // ---------------------------------------------------------------------------
 // THE GAME ITSELF, loaded on demand.
@@ -256,6 +271,33 @@ const DOCS = {
     text: 'The part itself, used with exactly the capitalisation typed here — prefixes are capitalised, roots are not, and an epithet carries its own article.',
     enabled: 'FALSE takes it out of rotation. Blank means enabled.',
     weight: 'Likelihood relative to the other rows IN THE SAME SLOT. Blank = 1, 0 is never used.',
+    bosses: 'Which boss archetypes can wear this part. BLANK MEANS ALL — fill it in to narrow ("Sharky" is not a name an orca can carry). Space- or comma-separated ids from bosses.csv.',
+    perk: 'Tie this part to a boss PERK. Blank is the general pool. A part with a perk only appears on a boss that has it — and one of that perk\'s parts is guaranteed to land, which is how the name warns the player what the fight does.',
+    notes: 'Free text — nothing reads it.',
+  },
+  'bosses.csv': {
+    id: 'A short handle for the archetype. bossNames.csv\'s `bosses` column joins to this, so renaming one unhooks its name parts.',
+    enemy: 'Which row in enemies.csv this boss is built from. A key that does not exist is refused at boot.',
+    sizeMul: 'How much bigger than its own row it arrives — applied to the model, the hitbox and the size roll together.',
+    weight: 'Likelihood relative to the other ELIGIBLE archetypes. Blank = 1, 0 takes it out without disabling the row.',
+    minLevel: 'The player level from which this archetype can appear at all. 0 means from the very first boss.',
+    ownNames: 'TRUE means this archetype draws ONLY from bossNames.csv rows that name it, never the shared pool. For a boss that should not sound like the fish — a boat. Leave blank to share.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    notes: 'Free text — nothing reads it.',
+  },
+  'bossPerks.csv': {
+    id: 'Which perk. The code joins to this, so only ids the game implements are accepted — anything else is refused, loudly.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    weight: 'Likelihood relative to the other perks. Blank = 1.',
+    cooldown: 'Seconds between activations. Electric is always on and ignores it; giant and swift never activate at all.',
+    windup: 'Seconds of telegraph before it fires — the tell the player is meant to read.',
+    duration: 'Seconds the effect itself lasts: the dash, the time spent gone or unseen, a barrel\'s fuse, how long an escort turtle stays.',
+    speed: 'World units per second. The lunge\'s dash, how fast a shooter\'s projectile travels, how fast a turtle repositions.',
+    radius: 'World units. Electric: the aura\'s reach. Teleport: how far from the player it lands. Barrels: the blast. Turtles: how far off the boss they hold station.',
+    range: 'World units. How close the player must be before a shooter opens fire at all — a boss that shoots across the whole arena is a fight with no distance in it.',
+    count: 'How many per activation: shots in a volley, or turtles kept up.',
+    mul: 'A plain multiplier, and what it multiplies is the perk\'s own business — giant scales SIZE, swift scales SPEED (and turn rate with it).',
+    damage: 'Lunge: a multiplier on contact damage while dashing. Electric: damage per second inside the aura. The shooters: damage per projectile.',
     notes: 'Free text — nothing reads it.',
   },
 };
@@ -275,7 +317,9 @@ const BLANK_MEANS = {
   },
   'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up' },
   'quips.csv': { enabled: 'enabled', weight: '1' },
-  'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },
+  'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
+  'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', notes: '—' },
+  'bossPerks.csv': { enabled: 'enabled', weight: '1', notes: '—', cooldown: 'unused', windup: 'unused', duration: 'unused', speed: 'unused', radius: 'unused', range: 'any range', count: '1', mul: '1', damage: 'unused' },
   // A blank spawn value means "leave the built-in alone", NOT zero — zero
   // would switch a system off, which is the opposite of leaving it alone.
   'spawning.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
@@ -337,8 +381,20 @@ export const TABLES = [
   {
     file: 'path/src/bossNames.csv',
     label: 'Boss names',
-    blurb: 'What the giant shark is called. These are PARTS, not names — a prefix, a root and an epithet are drawn separately, so eight of each is hundreds of sharks. Joins to nothing in code; add away.',
+    blurb: 'What the boss is called. These are PARTS, not names — a prefix, a root and an epithet are drawn separately, so eight of each is hundreds of bosses. `bosses` narrows a part to one archetype, `perk` ties it to a power; both blank is the general pool. Add away.',
     addRows: true,
+  },
+  {
+    file: 'path/src/bosses.csv',
+    label: 'Boss roster',
+    blurb: 'Which creatures can be THE boss, how big each arrives, and from what level. One is drawn per boss out of a shuffle bag, so a run meets every archetype it has unlocked before it sees one twice.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/bossPerks.csv',
+    label: 'Boss perks',
+    blurb: 'The one special thing a boss can do. The first boss of a run has none; every one after it gets exactly one, and its name always says which. Only ids the game implements can be added — a perk with no code behind it is refused.',
+    addRows: false,
   },
 ];
 
@@ -405,8 +461,34 @@ function columnSpec(file, name, rows) {
   if (file === 'path/src/bossNames.csv' && name === 'slot') {
     return { ...base, type: 'enum', options: ['prefix', 'root', 'epithet'] };
   }
+  // Both closed lists for the same reason: a `perk` or a `bosses` value that
+  // matches nothing is not a new tag, it is a name part that silently never
+  // appears again. Blank is offered first in each, because blank is the
+  // common answer — "any boss" and "the general pool".
+  if (file === 'path/src/bossNames.csv' && name === 'perk') {
+    return { ...base, type: 'enum', options: ['', ...PERK_IDS], labels: { '': '—  (general pool)' } };
+  }
+  if (file === 'path/src/bossNames.csv' && name === 'bosses') {
+    // A combo rather than an enum: the cell can legitimately hold SEVERAL ids
+    // ("bossShark bossOrca"), which no closed dropdown can express.
+    return { ...base, type: 'combo', options: ['', ...BOSS_IDS] };
+  }
+  // The creature the archetype is built from. A combo rather than an enum so a
+  // row can be pointed at a creature that has not been added to enemies.csv
+  // yet — the parser refuses it at boot with a message naming the key, which
+  // is a better place to find out than a greyed-out dropdown.
+  if (file === 'path/src/bosses.csv' && name === 'enemy') {
+    return { ...base, type: 'combo', options: ENEMY_IDS };
+  }
   if (name === 'enabled') return { ...base, type: 'enum', options: ['', 'TRUE', 'FALSE'], labels: { '': '—  (enabled)' } };
   if (name === 'weight') return { ...base, type: 'number', min: 0 };
+  // The boss tables' own numbers. Listed by name rather than by file because
+  // they mean the same thing in both, and every one of them is a quantity that
+  // cannot sensibly be negative.
+  if (['sizeMul', 'cooldown', 'windup', 'duration', 'speed', 'radius', 'damage'].includes(name)) {
+    return { ...base, type: 'number', min: 0 };
+  }
+  if (name === 'minLevel') return { ...base, type: 'number', min: 0, integer: true };
   if (name === 'maxStacks') return { ...base, type: 'number', min: 1, integer: true };
   if (name === 'cardArt') return { ...base, type: 'art', options: ['', ...CARD_ART_KEYS] };
   // Options are fetched when the picker opens rather than shipped with the

@@ -5,6 +5,7 @@ import { rollElementFor, commitElement, activeElement } from '../systems/element
 import { expandDesc } from '../upgradeText.js';
 import * as playtest from '../systems/playtest.js';
 import { isTypingTarget } from './typing.js';
+import { bossArchetypes, bossPerkList, bossState, forceBoss, previewBossNames } from '../systems/boss.js';
 
 // ---------------------------------------------------------------------------
 // THE UPGRADE PANEL — press U.
@@ -49,6 +50,10 @@ import { isTypingTarget } from './typing.js';
 
 const ALL = '(all)';
 const ROLL = '(roll)';
+// Distinct from ROLL on purpose. The perk-less boss is a real, shipping state —
+// it is what every run's FIRST boss is — and without a chip for it the one
+// combination you cannot check by hand is the one every player sees first.
+const NONE = '(none)';
 
 let panel = null;
 let listEl = null;
@@ -58,6 +63,9 @@ let statusEl = null;
 let rarityRow = null;
 let elementRow = null;
 let familyRow = null;
+let bossRow = null;
+let perkRow = null;
+let namesEl = null;
 let visible = false;
 
 // What the next grant will be. `rarity` starts at the floor tier so a plain
@@ -67,10 +75,25 @@ let element = ROLL;
 let family = ALL;
 let status = '';
 
+// What the next FORCED BOSS will be. `ROLL` leaves it to the game — the bag
+// for the archetype, the weighted table for the perk — and NONE is the
+// perk-less boss every run's first one is, which is otherwise unreachable on
+// demand. Both start at ROLL so the button with no other clicks gives you what
+// a real run gives you.
+let bossPick = ROLL;
+let perkPick = ROLL;
+let rolledNames = [];
+
 // Set by main.js — the run clock, for the playtest record. Passed in rather
 // than imported because `gameState` is a local in main.js, and a panel reaching
 // into the game loop's own state would be a worse dependency than a getter.
 let runTime = () => 0;
+
+// The scene and the run state, for the boss spawner below. Passed in for the
+// same reason `runTime` is: both are locals in main.js, and a panel reaching
+// into the game loop's own state would be a worse dependency than a getter.
+// Returns null until main.js wires it, which is what the button checks.
+let world = () => null;
 
 const C = {
   dim: 'rgba(232,236,243,0.45)',
@@ -80,8 +103,9 @@ const C = {
   off: 'rgba(232,236,243,0.3)',
 };
 
-export function initUpgradeDebug(getTime = null) {
+export function initUpgradeDebug(getTime = null, getWorld = null) {
   if (typeof getTime === 'function') runTime = getTime;
+  if (typeof getWorld === 'function') world = getWorld;
   rarity = baseRarity();
 
   panel = document.createElement('div');
@@ -112,6 +136,7 @@ export function initUpgradeDebug(getTime = null) {
   elementRow = row('glow');
   familyRow = row('show');
   controls.append(rarityRow.wrap, elementRow.wrap, familyRow.wrap);
+  controls.appendChild(bossControls());
   panel.appendChild(controls);
 
   listEl = document.createElement('div');
@@ -146,6 +171,82 @@ export function initUpgradeDebug(getTime = null) {
     if (e.key?.toLowerCase() !== 'u') return;
     setVisible(!visible);
   });
+}
+
+// ---------------------------------------------------------------------------
+// THE BOSS BLOCK
+// ---------------------------------------------------------------------------
+// The same problem the rest of this panel solves, one layer up. A boss is
+// eight to twelve LEVELS apart, its archetype is drawn from a bag, its perk is
+// rolled, and its NAME is assembled from three tables that narrow on each
+// other — bossNames.csv rows can be tagged for one archetype, for one perk, or
+// for neither. So "do all the combinations read right" is a question you
+// cannot currently answer without playing for an hour and getting lucky.
+//
+// Two buttons, and the cheap one matters more. SPAWN puts the combination in
+// the water through the real arrival. ROLL NAMES prints a dozen names for the
+// selected combination without spawning anything — which is the actual
+// question most of the time, and reading twelve at once beats twelve fights.
+function bossControls() {
+  const wrap = document.createElement('div');
+  wrap.style.cssText =
+    'display:flex;flex-direction:column;gap:5px;margin-top:3px;padding-top:6px;'
+    + 'border-top:1px solid rgba(232,236,243,0.12);';
+
+  const heading = document.createElement('div');
+  heading.style.cssText = `color:${C.dim};letter-spacing:0.14em;font-size:9px;`;
+  heading.textContent = 'BOSS — SPAWN ANY COMBINATION';
+  wrap.appendChild(heading);
+
+  bossRow = row('body');
+  perkRow = row('perk');
+  wrap.append(bossRow.wrap, perkRow.wrap);
+
+  const buttons = document.createElement('div');
+  buttons.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;';
+  buttons.append(
+    button('Spawn boss', () => {
+      const w = world();
+      if (!w?.scene) { status = 'no scene — boss spawning is not wired'; render(); return; }
+      const e = forceBoss(w.scene, w.gameState, {
+        boss: bossPick === ROLL ? null : bossPick,
+        // Three states, not two: ROLL leaves it to the weighted table, NONE
+        // forces the perk-less boss, and a named perk forces that one. `null`
+        // is the wire value for NONE, so ROLL has to become `undefined`.
+        perk: perkPick === ROLL ? undefined : (perkPick === NONE ? null : perkPick),
+      });
+      status = e
+        ? `spawned ${bossState.archetype?.id ?? '?'}${bossState.perk ? ` · ${bossState.perk.id}` : ' · no perk'} — "${bossState.name}"`
+        : 'could not spawn a boss';
+      // The name it actually got goes to the top of the list, so the thing in
+      // the water and the thing you are reading are the same string.
+      if (e) rolledNames = [bossState.name, ...rolledNames].slice(0, 12);
+      render();
+    }),
+    button('Roll 12 names', () => {
+      rolledNames = previewBossNames(12, {
+        boss: bossPick === ROLL ? null : bossPick,
+        perk: perkPick === ROLL || perkPick === NONE ? null : perkPick,
+      });
+      // ROLL is deliberately treated as "no perk" for the preview rather than
+      // as "roll a perk per name": a list where each line came from a different
+      // perk is unreadable as an answer to "does THIS combination read right".
+      status = `rolled 12 · ${bossPick === ROLL ? 'any body' : bossPick} · ${perkPick === ROLL || perkPick === NONE ? 'no perk' : perkPick}`;
+      render();
+    }),
+  );
+  wrap.appendChild(buttons);
+
+  namesEl = document.createElement('div');
+  // Monospace column, dim, scrollable and capped — twelve names is enough to
+  // judge a combination and short enough not to push the upgrade list off
+  // screen, which is the panel's actual job.
+  namesEl.style.cssText =
+    `color:${C.dim};font-size:10px;line-height:1.5;max-height:150px;overflow:auto;`
+    + 'white-space:pre;';
+  wrap.appendChild(namesEl);
+
+  return wrap;
 }
 
 // A labelled row of chips. `content` lets the family row build its own buttons
@@ -361,6 +462,18 @@ function render() {
 
   familyRow.body.textContent = '';
   familyRow.body.append(...familyChips());
+
+  // BOSS. Both rows are built from the tables rather than listed here, so a new
+  // row in bosses.csv or bossPerks.csv turns up as a chip with nothing edited.
+  bossRow.body.textContent = '';
+  for (const id of [ROLL, ...bossArchetypes().map((b) => b.id)]) {
+    bossRow.body.appendChild(chip(id, () => bossPick === id, () => { bossPick = id; render(); }));
+  }
+  perkRow.body.textContent = '';
+  for (const id of [ROLL, NONE, ...bossPerkList().map((p) => p.id)]) {
+    perkRow.body.appendChild(chip(id, () => perkPick === id, () => { perkPick = id; render(); }));
+  }
+  namesEl.textContent = rolledNames.join('\n');
 
   // THE LIST. Table order, not alphabetical: upgrades.csv is the order the
   // designer put them in, and a list that reorders itself is one you have to

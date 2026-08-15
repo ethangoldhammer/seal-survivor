@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Crab shells — pattern options</title>
+<style>
+  body { margin:0; background:#071019; color:#cfe6f2;
+         font:13px/1.45 'Inter', ui-sans-serif, system-ui, sans-serif; padding:12px 16px 24px; }
+  h1 { font-size:15px; margin:0 0 4px; letter-spacing:.02em; }
+  h2 { font-size:11px; margin:22px 0 8px; color:#7fd7ff; text-transform:uppercase; letter-spacing:.10em; }
+  h2 em { color:#7f9aac; font-style:normal; text-transform:none; letter-spacing:0; font-size:12px; margin-left:8px; }
+  p.note { margin:0 0 4px; color:#7f9aac; max-width:92ch; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; }
+  figure { margin:0; }
+  canvas { display:block; border-radius:5px; }
+  figcaption { padding-top:5px; font-size:12px; }
+  figcaption b { display:block; color:#e8f6ff; text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+  figcaption span { color:#7f9aac; font-size:11px; }
+  #log { white-space:pre-wrap; color:#6f8b9c; font:11px/1.5 ui-monospace, monospace; margin-top:20px; }
+</style>
+</head>
+<body>
+<h1>Crab shells — pattern options</h1>
+<p class="note">Every pattern in the generator, on both crabs, through the real asset pipeline and the
+game's own bloom. The DAY crab (<code>carapace</code>) is pigment: flow, breath and flicker are all
+zero, so whatever is on its shell never moves. The NIGHT crab (<code>emberClaw</code>) is light, and
+its pattern drifts and breathes. Filmstrips are how motion is shown — this page renders one frame per
+tile and has no animation loop. Everything here is on sliders:
+<code>`</code> → Look &amp; FX → Bioluminescence.</p>
+<div id="sheet"></div>
+<pre id="log"></pre>
+
+<script type="module">
+import * as THREE from 'three';
+import { CONFIG } from '/path/src/config.js';
+import { preloadAssets, createVisual, applyBiolumSkinSettings } from '/path/src/assets.js';
+import {
+  updateBiolumSkin, BIOLUM_PATTERNS, skinRoster, setBiolumSkinVariant,
+} from '/path/src/systems/biolumSkin.js';
+import { rollSkin } from '/path/src/skinTable.js';
+import { createPost } from '/path/src/systems/post.js';
+
+const W = 260, H = 175;
+
+// The crab declares forward '+X' (its STRIDE axis) and the game pins its
+// heading, so -90° about Z is what puts the model's +X along the screen
+// horizontal and its face and claws at the camera — the pose the player
+// actually sees. Same constant as biolum-preview.html, different reason.
+const FACING = -Math.PI / 2;
+
+const out = document.getElementById('sheet');
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+
+const errors = [];
+const realError = console.error.bind(console);
+console.error = (...a) => { errors.push(a.join(' ')); realError(...a); };
+
+await preloadAssets();
+
+// One renderer, one post chain, blitted into a 2D canvas per tile — so a
+// difference between two tiles is the pattern and never the context.
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+const post = createPost(renderer);
+
+const scene = new THREE.Scene();
+scene.add(new THREE.AmbientLight(0xffffff, CONFIG.lighting.ambient));
+const key = new THREE.DirectionalLight(0xffffff, CONFIG.lighting.keyIntensity);
+key.position.fromArray(CONFIG.lighting.keyPosition);
+scene.add(key);
+
+let camera = new THREE.PerspectiveCamera(32, W / H, 0.1, 200);
+let tileW = W, tileH = H;
+
+function setTileSize(w, h) {
+  tileW = w; tileH = h;
+  renderer.setSize(w, h);
+  post.resize();
+  camera = new THREE.PerspectiveCamera(32, w / h, 0.1, 200);
+}
+setTileSize(W, H);
+
+function frame(object, pad = 1.35) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  camera.position.set(centre.x, centre.y, centre.z + Math.max(size.x, size.y * (tileW / tileH)) * pad + 1.2);
+  camera.lookAt(centre);
+}
+
+// The seabed is the deep end of the gradient — that is where a crab is.
+const WATER = { shallow: CONFIG.colors.waterShallow, mid: CONFIG.colors.waterMid, deep: CONFIG.colors.waterDeep };
+const setWater = (c) => renderer.setClearColor(c, 1);
+setWater(WATER.deep);
+
+function section(title, note) {
+  const h = document.createElement('h2');
+  h.innerHTML = `${title}${note ? `<em>${note}</em>` : ''}`;
+  const row = document.createElement('div');
+  row.className = 'row';
+  out.append(h, row);
+  return row;
+}
+function tile(row, caption, sub) {
+  const cell = document.createElement('figure');
+  const canvas = document.createElement('canvas');
+  canvas.width = tileW; canvas.height = tileH;
+  canvas.getContext('2d').drawImage(renderer.domElement, 0, 0);
+  const cap = document.createElement('figcaption');
+  cap.innerHTML = `<b>${caption}</b>${sub ? `<span>${sub}</span>` : ''}`;
+  cell.append(canvas, cap);
+  row.appendChild(cell);
+}
+function shoot(row, caption, sub) {
+  applyBiolumSkinSettings();
+  post.render(scene, camera, 0);
+  tile(row, caption, sub);
+}
+
+const CRABS = {
+  day: { asset: 'enemyWalkingCrab', preset: 'carapace', water: WATER.mid },
+  night: { asset: 'enemyEmberCrab', preset: 'emberClaw', water: WATER.deep },
+};
+for (const c of Object.values(CRABS)) {
+  c.node = createVisual(c.asset);
+  c.node.rotation.z = FACING;
+}
+let inScene = null;
+function only(name) {
+  if (inScene) scene.remove(inScene.node);
+  inScene = CRABS[name];
+  scene.add(inScene.node);
+  setWater(inScene.water);
+  frame(inScene.node);
+  return inScene;
+}
+
+// A fixed instant, so every still tile catches the breath at a comparable
+// moment rather than wherever the clock happened to be.
+updateBiolumSkin(1.6);
+
+const START = structuredClone(CONFIG.biolumSkin);
+const restore = () => { Object.assign(CONFIG.biolumSkin, structuredClone(START)); };
+
+// --- as shipped -------------------------------------------------------------
+{
+  const row = section('The two crabs as they ship', 'the thing every option below has to beat');
+  for (const [name, c] of Object.entries(CRABS)) {
+    only(name);
+    const p = CONFIG.biolumSkin.presets[c.preset];
+    shoot(row, `${name} crab`, `${c.preset} — ${p.pattern}`);
+  }
+}
+
+// --- THE ROSTER -------------------------------------------------------------
+// What actually spawns, straight out of skins.csv — not a menu of options but
+// the shipped list, each row stamped on its own body the way a spawn does it.
+// Everything below this section is the space these were chosen FROM.
+{
+  const roster = skinRoster();
+  for (const [name, c] of Object.entries(CRABS)) {
+    const list = roster[c.preset] ?? [];
+    if (!list.length) continue;
+    const total = list.reduce((a, s) => a + s.weight, 0);
+    const row = section(`The ${name} roster — ${list.length} skins`,
+      `preset "${c.preset}", rolled at spawn, all at weight 1 (${(100 / list.length).toFixed(0)}% each)`);
+    if (inScene) { scene.remove(inScene.node); inScene = null; }
+    setWater(c.water);
+    setTileSize(215, 150);
+    for (const skin of list) {
+      const body = createVisual(c.asset);
+      body.rotation.z = FACING;
+      // The middle of any per-individual range, so the tile shows the skin
+      // rather than one lucky roll of it. The spread is the next row down.
+      const variant = { ...skin.look };
+      if (skin.warp) variant.warp = (skin.warp[0] + skin.warp[1]) / 2;
+      setBiolumSkinVariant(body, variant);
+      scene.add(body);
+      frame(body);
+      shoot(row, skin.id, `${((skin.weight / total) * 100).toFixed(0)}%`);
+      scene.remove(body);
+    }
+    setTileSize(W, H);
+  }
+}
+{
+  // The one row in the file with a range on it. Same skin, four crabs.
+  const roster = skinRoster();
+  const lattice = (roster.emberClaw ?? []).find((s) => s.id === 'lattice');
+  if (lattice?.warp) {
+    const row = section('One skin, rolled four times',
+      `"lattice" declares warp ${lattice.warp[0]}..${lattice.warp[1]}, so no two crabs spring alike`);
+    setWater(CRABS.night.water);
+    setTileSize(190, 135);
+    for (const at of [0.05, 0.35, 0.65, 0.95]) {
+      const body = createVisual(CRABS.night.asset);
+      body.rotation.z = FACING;
+      // Walked across the range rather than rolled, so the four tiles are the
+      // ENDS and the middle of what a spawn can hand out, not four samples
+      // that might all land in the same third of it.
+      setBiolumSkinVariant(body, { ...lattice.look, warp: lattice.warp[0]
+        + (lattice.warp[1] - lattice.warp[0]) * at });
+      scene.add(body);
+      frame(body);
+      shoot(row, `warp ${(lattice.warp[0] + (lattice.warp[1] - lattice.warp[0]) * at).toFixed(2)}`, '');
+      scene.remove(body);
+    }
+    setTileSize(W, H);
+  }
+}
+
+// --- the shell between the markings -----------------------------------------
+// The pattern's negative space. `bodyDarken` is what makes the glow read as
+// light rather than as a bright animal, and on this crab it lands on black —
+// so everything the veins don't touch is a silhouette. `shellGlow` puts a colour
+// back into exactly that space.
+{
+  const row = section('The shell between the markings',
+    'night crab, the shipped veins, shellGlow 0 / 0.09 / 0.18 / 0.32 at #ff5a1e');
+  only('night');
+  setTileSize(190, 135);
+  frame(CRABS.night.node);
+  for (const f of [0, 0.09, 0.18, 0.32]) {
+    const p = CONFIG.biolumSkin.presets.emberClaw;
+    p.shellGlow = f;
+    shoot(row, `shellGlow ${f.toFixed(2)}`,
+      f === 0 ? 'stark black' : (f === 0.18 ? 'shipped' : ''));
+  }
+  restore();
+  setTileSize(W, H);
+}
+{
+  const row = section('...and what colour that shell is',
+    'shellGlow 0.18, four hues — the one knob that decides what the animal is MADE of');
+  only('night');
+  setTileSize(190, 135);
+  frame(CRABS.night.node);
+  for (const [name, c] of [
+    ['deep orange (shipped)', 0xff5a1e],
+    ['blood', 0xff1e1e],
+    ['blue', 0x2f6fff],
+    ['green', 0x3dff2e],
+  ]) {
+    const p = CONFIG.biolumSkin.presets.emberClaw;
+    p.shellGlow = 0.18; p.shellColor = c;
+    shoot(row, name, `#${c.toString(16).padStart(6, '0')}`);
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- every pattern, both crabs ----------------------------------------------
+// The preset picks one of these; this is the menu it picked from, on the body
+// that has to wear it. Only the pattern is overridden — palette, coverage,
+// contrast and scale stay the preset's, so the tiles differ by SHAPE alone.
+for (const [name, c] of Object.entries(CRABS)) {
+  const row = section(`${name} crab — every pattern`,
+    `preset "${c.preset}", pattern overridden per tile, everything else untouched`);
+  only(name);
+  setTileSize(215, 150);
+  frame(c.node);
+  for (const p of BIOLUM_PATTERNS) {
+    CONFIG.biolumSkin.presets[c.preset].pattern = p;
+    shoot(row, p, p === 'lattice' ? 'new' : '');
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- feature size -----------------------------------------------------------
+// The knob that changes a pattern's identity more than the pattern name does:
+// the same generator at 0.10 and at 0.45 is fine grain versus big plates.
+{
+  const row = section('Feature size', 'night crab, four patterns, scale 0.12 / 0.20 / 0.30 / 0.45');
+  only('night');
+  setTileSize(190, 135);
+  frame(CRABS.night.node);
+  for (const pat of ['lattice', 'net', 'veins', 'billow']) {
+    for (const s of [0.12, 0.2, 0.3, 0.45]) {
+      const p = CONFIG.biolumSkin.presets.emberClaw;
+      p.pattern = pat; p.scale = s;
+      shoot(row, `${pat} ${s.toFixed(2)}`, '');
+    }
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- palettes ---------------------------------------------------------------
+const PALETTES = [
+  ['ember (shipped)', 0x5c0f1e, 0xc22a1c, 0xffb04a],
+  ['abyss', 0x00e5ff, 0x7b2dff, 0xffd166],
+  ['cold', 0x1de5c8, 0x2f6fd6, 0xbdf5ff],
+  ['toxic', 0x7cff3d, 0x00ffc8, 0xd6ff00],
+  ['bruise', 0xff2d95, 0x5b2bff, 0x00d4ff],
+  ['bone', 0xdfefff, 0x8fb4c8, 0xffffff],
+];
+{
+  const row = section('Palettes', 'night crab, the shipped veins pattern, three-stop ramp swapped');
+  only('night');
+  setTileSize(190, 135);
+  frame(CRABS.night.node);
+  for (const [pname, a, b, c] of PALETTES) {
+    const p = CONFIG.biolumSkin.presets.emberClaw;
+    p.colorA = a; p.colorB = b; p.colorC = c;
+    shoot(row, pname, '');
+  }
+  restore();
+  setTileSize(W, H);
+}
+{
+  const row = section('Day shell colours', 'walking crab, marble, four shells that are not glowing');
+  only('day');
+  setTileSize(190, 135);
+  frame(CRABS.day.node);
+  for (const [pname, a, b, c] of [
+    ['wet brown (shipped)', 0x4a3524, 0x7a4a2c, 0xa88a63],
+    ['granite', 0x2f3a40, 0x5d6b6f, 0x9fb0ad],
+    ['sand', 0x6b5636, 0x9c855a, 0xd8c79a],
+    ['oxblood', 0x3a1a18, 0x6e2b22, 0xa8674a],
+  ]) {
+    const p = CONFIG.biolumSkin.presets.carapace;
+    p.colorA = a; p.colorB = b; p.colorC = c;
+    shoot(row, pname, '');
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- THE LATTICE ------------------------------------------------------------
+// The backdrop grid, worn. Static on a preset with no breath, springing on one
+// that has it — which is exactly the day/night split the two crabs already are.
+{
+  const row = section('Lattice — the backdrop grid on a shell',
+    'the same pattern on both crabs: pigment by day, light by night');
+  setTileSize(215, 150);
+  for (const [name, c] of Object.entries(CRABS)) {
+    only(name);
+    frame(c.node);
+    const p = CONFIG.biolumSkin.presets[c.preset];
+    p.pattern = 'lattice';
+    for (const s of [0.14, 0.22]) {
+      p.scale = s;
+      shoot(row, `${name} — scale ${s}`, `warp ${p.warp ?? START.base.warp}`);
+    }
+    restore();
+  }
+  setTileSize(W, H);
+}
+{
+  // The day preset is deliberately dim — it is pigment on an animal in
+  // daylight — and at the shipped 0.55 the cells are barely there. This is
+  // what it costs to make them read as SHELL PLATES without reading as light:
+  // the last tile is already past what daylight will carry.
+  const row = section('Lattice by day — how hard it has to be pushed',
+    'walking crab, lattice at scale 0.14, four strengths, mid water');
+  only('day');
+  setTileSize(190, 135);
+  frame(CRABS.day.node);
+  for (const s of [0.55, 0.9, 1.3, 1.8]) {
+    const p = CONFIG.biolumSkin.presets.carapace;
+    p.pattern = 'lattice'; p.scale = 0.14; p.strength = s;
+    shoot(row, `strength ${s.toFixed(2)}`, s === 0.55 ? 'as shipped' : '');
+  }
+  restore();
+  setTileSize(W, H);
+}
+{
+  const row = section('Lattice — the spring, in motion',
+    'night crab, one full ripple across a breath cycle, 8 frames');
+  only('night');
+  setTileSize(170, 130);
+  frame(CRABS.night.node);
+  const p = CONFIG.biolumSkin.presets.emberClaw;
+  p.pattern = 'lattice';
+  p.scale = 0.18;
+  p.warp = 1.1;
+  p.pulseSync = 'free';
+  const period = (Math.PI * 2) / p.pulseSpeed;
+  for (let i = 0; i < 8; i++) {
+    shoot(row, `t + ${(i * period / 8).toFixed(2)}s`, i === 0 ? 'the ripple fires' : '');
+    updateBiolumSkin(period / 8);
+  }
+  restore();
+  setTileSize(W, H);
+}
+{
+  const row = section('Lattice — how far the cells travel',
+    'the same instant into the ripple at four warp settings');
+  only('night');
+  setTileSize(190, 135);
+  frame(CRABS.night.node);
+  for (const w of [0, 0.5, 1.1, 2.0]) {
+    const p = CONFIG.biolumSkin.presets.emberClaw;
+    p.pattern = 'lattice'; p.scale = 0.18; p.warp = w;
+    shoot(row, `warp ${w.toFixed(1)}`, w === 0 ? 'a rigid grid' : '');
+  }
+  restore();
+  setTileSize(W, H);
+}
+
+// --- the noise in motion ----------------------------------------------------
+// The night crab's whole advantage over the day one: its pattern is allowed to
+// move. `flow` translates the field, which is the drift a still tile cannot
+// show at all.
+{
+  const row = section('Drift — the noise moving',
+    'night crab, flow 0.9, three patterns, 6 frames 0.25s apart');
+  only('night');
+  setTileSize(150, 120);
+  frame(CRABS.night.node);
+  for (const pat of ['flow', 'marble', 'veins']) {
+    const p = CONFIG.biolumSkin.presets.emberClaw;
+    p.pattern = pat;
+    p.flow = 0.9;
+    for (let i = 0; i < 6; i++) {
+      shoot(row, `${pat} +${(i * 0.25).toFixed(2)}s`, '');
+      updateBiolumSkin(0.25);
+    }
+    restore();
+  }
+  setTileSize(W, H);
+}
+
+// --- a heap -----------------------------------------------------------------
+// Crabs arrive in crowds, and a pattern is judged there or not at all: nine of
+// them, each on its own phase offset.
+{
+  // THE READ THAT DECIDES IT. A skin is judged in a crowd or not at all: nine
+  // crabs, each rolling its own row out of skins.csv exactly as a spawn does,
+  // against the same heap wearing one preset. If the roster is doing its job
+  // the second tile is a crowd and the first is one animal nine times.
+  const row = section('A heap of them', 'nine crabs, rolled from skins.csv the way a spawn rolls them');
+  setTileSize(440, 230);
+  if (inScene) { scene.remove(inScene.node); inScene = null; }
+  const roster = skinRoster();
+  for (const [name, c] of Object.entries(CRABS)) {
+    setWater(c.water);
+    for (const rolled of [false, true]) {
+      const heap = new THREE.Group();
+      for (let i = 0; i < 9; i++) {
+        const n = createVisual(c.asset);
+        n.position.set((i % 3) * 2.4 - 2.4, Math.floor(i / 3) * 1.15 - 1.15, (i * 0.37 % 1 - 0.5) * 1.2);
+        n.rotation.z = FACING;
+        // A fixed walk across the table rather than Math.random, so the sheet
+        // is the same picture every reload and two runs can be compared.
+        if (rolled) {
+          const v = rollSkin(roster, c.preset, () => ((i * 0.618) % 1));
+          if (v) setBiolumSkinVariant(n, v);
+        }
+        heap.add(n);
+      }
+      scene.add(heap);
+      frame(heap, 1.1);
+      shoot(row, `${name} — ${rolled ? 'rolled skins' : 'preset only'}`,
+        rolled ? '' : 'what shipped before skins.csv');
+      scene.remove(heap);
+    }
+  }
+  setTileSize(W, H);
+}
+
+// This page never saves, but it shares the module instance with anything else
+// on the origin, and leaving CONFIG on the last tile's values is a trap for
+// whoever reads next.
+restore();
+applyBiolumSkinSettings();
+
+log(`patterns: ${BIOLUM_PATTERNS.join(', ')}`);
+log(`compiled programs: ${renderer.info.programs.length}   gl error: ${renderer.getContext().getError()}`);
+log(errors.length ? `SHADER ERRORS:\n${errors.join('\n')}` : 'shader errors: none');
+</script>
+</body>
+</html>

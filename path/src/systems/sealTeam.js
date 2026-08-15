@@ -9,6 +9,7 @@ import { spawnProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 import { companionDamage, companionScale, applyCompanionScale } from './scaling.js';
 import { markWeight } from './marks.js';
+import { celebrationState } from './celebrate.js';
 
 // Seal Team — escort seals that swim the same tilted 3D ring the beluga drone
 // uses, spread evenly around it, ram anything that gets close, and break
@@ -62,7 +63,58 @@ function newMember(root, visual, anim, pos, vel) {
     lungeTimer: 0, // seconds left before it gives up on the charge
     lungeRest: 0, // seconds until this seal may lunge again
     fireCooldown: Math.random() * 0.5, // staggered so an evolved squad doesn't volley in lockstep
+    // When this escort joins the victory clap, in the celebration's own WALL
+    // seconds (celebrationState.clock), or -1 for "sitting this one out". See
+    // armCelebration.
+    celebrateAt: -1,
   };
+}
+
+// THE SQUAD JOINS IN. Unlike the player, the escorts have a real authored clap
+// — `clapping` in sealhelper.glb, which is the ONLY celebration clip in the
+// game and is on a skeleton the player's model merely resembles (see
+// systems/celebrate.js). So they play it and the player is posed.
+//
+// Armed once per celebration, off the shared `seq` rather than off `active`:
+// active is true for the whole performance, so watching it would re-arm the
+// squad every frame and pin all six at the front of the clip forever.
+//
+// The stagger is in the celebration's WALL seconds, taken from the shared
+// clock rather than counted down locally — this function runs on the dilated
+// delta like everything else in the update loop, and a 0.09s gap counted on a
+// clock running at 0.12x would spread the squad over four seconds of real time
+// instead of half of one. Six escorts clapping on the same frame reads as one
+// animation played six times; ragged, it reads as six animals reacting.
+let armedSeq = 0;
+function armCelebration() {
+  const c = CONFIG.celebrate?.escorts ?? {};
+  const enabled = CONFIG.celebrate?.enabled !== false && c.enabled !== false;
+  let slot = 0;
+  for (const t of team) {
+    if (!enabled || Math.random() > (c.chance ?? 0)) {
+      t.celebrateAt = -1;
+      continue;
+    }
+    // `slot` counts only the escorts that are actually clapping, so the ones
+    // that sat this one out don't leave a silent gap in the middle of it.
+    t.celebrateAt = slot * (c.stagger ?? 0.09) + Math.random() * (c.jitter ?? 0);
+    slot++;
+  }
+}
+
+/**
+ * What the squad is doing right now, for ui/animDebug.js. Read-only, and it
+ * asks each escort's own controller rather than keeping a parallel count that
+ * could disagree with the animation actually playing.
+ */
+export function sealTeamAnimDebug() {
+  let celebrating = 0;
+  let armed = 0;
+  for (const t of team) {
+    if (t.anim?.debugState().oneShot?.state === 'celebrate') celebrating++;
+    else if (t.celebrateAt >= 0) armed++;
+  }
+  return { count: team.length, celebrating, armed };
 }
 
 // Grow or shrink the squad to match `count`. Called every frame, but only does
@@ -216,6 +268,12 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {})
   resize(scene, want, playerPos);
   if (want === 0) return;
 
+  // After resize, so a seal earned this frame is in the squad to be armed.
+  if (celebrationState.active && celebrationState.seq !== armedSeq) {
+    armedSeq = celebrationState.seq;
+    armCelebration();
+  }
+
   const cfg = CONFIG.sealTeam;
   const damage = companionDamage(cfg.contactDamage + cfg.damagePerLevel * Math.max(0, level - 1));
   // Big Rigz: the escorts grow, and the ram radius grows with them. Applied
@@ -266,6 +324,16 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {})
     // aboveSurface picks the land clips over the water ones, same rule the
     // player follows — an escort that has breached shouldn't swim-cycle
     // through the air.
+    // The victory clap, BEFORE the controller updates so the one-shot it
+    // triggers is the pose this frame writes rather than the next one — a
+    // frame's lag is invisible in a run and is exactly one frame of the clap
+    // missing from a trophy taken during a kill shot, where the world is at
+    // 0.12x and frames are all there is.
+    if (t.celebrateAt >= 0 && celebrationState.active && celebrationState.clock >= t.celebrateAt) {
+      t.celebrateAt = -1;
+      t.anim?.trigger('celebrate');
+    }
+
     if (t.anim) t.anim.update(dt, stateForSpeed(spd, t.pos.y > bounds.surfaceY), false);
 
     // Ram anything in reach. Per-enemy cooldowns rather than one global timer,

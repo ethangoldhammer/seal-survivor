@@ -751,6 +751,29 @@
       }
     ]
   },
+  "laserEyes": {
+    "cap": 6,
+    "perStack": [
+      {
+        "laserEyesLevel": 101
+      },
+      {
+        "laserEyesLevel": 102
+      },
+      {
+        "laserEyesLevel": 103
+      },
+      {
+        "laserEyesLevel": 104
+      },
+      {
+        "laserEyesLevel": 105
+      },
+      {
+        "laserEyesLevel": 106
+      }
+    ]
+  },
   "electricEel": {
     "cap": 8,
     "perStack": [

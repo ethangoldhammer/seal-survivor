@@ -7,6 +7,13 @@ import { enemies, removeEnemy } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 import { applyElementalHit, chillEnemy } from './elements.js';
+import { hitCreature } from './hitShape.js';
+
+// Where the last hit landed on the body, refilled by every hitCreature call
+// that passes. One shared object rather than one per test: this is the hottest
+// loop in the game and the value is consumed before the next test overwrites
+// it. Read it immediately or copy it.
+const contact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 
 // A chaining shot (the bounce weapon) spends one of its bounces to ricochet off
 // whatever it just hit and carry on, instead of being consumed by the impact.
@@ -38,17 +45,32 @@ export function resolveCombat(dt, scene, hooks) {
     for (let j = enemies.length - 1; j >= 0; j--) {
       const e = enemies[j];
       if (b.hits.has(e)) continue;
+      // A boss still making its entrance. Not `b.hits.add(e)` and not a
+      // despawn either: the shot passes through and keeps going, so a player
+      // who fired into the ceremony gets their pellet back rather than having
+      // it eaten by an invisible wall. See tickArrival in systems/boss.js for
+      // why this guard exists here as well as in the per-frame hp restore —
+      // this is the one damage source big enough to kill in a single frame.
+      if (e.invuln > 0) continue;
 
-      const reach = b.radius + e.radius;
-      const dx = b.mesh.position.x - e.mesh.position.x;
-      const dy = b.mesh.position.y - e.mesh.position.y;
-      if (dx * dx + dy * dy > reach * reach) continue;
+      // Against the CREATURE, which for most of the roster is the circle it
+      // has always been and for a boss is a shape fitted to its own bones.
+      // Both answer through the same call so there is one hit test in the game
+      // and not two that can drift apart.
+      if (!hitCreature(e, b.mesh.position.x, b.mesh.position.y, b.radius, contact)) continue;
 
       e.hp -= b.damage;
       b.hits.add(e);
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
-      hooks.onEnemyDamaged?.(e, b.damage, b.mesh.position.x, b.mesh.position.y, b.dir, b);
+      // WHERE IT LANDED, not where the bullet was. A shot moving 40 units a
+      // second is most of a metre inside the animal by the time the test that
+      // caught it returns, so passing its own position drew every impact
+      // buried in the body — and on a boss, several metres off the surface it
+      // supposedly struck. `contact` is the point on the skin, and everything
+      // downstream (the flash, the sparks, the splash, the ripple) has always
+      // taken this argument as "the impact" and simply been given a worse one.
+      hooks.onEnemyDamaged?.(e, b.damage, contact.x, contact.y, b.dir, b, contact);
 
       // Glow Up! rides the BASIC SHOT and nothing else here. Gated on the
       // source rather than on the faction because every ability in the game
@@ -181,7 +203,10 @@ export function resolveCombat(dt, scene, hooks) {
     // through your health while sitting motionless inside a bubble. The charm
     // from the dumbo octopus is pacification and nothing else, so it has to
     // gate the same thing.
-    if (e.trapTimer > 0 || e.charmTimer > 0) continue;
+    // A boss arriving is harmless for exactly as long as it is untouchable —
+    // see CONFIG.boss.arrival. One without the other turns the entrance into a
+    // punishment for watching it.
+    if (e.trapTimer > 0 || e.charmTimer > 0 || e.invuln > 0) continue;
 
     // Trap enemies deal damage as a burst timed with their attack animation,
     // not continuous per-second contact — they're usually not even touching
@@ -229,10 +254,21 @@ export function resolveCombat(dt, scene, hooks) {
       }
     }
 
-    const reach = e.radius + pRadius;
+    // THE SAME SHAPE THAT DECIDES WHETHER YOU CAN HIT IT decides whether it
+    // can hit you. Splitting those two was never on the table: a boss you can
+    // swim past but that still damages you from a body-width away is the
+    // exact complaint the circle produced, in the direction that costs the
+    // player health.
+    if (!hitCreature(e, pPos.x, pPos.y, pRadius, contact)) continue;
     const dx = e.mesh.position.x - pPos.x;
     const dy = e.mesh.position.y - pPos.y;
-    if (dx * dx + dy * dy > reach * reach) continue;
-    if (!isInvulnerable()) hooks.onPlayerHit((e.contactDamage ?? e.def.contactDamage) * dt, { x: -dx, y: -dy }, e.type); // damage-per-second on contact
+    if (!isInvulnerable()) {
+      // The shove still comes from the creature's CENTRE and not from the
+      // contact point. A contact-point normal on a long body points sideways
+      // out of the flank, which would slide the player along a shark rather
+      // than pushing them off it — and being pushed along the animal you are
+      // touching keeps you touching it.
+      hooks.onPlayerHit((e.contactDamage ?? e.def.contactDamage) * dt, { x: -dx, y: -dy }, e.type); // damage-per-second on contact
+    }
   }
 }

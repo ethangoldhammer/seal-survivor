@@ -42,13 +42,29 @@ export function podStats(level) {
   };
 }
 
-function buildOrca() {
+// A FAMILY, WHICH IS WHAT THE CARD IS CALLED. The pod used to be three copies
+// of one body; it is three different animals now — the bull with the tall
+// straight dorsal, the cow, and a calf noticeably smaller than either. Same
+// three the boss orca is cut from (tools/orca-split.mjs), wearing the friendly
+// outline.
+//
+// KEYED BY SLOT and not rolled, so the pod is stable: the same card always
+// buys the same animals in the same order, and a player who has learned that
+// the little one is the calf is not told otherwise on the next run. Slots past
+// the third repeat the adults — the card stacks to six, and a pod of six
+// calves would be a different joke than the one intended.
+const POD_BODIES = ['orcaFriendBull', 'orcaFriendCow', 'orcaFriendCalf'];
+function podAsset(slot) {
+  return POD_BODIES[slot] ?? POD_BODIES[slot % 2]; // bull, cow, bull, cow, ...
+}
+
+function buildOrca(slot) {
   // Outer object owns position and heading; inner owns the left/right mirror.
   // They can't be the same object — the heading rotation would invert the
   // moment an orca swims left. Same arrangement as the seal team and the
   // beluga drone, and for the same reason.
   const root = new THREE.Group();
-  const visual = createVisual('orcaFriend');
+  const visual = createVisual(podAsset(slot));
   root.add(visual);
   const anim = CONFIG.animation.enabled ? createAnimationController(visual) : null;
   return { root, visual, anim };
@@ -77,7 +93,7 @@ function newMember(root, visual, anim, slot, pos) {
 
 function resize(scene, count, playerPos) {
   while (pod.length < count) {
-    const { root, visual, anim } = buildOrca();
+    const { root, visual, anim } = buildOrca(pod.length);
     const c = CONFIG.orca;
     const start = new THREE.Vector3(
       playerPos.x + c.formationOffset[0],

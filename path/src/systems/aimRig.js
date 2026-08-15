@@ -188,7 +188,7 @@ export function createAimRig(instance) {
         // into a visible standing wave — and both are kept well under the
         // 60fps Nyquist limit, or the "vibration" aliases into a slow wobble.
         if (charge > 0) {
-          const vib = CONFIG.strike.charge.vibrate ?? {};
+          const vib = CONFIG.strike.charge.tremble ?? {};
           const amp = charge * (vib.head ?? 0);
           if (amp > 0) {
             const w = (vib.hz ?? 22) * Math.PI * 2;

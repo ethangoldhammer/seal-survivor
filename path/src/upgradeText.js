@@ -111,6 +111,7 @@ export const STAT_TEXT = {
   // --- companions and thrown things, levelled ---
   garlicLevel:        { label: 'sea garlic', kind: 'level', unlock: 'a damaging aura' },
   eelLevel:           { label: 'electric eel', kind: 'level', unlock: 'chain lightning' },
+  laserEyesLevel:     { label: 'laser eyes', kind: 'level', unlock: 'eye beams' },
   starfishLevel:      { label: 'starfish', kind: 'level', unlock: 'rapid thrown starfish' },
   seagullLevel:       { label: 'seagull', kind: 'level', unlock: 'homing dive-bombers' },
   belugaLevel:        { label: 'beluga', kind: 'level', unlock: 'a bubble that traps enemies' },

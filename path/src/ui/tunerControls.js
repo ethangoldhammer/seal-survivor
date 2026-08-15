@@ -495,14 +495,33 @@ export function buildRow(item, onChange) {
   slider.min = item.min;
   slider.max = item.max;
   slider.step = item.step;
-  slider.value = getPath(CONFIG, item.path);
+  // A PATH THAT DOES NOT EXIST YET IS NOT A VALUE OF ZERO — and it is not the
+  // middle of the slider either, which is what `<input type=range>` clamps an
+  // undefined to. Building a row used to write that clamp straight into CONFIG,
+  // so merely OPENING the panel invented a number for every path the config
+  // did not declare, and the next save wrote it to disk forever.
+  //
+  // 2026-08-14, live: adding one `shell glow` row put `0.5` — the midpoint of
+  // its 0..1 range — onto all seven bioluminescence presets, giving every
+  // glowing fish in the game a bright shell nobody had asked for. The presets
+  // are DIFFS against `base` (see withoutInheritedPresetKeys), so "absent" is
+  // the normal, correct state for most of their keys and every future key
+  // would have done the same thing.
+  //
+  // BUILDING A ROW NOW WRITES NOTHING AT ALL. Not merely for the absent case
+  // above: a saved value OUTSIDE this row's min/max was clamped by the input
+  // and that clamp was written too, so opening the panel quietly destroyed any
+  // value the schema had since narrowed its range around. Rendering is
+  // rendering; the first write happens when somebody drags.
+  const current = getPath(CONFIG, item.path);
+  slider.value = current ?? item.min;
 
-  const sync = () => {
+  const sync = (write = true) => {
     const v = Number(slider.value);
     val.textContent = formatValue(v);
-    setPath(CONFIG, item.path, v);
+    if (write) setPath(CONFIG, item.path, v);
   };
-  sync();
+  sync(false);
 
   slider.addEventListener('input', () => {
     sync();
@@ -519,6 +538,11 @@ export function buildRow(item, onChange) {
 // Push CONFIG back onto every control in both panels. Called after anything
 // that changes values behind the controls' backs — Reset, import, the P key
 // cycling the post preset.
+// Paths already reported as dead, so the warning is one line per path per
+// session rather than one per row per refresh (refreshTuner runs on every
+// run start).
+const deadPaths = new Set();
+
 export function refreshTunerRows() {
   for (const r of rows) {
     // Readouts first: they have no `path`, so anything reading one off the
@@ -526,6 +550,29 @@ export function refreshTunerRows() {
     if (r.readout) { paintReadout(r); continue; }
     if (r.paintChoice) { r.paintChoice(); continue; }
     const v = getPath(CONFIG, r.item.path);
+    // A ROW POINTING AT A KEY CONFIG.JS NO LONGER DECLARES MUST NOT TAKE THE
+    // GAME DOWN. `getPath` hands back undefined for it, and this function is
+    // called from refreshTuner — which startGame calls on every single run —
+    // so one stale path used to throw inside formatValue and kill startGame
+    // itself: the splash's dismissal never returned, its Rive animation froze
+    // mid-frame, and the game never started. A dead SLIDER is a cosmetic
+    // problem; a dead startGame is the whole game.
+    //
+    // Same rule paintReadout above already follows, for the same reason.
+    // Reported once rather than silently, because a row that shows a dash
+    // forever is its own kind of mystery — the fix is to repoint the path in
+    // TUNER_SCHEMA (or restore the key), and you cannot do either without
+    // being told which one it is.
+    if (v === undefined) {
+      if (!deadPaths.has(r.item.path)) {
+        deadPaths.add(r.item.path);
+        console.warn(`[tuner] "${r.item.path}" no longer exists in CONFIG — that control is inert.`
+          + ' Repoint it in TUNER_SCHEMA or restore the key.');
+      }
+      if (r.val) r.val.textContent = '—';
+      if (r.slider) r.slider.disabled = true;
+      continue;
+    }
     if (r.select) { r.select.value = v; continue; }
     if (r.box) { r.box.checked = !!v; continue; }
     if (r.swatch) { r.swatch.value = hexToCss(v); continue; }
@@ -563,6 +610,12 @@ function paintReadout(entry) {
 }
 
 export function formatValue(v) {
+  // Belt to refreshTunerRows' braces. That skips a dead path before it gets
+  // here, but this is exported and called from elsewhere, and the failure mode
+  // it used to have was catastrophically out of proportion to its job:
+  // formatting a number for a label brought down startGame. A dash is what a
+  // control with nothing behind it should read.
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
   if (Number.isInteger(v)) return String(v);
   return v.toFixed(Math.abs(v) < 1 ? 3 : 2);
 }

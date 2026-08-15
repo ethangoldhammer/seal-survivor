@@ -39,6 +39,11 @@ import { advanceCycles } from './beatSync.js';
 // banked power. That channel owns "I am loading a strike". This one owns "I
 // have the fuel for one". Two questions, two answers, and keeping them apart
 // is what stops the seal from being one undifferentiated pulsing blob.
+//
+// IT IS NOT DAY-GATED, unlike Glow Up! next door, and that is deliberate: this
+// is a readout, not an ability. Gating it on darkness took the eat-strike-eat
+// loop's body feedback away for the whole first half of every run, which is a
+// lot of run to spend saying nothing. What it IS gated on is `armed` below.
 // ============================================================================
 
 // Bucketed like updateElementSkin's key, and for the same reason: the stamp is
@@ -50,6 +55,30 @@ let skinKey = '';
 let breathCycle = 0;
 let waveT = -1;
 
+// ---------------------------------------------------------------------------
+// THE SEAL STARTS EVERY RUN DARK. Whatever the sky is doing, whatever the
+// meter says.
+//
+// `strikeState.charge` starts at 1, so the "loaded" read was true from the
+// first frame of every run — the seal spawned covered in glowing mint patches
+// before the player had touched anything. A body read that is already on when
+// you arrive is not telling you about a state, it is just what the animal
+// looks like, and the one thing this layer must never become is the seal's
+// default appearance.
+//
+// A DAYLIGHT GATE DOES NOT FIX THIS, which is worth writing down because it
+// was the first answer and it was wrong. It only hid the symptom in the
+// morning: `dayNight.startFromSystemClock` seeds the opening hour from the
+// player's own clock, so a run begun after dark opened exactly as lit as
+// before. The rule is about the START of a run, not the time of day.
+//
+// So the layer is ASLEEP until the meter first MOVES, and the first move can
+// only ever be the player spending it. From then on it behaves as described
+// above for the rest of the run. That also makes the glow mean something
+// sharper than "the bar is full": it means you filled it.
+let armed = false;
+let openingFuel = null;
+
 /** Force the next update to restamp — after a model swap from the T panel. */
 export function invalidateChargeSkin() {
   skinnedBody = null;
@@ -60,6 +89,10 @@ export function resetChargeSkin() {
   invalidateChargeSkin();
   breathCycle = 0;
   waveT = -1;
+  // Per RUN, not per boot: startGame() calls this, and a second run started
+  // from the score screen has to open as dark as the first one did.
+  armed = false;
+  openingFuel = null;
 }
 
 /**
@@ -72,6 +105,16 @@ export function resetChargeSkin() {
  */
 export function chargeCrossed() {
   if (CONFIG.sealCharge?.wave?.enabled === false) return;
+  // Gated with the steady glow, not separately — an asleep layer is silent in
+  // every channel it has, or "the seal starts dark" would still open with a
+  // band of light crossing it. The event itself is not lost: the ring flashes
+  // on the same frame.
+  //
+  // Unreachable while asleep in practice (a crossing needs the bar to have
+  // left full, which is the move that wakes the layer up) and kept anyway,
+  // because "asleep means silent" should not depend on that argument staying
+  // true of some future refill.
+  if (!armed) return;
   waveT = 0;
 }
 
@@ -88,6 +131,15 @@ export function updateChargeSkin(body, charge, rawDt = 0) {
 
   const fuel = Math.max(0, Math.min(1, charge));
   const full = fuel >= 1;
+
+  // Wake on the first MOVEMENT of the bar, not on a level or a threshold —
+  // measured against whatever it opened at rather than against 1, so a run
+  // that ever starts on a part-full meter still opens dark instead of at a
+  // dimmer version of the same wrong thing. See the note by `armed`.
+  if (!armed) {
+    if (openingFuel == null) openingFuel = fuel;
+    else if (Math.abs(fuel - openingFuel) > 1e-4) armed = true;
+  }
 
   // Ahead of the early-out below, like the element's breath: these are the
   // parts that are never idle, and they are two uniform writes.
@@ -113,10 +165,22 @@ export function updateChargeSkin(body, charge, rawDt = 0) {
   // at 20% still looks lit, and "I cannot strike" has to be visible at a
   // glance.
   const lit = Math.pow(fuel, s.falloff ?? 1.35);
-  const strength = (s.strength ?? 0.9) * lit * (full ? (s.fullBoost ?? 1.25) : 1);
+  // ...AND DAYLIGHT READS DARKER STILL. At noon this is 0 and the shader's own
+  // branch drops out, so the seal is an ordinary mottled animal rather than a
+  // dim glowing one — same crossfade, and the same "nothing left over to
+  // undo", as updateElementSkin.
+  //
+  // ...AND A LAYER THAT HAS NOT WOKEN UP YET READS DARKEST OF ALL: zero until
+  // the meter first moves, so the seal opens every run as an ordinary mottled
+  // animal at any hour. A multiplier rather than an early-out, so the wake-up
+  // goes through the same stamp as every other change to this layer.
+  const power = armed ? 1 : 0;
+  const strength = (s.strength ?? 0.9) * lit * (full ? (s.fullBoost ?? 1.25) : 1) * power;
 
   const bucket = Math.round(lit * 24) / 24;
-  const key = `${bucket}:${full ? 1 : 0}`;
+  // `power` is in the key so the wake-up restamps: the fuel has not moved
+  // enough to change the bucket on the frame the layer opens its eyes.
+  const key = `${bucket}:${full ? 1 : 0}:${power}`;
   // The body check survives a model swap from the tuner: same fuel, same
   // state, different materials underneath. A bare flag would say "already
   // stamped" about a body that no longer exists.

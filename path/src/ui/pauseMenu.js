@@ -146,7 +146,7 @@ export function initPauseMenu(opts) {
     <div class="sv-menu sv-pm" id="svPauseBox">
       <div class="sv-pm-head">
         <div class="sv-title" style="margin:0;">Paused</div>
-        <div class="sv-hint" style="margin:0;">Esc or Start to resume</div>
+        <div class="sv-hint" style="margin:0;">Esc or Start to resume &nbsp;·&nbsp; pad: LB/RB switch tabs, B back</div>
       </div>
       <div class="sv-pm-tabs" id="svPauseTabs"></div>
       <div class="sv-pm-body" id="svPauseBody"></div>
@@ -572,7 +572,18 @@ function onKeyDown(e) {
  */
 export function updatePauseNav() {
   if (!open || listeningFor) return;
+  // The bumpers change TAB from anywhere in the list. The strip is also the
+  // top row and can be nudged left/right like any other, but that means
+  // walking the cursor up to it and back down again for what is, on every
+  // console menu ever made, LB and RB. Before the row handling below, because
+  // stepTab rebuilds every row underneath it.
+  if (menuInput.tabPrev) stepTab(-1);
+  if (menuInput.tabNext) stepTab(1);
   if (menuInput.y) step(menuInput.y > 0 ? 1 : -1);
   if (menuInput.x) rows[cursor]?.nudge?.(menuInput.x > 0 ? 1 : -1);
   if (menuInput.confirm) rows[cursor]?.activate?.();
+  // B closes it, the way it closes a menu on any console. Start already
+  // toggles the pause from main.js; this is the button a pad player tries
+  // first, and without it the only way out was to find Start again.
+  if (menuInput.back) callbacks.onResume?.();
 }

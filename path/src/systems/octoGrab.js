@@ -6,6 +6,7 @@ import { boneRun, buildChain, applyChainToPoint, measureReach } from './ikChain.
 import { springFollow } from './orbit.js';
 import { attachBioluminescence } from './bioluminescence.js';
 import { createBoneSpring } from './boneSpring.js';
+import { canHold } from './control.js';
 
 // Octopus Grabber — the only DEFENSIVE companion in the game, driven by the
 // real six-arm rig in /models/octopus_rig.glb.
@@ -137,7 +138,9 @@ function averageTextureColor(tex) {
  *   the spot, never hold onto it.
  */
 function creatureTint(e) {
-  const key = e?.def?.asset ?? e?.type ?? null;
+  // `assetKey` first: a def may list several bodies (see spawnOne), and this
+  // needs the one this individual was actually built from.
+  const key = e?.assetKey ?? e?.def?.asset ?? e?.type ?? null;
 
   const tuned = key ? assetSignatureColor(key) : null;
   if (tuned != null) return _tint.set(tuned);
@@ -389,6 +392,9 @@ function huntTarget(enemiesList) {
     // Same size gate the arms use. Charging something no arm can lift would
     // park the octopus next to a megalodon doing nothing.
     if (e.radius > c.maxTargetRadius) continue;
+    // Same reason: swimming the body across the arena to a boss no arm may
+    // grab is the same wasted trip.
+    if (!canHold(e)) continue;
     // Already being reeled in — chasing it means swimming away from the seal
     // it is being delivered to.
     if (h.skipHeld !== false && arms.some((a) => a.target === e)) continue;
@@ -416,6 +422,11 @@ function acquire(arm, enemiesList, reach) {
     // Too big to move. An arm that latched onto a megalodon would be tied up
     // for the rest of the run pulling on something that doesn't budge.
     if (e.radius > c.maxTargetRadius) continue;
+    // ...and a boss cannot be held at all, whatever its size. The radius gate
+    // above happens to exclude today's two bosses, which is not a rule — the
+    // `giant` perk moves that number and a future archetype could be smaller.
+    // See systems/control.js.
+    if (!canHold(e)) continue;
     if (arms.some((other) => other.target === e)) continue;
 
     const dx = e.mesh.position.x - bodyPos.x;

@@ -36,6 +36,21 @@ export const menuInput = {
   // adopts the held Start rather than zeroing it, so the same press cannot
   // also confirm whatever the cursor opened onto.
   pause: false,
+  // B / Circle, edge-triggered. The universal "back" — it closes the pause
+  // menu, and it is what a pad player tries before they try Start a second
+  // time. Not bound to anything in gameplay, so it costs nothing to reserve.
+  back: false,
+  // LB and RB, edge-triggered. Sideways movement THROUGH a menu rather than
+  // within it: the pause menu's tab strip. The strip is also reachable as the
+  // top row with the stick, but a bumper works from anywhere in the list,
+  // which is what the strip is for on a pad.
+  tabPrev: false,
+  tabNext: false,
+  // ANY face/shoulder/stick button going down, edge-triggered. For surfaces
+  // that ask for "press anything to continue" rather than for a choice — the
+  // splash. The keyboard's version of this is a bare keydown listener; the pad
+  // has no events at all, so this is that listener's other half.
+  anyPress: false,
 };
 
 const keys = { up: false, down: false, left: false, right: false };
@@ -677,6 +692,24 @@ let confirmHeld = false;
 // would arm a second pause toggle and the menu would shut again on let-go.
 let pauseHeld = false;
 const PAUSE_BUTTON = 9; // Start, Standard Gamepad
+// B / Circle, and the two bumpers. Standard Gamepad indices, same mapping the
+// strike buttons above use — 4 and 5 are the bumpers, the triggers are 6 and 7
+// and are left out of the menus on purpose: an analog trigger with a low
+// break point steps a tab strip the moment a hand rests on it.
+const BACK_BUTTON = 1;
+const TAB_PREV_BUTTON = 4;
+const TAB_NEXT_BUTTON = 5;
+let backHeld = false;
+let tabPrevHeld = false;
+let tabNextHeld = false;
+let anyHeld = false;
+
+// Is ANY button on the pad down right now? Deliberately every button rather
+// than a list: this is what "press anything" means, and a list would be a
+// promise the next controller layout could break.
+function anyButtonDown(pad) {
+  return !!pad?.buttons?.some((b) => b?.pressed);
+}
 
 // One axis of the pad reduced to -1 / 0 / +1, from either the D-pad or the
 // stick. The D-pad wins: if it's pressed the player means exactly that step.
@@ -723,6 +756,29 @@ function updateMenuInput(pad) {
   const pauseDown = !!pad?.buttons[PAUSE_BUTTON]?.pressed;
   menuInput.pause = pauseDown && !pauseHeld;
   pauseHeld = pauseDown;
+
+  // All edge-triggered the same way as confirm, and all baselined by
+  // resetMenuInput — a bumper held as a menu opens must not step its tabs on
+  // the first frame, exactly as a held A must not confirm.
+  const backDown = !!pad?.buttons[BACK_BUTTON]?.pressed;
+  menuInput.back = backDown && !backHeld;
+  backHeld = backDown;
+
+  const prevDown = !!pad?.buttons[TAB_PREV_BUTTON]?.pressed;
+  menuInput.tabPrev = prevDown && !tabPrevHeld;
+  tabPrevHeld = prevDown;
+
+  const nextDown = !!pad?.buttons[TAB_NEXT_BUTTON]?.pressed;
+  menuInput.tabNext = nextDown && !tabNextHeld;
+  tabNextHeld = nextDown;
+
+  // True on the frame the pad goes from nothing-down to something-down. A
+  // second button pressed while the first is still held is NOT a fresh edge
+  // here — which is fine for the one thing this drives: a "press anything"
+  // screen is already gone by the time a second button lands on it.
+  const anyDown = anyButtonDown(pad);
+  menuInput.anyPress = anyDown && !anyHeld;
+  anyHeld = anyDown;
 }
 
 // Call when a menu opens. A is also the fire button, so the player is usually
@@ -742,6 +798,17 @@ export function resetMenuInput() {
   menuInput.x = 0;
   menuInput.y = 0;
   menuInput.confirm = false;
+  // Same adopt-don't-zero rule for the rest of the menu buttons. A bumper or a
+  // B held as the screen changes has to be released before it counts — the
+  // level-up menu opens under a hand that may be holding any of them.
+  backHeld = !!pad?.buttons[BACK_BUTTON]?.pressed;
+  tabPrevHeld = !!pad?.buttons[TAB_PREV_BUTTON]?.pressed;
+  tabNextHeld = !!pad?.buttons[TAB_NEXT_BUTTON]?.pressed;
+  anyHeld = anyButtonDown(pad);
+  menuInput.back = false;
+  menuInput.tabPrev = false;
+  menuInput.tabNext = false;
+  menuInput.anyPress = false;
   // NOT re-baselined here. This is called on the frame the pause menu opens,
   // and Start is what opened it — adopting "Start is down" as the baseline
   // would be right, but the edge has ALREADY been consumed by the toggle this

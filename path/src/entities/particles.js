@@ -286,14 +286,22 @@ function rand(range, fallback) {
 
 /**
  * Fire a named burst from CONFIG.emitters.
- * opts: { dirX, dirY, vx, vy, scale, glow }
+ * opts: { dirX, dirY, vx, vy, scale, speedMul, glow }
  * Colour is not among them — see the palette note in CONFIG.emitters.
+ *
+ * `speedMul` scales how hard the burst is thrown, leaving the emitter's spread,
+ * size, life and palette alone — `scale` says how MANY, this says how FAST. It
+ * exists for the one case a second emitter could not cover: the strike vent
+ * fires the mouth's own bubbles as a jet out the back of the seal, and cloning
+ * `breathBubbles` with bigger numbers would have meant tuning the seal's breath
+ * in two places forever.
  */
 export function emit(name, x, y, opts = {}) {
   const def = CONFIG.emitters[name];
   if (!def || !geometry) return;
 
   const count = Math.max(1, Math.round((def.count ?? 8) * (opts.scale ?? 1)));
+  const speedMul = Math.max(0, opts.speedMul ?? 1);
   const colors = def.colors ?? [0xffffff];
   const cone = def.cone ?? 0;
   const inherit = def.inherit ?? 0;
@@ -327,7 +335,7 @@ export function emit(name, x, y, opts = {}) {
     const angle = cone > 0
       ? baseAngle + (Math.random() - 0.5) * cone * 2
       : Math.random() * Math.PI * 2;
-    const speed = rand(def.speed, 6);
+    const speed = rand(def.speed, 6) * speedMul;
 
     const p3 = idx * 3;
     const p2 = idx * 2;

@@ -4,6 +4,11 @@
 // wired into the start menu.
 
 import { Rive, Layout, Fit, Alignment } from '@rive-app/canvas';
+// Points the runtime at our own copy of its WASM instead of unpkg. Imported for
+// the side effect, and it has to happen before any Rive instance exists — see
+// riveRuntime.js.
+import './riveRuntime.js';
+import { SPLASH_ARTBOARD } from './riveContract.js';
 // ?url so Vite emits the .riv as a hashed asset and hands back a path. The
 // alternative — base64 in a JS module, the way levelUpImages.js does it —
 // would push 644KB of binary through the module graph on every reload.
@@ -87,6 +92,13 @@ export function mountRiveSplash({
   rive = new Rive({
     src: splashUrl,
     canvas,
+    // NAMED, not left to the file's default. This used to be omitted, which was
+    // safe only for as long as the file had exactly one artboard — it now has
+    // two, and "the default artboard" is a property of the .riv that changes
+    // when someone reorders or re-marks them in the editor. The failure that
+    // guards against is a silent one: the splash would simply come up as the
+    // boss health bar one morning, with nothing in the code having changed.
+    artboard: SPLASH_ARTBOARD,
     // autoplay would start the artboard's FIRST TIMELINE. This file has three
     // of them plus a state machine, and the state machine is what sequences
     // them — so play it explicitly once the names are known, rather than

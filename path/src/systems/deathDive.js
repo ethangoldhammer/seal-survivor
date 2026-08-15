@@ -158,6 +158,14 @@ export function startDeathDive(finish) {
   _tailDir.set(-Math.sign(spin) || 1, -1, 0).normalize();
   player.aimRig?.tailImpulse(_tailDir, c.tailKick ?? 9);
 
+  // A death mid-wind-up hands over a body still offset by the tremble's
+  // positional buzz (see updatePlayer). Nothing eases it out from here —
+  // updatePlayer stops running the moment the dive owns the seal — so the
+  // corpse would sink a few hundredths off its own container for the whole
+  // sequence. Cleared here rather than in the dive's own transform, which is
+  // about rotation and has no business writing this every frame.
+  player.body.position.set(0, 0, 0);
+
   setAudioRate(1);
 }
 

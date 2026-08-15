@@ -5,12 +5,14 @@ import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { drawUpgrades } from '../upgradeTable.js';
 import { expandDesc } from '../upgradeText.js';
 import { rollElementFor, elementCardName, elementCardDesc } from '../systems/elements.js';
-import { rollRarity, rarityById, rarityRank, bestRarity } from '../systems/rarity.js';
+import { rollRarity, rarityById, rarityRank } from '../systems/rarity.js';
 import quipsCsv from '../quips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { menuInput, resetMenuInput } from '../input.js';
 import { mountRiveSplash } from './riveSplash.js';
+import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
+import { bossShot, shareBossShot, saveBossShot } from '../systems/bossShot.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import {
   fetchGlobalBoard,
@@ -55,6 +57,8 @@ function bindMenuSounds(node) {
 }
 let root = null;
 let splashPlayed = false;
+// The live splash, while one is up. See showStartMenu and updateMenuNav.
+let splash = null;
 // The run being scored on the game-over screen, held here because submitting
 // happens on a click that can land seconds after the run ended. Cleared once
 // submitted so a second click can't post the same run twice.
@@ -103,8 +107,13 @@ const STYLES = `
      bar would vanish exactly when you most want to know how the fight is
      going. Red and only red — nothing else in the HUD is, so the bar reads as
      "the thing trying to kill you" without needing a label saying so. */
+  /* Width is written per boss from its max health (see bossBarWidth) — the
+     value here is only what a bar that has not been updated yet falls back to. The
+     max-width is the guard that keeps a hand-edited hp number from producing a
+     bar wider than the window. */
   .sv-bossbar { position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
-    width: min(560px, 62vw); pointer-events: none; text-align: center; }
+    width: min(560px, 62vw); max-width: 92vw; pointer-events: none; text-align: center;
+    transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
   .sv-boss-name { font-size: 13px; font-weight: 700; letter-spacing: 0.14em;
     text-transform: uppercase; color: #ffd7d7; margin-bottom: 5px;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 12px rgba(255,60,60,0.55); }
@@ -116,6 +125,29 @@ const STYLES = `
   .sv-boss-fill { height: 100%; width: 100%; border-radius: 5px;
     background: linear-gradient(90deg, #ff2f45, #ff6a5a);
     box-shadow: 0 0 12px rgba(255,60,70,0.8); transition: width 0.12s linear; }
+  /* THE ARRIVAL. The bar is driven 0→1 across CONFIG.boss.arrival.seconds while
+     the boss swims in, and the shape of that fill is decided in JS — see
+     CONFIG.boss.arrival.ease and path/src/ease.js.
+     NO TRANSITION HERE, deliberately. This used to carry a 0.4s eased one, and
+     a transition that restarts every frame chasing a value that is itself
+     moving never arrives: it lagged a fixed 0.4s behind for the whole ceremony
+     and then covered the remainder in a snap. Two curves fighting over one
+     number, and the visible result was the opposite of both. The width written
+     each frame is already the eased answer, so the bar's job here is to draw it
+     and nothing else. Colour only. */
+  .sv-boss-fill-arriving { transition: none;
+    background: linear-gradient(90deg, #ff5a3c, #ffb066);
+    box-shadow: 0 0 22px rgba(255,140,80,0.95); }
+
+  /* THE TROPHY — the kept kill shot, on the death screen (systems/bossShot.js).
+     Sized as a share of the card rather than in px so it keeps its place on a
+     phone, and capped in height so a tall run summary never pushes the name box
+     and the leaderboard off the bottom of the screen. */
+  .sv-trophy { margin: 4px 0 12px; display: flex; flex-direction: column; gap: 7px; align-items: center; }
+  .sv-trophy-img { display: block; width: 100%; max-width: 420px; max-height: 34vh;
+    object-fit: contain; border-radius: 8px; border: 1px solid rgba(255,86,102,0.35);
+    box-shadow: 0 6px 26px rgba(0,0,0,0.55), 0 0 20px rgba(255,60,70,0.12); background: #05070d; }
+  .sv-trophy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
 
   /* Score toasts: one per kill, floating up from where the fish died. */
   .sv-toast { position: absolute; font-size: 13px; font-weight: 700;
@@ -144,6 +176,11 @@ const STYLES = `
   .sv-btn { pointer-events: all; background: #7ad7ff; color: #0a0c12; border: none; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 600; cursor: pointer; letter-spacing: 0.02em; }
   .sv-btn:hover { background: #9fe3ff; }
   .sv-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  /* The pad's cursor on the score card. Same look as the focus ring, but as a
+     class for the same reason the cards' selection is one: :focus-visible is
+     the browser's guess about whether a focus deserves a ring, and it guesses
+     "no" for the programmatic focus a stick push produces. */
+  .sv-btn.sv-nav-sel { outline: 2px solid #fff; outline-offset: 2px; }
   .sv-cards { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: min(760px, 92vw); }
   /* Cards are hexagons matching the background art exactly. The vertex
      percentages below were measured off the art itself (flat-top hex: points
@@ -154,8 +191,12 @@ const STYLES = `
     background-color: rgba(255,255,255,0.04);
     -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
     clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
-    cursor: pointer; transition: filter 0.15s ease, transform 0.15s ease; text-align: center; }
-  .sv-card:hover { filter: brightness(1.25) saturate(1.15); transform: scale(1.04); }
+    cursor: pointer; transition: transform 0.15s ease; text-align: center;
+    /* The face brightens on the same curve the bloom does, which is what gives
+       the FLOOR tier an arrival at all: its glow column is 0, so it has no bloom to
+       flare and this is the whole of its snap. */
+    filter: brightness(calc(1 + 0.18 * var(--sv-k, 0))) saturate(calc(1 + 0.10 * var(--sv-k, 0)));
+    transform: scale(calc(1 + 0.04 * var(--sv-hov, 0))); }
   /* THE RARITY SLOT. A card's rarity has to be drawn as a stroke and a bloom,
      and the card itself is a clip-path hexagon — which eats both. A clip-path
      removes an outer border outright, and CSS applies filter BEFORE clipping,
@@ -167,23 +208,87 @@ const STYLES = `
      reason. Set inline per card from the tier's colour, because the ladder
      comes out of rarities.csv and a fixed class per tier could not survive a
      row being renamed or added. */
-  .sv-card-slot { display: block; line-height: 0; }
-  /* clip-path cuts off any outline, so focus is shown with an inner glow.
-     Composed from custom properties so the rarity ring and the selection ring
-     can coexist: the tier owns the outer few pixels, the selection sits just
-     inside it. Written as one box-shadow list rather than two rules, since a
-     second rule would replace the first outright. */
-  .sv-card { box-shadow: inset 0 0 0 var(--sv-ring-w, 0px) var(--sv-ring, transparent); }
-  .sv-card:focus-visible { filter: brightness(1.3);
-    box-shadow: inset 0 0 0 var(--sv-ring-w, 0px) var(--sv-ring, transparent),
-                inset 0 0 0 calc(var(--sv-ring-w, 0px) + 4px) #7ad7ff; }
-  /* Gamepad selection. Same look as focus above, but as a class: a pad press
-     is not a focus event, and :focus-visible is the browser's guess about
-     whether to show a ring at all. Written after :hover and at equal
-     specificity so the highlight survives the mouse resting on another card. */
-  .sv-card.sv-card-sel { filter: brightness(1.3) saturate(1.15); transform: scale(1.04);
-    box-shadow: inset 0 0 0 var(--sv-ring-w, 0px) var(--sv-ring, transparent),
-                inset 0 0 0 calc(var(--sv-ring-w, 0px) + 4px) #7ad7ff; }
+  /* THE IGNITION — see CONFIG.rarityCard.ignite and igniteCards().
+     Two animated inputs, kept separate and ADDED rather than one variable both
+     things write: a hover that starts while a card is still cooling has to
+     compose with the flare, not replace it halfway down.
+     Registered, because an unregistered custom property is a token stream to
+     the animation system — it would jump between keyframes instead of
+     interpolating, and the whole effect is the interpolation. */
+  @property --sv-lit { syntax: '<number>'; inherits: true; initial-value: 0; }
+  @property --sv-hov { syntax: '<number>'; inherits: true; initial-value: 0; }
+  /* What everything downstream reads: the bloom on the slot and the face
+     brightness on the card are the same number, so they can't drift apart. */
+  .sv-card-slot { display: block; line-height: 0;
+    --sv-k: calc(var(--sv-lit) + var(--sv-hov) * var(--sv-hov-amt, 0.8));
+    transition: --sv-hov 0.15s ease-out;
+    /* FOUR passes, and the last two are the important ones for legibility.
+       The first pair is the tier's own colour, sized per card from
+       rarities.csv (0px on the floor tier, which is why the second pair
+       exists). The second pair is the SELECTION: white, the same size on every
+       card, and driven by --sv-hov alone rather than by --sv-k, so pointing at
+       a common card lights it exactly as hard as pointing at a legendary.
+       Written here rather than inline per card because a filter set on the
+       element would replace this whole list — see applyRarityStyle, which now
+       hands in sizes instead of a finished filter. */
+    filter:
+      drop-shadow(0 0 calc(var(--sv-glow-tight, 0px) * var(--sv-k)) var(--sv-ring, transparent))
+      drop-shadow(0 0 calc(var(--sv-glow-halo, 0px) * var(--sv-k)) var(--sv-ring, transparent))
+      drop-shadow(0 0 calc(var(--sv-sel-tight, 0px) * var(--sv-hov)) rgba(255,255,255,var(--sv-sel-tight-a, 0.95)))
+      drop-shadow(0 0 calc(var(--sv-sel-halo, 0px) * var(--sv-hov)) rgba(255,255,255,var(--sv-sel-halo-a, 0.6))); }
+  /* Cards do NOT arrive lit. --sv-lit sits at 0 until this card's turn comes
+     round, and the class both runs the flare and holds the resting value it
+     falls to — so with animations off (reduced motion, below) the card still
+     ends up at its idle glow instead of dark. */
+  .sv-card-slot.sv-lit { --sv-lit: var(--sv-idle, 0.42);
+    animation: sv-ignite var(--sv-ignite-time, 0.9s) both; }
+  @keyframes sv-ignite {
+    0%   { --sv-lit: 0; animation-timing-function: cubic-bezier(.2,.9,.3,1); }
+    7%   { --sv-lit: var(--sv-peak, 2.3); animation-timing-function: cubic-bezier(.15,.6,.25,1); }
+    100% { --sv-lit: var(--sv-idle, 0.42); }
+  }
+  /* Hover lands on the SLOT, not the card: the bloom is drawn out here (see
+     below), and a custom property set on the card cannot reach its parent.
+     :has is what makes that possible — without it the card would brighten and
+     the halo around it would not. */
+  .sv-card-slot:has(.sv-card:hover) { --sv-hov: 1; }
+  /* Keyboard focus and pad selection get the same lift as the mouse. Neither
+     can happen before the player has done something — the menu opens with
+     nothing selected and nothing focused (see showLevelUp) — so this cannot
+     light a card during the deal on its own. */
+  .sv-card-slot:has(.sv-card:focus-visible),
+  .sv-card-slot:has(.sv-card-sel) { --sv-hov: 1; }
+  /* ...and the ring goes WHITE with them. The tier colour is what the card is
+     worth and it owns the ring the rest of the time; while a card is the one
+     you are pointing at, "which one" matters more than "how good", and white
+     is the only colour on this menu that no tier can claim. Set on the slot so
+     both the ring (inherited by the card) and the white bloom passes above are
+     switched by one rule. */
+  .sv-card-slot:has(.sv-card:hover),
+  .sv-card-slot:has(.sv-card:focus-visible),
+  .sv-card-slot:has(.sv-card-sel) { --sv-ring-now: #ffffff; }
+  /* clip-path cuts off any outline, so the ring is drawn INSIDE the card as an
+     inset shadow. ONE rule for every state now, driven by --sv-ring-now: the
+     old pair (a tier ring, plus a cyan ring 4px further in for focus and pad
+     selection) meant three different looks for the same idea, and the cyan one
+     was the weakest of them on exactly the cards that needed help — a floor
+     tier has no bloom to go with it.
+     The second, wider shadow is the soft inner edge of the white state: it is
+     transparent at rest and costs nothing then. */
+  .sv-card {
+    box-shadow: inset 0 0 0 var(--sv-ring-w, 0px) var(--sv-ring-now, var(--sv-ring, transparent)),
+                inset 0 0 0 var(--sv-sel-w, 0px) var(--sv-sel-inner, transparent);
+    transition: box-shadow 0.15s ease; }
+  .sv-card-slot:has(.sv-card:hover),
+  .sv-card-slot:has(.sv-card:focus-visible),
+  .sv-card-slot:has(.sv-card-sel) {
+    --sv-sel-w: calc(var(--sv-ring-w, 0px) + 4px);
+    --sv-sel-inner: rgba(255,255,255,0.35); }
+  /* The pad's selection is a CLASS, not focus: a pad press is not a focus event
+     and :focus-visible is the browser's guess about whether a ring is wanted.
+     It needs no rule of its own any more — .sv-card-sel is one of the three
+     selectors in both blocks above, so the pad, the keyboard and the mouse all
+     produce the identical white ring and white bloom. */
   .sv-card-overlay { position: absolute; inset: 0; pointer-events: none; }
   /* Text is confined to the hex's inscribed box and centred both ways, so a
      long upgrade name can't spill past the angled edges. The inset matches
@@ -335,6 +440,17 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
       <div class="sv-menu">
         <div class="sv-title" id="svGameOverTitle">You Died!</div>
         <div class="sv-sub" id="svGameOverStats"></div>
+        <!-- THE TROPHY. Hidden unless a boss actually went down this run — an
+             empty frame on the death screen of a run that never met one would
+             read as a broken image. See systems/bossShot.js. -->
+        <div class="sv-trophy sv-hidden" id="svTrophy">
+          <img class="sv-trophy-img" id="svTrophyImg" alt="" />
+          <div class="sv-trophy-row">
+            <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share</button>
+            <button class="sv-btn sv-btn-sm" id="svTrophySave">Save image</button>
+            <span class="sv-status" id="svTrophyStatus"></span>
+          </div>
+        </div>
         <div class="sv-name-row" id="svNameRow">
           <input class="sv-name-input" id="svNameInput" type="text" maxlength="${MAX_NAME_LEN}"
                  placeholder="Your name" autocomplete="off" autocapitalize="characters"
@@ -358,7 +474,11 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     'svBossBar', 'svBossName', 'svBossFill',
     'svHighScoreLabel', 'svHighScore', 'svRapidFirePanel', 'svRapidFireTime',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
-    'svGameOverTitle',
+    // Try again is the one control on the score card that has to work — it is
+    // the way back into the game. It was reached only through its click
+    // binding until the pad needed to find it by name.
+    'svGameOverTitle', 'svRestartBtn',
+    'svTrophy', 'svTrophyImg', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -368,6 +488,14 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   // it appends its own overlay to `root`, and the order decides which sits on
   // top of which when two are somehow up at once.
   initPauseMenu({ root, reveal: runReveal, revealSeconds, onResume, onRestart: onPauseRestart });
+
+  // The Rive boss bar starts loading NOW, on the title screen, rather than on
+  // the frame a boss arrives — see initBossBarRive. Into `root` rather than
+  // into .sv-hud for the same reason the div bar is: that is a flex row of
+  // corner panels, and a centred banner would be a third item fighting the
+  // other two for space. Nothing is drawn until a fight starts, and if it never
+  // finishes loading the coded bar below carries the run.
+  initBossBarRive(root);
 
   // Every surface's tiles, built while the browser is otherwise idle — see
   // warmReveals. Nothing waits on it; a menu that somehow beats it just pays
@@ -444,7 +572,11 @@ export function showStartMenu() {
   // calling showStartMenu() twice.
   if (!splashPlayed && !prefersReducedMotion()) {
     splashPlayed = true;
-    mountRiveSplash({
+    // The handle is kept now, where it used to be discarded: the splash listens
+    // for a pointer and a key itself, but the Gamepad API has no events at all
+    // — a pad is a thing you POLL. So updateMenuNav dismisses it from the game
+    // loop, and this is what it dismisses.
+    splash = mountRiveSplash({
       parent: root,
       // The title screen breaking up into cells and clearing, over a run that
       // has already started. See revealSplashOut.
@@ -827,9 +959,12 @@ function revealUpgradesIn() {
     from: 0,
     to: 1,
     seconds: revealCfg('upgrades').inTime,
-    onDone: () => setMenuLocked(false),
+    onDone: () => { setMenuLocked(false); igniteCards(); },
   });
   // Nothing animated, so nothing is half-drawn and nothing needs locking.
+  // igniteCards is deliberately NOT repeated here: every path that returns
+  // false has already run onDone on its way out, and calling it twice would
+  // pop the first card twice on any machine that can't mask.
   if (!landed) setMenuLocked(false);
 }
 
@@ -846,6 +981,9 @@ function revealUpgradesOut() {
   // starts a fresh reveal — which is why `finish` hides the menu rather than
   // anything on the way in doing it.
   setMenuLocked(true);
+  // Also covers the ways out that aren't a pick — the menu being closed from
+  // under the deal shouldn't leave it counting to an empty screen.
+  cancelIgnition();
   runReveal('upgrades', {
     target: el.svLevelUpMenu,
     inner: el.svLevelUpBox,
@@ -949,16 +1087,28 @@ function applyRarityStyle(slot, card, rarityId) {
   const cfg = CONFIG.rarityCard ?? {};
   const hex = `#${(tier.color >>> 0).toString(16).padStart(6, '0')}`;
 
-  card.style.setProperty('--sv-ring', hex);
-  card.style.setProperty('--sv-ring-w', `${cfg.ringWidth ?? 3}px`);
+  // On BOTH, and not by accident. The card draws the ring, so it carries the
+  // colour and width itself and stays self-describing. The slot needs the same
+  // two values for the bloom it draws around the card and for the white
+  // selection ring it switches on — and a custom property cannot be read
+  // upwards from a child, so the parent has to hold its own copy.
+  for (const node of [slot, card]) {
+    node.style.setProperty('--sv-ring', hex);
+    node.style.setProperty('--sv-ring-w', `${cfg.ringWidth ?? 3}px`);
+  }
 
   // Two passes, not one. A single wide shadow reads as fog around the card; the
   // tight one gives the edge itself a hot line, and it is the pair that reads
   // as "this thing is lit" rather than "this thing is blurry".
+  //
+  // SIZES, not a finished filter. The slot's filter is a four-pass list in the
+  // stylesheet — this tier's two passes and the white selection pair — and an
+  // inline `filter` here would replace all four with two. So the tier hands in
+  // how big its own blurs are and the sheet composes them; 0px on the floor
+  // tier, which is exactly what "no bloom of its own" means.
   const glow = tier.glow ?? 0;
-  slot.style.filter = glow > 0
-    ? `drop-shadow(0 0 ${(cfg.glowTight ?? 5) * glow}px ${hex}) drop-shadow(0 0 ${(cfg.glowRadius ?? 16) * glow}px ${hex})`
-    : '';
+  slot.style.setProperty('--sv-glow-tight', `${(cfg.glowTight ?? 5) * glow}px`);
+  slot.style.setProperty('--sv-glow-halo', `${(cfg.glowRadius ?? 16) * glow}px`);
 
   // For anything that wants to style or test against the tier without
   // re-deriving it — including the harness, which asserts the ring is actually
@@ -973,16 +1123,87 @@ function applyRarityStyle(slot, card, rarityId) {
 let levelUpCards = [];
 let selectedIndex = -1;
 
+// The pending steps of the deal — see igniteCards. Held so a card picked mid
+// sequence can silence the rest of it: the menu is on its way out, and the
+// tiers it was still going to announce are no longer being offered.
+let igniteTimers = [];
+
+function cancelIgnition() {
+  for (const id of igniteTimers) clearTimeout(id);
+  igniteTimers = [];
+}
+
+/**
+ * Light the dealt cards one at a time, LOWEST TIER FIRST.
+ *
+ * Rank order rather than the order they happen to sit in: read left to right
+ * the hand is arbitrary, but read floor-upwards it is a build, and the best
+ * card on the table is always the last thing that happens. Nothing is lit
+ * before its turn (see the .sv-lit class) — three cards blooming on the same
+ * frame is a wash that says "something was dealt" and nothing about what.
+ *
+ * Each step is a sound as well as a flare: `cardPop` a step higher in pitch
+ * every time, with that tier's own sting on top of it. The pop is the counting,
+ * the sting is the answer, and the two together are why the sequence can be
+ * followed without looking at it.
+ *
+ * Runs off setTimeout rather than the game loop on purpose — the run is paused
+ * behind this menu, and the flare itself is a compositor animation, so nothing
+ * here needs a frame.
+ */
+function igniteCards() {
+  cancelIgnition();
+  const cfg = CONFIG.rarityCard?.ignite ?? {};
+  const step = Math.max(0, cfg.step ?? 0.13) * 1000;
+  const pitchStep = cfg.popPitch ?? 1.06;
+
+  // Ties keep their dealt order, so two cards of the same tier still read left
+  // to right rather than swapping around between level-ups.
+  const order = levelUpCards
+    .map((card, i) => ({ card, i, rank: Number(card.dataset.rarityRank) || 0 }))
+    .sort((a, b) => (a.rank - b.rank) || (a.i - b.i));
+
+  order.forEach(({ card }, n) => {
+    const fire = () => {
+      card.parentElement?.classList.add('sv-lit');
+      // Pitched by POSITION IN THE SEQUENCE, not by tier: the climb has to be
+      // even whatever hand was dealt, so three commons still count upwards.
+      playSfx('cardPop', 1, { pitch: pitchStep ** n });
+      const tier = rarityById(card.dataset.rarity);
+      if (tier?.sfx) playSfx(tier.sfx);
+    };
+    // The first card lights on the frame the dither lands rather than a step
+    // after it, so the sequence starts WITH the menu arriving.
+    if (n === 0) fire();
+    else igniteTimers.push(setTimeout(fire, n * step));
+  });
+}
+
 export function showLevelUp() {
   const pool = availableUpgrades();
   const picks = drawUpgrades(pool, CONFIG.upgradeChoices);
 
+  // A level-up can land while the last one is still dealing itself out (two
+  // levels in one wave). Whatever was still to be announced belongs to a hand
+  // that no longer exists.
+  cancelIgnition();
   el.svCards.innerHTML = '';
-  // The tiers actually DEALT this level-up. Collected as the cards are built
-  // rather than read back off `picks`, which holds the shared CONFIG.upgrades
-  // entries — the roll lives on the per-card copy, and reading the defs here
-  // silently found no rarity at all and never played the sting.
-  const dealt = [];
+  // The shape of the deal, handed to the CSS once rather than per card: the
+  // keyframe and the bloom both read these, so a tuner slider moves the flare
+  // on the NEXT menu without anything here recomputing a filter.
+  const ig = CONFIG.rarityCard?.ignite ?? {};
+  el.svCards.style.setProperty('--sv-ignite-time', `${ig.time ?? 0.9}s`);
+  el.svCards.style.setProperty('--sv-peak', String(ig.peak ?? 2.3));
+  el.svCards.style.setProperty('--sv-idle', String(ig.idle ?? 0.42));
+  el.svCards.style.setProperty('--sv-hov-amt', String(ig.hover ?? 0.8));
+  // The white "this one" bloom. On the container rather than per card because
+  // it is the one part of a card's look that is deliberately the same on all of
+  // them — see CONFIG.rarityCard.selectGlow.
+  const sel = CONFIG.rarityCard?.selectGlow ?? {};
+  el.svCards.style.setProperty('--sv-sel-tight', `${sel.tight ?? 7}px`);
+  el.svCards.style.setProperty('--sv-sel-halo', `${sel.halo ?? 22}px`);
+  el.svCards.style.setProperty('--sv-sel-tight-a', String(sel.tightAlpha ?? 0.95));
+  el.svCards.style.setProperty('--sv-sel-halo-a', String(sel.haloAlpha ?? 0.6));
   for (const def of picks) {
     // An upgrade declaring `roll` picks its variant HERE, at draw time, so the
     // card can show what it is offering. Rolled onto a SHALLOW COPY rather than
@@ -1004,8 +1225,10 @@ export function showLevelUp() {
     const card = document.createElement('div');
     card.className = 'sv-card';
     card.tabIndex = 0;
+    // The tier it was actually dealt at goes onto the card as data, and that is
+    // what the deal reads back later to know its order and its sting — not the
+    // CONFIG.upgrades entry, whose roll belongs to no particular hand.
     applyRarityStyle(slot, card, rarity);
-    dealt.push(choice);
 
     // `cardArt` comes off the upgrade itself — the `cardArt` column of
     // upgrades.csv, validated against LEVELUP_IMAGE_KEYS when the file loads,
@@ -1075,28 +1298,25 @@ export function showLevelUp() {
   el.svLevelUpMenu.classList.remove('sv-hidden');
   for (const card of el.svCards.querySelectorAll('.sv-card')) fitCardText(card);
 
-  // Gamepad navigation. The selection starts on the first card so there's
-  // always something A can confirm, and the pad's buttons are re-baselined so
-  // the fire button being held right now doesn't pick it instantly.
-  // The cards, not the slots — everything downstream (selection class, focus,
-  // the arrow-key geometry) acts on the card itself.
+  // Gamepad navigation. The cards, not the slots — everything downstream
+  // (selection class, focus, the arrow-key geometry) acts on the card itself.
+  // The pad's buttons are re-baselined so the fire button being held right now
+  // doesn't pick a card the moment one becomes selectable.
   levelUpCards = [...el.svCards.querySelectorAll('.sv-card')];
+  // NOTHING IS SELECTED YET. The menu used to open with the first card
+  // highlighted and focused so the pad always had something to confirm — but
+  // on a mouse that highlight is a lie: it points at a card the player never
+  // pointed at, and it sits there for the whole menu because the mouse has no
+  // reason to move it. The selection is now something an INPUT creates, and
+  // until one arrives the hand is just a hand. updateMenuNav puts it on the
+  // first card the moment the pad says anything.
   selectedIndex = -1;
   resetMenuInput();
-  selectCard(0);
-
-  // ONE sting, for the best tier on the table. Three would smear, and the two
-  // quieter ones would be inaudible under the loudest anyway — so the menu
-  // announces the best thing on offer and says nothing about the rest.
-  // Fired before the reveal rather than after it: the sound is what makes you
-  // look at the cards, so it has to arrive with them starting to appear, not
-  // half a second after they have landed.
-  const best = rarityById(bestRarity(dealt));
-  if (best?.sfx) playSfx(best.sfx);
 
   // Last, once everything is built, laid out and selected: the reveal masks
   // the finished menu, and a card added after it started would appear whole
-  // over a half-dithered one.
+  // over a half-dithered one. The deal announces itself once the dither has
+  // landed — see igniteCards, which revealUpgradesIn starts.
   revealUpgradesIn();
 }
 
@@ -1106,11 +1326,10 @@ function selectCard(i) {
   selectedIndex = Math.max(0, Math.min(levelUpCards.length - 1, i));
   // The pad and the keyboard get the same hover the mouse does — otherwise the
   // menu is silent for anyone not using a pointer, which is most of a run on a
-  // controller. Only on a real MOVE: showLevelUp calls selectCard(0) to put the
-  // selection somewhere before the cards have finished arriving, and a blip on
-  // that is the menu announcing itself rather than answering the player.
-  // Stepping into the card you are already on is not a move either.
-  if (previous >= 0 && previous !== selectedIndex) feedback('uiHover');
+  // controller. Every call here is now a player action (the menu no longer
+  // seeds a selection of its own), so the only thing that stays silent is
+  // stepping into the card you are already on, which is not a move.
+  if (previous !== selectedIndex) feedback('uiHover');
   levelUpCards.forEach((card, n) => card.classList.toggle('sv-card-sel', n === selectedIndex));
   // Move real focus along with it, so Enter/Space keep working on whatever the
   // pad is pointing at and the two input methods can't disagree about which
@@ -1153,9 +1372,97 @@ function stepSelection(dx, dy) {
   return best < 0 ? selectedIndex : best;
 }
 
-// Called once per frame from the game loop. No-op unless the level-up menu is
-// actually up — it's the only screen the pad drives.
+// --- the score card on a pad -------------------------------------------------
+// The level-up screen has driven off the pad for a long time; the screen you
+// see when a run ENDS never did, which meant a controller player could reach
+// the end of a run and have no way to start another one without a mouse.
+//
+// The controls are collected fresh every frame rather than cached on the way
+// in. The trophy row only exists if a boss went down, Submit disables itself
+// once a name is posted, and the board arrives from the network later — a list
+// built once when the card opened would be wrong within a second in the normal
+// case.
+let overIndex = -1;
+
+// Every control on the card, reachable or not. The clean-up below has to work
+// from THIS list rather than the filtered one: once the card is hidden every
+// button on it is inside a hidden block, so a highlight cleared through the
+// filter would be a highlight never cleared at all.
+function gameOverAll() {
+  return [el.svTrophyShare, el.svTrophySave, el.svNameSubmit, el.svRestartBtn].filter(Boolean);
+}
+
+function gameOverControls() {
+  // A disabled button and one inside a hidden block are both unreachable for a
+  // mouse, so neither may be a stop for the pad either — a cursor that lands
+  // on something invisible is a cursor that has vanished.
+  return gameOverAll().filter((c) => !c.disabled && !c.closest('.sv-hidden'));
+}
+
+// The name FIELD is deliberately not in that list. A pad cannot type, so a
+// cursor stop there would be a dead end with no way to see it was one — the
+// field stays a keyboard and touch control, and Submit (which is in the list)
+// posts whatever is in it.
+function selectGameOver(i, controls) {
+  const previous = overIndex;
+  overIndex = Math.max(0, Math.min(controls.length - 1, i));
+  if (previous !== overIndex) feedback('uiHover');
+  for (const c of controls) c.classList.toggle('sv-nav-sel', c === controls[overIndex]);
+  controls[overIndex].focus({ preventScroll: true });
+}
+
+/** True if the score card is up — in which case it owns the pad this frame. */
+function updateGameOverNav() {
+  if (el.svGameOverMenu.classList.contains('sv-hidden')) {
+    // The highlight has to go with the card, not just the index behind it: a
+    // class left on a button is a card that reopens with something already
+    // chosen, which is the whole thing this cursor is written to avoid.
+    if (overIndex >= 0) {
+      for (const c of gameOverAll()) c.classList.remove('sv-nav-sel');
+      overIndex = -1;
+    }
+    return false;
+  }
+  const controls = gameOverControls();
+  if (!controls.length) return true;
+
+  // Same rule as the cards: nothing is highlighted until the player asks, so
+  // the card doesn't open with a button lit for a mouse user who will never
+  // move it. Any menu direction or a confirm is the asking.
+  if (overIndex < 0 || overIndex >= controls.length) {
+    if (menuInput.x || menuInput.y || menuInput.confirm) selectGameOver(0, controls);
+    return true;
+  }
+
+  // One flat list, stepped by either axis. The card is a column of one- and
+  // two-button rows rather than a grid, so "down" and "right" mean the same
+  // thing here and a player pushing whichever one they thought of is right.
+  const step = (menuInput.y || menuInput.x);
+  if (step) selectGameOver(overIndex + (step > 0 ? 1 : -1), controls);
+  // Through the button's own click, so the pad takes the same path the mouse
+  // does — including the sound bound to it.
+  if (menuInput.confirm) controls[overIndex]?.click();
+  return true;
+}
+
+// Called once per frame from the game loop. Drives every screen the pad can
+// reach, in the order they can be on top of each other: the splash covers
+// everything, the score card is the only thing up when a run has ended, and
+// the cards are the only thing up mid-run.
 export function updateMenuNav() {
+  // The splash asks for "press anything", and on a pad that is a poll rather
+  // than a listener. Its own pointer and key handlers still do the same job
+  // for the other two input methods — see riveSplash.js.
+  if (splash) {
+    if (splash.isDestroyed) splash = null;
+    else {
+      if (menuInput.anyPress) splash.destroy('gamepad');
+      return;
+    }
+  }
+
+  if (updateGameOverNav()) return;
+
   if (!levelUpCards.length || el.svLevelUpMenu.classList.contains('sv-hidden')) return;
   // Nothing to drive while the cards are still dissolving in — and in
   // particular no confirm, or a fire button held through the level-up picks
@@ -1166,6 +1473,21 @@ export function updateMenuNav() {
   // whatever the player is actually on before stepping off it.
   const focused = levelUpCards.indexOf(document.activeElement);
   if (focused >= 0 && focused !== selectedIndex) selectCard(focused);
+
+  // The FIRST thing the pad says lands the selection rather than moving it:
+  // there is nothing on screen to step away from until the player has asked
+  // for a selection at all (see showLevelUp), and stepSelection measures from
+  // the selected card, which does not exist yet.
+  //
+  // Confirm counts as asking. A held fire button can't reach here — the menu
+  // is locked while the cards dissolve in and resetMenuInput has already
+  // adopted whatever is down — so a press that arrives with nothing selected
+  // is a deliberate one, and it puts the selection on the first card instead
+  // of committing to a card the player was never shown as chosen.
+  if (selectedIndex < 0) {
+    if (menuInput.x || menuInput.y || menuInput.confirm) selectCard(0);
+    return;
+  }
 
   if (menuInput.x || menuInput.y) selectCard(stepSelection(menuInput.x, menuInput.y));
   // Routed through the card's own click handler rather than a second copy of
@@ -1249,7 +1571,71 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
 // systems/boss.js's own view of what is in the water ({ name, frac }), or null
 // for "no boss" — which is also what the death and restart paths pass, so the
 // bar can never outlive the fight it belongs to.
+// HOW LONG THE BAR IS, from how much health the fight has.
+//
+// A later boss is not just harder, it is visibly WIDER across the top of the
+// screen — the escalation made readable before the first hit lands, and the
+// only reason the bar is sized at all rather than being one fixed rectangle.
+//
+// Mapped from hp on a SQUARE ROOT, not linearly. Boss health runs from 600 to
+// several thousand across a long run, and a linear map either pins the first
+// boss at a sliver or runs the sixth off both edges of the screen. The root
+// compresses the top end, so every boss in the range is legibly different from
+// its neighbours and none of them is unusable.
+// THESE TRACK enemies.csv AND GO STALE SILENTLY. They were 600 and 4000, set
+// when a boss had 600 base hp; boss health was then raised roughly fourfold and
+// these were not, so every boss in the game — starting with the first — was
+// already past the ceiling and every bar drew at full width. The feature did
+// not break loudly, it just quietly stopped meaning anything: five fights, five
+// identical bars.
+//
+// So they are set against what a run ACTUALLY MEETS (base hp, plus
+// hpPerDifficulty, plus CONFIG.spawn.ramp, at the minute the fight happens) —
+// about 10k for the first boss and about 150k deep into a long run — and
+// tools/boss-test.mjs re-derives that curve from the CSV and fails when the
+// spread collapses. That test is the thing that keeps this honest the next time
+// boss health moves; the numbers here cannot do it themselves.
+// Set BELOW the first boss rather than at it: the square root compresses the
+// top of the range and stretches the bottom, so an endpoint sitting on the
+// first fight pins that fight at zero width — the bar would start every run
+// looking broken.
+const BOSS_BAR_MIN_HP = 6000;    // under the first boss of a run — the short bar
+const BOSS_BAR_MAX_HP = 190000;  // deep into a long run — the full-width bar
+/** The two endpoints, so a test can drive the ends of the curve without
+ *  hardcoding hp numbers that go stale the next time boss health moves —
+ *  which is exactly how this pair got four times out of date. */
+export const BOSS_BAR_HP_RANGE = [BOSS_BAR_MIN_HP, BOSS_BAR_MAX_HP];
+// HOW BIG THIS FIGHT IS, 0..1. Split out from the width string because there
+// are now two bars reading it — this one and the Rive artboard, which wants the
+// same answer as a percentage of its own width — and a curve that lived in only
+// one of them would eventually mean the two bars disagreed about which boss was
+// the bigger one.
+export function bossBarSpan(maxHp) {
+  const t = (Math.sqrt(Math.max(BOSS_BAR_MIN_HP, maxHp ?? 0)) - Math.sqrt(BOSS_BAR_MIN_HP))
+    / (Math.sqrt(BOSS_BAR_MAX_HP) - Math.sqrt(BOSS_BAR_MIN_HP));
+  return Math.max(0, Math.min(1, t));
+}
+function bossBarWidth(maxHp) {
+  // Both ends are in vw so the bar keeps its proportion of the screen on every
+  // display, and the ceiling is short of the full width because a bar running
+  // edge to edge reads as a loading screen rather than as part of the HUD.
+  return `${44 + bossBarSpan(maxHp) * 40}vw`;
+}
+
 export function updateBossBar(banner) {
+  // THE RIVE BAR FIRST, THE CODED ONE AS THE FALLBACK. Asked every frame rather
+  // than decided once at boot, because "is the Rive bar drawing" genuinely can
+  // change mid-run: the artboard loads asynchronously, and it can give up at
+  // any point in that load (see bossBarRive.js). A run that starts before the
+  // file has arrived draws the div bar and switches over when it lands, which
+  // is the right way round — the fallback is the thing that is always ready.
+  if (updateBossBarRive(banner, bossBarSpan(banner?.maxHp))) {
+    // Both must never be up at once, and the div one is the one that would
+    // otherwise be left showing: it is hidden by the same class it always was,
+    // rather than by anything the Rive path knows about.
+    el.svBossBar?.classList.add('sv-hidden');
+    return;
+  }
   if (!el.svBossBar) return;
   if (!banner) {
     el.svBossBar.classList.add('sv-hidden');
@@ -1259,6 +1645,21 @@ export function updateBossBar(banner) {
   // Guarded because this runs every frame and the name changes once per boss:
   // writing textContent unconditionally re-lays-out the line for nothing.
   if (el.svBossName.textContent !== banner.name) el.svBossName.textContent = banner.name;
+
+  // Same guard, and it matters more here: the width is a layout property, and
+  // rewriting it every frame would force a reflow of the whole HUD sixty times
+  // a second for a value that changes once per boss.
+  const width = bossBarWidth(banner.maxHp);
+  if (el.svBossBar.style.width !== width) el.svBossBar.style.width = width;
+
+  // THE ARRIVAL. While the boss is swimming in, `frac` is how far through the
+  // ceremony it is rather than how much health it has left (see tickArrival in
+  // systems/boss.js), and the fill is switched to a slower, eased transition
+  // so it GROWS rather than snapping to each frame's value. The class is what
+  // carries that difference — a transition duration written from here would
+  // have to be unwritten again, and the frame it was missed on is the frame
+  // the bar jumps.
+  el.svBossFill.classList.toggle('sv-boss-fill-arriving', !!banner.arriving);
   el.svBossFill.style.width = `${Math.max(0, Math.min(1, banner.frac)) * 100}%`;
 }
 
@@ -1404,6 +1805,58 @@ export function clearToasts() {
 // nothing is submitted until they confirm. What shows immediately is the run's
 // own stats plus the board as it currently stands, so there's something to aim
 // at while typing rather than an empty panel.
+
+// --- the trophy ------------------------------------------------------------
+// The kill shot kept from this run's last boss, offered on the death screen.
+// Built here rather than in systems/bossShot.js for the same reason every other
+// surface is: that module owns the PICTURE, this one owns the screen.
+//
+// The buttons are wired once, on first show, and they must be wired to a real
+// click — both the share sheet and, in some browsers, the download are gated on
+// a user gesture, so neither can be fired from the frame loop or from a timer.
+let trophyWired = false;
+function showTrophy() {
+  const shot = bossShot();
+  if (!el.svTrophy) return;
+  if (!shot) {
+    // No boss died this run. Hidden, and the src is dropped as well as the
+    // element — a stale image left in the tag is a picture of the previous run
+    // sitting one class away from being shown again.
+    el.svTrophy.classList.add('sv-hidden');
+    if (el.svTrophyImg) el.svTrophyImg.removeAttribute('src');
+    return;
+  }
+
+  el.svTrophyImg.src = shot.url;
+  el.svTrophyImg.alt = shot.name ? `You beat ${shot.name}` : 'Your boss kill';
+  el.svTrophyStatus.textContent = '';
+  el.svTrophy.classList.remove('sv-hidden');
+
+  if (trophyWired) return;
+  trophyWired = true;
+  const say = (msg) => { if (el.svTrophyStatus) el.svTrophyStatus.textContent = msg; };
+  el.svTrophyShare?.addEventListener('click', async () => {
+    say('…');
+    // The result is reported back rather than assumed, because the three routes
+    // this can take are genuinely different outcomes to a player: the sheet
+    // opened, a file landed in Downloads, or nothing happened because they
+    // closed the sheet. Saying "shared!" for all three is how a download
+    // silently goes unnoticed.
+    const how = await shareBossShot();
+    say({
+      shared: 'Shared',
+      saved: 'Saved to your downloads',
+      opened: 'Opened in a new tab',
+      cancelled: '',
+      unavailable: 'Nothing to share',
+    }[how] ?? '');
+  });
+  el.svTrophySave?.addEventListener('click', () => {
+    const how = saveBossShot();
+    say(how === 'saved' ? 'Saved to your downloads' : how === 'opened' ? 'Opened in a new tab' : '');
+  });
+}
+
 export function showGameOver(gameState) {
   el.svHud.classList.add('sv-hidden');
   // Rolled per death, not once per session — the line is the first thing read
@@ -1431,6 +1884,8 @@ export function showGameOver(gameState) {
   // Show the standing board right away from local data, then upgrade it to the
   // global one when that arrives. Waiting on the network first would leave the
   // panel blank for as long as the request takes.
+  showTrophy();
+
   renderBoard(loadLeaderboard(), { global: false });
   if (isGlobal()) {
     fetchGlobalBoard().then((list) => {

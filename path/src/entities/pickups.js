@@ -344,7 +344,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
     if (waiting && (tell.shiver ?? 0) > 0) {
       const phase = (p.shiverPhase ??= Math.random() * Math.PI * 2);
       // Same Nyquist limit the wind-up tremble lives under (see
-      // CONFIG.strike.charge.vibrate): past ~20Hz at 60fps this aliases into a
+      // CONFIG.strike.charge.tremble): past ~20Hz at 60fps this aliases into a
       // slow wobble, which reads as broken rather than as urgent.
       const w = orbClock * (tell.hz ?? 18) * Math.PI * 2 + phase;
       p.shiverX = Math.cos(w) * tell.shiver;

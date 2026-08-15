@@ -58,7 +58,11 @@ beluga.speed,15,2,30,beluga bubble speed
 beluga.life,4,0.5,10,beluga bubble lifespan
 beluga.trapDuration,5.2,0.5,10,beluga seconds a catch is held
 beluga.durationPerLevel,0.7,0,3,beluga extra seconds held per level
-beluga.maxCatch,3,1,8,beluga creatures one bubble can seal
+beluga.maxCatch,3,1,8,beluga creatures one bomblet can seal
+beluga.splitDelay,0.9,0.1,4,beluga seconds the cluster floats before it splits
+beluga.splitCount,5,1,12,beluga bomblets per cluster
+beluga.bombletScale,0.45,0.1,1,beluga bomblet size x the cluster
+beluga.fuse,0.8,0.1,4,beluga seconds a bomblet drifts before it pops
 beluga.baseBubbleRadius,0.5,0.1,2,beluga bubble size
 beluga.radiusPerLevel,0.24,0,0.5,beluga bubble size per level
 club.damage,6,0,40,club whack damage — a CHIP on purpose; the carom is the payload
@@ -90,3 +94,23 @@ clubIce.freezeForPerLevel,0.2,0,1,cold snap freeze per level
 strike.damage,40,1,200,strike nominal damage — what Bone Shrapnel and Glow Up! measure against
 strike.cardDamage,5,0,30,strike damage added per strike-family card
 strike.chainDamageMul,1.11,1,1.5,strike food-chain damage mult per link — COMPOUNDS over links AND over Killer Instinct stacks
+airborne.enabled,1,,,air time: master switch for everything a breach is worth
+airborne.rampTime,1.1,0.2,5,air time: seconds of hang for a full ramp
+airborne.jumpRamp,0.4,0,1.5,air time: ramp added per mid-air jump used
+airborne.maxRamp,1.6,0.2,4,air time: ceiling on the summed ramp — the one number that caps air play
+airborne.damageMul,0.55,0,3,air time: extra damage at full ramp (multiplier is 1 + ramp x this)
+airborne.fireRateMul,0.45,0,3,air time: extra fire rate at full ramp
+airborne.pickupMul,0.9,0,4,air time: extra chum pickup radius at full ramp
+airborne.jumps.max,1,0,4,air jumps: relaunches granted per breach — 1 is a double jump
+airborne.jumps.speed,30,5,60,air jumps: launch speed
+airborne.jumps.upBias,0.45,0,1,air jumps: how much of the launch is forced upward (0 = pure dash)
+airborne.jumps.invuln,0.3,0,1.5,air jumps: i-frames granted per relaunch
+airborne.slam.enabled,1,,,splash-down: master switch for the re-entry blast
+airborne.slam.damage,46,0,200,splash-down: blast damage at ramp 1
+airborne.slam.radius,7.5,0,20,splash-down: blast radius at ramp 1
+airborne.slam.minRamp,0.18,0,1,splash-down: ramp below which no blast fires at all
+airborne.slam.speedBonus,0.02,0,0.2,splash-down: extra multiplier per unit/sec of impact speed
+airborne.slam.speedMax,1.6,1,4,splash-down: cap on that speed multiplier
+octoGrab.reach,7,1,25,octopus: grab radius at level 1 — one tentacle measures 5.86 so the cap is 11.14
+octoGrab.reachPerLevel,0.35,0,3,octopus: grab radius per level — level 8 asks for 9.45 of that cap
+octoGrab.reachStretch,1.9,1,2.5,octopus: how far past its real length an arm may strain (sets the cap)

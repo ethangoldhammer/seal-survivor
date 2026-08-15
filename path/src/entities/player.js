@@ -7,7 +7,10 @@ import { bounds, clampToArena, midWater } from '../arena.js';
 import { feedback } from '../systems/feedback.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createAimRig } from '../systems/aimRig.js';
+import { createCelebrationDriver, resetCelebration, celebrationSpin } from '../systems/celebrate.js';
+import { createBreathDriver } from '../systems/breathe.js';
 import { attachPlayerOutline } from '../systems/outlines.js';
+import { cancelDash } from '../systems/strike.js';
 
 // Scratch for the body transform, which composes the mirror, the barrel roll,
 // the crane and the wind-up shudder every frame.
@@ -16,17 +19,27 @@ const _craneQ = new THREE.Quaternion();
 const TAU = Math.PI * 2;
 const _yAxis = new THREE.Vector3(0, 1, 0); // the art's forward — the roll axis
 const _xAxis = new THREE.Vector3(1, 0, 0); // swings the nose toward the camera
+const _spinQ = new THREE.Quaternion();
+const _zAxis = new THREE.Vector3(0, 0, 1); // the seal's lateral axis — the somersault's
 
 export const player = {
   mesh: null, // container — carries the aim rotation
   body: null, // visual — carries the left/right flip
   aimRig: null, // fin/head IK, muzzles and bone anchors; null for a model with no rig
+  celebrate: null, // boss-kill victory pose; null for a model with no rig to pose
+  breathe: null, // the resting breath; null for a model with no breathRig
   velocity: new THREE.Vector2(0, 0),
   hp: 100,
   invuln: 0,
   upgrades: [],
   stats: {},
   aboveSurface: false,
+  // 0..1 — how settled the seal is at the waterline, and the only input to the
+  // relaxed idle and its breathing. Deliberately SEPARATE from aboveSurface,
+  // which is a physics fact (gravity, air drag, the breach splash) and must
+  // keep meaning exactly what it always has. See CONFIG.surfaceRest.
+  surfaceRest: 0,
+  surfaceRestTimer: 0, // seconds held still at the surface, before the ramp
   // Which way the surface was crossed on THIS frame: 1 up, -1 down, 0 not at
   // all. A one-frame edge, cleared at the top of updatePlayer — `aboveSurface`
   // alone can't carry it, since a caller reading it after the fact sees only
@@ -34,6 +47,24 @@ export const player = {
   // as a plain field for the same reason as dashTimer and comboSpeedMul —
   // entities/ doesn't import from systems/.
   breachDir: 0,
+  // --- air time -------------------------------------------------------------
+  // Seconds since the seal last crossed the water line going UP, and the
+  // mid-air relaunches spent since. Together they are what CONFIG.airborne
+  // scales everything off — see systems/airborne.js, which owns the maths;
+  // these three are only the raw record of the arc.
+  //
+  // Plain fields on the player for the same reason dashTimer and comboSpeedMul
+  // are: entities/ doesn't import from systems/, so the state lives here and
+  // the system that reads it comes to it.
+  //
+  // `airPeak` is the high-water mark of the ramp during THIS breach, and it
+  // exists because the splash-down is paid out on the way down. A jump spent at
+  // the top of the arc is the most expensive thing in the mechanic, and reading
+  // the live ramp at the moment of impact — after the descent has run the
+  // clock — would quietly refuse to pay for it.
+  airTime: 0,
+  airJumps: 0,
+  airPeak: 0,
   // The side-view mirror, as an ANGLE rather than written straight onto the
   // body. 0 or PI — a mirror about the forward axis IS a half roll, so it
   // lives in the same channel the barrel roll does and the two simply add.
@@ -107,6 +138,8 @@ export function initPlayer(scene) {
   player.body = body;
   player.anim = createAnimationController(body);
   player.aimRig = createAimRig(body);
+  player.celebrate = createCelebrationDriver(body);
+  player.breathe = createBreathDriver(body);
   scene.add(group);
   recomputeStats();
 }
@@ -136,6 +169,8 @@ export function rebuildShipBody() {
   // animation controller is — a swapped body leaves the old one pointing at
   // bones that are no longer in the scene.
   player.aimRig = createAimRig(body);
+  player.celebrate = createCelebrationDriver(body);
+  player.breathe = createBreathDriver(body);
 }
 
 // Rebuild the stat block from CONFIG, then replay every upgrade on top. Called
@@ -196,6 +231,10 @@ export function resetPlayer() {
   player.shudderAmp = 0;
   player.body.rotation.y = 0;
   player.body.quaternion.identity();
+  // The wind-up's positional buzz. Only the tremble ever writes this, and a run
+  // that ended mid-hold would otherwise open with the seal a few hundredths off
+  // its own container — invisible, but it would never come back.
+  player.body.position.set(0, 0, 0);
   player.rollAngle = 0;
   player.rollElapsed = 0;
   player.rollDuration = 0;
@@ -204,6 +243,9 @@ export function resetPlayer() {
   player.velocity.set(0, 0);
   player.aboveSurface = false;
   player.breachDir = 0;
+  player.airTime = 0;
+  player.airJumps = 0;
+  player.airPeak = 0;
   player.level = 1;
   player.mirrored = null;
   player.mirrorFrom = 0;
@@ -220,6 +262,17 @@ export function resetPlayer() {
   // death pose for every subsequent run.
   player.anim?.reset();
   player.aimRig?.reset();
+  // Both halves: the shared clock (or a run that starts moments after a boss
+  // died resumes celebrating for it) and this body's smoothed IK pose, which
+  // would otherwise blend the last run's clap into the first frames of this
+  // one. See systems/celebrate.js.
+  resetCelebration();
+  player.celebrate?.reset();
+  // A new run starts on a fresh breath, not mid-exhale, and never still
+  // relaxed from where the last seal came to rest.
+  player.breathe?.reset();
+  player.surfaceRest = 0;
+  player.surfaceRestTimer = 0;
   recomputeStats();
   player.hp = player.stats.maxHp;
   // After recomputeStats, not before: upgrades were just cleared above, so the
@@ -249,16 +302,55 @@ export function updatePlayer(dt, input) {
   // which is what makes it a turn radius rather than a lerp: speed/turnRate,
   // ~3.8 world units at defaults. The rate scales with the combo alongside
   // the speed it divides, so the radius stays constant as you get faster.
-  if (dashing && CONFIG.strike.dashTurnRate > 0 && input.move.lengthSq() > 0.001) {
+  // A DASH IS STEERED, THROTTLED AND CANCELLABLE — see CONFIG.strike.dashControl.
+  //
+  // It used to be none of those things past a slow turn: the heading swung
+  // toward the stick at a capped rate and the speed was pinned at dashSpeed for
+  // the whole length, so the only choice you had mid-strike was which arc to
+  // ride. Turn authority was never really the problem — 12 rad/s already bends
+  // a base dash through 151 degrees — being locked to 46 u/s with no way out
+  // was.
+  if (dashing && input.move.lengthSq() > 0.001) {
+    const dc = CONFIG.strike.dashControl ?? {};
+    const stick = Math.min(1, input.move.length());
     const v = player.velocity.length();
+
     if (v > 0.001) {
       const cur = Math.atan2(player.velocity.y, player.velocity.x);
       let delta = Math.atan2(input.move.y, input.move.x) - cur;
       while (delta > Math.PI) delta -= Math.PI * 2;
       while (delta < -Math.PI) delta += Math.PI * 2;
-      const maxStep = CONFIG.strike.dashTurnRate * combo * dt;
-      const a = cur + Math.max(-maxStep, Math.min(maxStep, delta));
-      player.velocity.set(Math.cos(a) * v, Math.sin(a) * v);
+
+      // BREAK OUT. Steering hard AGAINST the dash ends it on the spot and hands
+      // back ordinary swimming, at the cost of the reach not yet spent. The
+      // test is on the angle rather than on a button so it needs no new input:
+      // shoving the stick backwards is already what a player does when they
+      // want out, and it could not previously mean anything.
+      const breakAngle = (dc.breakOutAngle ?? 2.2);
+      if (dc.breakOut !== false && Math.abs(delta) >= breakAngle && stick >= (dc.breakOutStick ?? 0.7)) {
+        player.dashTimer = 0;
+        cancelDash();
+      } else {
+        // THE TURN. `dashTurnRate` is the base; `steerMul` scales it and lives
+        // apart so the rate can be raised without touching a slider that has
+        // already been tuned. Still scaled by the combo alongside the speed it
+        // divides, so the radius stays constant as a chain makes you faster.
+        const rate = CONFIG.strike.dashTurnRate * (dc.steerMul ?? 1) * combo;
+        const maxStep = rate * dt;
+        const a = cur + Math.max(-maxStep, Math.min(maxStep, delta));
+
+        // THE THROTTLE. A half-pushed stick asks for a slower dash, and easing
+        // right off bleeds toward `minSpeedMul` of it — so a dash can be shed
+        // into a normal swim instead of being waited out. Approached rather
+        // than snapped: an instant speed change reads as the dash stuttering.
+        let target = v;
+        if (dc.throttle !== false) {
+          const floor = (dc.minSpeedMul ?? 0.45);
+          const want = s.strikeDashSpeed * combo * (floor + (1 - floor) * stick);
+          target = v + (want - v) * Math.min(1, (dc.throttleLerp ?? 7) * dt);
+        }
+        player.velocity.set(Math.cos(a) * target, Math.sin(a) * target);
+      }
     }
   }
 
@@ -304,7 +396,56 @@ export function updatePlayer(dt, input) {
   // Breaching the surface throws up a splash, in either direction.
   player.aboveSurface = pos.y > bounds.surfaceY;
   player.breachDir = player.aboveSurface === wasAbove ? 0 : (player.aboveSurface ? 1 : -1);
-  if (player.aboveSurface !== wasAbove) {
+
+  // --- resting at the surface ---------------------------------------------
+  // A second, gentler reading of the same position, for the ANIMATION only.
+  // `aboveSurface` above is a hard line the seal is on one side of; this asks
+  // whether the animal is parked at the waterline, which is a band around it
+  // and includes floating just under. See CONFIG.surfaceRest for why the hard
+  // line made `surfaceIdle` a ~100ms window at the top of a jump.
+  {
+    const rest = CONFIG.surfaceRest ?? {};
+    const atSurface = pos.y > bounds.surfaceY - (rest.band ?? 1.3);
+    const settled = player.velocity.length() < (rest.speed ?? 2.4);
+    if (rest.enabled !== false && atSurface && settled) {
+      player.surfaceRestTimer += dt;
+    } else {
+      player.surfaceRestTimer = 0;
+    }
+    // Ease IN over settleTime once it has held still that long, and OUT over
+    // the much shorter releaseTime. Asymmetric on purpose — relaxing is a
+    // decision the animal takes its time over, moving is not.
+    const want = player.surfaceRestTimer >= (rest.settleTime ?? 0.7) ? 1 : 0;
+    const tau = want > player.surfaceRest ? (rest.settleTime ?? 0.7) : (rest.releaseTime ?? 0.16);
+    player.surfaceRest += (want - player.surfaceRest) * (1 - Math.exp(-dt / Math.max(0.01, tau)));
+    if (player.surfaceRest < 0.001) player.surfaceRest = 0;
+  }
+
+  // THE ARC'S CLOCK. Zeroed on the way UP and left alone on the way down —
+  // the descent is not a fourth state to clear, it is the frame the arc gets
+  // PAID (systems/airborne.js fires the splash-down off exactly these values,
+  // from main.js, later in the same frame). Clearing here instead would delete
+  // the record of the arc one line before the only thing that reads it.
+  //
+  // `airJumps` and `airPeak` are written by systems/airborne.js, not here, for
+  // the usual reason — but they are reset on the upward crossing alongside the
+  // clock, because "a new breach starts" is one event and splitting it across
+  // two files is how one of the three ends up not being reset.
+  if (player.breachDir > 0) {
+    player.airTime = 0;
+    player.airJumps = 0;
+    player.airPeak = 0;
+  } else if (player.aboveSurface) {
+    player.airTime += dt;
+  }
+
+  // LEAVING the water only. This used to fire in both directions, which meant
+  // the breach and the landing were the same event with the same sound and the
+  // same burst — so the end of an arc was indistinguishable from its start.
+  // The way down is now its own event, fired from main.js, because what it is
+  // worth depends on the air that was banked and entities/ has no business
+  // knowing about that. See CONFIG.feedback.reentry and systems/airborne.js.
+  if (player.breachDir > 0) {
     feedback('breach', {
       x: pos.x,
       y: bounds.surfaceY,
@@ -314,10 +455,10 @@ export function updatePlayer(dt, input) {
       vy: Math.abs(player.velocity.y),
       scale: Math.min(2, 0.5 + Math.abs(player.velocity.y) / 14),
     });
-    // Bark only on the way UP — surfacing for air is the moment a seal
-    // vocalizes; barking as you dive back under reads as a hiccup.
-    // Lowest one-shot priority, so a hit or death cuts it off cleanly.
-    if (player.aboveSurface) player.anim?.trigger('bark');
+    // Surfacing for air is the moment a seal vocalizes; barking as you dive
+    // back under reads as a hiccup. Lowest one-shot priority, so a hit or
+    // death cuts it off cleanly.
+    player.anim?.trigger('bark');
   }
 
   if (CONFIG.oxygen.enabled) {
@@ -453,29 +594,58 @@ export function updatePlayer(dt, input) {
   // to the body (unlike the head's, which the IK smoothing rounds off) that
   // left the body snapping up to two degrees on the frame of the launch — a
   // visible tick on the single most-repeated action in the game.
+  //
+  // THREE CHANNELS, on three incommensurate rates off the one `hz`. One
+  // oscillation at any amplitude reads as the seal nodding; three that never
+  // line up read as an animal straining against something. See
+  // CONFIG.strike.charge.tremble for what each is allowed to be worth.
   const wantShudder = player.chargePose;
   player.shudderAmp += (wantShudder - player.shudderAmp) * (1 - Math.exp(-18 * dt));
   if (player.shudderAmp < 0.001) player.shudderAmp = 0;
   let shudder = 0;
+  let rattle = 0;
   if (player.shudderAmp > 0) {
-    const vib = CONFIG.strike.charge.vibrate ?? {};
+    const vib = CONFIG.strike.charge.tremble ?? {};
     player.chargeClock += dt;
-    shudder = player.shudderAmp * (vib.body ?? 0)
-      * Math.sin(player.chargeClock * (vib.hz ?? 22) * Math.PI * 2);
+    const w = player.chargeClock * (vib.hz ?? 22) * Math.PI * 2;
+    shudder = player.shudderAmp * (vib.body ?? 0) * Math.sin(w);
+    // About the seal's own spine, folded into the barrel roll's axis below.
+    rattle = player.shudderAmp * (vib.roll ?? 0) * Math.sin(w * 1.37 + 2.1);
+    // ...and the one that actually MOVES the animal. Written to the visual
+    // root, not to player.mesh — the container carries the position the whole
+    // game collides and aims against, and vibrating that would vibrate the
+    // hitbox. createVisual hands back a wrapper Group whose position nothing
+    // else touches (the model's own fit and offset live on its children), so
+    // this owns the field outright and can write it absolutely.
+    const sh = player.shudderAmp * (vib.shiver ?? 0);
+    player.body.position.set(sh * Math.sin(w * 1.61 + 0.7), sh * Math.sin(w * 0.83 + 3.4), 0);
   } else {
     player.chargeClock = 0;
+    // Only when there is something to clear — this runs every frame of every
+    // run, and the seal is not winding up for nearly all of them.
+    if (player.body.position.lengthSq() !== 0) player.body.position.set(0, 0, 0);
   }
 
-  // One composition for all four. They are separate axes of the same
+  // One composition for all five. They are separate axes of the same
   // transform, and writing them as Euler components would make the result
   // depend on Euler order — the roll has to happen about the seal's own long
   // axis (+Y is the art's forward) whatever the crane is doing to it, which is
   // exactly what `crane * roll` gives and what `rotation.set(x, y, z)` does
   // not. Crane about the PARENT's X swings the nose out toward the camera and
   // is mirror-independent, since a 180 roll about forward leaves forward alone.
-  _rollQ.setFromAxisAngle(_yAxis, player.mirrorAngle + player.rollAngle);
+  //
+  // The victory somersault is the last term, about the seal's own LATERAL axis
+  // — which is also the camera axis, so the turn happens in the screen plane
+  // and reads whichever way the seal is facing. It belongs in this composition
+  // rather than being written onto the body by systems/celebrate.js for the
+  // reason the paragraph above gives: one transform, one writer. It is an
+  // angle asked for on demand (a pure function of the celebration clock), so
+  // there is no ordering to get wrong and nothing to accumulate on a frame
+  // where this function doesn't run.
+  _rollQ.setFromAxisAngle(_yAxis, player.mirrorAngle + player.rollAngle + rattle);
   _craneQ.setFromAxisAngle(_xAxis, player.craneAngle + shudder);
-  player.body.quaternion.copy(_craneQ).multiply(_rollQ);
+  _spinQ.setFromAxisAngle(_zAxis, celebrationSpin());
+  player.body.quaternion.copy(_craneQ).multiply(_rollQ).multiply(_spinQ);
 
   if (player.invuln > 0) player.invuln -= dt;
 
@@ -486,8 +656,13 @@ export function updatePlayer(dt, input) {
   if (CONFIG.animation.enabled && player.anim) {
     // aboveSurface picks the land clips (idle/walk) over the water ones —
     // a seal that's breached shouldn't be swim-cycling through the air.
-    const state = stateForSpeed(player.velocity.length(), player.aboveSurface);
+    const state = stateForSpeed(player.velocity.length(), player.aboveSurface, player.surfaceRest);
     player.anim.update(dt, state, player.hitThisFrame);
+    // Straight after the controller, so the breath lands on top of the pose the
+    // mixer just wrote rather than under it. Both bones it drives are keyed by
+    // every locomotion clip, so this needs no restore of its own — see
+    // systems/breathe.js.
+    player.breathe?.update(dt, player.surfaceRest);
   }
 
   // Fin and head IK run AFTER the mixer, deliberately: they overwrite the

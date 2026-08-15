@@ -38,7 +38,7 @@ const RAIL_SECTIONS = [
   ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'breach', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'bubblePop', 'oxygenWarn']],
   ['Strike & food chain', ['strike', 'strikeChain', 'strikeBurst', 'strikeRam', 'strikeMark', 'foodChain']],
   ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'levelUp']],
-  ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaTrap', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
+  ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaSplit', 'belugaTrap', 'belugaPop', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
   ['Thrown & launched', ['seagullDive', 'scallopLaunch', 'scallopJet', 'pearlShot', 'pearlBurst', 'bakalarHaul', 'bakalarBombDrop', 'bakalarBombBlast']],
   ['Boats', ['debrisBreak', 'boatExplosion', 'crewEaten', 'crewHit']],

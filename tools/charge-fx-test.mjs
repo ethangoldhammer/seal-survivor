@@ -2,14 +2,19 @@
 // ---------------------------------------------------------------------------
 // npm run test:chargefx
 //
-// The two things a strike wind-up now does to the seal itself:
+// What a strike wind-up does to the seal itself:
 //
 //   THE RIM     systems/outlines.js — the player's outline shell throbs while
 //               power banks and blows out on the release.
 //   THE VENT    systems/bubbles.js — every bubble emitter on the body opens at
-//               once, harder the more power is banked.
+//               once, harder the more power is banked, and thrown out the BACK
+//               of the animal like the boost charge behind a vehicle.
+//   THE TREMBLE entities/player.js — three channels of buzz on the model, two
+//               angular and one positional, none of them on the hitbox.
+//   THE BURST   the let-go: CONFIG.emitters.chargeBurst, fired from main.js on
+//               the frame the dash launches.
 //
-// Both are pure state machines over dt, which is exactly the kind of thing that
+// All of them are pure state machines over dt, which is exactly the kind of thing that
 // looks right in a screenshot and is wrong over time — a pulse that never
 // returns to the base look leaves the rim permanently lit, a vent whose carry
 // is mishandled dumps a second of bubbles in one frame after a hitch. So they
@@ -37,7 +42,17 @@ import {
   resetPlayerOutlineCharge,
 } from '../path/src/systems/outlines.js';
 import { updateBubbles, resetBubbles } from '../path/src/systems/bubbles.js';
-import { initParticles, resetParticles, particleCount } from '../path/src/entities/particles.js';
+import { initParticles, resetParticles, particleCount, emit } from '../path/src/entities/particles.js';
+import { attachNoiseShader } from '../path/src/systems/noiseShader.js';
+// The wind-up tremble is composed inside updatePlayer, alongside the mirror and
+// the barrel roll — it cannot be measured anywhere else without reimplementing
+// the composition, which would be a test of the copy.
+import { player, updatePlayer, resetPlayer, recomputeStats } from '../path/src/entities/player.js';
+import { updateChargeSkin, resetChargeSkin, chargeCrossed } from '../path/src/systems/chargeSkin.js';
+// Written directly rather than simulated: the sun's elevation is derived from
+// the arena bounds, which a headless harness has none of, and `skyLight` IS
+// the only thing the gate reads from the sky.
+import { skyLight } from '../path/src/systems/daylight.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAIN = path.join(HERE, '../path/src/main.js');
@@ -250,20 +265,47 @@ section('RIM — idle, and not fighting the tuner');
 // THE VENT
 // ===========================================================================
 
-initParticles(new THREE.Scene());
+const fxScene = new THREE.Scene();
+initParticles(fxScene);
+
+// The ring buffer's own attributes, which is where a DIRECTION test has to
+// read: particleCount() says how many bubbles there are and nothing about
+// where any of them went. Held as the live attribute rather than a copy — emit
+// writes straight into these arrays.
+const ring = fxScene.children.find((o) => o.isPoints).geometry.attributes;
+
+// Every particle emitted since the last reset, as plain vectors. Turbulence
+// lives entirely in the vertex shader, so aVelocity is exactly what emit()
+// threw — no GL context needed to read the aim of a burst.
+function shots() {
+  const out = [];
+  for (let i = 0; i < particleCount(); i++) {
+    out.push({
+      vx: ring.aVelocity.array[i * 3],
+      vy: ring.aVelocity.array[i * 3 + 1],
+      life: ring.aLife.array[i],
+      size: ring.aSize.array[i],
+      speed: Math.hypot(ring.aVelocity.array[i * 3], ring.aVelocity.array[i * 3 + 1]),
+    });
+  }
+  return out;
+}
+
+const mean = (xs) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
 
 const rigBoth = { anchors: { mouth: { x: 0, y: 0 }, tail: { x: 0, y: 0 } } };
 const rigMouth = { anchors: { mouth: { x: 0, y: 0 } } };
 const rigTail = { anchors: { tail: { x: 0, y: 0 } } };
 const STILL = { x: 0, y: 0 };
+const FACING_RIGHT = { x: 1, y: 0 }; // the seal pointing along +X
 
 // Particles emitted by `seconds` of holding at a fixed banked power. The breath
 // timer is reset each run so its 1-2s puff can't land inside one sample and not
 // another; `charge` is the only thing that varies.
-function vent(charge, seconds, rig = rigBoth, velocity = STILL, dt = 1 / 60, above = false) {
+function vent(charge, seconds, rig = rigBoth, velocity = STILL, dt = 1 / 60, above = false, forward = null) {
   resetBubbles();
   resetParticles();
-  for (let t = 0; t < seconds; t += dt) updateBubbles(dt, rig, velocity, above, charge);
+  for (let t = 0; t < seconds; t += dt) updateBubbles(dt, rig, velocity, above, charge, forward);
   return particleCount();
 }
 
@@ -330,6 +372,155 @@ section('VENT — the longer it is held, the more comes out');
   const expected = BC.perSecondMax * PER_BURST;
   check('full-power rate matches the configured bursts/sec',
     Math.abs(steps[3] - expected) < expected * 0.12, `${steps[3]} vs ~${expected}`);
+}
+
+// ---------------------------------------------------------------------------
+section('VENT — which way it blows, and how hard');
+//
+// The vent is EXHAUST, not breath: it leaves the back of the animal like the
+// boost charge behind a vehicle. Two things have to hold for that to read, and
+// neither is visible in a particle count — which is exactly why the vent
+// pointed straight up for as long as it did.
+//
+//   it goes BACKWARD, off the seal's FACING, not off its travel. A wind-up is
+//     usually a brake to a standstill, so travel has no direction to reverse.
+//   it is THROWN, harder as power banks. A jet that only trickles is a breath
+//     aimed sideways.
+{
+  vent(1, 1, rigBoth, STILL, 1 / 60, false, FACING_RIGHT);
+  const back = shots();
+  const rearward = back.filter((s) => s.vx < 0).length / back.length;
+  check('a full hold vents out the BACK of the seal, not upward',
+    mean(back.map((s) => s.vx)) < -1, `mean vx ${mean(back.map((s) => s.vx)).toFixed(2)}`);
+  check('...and nearly every bubble in the jet is behind it',
+    rearward > 0.9, `${(rearward * 100).toFixed(0)}% have vx < 0`);
+  // The mouth alone, because the head's share is the one that used to go up and
+  // the tail's could carry this test on its own.
+  vent(1, 1, rigMouth, STILL, 1 / 60, false, FACING_RIGHT);
+  check('the HEAD\'s share is rearward too — it is the one that used to rise',
+    mean(shots().map((s) => s.vx)) < -1, `mean vx ${mean(shots().map((s) => s.vx)).toFixed(2)}`);
+
+  // Facing beats travel, which is the whole reason `forward` is plumbed through
+  // at all: swimming one way while pointing another must still vent off the
+  // animal's own spine.
+  vent(1, 1, rigBoth, { x: -CONFIG.player.maxSpeed, y: 0 }, 1 / 60, false, FACING_RIGHT);
+  check('facing wins over travel — a seal drifting backwards still vents behind ITSELF',
+    mean(shots().map((s) => s.vx)) < 0, `mean vx ${mean(shots().map((s) => s.vx)).toFixed(2)}`);
+
+  // ...and with no facing to hand (a harness, a model with no rig) it falls
+  // back to reverse travel rather than to nothing.
+  //
+  // At a DRIFT, not at full speed. Every bubble also inherits a share of the
+  // seal's velocity (CONFIG.emitters.*.inherit), and at maxSpeed that share is
+  // several times the jet — the emitted velocity comes out positive with the
+  // jet still aimed correctly behind, because the water the bubble was born in
+  // is itself moving forward faster than the bubble leaves. Which is what
+  // really happens, and is why this samples where the two are separable.
+  vent(1, 1, rigBoth, { x: 3, y: 0 }, 1 / 60, false, null);
+  check('with no facing it falls back to the reverse of travel',
+    mean(shots().map((s) => s.vx)) < 0, `mean vx ${mean(shots().map((s) => s.vx)).toFixed(2)}`);
+}
+
+{
+  const wasBias = BC.backBias;
+  const wasMin = BC.jetSpeedMin;
+  const wasMax = BC.jetSpeedMax;
+  try {
+    // The knob at both ends. 0 is the old breath — straight up — and it has to
+    // still be reachable, because that is what makes `backBias` a control
+    // rather than a hardcoded direction with a number in front of it.
+    BC.backBias = 0;
+    vent(1, 1, rigBoth, STILL, 1 / 60, false, FACING_RIGHT);
+    const up = shots();
+    check('backBias 0 sends it straight up again',
+      mean(up.map((s) => s.vy)) > 1 && Math.abs(mean(up.map((s) => s.vx))) < 1,
+      `mean (${mean(up.map((s) => s.vx)).toFixed(2)}, ${mean(up.map((s) => s.vy)).toFixed(2)})`);
+
+    // The blend is normalised, so a half-biased vent is an ANGLE rather than a
+    // weaker jet — mixing direction and force into one number is how a tuner
+    // ends up unable to aim the thing without also softening it.
+    BC.backBias = 0.5;
+    vent(1, 1, rigBoth, STILL, 1 / 60, false, FACING_RIGHT);
+    const half = mean(shots().map((s) => s.speed));
+    BC.backBias = 1;
+    vent(1, 1, rigBoth, STILL, 1 / 60, false, FACING_RIGHT);
+    const full = mean(shots().map((s) => s.speed));
+    check('the bias changes the angle, not the force',
+      Math.abs(half - full) < full * 0.12, `${half.toFixed(2)} vs ${full.toFixed(2)} u/s`);
+    BC.backBias = wasBias;
+
+    // THROWN, not let go of — and it spools up over a hold.
+    vent(0.05, 1, rigBoth, STILL, 1 / 60, false, FACING_RIGHT);
+    const weak = mean(shots().map((s) => s.speed));
+    vent(1, 1, rigBoth, STILL, 1 / 60, false, FACING_RIGHT);
+    const strong = mean(shots().map((s) => s.speed));
+    check('the jet spools up with banked power', strong > weak * 1.4,
+      `${weak.toFixed(2)} -> ${strong.toFixed(2)} u/s`);
+
+    BC.jetSpeedMin = 1;
+    BC.jetSpeedMax = 1;
+    vent(1, 1, rigBoth, STILL, 1 / 60, false, FACING_RIGHT);
+    const unthrown = mean(shots().map((s) => s.speed));
+    check('and jetSpeed 1 is the emitters\' own speed, untouched',
+      strong > unthrown * (wasMax * 0.8), `${unthrown.toFixed(2)} vs ${strong.toFixed(2)} u/s at x${wasMax}`);
+  } finally {
+    BC.backBias = wasBias;
+    BC.jetSpeedMin = wasMin;
+    BC.jetSpeedMax = wasMax;
+  }
+}
+
+// ---------------------------------------------------------------------------
+section('RELEASE — the burst the let-go leaves behind');
+//
+// CONFIG.emitters.chargeBurst, fired by main.js on the frame a strike launches.
+// Everything about it is "quick to die, in every direction, dragged along by
+// the water the seal was moving through", so that is what is measured — a
+// release burst that lingers turns the launch into a cloud the dash swims out
+// of, and one with a cone is a jet rather than pressure leaving.
+{
+  const def = CONFIG.emitters.chargeBurst;
+  check('the emitter exists', !!def);
+
+  // Eight bursts rather than one. Every direction here is a fresh random draw,
+  // and 26 of them is a small enough sample that a lopsided burst is ordinary
+  // luck — the mean of the batch is what the claim is actually about, and
+  // widening the tolerance instead would be a test of nothing.
+  resetParticles();
+  for (let i = 0; i < 8; i++) emit('chargeBurst', 0, -10, { vx: 0, vy: 0, scale: 1 });
+  const shell = shots();
+  check('it fires in every direction, not in a cone',
+    (def.cone ?? 0) === 0 && shell.some((s) => s.vx > 0) && shell.some((s) => s.vx < 0)
+      && shell.some((s) => s.vy > 0) && shell.some((s) => s.vy < 0),
+    `${shell.length} bubbles across all four quadrants`);
+  check('quick to die — the whole burst is gone in under half a second',
+    Math.max(...shell.map((s) => s.life)) < 0.5,
+    `longest life ${Math.max(...shell.map((s) => s.life)).toFixed(2)}s`);
+  check('and small — smaller than the vent bubbles it follows',
+    Math.max(...shell.map((s) => s.size)) < CONFIG.emitters.breathBubbles.size[1],
+    `biggest ${Math.max(...shell.map((s) => s.size)).toFixed(3)} vs breath ${CONFIG.emitters.breathBubbles.size[1]}`);
+  // A shell drawn around the seal has to be centred on it, or the "in every
+  // direction" above would pass on a burst quietly listing to one side.
+  check('it is centred on the seal rather than listing to one side',
+    Math.abs(mean(shell.map((s) => s.vx))) < mean(shell.map((s) => s.speed)) * 0.4,
+    `mean vx ${mean(shell.map((s) => s.vx)).toFixed(2)} of ${mean(shell.map((s) => s.speed)).toFixed(2)} u/s`);
+
+  // INFLUENCED BY THE PLAYER'S VELOCITY, which is the whole reason it reads as
+  // water rather than as a sprite: the same shell fired out of a drift smears
+  // downstream.
+  resetParticles();
+  const drift = 12;
+  for (let i = 0; i < 8; i++) emit('chargeBurst', 0, -10, { vx: drift, vy: 0, scale: 1 });
+  const dragged = mean(shots().map((s) => s.vx));
+  check('the seal\'s own velocity drags it along',
+    Math.abs(dragged - drift * (def.inherit ?? 0)) < drift * 0.35,
+    `mean vx ${dragged.toFixed(2)}, expected ~${(drift * (def.inherit ?? 0)).toFixed(2)} at inherit ${def.inherit}`);
+
+  // They must not sail into the sky. No surfacePop on this one — too small and
+  // too brief to be worth a droplet burst each — but the water line still has
+  // to stop them.
+  check('a released bubble still dies at the water line',
+    (def.killAtSurface ?? !!def.surfacePop) === true);
 }
 
 section('VENT — the cases the existing emitters could not cover');
@@ -402,8 +593,88 @@ section('VENT — the switches');
 // WIRING — the game actually drives both of these
 // ===========================================================================
 
+// ---------------------------------------------------------------------------
+section('BODY — the meter on the animal, and what it opens a run as');
+//
+// systems/chargeSkin.js lights the seal's own markings with the fuel bar. The
+// regression this guards is not subtle once you see it: `strikeState.charge`
+// starts at 1, so the "loaded" read was true from the first frame of every
+// run — the seal spawned covered in glowing mint patches before the player had
+// touched anything. A body read that is already on when you arrive is not
+// telling you about a state, it is what the animal looks like.
+//
+// The first fix for that was a DAYLIGHT gate, and it is worth saying here why
+// it was wrong, because the test that went with it passed: the opening hour
+// comes from the player's own clock (dayNight.startFromSystemClock), so a run
+// begun after dark opened exactly as lit as before. The rule is about the
+// START of a run, not the time of day — hence the hour sweep below, which the
+// daylight version could not have survived.
+//
+// Driven off the real uniforms, and every expected number computed from CONFIG
+// — saved tuning beats the config defaults, so a hardcoded 1.125 here would be
+// a test of imported-tuning.json rather than of the code.
+{
+  const mat = new THREE.MeshStandardMaterial();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.8, 0.8), mat);
+  attachNoiseShader(mat);
+  const u = mat.userData.__noiseUniforms;
+  const frames = (charge, n = 8) => {
+    for (let i = 0; i < n; i++) updateChargeSkin(body, charge, 1 / 60);
+    return u.uChargeStrength.value;
+  };
+  const s = CONFIG.sealCharge;
+  const atFull = (s.strength ?? 0.9) * (s.fullBoost ?? 1.25);
+
+  // AT EVERY HOUR OF THE DAY. `skyLight` is written directly rather than
+  // simulated — the sun's elevation comes off the arena bounds, which a
+  // headless harness has none of — and the point of sweeping it is that the
+  // answer must not depend on it at all.
+  let litAtSomeHour = null;
+  for (const [label, night, twilight] of [['morning', 0, 0], ['dusk', 0, 1], ['midnight', 1, 0]]) {
+    skyLight.night = night;
+    skyLight.twilight = twilight;
+    resetChargeSkin();
+    const opening = frames(1, 30); // half a second of standing still
+    if (opening !== 0) litAtSomeHour = `${label} (${opening.toFixed(3)})`;
+  }
+  check('a run opens with the seal dark, at any hour', litAtSomeHour === null,
+    litAtSomeHour ? `lit at ${litAtSomeHour}` : 'morning, dusk and midnight all dark with a full meter');
+
+  // Asleep means silent in every channel, not just the steady one.
+  resetChargeSkin();
+  frames(1);
+  chargeCrossed();
+  updateChargeSkin(body, 1, 1 / 60);
+  check('...and no crossing band travels it while it is asleep',
+    u.uChargeWave.value < 0, `wave ${u.uChargeWave.value}`);
+
+  // THE WAKE-UP is the bar MOVING, which only the player can do.
+  const spent = frames(0.35);
+  check('spending the bar wakes it, dimly — the meter is low, not asleep',
+    spent > 0 && spent < atFull * 0.5, `${spent.toFixed(3)}`);
+  const refilled = frames(1);
+  check('and a meter the player filled lights the seal',
+    Math.abs(refilled - atFull) < 1e-9,
+    `${refilled.toFixed(3)} vs strength x fullBoost = ${atFull.toFixed(3)}`);
+  chargeCrossed();
+  updateChargeSkin(body, 1, 1 / 60);
+  check('...with the crossing flash, once it is awake', u.uChargeWave.value >= 0);
+
+  check('an empty meter still reads dark', frames(0) === 0);
+
+  // Per RUN, not per boot — a second run started from the score screen has to
+  // open as dark as the first, and `armed` is module state that would happily
+  // survive it.
+  resetChargeSkin();
+  check('the next run opens dark again', frames(1, 30) === 0);
+
+  skyLight.night = 0;
+  skyLight.twilight = 0;
+}
+
 section('WIRING — main.js');
 const main = fs.readFileSync(MAIN, 'utf8');
+check('ticks the seal\'s own read of the meter', /updateChargeSkin\(player\.body, strikeState\.charge/.test(main));
 check('imports the rim pulse', /import \{[^}]*\bupdatePlayerOutline\b[^}]*\} from '\.\/systems\/outlines\.js'/.test(main));
 check('imports the release flare', /import \{[^}]*\bflarePlayerOutline\b[^}]*\} from '\.\/systems\/outlines\.js'/.test(main));
 check('ticks the rim every frame, on real time',
@@ -413,6 +684,21 @@ check('the rim reads the BUTTON and the banked power',
 check('the flare fires on the frame a strike launches',
   /flarePlayerOutline\(strikeState\.power\)/.test(main));
 check('the vent gets the banked power', /updateBubbles\([^;]*input\.strikeHeld \? strikeState\.pending : 0/s.test(main));
+// ...and where the seal is POINTING, which is what makes the jet leave the back
+// of the animal from a standstill. Without this the vent still runs and still
+// pours — it just quietly aims itself out of the reverse of a velocity that
+// isn't there, which is straight up.
+check('the vent gets the seal\'s facing', /updateBubbles\([^;]*faceDir,/s.test(main));
+check('the facing is the art\'s forward, a quarter turn off the container',
+  /player\.mesh\.rotation\.z \+ Math\.PI \/ 2/.test(main));
+// The release burst, and the velocity it inherits. Read BEFORE tryStrike on
+// purpose: the impulse overwrites player.velocity with the dash's own, and
+// inheriting that would fire the whole shell out the front as one streak.
+check('the release fires the vent burst', /feedback\('strikeVent',/.test(main));
+check('...dragged by the velocity from before the impulse',
+  /const releaseVx = player\.velocity\.x[\s\S]{0,400}?tryStrike\(dir/.test(main));
+check('...and scaled by the power actually spent',
+  /feedback\('strikeVent',[\s\S]{0,300}?strikeState\.power/.test(main));
 check('a fresh run clears the rim', /resetPlayerOutlineCharge\(\)/.test(main));
 
 console.log(failures === 0 ? '\nAll charge-FX checks passed.' : `\n${failures} check(s) failed.`);

@@ -462,8 +462,48 @@ export function analyzeRun(run) {
     totalDamage,
     threats,
     flags,
+    chain: chainSummary(run),
     verdict: verdictLine(flags),
   };
+}
+
+/**
+ * The food chain, per bucket and in total.
+ *
+ * Tolerant of runs recorded BEFORE the chain was instrumented — the fields
+ * simply are not there, and the whole 100-run backlog is like that. Missing
+ * reads as zero rather than NaN, and the report skips a run with no strikes,
+ * so an old log still analyses instead of printing a row of blanks.
+ */
+function chainSummary(run) {
+  const out = {
+    strikes: 0, links: 0, maxChain: 0,
+    missNoFood: 0, missNoWindow: 0, missBoth: 0, chumEaten: 0,
+    buckets: [],
+  };
+  for (const b of run.buckets ?? []) {
+    const secs = b.seconds > 0 ? b.seconds : 1;
+    const row = {
+      t: b.t,
+      strikes: b.strikes ?? 0,
+      links: b.links ?? 0,
+      maxChain: b.maxChain ?? 0,
+      missNoFood: b.missNoFood ?? 0,
+      missNoWindow: b.missNoWindow ?? 0,
+      missBoth: b.missBoth ?? 0,
+      chumEaten: b.chumEaten ?? 0,
+      chumPerMin: ((b.chumEaten ?? 0) * 60) / secs,
+    };
+    out.strikes += row.strikes;
+    out.links += row.links;
+    out.missNoFood += row.missNoFood;
+    out.missNoWindow += row.missNoWindow;
+    out.missBoth += row.missBoth;
+    out.chumEaten += row.chumEaten;
+    if (row.maxChain > out.maxChain) out.maxChain = row.maxChain;
+    out.buckets.push(row);
+  }
+  return out;
 }
 
 function verdictLine(flags) {
@@ -602,6 +642,48 @@ export function formatRunReport(a) {
       gained ? `+${gained}`.padStart(6) : ''.padStart(6),
     ].join(''));
   }
+  // --- THE FOOD CHAIN -----------------------------------------------------
+  // Only printed when the run actually struck, so a build that never touches
+  // the strike does not carry an empty table around.
+  //
+  // The MISS columns are the whole reason this section exists. "The chain isn't
+  // popping" is three different bugs wearing one coat — no food in reach, the
+  // window shutting first, or the player simply not re-striking — and a count
+  // of links cannot separate them.
+  const ch = a.chain;
+  if (ch && ch.strikes > 0) {
+    L.push('');
+    L.push(`  FOOD CHAIN — ${ch.links} links from ${ch.strikes} strikes `
+      + `(${Math.round(100 * ch.links / ch.strikes)}%), deepest x${ch.maxChain}`);
+    L.push('  time   strikes  links   hit%  deepest   miss: no food  no window   both  chum/min');
+    for (const b of ch.buckets) {
+      if (!b.strikes && !b.chumEaten) continue;
+      L.push([
+        `  ${formatClock(b.t).padStart(5)}`,
+        String(b.strikes).padStart(8),
+        String(b.links).padStart(7),
+        `${b.strikes ? Math.round(100 * b.links / b.strikes) : 0}%`.padStart(7),
+        `x${b.maxChain}`.padStart(9),
+        String(b.missNoFood).padStart(15),
+        String(b.missNoWindow).padStart(10),
+        String(b.missBoth).padStart(7),
+        String(Math.round(b.chumPerMin)).padStart(10),
+      ].join(''));
+    }
+    // The one-line reading, because the table above is the evidence and this is
+    // the conclusion — and the conclusion is what gets acted on.
+    const worst = Math.max(ch.missNoFood, ch.missNoWindow, ch.missBoth);
+    if (ch.links === 0 && ch.strikes > 2) {
+      L.push('  -> no links at all. ' + (ch.missNoFood >= ch.missNoWindow
+        ? 'Not enough chum reaching the seal between strikes.'
+        : 'The window is shutting before the second strike lands.'));
+    } else if (worst > 0 && worst === ch.missNoFood) {
+      L.push('  -> misses are mostly NO FOOD: widen the magnet or lower strike.linkBarFraction.');
+    } else if (worst > 0 && worst === ch.missNoWindow) {
+      L.push('  -> misses are mostly NO WINDOW: raise strike.chainWindow.');
+    }
+  }
+
   L.push('');
   L.push('  ability            damage   share  picks  return  per stack-min');
   for (const r of a.abilities) {

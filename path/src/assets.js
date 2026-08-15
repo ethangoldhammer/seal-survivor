@@ -5,7 +5,7 @@ import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { CONFIG } from './config.js';
 import { applyAssetTable } from './assetTable.js';
 import { attachNoiseShader, applyNoiseSettings } from './systems/noiseShader.js';
-import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin } from './systems/biolumSkin.js';
+import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin, splitForEdges } from './systems/biolumSkin.js';
 import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
 import { createRockGeometry, startTumble } from './systems/rocks.js';
 
@@ -93,6 +93,236 @@ import { createRockGeometry, startTumble } from './systems/rocks.js';
 //            `tumble` is radians/sec about one random axis, applied by
 //            whichever system owns the mesh — see updateTumble.
 // ============================================================================
+
+// ============================================================================
+// THE ORCA RIG — shared by all five orca bodies
+//
+// One family file (Orca_Family_GLB.glb) cut into three animals by
+// tools/orca-split.mjs, and each animal used twice: once hostile (a boss) and
+// once friendly (the pod the Orca Family card buys). Five ASSETS entries, one
+// skeleton, so the chains live here rather than five times over.
+//
+// EVERY CHAIN BELOW WAS MEASURED, not read — tools/orca-rig-propose.mjs prints
+// them and checks each one before it is used. That is not superstition about
+// the old rig's junk names; this rig's names are honest and still lie in one
+// specific way. `Fin_L1..L4` and `Fin_L5..L8` are the LEFT and RIGHT pectoral
+// flippers, both labelled L, and the same is true of `Tail_Fin_L1..L4` against
+// `Tail_Fin_L5..L8` for the two fluke lobes. Reading the names would have put
+// both pectoral springs on the same side of the animal.
+//
+// WHAT THE CLIP DOES AND DOES NOT TOUCH matters as much as the chains. The
+// swim take animates 14 bones — Spine_Root through Spine10, Tail_01/02 and
+// Head — and nothing else. The dorsal, the pectorals and the flukes are
+// unanimated, so the spring solver owns them outright with nothing to fight,
+// which is exactly the arrangement the old rig had to be coaxed into.
+// The giant squid, and the roomiest rig in the game: 86 of its 97 bones drive
+// vertices, in ten limb chains that a spring solver can own outright.
+//
+// MEASURED, like the orca's — tools/check-squid-orientation.mjs walks the
+// hierarchy and prints each chain with the vertex count it drives, so a chain
+// named here is one that was seen to move geometry. The names happen to be
+// honest on this rig (unlike the orca's two flippers both called L), but the
+// arrangement is not obvious from them and is worth stating:
+//
+//   TTC              the artist's abbreviation for the arm chains. Six of them,
+//                    5-6 bones each: one Front, two Frontside (L/R), one Back,
+//                    two Side (L/R). Together they are the crown.
+//   nondeform L/R    NOT non-deforming, whatever the name says — each drives
+//                    ~1,000 vertices across seven bones. These are the two long
+//                    FEEDING TENTACLES, the pair that reach much further than
+//                    the other six, and they are the reason this body reads as a
+//                    giant squid rather than as a big octopus.
+//   topflapper L/R   the mantle fins.
+//   middlebone       the mantle itself. Deliberately NOT given a chain: it is
+//                    the body, and springing the body makes the whole animal
+//                    wobble rather than making its limbs trail.
+//
+// EVERY CHAIN IS UNANIMATED BY THE CLIPS WE USE. The file's `Idle` and `flapper`
+// takes move the arms a little, but nothing in the set covers a swim or a
+// lunge — see the entry below — so the springs have almost nothing to fight and
+// the trailing motion is theirs. That is the same arrangement the orca's dorsal
+// and pectorals have, arrived at by luck there and on purpose here.
+const SQUID_RIG = {
+  springChains: [
+    // The six arms of the crown, on their own ROLE — `arm`, which nothing else in
+    // the game uses.
+    //
+    // The alternative was to reuse `fin` and raise CONFIG.animation.spring
+    // .roleLooseness.fin, and that would have loosened every pectoral, dorsal
+    // and tail fin on the roster to make one squid's arms hang right. A role is
+    // the unit looseness is keyed on (see springCfgFor in systems/animation.js),
+    // so adding one is the extension point rather than a workaround — and an
+    // unregistered role degrades to the base spring rather than throwing, so
+    // this was safe before the config entry existed.
+    //
+    // Arms want to be much looser than a fin: a fin is a control surface held
+    // against the water, an arm is a rope being towed. `roleLooseness.arm`
+    // divides the stiffness and multiplies the lag, which is what makes them
+    // stream behind the body's path instead of turning with it.
+    { role: 'arm', bones: ['FrontTTC_20', 'FrontTTC001_19', 'FrontTTC002_18', 'FrontTTC003_17', 'FrontTTC004_16', 'FrontTTC005_15'] },
+    { role: 'arm', bones: ['FrontsideTTCL_26', 'FrontsideTTCL001_25', 'FrontsideTTCL002_24', 'FrontsideTTCL003_23', 'FrontsideTTCL004_22', 'FrontsideTTCL005_21'] },
+    { role: 'arm', bones: ['FrontsideTTCR_43', 'FrontsideTTCR001_42', 'FrontsideTTCR002_41', 'FrontsideTTCR003_40', 'FrontsideTTCR004_39', 'FrontsideTTCR005_38'] },
+    // Five bones, not six — the back arm is genuinely one joint shorter, and
+    // naming a sixth would cost this chain its spring entirely rather than
+    // failing loudly. That exact mistake cost the orca cow her whole dorsal on
+    // half of all boss arrivals; see the note on ORCA_RIG below.
+    { role: 'arm', bones: ['BackTTC_31', 'BackTTC001_30', 'BackTTC002_29', 'BackTTC003_28', 'BackTTC004_27'] },
+    { role: 'arm', bones: ['SideTTCL_37', 'SideTTCL001_36', 'SideTTCL002_35', 'SideTTCL003_34', 'SideTTCL004_33', 'SideTTCL005_32'] },
+    { role: 'arm', bones: ['SideTTCR_49', 'SideTTCR001_48', 'SideTTCR002_47', 'SideTTCR003_46', 'SideTTCR004_45', 'SideTTCR005_44'] },
+    // The two long feeding tentacles, also `arm`. Seven bones each and they start
+    // from a DIFFERENT parent (middlebone002) than the crown does, which is what
+    // lets them swing on their own rather than with the arms around them — and
+    // being the longest chains on the body, they are where the looseness reads
+    // most.
+    { role: 'arm', bones: ['nondeformL001_83', 'nondeformL003_82', 'nondeformL004_81', 'nondeformL005_80', 'nondeformL006_79', 'nondeformL007_78'] },
+    { role: 'arm', bones: ['nondeformR001_92', 'nondeformR003_91', 'nondeformR004_90', 'nondeformR005_89', 'nondeformR006_88', 'nondeformR007_87'] },
+    // The mantle fins — and the only chains here left on `fin`. Their job is to
+    // lag slightly, not to stream: they are the surfaces the animal drives with,
+    // so an arm's looseness on them would read as a broken wing rather than as
+    // something being towed.
+    { role: 'fin', bones: ['topflapperL_71', 'topflapperL001_70', 'topflapperL002_69'] },
+    { role: 'fin', bones: ['topflapperR_74', 'topflapperR001_73', 'topflapperR002_72'] },
+  ],
+};
+
+const ORCA_RIG = {
+  springChains: [
+    // The fluke, starting well up the spine so the whole rear swings. Longer
+    // than the old rig's seven-bone chain and it does not need a dedicated tail
+    // hip to start from — Spine8 has nothing but tail below it.
+    { role: 'tail', bones: ['Spine8', 'Spine9', 'Spine10', 'Tail_01', 'Tail_02'] },
+    // The dorsal. Rises on the centreline (x = 0) behind midbody — verified,
+    // because a dorsal chain that had picked up a pectoral would look like a
+    // fin lagging correctly right up until the animal turned.
+    //
+    // FOUR BONES, WHICH IS WHAT ALL THREE ANIMALS HAVE. The bull's dorsal runs
+    // to Dorsal_Fin6 and the cow's and calf's stop at Fin4 — a real anatomical
+    // difference (a bull's fin is the tall straight one, a cow's is shorter and
+    // curved) faithfully carried into the rig, and the reason the bull has 52
+    // bones against their 50. The shared chain takes the intersection: naming
+    // Fin5 cost the cow her entire dorsal spring, silently, on half of all boss
+    // arrivals. tools/apex-spring-test.mjs caught it by checking both bodies
+    // instead of letting one stand in for the other.
+    { role: 'fin', bones: ['Dorsal_Fin1', 'Dorsal_Fin2', 'Dorsal_Fin3', 'Dorsal_Fin4'] },
+    // The pectorals, +X and -X. See the note above about both being named L.
+    { role: 'fin', bones: ['Shoulder_L', 'Fin_L1', 'Fin_L2', 'Fin_L3'] },
+    { role: 'fin', bones: ['Shoulder_L1', 'Fin_L5', 'Fin_L6', 'Fin_L7'] },
+  ],
+  // STUB — the fluke lobes, deliberately not enabled, for the same reason the
+  // old entry gave: they hang off Tail_02 and already ride the tail's trail, so
+  // their own chains would lag them a second time.
+  //   lobe +X ['Tail_Fin_L1', 'Tail_Fin_L2', 'Tail_Fin_L3']
+  //   lobe -X ['Tail_Fin_L5', 'Tail_Fin_L6', 'Tail_Fin_L7']
+};
+
+// A real neck, which the old rig only approximated. `Neck` sits between
+// Spine_Root and Head and is the parent of nothing else, so leaning it turns
+// the head without dragging the pectorals along — the coupling the old entry
+// documented as a happy accident is now simply absent, and does not need to be.
+// MEASURED PER ANIMAL, which is why this is a function and not a constant.
+// `tipLength` walks from the last bone in the chain out to the snout, in the
+// BONE'S OWN units — and these models live in a ~700-unit space where the old
+// orca lived in a ~2.4-unit one. Carrying the old rig's 0.4 across put the
+// effector inside the skull, and the symptom was a head that converged on the
+// player so slowly it read as not tracking at all: tools/boss-rig-test.mjs
+// measured the cow still 94.7 degrees off four seconds after the player crossed
+// her body. The snout offsets are 91.5 / 75.5 / 44.4 for bull / cow / calf,
+// measured off the models, and they differ because the animals differ.
+//
+// `+Y` IS the snout direction on this rig — checked, not assumed: the Head
+// bone's local +Y lands on the body's forward axis at dot 1.000 on the bull and
+// 0.983 on the cow, whose head sits at a slight downward angle in the bind pose.
+const orcaLook = (tipLength) => ({
+  head: { bones: ['Neck', 'Head'], tipAxis: '+Y', tipLength },
+});
+
+// A JAW WITH FLESH ON IT. `Jaw_Bone` drives 2,094 vertices; the old rig's
+// `mouth_015` drove a token few, which is why the orca's bite never read as
+// more than a twitch. None of this file's motion is a bite, so it stays
+// procedural — see systems/jaw.js.
+const ORCA_BITE = { bone: 'Jaw_Rotate', axis: 'x', openAngle: 0.62 };
+
+// --- crabpincer.glb, shared by every crab in the game -----------------------
+// THREE assets ride this one binary — the day crab, the ember crab after dark,
+// and the king crab boss — and they are separate keys rather than one key with
+// a flag for the reason spelled out on enemyEmberCrab: a material is shared
+// across every clone of a key, so lighting the boss would light every crab on
+// the seabed with it.
+//
+// What is NOT allowed to differ between them is anything below: the spring
+// chains, the pincer and the eye stalks are facts about the FILE, and the claw
+// driver and the animation springs resolve them by name off whichever key
+// spawned. These used to be copy-pasted per entry and the copies carried a
+// standing instruction to keep each other in step, which is a promise a file
+// this size does not keep. Shared by reference instead — nothing writes to
+// them, and a rig that drifted would fail as stiff legs or a claw that never
+// opens rather than as an error.
+const CRAB_RIG = {
+  axis: 'z',
+  // EIGHT legs, not six: this rig models all four pairs as legs where the old
+  // one made the rear pair a stub "arm" chain and left it out. Plus the two
+  // arms, so ten spring chains against eight.
+  springChains: [
+    ['leg47L_010', 'leg46L_011', 'leg45L_012', 'leg44L_013', 'leg43L_014', 'leg42L_015', 'leg41L_016'],
+    ['leg37L_017', 'leg36L_018', 'leg35L_019', 'leg34L_020', 'leg33L_021', 'leg32L_022', 'leg31L_023'],
+    ['leg27L_024', 'leg26L_025', 'leg25L_026', 'leg24L_027', 'leg23L_028', 'leg22L_029', 'leg21L_030'],
+    ['leg17L_031', 'leg16L_032', 'leg15L_033', 'leg14L_034', 'leg13L_035', 'leg12L_036', 'leg11L_037'],
+    ['leg47R_061', 'leg46R_062', 'leg45R_063', 'leg44R_064', 'leg43R_065', 'leg42R_066', 'leg41R_067'],
+    ['leg37R_068', 'leg36R_069', 'leg35R_070', 'leg34R_071', 'leg33R_072', 'leg32R_073', 'leg31R_074'],
+    ['leg27R_075', 'leg26R_076', 'leg25R_077', 'leg24R_078', 'leg23R_079', 'leg22R_080', 'leg21R_081'],
+    ['leg17R_082', 'leg16R_083', 'leg15R_084', 'leg14R_085', 'leg13R_086', 'leg12R_087', 'leg11R_088'],
+    ['Shoulder2L_041', 'Hand1L_042', 'Hand2L_043', 'Hand3L_044'],
+    ['Shoulder2R_051', 'Hand1R_052', 'Hand2R_053', 'Hand3R_054'],
+  ],
+};
+
+// --- the chelipeds, as an IK rig --------------------------------------------
+// THIS RIG HAS A REAL PINCER, which the crab that came before it did not. The
+// wrist forks into two finger chains driving separate geometry — `Hand6` (fixed
+// prong) and `Hand5 -> Hand7` (movable) — and rotating the movable one opens the
+// tip-to-tip aperture from 9% of finger length to 33%, a measured +277%. So the
+// pinch here is a JAW, not the scissor fake systems/crabClaw.js falls back to on
+// a claw that cannot open. tools/crab-claw-probe.mjs reprints every number here.
+const CRAB_CLAW_RIG = {
+  // Bones run along their own local +Y on this rig (every child sits at
+  // (0, n, 0) in its parent) — NOT +X, which is what crabwalking.glb used.
+  // Getting this wrong points the IK effector sideways out of the wrist and the
+  // arm solves toward a spot beside the player.
+  tipAxis: '+Y',
+  tipLength: 0.06,
+  arms: [
+    // Rooted at the SHOULDER, which is where an arm actually swings from. That
+    // is only safe because systems/crabClaw.js restores the whole chain each
+    // frame: this clip keys rotation on 50 of the rig's 126 bones and neither
+    // shoulder bone is among them, so a solver that treated the bone's current
+    // value as the clip's pose would creep further out on every pinch. Rooting
+    // at the first KEYED bone instead sidesteps that and costs half the rear-up
+    // — 0.137 of reach against 0.154, and the claw visibly stops lifting.
+    { root: 'ShoulderL_039', tip: 'Hand3L_044', jaw: 'Hand5L_047', sign: -1 },
+    { root: 'ShoulderR_049', tip: 'Hand3R_054', jaw: 'Hand5R_057', sign: 1 },
+  ],
+  // The finger hinge, and it needs OPPOSITE signs per side (above): this rig's
+  // arms are mirrored in world space rather than in their bone orientations, so
+  // one angle would open one claw and close the other. crabwalking.glb needed no
+  // signs for exactly the opposite reason. Measured per side, not assumed from
+  // the naming.
+  jawAxis: 'x',
+  // Unused on this model — both arms declare a `jaw`, so the scissor path never
+  // runs. Kept so falling back to it stays a config change rather than a code one.
+  scissorAxis: 'z',
+};
+
+// The eye stalks, for the per-vertex eye glow (systems/biolumSkin.js
+// bakeEyeGlow). Base bone first, tip locator last — the ramp is a projection
+// onto that line, so the order is the gradient's direction and reversing it
+// lights the sockets instead of the eyes.
+//
+// Dots stripped, as everywhere the game names a bone: the raw glTF calls these
+// Eye.1.L_02 and three.js sanitises node names on load.
+const CRAB_EYE_STALKS = [
+  ['Eye1L_02', 'Eye2L_03', 'Eye3L_04', 'Eye3L_end_099'],
+  ['Eye1R_05', 'Eye2R_06', 'Eye3R_07', 'Eye3R_end_0100'],
+];
 
 export const ASSETS = {
   ship: {
@@ -190,6 +420,23 @@ export const ASSETS = {
         finR: { bone: 'foot_R_025', offset: [0, 0.24, 0] },
       },
     },
+    // The resting breath — see systems/breathe.js. Every field here was
+    // MEASURED by rotating the bone and watching where the skin actually went,
+    // the same method the biteRig entries use:
+    //
+    //   chest_04 about its own local X, +0.15 rad  ->  mouth -0.190,
+    //     shoulders -0.052, tail +0.081. The whole animal see-saws about the
+    //     chest, which is the most a rig with ONE trunk bone and no ribs can
+    //     do. `sign: -1` because that positive direction drops the front and a
+    //     breath in lifts it.
+    //   neck02_06 takes part of it back so the head holds its line.
+    //
+    // neck02_06 and NOT neck01_05, which is the obvious choice and a trap: the
+    // swim clip keys neck01_05 exactly once, and a single-keyframe track is a
+    // constant the mixer stops rewriting — so a delta added there would
+    // compound forever. chest_04 and neck02_06 are keyed by every locomotion
+    // clip, which is what lets the breath be a plain additive rotation.
+    breathRig: { chest: 'chest_04', neck: 'neck02_06', axis: 'x', sign: -1 },
     shape: 'cone', // a cone already points +Y, the game's forward axis
     radius: 0.7,
     height: 1.6,
@@ -455,6 +702,14 @@ export const ASSETS = {
       surfaceMove: 'Seal_Rig|Seal_Rig|Seal_Rig|walk',
       strike: 'Seal_Rig|Seal_Rig|Seal_Rig|roll',
       bark: 'Seal_Rig|Seal_Rig|Seal_Rig|clapping',
+      // The same clip again, as its own state — and this is the state it was
+      // actually authored for. As `bark` it is a 0.6s stand-in for a sound the
+      // escorts have no clip for; as `celebrate` it plays from just before the
+      // flippers meet (CONFIG.animation.states.celebrate.startAt) and runs long
+      // enough to land the clap. The escorts are the only model in the game
+      // with a real celebration clip — the player's is posed procedurally, on
+      // a rig this one only resembles. See systems/celebrate.js.
+      celebrate: 'Seal_Rig|Seal_Rig|Seal_Rig|clapping',
       death: 'Seal_Rig|Seal_Rig|Seal_Rig|sleep',
     },
     // The player's own surface, not a glow. sealhelper.glb ships no texture
@@ -519,6 +774,32 @@ export const ASSETS = {
     tint: 0x14202c,
     outline: { color: 0xffd27a, thickness: 0.025 },
     shape: 'box', width: 3.4, height: 1.3, depth: 1.4, color: 0xffd27a, unlit: true,
+  },
+
+  // THE BOAT BOSS's hull. Pointed at the trawler as a PLACEHOLDER — the real
+  // hull is coming, and when it lands this is the one line that changes: drop
+  // the .glb into public/models/ and repoint `model`. Everything else about
+  // the fight is measured off `fit` and the row's radius, so a bigger or
+  // smaller boat needs no other edit.
+  //
+  // Deliberately its own entry rather than reusing `trawler`: that one is the
+  // boat you shoot at for chum, and a boss wearing the same silhouette as
+  // scenery is a boss nobody reads as a boss. It also means the boss can be
+  // re-skinned from the T panel without touching the hostile fleet.
+  bossBoat: {
+    model: '/models/trawler.glb',
+    fit: 11,
+    forward: '+Y', up: '+X', // mirrored basis, same as `trawler` — see its note
+    modelUnlit: true,
+    tint: 0x2a1a1a,
+    outline: { color: 0xff6a5a, thickness: 0.02 },
+    shape: 'box', width: 8, height: 2.6, depth: 2.4, color: 0xff6a5a, unlit: true,
+  },
+
+  // The boat's seeker. Small, bright and pointed the way it is travelling
+  // (`orient` on the gun), because reading its TURN is the whole counterplay.
+  bossMissile: {
+    shape: 'cone', radius: 0.22, height: 0.9, color: 0xffd27a, unlit: true, glow: 1.4,
   },
 
   // Dumbo octopus — standing in with the cute squid until real dumbo art
@@ -604,40 +885,56 @@ export const ASSETS = {
     shape: 'icosahedron', radius: 0.55, color: 0xb07ad0, unlit: true,
   },
 
-  // The pod. Same hull as `enemyOrca`, kept separate for the `bakalarBoat`
-  // reason again — these are yours, so they carry the warm friendly outline
-  // every other companion uses instead of the cold hostile one.
-  orcaFriend: {
-    model: '/models/orca.glb',
-    fit: 4.4, // a shade smaller than the hostile orca — a family, not a boss
+  // THE POD — an actual family, which is what the card has always been called.
+  //
+  // Three bodies rather than three copies of one: the bull leads, the cow
+  // flanks, the calf brings up the rear (systems/orca.js picks by slot). They
+  // are the same three animals the bosses are cut from, wearing the warm
+  // friendly outline every companion uses instead of the cold hostile one —
+  // the same split `bakalarBoat` makes, and the reason these are separate
+  // entries rather than a flag on the enemy ones.
+  //
+  // A shade smaller than the hostile bodies — a family, not a boss — and the
+  // calf smaller again, because a calf that matched its mother would just read
+  // as a third adult swimming in a slightly odd formation.
+  orcaFriendBull: {
+    model: '/models/orca_male.glb',
+    fit: 4.4,
     pivot: 0.15,
     forward: '+Z', up: '+Y',
-    // The file's three real clips, mapped the way the pod actually behaves:
-    // `swim` while cruising in formation, `rushbeach` on an attack run. The
-    // first pass had all three pointing at `idle`, which meant an orca
-    // charging a hull at 22 units/sec looked exactly like one drifting.
-    animations: {
-      idle: 'Orca_Rig|Orca_Rig|idle',
-      swim: 'Orca_Rig|Orca_Rig|swim',
-      boost: 'Orca_Rig|Orca_Rig|rushbeach',
-    },
-    // Same four spring chains as `enemyOrca` — same file, same bones, and no
-    // reason a friendly orca should have a stiffer tail than a hostile one.
-    // See that entry for how the fin bones were identified (measured, not
-    // read: `Thigh`/`Foot` are the pectoral flippers on a reused quadruped
-    // rig). Kept as its own copy rather than shared, for the same reason the
-    // entry itself is separate: this one is re-skinnable on its own.
-    rig: {
-      springChains: [
-        ['hip_01001_024', 'tail_01_025', 'tail_02_026', 'tail_03_027',
-         'tail_04_028', 'tail_05_029', 'tail_05001_030'],
-        ['fin001_06', 'fin002_07', 'fin003_08', 'fin004_09'],
-        ['Thigh_F01_L_016', 'Foot_F02_L_017', 'Foot_F03_L_018', 'Foot_F04_L_019'],
-        ['Thigh_F01_R_020', 'Foot_F02_R_021', 'Foot_F03_R_022', 'Foot_F04_R_023'],
-      ],
-    },
+    // NO `animations` MAPPING, deliberately. The file carries one clip, and
+    // systems/animation.js reuses a lone clip for every state at a different
+    // playback rate (rule 2 in its header) — so idle, swim and boost come out
+    // of this one cycle, cruising and charging at different speeds. Naming a
+    // clip here would opt out of that and pin all three to one rate.
+    rig: ORCA_RIG,
+    lookRig: orcaLook(91.5),
     outline: { color: 0xffd27a, thickness: 0.022 },
     shape: 'icosahedron', radius: 1.1, color: 0x2c3a4a, unlit: true,
+  },
+  orcaFriendCow: {
+    model: '/models/orca_female.glb',
+    // The source animals' own proportions, carried across: measured on the
+    // family file the cow is 0.85 of the bull's length and the calf is 0.50.
+    // `fit` normalises every model to a target length, so without this the
+    // three would arrive identical and the family would read as triplets.
+    fit: 3.74,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    rig: ORCA_RIG,
+    lookRig: orcaLook(75.5),
+    outline: { color: 0xffd27a, thickness: 0.022 },
+    shape: 'icosahedron', radius: 1.05, color: 0x2c3a4a, unlit: true,
+  },
+  orcaFriendCalf: {
+    model: '/models/orca_calf.glb',
+    fit: 2.2,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    rig: ORCA_RIG,
+    lookRig: orcaLook(44.4),
+    outline: { color: 0xffd27a, thickness: 0.022 },
+    shape: 'icosahedron', radius: 0.8, color: 0x2c3a4a, unlit: true,
   },
 
   // Scallop Squirter. Borrowing the oyster hull — both are bivalves and at
@@ -736,6 +1033,22 @@ export const ASSETS = {
   // dozens of them at once.
   shrapnel: { shape: 'octahedron', radius: 0.14, color: 0xfff4e0, unlit: true },
   enemyBullet: { shape: 'sphere', radius: 0.15, color: 0xff7766, unlit: true },
+
+  // --- what a boss shoots (see systems/bossPerks.js) ------------------------
+  // Both are spawned with `orient: true`, so the elongation runs along the
+  // direction of travel: a beam is a streak pointing where it is going and a
+  // barrel noses over as it goes.
+  //
+  // A LONG THIN BOLT, not a beam that exists for one frame. An instant
+  // hitscan line is unreadable on a body the size of a boss — by the time the
+  // player has seen it they have taken it — so the eyebeam fires something
+  // that TRAVELS, and the shape is what sells it as light rather than as
+  // another rock.
+  bossBeam: { shape: 'oval', radius: 0.12, elongate: 5, color: 0xff5a3c, unlit: true },
+  // Dark and dull against everything else the boss throws, on purpose: a
+  // barrel is the one projectile the player is meant to read as an OBJECT
+  // sitting in the water rather than as an attack in flight.
+  bossBarrel: { shape: 'oval', radius: 0.36, elongate: 1.4, color: 0x7a5230, unlit: true },
 
   enemyShark: {
     model: '/models/shark.glb',
@@ -972,6 +1285,158 @@ export const ASSETS = {
     },
     shape: 'cone', radius: 1.4, height: 4, color: 0x51606b, unlit: true,
   },
+
+  // THE MOSASAUR — bossMosasaur's body, and the longest animal in the game.
+  //
+  // Built by tools/optimize-mosasaurus.mjs from the raw Sketchfab download:
+  // 7.87MB and 67,434 triangles down to 1.82MB and 33,711, which puts it in the
+  // megalodon's band (30,100) rather than at twice it. Most of that saving is
+  // the textures — 3.94MB of PNG re-encoded to 0.58MB of WebP — so the mesh it
+  // kept is the mesh the artist drew.
+  //
+  // WHY THIS BODY IS WORTH A BOSS SLOT: it is the only new SILHOUETTE available.
+  // Every other apex in the roster is a shark shape, an orca shape or a squid,
+  // and a fifth swimming boss that was another torpedo with fins would be a
+  // reskin. This one is a four-flippered reptile with a 60-unit skull, and it
+  // reads as a different animal from across the arena, which is the only place
+  // a boss is ever read from.
+  enemyMosasaur: {
+    model: '/models/mosasaurus.glb',
+    // 7.4, the kraken's number rather than the megalodon's 7.0 — and unlike the
+    // kraken's, this length is all BODY. Against the assets.csv size of 2.3 and
+    // bossMosasaur's 1.6 that measures 27.2 units on screen, the longest final
+    // body in the game (megalodon 25.8, orca 24.8, kraken 22.2). Deliberate: a
+    // mosasaur that did not out-measure the shark would have nothing to say.
+    fit: 7.4,
+    pivot: 0.15, // turn about the head, not the belly — as every swimmer here does
+    // MEASURED, and measured in the right space, which on this file is the trap.
+    // The mesh's own geometry through its node matrix comes out 89 units long
+    // on Y, and every axis read off it is wrong: a skinned vertex is placed by
+    // the BONE matrices, not by the mesh's, and the armature in between carries
+    // the FBX -90-degree X rotation. Software-skinned, the animal is 355.8 units
+    // along Z with the snout at +194 and the fluke at -162, and the jaw bone
+    // sits below the skull on -Y. Hence +Z / +Y, the same basis as every shark.
+    forward: '+Z', up: '+Y',
+
+    // ONE 13.2s REEL, cut here rather than re-exported — the seagull's
+    // arrangement, and see buildSubclips(). 25fps is the FILE's keyframe rate,
+    // derived from its smallest gap between keys (0.0400s), not a guess and not
+    // the display rate.
+    //
+    // What is in the reel, measured by tools/clip-takes.mjs — the energy
+    // profile for the takes, the jaw angle for what the mouth is doing, and a
+    // seam distance for whether a range can loop at all:
+    //
+    //   0-100    a swim cycle repeating on a 40-frame period, energy climbing
+    //   34-78    ...with a 37-degree bite in the middle of it
+    //   100-142  THE BIG BITE: gape to 62.5 degrees by frame 114, then the whole
+    //            body lunges (peak energy 2.06/frame against the swim's 0.72)
+    //            and the mouth shuts by 134
+    //   150-250  a quiet hold, mouth closed, several frames of no motion at all
+    //   260-330  the swim cycle again, calm and clean
+    //
+    // THE RANGES BELOW ARE THE ONES THAT LOOP. Seams, as a share of the body's
+    // length: swim 0.038%, idle 0.443%. Every other 40-frame window in the reel
+    // measures between 1.6% and 4% — including 37-77, which looks like a second
+    // swim take and is really the first bite, so a boost mapped there would open
+    // the animal's mouth once per stroke.
+    subclipFps: 25,
+    subclips: {
+      mosaIdle: [198, 228],
+      mosaSwim: [289, 329],
+      mosaBite: [100, 142],
+    },
+    // `boost` reuses the swim stroke, played at the boost state's own
+    // clipTimeScale — the arrangement the hammerhead and the orca already run
+    // on. It is not a shortcut here so much as the honest reading: the file has
+    // exactly one locomotion cycle in it, and the faster-looking stretches of
+    // the reel are the animal ACCELERATING into the bite, which by definition
+    // does not loop.
+    //
+    // `bite` is the second authored bite in the whole roster (megalodon's is
+    // the first), and it earns this body its jaw for free: entities/enemies.js
+    // skips building a procedural jaw driver for anything whose controller
+    // already covers the state, so there is no `biteRig` here on purpose. The
+    // range starts and ends with the mouth shut, which is what lets a one-shot
+    // blend back into the swim without the jaw snapping closed on the seam.
+    animations: {
+      idle: 'mosaIdle', swim: 'mosaSwim', boost: 'mosaSwim', bite: 'mosaBite',
+    },
+
+    rig: {
+      // THIS RIG RUNS ALONG LOCAL +X, like the hammerhead's and unlike most of
+      // this file. Measured off the bind pose, not inferred: every bone's offset
+      // from its parent comes out along X — Bone002_10 at (81.95, 0, 0),
+      // Bone010_19 at (125.99, 0, 0), the flippers at (99.64, -0.01, 0). Left at
+      // the default '+Y' every chain's last bone would be handed a tip direction
+      // square to the bone itself.
+      boneAxis: '+X',
+
+      // Bone names in this file carry no meaning at all, so every chain was
+      // picked by measuring where the driven flesh sits and verified to be a
+      // clean parent-to-child run whose root does not fork into the body.
+      //
+      // THE TAIL starts at Bone010_19, not at Bone009_30. Bone009_30 has four
+      // bone children — the tail, a belly stub and BOTH hind flippers — so a
+      // spring on it would swing the flippers with the tail as one welded
+      // piece. Bone010_19 is the first bone whose only descendant is the tail,
+      // and the chain runs 129.6 units out to Bone017_14, the fluke tip.
+      //
+      // FOUR FLIPPERS, which is the thing this body has and no other boss does.
+      // Each is its own chain and its own solver for the reason spelled out on
+      // enemyOrca: they branch off the spine, the solver assumes one root-to-tip
+      // ordering, and the payoff is that they lag on their own timing rather
+      // than as a set. `role: 'fin'` solves them against a stiffer scaled copy of
+      // the spring config — a flipper run at the tail's numbers trails as far as
+      // a tail does over a quarter the span, which reads as detached.
+      //
+      // Each flipper chain includes its shoulder pivot (Bone023_40 and friends,
+      // which dominate no vertices of their own). They are single-child bones
+      // hanging off the spine, so they cannot swing anything but their own
+      // flipper, and starting there gives a four-bone curl where the megalodon's
+      // pectorals only get three.
+      springChains: [
+        { role: 'tail',
+          bones: ['Bone010_19', 'Bone011_18', 'Bone014_17',
+                  'Bone015_16', 'Bone016_15', 'Bone017_14'] },
+        // Front pair, off the neck-side spine bone at z+97 — just behind the skull.
+        { role: 'fin', bones: ['Bone023_40', 'Bone024_39', 'Bone025_38', 'Bone026_37'] },
+        { role: 'fin', bones: ['Bone032_44', 'Bone033_43', 'Bone034_42', 'Bone035_41'] },
+        // Hind pair, off Bone009_30 at mid-body.
+        { role: 'fin', bones: ['Bone028_25', 'Bone029_24', 'Bone030_23', 'Bone031_22'] },
+        { role: 'fin', bones: ['Bone036_29', 'Bone037_28', 'Bone038_27', 'Bone039_26'] },
+      ],
+    },
+
+    // HEAD-LOOK, and this animal has a real neck to do it with — three bones
+    // spanning 37.8 units, where the megalodon has two short spine bones and
+    // the mightymeg has one. Bone001_13 is safe as the root even though it has
+    // two bone children: the second is a 16-vertex throat stub, and the front
+    // flippers hang off the OTHER branch out of Bone020_48 entirely, so nothing
+    // below the neck moves when the head turns.
+    //
+    // tipLength 260 is in the tip bone's OWN local units, which is what
+    // tipWorld() multiplies before handing the point to localToWorld — so the
+    // armature's 0.2302 scale is applied for us and must not be applied here.
+    // Measured rather than estimated: the furthest vertex this skull dominates
+    // sits 259.9 local units along the bone's +X, which lands the effector on
+    // the snout tip at world z+194.1 instead of inside the head.
+    lookRig: {
+      head: { bones: ['Bone001_13', 'Bone002_10', 'Bone004_7'], tipAxis: '+X', tipLength: 260 },
+    },
+
+    // THE FALLBACK BODY, for a run where the model fails to load. Sized against
+    // the hitbox rather than against the animal: tools/boss-test.mjs measures
+    // the two against each other and wants them within sight, which is the right
+    // requirement — a fallback drawn at half its hitbox is a boss that hits you
+    // from off its own body. Slimmer and longer than the megalodon's 1.4 x 4.0,
+    // as this body is.
+    // Colour sampled from the file's own base map (mean of its non-black
+    // texels, #434035) rather than picked, so an unloaded boss is at least the
+    // right animal's colour.
+    shape: 'cone', radius: 1.3, height: 4.6, color: 0x434035, unlit: true,
+  },
+
   enemyMightyMeg: {
     model: '/models/mightymeg.glb',
     fit: 6.0,
@@ -1393,67 +1858,14 @@ export const ASSETS = {
     // faceCamera creatures, this puts model +X along the screen horizontal,
     // +Y up and +Z (the claws and face) pointing at the camera.
     forward: '+X', up: '+Y',
-    // Six legs and two claws, each its own spring chain. No `wagChain`: this
+    // Eight legs and two claws, each its own spring chain. No `wagChain`: this
     // model's clips cover every state, so the procedural sine fallback is
     // never wanted — these exist purely so a collision has a skeleton to
     // shove (CONFIG.crabPhysics -> anim.impulse). Each spring's target stays
     // the walk cycle, so the limbs settle back into the loop on their own.
-    rig: {
-      axis: 'z',
-      // EIGHT legs now, not six: this rig models all four pairs as legs where
-      // the old one made the rear pair a stub "arm" chain and left it out. Plus
-      // the two arms, so ten spring chains against eight.
-      springChains: [
-        ['leg47L_010', 'leg46L_011', 'leg45L_012', 'leg44L_013', 'leg43L_014', 'leg42L_015', 'leg41L_016'],
-        ['leg37L_017', 'leg36L_018', 'leg35L_019', 'leg34L_020', 'leg33L_021', 'leg32L_022', 'leg31L_023'],
-        ['leg27L_024', 'leg26L_025', 'leg25L_026', 'leg24L_027', 'leg23L_028', 'leg22L_029', 'leg21L_030'],
-        ['leg17L_031', 'leg16L_032', 'leg15L_033', 'leg14L_034', 'leg13L_035', 'leg12L_036', 'leg11L_037'],
-        ['leg47R_061', 'leg46R_062', 'leg45R_063', 'leg44R_064', 'leg43R_065', 'leg42R_066', 'leg41R_067'],
-        ['leg37R_068', 'leg36R_069', 'leg35R_070', 'leg34R_071', 'leg33R_072', 'leg32R_073', 'leg31R_074'],
-        ['leg27R_075', 'leg26R_076', 'leg25R_077', 'leg24R_078', 'leg23R_079', 'leg22R_080', 'leg21R_081'],
-        ['leg17R_082', 'leg16R_083', 'leg15R_084', 'leg14R_085', 'leg13R_086', 'leg12R_087', 'leg11R_088'],
-        ['Shoulder2L_041', 'Hand1L_042', 'Hand2L_043', 'Hand3L_044'],
-        ['Shoulder2R_051', 'Hand1R_052', 'Hand2R_053', 'Hand3R_054'],
-      ],
-    },
-    // --- the chelipeds, as an IK rig ----------------------------------------
-    // THIS RIG HAS A REAL PINCER, which the crab that came before it did not.
-    // The wrist forks into two finger chains driving separate geometry —
-    // `Hand6` (fixed prong) and `Hand5 -> Hand7` (movable) — and rotating the
-    // movable one opens the tip-to-tip aperture from 9% of finger length to
-    // 33%, a measured +277%. So the pinch here is a JAW, not the scissor fake
-    // systems/crabClaw.js falls back to on a claw that cannot open.
-    // tools/crab-claw-probe.mjs reprints every number in this comment.
-    clawRig: {
-      // Bones run along their own local +Y on this rig (every child sits at
-      // (0, n, 0) in its parent) — NOT +X, which is what crabwalking.glb used.
-      // Getting this wrong points the IK effector sideways out of the wrist and
-      // the arm solves toward a spot beside the player.
-      tipAxis: '+Y',
-      tipLength: 0.06,
-      arms: [
-        // Rooted at the SHOULDER, which is where an arm actually swings from.
-        // That is only safe because systems/crabClaw.js restores the whole
-        // chain each frame: this clip keys rotation on 50 of the rig's 126
-        // bones and neither shoulder bone is among them, so a solver that
-        // treated the bone's current value as the clip's pose would creep
-        // further out on every pinch. Rooting at the first KEYED bone instead
-        // sidesteps that and costs half the rear-up — 0.137 of reach against
-        // 0.154, and the claw visibly stops lifting.
-        { root: 'ShoulderL_039', tip: 'Hand3L_044', jaw: 'Hand5L_047', sign: -1 },
-        { root: 'ShoulderR_049', tip: 'Hand3R_054', jaw: 'Hand5R_057', sign: 1 },
-      ],
-      // The finger hinge, and it needs OPPOSITE signs per side (above): this
-      // rig's arms are mirrored in world space rather than in their bone
-      // orientations, so one angle would open one claw and close the other.
-      // crabwalking.glb needed no signs for exactly the opposite reason.
-      // Measured per side rather than assumed from the naming.
-      jawAxis: 'x',
-      // Unused on this model — both arms declare a `jaw`, so the scissor path
-      // never runs. Kept so falling back to it stays a config change rather
-      // than a code one.
-      scissorAxis: 'z',
-    },
+    // Shared with every other crab — see CRAB_RIG above.
+    rig: CRAB_RIG,
+    clawRig: CRAB_CLAW_RIG,
     // The shell pattern. Static in daylight and quite dim — see the `carapace`
     // preset for the three zeroes that make it a texture rather than an effect.
     //
@@ -1471,17 +1883,7 @@ export const ASSETS = {
     // the gradient front-to-back, which is the axis the animal has: claws at
     // one end, rear legs at the other. Every preset knob that reads the body
     // axis depends on this.
-    // The eye stalks, for the per-vertex eye glow (systems/biolumSkin.js
-    // bakeEyeGlow). Base bone first, tip locator last — the ramp is a
-    // projection onto that line, so the order is the gradient's direction and
-    // reversing it lights the sockets instead of the eyes.
-    //
-    // Dots stripped, as everywhere the game names a bone: the raw glTF calls
-    // these Eye.1.L_02 and three.js sanitises node names on load.
-    eyeStalks: [
-      ['Eye1L_02', 'Eye2L_03', 'Eye3L_04', 'Eye3L_end_099'],
-      ['Eye1R_05', 'Eye2R_06', 'Eye3R_07', 'Eye3R_end_0100'],
-    ],
+    eyeStalks: CRAB_EYE_STALKS,
     biolumAxis: 'z',
     shape: 'octahedron', radius: 0.6, color: 0xc9713f, unlit: true,
   },
@@ -1497,54 +1899,51 @@ export const ASSETS = {
     model: '/models/crabpincer.glb',
     fit: 2.8,
     forward: '+X', up: '+Y',
-    // Copied wholesale from enemyWalkingCrab. Both blocks have to agree: the
-    // claw driver and the animation springs resolve bones by name off whichever
-    // key spawned, so a variant that dropped these would walk with stiff legs
-    // and never raise a claw.
-    rig: {
-      axis: 'z',
-      springChains: [
-        ['leg47L_010', 'leg46L_011', 'leg45L_012', 'leg44L_013', 'leg43L_014', 'leg42L_015', 'leg41L_016'],
-        ['leg37L_017', 'leg36L_018', 'leg35L_019', 'leg34L_020', 'leg33L_021', 'leg32L_022', 'leg31L_023'],
-        ['leg27L_024', 'leg26L_025', 'leg25L_026', 'leg24L_027', 'leg23L_028', 'leg22L_029', 'leg21L_030'],
-        ['leg17L_031', 'leg16L_032', 'leg15L_033', 'leg14L_034', 'leg13L_035', 'leg12L_036', 'leg11L_037'],
-        ['leg47R_061', 'leg46R_062', 'leg45R_063', 'leg44R_064', 'leg43R_065', 'leg42R_066', 'leg41R_067'],
-        ['leg37R_068', 'leg36R_069', 'leg35R_070', 'leg34R_071', 'leg33R_072', 'leg32R_073', 'leg31R_074'],
-        ['leg27R_075', 'leg26R_076', 'leg25R_077', 'leg24R_078', 'leg23R_079', 'leg22R_080', 'leg21R_081'],
-        ['leg17R_082', 'leg16R_083', 'leg15R_084', 'leg14R_085', 'leg13R_086', 'leg12R_087', 'leg11R_088'],
-        ['Shoulder2L_041', 'Hand1L_042', 'Hand2L_043', 'Hand3L_044'],
-        ['Shoulder2R_051', 'Hand1R_052', 'Hand2R_053', 'Hand3R_054'],
-      ],
-    },
-    clawRig: {
-      tipAxis: '+Y',
-      tipLength: 0.06,
-      arms: [
-        { root: 'ShoulderL_039', tip: 'Hand3L_044', jaw: 'Hand5L_047', sign: -1 },
-        { root: 'ShoulderR_049', tip: 'Hand3R_054', jaw: 'Hand5R_057', sign: 1 },
-      ],
-      jawAxis: 'x',
-      scissorAxis: 'z',
-    },
+    // Shared with the day crab rather than copied — see CRAB_RIG. The claw
+    // driver and the animation springs resolve bones by name off whichever key
+    // spawned, so a variant that dropped these would walk with stiff legs and
+    // never raise a claw.
+    rig: CRAB_RIG,
+    clawRig: CRAB_CLAW_RIG,
     // UNLIT, for the reason written out at length on enemyLanternRay: the glow
     // is additive, and a lit shell angled at the key light beats the pattern.
     modelUnlit: true,
     biolumSkin: 'emberClaw',
-    // The eye stalks, for the per-vertex eye glow (systems/biolumSkin.js
-    // bakeEyeGlow). Base bone first, tip locator last — the ramp is a
-    // projection onto that line, so the order is the gradient's direction and
-    // reversing it lights the sockets instead of the eyes.
-    //
-    // Dots stripped, as everywhere the game names a bone: the raw glTF calls
-    // these Eye.1.L_02 and three.js sanitises node names on load.
-    eyeStalks: [
-      ['Eye1L_02', 'Eye2L_03', 'Eye3L_04', 'Eye3L_end_099'],
-      ['Eye1R_05', 'Eye2R_06', 'Eye3R_07', 'Eye3R_end_0100'],
-    ],
+    eyeStalks: CRAB_EYE_STALKS,
     biolumAxis: 'z',
     // Nearly black, so the ember in the seams is the only thing with a colour.
     tint: 0x1a0f0c,
     shape: 'octahedron', radius: 0.6, color: 0x1a0f0c, unlit: true,
+  },
+
+  // THE KING CRAB — the boss body. Same binary, same rig, same claw; its own
+  // key so its own material, for the reason on the ember crab above: a material
+  // is shared across every clone of a key, so a boss that lit its shell would
+  // light every crab on the seabed with it. This one arrives alone, so it can
+  // afford a look the swarm cannot.
+  //
+  // `fit` is the day crab's, unchanged. The boss step is bosses.csv's `sizeMul`
+  // on top of assets.csv's size for this key — putting it here instead would
+  // hide the escalation in the wrong file and break tools/boss-test.mjs's
+  // measurement of drawn size against hitbox.
+  enemyBossCrab: {
+    model: '/models/crabpincer.glb',
+    fit: 2.8,
+    forward: '+X', up: '+Y',
+    rig: CRAB_RIG,
+    clawRig: CRAB_CLAW_RIG,
+    // Unlit, like the ember crab and for the same reason — and this body is
+    // mostly glow, so a key light raking a shell that dark would only wash out
+    // the seams the whole look is carried by.
+    modelUnlit: true,
+    biolumSkin: 'kingCrab',
+    eyeStalks: CRAB_EYE_STALKS,
+    biolumAxis: 'z',
+    // Colder and darker than the ember crab's brown-black: the boss reads as
+    // deep-water armour, and the shell being nearly black is what lets a pair
+    // of eyes find you across the arena.
+    tint: 0x0d1016,
+    shape: 'octahedron', radius: 0.6, color: 0x0d1016, unlit: true,
   },
   // --- seabed decor --------------------------------------------------------
   // A clump of blades that bends in the current. Built by
@@ -1586,77 +1985,56 @@ export const ASSETS = {
   // Axes below come from rendering each file with an axis helper (see
   // model-inspector.html), not from guessing at the longest dimension.
 
-  enemyOrca: {
-    model: '/models/orca.glb',
+  // THE BOSS BODIES. Two of them, and the boss rolls between them at spawn —
+  // see `asset` on CONFIG.enemies.bossOrca, which takes a list. One set of
+  // stats, one name pool, one health bar, two animals: a bull with the tall
+  // dorsal fin and a cow with the curved one, which is the difference a person
+  // who has ever seen an orca reads instantly and is the whole point of using
+  // both.
+  //
+  // Cut from Orca_Family_GLB.glb by tools/orca-split.mjs. What that replaced —
+  // and why — is worth knowing before anybody swaps it back: the old orca.glb
+  // was 968 vertices on a rig built for a quadruped, whose pectoral flippers
+  // were driven by bones called `Thigh_F01_L` and `Foot_F02_L` hanging off a
+  // `hip_01`, and whose swim clip moved the fluke a third as far as this one.
+  // Nothing was wrong with the animation tuning; the rig was a whale wearing
+  // somebody else's skeleton.
+  enemyOrcaBull: {
+    model: '/models/orca_male.glb',
     fit: 5.2,
     pivot: 0.15,
     forward: '+Z', up: '+Y',
-    animations: {
-      idle: 'Orca_Rig|Orca_Rig|idle',
-      swim: 'Orca_Rig|Orca_Rig|swim',
-      boost: 'Orca_Rig|Orca_Rig|rushbeach',
-    },
-    // Tail trail — see the rationale on enemyMegalodon. Seven bones, the
-    // longest tail in the roster, and the only one that can start at its own
-    // root: hip_01001_024 is a dedicated tail hip with nothing else hanging
-    // off it, so springing it swings the whole rear without touching the
-    // head, dorsal or pectorals (those live under the sibling hip_01_05).
-    //
-    // A cetacean's fluke beats vertically, which is the plane the camera
-    // sees, so this is the one creature in the set where the trail reads at
-    // full strength rather than partly into the screen.
-    // The orca was the FIRST creature here to spring its fins as well as its
-    // tail, and is now one of six — four independent chains. They have to be
-    // separate solvers rather
-    // than one long chain: the solver's whole method is each bone measuring
-    // its target after its PARENT has moved, which assumes a single root-to-
-    // tip ordering, and a body with fins coming off it has no such ordering.
-    // Separate chains also means each limb lags on its own timing, which is
-    // what stops the whole animal reading as one wobbling piece.
-    //
-    // The fin bone names are junk from a reused quadruped rig — `Thigh`/`Foot`
-    // are the pectoral flippers — so these were identified by measuring world
-    // positions, not by reading names. Verified against the file: the dorsal
-    // sits on the centreline (x≈0) rising behind midbody, and the pectorals
-    // spread to ±X low on the body near the head.
-    rig: {
-      springChains: [
-        { role: 'tail',
-          bones: ['hip_01001_024', 'tail_01_025', 'tail_02_026', 'tail_03_027',
-                  'tail_04_028', 'tail_05_029', 'tail_05001_030'] },
-        // dorsal
-        { role: 'fin', bones: ['fin001_06', 'fin002_07', 'fin003_08', 'fin004_09'] },
-        // pectoral L
-        { role: 'fin', bones: ['Thigh_F01_L_016', 'Foot_F02_L_017', 'Foot_F03_L_018', 'Foot_F04_L_019'] },
-        // pectoral R
-        { role: 'fin', bones: ['Thigh_F01_R_020', 'Foot_F02_R_021', 'Foot_F03_R_022', 'Foot_F04_R_023'] },
-      ],
-      // STUB — the fluke lobes, still not enabled. They hang off the last
-      // tail bone, so they already ride the tail's own trail; giving them
-      // their own chains would lag them a second time on top of that.
-      //   fluke L ['tailfin_L001_031', 'tailfin_L002_032', 'tailfin_L003_033']
-      //   fluke R ['tailfin_R001_034', 'tailfin_R002_035', 'tailfin_R003_036']
-    },
-    // Head-look — see enemyShark. The one animal in this set with something
-    // like a real neck, and the only one whose look chain overlaps the spring
-    // chains: Spine_03_012 is the parent of both pectorals, so leaning the
-    // head displaces the flippers' spring targets and they trail the turn.
-    // That compounds rather than conflicts. The look runs AFTER the springs
-    // each frame, so they pick the displacement up on the next one and trail
-    // it — which is the direction secondary motion is supposed to go anyway.
-    lookRig: {
-      head: { bones: ['Spine_03_012', 'Head_013'], tipAxis: '+Y', tipLength: 0.4 },
-    },
-    // BITE — mouth_015, same rig family as the low-poly shark and the dolphin
-    // (Blender's animal armature: Head with eye_L / eye_R / mouth hanging off
-    // it). None of this file's 5 clips is a bite, so it's procedural — see
-    // systems/jaw.js. Local X, dot 1.000 with the flank axis, positive sign.
-    //
-    // The widest gape in the roster, and deliberately: this is the creature
-    // whose whole design is that it out-eats everything else (a 34-unit prey
-    // radius against a shark's 18, and a 0.45s bite cooldown against 1.2), so
-    // the mouth is the thing you should be reading off it.
-    biteRig: { bone: 'mouth_015', axis: 'x', openAngle: 0.62 },
+    // THE WIREFRAME SKIN, available to this body. `biolumEdges` splits the
+    // geometry at load so barycentric coordinates exist (see splitForEdges);
+    // `biolumSkin` names the preset it wears. The orca is the right animal to
+    // carry it: 11,238 triangles of smooth hull means an edge flow that reads
+    // as a drawn cage rather than as noise, which is not true of the
+    // roster's low-poly fish.
+    biolumEdges: true,
+    biolumSkin: 'wireframeGlow',
+    // One clip, reused across every state at a different rate — see the note
+    // on orcaFriendBull for why there is no mapping here.
+    rig: ORCA_RIG,
+    lookRig: orcaLook(91.5),
+    biteRig: ORCA_BITE,
+    shape: 'cone', radius: 0.9, height: 2.6, color: 0x22303c, unlit: true,
+  },
+  enemyOrcaCow: {
+    model: '/models/orca_female.glb',
+    fit: 5.0, // fractionally the smaller animal, as she is
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    // THE WIREFRAME SKIN, available to this body. `biolumEdges` splits the
+    // geometry at load so barycentric coordinates exist (see splitForEdges);
+    // `biolumSkin` names the preset it wears. The orca is the right animal to
+    // carry it: 11,238 triangles of smooth hull means an edge flow that reads
+    // as a drawn cage rather than as noise, which is not true of the
+    // roster's low-poly fish.
+    biolumEdges: true,
+    biolumSkin: 'wireframeGlow',
+    rig: ORCA_RIG,
+    lookRig: orcaLook(75.5),
+    biteRig: ORCA_BITE,
     shape: 'cone', radius: 0.9, height: 2.6, color: 0x22303c, unlit: true,
   },
 
@@ -1825,6 +2203,109 @@ export const ASSETS = {
     // No clips — the source is one static mesh. The shared controller falls
     // back to the procedural rig or to no motion, same as the barracuda.
     shape: 'cone', radius: 0.4, height: 1.5, color: 0x86705b, unlit: true,
+  },
+
+  // THE GIANT SQUID — the boss body, and the rigged sibling enemySquid above
+  // says it never had. That entry's note is worth reading first: the small squid
+  // is frozen in the flare its artist posed it in, permanently, because OBJ
+  // carries no bones and the only rig-capable relative was a 2017 VRay .c4d.
+  // This is a different animal from a different source with a real armature, so
+  // everything that entry had to design around, this one simply does.
+  //
+  // Source: "Giant Squid Creature" by Ethan (sketchfab.com/ethanchew), CC-BY-4.0.
+  // The licence needs a visible credit somewhere in the build, which this
+  // comment is NOT — see the note in the README.
+  //
+  // 23,305 verts / 41,943 triangles / six 1024x1024 maps. That is megalodon
+  // budget (37,604 / 30,100 / seven maps) and it is affordable for the same
+  // reason the megalodon's is: maxConcurrent 1, and systems/boss.js is the only
+  // thing that can put one in the water. It would not be affordable for anything
+  // that spawns in numbers.
+  //
+  // ORIENTATION, MEASURED — tools/check-squid-orientation.mjs renders all six
+  // plausible pairs through the game's own basis and camera. The two facts that
+  // decided it:
+  //
+  //   THE CROWN HAS TO SPLAY ACROSS THE SCREEN, not into it. Same requirement
+  //   octoGrabber has and for the same reason: the arms are the silhouette, and
+  //   a crown pointed at the camera is a mantle with a smudge under it. Under
+  //   '-Y'/'+X' the body measures 2.60 x 6.00 on screen against 2.71 deep, with
+  //   the arms fanned symmetrically either side of the mantle.
+  //
+  //   THE BIND POSE LEANS. Not by much, but it leans in one plane — so the true
+  //   side view ('-Y'/'+Z', one eye, anatomically correct) draws the animal at a
+  //   visible slant, and `faceMotion` would then swim it crabwise for the whole
+  //   fight. '+X' puts that lean directly along the view axis where it does not
+  //   show. Choosing the dorsal read over the lateral one is the same trade
+  //   octoGrabber made, and it is what the crown wants anyway.
+  //
+  // ARMS LEAD, mantle trails: forward is '-Y' rather than '+Y'. A squid jets
+  // mantle-first to flee and swims arms-first to hunt, and a boss is hunting —
+  // exactly the argument enemySquid makes at length above, reaching the same
+  // answer on a different axis.
+  enemyGiantSquid: {
+    model: '/models/giantsquid.glb',
+    // The longest axis in world units, which on this body is mantle tip to arm
+    // tip. Bigger than the orca bull's 5.2 because much more of that length is
+    // ARM — the mantle alone is about 45% of it — and a kraken whose body reads
+    // the size of an orca's needs to be longer overall than one.
+    fit: 7.4,
+    // Origin at the crown's base, where the arms meet the head. The bounding
+    // box centre sits inside the mantle, and pivoting there would swing the
+    // whole arm bundle around a point well behind the animal's eyes on every
+    // course correction — the same reason enemySquid pivots at 0.42.
+    pivot: 0.38,
+    forward: '-Y', up: '+X',
+    // THE FIVE CLIPS THE FILE SHIPS, mapped onto the state machine. What is
+    // NOT here is the important part: there is no swim take and no attack take
+    // in this file at all. Measured travel tops out at 17.7% of body length on
+    // `Idle` and 23.6% on `flapper`, and the other three are eye motion.
+    //
+    // So the mapping is deliberately thin and the RIG does the locomotion —
+    // ten spring chains with no clip fighting them, which is the arrangement
+    // systems/animation.js documents as rule 3 and which the octopus companion
+    // already runs on (octopus_rig.glb ships 128 bones and zero clips).
+    //
+    //   idle    -> Idle      the arms working, the animal holding station.
+    //   swim    -> flapper   the mantle fins driving. It is the only take in the
+    //                        file that moves the body rather than the limbs, so
+    //                        it is the only honest candidate for locomotion.
+    //   boost   -> flapper   the same take. animation.js plays it at the boost
+    //                        state's own clipTimeScale, which is what a squid
+    //                        jetting looks like: the same stroke, faster.
+    //
+    //   bark    -> eyeballing  the ink burst's TELEGRAPH. `bark` is the state
+    //                          machine's emote one-shot, and systems/kraken.js
+    //                          fires it in the beat before every burst so the
+    //                          eyes roll first and the cloud is something the
+    //                          player saw coming. Reusing the shared emote state
+    //                          rather than inventing a kraken-only one is
+    //                          deliberate — see the note there.
+    //
+    // The two blink takes are left unmapped. They are ambient detail rather than
+    // states, and the only way to play them would be a second AnimationMixer on
+    // the same tree, fighting `Idle` (175 tracks, the eyelids among them) over
+    // the same bones. A mixer cannot restore a bone another mixer wrote.
+    animations: {
+      idle: 'Idle',
+      swim: 'flapper',
+      boost: 'flapper',
+      bark: 'eyeballing',
+    },
+    rig: SQUID_RIG,
+    // THE FALLBACK BODY, used when the model fails to load — and sized against
+    // the MANTLE rather than against the whole animal. tools/boss-test.mjs
+    // measures it against the hitbox radius and wants the two within sight of
+    // each other, which is the right requirement: a fallback drawn at half its
+    // hitbox is a boss that hits you from off its own body.
+    //
+    // The mantle-and-head is the solid ~55% of this creature; the arms are the
+    // rest and they carry no hitbox at all. So this stands in for the part a
+    // circle can honestly represent. At 1.6 x 4.2 it measures 1.00x the hitbox
+    // through the boss's two size steps, against the megalodon's 0.91x — the
+    // first guess (0.8 x 2.4) came out at 0.57x and boss-test failed it, which
+    // is exactly what that assertion is for.
+    shape: 'cone', radius: 1.6, height: 4.2, color: 0x2a0f14, unlit: true,
   },
 
   enemyOyster: {
@@ -2660,7 +3141,22 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
       // place and for the same reason as the noise above — it survives tint,
       // glow and the emissive toggle, all of which write colours or uniforms
       // rather than rebuilding the material.
-      if (def.biolumSkin) attachBiolumSkin(m2, mesh, def.biolumSkin, def.biolumAxis ?? null);
+      // `biolumEdges` splits the geometry so the body can wear the `wireframe`
+      // pattern — one vertex per triangle corner, which barycentric
+      // coordinates require. Done BEFORE the attach, because the attach bakes
+      // its per-vertex attributes off whatever geometry it finds and a split
+      // afterwards would throw them away. Once per asset, not per creature:
+      // clones share the geometry. See systems/biolumSkin.js.
+      if (def.biolumEdges) splitForEdges(mesh);
+      // `def.eyeStalks` is the fifth argument and it USED TO BE DROPPED HERE,
+      // which is the whole reason the crabs' eyes never lit in the game while
+      // every test of them passed: the harness calls attachBiolumSkin with the
+      // stalks by hand, this call site is the only one the game itself takes,
+      // and bakeEyeGlow with no stalks bakes an all-zero aEyeGlow that the
+      // shader multiplies out to nothing. No warning, no error — a tuned
+      // eyeStrength simply scaling zero. See the guard in
+      // tools/biolum-skin-test.mjs, which now reads this line.
+      if (def.biolumSkin) attachBiolumSkin(m2, mesh, def.biolumSkin, def.biolumAxis ?? null, def.eyeStalks ?? null);
       // Current-driven bend for seabed plants (CONFIG.grass.sway). `size.y` is
       // the clump's height in MODEL units, before `fit` reaches the node's
       // scale — the shader wants it there, both as the amplitude scale and as
@@ -2698,6 +3194,7 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
   wrapper.userData.lookRig = def.lookRig ?? null;
   wrapper.userData.biteRig = def.biteRig ?? null;
   wrapper.userData.clawRig = def.clawRig ?? null;
+  wrapper.userData.breathRig = def.breathRig ?? null;
   wrapper.userData.animationNames = def.animations ?? {};
   return wrapper;
 }
@@ -2755,6 +3252,7 @@ export function createVisual(key) {
     inst.userData.lookRig = template.userData.lookRig;
     inst.userData.biteRig = template.userData.biteRig;
     inst.userData.clawRig = template.userData.clawRig;
+    inst.userData.breathRig = template.userData.breathRig;
     inst.userData.animationNames = template.userData.animationNames;
     if (sizeMul) inst.scale.multiplyScalar(sizeMul);
     // A glowing creature gets its OWN material here, unlike every other clone,
@@ -3601,7 +4099,51 @@ export async function loadUploadedAsset(key, file) {
 // just future spawns.
 // ---------------------------------------------------------------------------
 
+// ONE SURFACE, TWO ASSETS. A follower has no look of its own: every tint,
+// emissive, glow, roughness and texture written for the leader lands on both,
+// and there is no way to set them apart.
+//
+// The seal team follows the player because they ARE the player's animal —
+// smaller escorts of the same species, wearing the same procedural mottling
+// (see `noiseShader` on both defs). Keeping two independent looks meant the
+// squad could drift away from the seal it escorts, and it did: a saved
+// `assetLooks.sealTeam` from back when the escorts wore a rainbow glow skin
+// left them lit green at 2.7x while the player sat at a white 0.4x sheen.
+// Deleting that saved value could not fix it either — a snapshot is deep-
+// merged from disk AND from localStorage, so the browser's cached copy put the
+// green straight back. This does fix it, because the field no longer exists:
+// config.js strips `assetLooks.sealTeam` on the way in (see the dead-address
+// list in withoutTableOwnedKeys) and the panel's escort row now edits the
+// player's look.
+export const LOOK_FOLLOWS = { sealTeam: 'ship' };
+
+// Followers, by leader. Built once — it is a two-entry map read on every look
+// write.
+const LOOK_FOLLOWERS = new Map();
+for (const [follower, leader] of Object.entries(LOOK_FOLLOWS)) {
+  if (!LOOK_FOLLOWERS.has(leader)) LOOK_FOLLOWERS.set(leader, []);
+  LOOK_FOLLOWERS.get(leader).push(follower);
+}
+
+/** The key whose stored look owns `key`'s appearance. Identity for most assets. */
+export function lookLeader(key) {
+  return LOOK_FOLLOWS[key] ?? key;
+}
+
 export function getAssetMaterials(key) {
+  // A follower's materials are reached through its leader, never on their own,
+  // so a stray write with the follower's key cannot paint half the pair.
+  const lead = lookLeader(key);
+  const followers = LOOK_FOLLOWERS.get(lead);
+  if (followers) {
+    const mats = new Set(assetMaterialsFor(lead));
+    for (const f of followers) for (const m of assetMaterialsFor(f)) mats.add(m);
+    return [...mats];
+  }
+  return assetMaterialsFor(lead);
+}
+
+function assetMaterialsFor(key) {
   const template = loadedModels.get(key);
   if (template) {
     const mats = new Set();

@@ -3,6 +3,11 @@ import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { abilityDamage } from './scaling.js';
+import { hitCreature } from './hitShape.js';
+
+// See the note on combat.js's `contact` — shared, and read before the next
+// test can overwrite it.
+const ringContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 
 // One entry per orbiting instance: { mesh, angleOffset, cooldowns: Map<enemy, secondsLeft> }
 let instances = [];
@@ -79,10 +84,11 @@ export function updateShrimpRing(dt, scene, playerPos, shrimpCount, enemiesList,
     for (let i = enemiesList.length - 1; i >= 0; i--) {
       const e = enemiesList[i];
       if (inst.cooldowns.has(e)) continue;
-      const dx = e.mesh.position.x - worldX;
-      const dy = e.mesh.position.y - worldY;
-      const combined = reach + e.radius;
-      if (dx * dx + dy * dy > combined * combined) continue;
+      // Against the measured body where there is one, so a shrimp brushing a
+      // boss's flank connects with the flank and not with a circle drawn
+      // around its middle. Everything else in the water is still the circle it
+      // has always been — see systems/hitShape.js.
+      if (!hitCreature(e, worldX, worldY, reach, ringContact)) continue;
 
       // Read once, so the hit and the number reported to the feedback layer
       // cannot disagree about how hard the shrimp hit.
@@ -91,7 +97,7 @@ export function updateShrimpRing(dt, scene, playerPos, shrimpCount, enemiesList,
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
       inst.cooldowns.set(e, CONFIG.shrimpRing.contactCooldown);
-      hooks.onEnemyDamaged?.(e, dmg);
+      hooks.onEnemyDamaged?.(e, dmg, ringContact.x, ringContact.y, null, null, ringContact);
       // At the shrimp, not the enemy — the ring is a fixed radius around the
       // player, so contacts happening out on that circle is the read.
       hooks.onContact?.(worldX, worldY);

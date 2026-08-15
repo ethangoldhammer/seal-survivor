@@ -37,11 +37,13 @@ import * as THREE from 'three';
 import {
   attachBiolumSkin, applyBiolumSkinSettings, updateBiolumSkin, instantiateBiolumSkin,
   BIOLUM_PATTERNS, patternIndex, biolumSkinMaterialCount, setBiolumSkinVariant,
+  skinRoster, biolumSkinPresetOf, rollBiolumSkinVariant,
 } from '../path/src/systems/biolumSkin.js';
+import { parseSkinCsv, buildSkins, rollSkin, allSkins } from '../path/src/skinTable.js';
 import * as THREE_NS from 'three';
-import { CONFIG, TUNER_SCHEMA, withoutInheritedPresetKeys } from '../path/src/config.js';
+import { CONFIG, TUNER_SCHEMA, withoutInheritedPresetKeys, importTuning } from '../path/src/config.js';
 import { updateBeatSync } from '../path/src/systems/beatSync.js';
-import { ASSETS } from '../path/src/assets.js';
+import { ASSETS, lookLeader } from '../path/src/assets.js';
 import { pulseDemoFor, panDemoFor } from '../path/src/systems/glowDebug.js';
 
 let failures = 0;
@@ -350,6 +352,33 @@ section('EYE GLOW');
     check('a model with no stalks bakes an all-zero attribute', !!none
       && [...Array(none.count)].every((_, i) => none.getX(i) === 0),
       `${none?.count ?? 0} verts, all 0 — the shader multiplies it out to nothing`);
+
+    // THE PIPELINE HAS TO HAND THE STALKS OVER, and this check exists because
+    // everything above passed for weeks while the eyes were dark in the game.
+    // Every check in this section calls attachBiolumSkin with STALKS BY HAND.
+    // The game has exactly one call site — processMaterial in assets.js — and
+    // it was passing four arguments, so bakeEyeGlow ran with `stalks === null`
+    // on every creature and baked the all-zero attribute the check above is
+    // happy to see on a model that declares none. Nothing throws and nothing
+    // warns: a tuned eyeStrength simply scales zero.
+    //
+    // Read out of the source rather than exercised, because the pipeline needs
+    // a GL context and a loaded asset roster to run at all — and a static read
+    // still catches the exact regression that shipped.
+    const assetsSrc = readFileSync(new URL('../path/src/assets.js', import.meta.url), 'utf8');
+    const callSites = assetsSrc.match(/attachBiolumSkin\([^)]*\)/g) ?? [];
+    check('the asset pipeline forwards eyeStalks to the bake',
+      callSites.length > 0 && callSites.every((c) => /eyeStalks/.test(c)),
+      callSites.length ? callSites.join(' | ') : 'no call site found in assets.js');
+
+    // ...and the other half of the same trap: eyeStalks only ever reaches the
+    // bake through the biolumSkin attach, so an asset that declares stalks and
+    // no skin is a pair of eyes that can never light.
+    const orphans = Object.entries(ASSETS)
+      .filter(([, d]) => d?.eyeStalks && !d.biolumSkin)
+      .map(([k]) => k);
+    check('every asset with eye stalks also wears a biolumSkin', orphans.length === 0,
+      orphans.length ? orphans.join(', ') : `${Object.values(ASSETS).filter((d) => d?.eyeStalks).length} asset(s) with stalks, all skinned`);
   }
 }
 
@@ -801,6 +830,234 @@ check('the seal team wears the player\'s noise, not a glow skin',
   ASSETS.sealTeam.noiseShader === true && ASSETS.sealTeam.biolumSkin === undefined
   && CONFIG.biolumSkin.presets.escort === undefined,
   `noiseShader=${ASSETS.sealTeam.noiseShader}, biolumSkin=${ASSETS.sealTeam.biolumSkin}, escort preset=${CONFIG.biolumSkin.presets.escort ? 'resurrected' : 'gone'}`);
+
+// AND THEY HAVE NO COLOUR OF THEIR OWN. Removing the glow skin was not enough
+// on its own: the escorts also carried a saved per-asset look (a green
+// emissive at 2.7x, authored when they wore the rainbow skin), which
+// ui/textures.js pushes onto their materials at every load. Deleting it from
+// imported-tuning.json did not fix it either, because a snapshot is merged
+// from the browser's cache as well, and the cache is usually the newer of the
+// two. They follow the player's look now, and the dead field is stripped from
+// every snapshot on the way in — see LOOK_FOLLOWS in assets.js.
+section('THE ESCORTS ARE THE PLAYER\'S ANIMAL');
+check('the seal team wears the player\'s noise, not a glow skin',
+  ASSETS.sealTeam.noiseShader === true && ASSETS.sealTeam.biolumSkin === undefined
+  && CONFIG.biolumSkin.presets.escort === undefined,
+  `noiseShader=${ASSETS.sealTeam.noiseShader}, biolumSkin=${ASSETS.sealTeam.biolumSkin}, escort preset=${CONFIG.biolumSkin.presets.escort ? 'resurrected' : 'gone'}`);
+check('...and the same material defaults, so it takes the light the same way',
+  JSON.stringify(ASSETS.sealTeam.material) === JSON.stringify(ASSETS.ship.material),
+  JSON.stringify(ASSETS.sealTeam.material));
+check('...and no look of its own to drift with',
+  lookLeader('sealTeam') === 'ship',
+  `leader is ${lookLeader('sealTeam')}`);
+{
+  // The regression, end to end: a snapshot carrying the old escort colour.
+  importTuning({ assetLooks: { sealTeam: { emissive: 0x159924, glow: 2.7 } } });
+  check('a snapshot cannot give the escorts a colour back',
+    CONFIG.assetLooks.sealTeam === undefined,
+    CONFIG.assetLooks.sealTeam ? JSON.stringify(CONFIG.assetLooks.sealTeam) : 'stripped');
+  check('...while the seal\'s own look survives that strip',
+    CONFIG.assetLooks.ship !== undefined);
+}
+
+// --- the skin roster --------------------------------------------------------
+// skins.csv: the per-individual variants rolled at spawn. The failures worth
+// guarding are all quiet ones — a row that names a preset nobody wears, a
+// pattern the shader has no branch for (which selects `blotches` in silence
+// because the uniform is an index), or a night palette that finds its way onto
+// the daylight crab.
+section('SKIN ROSTER (skins.csv)');
+{
+  const roster = skinRoster();
+  const skins = allSkins(roster);
+  const presets = Object.keys(roster);
+
+  check('the file parsed into a roster',
+    skins.length > 0, `${skins.length} skins across ${presets.join(', ')}`);
+
+  // THE HARD GATE, end to end, and the reason it is structural rather than a
+  // rule: a skin only reaches a creature already wearing its preset, and a
+  // preset is worn by assets that are already day-only or night-only in
+  // enemies.csv. This walks that chain rather than trusting the `gate` column.
+  const assetsFor = (preset) => Object.entries(ASSETS)
+    .filter(([, d]) => d.biolumSkin === preset).map(([k]) => k);
+  const enemiesOn = (asset) => Object.values(CONFIG.enemies)
+    .filter((d) => (d.asset ?? '') === asset);
+  let gateBroken = [];
+  for (const skin of skins) {
+    for (const asset of assetsFor(skin.preset)) {
+      for (const def of enemiesOn(asset)) {
+        const night = !!def.bioluminescent;
+        if ((skin.gate === 'night') !== night) gateBroken.push(`${skin.id} on ${asset}`);
+      }
+    }
+  }
+  check('every skin is hard-gated to the half of the day its preset lives in',
+    gateBroken.length === 0,
+    gateBroken.length ? gateBroken.join(', ') : skins.map((s) => `${s.id}:${s.gate}`).join(', '));
+
+  // The night crabs are unreachable before dusk (nightlife.glowing.day is 0),
+  // so this is what "a bone-white crab cannot appear at noon" rests on.
+  check('...and the glowing preset is only worn by a creature the daylight gate zeroes',
+    (CONFIG.spawn?.nightlife?.glowing?.day ?? 1) === 0,
+    `glowing.day = ${CONFIG.spawn?.nightlife?.glowing?.day}`);
+
+  check('every skin names a pattern the shader has a branch for',
+    skins.every((s) => s.look.pattern == null || BIOLUM_PATTERNS.includes(s.look.pattern)),
+    skins.filter((s) => s.look.pattern).map((s) => `${s.id}:${s.look.pattern}`).join(', '));
+
+  // Equal for now, by request — the column exists so the roster can be tilted
+  // later. If a weight is deliberately changed, change this check with it
+  // rather than deleting it.
+  for (const preset of presets) {
+    const ws = roster[preset].map((s) => s.weight);
+    check(`${preset}: every skin is equally likely`,
+      ws.every((w) => w === ws[0]), `${roster[preset].length} skins at weight ${ws[0]}`);
+  }
+
+  // A roll must be able to reach every row — a weight walk that falls off the
+  // end (or short-circuits on the first) would quietly ship one palette.
+  for (const preset of presets) {
+    const seen = new Set();
+    const n = roster[preset].length;
+    // Fixed probes, one per band, rather than thousands of random rolls: this
+    // is a weighted walk, so the bands are deterministic and a seeded flake
+    // proves nothing. See the note on seeded RNG in the spawn harnesses.
+    for (let i = 0; i < n; i++) {
+      const at = (i + 0.5) / n;
+      seen.add(rollSkin(roster, preset, () => at).__skin);
+    }
+    check(`${preset}: every skin is reachable`,
+      seen.size === n, `${seen.size} of ${n} — ${[...seen].join(', ')}`);
+  }
+
+  // The per-individual range. Two crabs rolling the same warp would be the
+  // tell that the range collapsed to its low end.
+  const lattice = skins.find((s) => s.id === 'lattice');
+  check('the lattice skin rolls its warp per individual',
+    !!lattice?.warp && lattice.warp[0] === 1 && lattice.warp[1] === 3,
+    lattice?.warp ? `${lattice.warp[0]}..${lattice.warp[1]}` : 'no range');
+  {
+    const lo = rollSkin({ emberClaw: [lattice] }, 'emberClaw', () => 0.001).warp;
+    const hi = rollSkin({ emberClaw: [lattice] }, 'emberClaw', () => 0.999).warp;
+    check('...inside the range it declared, and not the same number twice',
+      lo >= 1 && hi <= 3 && hi > lo, `${lo.toFixed(3)} .. ${hi.toFixed(3)}`);
+  }
+  check('a palette-only skin states no warp at all, so the preset keeps its own',
+    skins.filter((s) => s.id !== 'lattice').every((s) => s.warp == null));
+
+  // Blank means INHERIT, not zero. `ember` and `shell` are the shipped looks
+  // as rows: if a blank cell became a value, they would repaint the preset
+  // they are supposed to be identical to.
+  for (const id of ['shell', 'ember']) {
+    const s = skins.find((x) => x.id === id);
+    check(`"${id}" is the preset untouched — no keys at all`,
+      s && Object.keys(s.look).length === 0, s ? JSON.stringify(s.look) : 'missing');
+  }
+
+  // A rolled skin is a fresh object per spawn. Sharing the row would let one
+  // crab's warp roll reach back into every crab already wearing that skin.
+  const a = rollSkin(roster, 'emberClaw', () => 0.99);
+  const b = rollSkin(roster, 'emberClaw', () => 0.99);
+  check('each roll hands out its own object', a !== b && a.__skin === b.__skin);
+
+  check('a creature whose preset has no skins wears the preset',
+    rollSkin(roster, 'lantern', () => 0.5) === null
+    && rollSkin(roster, null, () => 0.5) === null);
+}
+
+// Bad rows cost you one variant, never the boot. Every one of these is a
+// mistake somebody will make in a spreadsheet.
+{
+  const warnings = [];
+  const warn = (m) => warnings.push(m);
+  const csv = [
+    'id,preset,gate,weight,pattern,colorA',
+    'ghost,noSuchPreset,night,1,,',            // preset config.js never declared
+    'wrongHour,carapace,night,1,,',            // night palette on the day shell
+    'badPattern,emberClaw,night,1,honeycomb,', // not a pattern
+    'badColor,emberClaw,night,1,,zzzzzz',      // not a hex
+    'good,emberClaw,night,1,marble,#112233',
+  ].join('\n');
+  const built = buildSkins(parseSkinCsv(csv, warn), {
+    patterns: BIOLUM_PATTERNS,
+    presetIsNight: (n) => (n === 'emberClaw' ? true : n === 'carapace' ? false : null),
+  }, warn);
+  const ids = allSkins(built).map((s) => s.id);
+  check('an unknown preset and a mis-gated row are dropped',
+    !ids.includes('ghost') && !ids.includes('wrongHour'), ids.join(', '));
+  check('...while a bad pattern or colour only loses that CELL',
+    ids.includes('badPattern') && ids.includes('badColor')
+    && allSkins(built).find((s) => s.id === 'badPattern').look.pattern === undefined
+    && allSkins(built).find((s) => s.id === 'badColor').look.colorA === undefined);
+  check('...and the good row survives with both',
+    allSkins(built).find((s) => s.id === 'good')?.look.colorA === 0x112233);
+  check('every rejection said why', warnings.length >= 4, `${warnings.length} warnings`);
+}
+
+// The stamp, through the public entry point the spawner uses.
+{
+  const tpl = makeBody();
+  attachBiolumSkin(tpl.material, tpl, 'emberClaw');
+  const root = new THREE_NS.Group();
+  const inst = new THREE_NS.Mesh(tpl.geometry, tpl.material);
+  root.add(inst);
+  instantiateBiolumSkin(root);
+
+  check('the preset is readable off a built body', biolumSkinPresetOf(root) === 'emberClaw');
+
+  // Force the lattice row, then check the uniform actually moved — the whole
+  // point of the roster is that this individual stops looking like its preset.
+  const roster = skinRoster();
+  const idx = roster.emberClaw.findIndex((s) => s.id === 'lattice');
+  const at = (idx + 0.5) / roster.emberClaw.length;
+  const rolled = rollBiolumSkinVariant(root, () => at);
+  const u = inst.material.userData.__bioSkinUniforms;
+  check('a spawn takes the rolled skin',
+    rolled?.__skin === 'lattice'
+    && u.uBioPattern.value === patternIndex('lattice')
+    && Math.abs(u.uBioWarp.value - rolled.warp) < 1e-9,
+    `${rolled?.__skin} pattern ${u.uBioPattern.value} warp ${u.uBioWarp.value?.toFixed(3)}`);
+  check('...and the shared template is not repainted by it',
+    tpl.material.userData.__bioSkinUniforms.uBioPattern.value === patternIndex('veins'),
+    `template pattern ${tpl.material.userData.__bioSkinUniforms.uBioPattern.value}`);
+
+  // THE SHELL BETWEEN THE MARKINGS. This used to assert that the night crab's
+  // preset lifts its own black point — `shellGlow > 0`, the deep orange in the
+  // pattern's negative space. It doesn't any more, on purpose: that term was
+  // the whole shell emitting at rest, which is what "glowing soft red and
+  // orange all the time" was, and emberClaw is now pigment like the day crab.
+  //
+  // So this checks the MECHANISM rather than the taste. `shellColor` has to
+  // survive at full strength, because it is what one number brings back — and
+  // a skin's own shellColor has to keep landing on the uniform, since the
+  // night palettes in skins.csv all set one and a cold ramp over a warm shell
+  // would be two creatures at once the moment either is turned up again.
+  const ember = CONFIG.biolumSkin.presets.emberClaw;
+  check('the night crab keeps a shell colour to turn back up',
+    (ember.shellColor ?? 0) !== 0,
+    `shellGlow ${ember.shellGlow} at #${(ember.shellColor ?? 0).toString(16)}`);
+  {
+    const roster = skinRoster();
+    const cold = roster.emberClaw.findIndex((s) => s.id === 'cold');
+    rollBiolumSkinVariant(root, () => (cold + 0.5) / roster.emberClaw.length);
+    const c = inst.material.userData.__bioSkinUniforms.uBioShellColor.value;
+    const want = new THREE_NS.Color(roster.emberClaw[cold].look.shellColor);
+    check('...and a skin can bring its own',
+      Math.abs(c.r - want.r) + Math.abs(c.g - want.g) + Math.abs(c.b - want.b) < 1e-6,
+      `#${want.getHexString()}`);
+  }
+  // Every other creature in the game must be untouched by all of this: the
+  // The shell glow is additive, so a fish meant to vanish into the dark has to be able
+  // to. Checked on the lanternfish, which declares no shellGlow at all.
+  {
+    const fish = makeBody();
+    attachBiolumSkin(fish.material, fish, 'lantern');
+    applyBiolumSkinSettings();
+    check('a preset that says nothing about it stays black between its markings',
+      fish.material.userData.__bioSkinUniforms.uBioShellGlow.value === 0);
+  }
+}
 
 check('the lanternfish still schools like the fish it copies',
   !!CONFIG.enemies.lanternfish?.swarm && CONFIG.enemies.lanternfish?.behavior === 'swarm');

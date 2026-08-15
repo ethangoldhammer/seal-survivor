@@ -5,6 +5,7 @@ import { player } from '../entities/player.js';
 import { skyLight } from './daylight.js';
 import { setNoiseGlow, setNoiseGlowPulse, clearNoiseGlow } from './noiseShader.js';
 import { advanceCycles } from './beatSync.js';
+import { holdEnemy } from './control.js';
 
 // ============================================================================
 // GLOW UP! — the seal's bioluminescence, and the only ELEMENT in the game.
@@ -408,7 +409,13 @@ export function chillEnemy(enemy, amount, duration, freezeFor, hooks, x, y) {
   // be a second thing for the crab collider, the predation pass and the
   // targeting scans to each learn about separately.
   if (enemy.chillSlow >= max * (e.freezeAt ?? 0.98)) {
-    enemy.trapTimer = Math.max(enemy.trapTimer ?? 0, freezeFor);
+    // THE SLOW STILL STACKED, and on a boss that is the whole of the effect —
+    // holdEnemy refuses the freeze and returns false, and the early return
+    // below leaves the cold on the body rather than spending it. Cold Snap
+    // against a boss is a permanent slow it can never be shaken out of, which
+    // is a real contribution to the fight and not the fight being cancelled.
+    // See systems/control.js.
+    if (!holdEnemy(enemy, freezeFor)) return false;
     // Spent. Without this the fish thaws straight back into the frozen state on
     // the next pellet and never moves again, which is a stun-lock rather than
     // an element.
