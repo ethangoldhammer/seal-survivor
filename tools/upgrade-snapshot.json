@@ -1249,6 +1249,35 @@
       }
     ]
   },
+  "harp": {
+    "cap": 8,
+    "perStack": [
+      {
+        "harpLevel": 101
+      },
+      {
+        "harpLevel": 102
+      },
+      {
+        "harpLevel": 103
+      },
+      {
+        "harpLevel": 104
+      },
+      {
+        "harpLevel": 105
+      },
+      {
+        "harpLevel": 106
+      },
+      {
+        "harpLevel": 107
+      },
+      {
+        "harpLevel": 108
+      }
+    ]
+  },
   "scallopSquirter": {
     "cap": 12,
     "perStack": [

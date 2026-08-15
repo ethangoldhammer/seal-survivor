@@ -28,11 +28,17 @@ import { buildHumanoidRig, bindHumanoidRig, aimBone, anchorToHips } from './huma
 export const crew = [];
 
 // Which model the crew wears, and the one measurement of it. Both the walk of
-// every vertex and the bone map are the same for every person aboard every
-// boat, so this happens once a session.
-const ASSET = 'fisherman';
-let measured;
-let measuredFailed = false;
+// every vertex and the bone map are the same for every person wearing a given
+// model, so this happens once per model per session.
+//
+// KEYED BY ASSET, because there is more than one kind of person on the water
+// now: a fisherman on the working boats, and the yacht boss's guests in white
+// tie (see CONFIG.enemies.bossYacht). A single cached measurement was fine
+// while there was one model and would silently hand the second model the first
+// one's skeleton — every bone looked up by name, so it would not throw, it
+// would just bind nothing and fall back to boxes.
+const DEFAULT_ASSET = 'fisherman';
+const measured = new Map();
 
 // Bone lengths as a fraction of standing height — the FALLBACK proportions,
 // used for the box body and for anything the model's own measurement couldn't
@@ -75,21 +81,22 @@ function cfg() {
 
 // Measure the model once. Called at boat spawn, like the wreckage measurement
 // next door, so the cost lands while nothing is exploding.
-export function primeCrew() {
-  if (measured !== undefined || measuredFailed) return measured ?? null;
-  if (!hasModel(ASSET)) return null;
+export function primeCrew(asset = DEFAULT_ASSET) {
+  if (measured.has(asset)) return measured.get(asset);
+  // Not cached: the model may simply not have finished loading yet, and a
+  // `null` written now would be remembered for the rest of the session.
+  if (!hasModel(asset)) return null;
+  let rig = null;
   try {
-    const probe = createVisual(ASSET);
-    measured = buildHumanoidRig(probe) ?? null;
-    if (!measured) {
-      measuredFailed = true;
-      console.warn('[crew] the crew model did not measure up as a humanoid — using the box body');
+    rig = buildHumanoidRig(createVisual(asset)) ?? null;
+    if (!rig) {
+      console.warn(`[crew] "${asset}" did not measure up as a humanoid — using the box body`);
     }
   } catch (err) {
-    measuredFailed = true;
-    console.warn('[crew] could not measure the crew model', err);
+    console.warn(`[crew] could not measure "${asset}"`, err);
   }
-  return measured ?? null;
+  measured.set(asset, rig);
+  return rig;
 }
 
 // The standing pose, in world coordinates around (x, y) with the feet on y.
@@ -275,20 +282,56 @@ const DRIVEN = [
   ['lowerLegR', 'kneeR', 'footR'],
 ];
 
+// THE SPINE ONLY — what a man standing on a deck gets. See swayAboard.
+//
+// The ragdoll is FLAT: every joint solves at z = 0, and aimBone points each
+// bone at a direction with no z in it. For a body tumbling through the air that
+// is the whole design and costs nothing. For a man standing still it is
+// ruinous, because his arms are not flat — this one stands in an A-pose with
+// his hands a little forward of his hips — and driving them squashes that pose
+// into the screen plane. The shoulders collapse, the far arm swings round to
+// the near side, and the coat's lapel ends up across his face. He is not moving
+// and he already looks broken.
+//
+// The spine does not have that problem: it runs up the mid-line, so flattening
+// it changes nothing at rest and still shows the whole upper body rocking —
+// the arms come along because they hang off the chest, in their own real pose.
+// NOT the hips, and that is the whole point of the set. `hips` is the ROOT
+// bone: everything the model has hangs off it, so aiming it turns the entire
+// figure. Its measured axis is the direction of its own flesh — (-0.01, 1.00,
+// -0.07) on this model, near vertical but not exactly — and aiming that at the
+// ragdoll's dead-straight (0, 1) rolls the whole man a few degrees off plumb
+// and leaves him standing on the deck at a lean, before anything has hit him.
+// It also carries no information: the hips point is PINNED, so what is being
+// aimed is a constant.
+//
+// The chest and the head are what the sway is, and neither is a root.
+const DRIVEN_ABOARD = new Set(['chest', 'head']);
+
 // Hand the skeleton over to the ragdoll for this frame.
-function poseModelBody(figure) {
+//
+// `anchor` moves the whole model to wherever the solver put the hips, which is
+// what a body falling through the air needs and what a man standing on a deck
+// must not have. Aboard, the group is already parented at his own spot on the
+// hull; anchorToHips corrects a WORLD error into a LOCAL position, so on a hull
+// that is scaled, or turned to face the other way, the correction is applied in
+// the wrong frame and the figure walks off the boat a little more each frame.
+function poseModelBody(figure, anchor = true, only = null) {
   const { model } = figure.body;
   const points = figure.rig.points;
   // Parents before children: aimBone reads its parent's world rotation, so the
   // torso has to be solved before the arms hanging off it.
   for (const [joint, from, to, sign] of DRIVEN) {
+    if (only && !only.has(joint)) continue;
     const seg = model.segments[joint];
     if (!seg) continue;
     const a = points[from];
     const b = points[to];
     aimBone(seg, (b.x - a.x) * (sign ?? 1), (b.y - a.y) * (sign ?? 1));
   }
-  anchorToHips(figure.body.group, model.segments.hips.bone, points.hips.x, points.hips.y);
+  if (anchor) {
+    anchorToHips(figure.body.group, model.segments.hips.bone, points.hips.x, points.hips.y);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -314,15 +357,36 @@ function poseModelBody(figure) {
 // how far the geometry spreads across the beam stood him on top of the
 // trawler's gantry, whose two legs span the whole boat with nothing but air
 // between them. A square metre of deck is a square metre of deck.
+//
+// AND IT HAS TO BE A FLOOR. Area alone is not enough, and the yacht is what
+// proved it: a hull's TOPSIDES — the plating between the waterline and the deck
+// edge — are a huge, continuous, perfectly vertical surface, and they land in
+// the lowest cell above the water in every bin along the boat. "The lowest
+// surface above the waterline" then finds the side of the boat, and four guests
+// stood a metre under the deck they appeared to be leaning on, buried to the
+// chest in it. The trawler never showed this because its topsides are barely a
+// cell tall and its working deck is the first thing above them.
+//
+// So each triangle contributes its HORIZONTAL PROJECTION: a deck counts for its
+// full area, a sloping cabin roof for rather less, and a wall for nothing at
+// all. That is the same quantity as "how much floor is there", which is the
+// question that was being asked all along.
 const DECK_BINS = 24;
-const DECK_COVERAGE = 1.0; // cells-worth of surface before you can stand on it
+const DECK_COVERAGE = 1.0; // cells-worth of floor before you can stand on it
+// How far a surface may tilt and still be a floor: within 60° of horizontal.
+// Steeper than a companionway and nobody is standing on it.
+const DECK_MAX_TILT = 0.5;
+// Elbow room, in bins, between two people gathered at the same end of a boat.
+// A bin is about half a person wide on a hull the size of the yacht, so
+// neighbouring bins put two guests inside each other.
+const DECK_GAP_BINS = 2;
 const deckCache = new Map();
 
 function deckProfile(boat) {
   const cached = deckCache.get(boat.assetKey);
   if (cached !== undefined) return cached;
 
-  boat.mesh.updateMatrixWorld(true);
+  boat.mesh.updateWorldMatrix(true, true);
   const toLocal = new THREE.Matrix4().copy(boat.mesh.matrixWorld).invert();
   const local = new THREE.Matrix4();
   const a = new THREE.Vector3();
@@ -372,12 +436,31 @@ function deckProfile(boat) {
     cVec.set(tris[i + 6], tris[i + 7], tris[i + 8]);
     ab.subVectors(b, a);
     ac.subVectors(cVec, a);
-    const area = cross.crossVectors(ab, ac).length() * 0.5;
-    if (!(area > 0)) continue;
+    cross.crossVectors(ab, ac);
+    const twice = cross.length();
+    if (!(twice > 0)) continue;
+    const area = twice * 0.5;
+    // How flat this triangle lies, and WHICH WAY UP: cos of the angle between
+    // its normal and up, signed. `cross.y` is already that times the doubled
+    // area, so the projection below costs nothing beyond the divide that was
+    // needed anyway.
+    //
+    // Signed, not absolute. A hull flares outward above the waterline, and the
+    // UNDERSIDE of that flare is every bit as horizontal as a deck — taken
+    // unsigned it fills the first cell above the water along most of the boat,
+    // and the guests stand on the ceiling of the hull's overhang. A floor you
+    // can stand on faces up.
+    const flat = cross.y / twice;
+    if (flat < DECK_MAX_TILT) continue;
+    // Its horizontal projection — the floor it actually offers. See the note
+    // above on the yacht's topsides for what happens without this.
+    const floor = area * flat;
     // Spread over the cells it actually covers, or one long deck plank lands
-    // entirely on whichever cell held its centroid.
+    // entirely on whichever cell held its centroid. Sampled by the triangle's
+    // REAL extent, not its projection, or a big gently-sloping roof would be
+    // dropped into fewer cells than it spans.
     const samples = Math.min(24, Math.max(1, Math.ceil(area / cellArea)));
-    const share = area / samples;
+    const share = floor / samples;
     for (let s = 0; s < samples; s++) {
       let u = Math.random();
       let v = Math.random();
@@ -391,22 +474,72 @@ function deckProfile(boat) {
   }
 
   const need = cellArea * DECK_COVERAGE;
-  const heights = columns.map((rows) => {
-    let best = null;
+
+  // THE DECK IS ONE LEVEL, AND IT IS THE SAME LEVEL ALL THE WAY ALONG. Picked
+  // across the WHOLE boat rather than bin by bin, which is the difference
+  // between finding a deck and finding whatever happened to be overhead at each
+  // point: choose per bin and the yacht puts one guest on the swim platform,
+  // one on the main deck and one on the sun deck, because each of those is the
+  // biggest thing above its own slice of hull.
+  //
+  // Two per-bin rules were tried before this and each fails on one of the two
+  // hulls. HIGHEST puts a man on the trawler's bridge roof, standing in its
+  // rigging. LOWEST puts the yacht's guests on its swim platform and its bow
+  // flare, a metre below the deck they appear to be leaning on — the trawler
+  // never showed it because its working deck IS the lowest thing above its
+  // water, which is exactly the coincidence that let a wrong rule look right.
+  //
+  // What both were reaching for is "the deck", and a deck is the level of a
+  // boat with the most floor on it. Totalled down the boat, the trawler's
+  // working deck outweighs its wheelhouse roof and the yacht's main deck
+  // outweighs both its swim platform and its flybridge, with neither needing to
+  // be named. Ties go downward: two levels of equal floor is a boat where the
+  // lower one is the one being worked.
+  const rowTotals = new Map();
+  for (const rows of columns) {
     for (const [row, area] of rows) {
-      // Above the waterline. These hulls float half-submerged — a boat's own
-      // origin sits at the water — so the biggest surface under a point near
-      // the stern is often a piece of hull half a metre down, and standing on
-      // it put a fisherman up to his knees in the sea.
       if (row < 0 || area < need) continue;
-      // The LOWEST surface above the water, not the highest: that is the main
-      // deck, which is where a crew works. Taking the highest put a man on the
-      // trawler's bridge roof, standing in the middle of its rigging.
-      if (best == null || row < best) best = row;
+      rowTotals.set(row, (rowTotals.get(row) ?? 0) + area);
+    }
+  }
+  let deckRow = null;
+  let deckTotal = 0;
+  for (const [row, total] of rowTotals) {
+    if (total > deckTotal || (total === deckTotal && deckRow != null && row < deckRow)) {
+      deckTotal = total;
+      deckRow = row;
+    }
+  }
+  // Then every bin that has a real share of THAT level is somewhere to stand,
+  // and every bin that does not — the pointed bow, the overhanging stern — is
+  // not. Which is also what keeps a guest off the stem: it is not that the bow
+  // is out of bounds, it is that there is no deck out there to stand on.
+  const heights = columns.map((rows) => {
+    if (deckRow == null) return null;
+    const area = rows.get(deckRow) ?? 0;
+    return area >= need ? (deckRow + 1) * cell : null;
+  });
+
+  // AND WHAT EACH BIN HAS OF ITS OWN, for the places the main deck does not
+  // reach. The yacht's foredeck is a real deck with a rail on it and a man can
+  // stand there, but it is a step DOWN from the main deck, so a rule that
+  // insists on one level for the whole boat has nothing to offer at the bow.
+  // Only the placements that ask for a specific end of the boat use this; the
+  // default spread still stays on the one main deck, which is the thing that
+  // stopped four guests standing on four different levels.
+  const ownHeights = columns.map((rows) => {
+    let best = null;
+    let bestArea = 0;
+    for (const [row, area] of rows) {
+      if (row < 0 || area < need) continue;
+      if (area > bestArea || (area === bestArea && best != null && row < best)) {
+        bestArea = area;
+        best = row;
+      }
     }
     return best == null ? null : (best + 1) * cell;
   });
-  const profile = { lo, span, heights };
+  const profile = { lo, span, heights, ownHeights };
   deckCache.set(boat.assetKey, profile);
   return profile;
 }
@@ -427,30 +560,59 @@ function deckAt(profile, x) {
   return null;
 }
 
-// Where on the boat people actually stand. Not evenly spaced along it — the
-// LOWEST decks first, kept apart from each other.
+// Where on the boat people actually stand. Not evenly spaced along it — spread
+// across whatever bins hold the deck, kept apart from each other.
 //
-// Height is the whole ranking: the lowest surface above the water is the main
-// working deck, and the highest is a wheelhouse roof or the top of a gantry.
-// Spacing them evenly along the hull instead put one man out on the trawler's
-// aft structure, standing in the rigging.
-function pickSlots(profile, count) {
+// The RANKING is already done: deckProfile picks one level for the whole boat
+// and reports a height only for the bins that actually have it, so everything
+// in `all` is a piece of the same deck. All that is left is where along it.
+// (This used to re-rank by height here as well, taking the lowest surface it
+// could find — which on the yacht meant re-deriving the swim platform after the
+// profile had correctly found the main deck.)
+function pickSlots(profile, count, where = null) {
   if (!profile) return null;
   const cell = profile.span / DECK_BINS;
-  const all = [];
+  const at = (i, y) => ({ x: profile.lo + (i + 0.5) * cell, y });
+
+  // A NAMED END OF THE BOAT, when the row asks for one. The yacht's guests
+  // gather at the bow because that is where passengers stand, and because it is
+  // the part of that hull the player can see clearly past the superstructure.
+  //
+  // Searched from the end inwards, and against each bin's OWN deck rather than
+  // the boat's main one: a bow is a step down from the main deck on most hulls,
+  // so insisting on the main level would walk them back amidships and quietly
+  // ignore what was asked for. A party filling up from the bow therefore spills
+  // onto whatever deck comes next, at that deck's own height — which is a group
+  // spread over a boat rather than a rank standing on one line.
+  if (where === 'bow' || where === 'stern') {
+    const bins = [...profile.ownHeights.keys()];
+    // Local +x is the bow. The hull is turned about y to face its heading (see
+    // systems/bossBoat.js), so this stays the bow whichever way it is sailing.
+    if (where === 'bow') bins.reverse();
+    const taken = [];
+    for (const i of bins) {
+      const y = profile.ownHeights[i];
+      if (y == null) continue;
+      const spot = at(i, y);
+      // Far enough apart to be two people rather than one blurred one. A bin is
+      // about half a person wide on a hull this size, so neighbouring bins are
+      // not enough — and standing two guests inside each other is also one shot
+      // taking both of them.
+      if (taken.some((t) => Math.abs(t.x - spot.x) < cell * DECK_GAP_BINS)) continue;
+      taken.push(spot);
+      if (taken.length >= count) break;
+    }
+    return taken.length ? taken : null;
+  }
+
+  const pool = [];
   profile.heights.forEach((y, i) => {
     if (y == null) return;
-    all.push({ x: profile.lo + (i + 0.5) * cell, y });
+    pool.push(at(i, y));
   });
-  if (!all.length) return null;
+  if (!pool.length) return null;
 
-  // The main deck: everything within a cell of the lowest surface found. A
-  // wheelhouse roof is a place to stand, but not while there's deck free.
-  const lowest = Math.min(...all.map((s) => s.y));
-  let pool = all.filter((s) => s.y <= lowest + cell);
-  if (pool.length < count) pool = all;
-
-  // Then FARTHEST-POINT: start amidships and each next man goes wherever is
+  // FARTHEST-POINT: start amidships and each next man goes wherever is
   // furthest from everyone already placed. A minimum-gap rule was tried and
   // fails the case it exists for — when the deck is short it has to give the
   // gap up, and two men end up standing in each other, which one shot then
@@ -487,15 +649,36 @@ const _feet = new THREE.Vector3();
 export function spawnCrewFor(scene, boat) {
   const c = cfg();
   if (c.enabled === false) return;
-  const model = primeCrew();
-  const count = Math.max(0, Math.round((boat.isTrawler ? c.trawlerCount : c.count) ?? 2));
+  // WHO IS ABOARD is the boat's to say. The working boats say nothing and get
+  // the fisherman at the tuned count; the yacht boss names its own model and
+  // brings its own party (CONFIG.enemies.bossYacht). Deliberately read off the
+  // boat rather than switched on inside here — everything below this line, and
+  // everything in the ragdoll, is unaware there is more than one kind of
+  // person, which is what keeps the yacht from being a second code path.
+  // A LIST when the boat has one, and one is rolled PER PERSON, so a party is a
+  // party rather than the same man printed four times. `crewAssets` is a new key
+  // rather than a list written into `crewAsset` — the same move the boss orca's
+  // two bodies had to make. Saved tuning beats config.js in the merge and every
+  // snapshot ever written carries `crewAsset` as the string it used to be, so a
+  // list put into that key would be overwritten by the snapshot on load, for
+  // anybody who has opened the tuner, and the deck would come up empty.
+  const roster = boat.crewAssets?.length ? boat.crewAssets
+    : [boat.crewAsset ?? DEFAULT_ASSET];
+  // HOW MANY, rolled between two bounds when the boat gives them. Rolled per
+  // arrival rather than fixed so two yachts in one run are not the same boat.
+  const lo = boat.crewMin;
+  const hi = boat.crewMax;
+  const rolled = lo != null && hi != null
+    ? Math.round(lo + Math.random() * Math.max(0, hi - lo))
+    : (boat.crewCount ?? (boat.isTrawler ? c.trawlerCount : c.count) ?? 2);
+  const count = Math.max(0, Math.round(rolled));
   if (!count) return;
   const profile = deckProfile(boat);
   const boatScale = boat.mesh.scale.x || 1;
   // Along the hull in the BOAT's own units, so the spread means the same thing
   // on a rowboat and on a trawler.
   const spread = ((boat.halfLength ?? 3) / boatScale) * (c.deckSpread ?? 0.6);
-  const slots = pickSlots(profile, count);
+  const slots = pickSlots(profile, count, boat.crewAt ?? null);
 
   for (let i = 0; i < count; i++) {
     const spot = slots?.[i % slots.length];
@@ -506,10 +689,16 @@ export function spawnCrewFor(scene, boat) {
       ?? ((c.deckHeight ?? 0.5) * (boat.spawnScale ?? 1)) / boatScale;
     const face = Math.random() < 0.5 ? 1 : -1;
 
+    // This person's own model, and its own measurement. Measured per ASSET and
+    // cached (see primeCrew), so a mixed party costs one measurement per kind of
+    // person rather than one per person.
+    const asset = roster[Math.floor(Math.random() * roster.length)];
+    const model = primeCrew(asset);
+
     let body;
     let h;
     if (model) {
-      const visual = createVisual(ASSET);
+      const visual = createVisual(asset);
       const scale = visual.scale.x || 1;
       const bound = bindHumanoidRig(visual, model);
       if (bound) {
@@ -548,7 +737,7 @@ export function spawnCrewFor(scene, boat) {
       h = (c.height ?? 1.25) * (0.9 + Math.random() * 0.2);
     }
 
-    boat.mesh.updateMatrixWorld(true);
+    boat.mesh.updateWorldMatrix(true, true);
     _feet.set(deckX, deckY, 0).applyMatrix4(boat.mesh.matrixWorld);
     const rig = buildRig(_feet.x, _feet.y, h ?? 1.25, face, body?.kind === 'model' ? body.model : null);
     if (!body) {
@@ -570,7 +759,29 @@ export function spawnCrewFor(scene, boat) {
       sway: Math.random() * Math.PI * 2,
       accumulator: 0,
       wet: false,
+      // GLUED TO THE DECK. A fishing boat's crew come off it one at a time —
+      // a bullet finds one, and he goes over the side while the others carry
+      // on — and that is most of what makes shooting at a boat feel like
+      // shooting at people. A BOSS is not that: its deck is inside a bullet
+      // hell that the player is spraying through for a minute at a time, so
+      // hit-by-hit knock-off empties it in the first few seconds and the rest
+      // of the fight is a bare hull. Glued, the party rides the whole fight
+      // and all of it goes into the water at the moment the boat does — see
+      // resetBossBoat, which is the only thing that can let go of them.
+      glued: boat.crewGlued === true,
     };
+    // WHAT IS PLANTED, while he is glued. Everything from the hips down: two
+    // feet, two knees and the pelvis. Not the feet alone — pin only those and
+    // the hips are free to sway, the legs swing under them, and since the drawn
+    // model hangs off the hips bone the MESH's feet slide across the deck while
+    // the solver's feet sit perfectly still. Pinning the whole lower body makes
+    // the man rock from the waist, which is what a person standing on a boat
+    // that has just been hit actually does.
+    if (figure.glued) {
+      for (const name of ['footL', 'footR', 'kneeL', 'kneeR', 'hips']) {
+        rig.points[name].pinned = true;
+      }
+    }
     crew.push(figure);
     if (figure.body.kind === 'boxes') poseBoxBody(figure);
   }
@@ -659,6 +870,13 @@ function goLimp(f, scene) {
   if (f.state === 'ragdoll') return;
   f.state = 'ragdoll';
   f.boat = null;
+  // The glue is the hull's, and the hull has just let go. Cleared here rather
+  // than at the call site so there is no route into the ragdoll that leaves a
+  // body still claiming to be attached to a boat it is falling away from — and
+  // with it the pins, or he falls into the sea with his feet nailed to where
+  // the boat used to be.
+  f.glued = false;
+  for (const p of f.rig.list) p.pinned = false;
   const body = f.body;
   // Off the hull and into the world, keeping exactly where he already was.
   // `attach` rather than `add` is the whole difference: it composes out the
@@ -768,6 +986,54 @@ export function blastCrew(scene, x, y, radius, strength) {
   }
 }
 
+/**
+ * THE HULL WENT DOWN AND TOOK THE PARTY WITH IT.
+ *
+ * Deliberately not blastCrew. That one is a point explosion and falls off to
+ * nothing at its radius, which is right for a barrel going up next to somebody
+ * and wrong for the deck they are standing on: a yacht's guests are spread over
+ * the whole length of the hull, so a radius big enough to reach the bow leaves
+ * everyone amidships getting a fraction of the shove, and a radius tuned for
+ * amidships misses the ends entirely. Both were tried and each left two of the
+ * four standing in mid-air where the boat used to be.
+ *
+ * So this reaches everyone who was ON this boat, by their glue and not by their
+ * distance, and throws all of them at full strength. After that they are on the
+ * solver alone — gravity, air and water drag, the seabed and the arena walls.
+ *
+ * @returns how many were thrown.
+ */
+export function throwCrewOff(scene, boat, x, y, strength) {
+  let thrown = 0;
+  for (const f of crew) {
+    if (f.boat !== boat || f.state === 'ragdoll') continue;
+    const hips = f.rig.points.hips;
+    // Outward from the hull's centre. Which way that is depends on where they
+    // were standing: a crew spread down a boat goes over both rails, and the
+    // yacht's party — gathered at the bow, all forward of the centre — goes
+    // over the bow together, which is the honest answer for a group standing
+    // in one place. Someone exactly amidships has no side to be thrown to, so
+    // he gets one.
+    const dx = hips.x - x;
+    const away = Math.abs(dx) > 1e-3 ? Math.sign(dx) : (Math.random() < 0.5 ? -1 : 1);
+    // How far out along the hull he was, as a fraction of its reach: the ends
+    // are whipped, amidships is mostly lifted. That is what a boat breaking its
+    // back does to the people on it, and it is also what stops four bodies
+    // leaving on identical arcs.
+    const lever = Math.min(1, Math.abs(dx) / Math.max(boat.halfLength ?? 5, 1e-3));
+    goLimp(f, scene);
+    push(f,
+      away * strength * (0.45 + 0.75 * lever) * (0.85 + Math.random() * 0.3),
+      // Never straight sideways: the ones near the middle go UP, which is what
+      // sells the deck heaving rather than the boat sliding out from under them.
+      strength * (0.85 - 0.35 * lever) * (0.85 + Math.random() * 0.3),
+      (Math.random() - 0.5) * strength * 0.5);
+    emit('splash', hips.x, y, { scale: 0.4, dirX: 0, dirY: 1 });
+    thrown++;
+  }
+  return thrown;
+}
+
 // SOMETHING HIT HIM. A bullet, a blast, or the seal itself going through the
 // deck at speed — they're the same event from the crew's point of view: he was
 // standing there a moment ago and now he isn't.
@@ -783,6 +1049,10 @@ export function damageCrew(scene, x, y, radius, opts = {}) {
   let hit = 0;
   for (const f of crew) {
     if (f.state === 'ragdoll') continue;
+    // The boss's guests do not come off one at a time — see `glued`. Skipped
+    // rather than counted as a miss, so nothing upstream reports a hit it
+    // didn't get.
+    if (f.glued) continue;
     const hips = f.rig.points.hips;
     const dx = hips.x - x;
     const dy = hips.y - y;
@@ -1051,7 +1321,16 @@ function solve(f, step) {
 function ride(f) {
   const boat = f.boat;
   if (!boat) return;
-  boat.mesh.updateMatrixWorld(true);
+  // ANCESTORS FIRST — updateWorldMatrix(true, …), not updateMatrixWorld(true).
+  // The two names are one letter apart and do opposite halves of the job:
+  // updateMatrixWorld rebuilds this node and everything UNDER it from its
+  // parent's CACHED world matrix, so on a node that hangs off something else —
+  // and a boss's hull is a body inside a creature's container — it happily
+  // composes against a stale parent and places the man where the boat was last
+  // frame. In the browser that is a frame of lag nobody sees; in a Node harness,
+  // where nothing ever renders and the container's matrix is never refreshed at
+  // all, it is a man standing forty units from his boat.
+  boat.mesh.updateWorldMatrix(true, true);
   _feet.set(f.deckX, f.deckY, 0).applyMatrix4(boat.mesh.matrixWorld);
 
   const pose = standingPose(_feet.x, _feet.y, f.height, f.face,
@@ -1063,6 +1342,138 @@ function ride(f) {
     p.x = at.x;
     p.y = at.y;
   }
+}
+
+// The bone-length pass on its own. `solve` has always ended with one; the
+// standing sway below needs the same thing and for the same reason, so it is
+// one function rather than two copies that can drift apart.
+function settleLinks(f, passes) {
+  const points = f.rig.points;
+  for (let pass = 0; pass < passes; pass++) {
+    for (const link of f.rig.links) {
+      const a = points[link.a];
+      const b = points[link.b];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const d = Math.hypot(dx, dy) || 1e-6;
+      const shift = ((d - link.rest) / d) * 0.5;
+      const ox = dx * shift;
+      const oy = dy * shift;
+      if (!a.pinned) { a.x += ox; a.y += oy; }
+      if (!b.pinned) { b.x -= ox; b.y -= oy; }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// STANDING, BUT NOT A STATUE
+// ---------------------------------------------------------------------------
+//
+// `ride` above is a hard snap: every joint is written to where a standing man's
+// joint goes, every frame. It is right for a fishing boat's crew, who are on
+// screen for a few seconds before something shoots them, and it is wrong for a
+// BOSS's deck, which the player stares at for a minute while shelling it. A
+// figure that cannot move at all next to a hull that rolls and takes hits reads
+// as scenery painted on the boat.
+//
+// So a glued figure is solved instead of snapped:
+//
+//   THE FEET ARE PLANTED. Pinned, and rewritten from the deck every tick, so
+//        they ride the hull's bob and roll exactly and no accumulated sway can
+//        walk a man off his own spot.
+//
+//   EVERYTHING ABOVE IS SPRUNG toward where it would be if he were standing
+//        still. That single spring does all three jobs at once: it carries the
+//        boat's motion up through the body (the deck moves, the target moves,
+//        the body follows late), it lets a jostle displace him, and it is what
+//        brings him back to the idle afterwards. There is no separate "return"
+//        behaviour to get wrong.
+//
+//   AND NO GRAVITY. He is holding himself up; that is what standing IS. Gravity
+//        here would only be a constant the spring has to win against, and the
+//        amount it lost by would be a permanent slouch.
+function swayAboard(f, dt) {
+  const boat = f.boat;
+  if (!boat) return;
+  boat.mesh.updateWorldMatrix(true, true);
+  _feet.set(f.deckX, f.deckY, 0).applyMatrix4(boat.mesh.matrixWorld);
+  const pose = standingPose(_feet.x, _feet.y, f.height, f.face,
+    f.body.kind === 'model' ? f.body.model : null);
+
+  const c = cfg().sway ?? {};
+  const stiffness = c.stiffness ?? 120;
+  const damping = c.damping ?? 7;
+  const step = SOLVER_STEP;
+
+  f.accumulator = Math.min(f.accumulator + dt, step * 8);
+  while (f.accumulator >= step) {
+    const decay = Math.exp(-damping * step);
+    for (const [name, at] of Object.entries(pose)) {
+      const p = f.rig.points[name];
+      if (p.pinned) {
+        // Position AND history. Writing only the position would have the
+        // solver read the boat's own travel as this man's velocity, and a
+        // figure on a boat crossing the arena would be permanently blown
+        // backwards by his own ride.
+        p.x = at.x; p.y = at.y; p.px = at.x; p.py = at.y;
+        continue;
+      }
+      const vx = (p.x - p.px) * decay + (at.x - p.x) * stiffness * step * step;
+      const vy = (p.y - p.py) * decay + (at.y - p.y) * stiffness * step * step;
+      p.px = p.x; p.py = p.y;
+      p.x += vx; p.y += vy;
+    }
+    // Bone lengths still get the last word, exactly as in the ragdoll — a
+    // spring pulling eleven points independently is free to stretch him.
+    settleLinks(f, 2);
+    f.accumulator -= step;
+  }
+}
+
+/**
+ * SOMETHING HIT THE BOAT. Not the man — the deck under him.
+ *
+ * The party is glued on (see `glued`), so a hit cannot take anyone off; what it
+ * does instead is shove the top of every body on that deck and let the spring
+ * in swayAboard haul it back upright. Which is the whole point of gluing them:
+ * a boss's deck stays populated for the fight AND still visibly reacts to being
+ * shot, where knocking men off one at a time gave a reaction once each and then
+ * an empty boat.
+ *
+ * Scaled by height above the feet, so the shove is a body rocking on its heels
+ * rather than a figure sliding sideways.
+ */
+export function jostleCrew(x, y, radius, power = 1) {
+  if (!crew.length) return 0;
+  const c = cfg().sway ?? {};
+  const kick = (c.jostle ?? 3.2) * power;
+  const step = SOLVER_STEP;
+  let shaken = 0;
+  for (const f of crew) {
+    if (!f.glued || f.state === 'ragdoll') continue;
+    const hips = f.rig.points.hips;
+    const dx = hips.x - x;
+    const dy = hips.y - y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > radius) continue;
+    shaken++;
+    const falloff = 1 - dist / Math.max(radius, 1e-3);
+    // Away from the blow, and always a little up: a deck heaving under a man
+    // lifts him as well as pushing him.
+    const len = dist || 1;
+    const ax = (dx / len) * kick * falloff;
+    const ay = Math.abs(dy / len) * kick * falloff * 0.4;
+    const foot = f.rig.points.footL.y;
+    for (const p of f.rig.list) {
+      if (p.pinned) continue;
+      // Height above the feet as a fraction of the man — the hat end takes the
+      // whole kick, the hips a third of it, and the ankles nothing.
+      const up = Math.max(0, (p.y - foot) / Math.max(f.height, 1e-3));
+      p.px -= ax * up * step;
+      p.py -= ay * up * step;
+    }
+  }
+  return shaken;
 }
 
 export function updateCrew(dt, scene) {
@@ -1079,9 +1490,18 @@ export function updateCrew(dt, scene) {
     // something hits him (damageCrew) or when the hull goes up under him
     // (blastCrew) — never on his own initiative.
     if (f.state !== 'ragdoll') {
-      ride(f);
+      // Glued figures SWAY on their planted feet; everyone else is snapped to
+      // the standing pose. See swayAboard for why a boss's deck needs the
+      // difference and an ordinary fishing boat does not.
+      if (f.glued) swayAboard(f, dt);
+      else ride(f);
       f.body.mixer?.update(dt);
-      if (f.body.kind === 'boxes') poseBoxBody(f);
+      // Only a glued figure is POSED while aboard. Everyone else is a plain
+      // animated model riding the hull, which is what they have always been —
+      // there is no sway to draw, and driving the bones would only replace a
+      // walk cycle with a mannequin.
+      if (f.glued && f.body.kind === 'model') poseModelBody(f, false, DRIVEN_ABOARD);
+      else if (f.body.kind === 'boxes') poseBoxBody(f);
       continue;
     }
 

@@ -7,7 +7,9 @@ import { enemies, removeEnemy } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 import { applyElementalHit, chillEnemy } from './elements.js';
+import { applyHarpCharm } from './harp.js';
 import { hitCreature } from './hitShape.js';
+import { pinchReach } from './crabClaw.js';
 
 // Where the last hit landed on the body, refilled by every hitCreature call
 // that passes. One shared object rather than one per test: this is the hottest
@@ -93,6 +95,15 @@ export function resolveCombat(dt, scene, hooks) {
       if (b.chill) {
         chillEnemy(e, b.chill.slow, b.chill.duration, b.chill.freezeFor, hooks,
           e.mesh.position.x, e.mesh.position.y);
+      }
+
+      // A note from the harp. Also before the death check, and for a reason
+      // that is not cosmetic here: a note that KILLS what it charmed has to
+      // report the charm anyway or the sting and the corpse disagree about
+      // what just happened. `applyHarpCharm` refuses a boss and says so, which
+      // is what stops the event firing on a note that only did damage.
+      if (b.charm && applyHarpCharm(e, b.charm)) {
+        hooks.onCharmed?.(e, contact.x, contact.y);
       }
 
       if (e.hp <= 0) {
@@ -242,8 +253,12 @@ export function resolveCombat(dt, scene, hooks) {
       const py = e.mesh.position.y - pPos.y;
       // Scaled by the crab's own radius, so a crab that has grown over a long
       // run reaches proportionally further — the same rule the driver aims by.
-      const pinchReach = e.radius * (pc.range ?? 2.4) + pRadius;
-      if (px * px + py * py <= pinchReach * pinchReach && !isInvulnerable()) {
+      // Shared with the COMMIT gate in entities/enemies.js rather than restated:
+      // the two are one mechanic measured twice, and the last time they were
+      // written separately only this one added `pRadius`, which silently killed
+      // the pinch the moment the crab's hitbox was retuned. See pinchReach.
+      const reachSq = pinchReach(e.radius, pRadius, pc.range ?? 2.4) ** 2;
+      if (px * px + py * py <= reachSq && !isInvulnerable()) {
         const base = e.contactDamage ?? e.def.contactDamage;
         hooks.onPlayerHit(
           base * (pc.damageMul ?? 0.75),

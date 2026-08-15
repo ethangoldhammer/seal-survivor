@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { faceSide } from './facing.js';
 import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
@@ -100,7 +101,8 @@ export function updateDumbo(dt, playerPos, level, enemiesList, clock, hooks = {}
   anim?.update(dt, stateForSpeed(spd), false);
   if (spd > 0.3) {
     octo.rotation.z = Math.atan2(octoVel.y, octoVel.x) - Math.PI / 2;
-    visual.rotation.y = octoVel.x < 0 ? Math.PI : 0;
+    // Turned, not flipped — see systems/facing.js.
+    faceSide(visual, octoVel.x, dt);
   }
 
   const s = currentDumboStats(level);

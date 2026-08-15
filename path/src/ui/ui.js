@@ -3,16 +3,18 @@ import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { drawUpgrades } from '../upgradeTable.js';
-import { expandDesc } from '../upgradeText.js';
+import { expandDesc, measure, phraseAll } from '../upgradeText.js';
 import { rollElementFor, elementCardName, elementCardDesc } from '../systems/elements.js';
 import { rollRarity, rarityById, rarityRank } from '../systems/rarity.js';
 import quipsCsv from '../quips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { menuInput, resetMenuInput } from '../input.js';
+import { touchPrimary } from '../devices.js';
 import { mountRiveSplash } from './riveSplash.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
-import { bossShot, shareBossShot, saveBossShot } from '../systems/bossShot.js';
+import { bossShot, bossShots, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards } from '../systems/bossShot.js';
+import { buildPrintPaper, initSnapshotPrints } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import {
   fetchGlobalBoard,
@@ -27,6 +29,9 @@ import {
 } from '../systems/leaderboard.js';
 import { feedback } from '../systems/feedback.js';
 import { playSfx } from '../systems/audio.js';
+// The popups' arrival and departure curves, by name — the same shared table the
+// boss bar's fill and the camera moves read from (path/src/ease.js).
+import { ease } from '../ease.js';
 
 let callbacks = {};
 const el = {};
@@ -70,8 +75,16 @@ let gameOverToken = 0;
 
 const STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-  .sv-ui * { box-sizing: border-box; font-family: 'Inter', system-ui, sans-serif; }
-  .sv-ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  /* THE FONT IS NOT SET HERE. It used to be — 'Inter' on this very selector —
+     and because a rule that matches an element directly beats anything it
+     would have inherited, that one declaration overrode the family the tuner
+     was writing onto .sv-ui for every element underneath it. The picker moved
+     nothing. ui/typography.js owns family now, in a sheet appended after this
+     one; the fallback lives on the variable (--sv-font) so there is still a
+     font before that module has run. */
+  .sv-ui * { box-sizing: border-box; }
+  .sv-ui { position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    font-family: var(--sv-font, 'Inter', system-ui, sans-serif); }
   .sv-hud { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: flex-start; color: #e8ecf3; }
   .sv-panel { background: rgba(12,14,22,0.72); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 10px 14px; backdrop-filter: blur(6px); }
 
@@ -139,15 +152,49 @@ const STYLES = `
     background: linear-gradient(90deg, #ff5a3c, #ffb066);
     box-shadow: 0 0 22px rgba(255,140,80,0.95); }
 
-  /* THE TROPHY — the kept kill shot, on the death screen (systems/bossShot.js).
-     Sized as a share of the card rather than in px so it keeps its place on a
-     phone, and capped in height so a tall run summary never pushes the name box
-     and the leaderboard off the bottom of the screen. */
-  .sv-trophy { margin: 4px 0 12px; display: flex; flex-direction: column; gap: 7px; align-items: center; }
-  .sv-trophy-img { display: block; width: 100%; max-width: 420px; max-height: 34vh;
-    object-fit: contain; border-radius: 8px; border: 1px solid rgba(255,86,102,0.35);
-    box-shadow: 0 6px 26px rgba(0,0,0,0.55), 0 0 20px rgba(255,60,70,0.12); background: #05070d; }
+  /* THE ROLL — every kill shot from the run, fanned out on the score screen
+     (systems/bossShot.js keeps them, ui/snapshotPrint.js builds the paper).
+     The prints overlap by a third, so eight of them still fit the card on a
+     phone; picking one lifts it square out of the fan. */
+  .sv-trophy { margin: 4px 0 12px; display: flex; flex-direction: column; gap: 9px; align-items: center; }
+  .sv-fan { display: flex; justify-content: center; align-items: center; flex-wrap: nowrap;
+    padding: 14px 0 10px; max-width: 100%; }
+  .sv-fan-slot { position: relative; background: none; border: 0; padding: 0; margin: 0;
+    cursor: pointer; pointer-events: all; transform-origin: 50% 60%;
+    transform: rotate(var(--rot, 0deg));
+    filter: drop-shadow(0 8px 20px rgba(0,0,0,0.5));
+    transition: transform 0.18s cubic-bezier(0.2,0.9,0.3,1), filter 0.18s ease; }
+  /* Lifted SQUARE to the frame, not merely raised: the fan's job is to show
+     that there are several, and the pick's job is to show one properly. */
+  .sv-fan-slot:hover, .sv-fan-slot:focus-visible {
+    transform: rotate(0deg) translateY(-8px) scale(1.04); outline: none; }
+  .sv-fan-sel, .sv-fan-sel:hover {
+    transform: rotate(0deg) translateY(-11px) scale(1.08);
+    filter: drop-shadow(0 12px 26px rgba(0,0,0,0.6)); }
+  .sv-fan-sel .sv-print-paper { outline: 2px solid #7ad7ff; outline-offset: 0; }
   .sv-trophy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  /* The two whole-run buttons read as secondary to the two that act on the
+     print the player just picked. */
+  .sv-btn-ghost { background: rgba(122,215,255,0.12); color: #cfeeff;
+    border: 1px solid rgba(122,215,255,0.35); }
+  .sv-btn-ghost:hover { background: rgba(122,215,255,0.22); }
+
+  /* THE SCORECARD. Five figures in a row rather than a sentence — the same
+     five the shared image carries. */
+  .sv-stat { display: inline-flex; flex-direction: column; align-items: center;
+    min-width: 62px; padding: 0 6px; font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: rgba(232,236,243,0.45); }
+  .sv-stat b { font-size: 19px; font-weight: 700; letter-spacing: 0.01em;
+    color: #e8ecf3; text-transform: none; }
+
+  /* TYPE IN THIS FILE IS THE FALLBACK LAYER, not the design. Every font-size,
+     weight, colour and text-shadow from here down is re-stated by
+     ui/typography.js from CONFIG.textStyles, in a sheet appended after this
+     one — so these values are what the game looks like for the few frames
+     before that module runs, and what it falls back to if it ever doesn't.
+     The live numbers are in path/src/textRoles.js and the Text panel (Y).
+     Everything else here — position, layout, the will-change hints — is real
+     and is not duplicated anywhere. */
 
   /* Score toasts: one per kill, floating up from where the fish died. */
   .sv-toast { position: absolute; font-size: 13px; font-weight: 700;
@@ -165,7 +212,9 @@ const STYLES = `
     text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 16px currentColor;
     pointer-events: none; transform: translate(-50%, -50%);
     will-change: transform, opacity; }
-  .sv-chain-x { font-size: 16px; margin-left: 7px; font-weight: 700;
+  /* em, not px: the ×N is a part of the banner rather than a thing with its
+     own size, so it tracks whatever the Chain banner role is set to. */
+  .sv-chain-x { font-size: 0.76em; margin-left: 7px; font-weight: 700;
     font-variant-numeric: tabular-nums; opacity: 0.9; }
   .sv-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(232,236,243,0.55); font-weight: 500; }
   .sv-value { font-size: 15px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
@@ -181,7 +230,10 @@ const STYLES = `
      the browser's guess about whether a focus deserves a ring, and it guesses
      "no" for the programmatic focus a stick push produces. */
   .sv-btn.sv-nav-sel { outline: 2px solid #fff; outline-offset: 2px; }
-  .sv-cards { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: min(760px, 92vw); }
+  /* position:relative so the effect tooltip has a coordinate frame that is the
+     card row itself. It is absolutely positioned, so it takes no part in the
+     flex layout and cannot push a card onto a second line. */
+  .sv-cards { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: min(760px, 92vw); position: relative; }
   /* Cards are hexagons matching the background art exactly. The vertex
      percentages below were measured off the art itself (flat-top hex: points
      at 5.7%/93.9% horizontally, flat top/bottom edges spanning 27.1%-72.3%,
@@ -303,6 +355,23 @@ const STYLES = `
     text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6); }
   .sv-card-desc { font-size: calc(11px * var(--sv-fit, 1)); color: rgba(232,236,243,0.92); line-height: 1.3;
     text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6); }
+  /* THE EFFECT TOOLTIP — see showCardEffect(). What the card actually does to
+     the stat block, measured from its own apply(), for the stack it is
+     offering right now.
+     ONE node for the whole hand, parked on the menu box and moved to whichever
+     card is pointed at, rather than one per slot. The slot carries a four-pass
+     drop-shadow filter, and a filter applies to descendants — a tooltip living
+     inside it would be bloomed white along with the card the moment it was
+     selected, which is illegible at 11px. Out here it inherits nothing.
+     Positioned in script because the cards wrap: there is no static offset
+     that is "under this card" for both rows. */
+  .sv-card-fx { position: absolute; z-index: 5; pointer-events: none;
+    max-width: 190px; padding: 6px 9px; border-radius: 7px;
+    background: rgba(9,14,22,0.94); border: 1px solid rgba(122,215,255,0.35);
+    color: #cfeaff; font-size: 11px; line-height: 1.35; text-align: center;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    opacity: 0; transition: opacity 0.12s ease-out; }
+  .sv-card-fx.sv-fx-on { opacity: 1; }
   .sv-hint { font-size: 11px; color: rgba(232,236,243,0.35); margin-top: 14px; letter-spacing: 0.04em; }
   .sv-leaderboard { margin: 14px 0; max-height: 220px; overflow-y: auto; text-align: left; }
   .sv-lb-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
@@ -440,16 +509,21 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
       <div class="sv-menu">
         <div class="sv-title" id="svGameOverTitle">You Died!</div>
         <div class="sv-sub" id="svGameOverStats"></div>
-        <!-- THE TROPHY. Hidden unless a boss actually went down this run — an
-             empty frame on the death screen of a run that never met one would
-             read as a broken image. See systems/bossShot.js. -->
+        <!-- THE ROLL. Every kill shot from the run, fanned out like prints
+             dropped on a table — the same paper the player watched come out of
+             the camera during the fight (ui/snapshotPrint.js builds both).
+             Hidden unless a boss actually went down: an empty rack on the
+             score screen of a run that never met one reads as a broken image.
+             See systems/bossShot.js. -->
         <div class="sv-trophy sv-hidden" id="svTrophy">
-          <img class="sv-trophy-img" id="svTrophyImg" alt="" />
+          <div class="sv-fan" id="svFan"></div>
           <div class="sv-trophy-row">
-            <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share</button>
-            <button class="sv-btn sv-btn-sm" id="svTrophySave">Save image</button>
-            <span class="sv-status" id="svTrophyStatus"></span>
+            <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share this one</button>
+            <button class="sv-btn sv-btn-sm" id="svTrophySave">Save this one</button>
+            <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetShare">Share all</button>
+            <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetSave">Save all</button>
           </div>
+          <div class="sv-status" id="svTrophyStatus"></div>
         </div>
         <div class="sv-name-row" id="svNameRow">
           <input class="sv-name-input" id="svNameInput" type="text" maxlength="${MAX_NAME_LEN}"
@@ -474,11 +548,12 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     'svBossBar', 'svBossName', 'svBossFill',
     'svHighScoreLabel', 'svHighScore', 'svRapidFirePanel', 'svRapidFireTime',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
+    'svFan', 'svSheetShare', 'svSheetSave',
     // Try again is the one control on the score card that has to work — it is
     // the way back into the game. It was reached only through its click
     // binding until the pad needed to find it by name.
     'svGameOverTitle', 'svRestartBtn',
-    'svTrophy', 'svTrophyImg', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
+    'svTrophy', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -496,6 +571,9 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   // other two for space. Nothing is drawn until a fight starts, and if it never
   // finishes loading the coded bar below carries the run.
   initBossBarRive(root);
+  // And the polaroid's artboard, parsed once here rather than on the frame a
+  // boss dies — see initSnapshotCards. It draws nothing until a kill.
+  initSnapshotPrints();
 
   // Every surface's tiles, built while the browser is otherwise idle — see
   // warmReveals. Nothing waits on it; a menu that somehow beats it just pays
@@ -656,6 +734,16 @@ export function hideRestartTransition(seconds = 0.5) {
 // only disables transitions, which wouldn't touch a canvas animation.
 function prefersReducedMotion() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
+/**
+ * The element every surface in the game is built inside. Handed to
+ * ui/callout.js by main.js so the warning band can be appended ON TOP of the
+ * menus — which is the one thing initUI cannot do for it, since that module
+ * has to load after this one to read popupPose without an import cycle.
+ */
+export function uiRoot() {
+  return root;
 }
 
 export function hideAllMenus() {
@@ -1064,6 +1152,94 @@ function cardDesc(choice) {
   return expandDesc(raw, choice, { owned, warn: console.warn });
 }
 
+// ---------------------------------------------------------------------------
+// THE EFFECT TOOLTIP
+//
+// Every `desc` in upgrades.csv is hand-typed English, and forty-four of the
+// forty-four never say {effect} — so the machinery that can measure a card by
+// running its own apply() has, until now, described nothing the player ever
+// sees. Meanwhile half the cards are flavour ("All balls, no pit.") and say
+// nothing about what they do, and at least one (shrimpRing) promises a number
+// that stopped being true.
+//
+// So the tooltip is not a second description to keep in sync — it is the
+// measurement, generated for whichever stack the card is offering. Nothing is
+// added to the CSV and nothing has to be maintained: a card written today gets
+// one, and a card whose apply() is retuned tomorrow updates itself.
+//
+// The `stack` matters. The third Coiled Spring is not the first, and hovering
+// it quotes the third stack's numbers — same rule cardDesc already follows.
+// `desc` is handed in already expanded rather than re-derived here: cardDesc()
+// runs expandDesc, which warns about unknown placeholders, and calling it a
+// second time per card would print every one of those warnings twice.
+function cardEffect(choice, desc) {
+  const stack = nextStack(choice);
+  const text = phraseAll(measure(choice, stack), stack);
+  if (!text) return '';
+
+  // Don't say it twice. Where a `desc` already spells the effect out — the
+  // stat cards mostly do, "+25% fire rate" verbatim — a tooltip repeating it
+  // word for word is a box that appears to tell you nothing, which trains the
+  // player to stop reading it on the cards where it is the only information
+  // there is. Compared loosely, because the desc wraps it in a sentence:
+  // "Bullets pierce +1 enemy" contains "+1 enemy" and needs no tooltip.
+  const flat = (s) => String(s).toLowerCase().replace(/[^a-z0-9%+.-]+/g, ' ').trim();
+  if (flat(desc).includes(flat(text))) return '';
+  return text;
+}
+
+// The one tooltip node, moved between cards. Created on the first hover of the
+// first run rather than at boot, so a session that never levels up never makes
+// one.
+let cardFx = null;
+
+function showCardEffect(card, text) {
+  if (!text) { hideCardEffect(); return; }
+  if (!cardFx) {
+    cardFx = document.createElement('div');
+    cardFx.className = 'sv-card-fx';
+    el.svCards.appendChild(cardFx);
+  }
+  cardFx.textContent = text;
+
+  // Anchored to the hex's DRAWN edge, not the element's. The card is a
+  // 210px box clipped to a hexagon whose bottom point sits at 89.6% of that
+  // height (see the clip-path), so measuring the box would leave the tooltip
+  // floating 22px below empty space.
+  const row = el.svCards.getBoundingClientRect();
+  const r = card.getBoundingClientRect();
+  const drawnBottom = r.top + r.height * 0.896;
+  const centre = r.left + r.width / 2 - row.left;
+
+  // Measure before deciding which side: the box has to be laid out to know how
+  // tall it is, and it is 30px on one line and 60 on three.
+  cardFx.style.visibility = 'hidden';
+  cardFx.style.left = '0px';
+  cardFx.style.top = '0px';
+  const h = cardFx.offsetHeight, w = cardFx.offsetWidth;
+
+  // Below by default; above when below would run off the bottom of the window,
+  // which is where the second row of a wrapped six-card hand ends up.
+  const below = drawnBottom + 8 + h <= window.innerHeight - 8;
+  const top = below ? drawnBottom + 8 - row.top
+                    : r.top + r.height * 0.104 - 8 - h - row.top;
+
+  // Clamped to the window, so a card on the end of the row doesn't push the
+  // tooltip off the side of the screen.
+  let left = centre - w / 2;
+  const min = 8 - row.left, max = window.innerWidth - 8 - w - row.left;
+  left = Math.max(min, Math.min(max, left));
+
+  cardFx.style.left = `${Math.round(left)}px`;
+  cardFx.style.top = `${Math.round(top)}px`;
+  cardFx.style.visibility = '';
+  cardFx.classList.add('sv-fx-on');
+}
+
+function hideCardEffect() {
+  cardFx?.classList.remove('sv-fx-on');
+}
+
 // How far through the run the rarity odds have travelled, 0..1.
 //
 // Player level rather than elapsed time: the roll happens on the level-up
@@ -1188,6 +1364,11 @@ export function showLevelUp() {
   // that no longer exists.
   cancelIgnition();
   el.svCards.innerHTML = '';
+  // The tooltip lives inside that container, so the line above just deleted
+  // it. Dropping the reference is what makes the next hover build a new one —
+  // holding the orphaned node would leave every tooltip from level 2 onwards
+  // positioned inside an element that is no longer in the document.
+  cardFx = null;
   // The shape of the deal, handed to the CSS once rather than per card: the
   // keyframe and the bloom both read these, so a tuner slider moves the flare
   // on the NEXT menu without anything here recomputing a filter.
@@ -1251,10 +1432,25 @@ export function showLevelUp() {
     const content = document.createElement('div');
     content.className = 'sv-card-content';
     content.innerHTML = `<div class="sv-card-name"></div><div class="sv-card-desc"></div>`;
+    const desc = cardDesc(choice);
     content.querySelector('.sv-card-name').textContent = cardName(choice);
-    content.querySelector('.sv-card-desc').textContent = cardDesc(choice);
+    content.querySelector('.sv-card-desc').textContent = desc;
 
     card.append(overlay, content);
+
+    // Measured once, at deal time, and parked on the card. The measurement
+    // replays apply() against two probe stat blocks, and re-running that on
+    // every pointerenter would do it again for a string that cannot have
+    // changed while the menu is up — the run is paused behind it.
+    //
+    // On the element rather than in a closure so the pad's selection and the
+    // harness can both read it without a second copy of cardEffect().
+    card.dataset.effect = cardEffect(choice, desc);
+    card.addEventListener('pointerenter', () => {
+      if (menuLocked) return;
+      showCardEffect(card, card.dataset.effect);
+    });
+    card.addEventListener('pointerleave', hideCardEffect);
 
     const pick = () => {
       // Half-drawn cards aren't a menu yet — see setMenuLocked. The class
@@ -1267,6 +1463,10 @@ export function showLevelUp() {
       // on the shared `levelUp` feedback that main.js fires, so this is opt-in
       // per card and silence here is the normal case.
       if (choice.sfx) playSfx(choice.sfx);
+      // The tooltip is not part of the dissolve — it is a floating box with its
+      // own background, and leaving it up over half-dithered cards reads as a
+      // stuck element. Goes on the frame the card is chosen.
+      hideCardEffect();
       levelUpCards = [];
       // Dissolves out rather than vanishing, and the choice is filed on this
       // frame regardless: the run comes back to life behind the cards while
@@ -1331,6 +1531,11 @@ function selectCard(i) {
   // stepping into the card you are already on, which is not a move.
   if (previous !== selectedIndex) feedback('uiHover');
   levelUpCards.forEach((card, n) => card.classList.toggle('sv-card-sel', n === selectedIndex));
+  // The pad and the keyboard get the tooltip too, for the same reason they get
+  // the hover glow: on a controller the pointer never moves, and an effect
+  // readable only with a mouse is an effect half the run cannot see.
+  const sel = levelUpCards[selectedIndex];
+  if (sel) showCardEffect(sel, sel.dataset.effect);
   // Move real focus along with it, so Enter/Space keep working on whatever the
   // pad is pointing at and the two input methods can't disagree about which
   // card is live. preventScroll because the menu is centred already and a
@@ -1389,7 +1594,8 @@ let overIndex = -1;
 // button on it is inside a hidden block, so a highlight cleared through the
 // filter would be a highlight never cleared at all.
 function gameOverAll() {
-  return [el.svTrophyShare, el.svTrophySave, el.svNameSubmit, el.svRestartBtn].filter(Boolean);
+  return [el.svTrophyShare, el.svTrophySave, el.svSheetShare, el.svSheetSave,
+    el.svNameSubmit, el.svRestartBtn].filter(Boolean);
 }
 
 function gameOverControls() {
@@ -1520,6 +1726,17 @@ function fitCardText(card) {
 function overflowsBox(content, lines) {
   if (content.scrollHeight > content.clientHeight + 1) return true;
   return lines.some((line) => line.scrollWidth > line.clientWidth + 1);
+}
+
+/**
+ * A world point in CSS pixels: { x, y }. The same projection the toasts and
+ * the seal's floating bars use, exported so ui/callout.js can put an arrow on
+ * a piece of chum without a second copy of this arithmetic drifting away from
+ * this one. Writes into a caller-owned `out` — this runs a few times a frame.
+ */
+export function worldToScreen(camera, x, y, out = { x: 0, y: 0 }) {
+  PROJECT_V.set(x, y, 0);
+  return projectToScreen(camera, PROJECT_V, out);
 }
 
 // Projects a world position to CSS pixels. The renderer canvas fills the
@@ -1666,9 +1883,21 @@ export function updateBossBar(banner) {
 // --- score toasts ---------------------------------------------------------
 // One small number per kill, rising from where the creature died. Driven by
 // the game loop rather than CSS animation so they pause with the game and
-// can't outlive a run.
+// can't outlive a run — and, since this file owns the clock rather than the
+// browser, so the whole shape of the thing is tunable. What each kind does on
+// its way in and out is CONFIG.textMotion (the Text panel, Y); this is only
+// the loop that plays it.
 
 const toasts = [];
+
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// The motion block for a kind, falling back to the score popup's — a config
+// key renamed out from under this must not stop the numbers appearing.
+function motionFor(kind) {
+  const m = CONFIG.textMotion ?? {};
+  return m[kind] ?? m.score ?? {};
+}
 
 export function spawnScoreToast(camera, worldX, worldY, points, multiplier = 1) {
   if (!el.svToastLayer || !camera) return;
@@ -1689,22 +1918,32 @@ export function spawnScoreToast(camera, worldX, worldY, points, multiplier = 1) 
   // colour, and the FOOD CHAIN banner carries the depth.
   node.textContent = `+${points.toLocaleString()}`;
   el.svToastLayer.appendChild(node);
-
-  toasts.push({
-    node,
-    x: screenPt.x,
-    y: screenPt.y,
-    // Slight horizontal scatter so simultaneous kills in a school don't
-    // stack into one illegible clump.
-    vx: (Math.random() - 0.5) * 26,
-    vy: -46 - Math.random() * 18,
-    life: combo ? 1.1 : 0.85,
-    age: 0,
-  });
+  pushToast(node, screenPt.x, screenPt.y, combo ? 'combo' : 'score');
 
   // Hard ceiling — a school wipe can kill a dozen creatures on one frame,
   // and unbounded DOM nodes would tank the frame rate.
   while (toasts.length > 40) removeToast(0);
+}
+
+// The travel half of a popup's motion, rolled once at birth: the speeds it
+// carries for its whole life. The arrival and departure curves are NOT rolled
+// here — they're read per frame, so dragging a slider re-shapes the numbers
+// already in the air instead of only the next kill.
+function pushToast(node, x, y, kind) {
+  const m = motionFor(kind);
+  const t = {
+    node,
+    kind,
+    x,
+    y,
+    // Slight horizontal scatter so simultaneous kills in a school don't
+    // stack into one illegible clump.
+    vx: (Math.random() - 0.5) * (m.scatter ?? 0),
+    vy: -((m.rise ?? 0) + Math.random() * (m.riseVary ?? 0)),
+    age: 0,
+  };
+  toasts.push(t);
+  return t;
 }
 
 // The FOOD CHAIN! banner. Announces that the strike chain EXTENDED, with the
@@ -1722,20 +1961,39 @@ export function spawnChainToast(camera, worldX, worldY, chain) {
   if (!el.svToastLayer || !camera) return;
   PROJECT_V.set(worldX, worldY, 0);
   projectToScreen(camera, PROJECT_V, screenPt);
+  chainToastAt(screenPt.x, screenPt.y, chain);
+}
 
-  // Gold at the bottom, running to a hot orange as the chain deepens — the
-  // same "this is getting out of hand" ramp the combo speed and grid warp are
-  // already on, so all three read as one escalation.
-  const t = Math.min(1, Math.max(0, (chain - 2) / 6));
-  const color = `rgb(255, ${Math.round(224 - 96 * t)}, ${Math.round(102 - 44 * t)})`;
+// Gold at the bottom, running to a hot orange as the chain deepens — the same
+// "this is getting out of hand" ramp the combo speed and grid warp are already
+// on, so all three read as one escalation. Both ends are tuned: the cold end is
+// the Chain banner role's own colour, the hot end and the depth it is reached
+// at are CONFIG.textMotion.chain.
+//
+// Written inline, per frame it changes, which is why textRoles.js marks this
+// role `inlineColor` and typography.js emits no `color` for it — two writers
+// on one property, where one of them silently never wins, is the bug that
+// costs an afternoon.
+function chainColor(chain) {
+  const m = motionFor('chain');
+  const cold = CONFIG.textStyles?.chain?.color ?? 0xffe066;
+  const hot = m.colorHot ?? 0xff803a;
+  const hotAt = Math.max(3, m.hotAt ?? 8);
+  const t = Math.min(1, Math.max(0, (chain - 2) / (hotAt - 2)));
+  const mix = (shift) => Math.round(lerp((cold >>> shift) & 255, (hot >>> shift) & 255, t));
+  return `rgb(${mix(16)}, ${mix(8)}, ${mix(0)})`;
+}
+
+function chainToastAt(x, y, chain) {
+  const color = chainColor(chain);
 
   if (chainToast && toasts.includes(chainToast)) {
     chainToast.age = 0;
-    chainToast.x = screenPt.x;
-    chainToast.y = screenPt.y;
+    chainToast.x = x;
+    chainToast.y = y;
     chainToast.node.style.color = color;
     chainToast.count.textContent = `×${chain}`;
-    return;
+    return chainToast;
   }
 
   const node = document.createElement('div');
@@ -1748,21 +2006,9 @@ export function spawnChainToast(camera, worldX, worldY, chain) {
   node.appendChild(count);
   el.svToastLayer.appendChild(node);
 
-  chainToast = {
-    node,
-    count,
-    x: screenPt.x,
-    y: screenPt.y,
-    // No horizontal scatter and a slower rise than a score toast: there's
-    // only one of these, so it has nothing to avoid, and it wants to sit
-    // still long enough to be read.
-    vx: 0,
-    vy: -30,
-    life: 1.3,
-    age: 0,
-    pop: 0.55,
-  };
-  toasts.push(chainToast);
+  chainToast = pushToast(node, x, y, 'chain');
+  chainToast.count = count;
+  return chainToast;
 }
 
 function removeToast(i) {
@@ -1774,17 +2020,160 @@ function removeToast(i) {
 export function updateToasts(dt) {
   for (let i = toasts.length - 1; i >= 0; i--) {
     const t = toasts[i];
+    const m = motionFor(t.kind);
+    // Read per frame rather than captured at birth, so a slider drag reshapes
+    // the popups already in the air — which is the difference between tuning
+    // this and guessing at it one kill at a time. It also means shortening the
+    // life retires everything currently over that age on the next frame, which
+    // is the behaviour you want from a control called "time on screen".
+    const pose = popupPose(t.kind, t.age + dt);
     t.age += dt;
-    if (t.age >= t.life) { removeToast(i); continue; }
+    if (t.age >= pose.life) { removeToast(i); continue; }
+
     t.x += t.vx * dt;
     t.y += t.vy * dt;
-    t.vy += 42 * dt; // ease the rise so it settles rather than flying off
-    const k = t.age / t.life;
-    t.node.style.transform = `translate(-50%,-50%) scale(${1 + (1 - k) * (t.pop ?? 0.25)})`;
+    t.vy += (m.gravity ?? 0) * dt; // ease the rise so it settles rather than flying off
+
+    t.node.style.transform = `translate(-50%,-50%) scale(${pose.scale})`;
     t.node.style.left = `${t.x}px`;
-    t.node.style.top = `${t.y}px`;
-    t.node.style.opacity = `${1 - k * k}`;
+    t.node.style.top = `${t.y + pose.lift}px`;
+    t.node.style.opacity = `${pose.alpha}`;
   }
+}
+
+/**
+ * WHERE A POPUP IS IN ITS ARRIVAL AND DEPARTURE, at `age` seconds old.
+ *
+ * THE TWO WINDOWS. The arrival runs from birth; the departure runs backwards
+ * from the end of life. ease() clamps its input, so before the departure window
+ * opens its progress is a hard 0 and its terms are identities — no branch
+ * needed, and no frame where both are half-applied by accident rather than on
+ * purpose.
+ *
+ * Exported because the Text panel's specimen plays the same curves on a loop:
+ * the popups are the one part of the interface you cannot hold still and look
+ * at, so the panel has to animate them to show what a motion row does. Two
+ * copies of this arithmetic would drift the moment one of them was tuned, and
+ * the whole point of the specimen is that it is not an approximation.
+ */
+export function popupPose(kind, age, lifeOverride = null) {
+  const m = motionFor(kind);
+  // `lifeOverride` is the callout band, whose time on screen is a column in
+  // callouts.csv rather than a slider — a warning holds for as long as that row
+  // says, and the motion block still owns the shape of the arrival and the
+  // departure. Every other caller passes nothing and gets `life` from the
+  // tuner, which is what the Text panel's specimen is drawing.
+  const life = Math.max(0.05, lifeOverride ?? m.life ?? 0.85);
+  const inM = m.in ?? {};
+  const outM = m.out ?? {};
+  const inTime = Math.max(0, inM.time ?? 0);
+  const outTime = Math.max(0, outM.time ?? 0);
+  const kIn = inTime > 0 ? ease(inM.ease, age / inTime) : 1;
+  const kOut = outTime > 0 ? ease(outM.ease, (age - (life - outTime)) / outTime) : 0;
+
+  // Multiplied for the two that are factors, added for the one that is an
+  // offset — so a `life` shorter than the two windows put together blends
+  // instead of fighting, and neither window can cancel the other out.
+  return {
+    life,
+    scale: lerp(inM.scale ?? 1, 1, kIn) * lerp(1, outM.scale ?? 1, kOut),
+    alpha: lerp(inM.fade ?? 1, 1, kIn) * lerp(1, outM.fade ?? 0, kOut),
+    lift: lerp(inM.lift ?? 0, 0, kIn) + lerp(0, outM.lift ?? 0, kOut),
+    // BLOOM, in px of halo ON TOP of whatever glow the text role already has.
+    // Added like `lift` rather than multiplied like the other two, and that is
+    // the reason it is its own field instead of a factor on the role's glow: a
+    // role set to glow 0 has nothing to multiply, and "blooms as it arrives"
+    // has to work on text that is not glowing the rest of the time. Both ends
+    // ramp to zero at rest, so a line can flare in, sit clean, and flare out.
+    bloom: lerp(inM.bloom ?? 0, 0, kIn) + lerp(0, outM.bloom ?? 0, kOut),
+  };
+}
+
+// --- previewing a whole screen ---------------------------------------------
+// WHICH SURFACE IS BEHIND THE TEXT PANEL. Dev only; the Text panel (Y) is the
+// only caller.
+//
+// Type is judged in place or not at all — the card text has to be read inside
+// the hex, the HUD label above a number, the quip over a score. But the screen
+// you happen to be on when you open the panel is the screen you are stuck with,
+// and on boot that is the start menu: the one surface you cannot get back to
+// without reloading, sitting in front of everything you actually want to look
+// at. So the panel can put any of them up, including none of them.
+//
+// This lives here rather than in the panel because what "show the score card"
+// safely means is this module's business, not a tuning panel's — see the run
+// that is deliberately made unpostable below.
+export const PREVIEW_SCREENS = ['clear', 'start', 'HUD', 'cards', 'score card'];
+
+export function previewScreen(name) {
+  if (!el.svHud) return;
+  // Everything down first, so each branch only has to say what it puts UP and
+  // no two screens can end up on top of each other.
+  hideAllMenus();
+  el.svHud.classList.add('sv-hidden');
+
+  if (name === 'start') {
+    // The element, not showStartMenu() — that function's job is to run the
+    // Rive splash and then START THE RUN, which is not what "let me look at
+    // the start menu's type" should do.
+    el.svStartMenu.classList.remove('sv-hidden');
+  } else if (name === 'HUD') {
+    showHud();
+  } else if (name === 'cards') {
+    // A real deal, the same one Shift+L gives: the tiers are rolled for the
+    // level you are actually on, and picking a card grants it.
+    showLevelUp();
+  } else if (name === 'score card') {
+    previewGameOver();
+  }
+  // 'clear' is the fall-through: nothing up, nothing but the sea behind the
+  // panel. It is also the way back from a specimen popup burst.
+}
+
+// The score card, with an invented run on it.
+//
+// THE RUN IS MADE UNPOSTABLE BEFORE THIS RETURNS. showGameOver arms a real
+// submission — that is its job — and a fabricated 184k with a name box under it
+// is one click away from being on the global leaderboard forever. Nulling
+// `pendingRun` is what actually disarms it (submitScore returns immediately
+// without one); the name row is hidden as well so the click isn't offered in
+// the first place.
+function previewGameOver() {
+  showGameOver({ score: 184200, kills: 212, level: 14, time: 421 });
+  pendingRun = null;
+  el.svNameRow?.classList.add('sv-hidden');
+  setStatus('Preview — this run is invented and cannot be posted.');
+}
+
+// --- the specimen ----------------------------------------------------------
+// Fire one of everything, where the panel can see it. Dev only — the Text panel
+// (Y) calls this, and nothing in a run does.
+//
+// It exists because the popups are the one part of the interface you cannot
+// hold still to look at: they last under a second, they only happen on a kill,
+// and a chain deep enough to turn the banner orange is not something you can
+// arrange while your other hand is on a slider.
+export function previewToasts() {
+  if (!el.svToastLayer) return;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  // Left of centre and clear of the panel on the right, in the band the
+  // gameplay actually happens in.
+  const cx = w * 0.38;
+  const cy = h * 0.55;
+
+  for (let i = 0; i < 5; i++) {
+    const node = document.createElement('div');
+    const combo = i >= 3;
+    node.className = combo ? 'sv-toast sv-toast-combo' : 'sv-toast';
+    node.textContent = `+${((i + 1) * 210 * (combo ? 4 : 1)).toLocaleString()}`;
+    el.svToastLayer.appendChild(node);
+    const t = pushToast(node, cx + (i - 2) * 46, cy + (i % 2) * 18, combo ? 'combo' : 'score');
+    // Staggered, so five popups on one frame read as a burst of kills rather
+    // than as one wide number.
+    t.age = -i * 0.09;
+  }
+  chainToastAt(cx, cy - 90, 6);
 }
 
 // The floating hp/air bars are pinned to the seal by projecting its world
@@ -1807,64 +2196,148 @@ export function clearToasts() {
 // at while typing rather than an empty panel.
 
 // --- the trophy ------------------------------------------------------------
-// The kill shot kept from this run's last boss, offered on the death screen.
-// Built here rather than in systems/bossShot.js for the same reason every other
-// surface is: that module owns the PICTURE, this one owns the screen.
+// ---------------------------------------------------------------------------
+// THE ROLL — every kill shot from the run, on the score screen.
 //
-// The buttons are wired once, on first show, and they must be wired to a real
-// click — both the share sheet and, in some browsers, the download are gated on
-// a user gesture, so neither can be fired from the frame loop or from a timer.
-let trophyWired = false;
+// The prints the player watched come out of the camera during the fight (see
+// ui/snapshotPrint.js) are stacked in the corner while they play; here they
+// are fanned out, and every one of them can be shared or saved on its own.
+// "Share all" composes the run into a single image — the scorecard over a grid
+// of the kills — because the share sheet takes one file at a time and nobody
+// posts five things in a row.
+//
+// The paper is BUILT BY THE PRINT MODULE, not restated here. Two polaroids in
+// two files drift apart the first time either is retuned, and the one that
+// drifted would be the one the player is asked to share.
+// ---------------------------------------------------------------------------
+
+// Which print the two "this one" buttons act on. The most recent kill by
+// default — it is the one the player just made, and on a run with one boss it
+// is the only honest answer.
+let selectedShot = 0;
+// The recap the sheet is composed from, banked when the screen is shown.
+let recapRun = null;
+
+function fanTilt(i, total) {
+  // A fan, not a stack: the spread is centred so the middle print is square to
+  // the frame and the ends lean away from it. One print gets no tilt at all —
+  // a lone photograph at an angle reads as a mistake rather than as a fan.
+  if (total <= 1) return 0;
+  const spread = Math.min(9, 26 / total);
+  return (i - (total - 1) / 2) * spread;
+}
+
 function showTrophy() {
-  const shot = bossShot();
-  if (!el.svTrophy) return;
-  if (!shot) {
-    // No boss died this run. Hidden, and the src is dropped as well as the
-    // element — a stale image left in the tag is a picture of the previous run
-    // sitting one class away from being shown again.
+  const shots = bossShots();
+  if (!el.svTrophy || !el.svFan) return;
+  el.svFan.innerHTML = '';
+  if (!shots.length) {
+    // No boss died this run. Hidden, and the prints are dropped as well as the
+    // element — a stale image left in the rack is a picture of the previous
+    // run sitting one class away from being shown again.
     el.svTrophy.classList.add('sv-hidden');
-    if (el.svTrophyImg) el.svTrophyImg.removeAttribute('src');
     return;
   }
 
-  el.svTrophyImg.src = shot.url;
-  el.svTrophyImg.alt = shot.name ? `You beat ${shot.name}` : 'Your boss kill';
+  selectedShot = shots.length - 1;
+  // Narrower the more there are, so eight prints still fit the card on a
+  // phone. The fan overlaps them by a third, so the rack is about half the
+  // width the same prints would need in a row.
+  const width = Math.max(96, Math.round(Math.min(190, 620 / Math.max(2, shots.length))));
+  shots.forEach((shot, i) => {
+    const slot = document.createElement('button');
+    slot.type = 'button';
+    slot.className = 'sv-fan-slot';
+    slot.style.setProperty('--rot', `${fanTilt(i, shots.length).toFixed(2)}deg`);
+    // Later kills sit on top of earlier ones, so the fan reads left to right
+    // in the order the run happened.
+    slot.style.zIndex = String(i + 1);
+    if (i > 0) slot.style.marginLeft = `${-Math.round(width * 0.34)}px`;
+    slot.setAttribute('aria-label', shot.name ? `Kill shot: ${shot.name}` : `Kill shot ${i + 1}`);
+    slot.appendChild(buildPrintPaper(shot.url, shot, width));
+    slot.addEventListener('click', () => selectShot(i));
+    el.svFan.appendChild(slot);
+  });
+  selectShot(selectedShot);
+  // Render every polaroid NOW, while the screen is arriving. Left until a
+  // button is pressed, the render would spend the click's transient activation
+  // and navigator.share would refuse the sheet — see warmShareCards.
+  warmShareCards();
   el.svTrophyStatus.textContent = '';
   el.svTrophy.classList.remove('sv-hidden');
+  wireTrophy();
+}
 
+function selectShot(i) {
+  selectedShot = i;
+  const slots = el.svFan?.children ?? [];
+  for (let n = 0; n < slots.length; n++) {
+    slots[n].classList.toggle('sv-fan-sel', n === i);
+    // The lifted print has to be above its neighbours whatever order it is in,
+    // and it has to go back to its place in the fan when another is picked.
+    slots[n].style.zIndex = String(n === i ? slots.length + 1 : n + 1);
+  }
+}
+
+// The buttons are wired once, on first show, and they must be wired to a real
+// click — both the share sheet and, in some browsers, the download are gated
+// on a user gesture, so neither can be fired from the frame loop or a timer.
+let trophyWired = false;
+
+function wireTrophy() {
   if (trophyWired) return;
   trophyWired = true;
   const say = (msg) => { if (el.svTrophyStatus) el.svTrophyStatus.textContent = msg; };
+  // The result is reported back rather than assumed, because the routes this
+  // can take are genuinely different outcomes to a player: the sheet opened, a
+  // file landed in Downloads, or nothing happened because they closed the
+  // sheet. Saying "shared!" for all three is how a download goes unnoticed.
+  const told = (how) => say({
+    shared: 'Shared',
+    saved: 'Saved to your downloads',
+    opened: 'Opened in a new tab',
+    cancelled: '',
+    unavailable: 'Nothing to share',
+  }[how] ?? '');
+
   el.svTrophyShare?.addEventListener('click', async () => {
     say('…');
-    // The result is reported back rather than assumed, because the three routes
-    // this can take are genuinely different outcomes to a player: the sheet
-    // opened, a file landed in Downloads, or nothing happened because they
-    // closed the sheet. Saying "shared!" for all three is how a download
-    // silently goes unnoticed.
-    const how = await shareBossShot();
-    say({
-      shared: 'Shared',
-      saved: 'Saved to your downloads',
-      opened: 'Opened in a new tab',
-      cancelled: '',
-      unavailable: 'Nothing to share',
-    }[how] ?? '');
+    told(await shareBossShot(selectedShot));
   });
-  el.svTrophySave?.addEventListener('click', () => {
-    const how = saveBossShot();
-    say(how === 'saved' ? 'Saved to your downloads' : how === 'opened' ? 'Opened in a new tab' : '');
+  el.svTrophySave?.addEventListener('click', async () => told(await saveBossShot(selectedShot)));
+  el.svSheetShare?.addEventListener('click', async () => {
+    // Composing eight frames into one image is the only thing on this screen
+    // that takes long enough to notice, and a button that looks dead for a
+    // moment gets pressed twice.
+    say('Building your run…');
+    told(await shareRunSheet(recapRun ?? {}));
+  });
+  el.svSheetSave?.addEventListener('click', async () => {
+    say('Building your run…');
+    told(await saveRunSheet(recapRun ?? {}));
   });
 }
 
-export function showGameOver(gameState) {
+export function showGameOver(gameState, extra = {}) {
   el.svHud.classList.add('sv-hidden');
   // Rolled per death, not once per session — the line is the first thing read
   // on a screen the player sees dozens of times a sitting.
-  el.svGameOverTitle.textContent = pickQuip(QUIPS);
+  // `deathCauses` is the Set killPlayer resolved at the moment of death. The
+  // demo score screen (svDemo, below) passes a plain object with no such key,
+  // and gets the whole table — which is what a preview of the screen wants.
+  el.svGameOverTitle.textContent = pickQuip(QUIPS, Math.random, gameState.deathCauses);
   const score = Math.floor(gameState.score ?? 0);
-  el.svGameOverStats.innerHTML =
-    `Score: ${score.toLocaleString()}<br/>Survived ${formatTime(gameState.time)} — Kills: ${gameState.kills} — Level ${gameState.level}`;
+  // THE SCORECARD. The same five figures the shared image carries (see
+  // drawScorecard in systems/bossShot.js), so a player looking at the picture
+  // they posted and a player looking at this screen are reading the same run.
+  const bosses = extra.bosses ?? bossShots().length;
+  el.svGameOverStats.innerHTML = [
+    ['Score', score.toLocaleString()],
+    ['Time', formatTime(gameState.time)],
+    ['Level', gameState.level],
+    ['Kills', gameState.kills],
+    ['Bosses', bosses],
+  ].map(([k, v]) => `<span class="sv-stat"><b>${v}</b>${k}</span>`).join('');
 
   const token = ++gameOverToken;
   pendingRun = {
@@ -1874,6 +2347,11 @@ export function showGameOver(gameState) {
     time: gameState.time,
     date: Date.now(),
   };
+  // What the shared image's scorecard is drawn from. Banked here rather than
+  // read when a button is pressed: by then the next run may have started (the
+  // score screen is live while the water carries on behind it), and a sheet
+  // captioned with somebody else's score is worse than no sheet.
+  recapRun = { ...pendingRun, bosses: extra.bosses ?? bossShots().length };
 
   el.svNameRow.classList.remove('sv-hidden');
   el.svNameSubmit.disabled = false;
@@ -1915,7 +2393,7 @@ export function showGameOver(gameState) {
   // Focus lands on the field so a name can be typed without clicking first,
   // but only with a real keyboard — on touch, focusing would throw up the
   // on-screen keyboard over the board before the player has asked for it.
-  if (!isTouchPrimary()) {
+  if (!touchPrimary()) {
     el.svNameInput.focus();
     el.svNameInput.select();
   }
@@ -1993,9 +2471,6 @@ function escapeHtml(str) {
   );
 }
 
-function isTouchPrimary() {
-  return window.matchMedia?.('(hover: none) and (pointer: coarse)').matches ?? false;
-}
 
 function formatTime(t) {
   const mins = Math.floor(t / 60);

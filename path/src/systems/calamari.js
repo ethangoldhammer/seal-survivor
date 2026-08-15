@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { aoe } from './scaling.js';
+import { playerOverlayZ } from '../entities/player.js';
 
 // Calamari Ring — a glowing shockwave that sweeps outward from the seal on a
 // cadence, damaging and shoving everything the wavefront passes through.
@@ -138,7 +139,10 @@ export function updateCalamari(dt, scene, playerPos, level, enemiesList, hooks =
     if (cooldown <= 0) {
       cooldown = s.interval;
       const mesh = pool.pop() ?? makeMesh();
-      mesh.position.set(playerPos.x, playerPos.y, -0.2);
+      // Behind the seal like every other overlay the player wears — see
+      // playerOverlayZ. A wave is born under the animal and only clears it a
+      // few frames later, which is exactly when a plane inside the body shows.
+      mesh.position.set(playerPos.x, playerPos.y, playerOverlayZ());
       scene.add(mesh);
       waves.push({
         mesh,

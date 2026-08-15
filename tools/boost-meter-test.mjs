@@ -1,6 +1,11 @@
 import './dom-stub.mjs';
+import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CONFIG } from '../path/src/config.js';
+import {
+  installModel, createVisual, getAssetSizeMultiplier, setAssetSizeMultiplier,
+} from '../path/src/assets.js';
 import {
   strikeState, resetStrike, feedChum, updateStrike, restoreCharge,
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
@@ -500,6 +505,47 @@ check('  ...in ring order, first pip first',
   peakAt.every((f, i) => i === 0 || f > peakAt[i - 1]));
 check('  ...and the pops faded out afterwards',
   U.uPipPop.value.every((v) => v < 0.01));
+
+// ============================================================================
+// THE INSTRUMENT IS BEHIND THE ANIMAL.
+//
+// The ring is a flat quad on a plane and the seal is a solid 3.5 units deep,
+// so a plane anywhere near z=0 does not sit "just behind" the seal — it goes
+// THROUGH it, and the arcs get sliced by the flank they pass into. It shipped
+// that way at z=-0.05.
+//
+// Measured against the model the game actually builds rather than against the
+// constant that placed it, which is the only version of this check worth
+// having: playerOverlayZ derives its number from the seal's size multiplier,
+// and comparing a derivation to itself would pass with the seal at any size.
+// ============================================================================
+console.log('\nTHE RING SITS BEHIND THE SEAL, AT WHATEVER SIZE IT IS');
+{
+  const buf = readFileSync(new URL('../public/models/furseal.glb', import.meta.url));
+  const gltf = await new GLTFLoader().parseAsync(
+    buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '',
+  );
+  installModel('ship', gltf.scene, gltf.animations);
+
+  // Two sizes: the one on the slider now, and a seal scaled well past it. The
+  // second is what a hand-typed world offset fails.
+  const SHIP_SIZE = getAssetSizeMultiplier('ship') || 1;
+  for (const size of [SHIP_SIZE, 4]) {
+    setAssetSizeMultiplier('ship', size);
+    const seal = createVisual('ship');
+    const scene = new THREE.Scene();
+    scene.add(seal);
+    // Without this every world matrix is identity and the box measures the
+    // model at scale 1 — silently, and it looks like a pass.
+    scene.updateMatrixWorld(true);
+    const rear = new THREE.Box3().setFromObject(seal).min.z;
+
+    updateStrikeRing(1 / 60, pos, strikeState, true, stats());
+    check(`at size ${size.toFixed(2)} the meter clears the seal's rear (${rear.toFixed(2)})`,
+      ringMesh.position.z < rear);
+  }
+  setAssetSizeMultiplier('ship', SHIP_SIZE);
+}
 
 console.log('\nTHE DRAIN IS NEVER STAGGERED');
 // Holding burns fuel and the release spends it. Both are things the player

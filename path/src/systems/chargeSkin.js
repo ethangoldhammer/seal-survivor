@@ -189,10 +189,11 @@ export function updateChargeSkin(body, charge, rawDt = 0) {
   skinnedBody = body;
 
   setNoiseChargeGlow(body, {
-    // Colour tracks the ring: charging blue, ready mint. The meter and the
-    // animal must never disagree about what state the run is in, so both read
-    // the SAME two entries out of CONFIG.strike.ring.
-    color: full ? CONFIG.strike.ring.readyColor : CONFIG.strike.ring.color,
+    // MONOCHROME, and no longer the ring's two colours. Hue on the seal's body
+    // is Glow Up!'s alphabet — a run with no element has to read as an ordinary
+    // animal lit from inside, or a mint-green seal claims a power it doesn't
+    // have. Grey while filling, white at full. See CONFIG.sealCharge.
+    color: full ? (s.readyColor ?? 0xffffff) : (s.color ?? 0x8f9aa3),
     tipColor: s.tipColor ?? 0xffffff,
     white: s.white ?? 0.35,
     coverage: s.coverage ?? 0.3,

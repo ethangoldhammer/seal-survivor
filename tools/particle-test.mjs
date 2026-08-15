@@ -14,9 +14,13 @@
 //                 that stops the rainbow coming back — a new emitter with a
 //                 magenta in an orange ramp fails here rather than in a
 //                 playtest three weeks later.
-//   NO TINTING    emit() must ignore a caller-supplied colour outright. Fed a
-//                 hot pink through the old `opts.color` route, every particle
-//                 must still come out of the emitter's own palette.
+//   DEATH TINTS   The one exception to the palette rule, and it is checked in
+//                 both directions. A burst fed a colour must come out ENTIRELY
+//                 that hue (with brightness scattered, or it reads as a blob);
+//                 and the only call site in the game allowed to feed one is the
+//                 kill. What it feeds must also be a colour for EVERY creature
+//                 in the roster — a null there falls back to the emitter's
+//                 palette, which is the generic burst this rule forbids.
 //   THE CURRENT   Turbulence is written twice — once in GLSL for the shader,
 //                 once in JS for the bubble solve — and the two drifting apart
 //                 puts a bubble's burst somewhere the bubble isn't. Both
@@ -48,6 +52,7 @@ import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { bounds, sea, setWaveTime, surfaceHeightAt } from '../path/src/arena.js';
+import { assetBaseColor } from '../path/src/assets.js';
 import {
   initParticles,
   emit,
@@ -125,29 +130,174 @@ for (const [name, def] of Object.entries(CONFIG.emitters)) {
 // ===========================================================================
 // NO CALLER TINTING
 // ===========================================================================
-section('Colour comes from the emitter and nowhere else');
+section('Colour comes from the emitter — except on a death');
 
 resetParticles();
 const PINK = 0xff00c8;
+const pink = new THREE.Color(PINK);
 const tinted = burst('explosion', 0, -10, { color: PINK, glow: 1 });
-const palette = (CONFIG.emitters.explosion.colors ?? []).map((c) => new THREE.Color(c));
 
-// Every particle must match a palette entry once the emitter's glow multiplier
-// is divided back out — the channel RATIOS are what identify the hue.
-const glowMul = (CONFIG.emitters.explosion.glow ?? 1) * (CONFIG.bloom?.particleOverdrive ?? 1);
-let offPalette = 0;
+// The hue is carried by the channel RATIOS, not the magnitudes: the emitter's
+// glow multiplier and the per-particle brightness scatter both scale all three
+// channels together, so normalising on the peak channel is what isolates it.
+const norm = (i) => {
+  const c = [A.aColor.array[i * 3], A.aColor.array[i * 3 + 1], A.aColor.array[i * 3 + 2]];
+  const peak = Math.max(...c);
+  return peak > 0 ? c.map((v) => v / peak) : c;
+};
+const pinkNorm = (() => {
+  const peak = Math.max(pink.r, pink.g, pink.b);
+  return [pink.r / peak, pink.g / peak, pink.b / peak];
+})();
+
+let offHue = 0;
+const brightness = [];
 for (const i of tinted) {
+  const n = norm(i);
+  if (n.some((v, k) => Math.abs(v - pinkNorm[k]) > 1e-3)) offHue++;
+  brightness.push(Math.max(A.aColor.array[i * 3], A.aColor.array[i * 3 + 1], A.aColor.array[i * 3 + 2]));
+}
+check('a tinted burst is entirely the caller\'s hue', offHue === 0,
+  `${tinted.length} particles, ${offHue} off-hue`);
+// One hue applied flat is a blob rather than an explosion. The scatter is what
+// gives a single-colour burst the depth the multi-colour palettes have.
+const spread = Math.max(...brightness) / Math.min(...brightness);
+check('and its brightness is scattered, not flat', spread > 1.5,
+  `brightest/dimmest ${spread.toFixed(2)}`);
+
+// Untinted, the same emitter still comes out of its own palette — the tint is
+// an override for the one caller, not a new default.
+resetParticles();
+const plain = burst('explosion', 0, -10, { glow: 1 });
+const palette = (CONFIG.emitters.explosion.colors ?? []).map((c) => new THREE.Color(c));
+let offPalette = 0;
+const glowMul = (CONFIG.emitters.explosion.glow ?? 1) * (CONFIG.bloom?.particleOverdrive ?? 1);
+for (const i of plain) {
   const r = A.aColor.array[i * 3] / glowMul;
   const g = A.aColor.array[i * 3 + 1] / glowMul;
   const b = A.aColor.array[i * 3 + 2] / glowMul;
   const match = palette.some((p) => Math.abs(p.r - r) < 1e-3 && Math.abs(p.g - g) < 1e-3 && Math.abs(p.b - b) < 1e-3);
   if (!match) offPalette++;
 }
-check('explosion ignores opts.color', offPalette === 0, `${tinted.length} particles, ${offPalette} off-palette`);
-// Comments are allowed to talk about it — the note explaining why it's gone is
-// the most useful thing in that function. Code isn't.
-const CODE = SRC.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-check('no code path reads a caller colour', !/opts\.color/.test(CODE));
+check('an untinted burst is still the emitter\'s palette', offPalette === 0,
+  `${plain.length} particles, ${offPalette} off-palette`);
+
+// ---------------------------------------------------------------------------
+// A DEATH IS ALWAYS THE CREATURE'S COLOUR
+//
+// Two ways this rule dies quietly. One: a second call site starts passing a
+// colour, and the per-creature tint stops meaning "something died". Two: the
+// kill passes a colour that comes back null for some creature, which is not an
+// error — it falls straight through to the emitter's generic palette, so that
+// creature explodes anonymously and nothing anywhere reports it.
+// ---------------------------------------------------------------------------
+const MAIN = fs.readFileSync(path.join(HERE, '../path/src/main.js'), 'utf8');
+const killCall = /function onEnemyKilledFeedback[\s\S]*?\n}/.exec(MAIN)?.[0] ?? '';
+check('the kill feedback passes a colour', /color:\s*assetBaseColor\(/.test(killCall));
+
+// Every other feedback() call in the game must NOT. Comments are allowed to
+// discuss it; code isn't.
+const strip = (s) => s.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+const srcFiles = [];
+(function walk(dir) {
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, ent.name);
+    if (ent.isDirectory()) walk(p);
+    else if (ent.name.endsWith('.js')) srcFiles.push(p);
+  }
+})(path.join(HERE, '../path/src'));
+
+// Balanced-paren scan rather than a regex. A non-greedy match to the next `})`
+// runs straight past the end of a one-line `feedback('uiHover')` and swallows
+// whatever function follows it, so ui.js reported a tint it does not have.
+const callArgs = (code, fnName) => {
+  const out = [];
+  const re = new RegExp(`\\b${fnName}\\(`, 'g');
+  for (const m of code.matchAll(re)) {
+    let depth = 0;
+    for (let i = m.index + m[0].length - 1; i < code.length; i++) {
+      const c = code[i];
+      if (c === '(') depth++;
+      else if (c === ')') {
+        depth--;
+        if (depth === 0) { out.push(code.slice(m.index + m[0].length, i)); break; }
+      }
+    }
+  }
+  return out;
+};
+
+const strayTints = [];
+for (const file of srcFiles) {
+  const code = strip(fs.readFileSync(file, 'utf8'));
+  for (const args of [...callArgs(code, 'feedback'), ...callArgs(code, 'emit')]) {
+    if (!/\bcolor:/.test(args)) continue;
+    if (file.endsWith('main.js') && /assetBaseColor\(/.test(args)) continue; // the kill
+    strayTints.push(path.relative(path.join(HERE, '..'), file));
+  }
+}
+check('and no other burst in the game passes one', strayTints.length === 0,
+  strayTints.length ? [...new Set(strayTints)].join(', ') : `${srcFiles.length} source files`);
+
+// The colour it passes must exist for every creature that can die. Both spawn
+// routes: `asset`, and the `assets` LIST a variant rolls one entry out of.
+const rosterKeys = new Set();
+for (const def of Object.values(CONFIG.enemies ?? {})) {
+  if (Array.isArray(def?.assets)) for (const k of def.assets) { if (k) rosterKeys.add(k); }
+  else if (def?.asset) rosterKeys.add(def.asset);
+}
+const colourless = [...rosterKeys].filter((k) => assetBaseColor(k) == null);
+check('every creature in the roster has one', colourless.length === 0,
+  colourless.length ? colourless.join(', ') : `${rosterKeys.size} asset keys`);
+
+// And it must not collapse to one hue across the roster — if it did, the tint
+// would be carrying no information and the palette would have been simpler.
+const hues = new Set([...rosterKeys].map((k) => assetBaseColor(k)).filter((c) => c != null));
+check('and they are not all the same colour', hues.size > 1, `${hues.size} distinct colours`);
+
+// ---------------------------------------------------------------------------
+// ...AND VISIBLE. Roughly a third of the roster is near-black (abyss shark,
+// boss crab, ember crab, the squids). Fired literally those deaths are
+// invisible over dark water, so the tint gets a brightness floor — the failure
+// this catches is a burst that is correctly the creature's colour and still
+// cannot be seen, which no colour assertion above would notice.
+// ---------------------------------------------------------------------------
+const floor = CONFIG.fx?.deathTintMinPeak ?? 0;
+check('the death tint has a brightness floor', floor > 0, `deathTintMinPeak ${floor}`);
+
+const DARKEST = [...rosterKeys]
+  .map((k) => ({ k, c: new THREE.Color(assetBaseColor(k) ?? 0) }))
+  .sort((a, b) => Math.max(a.c.r, a.c.g, a.c.b) - Math.max(b.c.r, b.c.g, b.c.b))[0];
+
+resetParticles();
+const darkBurst = burst('explosion', 0, -10, { color: assetBaseColor(DARKEST.k), glow: 1 });
+// Against the emitter's own glow, so this is "as bright as an ordinary burst",
+// not an absolute that a tuning change to the overdrive would move.
+const emitterGlow = (CONFIG.emitters.explosion.glow ?? 1) * (CONFIG.bloom?.particleOverdrive ?? 1);
+let darkestPeak = Infinity;
+for (const i of darkBurst) {
+  darkestPeak = Math.min(darkestPeak, Math.max(
+    A.aColor.array[i * 3], A.aColor.array[i * 3 + 1], A.aColor.array[i * 3 + 2],
+  ) / emitterGlow);
+}
+// 0.65 is the bottom of the per-particle scatter, so even the dimmest particle
+// of the darkest creature's death clears floor * 0.65.
+check('the darkest creature still explodes visibly', darkestPeak >= floor * 0.65 - 1e-3,
+  `${DARKEST.k} #${(assetBaseColor(DARKEST.k) >>> 0).toString(16).padStart(6, '0')} -> dimmest peak ${darkestPeak.toFixed(2)}`);
+
+// The lift must not have bleached the hue on the way up — that is the whole
+// reason it scales on the peak channel rather than on luminance.
+const darkNorm = (() => {
+  const c = new THREE.Color(assetBaseColor(DARKEST.k));
+  const peak = Math.max(c.r, c.g, c.b);
+  return [c.r / peak, c.g / peak, c.b / peak];
+})();
+let lifted = 0;
+for (const i of darkBurst) {
+  const n = norm(i);
+  if (n.some((v, k) => Math.abs(v - darkNorm[k]) > 1e-3)) lifted++;
+}
+check('and its hue survived the lift', lifted === 0, `${darkBurst.length} particles, ${lifted} shifted`);
 
 // ===========================================================================
 // PEARL BURSTS ARE WHITE

@@ -94,7 +94,11 @@ for (const preset of inUse) {
   const cfg = resolve(preset);
   const [body] = school(preset, 1);
   const u = body.material.userData.__bioSkinUniforms;
-  const was = { drift: u.uBioDrift.value, cycle: u.uBioCycle.value, flick: u.uBioFlickerT.value };
+  // The field offset is a vec3 (it can walk a closed lap now, not just a
+  // line), so "how far has it moved" is a distance rather than a difference —
+  // and cloned, or `was.drift` would be the live uniform and every comparison
+  // below would measure zero against itself.
+  const was = { drift: u.uBioDrift.value.clone(), cycle: u.uBioCycle.value, flick: u.uBioFlickerT.value };
 
   // SAMPLED THROUGH THE WINDOW, NOT JUST AT ITS ENDS, because every one of
   // these clocks WRAPS and the window's length in cycles is not fixed. The
@@ -112,7 +116,7 @@ for (const preset of inUse) {
   const STEPS = 8;
   for (let i = 0; i < STEPS; i++) {
     run(2 / STEPS);
-    moved.drift = Math.max(moved.drift, Math.abs(u.uBioDrift.value - was.drift));
+    moved.drift = Math.max(moved.drift, u.uBioDrift.value.distanceTo(was.drift));
     moved.cycle = Math.max(moved.cycle, Math.abs(u.uBioCycle.value - was.cycle));
     moved.flick = Math.max(moved.flick, Math.abs(u.uBioFlickerT.value - was.flick));
   }

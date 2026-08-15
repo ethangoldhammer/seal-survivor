@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { pipCount } from './strike.js';
+import { playerOverlayZ } from '../entities/player.js';
 
 // ============================================================================
 // THE CHARGE METER — TWO ARCS around the ship, Sektori-style, instead of a
@@ -362,7 +363,10 @@ export function createStrikeRing() {
     },
   });
   mesh = new THREE.Mesh(geometry, material);
-  mesh.position.z = -0.05;
+  // Behind the whole seal, not just behind its origin — see playerOverlayZ.
+  // Restamped every frame in updateStrikeRing, because the seal's size is a
+  // slider and this is derived from it.
+  mesh.position.z = playerOverlayZ();
   mesh.frustumCulled = false;
   resetStrikeRing();
   return mesh;
@@ -385,6 +389,7 @@ export function updateStrikeRing(dt, playerPos, strikeState, running, stats = nu
   // around the animal as either happened.
   mesh.position.x = playerPos.x + (ring.offsetX ?? 0);
   mesh.position.y = playerPos.y + (ring.offsetY ?? 0);
+  mesh.position.z = playerOverlayZ();
   mesh.scale.setScalar(ring.radius * (ring.scale ?? 1));
 
   const u = mesh.material.uniforms;

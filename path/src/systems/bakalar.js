@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { snapSide } from './facing.js';
 import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
@@ -410,7 +411,9 @@ function launch(level) {
   const margin = halfWidth + c.hullRadius + 2;
   boat.position.set(dir > 0 ? bounds.left - margin : bounds.right + margin, bounds.surfaceY, 0);
   // Hull is modelled along +X, same convention as systems/boats.js.
-  boat.rotation.y = dir > 0 ? 0 : Math.PI;
+  // Snapped: this is an ARRIVAL, from off-screen, with a heading already —
+  // see systems/facing.js and the same note in systems/boats.js.
+  snapSide(boat, dir);
   boat.visible = true;
   netMesh.visible = true;
 }

@@ -6,7 +6,9 @@ import { pickups, spawnXpOrb } from '../entities/pickups.js';
 import { recordSpawn } from './playtest.js';
 import { primeBoatDebris, spawnBoatDebris, updateBoatDebris, resetBoatDebris, blastDebris } from './boatDebris.js';
 import { spawnCrewFor, updateCrew, resetCrew, releaseCrew, blastCrew, clearDeckCache } from './crew.js';
+import { snapSide } from './facing.js';
 import { RigidBody, addBody, removeBody, blastBodies } from './rigidBody.js';
+import { updateHullWake } from './boatWake.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
@@ -117,7 +119,13 @@ function spawnBoat(scene, difficulty) {
   // Face the way it's sailing. The hull is modelled along +X, so a boat
   // heading left is the same boat spun 180° about the vertical — which keeps
   // it in profile either way rather than showing its stern to the camera.
-  mesh.rotation.y = dir > 0 ? 0 : Math.PI;
+  // SNAPPED, not turned — a boat sails in from off-screen already pointed the
+  // way it is going, and watching it rotate into its heading as it arrives
+  // would be a boat that spawned backwards. Routed through systems/facing.js
+  // anyway so the heading is owned in one place: an ordinary boat holds `dir`
+  // for its whole life and never comes about, but if one ever does, it turns
+  // the way the boat boss does rather than flipping.
+  snapSide(mesh, dir);
   scene.add(mesh);
 
   // Cut the wreck now rather than when it's needed — see primeBoatDebris.
@@ -256,6 +264,29 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
       // on a rowboat and on a trawler and never resizes either one for good.
       b.mesh.scale.setScalar(b.spawnScale * (1 + CONFIG.fx.hitPop * t));
     }
+
+    // THE WATER IT IS PUSHING. Off the body rather than off the course it was
+    // given, so a hull that has been punted, blasted or shoved by a turtle
+    // sheds a wake for what it is ACTUALLY doing — a boat knocked backwards
+    // churns as it coasts, and one held still against its thrust barely does.
+    // `dir` stays the heading it is drawn at (the hull is spun to face it at
+    // spawn and never turns again), which is what keeps the stern the stern
+    // through a shove that has reversed its velocity.
+    updateHullWake(dt, b, {
+      // THE BOX CENTRE, not the mesh origin. prepareModel anchors a hull on its
+      // centre of mass — about a third of the way up from the keel and not the
+      // middle of the boat lengthwise either — so `offsetX` is the difference,
+      // and measuring the transom off the origin instead puts the wake inside
+      // the stern. Already mirrored for a boat sailing the other way (see the
+      // spawn), which is why it is added rather than signed here.
+      x: b.body.x + (b.offsetX ?? 0),
+      halfLength: b.halfLength,
+      // The bottom of the hull, so the wake knows what "under the boat" means.
+      keelY: b.body.y + (b.offsetY ?? 0) - (b.halfHeight ?? 0),
+      dir: b.dir,
+      speed: Math.abs(b.body.vx),
+      vx: b.body.vx,
+    });
 
     // Sailed off the far side — despawn quietly, no reward. Its crew goes with
     // it: they're still standing on a boat that just left the arena. Measured

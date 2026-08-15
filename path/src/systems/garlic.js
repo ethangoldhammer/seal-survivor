@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { aoe } from './scaling.js';
+import { playerOverlayZ } from '../entities/player.js';
 
 // A constant low-damage aura around the ship. The cloudy look is two layers
 // of value noise scrolling at different rates — cheap, no texture needed.
@@ -70,7 +71,9 @@ export function createGarlicVisual() {
     },
   });
   mesh = new THREE.Mesh(geometry, material);
-  mesh.position.z = -0.2;
+  // Behind the whole seal — see playerOverlayZ. Restamped per frame below,
+  // since it is derived from the seal's live size.
+  mesh.position.z = playerOverlayZ();
   mesh.visible = false;
   return mesh;
 }
@@ -104,6 +107,7 @@ export function updateGarlic(dt, scene, playerPos, garlicLevel, enemiesList, hoo
   const radius = currentGarlicRadius(garlicLevel);
   mesh.position.x = playerPos.x;
   mesh.position.y = playerPos.y;
+  mesh.position.z = playerOverlayZ();
   mesh.scale.setScalar(radius);
 
   const u = mesh.material.uniforms;

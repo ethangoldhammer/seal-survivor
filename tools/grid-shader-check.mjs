@@ -80,7 +80,13 @@ if (vs && fs) {
     for (let i = 0; i < gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i++) {
       names.push(gl.getActiveUniform(p, i).name);
     }
-    for (const want of ['uTouch[0]', 'uTouchColor[0]', 'uTouchWarp', 'uTouchGain']) {
+    // uWake[0] is here for the same reason the touch uniforms are: it is an
+    // ARRAY, and an array whose elements the compiler can prove are unused is
+    // optimised away silently -- the grid still draws, it just stops noticing
+    // the seal and every hull on the water. See MAX_WAKES in systems/grid.js.
+    // (No backticks in this comment: it is inside the page's template literal,
+    // and one would end the string. Same trap as a backtick in a GLSL comment.)
+    for (const want of ['uTouch[0]', 'uTouchColor[0]', 'uTouchWarp', 'uTouchGain', 'uWake[0]']) {
       const live = names.some((n) => n === want || n === want.replace('[0]', ''));
       if (!live) bad++;
       lines.push((live ? 'PASS  ' : 'FAIL  ') + want + ' survived into the linked program');

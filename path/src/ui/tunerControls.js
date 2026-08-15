@@ -386,12 +386,18 @@ export function buildRow(item, onChange) {
       const v = getPath(CONFIG, item.path);
       for (const c of chips) c.classList.toggle('sv-t-on', c.dataset.value === String(v));
     };
-    for (const opt of item.options) {
+    for (const [i, opt] of item.options.entries()) {
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'sv-t-chip';
       chip.dataset.value = opt;
-      chip.textContent = opt;
+      // A separate LABEL, where the stored value isn't fit to read. The font
+      // picker stores a whole CSS stack ("'Baloo 2', system-ui, sans-serif")
+      // and has to show "Baloo" — and `chipFont` then draws that pill in the
+      // family it selects, which is the difference between a list of names and
+      // a specimen sheet you can pick off at a glance.
+      chip.textContent = item.labels?.[i] ?? opt;
+      if (item.chipFont && opt !== 'global') chip.style.fontFamily = opt;
       chip.addEventListener('click', () => {
         setPath(CONFIG, item.path, opt);
         paint();

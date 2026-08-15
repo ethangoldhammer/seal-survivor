@@ -1,11 +1,8 @@
 [
-  { "key": "grabber-current", "file": "octopus_rig.glb", "fit": 4.6, "forward": "-Z", "up": "-X", "tint": 11565776 },
-  { "key": "grabber-candidate", "file": "octopus.glb", "fit": 4.6, "forward": "-Z", "up": "-X", "tint": 11565776 },
-  { "key": "grabber-candidate-untinted", "file": "octopus.glb", "fit": 4.6, "forward": "-Z", "up": "-X" },
+  { "key": "00-control-reeffish", "file": "fish2.glb", "fit": 1.0, "forward": "+Z", "up": "+Y" },
 
-  { "key": "squid-fY-uZ", "file": "giantsquid.glb", "fit": 6.0, "forward": "-Y", "up": "+Z" },
-  { "key": "squid-fY-uZneg", "file": "giantsquid.glb", "fit": 6.0, "forward": "-Y", "up": "-Z" },
-  { "key": "squid-fY-uX", "file": "giantsquid.glb", "fit": 6.0, "forward": "-Y", "up": "+X" },
-  { "key": "squid-fZneg-uXneg", "file": "giantsquid.glb", "fit": 6.0, "forward": "-Z", "up": "-X" },
-  { "key": "squid-fZ-uY", "file": "giantsquid.glb", "fit": 6.0, "forward": "+Z", "up": "+Y" }
+  { "key": "10-brownfish", "file": "brownfish.glb", "fit": 1.1, "forward": "+Z", "up": "+Y" },
+  { "key": "20-clownfish", "file": "clownfish.glb", "fit": 0.9, "forward": "+Z", "up": "+Y" },
+  { "key": "30-tunafish", "file": "tunafish.glb", "fit": 1.3, "forward": "+Z", "up": "+Y" },
+  { "key": "40-bluetang", "file": "bluetang.glb", "fit": 1.0, "forward": "+Z", "up": "+Y" }
 ]

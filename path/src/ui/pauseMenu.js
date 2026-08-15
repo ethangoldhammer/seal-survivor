@@ -29,6 +29,7 @@ import { CONFIG } from '../config.js';
 import { feedback } from '../systems/feedback.js';
 import { menuInput, resetMenuInput } from '../input.js';
 import { isTextEntry } from './typing.js';
+import { revealPile, releasePile } from './snapshotPrint.js';
 import {
   ACTIONS,
   SCHEMA,
@@ -182,6 +183,11 @@ export function showPauseMenu() {
   if (open) return;
   open = true;
   listeningFor = null;
+  // The run's kill shots come back for as long as the menu is up. A paused
+  // player is looking at their run rather than through the corner of the
+  // screen at the water, which is the one time the pile is worth the space.
+  // Sticky, or it would drift away three seconds into a menu being read.
+  revealPile(true);
   // Re-read every control from the live settings on the way in. The M key and
   // the P key change two of these from outside the menu, so a panel built once
   // and cached would open showing stale values.
@@ -206,6 +212,8 @@ export function hidePauseMenu() {
   if (!open) return;
   open = false;
   listeningFor = null;
+  // Back to the clock: the pile eases out again a few seconds into play.
+  releasePile();
   reveal?.('pause', {
     target: wrap,
     inner: box,

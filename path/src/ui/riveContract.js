@@ -20,6 +20,9 @@ export const SPLASH_ARTBOARD = 'Splash Screen';
 /** The in-game boss health bar. CONFIG.boss.bar.artboard can override it. */
 export const BOSS_BAR_ARTBOARD = 'Boss Health';
 
+/** The kill-shot card — the polaroid the run's trophies are printed on. */
+export const SNAPSHOT_ARTBOARD = 'Polaroid';
+
 /**
  * The data-binding properties the boss bar drives, by role. All three sit on
  * one view model, which the splash shares — see ui/bossBarRive.js for what
@@ -31,10 +34,77 @@ export const BOSS_BAR_BINDINGS = {
   name: 'strBossName',       // the label under it
 };
 
+/**
+ * The properties the kill-shot card is drawn from. Unlike the bar's three, the
+ * card is almost entirely STRINGS — Rive has no number formatting, so a score
+ * with thousands separators and a time as m:ss have to arrive already written.
+ * The two numbers the run actually has (level, score) are formatted by the game
+ * and sent as text; see systems/bossShot.js for the formatters that own them.
+ *
+ * `shot` is the exception and the reason this artboard is worth having: an
+ * IMAGE property, which the frame grabbed on the kill is decoded into. It is
+ * per view-model INSTANCE, which is what lets one parsed file carry a whole
+ * run's prints with a different photograph in each — measured, eight for eight,
+ * with no bleed between them. The alternative (substituting the image ASSET at
+ * load) is per FILE, and would have cost a fresh parse of 1.7MB per print.
+ */
+export const SNAPSHOT_BINDINGS = {
+  shot: 'imgShot',          // the kill shot itself, square, 620x620 in the zone
+  name: 'strBossName',      // who was beaten; shrinks to fit, 43 chars verified
+  kicker: 'strKicker',      // "defeated " — SEE THE TRAILING SPACE BELOW
+  level: 'strLevel',        // "LVL 17" — the prefix belongs to the string
+  time: 'strTime',          // "4:12" — the game's own m:ss, unpadded minutes
+  score: 'strScore',        // STUB — declared, not placed on the card yet
+  wordmark: 'strWordmark',  // STUB — declared, not placed on the card yet
+};
+
+/**
+ * THE KICKER CARRIES A TRAILING SPACE, and it is load-bearing. The kicker and
+ * the time are separate runs set side by side on the chin, so the gap between
+ * "defeated" and "04:12" is not padding in the artboard — it is the last
+ * character of this string. Write it trimmed and the card reads "defeated@
+ * 04:12". The artboard's own default value has the space in it; anything the
+ * game sends has to keep it.
+ */
+export const SNAPSHOT_KICKER = 'defeated ';
+
+// WHAT IS DECLARED BUT NOT YET DRAWN. `strScore` and `strWordmark` are bound
+// and writable, and land nowhere — the card has no slot for either yet. They
+// stay in the contract because they exist on the view model, so deleting one in
+// the editor SHOULD fail the check; just don't read a blank card as a broken
+// write.
+//
+// A QR is going on the card too, in that same undecided corner — qr.js already
+// encodes one, pure and DOM-free, so it is only ever a placement question. When
+// it lands it wants an IMAGE property, `imgQr`, fed exactly like `imgShot`:
+// rasterise qrRows() onto a canvas, decodeImage, assign. Add the name here at
+// that point and not before — a required name that is not in the file fails
+// every export, including the good ones.
+
+/**
+ * The view models by name. Not needed to BIND anything — every surface uses
+ * autoBind, which hands back the artboard's own default instance without a
+ * lookup — but they are the only unambiguous thing to check an export against.
+ *
+ * WHY THAT MATTERS: the validator below is a scan for name strings in a binary,
+ * and `strBossName` now exists TWICE, once on each view model. Rename the
+ * polaroid's copy in the editor and a scan for it still finds the health bar's,
+ * and the check passes on an export that has quietly lost the card's name. The
+ * view model names are unique, so they are the part of this contract that can
+ * actually fail when something is renamed.
+ */
+export const VIEW_MODELS = {
+  bar: 'ViewModel1',      // shared by the splash and the boss bar
+  snapshot: 'PolaroidVM', // the kill-shot card
+};
+
 /** Everything a usable export must contain, flat, for a validator to walk. */
 export function riveRequirements(bossArtboard = BOSS_BAR_ARTBOARD) {
   return {
-    artboards: [SPLASH_ARTBOARD, bossArtboard],
-    bindings: Object.values(BOSS_BAR_BINDINGS),
+    artboards: [SPLASH_ARTBOARD, bossArtboard, SNAPSHOT_ARTBOARD],
+    // Deduped: `strBossName` is on both view models, and a validator that
+    // listed it twice would report the same name passing (or failing) twice.
+    bindings: [...new Set([...Object.values(BOSS_BAR_BINDINGS), ...Object.values(SNAPSHOT_BINDINGS)])],
+    viewModels: Object.values(VIEW_MODELS),
   };
 }

@@ -700,5 +700,10 @@ export function createWorld(container) {
   resize();
   window.addEventListener('resize', resize);
 
-  return { scene, camera, renderer, resize, applyRenderScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, updateSurface, updateColors, updateLighting, grid, constellations, hexTiles, wallRocks, rain, lightning, setLightningHandler };
+  // `halfExtents` goes out for the same reason the cinematic rig is handed it:
+  // anything that has to decide whether two things FIT in the shot needs the
+  // frame in world units, and that is a fact about this asymmetric frustum
+  // that nothing outside this file can work out for itself. See applyFraming
+  // in systems/bossKill.js, which frames the seal and the boss it just killed.
+  return { scene, camera, renderer, resize, applyRenderScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, halfExtents, updateSurface, updateColors, updateLighting, grid, constellations, hexTiles, wallRocks, rain, lightning, setLightningHandler };
 }

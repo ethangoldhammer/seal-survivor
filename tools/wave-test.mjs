@@ -36,7 +36,7 @@
 
 import './dom-stub.mjs';
 import * as THREE from 'three';
-import { CONFIG } from '../path/src/config.js';
+import { CONFIG, xpToughnessMul, difficultyRamp } from '../path/src/config.js';
 import { inSpawnGroup } from '../path/src/enemyTable.js';
 import { enemies, resetEnemies, removeEnemy, updateSpawning } from '../path/src/entities/enemies.js';
 import { waveState, updateWaves, resetWaves, waveSpawn, lullEligible } from '../path/src/systems/waves.js';
@@ -307,13 +307,34 @@ const allDrops = phases.flatMap((p) => p.xp);
 const calmDrops = allDrops.filter((d) => d.lull);
 const surgeDrops = allDrops.filter((d) => !d.lull && lullEligible(CONFIG.enemies[d.type]));
 
-check('lull fish carry the reduced value', calmDrops.length > 0 && calmDrops.every((d) => Math.abs(d.xp - d.def * W.lull.xpMul) < 1e-9),
-  `${calmDrops.length} fish, e.g. ${calmDrops[0]?.type} at ${calmDrops[0]?.xp} vs ${calmDrops[0]?.def} listed`);
-check('...and it is genuinely low', calmDrops.every((d) => d.xp < d.def * 0.5),
+// FULL VALUE IS NO LONGER THE LISTED VALUE. An instance's xp also carries the
+// toughness this individual was born with (CONFIG.xp.toughness), which at the
+// fixed difficulty this section runs at is one constant per species — so the
+// lull multiplier is still exactly testable, just against this rather than
+// against def.xp. Built from the shipped helpers, so if the toughness curve
+// moves, this moves with it instead of going red.
+function fullValue(type) {
+  const def = CONFIG.enemies[type];
+  const d = gameState.difficulty;
+  const hp = (def.hp + (def.hpPerDifficulty ?? 0) * d) * difficultyRamp('hp', d);
+  return (def.xp ?? 0) * xpToughnessMul(hp, def.hp);
+}
+const near = (a, b) => Math.abs(a - b) < Math.max(1e-9, Math.abs(b) * 1e-9);
+
+check('lull fish carry the reduced value',
+  calmDrops.length > 0 && calmDrops.every((d) => near(d.xp, fullValue(d.type) * W.lull.xpMul)),
+  `${calmDrops.length} fish, e.g. ${calmDrops[0]?.type} at ${calmDrops[0]?.xp.toFixed(2)} vs ${fullValue(calmDrops[0]?.type).toFixed(2)} at full`);
+check('...and it is genuinely low', calmDrops.every((d) => d.xp < fullValue(d.type) * 0.5),
   `xpMul ${W.lull.xpMul}`);
 check('the same species spawned at pressure is worth full value',
-  surgeDrops.length > 0 && surgeDrops.every((d) => Math.abs(d.xp - d.def) < 1e-9),
+  surgeDrops.length > 0 && surgeDrops.every((d) => near(d.xp, fullValue(d.type))),
   surgeDrops.length ? `${surgeDrops.length} fish spawned outside a lull, all at full xp` : 'no small fish spawned outside a lull to compare');
+// ...and "full" is above the listed value by then, which is the toughness ramp
+// doing its job. A run at difficulty 30 is well past the point where a creature
+// is the version of itself the roster authored.
+check('a creature at pressure is worth MORE than its listed xp, because the run made it tougher',
+  surgeDrops.length > 0 && surgeDrops.every((d) => d.xp > d.def),
+  `e.g. ${surgeDrops[0]?.type} at ${surgeDrops[0]?.xp.toFixed(2)} vs ${surgeDrops[0]?.def} listed, at difficulty ${gameState.difficulty}`);
 // The handover is the point: fish arrive on a surge's ramp still carrying lull
 // value, so there is no frame on which the water's worth changes.
 const rampDrops = phases.filter((p) => p.phase === 'surge').flatMap((p) => p.xp).filter((d) => d.lull);
@@ -423,8 +444,11 @@ const off = waveSpawn();
 check('every multiplier reads 1', off.rateMul === 1 && off.groupMul === 1 && off.xpMul === 1 && off.lull === false,
   JSON.stringify(off));
 resetEnemies(scene);
-updateSpawning(dt, { difficulty: 20, level: 12 }, scene);
-check('...and spawns pay full chum', enemies.every((e) => e.xp === e.def.xp),
+// At difficulty 0, so "full chum" is a clean comparison: the toughness ramp
+// (CONFIG.xp.toughness) is 1x at the start of a run, and this check is about
+// the WAVE multiplier being gone, not about the toughness one existing.
+updateSpawning(dt, { difficulty: 0, level: 12 }, scene);
+check('...and spawns pay full chum', enemies.length > 0 && enemies.every((e) => e.xp === e.def.xp),
   `${enemies.length} spawned, all at listed value`);
 W.enabled = true;
 

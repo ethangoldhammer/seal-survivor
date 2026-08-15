@@ -53,6 +53,23 @@ async function shoot(spec) {
   const g = await new GLTFLoader().loadAsync('/models/' + spec.file);
   const root = g.scene;
 
+  // `meshIndex`, exactly as isolateMesh does it in assets.js: keep that one
+  // mesh in traversal order and prune the rest. Without this a pack file
+  // auditions as every fish in it at once, piled on top of each other, and the
+  // one question worth asking here — which way is the nose — is unreadable.
+  if (spec.meshIndex != null) {
+    const meshes = [];
+    root.traverse((o) => { if (o.isMesh) meshes.push(o); });
+    const target = meshes[spec.meshIndex];
+    if (target) {
+      const keep = new Set();
+      for (let o = target; o; o = o.parent) keep.add(o);
+      const drop = [];
+      root.traverse((o) => { if (o.isMesh && !keep.has(o)) drop.push(o); });
+      for (const o of drop) o.parent?.remove(o);
+    }
+  }
+
   // fit: normalise the longest bbox axis, exactly as prepareModel does.
   root.updateMatrixWorld(true);
   let box = new THREE.Box3().setFromObject(root);

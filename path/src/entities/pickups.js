@@ -76,6 +76,7 @@ export function chumGlowAt(dist, reach, clock = 0, phase = 0) {
 export const strikeOrbs = [];
 export const bubbleOrbs = [];
 export const rapidFireOrbs = [];
+export const chumChunks = [];
 
 export function resetPickups(scene) {
   orbPool?.reset();
@@ -88,11 +89,63 @@ export function resetPickups(scene) {
   bubbleOrbs.length = 0;
   for (const o of rapidFireOrbs) scene.remove(o.mesh);
   rapidFireOrbs.length = 0;
+  for (const c of chumChunks) removeChunk(scene, c);
+  chumChunks.length = 0;
 }
 
 function tierFor(radius) {
   for (const t of CONFIG.pickups.tiers) if (radius <= t.maxRadius) return t;
   return CONFIG.pickups.tiers[CONFIG.pickups.tiers.length - 1];
+}
+
+/**
+ * The radius a creature's DROP is sized and priced off — its own, unless
+ * enemies.csv gave it a `chumRadius` because the two are different facts.
+ *
+ * `radius` is a hitbox, and for one creature that hitbox is doing a second job:
+ * a crawler's centre is parked at `bounds.bottom + radius`, so the king crab's
+ * 0.5 is its resting height off the sand rather than its size. Everything the
+ * drop reads keys on this number — the orb tier, the mass ramp, the heal, the
+ * orb's own scale — so at 0.5 the biggest body in the game dropped a minnow's
+ * orb, worth 44 xp against the boss shark's 410 off a row asking for MORE xp
+ * than the shark's.
+ *
+ * Exported because the fallback has to be in ONE place. It was written out at
+ * the call site in main.js and again in tools/xp-economy-test.mjs, which is how
+ * a harness comes to measure a creature the game no longer ships.
+ */
+export function chumRadiusOf(def) {
+  return def?.chumRadius ?? def?.radius ?? 0.5;
+}
+
+/**
+ * How much bigger a drop is than the top tier already makes it, for a source of
+ * `radius` — see CONFIG.pickups.mass. `{ value, size }`, both 1 at or below the
+ * ramp's start, so every creature the three tiers already separated is
+ * untouched and only the crowd they lumped together comes apart.
+ *
+ * Two multipliers rather than one because they are two different promises: the
+ * value is what the orb PAYS and the size is what it SAYS, and a chum orb that
+ * grew as fast as its value would be a boulder. Returned together, and pure, so
+ * tools/xp-economy-test.mjs can walk the roster through it — "does a megalodon
+ * actually drop more than a shark" is a question about this function and
+ * nothing else.
+ */
+export function chumMassMul(radius) {
+  const m = CONFIG.pickups?.mass;
+  if (!m || m.enabled === false) return { value: 1, size: 1 };
+  const from = m.from ?? 1;
+  if (!(from > 0) || !(radius > from)) return { value: 1, size: 1 };
+  const over = radius / from;
+  const cap = m.max ?? Infinity;
+  return {
+    value: Math.min(cap, over ** (m.exponent ?? 1)),
+    // Capped against the SAME ceiling raised to the size exponent, not against
+    // `max` directly — otherwise the size ramp would keep growing after the
+    // value ramp had stopped, and the biggest orbs in the game would all be
+    // telling the player they were worth more than they are.
+    size: Math.min(cap ** (m.sizeExponent ?? 1), over ** ((m.exponent ?? 1) * (m.sizeExponent ?? 1))),
+  };
 }
 
 // `sourceRadius` is the dropping enemy's def.radius — small fish drop small,
@@ -101,9 +154,12 @@ function tierFor(radius) {
 // rather than placing it (a boat coming apart) — see the toss in updatePickups.
 export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
   const tier = tierFor(sourceRadius);
+  // Past the top tier the drop keeps growing with the body it came out of, in
+  // both what it pays and what it looks like — see CONFIG.pickups.mass.
+  const mass = chumMassMul(sourceRadius);
   const mesh = createVisual('xpOrb');
   mesh.position.copy(pos);
-  mesh.scale.setScalar(tier.scale);
+  mesh.scale.setScalar(tier.scale * mass.size);
   // Materials are shared across every instance of an asset (see assets.js),
   // so writing tier colour here writes it GLOBALLY — which would stomp any
   // tint set in the texture panel a frame later. Only apply the tier colour
@@ -130,7 +186,12 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
     // The holdback scales the xp only — the orb, its size, its heal and its
     // refill of the charge meter are all untouched, so an early run is fed
     // exactly as well as before and just levels slower. See CONFIG.xp.dropRamp.
-    value: value * tier.xpMul * chumValueRamp(runDifficulty),
+    //
+    // `mass.value` and CONFIG.xp.chumMul join it here, at the drop, for the same
+    // reason the holdback is here: an orb is worth what it was worth when it hit
+    // the water, no matter how long it sits on the seabed before anything eats
+    // it. Only the heal and the charge refill are left on the tier alone.
+    value: value * tier.xpMul * mass.value * (CONFIG.xp?.chumMul ?? 1) * chumValueRamp(runDifficulty),
     healMul: tier.healMul,
     vx: vel?.x ?? 0,
     vy: vel?.y ?? 0,
@@ -162,6 +223,213 @@ export function spawnRapidFireOrb(scene, pos) {
   mesh.position.copy(pos);
   scene.add(mesh);
   rapidFireOrbs.push({ mesh, life: CONFIG.rapidFirePickup.lifetime });
+}
+
+// ---------------------------------------------------------------------------
+// CHUM CHUNKS — one big piece of catch, worth a real bite of health.
+//
+// Everything about a chunk is decided at SPAWN and then visible: the heal it
+// will pay is rolled once, and the size and colour it wears are that roll. So
+// "is it worth crossing the arena for this one" is a question the player can
+// answer by looking, which is the entire reason this pickup exists in a
+// separate array instead of as a fourth entry in CONFIG.pickups.tiers.
+//
+// See CONFIG.chumChunk for the numbers and for who puts one in the water.
+// ---------------------------------------------------------------------------
+
+// The roll, 0..1, where 0 is the smallest chunk and 1 the largest. Pure and
+// exported because the DISTRIBUTION is the balance decision, not the endpoints:
+// `healMax` on its own says nothing about how often anyone sees a big one, and
+// the only honest way to check "bigger is rarer" is to run this a few thousand
+// times and look at the histogram — which is what tools/chum-chunk-test.mjs
+// does. `rand` is injected for the same reason: the test seeds it.
+//
+// `floor` raises the BOTTOM of the range (the pity chunk's whole trick), and it
+// is applied to the rolled position rather than to the heal, so the size the
+// player sees still matches what they get.
+export function rollChunkT(rand = Math.random, bias = 1, floor = 0) {
+  const t = Math.pow(Math.max(0, Math.min(1, rand())), Math.max(0.01, bias));
+  return Math.max(0, Math.min(1, floor + t * (1 - floor)));
+}
+
+// The heal, as a fraction of max HP, for a roll of `t`. Linear between the two
+// ends — all of the rarity lives in rollChunkT above, and splitting the curve
+// across both would make neither of them readable.
+export function chunkHealFrac(t) {
+  const c = CONFIG.chumChunk ?? {};
+  const lo = c.healMin ?? 0.1;
+  const hi = c.healMax ?? 0.75;
+  return lo + (hi - lo) * Math.max(0, Math.min(1, t));
+}
+
+const chunkColor = new THREE.Color();
+const chunkBox = new THREE.Box3();
+const chunkSize = new THREE.Vector3();
+
+/**
+ * Put a chunk in the water.
+ *
+ * `opts.t` is a roll from rollChunkT; omit it and one is taken at the ambient
+ * bias. `opts.vel` is a {x, y} throw for a chunk being kicked out of something
+ * (a boss), which runs through the same toss physics chum from a broken hull
+ * does. Returns the chunk, so the caller can announce it at the size it rolled.
+ */
+export function spawnChumChunk(scene, pos, opts = {}) {
+  const c = CONFIG.chumChunk ?? {};
+  const t = opts.t ?? rollChunkT(Math.random, c.healBias ?? 1);
+  const mesh = createVisual('chumChunk');
+  mesh.position.copy(pos);
+  // multiplyScalar, NOT setScalar: the asset carries its own size from
+  // assets.csv and assigning over it would silently delete that row's effect.
+  // This is a multiple of however big a chunk is authored to be.
+  mesh.scale.multiplyScalar((c.scaleMin ?? 1) + ((c.scaleMax ?? 2.4) - (c.scaleMin ?? 1)) * t);
+
+  // ITS OWN MATERIAL. Primitive assets share one material across every
+  // instance, so writing tint or glow to the shared one would repaint every
+  // chunk in the water to match whichever spawned last — and the tint IS the
+  // tell here, so that is not a cosmetic problem but a lie about the heal.
+  // Safe to clone because this asset is a plain unlit material with no
+  // injected shader; an asset with `shell` or a bioluminescent skin would lose
+  // it in the clone.
+  if (mesh.material) {
+    mesh.material = mesh.material.clone();
+    mesh.userData.ownMaterial = true;
+  }
+  const base = chunkColor.set(c.tintMin ?? 0xff6a4a).clone()
+    .lerp(new THREE.Color(c.tintMax ?? 0xffd166), t);
+
+  // MEASURED, not assumed. A chunk's size is the asset's authored radius times
+  // its assets.csv row times the roll above, and any of those three can move —
+  // so the radius the seal has to swim inside to take one is read off the mesh
+  // that actually exists rather than typed here in world units. Once, at spawn:
+  // nothing scales a chunk after this.
+  //
+  // Before scene.add on purpose: setFromObject only refreshes this object's own
+  // world matrix, so measuring it while parented to a scene whose matrices are
+  // a frame stale would fold that staleness into the size.
+  chunkBox.setFromObject(mesh);
+  chunkBox.getSize(chunkSize);
+  scene.add(mesh);
+  const chunk = {
+    mesh,
+    // Half the larger horizontal extent — a chunk is a lumpy rock, and the
+    // generous end of that is the one that matches what the player sees.
+    radius: Math.max(chunkSize.x, chunkSize.y) * 0.5,
+    t,
+    healFrac: chunkHealFrac(t),
+    base,
+    life: c.lifetime ?? 34,
+    // Counts DOWN from the arrival flash; see the brightness in updateChunk.
+    flash: c.flash?.enabled === false ? 0 : (c.flash?.seconds ?? 0),
+    vx: opts.vel?.x ?? 0,
+    vy: opts.vel?.y ?? 0,
+    phase: Math.random() * Math.PI * 2,
+  };
+  chumChunks.push(chunk);
+  return chunk;
+}
+
+function removeChunk(scene, chunk) {
+  scene.remove(chunk.mesh);
+  // The clone above is this chunk's alone, so nothing else is still drawing
+  // with it. Cloned materials share their compiled program, so this frees the
+  // uniforms and not the shader.
+  if (chunk.mesh.userData.ownMaterial) chunk.mesh.material?.dispose?.();
+}
+
+// How bright a chunk should be right now, as a multiplier on the colour it
+// rolled. Exported and pure for the same reason chumGlowAt is: the arrival
+// flash has to be plainly brighter than the resting glow and has to actually
+// reach it, and both of those are visible in the numbers alone.
+export function chunkBrightness(flashLeft, clock, phase = 0) {
+  const c = CONFIG.chumChunk ?? {};
+  const glow = c.glow ?? 1.5;
+  const pulse = 1 + (c.pulseDepth ?? 0) * Math.sin(clock * (c.pulseHz ?? 0.8) * Math.PI * 2 + phase);
+  let mul = glow * pulse;
+  const seconds = c.flash?.seconds ?? 0;
+  if (flashLeft > 0 && seconds > 0) {
+    // Exponential, so the afterglow drops off fast enough to still read as a
+    // flash but never hits the resting value with a visible corner on it.
+    const k = Math.max(0, Math.min(1, flashLeft / seconds));
+    mul += (c.flash?.boost ?? 0) * k * k;
+  }
+  return Math.max(0, mul);
+}
+
+function updateChunk(dt, scene, player, chunk, onCollect) {
+  chunk.life -= dt;
+  if (chunk.flash > 0) chunk.flash -= dt;
+  updateTumble(chunk.mesh, dt);
+
+  const dx = player.mesh.position.x - chunk.mesh.position.x;
+  const dy = player.mesh.position.y - chunk.mesh.position.y;
+  const dist = Math.hypot(dx, dy) || 0.0001;
+
+  const speed = player.velocity?.length?.() ?? 0;
+  const reach = magnetDistance(
+    player.mesh.position.x, player.mesh.position.y,
+    chunk.mesh.position.x, chunk.mesh.position.y, speed,
+  );
+  const magnetised = reach < magnetRadius(player.stats, speed);
+
+  if (magnetised) {
+    // Same precedence chum uses: the magnet outranks a throw still in flight,
+    // and cancels it, so a chunk the seal has claimed stops arcing away.
+    chunk.vx = 0;
+    chunk.vy = 0;
+    const pull = magnetSpeed(speed) * dt;
+    chunk.mesh.position.x += (dx / dist) * pull;
+    chunk.mesh.position.y += (dy / dist) * pull;
+  } else if (chunk.vx || chunk.vy) {
+    // Kicked out of something. The same toss model chum spilling from a hull
+    // uses — drag below the water line, gravity above it — so a chunk thrown
+    // clear of a boss travels like every other piece of catch in the game.
+    const toss = CONFIG.pickups.toss ?? {};
+    const underwater = chunk.mesh.position.y < bounds.surfaceY;
+    if (!underwater) chunk.vy -= CONFIG.arena.gravity * dt;
+    const drag = Math.exp(-(underwater ? (toss.waterDrag ?? 4.5) : (toss.airDrag ?? 1.2)) * dt);
+    chunk.vx *= drag;
+    chunk.vy *= drag;
+    chunk.mesh.position.x += chunk.vx * dt;
+    chunk.mesh.position.y += chunk.vy * dt;
+    if (chunk.vx * chunk.vx + chunk.vy * chunk.vy < 0.09) { chunk.vx = 0; chunk.vy = 0; }
+  } else {
+    chunk.mesh.position.y -= (CONFIG.chumChunk?.sinkSpeed ?? 0.9) * dt;
+  }
+
+  // Never above the water and never through the seabed, whichever path moved
+  // it — a chunk hanging in the sky or buried in the floor is unreachable, and
+  // this is the game's rarest pickup to lose that way.
+  const ceiling = bounds.surfaceY - 0.15;
+  if (chunk.mesh.position.y > ceiling) {
+    chunk.mesh.position.y = ceiling;
+    chunk.vy = Math.min(chunk.vy, 0);
+  }
+  const floor = bounds.bottom + 0.8;
+  if (chunk.mesh.position.y < floor) {
+    chunk.mesh.position.y = floor;
+    chunk.vy = 0;
+  }
+
+  if (chunk.mesh.material?.color) {
+    chunk.mesh.material.color.copy(chunk.base)
+      .multiplyScalar(chunkBrightness(chunk.flash, orbClock, chunk.phase));
+  }
+
+  // The seal's own reach PLUS the chunk's body — a big chunk is taken from
+  // further out than a small one, because it is a bigger thing to swim into.
+  // Using the bare collectRadius would have the largest chunks needing the
+  // seal's centre to reach a point well inside them.
+  //
+  // Gated on there BEING a handler: without one the chunk is left in the water
+  // to sink and expire normally, rather than being swum through and deleted
+  // with nothing paid out.
+  if (onCollect && dist < CONFIG.pickups.collectRadius + chunk.radius) {
+    onCollect(chunk);
+    return 'collected';
+  }
+  if (chunk.life <= 0) return 'expired';
+  return null;
 }
 
 // Shared float/magnet/lifespan/collect logic for the simple orb types below
@@ -218,7 +486,7 @@ function updateOrbArray(dt, scene, player, arr, driftSpeed, onCollect) {
 
 // onCollect(xpValue, x, y, healMul) — main.js applies both xp and heal from
 // one callback so the two always travel together.
-export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbleOrb, onRapidFireOrb) {
+export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbleOrb, onRapidFireOrb, onChunk) {
   // A sealed mouth doesn't just refuse to swallow — it doesn't REACH either.
   // The magnet is off for the whole wind-up, so chum stays exactly where it is.
   // Leaving the magnet on looked far worse than no gate at all: every orb in
@@ -389,6 +657,20 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
   if (onStrikeOrb) updateOrbArray(dt, scene, player, strikeOrbs, 0, onStrikeOrb);
   if (onBubbleOrb) updateOrbArray(dt, scene, player, bubbleOrbs, CONFIG.oxygen.bubbleRiseSpeed, onBubbleOrb);
   if (onRapidFireOrb) updateOrbArray(dt, scene, player, rapidFireOrbs, 0, onRapidFireOrb);
+
+  // Chunks run whether or not a callback was passed, unlike the three above:
+  // an unconsumed chunk still has to sink, still has to expire and still has to
+  // stop glowing, and a caller with no handler leaving one frozen mid-water and
+  // lit forever would be far worse than it simply not paying out. Only the
+  // COLLECT is gated.
+  for (let i = chumChunks.length - 1; i >= 0; i--) {
+    const chunk = chumChunks[i];
+    const result = updateChunk(dt, scene, player, chunk, onChunk);
+    if (result) {
+      removeChunk(scene, chunk);
+      chumChunks.splice(i, 1);
+    }
+  }
 }
 
 // Swallow every chum orb within `radius` of (x, y) on this frame — the release
@@ -524,6 +806,39 @@ export function bestChumTarget(x, y, maxDist, distanceBias = 18) {
     const score = (p.pileSize ?? 1) / (1 + Math.sqrt(d2) / Math.max(0.01, distanceBias));
     if (score > bestScore) { bestScore = score; best = p; }
   }
+  return best;
+}
+
+/**
+ * The nearest bite to (x, y), as a plain { x, y } or null — what the first-run
+ * arrow points at (see ui/callout.js).
+ *
+ * NOT bestChumTarget above, which is a crab's question and answers it with the
+ * biggest PILE. A player being shown chum for the first time wants the closest
+ * one thing, because the point of the arrow is "there, go and eat it" and a
+ * heap across the arena is a longer errand than the tip is on screen for.
+ *
+ * Chunks count and outrank orbs at equal distance: a chunk is the single most
+ * valuable thing in the water, and the one worth learning to chase.
+ *
+ * Returns a copy rather than the pickup itself so a caller cannot hold a
+ * reference to an orb that gets eaten a frame later.
+ */
+export function nearestChum(x, y, maxDist = Infinity) {
+  let best = null;
+  let bestD2 = maxDist * maxDist;
+  const consider = (pos, bias) => {
+    const dx = pos.x - x;
+    const dy = pos.y - y;
+    const d2 = (dx * dx + dy * dy) * bias;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = { x: pos.x, y: pos.y };
+    }
+  };
+  for (const p of pickups) consider(p.mesh.position, 1);
+  // 0.25 = a chunk wins from twice as far away as an orb.
+  for (const c of chumChunks) consider(c.mesh.position, 0.25);
   return best;
 }
 

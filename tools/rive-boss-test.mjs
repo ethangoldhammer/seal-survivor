@@ -388,6 +388,12 @@ section('THE SHIPPED FILE — what is actually in path/src/ui/seal_survivor.riv'
   for (const name of want.artboards) {
     check(`the shipped file has the "${name}" artboard`, riv.includes(name));
   }
+  for (const name of want.viewModels ?? []) {
+    // The only names in the contract that are UNIQUE. `strBossName` is on both
+    // view models now, so a scan for it survives the polaroid's copy being
+    // renamed — the view model names are what actually fail in that case.
+    check(`...and the "${name}" view model`, riv.includes(name));
+  }
   for (const name of want.bindings) {
     check(`...and the "${name}" binding`, riv.includes(name));
   }

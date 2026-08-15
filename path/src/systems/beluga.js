@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { faceSide } from './facing.js';
 import { CONFIG } from '../config.js';
 import { createVisual, getAssetSizeMultiplier } from '../assets.js';
 import { orbitTarget, springFollow } from './orbit.js';
@@ -248,7 +249,8 @@ export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, ho
     const spd = Math.hypot(droneVel.x, droneVel.y);
     if (spd > 0.3) {
       drone.rotation.z = Math.atan2(droneVel.y, droneVel.x) - Math.PI / 2;
-      visual.rotation.y = droneVel.x < 0 ? Math.PI : 0;
+      // Turned, not flipped — see systems/facing.js.
+      faceSide(visual, droneVel.x, dt);
     }
 
     // The swim cycle, paced by how fast the spring is actually carrying it.

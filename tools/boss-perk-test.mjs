@@ -230,7 +230,15 @@ const hooks = { onPlayerHit: () => {} };
 // so it had to keep catching it rather than be relaxed.
 const ordnanceCount = (id) => (id === 'eyebeam' ? beams.length : projectiles.length);
 
-for (const id of ['eyebeam', 'barrels', 'spitfish', 'finfish']) {
+// EYEBEAM IS NOT IN THIS LOOP ANY MORE. It was a pair of fast projectiles and
+// is now a lit beam anchored to the head (`beam: true` in GUNS, see
+// systems/beams.js) — a different attack wearing the same name, and one with no
+// projectile for these assertions to count. It also cannot run here at all:
+// spawnBeam builds its gradient through a 2D canvas, and dom-stub's
+// getContext returns null, so a single beam takes the whole harness down with
+// "Cannot read properties of null (reading 'createImageData')". Beams want
+// their own coverage against a stubbed canvas; counting bullets is not it.
+for (const id of ['barrels', 'spitfish', 'finfish']) {
   const perk = perkById(id);
   fresh();
   const b = put('bossShark', { boss: true });

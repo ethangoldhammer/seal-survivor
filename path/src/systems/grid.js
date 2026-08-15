@@ -14,18 +14,38 @@ import { touchSlots, TOUCH_SLOTS } from '../input.js';
 // .touchGlow, and input.js for how a finger gets its slot.
 
 const MAX_RIPPLES = 24; // must match the shader's loop bound
+// WAKE SOURCES. Slot 0 is the seal, always; the rest are HULLS — up to
+// `boats.maxAlive` sailing past plus the one boat boss. The field pulls toward
+// each of them, so a boat displaces the water it is sitting in instead of
+// floating on a lattice that has not noticed it.
+//
+// Enough slots for the roster and no more: this is a per-vertex loop over the
+// whole grid, so every slot is paid for on every vertex whether it holds
+// anything or not. A source with zero strength contributes exactly nothing but
+// still costs its iteration.
+const MAX_WAKES = 6; // must match the shader's loop bound
 // Same contract, for the fingers. Read from input.js rather than retyped so the
 // shader loop and the slot registry cannot drift apart.
 const MAX_TOUCH = TOUCH_SLOTS;
 
+// One vec4 per source, reused in place — a fresh array every frame would be a
+// new uniform upload of the whole block.
+const wakes = Array.from({ length: MAX_WAKES }, () => new THREE.Vector4(0, 0, 1, 0));
+// Which slots were claimed by a hull this frame — see hullWake and the sweep in
+// update(). A boolean per slot rather than a count, because a hull destroyed
+// mid-frame must not leave the slot behind it holding its last position.
+const wakeClaims = new Array(MAX_WAKES).fill(false);
+let wakeCursor = 1; // slot 0 is the seal's and is never handed out
+
 const vertexShader = /* glsl */ `
   #define MAX_RIPPLES ${MAX_RIPPLES}
   #define MAX_TOUCH ${MAX_TOUCH}
+  #define MAX_WAKES ${MAX_WAKES}
 
   uniform float uTime;
   uniform vec3 uRipples[MAX_RIPPLES];   // xy = origin, z = start time
   uniform vec2 uRippleParams[MAX_RIPPLES]; // x = strength, y = radius
-  uniform vec4 uWake;                   // xy = ship, z = radius, w = strength
+  uniform vec4 uWake[MAX_WAKES];        // xy = source, z = radius, w = strength
   uniform vec4 uTouch[MAX_TOUCH];       // xy = world pos, z = radius, w = level
   uniform vec4 uTouchWarp;              // x = push, y = swirl, z = wave, w = spin
   uniform float uDecay;
@@ -56,10 +76,15 @@ const vertexShader = /* glsl */ `
       disp += dir * wave * falloff * strength * decay * isLive;
     }
 
-    vec2 wakeDelta = pos.xy - uWake.xy;
-    float wakeDist = length(wakeDelta) + 0.0001;
-    float wakeFall = smoothstep(uWake.z, 0.0, wakeDist);
-    disp += (wakeDelta / wakeDist) * wakeFall * uWake.w;
+    // Every wake source, summed. The seal is slot 0 and the hulls follow it —
+    // see MAX_WAKES. Unfilled slots carry a strength of zero and add nothing,
+    // which is why there is no count uniform to branch on.
+    for (int i = 0; i < MAX_WAKES; i++) {
+      vec2 wakeDelta = pos.xy - uWake[i].xy;
+      float wakeDist = length(wakeDelta) + 0.0001;
+      float wakeFall = smoothstep(uWake[i].z, 0.0, wakeDist);
+      disp += (wakeDelta / wakeDist) * wakeFall * uWake[i].w;
+    }
 
     // Fingers. Two components on purpose: a radial shove that pulses outward
     // (the finger pushing the water away) and a tangential shear (the lattice
@@ -282,7 +307,7 @@ export function createGrid(scene) {
         uTime: { value: 0 },
         uRipples: { value: ripples },
         uRippleParams: { value: rippleParams },
-        uWake: { value: new THREE.Vector4(0, 0, CONFIG.grid.wakeRadius, CONFIG.grid.wakeStrength) },
+        uWake: { value: wakes },
         uTouch: { value: touch },
         uTouchColor: { value: touchColor },
         uTouchWarp: { value: touchWarp },
@@ -443,18 +468,56 @@ export function createGrid(scene) {
     material.uniforms.uClip.value = CONFIG.grid.clipAtSurface ? 1 : 0;
 
     const speed = shipVel ? Math.hypot(shipVel.x, shipVel.y) : 0;
-    const wake = material.uniforms.uWake.value;
-    wake.set(
+    wakes[0].set(
       shipPos.x,
       shipPos.y,
       CONFIG.grid.wakeRadius,
       CONFIG.grid.wakeStrength * (1 + speed * CONFIG.grid.wakeSpeedGain)
     );
+    // THE HULLS. Re-published every frame by whoever owns them rather than
+    // registered once: a boat is destroyed mid-frame more often than not, and a
+    // registry would leave its dent in the water behind it. Anything that did
+    // not claim a slot this frame is cleared here, so a source can only ever
+    // persist by asserting itself.
+    for (let i = 1; i < MAX_WAKES; i++) {
+      if (wakeClaims[i]) wakeClaims[i] = false;
+      else wakes[i].w = 0;
+    }
+    wakeCursor = 1;
 
     updateTouch(dt, view);
   }
 
+  /**
+   * A HULL DISPLACING WATER. Published every frame by whoever owns the boat —
+   * systems/boats.js for the ones sailing past, systems/bossBoat.js for the
+   * boss — and dropped automatically by the sweep in update() the first frame
+   * nobody re-asserts it. That is deliberate rather than a registry with an
+   * unregister: hulls are destroyed mid-frame constantly, and the failure mode
+   * of a registry is a permanent dent in the water where a boat used to be.
+   *
+   * Past MAX_WAKES the extra hulls simply do not warp the field. They still
+   * bubble (systems/boatWake.js is unbounded) — this is the decoration, and
+   * dropping the sixth boat's share of it costs nothing anybody can see.
+   *
+   * @param strength signed, and NEGATIVE pulls the lattice inward toward the
+   *        hull — the same convention CONFIG.grid.wakeStrength uses for the
+   *        seal, and the reason a boat reads as sitting IN the water rather
+   *        than as a bubble pushing it away.
+   */
+  function hullWake(x, y, radius, strength) {
+    if (wakeCursor >= MAX_WAKES || !(radius > 0)) return;
+    const i = wakeCursor++;
+    wakes[i].set(x, y, radius, strength);
+    wakeClaims[i] = true;
+  }
+
   function reset() {
+    for (let i = 1; i < MAX_WAKES; i++) {
+      wakes[i].set(0, 0, 1, 0);
+      wakeClaims[i] = false;
+    }
+    wakeCursor = 1;
     for (let i = 0; i < MAX_RIPPLES; i++) rippleParams[i].set(0, 1);
     cursor = 0;
     for (let i = 0; i < MAX_TOUCH; i++) {
@@ -467,5 +530,5 @@ export function createGrid(scene) {
   build();
   reset();
 
-  return { build, dispose, ripple, update, reset, setWaveTime };
+  return { build, dispose, ripple, hullWake, update, reset, setWaveTime };
 }

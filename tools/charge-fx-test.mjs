@@ -39,6 +39,7 @@ import {
   applyPlayerOutline,
   updatePlayerOutline,
   flarePlayerOutline,
+  flashPlayerOutlineDamage,
   resetPlayerOutlineCharge,
 } from '../path/src/systems/outlines.js';
 import { updateBubbles, resetBubbles } from '../path/src/systems/bubbles.js';
@@ -258,6 +259,88 @@ section('RIM — idle, and not fighting the tuner');
     CONFIG.playerOutline.enabled = wasOutline;
     applyPlayerOutline();
     resetPlayerOutlineCharge();
+  }
+}
+
+// ===========================================================================
+// THE INK LINE — the flat black rim drawn INSIDE the glowing one.
+//
+// What cannot be checked here is the picture: whether the ink actually covers
+// the glow's inner edge is decided by the depth test between two inverted
+// hulls, and no Node harness has a depth buffer. That was measured in a real
+// GL context by reading a scanline back with gl.readPixels — background, then
+// 5px of glow, then 2px of ink, then the seal — and the ordering falls out of
+// the geometry: the thinner hull's back faces are nearer the camera wherever
+// the two overlap.
+//
+// What IS checkable is everything that would silently take the effect away:
+// the second shell existing at all, being thinner than the rim (equal or wider
+// and it swallows the glow it is supposed to sit inside), and — the one that
+// would drift — staying out of the way of every driver in outlines.js. The ink
+// is the seal's drawn edge; a line that flared with the wind-up reads as the
+// drawing wobbling rather than as the light behind it flaring.
+// ===========================================================================
+section('THE INK LINE');
+{
+  const shells = body.children.filter((o) => o.userData.__isOutline);
+  check('a second shell was attached', shells.length === 2, `${shells.length} shell(s)`);
+
+  // Order is load-bearing, not incidental: the glow is built first so that a
+  // bare find() for "an outline" — which is how the rest of this file reaches
+  // for it — lands on the rim rather than on the ink.
+  const [glowShell, inkShell] = shells;
+  check('the glow is the first of them', glowShell === shell);
+
+  const inkMat = inkShell.material;
+  const inkThick = () => inkMat.userData.__outlineThickness.value;
+  const inkCfg = CONFIG.playerOutline.inner;
+
+  check('the ink is flat black', inkMat.color.r === 0 && inkMat.color.g === 0 && inkMat.color.b === 0);
+  check('...at its own width, in world units over the scale',
+    Math.abs(inkThick() - inkCfg.thickness / PARENT_SCALE) < 1e-9,
+    `${inkThick()} vs ${inkCfg.thickness}/${PARENT_SCALE}`);
+  // The whole effect is the DIFFERENCE between the two hulls. At equal widths
+  // there is no glow left to peek out.
+  check('...and thinner than the rim it sits inside',
+    inkThick() < thickOf(), `ink ${inkThick()} vs rim ${thickOf()}`);
+  check('it draws after the glow and before the seal',
+    inkShell.renderOrder > glowShell.renderOrder && inkShell.renderOrder < (body.renderOrder ?? 0),
+    `glow ${glowShell.renderOrder}, ink ${inkShell.renderOrder}, seal ${body.renderOrder ?? 0}`);
+
+  // A wind-up, a release flare and a hit, all at once — everything in
+  // outlines.js that writes to a shell. The rim has to move; the ink must not.
+  resetPlayerOutlineCharge();
+  applyPlayerOutline();
+  const inkBefore = inkMat.color.clone();
+  const inkWidthBefore = inkThick();
+  for (let t = 0; t < 0.5; t += 1 / 120) updatePlayerOutline(1 / 120, 1);
+  flarePlayerOutline(1);
+  flashPlayerOutlineDamage(1);
+  updatePlayerOutline(1 / 120, 1);
+  check('the rim is lit by all of that', glowOf() > BASE_GLOW * 1.05, `${glowOf().toFixed(2)}`);
+  check('...and the ink did not move — still black', inkMat.color.equals(inkBefore));
+  check('...still the same width', Math.abs(inkThick() - inkWidthBefore) < 1e-12);
+  resetPlayerOutlineCharge();
+
+  // The toggle, from both sides. The ink rides the rim's own switch as well as
+  // its own: a black seal-shaped smudge with no glow behind it is not a look
+  // anyone asked for.
+  const wasInk = inkCfg.enabled;
+  const wasOutline = CONFIG.playerOutline.enabled;
+  try {
+    inkCfg.enabled = false;
+    applyPlayerOutline();
+    check('the toggle hides the ink', inkShell.visible === false);
+    check('...and leaves the glowing rim alone', glowShell.visible === true);
+
+    inkCfg.enabled = true;
+    CONFIG.playerOutline.enabled = false;
+    applyPlayerOutline();
+    check('switching the rim off takes the ink with it', inkShell.visible === false);
+  } finally {
+    inkCfg.enabled = wasInk;
+    CONFIG.playerOutline.enabled = wasOutline;
+    applyPlayerOutline();
   }
 }
 
@@ -659,6 +742,23 @@ section('BODY — the meter on the animal, and what it opens a run as');
   chargeCrossed();
   updateChargeSkin(body, 1, 1 / 60);
   check('...with the crossing flash, once it is awake', u.uChargeWave.value >= 0);
+
+  // MONOCHROME ON THE BODY. Hue on the seal is Glow Up!'s alphabet: a lit
+  // animal means an element, and this layer runs on every run including the
+  // ones that never took the card. Measured as SATURATION off the live uniform
+  // rather than compared against the config numbers, so a colour arriving from
+  // anywhere — a tuner row, a re-coupling to CONFIG.strike.ring, whose ready
+  // mint is what put a green seal in front of a player with no element — fails
+  // here rather than only in a screenshot.
+  const saturation = () => {
+    const c = u.uChargeColor.value;
+    return Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b);
+  };
+  check('a loaded seal glows grey-to-white, not a hue', saturation() < 0.02,
+    `saturation ${saturation().toFixed(3)}`);
+  frames(0.5);
+  check('...and so does a filling one', saturation() < 0.02,
+    `saturation ${saturation().toFixed(3)}`);
 
   check('an empty meter still reads dark', frames(0) === 0);
 

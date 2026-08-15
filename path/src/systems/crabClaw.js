@@ -91,6 +91,33 @@ function rememberChain(arm) {
 }
 
 /**
+ * How far a pinch reaches, SURFACE TO SURFACE — the crab's body, plus the
+ * player's, plus the arm.
+ *
+ * One function because there are two halves to a pinch and they must agree:
+ * entities/enemies.js decides whether to start the gesture (`commitRange`) and
+ * systems/combat.js decides whether the closed claw touched anything (`range`).
+ * They were written separately and only one of them added the player's radius,
+ * which is a bug that hides completely until the crab's hitbox changes size —
+ * and then the whole mechanic silently stops. Which is what happened: the swarm
+ * crab's `radius` went 0.8 -> 0.2 in enemies.csv, and since the commit gate was
+ * the only reach in the game measured centre-to-centre, it fell from 1.68 to
+ * 0.42 world units. The seal's own radius is 1.0, so committing required the
+ * seal's CENTRE to be inside the crab — unreachable, because ordinary contact
+ * fires at 1.2 and shoves it back out first. The claw never reached again, and
+ * nothing failed: tools/crab-claw-test.mjs calls strike() itself, so it proved
+ * the gesture worked while the gate that fires it was dead.
+ *
+ * @param {number} bodyRadius  the crab's `radius` — its own, per instance, so a
+ *                             crab that grew over a long run reaches further
+ * @param {number} playerRadius  the seal's hitRadius
+ * @param {number} mul  `CONFIG.crabClaw.commitRange` or `.range`
+ */
+export function pinchReach(bodyRadius, playerRadius, mul) {
+  return (bodyRadius ?? 0) * (mul ?? 0) + (playerRadius ?? 0);
+}
+
+/**
  * @param instance the posed model; reads `userData.clawRig`.
  * @returns null when the model declares no claw rig or no arm resolves, which
  *   every caller treats as "this creature doesn't pinch".

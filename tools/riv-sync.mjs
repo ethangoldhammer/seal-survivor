@@ -85,17 +85,22 @@ const sha = (buf) => createHash('sha1').update(buf).digest('hex').slice(0, 12);
 function inspect(buf) {
   const text = buf.toString('latin1');
   const found = {};
-  for (const name of [...REQUIRED.artboards, ...REQUIRED.bindings]) {
+  for (const name of [...REQUIRED.artboards, ...(REQUIRED.viewModels ?? []), ...REQUIRED.bindings]) {
     found[name] = text.includes(name);
   }
   return found;
 }
 
+function kindOf(name) {
+  if (REQUIRED.artboards.includes(name)) return 'artboard';
+  if ((REQUIRED.viewModels ?? []).includes(name)) return 'model';
+  return 'binding';
+}
+
 function report(found) {
   const missing = Object.entries(found).filter(([, ok]) => !ok).map(([n]) => n);
   for (const [name, ok] of Object.entries(found)) {
-    const kind = REQUIRED.artboards.includes(name) ? 'artboard' : 'binding';
-    say(`   ${ok ? C.ok('✓') : C.bad('✗')} ${kind.padEnd(8)} ${name}`);
+    say(`   ${ok ? C.ok('✓') : C.bad('✗')} ${kindOf(name).padEnd(8)} ${name}`);
   }
   return missing;
 }

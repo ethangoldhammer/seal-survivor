@@ -110,7 +110,11 @@ uniform int   uBioPattern;
 // so that a musical division ('1 bar') and a free-running rate ('1.8 rad/s')
 // are the same two floats down here — see systems/beatSync.js. A shader that
 // took a raw time and a rate could only ever run free.
-uniform float uBioDrift;    // distance the pattern field has travelled (not a cycle)
+// WHERE IN THE FIELD THE PATTERN IS SAMPLING, as an offset rather than a
+// distance. It was a float — one axis, travelled forever — and it is a vec3 so
+// the path can be a LOOP instead of a line. See the note by drift in
+// FRAG_BODY for why that is the whole trick.
+uniform vec3  uBioDrift;
 uniform float uBioCycle;    // breath/travel position in CYCLES, wrapped to [0,2)
 uniform float uBioFlickerT; // the flicker's noise coordinate, in whole steps
 uniform float uBioScale;
@@ -376,15 +380,27 @@ float bioMask(float v) {
 const FRAG_BODY = `
   {
     vec3 bp = vBioPos / max(0.01, uBioScale);
-    // The whole field drifts slowly. On a still pattern this is what stops it
-    // looking like a decal.
+    // The whole field moves. On a still pattern this is what stops it looking
+    // like a decal.
     //
-    // DELIBERATELY NOT BEAT-SYNCED. Drift is a translation through the noise
-    // field — it never comes back round, so there is no cycle to quantise and
-    // "one drift per bar" would only mean something if the pattern repeated,
-    // which noise does not. The three things below that DO repeat are synced;
-    // this one is honestly a rate in seconds. See systems/beatSync.js.
-    vec3 drift = vec3(0.0, 0.0, uBioDrift);
+    // THIS USED TO BE UNSYNCABLE, AND THE REASON IT NO LONGER IS, IS THE SHAPE
+    // OF THE PATH. A straight translation through noise never comes back
+    // round: "one drift per bar" is meaningless because there is nothing to
+    // come back TO, and wrapping the offset to loop it snaps the whole pattern
+    // to a different part of the field once a bar. That is why this was a
+    // seconds-based rate and documented as impossible to quantise.
+    //
+    // A CLOSED path has no such problem. Walk a circle through the field and
+    // every lap ends exactly where it started, on the same noise values, with
+    // no seam anywhere — so a lap IS a cycle and a cycle can go on the grid.
+    // The field still never repeats; the PATH through it does, which is all
+    // the sync ever needed. The radius is what "how far through the field"
+    // means now (biolumSkin.flowSpan), and the lap is on flowSync.
+    //
+    // Straight-line drift is still here and still the default: with flowSync
+    // 'free' the JS writes (0, 0, distance) into this and nothing about an
+    // existing preset changes.
+    vec3 drift = uBioDrift;
 
     float bioMaskV = 0.0;
     float bioHue = 0.0;
@@ -580,7 +596,12 @@ const FRAG_BODY = `
       // Hue walks along the body too, so the far end of the animal is a
       // different colour from the near end rather than the whole cage being
       // one tint.
-      bioHue = fract(vBioAxis * 1.7 + uBioDrift * 0.1) * uBioHueSpread;
+      // drift.z, not uBioDrift -- that was a float and is a vec3 now, and
+      // float + vec3 is a compile error, which links no program and renders
+      // the creature as NOTHING rather than as a wrong colour. Z is the axis
+      // the free path travels along, so this walks exactly as it used to; on a
+      // looped path it swings back and forth with the lap instead.
+      bioHue = fract(vBioAxis * 1.7 + drift.z * 0.1) * uBioHueSpread;
 
       // A body that did not declare biolumEdges has no barycentric attribute
       // and would render as a solid glowing blob — every fragment reads
@@ -808,7 +829,7 @@ export function attachBiolumSkin(material, mesh, preset = 'lantern', axisName = 
 function freshUniforms() {
   return {
     uBioPattern: { value: 0 },
-    uBioDrift: { value: 0 },
+    uBioDrift: { value: new THREE.Vector3() },
     uBioCycle: { value: 0 },
     uBioFlickerT: { value: 0 },
     uBioScale: { value: 0.25 },
@@ -856,7 +877,10 @@ function freshUniforms() {
 // photophores stutter on sixteenths, which is most of the point of having a
 // picker per FX rather than one per creature.
 function freshClock() {
-  return { drift: 0, cycle: 0, flick: 0 };
+  // `drift` is the straight-line distance (flowSync 'free'); `lap` is the
+  // position around the closed path (flowSync on a division). Only one of the
+  // two is advanced on any given frame — see updateBiolumSkin.
+  return { drift: 0, cycle: 0, flick: 0, lap: 0 };
 }
 
 function inject(material, u) {
@@ -1483,9 +1507,36 @@ export function updateBiolumSkin(rawDt) {
     const clock = (m.userData.__bioSkinClock ??= freshClock());
     const offset = m.userData.__bioSkinOffset ?? 0;
 
-    // Drift is a rate in seconds by design — see the note in FRAG_BODY.
-    clock.drift += rawDt * (cfg.flow ?? 0.05);
-    u.uBioDrift.value = clock.drift;
+    // WHERE THE PATTERN IS SAMPLING THE FIELD FROM. Two paths, and which one
+    // runs is `flowSync`: a division walks a closed loop through the field, so
+    // the lap lands on the grid; 'free' (the default) keeps the straight-line
+    // drift in seconds that every preset had before this existed.
+    const lapDiv = cfg.flowSync ?? 'free';
+    if (lapDiv && lapDiv !== 'free') {
+      // The lap position, 0..1, derived from the transport exactly like the
+      // breath and the flicker — so it is the SAME instant of the bar on every
+      // creature, not a per-material accumulation that drifts apart over a run.
+      // `flow` is the free-run twin the picker falls back to, in laps/sec.
+      clock.lap = advanceCycles(clock.lap ?? 0, lapDiv, cfg.flow ?? 0.05, rawDt, 1);
+      let lap = clock.lap + offset;
+      // THE PULSE. Quantising the lap into whole steps makes the field JUMP
+      // rather than glide — one shove per step, landing on the beat. 0 is a
+      // smooth lap, which is the same path taken continuously.
+      const steps = Math.max(0, Math.round(cfg.flowSteps ?? 0));
+      if (steps > 0) lap = Math.floor(lap * steps) / steps;
+      const th = lap * Math.PI * 2;
+      // Radius from the span the caller asked for: `flowSpan` is how far the
+      // sample point travels in one lap, and a circle of circumference S has
+      // radius S/2pi. Expressed as distance rather than radius so it means the
+      // same thing as `flow` did — field units covered.
+      const r = (cfg.flowSpan ?? 3) / (Math.PI * 2);
+      // Offset so theta 0 sits at the field origin: the loop starts exactly
+      // where an unsynced pattern starts, rather than a radius away from it.
+      u.uBioDrift.value.set(r * Math.sin(th), 0, r * (1 - Math.cos(th)));
+    } else {
+      clock.drift += rawDt * (cfg.flow ?? 0.05);
+      u.uBioDrift.value.set(0, 0, clock.drift);
+    }
 
     // `pulseSpeed` is authored in RADIANS per second (it was written straight
     // into a sin), so it divides by 2π to become the cycles/second the free

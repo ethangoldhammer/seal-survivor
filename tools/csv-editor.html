@@ -31,15 +31,28 @@
     border-bottom: 1px solid var(--line); padding: 10px 16px;
     display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
   }
-  .tabs { display: flex; gap: 4px; }
-  .tab {
-    padding: 6px 12px; border-radius: 6px; border: 1px solid transparent;
-    background: none; color: var(--dim); cursor: pointer; font: inherit; font-weight: 500;
+  /* ONE PICKER, NOT ELEVEN TABS. Eleven tabs wrapped to two rows at any window
+     narrower than a laptop and pushed the grid down with them, and the two
+     tables anyone opens most were the ones that wrapped. A select is also the
+     control that says "these are alternatives" — which is exactly what they
+     are, since only one is ever on screen. */
+  #tableSel {
+    appearance: none; cursor: pointer; font: inherit; font-weight: 600;
+    padding: 6px 30px 6px 11px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    background-image: linear-gradient(45deg, transparent 50%, var(--dim) 50%),
+                      linear-gradient(135deg, var(--dim) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
   }
-  .tab:hover { color: var(--text); }
-  .tab[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--text); }
-  .tab .count { color: var(--dim); font-weight: 400; margin-left: 5px; }
-  .tab .dot { color: var(--dirty); margin-left: 5px; font-size: 15px; line-height: 0; }
+  #tableSel:hover, #tableSel:focus { border-color: var(--accent); outline: none; }
+  /* The unsaved-work marker the tab strip used to carry as a dot. A closed
+     select can only show the row you are on, so an edit left on ANOTHER table
+     has nowhere to appear — this outlines the whole control instead, and
+     `#dirtyElse` names which ones. */
+  #tableSel.elsewhere { border-color: var(--dirty); }
+  #dirtyElse { color: var(--dirty); font-size: 12px; }
+  #dirtyElse:empty { display: none; }
 
   .grow { flex: 1; }
   input[type="search"] {
@@ -76,6 +89,23 @@
   }
   thead th:hover { color: var(--text); }
   thead th .arrow { color: var(--accent); }
+
+  /* THE RESIZE GRIP. `thead th` is already sticky, which is a positioned
+     element, so this anchors to the header cell without adding a
+     position:relative that would break the sticky itself. Sits half over the
+     border so the target is 7px wide while the line stays 1px. */
+  .grip {
+    position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
+    cursor: col-resize; z-index: 2; touch-action: none;
+  }
+  .grip::after {
+    content: ""; position: absolute; inset: 0 3px; background: var(--accent);
+    opacity: 0; transition: opacity .12s;
+  }
+  .grip:hover::after, .grip.dragging::after { opacity: .8; }
+  /* Every cell in the table follows the mouse during a drag, so the text
+     selection that a drag would otherwise paint over them is suppressed. */
+  body.resizing { cursor: col-resize; user-select: none; }
   th.sticky, td.sticky {
     position: sticky; left: 0; z-index: 12; background: var(--bg);
     border-right: 1px solid var(--line);
@@ -144,6 +174,39 @@
   .playbtn:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
   .playbtn[disabled] { color: var(--dim); opacity: .4; cursor: default; background: none; }
 
+  /* A cell holding SEVERAL ids: reads as chips, edits as a checklist. */
+  .multibtn {
+    display: flex; align-items: center; gap: 4px; cursor: pointer;
+    width: 100%; text-align: left; overflow: hidden; flex-wrap: nowrap;
+  }
+  .multibtn .chip {
+    flex: none; font-size: 11px; padding: 1px 6px; border-radius: 10px;
+    border: 1px solid var(--line); color: var(--text);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .multibtn .more { flex: none; font-size: 11px; color: var(--dim); }
+  .multibtn .any { color: var(--dim); font-style: italic; }
+
+  .multimenu {
+    position: fixed; z-index: 60; background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 9px; padding: 5px;
+    box-shadow: 0 12px 32px #0006; min-width: 210px; max-height: 60vh; overflow: auto;
+  }
+  .multimenu label {
+    display: flex; align-items: center; gap: 8px; padding: 5px 9px;
+    border-radius: 6px; cursor: pointer; font-size: 12px;
+  }
+  .multimenu label:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+  .multimenu input { accent-color: var(--accent); margin: 0; }
+  .multimenu .sep { height: 1px; background: var(--line); margin: 4px 0; }
+  .multimenu .clear {
+    display: block; width: 100%; text-align: left; border: none; background: none;
+    color: var(--dim); font: inherit; font-size: 12px; padding: 5px 9px;
+    border-radius: 6px; cursor: pointer;
+  }
+  .multimenu .clear:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--text); }
+  .multimenu .unknown { color: var(--bad); }
+
   /* A templated cell is the input, a token menu, and the line the card will
      actually read once the placeholders resolve. */
   .tmpl { display: flex; flex-direction: column; gap: 1px; }
@@ -184,12 +247,14 @@
   .sound-opt .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; }
   .sound-opt .detail { color: var(--dim); font-size: 11px; }
 
-  .rowdel {
+  .rowacts { white-space: nowrap; }
+  .rowdel, .rowdup {
     border: none; background: none; color: var(--dim); cursor: pointer;
     font-size: 15px; padding: 4px 8px; visibility: hidden;
   }
-  tbody tr:hover .rowdel { visibility: visible; }
+  tbody tr:hover .rowdel, tbody tr:hover .rowdup { visibility: visible; }
   .rowdel:hover { color: var(--bad); }
+  .rowdup:hover { color: var(--accent); }
 
   dialog {
     border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
@@ -211,7 +276,8 @@
 </style>
 
 <header>
-  <div class="tabs" id="tabs"></div>
+  <select id="tableSel" aria-label="Which table"></select>
+  <span id="dirtyElse"></span>
   <div class="grow"></div>
   <input type="search" id="filter" placeholder="Filter rows…" autocomplete="off">
   <button class="action" id="addRow" hidden>+ Add row</button>
@@ -222,6 +288,10 @@
 <p class="blurb" id="blurb"></p>
 <p class="status" id="status"></p>
 <div class="scroller"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+<!-- Written by applyColWidths, one rule per column you have resized. A
+     stylesheet rather than inline widths on every cell: the widths then
+     survive renderBody without being re-applied to a thousand fresh <td>s. -->
+<style id="colw"></style>
 
 <dialog id="artDlg">
   <div class="dlg-head">
@@ -259,7 +329,11 @@ boot();
 async function boot() {
   const r = await fetch('/api/tables');
   const data = await r.json();
-  tables = data.tables.map((t) => ({ ...t, original: clone(t.rows) }));
+  // `origIndex` is what each live row was when the page loaded, so the "this
+  // cell changed" highlight survives a row being inserted or deleted above it.
+  // Comparing by POSITION instead paints every row below an insert as edited,
+  // which is the one thing that highlight must never lie about.
+  tables = data.tables.map((t) => ({ ...t, original: clone(t.rows), origIndex: t.rows.map((_, i) => i) }));
   renderTabs();
   renderTable();
 
@@ -269,6 +343,11 @@ async function boot() {
   loadArt().catch(() => {});
   loadSounds().catch(() => {});
 
+  $('tableSel').onchange = (e) => {
+    active = Number(e.target.value);
+    sortCol = null;
+    renderTabs(); renderTable();
+  };
   $('filter').oninput = renderBody;
   $('save').onclick = save;
   $('revert').onclick = revert;
@@ -278,20 +357,27 @@ async function boot() {
   });
 }
 
+// No "unsaved changes" prompt when you switch: each table keeps its own edits
+// in the page, so switching away loses nothing and confirming it would be a
+// dialog about a non-event. The picker carries the marker instead — an edit
+// left unsaved on a table you have navigated away from stays visible from here.
 function renderTabs() {
-  $('tabs').innerHTML = '';
+  const sel = $('tableSel');
+  sel.innerHTML = '';
   tables.forEach((t, i) => {
-    const b = document.createElement('button');
-    b.className = 'tab';
-    b.setAttribute('aria-selected', i === active);
-    b.innerHTML = `${t.label}<span class="count">${t.rows.length}</span>${dirtyOf(t) ? '<span class="dot" title="unsaved changes">•</span>' : ''}`;
-    // No "unsaved changes" prompt: each table keeps its own edits in the page,
-    // so switching away loses nothing and confirming it would be a dialog
-    // about a non-event. The tab carries a dot instead, so an edit left
-    // unsaved on another table is still visible from here.
-    b.onclick = () => { active = i; sortCol = null; renderTabs(); renderTable(); };
-    $('tabs').append(b);
+    const o = document.createElement('option');
+    o.value = i;
+    o.textContent = `${t.label}  ·  ${t.rows.length}${dirtyOf(t) ? '  •' : ''}`;
+    sel.append(o);
   });
+  sel.value = active;
+
+  // Which OTHER tables are dirty. Named rather than counted: "2 unsaved" sends
+  // you hunting through eleven options, and the whole point of the marker is
+  // that you stop needing to.
+  const others = tables.filter((t, i) => i !== active && dirtyOf(t)).map((t) => t.label);
+  sel.classList.toggle('elsewhere', others.length > 0);
+  $('dirtyElse').textContent = others.length ? `• unsaved in ${others.join(', ')}` : '';
 }
 
 function renderTable() {
@@ -301,12 +387,13 @@ function renderTable() {
   status('');
   renderHead();
   renderBody();
+  applyColWidths();
   markDirty();
 }
 
 function renderHead() {
   const tr = document.createElement('tr');
-  T().columns.forEach((c) => {
+  T().columns.forEach((c, n) => {
     const th = document.createElement('th');
     if (c.key) th.className = 'sticky';
     th.textContent = c.name;
@@ -316,14 +403,108 @@ function renderHead() {
     if (c.type === 'number' && c.min !== undefined) tip += `\nMinimum ${c.min}${c.integer ? ', whole numbers' : ''}.`;
     if (tip) th.title = tip.trim();
     th.onclick = () => {
+      // A drag that ends over the header is still a mouseup on the <th>, and
+      // without this every resize would also re-sort the table under you.
+      if (justResized) return;
       sortDir = sortCol === c.name ? -sortDir : 1;
       sortCol = c.name;
-      renderHead(); renderBody();
+      renderHead(); renderBody(); applyColWidths();
     };
+    th.append(makeGrip(c, n));
     tr.append(th);
   });
   if (T().addRows) tr.append(document.createElement('th'));
   $('thead').replaceChildren(tr);
+}
+
+// ---------------------------------------------------------------------------
+// COLUMN WIDTHS
+//
+// Kept per FILE and per COLUMN NAME, not per position: sorting reorders rows
+// and a column added to a CSV later shifts every index after it, and a width
+// that silently moved to the neighbouring column would be worse than no width
+// at all. Position is only used at the moment the rule is written.
+//
+// In localStorage because it is a preference about looking, not data about the
+// game — nothing here ever reaches a CSV.
+// ---------------------------------------------------------------------------
+const WIDTH_KEY = 'svCsvColWidths';
+const MIN_COL = 56;
+
+let colWidths = (() => {
+  try { return JSON.parse(localStorage.getItem(WIDTH_KEY)) || {}; } catch { return {}; }
+})();
+let justResized = false;
+
+function saveColWidths() {
+  try { localStorage.setItem(WIDTH_KEY, JSON.stringify(colWidths)); } catch { /* private window; the widths just don't persist */ }
+}
+
+// THE WIDTH GOES ON THE CONTROL, NOT ON THE CELL. This table is auto-layout,
+// where a `width` on a <td> is a suggestion the browser is free to ignore and
+// a `max-width` on one is undefined behaviour — setting both collapsed every
+// resized column to the width of its header text, which is the opposite of
+// what was asked for. What already works here is `.w-text`, `.w-num` and the
+// rest, which size the input and let the column follow it. So this overrides
+// exactly those, and inherits their reliability.
+function applyColWidths() {
+  const mine = colWidths[T().file] ?? {};
+  const rules = [];
+  T().columns.forEach((c, n) => {
+    const w = mine[c.name];
+    if (!w) return;
+    rules.push(`.scroller tbody td:nth-child(${n + 1}) .cell { width: ${w}px; }`);
+  });
+  $('colw').textContent = rules.join('\n');
+}
+
+function makeGrip(c, n) {
+  const g = document.createElement('div');
+  g.className = 'grip';
+  g.title = `Drag to resize "${c.name}" — double-click to reset`;
+
+  g.onpointerdown = (e) => {
+    e.preventDefault();
+    e.stopPropagation(); // never reaches the th, so a drag is not also a sort
+    const startX = e.clientX;
+    // Measured off a real control rather than off the header cell: the width
+    // being written lands on the control, and the first and last columns carry
+    // 16px of gutter padding on the cell around it — starting from the header
+    // would jump the column by that gutter on the first pixel of the drag.
+    const probe = document.querySelector(`.scroller tbody td:nth-child(${n + 1}) .cell`);
+    const startW = (probe ?? g.parentElement).getBoundingClientRect().width;
+    g.setPointerCapture(e.pointerId);
+    g.classList.add('dragging');
+    document.body.classList.add('resizing');
+
+    const move = (ev) => {
+      const w = Math.max(MIN_COL, Math.round(startW + (ev.clientX - startX)));
+      (colWidths[T().file] ??= {})[c.name] = w;
+      applyColWidths();
+    };
+    const up = () => {
+      g.releasePointerCapture(e.pointerId);
+      g.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      g.removeEventListener('pointermove', move);
+      g.removeEventListener('pointerup', up);
+      saveColWidths();
+      // Cleared on the next tick, after the click this pointerup is about to
+      // synthesise has already been swallowed by the th handler.
+      justResized = true;
+      setTimeout(() => { justResized = false; }, 0);
+    };
+    g.addEventListener('pointermove', move);
+    g.addEventListener('pointerup', up);
+  };
+
+  g.ondblclick = (e) => {
+    e.stopPropagation();
+    delete colWidths[T().file]?.[c.name];
+    saveColWidths();
+    applyColWidths();
+  };
+  return g;
 }
 
 // The view is sorted and filtered; the FILE is not. Save always writes rows in
@@ -357,14 +538,22 @@ function renderBody() {
     t.columns.forEach((c) => tr.append(cellFor(c, i)));
     if (t.addRows) {
       const td = document.createElement('td');
+      td.className = 'rowacts';
+
+      const dup = document.createElement('button');
+      dup.className = 'rowdup'; dup.textContent = '⧉'; dup.title = 'Duplicate this row';
+      dup.onclick = () => duplicateRow(i);
+
       const b = document.createElement('button');
       b.className = 'rowdel'; b.textContent = '✕'; b.title = 'Delete this row';
       b.onclick = () => {
         if (!confirm(`Delete "${t.rows[i].id || 'this row'}"?`)) return;
         t.rows.splice(i, 1);
+        t.origIndex.splice(i, 1);
         renderTabs(); renderBody(); markDirty();
       };
-      td.append(b);
+
+      td.append(dup, b);
       tr.append(td);
     }
     frag.append(tr);
@@ -401,6 +590,11 @@ function cellFor(c, i) {
     el.className = 'cell artbtn w-art';
     el.onclick = () => openArt(c, i);
     paintArt(el, t.rows[i][c.name]);
+  } else if (c.type === 'multi') {
+    el = document.createElement('button');
+    el.className = 'cell multibtn w-text';
+    el.onclick = () => openMulti(el, c, i, set);
+    paintMulti(el, c, t.rows[i][c.name]);
   } else if (c.type === 'sound') {
     el = document.createElement('button');
     el.className = 'cell soundbtn w-text';
@@ -474,8 +668,9 @@ function moveCell(e, td) {
 }
 
 function paint(td, c, i) {
+  const o = T().origIndex[i];
   const raw = String(T().rows[i][c.name] ?? '');
-  const was = String(T().original[i]?.[c.name] ?? '');
+  const was = o == null ? '' : String(T().original[o]?.[c.name] ?? '');
   td.classList.toggle('dirty', raw !== was);
 
   const err = validate(c, raw);
@@ -498,6 +693,14 @@ function validate(c, raw) {
     if (c.integer && !Number.isInteger(n)) return `Whole numbers only; the game floors this to ${Math.floor(n)}.`;
     return '';
   }
+  if (c.type === 'multi') {
+    // Exactly the warning bossNameTable.js prints at boot, moved to the cell:
+    // a part tagged for an archetype that isn't there is loaded, kept, and
+    // then never drawn — which is invisible from the file.
+    const bad = splitList(v).filter((id) => !c.options.includes(id));
+    if (!bad.length) return '';
+    return `${bad.join(', ')} — not in ${c.source || 'the list'}, so this part will never appear.`;
+  }
   if (c.key && v === '') return 'A row with no id is skipped entirely.';
   if (c.name === 'text' && v === '') return 'A quip with no text is ignored.';
   return '';
@@ -508,11 +711,43 @@ function addRow() {
   const rec = {};
   t.header.forEach((h) => { rec[h] = ''; });
   t.rows.push(rec);
+  t.origIndex.push(null);
   $('filter').value = '';
   sortCol = null;
   renderTabs(); renderHead(); renderBody(); markDirty();
   const last = $('tbody').lastElementChild?.querySelector('.cell');
   last?.focus();
+}
+
+// A near-copy of an existing row is how most of these tables actually grow: a
+// second epithet for the same perk, another boss that differs only in sizeMul.
+// The copy lands directly BELOW its source rather than at the bottom, because
+// the reason you duplicated is that the two belong read together — in the
+// editor and in the diff. Only the id is changed, and only because two rows
+// with the same id is a row the game silently drops.
+function duplicateRow(i) {
+  const t = T();
+  const rec = { ...t.rows[i] };
+  if ('id' in rec) rec.id = uniqueId(t, rec.id);
+  t.rows.splice(i + 1, 0, rec);
+  t.origIndex.splice(i + 1, 0, null);
+  renderTabs(); renderBody(); markDirty();
+  // Straight into the new id: renaming it is the next thing you were going to
+  // do, and `bossSharkCopy` is a placeholder, not a name.
+  const cell = $('tbody').querySelector(`tr[data-row="${i + 1}"] .cell`);
+  if (cell) { cell.focus(); cell.select?.(); }
+}
+
+function uniqueId(t, base) {
+  // A copy of a copy counts up rather than stacking the word: duplicating
+  // `squiddedCopy` gives `squiddedCopy2`, not `squiddedCopyCopy`.
+  const raw = String(base ?? '').trim();
+  const stem = raw.replace(/Copy\d*$/, '') || raw;
+  if (!stem) return '';
+  const taken = new Set(t.rows.map((r) => String(r.id ?? '').trim()));
+  let id = `${stem}Copy`;
+  for (let n = 2; taken.has(id); n++) id = `${stem}Copy${n}`;
+  return id;
 }
 
 const dirtyOf = (t) => JSON.stringify(t.rows) !== JSON.stringify(t.original);
@@ -531,6 +766,7 @@ function revert() {
   const t = T();
   if (!confirm('Throw away every change to this table since it loaded?')) return;
   t.rows = clone(t.original);
+  t.origIndex = t.rows.map((_, i) => i);
   renderTabs(); renderBody(); markDirty();
   status('Reverted to what is on disk.');
 }
@@ -550,6 +786,7 @@ async function save() {
     if (!r.ok) { status(out.error, 'bad'); markDirty(); return; }
     t.mtimeMs = out.mtimeMs;
     t.original = clone(t.rows);
+    t.origIndex = t.rows.map((_, i) => i);
     // What was changed is now what's on disk, so the highlight has to go —
     // cleared in place rather than by re-rendering, which would take the
     // caret out of the cell you were typing in. The `bad` flags stay: those
@@ -599,6 +836,107 @@ async function loadArt() {
     paintArt(b, T().rows[row].cardArt ?? '');
   });
   return art;
+}
+
+// --- cells that hold a LIST -------------------------------------------------
+//
+// `bosses` is one cell holding several archetype ids. A datalist could only
+// ever offer them one at a time and then leave you maintaining the separator
+// by hand — which is how "bossShark,bossOrca" gets written as a single id that
+// matches nothing at all. The checklist owns the separator instead: it always
+// writes back the single space bossNameTable.js canonicalises on, and it can
+// only write ids that exist.
+
+const splitList = (raw) => String(raw ?? '').trim().split(/[\s,]+/).filter(Boolean);
+
+// Two chips and a count. The column is narrow and the popover is where "which
+// ones exactly" gets answered; what the cell has to say at a glance is whether
+// this part is narrowed at all, and roughly how far.
+function paintMulti(btn, c, raw) {
+  const ids = splitList(raw);
+  btn.innerHTML = '';
+  if (!ids.length) {
+    const any = document.createElement('span');
+    any.className = 'any';
+    any.textContent = c.blankLabel || 'any';
+    btn.append(any);
+    return;
+  }
+  for (const id of ids.slice(0, 2)) {
+    const chip = document.createElement('span');
+    chip.className = 'chip' + (c.options.includes(id) ? '' : ' unknown');
+    chip.textContent = id;
+    btn.append(chip);
+  }
+  if (ids.length > 2) {
+    const more = document.createElement('span');
+    more.className = 'more';
+    more.textContent = `+${ids.length - 2}`;
+    btn.append(more);
+  }
+}
+
+function openMulti(anchor, c, i, set) {
+  document.querySelector('.multimenu')?.remove();
+  const chosen = new Set(splitList(T().rows[i][c.name]));
+  // An id already in the cell that the list doesn't offer — a renamed or
+  // deleted archetype — still gets a row. It has to be visible to be
+  // unchecked, and a picker that silently dropped it on the first click would
+  // be editing the file behind your back.
+  const extra = [...chosen].filter((id) => !c.options.includes(id));
+
+  const menu = document.createElement('div');
+  menu.className = 'multimenu';
+
+  const write = () => {
+    // Written in ROSTER order rather than click order, so two rows tagged for
+    // the same pair read identically in the file and in the diff.
+    const out = [...c.options, ...extra].filter((id) => chosen.has(id)).join(' ');
+    set(out);
+    paintMulti(anchor, c, out);
+  };
+
+  for (const id of [...c.options, ...extra]) {
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = chosen.has(id);
+    box.onchange = () => { box.checked ? chosen.add(id) : chosen.delete(id); write(); };
+    const nm = document.createElement('span');
+    // Labelled in the list, bare in the cell: "crab — a crab" is what you need
+    // while choosing and noise once chosen.
+    nm.textContent = c.labels?.[id] ?? id;
+    if (extra.includes(id)) {
+      nm.className = 'unknown';
+      nm.title = `Not in ${c.source || 'the list'} — this part will never appear.`;
+    }
+    label.append(box, nm);
+    menu.append(label);
+  }
+
+  // Blank is a real answer, and unticking the last box by hand is a worse way
+  // to say it than one button that says what it means.
+  const sep = document.createElement('div');
+  sep.className = 'sep';
+  const clear = document.createElement('button');
+  clear.className = 'clear';
+  clear.textContent = `Clear — ${c.blankLabel || 'any'}`;
+  clear.onclick = () => {
+    chosen.clear();
+    menu.querySelectorAll('input').forEach((b) => { b.checked = false; });
+    write();
+  };
+  menu.append(sep, clear);
+
+  // Stays open across clicks: picking more than one is the entire point, and a
+  // menu that closed on the first tick would make the second one a re-open.
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.min(r.left, innerWidth - menu.offsetWidth - 12)}px`;
+  menu.style.top = `${Math.min(r.bottom + 4, innerHeight - menu.offsetHeight - 12)}px`;
+  setTimeout(() => addEventListener('pointerdown', function away(e) {
+    if (!menu.contains(e.target)) { menu.remove(); removeEventListener('pointerdown', away); }
+  }), 0);
 }
 
 // --- sounds -----------------------------------------------------------------

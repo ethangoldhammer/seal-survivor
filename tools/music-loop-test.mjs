@@ -25,6 +25,16 @@
 //               integrates a speed the loop is not playing at.
 //   DEATH       dying does not stop the track. It drags down with the dive and
 //               winds back up to pitch under the score card, still playing.
+//   BOSS        a fight takes the transport on the next BAR — a boundary short
+//               enough to land inside the arrival ceremony and musical enough
+//               not to chop the run's loop mid-phrase. It gives it back under
+//               the kill's silence, where a switch costs nothing, which is also
+//               what makes the reverb tail out of boss music rather than out of
+//               whatever replaced it.
+//   PADDING     an mp3 decodes with silence on the front, so the first sample
+//               of a buffer is not the downbeat. Left in, a switch quantised to
+//               a bar still lands a flam late — and every file in the library
+//               carries 20–36ms of it.
 //
 // Run: node --import ./tools/vite-loader.mjs tools/music-loop-test.mjs
 // ---------------------------------------------------------------------------
@@ -133,7 +143,7 @@ class FakeCtx {
       loop: false,
       started: null,
       stopped: null,
-      start(when) { node.started = when ?? now; sources.push(node); },
+      start(when, offset = 0) { node.started = when ?? now; node.offset = offset; sources.push(node); },
       stop(when) { node.stopped = when ?? now; },
     });
     return node;
@@ -141,8 +151,29 @@ class FakeCtx {
   createOscillator() {
     return baseNode('osc', { type: 'sine', frequency: new Param(440), detune: new Param(0), start() {}, stop() {} });
   }
+  // REAL SAMPLES, not just a duration. music.js measures where a file's audio
+  // actually starts and rounds its length to a whole number of bars (see
+  // measureTrack), and a buffer that is only a number cannot exercise any of
+  // that — the bar-quantised boss switch would be asserted against a
+  // measurement that never ran. `lead` is the encoder padding every mp3 in the
+  // library carries; `silent` is the mocked-context case, where there is
+  // nothing to read and the file has to fall back to its own length.
   async decodeAudioData(data) {
-    const buffer = { duration: data?.seconds ?? 1, sampleRate: 48000 };
+    const seconds = data?.seconds ?? 1;
+    const rate = 48000;
+    const length = Math.round(seconds * rate);
+    const buffer = { duration: seconds, sampleRate: rate, length, numberOfChannels: 1, tag: data?.tag };
+    if (!data?.silent) {
+      const lead = Math.round((data?.lead ?? 0) * rate);
+      const tail = Math.round((data?.tail ?? 0) * rate);
+      const pcm = new Float32Array(length);
+      // Phase-offset so the very first sample is ALREADY loud. A sine started
+      // at zero crosses the silence floor for one sample, and music.js would
+      // correctly read that single sample as encoder padding — a lead-in of
+      // 1/48000s, which is not what any of these cases mean to set up.
+      for (let i = lead; i < length - tail; i++) pcm[i] = Math.sin(i * 0.05 + 1) * 0.5;
+      buffer.getChannelData = () => pcm;
+    }
     decoded.add(buffer);
     return buffer;
   }
@@ -176,9 +207,21 @@ function run(seconds, onStep = null) {
 }
 
 // A loop of an exact length, decoded straight in — no file, no mp3.
-async function loadLoop(slot, seconds) {
-  await music.loadTrackFromFile(slot, { name: `loop${slot}`, arrayBuffer: async () => ({ seconds }) });
+// `opts.lead`/`opts.tail` are seconds of silence on either end (what an mp3
+// decodes with); `opts.silent` produces a buffer with no readable samples at
+// all, which is what a mocked decoder gives you.
+async function loadLoop(slot, seconds, opts = {}) {
+  await music.loadTrackFromFile(slot, {
+    name: `loop${slot}`,
+    arrayBuffer: async () => ({ seconds, tag: slot, ...opts }),
+  });
 }
+
+// Which track a playing source node is — the buffer carries the slot name it
+// was decoded under, so a rotation can be read back as a list of names rather
+// than as a list of anonymous nodes.
+const playing = () => lastLoop()?.buffer?.tag ?? null;
+const playedOrder = () => loops().map((s) => s.buffer?.tag ?? '?');
 
 function reset() {
   music.stop();
@@ -206,7 +249,10 @@ reset();
 music.play(1);
 const first = loops()[0];
 check('the first loop starts', !!first, `at t=${first?.started.toFixed(3)}`);
-check('the whole file loops, uncut', first.loop === true && !first.loopEnd,
+// Uncut means NOT CROPPED TO THE BPM GRID, which is what it used to be. Loop
+// points are allowed — they are how the encoder's silence gets skipped — but
+// they may never end the loop before the file does.
+check('the whole file loops, uncut', first.loop === true && (!first.loopEnd || near(first.loopEnd, SHORT, 1e-6)),
   `loopEnd ${first.loopEnd ?? 'unset'} vs a ${CONFIG.music.beatsPerLoop}-beat grid of ${music.loopDuration()}s`);
 
 const t0 = first.started;
@@ -227,7 +273,7 @@ reset();
 CONFIG.music.levelsPerSlot = 1;
 music.play(2); // slot '2' — 27.168s, longer than the 16s grid
 const longSrc = loops()[0];
-check('nothing is clipped off the end', !longSrc.loopEnd,
+check('nothing is clipped off the end', !longSrc.loopEnd || near(longSrc.loopEnd, LONG, 1e-6),
   'it used to be cropped to beatsPerLoop, which turned twelve bars into eight and a cut');
 const t1 = longSrc.started;
 run(0.5);
@@ -557,6 +603,252 @@ run(0.05);
 settings.setSetting('audio.muted', true);
 check('...and neither does one with the music muted', music.hushMusic({}) === false);
 settings.resetSettings('audio');
+music.stop();
+
+// ---------------------------------------------------------------------------
+// THE BOSS BANK
+// ---------------------------------------------------------------------------
+// A second set of loops that takes the transport for the length of a fight.
+// Everything below is a property you can only hear as "the music went a bit
+// wrong when the boss turned up", which is why it is arithmetic here.
+//
+// The bank is loaded by hand under the names music.js builds internally
+// ('boss' + index) rather than through preloadDefaultTracks, whose fetch 404s
+// in this harness — which also pins the naming contract down: a track named
+// 'boss0' must never be reachable by slotForLevel, or an ordinary level-up
+// would draw a fight loop.
+const BAR = 2.265;
+CONFIG.music.barSeconds = BAR;
+CONFIG.music.bossIntro = true;
+// Real lengths, from the real files: a four-bar intro, then eight, five and
+// seven bars. Uneven on purpose — the rotation must switch on each file's OWN
+// end, and a bank of equal loops would pass either way.
+CONFIG.music.bossSrc = ['b0', 'b1', 'b2', 'b3'];
+// A third run loop, so that "the level reached during the fight" below picks a
+// DIFFERENT slot from the one the fight interrupted. With only two loaded,
+// slotForLevel clamps to the last one and the assertion would pass on a version
+// that ignored the level entirely.
+await loadLoop('3', BAR * 4);
+await loadLoop('boss0', BAR * 4);
+await loadLoop('boss1', BAR * 8);
+await loadLoop('boss2', BAR * 5);
+await loadLoop('boss3', BAR * 7);
+
+section('A boss arrives: the switch lands on a bar line, not on the frame');
+reset();
+CONFIG.music.levelsPerSlot = 1;
+music.play(1);
+run(0.05);
+const runLoopAt = lastLoop().started;
+// Deliberately NOT on a bar: a third of the way into one, which is where a
+// player crossing a level threshold actually is.
+run(BAR * 2 + BAR / 3);
+const beforeArrival = loops().length;
+check('the run\'s own loop is playing when the boss lands', playing() === '1', String(playing()));
+music.startBossMusic();
+check('the score does not change on the arrival frame', loops().length === beforeArrival,
+  'a cut here would chop the run loop mid-phrase');
+run(BAR); // one bar is the most it may ever wait
+check('...it has changed a bar later', playing() === 'boss0', String(playing()));
+const bossAt = lastLoop().started;
+const barsWaited = (bossAt - runLoopAt) / BAR;
+check('...and it landed exactly on a bar line',
+  near(barsWaited, Math.round(barsWaited), 1e-6), `${barsWaited.toFixed(4)} bars after the run loop began`);
+check('...at most one bar after the arrival', barsWaited - (BAR * 2 + BAR / 3) / BAR <= 1 + 1e-9,
+  `waited ${(bossAt - (runLoopAt + BAR * 2 + BAR / 3)).toFixed(3)}s`);
+
+section('The intro plays once; the cycle wraps to the body, not to the intro');
+// Long enough for the intro plus a full pass of the other three and back round.
+run(BAR * 4 + BAR * 8 + BAR * 5 + BAR * 7 + BAR * 8 + 0.5);
+const order = playedOrder().slice(playedOrder().indexOf('boss0'));
+check('the intro is first', order[0] === 'boss0', order.join(' → '));
+check('...and it never comes back', order.slice(1).every((n) => n !== 'boss0'), order.join(' → '));
+check('...the body cycles in file order and wraps to the second entry',
+  order.slice(0, 5).join(',') === 'boss0,boss1,boss2,boss3,boss1', order.join(' → '));
+
+section('Each boss loop plays all of itself');
+const starts = [];
+for (const s of loops()) if (String(s.buffer?.tag).startsWith('boss')) starts.push([s.buffer.tag, s.started]);
+let gapsOk = true;
+let gapDetail = '';
+for (let i = 1; i < Math.min(5, starts.length); i++) {
+  const expected = { boss0: BAR * 4, boss1: BAR * 8, boss2: BAR * 5, boss3: BAR * 7 }[starts[i - 1][0]];
+  const actual = starts[i][1] - starts[i - 1][1];
+  if (!near(actual, expected, 1e-6)) { gapsOk = false; gapDetail += `${starts[i - 1][0]} ran ${actual.toFixed(3)}s not ${expected.toFixed(3)}s; `; }
+}
+check('every loop runs its own full length before the next', gapsOk, gapDetail || 'four uneven loops, none cut');
+
+section('Levelling up inside a fight does not end the fight\'s music');
+const duringFight = playing();
+music.setLevel(3); // slot '3' would be due — and must not arrive
+run(BAR * 8 + 0.5);
+check('the run\'s loop is not queued underneath the boss',
+  String(playing()).startsWith('boss'), String(playing()));
+check('...the fight is still on the boss bank', music.bossMusicActive() === true);
+
+section('The kill: the tail is made of boss music, the return is not');
+const bossSource = lastLoop();
+check('a boss loop is what the hush will feed the room', String(bossSource.buffer.tag).startsWith('boss'));
+const bossLit = music.hushMusic({ cut: 0.2, feed: 0.3, seconds: 4, decay: 2, level: 1.3 });
+check("the kill lights the tail", bossLit === true);
+run(0.3);
+check('the score is cut', near(musicGainNode().gain.value, 0, 1e-6), String(musicGainNode().gain.value));
+check('...and the boss loop is still the source that was feeding it',
+  lastLoop() === bossSource, 'the tail must be built from the fight, not from what replaces it');
+// The handover, in the order systems/bossKill.js does it: the transport first,
+// while the gain is still at zero, and only then the release.
+music.endBossMusic();
+check('the fight\'s music ends', music.bossMusicActive() === false);
+check('...and the run\'s own loop is back, chosen for the level reached IN the fight',
+  playing() === '3', `${playing()} — setLevel(3) was held for the whole fight`);
+check('...the swap happened in silence', near(musicGainNode().gain.value, 0, 1e-6),
+  String(musicGainNode().gain.value));
+check('...from the top of the loop, not part-way in', near(lastLoop().offset ?? 0, 0, 1e-6));
+music.releaseMusicHush(0.35);
+run(0.4);
+check('...and what fades back up is the run\'s music', playing() === '3', String(playing()));
+
+section('One rotation per run: the next boss picks up where the last left off');
+reset();
+music.play(1);
+run(0.05);
+// One fight, `bars` bars long, returning the loops actually heard in it. The
+// tags are read BEFORE the kill, so the run loop the handover starts is not
+// counted as part of the fight.
+function fight(bars) {
+  const from = loops().length;
+  music.startBossMusic();
+  run(BAR * bars + 0.1);
+  const heard = loops().slice(from).map((s) => s.buffer?.tag);
+  music.endBossMusic();
+  run(0.2);
+  return heard;
+}
+// boss0 is 4 bars, boss1 is 8, boss2 is 5, boss3 is 7.
+const fight1 = fight(5); // the intro, then into the next
+const fight2 = fight(5);
+const fight3 = fight(9);
+check('the run\'s first boss opens on the intro', fight1[0] === 'boss0', fight1.join(' → '));
+check('...and moves on from it inside the fight', fight1[1] === 'boss1', fight1.join(' → '));
+check('the second boss resumes on the loop the first had queued when it died',
+  fight2[0] === 'boss2', `fight 1 heard ${fight1.join(' → ')}, fight 2 opened on ${fight2[0]}`);
+check('the third carries on from the second', fight3[0] === 'boss3', fight3.join(' → '));
+check('...and wraps past the intro, not back to it', fight3[1] === 'boss1', fight3.join(' → '));
+check('the intro is never heard twice in a run',
+  [...fight2, ...fight3].every((n) => n !== 'boss0'), [...fight2, ...fight3].join(' → '));
+check('...and no loop is skipped across the gap between fights',
+  [...fight1, ...fight2, ...fight3].join(',') === 'boss0,boss1,boss2,boss3,boss1',
+  [...fight1, ...fight2, ...fight3].join(' → '));
+
+// The shortest fight there is: killed before the arrival's switch has even
+// landed, so the intro was queued and never sounded. It is still spent — the
+// alternative is the one fight that skips the announcement handing it to the
+// next boss, and the run hearing it twice.
+reset();
+music.play(1);
+run(0.05);
+music.startBossMusic();
+music.endBossMusic(); // dead inside the first bar
+run(0.2);
+const after = loops().length;
+music.startBossMusic();
+run(BAR + 0.1);
+check('a boss killed before the intro sounded still spends it',
+  loops().slice(after).map((s) => s.buffer?.tag)[0] === 'boss1',
+  loops().slice(after).map((s) => s.buffer?.tag).join(' → '));
+
+// ...and a NEW run gets its own intro back.
+music.play(1);
+run(0.05);
+const freshRun = loops().length;
+music.startBossMusic();
+run(BAR + 0.1);
+check('a fresh run announces its first boss again',
+  loops().slice(freshRun).map((s) => s.buffer?.tag)[0] === 'boss0',
+  loops().slice(freshRun).map((s) => s.buffer?.tag).join(' → '));
+music.endBossMusic();
+
+section('Two bosses at once: the first kill does not take the music');
+reset();
+music.play(1);
+run(0.05);
+music.startBossMusic();
+run(BAR);
+music.startBossMusic(); // a second boss joins
+check('the second arrival does not restart the rotation from the intro',
+  playing() === 'boss0', String(playing()));
+music.endBossMusic();
+check('one kill with a boss still in the water leaves the fight music up',
+  music.bossMusicActive() === true);
+run(0.1);
+check('...still on the boss bank', String(playing()).startsWith('boss'), String(playing()));
+music.endBossMusic();
+check('the last kill hands it back', music.bossMusicActive() === false);
+check('...to the run\'s own loop', playing() === '1', String(playing()));
+
+section('A run restarted mid-fight opens on the run\'s music');
+reset();
+music.play(1);
+run(0.05);
+music.startBossMusic();
+run(BAR + 0.1);
+check('the fight is up', music.bossMusicActive() === true);
+music.play(1); // the player died and started again
+run(0.05);
+check('the new run is not in a fight', music.bossMusicActive() === false);
+check('...and opens on its first loop', playing() === '1', String(playing()));
+run(BAR * 2);
+check('...which the dead fight never takes back', playing() === '1', String(playing()));
+
+section('Encoder padding is skipped, not played as a gap');
+reset();
+// 36ms of leading silence, which is what an mp3 in this library decodes with.
+await loadLoop('4', BAR * 4, { lead: 0.036 });
+CONFIG.music.levelsPerSlot = 1;
+music.play(4);
+run(0.05);
+const padded = lastLoop();
+check('the loop starts at the downbeat, not at sample zero',
+  near(padded.offset ?? 0, 0.036, 0.0005), `offset ${(padded.offset ?? 0).toFixed(4)}s`);
+check('...and wraps back to the downbeat rather than to the silence',
+  near(padded.loopStart ?? 0, 0.036, 0.0005), `loopStart ${(padded.loopStart ?? 0).toFixed(4)}s`);
+check('...with nothing taken off the end', near(padded.loopEnd ?? 0, BAR * 4, 1e-6),
+  'a bar may legitimately end quiet — the back of the file is never trimmed');
+
+section('A boss bank that never loaded costs the fight its score, not the game its sound');
+reset();
+// Every boss file 404s — the public/music path is wrong, the deploy dropped
+// them, the player is offline. The run's own music must simply carry on: this
+// is the failure that would otherwise be SILENT, an ocean that goes quiet on
+// the one arrival the whole run builds to.
+const savedBank = CONFIG.music.bossSrc;
+CONFIG.music.bossSrc = [];
+music.play(1);
+run(0.05);
+check('the arrival reports that it could not take the transport', music.startBossMusic() === false);
+check('...and does not think a fight is scored', music.bossMusicActive() === false);
+run(BAR * 2);
+check('...the run\'s own music is still playing', playing() === '1', String(playing()));
+// And the kill's handover has to be safe with a fight that never started, or
+// every boss death with a missing bank would swap the track for no reason.
+music.endBossMusic();
+check('an unmatched kill does not disturb the music', playing() === '1', String(playing()));
+CONFIG.music.bossSrc = savedBank;
+
+section('The bar grid measures the files, and says which one is wrong');
+const report = Object.fromEntries(music.trackReport().map((r) => [r.name, r]));
+check('a four-bar loop measures as four bars', report.boss0?.bars === 4, `${report.boss0?.bars} bars`);
+check('a seven-bar loop measures as seven', report.boss3?.bars === 7, `${report.boss3?.bars} bars`);
+check('an on-grid file reports no drift', near(report.boss1?.drift ?? 1, 0, 1e-6),
+  `${((report.boss1?.drift ?? 0) * 1000).toFixed(1)}ms`);
+// The real SealSurvivor_Boss_Loop01.mp3, to the millisecond: 192ms short of the
+// eight bars it is written as. No loop point can repair that — the samples do
+// not exist — so the one thing the code owes it is to SAY so.
+await loadLoop('boss4', 17.928);
+const short = music.trackReport().find((r) => r.name === 'boss4');
+check('a file short of its bar count is still read as that many bars', short?.bars === 8, `${short?.bars} bars`);
+check('...and the shortfall is reported rather than hidden',
+  near(short?.drift ?? 0, -0.192, 0.001), `${((short?.drift ?? 0) * 1000).toFixed(0)}ms short of eight bars`);
 music.stop();
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);

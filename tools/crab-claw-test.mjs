@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
 import { ASSETS, installModel, createVisual } from '../path/src/assets.js';
 import { createAnimationController, stateForSpeed } from '../path/src/systems/animation.js';
-import { createClawDriver } from '../path/src/systems/crabClaw.js';
+import { createClawDriver, pinchReach } from '../path/src/systems/crabClaw.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODEL = resolve(HERE, '../public/models/crabpincer.glb');
@@ -270,6 +270,56 @@ console.log('\nCRAB CLAW\n');
   CONFIG.crabClaw.enabled = wasEnabled;
   scene.remove(crab.visual);
   scene.remove(plain.visual);
+}
+
+// ---------------------------------------------------------------------------
+// THE GATE THAT FIRES IT.
+//
+// Everything above drives the gesture by calling strike() directly, which is
+// exactly how the mechanic could be dead in the game while every check here
+// passed: the commit gate in entities/enemies.js was measured centre-to-centre
+// while its paired damage check in systems/combat.js measured surface to
+// surface, so when the swarm crab's radius went 0.8 -> 0.2 the gate fell to
+// 0.42 world units — inside a seal whose own radius is 1.0 — and no crab ever
+// asked for a pinch again.
+//
+// So this section tests the ARITHMETIC of the reach against the roster, at the
+// radii the CSV actually ships, and it is deliberately not a bone test.
+{
+  console.log('\nTHE COMMIT GATE');
+  const pc = CONFIG.crabClaw;
+  const pR = CONFIG.player.hitRadius;
+
+  for (const key of ['walkingCrab', 'emberCrab']) {
+    const def = CONFIG.enemies[key];
+    if (!def) continue;
+    const commit = pinchReach(def.radius, pR, pc.commitRange ?? 2.1);
+    const reach = pinchReach(def.radius, pR, pc.range ?? 2.4);
+    // What ordinary contact already costs you. A commit gate tighter than this
+    // means the crab is inside you before it starts winding up, so the tell has
+    // nothing left to telegraph — the hit lands with the touch.
+    const contact = def.radius + pR;
+    console.log(`        ${key.padEnd(13)} radius ${String(def.radius).padStart(4)}`
+      + `   contact ${contact.toFixed(2)}   commit ${commit.toFixed(2)}   reach ${reach.toFixed(2)}`);
+
+    check(`${key}: the pinch commits before the crab is touching you`,
+      commit > contact,
+      `commits at ${commit.toFixed(2)}, contact starts at ${contact.toFixed(2)}`);
+    check(`${key}: ...and the claw still lands from where it committed`,
+      reach >= commit,
+      `reach ${reach.toFixed(2)} vs commit ${commit.toFixed(2)}`);
+    // The regression itself, stated as the thing that must never come back: a
+    // gate that ignores the seal's body is unreachable at any small radius.
+    check(`${key}: the gate is not measured centre-to-centre`,
+      commit > def.radius * (pc.commitRange ?? 2.1) + 1e-9,
+      `${commit.toFixed(2)} against the ${(def.radius * (pc.commitRange ?? 2.1)).toFixed(2)} a centre-to-centre gate would use`);
+  }
+
+  // And it has to survive the hitbox being retuned again, which is the whole
+  // reason this is arithmetic rather than a number written down.
+  const tiny = pinchReach(0.05, pR, pc.commitRange ?? 2.1);
+  check('a crab with almost no hitbox can still commit to a pinch',
+    tiny > 0.05 + pR, `${tiny.toFixed(2)} at radius 0.05`);
 }
 
 console.log(`\n${failures === 0 ? 'all good' : `${failures} FAILED`}\n`);

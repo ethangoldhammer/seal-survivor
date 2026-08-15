@@ -292,6 +292,9 @@ export function initStagePanel(sceneGetter) {
 
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'f' && e.key !== 'F') return;
+    // Shift+F is fullscreen (main.js). This handler has to accept 'F' as well
+    // as 'f' — caps lock — so the modifier is what separates them, not the case.
+    if (e.shiftKey) return;
     // isTextEntry, NOT isTypingTarget: the latter counts a focused range input
     // as typing, so F would stop working the moment you touched any slider on
     // this very panel.

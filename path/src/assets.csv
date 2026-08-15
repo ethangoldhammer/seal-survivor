@@ -4,6 +4,7 @@ belugaDrone,3.1,
 bounceShot,1.58,
 bubbleOrb,2.84,
 bullet,1.2,
+chumChunk,2.2,the big health chunk - xpOrb has no row so it renders at 1; this is the multiple of an ordinary orb before CONFIG.chumChunk.scaleMin/Max scales it by the heal it rolled
 club,1,size is CONFIG.club.length at 1 - the hitbox is the config value
 clubBoom,1,Powder Keg club - same model as club - keep equal
 clubIce,1,Cold Snap club - same model as club - keep equal
@@ -13,6 +14,7 @@ eelCompanion,1.5,
 enemyAbyssShark,2.62,night variant of enemyGreatWhite - keep these two equal
 enemyBarracuda,1.78,
 enemyBossCrab,2.3,the king crab boss - same animal as enemyWalkingCrab so it takes the same size; the boss step is bosses.csv sizeMul on top
+enemyBossHammerhead,3.6,"The hammerhead boss. The one boss asset whose size lives ENTIRELY in this column: enemyHammerhead has no row at all, so the wave animal spawns at 1 and its fit of 4.0 is its whole on-screen length. 4.0 x 3.6 = 14.4 here, and bossHammerhead's 1.6 takes it to 23.0 - the smallest boss body in the game, which is the point of it. Out of family with the other numbers in this column for exactly that reason; measured by tools/boss-scale-check.mjs"
 enemyEmberCrab,2.3,same animal as enemyWalkingCrab - keep these two equal
 enemyGiantSquid,2,The kraken. 7.4 fit x this = 14.8 long - the family the other apex bodies are in. Measured by tools/boss-scale-check.mjs
 enemyGreatWhite,2.62,
@@ -28,11 +30,17 @@ enemySeaTurtle,3.08,
 enemyShark,2.66,
 enemyStingray,3.1,
 enemyWalkingCrab,2.3,matched to enemyEmberCrab; 2.3 reproduces the old crab's on-screen height on the new rig
+harp,1,"the orbiting harp - fit is 1.6 world units against the seal's 2.6, so this column is the multiple of a deliberately under-sized instrument"
 missile,2,
+moneyRoll1,1,"the yacht's explosive — a banded roll of hundreds. Size is 1 on purpose: the sizing that matters is `fit` in assets.js, set to the length of the oval barrel this replaces, so the swap is a look change and not a balance one."
+moneyRoll2,1,"spare roll from the same pack. Unused by the yacht's two guns; here so a row exists before anybody reaches for it — an asset with no row spawns at 1 silently."
+moneyRoll3,1,the yacht's seeker — the shorter fit of the four
+moneyRoll4,1,"spare roll, seeker size. See moneyRoll2."
+musicNote,1,the harp's note
 octoGrabber,1.34,
-orcaFriendBull,1,The pod leader — Orca Family, slot 0.
-orcaFriendCalf,1,Orca Family, slot 2. Smallest of the three.
-orcaFriendCow,1,Orca Family, slot 1.
+orcaFriendBull,1,"The pod leader — Orca Family, slot 0."
+orcaFriendCalf,1,"Orca Family, slot 2. Smallest of the three."
+orcaFriendCow,1,"Orca Family, slot 1."
 rapidFireOrb,2.4,
 seagull,9.54,
 sealTeam,2.72,

@@ -154,8 +154,16 @@ const attrs = {};
 const tracked = [];
 // A ceiling on the bookkeeping, not on the bubbles: past this, extra particles
 // simply aren't followed and fade out on their own timer as they always did.
-// Well above what breath and wake produce together at full tilt.
-const MAX_TRACKED = 256;
+//
+// Sized against everything that can be bubbling at once, which since the hulls
+// started shedding wakes (systems/boatWake.js) is no longer just the seal: the
+// player's breath and wake, plus up to `boats.maxAlive` hulls and a boat boss.
+// A hull's bubbles are born a third of a unit under the line and reach it in a
+// fraction of their life, so each hull holds far fewer slots than its emission
+// rate suggests — but the whole point of a boat wake is the foam, and foam is
+// what this list pays for. Overflowing it does not drop bubbles; it drops the
+// POPS, which is the effect going quiet exactly when the water is busiest.
+const MAX_TRACKED = 384;
 
 // --- uploading only what changed --------------------------------------------
 //
@@ -286,8 +294,11 @@ function rand(range, fallback) {
 
 /**
  * Fire a named burst from CONFIG.emitters.
- * opts: { dirX, dirY, vx, vy, scale, speedMul, glow }
- * Colour is not among them — see the palette note in CONFIG.emitters.
+ * opts: { dirX, dirY, vx, vy, scale, speedMul, glow, color }
+ *
+ * `color` overrides the emitter's palette for this one burst. It exists for
+ * DEATHS and nothing else — see the note at the tint below, and the palette
+ * note in CONFIG.emitters for why every other burst is the emitter's colour.
  *
  * `speedMul` scales how hard the burst is thrown, leaving the emitter's spread,
  * size, life and palette alone — `scale` says how MANY, this says how FAST. It
@@ -325,6 +336,22 @@ export function emit(name, x, y, opts = {}) {
 
   const color = new THREE.Color();
 
+  // A death tint, lifted clear of the water if the creature is a dark one.
+  // Resolved ONCE per burst rather than per particle: the lift is a property of
+  // the creature, and doing it inside the loop would fight the per-particle
+  // brightness scatter below for the same channels. See CONFIG.fx.deathTintMinPeak.
+  let tint = null;
+  if (opts.color != null) {
+    tint = new THREE.Color(opts.color);
+    const floor = CONFIG.fx?.deathTintMinPeak ?? 0;
+    const peak = Math.max(tint.r, tint.g, tint.b);
+    // A creature whose colour is pure black has no hue to preserve, so there is
+    // nothing to lift it by — it falls back to the emitter's palette instead of
+    // dividing by zero into NaN.
+    if (peak <= 0) tint = null;
+    else if (peak < floor) tint.multiplyScalar(floor / peak);
+  }
+
   // Where this burst's run of slots begins, for the upload range below.
   const firstIdx = cursor % capacity;
 
@@ -350,15 +377,28 @@ export function emit(name, x, y, opts = {}) {
     attrs.aVelocity.array[p3 + 1] = vy;
     attrs.aVelocity.array[p3 + 2] = 0;
 
-    // The emitter's palette, and NOTHING else. There was a `opts.color` path
-    // here that let a caller tint a burst — kills and mussel impacts used it to
-    // fire in the dying creature's own colour, which sounds like it reads as
-    // "that creature, hit" and in a real fight reads as the screen throwing a
-    // different hue every second: magenta, lime, purple, yellow, whatever the
-    // roster happened to be. The palettes below are authored per emitter as
-    // one colour family each; a burst's colour says what KIND of event it was,
-    // and that only works if it is the only thing saying it.
-    color.set(colors[(Math.random() * colors.length) | 0]);
+    // The emitter's palette — EXCEPT on a death, which is tinted with the
+    // creature's own emissive by whoever fired it.
+    //
+    // This was removed once, on the grounds that a per-creature tint puts a
+    // different hue on the screen every second or two across a wave. That is
+    // true and it is the point: a kill is the one event where the thing that
+    // died is the information, and a fish coming apart in its own colour is
+    // what says WHICH fish. The rule the palette note in CONFIG.emitters
+    // states — one colour family per emitter, a burst's colour says what KIND
+    // of event it was — still holds for every emitter that isn't a death.
+    // Deaths are the exception, deliberately, and are never generic: see
+    // assetBaseColor, which always answers with a colour rather than falling
+    // through to the palette below.
+    if (tint) {
+      // One hue applied flat to every particle reads as a blob rather than an
+      // explosion, so brightness is scattered per particle. That restores the
+      // depth the multi-colour palettes give the other emitters while staying
+      // unmistakably the one hue.
+      color.copy(tint).multiplyScalar(0.65 + Math.random() * 0.7);
+    } else {
+      color.set(colors[(Math.random() * colors.length) | 0]);
+    }
     // Glow overdrive: multiplying color channels past 1.0 here is what
     // actually does something now that particles render to an HDR target —
     // bloom's bright-pass sees the true value, not a pre-clamped 1.0. Each

@@ -2,45 +2,13 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "scratch-preview",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "5188",
-        "--directory",
-        "/private/tmp/claude-501/-Users-ethangoldhammer-Projects-seal-survivor/2329347e-b815-4454-a2e9-44d9bb1839ed/scratchpad"
-      ],
-      "port": 5188
-    },
-    {
-      "name": "ink-preview",
-      "runtimeExecutable": "node",
-      "runtimeArgs": [
-        "/private/tmp/claude-501/-Users-ethangoldhammer-Projects-seal-survivor/5c3d38a4-c8e2-41f6-b94f-c86ea2f524f6/scratchpad/serve.mjs"
-      ],
-      "port": 4611
-    },
-    {
-      "name": "shader-check",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "5190",
-        "--directory",
-        "/private/tmp/claude-501/-Users-ethangoldhammer-Projects-seal-survivor/e293b3be-e17f-426e-be8c-8750c206771d/scratchpad"
-      ],
-      "port": 5190
-    },
-    {
       "name": "csv-editor",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
         "csv"
       ],
-      "port": 5177
+      "autoPort": true
     },
     {
       "name": "dev",

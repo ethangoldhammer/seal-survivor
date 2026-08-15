@@ -40,6 +40,19 @@
 //   OPTIONAL — the game already has a default for each (shown), so a blank
 //   cell REMOVES the field and that default applies. This is how you turn a
 //   per-creature ramp off: clear the cell.
+//     chumRadius             = radius  what the DROP is sized and priced off.
+//                                      Blank is right for almost everything:
+//                                      `radius` is a body's size and the orb
+//                                      tiers, the mass ramp and the heal all
+//                                      key on it. The exception is a creature
+//                                      whose radius is doing a second job —
+//                                      the king crab's is its RESTING HEIGHT
+//                                      off the sand (see CONFIG.enemies
+//                                      .bossCrab), so at 0.5 the biggest body
+//                                      in the game dropped a minnow's orb: 44
+//                                      xp where the boss shark pays 410. This
+//                                      column is the size the drop should have
+//                                      read, and nothing else uses it.
 //     speedVariance              0     per-individual speed jitter
 //     speedPerDifficulty         0     linear speed gain per difficulty point
 //     turnRate                   none  rad/s; blank = pivots on the spot
@@ -95,6 +108,9 @@ const REQUIRED = {
 // Blank here means "this creature doesn't have this", and the game's own `??`
 // default takes over. Listed with the same minimums the values can sanely hold.
 const OPTIONAL = {
+  // What the DROP reads instead of `radius`, for a body whose hitbox is not a
+  // statement about its size. See the column note at the top.
+  chumRadius: { min: 0 },
   speedVariance: { min: 0 },
   speedPerDifficulty: { min: 0 },
   turnRate: { min: 0 },

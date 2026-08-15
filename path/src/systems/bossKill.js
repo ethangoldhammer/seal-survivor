@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { setSfxRateScale } from './audio.js';
-import { setMusicRateScale, hushMusic, releaseMusicHush } from './music.js';
+import { setMusicRateScale, hushMusic, releaseMusicHush, endBossMusic } from './music.js';
 
 // THE KILL SHOT — the two seconds after a boss dies.
 //
@@ -53,7 +53,8 @@ import { setMusicRateScale, hushMusic, releaseMusicHush } from './music.js';
 
 export const bossKillState = {
   active: false,
-  // 'punch' on the way down, 'hold' at the bottom, 'restore' on the way back.
+  // 'punch' on the way down, 'hold' at the bottom, 'print' while the photo is
+  // in flight, 'restore' on the way back.
   phase: 'none',
   timeScale: 1,
   elapsed: 0,
@@ -64,6 +65,21 @@ export const bossKillState = {
   // dilation rather than something that crawls with it.
   camZoom: 1,
   camWeight: 0,
+  // WHERE THE FRAME IS POINTED, in world units. Was the seal's own position,
+  // read straight off the player by main.js; it is now a point BETWEEN the
+  // seal and the body it just killed, and the zoom above is pulled back
+  // whenever the push-in would crop one of them out. See applyFraming.
+  //
+  // A plain object rather than a Vector3 because world.focusCamera only ever
+  // reads .x and .y, and this is rewritten every frame of a shot.
+  cam: { x: 0, y: 0 },
+  // Whether `cam` has been worked out yet for THIS shot. A boss dies partway
+  // through a frame — after the camera work, in systems/boss.js — so the shot
+  // is already `active` for the rest of that frame with nothing but the last
+  // one's framing in it. One frame pointed at where the previous seal stood is
+  // a visible jump on the killing blow, which is the worst frame in the run to
+  // put one on.
+  framed: false,
 };
 
 // THE FRAME WORTH KEEPING. Raised for exactly one frame, partway through the
@@ -85,6 +101,147 @@ export function bossKillShotDue() {
   if (!shotDue) return false;
   shotDue = false;
   return true;
+}
+
+/**
+ * When the shutter goes, in WALL seconds after the kill.
+ *
+ * The one derivation of this number in the game: the ramp down, then a
+ * fraction of the way into the beat. systems/celebrate.js times the seal's
+ * pose off it, systems/bossCorpse.js times how long the body is kept whole
+ * off it, and ui/snapshotPrint.js is handed the picture on it — retune the
+ * shot and all three follow, because none of them holds a copy.
+ */
+export function snapshotMoment() {
+  const k = CONFIG.boss?.kill ?? {};
+  const dilate = Math.max(0.01, k.dilateTime ?? 0.12);
+  const beat = Math.max(0, k.beatTime ?? 1.5);
+  return dilate + beat * (k.snapshot?.at ?? 0.6);
+}
+
+/**
+ * How long the world stays slow AFTER the beat, while the print is in the air.
+ *
+ * Derived from the print's own timings rather than typed next to them, for the
+ * same reason the pose is: the phase exists to cover the animation, and a hand
+ * -typed length is a second description of it that goes stale the first time
+ * the print is retuned. What is left of the BEAT after the shutter already
+ * covers part of the flight, so only the remainder is bought here — a print
+ * short enough to finish inside the beat adds no phase at all.
+ */
+export function printPhaseSeconds() {
+  const k = CONFIG.boss?.kill ?? {};
+  const p = k.print ?? {};
+  if (p.enabled === false || k.snapshot?.enabled === false) return 0;
+  const flight = ((p.ejectMs ?? 260) + (p.holdMs ?? 620) + (p.parkMs ?? 520)) / 1000;
+  const beat = Math.max(0, k.beatTime ?? 1.5);
+  const leftOfBeat = beat * (1 - Math.max(0, Math.min(1, k.snapshot?.at ?? 0.6)));
+  return Math.max(0, flight - leftOfBeat);
+}
+
+// WHAT THE SHOT IS LOOKING AT. Written once a frame by main.js, which is the
+// only place that knows both where the seal is and how big the frame is; read
+// by applyFraming below. Kept as loose numbers rather than as the caller's own
+// objects so nothing here can hold a reference to a creature that is about to
+// go back to the pool.
+const framing = {
+  px: 0, py: 0,
+  sx: 0, sy: 0, sr: 0,
+  hasSubject: false,
+  halfW: 0, halfH: 0,
+};
+
+/**
+ * @param playerPos the seal.
+ * @param subject   { x, y, r } — the body, or null when there isn't one to
+ *                  frame (the shot then behaves exactly as it used to).
+ * @param half      { w, h } the visible half-frame in world units at zoom 1.
+ */
+export function setBossKillFraming(playerPos, subject, half) {
+  framing.px = playerPos?.x ?? 0;
+  framing.py = playerPos?.y ?? 0;
+  framing.halfW = half?.w ?? 0;
+  framing.halfH = half?.h ?? 0;
+  framing.hasSubject = !!subject;
+  if (subject) {
+    framing.sx = subject.x ?? 0;
+    framing.sy = subject.y ?? 0;
+    framing.sr = Math.max(0, subject.r ?? 0);
+  }
+}
+
+// TWO ANIMALS IN ONE FRAME.
+//
+// The push-in used to be aimed at the seal and zoomed to a fixed 2.2, which is
+// the right shot for a seal on its own and the wrong one for a seal standing
+// over something forty units long: at 2.2 the body is mostly outside the
+// frame, and the picture that gets kept is a close-up of a celebration with no
+// visible reason for it.
+//
+// So the frame is aimed BETWEEN them and the zoom is whatever actually fits.
+// `subjectBias` is short of the midpoint on purpose — the seal is the subject
+// and the boss is what it did, so the frame leans toward the animal that is
+// still alive.
+//
+// The fit only ever pulls the zoom BACK (it is a min against the push, floored
+// at 1), so this can widen a shot that would have cropped and can never invent
+// a push-in the shot didn't ask for, nor open out past the ordinary frame.
+function applyFraming() {
+  const c = cfg().cam ?? {};
+  bossKillState.cam.x = framing.px;
+  bossKillState.cam.y = framing.py;
+  bossKillState.framed = true;
+  if (!framing.hasSubject || c.frameBoth === false || !(framing.halfW > 0)) return;
+
+  const bias = Math.max(0, Math.min(1, c.subjectBias ?? 0.42));
+  const minZoom = c.minZoom ?? 1;
+  const pad = Math.max(0, c.framePad ?? 1.8);
+
+  // Both subjects have to be inside the half-frame measured FROM THE POINT THE
+  // CAMERA IS ACTUALLY AIMED AT, which is not the midpoint between them — the
+  // bias moved it. Measuring the fit off the separation instead is right at
+  // bias 0.5 and quietly crops the far animal at every other value.
+  const fitAt = (fx, fy) => {
+    const needW = Math.max(
+      Math.abs(framing.px - fx) + pad,
+      Math.abs(framing.sx - fx) + framing.sr + pad,
+    );
+    const needH = Math.max(
+      Math.abs(framing.py - fy) + pad,
+      Math.abs(framing.sy - fy) + framing.sr + pad,
+    );
+    return Math.min(
+      framing.halfW / Math.max(needW, 1e-3),
+      framing.halfH / Math.max(needH, 1e-3),
+    );
+  };
+
+  let fx = framing.px + (framing.sx - framing.px) * bias;
+  let fy = framing.py + (framing.sy - framing.py) * bias;
+  let fit = fitAt(fx, fy);
+
+  // THE LEAN IS A LUXURY. Aiming short of the midpoint costs frame on the far
+  // side, and across a whole arena — a seal at one wall, a megalodon dead at
+  // the other — that cost is the difference between the boss being in the
+  // picture and being an inch outside it. So when the biased frame cannot hold
+  // both at the widest zoom allowed, the lean is given up and the pair is
+  // centred, which is the framing that fits the most of them.
+  //
+  // Giving up the ZOOM instead is not an option: below minZoom the frame runs
+  // off the water plane onto the bare scene background.
+  if (fit < minZoom) {
+    const loX = Math.min(framing.px, framing.sx - framing.sr);
+    const hiX = Math.max(framing.px, framing.sx + framing.sr);
+    const loY = Math.min(framing.py, framing.sy - framing.sr);
+    const hiY = Math.max(framing.py, framing.sy + framing.sr);
+    fx = (loX + hiX) / 2;
+    fy = (loY + hiY) / 2;
+    fit = fitAt(fx, fy);
+  }
+
+  bossKillState.camZoom = Math.max(minZoom, Math.min(bossKillState.camZoom, fit));
+  bossKillState.cam.x = fx;
+  bossKillState.cam.y = fy;
 }
 
 let clock = 0;
@@ -142,6 +299,8 @@ export function startBossKill() {
   if (cfg().enabled === false) return false;
   bossKillState.active = true;
   bossKillState.phase = 'punch';
+  // Unframed until the next frame works it out — see bossKillState.framed.
+  bossKillState.framed = false;
   bossKillState.elapsed = 0;
   // A picture per boss, and one only. Armed here rather than cleared on the
   // way out, so a shot interrupted before its hold — by a death, by a restart —
@@ -198,6 +357,40 @@ function pushCamera(t, releasing) {
     + ((cam.weight ?? 0.9) - fromWeight) * smoothstep(t / Math.max(0.01, cam.frameTime ?? 0.2));
 }
 
+// Into the ramp back, from wherever the moment actually got to. Shared by the
+// two phases that can end it (a beat with no print behind it, and the print
+// finishing) so the handover is written once — the music release in particular
+// is easy to leave behind in one of two exits, and a hush that outlives its
+// shot is a silent ocean with nothing wrong on screen to explain it.
+function beginRestore(c) {
+  bossKillState.phase = 'restore';
+  clock = 0;
+  fromScale = bossKillState.timeScale;
+  fromZoom = bossKillState.camZoom;
+  fromWeight = bossKillState.camWeight;
+  // The music comes back WITH the water, not after it. Both are the same
+  // event — the moment ending — and a score that waited for the frame to
+  // finish opening out would leave a second of live, silent gameplay in
+  // between, which reads as the game having lost its music rather than as
+  // the beat being over.
+  const m = c.music ?? {};
+  // THE FIGHT'S MUSIC ENDS HERE, and it ends BEFORE the release — the order is
+  // the whole reason this is two calls and not one.
+  //
+  // The hush has had the music gain at zero since the killing blow, so the boss
+  // loop has been playing silently underneath the tail for the length of the
+  // held beat. Swapping the transport back to the run's own loop while that is
+  // still true is the one moment in the fight where a switch costs nothing:
+  // there is no seam to hear, so it needs no boundary to land on, and the
+  // ordinary music gets to come back from its own bar one.
+  //
+  // Then the release ramps the gain up, and what fades in is already the right
+  // track. Reversed, the player would hear a second of boss music return before
+  // it was cut a second time — the fight ending twice.
+  endBossMusic();
+  if (m.enabled !== false) releaseMusicHush(m.returnFade ?? 0.35);
+}
+
 /**
  * @param rawDt UNSCALED seconds. Like the death dive and the level-up ramp,
  *              this runs on the wall clock because it is what decides the
@@ -216,6 +409,7 @@ export function updateBossKill(rawDt) {
     const into = Math.max(0.01, c.dilateTime ?? 0.12);
     const scale = apply(fromScale + (hold - fromScale) * smoothstep(clock / into));
     pushCamera(clock, false);
+    applyFraming();
     if (clock >= into) {
       bossKillState.phase = 'hold';
       clock = 0;
@@ -231,6 +425,7 @@ export function updateBossKill(rawDt) {
     // `pushCamera` is fed the time since the punch began, not since the hold
     // did, so a push longer than the dilation carries on through the beat.
     pushCamera(clock + Math.max(0.01, c.dilateTime ?? 0.12), false);
+    applyFraming();
     // NOT `hold` — that is the time SCALE, and it is already in scope. A local
     // called the same thing shadowed it and the whole hold ran at 0.55x instead
     // of 0.12x: the slow motion quietly stopped being slow, with nothing
@@ -241,19 +436,30 @@ export function updateBossKill(rawDt) {
       shotDue = c.snapshot?.enabled !== false;
     }
     if (clock >= holdFor) {
-      bossKillState.phase = 'restore';
-      clock = 0;
-      fromScale = bossKillState.timeScale;
-      fromZoom = bossKillState.camZoom;
-      fromWeight = bossKillState.camWeight;
-      // The music comes back WITH the water, not after it. Both are the same
-      // event — the moment ending — and a score that waited for the frame to
-      // finish opening out would leave a second of live, silent gameplay in
-      // between, which reads as the game having lost its music rather than as
-      // the beat being over.
-      const m = c.music ?? {};
-      if (m.enabled !== false) releaseMusicHush(m.returnFade ?? 0.35);
+      // Into the print if there is one to wait for, straight out if there
+      // isn't — the phase buys time for an animation, so with the print
+      // switched off it must not exist at all rather than be a beat of zero
+      // length that still costs a frame of state.
+      if (printPhaseSeconds() > 0) {
+        bossKillState.phase = 'print';
+        clock = 0;
+      } else {
+        beginRestore(c);
+      }
     }
+    return apply(hold);
+  }
+
+  // THE PRINT IS IN THE AIR. The world stays exactly where the beat left it —
+  // this is the same held frame, extended — while the photo ejects, develops
+  // and flies to the corner (see ui/snapshotPrint.js). It is a separate phase
+  // rather than a longer `beatTime` because it is a different thing being
+  // waited on: the beat is how long the wreckage is worth looking at, and this
+  // is how long the print takes. Retuning either must not move the other.
+  if (bossKillState.phase === 'print') {
+    pushCamera(clock + Math.max(0.01, c.dilateTime ?? 0.12) + Math.max(0, c.beatTime ?? 1.5), false);
+    applyFraming();
+    if (clock >= printPhaseSeconds()) beginRestore(c);
     return apply(hold);
   }
 
@@ -264,6 +470,7 @@ export function updateBossKill(rawDt) {
   const t = clock / Math.max(0.01, c.returnTime ?? 0.4);
   const scale = apply(fromScale + (1 - fromScale) * smoothstep(t));
   pushCamera(clock, true);
+  applyFraming();
   const camDone = clock >= Math.max(0.01, cfg().cam?.releaseTime ?? 0.5);
   if (t >= 1 && camDone) {
     resetBossKill();
@@ -281,6 +488,11 @@ export function resetBossKill() {
   bossKillState.elapsed = 0;
   bossKillState.camZoom = 1;
   bossKillState.camWeight = 0;
+  bossKillState.framed = false;
+  // The subject goes with the shot. A stale body left in here would be framed
+  // against by the NEXT kill for its first frame, which is a picture of two
+  // bosses one of which is no longer in the water.
+  framing.hasSubject = false;
   clock = 0;
   fromScale = 1;
   fromZoom = 1;
@@ -299,5 +511,14 @@ export function resetBossKill() {
     // moment that is no longer happening. Harmless if the beat was already
     // over: the release is a no-op once the hush has been let go.
     releaseMusicHush(0);
+    // The fight's music with it, and at a bar rather than instantly: this is
+    // the path where the beat was CUT SHORT, so the hush has just been let go
+    // and the boss loop is audible again. Without this the shot's normal exit
+    // is the only thing that ever ends the rotation, and a beat interrupted
+    // half way — the tuner switching the shot off, a restart landing inside
+    // one — would leave boss music looping over an empty ocean for the rest of
+    // the run. Harmless from startGame: play() re-picks the opening loop a
+    // moment later either way.
+    endBossMusic({ immediate: false });
   }
 }

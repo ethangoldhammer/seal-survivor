@@ -33,7 +33,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, extname, basename } from 'node:path';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number(process.env.CSV_EDITOR_PORT || 5177);
+// 5177 is the door to knock on by hand. PORT is what a harness hands over when
+// it has assigned one, and it has to be honoured or a second session's editor
+// dies on "port in use" against the first session's — which is reachable
+// whenever two Claude chats are open on this repo, and is exactly the case
+// this file's mtime check exists for. CSV_EDITOR_PORT still wins over both, so
+// asking for a specific port by hand is unaffected.
+const PORT = Number(process.env.CSV_EDITOR_PORT || process.env.PORT || 5177);
 
 const SRC = join(ROOT, 'path/src');
 const readSrc = (f) => { try { return readFileSync(join(SRC, f), 'utf8'); } catch { return ''; } };
@@ -105,6 +111,32 @@ const SPAWN_GROUPS = extractObjectKeys(configSrc, 'groupMaxAlive');
 // offered one the code has no behaviour for would be the editor inviting the
 // exact typo the parser refuses.
 const PERK_IDS = extractStringArray(readSrc('bossPerkTable.js'), 'PERK_IDS');
+// The two closed lists callouts.csv joins on, read out of the parser that
+// enforces them for the same reason: a `kind` this editor offered and the game
+// refused would be the tool inviting the row-dropping typo. Both fall back to
+// what they are today rather than to nothing, so a rename in the parser
+// degrades the dropdown instead of emptying it.
+const calloutSrc = readSrc('calloutTable.js');
+const orToday = (found, today) => (found.length ? found : today);
+const CALLOUT_KINDS = orToday(extractStringArray(calloutSrc, 'CALLOUT_KINDS'), ['warn', 'coach']);
+const ARROW_TARGETS = orToday(extractStringArray(calloutSrc, 'ARROW_TARGETS'), ['chum', 'surface']);
+const CALLOUT_ANCHORS = orToday(extractStringArray(calloutSrc, 'CALLOUT_ANCHORS'), ['band', 'player']);
+// Read out of the game rather than restated here, like every other list in this
+// file. NAME_SLOTS is the one the parser actually validates against — SLOTS is
+// the shorter list of the parts a name is BUILT from, and offering that one
+// would leave `nickname` a value the editor refuses to type and the game
+// accepts. Falls back to the three composed slots if the extractor comes back
+// empty (NAME_SLOTS is a spread of SLOTS, which a literal-array regex can't
+// see), so the dropdown degrades to what it always was rather than to nothing.
+const NAME_SLOTS = (() => {
+  const src = readSrc('bossNameTable.js');
+  const composed = extractStringArray(src, 'SLOTS');
+  if (!composed.length) return ['prefix', 'root', 'epithet'];
+  // `export const NAME_SLOTS = [...SLOTS, 'nickname', 'solo'];` — the extras
+  // are whatever is quoted in that literal, on top of the composed slots.
+  const extras = extractStringArray(src, 'NAME_SLOTS');
+  return [...composed, ...extras.filter((s) => !composed.includes(s))];
+})();
 // ...and the boss archetypes, read out of bosses.csv itself, so the `bosses`
 // column offers what is actually in the roster today.
 const idsFromCsv = (rel) => {
@@ -115,6 +147,19 @@ const idsFromCsv = (rel) => {
 };
 const BOSS_IDS = idsFromCsv('path/src/bosses.csv');
 const ENEMY_IDS = idsFromCsv('path/src/enemies.csv');
+
+// The causes of death a quip can be written for, read out of deathCauses.js so
+// the picker offers what the game actually classifies. The `label` rides along
+// because "orca" and "the orca" are the same tick but only one of them reads
+// like a sentence in a checklist.
+const DEATH_CAUSES = (() => {
+  const src = readSrc('deathCauses.js');
+  const out = [];
+  for (const m of src.matchAll(/\{\s*id:\s*'([\w]+)',\s*label:\s*'([^']*)'/g)) {
+    out.push({ id: m[1], label: m[2] });
+  }
+  return out;
+})();
 
 // ---------------------------------------------------------------------------
 // THE GAME ITSELF, loaded on demand.
@@ -210,6 +255,7 @@ const DOCS = {
   'enemies.csv': {
     id: 'Must match a key in CONFIG.enemies. The join key — renaming it here orphans the row.',
     radius: 'Hitbox radius in world units.',
+    chumRadius: 'What the chum orb is sized and priced off — its tier, the mass ramp, its heal and its scale. Blank means "same as radius", which is right for everything whose hitbox describes how big it is. Fill it in only when radius is doing a second job: the king crab\'s is its resting height off the sand, so at 0.5 it dropped a minnow\'s orb.',
     hp: 'Starting health at difficulty 0.',
     hpPerDifficulty: 'Health gained per difficulty point (1 point = 20s).',
     speed: 'Base swim speed.',
@@ -264,11 +310,26 @@ const DOCS = {
     text: 'The game-over headline itself.',
     enabled: 'FALSE takes it out of rotation. Blank means enabled.',
     weight: 'Likelihood relative to the other rows. Blank = 1, 0 is never shown.',
+    causes: 'What has to have killed you for this line to fire. BLANK MEANS ANY DEATH. A line written for a cause BEATS the general pool rather than competing with it — die to a crab and only the crab lines are drawn from, so tagging one makes it certain, not merely likelier. Tick several and the line covers all of them.',
+  },
+  'callouts.csv': {
+    id: 'WHICH callout this is, and it joins to code — the condition that fires a warning, or the step that offers a tip. Renaming one takes it out of the game; rewording `text` does not. Adding a row does nothing on its own: something has to fire it.',
+    kind: '`warn` for a state you must fix now (fires every run, forever) or `coach` for a first-run tip (fires ONCE EVER per device and then never again). Anything else is ignored, loudly.',
+    text: 'The line itself. This is the whole point of the row, and the one column you can change freely.',
+    textTouch: 'What to say instead on a touchscreen. Blank uses `text`. Fill it in wherever the line names a control — "press Space" is nonsense held in two hands.',
+    textPad: 'What to say instead on a controller. Blank uses `text`. A `{strike}` token becomes whatever strike is bound to right now and `{bumper}` becomes what THIS pad calls its shoulders, so neither a rebind nor a change of controller can make the line lie. A row carrying a key token with no `textPad` tells a controller player to press Space, which is the exact failure this column exists to prevent.',
+    devices: 'Which devices this row exists on at all — space-separated `kbm`, `touch`, `pad`. Blank is all of them, which is nearly every row. An unrecognised name is dropped rather than widening the list, and a row left with nothing to say on a device it can still appear on is dropped outright, the same as a row with no text.',
+    enabled: 'FALSE takes the callout out of the game entirely. Blank means enabled.',
+    anchor: 'WHERE it appears — and each anchor is its own one-at-a-time slot, so a `band` line and a `player` line CAN be up together. `band` is the big line across the middle of the screen; `player` is a small line riding just above the boost ring on the seal. Blank = band.',
+    priority: 'Who gets the surface when two rows on the SAME anchor want it at once — higher wins, and the loser is DROPPED rather than queued. For a tip it is also the order tips are offered in, and a tip that becomes ready INTERRUPTS a lower one. Every coach row outranks every warning regardless of this number.',
+    hold: 'Seconds on screen. For a tip this is also its patience: do the thing and it goes at once, ignore it and it goes at this. Blank falls back to Callout placement in the Text panel (Y).',
+    repeat: 'Seconds before a warning may say itself AGAIN while its condition is still true. Blank = say it once per crossing and then stay quiet until the trouble clears and comes back. Ignored on a tip — those never repeat.',
+    arrow: 'What the arrow points at while this line is up: `chum` (the nearest bite in the water) or `surface` (straight up, out of it). Blank is no arrow, which is most rows.',
   },
   'bossNames.csv': {
     id: 'A short handle for the row. Never shown to the player — it exists so a reworded part keeps its identity in a diff.',
-    slot: 'Which PART of the name this is: prefix ("Gore") + root ("maw") make the name, epithet ("the Devourer") follows it. Any other value is ignored, loudly.',
-    text: 'The part itself, used with exactly the capitalisation typed here — prefixes are capitalised, roots are not, and an epithet carries its own article.',
+    slot: 'Which PART of the name this is: prefix ("Gore") + root ("maw") make the name, epithet ("the Devourer") follows it. A nickname is a WHOLE name ("Ol\' Chompy") that replaces the prefix and root together — the way to hand-write a name the machine could never assemble. A solo name is a nickname that takes no epithet either: the cell is the entire name, the way a ship\'s name is complete on its own. Any other value is ignored, loudly.',
+    text: 'The part itself, used with exactly the capitalisation typed here — prefixes are capitalised, roots are not, an epithet carries its own article, and a nickname is written exactly as it should read.',
     enabled: 'FALSE takes it out of rotation. Blank means enabled.',
     weight: 'Likelihood relative to the other rows IN THE SAME SLOT. Blank = 1, 0 is never used.',
     bosses: 'Which boss archetypes can wear this part. BLANK MEANS ALL — fill it in to narrow ("Sharky" is not a name an orca can carry). Space- or comma-separated ids from bosses.csv.',
@@ -316,7 +377,8 @@ const BLANK_MEANS = {
     spawnGroup: 'no group', bioluminescent: 'no', bossMinion: 'no',
   },
   'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up' },
-  'quips.csv': { enabled: 'enabled', weight: '1' },
+  'quips.csv': { enabled: 'enabled', weight: '1', causes: 'any death' },
+  'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
   'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', notes: '—' },
   'bossPerks.csv': { enabled: 'enabled', weight: '1', notes: '—', cooldown: 'unused', windup: 'unused', duration: 'unused', speed: 'unused', radius: 'unused', range: 'any range', count: '1', mul: '1', damage: 'unused' },
@@ -331,7 +393,23 @@ const BLANK_MEANS = {
 // ---------------------------------------------------------------------------
 // THE TABLES
 // ---------------------------------------------------------------------------
+// ORDER IS THE MENU. The two tables that are pure writing — the boss's name and
+// the line you read when you die — sit at the top because they are the ones
+// opened to add a row rather than to check a number. Everything below them is
+// balance, and balance is a thing you go looking for.
 export const TABLES = [
+  {
+    file: 'path/src/bossNames.csv',
+    label: 'Boss names',
+    blurb: 'What the boss is called. These are PARTS, not names — a prefix, a root and an epithet are drawn separately, so eight of each is hundreds of bosses. `bosses` narrows a part to one archetype, `perk` ties it to a power; both blank is the general pool. Add away.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/quips.csv',
+    label: 'Death quips',
+    blurb: 'The game-over headline. The `id` joins to nothing in code, so new lines are just new rows — add away. `causes` is the one column that does join: leave it blank and the line can answer any death, or tick what has to have killed you. A line written for a cause BEATS the general pool rather than competing with it, so tagging one makes it certain for that death, not merely likelier.',
+    addRows: true,
+  },
   {
     file: 'path/src/upgrades.csv',
     label: 'Upgrades',
@@ -373,16 +451,10 @@ export const TABLES = [
     addRows: false,
   },
   {
-    file: 'path/src/quips.csv',
-    label: 'Death quips',
-    blurb: 'The game-over headline. This table joins to nothing in code, so new lines are just new rows — add away.',
-    addRows: true,
-  },
-  {
-    file: 'path/src/bossNames.csv',
-    label: 'Boss names',
-    blurb: 'What the boss is called. These are PARTS, not names — a prefix, a root and an epithet are drawn separately, so eight of each is hundreds of bosses. `bosses` narrows a part to one archetype, `perk` ties it to a power; both blank is the general pool. Add away.',
-    addRows: true,
+    file: 'path/src/callouts.csv',
+    label: 'Warnings & tips',
+    blurb: 'What the game SHOUTS: the four warnings that fire whenever you are in trouble, and the five first-run tips that fire once each per device and then never again. Rewording a line is free; the `id` joins to the code that fires it, so a new row needs a condition to go with it.',
+    addRows: false,
   },
   {
     file: 'path/src/bosses.csv',
@@ -459,7 +531,15 @@ function columnSpec(file, name, rows) {
   // A closed list, unlike enemies.csv's spawnGroup combo above: an unknown
   // slot is not a new kind of name part, it is a part that never appears.
   if (file === 'path/src/bossNames.csv' && name === 'slot') {
-    return { ...base, type: 'enum', options: ['prefix', 'root', 'epithet'] };
+    return {
+      ...base,
+      type: 'enum',
+      options: NAME_SLOTS,
+      labels: {
+        nickname: 'nickname  (a whole name)',
+        solo: 'solo  (a whole name, no epithet)',
+      },
+    };
   }
   // Both closed lists for the same reason: a `perk` or a `bosses` value that
   // matches nothing is not a new tag, it is a name part that silently never
@@ -468,10 +548,25 @@ function columnSpec(file, name, rows) {
   if (file === 'path/src/bossNames.csv' && name === 'perk') {
     return { ...base, type: 'enum', options: ['', ...PERK_IDS], labels: { '': '—  (general pool)' } };
   }
+  // One quip, several causes. Closed for the same reason the two above are: a
+  // cause id the game doesn't know is dropped at parse with a warning, which
+  // leaves a line that reads perfectly in the file and can never fire.
+  if (file === 'path/src/quips.csv' && name === 'causes') {
+    return {
+      ...base,
+      type: 'multi',
+      options: DEATH_CAUSES.map((c) => c.id),
+      labels: Object.fromEntries(DEATH_CAUSES.map((c) => [c.id, `${c.id}  —  ${c.label}`])),
+      blankLabel: 'any death',
+      source: 'deathCauses.js',
+    };
+  }
   if (file === 'path/src/bossNames.csv' && name === 'bosses') {
-    // A combo rather than an enum: the cell can legitimately hold SEVERAL ids
-    // ("bossShark bossOrca"), which no closed dropdown can express.
-    return { ...base, type: 'combo', options: ['', ...BOSS_IDS] };
+    // The cell holds SEVERAL ids ("bossShark bossOrca"), which no dropdown can
+    // express — so it gets a checklist instead. Still a closed list for the
+    // same reason `perk` is: an id that matches nothing is not a new tag, it
+    // is a name part that silently never appears again.
+    return { ...base, type: 'multi', options: BOSS_IDS, blankLabel: 'any boss', source: 'bosses.csv' };
   }
   // The creature the archetype is built from. A combo rather than an enum so a
   // row can be pointed at a creature that has not been added to enemies.csv
@@ -479,6 +574,28 @@ function columnSpec(file, name, rows) {
   // is a better place to find out than a greyed-out dropdown.
   if (file === 'path/src/bosses.csv' && name === 'enemy') {
     return { ...base, type: 'combo', options: ENEMY_IDS };
+  }
+  // The callout table's own columns. Two closed lists, because both are joins
+  // rather than free text: a `kind` the parser doesn't know drops the row, and
+  // an `arrow` it doesn't know silently loses the arrow — neither is a typo you
+  // would find by looking at the file.
+  if (file === 'path/src/callouts.csv') {
+    if (name === 'kind') {
+      return { ...base, type: 'enum', options: CALLOUT_KINDS,
+        labels: { warn: 'warn  (every run)', coach: 'coach  (first run only)' } };
+    }
+    if (name === 'arrow') {
+      return { ...base, type: 'enum', options: ['', ...ARROW_TARGETS], labels: { '': '—  (no arrow)' } };
+    }
+    if (name === 'anchor') {
+      return { ...base, type: 'enum', options: ['', ...CALLOUT_ANCHORS],
+        labels: { '': `—  (${CALLOUT_ANCHORS[0]})`, band: 'band  (middle of the screen)', player: 'player  (above the boost ring)' } };
+    }
+    if (name === 'priority') return { ...base, type: 'number', min: 0 };
+    if (name === 'hold') return { ...base, type: 'number', min: 0 };
+    // Blank is a real answer here ("never repeats"), so the cell has to be
+    // clearable — which the number control allows and an enum would not.
+    if (name === 'repeat') return { ...base, type: 'number', min: 0 };
   }
   if (name === 'enabled') return { ...base, type: 'enum', options: ['', 'TRUE', 'FALSE'], labels: { '': '—  (enabled)' } };
   if (name === 'weight') return { ...base, type: 'number', min: 0 };

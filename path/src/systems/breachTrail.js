@@ -6,6 +6,11 @@ import { turbulenceAt, emit } from '../entities/particles.js';
 // ============================================================================
 // THE BREACH TRAIL — the RGB-split exhaust the seal drags through the air.
 //
+// ...and the SWIM TRAIL, the plain white ribbon it draws underwater. They are
+// one effect with two settings blocks rather than two systems; see "TWO TRAILS,
+// ONE ALGORITHM" below the constants. Everything in this header describes both,
+// except the RGB split, which is the air trail's alone.
+//
 // Three ribbons, one per colour channel, drawn additively over each other. Each
 // reads the SAME spine at a different offset, so where they agree they sum back
 // to white and where they don't they fringe. That is what makes the split read
@@ -41,6 +46,61 @@ import { turbulenceAt, emit } from '../entities/particles.js';
 // every breach and for a second or two after each one.
 // ============================================================================
 
+// ============================================================================
+// TWO TRAILS, ONE ALGORITHM — the profiles.
+//
+// The seal drags a ribbon in the air and a ribbon through the water, and they
+// are the same effect photographed under different conditions:
+//
+//   air    three channels, pure R/G/B, split apart by `channelTrail` and
+//          `channelSpread` and summing back to white where they overlap. A
+//          blown-out highlight. This is the original, and nothing about it has
+//          changed.
+//   water  ONE channel, white. Water does not blow a sensor out; there is no
+//          aberration to photograph, so the split would be a rainbow drawn on
+//          purpose — exactly what CONFIG.emitters' palette rule exists to
+//          prevent. What is left is the thing underneath the split: the core
+//          and the halo, which is the glowing line.
+//
+// Everything else — the particle cloud, the turbulence, the centripetal spline,
+// the fold guard, the cross-section shader, the fin anchors, the strand
+// boundaries, the taper — is shared, because all of it is about how a ribbon
+// through a drifting cloud is drawn and none of it is about which medium the
+// cloud is in. A profile is a SETTINGS BLOCK, not a second implementation:
+// CONFIG.breachTrail.water names only what differs and inherits the rest, so a
+// fix to the ribbon is a fix to both and there is no second copy to drift.
+//
+// THE CHANNEL COUNT IS THEREFORE READ OFF THE COLOURS, not a constant. One
+// colour is one ribbon, and the split arithmetic collapses to zero offset on
+// its own — `(ch - (n-1)/2)` is 0 when n is 1 — so the white trail needs no
+// special case anywhere in the draw loop.
+//
+// SEPARATE SCENE ROOTS, one per profile, and that is deliberate rather than
+// tidy: the two clouds have different lifetimes and different gates, and
+// anything asking "what is the breach trail doing" (the harness, perf logging)
+// must not be handed a swim trail in the same answer.
+// ============================================================================
+function makeProfile(key, name) {
+  return {
+    key,
+    name,      // its scene node's name — 'breachTrail' / 'swimTrail'
+    plumes: [],
+    root: null,
+    // Whether the gate was open last frame. Crossing it is what starts a new
+    // STRAND (so two bursts are not joined by a stripe across the arena) and
+    // what seals the old one.
+    wasActive: false,
+  };
+}
+
+const profiles = {
+  air: makeProfile('air', 'breachTrail'),
+  water: makeProfile('water', 'swimTrail'),
+};
+const PROFILE_LIST = [profiles.air, profiles.water];
+
+// The air profile's channel count, and the default for anything that has to
+// guess before a colour list is in hand.
 const CHANNELS = 3;
 // TWO vertices per rib, and the cross-section lives in the FRAGMENT SHADER.
 //
@@ -74,12 +134,12 @@ const HARD_MAX_SAMPLES = 512;
 // consecutive pair jump from one flipper to the other, and the ribbon threaded
 // through it is a zigzag between the fins rather than two trails. Each plume
 // therefore owns its particles, its geometry and its own strand counter.
-const plumes = [];
-let root = null;    // the one scene node, holding a subgroup per plume
+//
+// ...and one set of plumes PER PROFILE on top of that, so the air trail and the
+// water trail are four independent clouds in all. See the profiles above.
 
 // Shared scratch for the resample — one plume is drawn at a time, so these are
 // reused rather than duplicated per plume.
-let nodeCap = 64;   // particles each plume may hold
 let sx = new Float32Array(HARD_MAX_SAMPLES);
 let sy = new Float32Array(HARD_MAX_SAMPLES);
 let sBright = new Float32Array(HARD_MAX_SAMPLES);
@@ -89,7 +149,6 @@ let sCount = 0;
 let nodeCum = new Float32Array(64); // arc length along the raw particle polyline
 
 let clock = 0;          // drives the turbulence field's churn
-let wasAirborne = false;
 
 /**
  * One plume: its own particles, its own geometry, its own history.
@@ -117,6 +176,12 @@ function makePlume() {
     eraseT: 0,
     sealCount: 0,
     burnDebt: 0,
+    // How many PARTICLES this plume may hold — rate x lifetime, and per-plume
+    // rather than shared because the two profiles emit at different rates. It
+    // was a module-level variable when there was one trail; leaving it there
+    // would have let whichever profile updated last set the cap for both, so a
+    // slow water trail would silently truncate the breach cloud mid-arc.
+    nodeCap: 64,
   };
 }
 
@@ -126,8 +191,94 @@ const _dir = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 0, 1);
 const _col = new THREE.Color();
 
-function cfg() {
-  return CONFIG.breachTrail ?? {};
+// The water profile's numbers, rebuilt in place each frame. It is the air block
+// with `breachTrail.water` laid over it, so the water trail inherits every knob
+// it does not name — which is what makes this two settings blocks rather than
+// two effects. Assembled fresh rather than cached because every value in it is
+// a live tuner slider, and a cache would freeze the water trail at whatever the
+// air one happened to be at load.
+const _water = {};
+
+function cfg(key = 'air') {
+  const base = CONFIG.breachTrail ?? {};
+  if (key !== 'water') return base;
+  return Object.assign(_water, base, base.water ?? {});
+}
+
+// One colour, one ribbon. The whole difference between the split trail and the
+// white one is the length of this list — see the profile note at the top.
+function channelCount(c) {
+  const n = (c.colors ?? []).length;
+  return n > 0 ? n : CHANNELS;
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+// ---------------------------------------------------------------------------
+// THE WIND-UP, and it is a TELEGRAPH before it is an effect.
+//
+// A charging strike is the one moment the player has committed to something the
+// water around them has not been told about yet, and the trail is the loudest
+// thing they own — so it is what should say it. The longer the hold, the more
+// of it: the plume reaches further, swells, and burns brighter, all off the
+// same banked power the strike itself is priced on.
+//
+// A THIRD SETTINGS LAYER, applied over whichever profile is drawing. Not a
+// profile of its own: a wind-up in the air and a wind-up underwater are the
+// same tell, and the trail it is boosting is already the right one for where
+// the seal is. So this multiplies rather than replaces, and the air trail's
+// wind-up is still an RGB split while the water one is still white.
+//
+// It ends by simply stopping. On release `wind` drops to zero and every number
+// here goes back to 1 for the NEXT particle — but the long, bright, wide ones
+// already laid down keep the life and the ramp stamped on them at birth, so the
+// telegraph does not vanish on the release frame. It blooms outward and dies on
+// its own clock while the dash is happening, which is the release read.
+//
+// Written into a copy, never onto CONFIG. `c` for the air profile IS
+// CONFIG.breachTrail, and multiplying its `life` in place would ratchet the
+// stored value up every frame of every hold until the tuning file was ruined.
+const _boosted = { air: {}, water: {} };
+
+function withCharge(c, key, wind) {
+  const b = CONFIG.breachTrail?.charge ?? {};
+  if (!(wind > 0) || b.enabled === false) return c;
+  const o = Object.assign(_boosted[key], c);
+
+  // The two that make it "more trail": more particles a second, each living
+  // longer. Rate is what makes it denser, life is what makes it REACH — the
+  // cloud's length is its lifetime, not a number of points (see `life` in
+  // CONFIG.breachTrail), so this is the one that extends the plume out behind
+  // the animal.
+  const rateMul = lerp(1, b.rate ?? 1.9, wind);
+  const lifeMul = lerp(1, b.life ?? 2.2, wind);
+  o.emitPerSecond = (c.emitPerSecond ?? 60) * rateMul;
+  o.life = (c.life ?? 1) * lifeMul;
+
+  // BRIGHTNESS HAS TO COME THROUGH `glow` AND NOT THROUGH THE RAMP. The ramp
+  // is clamped to 1 where intensity is worked out in resampleSpine, so pushing
+  // it harder does nothing at all once a hold is past its first fraction —
+  // which would look exactly like the boost not being wired up.
+  o.glow = (c.glow ?? 1) * lerp(1, b.glow ?? 1.8, wind);
+  o.width = (c.width ?? 1) * lerp(1, b.width ?? 1.3, wind);
+  o.blowOut = (c.blowOut ?? 0) * lerp(1, b.blowOut ?? 1.5, wind);
+
+  // THE CEILING HAS TO MOVE WITH THEM, and this is the line the whole effect
+  // fails silently without. `wantNodeCap` is rate x life clamped by `maxNodes`,
+  // and both multipliers are already at their ceiling on the shipped numbers —
+  // so a boost that raised the rate and the life but not the cap would emit
+  // every extra particle and immediately pop it off the end of the list. The
+  // trail would be no longer, only churnier, and nothing would say why.
+  o.maxNodes = Math.min(HARD_MAX_NODES,
+    Math.ceil((c.maxNodes ?? 100) * rateMul * lifeMul));
+
+  // `samples` is deliberately NOT boosted. It is the geometry's rib count, and
+  // changing it rebuilds the plume — see the rebuild test in runProfile. Charge
+  // climbs continuously through a hold, so scaling it here would dispose and
+  // reallocate two BufferGeometries every frame the player is winding up.
+  return o;
 }
 
 // TWO SEPARATE COUNTS, and conflating them is the easy mistake now that the
@@ -202,8 +353,8 @@ const trailFragmentShader = /* glsl */ `
   }
 `;
 
-function buildPlume(plume, pts) {
-  disposePlume(plume);
+function buildPlume(profile, plume, pts, channels) {
+  disposePlume(profile, plume);
   plume.capacity = pts;
   plume.group = new THREE.Group();
   plume.group.frustumCulled = false;
@@ -222,7 +373,7 @@ function buildPlume(plume, pts) {
     edges[i * VERTS_PER_RIB + 1] = 1;
   }
 
-  for (let c = 0; c < CHANNELS; c++) {
+  for (let c = 0; c < channels; c++) {
     const geo = new THREE.BufferGeometry();
     const verts = pts * VERTS_PER_RIB;
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts * 3), 3));
@@ -248,7 +399,7 @@ function buildPlume(plume, pts) {
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.frustumCulled = false;
-    // One order for all three: they are the same surface split into channels,
+    // One order for all of them: they are the same surface split into channels,
     // and letting the renderer sort them against each other would make which
     // fringe sits on top depend on the camera rather than on the art. Additive
     // blending is commutative, so a fixed order costs nothing.
@@ -256,17 +407,17 @@ function buildPlume(plume, pts) {
     plume.group.add(mesh);
     plume.ribbons.push({ mesh, geo });
   }
-  root.add(plume.group);
+  profile.root.add(plume.group);
 }
 
-function disposePlume(plume) {
+function disposePlume(profile, plume) {
   for (const r of plume.ribbons) {
     r.geo.dispose();
     r.mesh.material.dispose();
   }
   plume.ribbons = [];
   if (plume.group) {
-    root?.remove(plume.group);
+    profile?.root?.remove(plume.group);
     plume.group = null;
   }
   plume.capacity = 0;
@@ -678,7 +829,7 @@ function emitNode(plume, x, y, dirX, dirY, vx, vy, ramp, c, age0 = 0) {
     strand: plume.strand,
   };
   plume.nodes.unshift(node);
-  while (plume.nodes.length > nodeCap) plume.nodes.pop();
+  while (plume.nodes.length > plume.nodeCap) plume.nodes.pop();
 }
 
 /**
@@ -785,7 +936,7 @@ function eraseNodes(plume, dt, c) {
 }
 
 /**
- * Rebuild the three ribbons for this frame.
+ * Rebuild both trails for this frame.
  *
  * @param dt      real seconds — the cloud is weather, and a hit-stop must not
  *                stall it mid-billow.
@@ -793,20 +944,24 @@ function eraseNodes(plume, dt, c) {
  * @param player  read for position, velocity and height only
  * @param ramp    the live air ramp (systems/airborne.js) — stamped onto each
  *                particle at birth, which is what makes a long hang leave a
- *                visibly hotter trail than a skim
- * @param emitting whether the seal is actually FLYING right now, as opposed to
- *                merely being above the water line. Drifting and dying happen
+ *                visibly hotter trail than a skim. The AIR trail's; the water
+ *                trail stamps its own speed ramp, see below.
+ * @param emitting whether the seal is actually swimming or flying right now, as
+ *                opposed to merely being somewhere. Drifting and dying happen
  *                regardless — that is the point of running outside the pause
  *                gate — but laying down new particles must not. A seal frozen
  *                mid-arc behind the level-up cards is not moving, so eighty-five
  *                particles a second would all be born at the same coordinates
  *                and stack into one bright blob; the same goes for a corpse on
  *                its way down through the death dive.
+ * @param charge  banked strike power, 0..1, or 0 when no strike is being wound
+ *                up. THE TELEGRAPH — see withCharge. Defaulted, so every caller
+ *                that predates it (the harnesses, tools/looks) behaves as it did.
  */
-export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true) {
-  const c = cfg();
-  if (!c.enabled) {
-    if (root) clearBreachTrail(scene);
+export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true, charge = 0) {
+  const base = CONFIG.breachTrail ?? {};
+  if (!base.enabled) {
+    if (profiles.air.root || profiles.water.root) clearBreachTrail(scene);
     return;
   }
 
@@ -820,34 +975,127 @@ export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true) 
   // dying — would keep emitting from a body that is now sinking through the
   // death dive. The position cannot lie about where the seal is.
   const airborne = player.mesh.position.y > bounds.surfaceY;
+  const vx = player.velocity?.x ?? 0;
+  const vy = player.velocity?.y ?? 0;
+  const speed = Math.hypot(vx, vy);
 
-  if (!root) {
-    root = new THREE.Group();
-    root.name = 'breachTrail';
-    root.frustumCulled = false;
-    scene.add(root);
+  // Shared scratch, and both profiles read it in this frame before anything can
+  // change it — so it is fetched once rather than per profile.
+  const tips = tipsFor(player);
+
+  // The wind-up, 0..1. See withCharge for what it does to a profile.
+  const boost = base.charge ?? {};
+  const wind = boost.enabled === false ? 0 : Math.min(1, Math.max(0, charge || 0));
+  // What the hold asserts as a floor under the drive, independent of speed —
+  // see the water gate below for why a wind-up needs one at all.
+  const windDrive = wind * (boost.rampFloor ?? 1);
+
+  // --- THE AIR TRAIL ---------------------------------------------------------
+  // Exactly as it was: it exists for as long as the seal is above the line, at
+  // a flat rate, carrying the air ramp — plus the wind-up on top, because a
+  // strike charged mid-arc is the same tell as one charged in the water.
+  runProfile(profiles.air, dt, scene, tips, withCharge(cfg('air'), 'air', wind), {
+    active: airborne,
+    emitting,
+    rate: 1,
+    nodeRamp: Math.max(ramp, windDrive),
+    vx,
+    vy,
+  });
+
+  // --- THE WATER TRAIL -------------------------------------------------------
+  // SPEED-GATED AND RAMPED, exactly the way the tail-fin bubble wake is
+  // (systems/bubbles.js) and for the same reason: below `minSpeed` the flippers
+  // are not working hard enough to leave anything, and switching on at full
+  // strength at the threshold would pop rather than fade.
+  //
+  // The ramp does two jobs at once. It scales the EMISSION RATE, so a faster
+  // seal lays a denser cloud; and it is stamped on each particle in place of
+  // the air ramp, so it also scales BRIGHTNESS through the same `intensity`
+  // term the air trail uses for hang time. One number, and the trail gets
+  // thicker and hotter together the way a wake does.
+  const w = cfg('water');
+  const minSpeed = Math.max(0, w.minSpeed ?? 8);
+  const full = Math.max(minSpeed + 0.01, w.fullSpeed ?? CONFIG.player?.maxSpeed ?? 34);
+  const wRamp = Math.min(1, Math.max(0, (speed - minSpeed) / (full - minSpeed)));
+
+  // THE WIND-UP HAS TO OPEN THE GATE, and this is the whole reason the boost is
+  // not simply a multiplier on what was already being drawn.
+  //
+  // A strike wind-up is a BRAKE TO A STANDSTILL — holding seals the mouth, so
+  // you stop and commit — which is precisely the state this gate exists to shut.
+  // Left speed-gated, the telegraph would be silent for every wind-up taken the
+  // way wind-ups are actually taken, and would only ever show on the rare one
+  // charged mid-swim. systems/bubbles.js has the identical problem with the
+  // identical answer: see the vent there, which gives the charge its own path
+  // for exactly this reason rather than scaling the wake.
+  //
+  // So the charge SUBSTITUTES for speed. It opens the gate, and it drives the
+  // trail at whatever a hold of that depth is worth — a seal that has stopped
+  // dead and banked a full charge draws the same intensity as one at top speed,
+  // which is the right claim to make about it.
+  const openedByWind = windDrive > 0 && (boost.openGate ?? true);
+  const drive = Math.max(wRamp, openedByWind ? windDrive : 0);
+  runProfile(profiles.water, dt, scene, tips, withCharge(w, 'water', wind), {
+    // NOT `!airborne` alone. A seal drifting to a stop underwater has to close
+    // its strand, or the next burst of speed is joined to this one by a ribbon
+    // drawn straight across everything in between.
+    active: w.enabled !== false && !airborne && (speed >= minSpeed || openedByWind),
+    emitting,
+    rate: drive,
+    nodeRamp: drive,
+    vx,
+    vy,
+  });
+}
+
+/**
+ * One profile's frame: its plumes, its gate, its cloud, its ribbons.
+ *
+ * @param profile one of `profiles` — owns the scene root and the plume list
+ * @param c       that profile's resolved settings (see cfg)
+ * @param o       { active, emitting, rate, nodeRamp, vx, vy }
+ *                active   is the gate open — airborne for the air trail, fast
+ *                         enough and submerged for the water one. Crossing it
+ *                         in either direction is a strand boundary.
+ *                rate     multiplier on `emitPerSecond`, 0..1. The air trail
+ *                         passes 1; the water trail passes its speed ramp.
+ *                nodeRamp what gets stamped on each particle as its intensity.
+ */
+function runProfile(profile, dt, scene, tips, c, o) {
+  if (!profile.root) {
+    profile.root = new THREE.Group();
+    profile.root.name = profile.name;
+    profile.root.frustumCulled = false;
+    scene.add(profile.root);
   }
 
-  const tips = tipsFor(player);
-  nodeCap = wantNodeCap(c);
+  const plumes = profile.plumes;
+  const nodeCap = wantNodeCap(c);
   const want = wantSamples(c);
+  const channels = channelCount(c);
+  const { active, vx, vy } = o;
 
   // One plume per tip, created and torn down to match. The count only changes
   // when the seal's rig does — a model swap in the workbench, or the very first
   // frame before the rig has posed itself.
   while (plumes.length < tips.length) plumes.push(makePlume());
-  while (plumes.length > tips.length) disposePlume(plumes.pop());
-
-  const vx = player.velocity?.x ?? 0;
-  const vy = player.velocity?.y ?? 0;
+  while (plumes.length > tips.length) disposePlume(profile, plumes.pop());
 
   for (let i = 0; i < plumes.length; i++) {
     const plume = plumes[i];
     const tip = tips[i];
     const px = tip.x;
     const py = tip.y;
+    plume.nodeCap = nodeCap;
 
-    if (!plume.group || plume.capacity !== want) buildPlume(plume, want);
+    // Rebuilt when the sample count changes and ALSO when the channel count
+    // does — dragging the colour list from three entries to one has to throw
+    // away the two ribbons that no longer have a colour, or they keep drawing
+    // whatever they held last frame forever.
+    if (!plume.group || plume.capacity !== want || plume.ribbons.length !== channels) {
+      buildPlume(profile, plume, want, channels);
+    }
 
     // A NEW breach starts a new STRAND rather than clearing the cloud. Clearing
     // was right when the spine was a path and the old one was worthless the
@@ -857,7 +1105,7 @@ export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true) 
     // what stops the ribbon connecting the two — see the boundary blanking in
     // resampleSpine, which is what would otherwise be a bright stripe straight
     // across the arena.
-    if (airborne && !wasAirborne) {
+    if (active && !profile.wasActive) {
       plume.strand++;
       plume.emitDebt = 0;
       plume.lastX = px;
@@ -869,8 +1117,13 @@ export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true) 
       plume.eraseT = 0;
       plume.burnDebt = 0;
     }
-    // ...and going back UNDER seals it, which is what starts the erase.
-    if (!airborne && wasAirborne) {
+    // ...and the gate closing seals it, which is what starts the erase. For the
+    // air trail that is re-entry; for the water trail it is the seal slowing
+    // below `minSpeed` or leaving the water. The water profile turns the erase
+    // itself off (see CONFIG.breachTrail.water) — a wipe with sparks every time
+    // you ease off the stick would be an event announcing nothing — so all this
+    // does there is open the head taper and let the cloud die on its own.
+    if (!active && profile.wasActive) {
       plume.sealed = true;
       plume.eraseT = 0;
       plume.sealCount = plume.nodes.length;
@@ -881,8 +1134,8 @@ export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true) 
     driftNodes(plume, dt, c);
     eraseNodes(plume, dt, c);
 
-    if (airborne && emitting) {
-      const rate = Math.max(0, c.emitPerSecond ?? 60);
+    if (active && o.emitting) {
+      const rate = Math.max(0, c.emitPerSecond ?? 60) * Math.max(0, o.rate ?? 1);
       plume.emitDebt += rate * dt;
       let n = Math.floor(plume.emitDebt);
       if (n > 0) {
@@ -923,7 +1176,7 @@ export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true) 
             plume,
             plume.lastX + (px - plume.lastX) * (1 - t),
             plume.lastY + (py - plume.lastY) * (1 - t),
-            tx, ty, vx, vy, ramp, c,
+            tx, ty, vx, vy, o.nodeRamp ?? 0, c,
             // The rearmost of the batch was laid down earliest in the frame, so
             // it is the oldest — by the same fraction of dt that it sits back
             // along the segment. See the note on `age` in emitNode.
@@ -938,7 +1191,7 @@ export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true) 
     // falling), and a `last` position left at wherever emission stopped would
     // make the first batch afterwards spread itself across the whole gap as one
     // long streak.
-    if (airborne) {
+    if (active) {
       plume.lastX = px;
       plume.lastY = py;
     }
@@ -946,7 +1199,7 @@ export function updateBreachTrail(dt, scene, player, ramp = 0, emitting = true) 
     drawPlume(plume, c);
   }
 
-  wasAirborne = airborne;
+  profile.wasActive = active;
 }
 
 /**
@@ -973,7 +1226,14 @@ function tipsFor(player) {
   return _tips;
 }
 
-/** Resample one plume's cloud into a curve and write its three ribbons. */
+/**
+ * Resample one plume's cloud into a curve and write its ribbons — three of
+ * them for the air profile, one for the water profile. The channel arithmetic
+ * below is written against `channels` rather than a constant, and at one
+ * channel every term of the split evaluates to zero on its own: the offset is
+ * `(0 - 0) * spread`, so a single white ribbon is drawn straight down the spine
+ * with no branch anywhere saying so.
+ */
 function drawPlume(plume, c) {
   if (plume.nodes.length < 2) {
     setVisible(plume, false);
@@ -998,8 +1258,9 @@ function drawPlume(plume, c) {
   const trail = (c.channelTrail ?? 0) * width;
   const spread = (c.channelSpread ?? 0) * width;
   const colors = c.colors ?? [0xff0000, 0x00ff00, 0x0000ff];
+  const channels = plume.ribbons.length;
 
-  for (let ch = 0; ch < CHANNELS; ch++) {
+  for (let ch = 0; ch < channels; ch++) {
     const r = plume.ribbons[ch];
     const pos = r.geo.attributes.position;
     const col = r.geo.attributes.aColor;
@@ -1016,8 +1277,8 @@ function drawPlume(plume, c) {
     // along it. Along-path alone splits the trail only where it CURVES, so a
     // straight launch would come out white — the sideways term is what keeps a
     // fringe on the straights too.
-    const offset = (ch - (CHANNELS - 1) / 2) * spread;
-    const back = (ch - (CHANNELS - 1) / 2) * trail;
+    const offset = (ch - (channels - 1) / 2) * spread;
+    const back = (ch - (channels - 1) / 2) * trail;
     // Marching read head. Target distances are monotonic in `i`, so this walks
     // forward once per channel rather than searching.
     let k = 0;
@@ -1094,22 +1355,33 @@ function drawPlume(plume, c) {
   }
 }
 
-/** Tear the trail down — run start, and whenever the effect is switched off. */
+/** Tear both trails down — run start, and whenever the effect is switched off. */
 export function clearBreachTrail(scene) {
-  for (const p of plumes) disposePlume(p);
-  plumes.length = 0;
-  if (root) {
-    scene.remove(root);
-    root = null;
+  for (const profile of PROFILE_LIST) {
+    for (const p of profile.plumes) disposePlume(profile, p);
+    profile.plumes.length = 0;
+    if (profile.root) {
+      scene.remove(profile.root);
+      profile.root = null;
+    }
+    profile.wasActive = false;
   }
-  wasAirborne = false;
   clock = 0;
 }
 
+// THE READOUTS BELOW DEFAULT TO THE AIR TRAIL, and that is the contract rather
+// than a convenience. Everything that asks these questions — the harness, perf
+// logging — is asking about the breach, and folding a swim trail into the same
+// number would make "the cloud is gone" quietly mean "the cloud is gone unless
+// the seal happens to be moving". Pass 'water' to ask about the other one.
+function plumesOf(key) {
+  return (profiles[key] ?? profiles.air).plumes;
+}
+
 /** How many particles are alive. For the harness, and for perf logging. */
-export function breachTrailCount() {
+export function breachTrailCount(key = 'air') {
   let n = 0;
-  for (const p of plumes) n += p.nodes.length;
+  for (const p of plumesOf(key)) n += p.nodes.length;
   return n;
 }
 
@@ -1122,9 +1394,9 @@ export function breachTrailCount() {
  * spline's opinion rather than the simulation's. Anything asking "did the
  * particles move" has to ask the particles.
  */
-export function breachTrailNodes() {
+export function breachTrailNodes(key = 'air') {
   const out = [];
-  for (const p of plumes) for (const n of p.nodes) out.push([n.x, n.y]);
+  for (const p of plumesOf(key)) for (const n of p.nodes) out.push([n.x, n.y]);
   return out;
 }
 
@@ -1137,7 +1409,8 @@ export function breachTrailNodes() {
  * and the resulting nonsense looks exactly like drag running backwards. The
  * velocity is the thing being asked about, so it is the thing reported.
  */
-export function breachTrailStats() {
+export function breachTrailStats(key = 'air') {
+  const plumes = plumesOf(key);
   let speed = 0;
   let age = 0;
   let count = 0;

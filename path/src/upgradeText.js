@@ -119,6 +119,7 @@ export const STAT_TEXT = {
   bakalarLevel:       { label: "Bakalar's boat", kind: 'level', unlock: 'a net full of bombs' },
   calamariLevel:      { label: 'calamari ring', kind: 'level', unlock: 'rings of fried squid' },
   dumboLevel:         { label: 'dumbo octopus', kind: 'level', unlock: 'a charm on nearby enemies' },
+  harpLevel:          { label: 'harp seal', kind: 'level', unlock: 'notes that charm the biggest enemy near you' },
   oysterLevel:        { label: 'oyster blaster', kind: 'level', unlock: 'bursting pearls' },
   octoGrabLevel:      { label: 'octopus grabber', kind: 'level', unlock: 'tentacles that reel fish in' },
   orcaLevel:          { label: 'orca family', kind: 'level', unlock: 'three orcas hunting the boats' },

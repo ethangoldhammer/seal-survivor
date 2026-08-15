@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
-import { CONFIG, difficultyRamp } from '../config.js';
+import { CONFIG, difficultyRamp, xpToughnessMul } from '../config.js';
 import { acquireVisual, releaseVisual } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
 import { bounds, clampBelowSurface } from '../arena.js';
@@ -9,6 +9,7 @@ import { deathState } from '../systems/deathDive.js';
 import { skyLight } from '../systems/daylight.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createHeadLook } from '../systems/headLook.js';
+import { faceSide } from '../systems/facing.js';
 import { recordSpawn, SENTINEL_HP } from '../systems/playtest.js';
 import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
 import { updateWaves, waveSpawn, resetWaves, lullEligible } from '../systems/waves.js';
@@ -28,7 +29,7 @@ import { attachHitShape, releaseHitShape } from '../systems/hitShape.js';
 // a real animal to the denominator, and every clear rate in the report comes
 // out wrong with nothing to say why.
 import { createJawDriver } from '../systems/jaw.js';
-import { createClawDriver } from '../systems/crabClaw.js';
+import { createClawDriver, pinchReach } from '../systems/crabClaw.js';
 import { rollBiolumSkinVariant } from '../systems/biolumSkin.js';
 import { player } from './player.js';
 
@@ -786,8 +787,14 @@ const BEHAVIORS = {
       ay += sy * (sw.separation ?? 0);
     }
 
-    ax += ctx.dirX * (sw.towardPlayer ?? 0);
-    ay += ctx.dirY * (sw.towardPlayer ?? 0);
+    // Per instance, not off the def: this is the one term in the boids that
+    // points at the seal, and it grows with the run so a late school hunts
+    // rather than mills. `e.towardPlayer` is baked at spawn — see spawnOne and
+    // CONFIG.hunterRamp.swarmSeek. The `??` keeps a hand-built fish (the
+    // harnesses in tools/ make them) steering the way it always did.
+    const seek = e.towardPlayer ?? sw.towardPlayer ?? 0;
+    ax += ctx.dirX * seek;
+    ay += ctx.dirY * seek;
 
     // Flee anything that eats fish.
     const fleeR = sw.fleeRadius ?? 0;
@@ -1292,6 +1299,15 @@ function bossInWater() {
   return false;
 }
 
+// The boss itself, for the things that need to know WHERE it is rather than
+// merely that it exists — the forage's placement, mostly. Same scan and the
+// same reasoning as bossInWater above: the live roster is the only thing that
+// knows for certain, and asking systems/boss.js would be an import cycle.
+function liveBoss() {
+  for (const e of enemies) if (e.isBoss) return e;
+  return null;
+}
+
 /**
  * Hold every spawn in the game for `seconds`.
  *
@@ -1755,6 +1771,15 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
       ? Math.min(ramp.turnRateMax ?? Infinity, (1 + (ramp.turnRate ?? 0)) ** difficulty)
       : 1)
     : def.turnRate;
+  // ...and a SCHOOL presses harder, which is the only line here that reaches a
+  // basic fish — the two above read a preyRadius and a turnRate that the swarm
+  // species do not declare. Same compounding-and-capped shape; see
+  // CONFIG.hunterRamp.swarmSeek for why the schools needed their own.
+  const towardPlayer = def.swarm
+    ? (def.swarm.towardPlayer ?? 0) * (rampOn
+      ? Math.min(ramp.swarmSeekMax ?? Infinity, (1 + (ramp.swarmSeek ?? 0)) ** difficulty)
+      : 1)
+    : 0;
 
   // Trap-type enemies play a one-shot attack clip on their own timer rather
   // than the continuous idle/swim/boost loop, so they get a tiny dedicated
@@ -1802,7 +1827,14 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // Score is not scaled with this — systems/scoring.js reads def.xp on
     // purpose, so a quiet-water kill still banks full points. See
     // CONFIG.spawn.waves.lull.
-    xp: (def.xp ?? 0) * xpMul,
+    //
+    // ...AND THE SAME GOES FOR THE TOUGHNESS THIS ONE WAS BORN WITH. `hp` above
+    // is already the fully ramped figure, so a creature the run has made
+    // twenty-five times harder to kill drops chum worth more than the one that
+    // spawned in the first minute — see CONFIG.xp.toughness for why the ladder
+    // needs that. Read here, off the same `hp` the creature is about to carry,
+    // so the two can never disagree about how hard this individual was.
+    xp: (def.xp ?? 0) * xpMul * xpToughnessMul(hp, def.hp),
     speed,
     // Per-instance, so a crab that spawned at minute one keeps hitting for
     // what it was worth then. combat.js reads e.contactDamage, not the def.
@@ -1835,6 +1867,9 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // Per-instance aggression, baked at spawn — see CONFIG.hunterRamp.
     preyRadius,
     turnRate,
+    // How hard this individual steers at the seal — see the bake above. Read by
+    // the swarm behavior in place of def.swarm.towardPlayer.
+    towardPlayer,
     // Jaw state. `biteCooldown` rate-limits the snap; `lungeTimer` is the
     // burst of speed that carries it in. Both tick in updateEnemies.
     jaw,
@@ -1887,6 +1922,16 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // meant a beluga bubble landing on a charmed fish would cut the charm
     // short (or extend it) depending on which fired last.
     charmTimer: 0,
+    // The harp's note ring, and the same argument one more time: this is the
+    // DAMAGE half of a harp charm and charmTimer is the pacify half, so a dumbo
+    // charm landing on this body must not grow a ring and the ring must not end
+    // early because the pacify wore off first. The radius and per-tick damage
+    // are stamped on alongside it (systems/harp.js), so a level-up mid-charm
+    // cannot resize a ring that is already on screen.
+    harpAura: 0,
+    harpAuraTick: 0,
+    harpAuraRadius: 0,
+    harpAuraDamage: 0,
     // --- the boss's own two fields (systems/boss.js, systems/bossPerks.js) ---
     // Seconds of "cannot be hurt and cannot hurt you" left. Only ever non-zero
     // on a boss making its entrance, but seeded on every creature for the same
@@ -2019,7 +2064,13 @@ function spawnPicked(scene, difficulty, playerLevel = 1, wave = FLAT_WAVE) {
   const { key, def } = picked;
 
   if (def.group) {
-    const anchor = edgeSpawnPoint(def);
+    // AWAY FROM THE BOSS, while there is one. The pool above deliberately keeps
+    // sending food through a boss fight; this is where that food LANDS, and the
+    // far wall is the whole difference between a decision and a free top-up.
+    // Feeding has to cost you the swim out, the swim back, and a boss whose
+    // head never stops tracking you following you the whole way — a school
+    // that arrived on top of the fight would just be chum with extra steps.
+    const anchor = liveBoss() ? forageSpawnPoint(liveBoss()) : edgeSpawnPoint(def);
     let n = def.group.min + Math.floor(Math.random() * (def.group.max - def.group.min + 1));
     // A quiet stretch sends a few fish, not a shoal. Floored at one so the
     // multiplier can thin a school without ever cancelling the spawn outright
@@ -2178,6 +2229,24 @@ function updateBossForage(dt, scene, difficulty, playerLevel) {
   const cfg = CONFIG.boss?.schools ?? {};
   if (cfg.enabled === false) return;
 
+  // TWO WAYS TO FEED A BOSS FIGHT, AND ONLY ONE OF THEM RUNS.
+  //
+  // `clearOut.keepFood` keeps the small fry in the ordinary spawner's pool for
+  // the whole fight (see pickType), which is the simpler answer and reuses the
+  // wave pacing wholesale. This function is the other one: its own cadence, its
+  // own cap, deliberately sparse. Both were built, independently, and with both
+  // live the water filled to fifteen fish during a fight that was supposed to
+  // hold nine — each system spending its budget as if it were the only one.
+  //
+  // So the pool version wins while it is on, because it is the one the roster
+  // gate already routes through, and this one stands down rather than topping
+  // it up. The placement rule — away from the boss — was moved into
+  // spawnPicked so it applies whichever of the two is feeding, since that is
+  // the part that makes the food a decision instead of a handout.
+  //
+  // Set `keepFood: false` to hand the job back to this function.
+  if (CONFIG.boss?.clearOut?.keepFood !== false) return;
+
   let boss = null;
   let others = 0;
   for (const e of enemies) {
@@ -2265,6 +2334,13 @@ export function updateSpawning(dt, gameState, scene) {
   // is what decides how much of that trickles in. A fight should have something
   // to eat in it without being the best farming window in the run.
   const bossFood = bossLockout() ? (CONFIG.boss?.clearOut?.foodRateMul ?? 0.45) : 1;
+  // ...AND THE SCHOOLS ARRIVE THINNED, for the same reason a lull thins them:
+  // a school spawns WHOLE regardless of how much room is left, so a single
+  // unlucky pick puts fourteen fish in the water and blows straight through the
+  // headcount below. The cap bounds the loop; this is what bounds one pick.
+  if (bossFood !== 1) {
+    wave.groupMul = Math.min(wave.groupMul, CONFIG.boss?.clearOut?.foodGroupMul ?? 0.25);
+  }
 
   // The boss forage. Below the hush (the water is meant to be emptying, and a
   // school arriving into it would undo the clear-out in front of the player)
@@ -2719,7 +2795,13 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
         } else {
           e.mesh.rotation.z = heading;
         }
-        if (CONFIG.view === 'side' && !launched) e.visual.rotation.y = e.vx < 0 ? Math.PI : 0;
+        // Turned, not flipped. This was `rotation.y = vx < 0 ? PI : 0`, which
+        // is an animal swapping ends between two frames — barely visible on a
+        // sprat and increasingly silly the bigger and slower the body is, which
+        // is exactly backwards, because the big slow ones are what the player is
+        // watching. See systems/facing.js; the deadzone in there is also what
+        // stops a creature hovering near zero horizontal speed from flickering.
+        if (CONFIG.view === 'side' && !launched) faceSide(e.visual, e.vx, dt);
       }
     } else if (e.def.spin) {
       e.visual.rotation.z += dt * e.def.spin;
@@ -2786,7 +2868,21 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
       // clear-out there is briefly nothing else in `lookTarget` at all. In all
       // three the head staying locked on is what says the fight is still about
       // you. See CONFIG.enemyLook.boss for the profile that carries it.
-      const target = e.isBoss ? playerPos : e.lookTarget;
+      // AND A HUNTER WITH NOTHING TO CHASE PEEKS AT YOU. `lookTarget` is what
+      // the creature is steering at, which is null far more often than it
+      // sounds — cruising, wandering, between meals — and a head that only
+      // moves while something is being chased is a head that is still most of
+      // the time. Falling back to the player is the peek: it costs nothing,
+      // it is the most interesting thing on the screen to look at, and it is
+      // the difference between a fish swimming past and a fish that has
+      // noticed you swimming past.
+      //
+      // Safe to point at from anywhere because the rig gates itself on RANGE
+      // as well as angle (see coneGate and the range fade in headLook.js) — a
+      // shark forty units away does not turn its head, it just carries on,
+      // which is exactly the "staring across the arena looks possessed" case
+      // that gating exists for.
+      const target = e.isBoss ? playerPos : (e.lookTarget ?? playerPos);
       e.look.update(dt, target, {
         suppressed: e.anim?.isPlayingOneShot() ?? false,
         boss: !!e.isBoss,
@@ -2827,8 +2923,16 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
       // COMMIT range is deliberately tighter than the range the pinch reaches
       // at. A crab that starts a windup at the exact edge plays the whole
       // 0.9s gesture at a player who has already drifted out of it.
+      //
+      // Through pinchReach, so this measures the same way the damage half in
+      // systems/combat.js does — see the note there. `ctx.dist` is centre to
+      // centre, and the seal's body is a whole world unit of it; leaving that
+      // out is what killed the mechanic when the crab's hitbox shrank.
+      // CONFIG.player.hitRadius rather than the live stat because stats.js
+      // copies it through unmodified and no upgrade writes it — if one ever
+      // does, this is the line that has to be handed player.stats instead.
       if (canPinch && e.pinchTimer <= 0 && !e.claw.isStriking()
-        && ctx.dist < e.radius * (pc.commitRange ?? 2.1)) {
+        && ctx.dist < pinchReach(e.radius, CONFIG.player.hitRadius, pc.commitRange ?? 2.1)) {
         if (e.claw.strike()) e.pinchTimer = pc.cooldown ?? 2.6;
       }
 
@@ -2961,6 +3065,19 @@ export function removeEnemy(scene, index) {
   // reference, so a body left behind is an invisible obstacle in the water
   // that other bodies keep bouncing off.
   if (e.body) removeBody(e.body);
+  // A BOSS BEING KEPT FOR THE PHOTOGRAPH. systems/bossCorpse.js has taken
+  // ownership of the visual and the hitbox for the second or so the kill shot
+  // needs a body in the frame, and it gives both back itself when the body
+  // finally comes apart. Releasing them here would hand a pooled visual out to
+  // the next creature while the corpse is still drawing with it — the boss
+  // would turn into a mackerel mid-shot.
+  //
+  // It still leaves `enemies` on this frame, exactly like any other death: the
+  // hold is about what is on screen, not about what is alive.
+  if (e.corpseHeld) {
+    enemies.splice(index, 1);
+    return;
+  }
   // The body goes back to the pool rather than to the garbage collector. This
   // is also where the leak was: scene.remove takes a mesh out of the graph, and
   // WebGL frees nothing on JS garbage collection, so every dead creature's bone

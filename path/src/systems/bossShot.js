@@ -1,4 +1,10 @@
 import { CONFIG } from '../config.js';
+import { encodeQr } from '../qr.js';
+// The polaroid. Safe to import from a Node harness — snapshotCard.js pulls the
+// Rive runtime in dynamically, inside its init, precisely so that this import
+// does not drag a browser-only WASM package into every test that touches a
+// kill shot.
+import { renderSnapshotCardPng, renderSnapshotCards, snapshotCardsLive, cardTextFor, CARD_ASPECT } from '../ui/snapshotCard.js';
 
 // THE TROPHY — the kill shot, kept.
 //
@@ -20,37 +26,40 @@ import { CONFIG } from '../config.js';
 //
 // Nothing here is on the hot path. capture() runs at most once per boss.
 
-const state = {
-  // A data URL for the composited image, and the blob behind it. Both, because
-  // they are wanted by different things: an <img> src takes the URL and the
-  // share sheet takes a File made from the blob.
-  url: null,
-  blob: null,
-  name: '',
-  level: 0,
-  score: 0,
-  time: 0,
-  at: 0,
-};
+// THE ROLL. Every boss killed this run, oldest first — not one slot that each
+// kill overwrites, which is what this was until the score screen started
+// fanning them all out.
+//
+// WHAT EACH ONE COSTS. The full-size image is held as a data URL because that
+// is what the grab produces synchronously (see below) and what an <img> and a
+// download both take without ceremony — about 2MB of string per picture, and
+// `keep` is what stops eight of those becoming a memory leak with a lifetime
+// of the tab. The `thumb` beside it is a small CANVAS rather than another
+// string: the contact sheet is drawn from these, and canvas-to-canvas is
+// synchronous where an <img> would have to be decoded first, which would make
+// composing the sheet an async operation that can fail halfway.
+const shots = [];
 
 function cfg() {
   return CONFIG.boss?.kill?.snapshot ?? {};
 }
 
-/** The trophy from this run, or null if no boss has been beaten. */
+/** The most recent trophy, or null if no boss has been beaten this run. */
 export function bossShot() {
-  return state.url ? { ...state } : null;
+  const last = shots[shots.length - 1];
+  return last ? { ...last } : null;
 }
 
-/** A new run starts with no trophy — the death screen must not show the last one's. */
+/** Every trophy from this run, oldest first. The score screen fans these out. */
+export function bossShots() {
+  return shots.map((s) => ({ ...s }));
+}
+
+/** A new run starts with no trophies — the score screen must not show the last one's. */
 export function resetBossShot() {
-  state.url = null;
-  state.blob = null;
-  state.name = '';
-  state.level = 0;
-  state.score = 0;
-  state.time = 0;
-  state.at = 0;
+  shots.length = 0;
+  sheet.url = null;
+  sheet.blob = null;
 }
 
 function formatTime(seconds) {
@@ -67,19 +76,54 @@ function formatTime(seconds) {
 export function captureBossShot(canvas, meta = {}) {
   if (cfg().enabled === false || !canvas) return false;
   try {
-    const out = compose(canvas, meta);
-    if (!out) return false;
-    state.url = out.toDataURL('image/png');
-    state.name = meta.name ?? '';
-    state.level = meta.level ?? 0;
-    state.score = meta.score ?? 0;
-    state.time = meta.time ?? 0;
-    state.at = Date.now();
+    const made = compose(canvas, meta);
+    if (!made) return false;
+    const out = made.canvas;
+    // THE THUMBNAIL IS TAKEN BEFORE THE CODE IS STAMPED, and that ordering is
+    // the whole reason compose hands back a stamp instead of a finished
+    // picture. The contact sheet is built from these thumbnails under a header
+    // that carries its own code: leave the code on them and a two-boss run
+    // ships an image with three QRs in it, two of them shrunk past the point
+    // of scanning. A sheet has one code, on the scorecard, and the cells are
+    // photographs.
+    const thumb = thumbnail(out);
+    // THE SQUARE, taken from the RAW frame rather than from the composite —
+    // before the caption band, before the code, before anything this file
+    // draws. It is what the Rive polaroid puts in its picture zone (see
+    // ui/snapshotCard.js), and that artboard draws its own chin: a crop of the
+    // captioned image would be a print of a print, with half a boss name
+    // burnt into the photograph.
+    //
+    // Kept as a CANVAS, like the thumbnail beside it, not as a data URL. It is
+    // ~1.5MB of bitmap either way, and a canvas can be handed straight to
+    // decodeImage without base64ing two megabytes to immediately undo it.
+    const square = squareCrop(canvas);
+    made.stampQr();
+    const shot = {
+      url: out.toDataURL('image/png'),
+      blob: null,
+      thumb,
+      square,
+      name: meta.name ?? '',
+      level: meta.level ?? 0,
+      score: meta.score ?? 0,
+      time: meta.time ?? 0,
+      at: Date.now(),
+    };
     // The blob is asynchronous and the URL is not, so the image is usable
     // immediately and the share sheet becomes available a beat later. That
-    // ordering is deliberate: the death screen is seconds away at the earliest,
+    // ordering is deliberate: the score screen is seconds away at the earliest,
     // and an <img> that appears at once matters more than a button that does.
-    out.toBlob?.((blob) => { state.blob = blob; }, 'image/png');
+    out.toBlob?.((blob) => { shot.blob = blob; }, 'image/png');
+    shots.push(shot);
+    // A run cannot produce more than about eight of these, but the cap is what
+    // makes that a fact rather than a hope — and the oldest is the right one to
+    // drop, because the roll reads as a progression and the last kill is the
+    // one the player just made.
+    while (shots.length > Math.max(1, cfg().keep ?? 8)) shots.shift();
+    // Any sheet composed before this kill is now missing a picture.
+    sheet.url = null;
+    sheet.blob = null;
     return true;
   } catch (err) {
     // A tainted canvas, a lost context, a browser that refuses toDataURL on a
@@ -92,6 +136,12 @@ export function captureBossShot(canvas, meta = {}) {
 
 // The caption. Drawn onto a copy rather than over the live canvas, which would
 // be drawing UI into the frame the player is still playing in.
+//
+// Returns { canvas, stampQr } rather than the canvas: the QR is the last thing
+// to go on and the caller decides whether it goes on at all, because the same
+// picture is used twice — once as the image somebody shares, once as a cell in
+// the contact sheet, and only the first wants a code. The SPACE for it is
+// reserved either way, so both readings are laid out identically.
 function compose(src, meta) {
   const maxW = Math.max(320, cfg().maxWidth ?? 1600);
   const scale = Math.min(1, maxW / Math.max(1, src.width));
@@ -125,6 +175,18 @@ function compose(src, meta) {
   const subSize = Math.max(12, Math.round(h * 0.026));
   const family = CONFIG.typography?.family ?? 'system-ui, sans-serif';
 
+  // The code goes in the bottom-right corner, and everything else on this
+  // image gets out of its way rather than being drawn over: the boss name is
+  // measured against what is LEFT of the width, and the wordmark right-aligns
+  // to the code's left edge instead of the frame's.
+  const gap = Math.round(pad * 0.5);
+  const plan = qrPlan(Math.min(
+    qrCfg().maxSize ?? 320,
+    w * 0.34, // never a third of the frame, whatever the floor below says
+    Math.max(qrCfg().minSize ?? 132, h * (qrCfg().size ?? 0.2)),
+  ));
+  const claimed = plan ? plan.w + gap : 0;
+
   g.textBaseline = 'alphabetic';
   g.fillStyle = 'rgba(255,120,120,0.95)';
   g.font = `700 ${subSize}px ${family}`;
@@ -134,7 +196,8 @@ function compose(src, meta) {
   g.fillStyle = '#ffffff';
   g.font = `700 ${nameSize}px ${family}`;
   g.letterSpacing = '0.02em';
-  fitText(g, (meta.name ?? 'A BOSS').toUpperCase(), pad, h - pad - subSize * 1.5, w - pad * 2, nameSize, family);
+  fitText(g, (meta.name ?? 'A BOSS').toUpperCase(), pad, h - pad - subSize * 1.5,
+    w - pad * 2 - claimed, nameSize, family);
 
   g.fillStyle = 'rgba(232,236,243,0.72)';
   g.font = `600 ${subSize}px ${family}`;
@@ -145,15 +208,369 @@ function compose(src, meta) {
   ];
   g.fillText(bits.join('  ·  '), pad, h - pad * 0.6);
 
-  // The wordmark, right-aligned on the same line. It is the only reason a
-  // stranger who sees this image knows what game it is.
+  // The wordmark, right-aligned on the same line. It is the reason a stranger
+  // who sees this image knows what game it is; the code beside it is how they
+  // get to it without typing anything.
   const mark = cfg().wordmark ?? 'SEAL SURVIVOR';
   g.textAlign = 'right';
   g.fillStyle = 'rgba(232,236,243,0.5)';
-  g.fillText(mark, w - pad, h - pad * 0.6);
+  g.fillText(mark, w - pad - claimed, h - pad * 0.6);
   g.textAlign = 'left';
 
+  return {
+    canvas: out,
+    stampQr: () => {
+      if (plan) drawQrPlan(g, plan, w - pad - plan.w, h - pad * 0.6 - plan.h);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// THE QR — see path/src/qr.js for the encoder, and the note in config.js for
+// why the picture carries one at all.
+//
+// Both images want the same object at different sizes, so the shape is planned
+// first (qrPlan) and drawn second (drawQrPlan): a caller has to know how wide
+// the code came out BEFORE it draws, because the type on that line moves out
+// of its way, and a panel measured after the fact is a wordmark drawn
+// underneath a QR code.
+// ---------------------------------------------------------------------------
+function qrCfg() {
+  return cfg().qr ?? {};
+}
+
+// One encode, kept. The link does not change between the kill shot and the
+// sheet, and it does not change between runs — but it is keyed on the text
+// rather than assumed, so a tuner edit to the link is picked up rather than
+// cached past.
+let cached = { text: null, code: null };
+
+function qrFor(text) {
+  if (!text) return null;
+  if (cached.text === text) return cached.code;
+  let code = null;
+  try {
+    code = encodeQr(text, qrCfg().level ?? 'M');
+    if (!code) console.warn('[bossShot] the share link is too long for a QR code');
+  } catch (err) {
+    console.warn(`[bossShot] could not encode the QR — ${err}`);
+  }
+  cached = { text, code };
+  return code;
+}
+
+/**
+ * How big the code wants to be, and everything needed to draw it.
+ *
+ * @param box the largest square it may occupy, in pixels.
+ * @returns { w, h, ... } or null when there is no code to draw — switched off,
+ *          no link, or a link too long to encode. Every caller treats null as
+ *          "no code" and lays out as if this feature did not exist.
+ */
+function qrPlan(box) {
+  const c = qrCfg();
+  if (c.enabled === false) return null;
+  const code = qrFor(c.link ?? cfg().url ?? '');
+  if (!code) return null;
+
+  const quiet = Math.max(0, Math.round(c.quiet ?? 3));
+  const span = code.size + quiet * 2;
+  // WHOLE PIXELS PER MODULE. A fractional module size is a code whose squares
+  // land on different pixel boundaries across the image — the edges alias, and
+  // after a chat app has resized and recompressed the picture the small ones
+  // stop resolving. Rounding down here costs at most one module of size and is
+  // the difference between a code that scans off a phone screen and one that
+  // is a grey square somebody gives up on.
+  const unit = Math.max(1, Math.floor(box / span));
+  const side = unit * span;
+  const caption = c.caption ?? '';
+  const capSize = caption ? Math.max(9, Math.round(side * 0.095)) : 0;
+  const capBand = capSize ? Math.round(capSize * 1.5) : 0;
+  return { code, unit, quiet, side, caption, capSize, capBand, w: side, h: side + capBand };
+}
+
+// Draws the plan with its top-left at x, y.
+function drawQrPlan(g, plan, x, y) {
+  const c = qrCfg();
+  const { code, unit, quiet, side } = plan;
+  // The panel, including the quiet zone — one light rectangle under
+  // everything, because the picture behind it is a dark ocean and a code
+  // drawn straight onto it has no white to be dark against.
+  g.fillStyle = c.light ?? '#f4f7f8';
+  g.fillRect(x, y, plan.w, plan.h);
+
+  g.fillStyle = c.dark ?? '#05070d';
+  const x0 = x + quiet * unit;
+  const y0 = y + quiet * unit;
+  for (let r = 0; r < code.size; r++) {
+    // Runs rather than modules: a row of a version-3 code is 29 squares and
+    // the dark ones come in twos and threes, so this is a third of the fill
+    // calls and — more to the point — no seam between adjacent modules for a
+    // JPEG to find.
+    let run = 0;
+    for (let cIdx = 0; cIdx <= code.size; cIdx++) {
+      const dark = cIdx < code.size && code.modules[r * code.size + cIdx];
+      if (dark) { run++; continue; }
+      if (run) g.fillRect(x0 + (cIdx - run) * unit, y0 + r * unit, run * unit, unit);
+      run = 0;
+    }
+  }
+
+  if (plan.caption) {
+    const family = CONFIG.typography?.family ?? 'system-ui, sans-serif';
+    g.save?.();
+    g.fillStyle = c.dark ?? '#05070d';
+    g.font = `700 ${plan.capSize}px ${family}`;
+    g.textAlign = 'center';
+    g.textBaseline = 'alphabetic';
+    g.letterSpacing = '0.12em';
+    g.fillText(plan.caption, x + plan.w / 2, y + side + plan.capSize);
+    g.letterSpacing = '0em';
+    g.textAlign = 'left';
+    g.restore?.();
+  }
+}
+
+// THE SQUARE CROP — the frame, uncaptioned, cut to the shape the polaroid's
+// picture zone actually is.
+//
+// The game renders at whatever shape the window is, usually about 16:9, and
+// the zone is square: something has to go. A CENTRED crop is the right cut
+// rather than a lucky one — systems/bossKill.js pushes the camera in on the
+// seal for the whole of the shot this is grabbed from, so the subject is
+// already in the middle of the frame. It costs about 44% of the width, which
+// is why the bias below exists for the fights where it reads badly.
+//
+// Sized to the zone rather than to the source: 620 is what the artboard asks
+// for, the in-run print never shows it wider than about 530 device pixels, and
+// every extra hundred pixels here is another megabyte held per boss, eight
+// times over, for the life of the tab.
+function squareCrop(src) {
+  const size = Math.max(64, Math.round(cfg().squareSize ?? 620));
+  const side = Math.min(src.width, src.height);
+  if (!(side > 0)) return null;
+  // -1 pulls the crop to the top of the frame, 1 to the bottom, 0 is centred.
+  const bias = Math.max(-1, Math.min(1, cfg().squareBiasY ?? 0));
+  const room = src.height - side;
+  const sx = Math.round((src.width - side) / 2);
+  const sy = Math.round((room / 2) * (1 + bias));
+  const out = document.createElement('canvas');
+  out.width = out.height = size;
+  const g = out.getContext('2d');
+  if (!g) return null;
+  // The same backdrop the composite gets, and for the same reason: the game
+  // draws on a transparent canvas, and a transparent picture inside a white
+  // polaroid is a white square.
+  g.fillStyle = cfg().backdrop ?? '#05070d';
+  g.fillRect(0, 0, size, size);
+  g.drawImage(src, sx, sy, side, side, 0, 0, size, size);
   return out;
+}
+
+// A cell-sized copy of the picture, kept for the contact sheet. Drawn once,
+// here, rather than eight times when the sheet is composed — and at the size
+// the sheet actually wants, so the grid is a straight blit rather than eight
+// full-size downscales on the frame the player pressed a button.
+function thumbnail(src) {
+  const w = Math.max(64, Math.round(sheetCfg().cellWidth ?? 660));
+  const h = Math.round((w * src.height) / Math.max(1, src.width));
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const g = out.getContext('2d');
+  if (!g) return null;
+  g.drawImage(src, 0, 0, w, h);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// THE CONTACT SHEET — the whole run as one image.
+//
+// A player who beat five bosses has five pictures, and the share sheet takes
+// one file at a time on most targets. Posting five separately is not something
+// anybody does, so the run composes into a single PNG: the scorecard along the
+// top, then every kill shot in a grid under it, oldest first, so the image
+// reads as a run rather than as a folder.
+//
+// Composed on demand and cached, because it is only ever wanted from a button
+// press and a run that ends without one being pressed should not have paid for
+// it. Invalidated by any new kill.
+// ---------------------------------------------------------------------------
+const sheet = { url: null, blob: null };
+
+function sheetCfg() {
+  return cfg().sheet ?? {};
+}
+
+function num(v, fallback) {
+  return Number.isFinite(v) ? v : fallback;
+}
+
+/**
+ * Draw every trophy from this run into one image, under a scorecard.
+ *
+ * @param run { score, kills, level, time, bosses } — the recap. Handed in
+ *            rather than read from a game module: this file knows about
+ *            pictures, and the run is the caller's fact.
+ * @returns a canvas, or null if there is nothing to draw.
+ */
+export async function composeRunSheet(run = {}) {
+  if (!shots.length) return null;
+  const c = sheetCfg();
+  const cols = Math.max(1, Math.min(shots.length, c.columns ?? 2));
+  const rows = Math.ceil(shots.length / cols);
+  const cellW = Math.max(64, c.cellWidth ?? 660);
+
+  // THE CELLS ARE POLAROIDS, when Rive can draw them. Every kill shot on the
+  // sheet is the same card the player watched come out of the camera and the
+  // same card they can share on its own — one look, wherever a kill shot
+  // appears, which is the whole reason the artboard exists.
+  //
+  // Rendered CONCURRENTLY (see renderSnapshotCards): each card has to be given
+  // time to write itself on, and eight of those in series is twenty seconds of
+  // a share button looking broken.
+  //
+  // At pixelRatio 1, because this is a file rather than a screen: a 3x phone
+  // would otherwise silently triple every cell and compose a sheet too big to
+  // send.
+  const cards = await renderSnapshotCards(
+    shots.map((s) => ({ photo: s.square, meta: cardTextFor(s) })),
+    { width: cellW, pixelRatio: 1 },
+  );
+  const asCards = cards.some(Boolean);
+
+  // A polaroid is taller than the frame inside it, so the row height follows
+  // whichever cell is actually being drawn — and the fallback keeps the old
+  // thumbnail's shape rather than leaving a card-sized hole.
+  const first = shots[0].thumb;
+  const cellH = asCards
+    ? Math.round(cellW * CARD_ASPECT)
+    : (first ? Math.round((cellW * first.height) / Math.max(1, first.width)) : Math.round(cellW * 0.5625));
+  const gap = Math.round(c.gap ?? 18);
+  const pad = Math.round(c.pad ?? 34);
+  const head = Math.round(c.headerHeight ?? 250);
+  // Room for the tilt to swing into. A card rotated in place needs its corners
+  // to have somewhere to go, and without this the spread clips every one of
+  // them against its neighbour.
+  const tilt = asCards ? num(c.tilt, 2.4) : 0;
+  const swing = tilt ? Math.ceil(cellW * Math.abs(Math.sin(tilt * Math.PI / 180)) * 0.6) : 0;
+
+  const w = pad * 2 + cols * cellW + (cols - 1) * gap + swing * 2;
+  const h = pad + head + rows * cellH + (rows - 1) * gap + pad + swing;
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const g = out.getContext('2d');
+  if (!g) return null;
+
+  g.fillStyle = c.backdrop ?? cfg().backdrop ?? '#05070d';
+  g.fillRect(0, 0, w, h);
+  drawScorecard(g, run, pad, pad, w - pad * 2, head - gap);
+
+  for (let i = 0; i < shots.length; i++) {
+    const x = pad + swing + (i % cols) * (cellW + gap);
+    const y = pad + head + Math.floor(i / cols) * (cellH + gap);
+    const card = asCards ? cards[i] : null;
+
+    if (card) {
+      // A SPREAD, NOT A GRID: alternating tilts so the sheet reads as
+      // photographs dropped on a table rather than as a contact sheet. Rotated
+      // about each card's own centre, so the lean does not walk the card out
+      // of its cell.
+      const angle = (i % 2 ? tilt : -tilt) * (Math.PI / 180);
+      g.save();
+      g.translate(x + cellW / 2, y + cellH / 2);
+      g.rotate(angle);
+      // The card's paper carries its own shadow in the artboard; this is the
+      // one it casts on the sheet, which is what separates two overlapping
+      // prints.
+      g.shadowColor = 'rgba(0,0,0,0.5)';
+      g.shadowBlur = Math.round(cellW * 0.035);
+      g.shadowOffsetY = Math.round(cellW * 0.012);
+      g.drawImage(card, -cellW / 2, -cellH / 2, cellW, cellH);
+      g.restore();
+      continue;
+    }
+
+    const t = shots[i].thumb;
+    if (t) g.drawImage(t, x, y, cellW, cellH);
+    else {
+      g.fillStyle = 'rgba(255,255,255,0.05)';
+      g.fillRect(x, y, cellW, cellH);
+    }
+    // A hairline around each frame, so the grid reads as separate photographs
+    // rather than as one image that happens to have seams in it.
+    g.strokeStyle = c.frame ?? 'rgba(255,255,255,0.14)';
+    g.lineWidth = 2;
+    g.strokeRect(x + 1, y + 1, cellW - 2, cellH - 2);
+  }
+  return out;
+}
+
+// THE SCORECARD. The same five figures the score screen shows, drawn into the
+// image — an image posted somewhere else has no score screen next to it, and
+// without these it is a picture of a fish rather than a result.
+//
+// THREE BANDS, and they are bands rather than a free arrangement because the
+// first version had the title and the numbers sharing a line: the title is set
+// large and a long one ran straight into "SCORE". Nothing here is positioned
+// relative to anything it could collide with — the top line is the top line,
+// the numbers sit on the bottom line, and the space between them is whatever
+// the header height leaves over.
+function drawScorecard(g, run, x, y, w, h) {
+  const family = CONFIG.typography?.family ?? 'system-ui, sans-serif';
+  const c = sheetCfg();
+  const title = Math.max(20, Math.round(h * 0.26));
+  const label = Math.max(11, Math.round(h * 0.075));
+  const value = Math.max(16, Math.round(h * 0.19));
+
+  // The code first, because the whole header lays itself out around it: it
+  // takes the right-hand end of the band, top to bottom, and the title, the
+  // URL and the four figures all get the width that is left.
+  const gap = Math.round(c.gap ?? 18);
+  const plan = qrPlan(Math.min(qrCfg().maxSize ?? 320, h, w * 0.3));
+  const claimed = plan ? plan.w + gap * 2 : 0;
+  if (plan) drawQrPlan(g, plan, x + w - plan.w, y + Math.max(0, (h - plan.h) / 2));
+
+  g.textAlign = 'left';
+  g.textBaseline = 'alphabetic';
+  g.fillStyle = '#ffffff';
+  g.font = `700 ${title}px ${family}`;
+  g.fillText(c.title ?? 'SEAL SURVIVOR', x, y + title);
+
+  // Right-aligned on the title's own line, where there is nothing to run into.
+  // It stays even with the code beside it: the address in type is what a
+  // person reads out loud to somebody in the same room, and it is the only
+  // route left if the picture is looked at on the device it was shared from.
+  g.textAlign = 'right';
+  g.fillStyle = 'rgba(232,236,243,0.5)';
+  g.font = `600 ${label}px ${family}`;
+  g.fillText(cfg().url ?? 'seal-survivor.pages.dev', x + w - claimed, y + title);
+  g.textAlign = 'left';
+
+  const bosses = run.bosses ?? shots.length;
+  g.fillStyle = 'rgba(255,120,120,0.95)';
+  g.font = `700 ${label}px ${family}`;
+  g.fillText(`${bosses} BOSS${bosses === 1 ? '' : 'ES'} DEFEATED`, x, y + title + label * 2);
+
+  // The figures along the bottom of the band, in four even columns across the
+  // full width — the numbers are what a stranger reads after the pictures.
+  const stats = [
+    ['SCORE', Math.floor(run.score ?? 0).toLocaleString()],
+    ['TIME', formatTime(run.time)],
+    ['LEVEL', String(run.level ?? 0)],
+    ['KILLS', String(run.kills ?? 0)],
+  ];
+  const colW = (w - claimed) / stats.length;
+  for (let i = 0; i < stats.length; i++) {
+    const cx = x + i * colW;
+    g.fillStyle = 'rgba(232,236,243,0.55)';
+    g.font = `600 ${label}px ${family}`;
+    g.fillText(stats[i][0], cx, y + h - value * 1.25);
+    g.fillStyle = '#ffffff';
+    g.font = `700 ${value}px ${family}`;
+    g.fillText(stats[i][1], cx, y + h);
+  }
 }
 
 // Boss names run to forty characters ("Wicked Grimgullet the Chumbucket
@@ -170,13 +587,23 @@ function fitText(g, text, x, y, maxWidth, size, family) {
 }
 
 /** A filename with the boss and the date in it, so a folder of these reads. */
-function fileName() {
-  const slug = (state.name || 'boss').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
+function fileName(shot) {
+  const slug = (shot?.name || 'boss').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
   return `seal-survivor-${slug || 'boss'}.png`;
 }
 
+// Which picture a caller means. Everything below takes an index into the roll,
+// and every one of them defaults to the LAST — that keeps the old one-trophy
+// callers (and the share button that predates the fan) meaning exactly what
+// they used to mean.
+function shotAt(index) {
+  if (!shots.length) return null;
+  if (index == null) return shots[shots.length - 1];
+  return shots[Math.max(0, Math.min(shots.length - 1, Math.floor(index)))] ?? null;
+}
+
 /**
- * Hand the image to the player. MUST be called from a click — both the share
+ * Hand an image to the player. MUST be called from a click — both the share
  * sheet and (on some browsers) the download are gated on a user gesture.
  *
  * Three routes, in order of how good they are, and the first one that exists
@@ -193,20 +620,161 @@ function fileName() {
  * player where they want it; this code never sees an account and never picks a
  * destination.
  *
+ * @param index which trophy, oldest first. Omitted means the latest.
  * @returns 'shared' | 'saved' | 'opened' | 'cancelled' | 'unavailable'
  */
-export async function shareBossShot() {
-  if (!state.url) return 'unavailable';
-
-  const title = state.name ? `I beat ${state.name}` : 'Seal Survivor';
-  const text = state.name
-    ? `${title} at level ${state.level} in Seal Survivor. ${cfg().url ?? 'https://seal-survivor.pages.dev'}`
+export async function shareBossShot(index) {
+  const shot = shotAt(index);
+  if (!shot?.url) return 'unavailable';
+  const title = shot.name ? `I beat ${shot.name}` : 'Seal Survivor';
+  const text = shot.name
+    ? `${title} at level ${shot.level} in Seal Survivor. ${cfg().url ?? 'https://seal-survivor.pages.dev'}`
     : `Seal Survivor. ${cfg().url ?? 'https://seal-survivor.pages.dev'}`;
+  // The polaroid if there is one, the captioned composite if not — same file
+  // name and same words either way, because what changed is how the picture
+  // looks and not what it is.
+  const card = await cardImage(shot);
+  return handOver(card?.blob ?? shot.blob, card?.url ?? shot.url, fileName(shot), title, text);
+}
 
-  const file = state.blob
-    ? new File([state.blob], fileName(), { type: 'image/png' })
-    : null;
+/** Straight to disk, no sheet. Also the fallback for share. */
+export async function saveBossShot(index) {
+  const shot = shotAt(index);
+  if (!shot?.url) return 'unavailable';
+  const card = await cardImage(shot);
+  return download(card?.url ?? shot.url, fileName(shot));
+}
 
+// ---------------------------------------------------------------------------
+// THE POLAROID AS THE SHARED FILE
+//
+// What leaves the game is the same object the player watched come out of the
+// camera: ui/snapshotCard.js draws the Rive artboard off screen at share size
+// and hands back a PNG. The captioned composite above is still built and still
+// kept — it is the fallback when Rive is not drawing, and it is what the
+// contact sheet's cells are made of — but it is not what gets posted.
+//
+// ONE THING IS MISSING FROM THE CARD AND IT IS DELIBERATE: the QR. The code
+// lives on the composite, and the polaroid has no slot for one yet (see the
+// note in ui/riveContract.js). Until `imgQr` is placed, a shared kill shot
+// carries no code. `shareCard: false` in config puts the captioned composite
+// back, code and all, in one value.
+// ---------------------------------------------------------------------------
+
+function cardImage(shot) {
+  if (!shot) return Promise.resolve(null);
+  // Cached ON THE SHOT rather than in a map: it is the same object shotAt
+  // hands out every time, it dies with the run, and a player who shares and
+  // then saves must not pay for two renders of an identical picture.
+  if (shot.card) return Promise.resolve(shot.card);
+  if (cfg().shareCard === false || !shot.square || !snapshotCardsLive()) return Promise.resolve(null);
+  if (shot.cardPending) return shot.cardPending;
+
+  shot.cardPending = (async () => {
+    try {
+      const url = await renderSnapshotCardPng({
+        photo: shot.square,
+        meta: cardTextFor(shot),
+        width: Math.max(320, cfg().cardWidth ?? 1600),
+      });
+      if (!url) {
+        // Not an exception — the card module returns null when the artboard
+        // failed to bind. Said out loud because the symptom otherwise is a
+        // share button that quietly hands over the plain frame instead.
+        console.warn('[bossShot] the polaroid drew nothing; sharing the plain frame.');
+        return null;
+      }
+      // The share sheet wants a FILE, which means a blob. Round-tripping the
+      // data URL through fetch is a local decode, not a request.
+      const blob = await (await fetch(url)).blob();
+      shot.card = { url, blob };
+      return shot.card;
+    } catch (err) {
+      console.warn(`[bossShot] could not render the polaroid, sharing the plain frame — ${err}`);
+      return null;
+    }
+  })();
+  return shot.cardPending;
+}
+
+/**
+ * Render every trophy's polaroid NOW, before anybody presses anything.
+ *
+ * WHY THIS IS NOT LAZY. navigator.share needs transient activation — it has to
+ * be called while the click that triggered it is still "recent" — and a render
+ * awaited inside the handler can spend that activation before the sheet is
+ * ever asked for, which fails as a share that silently turns into a download.
+ * The score screen calls this when it appears, seconds before any button can
+ * be pressed, so by then cardImage returns a cached picture immediately.
+ *
+ * Failures are swallowed on purpose: this is a warm-up, and every caller
+ * already copes with getting no card.
+ */
+export async function warmShareCards() {
+  // ONE AT A TIME. Each of these builds a Rive instance, decodes a bitmap and
+  // reads back a 1600x2000 canvas; eight of them started at once is both a
+  // spike on the frame the score screen is arriving on and a real race — the
+  // runtime hands back an unbound artboard often enough, under that much
+  // concurrent loading, that the cards come out empty. Sequential, they are
+  // ~50ms each and the player is still reading the first line of the screen.
+  for (const shot of shots) await cardImage(shot);
+}
+
+/**
+ * The whole run as one image — the scorecard and every kill shot in a grid.
+ * Composed on the first press and cached, so a player who shares and then
+ * saves does not pay for it twice.
+ *
+ * @param run the recap, as composeRunSheet takes it.
+ */
+export async function shareRunSheet(run = {}) {
+  if (!await buildSheet(run)) return 'unavailable';
+  const bosses = run.bosses ?? shots.length;
+  const title = 'My Seal Survivor run';
+  const text = `${bosses} boss${bosses === 1 ? '' : 'es'} down, level ${run.level ?? 0},`
+    + ` ${Math.floor(run.score ?? 0).toLocaleString()} points in Seal Survivor.`
+    + ` ${cfg().url ?? 'https://seal-survivor.pages.dev'}`;
+  return handOver(sheet.blob, sheet.url, 'seal-survivor-run.png', title, text);
+}
+
+/**
+ * The same image, straight to disk.
+ *
+ * ASYNC now, because the sheet is a spread of Rive cards and every one of them
+ * has to finish drawing before it can be composed. The caller has to await it —
+ * a bare call returns a Promise, and `told(saveRunSheet())` would report the
+ * word "[object Promise]" at the player instead of what happened.
+ */
+export async function saveRunSheet(run = {}) {
+  if (!await buildSheet(run)) return 'unavailable';
+  return download(sheet.url, 'seal-survivor-run.png');
+}
+
+// Compose once, keep it. Returns false when there is nothing to compose —
+// which is not a failure, it is a run that never met a boss.
+async function buildSheet(run) {
+  if (sheet.url) return true;
+  try {
+    // Async now that the cells are Rive cards — each one has to be given time
+    // to write itself on before it can be read off a canvas. Still composed
+    // once and cached, so a player who shares and then saves pays for it once.
+    const canvas = await composeRunSheet(run);
+    if (!canvas) return false;
+    sheet.url = canvas.toDataURL('image/png');
+    canvas.toBlob?.((blob) => { sheet.blob = blob; }, 'image/png');
+    return true;
+  } catch (err) {
+    console.warn(`[bossShot] could not compose the run sheet — ${err}`);
+    return false;
+  }
+}
+
+// THE THREE ROUTES, in one place. Both the single trophy and the whole sheet
+// take exactly the same path out of the game, and having written it twice once
+// already — the second copy is where the AbortError check goes missing — it is
+// written here once and handed what to send.
+async function handOver(blob, url, name, title, text) {
+  const file = blob ? new File([blob], name, { type: 'image/png' }) : null;
   if (file && navigator.canShare?.({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title, text });
@@ -218,23 +786,22 @@ export async function shareBossShot() {
       console.warn(`[bossShot] share failed, saving instead — ${err}`);
     }
   }
-  return saveBossShot();
+  return download(url, name);
 }
 
-/** Straight to disk, no sheet. Also the fallback for share. */
-export function saveBossShot() {
-  if (!state.url) return 'unavailable';
+function download(url, name) {
+  if (!url) return 'unavailable';
   try {
     const a = document.createElement('a');
-    a.href = state.url;
-    a.download = fileName();
+    a.href = url;
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     a.remove();
     return 'saved';
   } catch (err) {
     console.warn(`[bossShot] could not save — ${err}`);
-    window.open(state.url, '_blank');
+    window.open(url, '_blank');
     return 'opened';
   }
 }

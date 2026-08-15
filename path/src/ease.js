@@ -103,3 +103,49 @@ export function ease(name, t) {
 export function isEasing(name) {
   return BY_NAME.has(name);
 }
+
+// The same curves, for a CSS transition.
+//
+// WHY THIS EXISTS. Some motion belongs to the browser rather than to the game
+// loop — a print sliding out of a corner is on the wall clock, over a frame
+// that may be running at a tenth speed, and anything driven from update() would
+// be dilated along with the ocean. But a CSS transition wants a timing
+// function, and until now that meant a hand-written cubic-bezier per animation,
+// which is exactly how a codebase ends up with fourteen curves nobody can name
+// and none of them the ones in the table above.
+//
+// `linear()` closes that gap: it takes a list of sampled output values and
+// interpolates between them, so ANY curve here — including outExpo, which no
+// cubic-bezier can express — becomes a real CSS timing function. The samples
+// are what the shared table produces, so a name picked in the tuner means the
+// same shape whether it is read per frame or handed to the compositor.
+//
+// A browser too old to parse linear() falls back to its own default ease
+// rather than to no animation at all, which is a downgrade and not a hole.
+const CSS_CACHE = new Map();
+
+/**
+ * A CSS timing function for a named curve.
+ *
+ * @param name  any name from EASE_TABLE. Unknown names get linear, with the
+ *              same one-shot warning ease() gives.
+ * @param steps how finely to sample. 16 is indistinguishable from the real
+ *              curve at the durations UI runs at and keeps the string short.
+ */
+export function cssEase(name, steps = 16) {
+  const key = `${name}:${steps}`;
+  const hit = CSS_CACHE.get(key);
+  if (hit) return hit;
+  if (!BY_NAME.has(name)) {
+    // Route through ease() so an unknown name is reported once, in the same
+    // words, wherever it came from.
+    ease(name, 0);
+    return 'linear';
+  }
+  const n = Math.max(2, Math.round(steps));
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(ease(name, i / (n - 1)).toFixed(4));
+  const css = `linear(${out.join(', ')})`;
+  CSS_CACHE.set(key, css);
+  return css;
+}

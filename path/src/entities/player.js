@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { baseStats, applyLevelGrowth } from '../stats.js';
 import { applyWithRarity, baseRarity } from '../systems/rarity.js';
-import { createVisual } from '../assets.js';
+import { createVisual, getAssetSizeMultiplier } from '../assets.js';
 import { bounds, clampToArena, midWater } from '../arena.js';
 import { feedback } from '../systems/feedback.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
@@ -29,6 +29,10 @@ export const player = {
   celebrate: null, // boss-kill victory pose; null for a model with no rig to pose
   breathe: null, // the resting breath; null for a model with no breathRig
   velocity: new THREE.Vector2(0, 0),
+  // The shove, held apart from `velocity` — see applyPlayerKnockback. World
+  // units per second, decaying; zero on every frame nothing has hit the seal.
+  knockX: 0,
+  knockY: 0,
   hp: 100,
   invuln: 0,
   upgrades: [],
@@ -123,6 +127,39 @@ export const player = {
   // uniformly more agile rather than fast-but-unsteerable.
   comboSpeedMul: 1,
 };
+
+// ---------------------------------------------------------------------------
+// WHERE THE SEAL'S OWN OVERLAYS SIT, in z.
+//
+// Everything drawn AROUND the animal rather than on it — the charge meter's
+// arcs, the aura, the shockwave rings — is a flat quad on a plane, and that
+// plane has to clear the whole animal rather than just its origin. They used
+// to sit at -0.05 and -0.2, which is INSIDE the body: furseal.glb as the game
+// builds it spans -1.72..+1.79 in z at the shipped size, so the meter was
+// sliced by the seal — arcs disappearing into the flank and coming out the
+// other side. That reads as clipping, not as an instrument, and it is why the
+// glow looked like it was painted on the seal instead of behind it.
+//
+// The camera is orthographic at z=+40 looking down -z (see world.js), so a
+// smaller z is further away and nothing about this changes with framing.
+//
+// DERIVED FROM THE LIVE SIZE MULTIPLIER, not typed as a world number, because
+// the T-panel's seal size is a slider that actually gets moved: the rear
+// extent measured 1.717 units at the shipped multiplier of 2.36, which is
+// 0.728 per unit of it. A hand-typed -2 would put the meter back inside the
+// animal the first time the seal was scaled up.
+//
+// There is room behind: the surface line sits at -3, the fog band at -3.2 and
+// the grid at -4.5, so at any sane size this stays in front of the scenery.
+const SEAL_REAR_EXTENT_PER_SIZE = 0.728;
+// Clearance for the parts of the animal that move in z without changing the
+// bounding box the number above came from — the barrel roll and the wind-up
+// tremble.
+const OVERLAY_CLEARANCE = 0.3;
+
+export function playerOverlayZ() {
+  return -(SEAL_REAR_EXTENT_PER_SIZE * (getAssetSizeMultiplier('ship') || 1) + OVERLAY_CLEARANCE);
+}
 
 export function initPlayer(scene) {
   const group = new THREE.Group();
@@ -241,6 +278,10 @@ export function resetPlayer() {
   player.rollFrom = 0;
   player.rollTo = 0;
   player.velocity.set(0, 0);
+  // Cleared with the velocity, and for the same reason: a run that ended with
+  // the seal mid-shove would otherwise start the next one still sliding.
+  player.knockX = 0;
+  player.knockY = 0;
   player.aboveSurface = false;
   player.breachDir = 0;
   player.airTime = 0;
@@ -386,6 +427,26 @@ export function updatePlayer(dt, input) {
 
   pos.x += player.velocity.x * dt;
   pos.y += player.velocity.y * dt;
+
+  // BEING SHOVED, integrated on top of whatever the seal's own swimming asked
+  // for and decaying exponentially back to nothing. See applyPlayerKnockback
+  // for why it is a position offset rather than a velocity impulse: in one
+  // line, everything above this reads `velocity` and several things assign it.
+  //
+  // AFTER the speed clamp and the drag, deliberately — neither applies to it.
+  // A shove that the seal's own top speed could clip would be a shove that got
+  // weaker the better the player's movement upgrades were, which is the wrong
+  // way round; and bleeding it through the water's friction as well as its own
+  // decay would double-count the same slowing.
+  if (player.knockX || player.knockY) {
+    pos.x += player.knockX * dt;
+    pos.y += player.knockY * dt;
+    const drop = Math.exp(-(CONFIG.playerKnockback?.decay ?? 9) * dt);
+    player.knockX *= drop;
+    player.knockY *= drop;
+    if (Math.abs(player.knockX) < 0.01) player.knockX = 0;
+    if (Math.abs(player.knockY) < 0.01) player.knockY = 0;
+  }
 
   const wasAbove = player.aboveSurface;
   const hitWall = clampToArena(pos, player.velocity, s.hitRadius, CONFIG.arena.wallRestitution);
@@ -675,6 +736,46 @@ export function updatePlayer(dt, input) {
   updateAimRig(dt, input.aim, CONFIG.weapon.autofire, player.chargePose);
 
   player.hitThisFrame = false;
+}
+
+/**
+ * SHOVE THE SEAL. The mirror of applyKnockback in entities/enemies.js, and it
+ * makes the same two choices for the same reasons.
+ *
+ * A POSITION OFFSET, NOT A VELOCITY IMPULSE. `player.velocity` is not a free
+ * field: updatePlayer clamps it to the seal's own top speed, bleeds it through
+ * the water's friction every frame, reflects it off the arena walls, and the
+ * aim, the animation state and the breach test all read it. An impulse added
+ * there would be clipped to `maxSpeed` the same frame — so an "extreme" shove
+ * would land at whatever the seal could already swim at, and would get WEAKER
+ * as the player bought movement upgrades. It would also swing the aim, since
+ * velocity is what the aim falls back to when there is no cursor. Held apart,
+ * the shove composes with the swimming instead of competing for the field.
+ *
+ * NOT clamped to the arena here either — the caller's integration runs before
+ * clampToArena, so a shove into a wall stops at the wall like anything else.
+ * At the default 9/s decay a shove travels speed/9 units and is 95% spent in a
+ * third of a second, which is a hit that lands and is over. It is deliberately
+ * NOT a hold: nothing here suppresses thrust, so the player can swim out of it
+ * from the first frame, and the shove is something they have to swim against
+ * rather than something that takes their turn away. See systems/control.js for
+ * why that line matters in this game.
+ *
+ * @param dirX,dirY  direction to shove along; need not be normalised
+ * @param speed      world units/sec imparted, before decay
+ */
+export function applyPlayerKnockback(dirX, dirY, speed) {
+  if (CONFIG.playerKnockback?.enabled === false || !(speed > 0)) return 0;
+  const len = Math.hypot(dirX, dirY);
+  if (len < 1e-6) return 0;
+  // A ceiling on what any one source may impart, because this is the one place
+  // an enemy writes the player's position and the failure mode is the seal
+  // leaving the screen. Per-hit, not cumulative: two shoves in the same moment
+  // are meant to stack, a single mistuned one is not meant to be survivable.
+  const push = Math.min(speed, CONFIG.playerKnockback?.maxSpeed ?? 60);
+  player.knockX += (dirX / len) * push;
+  player.knockY += (dirY / len) * push;
+  return push;
 }
 
 export function applyRecoil(dir) {

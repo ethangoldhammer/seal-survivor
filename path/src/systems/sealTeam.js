@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { faceSide } from './facing.js';
 import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
@@ -318,7 +319,9 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {})
     const spd = Math.hypot(t.vel.x, t.vel.y);
     if (spd > 0.3) {
       t.root.rotation.z = Math.atan2(t.vel.y, t.vel.x) - Math.PI / 2;
-      t.visual.rotation.y = t.vel.x < 0 ? Math.PI : 0;
+      // Turned, not flipped — see systems/facing.js. Already inside a speed
+      // gate, so a seal holding station keeps whichever way it was pointed.
+      faceSide(t.visual, t.vel.x, dt);
     }
 
     // aboveSurface picks the land clips over the water ones, same rule the

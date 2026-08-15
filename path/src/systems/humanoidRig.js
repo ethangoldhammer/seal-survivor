@@ -28,6 +28,17 @@ const TARGETS = {
   lowerLegL: [0.07, 0.17], lowerLegR: [-0.07, 0.17],
 };
 
+// The next joint down each chain — which way a bone actually runs. See the
+// axis note in buildHumanoidRig: this is preferred over the flesh centroid
+// wherever it exists, because it is the skeleton's own answer rather than an
+// inference from where the meat sits. The four leaves are absent on purpose.
+const CHILD_JOINT = {
+  hips: 'chest',
+  chest: 'head',
+  upperArmL: 'lowerArmL', upperArmR: 'lowerArmR',
+  upperLegL: 'lowerLegL', upperLegR: 'lowerLegR',
+};
+
 // A bone has to be within this much of the target (in heights) to be accepted,
 // or the segment simply isn't driven and keeps whatever pose it had.
 const MAX_MISS = 0.22;
@@ -99,10 +110,28 @@ function lateralAxis(bones, flesh, lo, height) {
   return Math.abs(second.f.at.z - first.f.at.z) > Math.abs(second.f.at.x - first.f.at.x) ? 'z' : 'x';
 }
 
-function skinnedMeshOf(root) {
-  let found = null;
-  root.traverse((o) => { if (!found && o.isSkinnedMesh && o.skeleton) found = o; });
-  return found;
+// EVERY skinned mesh on the body's skeleton, not the first one found.
+//
+// A character is very often not one mesh. This game's businessman is thirteen —
+// body, head, hair, glasses, shirt, jacket, trousers, shoes — all bound to the
+// same 55-bone skeleton, which is how any DCC tool exports a dressed figure.
+// Measuring only the first of them measured 3,212 of his 23,377 vertices, and
+// every number downstream was then computed from a seventh of a man: his
+// standing height, the sole his feet stand on, and which bone is nearest each
+// target. It found no flesh at all on the head bone — the head is a different
+// mesh — so "the top of the spine" came out as the NECK, and the ragdoll then
+// aimed a neck as though it were a head and cranked it round.
+//
+// Filtered to one skeleton on purpose: a model can carry a second rigged object
+// that is not part of this body — a held prop, a mount — and its bones are not
+// these bones.
+function skinnedMeshesOf(root) {
+  const found = [];
+  root.traverse((o) => { if (o.isSkinnedMesh && o.skeleton?.bones?.length) found.push(o); });
+  if (!found.length) return found;
+  const bones = found[0].skeleton.bones;
+  return found.filter((m) => m.skeleton.bones.length === bones.length
+    && m.skeleton.bones[0] === bones[0]);
 }
 
 // The weighted centroid of the vertices each bone moves, in the ROOT's space —
@@ -114,26 +143,17 @@ function skinnedMeshOf(root) {
 // blend the GPU runs is the only way to get a number that can be compared with
 // where the bones are now. (Doing it the easy way put the fisherman's head 4
 // units from his neck and read as "this model isn't a humanoid".)
-function fleshCentroids(root, mesh) {
-  const geo = mesh.geometry;
-  const pos = geo.attributes.position;
-  const skinIndex = geo.attributes.skinIndex;
-  const skinWeight = geo.attributes.skinWeight;
-  if (!pos || !skinIndex || !skinWeight) return null;
-
-  const skeleton = mesh.skeleton;
-  const bones = skeleton.bones;
-  const inverses = skeleton.boneInverses;
-  if (!inverses?.length) return null;
+function fleshCentroids(root, meshes) {
+  const skeleton = meshes[0]?.skeleton;
+  const bones = skeleton?.bones;
+  const inverses = skeleton?.boneInverses;
+  if (!bones?.length || !inverses?.length) return null;
 
   root.updateMatrixWorld(true);
   const toRoot = new THREE.Matrix4().copy(root.matrixWorld).invert();
-  // The full chain the skinning shader applies, minus the per-vertex part.
-  const post = new THREE.Matrix4()
-    .multiplyMatrices(toRoot, mesh.matrixWorld)
-    .multiply(mesh.bindMatrixInverse);
 
   // bone.matrixWorld * boneInverse, once per bone rather than once per vertex.
+  // Shared across every mesh, because they share the skeleton.
   const offset = bones.map((b, i) => new THREE.Matrix4().multiplyMatrices(b.matrixWorld, inverses[i]));
 
   const sums = bones.map(() => ({ w: 0, v: new THREE.Vector3() }));
@@ -142,38 +162,69 @@ function fleshCentroids(root, mesh) {
   const acc = new THREE.Vector3();
   const part = new THREE.Vector3();
 
-  // Every 3rd vertex. The centroid of a few thousand samples lands in the same
-  // place as the centroid of all of them, and this runs on a 20k-vertex mesh.
-  for (let i = 0; i < pos.count; i += 3) {
-    bind.fromBufferAttribute(pos, i).applyMatrix4(mesh.bindMatrix);
-    acc.set(0, 0, 0);
-    let total = 0;
-    for (let k = 0; k < 4; k++) {
-      const w = skinWeight.getComponent(i, k);
-      if (w <= 0.001) continue;
-      const b = skinIndex.getComponent(i, k);
-      if (!offset[b]) continue;
-      acc.addScaledVector(part.copy(bind).applyMatrix4(offset[b]), w);
-      total += w;
-    }
-    if (total <= 0) continue;
-    skinned.copy(acc).divideScalar(total).applyMatrix4(post);
-    for (let k = 0; k < 4; k++) {
-      const w = skinWeight.getComponent(i, k);
-      if (w <= 0.001) continue;
-      const s = sums[skinIndex.getComponent(i, k)];
-      if (!s) continue;
-      s.w += w;
-      s.v.addScaledVector(skinned, w);
+  // THE SOLE — the lowest the skinned mesh actually reaches, tracked here
+  // because this is the one loop that computes where a vertex ends up. See
+  // `originToFeet` for why the flesh centroids alone cannot answer it.
+  let sole = Infinity;
+
+  // Every piece of the body, and every 3rd vertex of it. The centroid of a few
+  // thousand samples lands in the same place as the centroid of all of them,
+  // and this runs on tens of thousands. The sole is sampled the same way and is
+  // therefore approximate by up to the gap between two vertices on a shoe — a
+  // fraction of a millimetre at the size these are drawn, and far closer than
+  // the half-a-foot it replaces.
+  const post = new THREE.Matrix4();
+  let sampled = 0;
+  for (const mesh of meshes) {
+    const geo = mesh.geometry;
+    const pos = geo.attributes.position;
+    const skinIndex = geo.attributes.skinIndex;
+    const skinWeight = geo.attributes.skinWeight;
+    // A piece with no weights of its own is not part of the body's deformation
+    // and is skipped rather than failing the whole measurement.
+    if (!pos || !skinIndex || !skinWeight) continue;
+    // PER MESH: each one carries its own bind matrix and its own place in the
+    // hierarchy, and composing every piece against the first one's would scatter
+    // a dressed figure across the scene.
+    post.multiplyMatrices(toRoot, mesh.matrixWorld).multiply(mesh.bindMatrixInverse);
+
+    for (let i = 0; i < pos.count; i += 3) {
+      bind.fromBufferAttribute(pos, i).applyMatrix4(mesh.bindMatrix);
+      acc.set(0, 0, 0);
+      let total = 0;
+      for (let k = 0; k < 4; k++) {
+        const w = skinWeight.getComponent(i, k);
+        if (w <= 0.001) continue;
+        const b = skinIndex.getComponent(i, k);
+        if (!offset[b]) continue;
+        acc.addScaledVector(part.copy(bind).applyMatrix4(offset[b]), w);
+        total += w;
+      }
+      if (total <= 0) continue;
+      skinned.copy(acc).divideScalar(total).applyMatrix4(post);
+      if (skinned.y < sole) sole = skinned.y;
+      sampled++;
+      for (let k = 0; k < 4; k++) {
+        const w = skinWeight.getComponent(i, k);
+        if (w <= 0.001) continue;
+        const s = sums[skinIndex.getComponent(i, k)];
+        if (!s) continue;
+        s.w += w;
+        s.v.addScaledVector(skinned, w);
+      }
     }
   }
-  return sums.map((s) => (s.w > 0 ? { weight: s.w, at: s.v.clone().divideScalar(s.w) } : null));
+  if (!sampled) return null;
+  const flesh = sums.map((s) => (s.w > 0 ? { weight: s.w, at: s.v.clone().divideScalar(s.w) } : null));
+  flesh.sole = Number.isFinite(sole) ? sole : null;
+  return flesh;
 }
 
 export function buildHumanoidRig(root) {
-  const mesh = skinnedMeshOf(root);
-  if (!mesh) return null;
-  const flesh = fleshCentroids(root, mesh);
+  const meshes = skinnedMeshesOf(root);
+  if (!meshes.length) return null;
+  const mesh = meshes[0];
+  const flesh = fleshCentroids(root, meshes);
   if (!flesh) return null;
 
   const bones = mesh.skeleton.bones;
@@ -219,7 +270,7 @@ export function buildHumanoidRig(root) {
   // by a bit of clothing. Requiring a candidate to descend from the limb it
   // belongs to rules that out by construction, and no measurement of position
   // ever could.
-  const pick = (target, under = null, notUnder = null) => {
+  const pick = (target, under = null, notUnder = null, allow = null) => {
     const [tx, ty] = target;
     let best = null;
     let bestScore = Infinity;
@@ -233,6 +284,9 @@ export function buildHumanoidRig(root) {
       // chest is derived from are on one chain and the chest lands on a
       // shoulder.
       if (notUnder != null && descendsFrom(bones[i], bones[notUnder])) continue;
+      // A caller-supplied structural veto. Used to keep the spine out of the
+      // arm search — see the note where the spine set is built.
+      if (allow && !allow(i)) continue;
       const dx = f.at[lateral] / height - tx;
       const dy = (f.at.y - lo) / height - ty;
       const miss = Math.hypot(dx, dy);
@@ -253,16 +307,52 @@ export function buildHumanoidRig(root) {
   chosen.upperLegL = pick(TARGETS.upperLegL);
   chosen.upperLegR = pick(TARGETS.upperLegR, null, chosen.upperLegL);
   if (chosen.upperLegL == null || chosen.upperLegR == null) return null;
-  chosen.upperArmL = pick(TARGETS.upperArmL);
-  chosen.upperArmR = pick(TARGETS.upperArmR, null, chosen.upperArmL);
-  if (chosen.upperArmL == null || chosen.upperArmR == null) {
-    chosen.upperArmL = null;
-    chosen.upperArmR = null;
-  }
 
   const hipsBone = commonAncestor(bones[chosen.upperLegL], bones[chosen.upperLegR]);
   if (!hipsBone) return null;
   chosen.hips = bones.indexOf(hipsBone);
+
+  // AN ARM IS NOT PART OF THE SPINE, and until this was said out loud nothing
+  // stopped the arm search from answering with one. The arm targets are a
+  // POSITION — "about here, out to the side, high up" — and on a figure whose
+  // idle holds its arms out and up, the real arm bones sit further out and
+  // higher than the target while the SPINE sits closer to it. The spine wins on
+  // distance, and it is not even wrong by much: it is a bone in roughly the
+  // right place that happens to be the wrong bone.
+  //
+  // What follows from that is much worse than an arm bound to a spine. The two
+  // picks came back as `Spine1` and `Spine`, and the second guard — "not under
+  // the first" — let that through, because Spine is not UNDER Spine1, it is
+  // ABOVE it. The chest is then derived as the pair's common ancestor, which
+  // for two bones on one chain is the higher of the two, so the chest came out
+  // as a bone that CONTAINS the arms it was derived from. The head is then
+  // searched for under the chest while excluding everything under either arm —
+  // which by then is the entire body. No head, no rig, and a model with a
+  // perfectly good 55-bone skeleton fell back to the box body.
+  //
+  // So the spine is ruled out by construction. It is the path from the pelvis
+  // to the head, and both ends of it are already known: the hips are the bone
+  // the legs hang off (above), and the head is the highest flesh anywhere above
+  // them. Nothing on that path can be an arm.
+  const crownIndex = highestUnder(bones, flesh, chosen.hips,
+    [chosen.upperLegL, chosen.upperLegR]);
+  const spine = new Set();
+  for (let b = crownIndex == null ? null : bones[crownIndex]; b; b = b.parent) {
+    const i = bones.indexOf(b);
+    if (i >= 0) spine.add(i);
+    if (b === hipsBone) break;
+  }
+  const offSpine = (i) => !spine.has(i);
+
+  chosen.upperArmL = pick(TARGETS.upperArmL, null, null, offSpine);
+  // Not under the first arm AND not above it: two arms branch apart, so neither
+  // can contain the other. `notUnder` alone only says one of those.
+  chosen.upperArmR = pick(TARGETS.upperArmR, null, chosen.upperArmL, (i) => offSpine(i)
+    && !descendsFrom(bones[chosen.upperArmL], bones[i]));
+  if (chosen.upperArmL == null || chosen.upperArmR == null) {
+    chosen.upperArmL = null;
+    chosen.upperArmR = null;
+  }
 
   const chestBone = chosen.upperArmL != null && chosen.upperArmR != null
     ? commonAncestor(bones[chosen.upperArmL], bones[chosen.upperArmR])
@@ -293,14 +383,71 @@ export function buildHumanoidRig(root) {
   // assumed to be +Y — which it is on a Blender rig, right up until it isn't.
   const segments = {};
   const boneInverse = new THREE.Matrix4();
+  const boneQuat = new THREE.Quaternion();
   for (const [joint, index] of Object.entries(chosen)) {
     const bone = bones[index];
     boneInverse.copy(bone.matrixWorld).invert();
-    // Flesh is in root space; the bone's inverse expects world.
-    const world = flesh[index].at.clone().applyMatrix4(root.matrixWorld);
-    const axis = world.applyMatrix4(boneInverse);
+
+    // WHICH WAY THE BONE POINTS, and where possible that is a fact about the
+    // SKELETON rather than about the meat hanging off it: a bone runs toward
+    // the next joint down its own chain. Both ends of that are already chosen
+    // structurally, so it costs nothing and it is exactly right.
+    //
+    // The flesh centroid is the fallback, and it is the fallback because it can
+    // point almost anywhere. A Mixamo pelvis is the case that forced this: its
+    // bone sits at the hip line while the vertices it drives — buttocks, the
+    // top of both thighs — sit BELOW that, so its measured axis came out at
+    // (-0.20, -0.81, -0.55), pointing down and back. Aim that at the ragdoll's
+    // "up" and the whole figure, which hangs off the pelvis, turns over.
+    //
+    // Leaves keep the flesh: a head, a forearm and a shin have no next joint,
+    // and where their mass lies is the only direction they have.
+    const child = CHILD_JOINT[joint];
+    const childIndex = child == null ? null : chosen[child];
+    const axis = new THREE.Vector3();
+    if (childIndex != null && bones[childIndex]) {
+      axis.setFromMatrixPosition(bones[childIndex].matrixWorld).applyMatrix4(boneInverse);
+    }
+    // Degenerate when two chosen bones sit on top of each other, which a rig
+    // with a zero-length joint really can do.
+    if (axis.lengthSq() < 1e-10) {
+      // Flesh is in root space; the bone's inverse expects world.
+      axis.copy(flesh[index].at).applyMatrix4(root.matrixWorld).applyMatrix4(boneInverse);
+    }
     if (axis.lengthSq() < 1e-10) continue;
-    segments[joint] = { name: bone.name, bone, axis: axis.normalize(), rest: bone.quaternion.clone() };
+    axis.normalize();
+
+    // THE POLE. Aiming a bone fixes where it POINTS and says nothing about how
+    // it is rolled around that direction, and `setFromUnitVectors` resolves
+    // that freedom by taking the shortest arc — which means the roll is a
+    // by-product of the angle the limb happens to be at, and changes as the
+    // limb swings. On screen that is a knee that rotates about the thigh and an
+    // elbow that turns the forearm over: the joint reads as twisting rather
+    // than bending, and it is the one artefact that makes a ragdoll look
+    // broken rather than limp.
+    //
+    // So each bone also remembers where the CAMERA is in its own local space.
+    // aimBone rolls the bone back until that reference points at the camera
+    // again, which pins the twist to one value instead of leaving it to fall
+    // out of the swing. World +Z because that is where the camera is and
+    // because the ragdoll solves flat in the z = 0 plane — a limb's bend plane
+    // faces the viewer, which is exactly what a side-on game wants.
+    bone.getWorldQuaternion(boneQuat).invert();
+    const side = new THREE.Vector3(0, 0, 1).applyQuaternion(boneQuat);
+    // Only the part across the limb can be rolled; the part along it is what
+    // the swing already decided.
+    side.addScaledVector(axis, -side.dot(axis));
+
+    segments[joint] = {
+      name: bone.name,
+      bone,
+      axis,
+      // Null for a bone that happens to lie along the view axis at rest: its
+      // roll is genuinely unconstrained and forcing one would be inventing a
+      // number. Those bones keep the old shortest-arc behaviour.
+      side: side.lengthSq() > 1e-8 ? side.normalize() : null,
+      rest: bone.quaternion.clone(),
+    };
   }
 
   // The rest pose, in heights above the feet, for the verlet figure to be
@@ -318,10 +465,17 @@ export function buildHumanoidRig(root) {
   // re-centres every model on its centre of mass, which for a person is
   // somewhere around the navel.
   //
-  // Taken from the flesh, NOT from a bounding box: Box3 on a skinned mesh
-  // measures the BIND pose, and this model's bind pose is nowhere near the
-  // pose it loads in — asking the box put his feet a metre underground.
-  const originToFeet = lo;
+  // THE SOLE, not the lowest flesh centroid. Both are measured off the SKINNED
+  // mesh — never a Box3, which on a skinned mesh measures the BIND pose, and
+  // the fisherman's bind pose is nowhere near the pose he loads in; asking the
+  // box put his feet a metre underground. But a bone's flesh centroid sits in
+  // the MIDDLE of the flesh it drives, so the lowest one is the middle of a
+  // foot, and standing a man on that buries him to the ankles in the deck.
+  // What a floor touches is the bottom of his shoe.
+  //
+  // Falls back to the old measurement for a rig whose sole could not be read,
+  // which is half a foot too high rather than nothing at all.
+  const originToFeet = flesh.sole ?? lo;
 
   return {
     height, // in the root's units, before whatever scale it is drawn at
@@ -352,7 +506,7 @@ export function bindHumanoidRig(root, measured) {
   for (const [joint, seg] of Object.entries(measured.segments)) {
     const bone = root.getObjectByName(seg.name);
     if (!bone?.isBone) return null;
-    segments[joint] = { name: seg.name, bone, axis: seg.axis, rest: seg.rest };
+    segments[joint] = { name: seg.name, bone, axis: seg.axis, side: seg.side, rest: seg.rest };
   }
   let mesh = null;
   root.traverse((o) => { if (!mesh && o.isSkinnedMesh) mesh = o; });
@@ -360,15 +514,20 @@ export function bindHumanoidRig(root, measured) {
 }
 
 // Aim one bone along a world direction. The bone's own measured axis is what
-// gets pointed; twist is left alone, which for a body tumbling through the air
-// is a distinction nobody can see.
+// gets pointed, and its measured `side` is then rolled back to face the camera
+// — see the note on the pole where `side` is measured. Without that second step
+// the roll is whatever the shortest arc happened to leave, and knees and elbows
+// turn over as the limb swings.
 const _parentQuat = new THREE.Quaternion();
 const _inv = new THREE.Quaternion();
 const _dir = new THREE.Vector3();
 const _q = new THREE.Quaternion();
+const _side = new THREE.Vector3();
+const _pole = new THREE.Vector3();
+const _roll = new THREE.Quaternion();
 
 export function aimBone(segment, wx, wy) {
-  const { bone, axis } = segment;
+  const { bone, axis, side } = segment;
   _dir.set(wx, wy, 0);
   if (_dir.lengthSq() < 1e-10) return;
   _dir.normalize();
@@ -378,8 +537,43 @@ export function aimBone(segment, wx, wy) {
   bone.updateWorldMatrix(true, false);
   bone.parent.getWorldQuaternion(_parentQuat);
   _inv.copy(_parentQuat).invert();
+  // Everything below is in the PARENT's space, which is where bone.quaternion
+  // lives — including the pole, which is why the camera direction has to be
+  // brought in here rather than compared in world space.
   _dir.applyQuaternion(_inv);
   bone.quaternion.copy(_q.setFromUnitVectors(axis, _dir));
+
+  if (side) {
+    // Where the reference ended up after the swing, flattened across the limb:
+    // rolling can only move the part that is perpendicular to it.
+    _side.copy(side).applyQuaternion(bone.quaternion);
+    _side.addScaledVector(_dir, -_side.dot(_dir));
+    // The camera, in parent space, flattened the same way.
+    _pole.set(0, 0, 1).applyQuaternion(_inv);
+    _pole.addScaledVector(_dir, -_pole.dot(_dir));
+    // Both degenerate exactly when the limb points at the camera, which is the
+    // one case where the roll genuinely does not matter.
+    if (_side.lengthSq() > 1e-8 && _pole.lengthSq() > 1e-8) {
+      _side.normalize();
+      _pole.normalize();
+      // THE POLE IS AN AXIS, NOT A DIRECTION. A bend plane has no near side and
+      // no far side — a knee bends in the same plane whether the body is facing
+      // the camera or away from it — so the correction takes whichever of ±Z is
+      // the shorter roll.
+      //
+      // Insisting on +Z is the same bug the boat's heading has: a hull turned to
+      // sail the other way carries its passenger through 180 degrees, and every
+      // bone on him then has to roll a further 180 to point its reference back
+      // at the camera. The figure comes out folded over itself — head down by
+      // the waist, one arm straight up — while every joint is still perfectly
+      // "correct" and nothing anywhere throws.
+      if (_side.dot(_pole) < 0) _pole.negate();
+      _roll.setFromUnitVectors(_side, _pole);
+      // Pre-multiply: the roll is a rotation in the parent's frame and has to
+      // be applied AFTER the swing, not composed into the bone's own axes.
+      bone.quaternion.premultiply(_roll);
+    }
+  }
   bone.updateMatrixWorld(true);
 }
 

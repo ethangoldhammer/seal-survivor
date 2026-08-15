@@ -13,9 +13,9 @@ spawn.nightlife.glowing.night,1,0,3,Spawn rate multiplier for glowing creatures 
 spawn.nightlife.daylight.day,1,0,3,Spawn rate multiplier for everything else in daylight.
 spawn.nightlife.daylight.night,0.08,0,1,Spawn rate multiplier for everything else at night. Not 0 - a few stragglers still come.
 spawn.ramp.hp,0.075,0,0.15,Roster-wide enemy hp growth per 20s.
-spawn.ramp.hpMax,30,1,30,Cap on that hp growth (x).
-spawn.ramp.damage,0.028,0,0.15,Roster-wide enemy damage growth per 20s.
-spawn.ramp.damageMax,4,1,12,Cap on that damage growth (x).
+spawn.ramp.hpMax,40,1,60,Cap on that hp growth (x). Enemy hp rides TWO ramps - this and each creature's own hpPerDifficulty - so the effective spread is far bigger than this number: a basic fish is 139x tougher at minute 15 than at minute 1.
+spawn.ramp.damage,0.032,0,0.15,Roster-wide enemy damage growth per 20s. This is the ONLY damage ramp for 32 of the 34 creatures - only the two crabs carry a contactDamagePerDifficulty - which is why it has to do more work than the hp row above.
+spawn.ramp.damageMax,8,1,16,Cap on that damage growth (x). Was 4 while hp's cap was 30; a run that made enemies 139x tougher and 3.4x more dangerous is one that ends in bullet sponges. Contact damage is per SECOND of contact and swarms stack it - raise this one in small steps.
 spawn.ramp.speed,0.013,0,0.06,Roster-wide enemy speed growth per 20s.
 spawn.ramp.speedMax,1.9,1,4,Cap on that speed growth (x).
 crabSpawn.enabled,1,0,1,Whether chum on the seabed summons crabs at all.
@@ -36,5 +36,36 @@ xp.midMul,1.6,1.05,2.2,xp growth; mid levels
 xp.midFrom,6,2,20,mid band starts at level
 xp.lateMul,1.42,1.05,2.2,xp growth; late levels
 xp.lateFrom,17,5,40,late band starts at level
-xp.dropRamp.start,0.5,0.2,1,early chum xp (x; 1 = off)
-xp.dropRamp.fullAt,16,1,30,full chum xp at difficulty
+xp.dropRamp.start,0.12,0.05,1,What an orb pays in the first seconds of a run (x; 1 = off). Baked into the orb where it DROPS - it keeps that value however long it sits on the seabed.
+xp.dropRamp.fullAt,26,1,40,Difficulty at which orbs pay their full listed xp. 26 is about five minutes at the saved difficultyPerSecond.
+xp.dropRamp.curve,2,1,4,Shape of the climb between the two rows above. 1 = straight line (what this was); higher holds the opening down longer and climbs later. A straight line is why the holdback never held - it was already paying 60% one minute in.
+xp.chumMul,1.25,0.25,4,What a mouthful is worth across the board. The dial for moving the whole ladder at once.
+xp.toughness.exponent,0.4,0,1,How much of a creature's run-scaled toughness it pays back as xp. 0 = off (a minute-15 shark pays a minute-1 shark's chum); 1 = pays exactly what it costs. This is the strongest lever on how a run paces - see the measured table in config.js.
+xp.toughness.max,12,1,40,Ceiling on that multiplier.
+xp.chain.perLink,0.22,0,1,Extra chum xp per food-chain link. 0 = a chain is worth no xp at all.
+xp.chain.max,2.6,1,8,Ceiling on the food-chain xp multiplier.
+xp.spill.enabled,1,0,1,Whether one mouthful that is worth several levels is paid in over a few seconds instead of all on the frame it was swallowed. Off = a boss orb opens five upgrade cards back to back.
+xp.spill.maxLevels,1,1,5,Levels a single mouthful may cross at once. The rest is held. 1 = one card per swallow.
+xp.spill.seconds,10,1,60,How long the held-back xp takes to pay in. Gameplay seconds - the level-up slowdown dilates it with everything else.
+pickups.mass.enabled,1,0,1,Whether a drop keeps growing with the body it came out of past the top orb tier.
+pickups.mass.from,1,0.3,4,Source radius the ramp starts at. At or below this a drop is exactly what the tier table says.
+pickups.mass.exponent,1.4,0,3,How hard drop value climbs with the size of what died. 1 = by length; 2 = by area.
+pickups.mass.max,3,1,10,Ceiling on that multiplier. The orb's SIZE ramp is capped against this too - see pickups.mass.sizeExponent in config.js.
+chumChunk.enabled,1,0,1,Whether the big health chunk exists at all.
+chumChunk.spawnMin,55,10,240,Ambient chunk cadence - shortest gap in seconds.
+chumChunk.spawnMax,95,10,300,Ambient chunk cadence - longest gap in seconds.
+chumChunk.lifetime,34,5,120,Seconds a chunk waits before it disappears. Long on purpose - a chunk you saw and swam for is the point.
+chumChunk.healMin,0.1,0.01,0.5,Smallest chunk as a fraction of max HP.
+chumChunk.healMax,0.75,0.1,1,Largest chunk as a fraction of max HP.
+chumChunk.healBias,2.6,1,6,Bigger is rarer. 1 = flat roll; higher piles the distribution at the small end.
+chumChunk.boss.enabled,1,0,1,Whether a live boss kicks chunks loose.
+chumChunk.boss.maxPerFight,3,0,10,Ejections one fight can throw. The pity chunk is NOT counted here.
+chumChunk.boss.gapMin,9,1,120,Shortest gap between boss ejections.
+chumChunk.boss.gapMax,22,1,180,Longest gap between boss ejections.
+chumChunk.boss.tossSpeed,11,0,40,How hard a chunk is thrown clear of the boss body (u/s).
+chumChunk.boss.healBias,1.7,1,6,Boss chunks skew bigger than ambient ones - lower is flatter is more big ones.
+chumChunk.pity.enabled,1,0,1,The one-per-fight rescue chunk.
+chumChunk.pity.hpFrac,0.3,0.05,0.6,Below this fraction of max HP the pity roll starts happening.
+chumChunk.pity.checkEvery,2,0.5,10,Seconds between pity rolls while under the gate.
+chumChunk.pity.chance,0.85,0,1,Chance per roll.
+chumChunk.pity.healMin,0.45,0.1,1,A pity chunk rolls no smaller than this fraction of max HP.

@@ -2,7 +2,7 @@ import {
   getAssetMaterials, setAssetTexture, setAssetTint, setAssetRepeat, hasCustomTexture,
   setAssetEmissive, setAssetGlow, supportsEmissive, getAssetSizeMultiplier,
   loadUploadedAsset, isSpriteFile, setAssetEmissiveMask, assetEmissiveMaskState,
-  lookLeader,
+  lookLeader, glowIsProcedural, assetGlowPreset,
 } from '../assets.js';
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
 import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
@@ -422,8 +422,13 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
 function reapplyLook(key, look) {
   if (!look) return;
   if (look.tint != null) setAssetTint(key, look.tint);
-  if (look.emissive != null) setAssetEmissive(key, look.emissive);
-  if (look.glow != null && look.glow !== 1) setAssetGlow(key, look.glow);
+  // Emission is the biolumSkin's on a procedurally-shaded model and there is
+  // no control for it here (see the note where those rows are built), so a
+  // stale flood in the snapshot must not come back through a model swap
+  // either — this function is the other door into the same materials.
+  const procedural = glowIsProcedural(key);
+  if (!procedural && look.emissive != null) setAssetEmissive(key, look.emissive);
+  if (!procedural && look.glow != null && look.glow !== 1) setAssetGlow(key, look.glow);
   if (look.repeatX !== 1 || look.repeatY !== 1) setAssetRepeat(key, look.repeatX, look.repeatY);
   // Size is assets.csv's — see the read-only row below. Re-pushing it here
   // would put a stale snapshot value back over the file.
@@ -555,7 +560,28 @@ function buildCreatureRow(key, label, onAssetChanged) {
     divider.className = 'sv-tex-divider';
     el.append(divider);
 
-    if (supportsEmissive(key)) {
+    // A CREATURE WHOSE GLOW IS PROCEDURAL GETS NEITHER CONTROL.
+    //
+    // Both of these write a UNIFORM emission over the whole body, and these
+    // models ship no emissive map to shape one with — so the only thing they
+    // can do is flood the pattern that is meant to be the mask. The day crab
+    // spent months at emissive #f4d2f8 / glow 4.05 and rendered as a flat
+    // white silhouette with all three of its shell skins invisible
+    // underneath, which is what this row is for.
+    //
+    // A note rather than a disabled slider, and the same treatment the Size
+    // slider got when assets.csv took it over: a control that still moves but
+    // is discarded on the next reload is worse than no control, because it
+    // looks like it worked.
+    if (glowIsProcedural(key)) {
+      const note = document.createElement('div');
+      note.className = 'sv-tex-glowrow';
+      note.style.opacity = '0.72';
+      note.style.display = 'block';
+      note.textContent = `Glow is procedural on this model — the "${assetGlowPreset(key)}" `
+        + 'pattern is its emissive mask. Tune it under Bioluminescence, not here.';
+      el.append(note);
+    } else if (supportsEmissive(key)) {
       const emissiveRow = document.createElement('div');
       emissiveRow.className = 'sv-tex-glowrow';
       const emissiveLabel = document.createElement('label');
@@ -574,26 +600,28 @@ function buildCreatureRow(key, label, onAssetChanged) {
       if (look.emissive != null) setAssetEmissive(key, look.emissive);
     }
 
-    const glowRow = document.createElement('div');
-    glowRow.className = 'sv-tex-glowrow';
-    const glowLabel = document.createElement('label');
-    glowLabel.textContent = 'Glow';
-    glowSlider = document.createElement('input');
-    glowSlider.type = 'range';
-    glowSlider.min = '0'; glowSlider.max = '8'; glowSlider.step = '0.05';
-    glowSlider.value = look.glow ?? 1;
-    const glowVal = document.createElement('span');
-    glowVal.className = 'sv-tex-variant-name';
-    glowVal.textContent = `${Number(glowSlider.value).toFixed(2)}x`;
-    glowSlider.addEventListener('input', () => {
-      look.glow = Number(glowSlider.value);
-      setAssetGlow(key, look.glow);
-      glowVal.textContent = `${look.glow.toFixed(2)}x`;
-      saveTuningToStorage();
-    });
-    glowRow.append(glowLabel, glowSlider, glowVal);
-    el.append(glowRow);
-    if (look.glow != null && look.glow !== 1) setAssetGlow(key, look.glow);
+    if (!glowIsProcedural(key)) {
+      const glowRow = document.createElement('div');
+      glowRow.className = 'sv-tex-glowrow';
+      const glowLabel = document.createElement('label');
+      glowLabel.textContent = 'Glow';
+      glowSlider = document.createElement('input');
+      glowSlider.type = 'range';
+      glowSlider.min = '0'; glowSlider.max = '8'; glowSlider.step = '0.05';
+      glowSlider.value = look.glow ?? 1;
+      const glowVal = document.createElement('span');
+      glowVal.className = 'sv-tex-variant-name';
+      glowVal.textContent = `${Number(glowSlider.value).toFixed(2)}x`;
+      glowSlider.addEventListener('input', () => {
+        look.glow = Number(glowSlider.value);
+        setAssetGlow(key, look.glow);
+        glowVal.textContent = `${look.glow.toFixed(2)}x`;
+        saveTuningToStorage();
+      });
+      glowRow.append(glowLabel, glowSlider, glowVal);
+      el.append(glowRow);
+      if (look.glow != null && look.glow !== 1) setAssetGlow(key, look.glow);
+    }
 
     // Per-model glow source. Only shown for models that actually ship a mask
     // in public/textures/emissive — for everything else there is nothing to

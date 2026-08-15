@@ -22,9 +22,17 @@
 //
 // WHAT IS MODELLED: the PLAYER'S BRAIN and the chum supply.
 //
-//   The supply rate is taken from playtest/runs.jsonl — one kill drops one orb,
-//   so kills/sec IS chum/sec, and real runs sit at a median of about 4.3.
-//   Inventing that number would have made the whole exercise circular.
+//   THE SUPPLY IS WHAT THE SEAL EATS, NOT WHAT DIES. This harness used to take
+//   kills/sec from playtest/runs.jsonl and feed it in as chum/sec on the
+//   reasoning that one kill drops one orb — a median of 4.3/s. The logs record
+//   BOTH numbers, and they are nothing like each other: across 124 runs the
+//   seal kills 2.4-6.6 a second and SWALLOWS 0.17-1.6. Most of what dies drops
+//   where the mussels killed it and is never reached.
+//
+//   Feeding the kill rate in overstated the supply by 3-25x, which is why this
+//   harness reported a 92% link rate for a mechanic that scores 0-18% in the
+//   logs it was calibrated against. `SCENARIOS` below is now the measured
+//   EATEN rate, per 30s bucket of real play.
 //
 //   The brain is a deliberately COMPETENT-BUT-NOT-PERFECT player: it swims at
 //   the nearest chum, winds up when it has eaten enough to arm a link, and
@@ -32,8 +40,18 @@
 //   and it cannot see the window's clock. If the loop only works for a player
 //   who can, that is the finding.
 //
+//   IT ALSO HAS A CHARGE DISCIPLINE, because how long you hold is the single
+//   biggest thing a player varies and the wind-up SEALS THE MOUTH. A hold is
+//   time the seal is structurally forbidden from eating, and eating is the only
+//   thing that keeps the window open — so the two ends of the same rhythm pull
+//   against each other, and the harness has to be able to see that. `hold` is
+//   the banked power the brain waits for: 'min' is a twitch release at minFire,
+//   'full' is a player buying the reach the charge is there to sell.
+//
 // The point is the MISS BREAKDOWN, not the link count. A link rate on its own
 // says the chain is rare; the reasons say which of the three gates is shutting.
+// `lapsed in hand` is the fourth number and the one that matters most: windows
+// that died DURING a wind-up, i.e. chains lost to the mouth being shut.
 // ---------------------------------------------------------------------------
 
 import './dom-stub.mjs';
@@ -66,11 +84,21 @@ function rng(seed) {
 /**
  * One run of the loop.
  *
- * @param chumPerSec how fast kills are dropping food — from the real logs
+ * @param chumPerSec how fast the seal is SWALLOWING food — from the real logs
  * @param seed       fixed per scenario so runs are comparable
  * @param seconds    simulated length
+ * @param hold       charge discipline: 'min' releases the instant it can fire,
+ *                   'full' banks the whole bar first. See the header — this is
+ *                   the dial that decides how long the mouth stays shut.
+ * @param cadence    seconds the brain waits between strikes, floor. 0 is "as
+ *                   often as the food allows", which is 16-31 strikes a minute
+ *                   and NOT what anybody plays like: the logs have real players
+ *                   at 0.7-3.7 a minute. The chain is described as something a
+ *                   striking RHYTHM sustains, so the harness has to be able to
+ *                   ask what rhythm — a window that only works at 24 strikes a
+ *                   minute is a window that works for nobody.
  */
-export function simulate(chumPerSec, seed, seconds = 60) {
+export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence = 0) {
   const rand = rng(seed);
   resetPlayer(scene);
   resetStrike();
@@ -81,11 +109,16 @@ export function simulate(chumPerSec, seed, seconds = 60) {
   const stat = {
     strikes: 0, links: 0, maxChain: 0,
     missNoFood: 0, missNoWindow: 0, missBoth: 0,
-    eaten: 0, spawned: 0, holdFrames: 0,
+    eaten: 0, spawned: 0, holdFrames: 0, frames: 0,
+    // Windows that ran out, split by what the player was doing when they did.
+    // `lapsedHeld` is a chain lost while the mouth was shut by a wind-up — the
+    // player was mid-rhythm and could not have eaten to save it.
+    lapsedHeld: 0, lapsedFree: 0, windowFrames: 0,
   };
 
   let spawnAcc = 0;
   let holding = false;
+  let sinceStrike = 1e9; // the first strike of a run waits on nothing
 
   for (let f = 0; f < seconds / DT; f++) {
     // --- the water fills with food, where the fighting is -------------------
@@ -127,22 +160,35 @@ export function simulate(chumPerSec, seed, seconds = 60) {
 
     // Wind up once enough has been eaten to arm a link — the whole point of
     // the rework is that this is the readable cue, so the brain uses it.
-    const armed = strikeState.pipsSinceStrike >= linkPips(stats);
+    // Gated behind the rhythm the scenario is testing: a brain that strikes the
+    // instant it can is measuring the ceiling, not a player.
+    sinceStrike += DT;
+    const armed = strikeState.pipsSinceStrike >= linkPips(stats) && sinceStrike >= cadence;
     if (!holding && armed && strikeState.charge > CONFIG.strike.charge.minFire) holding = true;
     if (holding) stat.holdFrames++;
 
     player.chumSealed = holding && CONFIG.strike.charge.gulp?.blockEating !== false;
     updateCharge(DT, holding, stats);
 
-    // Release as soon as it would fire. Waiting for a fatter charge is a real
-    // strategy but it spends window, and the brain is modelling a player who
-    // wants the link.
-    if (holding && strikeState.pending >= CONFIG.strike.charge.minFire) {
+    // How fat a charge this player buys. 'min' is the twitch release — the
+    // cheapest possible link and the kindest case for the window. 'full' waits
+    // for the bar, which is what the reach and damage multipliers are there to
+    // sell and what most of a real hold looks like; it is also up to a second
+    // with the mouth shut, which the window has to survive.
+    const canFire = strikeState.pending >= CONFIG.strike.charge.minFire;
+    // 'full' holds until the tank is dry or the bank is capped — the bar
+    // running dry is what ends a wind-up in play, and without that clause a
+    // 'full' brain on a part-full bar would hold the button forever.
+    const ready = hold === 'full'
+      ? canFire && (strikeState.charge <= 0 || strikeState.pending >= 1)
+      : canFire;
+    if (holding && ready) {
       const dir = { x: input.move.x || 1, y: input.move.y };
       const L = Math.hypot(dir.x, dir.y) || 1;
       if (tryStrike({ x: dir.x / L, y: dir.y / L }, stats)) {
         const rel = consumeStrikeLink();
         stat.strikes++;
+        sinceStrike = 0;
         if (rel.chain > 0) {
           stat.links++;
           if (rel.chain > stat.maxChain) stat.maxChain = rel.chain;
@@ -160,7 +206,18 @@ export function simulate(chumPerSec, seed, seconds = 60) {
       player.chumSealed = false;
     }
 
+    // Sampled either side of updateStrike, which is the only thing that runs
+    // the window's clock down — a lapse is invisible after the fact because
+    // both counters are cleared with it.
+    const windowBefore = strikeState.chainTimer;
     updateStrike(DT, scene, player.mesh.position, stats, [], {});
+    if (windowBefore > 0) {
+      stat.windowFrames++;
+      if (strikeState.chainTimer <= 0) {
+        if (holding) stat.lapsedHeld++; else stat.lapsedFree++;
+      }
+    }
+    stat.frames++;
     updatePlayer(DT, input);
     updatePickups(DT, scene, player, () => { feedChum(stats); stat.eaten++; },
       () => {}, () => {}, () => {});
@@ -170,42 +227,88 @@ export function simulate(chumPerSec, seed, seconds = 60) {
 
 // ---------------------------------------------------------------------------
 
+// MEASURED, from the chumEaten counter in playtest/runs.jsonl, aggregated over
+// 124 runs by 30-second bucket. Not the kill rate — see the header for why
+// that distinction is the whole reason this table changed.
+//
+// The rate CLIMBS through a run (the seal gets faster, the magnet gets wider,
+// the water gets busier), so the opening is the lean case and a good late
+// stretch is the rich one. "wave 10ish", where the chain is reported to fall
+// apart, is the 240-300s band: 1.0-1.6/s.
 export const SCENARIOS = [
-  ['lean water   (p10)', 1.9],
-  ['typical      (median)', 4.3],
-  ['busy         (p90)', 9.4],
+  ['opening      (0-60s)', 0.2],
+  ['building     (90-150s)', 0.9],
+  ['wave 10ish   (180-300s)', 1.3],
+  ['best seen    (p90 bucket)', 2.4],
 ];
 export const SEEDS = [1, 7, 13, 29, 101];
+export const HOLDS = ['min', 'full'];
 
-if (!process.env.SIM_QUIET) console.log('\nFOOD CHAIN — simulated against chum rates measured from playtest/runs.jsonl');
+/**
+ * Aggregate one scenario over every seed. Split out so a tuning sweep can call
+ * it directly — importing this file used to run the whole report as a side
+ * effect, which made "try it at a different chainWindow" a copy of the file.
+ */
+export function measure(rate, hold, seconds = 60, cadence = 0) {
+  const agg = { strikes: 0, links: 0, maxChain: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0,
+    eaten: 0, lapsedHeld: 0, lapsedFree: 0 };
+  for (const seed of SEEDS) {
+    const r = simulate(rate, seed, seconds, hold, cadence);
+    agg.strikes += r.strikes; agg.links += r.links;
+    agg.missNoFood += r.missNoFood; agg.missNoWindow += r.missNoWindow; agg.missBoth += r.missBoth;
+    agg.eaten += r.eaten; agg.lapsedHeld += r.lapsedHeld; agg.lapsedFree += r.lapsedFree;
+    if (r.maxChain > agg.maxChain) agg.maxChain = r.maxChain;
+  }
+  agg.minutes = SEEDS.length * (seconds / 60);
+  agg.hit = agg.strikes ? agg.links / agg.strikes : 0;
+  return agg;
+}
+
+export function report() {
+console.log('\nFOOD CHAIN — simulated against the chum the seal actually SWALLOWS in real runs');
 console.log(`(real player, real strike, real magnet, real pickups; ${SEEDS.length} seeds x 60s each)\n`);
 console.log(`  linkBarFraction ${CONFIG.strike.linkBarFraction}  ->  a link costs ${linkPips(null)} of ${pipCount(null)} pips`);
 console.log(`  chainWindow ${CONFIG.strike.chainWindow}s, windowFromDashEnd ${CONFIG.strike.windowFromDashEnd}`);
 console.log(`  magnet reach: idle ${(CONFIG.player.pickupRadius).toFixed(1)}  striking ${(CONFIG.player.pickupRadius * CONFIG.pickups.magnet.striking.radiusMul).toFixed(1)}\n`);
 
-console.log('  water                strikes/min  links/min   hit%   deepest   miss: food  window  both');
-let worstHit = 1;
-for (const [label, rate] of SCENARIOS) {
-  const agg = { strikes: 0, links: 0, maxChain: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0, eaten: 0 };
-  for (const seed of SEEDS) {
-    const r = simulate(rate, seed, 60);
-    agg.strikes += r.strikes; agg.links += r.links;
-    agg.missNoFood += r.missNoFood; agg.missNoWindow += r.missNoWindow; agg.missBoth += r.missBoth;
-    agg.eaten += r.eaten;
-    if (r.maxChain > agg.maxChain) agg.maxChain = r.maxChain;
+for (const hold of HOLDS) {
+  console.log(hold === 'min'
+    ? '  RELEASING THE INSTANT IT FIRES — the cheapest link, the kindest case for the window'
+    : '\n  CHARGING FULLY — what the reach and damage multipliers are selling, mouth shut for up to a second');
+  console.log('  water                     strikes/min  links/min   hit%   deepest   miss: food  window   lapsed in hand');
+  for (const [label, rate] of SCENARIOS) {
+    const agg = measure(rate, hold);
+    const lapses = agg.lapsedHeld + agg.lapsedFree;
+    console.log([
+      `  ${label.padEnd(25)}`,
+      (agg.strikes / agg.minutes).toFixed(1).padStart(10),
+      (agg.links / agg.minutes).toFixed(1).padStart(11),
+      `${Math.round(agg.hit * 100)}%`.padStart(7),
+      `x${agg.maxChain}`.padStart(10),
+      String(agg.missNoFood + agg.missBoth).padStart(13),
+      String(agg.missNoWindow).padStart(8),
+      `${agg.lapsedHeld}/${lapses}`.padStart(17),
+    ].join(''));
   }
-  const mins = SEEDS.length;             // 60s each
-  const hit = agg.strikes ? agg.links / agg.strikes : 0;
-  if (hit < worstHit) worstHit = hit;
-  console.log([
-    `  ${label.padEnd(20)}`,
-    (agg.strikes / mins).toFixed(1).padStart(10),
-    (agg.links / mins).toFixed(1).padStart(11),
-    `${Math.round(hit * 100)}%`.padStart(7),
-    `x${agg.maxChain}`.padStart(10),
-    String(agg.missNoFood).padStart(13),
-    String(agg.missNoWindow).padStart(8),
-    String(agg.missBoth).padStart(6),
-  ].join(''));
 }
+
+// --- WHAT RHYTHM DOES IT TAKE ----------------------------------------------
+//
+// The tables above let the brain strike the instant it can, which is 13-20
+// times a minute. Real players are at 0.7-3.7. So the number those tables
+// report is a CEILING, and a mechanic that only works at the ceiling works for
+// nobody — this is the table that says whether an ordinary rhythm keeps a
+// chain, and it is the one that condemned the 1.1s window.
+console.log('\n  KEEPING ONE GOING — hit rate by how often the player strikes, at the "wave 10ish" rate');
+const CADENCES = [1.5, 3, 6, 12];
+console.log('  strike every        ' + CADENCES.map((c) => `${c}s`.padStart(10)).join(''));
+const chainRate = SCENARIOS.find(([l]) => l.startsWith('wave 10ish'))[1];
+console.log('  hit%, deepest       ' + CADENCES.map((c) => {
+  const a = measure(chainRate, 'full', 90, c);
+  return `${Math.round(a.hit * 100)}% x${a.maxChain}`.padStart(10);
+}).join(''));
 console.log('');
+}
+
+// Importable: a sweep wants `measure` without the report firing on import.
+if (!process.env.SIM_IMPORT) report();

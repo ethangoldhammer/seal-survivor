@@ -34,8 +34,14 @@ let tailSignature = '';
 let hushed = false;
 
 const tracks = new Map(); // name -> AudioBuffer
+// name -> { leadIn, loopEnd, bars }, measured once at decode. See measureTrack.
+const trackMeta = new Map();
 let currentTrack = null;
 let queuedTrack = null;
+// Which grid the queued switch waits for: 'loop' (the end of the playing file,
+// the level-up default) or 'bar' (the next bar line, which is what a boss
+// arrival uses — see startBossMusic).
+let queuedQuantum = 'loop';
 let started = false;
 let pollTimer = null;
 let defaultsRequested = false;
@@ -150,12 +156,125 @@ export function loopDuration() {
   return (60 / Math.max(1, CONFIG.music.bpm)) * beats;
 }
 
+// --- the bar grid ----------------------------------------------------------
+// One bar of the MUSIC, in score seconds, and note that it is measured off the
+// files rather than derived from CONFIG.music.bpm. Every file in the library —
+// all sixteen run loops and all seven boss loops — is a whole number of 2.265s
+// bars, which is 105.96bpm; `bpm` is the ANIMATION grid, is tuned by ear, and
+// is currently a fraction under that. The gap is nothing to a creature marching
+// to the beat and everything to a track switch, which either lands on the
+// downbeat or does not. See CONFIG.music.barSeconds.
+function barSeconds() {
+  return Math.max(0.05, CONFIG.music.barSeconds ?? 2.265);
+}
+
+// Where a decoded file's music actually STARTS.
+//
+// An mp3 decodes with silence on the front — 20 to 36ms across this library,
+// the encoder's own delay — so the first SAMPLE of the buffer is not the
+// downbeat. Left in, it costs twice: the loop inserts that much dead air on
+// every pass, and a file started at a bar line lands its music a flam late.
+// Skipping it is what makes a bar-quantised switch actually land on the bar.
+//
+// ONLY THE FRONT IS TRIMMED, and that is deliberate. The obvious symmetry —
+// find the last audible sample and loop to there — is wrong, because a bar can
+// legitimately END in near-silence: a decayed tail, a held note that has fallen
+// under the floor, a written rest. Cutting there would shorten the phrase by
+// however much of it happened to be quiet, which is a musical edit rather than
+// a repair. The back of the file is left exactly as authored.
+//
+// `bars` is measurement, not correction — it is what the loop SHOULD be, and
+// the two disagreeing is a fact about the file that no loop point can fix. A
+// file that is short of its bar count cannot be extended: the samples do not
+// exist. The rotation still switches on the file's own length, so a short file
+// costs one early transition rather than a stutter, and the discrepancy is
+// reported by `trackReport()` for whoever has to re-export it.
+const SILENCE = 0.0015; // -56 dBFS, below the noise floor of every file here
+
+function measureTrack(name, buffer) {
+  const bar = barSeconds();
+  const fallback = { leadIn: 0, loopEnd: buffer?.duration ?? 0, bars: 0, drift: 0 };
+  if (!(buffer?.duration > 0.05)) { trackMeta.set(name, fallback); return; }
+
+  const rate = buffer.sampleRate;
+  const n = buffer.length;
+  // A buffer with no readable samples cannot be measured, and that is a real
+  // case rather than defensiveness: decodeAudioData is the only thing that
+  // produces one of these, and a mocked context is free to hand back a duration
+  // and nothing else. Played at its own length, as it was before any of this.
+  const chans = [];
+  for (let c = 0; c < (buffer.numberOfChannels ?? 0); c++) {
+    const d = buffer.getChannelData?.(c);
+    if (d?.length) chans.push(d);
+  }
+  if (chans.length === 0 || !(n > 0)) { trackMeta.set(name, fallback); return; }
+
+  // Only the head is scanned — the padding is tens of milliseconds, and a full
+  // sweep of twenty-three files at 48kHz is millions of samples for an answer
+  // that lives in the first half-second.
+  const window = Math.min(n, Math.floor(rate * 0.5));
+  let first = -1;
+  for (let i = 0; i < window; i++) {
+    let p = 0;
+    for (const d of chans) { const v = Math.abs(d[i]); if (v > p) p = v; }
+    if (p > SILENCE) { first = i; break; }
+  }
+  // No audio in the first half-second: either the file opens on a long rest or
+  // it is silent. Neither is something to trim.
+  if (first < 0) { trackMeta.set(name, fallback); return; }
+
+  const leadIn = first / rate;
+  const musical = buffer.duration - leadIn;
+  const bars = Math.round(musical / bar);
+  trackMeta.set(name, {
+    leadIn,
+    loopEnd: buffer.duration,
+    bars: bars >= 1 ? bars : 0,
+    drift: bars >= 1 ? musical - bars * bar : 0,
+  });
+}
+
+/**
+ * Every loaded track against the bar grid: how long it is, how many bars that
+ * makes it, and how far off the nearest whole bar it lands.
+ *
+ * A file more than a frame or two out is an EXPORT problem, not a playback one
+ * — see measureTrack — and this is the only place it is visible. Read by
+ * tools/music-loop-test.mjs, and worth a look after any new loop is dropped in.
+ */
+export function trackReport() {
+  const bar = barSeconds();
+  const out = [];
+  for (const [name, buffer] of tracks) {
+    const m = metaFor(name);
+    out.push({
+      name,
+      duration: buffer.duration,
+      leadIn: m?.leadIn ?? 0,
+      bars: m?.bars ?? 0,
+      drift: m?.drift ?? 0,
+      bar,
+    });
+  }
+  return out;
+}
+
+function metaFor(name) {
+  const buffer = tracks.get(name);
+  if (!buffer) return null;
+  if (!trackMeta.has(name)) measureTrack(name, buffer);
+  return trackMeta.get(name);
+}
+
 // How long one full pass of the loop that's PLAYING takes, in score seconds.
 // The file's own length is the truth here: "the loop has finished" means the
 // thing the player can hear has come back round, and that's where the buffer
-// wraps, whatever the BPM says. Falls back to the grid before anything has
-// loaded.
+// wraps, whatever the BPM says. The MUSICAL length where one could be measured
+// (see measureTrack), so this agrees with the loop points the source node was
+// actually given. Falls back to the grid before anything has loaded.
 function loopSeconds() {
+  const m = metaFor(currentTrack);
+  if (m && m.loopEnd > m.leadIn) return Math.max(0.05, m.loopEnd - m.leadIn);
   const buffer = tracks.get(currentTrack);
   if (buffer && buffer.duration > 0.05) return buffer.duration;
   return loopDuration();
@@ -249,6 +368,10 @@ export async function loadTrackFromFile(name, file) {
   if (!ensureChain()) return false;
   try {
     tracks.set(name, await ctx.decodeAudioData(await file.arrayBuffer()));
+    // The measurement belongs to the buffer, not to the slot — a re-upload into
+    // an occupied slot would otherwise keep the old file's downbeat and bar
+    // count and loop the new one at the wrong length.
+    trackMeta.delete(name);
     notifyTracksChanged();
     return true;
   } catch (err) {
@@ -275,6 +398,7 @@ export function hasTrack(name) {
 
 export function clearTrack(name) {
   tracks.delete(name);
+  trackMeta.delete(name);
   notifyTracksChanged();
 }
 
@@ -304,6 +428,26 @@ export async function preloadDefaultTracks() {
     // pick it up now instead of staying silent for the rest of the run.
     if (pendingLevel != null) play(pendingLevel);
   }
+
+  // The boss bank, after the run's own loops rather than alongside them: the
+  // first ordinary loop has to be decoded before the player can hear anything,
+  // and the boss music is not needed until a fight — which is minutes away at
+  // the very earliest, since the first boss is gated on a level threshold.
+  const bossSources = CONFIG.music.bossSrc ?? [];
+  for (let i = 0; i < bossSources.length; i++) {
+    const src = bossSources[i];
+    const name = BOSS_PREFIX + i;
+    if (!src || tracks.has(name)) continue;
+    try {
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      tracks.set(name, await ctx.decodeAudioData(await res.arrayBuffer()));
+    } catch (err) {
+      console.warn(`[music] could not load boss loop "${src}" —`, err?.message ?? err);
+      continue;
+    }
+    notifyTracksChanged();
+  }
 }
 
 function startSource(name, when) {
@@ -322,6 +466,14 @@ function startSource(name, when) {
   // `beatsPerLoop` when it ran longer, which is what turned the one loop
   // written as twelve bars into eight bars and a cut.
   source.loop = true;
+  // ...from the downbeat rather than from sample zero, so the encoder's silence
+  // is skipped on every pass instead of being played as a gap at the loop
+  // point. The back of the file is left alone — see measureTrack.
+  const meta = metaFor(name);
+  if (meta && meta.leadIn > 0) {
+    source.loopStart = meta.leadIn;
+    source.loopEnd = meta.loopEnd;
+  }
   // Picks up the ramp in flight rather than snapping to the rate it's heading
   // for: a track can change hands mid-dilation now that the music plays on
   // through the death dive.
@@ -329,7 +481,11 @@ function startSource(name, when) {
   source.playbackRate.value = rateNow;
   if (rateTau > 0) source.playbackRate.setTargetAtTime(rateTarget, ctx.currentTime, rateTau);
   source.connect(filter);
-  source.start(when);
+  // Started AT the downbeat, not at sample zero — otherwise a switch quantised
+  // to a bar line still puts the music a padding's width late, which across
+  // this library is up to 36ms and audible as a flam against everything else
+  // landing on that beat.
+  source.start(when, meta?.leadIn ?? 0);
   currentTrack = name;
   // `when` is normally a hair in the future — where the score clock will be by
   // the time the first sample of the new file is actually heard.
@@ -383,6 +539,12 @@ export function play(level = 1) {
   // Drop anything the previous run left queued, or it would cut in at the
   // next boundary and override the loop we just started on.
   queuedTrack = null;
+  queuedQuantum = 'loop';
+  // ...and any fight the last run was in the middle of. A run that ended
+  // DURING a boss — the common way to end one — leaves the rotation up, and
+  // without this the new run would open on the run's first loop and then be
+  // taken back over by the dead fight's next boss loop one bar later.
+  resetBossMusic();
   depthHeld = false;
   resumeUntil = 0;
   // A run started while the last one's boss-kill hush was still up would open
@@ -416,15 +578,44 @@ export function stop() {
   releaseMusicHush(0);
   started = false;
   queuedTrack = null;
+  queuedQuantum = 'loop';
+  resetBossMusic();
   pendingLevel = null;
   if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
 }
 
-// Queue a track to begin at the next loop boundary. Passing the track that's
-// already playing is a no-op, so repeated level-ups don't restart the loop.
-export function queueTrack(name) {
+// ctx time of the next BAR LINE of the playing file — the same arithmetic as
+// nextBoundary against a shorter grid.
+//
+// Measured from `loopAnchor` rather than from the transport's origin, and that
+// is what makes it a real bar line instead of an arbitrary 2.265s tick: the
+// anchor is where the playing file's own downbeat is, and every file in the
+// library is a whole number of bars long (see measureTrack), so counting bars
+// from the anchor stays in phase with the music across any number of wraps.
+//
+// At most one bar away, which is the whole point of the boss switch: a fight
+// cannot wait the up-to-18s a loop boundary can be.
+export function nextBar(now = ctx?.currentTime ?? 0) {
+  advance();
+  const bar = barSeconds();
+  if (!started || bar <= 0) return now;
+  const into = ((transportPos - loopAnchor) % bar + bar) % bar;
+  return now + (bar - into) / Math.max(0.05, rateNow);
+}
+
+/**
+ * Queue a track to begin at the next boundary. Passing the track that's already
+ * playing is a no-op, so repeated level-ups don't restart the loop.
+ *
+ * @param quantum 'loop' waits for the playing file to finish, so a phrase is
+ *                never cut — the level-up default. 'bar' waits only for the
+ *                next bar line: still seamless to a listener, but it arrives
+ *                inside a couple of seconds instead of up to eighteen.
+ */
+export function queueTrack(name, quantum = 'loop') {
   if (!started || !tracks.has(name) || name === currentTrack) return;
   queuedTrack = name;
+  queuedQuantum = quantum === 'bar' ? 'bar' : 'loop';
 }
 
 function pollQueue() {
@@ -435,13 +626,17 @@ function pollQueue() {
   advance();
   if (!queuedTrack) return;
   const now = ctx.currentTime;
-  const boundary = nextBoundary(now);
+  const boundary = queuedQuantum === 'bar' ? nextBar(now) : nextBoundary(now);
   // Schedule slightly ahead of the boundary so the switch is sample-accurate
   // rather than depending on when this poll happens to fire.
   if (boundary - now <= 0.12) {
     const name = queuedTrack;
     queuedTrack = null;
     startSource(name, boundary);
+    // A boss fight chains: the loop that just started queues its own successor
+    // for the END of itself, so the rotation carries on with no clock outside
+    // the music driving it. See startBossMusic.
+    if (bossActive) queueNextBossLoop();
   }
 }
 
@@ -507,8 +702,197 @@ export function updateDepth(y) {
 export function setLevel(level) {
   currentLevel = level;
   if (!CONFIG.music.enabled || !started) return;
+  // NOT DURING A BOSS FIGHT. Levelling up mid-fight is common — it is the
+  // fight's own drops that do it — and without this the run's next ordinary
+  // loop would be queued underneath the boss music and cut in at the following
+  // boundary, ending the fight's score while the boss was still alive. The
+  // level is still recorded above, and endBossMusic reads it on the way out, so
+  // the loop that comes back after the kill is the one this level asked for.
+  if (bossActive) return;
   const slot = slotForLevel(level);
   if (slot != null && slot !== currentTrack) queueTrack(slot);
+}
+
+// ---------------------------------------------------------------------------
+// THE BOSS ROTATION
+// ---------------------------------------------------------------------------
+// A second bank of loops that takes over the transport for the length of a
+// fight. THE SAME transport — the same source node, the same filter, the same
+// gain — rather than a second player running alongside, and that is the whole
+// design:
+//
+//   - the kill's reverb tail (see hushMusic) taps the depth filter, so what
+//     rings out over the held close-up is made of BOSS music. A parallel player
+//     would have to grow its own send, and the tail would be built from a loop
+//     the fight had nothing to do with.
+//   - the death dive's tape drag, the upgrade screen's duck, the depth
+//     low-pass and the suffocation band-pass all act on that chain and go on
+//     working through a fight without knowing a fight is happening.
+//
+// The bank lives under its own names ('boss0'…) rather than in the numbered
+// upload slots, so slotForLevel — which scans '1'..CONFIG.music.slots — can
+// never draw one for an ordinary level.
+
+const BOSS_PREFIX = 'boss';
+
+// How many fights are running. A refcount rather than a flag because two bosses
+// in the water at once is reachable (the debug spawner, and a level gap of 8 is
+// a handful of seconds to a build that is eating well) — the music has to stay
+// up until the LAST one dies, and the first kill must not drag the run's
+// ordinary loop back underneath a boss that is still swimming.
+let bossFights = 0;
+let bossActive = false;
+// Index into the rotation, and it belongs to the RUN rather than to the fight:
+// it survives a kill and is only cleared by resetBossMusic. -1 means no boss
+// has arrived yet this run, which is the one and only state that plays the
+// intro. See startBossMusic for why the rotation is continuous across fights.
+let bossCursor = -1;
+
+// Which boss loops actually loaded, in file order. Empty slots are skipped the
+// same way slotForLevel skips them, so a 404 on one file costs that loop rather
+// than the fight's music.
+function bossBank() {
+  const out = [];
+  const n = (CONFIG.music.bossSrc ?? []).length;
+  for (let i = 0; i < n; i++) {
+    const name = BOSS_PREFIX + i;
+    if (tracks.has(name)) out.push(name);
+  }
+  return out;
+}
+
+/** Is the score currently on the boss bank? For the tuner readout and tests. */
+export function bossMusicActive() {
+  return bossActive;
+}
+
+// The next loop in the rotation, queued to start when the playing one finishes.
+//
+// The FIRST loop of the bank is an intro: four bars where the rest are five to
+// eight, played once and then never returned to. The cycle wraps to the second
+// entry instead, so a long fight repeats the body of the music without
+// re-announcing itself every ninety seconds.
+//
+// Note the cursor ends up pointing at the loop that is QUEUED, not the one
+// sounding — this runs immediately after a switch. That is what the next fight
+// resumes from; see startBossMusic.
+function queueNextBossLoop() {
+  const bank = bossBank();
+  if (bank.length === 0) return;
+  const hasIntro = bank.length > 1 && CONFIG.music.bossIntro !== false;
+  bossCursor += 1;
+  if (hasIntro) {
+    // 0 is the intro and is only ever reached by the entry below; from here the
+    // cursor walks 1..n-1 and wraps back to 1.
+    if (bossCursor >= bank.length) bossCursor = 1;
+    if (bossCursor < 1) bossCursor = 1;
+  } else if (bossCursor >= bank.length) {
+    bossCursor = 0;
+  }
+  // A bank of one is the fight's whole score: queueTrack refuses a name that is
+  // already playing, so it simply keeps looping, which is correct.
+  queueTrack(bank[bossCursor], 'loop');
+}
+
+/**
+ * A boss has arrived. Take the transport, on the next bar line.
+ *
+ * Called from systems/boss.js on the frame the arrival ceremony lands — the
+ * same frame the health bar fills and the riser resolves.
+ *
+ * QUANTISED TO THE BAR, not to the frame and not to the end of the playing
+ * loop. The frame is where the boss is; the bar is where the MUSIC is, and the
+ * two are up to 2.265s apart. Switching on the frame would cut the run's loop
+ * mid-phrase and put the boss music's downbeat wherever the player happened to
+ * hit the level threshold; waiting for the loop boundary is musical but can be
+ * eighteen seconds, which is a third of a fight. One bar is the only boundary
+ * that is both seamless and inside the ceremony.
+ *
+ * ONE ROTATION PER RUN, NOT PER FIGHT. The second boss picks up on the loop the
+ * first one had queued when it died, the third carries on from the second, and
+ * so on — the run has a single piece of fight music that the fights are windows
+ * onto, rather than each fight replaying the same opening. A player who meets
+ * four bosses hears four different stretches of it.
+ *
+ * The intro is part of that: it belongs to the RUN's first boss, and after that
+ * the cursor is never allowed back to it. Claimed the moment it is queued
+ * rather than when it finishes, so a boss killed inside its own first bar still
+ * spends it — otherwise the shortest fight in the run would hand the intro to
+ * the next one and the announcement would land twice.
+ *
+ * @returns true if the bank is loaded and a switch was queued.
+ */
+export function startBossMusic() {
+  if (!CONFIG.music.enabled || !started) return false;
+  bossFights += 1;
+  // A second boss arriving mid-fight joins the one already playing rather than
+  // restarting the rotation.
+  if (bossActive) return true;
+  const bank = bossBank();
+  if (bank.length === 0) {
+    // Nothing loaded — the run's own music plays on. Deliberately not silence:
+    // a missing file should cost the fight its score, not the game its sound.
+    bossFights = Math.max(0, bossFights - 1);
+    return false;
+  }
+  bossActive = true;
+  const floor = bank.length > 1 && CONFIG.music.bossIntro !== false ? 1 : 0;
+  if (bossCursor < 0) bossCursor = 0; // the run's first boss, and the only intro
+  else if (bossCursor < floor || bossCursor >= bank.length) bossCursor = floor;
+  queueTrack(bank[bossCursor], 'bar');
+  return true;
+}
+
+/**
+ * The fight is over. Hand the transport back to the run's own music.
+ *
+ * Called from systems/bossKill.js as the water ramps back to full speed —
+ * BEFORE releaseMusicHush, so the level the score comes back at is the ordinary
+ * one rather than the boss trim, and the loop that fades up is already the
+ * right one. The switch itself is inaudible: it happens while the hush still
+ * has the music gain at zero.
+ *
+ * Unquantised on purpose. Every other switch in this file waits for a boundary
+ * because a listener can hear the seam; there is no seam to hear when nothing
+ * is sounding, and the ordinary loop should come back from ITS OWN bar one
+ * rather than a bar and a half into a phrase.
+ *
+ * @param opts.immediate  false lets the boss loop finish its bar first, for the
+ *                        callers that end a fight with the music still audible
+ *                        (a boss switched off in the tuner, a boss that leaves
+ *                        without a kill shot).
+ */
+export function endBossMusic({ immediate = true } = {}) {
+  bossFights = Math.max(0, bossFights - 1);
+  if (!bossActive || bossFights > 0) return;
+  bossActive = false;
+  // `bossCursor` is deliberately LEFT WHERE IT IS — it is the run's place in the
+  // rotation, not this fight's, and the next boss resumes from it. Only a run
+  // reset clears it.
+  //
+  // What it points at right now is the loop this fight had queued and never got
+  // to play, so nothing in the bank is skipped and nothing is heard twice in a
+  // row across the gap between two fights.
+  queuedTrack = null;
+  if (!started || !ensureChain()) return;
+  // Whatever the run is owed NOW: the player has almost certainly levelled
+  // during the fight, and setLevel stood down for the duration (see above), so
+  // this is where those level-ups are finally answered. From the top of the
+  // loop, which is the point of doing it under the hush.
+  const slot = slotForLevel(currentLevel);
+  if (!slot) return;
+  if (immediate) startSource(slot, ctx.currentTime + 0.02);
+  else queueTrack(slot, 'bar');
+}
+
+/**
+ * Drop the rotation with no handover — a run reset, or the fight's owner going
+ * away. play() calls this; nothing else should need it.
+ */
+export function resetBossMusic() {
+  bossFights = 0;
+  bossActive = false;
+  bossCursor = -1;
 }
 
 // Which uploaded loop should be playing at this level. Empty slots are

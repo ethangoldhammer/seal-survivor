@@ -33,7 +33,7 @@ import { dirname, resolve } from 'node:path';
 import { CONFIG } from '../path/src/config.js';
 import { bossLockout, clearForBoss, enemies, resetEnemies, removeEnemy, updateEnemies, updateSpawning, spawnNamed } from '../path/src/entities/enemies.js';
 import { cycleState, lullEligible, resetWaves, setBossCycle, waveSpawn, waveState } from '../path/src/systems/waves.js';
-import { bossKillState, resetBossKill, startBossKill, updateBossKill } from '../path/src/systems/bossKill.js';
+import { bossKillState, resetBossKill, startBossKill, updateBossKill, printPhaseSeconds } from '../path/src/systems/bossKill.js';
 import { initBossGibs, spawnBossGibs, updateBossGibs, resetBossGibs, bossGibCount } from '../path/src/systems/bossGibs.js';
 import { bounds } from '../path/src/arena.js';
 import { inSpawnGroup, spawnGroupsOf } from '../path/src/enemyTable.js';
@@ -364,20 +364,34 @@ section('THE KILL SHOT — slow motion and a close-up');
   while (bossKillState.phase === 'hold' && held < 10) { updateBossKill(DT); held += DT; }
   check('the beat is long enough to sink in', held > 1.2, `${held.toFixed(2)}s held`);
 
+  // THE PRINT. The beat is followed by a stretch of the same held frame while
+  // the photograph ejects, develops and flies to the corner — see
+  // ui/snapshotPrint.js. It is the same slow motion, extended, so it is
+  // measured apart from the beat and apart from the ramp back.
+  let printed = 0;
+  while (bossKillState.phase === 'print' && printed < 10) { updateBossKill(DT); printed += DT; }
+  check('the print gets the whole of its flight in slow motion',
+    printed >= printPhaseSeconds() - DT, `${printed.toFixed(2)}s`);
+  check('...at the same speed the beat was held at',
+    Math.abs(bossKillState.timeScale - K.hold) < 1e-6, `x${bossKillState.timeScale.toFixed(3)}`);
+
   // And back. Quicker than the beat, on purpose — the moment has to END rather
   // than sag back into play, and the water is already refilling by the time the
   // frame finishes opening out.
   let frames = 0;
   while (bossKillState.active && frames++ < 10000) updateBossKill(DT);
   const back = frames * DT;
-  const total = t + held + back;
+  const total = t + held + printed + back;
   check('it lets go on its own', !bossKillState.active);
   check('...back to a live clock and an unclaimed frame',
     bossKillState.timeScale === 1 && bossKillState.camWeight === 0 && bossKillState.camZoom === 1);
   check('...and does it faster than it held', back < held, `${back.toFixed(2)}s back vs ${held.toFixed(2)}s held`);
   // Still punctuation. A run that reaches level 40 sees eight of these, and the
-  // eighth has to be worth watching.
-  check('the whole shot is under three seconds', total < 3, `${total.toFixed(2)}s`);
+  // eighth has to be worth watching. Three seconds now rather than two: the
+  // print is a second and a half of it, and it is the part with the trophy in
+  // it — but the ceiling stays close, because a fourth second of held water is
+  // where a flourish turns into a cutscene.
+  check('the whole shot is under three and a half seconds', total < 3.5, `${total.toFixed(2)}s`);
   check('...and is not so short it cannot be read', total > 1.2, `${total.toFixed(2)}s`);
 
   // The switch.
@@ -547,12 +561,23 @@ section('THE WRECKAGE — a boss comes apart');
   // body is back in the visual pool and its bones are posing somebody else, so
   // a burst fired from there is sampled off whatever creature inherited the
   // rig. It has to come from the kill hook, while there is still a pose.
+  //
+  // The body is now KEPT for about a second first (systems/bossCorpse.js, so
+  // the boss is still in the frame when the kill shot takes its picture), but
+  // the rule is unchanged and is the reason the hold works the way it does:
+  // whatever eventually throws the burst has to be holding a body that still
+  // has its pose. The kill hook is where that body is claimed, on the frame of
+  // the blow, and the corpse hands the visual back only after it has thrown.
   const mainSrc = readFileSync(resolve(here, '../path/src/main.js'), 'utf8');
   const bossSrc = readFileSync(resolve(here, '../path/src/systems/boss.js'), 'utf8');
-  check('the burst is fired from the kill hook, on the frame of the blow',
-    /isBoss\)\s*spawnBossGibs\(e\)/.test(mainSrc));
+  const corpseSrc = readFileSync(resolve(here, '../path/src/systems/bossCorpse.js'), 'utf8');
+  check('the body is claimed from the kill hook, on the frame of the blow',
+    /isBoss && !holdBossCorpse\(e, world\.scene\)\) spawnBossGibs\(e\)/.test(mainSrc));
   check('...and not from the boss module, a frame after the body has gone',
-    !bossSrc.includes('bossGibs'));
+    !bossSrc.includes('bossGibs') && !bossSrc.includes('bossCorpse'));
+  check('...with the burst thrown before the visual goes back to the pool',
+    corpseSrc.indexOf('spawnBossGibs(e)') > 0
+    && corpseSrc.indexOf('spawnBossGibs(e)') < corpseSrc.indexOf('releaseVisual(e.visual)'));
 }
 
 // ---------------------------------------------------------------------------
@@ -867,6 +892,18 @@ section('THE NAME — narrowed by archetype and by perk');
         for (const ep of pool('epithet')) out.add(`${pre.text}${root.text} ${ep.text}`);
       }
     }
+    // ...AND THE HAND-WRITTEN ONES. A nickname replaces the whole prefix+root
+    // half rather than joining it, so it is a second way to build a legal name
+    // and not a fourth part of the first way. Without this the enumeration
+    // calls every authored name impossible — which is what it did, correctly,
+    // the moment the first nickname was written.
+    // BOTH hand-written slots, because they are one pool in the roll: `solo`
+    // is a nickname that ends the name rather than a different kind of row.
+    for (const nick of [...pool('nickname'), ...pool('solo')]) {
+      out.add(nick.text);
+      // A solo name stands alone; everything else may still take an epithet.
+      if (!nick.solo) for (const ep of pool('epithet')) out.add(`${nick.text} ${ep.text}`);
+    }
     return out;
   };
 
@@ -901,18 +938,43 @@ section('THE NAME — narrowed by archetype and by perk');
     const mine = new Set();
     for (let i = 0; i < 800; i++) mine.add(rollBossName(parts, { boss: arch.id, exclusive: true }, rng));
 
-    // Every part it used has to be one that names it. Checked against the
-    // SHARED pool directly rather than against a legal-name set, because the
-    // failure being hunted is a shared word leaking in — and the most likely
-    // way for that to happen is a new generic row nobody thought about.
-    const sharedText = new Set();
-    for (const slot of ['prefix', 'root', 'epithet']) {
-      for (const p of parts[slot]) if (!p.bosses && !p.perk) sharedText.add(p.text);
-    }
-    const leaked = [...mine].filter((n) => [...sharedText].some((t) => n.startsWith(t) || n.endsWith(t) || n.endsWith(` ${t}`)));
+    // Every part it used has to be one that names it — asked of the PARTS a
+    // name could have been assembled from, never of the letters in it. This
+    // check used to search each name for shared text and it was wrong for the
+    // reason written above legalNames: a prefix is glued straight onto a root
+    // with no space between them, so every shared prefix is also the opening
+    // letters of some perfectly legal name. A shared "Salt" made the boat's
+    // own "Salty" + "deck" report itself as a leak, and a word boundary would
+    // not have saved it, because there is no boundary between two glued
+    // halves to find. The legal set is exact and it is built from the file, so
+    // a new generic row nobody thought about still cannot slip past it: a name
+    // built with one simply is not in there.
+    const own = legalNames(arch.id, null, true);
+    const leaked = [...mine].filter((n) => !own.has(n));
     check(`${arch.id} never touches the shared vocabulary`, leaked.length === 0,
       leaked.length ? `leaked: ${leaked.slice(0, 3).join('; ')}` : `${mine.size} distinct names, all its own`);
     check('...and has enough of its own to not repeat', mine.size > 60, `${mine.size} distinct names`);
+
+    // ...AND NO SHARED ROW MAY SPELL ONE OF ITS WORDS. The set of legal names
+    // is blind to exactly this: a shared row and a tagged row carrying the
+    // same text produce the same string, so the name reads as legal no matter
+    // which of the two was drawn — while every other archetype quietly gains
+    // the word, and "Grimdeck" turns up on a shark. Compared as whole parts,
+    // because here the part IS the comparison and a substring would mean
+    // nothing. This is the check the substring search was reaching for.
+    const NAMED_SLOTS = ['prefix', 'root', 'epithet', 'nickname', 'solo'];
+    const sharedText = new Set();
+    for (const slot of NAMED_SLOTS) {
+      for (const p of parts[slot] ?? []) if (!p.bosses && !p.perk) sharedText.add(p.text);
+    }
+    const dupes = [];
+    for (const slot of NAMED_SLOTS) {
+      for (const p of parts[slot] ?? []) {
+        if (!p.perk && p.bosses?.includes(arch.id) && sharedText.has(p.text)) dupes.push(`${slot} "${p.text}"`);
+      }
+    }
+    check(`...and no shared row spells one of ${arch.id}'s own words`, dupes.length === 0,
+      dupes.length ? `duplicated: ${dupes.slice(0, 3).join('; ')}` : `${sharedText.size} shared parts, none of them its`);
 
     // ...and the other way round: no other archetype may wear ITS words.
     for (const other of roster) {
@@ -1452,11 +1514,19 @@ section('THE CLEAR-OUT — a boss fight empties the water');
   // chum in it is the thing this replaced) and they arrive in small numbers (a
   // boss fight with fifteen fish in it is just a fight).
   const forage = enemies.filter((e) => e !== boss && !e.leaving);
-  const cap = CONFIG.boss?.schools?.maxAlive ?? 9;
+  // WHICH system fed them depends on `keepFood`: on (the default) the ordinary
+  // pool keeps sending small fry all fight; off, updateBossForage's own trickle
+  // does it. Only one runs at a time — with both live the water filled to
+  // fifteen where nine was intended, each spending its budget as if it were
+  // alone — so the cap asserted here is whichever one is actually in charge.
+  const poolFeeds = CONFIG.boss?.clearOut?.keepFood !== false;
+  const cap = poolFeeds
+    ? Math.round(CONFIG.spawn.maxAlive * 0.5)
+    : (CONFIG.boss?.schools?.maxAlive ?? 9);
   check('the forage sends fish into the fight', forage.length > 0,
     `${forage.length} in the water: ${[...new Set(forage.map((e) => e.type))].join(', ') || 'none'}`);
-  check('...and never more than the cap', forage.length <= cap,
-    `${forage.length} vs cap ${cap}`);
+  check('...and a boss fight never becomes an ordinary wave', forage.length <= cap,
+    `${forage.length} vs cap ${cap} (${poolFeeds ? 'pool' : 'trickle'} is feeding)`);
   // Away from the boss, which is the whole point of the feature — a school
   // that spawned on top of the fight would be a free top-up rather than a
   // decision. Measured on the arrival SIDE rather than by distance: the fish

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { actionForKey, stickDeadzone } from './systems/settings.js';
+import { defaultDevice, shoulderLabel } from './devices.js';
 
 // There is no `firing` here any more. The seal shoots on its own — see
 // CONFIG.weapon.autofire, which is now the only thing that decides whether the
@@ -19,6 +20,17 @@ export const input = {
   // stops being down.
   strikeHeld: false,    // level — true for as long as any strike input is down
   strikeRelease: false, // edge-triggered — true for exactly one frame per let-go
+  // Is the player DELIBERATELY pointing the seal this frame — a pushed right
+  // stick, or a thumb on the aim half. Not the same question as `aim`, which
+  // always holds a direction and is never "off": something has to be true for
+  // the guns, and the last direction given is the only sane answer.
+  //
+  // Only the two devices that aim by gesture can report it. A mouse aims by
+  // existing — the pointer is always somewhere and the seal always faces it —
+  // so there is no moment to catch and this stays false on a keyboard. The one
+  // thing reading it is the first-run coach, which does not teach aiming to a
+  // mouse for that exact reason.
+  aiming: false,
 };
 
 // Menu navigation, kept separate from `input` on purpose: gameplay wants a
@@ -161,6 +173,63 @@ const CONFIRM_BUTTONS = [0, 9];
 // instant you released the right stick, which reads as "gamepad doesn't
 // work". Now the mouse only reclaims aim when it actually moves again.
 let lastAimDevice = 'mouse'; // 'mouse' | 'gamepad' | 'touch'
+
+// --- which device is in the player's hands ---------------------------------
+// Related to lastAimDevice above and deliberately NOT the same thing. That one
+// arbitrates who gets to point the seal, so it only ever moves on an input that
+// AIMS, and it starts life as 'mouse' on every machine including phones. This
+// one answers "what should the words on screen tell them to press", which any
+// input at all is evidence about — a thumb on the movement stick says touch
+// just as loudly as one on the aim stick.
+//
+// LAST DEVICE TO DO ANYTHING WINS, with no stickiness beyond that. The player
+// who puts the keyboard down and picks up a pad mid-run has told us something
+// true, and the tips are the one place that has to keep up: a first-run tip
+// naming the wrong button is worse than no tip, because it is a wrong answer to
+// a question the player is actively asking.
+//
+// `null` until real input arrives, so defaultDevice() can keep guessing rather
+// than being latched in at boot.
+let activeDevice = null;
+// When the last touch landed. Mouse events are IGNORED for a moment after one:
+// a tap on a touchscreen is followed by a synthesised mousemove/mousedown pair
+// in every browser, and without this the very first tap of a phone player's
+// first run would flip them to 'kbm' and teach them to press Space.
+let lastTouchAt = -Infinity;
+const SYNTHETIC_MOUSE_MS = 700;
+
+function markDevice(device) {
+  activeDevice = device;
+}
+
+// A mouse event that a touch just manufactured is not a mouse.
+function markMouseDevice() {
+  if (performance.now() - lastTouchAt < SYNTHETIC_MOUSE_MS) return;
+  markDevice('kbm');
+}
+
+/**
+ * Which of DEVICES the player is using right now. Read by anything that puts
+ * the name of a control on screen — see calloutTable.js, and the `device` that
+ * main.js hands to the callouts and the coach every frame.
+ */
+export function inputDevice() {
+  return activeDevice ?? defaultDevice();
+}
+
+/**
+ * Words for the hardware in front of the player, for the `{token}`s a callout
+ * line can carry. Only the shoulder buttons so far, because they are the only
+ * control the game asks for by name that the browser will not name for us —
+ * see shoulderLabel.
+ *
+ * Read from the pad we last chose rather than from the connected list: with two
+ * pads plugged in, the one being pressed is the one the words are about.
+ */
+export function inputTokens() {
+  return { bumper: shoulderLabel(inputStatus.gamepadName) };
+}
+
 export const inputStatus = {
   gamepadConnected: false,
   gamepadName: '',
@@ -173,6 +242,11 @@ export const inputStatus = {
   padCount: 0,
   axes: [],
   buttons: [],
+  // What inputDevice() is answering, refreshed each frame. Here rather than
+  // only behind the getter because "the tips are showing the wrong buttons" is
+  // a bug report about this value, and it should be readable next to the pad
+  // state that most often explains it.
+  device: defaultDevice(),
 };
 
 export function initInput(canvas) {
@@ -199,10 +273,12 @@ export function initInput(canvas) {
   canvas.addEventListener('mousemove', (e) => {
     lastAimDevice = 'mouse';
     hasMouse = true;
+    markMouseDevice();
     updateMouseNDC(e.clientX, e.clientY);
   });
   canvas.addEventListener('mousedown', (e) => {
     hasMouse = true;
+    markMouseDevice();
     // Raise the press edge here rather than in updateInput, the way Space does:
     // the event IS the edge, and a click that opens and closes inside one frame
     // would be invisible to a poll of `mouseStrikeHeld` alone.
@@ -242,6 +318,8 @@ export function initInput(canvas) {
       // which a touch device can still latch via a synthesised event — keeps
       // overwriting touch aim the moment the aim thumb comes off.
       lastAimDevice = 'touch';
+      lastTouchAt = performance.now();
+      markDevice('touch');
       const rect = canvas.getBoundingClientRect();
       forEachTouch(e.changedTouches, (t) => {
         beginTouch(t);
@@ -514,6 +592,9 @@ export function clearPendingInput() {
 const FIXED_MOVE = { arrowup: 'up', arrowdown: 'down', arrowleft: 'left', arrowright: 'right' };
 
 function setKey(e, down) {
+  // Any key at all, bound or not, and only on the way down: a keyup arriving
+  // from the key that dismissed the splash is not somebody choosing a keyboard.
+  if (down) markDevice('kbm');
   const k = e.key.toLowerCase();
   // The player's binding first, then the fixed arrows. Two lookups rather than
   // one merged map because a rebind must be able to move `up` off W without
@@ -648,11 +729,17 @@ function getGamepad() {
     return null;
   }
 
-  if (pad.index !== activePadIndex) {
-    activePadIndex = pad.index;
+  // The NAME is refreshed whenever it changes, not only when the slot does:
+  // unplugging one pad and plugging in another usually reuses index 0, and a
+  // stale name there is a tip telling a PlayStation player to press LB. The
+  // log line stays on the slot change, which is the event worth reading about.
+  if (pad.index !== activePadIndex || inputStatus.gamepadName !== (pad.id ?? 'gamepad')) {
     inputStatus.gamepadConnected = true;
     inputStatus.gamepadName = pad.id ?? 'gamepad';
-    console.info(`[input] reading gamepad ${pad.index}: ${pad.id} (mapping: ${pad.mapping || 'non-standard'})`);
+    if (pad.index !== activePadIndex) {
+      console.info(`[input] reading gamepad ${pad.index}: ${pad.id} (mapping: ${pad.mapping || 'non-standard'})`);
+    }
+    activePadIndex = pad.index;
   }
 
   // Button and axis numbers below are the Standard Gamepad layout. A pad
@@ -832,6 +919,13 @@ const worldPoint = new THREE.Vector3();
 export function updateInput(camera, playerPos) {
   const pad = getGamepad();
 
+  // A pad claims the prompts by being PUSHED, not by being plugged in. The
+  // deadzone is what makes that safe: a controller sitting on the desk with a
+  // drifting stick would otherwise re-take the words from the keyboard on every
+  // frame, forever, and no amount of typing would win them back.
+  if (pad && padActivity(pad) > stickDeadzone()) markDevice('pad');
+  inputStatus.device = inputDevice();
+
   // Menus run while the game is paused, so this is updated from the same poll
   // rather than gated on gameState — whoever has a menu open reads it.
   updateMenuInput(pad);
@@ -867,6 +961,8 @@ export function updateInput(camera, playerPos) {
 
   // --- aim (priority: right stick > touch drag > mouse) ---
   let aimed = false;
+  // Reset per frame, unlike `aim` itself: this is the gesture, not the heading.
+  input.aiming = false;
 
   if (pad) {
     const rx = pad.axes[2] ?? 0;
@@ -874,6 +970,7 @@ export function updateInput(camera, playerPos) {
     if (Math.hypot(rx, ry) > stickDeadzone()) {
       input.aim.set(rx, -ry).normalize();
       aimed = true;
+      input.aiming = true;
       lastAimDevice = 'gamepad';
     }
   }
@@ -884,6 +981,7 @@ export function updateInput(camera, playerPos) {
   if (!aimed && aimMag) {
     input.aim.copy(aimVec);
     aimed = true;
+    input.aiming = true;
     lastAimDevice = 'touch';
   }
 

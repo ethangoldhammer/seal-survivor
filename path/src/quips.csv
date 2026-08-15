@@ -1,10 +1,15 @@
-id,text,enabled,weight
-died,You Died!,TRUE,1
-sealed,Your Fate is Sealed!,TRUE,1
-clubbed,Ya dead kehd!,TRUE,1
-chummy,Chummy.,TRUE,1
-chum,"You're the Chum Now, Dog",TRUE,1
-lastbreath,"Get ready to learn yoga, buddy!",TRUE,1
-approval,Seal of Approval for you!,TRUE,
-whalebro,Crab Food.,TRUE,
-gdaychum,g'day chum. ,,
+id,text,enabled,weight,causes
+died,You Died!,TRUE,1,
+sealed,Your Fate is Sealed!,TRUE,1,
+clubbed,Ya dead kehd!,TRUE,1,boat
+chummy,Chummy.,TRUE,1,
+chum,"You're the Chum Now, Dog",TRUE,1,shark
+lastbreath,"Get ready to learn yoga, buddy!",TRUE,1,drowning
+approval,Seal of Approval for you!,TRUE,,
+whalebro,Crab Food.,TRUE,,crab
+gdaychum,g'day chum. ,,,shark orca crab
+drowned,ya drown'd!,,,drowning
+squidded,you got squidded.,,,squid
+squiddedCopy,you got ink'd!,,,squid
+squiddedCopyCopy,you got shark'd!,,,shark
+squiddedCopyCopyCopy,shark week is over!,,,shark

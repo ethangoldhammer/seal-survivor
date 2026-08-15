@@ -67,6 +67,11 @@ const APEX = [
   // or a re-export that renumbers them would resolve nothing and simply leave a
   // 27-unit animal swimming rigid.
   'enemyMosasaur',
+  // bossHammerhead's body — the same binary and the same bone names as the wave
+  // hammerhead above, on its own asset key so the boss can carry its own look.
+  // Both are listed rather than one standing in for the other: the chains are
+  // COPIED between the two defs, not shared, so they can silently drift apart.
+  'enemyBossHammerhead',
 ];
 
 // GLTFLoader decodes embedded textures through a blob: URL, which Node has no
@@ -362,7 +367,7 @@ console.log('\nCOST');
     // A boss is a singleton — maxConcurrent 1 in enemies.csv — so its five
     // chains are only ever paid for once, which is what makes four flippers
     // affordable on this body and not on a wave creature.
-    enemyMosasaur: 1,
+    enemyMosasaur: 1, enemyBossHammerhead: 1,
   };
   // The springs are timed by DIFFERENCE — the same update run with them on and
   // with them off — because controller.update also advances the mixer and the

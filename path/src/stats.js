@@ -134,6 +134,7 @@ export function baseStats() {
     bakalarLevel: 0,
     calamariLevel: 0,
     dumboLevel: 0,
+    harpLevel: 0,
     scallopCount: 0,
     oysterLevel: 0,
     octoGrabLevel: 0,
@@ -169,7 +170,7 @@ export const INTEGER_STATS = new Set([
   'scallopCount', 'bounceMaxBounces', 'projectileBonus',
   'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'starfishLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
-  'dumboLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'musselVolleyLevel',
+  'dumboLevel', 'harpLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'musselVolleyLevel',
   'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel',
 ]);
 

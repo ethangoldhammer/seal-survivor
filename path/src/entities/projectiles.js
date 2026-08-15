@@ -30,11 +30,26 @@ export function spawnProjectile(scene, {
   chain = false, chainRange = 0, chainLock = 0, chainSpeedGain = 1,
   jet = false, jetInterval = [0.2, 0.4], jetSpeed = [10, 18], jetTurn = 2.4, jetDrag = 2,
   spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false, burst = null,
-  gravityScale = 1, chill = null,
+  // HOW FAR THE BODY IS CANTED OUT OF THE SCREEN PLANE, in radians about x,
+  // set once at spawn and never touched again.
+  //
+  // Only a shot with a MODEL has any use for this, and only because the game
+  // is a side view. The camera looks straight down -z, so a body whose long
+  // axis lies in the xy plane presents the same profile for its entire flight
+  // — and for a cylinder (the yacht's rolls of cash) that profile is a
+  // rectangle. Spinning it does not help: it is a rectangle at every angle in
+  // that plane. A cant brings the end of the body into view and is the whole
+  // difference between reading as a roll and reading as a brick.
+  //
+  // It survives `spin`, which writes rotation.z alone, and is meaningless
+  // beside `orient`, which rewrites the whole orientation every frame.
+  tilt = 0,
+  gravityScale = 1, chill = null, charm = null,
 }) {
   const mesh = createVisual(asset ?? (faction === 'player' ? 'bullet' : 'enemyBullet'));
   mesh.position.copy(origin);
   if (scale !== 1) mesh.scale.setScalar(scale);
+  if (tilt) mesh.rotation.x = tilt;
   scene.add(mesh);
 
   // A projectile whose model has real animation (currently: the seagull
@@ -118,6 +133,13 @@ export function spawnProjectile(scene, {
     // is a payload description, exactly like `burst` above, and projectiles.js
     // never acts on it either.
     chill,
+    // The harp's note: { duration, auraDuration, auraRadius, auraDamage }, or
+    // null for everything else. Third payload of the same kind and the third
+    // time this sentence is written, which is the point — a shot describes what
+    // it is carrying and the system that owns the effect is the only thing that
+    // knows what the description MEANS. Applied in combat.js through
+    // systems/harp.js.
+    charm,
   });
 }
 

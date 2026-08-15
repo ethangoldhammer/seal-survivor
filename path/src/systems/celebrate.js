@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { buildChain, applyChainToPoint, measureReach, smoothstep } from './ikChain.js';
 import { trackCoverage } from './animation.js';
+import { snapshotMoment } from './bossKill.js';
 
 // ============================================================================
 // THE VICTORY LAP — what the seal does with its body in the second after a
@@ -112,18 +113,12 @@ function cfg() {
   return CONFIG.celebrate ?? {};
 }
 
-/**
- * When the trophy frame is grabbed, in wall seconds after the kill — read out
- * of the kill shot's own config so the two cannot drift apart. See
- * systems/bossKill.js (the punch, then a fraction of the way into the hold)
- * and systems/bossShot.js (which consumes the cue).
- */
-export function snapshotMoment() {
-  const k = CONFIG.boss?.kill ?? {};
-  const dilate = Math.max(0.01, k.dilateTime ?? 0.12);
-  const hold = Math.max(0, k.beatTime ?? 1.5);
-  return dilate + hold * (k.snapshot?.at ?? 0.6);
-}
+// When the trophy frame is grabbed, in wall seconds after the kill. It lives
+// in systems/bossKill.js now — the shot owns its own timing, and three modules
+// time themselves off it — and is re-exported here because this is where the
+// callers (ui/animDebug.js, tools/celebrate-test.mjs) have always imported it
+// from, and because the pose below is the main thing that reads it.
+export { snapshotMoment };
 
 /** Pick a variant by weight. Returns null when every weight is 0 or absent. */
 function pickVariant(rng) {

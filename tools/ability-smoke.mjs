@@ -30,7 +30,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
-import { installModel, createVisual } from '../path/src/assets.js';
+import { installModel, createVisual, ASSETS } from '../path/src/assets.js';
 import { enemies } from '../path/src/entities/enemies.js';
 import { boats } from '../path/src/systems/boats.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab } from '../path/src/systems/octoGrab.js';
@@ -42,6 +42,7 @@ import { createBelugaDrone, updateBeluga, resetBeluga, trapSeconds } from '../pa
 import { weatherState } from '../path/src/systems/weather.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, suctionAt, __beamShader } from '../path/src/systems/bakalar.js';
 import { fireMusselBarrage, barrageCount, barrageDamage } from '../path/src/systems/musselVolley.js';
+import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpStats } from '../path/src/systems/harp.js';
 import { bounds } from '../path/src/arena.js';
 
 const scene = new THREE.Scene();
@@ -787,6 +788,213 @@ check('the fan is centred on the dash heading', Math.abs(barrageMean) < 0.3, `ce
 // promises more shells and they are meant to hit harder too.
 check('levelling adds shells', barrageCount(3) > barrageCount(1), `${barrageCount(1)} -> ${barrageCount(3)}`);
 check('levelling adds damage', barrageDamage(3) > barrageDamage(1), `${barrageDamage(1)} -> ${barrageDamage(3)}`);
+
+// ===========================================================================
+section('HARP SEAL');
+// ===========================================================================
+// Three separable claims, and the first is the one worth a harness at all:
+// the harp targets the BIGGEST thing near you, not the nearest. That is the
+// card, it is one comparison deep in a loop, and it is invisible in play —
+// a nearest-target bug still looks like a working ability.
+resetProjectiles(scene);
+enemies.length = 0;
+
+// THE MODEL, INSTALLED FIRST — and this half is not about behaviour at all.
+// harp.glb is authored standing up the +Y pillar with its flat face on X-Y, so
+// the entry names `forward: '+Y', up: '-X'` to land that face at the camera.
+// Get the `up` sign wrong and the harp turns edge-on: a 0.28-unit sliver for
+// the whole run, which looks like the model failed to load rather than like a
+// rotation, and no amount of staring at the axis NAMES would tell you. So it
+// is measured where the vertices actually ended up, after orientation and fit.
+const HARP_MODEL = resolve(dirname(fileURLToPath(import.meta.url)), '../public/models/harp.glb');
+if (existsSync(HARP_MODEL)) {
+  const raw = readFileSync(HARP_MODEL);
+  const gltf = await new GLTFLoader().parseAsync(
+    raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), '',
+  );
+  installModel('harp', gltf.scene, gltf.animations);
+
+  const probe = createVisual('harp');
+  scene.add(probe);
+  // Without this every measurement comes back identical and nothing throws —
+  // Box3 does not force the world matrices for you.
+  scene.updateMatrixWorld(true);
+  const hbox = new THREE.Box3().setFromObject(probe);
+  const hs = hbox.getSize(new THREE.Vector3());
+  check('the harp stands upright', hs.y > hs.x && hs.y > hs.z,
+    `${hs.x.toFixed(2)} x ${hs.y.toFixed(2)} y ${hs.z.toFixed(2)} z`);
+  check('...and presents its face, not its edge, to the camera', hs.z < hs.x,
+    `depth ${hs.z.toFixed(2)} vs width ${hs.x.toFixed(2)}`);
+  check('...at the fit it asks for', Math.abs(Math.max(hs.x, hs.y, hs.z) - ASSETS.harp.fit) < 0.01,
+    `${Math.max(hs.x, hs.y, hs.z).toFixed(2)} vs fit ${ASSETS.harp.fit}`);
+  // A model whose art sits off to one side of its own origin would swing round
+  // the ring wobbling, because the orbit drives the origin and not the harp.
+  const hc = hbox.getCenter(new THREE.Vector3());
+  check('...balanced on its own origin', Math.hypot(hc.x, hc.y, hc.z) < 0.2,
+    `${Math.hypot(hc.x, hc.y, hc.z).toFixed(3)} off centre`);
+  // The file ships one flat white material with UVs and no image. Untinted it
+  // is a white blob, and `tint` silently doing nothing is the failure that
+  // looks like an art problem.
+  let painted = 0;
+  let meshes = 0;
+  probe.traverse((o) => {
+    if (!o.isMesh) return;
+    meshes++;
+    if (o.material.color.getHexString() !== 'ffffff') painted++;
+  });
+  check('the tint reached the material', meshes > 0 && painted === meshes,
+    `${painted}/${meshes} painted`);
+  scene.remove(probe);
+} else {
+  console.log('  (harp.glb missing — the harp falls back to its procedural cone)');
+}
+
+const harpGroup = createHarpVisual();
+scene.add(harpGroup);
+resetHarp();
+
+const harpPlayer = { x: 0, y: 0, z: 0 };
+let plucks = 0;
+let auraTicks = 0;
+let auraCaught = 0;
+const harpHooks = {
+  onPluck: () => { plucks++; },
+  onAuraTick: (x, y, count) => { auraTicks++; auraCaught += count; },
+};
+const tickHarp = (frames, level = 1) => {
+  for (let i = 0; i < frames; i++) updateHarp(dt, scene, harpPlayer, level, enemies, harpHooks);
+};
+
+// A big one FAR out and a small one CLOSE in. Nearest-target and largest-target
+// disagree by 180 degrees here, which is what makes the heading check below a
+// real test rather than a coincidence a tighter layout could fake.
+const minnow = fakeEnemy(3, 0, 0.3, 9999);
+minnow.def.radius = 0.3;
+minnow.sizeMul = 1;
+const shark = fakeEnemy(-9, 0, 2.2, 9999);
+shark.def.radius = 2.2;
+shark.sizeMul = 1;
+enemies.push(minnow, shark);
+
+check('an unlearned harp is not in the water', (() => {
+  tickHarp(240, 0);
+  return projectiles.length === 0 && harpGroup.visible === false;
+})(), `${projectiles.length} note(s)`);
+
+const harpCfg = CONFIG.harp;
+const pluckFrames = Math.ceil((harpCfg.interval + 0.1) / dt);
+for (let i = 0; i < pluckFrames && projectiles.length === 0; i++) tickHarp(1);
+check('the harp plucks a note', projectiles.length === 1, `${projectiles.length} note(s)`);
+check('...and said so', plucks === 1, `${plucks} pluck event(s)`);
+
+const note = projectiles[0];
+check('the note is tagged to the harp', note?.source === 'harp', String(note?.source));
+check('it seeks', !!note?.homing);
+check('it carries a charm payload', !!note?.charm
+  && note.charm.duration > 0 && note.charm.auraRadius > 0 && note.charm.auraDamage > 0);
+
+// THE CLAIM. The note left pointing at the shark nine units to the LEFT, not
+// at the minnow three units to the right.
+check('it was plucked at the biggest enemy, not the nearest',
+  note.dir.x < -0.9, `heading x ${note.dir.x.toFixed(2)} (shark is at -9, minnow at +3)`);
+
+// A boss is bigger than everything and cannot be charmed, so spending the aura
+// on it buys nothing — the pick has to step down to the largest CHARMABLE body
+// while one exists.
+resetProjectiles(scene);
+resetHarp();
+const bossFish = fakeEnemy(-6, 0, 5, 9999);
+bossFish.def.radius = 5;
+bossFish.sizeMul = 2;
+bossFish.isBoss = true;
+enemies.push(bossFish);
+for (let i = 0; i < pluckFrames && projectiles.length === 0; i++) tickHarp(1);
+check('a boss does not soak up the pluck while a charmable body is in range',
+  projectiles.length === 1 && projectiles[0].dir.x < -0.9 && projectiles[0].dir.x > -0.999,
+  `heading x ${projectiles[0]?.dir.x.toFixed(3)}`);
+
+// ...but a boss alone is still worth playing at: the damage is real even when
+// the charm is refused.
+resetProjectiles(scene);
+resetHarp();
+enemies.length = 0;
+enemies.push(bossFish);
+for (let i = 0; i < pluckFrames && projectiles.length === 0; i++) tickHarp(1);
+check('a boss alone is still played at', projectiles.length === 1, `${projectiles.length} note(s)`);
+
+// --- the charm and its ring ------------------------------------------------
+const payload = projectiles[0].charm;
+check('a boss takes the damage but not the charm',
+  applyHarpCharm(bossFish, payload) === false
+  && !(bossFish.charmTimer > 0) && !(bossFish.harpAura > 0));
+
+check('an ordinary body takes both halves', (() => {
+  applyHarpCharm(shark, payload);
+  return shark.charmTimer > 0 && shark.harpAura > 0;
+})(), `charm ${shark.charmTimer}s, aura ${shark.harpAura}s`);
+// The two timers are deliberately not the same number — the ring outlives the
+// daze, which is the whole overlap the card is built around.
+check('the ring outlives the charm', shark.harpAura > shark.charmTimer,
+  `aura ${shark.harpAura}s vs charm ${shark.charmTimer}s`);
+
+resetProjectiles(scene);
+enemies.length = 0;
+const host = fakeEnemy(0, 0, 2.2, 9999);
+host.def.radius = 2.2;
+const victim = fakeEnemy(host.harpAuraRadius ?? 1.5, 0, 0.4, 9999);
+const bystander = fakeEnemy(30, 0, 0.4, 9999);
+enemies.push(host, victim, bystander);
+applyHarpCharm(host, payload);
+// Inside the measured ring, by construction — the picture is drawn on this
+// same radius, so a victim placed off it would be testing a different number
+// than the one the player can see.
+victim.mesh.position.x = host.harpAuraRadius * 0.6;
+
+const victimHpBefore = victim.hp;
+const hostHpBefore = host.hp;
+tickHarp(Math.ceil((CONFIG.harp.auraTick * 2.5) / dt));
+check('the ring hurts what is standing in it', victim.hp < victimHpBefore,
+  `${(victimHpBefore - victim.hp).toFixed(1)} damage`);
+check('...and never its own host', host.hp === hostHpBefore, `host took ${hostHpBefore - host.hp}`);
+check('...and nothing outside it', bystander.hp === 9999, `bystander took ${9999 - bystander.hp}`);
+check('the ring reported ticking', auraTicks > 0 && auraCaught > 0,
+  `${auraTicks} tick(s), ${auraCaught} caught`);
+check('the ring is actually drawn', harpGroup.children.filter((o) => o.visible).length > 1,
+  `${harpGroup.children.filter((o) => o.visible).length} visible mesh(es)`);
+
+// Two charmed bodies side by side must not saw each other apart — that loses
+// both grinders in about a second and reads as a bug.
+applyHarpCharm(victim, payload);
+const pairHp = victim.hp;
+tickHarp(Math.ceil((CONFIG.harp.auraTick * 2.5) / dt));
+check('two charmed bodies leave each other alone', victim.hp === pairHp,
+  `${pairHp - victim.hp} damage between them`);
+
+// And it has to END. An aura that never expires is a permanent grinder from
+// one pluck, and the timer is the only thing standing between those.
+tickHarp(Math.ceil((payload.auraDuration + 0.5) / dt));
+check('the ring wears off', !(host.harpAura > 0), `${host.harpAura}s left`);
+check('...and its notes go dark with it',
+  harpGroup.children.filter((o) => o.visible).length <= 1,
+  `${harpGroup.children.filter((o) => o.visible).length} visible mesh(es)`);
+
+// Levelling has to buy something on every axis the card promises.
+const h1 = currentHarpStats(1);
+const h5 = currentHarpStats(5);
+check('levelling plays faster', h5.interval < h1.interval, `${h1.interval.toFixed(2)}s -> ${h5.interval.toFixed(2)}s`);
+check('levelling hits harder', h5.damage > h1.damage, `${h1.damage} -> ${h5.damage}`);
+check('levelling holds the charm longer', h5.charmDuration > h1.charmDuration,
+  `${h1.charmDuration.toFixed(1)}s -> ${h5.charmDuration.toFixed(1)}s`);
+check('levelling grows the ring', h5.auraRadius > h1.auraRadius && h5.auraDamage > h1.auraDamage,
+  `r ${h1.auraRadius.toFixed(1)} -> ${h5.auraRadius.toFixed(1)}, dmg ${h1.auraDamage} -> ${h5.auraDamage}`);
+// The cadence floor is what stops a full stack turning into a continuous
+// stream, and it is a max() that is easy to write the wrong way round.
+check('the cadence floor holds at the cap', currentHarpStats(99).interval >= CONFIG.harp.intervalFloor,
+  `${currentHarpStats(99).interval.toFixed(2)}s vs floor ${CONFIG.harp.intervalFloor}`);
+
+resetProjectiles(scene);
+enemies.length = 0;
+scene.remove(harpGroup);
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

@@ -16,8 +16,29 @@
 //              prefix   the front half of the name  — "Gore"
 //              root     the back half of it         — "maw"
 //              epithet  what follows the name       — "the Devourer"
+//              nickname a WHOLE name, written out   — "Ol' Chompy"
+//              solo     a whole name, and the END of it — "The Rusty Maiden"
 //            A row with any other slot is ignored, loudly: a typo'd slot is
 //            a part that silently never appears.
+//
+//            NICKNAME IS THE WAY OUT OF THE MACHINE. Parts are wonderful for
+//            volume and useless for a joke — "Ol' Chompy" cannot be assembled
+//            from halves, and neither can anything else that depends on being
+//            exactly the words somebody chose. A nickname replaces the prefix
+//            and the root together, so an author can hand-write the names that
+//            need to be hand-written and let the machine fill in around them.
+//
+//            SOLO IS A NICKNAME THAT TAKES NO EPITHET. Nothing is ever added
+//            after it — the cell is the entire name, the way a ship's name is
+//            complete on its own. The two share a pool and are rolled
+//            together; the only difference is what happens at the end.
+//
+//            It is a POOL, not an override: hand-written names compete with the
+//            constructed one at `nicknameChance`, so writing one does not mean
+//            every boss is now called that. Everything else about a nickname
+//            row behaves like any other part — `bosses` narrows it to an
+//            archetype, `perk` ties it to a perk, `weight` sets how often it
+//            wins against the other nicknames.
 //   text     the part itself. Case is used EXACTLY as typed — prefixes are
 //            capitalised, roots are not ("Gore" + "maw" = "Goremaw"), and an
 //            epithet carries its own article ("the Devourer") because not
@@ -52,7 +73,43 @@ import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
 const LABEL = 'bossNames';
 const FILE = 'bossNames.csv';
 
+// The slots a name is BUILT from. Kept to the three composed parts on purpose:
+// this is the list an `ownNames` archetype is checked for completeness against,
+// and it does not want the hand-written slots in it — an archetype with no
+// nickname of its own is the normal case, not a gap to warn about.
 export const SLOTS = ['prefix', 'root', 'epithet'];
+
+// ...and every slot a ROW may legally declare. The parser and the CSV editor's
+// dropdown read this one; nothing else should. (The editor reads it by pulling
+// the quoted strings out of this literal, so keep the extras spelled out here
+// rather than spread in from another array.)
+export const NAME_SLOTS = [...SLOTS, 'nickname', 'solo'];
+
+// The hand-written half of that list. `solo` USED TO BE A COLUMN — a boolean
+// that meant something on nickname rows and nothing on the other three — and
+// it is a slot instead because that is the same fact in a form where the
+// mistake cannot be written down: `slot` already answers "what part of a name
+// is this", and "a whole name that stands alone" is an answer to that question.
+// Six lines of parsing and a runtime warning policing a meaningless cell went
+// away with it.
+//
+// Both slots are ONE POOL as far as rolling goes — see poolFor. They are two
+// rows in the table and one kind of thing in the game.
+const NICKNAME_SLOTS = NAME_SLOTS.filter((s) => !SLOTS.includes(s));
+
+// The pools a name can be rolled FROM: the three composed parts, plus the
+// hand-written names as a single pool. `solo` is deliberately not here — it is
+// not a fifth thing a perk could speak through, it is nicknames that happen to
+// end the name, and poolFor hands both slots back under 'nickname'.
+const ROLL_SLOTS = [...SLOTS, 'nickname'];
+
+// How often a boss with a nickname available wears it instead of a built name,
+// when nothing else has already decided. The default rather than the rule —
+// systems/boss.js passes CONFIG.boss.names.nicknameChance — and deliberately
+// well under half: the hand-written names are the seasoning, and a table where
+// they turned up most of the time would waste the vocabulary that makes every
+// other boss feel different from the last one.
+const DEFAULT_NICKNAME_CHANCE = 0.25;
 
 // The one thing this module must never do is return nothing. A nameless boss
 // is a visibly broken health bar, and it would be caused by a file the player
@@ -88,12 +145,12 @@ function parseBossList(raw) {
 export function parseBossNameCsv(text, warn = console.warn, known = null) {
   const rows = parseIdTable(text, LABEL, FILE, warn);
   const out = {};
-  for (const slot of SLOTS) out[slot] = [];
+  for (const slot of NAME_SLOTS) out[slot] = [];
 
   for (const [id, row] of rows) {
     const slot = String(row.slot ?? '').trim().toLowerCase();
-    if (!SLOTS.includes(slot)) {
-      warn(`[${LABEL}] "${id}" has slot "${row.slot ?? ''}", which is not one of ${SLOTS.join(', ')} — the row is being ignored.`);
+    if (!NAME_SLOTS.includes(slot)) {
+      warn(`[${LABEL}] "${id}" has slot "${row.slot ?? ''}", which is not one of ${NAME_SLOTS.join(', ')} — the row is being ignored.`);
       continue;
     }
     // Not trimmed to nothing and not trimmed at the edges either: the space
@@ -124,7 +181,12 @@ export function parseBossNameCsv(text, warn = console.warn, known = null) {
         + `the part will never appear. Known: ${known.perks.join(', ')}.`);
     }
 
-    out[slot].push({ id, text: partText, weight: w == null ? 1 : w, bosses, perk });
+    // Carried on the row as well as in the slot, because the roll asks the
+    // question of a part it has already drawn ("does anything follow this
+    // name?") rather than of the pool it came from.
+    const solo = slot === 'solo';
+
+    out[slot].push({ id, text: partText, weight: w == null ? 1 : w, bosses, perk, solo });
   }
 
   // The GENERAL pool is what a boss is built from — perk vocabulary is extra,
@@ -132,9 +194,17 @@ export function parseBossNameCsv(text, warn = console.warn, known = null) {
   // the check below counts only parts with no perk, which is what makes the
   // warning fire on the file that is actually broken.
   const general = (slot) => out[slot].filter((p) => !p.perk).length;
-  if (!general('prefix') || !general('root')) {
-    warn(`[${LABEL}] ${FILE} has no usable general (perk-less) ${!general('prefix') ? 'prefix' : 'root'} rows — `
-      + `every boss will be called "${FALLBACK_BOSS_NAME}".`);
+  // ...and nicknames are a complete answer on their own. A table of nothing but
+  // hand-written names is a legitimate way to run this feature — every boss is
+  // called something somebody chose — so it must not be reported as the file
+  // being broken. Counted across BOTH hand-written slots: a file of nothing but
+  // solo names is exactly as complete as a file of nothing but nicknames.
+  // The warning is for the case that really does end at the fallback: nothing
+  // to build from AND nothing written out.
+  const written = NICKNAME_SLOTS.reduce((n, slot) => n + general(slot), 0);
+  if ((!general('prefix') || !general('root')) && !written) {
+    warn(`[${LABEL}] ${FILE} has no usable general (perk-less) ${!general('prefix') ? 'prefix' : 'root'} rows `
+      + `and no nicknames to fall back on — every boss will be called "${FALLBACK_BOSS_NAME}".`);
   }
 
   // Every archetype that asked for its own vocabulary, checked slot by slot.
@@ -197,7 +267,13 @@ function echoes(root, epithet) {
 // quietly starts rolling "Chompy" again months later. This way exclusivity is
 // one cell, and a new shared part can never leak into an exclusive archetype.
 function poolFor(parts, slot, boss, perk, exclusive = false) {
-  const rows = parts?.[slot];
+  // ASKING FOR 'nickname' ASKS FOR BOTH HAND-WRITTEN SLOTS. They are one pool
+  // and they must be filtered as one: an exclusive archetype whose only
+  // hand-written name is a solo one should wear it, and it would not if the two
+  // slots were narrowed separately and the solo pool came back empty.
+  const rows = slot === 'nickname'
+    ? NICKNAME_SLOTS.flatMap((s) => parts?.[s] ?? [])
+    : parts?.[slot];
   if (!rows?.length) return [];
   const mine = rows.filter((p) => {
     if ((p.perk ?? null) !== perk) return false;
@@ -227,7 +303,9 @@ function poolFor(parts, slot, boss, perk, exclusive = false) {
  * Roll a boss name.
  *
  * `opts.boss` is the archetype id from bosses.csv and `opts.perk` the perk id
- * from bossPerks.csv, either of which may be null. `random` is injectable so
+ * from bossPerks.csv, either of which may be null. `opts.nicknameChance` is how
+ * often a hand-written whole name is preferred to a built one when nothing else
+ * has already decided (see the nickname block below). `random` is injectable so
  * the distribution can be checked without running the game.
  *
  * THE PERK ALWAYS SHOWS. If the perk has vocabulary, exactly one slot is
@@ -256,9 +334,22 @@ export function rollBossName(parts, opts = {}, random = Math.random) {
   const exclusive = !!opts.exclusive;
 
   // Which slot, if any, the perk speaks for this time.
+  //
+  // NICKNAME IS IN THIS ROLL, which is what keeps the perk guarantee intact
+  // once hand-written names exist. A perk-tagged nickname ("Sparky") is a
+  // complete name that already says what the fight does, so it is allowed to
+  // be the slot the perk speaks through — and because the choice is made HERE,
+  // before anything else, the decision below about whether to wear a nickname
+  // at all can simply obey it.
+  //
+  // Rolled across ROLL_SLOTS and not NAME_SLOTS, which is the difference
+  // between four pools and five: the nickname pool already contains the solo
+  // rows, so weighting `solo` as a slot of its own would count every one of
+  // them twice and hand the perk to hand-written names more often than the
+  // vocabulary asked for.
   let perkSlot = null;
   if (perk) {
-    const weights = SLOTS.map((slot) => {
+    const weights = ROLL_SLOTS.map((slot) => {
       let total = 0;
       for (const p of poolFor(parts, slot, boss, perk, exclusive)) total += p.weight > 0 ? p.weight : 1;
       return total;
@@ -266,31 +357,82 @@ export function rollBossName(parts, opts = {}, random = Math.random) {
     const total = weights.reduce((a, b) => a + b, 0);
     if (total > 0) {
       let roll = random() * total;
-      for (let i = 0; i < SLOTS.length; i++) {
+      for (let i = 0; i < ROLL_SLOTS.length; i++) {
         if (weights[i] <= 0) continue;
-        perkSlot = SLOTS[i];
+        perkSlot = ROLL_SLOTS[i];
         roll -= weights[i];
         if (roll <= 0) break;
       }
     }
   }
 
-  const draw = (slot) => pickPart(
-    poolFor(parts, slot, boss, slot === perkSlot ? perk : null, exclusive), random);
+  const draw = (slot, filter = null) => {
+    let pool = poolFor(parts, slot, boss, slot === perkSlot ? perk : null, exclusive);
+    if (filter) pool = pool.filter(filter);
+    return pickPart(pool, random);
+  };
 
-  const prefix = draw('prefix');
-  const root = draw('root');
-  if (!prefix || !root) return FALLBACK_BOSS_NAME;
+  // --- the nickname decision ------------------------------------------------
+  //
+  // Three cases, and only the last one is a dice roll:
+  //
+  //   the perk speaks through the nickname   -> a nickname, necessarily
+  //   the perk speaks through prefix or root -> no nickname, necessarily,
+  //       because a nickname REPLACES both of those and would take the
+  //       telegraph with it
+  //   anything else (no perk, or the perk is in the epithet) -> the roll
+  //
+  // A solo name is refused when the epithet is carrying the perk, for the same
+  // reason: solo means nothing is appended, and what would be dropped is the
+  // one word the player needed. Filtered out of the drawn pool rather than
+  // asked for by slot, because `nickname` and `solo` are drawn together and the
+  // question here is about the part, not about where it came from.
+  const soloAllowed = perkSlot !== 'epithet';
+  const nickFilter = soloAllowed ? null : (p) => !p.solo;
 
-  const name = `${prefix.text}${root.text}`;
+  let nickname = null;
+  if (perkSlot === 'nickname') {
+    nickname = draw('nickname');
+  } else if (perkSlot !== 'prefix' && perkSlot !== 'root') {
+    const chance = opts.nicknameChance ?? DEFAULT_NICKNAME_CHANCE;
+    if (chance > 0 && random() < chance) nickname = draw('nickname', nickFilter);
+  }
+
+  // The built name, needed either as the answer or as the fallback for a
+  // nickname pool that turned out to be empty for this boss.
+  let name = null;
+  // What the echo check below measures against, which is NOT the finished
+  // name. For a built name it is the ROOT alone — "the Tidebreaker" echoes
+  // "tide", and comparing it against the whole of "Grimtide" finds nothing.
+  let echoAgainst = '';
+  if (!nickname) {
+    const prefix = draw('prefix');
+    const root = draw('root');
+    // A LAST LOOK AT THE NICKNAMES before giving up. A table that is all
+    // hand-written names has no prefixes to build from, and answering that
+    // with the fallback would mean the feature working perfectly and every
+    // boss still called "The Old Shadow".
+    if (!prefix || !root) nickname = draw('nickname', nickFilter);
+    else { name = `${prefix.text}${root.text}`; echoAgainst = root.text; }
+  }
+  if (!name && !nickname) return FALLBACK_BOSS_NAME;
+
+  // A nickname has no halves to pick from, so the whole of it is what an
+  // epithet must not echo.
+  if (nickname) { name = nickname.text; echoAgainst = nickname.text; }
+
+  // SOLO IS THE END OF THE NAME. Checked before the epithet is drawn rather
+  // than after, so a solo nickname cannot be knocked back into a reroll by the
+  // echo logic below.
+  if (nickname?.solo) return name;
 
   let epithet = draw('epithet');
-  if (epithet && echoes(root.text, epithet.text)) {
+  if (epithet && echoes(echoAgainst, epithet.text)) {
     epithet = draw('epithet');
     // Dropped only when it is a GENERAL epithet. Dropping a perk's would trade
     // the echo for a boss whose name no longer says what it does, and the echo
     // is a cosmetic wobble while the missing telegraph is the feature failing.
-    if (epithet && echoes(root.text, epithet.text) && perkSlot !== 'epithet') return name;
+    if (epithet && echoes(echoAgainst, epithet.text) && perkSlot !== 'epithet') return name;
   }
 
   return epithet ? `${name} ${epithet.text}` : name;

@@ -59,9 +59,11 @@ export function initFeedback(gridSystem) {
 
 /**
  * @param {string} event key in CONFIG.feedback
- * @param {object} at    { x, y, dirX, dirY, vx, vy, scale }
- *                       No `color`: a burst's colour is the emitter's, always.
- *                       See CONFIG.emitters for why.
+ * @param {object} at    { x, y, dirX, dirY, vx, vy, scale, color }
+ *                       `color` is for DEATHS only — a kill burst is always the
+ *                       dying creature's own emissive, never a generic palette.
+ *                       Every other burst leaves it off and takes the emitter's
+ *                       colour. See CONFIG.emitters for why that split exists.
  */
 export function feedback(event, at = {}) {
   const def = CONFIG.feedback[event];

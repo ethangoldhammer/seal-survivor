@@ -58,6 +58,7 @@ import { parseBossCsv, newBossBag, nextBoss, FALLBACK_BOSS } from '../bossTable.
 import { parseBossPerkCsv, rollBossPerk } from '../bossPerkTable.js';
 import { attachBossPerk, resetBossPerks, updateBossPerks } from './bossPerks.js';
 import { startBossRiser, stopBossRiser } from './bossRiser.js';
+import { startBossMusic, endBossMusic, resetBossMusic } from './music.js';
 import { startBossKill } from './bossKill.js';
 import { attachBossBoat, isBoatBoss, resetBossBoat, updateBossBoat } from './bossBoat.js';
 import { attachKraken, releaseKraken, resetKraken, updateKraken } from './kraken.js';
@@ -278,6 +279,9 @@ export function resetBoss(scene = null) {
   resetBossDamageCap();
   resetBossPerks();
   stopBossRiser(false);
+  // No handover — play() picks the opening loop for the new run a moment later,
+  // and a switch scheduled here would be overwritten by it anyway.
+  resetBossMusic();
   // Levels start at 1, so a gap of 5 means the first boss arrives AT level 5 —
   // four level-ups in, not five past the first one. That is also what keeps
   // the whole run on the same grid: 5, 10, 15, and every threshold after it is
@@ -357,6 +361,17 @@ function tickArrival(dt, e) {
   e.invuln = 0;
   stopBossRiser();
   playSfx('bossArrive');
+  // ...and the score changes hands. HERE rather than at the spawn or at the
+  // held breath: the riser has spent the whole ceremony climbing toward this
+  // frame, and the boss music arriving with its resolution makes the two one
+  // sound instead of two.
+  //
+  // It does not land on this frame, though — startBossMusic queues it for the
+  // next BAR LINE, up to 2.265s out, so the run's loop is never cut mid-phrase
+  // and the boss music starts on its own downbeat. The cue and the riser cover
+  // the gap; what the player hears is the arrival, and then the music already
+  // being different.
+  startBossMusic();
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +455,11 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     // NOT resetKraken: the cadence stops, the cloud does not. See releaseKraken.
     releaseKraken();
     stopBossRiser();
+    // The score goes back to the run's own, at the next bar rather than on this
+    // frame: unlike a kill there is no hush to hide the switch under, so this
+    // one is audible and has to land musically. Cheap to call every frame while
+    // the toggle is off — after the first it finds no fight and returns.
+    endBossMusic({ immediate: false });
     return null;
   }
 
@@ -473,16 +493,35 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     // true. A victory lap over a corpse would be a bad look, and it would be
     // fighting the death dive for the same camera.
     if (gameState?.running) {
-      startBossKill();
+      // The shot normally owns the music's handover: it hushes the score on the
+      // killing blow and swaps back to the run's own loop under the silence.
+      // `false` means it is switched off in the tuner, and then nothing else
+      // ever will — so the fight's music has to end itself, at a bar, since
+      // there is no silence here to hide the switch in.
+      if (!startBossKill()) endBossMusic({ immediate: false });
       // The third part of the aftermath, and it starts from the same zero as
       // the shot because it is posing FOR the shot — see systems/celebrate.js,
       // which derives its peak from the snapshot's own timing. Rolls its own
       // chance internally and returns null on the kills that don't get one.
       startCelebration();
       bossCycleRelief(gameState?.difficulty ?? 0);
+    } else {
+      // Killed on the same frame the player died, so there is no shot and
+      // nothing will ever hand the transport back — the rotation would chain
+      // another boss loop under the score card of a run that is over.
+      //
+      // Dropped WITHOUT a handover, unlike every other exit: the loop that is
+      // playing stays, and rides the death dive's tape drag down with
+      // everything else. Swapping to the run's ordinary music on this frame
+      // would be the game changing the subject in the middle of a death.
+      resetBossMusic();
     }
     resetBossPerks();
-    resetBossBoat(scene);
+    // `true` — this branch is the boss having DIED, not the fight being
+    // switched off, and that is the difference between a yacht's guests being
+    // thrown into the sea and being deleted along with the run. The other two
+    // call sites are switch-offs and correctly pass nothing.
+    resetBossBoat(scene, true);
     // NOT resetKraken. A kraken's ink outlives the kraken — that is most of what
     // the ink IS — so the fight's clock is dropped here and the cloud is left to
     // finish dissolving on its own. See releaseKraken.
@@ -623,6 +662,10 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     boss: archetype.id,
     perk: perk?.id ?? null,
     exclusive: archetype.ownNames,
+    // How often a hand-written whole name wins over a built one. The only
+    // naming number that is not a cell in bossNames.csv, because it is about
+    // the BALANCE between the two kinds of row rather than about any row.
+    nicknameChance: CONFIG.boss?.names?.nicknameChance,
   });
   bossState.maxHp = e.maxHp ?? 1;
   // THE CADENCE IS KEPT ON ITS GRID, not restarted from wherever the player
@@ -703,7 +746,14 @@ export function previewBossNames(count = 12, { boss = null, perk = null } = {}) 
   // panel cannot preview a vocabulary the game would never actually roll —
   // which would make the one tool for reading these names lie about them.
   const exclusive = ownNames(boss);
-  for (let i = 0; i < count; i++) out.push(rollBossName(NAME_PARTS, { boss, perk, exclusive }));
+  // Same nickname odds the real roll uses, for the same reason exclusivity is
+  // resolved above: a preview that never showed a hand-written name would be
+  // the one tool for reading these names hiding a quarter of them.
+  for (let i = 0; i < count; i++) {
+    out.push(rollBossName(NAME_PARTS, {
+      boss, perk, exclusive, nicknameChance: CONFIG.boss?.names?.nicknameChance,
+    }));
+  }
   return out;
 }
 
@@ -796,6 +846,7 @@ export function forceBoss(scene, gameState, opts = {}) {
       boss: bossState.archetype?.id ?? null,
       perk: want?.id ?? null,
       exclusive: !!bossState.archetype?.ownNames,
+      nicknameChance: CONFIG.boss?.names?.nicknameChance,
     });
   }
   return e;

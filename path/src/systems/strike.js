@@ -669,6 +669,30 @@ export function chainDamageMul(stats) {
 }
 
 /**
+ * The chain's XP multiplier — the fourth of the set, and the last one the chain
+ * did nothing for. See CONFIG.xp.chain.
+ *
+ * LINEAR, deliberately, where the damage multiplier is exponential. Damage is
+ * spent on one creature and the chain that earned it dies with the window;
+ * xp is banked forever, so an exponential here would mean one exceptional chain
+ * decided the rest of the run. Linear-and-capped makes a deep chain worth
+ * hunting for without making it worth restarting a run over. Same shape and the
+ * same offset as the score multiplier in systems/scoring.js, which is the
+ * closest relative it has.
+ *
+ * Returns 1 with no chain running, so the call site needs no branch of its own.
+ */
+export function chainXpMul(stats = null) {
+  const c = CONFIG.xp?.chain;
+  const perLink = c?.perLink ?? 0;
+  if (!(perLink > 0)) return 1;
+  const offset = CONFIG.strike.chainLevelOffset ?? 1;
+  const level = chainLevel(stats);
+  if (level <= offset) return 1;
+  return Math.min(c?.max ?? Infinity, 1 + (level - offset) * perLink);
+}
+
+/**
  * A chum orb swallowed. ALWAYS puts fuel back — food is the bar's only source,
  * so gating this on anything would be a way to strand the player with an empty
  * bar. Returns true only when it topped the bar off inside a live combo, which

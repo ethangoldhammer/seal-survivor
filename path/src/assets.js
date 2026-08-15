@@ -457,6 +457,15 @@ export const ASSETS = {
   // multiply it — that's the intent, not an oversight.
   missile: { shape: 'oval', radius: 0.16, elongate: 1.8, color: 0x07070a, unlit: true },
   bounceShot: { shape: 'octahedron', radius: 0.2, color: 0x66ddff, unlit: true },
+  // The harp's music note. A PROCEDURAL STAND-IN, like `harp` below: an
+  // elongated bead, bright enough to bloom, which is what actually makes it
+  // legible as a small fast thing at this size. Both keys take an upload from
+  // the T panel the day real note art exists, and nothing else has to change.
+  //
+  // `orient: true` on the projectile lines the long axis up with its flight,
+  // so the note noses onto the curve as the seeker pulls it round rather than
+  // sliding through the arc sideways — see the note on 'oval' in getGeometry.
+  musicNote: { shape: 'oval', radius: 0.16, elongate: 2.1, color: 0xffe9a3, unlit: true },
   // Orbiting shrimp. `fit` is its size at CONFIG.shrimpRing.scale === 1; the
   // ring multiplies by the live slider value, so the size control still does
   // something now that a model ships (it used to be inert whenever one had
@@ -796,6 +805,114 @@ export const ASSETS = {
     shape: 'box', width: 8, height: 2.6, depth: 2.4, color: 0xff6a5a, unlit: true,
   },
 
+  // THE YACHT — the boat boss's other hull (CONFIG.enemies.bossYacht). Same
+  // fight, same patterns; what changes is the silhouette and the fact that
+  // there are people standing on it.
+  bossYacht: {
+    model: '/models/yacht.glb',
+    // Longer and lower than the trawler's 11, which is the shape of the claim
+    // this boat makes. Everything else about the fight is measured off `fit`
+    // and the row's radius, so nothing downstream needed a second edit.
+    fit: 13,
+    // A THIRD BASIS, and not by preference. This hull's length runs down the
+    // model's Z where both other boats run along X, so the pair that works for
+    // them is wrong here. `forward` lands on world +Y and `up` on world -X (see
+    // orientationQuaternion), so: '+Y' stands the model's own up axis up, and
+    // '-Z' sends the bow — which is the +Z end, measured off the side view —
+    // to world +X. That is the heading systems/bossBoat.js calls rotation.y 0,
+    // so the hull faces the way it is sailing instead of backing across the
+    // arena.
+    forward: '+Y', up: '-Z',
+    // WHERE THE WATERLINE IS, and it is not where prepareModel puts it. Left
+    // alone the origin lands on the area centroid, y -7.91 — three units above
+    // this hull's boot top, so the yacht would float buried to its main deck.
+    // That is the cosmetic half. The half that breaks something: systems/
+    // crew.js reads "above the water" as local y > 0 when it looks for a deck
+    // to stand on, so with the origin three units high the lowest surface it
+    // can find is underwater, and every guest is placed on the sea bed of the
+    // boat's own coordinate system. 0.829 of the way down from the masthead is
+    // the black-to-white line on the hull, measured against the model.
+    pivot: 0.829,
+    modelUnlit: true, // same reason as `trawler`: scene lights can't lift it
+    // Pale, where the trawler is near-black. This is the one boat in the game
+    // that ships a full PBR set — base colour, a normal map and an ORM — and a
+    // white hull under a gold rim is most of why the subtype reads as a
+    // different boat before you have read anything else about it.
+    tint: 0xb9c8d6,
+    // 0.042, not the 0.02 the other two boats use. Outline thickness is in the
+    // SOURCE model's units, and this hull is 40.3 of them long against the
+    // trawler's 19.0 — copying the number across would draw a rim half as wide
+    // on a boat twice the size.
+    outline: { color: 0xffd27a, thickness: 0.042 },
+    shape: 'box', width: 9, height: 2.2, depth: 2.4, color: 0xffd27a, unlit: true,
+  },
+
+  // THE GUEST. Who is standing on the yacht — see systems/crew.js, which owns
+  // both the idle on deck and the ragdoll off it.
+  //
+  // RIGGED BY tools/rig-guest.mjs, and that is not an implementation detail
+  // that can be forgotten. The source file is a statue: 0 skins, 0 clips. The
+  // crew ragdoll drives real bones, so loaded as it shipped this model fails
+  // buildHumanoidRig, silently falls back to the procedural box body, and the
+  // man in the tailcoat is never drawn at all. Re-exporting the source over
+  // public/models/ballroomguest.glb without re-running that tool puts the bug
+  // straight back, with no error anywhere to say so.
+  //
+  // He is modelled Y-up and facing +Z, the same as the fisherman, so he takes
+  // the same basis: '+Y' puts his height on world +Y and '-Z' leaves him
+  // upright and looking along +X.
+  //
+  // NO `animations`. There is no clip in the file and none was invented for
+  // one: crew.js's attachClips finds nothing, leaves body.mixer null, and a
+  // guest simply stands still until something hits him. A man at a rail is
+  // meant to look like he is doing nothing.
+  //
+  // `fit` is his standing height and is deliberately NOT scaled with the hull,
+  // for the same reason the fisherman's isn't: a yacht is bigger than a
+  // trawler, the people on it are not. Slightly over the fisherman's 1.25
+  // because this one is not wearing sea boots.
+  ballroomGuest: {
+    model: '/models/ballroomguest.glb',
+    fit: 1.3,
+    forward: '+Y', up: '-Z',
+    outline: { color: 0xffe7b0, thickness: 0.006 },
+    shape: 'box', width: 0.4, height: 1.2, depth: 0.3, color: 0x14202c, unlit: true,
+  },
+
+  // THE OTHER GUEST — the one in the suit. The yacht rolls one model per
+  // person from CONFIG.enemies.bossYacht's `crewAssets`, so a party is a party
+  // rather than the same man printed four times.
+  //
+  // NOT rigged by tools/rig-guest.mjs, and it is worth saying why given its
+  // neighbour above is: this model arrived with a real skeleton — 55 joints, a
+  // standard Hips/Spine/Neck/Head chain with fingers, and an idle clip. There
+  // is nothing for the rigging tool to do, and running it over this file would
+  // throw away a better rig than it can build. The tool is for statues.
+  //
+  // Same basis as the ballroom guest and the fisherman: modelled Y-up facing
+  // +Z, so '+Y'/'-Z' stands him up looking along +X.
+  //
+  // `fit` is his standing height and is deliberately the ballroom guest's, so
+  // two men on the same deck are the same size as each other. Note the source
+  // is nearly as WIDE as it is tall (1.75 against 1.84) because the idle has
+  // his arms out; `fit` normalises the longest side, which is still the height,
+  // so that does not shrink him.
+  businessGuest: {
+    model: '/models/businessguest.glb',
+    fit: 1.3,
+    forward: '+Y', up: '-Z',
+    // The one clip in the file, quoted exactly as exported. systems/crew.js
+    // plays only the idle — see attachClips — so the other two names are the
+    // same clip rather than a guess at one that isn't there.
+    animations: {
+      idle: 'IdleV4.2(maya_head)',
+      swim: 'IdleV4.2(maya_head)',
+      boost: 'IdleV4.2(maya_head)',
+    },
+    outline: { color: 0xffe7b0, thickness: 0.006 },
+    shape: 'box', width: 0.4, height: 1.2, depth: 0.3, color: 0x14202c, unlit: true,
+  },
+
   // The boat's seeker. Small, bright and pointed the way it is travelling
   // (`orient` on the gun), because reading its TURN is the whole counterplay.
   bossMissile: {
@@ -819,6 +936,46 @@ export const ASSETS = {
     // body to white — which is what a high flat glow does to a shaded model.
     texture: { emissive: '/textures/emissive/cutesquid.jpg' },
     shape: 'icosahedron', radius: 0.45, color: 0xffd83d, unlit: true,
+  },
+
+  // The harp itself, orbiting the seal.
+  //
+  // MEASURED, not guessed (tools/inspect-club.mjs reads any glb): 2.31 x by
+  // 5.20 y by 0.91 z, so the pillar runs up +Y and the flat face — the plane
+  // the strings lie in — is X-Y with Z as the thin axis. That pair of facts is
+  // what fixes the two axes below, and they are not the defaults:
+  //
+  //   forward '+Y'  the long axis, which side view sends to entity +Y (up).
+  //   up      '-X'  chosen so `flank` (= forward x up) comes out as model +Z,
+  //                 and entity +Z is the camera. Get this wrong by a sign and
+  //                 the harp is edge-on — a 0.9-unit sliver — for the whole
+  //                 run, which looks like the model failed to load rather than
+  //                 like a rotation.
+  //
+  // No `pivot`: it balances on its centre of mass, which is what an object
+  // being carried around a circle should turn about. `pivot` is for swimmers
+  // that lead with the head.
+  harp: {
+    model: '/models/harp.glb',
+    // 1.6 world units tall against the seal's 2.6 — a carried instrument, and
+    // deliberately under the animal holding it.
+    fit: 1.6,
+    forward: '+Y', up: '-X',
+    // The file is one flat white MeshStandardMaterial at roughness 0.97, with
+    // UVs but no image — the same situation the seal is in. Left as-is it is a
+    // matte white blob, so the colour is tinted on and the roughness dropped
+    // far enough for the key light to put a highlight down the pillar as it
+    // turns. Gold rather than pale for the bloom's sake: the bright-pass reads
+    // luminance, and a warm ramp carries where a cold one barely registers.
+    tint: 0xffcc66,
+    material: { roughness: 0.3, metalness: 0.65, emissive: 0x2a1c04, emissiveIntensity: 0.35 },
+    // The fallback, and it earns its place — a harp is, at a glance and at this
+    // size, a triangle, and a three-sided cone is the only primitive here that
+    // reads as one. `unlit: false` to match the model: this thing swings through
+    // the full depth of the orbit ring, and a flat neon triangle would give away
+    // that it has no thickness at the moment it presents its edge.
+    shape: 'cone', radius: 0.5, height: 1.3, segments: 3,
+    color: 0xffd479, unlit: false,
   },
 
   // Octopus Grabber — the reeling companion, standing in with the same cute
@@ -1049,6 +1206,66 @@ export const ASSETS = {
   // barrel is the one projectile the player is meant to read as an OBJECT
   // sitting in the water rather than as an attack in flight.
   bossBarrel: { shape: 'oval', radius: 0.36, elongate: 1.4, color: 0x7a5230, unlit: true },
+
+  // --- THE YACHT'S ORDNANCE — banded rolls of hundreds ----------------------
+  //
+  // The yacht throws money. Mechanically it is the same barrel and the same
+  // seeker every boat boss fires (see CONFIG.enemies.bossYacht `ordnance`, and
+  // the note in systems/bossBoat.js) — what changes is entirely what the thing
+  // in the water looks like, because a yacht shelling you with oil drums was
+  // the trawler's fight wearing a nicer hull.
+  //
+  // FOUR ROLLS AND NOT ONE. The source pack is a single merged mesh of four
+  // rolls lying in a pile; `npm run split` cuts it into four files, welds each
+  // roll back to its own end caps, and turns every one of them to point down
+  // +Y — so all four are interchangeable in a gun slot and the pair the yacht
+  // names is a choice rather than the only thing that would fit. See
+  // tools/split-islands.mjs for why the cut is by CONTAINMENT and not by
+  // overlap, and why the axis comes off the normals.
+  //
+  // `fit` is the one number here that is not taste: each is set to the length
+  // of the procedural shot it replaces (the barrel's oval is 1.0 units end to
+  // end, the seeker's cone is 0.9), so the swap changes what the player is
+  // dodging and not how big it is. The gun's own `radius` — what it can hit
+  // you with — is untouched in either direction.
+  //
+  // LIT, unlike every other projectile in the game, and deliberately: these
+  // read as OBJECTS thrown into the water rather than as bolts of light, which
+  // is the same call `bossBarrel` makes one line above with `unlit: true` and a
+  // dull brown. The bills carry their own colour and the trail supplies the
+  // glow, so nothing here has to be overdriven to be seen.
+  //
+  // `forward: '+Y'` is the cylinder axis, which is what the splitter aligned
+  // them to. On a gun with `orient: true` that flies the roll END-ON, like a
+  // shell; a gun that wants it broadside and tumbling turns `orient` off and
+  // lets systems/rocks.js spin it instead.
+  moneyRoll1: {
+    model: '/models/moneyroll1.glb',
+    fit: 1,
+    forward: '+Y', up: '+Z',
+    // Paper, not metal. A high roughness keeps the key light off the curved
+    // side as a broad sheen instead of a hot line, which at this size would be
+    // the only thing on screen and would read as chrome.
+    material: { roughness: 0.85, metalness: 0 },
+  },
+  moneyRoll2: {
+    model: '/models/moneyroll2.glb',
+    fit: 1,
+    forward: '+Y', up: '+Z',
+    material: { roughness: 0.85, metalness: 0 },
+  },
+  moneyRoll3: {
+    model: '/models/moneyroll3.glb',
+    fit: 0.9,
+    forward: '+Y', up: '+Z',
+    material: { roughness: 0.85, metalness: 0 },
+  },
+  moneyRoll4: {
+    model: '/models/moneyroll4.glb',
+    fit: 0.9,
+    forward: '+Y', up: '+Z',
+    material: { roughness: 0.85, metalness: 0 },
+  },
 
   enemyShark: {
     model: '/models/shark.glb',
@@ -1709,6 +1926,59 @@ export const ASSETS = {
     shape: 'cone', radius: 0.85, height: 2.6, color: 0x7d8a94, unlit: true,
   },
 
+  // THE HAMMERHEAD BOSS BODY. Same binary, same sidecar textures, same rig and
+  // the same one-bone head-look — its own key for the reason enemyBossCrab has
+  // one: a material is shared across every clone of a key, so a boss given its
+  // own look would hand that look to all four hammerheads in the wave with it.
+  // It arrives alone, so it can afford one they cannot.
+  //
+  // `fit` is the wave animal's 4.0, unchanged. The boss step is bosses.csv's
+  // `sizeMul` over assets.csv's size for this key — putting it here instead
+  // would hide the escalation in the wrong file and break the drawn-size against
+  // hitbox measurement in tools/boss-test.mjs.
+  //
+  // EVERYTHING BELOW IS COPIED, NOT SHARED, and deliberately: these are
+  // per-asset declarations, and the boss may yet want different chains, a
+  // different tint or a glow the wave animal must not have. The one thing that
+  // must not drift is the bone NAMES, which is what tools/apex-spring-test.mjs
+  // checks on both keys.
+  enemyBossHammerhead: {
+    model: '/models/hammerhead.glb',
+    texture: {
+      map: '/textures/hammerhead.jpg',
+      emissive: '/textures/emissive/hammerhead.jpg',
+      // TRUE on a glTF, against the rule the loader derives from the model
+      // format. Not a mistake and not copied blind — see the long note on
+      // enemyHammerhead, which measured it: these sidecars carry the baking
+      // tool's convention rather than the model's, and at the format default
+      // every fin lands off its own UV island and picks up the black background
+      // between them.
+      flipY: true,
+    },
+    fit: 4.0,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    animations: { idle: 'Take 001', swim: 'Take 001', boost: 'Take 001' },
+    rig: {
+      // The rig runs along local +X — the measurement is on enemyHammerhead.
+      boneAxis: '+X',
+      springChains: [
+        { role: 'tail', bones: ['Torso2', 'Torso3', 'Torso4', 'Tail1', 'Tail2'] },
+        { role: 'fin', bones: ['Fin_L1', 'Fin_L2'] },
+        { role: 'fin', bones: ['Fin_R1', 'Fin_R2'] },
+      ],
+    },
+    // The head swing is the whole point of this animal, and it matters more on
+    // the boss than on the wave version: it is the only tell the shove has.
+    // A hammerhead that turns to face you before it hits you is a hammerhead
+    // the player can read.
+    lookRig: {
+      head: { bones: ['Head'], tipAxis: '+X', tipLength: 1.6 },
+    },
+    // No biteRig — this file has no jaw bone at all. See enemyHammerhead.
+    shape: 'cone', radius: 1.1, height: 3.4, color: 0x7d8a94, unlit: true,
+  },
+
   // --- schooling prey (behavior:'swarm', prey:true) ---
   enemyTrout: {
     model: '/models/trout.fbx',
@@ -1762,6 +2032,160 @@ export const ASSETS = {
     pivot: 0.15, // turn about the head, not the belly
     shape: 'icosahedron', radius: 0.3, color: 0xd8c9a3, unlit: true,
   },
+
+  // --- fishes.glb — a second meshIndex trio, and the cheapest art in the game
+  //
+  // 137KB for three fish, ~1.2k triangles each, and NO TEXTURES AT ALL: the
+  // file carries one flat material for all three meshes. That is why each
+  // entry below sets its own `tint` and why it has to. Untinted these are
+  // three identical dull-teal bodies, which is the exact failure the fishpack
+  // trio was split to avoid — and tinting works here only because materials
+  // are per ASSET KEY (see instantiateParsedModel), so one file backing three
+  // keys really is three independent colours.
+  //
+  // No skeleton and no clips, so all three take the static path enemyReeffish
+  // is on: they spin to face their heading and nothing bends. At 1.0-1.25
+  // units that reads fine — the tang next to them is 1058 triangles of
+  // ACTUAL swim cycle, and the difference is invisible at gameplay distance.
+  //
+  // `forward: '-Z'`, which is the opposite of every other fish in this file
+  // and is MEASURED rather than assumed. Slab-profiling each mesh along its
+  // long axis, the cross-section collapses in thickness at HIGH z on all
+  // three (0.30, 0.34 and 0.12 units, against 0.73/0.90/0.89 at the other
+  // end) while staying tall — that is a caudal blade, so the head is the
+  // low-z end. The same measurement run against fish2.glb comes out the other
+  // way round and agrees with the '+Z' that entry has always declared, which
+  // is the only reason to trust it here.
+  enemyFishesA: {
+    model: '/models/fishes.glb', meshIndex: 0,
+    fit: 1.0, forward: '-Z', up: '+Y',
+    pivot: 0.15, // turn about the head, not the belly
+    tint: 0x7fb5a3,
+    shape: 'icosahedron', radius: 0.34, color: 0x7fb5a3, unlit: true,
+  },
+  enemyFishesB: {
+    model: '/models/fishes.glb', meshIndex: 1,
+    fit: 1.25, forward: '-Z', up: '+Y',
+    pivot: 0.15, // turn about the head, not the belly
+    tint: 0xc98f5a,
+    shape: 'icosahedron', radius: 0.4, color: 0xc98f5a, unlit: true,
+  },
+  enemyFishesC: {
+    model: '/models/fishes.glb', meshIndex: 2,
+    fit: 1.1, forward: '-Z', up: '+Y',
+    pivot: 0.15, // turn about the head, not the belly
+    tint: 0x8f7fc0,
+    shape: 'icosahedron', radius: 0.33, color: 0x8f7fc0, unlit: true,
+  },
+
+  // --- the split pack: four rigged schoolers, ~700-900 triangles each -------
+  //
+  // Cut out of one merged file by tools/fish-split.mjs — see that file for what
+  // the cut has to preserve and how it proves it did. What matters HERE is that
+  // all four came out of the same tool with the same treatment, which is why
+  // they can share these notes instead of repeating them four times:
+  //
+  //   '+Z' / '+Y' ON ALL FOUR IS BAKED, NOT DISCOVERED. Each fish was posed at
+  //   its own angle in the source pile, so as-cut they swim diagonally across
+  //   the screen and no forward/up pair can say so (the squid problem — see
+  //   enemySquid). The tool straightens each one onto its own principal axes,
+  //   so the entry gets to declare the clean pair and mean it. Do not "fix" a
+  //   future re-export by hunting for the right axis names here; re-run the
+  //   tool.
+  //
+  //   NO `animations` MAPPING. One clip each (FishSwimming, 1.67s), which puts
+  //   them on the single-clip-reuse path — same arrangement as enemyPuffer,
+  //   and the note there explains why naming it three times is the long road
+  //   to the same place.
+  //
+  //   NO TEXTURES ANYWHERE. The source is flat-shaded material colour, which
+  //   is why these are 130-150KB apiece and why they carry no `texture.emissive`
+  //   — there is no base-colour map for a mask to be generated against.
+  //   They keep their own material colours rather than taking a `tint`: unlike
+  //   the fishes.glb trio, which is three bodies sharing ONE dull teal and so
+  //   needs tinting apart, these four already ship distinct paint.
+  enemyBrownFish: {
+    model: '/models/brownfish.glb',
+    fit: 1.15,
+    pivot: 0.15, // turn about the head, not the belly
+    forward: '+Z', up: '+Y',
+    shape: 'icosahedron', radius: 0.36, color: 0xa8846b, unlit: true,
+  },
+  enemyClownFish: {
+    model: '/models/clownfish.glb',
+    fit: 0.85, // the smallest body in the roster — a clownfish is tiny
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    shape: 'icosahedron', radius: 0.3, color: 0xe8511c, unlit: true,
+  },
+  // The biggest of the four (4.20 long against the clownfish's 3.34) and the
+  // only one built like something that swims fast, which is what its creature
+  // entry is written around.
+  enemyTuna: {
+    model: '/models/tunafish.glb',
+    fit: 1.5,
+    pivot: 0.12, // leads harder than the schoolers: a longer, faster body
+    forward: '+Z', up: '+Y',
+    shape: 'cone', radius: 0.4, height: 1.2, color: 0x51637d, unlit: true,
+  },
+  // A palette surgeonfish. NOT the same creature as enemyTang, which is a blue
+  // powder tang off blue_powder_tang.glb — two different animals that a careless
+  // name would have merged, which is why neither the asset key nor the model
+  // file is called anything with "tang" in it on its own.
+  enemySurgeonFish: {
+    model: '/models/surgeonfish.glb',
+    fit: 1.0,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    shape: 'icosahedron', radius: 0.34, color: 0x1b3fd8, unlit: true,
+  },
+
+  // Pufferfish. 5,152 triangles on a 16-bone rig with one 0.88s swim cycle,
+  // and the whole file is 444KB — the best value in the roster after the trio
+  // above.
+  //
+  // NO `animations` MAPPING, deliberately, and it is not an omission. The file
+  // ships exactly one clip, which puts it on the single-clip-reuse path in
+  // systems/animation.js (`clips.length === 1 && !explicitlyMapped`): the same
+  // cycle drives idle, swim and boost, retimed per state by
+  // CONFIG.animation.states[...].clipTimeScale. Naming that one clip three
+  // times over — as enemyTang does — lands in the same place by a longer road,
+  // because `shared` is computed from how many states resolved to the action
+  // rather than from how they got there.
+  //
+  // `modelUnlit` is already true of the FILE (its material carries
+  // KHR_materials_unlit), so this line changes nothing today. It is here as
+  // the statement that this fish is meant to ignore scene lights, so a
+  // re-export that quietly drops the extension doesn't quietly change how it
+  // reads.
+  //
+  // Orientation measured off the bones, which for a skinned model is the only
+  // honest source: `face.001/002` sit at z +1.70 and +2.75, `tail.001..004`
+  // run to z -3.88, and the pectorals are at ±x with fin.T above fin.B on y.
+  // The POSITION accessors say the long axis is Y, and they are wrong in the
+  // way skinned accessors always are — they are in skin space, not the space
+  // the node transforms describe.
+  // IT IS NOT INFLATED, and that is worth saying out loud because the name
+  // promises otherwise. Auditioned in the game's own basis it is a slim
+  // spotted fish about 3.2 times longer than it is deep — a puffer swimming,
+  // which is how they spend their lives, not the spiny ball. The rig has no
+  // inflate in it either: 16 bones covering face, tail and four fins, and one
+  // 0.88s swim cycle. So nothing about this creature's numbers can be
+  // justified by spines the player cannot see, and CONFIG.enemies.puffer is
+  // tuned to the fish in the picture rather than to the word.
+  //
+  // `fit` is above the schoolers' 0.9-1.3 on purpose: it is a solitary
+  // mid-tier body and needs to read as bigger than the shoal it drifts past,
+  // which at this silhouette is the only thing separating them at a glance.
+  enemyPuffer: {
+    model: '/models/puffer.glb',
+    fit: 1.4,
+    pivot: 0.15, // turn about the head, not the belly
+    forward: '+Z', up: '+Y',
+    modelUnlit: true,
+    shape: 'icosahedron', radius: 0.45, color: 0xd8c07a, unlit: true,
+  },
+
   // Same file as enemyFish, loaded as its OWN template — materials are shared
   // across clones of one asset key, so injecting the glow here rather than
   // into enemyFish is what keeps every ordinary fish dark.
@@ -2165,6 +2589,58 @@ export const ASSETS = {
     shape: 'cone', radius: 0.35, height: 1.5, color: 0xa8b8c0, unlit: true,
   },
 
+  // Sailfish — the first fast chaser in the roster that actually swims.
+  //
+  // The barracuda directly above is the creature this is answering. That one
+  // is a good silhouette with NO CLIPS AT ALL: it darts across the water as a
+  // rigid board, which is acceptable at 0.45 radius and stops being acceptable
+  // as the body gets longer. This file ships three takes on a 17-bone rig, so
+  // the same role can be played by something a third bigger without the
+  // stiffness scaling up with it.
+  //
+  // THE CLIP MAPPING IS THE POINT. `Armature|Swim` (2.50s) and
+  // `Armature|SwimFast` (1.67s) are a genuine cruise/sprint pair, which almost
+  // nothing else in the roster has — most entries here name one clip three
+  // times because one clip is all there is. So `boost` is a real gear change,
+  // not the swim cycle played faster, and `idle` deliberately shares the
+  // cruise action with `swim`: that makes the pair `shared` in
+  // createAnimationController and hands both of them back to
+  // CONFIG.animation.states[...].clipTimeScale, which is where a sailfish
+  // idling slower than it cruises wants to be tuned from.
+  //
+  // THE THIRD CLIP IS UNUSED, on purpose. `Armature|Bite` (1.67s) and the
+  // honest `Jaw_04` bone under `Head_02` are between them everything a
+  // `behavior: 'hunt'` version of this creature would need — but `biteRig`
+  // takes a bone, an AXIS and an angle, and which local axis opens that jaw
+  // DOWNWARD is a thing to measure through the skinning rather than read off
+  // the hierarchy (see enemyShark.biteRig and enemyOtter.biteRig, both of
+  // which came out somewhere the names did not predict). It is a chaser until
+  // somebody does that measurement.
+  //
+  // Orientation is off the bones, not the accessors: `Head_02` sits at z +149
+  // and `Jaw_04` at z +243 against `CaudalFin_09` at z -340, and the four
+  // `Sail` bones climb to y +414 while the jaw sits at y +238. Nose +Z, back
+  // +Y. (The raw POSITION bounds claim the long axis is Y — skin space again,
+  // exactly as on enemyPuffer.)
+  //
+  // `pivot` is tighter than the 0.15 every other fish here uses. The dorsal
+  // sail is a tall flag running most of the body's length, so a turn about a
+  // point further back sweeps it through a much bigger arc than the head
+  // moves; leading closer to the nose keeps the sail trailing the turn rather
+  // than swinging across it.
+  enemySailfish: {
+    model: '/models/sailfish.glb',
+    fit: 3.0,
+    pivot: 0.1,
+    forward: '+Z', up: '+Y',
+    animations: {
+      idle: 'Armature|Swim',
+      swim: 'Armature|Swim',
+      boost: 'Armature|SwimFast',
+    },
+    shape: 'cone', radius: 0.4, height: 1.9, color: 0x4a6f8f, unlit: true,
+  },
+
 
   // Squid. Built by tools/build-squid.mjs from a STILL-RENDER obj, and it has
   // no rig for the same reason the wasp in that library has none: OBJ carries
@@ -2324,6 +2800,22 @@ export const ASSETS = {
   xpOrb: {
     shape: 'rock', radius: 0.28, color: 0xff3355, unlit: true,
     rock: { variants: 10, tumble: 0.55, amplitude: 0.5, frequency: 1.7, squash: 0.38 },
+  },
+
+  // A CHUNK — one large piece of the same catch, worth a real bite of health
+  // rather than the sliver an orb pays. Same `rock` machinery as chum above and
+  // deliberately so: it has to read as MORE OF THE SAME THING, not as a medkit,
+  // or the seal is picking up a different game's pickup. What separates it is
+  // size (see assets.csv), a warmer, meatier colour, and the fact that it is
+  // the only chum that glows on arrival.
+  //
+  // Rougher and slower than an orb: fewer variants because you see one at a
+  // time rather than a dozen in a heap, higher amplitude because at this size
+  // a smooth lump reads as a ball, and half the tumble because a heavy piece
+  // should turn like one.
+  chumChunk: {
+    shape: 'rock', radius: 0.28, color: 0xff6a4a, unlit: true,
+    rock: { variants: 5, tumble: 0.28, amplitude: 0.62, frequency: 1.3, squash: 0.3 },
   },
   particle: { shape: 'sphere', radius: 0.08, color: 0xffffff, unlit: true },
 };
@@ -3783,11 +4275,13 @@ export function assetSignatureColor(key) {
 // fallback shape's authored colour stands in, which is the creature's colour
 // for everything that hasn't had a model uploaded over it.
 //
-// Deliberately a second function rather than a fallback bolted onto
-// assetSignatureColor: that one returning null is load-bearing at the kill
-// feedback, where "no configured look" is what selects the emitter's own
-// multi-colour palette. Widening it there would quietly flatten every kill
-// burst to one hue.
+// THIS is what the kill burst asks. A death is always the dying creature's
+// colour and never the emitter's generic palette, so the kill feedback needs
+// the function that always answers — assetSignatureColor's null would drop any
+// creature with no tuned look straight back onto the palette, which is the one
+// outcome that rule forbids. The two stay separate because a null IS the right
+// answer elsewhere: octoGrab reads the signature to decide whether there is a
+// configured look to honour at all.
 export function assetBaseColor(key) {
   const tuned = assetSignatureColor(key);
   if (tuned != null) return tuned;
@@ -3809,18 +4303,58 @@ export function applyAssetSizesFromTable() {
 // re-apply after a CSV edit still lands.
 applyAssetSizesFromTable();
 
+// IS THIS ASSET'S GLOW PROCEDURAL? True for a creature whose light comes from
+// its biolumSkin pattern and that ships no baked emissive map to shape a flat
+// one with.
+//
+// For those, `emissive` and `glow` in a saved look are not a look — they are a
+// UNIFORM flood over the whole body, and a body with no mask has nothing to
+// shape it. The pattern is the mask, which is the entire point of the
+// procedural system: light in the seams, on the claws, in the eyes, and dark
+// shell between.
+//
+// This was live and it cost the day crab its whole shell. `assetLooks
+// .enemyWalkingCrab` carried emissive #f4d2f8 at glow 4.05 with the mask
+// override off, so every walking crab rendered as a flat white silhouette —
+// all three carapace skins identical, because none of the pattern survived
+// underneath it. Nothing reported it: `npm run glow` audits biolumSkin ramps,
+// not per-asset Look values, and the asset's own comment says the opposite is
+// intended ("no emissive mask: the daytime shell pattern is doing that job
+// procedurally anyway").
+//
+// Skipped rather than stripped from the snapshot on the way in, because this
+// is a fact about the ASSET and assets.js is the only module that holds those.
+// config.js does the stripping for table-owned fields and cannot do this one:
+// it would have to import assets.js, which imports it (see assetTable.js).
+//
+// An asset that declares BOTH a biolumSkin and a real emissive map is exempt —
+// there the flat channel has a mask to ride and is a legitimate control.
+// Exported for ui/textures.js, which hides the two controls rather than
+// leaving live sliders pointing at a value nothing will read back — the same
+// call the Size slider got when assets.csv took it over.
+export function glowIsProcedural(key) {
+  const def = ASSETS[key];
+  return !!def?.biolumSkin && !def?.texture?.emissive;
+}
+
+// Which preset it wears, for the note the panel shows in their place.
+export function assetGlowPreset(key) {
+  return ASSETS[key]?.biolumSkin ?? null;
+}
+
 export function applySavedAssetLooks() {
   const looks = CONFIG.assetLooks ?? {};
   for (const [key, look] of Object.entries(looks)) {
     if (!look) continue;
     try {
+      const procedural = glowIsProcedural(key);
       if (look.tint != null) setAssetTint(key, look.tint);
-      if (look.emissive != null) setAssetEmissive(key, look.emissive);
-      if (look.glow != null && look.glow !== 1) setAssetGlow(key, look.glow);
+      if (!procedural && look.emissive != null) setAssetEmissive(key, look.emissive);
+      if (!procedural && look.glow != null && look.glow !== 1) setAssetGlow(key, look.glow);
       // Only when explicitly chosen. `null` means this model was left on auto,
       // and writing it back would pin it to whatever the global happened to be
       // at save time.
-      if (look.emissiveMask != null) setAssetEmissiveMask(key, look.emissiveMask);
+      if (!procedural && look.emissiveMask != null) setAssetEmissiveMask(key, look.emissiveMask);
       if (look.repeatX != null && (look.repeatX !== 1 || look.repeatY !== 1)) {
         setAssetRepeat(key, look.repeatX, look.repeatY);
       }

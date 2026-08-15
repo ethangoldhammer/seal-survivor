@@ -44,13 +44,40 @@ const shellColor = new THREE.Color();
 // ---------------------------------------------------------------------------
 
 let playerShells = [];
+// The ink line — a second, thinner set of hulls in flat black, sitting inside
+// the glowing ones so the glow shows as a fringe around it. See
+// CONFIG.playerOutline.inner.
+//
+// A SEPARATE ARRAY rather than a flag on the shells, because the difference
+// that matters is what writes to them: everything below this line — the
+// wind-up throb, the release flare, the damage flash — walks `playerShells`
+// and must never reach the ink. The list you are not in is the guarantee.
+let playerInnerShells = [];
 
 // Build the shells for a freshly created seal body. Safe to call repeatedly —
 // the previous set went away with the body that owned it, and its materials
 // are dropped here rather than left to leak on every T-menu size change.
 export function attachPlayerOutline(body) {
   for (const shell of playerShells) shell.material?.dispose();
+  for (const shell of playerInnerShells) shell.material?.dispose();
   playerShells = body ? addOutlineShells(body, { color: CONFIG.playerOutline?.color ?? 0xffffff }) : [];
+  // The glow first, so a bare `find` for an outline in a harness still lands
+  // on the rim everything else in this file is about.
+  //
+  // addOutlineShells skips anything already marked as an outline, so this
+  // second pass wraps the SEAL again rather than wrapping the shells that were
+  // just built — which is what stops the ink from being an outline of an
+  // outline, half of it inside-out.
+  playerInnerShells = body
+    ? addOutlineShells(body, { color: CONFIG.playerOutline?.inner?.color ?? 0x000000 })
+    : [];
+  // Explicitly between the glow and the seal. The depth test already sorts
+  // these correctly on its own — the thinner hull's back faces are nearer the
+  // camera everywhere the two overlap — but leaving the picture to depend on
+  // which array happened to be built first is not a thing to leave unwritten.
+  // Nudged rather than assigned, so it stays a half step behind whatever the
+  // seal's own meshes are ordered at instead of assuming that is zero.
+  for (const shell of playerInnerShells) shell.renderOrder += 0.5;
   // A new body comes up at the base look, so the wind-up state has to come up
   // clear with it — a flare left running from the seal that was just replaced
   // would decay onto shells that never saw the strike.
@@ -70,6 +97,26 @@ export function applyPlayerOutline() {
   for (const shell of playerShells) {
     shell.visible = cfg.enabled !== false;
     if (shell.material) applyLook(shell.material, cfg, accumulatedScale(shell));
+  }
+
+  // The ink line rides the rim's own switch as well as its toggle: it is a
+  // line drawn INSIDE the glow, and left on by itself it would be a black
+  // seal-shaped smudge with nothing behind it.
+  const ink = cfg.inner ?? {};
+  const inkOn = cfg.enabled !== false && ink.enabled !== false;
+  for (const shell of playerInnerShells) {
+    shell.visible = inkOn;
+    // `glow: 1` explicitly rather than by omission — applyLook would default
+    // it, but the reason it is 1 is that the ink must never enter the bloom
+    // pass, and that is worth saying at the one place it is decided.
+    if (shell.material) {
+      applyLook(shell.material, {
+        color: ink.color ?? 0x000000,
+        thickness: ink.thickness ?? 0.05,
+        opacity: ink.opacity ?? 1,
+        glow: 1,
+      }, accumulatedScale(shell));
+    }
   }
 }
 

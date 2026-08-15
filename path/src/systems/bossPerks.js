@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { spawnBeam } from './beams.js';
 import { spawnProjectile, projectiles } from '../entities/projectiles.js';
 import { enemies, spawnNamed } from '../entities/enemies.js';
+import { emit } from '../entities/particles.js';
 
 // ===========================================================================
 // BOSS PERKS — the one special thing a boss can do.
@@ -1025,6 +1026,19 @@ export function fireBossShot(scene, {
     asset: gun.asset,
     scale: gun.scale,
     orient: gun.orient,
+    // END OVER END, for a shot whose body is worth watching turn. Nothing in
+    // the GUNS table above sets it — a barrel and a beam both want to lie
+    // still on their heading — but a gun handed in by a boss's `ordnance`
+    // override can, and the yacht's rolls of cash do.
+    //
+    // It is exclusive with `orient` rather than layered over it, and that is
+    // entities/projectiles.js's rule, not one made here: both write Euler
+    // angles onto the same mesh, so a shot that spins does not also point.
+    spin: gun.spin ?? 0,
+    // The cant. See the note on `tilt` in entities/projectiles.js for why a
+    // side-view game needs one at all — in short, a cylinder flown flat in the
+    // screen plane is a rectangle for its whole flight.
+    tilt: gun.tilt ?? 0,
     homing: !!gun.homing,
     turnRate: turnRate ?? 1.6,
     // The seal, and nothing else, ever. See the note on `chase` in
@@ -1041,7 +1055,18 @@ export function fireBossShot(scene, {
   // actually IS rather than where it was aimed. See updateOrdnance.
   if (!gun.fuse) return;
   const live = projectiles[projectiles.length - 1];
-  if (live) ordnance.push({ p: live, x: origin.x, y: origin.y, radius: blastRadius, damage, source });
+  // `burst` and `blastColor` ride on the RECORD rather than being looked up in
+  // boom(), because by the time a fuse ends the gun that lit it is long out of
+  // scope — the projectile has left the list and all boom() has is a position.
+  // A gun that names neither gets the ring and nothing else, which is what
+  // every barrel in the game did before the yacht wanted its money back.
+  if (live) {
+    ordnance.push({
+      p: live, x: origin.x, y: origin.y, radius: blastRadius, damage, source,
+      burst: gun.blastEmitter ?? null,
+      blastColor: gun.blastColor ?? null,
+    });
+  }
 }
 
 // The shooter state machine.
@@ -1120,18 +1145,27 @@ function updateOrdnance(dt, scene) {
       continue;
     }
     ordnance.splice(i, 1);
-    boom(scene, b.x, b.y, b.radius, fx, b.damage, b.source);
+    boom(scene, b.x, b.y, b.radius, fx, b.damage, b.source, b);
   }
 }
 
 // The blast. Damage is dealt through the same hook a bite goes through, so it
 // respects i-frames, shakes the screen and is filed in the playtest log like
 // every other hit — see updateBossPerks.
-function boom(scene, x, y, radius, fx, damage = 20, source = 'boss:barrels') {
-  const ring = track(scene, makeRing(fx.blastColor ?? 0xffa64a, 0.55, 1, 48));
+function boom(scene, x, y, radius, fx, damage = 20, source = 'boss:barrels', shot = null) {
+  const ring = track(scene, makeRing(shot?.blastColor ?? fx.blastColor ?? 0xffa64a, 0.55, 1, 48));
   ring.position.set(x, y, 0);
   ring.visible = true;
   blasts.push({ ring, life: fx.blastSeconds ?? 0.35, max: fx.blastSeconds ?? 0.35, radius });
+
+  // WHAT THE BLAST THROWS, for a shot that named something. Scaled by the
+  // radius the blast actually has rather than emitted flat, because that radius
+  // is a pattern's number (CONFIG.bossBoat.patterns) and varies by nearly a
+  // metre between `rain` and `spread` — a fixed count would make the small one
+  // look like the big one and take the reach reading away from the player.
+  // Divided by 3 so the mid-sized blast is the emitter's own count, which is
+  // what it was tuned at.
+  if (shot?.burst) emit(shot.burst, x, y, { scale: Math.max(0.5, radius / 3) });
 
   const hooks = field.hooks;
   const pp = field.playerPos;

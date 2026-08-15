@@ -464,9 +464,12 @@ check('re-enabling restores both', u.uBioStrength.value === 2.5 && u.uBioBodyDar
 
 check('an unknown pattern name falls back to the first', patternIndex('nonsense') === 0);
 
-const t0 = u.uBioDrift.value;
+// `.z` — the offset is a vec3 now (the field can walk a closed lap, see
+// updateBiolumSkin), and the free path writes the straight-line distance into
+// Z. Read as a whole object this compares NaN and passes nothing.
+const t0 = u.uBioDrift.value.z;
 updateBiolumSkin(0.5);
-check('update advances the drift clock', u.uBioDrift.value > t0);
+check('update advances the drift clock', u.uBioDrift.value.z > t0);
 
 // --- presets ---------------------------------------------------------------
 section('PRESETS');
@@ -592,10 +595,10 @@ check('an unparented instance still receives settings',
   'a creature is unparented between createVisual and being added to its container');
 if (lanternGlow === undefined) delete CONFIG.biolumSkin.presets.lantern.glow;
 else CONFIG.biolumSkin.presets.lantern.glow = lanternGlow;
-const tBefore = roots[0].inst.material.userData.__bioSkinUniforms.uBioDrift.value;
+const tBefore = roots[0].inst.material.userData.__bioSkinUniforms.uBioDrift.value.z;
 updateBiolumSkin(0.5);
 check('and its clock still advances',
-  roots[0].inst.material.userData.__bioSkinUniforms.uBioDrift.value > tBefore);
+  roots[0].inst.material.userData.__bioSkinUniforms.uBioDrift.value.z > tBefore);
 delete CONFIG.biolumSkin.presets.lantern.strength;
 
 // --- beat sync --------------------------------------------------------------
@@ -626,11 +629,56 @@ section('BEAT SYNC');
     Math.abs(fine.material.userData.__bioSkinUniforms.uBioCycle.value - coarse) < 1e-6,
     `${coarse.toFixed(5)} vs ${fine.material.userData.__bioSkinUniforms.uBioCycle.value.toFixed(5)}`);
 
-  // Drift is deliberately NOT synced — it translates through the noise rather
-  // than repeating, so there is no cycle to quantise.
-  const d0 = su.uBioDrift.value;
+  // WITH flowSync 'free' — the default — the field still travels in a straight
+  // line at a rate in seconds, exactly as it did before laps existed. The
+  // uniform is a vec3 now, and the free path only ever writes Z.
+  const d0 = su.uBioDrift.value.z;
   updateBiolumSkin(0.5);
-  check('drift keeps running on seconds, not on the grid', su.uBioDrift.value > d0);
+  check('at flowSync free, drift still runs on seconds', su.uBioDrift.value.z > d0);
+  check('...along one axis only, so nothing else in the field moves with it',
+    su.uBioDrift.value.x === 0 && su.uBioDrift.value.y === 0);
+
+  // ...and on a division it walks a CLOSED path instead, which is what makes a
+  // lap quantisable at all: the offset has to come back to where it started,
+  // or the pattern snaps to a different part of the field once a bar.
+  CONFIG.biolumSkin.base.flowSync = '1 bar';
+  CONFIG.biolumSkin.base.flowSpan = 3;
+  CONFIG.biolumSkin.base.flowSteps = 0;
+  applyBiolumSkinSettings();
+  const lapped = makeBody();
+  attachBiolumSkin(lapped.material, lapped, BASE_ONLY);
+  applyBiolumSkinSettings();
+  const lu = lapped.material.userData.__bioSkinUniforms;
+  const bar = 4 * (60 / (CONFIG.music?.bpm ?? 105));
+  updateBeatSync(0); updateBiolumSkin(0);
+  const start = lu.uBioDrift.value.clone();
+  let far = 0;
+  const steps = 24;
+  for (let i = 0; i < steps; i++) {
+    updateBeatSync(bar / steps);
+    updateBiolumSkin(bar / steps);
+    far = Math.max(far, lu.uBioDrift.value.distanceTo(start));
+  }
+  check('a lap travels through the field', far > 0.4, `${far.toFixed(3)} away at its furthest`);
+  check('...and closes, landing back where it started',
+    lu.uBioDrift.value.distanceTo(start) < 1e-3,
+    `${lu.uBioDrift.value.distanceTo(start).toFixed(6)} from the start after one bar`);
+
+  // Steps are the difference between a glide and a pulse: the offset has to
+  // HOLD between beats, or it is the same smooth lap with extra config.
+  CONFIG.biolumSkin.base.flowSteps = 4;
+  applyBiolumSkinSettings();
+  const held = new Set();
+  for (let i = 0; i < 16; i++) {
+    updateBeatSync(bar / 16);
+    updateBiolumSkin(bar / 16);
+    held.add(lu.uBioDrift.value.z.toFixed(4));
+  }
+  check('flowSteps quantises the lap into whole jumps',
+    held.size <= 5, `${held.size} distinct field positions across a bar at 4 steps`);
+  CONFIG.biolumSkin.base.flowSync = 'free';
+  CONFIG.biolumSkin.base.flowSteps = 0;
+  applyBiolumSkinSettings();
 
   // ...and 'free' has to still work, or the master switch is a one-way door.
   CONFIG.biolumSkin.base.pulseSync = 'free';
@@ -1063,6 +1111,44 @@ check('the lanternfish still schools like the fish it copies',
   !!CONFIG.enemies.lanternfish?.swarm && CONFIG.enemies.lanternfish?.behavior === 'swarm');
 check('the ray still glides and the shark still hunts',
   CONFIG.enemies.lanternRay?.behavior === 'glide' && CONFIG.enemies.abyssShark?.behavior === 'hunt');
+
+// --- the pattern is the mask ------------------------------------------------
+// A UNIFORM emissive on a creature whose light is procedural has nothing to
+// shape it, so it floods the pattern it is sitting on top of. The day crab sat
+// at emissive #f4d2f8 / glow 4.05 with no mask for months and rendered as a
+// flat white silhouette — all three of its carapace skins identical
+// underneath, which is exactly as broken as it sounds and reported by nothing.
+//
+// applySavedAssetLooks now skips both fields for these assets, so a value left
+// in a snapshot is inert. This checks the snapshot itself is clean anyway: an
+// inert value still shows up as a number somebody will later "fix" by wiring
+// it back up.
+section('PROCEDURAL GLOW OWNS THE EMISSIVE CHANNEL');
+{
+  const procedural = Object.entries(ASSETS)
+    .filter(([, d]) => d.biolumSkin && !d.texture?.emissive)
+    .map(([k]) => k);
+  check('the glowing roster is found at all', procedural.length > 0, `${procedural.length} assets`);
+
+  const flooded = procedural.filter((k) => {
+    const look = CONFIG.assetLooks?.[k];
+    return look && (look.emissive != null || (look.glow != null && look.glow !== 1));
+  });
+  check('none of them carries a flat emissive or glow in saved tuning',
+    flooded.length === 0,
+    flooded.map((k) => {
+      const l = CONFIG.assetLooks[k];
+      return `${k} emissive=${l.emissive} glow=${l.glow}`;
+    }).join(', ') || `checked ${procedural.length}`);
+
+  // The three crabs by name, since they are what this was found on and a
+  // rename would otherwise quietly drop them out of the list above.
+  for (const k of ['enemyWalkingCrab', 'enemyEmberCrab', 'enemyBossCrab']) {
+    check(`${k} is procedurally shaded`,
+      !!ASSETS[k]?.biolumSkin && !ASSETS[k]?.texture?.emissive,
+      ASSETS[k] ? `preset ${ASSETS[k].biolumSkin}` : 'ASSET MISSING');
+  }
+}
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

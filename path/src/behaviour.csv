@@ -30,6 +30,8 @@ hunterRamp.preyFocus,0.04,0,0.2,fish distraction shed per 20s
 hunterRamp.preyFocusMin,0.3,0,1,min fish distraction left (x)
 hunterRamp.turnRate,0.02,0,0.08,hunter turn growth per 20s
 hunterRamp.turnRateMax,3.05,1,4,hunter turn growth cap (x)
+hunterRamp.swarmSeek,0.02,0,0.08,how much harder a SCHOOL presses per 20s. Multiplies swarm.towardPlayer - the only term in the boids pointing at the seal. Nothing else in this block reaches the basic fish; they read no preyRadius and no turnRate.
+hunterRamp.swarmSeekMax,3,1,6,cap on that (x). At 3 the pull at the seal is the strongest term in the school's steering and a shoal hunts as a body; at 1 schools mill around you all run exactly as they do today.
 enemies.walkingCrab.crawl.floorRushHeight,10.5,1,20,crab rush trigger height
 enemies.walkingCrab.crawl.rushSpeedMul,2.5,1,4,crab rush speed mult
 enemies.walkingCrab.crawl.feed.seekRadius,60,0,60,chum seek radius

@@ -1,5 +1,11 @@
 node_modules
 dist
+# Look-page builds (npm run looks:cash, and the yacht deck's equivalent). A
+# vite build of tools/looks/*.html plus the PNGs the page POSTs back to
+# tools/looks/serve.mjs — generated, and only useful for the hour you look at
+# them. The PAGES are tracked; their output is not.
+dist-cash-look
+dist-yacht-look
 .DS_Store
 .env
 server/.wrangler

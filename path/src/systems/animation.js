@@ -333,6 +333,18 @@ export function createAnimationController(instance) {
   const springBones = [...new Set(springs.flatMap(({ solver }) => solver.bones))];
   const springRest = springBones.map((b) => b.quaternion.clone());
 
+  // LIMP. Null while the creature is alive; a { pose, cfg } record once
+  // something has cut the skeleton loose — see systems/bossRagdoll.js, which is
+  // the only caller.
+  //
+  // `pose` is the quaternions the sprung bones held at the moment it was set,
+  // and it takes the place of BOTH drivers: the mixer is not advanced at all,
+  // and `springRest` is not restored. That is what the mode is. The spring
+  // needs something to pull back toward or an impulse ratchets it (see the
+  // springRest note above), and for a corpse the only honest target is the pose
+  // it died in — not the bind pose, which is a shape the animal was never in.
+  let limp = null;
+
   const warnedMissing = new Set();
   let current = null; // the action currently faded in
   let currentState = null;
@@ -630,6 +642,15 @@ export function createAnimationController(instance) {
       playbackDir = 1;
       beatSyncBeats = 0;
       beatCycle = 0;
+      // AND THE RAGDOLL, WHICH OUTLIVES THE CREATURE OTHERWISE. This controller
+      // is cached on the visual and handed to whoever recycles that body (see
+      // `__rigs` in entities/enemies.js), so a boss that died limp would hand
+      // its successor a skeleton that ignores the mixer entirely. The pooled
+      // visual's transforms are restored by resetVisual; the SOLVER's velocity
+      // is not, and a mackerel spawning with a megalodon's death whip still in
+      // its springs is the same leak wearing a smaller body.
+      limp = null;
+      for (const { solver } of springs) solver.reset();
       // Stop every action outright rather than crossfading: fading from a
       // clamped death pose leaves it bleeding into the first moments of the
       // new run.
@@ -648,6 +669,19 @@ export function createAnimationController(instance) {
     },
 
     update(dt, state, hitThisFrame) {
+      // CUT LOOSE. No mixer, no sine, no rest pose — the pose it died in is
+      // restored instead and the springs are all that move it. `state` and
+      // `hitThisFrame` are ignored rather than rejected, so the caller that was
+      // already updating this creature (systems/bossCorpse.js) does not have to
+      // learn a second call. See `limp`.
+      if (limp) {
+        for (let i = 0; i < springBones.length; i++) springBones[i].quaternion.copy(limp.pose[i]);
+        const live = CONFIG.animation.spring;
+        if (live.enabled) {
+          for (const { solver } of springs) solver.update(dt, limp.cfg, live.weight);
+        }
+        return;
+      }
       // Before the pose driver, not after: whatever writes this frame's pose —
       // mixer or sine — is meant to win over the rest pose wherever it has an
       // opinion. See springRest.
@@ -675,10 +709,40 @@ export function createAnimationController(instance) {
     // A stiffer chain absorbs the same shove into a smaller swing on its own,
     // through its own spring constant, so the impulse is NOT role-scaled here.
     // Scaling it as well would apply the same stiffening twice.
-    impulse(dirWorld, strength) {
+    //
+    // `tipBias` overrides the configured one for this shove only. A corpse
+    // buckles through its middle where a live hit flicks the tail, and the two
+    // are the same solver being asked for different shapes — see
+    // CONFIG.boss.ragdoll.tipBias.
+    impulse(dirWorld, strength, tipBias) {
       const cfg = CONFIG.animation.spring;
       if (!cfg.enabled) return;
-      for (const { solver } of springs) solver.impulse(dirWorld, strength, cfg.impulseTipBias);
+      const bias = tipBias ?? cfg.impulseTipBias;
+      for (const { solver } of springs) solver.impulse(dirWorld, strength, bias);
+    },
+
+    /**
+     * CUT THE SKELETON LOOSE, or hand it back. See `limp`.
+     *
+     * @param springCfg the spring settings to solve every chain with while
+     *        limp — role scaling deliberately does not apply, since a stiff fin
+     *        is a fact about a fin with muscle in it. Null hands control back
+     *        to the mixer.
+     * @returns true if the model actually has springs to go limp WITH. False
+     *          means this body cannot ragdoll and the caller should not pretend
+     *          it did — bossBoat's trawler has no rig at all.
+     */
+    setLimp(springCfg) {
+      if (!springCfg || !springs.length) {
+        limp = null;
+        return false;
+      }
+      limp = { pose: springBones.map((b) => b.quaternion.clone()), cfg: springCfg };
+      return true;
+    },
+
+    isLimp() {
+      return limp != null;
     },
 
     resetSpring() {

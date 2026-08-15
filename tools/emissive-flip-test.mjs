@@ -44,7 +44,16 @@ const check = (ok, msg) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${msg}`); if (
 //     the format default of false its body still looks plausible, because the
 //     body is the one big central UV island either way, while every fin lands
 //     off its own small island and picks up the black background between them.
-const OVERRIDES = { enemyHammerhead: true };
+//
+//   enemyBossHammerhead — the boss body. THE SAME BINARY AND THE SAME TWO
+//     SIDECARS as enemyHammerhead above; it is a separate asset key only so the
+//     boss can carry its own material and look (see the note on its def), and
+//     the measurement behind the override is that one, unchanged. Listed
+//     separately rather than derived from the shared model path, because this
+//     list is meant to be a roll-call of deliberate acts — if the boss ever
+//     gets its own baked masks, that is the moment somebody should have to come
+//     back here and re-measure rather than inherit an answer.
+const OVERRIDES = { enemyHammerhead: true, enemyBossHammerhead: true };
 const isFbx = (model) => /\.fbx$/i.test(model);
 const expectedFlipY = (key, model) => OVERRIDES[key] ?? isFbx(model);
 

@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { parseQuipCsv, pickQuip, FALLBACK_QUIP } from '../path/src/quipTable.js';
+import { causesOfDeath, unclassifiedSources } from '../path/src/deathCauses.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CSV = resolve(here, '../path/src/quips.csv');
@@ -97,6 +98,116 @@ for (let i = 0; i < 500; i++) seen.add(pickQuip(shipped));
 check('more than one line is reachable', seen.size > 1, `${seen.size} distinct`);
 check('every enabled line is reachable', seen.size === shipped.length,
   `${seen.size} of ${shipped.length}`);
+
+// ---------------------------------------------------------------------------
+// CAUSE OF DEATH
+//
+// The `causes` column decides WHICH line a death gets, and every failure in
+// here is silent: a tag that matches nothing is a line that never fires, and a
+// creature nobody classified is a joke that never lands. Neither shows up as
+// an error in the game — you would only notice by dying a hundred times and
+// feeling that the headline had gone generic.
+// ---------------------------------------------------------------------------
+section('Cause of death — the taxonomy');
+
+const idsOf = (rel) => readFileSync(resolve(here, rel), 'utf8')
+  .trim().split(/\r?\n/).slice(1).map((l) => l.split(',')[0].trim()).filter(Boolean);
+
+// THE DRIFT CHECK. deathCauses.js writes its membership out by hand — there is
+// no flag on a creature to derive it from — so this is what stops a creature
+// added to enemies.csv from killing the player under no cause at all. If this
+// fails, the fix is a one-word edit: put the new id in the cause it belongs to.
+const unclassified = unclassifiedSources(idsOf('../path/src/enemies.csv'));
+check('every creature in enemies.csv belongs to a cause',
+  unclassified.length === 0, unclassified.join(', '));
+const unclassifiedBosses = unclassifiedSources(idsOf('../path/src/bosses.csv'));
+check('every archetype in bosses.csv belongs to a cause',
+  unclassifiedBosses.length === 0, unclassifiedBosses.join(', '));
+
+// Every boss is a boss, whichever animal it is wearing.
+check('a boss death is also its animal\'s cause',
+  [...causesOfDeath('bossShark')].sort().join(',') === 'boss,shark',
+  [...causesOfDeath('bossShark')].join(','));
+// The trawler's salvo and every perk arrive with no creature key at all.
+check('a boss ATTACK still counts as a boss death',
+  causesOfDeath('boss:boatSalvo').has('boss'));
+// ...and the shells specifically are still the trawler killing you, which is
+// the difference between the boat line firing on a ram and firing on a shot.
+check('the trawler\'s shells count as the trawler',
+  ['boss:boatRain', 'boss:boatSalvo', 'boss:boatSpread'].every((s) => causesOfDeath(s).has('boat')));
+check('a boss PERK is a boss death and nothing narrower',
+  [...causesOfDeath('boss:electricAura')].join(',') === 'boss');
+check('the three non-animal deaths classify',
+  causesOfDeath('drowning').has('drowning')
+  && causesOfDeath('lightning').has('lightning')
+  && causesOfDeath('enemy shot').has('shot'));
+// A guess here would be worse than nothing: it would fire somebody's crab joke
+// for a death that had no crab in it.
+check('an unknown source claims no cause', causesOfDeath('kelp').size === 0);
+check('no source at all claims no cause', causesOfDeath(null).size === 0);
+
+section('Cause of death — which line is dealt');
+const tagged = parseQuipCsv(
+  'id,text,causes\ngeneral,Anything,\ngeneral2,Anything else,\ncrabby,Crab Food,crab\nwet,No air,drowning\nboth,"Crab or shark",crab shark',
+  quiet,
+);
+const drawn = (cause, n = 200) => {
+  const out = new Set();
+  for (let i = 0; i < n; i++) out.add(pickQuip(tagged, Math.random, causesOfDeath(cause)));
+  return out;
+};
+
+// The design decision this table exists to enforce: a written-for line WINS,
+// it does not merely join the queue. Tagging "Crab Food" for crab and then
+// seeing it one death in five would be the bug.
+const byCrab = drawn('walkingCrab');
+check('a crab death only draws crab lines',
+  [...byCrab].every((t) => t === 'Crab Food' || t === 'Crab or shark'),
+  [...byCrab].join(' | '));
+check('both crab lines are reachable', byCrab.size === 2, `${byCrab.size}`);
+check('a multi-cause line also fires for its other cause',
+  drawn('megalodon').has('Crab or shark'));
+check('drowning gets the drowning line',
+  [...drawn('drowning')].join('') === 'No air');
+
+// The fallbacks, in order. Each one is the difference between a generic
+// headline and a blank one.
+const byUntagged = drawn('otter');
+check('a cause nobody wrote for falls back to the general lines',
+  byUntagged.size === 2 && [...byUntagged].every((t) => t.startsWith('Anything')),
+  [...byUntagged].join(' | '));
+check('an unclassified death falls back to the general lines',
+  [...drawn('kelp')].every((t) => t.startsWith('Anything')));
+const allTagged = parseQuipCsv('id,text,causes\na,Only crab,crab', quiet);
+check('a table of nothing but tagged lines still answers a foreign death',
+  pickQuip(allTagged, Math.random, causesOfDeath('drowning')) === 'Only crab');
+check('no cause passed at all puts every line in play',
+  (() => {
+    const seen = new Set();
+    for (let i = 0; i < 400; i++) seen.add(pickQuip(tagged));
+    return seen.size === 5;
+  })());
+
+// A tag that matches nothing is dropped at parse rather than kept, so the row
+// stays in the general pool instead of becoming unreachable.
+let warned = '';
+const typo = parseQuipCsv('id,text,causes\na,Typo,crustacean', (m) => { warned = m; });
+check('an unknown cause id is dropped', typo[0].causes === null);
+check('and warns, naming it', warned.includes('crustacean'), warned.slice(0, 60));
+check('the row still fires for an ordinary death',
+  pickQuip(typo, Math.random, causesOfDeath('shark')) === 'Typo');
+// Space or comma, because the value comes out of a spreadsheet either way.
+check('commas separate causes as well as spaces',
+  parseQuipCsv('id,text,causes\na,A,"crab,shark"', quiet)[0].causes.length === 2);
+
+section('The shipped file — causes');
+const shippedTags = shipped.filter((q) => q.causes);
+check('at least one line is written for a cause', shippedTags.length > 0,
+  shippedTags.map((q) => `${q.id}:${q.causes.join('+')}`).join(' '));
+// Untagged rows are the safety net for every death nobody wrote a line for.
+// Tagging the last of them would make a shark death the only one with a joke.
+check('the general pool is not empty', shipped.some((q) => !q.causes),
+  `${shipped.filter((q) => !q.causes).length} general`);
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

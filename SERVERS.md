@@ -124,6 +124,35 @@ the leaderboard, deployed with wrangler.
 
 ---
 
+## `.claude/launch.json` — where the entries come from
+
+This is the list Claude sessions start servers from, and it accumulates. Two
+kinds of rot to know about:
+
+**Dead scratchpads.** Entries like `scratch-preview` / `ink-preview` /
+`shader-check` point at `/private/tmp/claude-*/…/scratchpad` directories
+belonging to sessions that ended. The directory is gone; the entry isn't.
+Harmless, but they're most of the length of the file.
+
+**Hardcoded ports.** `dev-alt` (5199) and `dev-alt2` (5223) pass
+`--port … --strictPort`, so they fail outright rather than moving aside when
+something already has the port. `autoPort: true` is the form that behaves —
+`vite.config.js` honours `PORT` for exactly this reason.
+
+**The CSV editor is an attach entry, on purpose:**
+
+```json
+{ "name": "csv-editor", "url": "http://localhost:5177", "port": 5177 }
+```
+
+No command, so `preview_start` connects to the running editor instead of
+starting a rival. Two reasons it must stay that way: `tools/csv-editor.mjs`
+reads `CSV_EDITOR_PORT`, not `PORT`, so `autoPort` does nothing for it — and a
+second instance is a second writer to the same three CSVs, which turns the
+mtime guard from a safety net into a stream of refused saves.
+
+---
+
 ## Panel commands
 
 ```bash

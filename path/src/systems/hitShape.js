@@ -164,20 +164,33 @@ function fitAxisSpheres(mesh, slices) {
   const box = geo.boundingBox;
   if (!box) return [];
 
-  // Local +Y is forward for every creature in this project — createVisual
-  // builds them nose-up. So the long axis of a swimmer is Y, and slicing along
-  // it is slicing the body from nose to tail.
-  const lo = box.min.y;
-  const hi = box.max.y;
+  // ALONG WHICHEVER AXIS THE BODY IS LONGEST, measured rather than assumed.
+  //
+  // This used to slice along local +Y on the grounds that createVisual builds
+  // every creature nose-up, which is true of every creature and not true of the
+  // things that are not creatures. The yacht's hull is modelled Y-up with its
+  // LENGTH down Z — `forward: '+Y'` on that asset means "this model's Y is the
+  // axis to stand up", not "this model is longest along Y" — so slicing by Y
+  // sliced the boat horizontally and stacked the hitbox up the superstructure
+  // like a totem pole, from the keel to the masthead.
+  //
+  // For anything built nose-up the longest axis IS Y, so this changes nothing
+  // for them and stops the assumption being load-bearing for everything else.
+  const size = { x: box.max.x - box.min.x, y: box.max.y - box.min.y, z: box.max.z - box.min.z };
+  const axis = size.z > size.x && size.z > size.y ? 'z'
+    : (size.x > size.y ? 'x' : 'y');
+  const lo = box.min[axis];
+  const hi = box.max[axis];
   const span = hi - lo;
   if (!(span > 0)) return [];
+  const along = (i) => (axis === 'x' ? pos.getX(i) : (axis === 'z' ? pos.getZ(i) : pos.getY(i)));
 
   const n = new Int32Array(slices);
   const sx = new Float64Array(slices);
   const sy = new Float64Array(slices);
   const sz = new Float64Array(slices);
   for (let i = 0; i < pos.count; i++) {
-    const t = (pos.getY(i) - lo) / span;
+    const t = (along(i) - lo) / span;
     const s = Math.min(slices - 1, Math.max(0, Math.floor(t * slices)));
     n[s] += 1; sx[s] += pos.getX(i); sy[s] += pos.getY(i); sz[s] += pos.getZ(i);
   }
@@ -187,7 +200,7 @@ function fitAxisSpheres(mesh, slices) {
   const sd2 = new Float64Array(slices);
   const dmax = new Float64Array(slices);
   for (let i = 0; i < pos.count; i++) {
-    const t = (pos.getY(i) - lo) / span;
+    const t = (along(i) - lo) / span;
     const s = Math.min(slices - 1, Math.max(0, Math.floor(t * slices)));
     const dx = pos.getX(i) - sx[s];
     const dy = pos.getY(i) - sy[s];
