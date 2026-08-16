@@ -256,6 +256,62 @@ check('events still fire with the world held', fireStagedEvent() === true);
 check('and are still counted', stageState.fired === 1);
 resetStage();
 
+// --- the bare freeze (K) ----------------------------------------------------
+// The same still world without the panel, for looking at a creature rather than
+// firing events at it. It rides stageSimulates() rather than getting a gate of
+// its own — see the note there — so the checks that matter are that it works
+// with nothing open, that it does not become a second way to write
+// stageState.sim, and above all that it cannot outlive a run.
+{
+  const { isWorldFrozen, setWorldFrozen, onFreezeChanged } = await import('../path/src/systems/stage.js');
+
+  // The badge subscribes to this and to nothing else, so every claim below
+  // about "the badge clears" is really a claim about this list being called.
+  const seen = [];
+  const off = onFreezeChanged((on) => seen.push(on));
+
+  check('nothing is frozen to begin with', isWorldFrozen() === false);
+  setWorldFrozen(true);
+  check('freezing holds the simulation with no stage open',
+    stageSimulates() === false && isStaging() === false,
+    'this is the whole feature — a still world with no menu over it');
+  check('...without flipping the bar\'s own switch behind your back',
+    stageState.sim === false && isWorldFrozen() === true);
+
+  // THE ONE THAT MATTERS. A freeze is invisible except that the water stops, so
+  // a run starting frozen reads as the game having hung on its first frame —
+  // and the key that would clear it is the one thing you would not think to
+  // press. resetStage runs at every run start.
+  // resetStage runs at every run start, and the stage is SHUT here on purpose:
+  // that is the case the badge got wrong first. closeStage's own notification
+  // is guarded to fire only when the stage was open, so hanging the badge off
+  // it cleared the state silently and left the badge over a thawed world.
+  seen.length = 0;
+  resetStage();
+  check('starting a run thaws the world', isWorldFrozen() === false && stageSimulates() === true,
+    'a freeze that survived a reset would look exactly like a hang');
+  check('...and says so, with the stage bar shut', seen.length === 1 && seen[0] === false,
+    `notified ${JSON.stringify(seen)} — the badge has no other way to hear it`);
+
+  // ...and does not natter on every subsequent run start, which is what an
+  // unguarded setter would do.
+  seen.length = 0;
+  resetStage();
+  resetStage();
+  check('an already-thawed reset stays quiet', seen.length === 0, `${seen.length} notifications`);
+
+  // Frozen and staged together must not leave the world held when only one of
+  // them is lifted — they are separate flags and either one alone holds it.
+  setWorldFrozen(true);
+  openStage();
+  stageState.sim = true;
+  check('a staged sim does not override a freeze', stageSimulates() === false);
+  setWorldFrozen(false);
+  check('...and lifting the freeze hands it back', stageSimulates() === true);
+  off();
+  resetStage();
+}
+
 // --- the sandbox entry ------------------------------------------------------
 // `?sandbox` is what makes a reload survivable: it boots past the splash into
 // a staged run, so reloading to pick up someone else's change returns you to

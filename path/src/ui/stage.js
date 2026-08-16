@@ -1,5 +1,8 @@
 import { CONFIG } from '../config.js';
-import { stageState, toggleStage, isStaging, fireStagedEvent, stageEvents, onStageChanged, setSandboxUrl } from '../systems/stage.js';
+import {
+  stageState, toggleStage, isStaging, fireStagedEvent, stageEvents, onStageChanged, setSandboxUrl,
+  isWorldFrozen, setWorldFrozen, onFreezeChanged,
+} from '../systems/stage.js';
 import { resetEnemies } from '../entities/enemies.js';
 import { isTextEntry } from './typing.js';
 
@@ -48,12 +51,29 @@ const STYLES = `
   .sv-stage-btn.sv-stage-stale { border-color: rgba(255,179,71,0.55); color: #ffb347;
     background: rgba(255,179,71,0.12); }
   .sv-stage-btn.sv-stage-stale:hover { border-color: #ffb347; color: #ffd9a0; }
+
+  /* THE FREEZE BADGE. Small, top-centre, and unmissable — a held world with no
+     menu over it is indistinguishable from a hung one, and the key that clears
+     it is the one thing you would not think to press. Top rather than bottom so
+     it never lands under the stage bar when both are up, and pointer-events
+     none so it cannot swallow a click on whatever it happens to sit over. */
+  .sv-freeze { position: fixed; top: 10px; left: 0; right: 0; margin: 0 auto;
+    width: fit-content; z-index: 33; pointer-events: none; display: none;
+    font: 600 10px/1 'Inter', system-ui, sans-serif; letter-spacing: 0.14em;
+    text-transform: uppercase; color: #7ad7ff; padding: 6px 12px; border-radius: 999px;
+    background: rgba(6,10,18,0.82); border: 1px solid rgba(122,215,255,0.45);
+    backdrop-filter: blur(8px); }
+  .sv-freeze.sv-freeze-on { display: block; }
 `;
 
 let panel = null;
 let statusEl = null;
 let staleEl = null;
 let getScene = null;
+// The freeze badge. A sibling of the bar rather than a child of it: the whole
+// point of K is that it works with the bar shut, and a badge inside a hidden
+// panel is a badge nobody sees.
+let freezeEl = null;
 
 // --- holding the page still -------------------------------------------------
 // Nothing in this app accepts a hot update, so any edit anywhere falls through
@@ -264,6 +284,12 @@ export function initStagePanel(sceneGetter) {
 
   panel.append(simWrap, safeWrap, clearBtn, closeBtn, staleEl, statusEl);
   document.body.appendChild(panel);
+
+  freezeEl = document.createElement('div');
+  freezeEl.className = 'sv-freeze';
+  freezeEl.textContent = 'frozen · K';
+  document.body.appendChild(freezeEl);
+
   refreshStatus();
 
   // The stage can be closed by something that isn't this panel — starting a
@@ -310,6 +336,33 @@ export function initStagePanel(sceneGetter) {
     fireStagedEvent();
     refreshStatus();
   });
+
+  // K — FREEZE. Everything the stage bar's sim switch stops, without the bar.
+  //
+  // Lives here rather than in main.js's bindGlobalKeys because it is the same
+  // concern as the switch three inches above it, and splitting a state from its
+  // only other control across two files is how the two end up disagreeing.
+  //
+  // isTextEntry and not isTypingTarget, for the reason the F handler gives: the
+  // latter counts a focused slider as typing, and freezing the world is exactly
+  // what you want to do WHILE dragging one.
+  window.addEventListener('keydown', (e) => {
+    if (e.key?.toLowerCase() !== 'k' || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
+    if (isTextEntry(e.target) || e.repeat) return;
+    e.preventDefault();
+    setWorldFrozen(!isWorldFrozen());
+  });
+
+  // The badge follows the STATE, not the keypress. Starting a run clears the
+  // freeze from inside resetStage, and a badge painted only where K is handled
+  // would sit over a world that had already thawed — which is the thing it
+  // exists to prevent, inverted.
+  onFreezeChanged(setFreezeBadge);
+}
+
+function setFreezeBadge(on) {
+  if (!freezeEl) return;
+  freezeEl.classList.toggle('sv-freeze-on', !!on);
 }
 
 function refreshStatus() {

@@ -76,7 +76,7 @@
     },
     "enemyReeffish": {
       "emissive": 16711816,
-      "glow": 4.5,
+      "glow": 0.75,
       "tint": null,
       "roughness": 0.5,
       "repeatX": 1,
@@ -5019,8 +5019,8 @@
       "hitstop": 0,
       "glow": 0.6,
       "ripple": {
-        "strength": 0.2,
-        "radius": 6
+        "strength": 0,
+        "radius": 2
       },
       "sfx": "kill",
       "haptic": [
@@ -5039,8 +5039,8 @@
       "hitstop": 0.07,
       "glow": 1.2,
       "ripple": {
-        "strength": 1,
-        "radius": 7
+        "strength": 0.3,
+        "radius": 5
       },
       "sfx": "bigKill",
       "haptic": [
@@ -8364,6 +8364,7 @@
       "hueBias": 0,
       "warp": 0.8,
       "bodyDarken": 0.35,
+      "pigment": 0,
       "colorA": 58879,
       "colorB": 8072703,
       "colorC": 16765286,
@@ -8502,6 +8503,7 @@
         "contrast": 3,
         "strength": 0.95,
         "tailBias": -0.35,
+        "hueSpread": 0.55,
         "pulseAmp": 0.45,
         "pulseSpeed": 0.6,
         "pulseSync": "4 bars",
@@ -8629,6 +8631,95 @@
         "flow": 0,
         "drift": 0,
         "tailBias": 0
+      },
+      "squidGlow": {
+        "pattern": "spots",
+        "scale": 0.34,
+        "coverage": 0.22,
+        "contrast": 3.4,
+        "strength": 0.9,
+        "tailBias": -0.25,
+        "flow": 0,
+        "pulseAmp": 0.55,
+        "pulseSpeed": 1.2,
+        "flickerAmp": 0.12,
+        "flickerSync": "1/4",
+        "flickerRate": 2,
+        "phaseSteps": 0,
+        "schoolAmp": 0,
+        "colorA": 3866592,
+        "colorB": 46335,
+        "colorC": 14221302,
+        "hueSpread": 0.55,
+        "shellColor": 5917294,
+        "shellGlow": 0.16,
+        "bodyDarken": 0.42
+      },
+      "hide": {
+        "luminous": false,
+        "pigment": 1,
+        "strength": 0,
+        "pattern": "wireframe",
+        "scale": 0.62,
+        "coverage": 0.42,
+        "contrast": 0.9,
+        "warp": 1.1,
+        "tailBias": 0,
+        "hueBias": 0.45,
+        "colorA": 12175058,
+        "colorB": 9413040,
+        "colorC": 14674158,
+        "hueSpread": 0.85,
+        "hueScale": 1.6,
+        "shellColor": 10135990,
+        "pulseAmp": 0,
+        "flow": 0,
+        "schoolAmp": 0,
+        "phaseSpread": 0,
+        "phaseSteps": 0
+      },
+      "scales": {
+        "luminous": false,
+        "pigment": 1,
+        "strength": 0,
+        "pattern": "net",
+        "scale": 0.09,
+        "coverage": 0.5,
+        "contrast": 2.2,
+        "tailBias": 0,
+        "hueBias": 0.5,
+        "colorA": 13162724,
+        "colorB": 10467016,
+        "colorC": 15660280,
+        "hueSpread": 0.7,
+        "hueScale": 2.2,
+        "shellColor": 11058380,
+        "pulseAmp": 0,
+        "flow": 0,
+        "schoolAmp": 0,
+        "phaseSpread": 0,
+        "phaseSteps": 0
+      },
+      "plate": {
+        "luminous": false,
+        "pigment": 1,
+        "strength": 0,
+        "pattern": "lattice",
+        "scale": 0.26,
+        "coverage": 0.62,
+        "tailBias": 0,
+        "hueBias": 0.2,
+        "colorA": 7299664,
+        "colorB": 11048570,
+        "colorC": 14207400,
+        "hueSpread": 0.6,
+        "hueScale": 1.3,
+        "shellColor": 12430994,
+        "pulseAmp": 0,
+        "flow": 0,
+        "schoolAmp": 0,
+        "phaseSpread": 0,
+        "phaseSteps": 0
       }
     }
   },
@@ -10220,5 +10311,5 @@
     "overlayOpacity": 0.32,
     "overlayColor": 0
   },
-  "_savedAt": 1786917378093
+  "_savedAt": 1786922401067
 }

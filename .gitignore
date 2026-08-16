@@ -54,3 +54,4 @@ tools/atlas-render/shots/
 # backup left beside the models ships to every player. Delete once a converted
 # model has been seen in game — nothing can regenerate a source texture.
 .model-orig/
+dist-skins-look

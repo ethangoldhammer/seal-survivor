@@ -4069,13 +4069,18 @@ function animate(now) {
     // clock by design — so a roster frozen solid in the middle of them reads
     // as the animals having crashed, not as the game being paused.
     animateEnemiesIdle(realDt);
-  } else if (isStaging() && !stageSimulates()) {
-    // The stage with its simulation switched off. Same treatment and for
-    // exactly the same reason as the level-up freeze above: the water, the sky
-    // and the seal's own idle all keep moving on the wall clock regardless, so
-    // a roster frozen solid among them reads as a crash rather than as a held
-    // world. Anything left in the arena goes on breathing where it stands
-    // while you fire events at it.
+  } else if (!stageSimulates()) {
+    // The world held still: the stage with its simulation switched off, or the
+    // bare freeze (K) that is the same thing without the panel. Same treatment
+    // and for exactly the same reason as the level-up freeze above: the water,
+    // the sky and the seal's own idle all keep moving on the wall clock
+    // regardless, so a roster frozen solid among them reads as a crash rather
+    // than as a held world. Anything left in the arena goes on breathing where
+    // it stands while you fire events at it — or look at it.
+    //
+    // The `isStaging()` test that used to be here is gone rather than widened:
+    // stageSimulates() is false in exactly these two cases and true whenever
+    // the run is over, so asking it alone is asking the real question.
     animateEnemiesIdle(realDt);
   }
 

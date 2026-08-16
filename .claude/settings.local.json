@@ -42,7 +42,9 @@
       "Bash(xxd \"/Users/ethangoldhammer/Documents/_DesignSystems/SealSurvivor/RIV/seal_survivor.riv\")",
       "Bash(npm i *)",
       "Bash(node -e \"console.log\\(require\\('./node_modules/@rive-app/canvas/package.json'\\).version\\)\")",
-      "Bash(cp \"/Users/ethangoldhammer/Documents/_DesignSystems/SealSurvivor/RIV/seal_survivor.riv\" path/src/ui/seal_survivor.riv && ls -l path/src/ui/seal_survivor.riv)"
+      "Bash(cp \"/Users/ethangoldhammer/Documents/_DesignSystems/SealSurvivor/RIV/seal_survivor.riv\" path/src/ui/seal_survivor.riv && ls -l path/src/ui/seal_survivor.riv)",
+      "Bash(node -e \"console.log\\(typeof navigator, typeof navigator?.getGamepads\\)\")",
+      "Bash(npm run *)"
     ]
   }
 }

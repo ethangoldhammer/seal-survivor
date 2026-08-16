@@ -43,7 +43,7 @@ import { parseSkinCsv, buildSkins, rollSkin, allSkins } from '../path/src/skinTa
 import * as THREE_NS from 'three';
 import { CONFIG, TUNER_SCHEMA, withoutInheritedPresetKeys, importTuning } from '../path/src/config.js';
 import { updateBeatSync } from '../path/src/systems/beatSync.js';
-import { ASSETS, lookLeader } from '../path/src/assets.js';
+import { ASSETS, lookLeader, setAssetSkin } from '../path/src/assets.js';
 import { pulseDemoFor, panDemoFor } from '../path/src/systems/glowDebug.js';
 
 let failures = 0;
@@ -1205,6 +1205,67 @@ section('PROCEDURAL GLOW OWNS THE EMISSIVE CHANNEL');
       !!ASSETS[k]?.biolumSkin && !ASSETS[k]?.texture?.emissive,
       ASSETS[k] ? `preset ${ASSETS[k].biolumSkin}` : 'ASSET MISSING');
   }
+}
+
+// ---------------------------------------------------------------------------
+section('THE SKIN COLUMN — assets.csv can put a pattern on any model');
+// The half tools/path-table-test.mjs cannot reach. That file proves a CSV cell
+// arrives at setSkin; this proves what setSkin then DOES to the asset — which
+// is the only thing instantiateParsedModel ever reads.
+//
+// It matters because the two ends look fine independently. A column that parses
+// perfectly and writes a field nobody loads is a feature that ships doing
+// nothing, and every check in this file would still pass.
+{
+  // A key nothing else in this run touches, restored afterwards: ASSETS is a
+  // live module object and the checks above read it.
+  const KEY = 'enemyBarracuda';
+  const before = ASSETS[KEY]?.biolumSkin;
+  const beforeEdges = ASSETS[KEY]?.biolumEdges;
+
+  setAssetSkin(KEY, 'hide');
+  check('a preset lands on the asset definition itself', ASSETS[KEY].biolumSkin === 'hide',
+    `biolumSkin = ${ASSETS[KEY].biolumSkin}`);
+  // Read as source: the call site is inside instantiateParsedModel, which needs
+  // a parsed .glb to reach, so the text is the only way to ask this from Node.
+  const loaderSrc = readFileSync(new URL('../path/src/assets.js', import.meta.url), 'utf8');
+  check('...which is the field the model loader reads',
+    loaderSrc.includes('if (def.biolumSkin) attachBiolumSkin('),
+    'the call site in assets.js still keys off def.biolumSkin');
+
+  // THE WIREFRAME TRAP. That pattern needs barycentric coordinates, which come
+  // from splitForEdges, which runs off `biolumEdges` — a field only ever set by
+  // hand before the column existed. Assign wireframeGlow from a CSV row without
+  // this and the shader's own guard draws the body as NOTHING: not a wrong
+  // colour, not a warning, an animal that fails to appear.
+  setAssetSkin(KEY, 'wireframeGlow');
+  check('a wireframe preset opts the geometry split in with it',
+    ASSETS[KEY].biolumEdges === true,
+    `biolumEdges = ${ASSETS[KEY].biolumEdges}`);
+  check('...and a non-wireframe preset does not pay for it',
+    (setAssetSkin(KEY, null), setAssetSkin(KEY, 'scales'), ASSETS[KEY].biolumEdges === undefined),
+    `biolumEdges = ${ASSETS[KEY].biolumEdges}`);
+
+  setAssetSkin(KEY, null);
+  check('"none" leaves no trace of either',
+    ASSETS[KEY].biolumSkin === undefined && ASSETS[KEY].biolumEdges === undefined);
+
+  // The pigment family is what the column exists to hand out. A preset in it
+  // that forgets `pigment` is a glow wearing a hide's name — it would paint
+  // nothing, leave the model's texture showing through, and read on the look
+  // page as "that species can't lose its jpeg".
+  const pigment = Object.entries(CONFIG.biolumSkin.presets).filter(([, p]) => (p?.pigment ?? 0) > 0);
+  check('the pigment family exists and every member paints', pigment.length >= 3
+    && pigment.every(([, p]) => p.pigment === 1),
+    pigment.map(([n]) => n).join(', '));
+  check('...and none of them is night-gated — a hide is not a reason to only spawn after dark',
+    pigment.every(([, p]) => p.luminous === false));
+  check('...and none of them adds light on top of the paint',
+    pigment.every(([, p]) => (p.strength ?? 1) === 0),
+    'strength 0 keeps sixty painted creatures out of the bloom pass');
+
+  if (before === undefined) delete ASSETS[KEY].biolumSkin; else ASSETS[KEY].biolumSkin = before;
+  if (beforeEdges === undefined) delete ASSETS[KEY].biolumEdges; else ASSETS[KEY].biolumEdges = beforeEdges;
 }
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);

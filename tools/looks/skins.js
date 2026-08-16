@@ -31,8 +31,9 @@
 // attach second, always.
 //
 // That difference is exactly the seam a look page can hide, so the real path is
-// checked in Node instead — tools/skin-column-test.mjs walks assets.csv →
-// setAssetSkin → def.biolumSkin → the processMaterial call site.
+// checked in Node instead — see THE SKIN COLUMN in tools/biolum-skin-test.mjs,
+// which walks setAssetSkin → def.biolumSkin, and tools/path-table-test.mjs,
+// which walks assets.csv → setSkin.
 //
 // IT WRITES NOTHING — a vite build with no dev server behind it and no save
 // path. See SERVERS.md.

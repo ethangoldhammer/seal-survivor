@@ -11532,8 +11532,11 @@ export const CONFIG = {
     },
 
     // ---------------------------------------------------------------------------
-    // TOUCH — the two floating virtual sticks on a phone. See input.js for how a
-    // finger claims one; these are the numbers that decide how they FEEL.
+    // TOUCH — the phone's two halves: a floating virtual stick on the left that
+    // steers, and a pointer on the right that aims AT whatever it is touching.
+    // The two numbers below are the stick's, and only the stick's — the aim
+    // half has no anchor, no radius and no deadzone by construction. See
+    // input.js for how a finger claims a half.
     // ---------------------------------------------------------------------------
     touch: {
       // CSS px of travel from where the thumb landed that counts as full
@@ -11546,7 +11549,7 @@ export const CONFIG = {
       // off centre and nothing for a wide deadzone to protect against.
       deadzone: 6,
       // Fraction of the canvas width the left (movement) stick owns. Everything
-      // to the right of it belongs to the aim stick.
+      // to the right of it is the aim half.
       splitX: 0.5,
       // With a thumb on the move stick and none on aim, point the ship where it's
       // swimming. Without this the aim direction just sticks at whatever it was
@@ -12603,6 +12606,86 @@ export const CONFIG = {
         flow: 0,
         drift: 0,
         tailBias: 0,
+        luminous: true,
+      },
+
+      // THE SQUID'S PHOTOPHORES. Discrete organs, not a field: a squid's light
+      // comes out of countable points down the mantle, which is `spots` — and
+      // it is the only preset here that wants them, because on a fish that same
+      // pattern reads as a disease and on a shark it reads as barnacles.
+      //
+      // NOT `lantern`, which was the obvious reach and is wrong twice over. Its
+      // `speckle` is sampled at 4x frequency (see the note there), so on a
+      // 2.8-unit body the dots land finer than the camera resolves; and its
+      // 4-slot phase spread is built for a nine-strong shoal, while squid spawn
+      // in ones and twos, where a slot grid is just four animals in lockstep.
+      squidGlow: {
+        pattern: 'spots',
+        // Coarse on purpose. Photophores are organs — a dozen down the mantle,
+        // not a dust of them. This is the first number to move per species.
+        scale: 0.34,
+        // Low: the LIT fraction is the organs themselves, and most of a squid
+        // is not an organ. Everything the pattern does not cover is `shellGlow`
+        // below, which is where the mantle's own colour comes from.
+        coverage: 0.22,
+        // Hard edges. A photophore has a rim; a glow that fades out at its
+        // border is a bruise.
+        contrast: 3.4,
+        // Sized the way lantern's was — against the CLIP, not by eye. The
+        // composite is LDR, so `strength * glow` is the ceiling on the lit
+        // core: at 0.9 the core lands just past 1.0, which is what lets the
+        // breath below cross the clip line so peaks bloom and troughs read as
+        // dark. Push this to 2 and every organ resolves to the same flat white
+        // disc and the breath disappears inside it. `npm run test:glowphase`.
+        strength: 0.9,
+        // Head-biased: the arms and the eyes carry more than the mantle tip,
+        // which is the read that makes it an animal rather than a lamp.
+        tailBias: -0.25,
+        // Organs stay put. `flow` drifts the field THROUGH the body, and a
+        // photophore that wandered down the mantle would be the exact failure
+        // the bind-pose note in biolumSkin.js is about.
+        flow: 0,
+        // Slow, deep breath — the whole animal lighting and dimming together.
+        // Deeper than lantern's 0.2 because there are a dozen organs here
+        // rather than a hundred specks: with few emitters, the modulation has
+        // to be the motion.
+        pulseAmp: 0.55,
+        pulseSync: '2 bars',
+        pulseSpeed: 1.2,
+        // Barely any. A squid signals; it does not gutter like a lanternfish.
+        //
+        // 1/4 and not 1/8, which is what I reached for first and what
+        // `npm run test:beat` rejected: at 105bpm a 1/8 is 0.29s against this
+        // free rate's 0.50s, so putting it on the grid would have silently run
+        // the stutter 1.75x faster than the rate authored right below it. The
+        // rule that test enforces is lantern's — pick the division NEAREST the
+        // free rate, so nothing about the tempo moves when it joins the grid.
+        flickerAmp: 0.12,
+        flickerSync: '1/4',
+        flickerRate: 2.0,
+        // CONTINUOUS RANDOM, NOT SLOTS. phaseSteps 0 is right here for the
+        // reason lantern's 4 is right there — see the note above. Two squid on
+        // screen want to be visibly out of step with each other, and any slot
+        // count small enough to read as a grid would put them in unison.
+        phaseSteps: 0,
+        phaseSpread: 1,
+        // Out of the school wave: a squid is not a shoal, and dimming one as a
+        // field passed over it would read as a lighting bug on a solitary
+        // animal. Same call `carapace` makes, for the same reason.
+        schoolAmp: 0,
+        // Cold organs on a warm body — the contrast that says "these are lit
+        // and the rest of it is not".
+        colorA: 0x3affe0, colorB: 0x00b4ff, colorC: 0xd8fff6,
+        hueSpread: 0.55,
+        // THE MANTLE ITSELF. Not zero, which would leave the negative space
+        // black and the squid a silhouette with dots on it — and the negative
+        // space is 78% of this animal at the coverage above.
+        shellColor: 0x5a4a6e,
+        shellGlow: 0.16,
+        // Light touch: squid.glb ships a real texture and this preset is meant
+        // to light it, not replace it. To replace it, set `pigment: 1` and take
+        // this to 0.05 — see the pigment family below.
+        bodyDarken: 0.42,
         luminous: true,
       },
 
@@ -16946,6 +17029,10 @@ const SYNCED_FX = [
   ['glowing tang', () => resolveBiolumCfg('biolumSkin.presets.reefGlow'), ['pulseSync', 'flickerSync']],
   ['glowing darter', () => resolveBiolumCfg('biolumSkin.presets.dartGlow'), ['pulseSync', 'flickerSync']],
   ['abyss shark', () => resolveBiolumCfg('biolumSkin.presets.abyssHunter'), ['pulseSync', 'flickerSync']],
+  // The slowest breath on the grid, at two bars. Listed next to the shoals on
+  // purpose: this preset's whole argument is that it is NOT one of them, and
+  // that is only visible when its division sits beside theirs.
+  ['squid', () => resolveBiolumCfg('biolumSkin.presets.squidGlow'), ['pulseSync', 'flickerSync']],
   // THREE divisions on this one, not two — it is the only preset whose FIELD
   // is on the grid as well as its brightness and its flicker. `flowSync` is
   // new; every other row here can carry it too the moment its preset names one.
@@ -17328,6 +17415,7 @@ function biolumSkinGroups() {
     lantern: 'Bioluminescence — lanternfish',
     veil: 'Bioluminescence — lantern ray',
     abyssHunter: 'Bioluminescence — abyss shark',
+    squidGlow: 'Bioluminescence — squid',
     reefGlow: 'Bioluminescence — glowing tang',
     dartGlow: 'Bioluminescence — glowing darter',
     emberClaw: 'Bioluminescence — ember crab',
@@ -20587,8 +20675,8 @@ export const TUNER_SCHEMA = [
     group: 'Touch sticks',
     section: 'Interface & controls',
     items: [
-      { path: 'touch.stickRadius', min: 20, max: 160, step: 5, label: 'full deflection (px)' },
-      { path: 'touch.deadzone', min: 0, max: 30, step: 1, label: 'stick deadzone (px)' },
+      { path: 'touch.stickRadius', min: 20, max: 160, step: 5, label: 'move stick: full deflection (px)' },
+      { path: 'touch.deadzone', min: 0, max: 30, step: 1, label: 'move stick: deadzone (px)' },
       { path: 'touch.splitX', min: 0.2, max: 0.8, step: 0.05, label: 'move / aim screen split' },
       { path: 'touch.aimFollowsMove', type: 'bool', label: 'face travel when not aiming' },
       { path: 'touch.strike.thirdTouch', type: 'bool', label: 'strike: third finger' },

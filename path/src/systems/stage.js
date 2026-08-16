@@ -126,6 +126,14 @@ export function resetStage() {
   closeStage();
   stageState.fired = 0;
   anchor.known = false;
+  // A freeze must not survive into a new run. Nothing about it is visible
+  // except that the water stops, so a run starting frozen reads as the game
+  // having hung on the first frame — and the key that would clear it is the one
+  // thing you would not think to press.
+  //
+  // Through the setter, not by assignment, so the badge hears about it. Written
+  // straight to the variable this cleared the state and left the badge up.
+  setWorldFrozen(false);
 }
 
 /**
@@ -219,7 +227,59 @@ export function fireStagedEvent() {
  * `!gameState.paused` in main.js to decide which sense was meant.
  */
 export function stageSimulates() {
-  return !stageState.active || stageState.sim;
+  return !frozen && (!stageState.active || stageState.sim);
+}
+
+// ---------------------------------------------------------------------------
+// FREEZE — the same still world, without the panel.
+//
+// The stage's `sim` switch already stops every creature dead, and it is the
+// only thing in the game that does so without a menu over the top: the pause
+// screen dims the frame and covers the middle of it, which is exactly where the
+// animal you wanted to look at is. But reaching it means opening the stage bar,
+// and the bar is 96px of the bottom of the screen you also wanted.
+//
+// So the state is split out and given its own key. It is a SEPARATE flag rather
+// than a second way to write `stageState.sim`, because the two are answers to
+// different questions and the bar's checkbox should not silently flip when you
+// froze the world from outside it.
+//
+// It rides `stageSimulates()` rather than getting a gate of its own, and that
+// is the whole reason this is four lines instead of an afternoon. There are
+// twenty-odd `!gameState.paused` tests in main.js and each one is a decision
+// about what should keep moving behind a menu — the aim indicator, the gore,
+// the oxygen warning, the marks. `stageSimulates()` already answers "should the
+// SIMULATION run" and is consulted in exactly two places, both of which are
+// already written for a world held still with everything else alive. Joining it
+// inherits all of that, tested, including the idle-breathing branch that keeps
+// a frozen roster from reading as a crash.
+// ---------------------------------------------------------------------------
+let frozen = false;
+
+// Its own listener set, NOT onStageChanged's, and that is a bug fixed rather
+// than a preference. closeStage's announcement is guarded — it only fires when
+// the stage was actually open — so a run started with the bar shut would clear
+// the freeze silently and leave the badge sitting over a world that had already
+// thawed. Which is the precise thing the badge exists to prevent, inverted.
+const freezeListeners = new Set();
+
+export function onFreezeChanged(cb) {
+  freezeListeners.add(cb);
+  return () => freezeListeners.delete(cb);
+}
+
+export function isWorldFrozen() {
+  return frozen;
+}
+
+export function setWorldFrozen(on) {
+  const next = !!on;
+  // Guarded like closeStage's, for the same reason: resetStage runs at every
+  // run start and would otherwise notify on every one of them.
+  if (next === frozen) return frozen;
+  frozen = next;
+  for (const cb of freezeListeners) cb(frozen);
+  return frozen;
 }
 
 /**

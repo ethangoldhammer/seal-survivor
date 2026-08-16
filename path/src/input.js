@@ -91,20 +91,30 @@ let hasMouse = false;
 // charging, and a boolean would drop the meter on the first let-go.
 const mouseButtonsDown = new Set();
 
-// --- touch: two floating virtual sticks ------------------------------------
+// --- touch: a floating stick that steers, a pointer that aims --------------
 // Fingers are tracked by `identifier`, never by position in the touches list.
 // `touches[0]` is only "the first finger" by accident — it's whichever one the
 // browser lists first, so lifting the left thumb promotes the right one to
 // steering mid-run.
 //
-// A finger claims a stick by WHERE IT LANDS, not by arrival order. Order sounds
+// A finger claims a half by WHERE IT LANDS, not by arrival order. Order sounds
 // right ("first touch moves, second aims") right up until the player lifts and
 // re-plants their left thumb while still aiming: the re-plant is then the only
 // touch looking for a slot and it takes the one that's free, which is aim. The
 // ship stops steering and starts pointing instead.
 //
-// Both sticks FLOAT — the anchor is wherever the thumb went down. Nothing to
-// hit, nothing to look at, and no spring-back to fight.
+// THE TWO HALVES ARE NOT THE SAME KIND OF CONTROL, and both entries here being
+// the same shape hides that:
+//
+//   move  a floating stick. The anchor is wherever the thumb went down, and
+//         what's read is DEFLECTION from it — direction and how far. See
+//         readStick.
+//   aim   a pointer. The anchor is ignored entirely and only `current` is read,
+//         because the seal aims at the world point under the fingertip the same
+//         way it aims at the mouse cursor. See readAimTouchNDC.
+//
+// The anchor is still recorded for the aim half: the double-tap-and-hold strike
+// measures tap drift against it, and it costs nothing to keep.
 const sticks = {
   move: null, // { id, start: Vector2, current: Vector2, down, charging }
   aim: null,
@@ -525,9 +535,12 @@ function touchStrikeDown() {
   return strikeTouchId !== null || !!sticks.move?.charging || !!sticks.aim?.charging;
 }
 
-// A stick's deflection: direction into `out`, magnitude returned as 0..1 ramped
-// from the deadzone edge, matching how applyDeadzone treats a physical stick.
-// Returns 0 for centred, and leaves `out` untouched in that case.
+// The MOVE stick's deflection: direction into `out`, magnitude returned as 0..1
+// ramped from the deadzone edge, matching how applyDeadzone treats a physical
+// stick. Returns 0 for centred, and leaves `out` untouched in that case.
+//
+// Only the move half goes through here. The aim half is a pointer, not a stick
+// — see readAimTouchNDC.
 function readStick(stick, out) {
   if (!stick) return 0;
   const t = CONFIG.touch;
@@ -542,8 +555,35 @@ function readStick(stick, out) {
   return Math.min(1, (len - dead) / (radius - dead));
 }
 
+// Where the aim thumb is touching, in NDC — the same coordinates the mouse
+// publishes, because the aim thumb points the same way a mouse does: the seal
+// aims AT the spot under it.
+//
+// This is not a stick reading, and that is the fix. Deflection measures from
+// the ANCHOR — wherever the thumb happened to land — so the aim line started at
+// a point that is invisible, arbitrary, and usually not the seal: plant low,
+// drag up-right, and the seal pointed up-right no matter where on the screen
+// the thumb had ended up. Absolute aiming has no anchor to be wrong about. The
+// line runs from the player to the fingertip, which is a line the player can
+// see, so what they are pointing at is exactly what they are touching.
+//
+// Returns false when there is no aim thumb down, or when the canvas has no size
+// yet (a rect of zeros would put every touch at NDC (-1, 1), the top-left
+// corner, and quietly aim the seal there).
+function readAimTouchNDC(out) {
+  const a = sticks.aim;
+  if (!a) return false;
+  const rect = domElement.getBoundingClientRect();
+  if (!(rect.width > 0) || !(rect.height > 0)) return false;
+  out.set(
+    ((a.current.x - rect.left) / rect.width) * 2 - 1,
+    -(((a.current.y - rect.top) / rect.height) * 2 - 1)
+  );
+  return true;
+}
+
 const moveVec = new THREE.Vector2();
-const aimVec = new THREE.Vector2();
+const aimNDC = new THREE.Vector2();
 
 // Drops any half-finished input so a run never inherits it. The keypress that
 // dismisses the splash also lands on setKey below, and Space is boost — without
@@ -959,7 +999,7 @@ export function updateInput(camera, playerPos) {
 
   if (input.move.lengthSq() > 1) input.move.normalize();
 
-  // --- aim (priority: right stick > touch drag > mouse) ---
+  // --- aim (priority: right stick > aim thumb > mouse) ---
   let aimed = false;
   // Reset per frame, unlike `aim` itself: this is the gesture, not the heading.
   input.aiming = false;
@@ -975,14 +1015,21 @@ export function updateInput(camera, playerPos) {
     }
   }
 
-  // Aim stick. Direction only — the guns run themselves now, so there's no
-  // threshold to cross and any deflection at all just re-points the seal.
-  const aimMag = readStick(sticks.aim, aimVec);
-  if (!aimed && aimMag) {
-    input.aim.copy(aimVec);
-    aimed = true;
-    input.aiming = true;
-    lastAimDevice = 'touch';
+  // The aim thumb, pointing AT what it is touching. No deadzone and no
+  // threshold to cross: a thumb resting on the glass is already naming a point,
+  // and there is no centred state for it to sit in. See readAimTouchNDC.
+  if (!aimed && readAimTouchNDC(aimNDC)) {
+    worldPoint.set(aimNDC.x, aimNDC.y, 0).unproject(camera);
+    const dx = worldPoint.x - playerPos.x;
+    const dy = worldPoint.y - playerPos.y;
+    // A thumb directly on the seal has no direction in it. Keep the last
+    // heading rather than snapping to whichever way the rounding fell.
+    if (Math.hypot(dx, dy) > 0.001) {
+      input.aim.set(dx, dy).normalize();
+      aimed = true;
+      input.aiming = true;
+      lastAimDevice = 'touch';
+    }
   }
 
   // One thumb down and it's the movement one: face where we're swimming. The

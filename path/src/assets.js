@@ -4083,7 +4083,22 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
 
   if (def.headTint != null) paintHeadTint(model, def);
 
-  if (def.outline) addOutlineShells(model, def.outline);
+  // ONE OUTLINE MATERIAL PER ASSET, not one per mesh, and that is what makes a
+  // static rim tunable at all. addOutlineShells builds a fresh material per
+  // mesh when it is handed none — fine when the values were only ever going to
+  // be the literals in this file, and useless the moment there is a swatch:
+  // an edit would have to find every shell of every creature already swimming.
+  // Handing it one material means a colour or a thickness written here reaches
+  // all of them, because they are all the same object.
+  //
+  // Registered under `label`, which is the ASSET KEY at both of the game's call
+  // sites. A harness passing something else gets an unreachable rim rather than
+  // a crash, which is the right way round.
+  if (def.outline) {
+    const shared = makeOutlineMaterial(def.outline);
+    if (label) outlineMaterials.set(label, { material: shared, base: def.outline });
+    addOutlineShells(model, { ...def.outline, material: shared });
+  }
 
   const orient = new THREE.Group();
   orient.quaternion.copy(orientationQuaternion(def));
@@ -5454,12 +5469,85 @@ export function supportsGlow() {
   return true;
 }
 
+// HOW A BODY ANSWERS THE KEY LIGHT — the pair that was hardcoded in the ASSETS
+// entries above and had no control anywhere. Ten entries set `material` and the
+// rest inherit whatever their file shipped with, so "why is this creature matte
+// and that one wet" was a question you answered by editing code and reloading.
+//
+// Both stash the value they found the first time, so passing null is a real
+// undo back to the model's own number rather than a guess at what it was. That
+// matters more here than for tint: a tint has an obvious neutral and these do
+// not — 0 is a legitimate metalness and so is 1.
+//
+// Unlit materials have neither property and are skipped rather than warned
+// about; roughly half the roster is `modelUnlit`, and a warning per creature
+// per drag is noise about a design decision.
 export function setAssetRoughness(key, value) {
   for (const m of getAssetMaterials(key)) {
     if (!('roughness' in m)) continue;
     if (m.userData.__originalRoughness === undefined) m.userData.__originalRoughness = m.roughness ?? 1;
     m.roughness = value ?? m.userData.__originalRoughness;
   }
+}
+
+export function setAssetMetalness(key, value) {
+  for (const m of getAssetMaterials(key)) {
+    if (!('metalness' in m)) continue;
+    if (m.userData.__originalMetalness === undefined) m.userData.__originalMetalness = m.metalness ?? 0;
+    m.metalness = value ?? m.userData.__originalMetalness;
+  }
+}
+
+// Whether the two above can do anything on this asset — a lit material has both
+// and an unlit one has neither, so this is one question, not two. The panel
+// uses it to leave the rows out rather than show two sliders that move nothing.
+export function supportsSurface(key) {
+  return getAssetMaterials(key).some((m) => 'roughness' in m);
+}
+
+// ---------------------------------------------------------------------------
+// THE RIM — the other look that was code-only.
+//
+// Keyed by asset, holding the ONE material every shell of that asset draws with
+// (see the call in prepareModel) plus the block the entry declared, which is
+// what a reset goes back to.
+// ---------------------------------------------------------------------------
+const outlineMaterials = new Map();
+
+export function assetOutlineBase(key) {
+  return outlineMaterials.get(key)?.base ?? null;
+}
+
+export function hasOutline(key) {
+  return outlineMaterials.has(key);
+}
+
+/**
+ * Recolour / resize an asset's rim. Any field left undefined falls back to what
+ * the entry declared, so this is also the reset.
+ *
+ * COLOUR AND GLOW ARE ONE WRITE, not two, because the shell has no separate
+ * intensity: `glow` is the colour multiplied past 1.0, which only means
+ * anything because the scene renders to an HDR target — the bright pass then
+ * sees the true value instead of a pre-clamped white. Setting them separately
+ * would mean the second write undoing the first, which is exactly the bug
+ * makeOutlineMaterial's own note is about.
+ *
+ * THICKNESS IS IN THE SOURCE FILE'S UNITS, not the world's — the shader offsets
+ * in object space. That is why the boats sit at 0.02 and the seagull at 0.71:
+ * one is a 73-unit FBX and the other is not. A number copied between two
+ * species is almost always wrong, which is why the panel prints the current one
+ * rather than starting every asset from a shared default.
+ */
+export function setAssetOutline(key, { color, thickness, glow } = {}) {
+  const entry = outlineMaterials.get(key);
+  if (!entry) return false;
+  const { material, base } = entry;
+  const c = color ?? base.color ?? 0x000000;
+  const g = Math.max(0, glow ?? base.glow ?? 1);
+  material.color.set(c).multiplyScalar(g);
+  setOutlineThicknessOn(material, thickness ?? base.thickness ?? 0.03);
+  return true;
 }
 
 export function supportsEmissive(key) {

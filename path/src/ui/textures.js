@@ -3,6 +3,8 @@ import {
   setAssetEmissive, setAssetGlow, supportsEmissive, getAssetSizeMultiplier,
   loadUploadedAsset, isSpriteFile, setAssetEmissiveMask, assetEmissiveMaskState,
   lookLeader, glowIsProcedural, assetGlowPreset,
+  setAssetRoughness, setAssetMetalness, supportsSurface,
+  setAssetOutline, hasOutline, assetOutlineBase,
 } from '../assets.js';
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
 import { CONFIG, TUNER_SCHEMA, SKIN_SECTION, saveTuningToStorage } from '../config.js';
@@ -148,8 +150,15 @@ const UPGRADE_SECTIONS = [
 
 
 const STYLES = `
-  .sv-tex { position: fixed; top: 0; left: 0; bottom: 0; width: 300px; z-index: 30;
-    background: rgba(10,12,18,0.94); border-right: 1px solid rgba(255,255,255,0.12);
+  /* RIGHT, and the reason is which OTHER panel it has to coexist with. The
+     upgrade debug panel (U) is left:12px and up to 40vw wide at z-index 32, so
+     on the left this one is simply buried whenever U is open — and reading a
+     card's numbers against the model it belongs to means having both up. The
+     tuner (\`) and the text panel (Y) are the right-hand neighbours it now
+     stacks with instead, which is the trade: those are each a whole editing
+     session of their own and are rarely wanted at the same time as this. */
+  .sv-tex { position: fixed; top: 0; right: 0; bottom: 0; width: 300px; z-index: 30;
+    background: rgba(10,12,18,0.94); border-left: 1px solid rgba(255,255,255,0.12);
     backdrop-filter: blur(10px); color: #e8ecf3; font-family: 'Inter', system-ui, sans-serif;
     display: flex; flex-direction: column; }
   .sv-tex.sv-hidden { display: none; }
@@ -192,6 +201,20 @@ const STYLES = `
     border-radius: 5px; background: none; padding: 0; cursor: pointer; }
   .sv-tex-variant-name { font-size: 9px; color: rgba(232,236,243,0.45); flex-shrink: 0; min-width: 62px; text-align: right; }
   .sv-tex-upload-status { font-size: 9px; color: rgba(232,236,243,0.45); margin-top: 4px; line-height: 1.4; }
+  /* SURFACE — folded away by default. These are the last knobs anyone reaches
+     for on a creature (tint and texture are the first two), and unfolded they
+     would add five rows to all 48 models, turning a scrollable tab into an
+     unscrollable one. A native <details> rather than buildSection's collapsible:
+     that one is a PANEL-level header with its own open-state persistence and
+     colour rail, and nesting it three deep inside a row reads as a mistake. */
+  .sv-tex-surface { margin-top: 8px; }
+  .sv-tex-surface > summary { font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: rgba(232,236,243,0.42); cursor: pointer; list-style: none; padding: 3px 0;
+    user-select: none; }
+  .sv-tex-surface > summary::-webkit-details-marker { display: none; }
+  .sv-tex-surface > summary::before { content: '▸ '; color: rgba(232,236,243,0.3); }
+  .sv-tex-surface[open] > summary::before { content: '▾ '; }
+  .sv-tex-surface > summary:hover { color: rgba(232,236,243,0.72); }
   .sv-up-text { flex: 1; background: rgba(255,255,255,0.06); color: #e8ecf3; font-family: inherit;
     border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 3px 6px; font-size: 10px; min-width: 0; }
   /* The read-only twin of .sv-up-text — same size and rhythm so the Upgrades
@@ -454,6 +477,27 @@ function reapplyLook(key, look) {
   // Explicit choices only — null means "follow the global", and re-pushing it
   // would pin the model to whatever the global happened to be at the time.
   if (look.emissiveMask != null) setAssetEmissiveMask(key, look.emissiveMask);
+  // Same rule for the surface: null is "the model's own", and the setters read
+  // that from the material the first time they touch it, so pushing a null here
+  // would pin the new model to the OLD one's roughness — the swap's whole point
+  // being that the two are different files.
+  if (look.roughness != null) setAssetRoughness(key, look.roughness);
+  if (look.metalness != null) setAssetMetalness(key, look.metalness);
+  applyOutlineLook(key, look);
+}
+
+// The rim is one write, not three: `glow` is the colour multiplied past 1.0, so
+// setting them separately means each undoing the last. Skipped entirely when
+// the look holds none of the three, so an asset with a declared outline and no
+// tuning keeps exactly the literals in its ASSETS entry.
+function applyOutlineLook(key, look) {
+  if (!look) return;
+  if (look.outlineColor == null && look.outlineThickness == null && look.outlineGlow == null) return;
+  setAssetOutline(key, {
+    color: look.outlineColor ?? undefined,
+    thickness: look.outlineThickness ?? undefined,
+    glow: look.outlineGlow ?? undefined,
+  });
 }
 
 // The stored look for `key` — which for a FOLLOWER is its leader's, not one of
@@ -471,9 +515,127 @@ function lookState(key) {
       // null = follow CONFIG.glow.emissiveMaps; true/false = this model
       // overrides it. See setAssetEmissiveMask.
       emissiveMask: null,
+      // SURFACE AND RIM. All null, and null means "whatever the model or the
+      // ASSETS entry already said" — not a neutral value. There isn't one:
+      // 0 is a legitimate metalness and so is 1, and an outline thickness is in
+      // the source file's units, so no default is right for two assets at once.
+      // The setters stash what they found on the first write, which is what
+      // makes clearing these a real undo rather than a guess.
+      roughness: null, metalness: null,
+      outlineColor: null, outlineThickness: null, outlineGlow: null,
     };
   }
   return CONFIG.assetLooks[key];
+}
+
+// One labelled slider that writes `look[field]` and pushes it through `push`.
+//
+// The readout prints "model's own" until the slider is touched, which is the
+// whole difference between these rows and every other slider on the panel:
+// null here is not zero, it is "whatever the file said", and a row that opened
+// showing 0.00 would claim a value the asset does not have. See the null note
+// on lookState's defaults.
+function surfaceSlider(look, field, { label, min, max, step, format }, push) {
+  const row = document.createElement('div');
+  row.className = 'sv-tex-glowrow';
+  const name = document.createElement('label');
+  name.textContent = label;
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = String(min); slider.max = String(max); slider.step = String(step);
+  const val = document.createElement('span');
+  val.className = 'sv-tex-variant-name';
+
+  const current = look[field];
+  // Parked at the middle when untouched, so the handle is not sitting on a
+  // number the creature is not at. Anywhere would be a lie; the middle is the
+  // one that does not look like a reading.
+  slider.value = String(current ?? (min + max) / 2);
+  val.textContent = current == null ? "model's own" : format(current);
+
+  slider.addEventListener('input', () => {
+    look[field] = Number(slider.value);
+    val.textContent = format(look[field]);
+    push(look[field]);
+    saveTuningToStorage();
+  });
+  row.append(name, slider, val);
+  return row;
+}
+
+/**
+ * The folded Surface block: roughness/metalness for the body, colour, width
+ * and glow for the rim. Returns null when an asset has neither — most sprites
+ * and every procedural shape — rather than a header over an empty box.
+ */
+function buildSurfaceBlock(key, look) {
+  const lit = supportsSurface(key);
+  const rim = hasOutline(key);
+  if (!lit && !rim) return null;
+
+  const box = document.createElement('details');
+  box.className = 'sv-tex-surface';
+  const head = document.createElement('summary');
+  head.textContent = lit && rim ? 'Surface & rim' : (lit ? 'Surface' : 'Rim');
+  box.appendChild(head);
+
+  if (lit) {
+    box.append(
+      surfaceSlider(look, 'roughness', {
+        label: 'Rough', min: 0, max: 1, step: 0.01,
+        format: (v) => v.toFixed(2),
+      }, (v) => setAssetRoughness(key, v)),
+      surfaceSlider(look, 'metalness', {
+        label: 'Metal', min: 0, max: 1, step: 0.01,
+        format: (v) => v.toFixed(2),
+      }, (v) => setAssetMetalness(key, v)),
+    );
+  }
+
+  if (rim) {
+    const base = assetOutlineBase(key) ?? {};
+    const pushRim = () => applyOutlineLook(key, look);
+
+    const colorRow = document.createElement('div');
+    colorRow.className = 'sv-tex-glowrow';
+    const colorLabel = document.createElement('label');
+    colorLabel.textContent = 'Rim';
+    const swatch = document.createElement('input');
+    swatch.type = 'color';
+    swatch.value = `#${(look.outlineColor ?? base.color ?? 0).toString(16).padStart(6, '0')}`;
+    swatch.addEventListener('input', () => {
+      look.outlineColor = parseInt(swatch.value.slice(1), 16);
+      pushRim();
+      saveTuningToStorage();
+    });
+    colorRow.append(colorLabel, swatch);
+    box.appendChild(colorRow);
+
+    // THICKNESS IS IN THE SOURCE FILE'S UNITS, which is why this range is built
+    // around the asset's OWN value rather than being a shared 0..1. The shader
+    // offsets in object space, so the boats sit at 0.02 and the seagull at 0.71
+    // — a fixed range would give one of them a slider with no usable travel and
+    // the other a slider that is all travel. 4x its own number, so the current
+    // setting lands a quarter of the way along and there is room both ways.
+    const declared = base.thickness ?? 0.03;
+    box.appendChild(surfaceSlider(look, 'outlineThickness', {
+      label: 'Width', min: 0, max: Math.max(0.01, declared * 4), step: declared / 100,
+      format: (v) => v.toFixed(v < 0.1 ? 4 : 2),
+    }, pushRim));
+
+    box.appendChild(surfaceSlider(look, 'outlineGlow', {
+      label: 'Rim glow', min: 0, max: 4, step: 0.05,
+      format: (v) => `${v.toFixed(2)}x`,
+    }, pushRim));
+
+    const note = document.createElement('div');
+    note.className = 'sv-tex-upload-status';
+    note.textContent = `Width is in the model file's units, not the world's — this one ships at ${declared}. `
+      + 'Rim glow pushes the colour past 1.0 so the bloom pass haloes it; 1 is a flat border.';
+    box.appendChild(note);
+  }
+
+  return box;
 }
 
 function buildCreatureRow(key, label, onAssetChanged) {
@@ -481,6 +643,10 @@ function buildCreatureRow(key, label, onAssetChanged) {
 
   const el = document.createElement('div');
   el.className = 'sv-tex-row';
+  // Which asset this row edits, on the element. The label is a human name and
+  // several of them start with the same word, so it is not an identifier —
+  // tools/surface-panel-test.mjs needs to find one specific row's controls.
+  el.dataset.key = key;
 
   const nameRow = document.createElement('div');
   nameRow.className = 'sv-tex-name';
@@ -730,6 +896,17 @@ function buildCreatureRow(key, label, onAssetChanged) {
     : 'none — set one in assets.csv (npm run csv), then reload';
   skinRow.append(skinLabel, skinVal);
 
+  // --- SURFACE & RIM --------------------------------------------------------
+  //
+  // The two looks that were code-only until now: how the body answers the key
+  // light (`material` in the ASSETS entry — ten of them set it, everything else
+  // inherits whatever its file shipped with) and the inverted-hull rim
+  // (`outline`, on thirteen). Neither had a control anywhere, so the way to
+  // find out what a rougher shark looked like was to edit assets.js and reload.
+  //
+  // Folded away, because they are genuinely the third thing you reach for.
+  const surfaceEl = buildSurfaceBlock(key, look);
+
   // 3D model / 2D sprite upload — replaces this asset's mesh with an uploaded
   // .glb / .gltf / .fbx, or with a flat quad cut to an uploaded image's aspect
   // ratio. Saved to IndexedDB (not localStorage — a model is megabytes, well
@@ -806,7 +983,9 @@ function buildCreatureRow(key, label, onAssetChanged) {
   });
   modelRow.append(modelLabel, modelBtn, modelClear, modelFile);
 
-  el.append(sizeDivider, sizeRow, skinRow, modelRow, modelStatus);
+  el.append(sizeDivider, sizeRow, skinRow);
+  if (surfaceEl) el.append(surfaceEl);
+  el.append(modelRow, modelStatus);
 
   // Restore a model uploaded in a previous session.
   loadModelFromDB(key).then((file) => {
@@ -826,6 +1005,15 @@ function buildCreatureRow(key, label, onAssetChanged) {
     // It also has no controls left here to clear.
     if (emissiveSwatch) { setAssetEmissive(key, null); emissiveSwatch.value = '#000000'; }
     if (glowSlider) { setAssetGlow(key, null); glowSlider.value = '1'; }
+    // SURFACE AND RIM GO BACK TO THE FILE, not to a neutral. Null is what the
+    // setters read as "the value you found the first time", so this restores
+    // the model's own roughness and the ASSETS entry's own rim rather than
+    // flattening every creature to 0.5/0/black. The rows themselves are rebuilt
+    // by onAssetChanged below, which is what puts "model's own" back in their
+    // readouts.
+    setAssetRoughness(key, null);
+    setAssetMetalness(key, null);
+    setAssetOutline(key, {});
     // The LEADER's entry, so resetting a follower's row clears the look it was
     // actually editing rather than deleting an empty object beside it and
     // leaving the colour on screen. See lookState.
