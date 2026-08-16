@@ -186,8 +186,31 @@ const FITTED = [
   ['bakalar bands', CONFIG.bakalar.beam.bandSync, fromPerSecond(CONFIG.bakalar.beam.bandSpeed)],
 ];
 
+// EFFECTS DELIBERATELY PUT ON A DIVISION THEIR FREE RATE DOES NOT IMPLY.
+//
+// Both checks below compare the chosen division against the one the authored
+// free-running rate is nearest to, which is the right question exactly once: as
+// a typo guard, when the division was meant to leave the pace alone. A division
+// is a dropdown, and picking a slower one on purpose is a normal thing to do —
+// it just cannot be told apart from picking the wrong one by arithmetic.
+//
+// So the exception is named rather than the threshold loosened. Widening 1.45x
+// far enough to admit emberClaw's 8x would stop catching anything at all; this
+// way every other row is still held to the tight fit, and a new mismatch shows
+// up as a failure rather than as one more reason to relax the number.
+//
+// emberClaw flicker: rate 1.75/s (0.57s) locked to 2 bars (4.57s). The ember
+// crabs arrive as a swarm and the flicker is what makes the mass pulse together
+// — on its free rate that is a shimmer, and on two bars it is the whole seabed
+// breathing with the music, which is the point of the school.
+const DELIBERATE_RETIMES = new Set(['emberClaw flicker']);
+
 for (const [label, division, freeSeconds] of FITTED) {
   const want = nearestDivision(freeSeconds);
+  if (DELIBERATE_RETIMES.has(label)) {
+    console.log(`  ----  ${label}: ${division} — retimed on purpose, free rate implies ${want}`);
+    continue;
+  }
   check(`${label}: ${division}`, division === want,
     `free cycle ${freeSeconds.toFixed(2)}s, nearest ${want} (${divisionSeconds(want).toFixed(2)}s)`);
 }
@@ -195,10 +218,21 @@ for (const [label, division, freeSeconds] of FITTED) {
 // The fit is only meaningful if it is actually close. A "nearest" that is 3x
 // out is a retimed effect being reported as an unchanged one.
 for (const [label, division, freeSeconds] of FITTED) {
+  if (DELIBERATE_RETIMES.has(label)) continue;
   const secs = divisionSeconds(division);
   const ratio = secs > 0 ? Math.max(secs / freeSeconds, freeSeconds / secs) : Infinity;
   check(`${label} kept its pace`, ratio < 1.45,
     `${freeSeconds.toFixed(2)}s -> ${secs.toFixed(2)}s (${ratio.toFixed(2)}x)`);
+}
+
+// The exception list must not outlive what it excuses. A label that stops
+// existing — a preset renamed, a flicker switched off — would otherwise sit
+// here silently excusing nothing, and the next effect to take that name would
+// inherit the pass.
+for (const label of DELIBERATE_RETIMES) {
+  const live = FITTED.some(([l]) => l === label);
+  check(`${label} is still a real row`, live,
+    live ? 'still in FITTED' : 'nothing in FITTED carries this label any more — drop it from the list');
 }
 
 // --- wiring ----------------------------------------------------------------

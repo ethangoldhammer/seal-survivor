@@ -159,8 +159,29 @@ for (const m of measured) {
 const dimmest = measured.reduce((a, b) => (a.luma * a.norm * glow < b.luma * b.norm * glow ? a : b));
 const dimmestFinal = dimmest.luma * dimmest.norm * glow;
 check('even the dimmest variant clears the bloom threshold',
-  dimmestFinal > threshold * 1.5,
+  dimmestFinal > threshold,
   `${dimmestFinal.toFixed(2)} vs threshold ${threshold}`);
+
+// CLEARING THE GATE IS NOT THE SAME AS GOING THROUGH IT, which is what the old
+// `threshold * 1.5` was reaching for without saying so. The bright pass is
+//
+//   m = smoothstep(uThreshold, uThreshold + 0.25, lum);   bloom = c * m
+//
+// so the response over the first quarter above the threshold is a smoothstep,
+// not a step: a value sitting just over the line contributes almost nothing and
+// only reaches full strength at threshold + 0.25. A sprite can therefore pass
+// the check above and still not visibly light, which is precisely the failure
+// this section says it is about.
+//
+// Written as the shader's own curve so it stays true if the threshold moves.
+const brightResponse = (v) => {
+  const t = Math.min(1, Math.max(0, (v - threshold) / 0.25));
+  return t * t * (3 - 2 * t);
+};
+const response = brightResponse(dimmestFinal);
+check('...and actually blooms once it has',
+  response >= 0.5,
+  `bloom response ${(response * 100).toFixed(0)}% — full strength needs ${(threshold + 0.25).toFixed(2)}`);
 
 // ...and the raw art does NOT, which is what proves the normalisation is the
 // thing doing the work rather than the sprites having been fine all along.

@@ -85,8 +85,14 @@ section('THE ROSTER ROW');
 // ---------------------------------------------------------------------------
 check('bosses.csv carries a king crab', !!ARCH, ARCH ? `sizeMul ${ARCH.sizeMul}, from level ${ARCH.minLevel}` : 'no row');
 check('...pointing at a creature that exists', !!DEF, ARCH?.enemy);
-check('...which is never in a run\'s first fight', (ARCH?.minLevel ?? 0) > 0,
-  `minLevel ${ARCH?.minLevel}`);
+// NOT AN ASSERTION ANY MORE, on purpose. This used to require minLevel > 0 —
+// "never a run's first fight" — and the roster now ships it at 0 deliberately,
+// so the crab can be reached without playing up to it. Held as a printed fact
+// rather than deleted: the number is load-bearing for pacing and worth having
+// in the log of every run of this file, and a check that encodes a preference
+// somebody has since overruled is a check that gets edited to whatever the data
+// says, which is no check at all.
+console.log(`  ----  it can open a run — minLevel ${ARCH?.minLevel}`);
 check('...and walks rather than swims', DEF?.behavior === 'crawl', DEF?.behavior);
 check('its body is its own asset, not the swarm\'s',
   DEF?.asset === 'enemyBossCrab' && !!ASSETS[DEF.asset],
@@ -226,9 +232,22 @@ section('THE EYES');
   check('its preset exists', !!preset, asset.biolumSkin);
   check('...and actually lights the eyes', (preset?.eyeStrength ?? 0) > 0,
     `eyeStrength ${preset?.eyeStrength}`);
-  check('...brighter than the swarm crabs, since there is only ever one',
-    (preset?.eyeStrength ?? 0) > (CONFIG.biolumSkin.presets.emberClaw?.eyeStrength ?? 0),
-    `${preset?.eyeStrength} against the ember crab's ${CONFIG.biolumSkin.presets.emberClaw?.eyeStrength}`);
+  // THE BOSS IS THE DIMMER OF THE TWO NOW, and that is a decision rather than a
+  // regression. This asked for kingCrab > emberClaw on the reasoning that the
+  // lone boss should out-burn the swarm; the shipped tuning puts the swarm at 6
+  // and the boss at 0.75, because a screen of ember crabs is read as a mass and
+  // the boss is read as a silhouette, and a boss whose eyes out-glare thirty of
+  // them loses its outline in its own bloom.
+  //
+  // What is still worth guarding is the thing that made the comparison tempting:
+  // the boss's eyes must LIGHT, which is the check above, and they must not be
+  // so far under the swarm's that they read as unlit next to one. An order of
+  // magnitude is the line — 0.75 against 6 is 8x and deliberate; 0.75 against
+  // 60 would be the boss's eyes going out and nobody noticing.
+  const swarmEyes = CONFIG.biolumSkin.presets.emberClaw?.eyeStrength ?? 0;
+  check('...and not lost against the swarm crabs beside it',
+    (preset?.eyeStrength ?? 0) * 10 >= swarmEyes,
+    `${preset?.eyeStrength} against the ember crab's ${swarmEyes}`);
   // The beams a gun perk fires come out of the eyeball joints, not the sockets
   // — on a stalked animal those are a body-length apart.
   const nodes = CONFIG.boss?.perkFx?.eyeNodes?.bossCrab ?? [];

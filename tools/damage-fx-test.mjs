@@ -335,8 +335,24 @@ section('RIM — the flash');
     `${graze.red.toFixed(2)} vs ${full.red.toFixed(2)}`);
   check('a bigger hit blows out brighter', full.glow > graze.glow * 1.05,
     `${graze.glow.toFixed(2)} -> ${full.glow.toFixed(2)}`);
-  check('...and burns longer', full.life > graze.life * 1.5,
+  // HOW MUCH LONGER IS THE CONFIG'S TO SAY, not this file's. The flash is a lerp
+  // between `minTime` and `time`, so the widest spread that can ever exist is
+  // their ratio — 0.24/0.18, about 1.33x, as shipped. The old assertion asked
+  // for 1.5x, which those two numbers make arithmetically unreachable: it was
+  // calibrated against an earlier pair and turned into a demand that the flash
+  // outrun its own configuration.
+  //
+  // Derived from the config instead, which is strictly the stronger test. It
+  // still fails if a big hit stops lasting longer than a graze, AND it now also
+  // fails if the effect stops spanning the range it was given — a collapse the
+  // fixed 1.5x could not have seen, because any tuning that narrowed minTime
+  // and time together would sail through it.
+  const spreadCeiling = HIT.time / HIT.minTime;
+  const spread = graze.life > 0 ? full.life / graze.life : Infinity;
+  check('...and burns longer', full.life > graze.life * 1.1,
     `${graze.life.toFixed(3)}s -> ${full.life.toFixed(3)}s`);
+  check('...spanning the range minTime..time allows', spread >= spreadCeiling * 0.9,
+    `${spread.toFixed(2)}x of a possible ${spreadCeiling.toFixed(2)}x`);
   check('a graze still lasts at least minTime', graze.life >= HIT.minTime - 1 / 120,
     `${graze.life.toFixed(3)}s vs ${HIT.minTime}s`);
 }

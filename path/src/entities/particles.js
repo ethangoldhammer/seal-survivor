@@ -65,13 +65,14 @@ const vertexShaderFor = (goo) => /* glsl */ `
   attribute float aDrag;
   attribute float aTurb;    // how hard the current takes this one
   attribute float aClip;    // 1 = die at the water line rather than sail through it
-  attribute float aGoo;     // 1 = belongs to the goo layer, not the sprite layer
+  attribute float aGoo;     // 0 = a sprite; 1..n = which goo GROUP it belongs to
 
   uniform float uTime;
   uniform float uScale; // device pixels per world unit
   uniform vec3 uTurb;   // x = strength, y = spatial frequency, z = time scale
   ${goo
-    ? 'uniform float uGooRadius; // splat diameter, x the particle\'s own size'
+    ? `uniform float uGooRadius; // splat diameter, x the particle's own size
+  uniform float uGroup;     // which group this draw is rendering`
     : 'uniform float uGooHide;   // 1 while the goo pass is drawing them instead'}
 
   // The water line, transcribed from WAVE in arena.js — see grid.js for the
@@ -123,7 +124,13 @@ ${TURBULENCE_GLSL}
     // effect switched off, nobody would be drawing them and a kill burst would
     // simply be invisible — the failure mode of a look toggle should be the old
     // look, not a missing one.
-    ${goo ? 'alive *= aGoo;' : 'alive *= 1.0 - aGoo * uGooHide;'}
+    // One draw per group, each keeping only its own: two substances that want
+    // different surfaces (blood is thick and opaque, foam is thin and glowing)
+    // cannot share one threshold, and summing them into one field would weld
+    // them to each other as well.
+    ${goo
+      ? 'alive *= 1.0 - step(0.5, abs(aGoo - uGroup));'
+      : 'alive *= 1.0 - step(0.5, aGoo) * uGooHide;'}
 
     // Park dead points outside the frustum so they never rasterise.
     pos.z -= (1.0 - alive) * 100000.0;
@@ -212,15 +219,58 @@ let gooMat = null;
 let gooRoot = null;
 let gooDivisor = 2;
 let pixelScale = 40;
-// When the last goo particle in flight dies. Everything the goo pass does is
-// skipped outright before this — no target bind, no clear, no fullscreen quad —
-// so a run with no kills on screen pays nothing at all for the effect.
-let gooUntil = -1;
+// When the last particle of each group dies, keyed by group NAME. Everything
+// the goo pass does is skipped outright before that — no target bind, no clear,
+// no fullscreen quad — so a group with nothing in flight costs nothing, and a
+// run with none of them on screen costs nothing at all.
+const gooUntil = new Map();
 
 function gooSettings() {
   const g = CONFIG.fx?.goo;
-  if (!g || g.enabled === false) return null;
+  if (!g || g.enabled === false || !g.groups) return null;
   return g;
+}
+
+// Groups are addressed by NAME everywhere outside this file — an emitter says
+// `goo: 'foam'` — and by INDEX inside it, because the flag rides in a float
+// attribute. 0 is reserved for "not goo", so the index is the key's position
+// plus one. Order is the object's key order, which is also the order they
+// composite in: a later group lands on top of an earlier one.
+function gooGroupNames() {
+  const g = gooSettings();
+  return g ? Object.keys(g.groups) : [];
+}
+
+// `goo: true` means the first group — the default surface, which is what the
+// whole feature was before groups existed. Emitters written against that
+// spelling (and any written in another session while this one was in flight)
+// keep working without knowing groups happened.
+function gooGroupName(def) {
+  if (def.goo === true) return gooGroupNames()[0];
+  return def.goo;
+}
+
+// A group is a DIFF against CONFIG.fx.goo's own keys — see the note there.
+// Resolved fresh on every use rather than merged once at boot, because both
+// halves are live tuner values.
+function gooSurface(name) {
+  const g = gooSettings();
+  if (!g) return null;
+  const { groups, enabled, divisor, ...defaults } = g;
+  return { ...defaults, ...(groups[name] ?? {}) };
+}
+
+/**
+ * The groups with something alive in them right now, in composite order.
+ * post.js is the only caller; an empty array is the fast path.
+ */
+export function activeGooGroups() {
+  if (!gooRoot || !gooSettings()) return [];
+  const out = [];
+  gooGroupNames().forEach((name, i) => {
+    if (clock < (gooUntil.get(name) ?? -1)) out.push({ name, index: i + 1, def: gooSurface(name) });
+  });
+  return out;
 }
 
 const attrs = {};
@@ -371,6 +421,7 @@ export function initParticles(scene) {
       uWaveAmp: material.uniforms.uWaveAmp,
       uChop: material.uniforms.uChop,
       uGooRadius: { value: 3.2 },
+      uGroup: { value: 1 },
     },
   });
 
@@ -386,7 +437,7 @@ export function initParticles(scene) {
 
 export function disposeParticles(scene) {
   tracked.length = 0;
-  gooUntil = -1;
+  gooUntil.clear();
   if (!points) return;
   scene.remove(points);
   geometry.dispose();
@@ -401,11 +452,11 @@ export function disposeParticles(scene) {
 }
 
 /**
- * The goo layer, for systems/post.js — the only caller. Returns null when the
- * effect is off or nothing goopy is in flight, which is the fast path.
+ * The scene and material post.js draws a group with. Whether there is anything
+ * to draw is `activeGooGroups()`; this is just the objects.
  */
 export function gooLayer() {
-  if (!gooRoot || !gooSettings() || clock >= gooUntil) return null;
+  if (!gooRoot) return null;
   return { scene: gooRoot, material: gooMat };
 }
 
@@ -480,7 +531,15 @@ export function emit(name, x, y, opts = {}) {
 
   // A goo emitter's particles are drawn by the density pass instead of as
   // sprites — but only while that pass is running. See uGooHide in the shader.
-  const isGoo = def.goo && gooSettings() ? 1 : 0;
+  //
+  // An emitter naming a group that does not exist falls back to a SPRITE burst
+  // rather than to group 0 or to silence: a typo in a name should cost the look
+  // of one emitter, not delete the burst it belongs to.
+  const wantsGroup = def.goo && gooSettings() ? gooGroupName(def) : null;
+  const gooGroup = wantsGroup ? gooGroupNames().indexOf(wantsGroup) + 1 : 0;
+  if (wantsGroup && gooGroup === 0) {
+    console.warn(`[particles] emitter "${name}" wants goo group "${def.goo}", which is not in CONFIG.fx.goo.groups`);
+  }
 
   const color = new THREE.Color();
 
@@ -579,11 +638,11 @@ export function emit(name, x, y, opts = {}) {
     attrs.aDrag.array[idx] = drag;
     attrs.aTurb.array[idx] = turb;
     attrs.aClip.array[idx] = clipsAtSurface ? 1 : 0;
-    attrs.aGoo.array[idx] = isGoo;
+    attrs.aGoo.array[idx] = gooGroup;
     // Measured from the LONGEST life this burst rolled, not the emitter's
     // figure: the pass has to still be running on the frame the last blob
     // actually dies, or the goo vanishes a few frames early and reads as a pop.
-    if (isGoo) gooUntil = Math.max(gooUntil, clock + life);
+    if (gooGroup) gooUntil.set(wantsGroup, Math.max(gooUntil.get(wantsGroup) ?? -1, clock + life));
 
     // The shader kills every flagged particle at the surface no matter what;
     // this list is only about the BURST one leaves behind, which needs a
@@ -690,9 +749,10 @@ export function updateParticles(dt) {
     u.uWaveAmp.value = sea.amp;
     u.uChop.value = sea.chop;
 
-    const goo = gooSettings();
-    u.uGooHide.value = goo ? 1 : 0;
-    if (gooMat) gooMat.uniforms.uGooRadius.value = goo?.radius ?? 3.2;
+    // The sprite pass hides every goo particle whenever the effect is on at
+    // all — post.js draws each group in turn. With it off they come straight
+    // back as ordinary sprites, which is what makes the toggle safe mid-flight.
+    u.uGooHide.value = gooSettings() ? 1 : 0;
   }
   updateSurfacePops();
 }
@@ -709,7 +769,7 @@ export function resetParticles() {
   markWhole(attrs.aStart);
   cursor = 0;
   tracked.length = 0;
-  gooUntil = -1;
+  gooUntil.clear();
 }
 
 export function particleCount() {

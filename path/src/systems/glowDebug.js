@@ -157,6 +157,56 @@ export function glowHeadroom(cfg = {}) {
 }
 
 /**
+ * The same breath, measured where an overdriven preset actually shows it: in
+ * the BLOOM, not in the core.
+ *
+ * glowHeadroom above is the whole story only while the core is near 1. Push
+ * `strength` well past it — which the shipped presets deliberately do — and the
+ * core is white at both ends of the cycle, so `crosses` goes false and the
+ * breath reads as dead. It is not. The scene target is HalfFloat precisely so
+ * an emissive value can exceed 1 and survive to the bright pass (see the note
+ * over createPost in systems/post.js), and what happens there is:
+ *
+ *   m = smoothstep(threshold, threshold + 0.25, luminance(c));  bloom = c * m
+ *
+ * Once luminance clears `threshold + 0.25`, m is 1 and the bright pass passes
+ * the colour through UNCHANGED — so the halo's brightness stays linear in the
+ * core's, all the way up, and a breath the core can no longer show is carried
+ * at full depth by the glow around it.
+ *
+ * TWO WEIGHTINGS, AND THEY ARE NOT INTERCHANGEABLE. This gate is Rec.709
+ * LUMINANCE, so blue counts for 0.0722 and a cold preset clears it far later
+ * than its peak channel suggests. glowHeadroom and the composite's knee both
+ * use the PEAK channel instead, because what they ask is whether a channel
+ * truncates. Measuring this one on peak would report a blue glow blooming that
+ * in fact never crosses the gate.
+ */
+export function glowBloomSwing(cfg = {}, bloom = {}) {
+  const strength = (cfg.strength ?? 1.6) * (cfg.glow ?? 1);
+  const amp = cfg.pulseAmp ?? 0;
+  const lumOf = (hex = 0) => (0.2126 * ((hex >> 16) & 255) + 0.7152 * ((hex >> 8) & 255)
+    + 0.0722 * (hex & 255)) / 255;
+  const lum = Math.max(lumOf(cfg.colorA ?? 0), lumOf(cfg.colorB ?? 0), lumOf(cfg.colorC ?? 0));
+  const threshold = bloom.threshold ?? 0.58;
+  // The shader's smoothstep, verbatim — a near-miss here would misreport
+  // exactly the dim presets this is meant to adjudicate.
+  const m = (v) => {
+    const t = Math.min(1, Math.max(0, (v - threshold) / 0.25));
+    return t * t * (3 - 2 * t);
+  };
+  const lo = strength * (1 - amp) * lum;
+  const hi = strength * (1 + amp) * lum;
+  const driveLo = lo * m(lo);
+  const driveHi = hi * m(hi);
+  // A ratio, not a difference: what the eye reads in a halo is proportional.
+  // `Infinity` is the genuinely good case of a breath whose bottom end sits
+  // under the gate entirely — the glow switching off and on rather than
+  // swelling — so it is not clamped away.
+  const ratio = driveLo > 0 ? driveHi / driveLo : (driveHi > 0 ? Infinity : 1);
+  return { driveLo, driveHi, ratio };
+}
+
+/**
  * How much of the pattern's SHAPE survives the clip.
  *
  * The breath is not the only casualty of an over-bright core. `bioMaskV` is the

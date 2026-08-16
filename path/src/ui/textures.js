@@ -367,9 +367,9 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
   // panels is a one-line change in TUNER_SCHEMA and can't leave it homeless.
   for (const [tag, id, blurb] of [
     ['companions', '#svTexPanelCompanions',
-      'Every ability that fights alongside you — orbit, reach, damage and cooldown. Which upgrade card grants each one is on the Upgrades tab; its model and colour are on Models.'],
+      'Every ability that fights alongside you — orbit, reach, damage and cooldown. Which upgrade card grants each one is on the Upgrades tab; its model and colour are on Models. The camera punch the food chain fires is under Camera in the ` panel, with the rest of the camera.'],
     ['enemies', '#svTexPanelEnemies',
-      'What spawns, how often, how early, and how it behaves. Set a spawn rate to 0 to switch a creature off entirely.'],
+      'What spawns, how often, how early, and how it behaves. Set a spawn rate to 0 to switch a creature off entirely. The kill shot’s push-in and its trophy photo are under Camera in the ` panel.'],
   ]) {
     const el = panel.querySelector(id);
     const note = document.createElement('div');

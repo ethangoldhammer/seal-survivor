@@ -122,6 +122,14 @@ function run(hull, o, seconds, dt = 1 / 60) {
         vx: attrs.aVelocity.array[i * 3],
         vy: attrs.aVelocity.array[i * 3 + 1],
         clip: attrs.aClip.array[i],
+        // WHICH LAYER IT IS DRAWN BY, and how big it draws. A goo particle
+        // (aGoo > 0) is not a sprite: it is splatted into the density field at
+        // `size x the group's radius`, which for the foam is nearly a unit
+        // where a bubble is a fifth of one. Every overlap check below has to
+        // use that, or it is measuring a point against a hull the particle is
+        // painting a third of itself across.
+        goo: attrs.aGoo.array[i],
+        size: attrs.aSize.array[i],
         // Enough to re-solve the whole flight — see `solve`.
         drag: attrs.aDrag.array[i],
         life: attrs.aLife.array[i],
@@ -158,6 +166,18 @@ function solve(p, age) {
   return [p.x + p.vx * f, p.y + p.vy * f + 0.5 * p.gy * age * age];
 }
 
+// Half the width a particle actually DRAWS, in world units. A sprite is its own
+// size; a goo lobe is that times its group's splat radius. Read off the
+// particle rather than off the emitter, so a burst's size scatter is covered
+// and not just its top end.
+function drawnHalf(p) {
+  if (!(p.goo > 0)) return p.size * 0.5;
+  const goo = CONFIG.fx?.goo;
+  const name = Object.keys(goo?.groups ?? {})[p.goo - 1];
+  const radius = goo?.groups?.[name]?.radius ?? goo?.radius ?? 3;
+  return p.size * radius * 0.5;
+}
+
 const c = CONFIG.boatWake;
 // A rowboat and the boss yacht, as the two ends of the size range the effect
 // has to cover. Both measured the way the game measures them — see hullExtents
@@ -178,8 +198,14 @@ console.log(`  (speedRef ${c.speedRef}, churn ${c.churnPerSecond}/s, idle share 
   // The two halves, told apart by the clip flag — which is not a label the
   // system chose but the consequence of where each one was born, and therefore
   // the thing actually worth asserting on.
+  //
+  // THE FOAM IS A THIRD THING and has to come out of `spray` explicitly. It is
+  // born at the line and deliberately unflagged, so "unflagged" stopped meaning
+  // "bow wave" the day it was added — and every bow-wave assertion below would
+  // otherwise be testing lobes of foam sitting astern against rules written for
+  // drops thrown off the stem.
   const churn = parts.filter((p) => p.clip === 1);
-  const spray = parts.filter((p) => p.clip === 0);
+  const spray = parts.filter((p) => p.clip === 0 && !(p.goo > 0));
   check('churn was emitted at all', churn.length > 0, `${churn.length} emitted`);
   const above = churn.filter((p) => p.y >= p.surf);
   check('every churn bubble is born under the water line', above.length === 0,
@@ -205,7 +231,15 @@ for (const dir of [1, -1]) {
   const hull = {};
   const parts = run(hull, { x: 0, halfLength: ROWBOAT, dir, speed: 4.5, vx: 4.5 * dir }, 2);
   const churn = parts.filter((p) => p.clip === 1);
-  const spray = parts.filter((p) => p.clip === 0);
+  const spray = parts.filter((p) => p.clip === 0 && !(p.goo > 0));
+  const foam = parts.filter((p) => p.goo > 0);
+  // The foam belongs astern with the churn, so it gets the churn's rule rather
+  // than the spray's — and it is measured from its trailing EDGE, since that is
+  // the part that would be over the boat.
+  const foamBack = foam.map((p) => (-dir * p.x - drawnHalf(p)) / ROWBOAT);
+  check(`foam never gets ahead of the transom (dir ${dir > 0 ? '+x' : '-x'})`,
+    foam.length > 0 && foamBack.every((b) => b > 1),
+    `${foam.length} lobes, nearest edge ${Math.min(...foamBack).toFixed(2)} half-lengths aft`);
   // Measured in half-lengths back from the middle, which is the unit
   // churnFrom/churnTo are authored in.
   const back = churn.map((p) => (-dir * p.x) / ROWBOAT);
@@ -262,6 +296,11 @@ for (const [name, halfLength, speed] of [
   let worst = 0;
   let inside = 0;
   for (const p of parts) {
+    // The hull grows by however wide this particle draws, which is the same
+    // test as shrinking the particle to a point and is easier to read. For a
+    // bubble it is a couple of centimetres and changes nothing; for a foam lobe
+    // it is most of a unit and is the entire point of the check.
+    const half = drawnHalf(p);
     // Walked rather than sampled at a few points: the entry can be brief, and a
     // check that steps over it is a check that always passes.
     const steps = 40;
@@ -272,16 +311,23 @@ for (const [name, halfLength, speed] of [
       const hx = startX + speed * (p.atFrame / 60 + age);
       const dx = Math.abs(x - hx);
       const dy = Math.abs(y - centreY());
-      if (dx < halfLength && dy < halfHeight) {
+      if (dx < halfLength + half && dy < halfHeight + half) {
         inside += 1;
         // How far in, so a failure says whether it is a hair or a howler.
-        worst = Math.max(worst, Math.min(halfLength - dx, halfHeight - dy));
+        worst = Math.max(worst, Math.min(halfLength + half - dx, halfHeight + half - dy));
         break;
       }
     }
   }
   check(`nothing is ever drawn on the hull — ${name}`, inside === 0,
-    `${inside} of ${parts.length} bubbles entered the box, worst ${worst.toFixed(2)}u in`);
+    `${inside} of ${parts.length} particles entered the box, worst ${worst.toFixed(2)}u in`);
+
+  // ...and the foam is the reason that check now measures a WIDTH. Its lobes
+  // are the only things in the wake big enough for the difference to matter, so
+  // if none were emitted the assertion above is back to being about bubbles.
+  const foam = parts.filter((p) => p.goo > 0);
+  check(`  ...with foam lobes in the sample — ${name}`, foam.length > 0,
+    `${foam.length} of ${parts.length}, widest ${(Math.max(0, ...foam.map(drawnHalf)) * 2).toFixed(2)}u across`);
 
   // ...and the check must not be passing because nothing was in the risky zone
   // to begin with. A keel bubble is the only one born below the hull, so it is
@@ -305,8 +351,13 @@ for (const [name, halfLength, speed] of [
   const hull = {};
   const parts = run(hull, { x: 0, halfLength: YACHT, dir: 1, speed: 0, vx: 0 }, 3);
   check('a stopped hull still churns (idleShare)', parts.length > 0, `${parts.length} emitted`);
+  // Bubbles are flagged for the surface clip; the bow wave is born in the air
+  // and is not. The foam is the third thing in the buffer now — born AT the
+  // line and deliberately unflagged (see `hullFoam`) — so it is excluded by
+  // name rather than by clip, or "no bow wave" would read every lobe of foam as
+  // a drop of spray.
   check('a stopped hull throws no bow wave',
-    parts.every((p) => p.clip === 1));
+    parts.every((p) => p.clip === 1 || p.goo > 0));
   check('a stopped hull keeps its wake on one side',
     parts.every((p) => p.x <= 1e-6),
     `${parts.filter((p) => p.x > 0).length} ended up forward of the middle`);
@@ -348,7 +399,8 @@ for (const [name, halfLength, speed] of [
   setWaveTime(0);
   updateHullWake(1.0, hull, { x: 0, halfLength: YACHT, dir: 1, speed: 8, vx: 8 });
   const n = live().length;
-  const cap = c.maxPerFrame * (CONFIG.emitters.hullWake.count + CONFIG.emitters.hullSpray.count);
+  const cap = c.maxPerFrame * (CONFIG.emitters.hullWake.count
+    + CONFIG.emitters.hullSpray.count + CONFIG.emitters.hullFoam.count);
   check('a one-second frame is capped', n <= cap, `${n} particles, cap is ${cap}`);
 }
 

@@ -1306,6 +1306,35 @@ export const ASSETS = {
     material: { roughness: 0.85, metalness: 0 },
   },
 
+  // A BONE, thrown out of a man being eaten. Not a creature and not a pickup:
+  // nothing ever spawns one of these as a visual — systems/gore.js takes the
+  // GEOMETRY out of it once, at the first meal, and everything after that is
+  // instanced. It is an ASSETS entry purely so the loader brings it in with
+  // everything else and so a replacement can be dropped over it the usual way.
+  //
+  // WHICH IS ALSO WHY IT HAS NO assets.csv ROW AND NO `fit`. Both of those set
+  // how big a thing spawns, and the gore pool centres and normalises every
+  // shape it takes in — a bone comes out at CONFIG.gore.pieces.size times the
+  // MAN'S height and nothing else can reach it. See the note on normalise().
+  //
+  // The file is one mesh, so it is one shape: sixteen identical femurs unless
+  // something else varies them, which is what `lengthJitter`/`girthJitter` and
+  // the flesh lumps in CONFIG.gore.pieces are for. A pack holding several
+  // different bones as several meshes would need none of that — every mesh
+  // becomes its own shape.
+  gorebone: {
+    model: '/models/bone.glb',
+    // Bone is not wet and not metal. High roughness so the key light lands as
+    // a broad sheen rather than the hot specular line that would make a
+    // tumbling piece read as chrome.
+    material: { roughness: 0.86, metalness: 0 },
+    // What the pieces are tinted. The file ships a white material, so without
+    // this every bone would come out the flat white of the brightest thing in
+    // the game — see `boneColor` in CONFIG.gore.pieces, which this is read
+    // through by assetBaseColor.
+    color: 0xe4dcc4,
+  },
+
   enemyShark: {
     model: '/models/shark.glb',
     fit: 3.8,

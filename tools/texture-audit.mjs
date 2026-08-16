@@ -113,22 +113,74 @@ const MB = 1048576;
 function keysByModel() {
   const src = fs.readFileSync(path.join(ROOT, 'path/src/assets.js'), 'utf8').split('\n');
   const map = new Map();
+  const fits = new Map();
   let key = null;
   for (const line of src) {
     const open = line.match(/^ {2}(\w+):\s*\{/);
     if (open) key = open[1];
+    if (!key) continue;
+    const fit = line.match(/^\s*fit:\s*([\d.]+)/);
+    if (fit) fits.set(key, parseFloat(fit[1]));
     const model = line.match(/model:\s*'\/models\/([^']+)'/);
-    if (model && key) {
+    if (model) {
       if (!map.has(model[1])) map.set(model[1], []);
       map.get(model[1]).push(key);
     }
   }
-  return map;
+  return { map, fits };
 }
+
+// --- how big is it actually on screen ---------------------------------------
+//
+// The number that decides whether a map is the right size, and the one that is
+// impossible to eyeball: a creature's texture budget is set by the pixels it
+// covers, and NOTHING here covers many.
+//
+// The camera is orthographic and frames CONFIG.arena.viewHeight world units top
+// to bottom whatever the window is, so pixels-per-world-unit is just the canvas
+// height over that. A model's world size is `fit` (its longest axis, in world
+// units) times the size multiplier from assets.csv — see the note in that file
+// about why the multiplier is not optional reading.
+const VIEW_HEIGHT = 52; // CONFIG.arena.viewHeight
+
+function sizesByKey() {
+  const csv = fs.readFileSync(path.join(ROOT, 'path/src/assets.csv'), 'utf8').split('\n');
+  const out = new Map();
+  for (const line of csv.slice(1)) {
+    const m = line.match(/^([\w]+),([\d.]+)/);
+    if (m) out.set(m[1], parseFloat(m[2]));
+  }
+  return out;
+}
+
+// Rounded up to a power of two, which is the only thing worth shipping: a
+// non-power-of-two map costs the same VRAM as the next one up and loses the mip
+// chain on some drivers.
+const pot = (n) => 2 ** Math.max(5, Math.ceil(Math.log2(Math.max(1, n))));
 
 // --- report -----------------------------------------------------------------
 
-const users = keysByModel();
+const { map: users, fits } = keysByModel();
+const sizes = sizesByKey();
+
+// Two windows, because the answer has to hold for both and they are a factor of
+// four apart. The first is what the playtest logs actually record
+// (render.mpix 0.54 at pixelRatio 0.65); the second is a full-screen 4K panel at
+// device pixel ratio 1, which is as many pixels as this game will ever be asked
+// to cover.
+const WINDOWS = [
+  { label: 'logged window', px: 581 },
+  { label: '4K full screen', px: 2160 },
+];
+
+// And the frame is not always the resting one. The cinematic rig pushes in to
+// cinecam.base.zoomMax, and it does it for the kill shot — the single most
+// looked-at moment in a run, held on a stopped clock. A map sized for the
+// resting frame is a map that goes soft exactly there, which is the worst
+// possible place to save memory. Everything in frame scales, not just the
+// subject, so this multiplies every row.
+const ZOOM_MAX = 3.15; // CONFIG.cinecam.base.zoomMax
+
 const rows = [];
 
 for (const file of fs.readdirSync(MODELS)) {
@@ -188,10 +240,56 @@ if (png.size) {
   console.log();
 }
 
-const big = rows.filter((r) => r.vram > 15 * MB);
-if (big.length) {
-  console.log('VRAM — models over 15MB. Halving a map quarters its cost, so 1024 -> 512 is the lever:');
-  for (const r of big) {
-    console.log(`  ${(r.vram / MB).toFixed(1).padStart(6)}MB  ${r.file.padEnd(24)} ${(r.vram / 4 / MB).toFixed(1)}MB at half size`);
+// --- what size the map should actually be -----------------------------------
+//
+// Not a rule of thumb: the widest this model ever gets on screen, in pixels,
+// against the map it carries. A map bigger than that is texels the rasteriser
+// averages away and the GPU pays to hold — and the mip chain means it does not
+// even look sharper, it looks identical.
+console.log('SIZE — the map each model can justify, from how many pixels it covers:\n');
+console.log('  model                     on screen (px)      biggest map   justified   saved');
+console.log('  ' + '-'.repeat(80));
+
+let vramNow = 0;
+let vramRight = 0;
+
+for (const r of rows) {
+  // The biggest key using this model, since one map serves them all.
+  let world = 0;
+  let via = null;
+  for (const k of r.keys) {
+    const w = (fits.get(k) ?? 0) * (sizes.get(k) ?? 1);
+    if (w > world) { world = w; via = k; }
   }
+  if (!world) continue;
+
+  const spans = WINDOWS.map((w) => world * (w.px / VIEW_HEIGHT));
+  const widest = Math.max(...spans) * ZOOM_MAX;
+  const biggest = Math.max(...r.imgs.map((i) => Math.max(i.w, i.h)));
+  // One texel per pixel at the largest the model ever gets, rounded up. No
+  // headroom multiplier: the mip chain already means a map sampled below 1:1
+  // costs nothing in sharpness, and the 4K row above is already the ceiling.
+  const want = Math.min(biggest, pot(widest));
+
+  const now = r.vram;
+  const then = r.imgs.reduce((s, i) => s + vramOf({
+    w: Math.min(i.w, want), h: Math.min(i.h, want),
+  }), 0);
+  vramNow += now;
+  vramRight += then;
+
+  if (want >= biggest) continue; // already the right size or smaller
+  console.log(
+    `  ${r.file.padEnd(24)} ${spans.map((s) => s.toFixed(0).padStart(5)).join(' /')}      `
+    + `${String(biggest).padStart(6)}²   ${String(want).padStart(6)}²   `
+    + `${((now - then) / MB).toFixed(1).padStart(5)}MB   (${via})`,
+  );
 }
+
+console.log('  ' + '-'.repeat(80));
+console.log(`  ${(vramNow / MB).toFixed(0)}MB -> ${(vramRight / MB).toFixed(0)}MB across the roster`);
+console.log(`  on-screen px are ${WINDOWS.map((w) => w.label).join(' / ')}, at rest`);
+console.log(`  the justified column already carries the ${ZOOM_MAX}x cinematic push\n`);
+console.log('  A CEILING, NOT A TARGET. This assumes the map is spread evenly over the');
+console.log('  model, and a UV layout that gives the face its own big island wants more');
+console.log('  than the average says. Step down one power of two, look at it, step again.\n');

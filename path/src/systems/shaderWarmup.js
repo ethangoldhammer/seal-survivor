@@ -128,6 +128,12 @@ export async function warmShaders(post, scene, camera, onProgress) {
 export function warmPipeline(post, scene, camera) {
   try {
     post.render(scene, camera, 0);
+    // The goo pass is the one thing a real frame does NOT reach: it is skipped
+    // on any frame with nothing goopy alive, which at boot is every frame, so
+    // its two programs would link on the frame of the first kill instead. See
+    // post.warmGoo — it draws the pass with no particles in it, which links
+    // both against the same targets the game will ask for.
+    post.warmGoo?.(camera);
   } catch (err) {
     console.warn('[warmup] first frame failed —', err?.message ?? err);
   }

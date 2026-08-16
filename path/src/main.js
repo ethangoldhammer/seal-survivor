@@ -54,6 +54,7 @@ import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from 
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
 import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact } from './systems/bossImpact.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
+import { initGore, updateGore, resetGore } from './systems/gore.js';
 import { tickHitShapes, initHitShapeDebug, updateHitShapeDebug } from './systems/hitShape.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from './systems/strikeRing.js';
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
@@ -143,6 +144,10 @@ initParticles(world.scene);
 initImpactFlashes(world.scene);
 initBossImpacts(world.scene);
 initBossGibs(world.scene);
+// The shape pool itself is built lazily on the first meal, not here: the bone
+// models it draws from may still be loading, and one of them may be an upload
+// that has not happened yet. See ensurePool in systems/gore.js.
+initGore(world.scene);
 initHitShapeDebug(world.scene);
 initMarks(world.scene);
 initFeedback(world.grid);
@@ -860,6 +865,9 @@ function startGame() {
   // (it sinks on its own clock, not the creature's) and would otherwise be
   // raining down through the opening seconds of the next run.
   resetBossGibs();
+  // Same for what is left of the crew — bones sink for five and a half seconds
+  // and would otherwise still be arriving on the seabed of the next run.
+  resetGore();
   // ...and any body still being held for a photograph. Released rather than
   // burst: this is a restart, and a boss exploding over the opening frame of
   // the next run is worse than one that simply isn't there.
@@ -3488,6 +3496,12 @@ function animate(now) {
       onEnemyDamaged: damageFrom('orca'),
       onEnemyKilled: onEnemyKilledFeedback,
       onStrike: (x, y) => feedback('orcaStrike', { x, y }),
+      // The moment one of them leaves the line, which is the read the card is
+      // selling and was completely silent — the pod's only voice was the hit,
+      // two seconds and half an arena later. Same event the escort seals use
+      // for the same beat (see onLunge above): a wind-up at the animal that
+      // broke formation, not at whatever it is going after.
+      onBreakOff: (x, y) => feedback('sealLunge', { x, y, scale: 1.4 }),
       onBoatHit: (boat, dmg, x, y) => feedback('orcaStrike', { x, y, scale: 1.3 }),
       onCrewEaten: (x, y) => feedback('crewEaten', { x, y, scale: 0.9 }),
       onBoatDestroyed,
@@ -3702,7 +3716,9 @@ function animate(now) {
       const meal = nearestFloatingCrew(
         player.mesh.position.x, player.mesh.position.y, player.stats.hitRadius);
       if (meal) {
-        const at = eatCrew(world.scene, meal);
+        const at = eatCrew(world.scene, meal, {
+          vx: player.velocity.x, vy: player.velocity.y,
+        });
         if (at) {
           collectChum(at.xp, at.x, at.y, at.healMul);
           feedback('crewEaten', { x: at.x, y: at.y });
@@ -4150,6 +4166,10 @@ function animate(now) {
   // dies in the same breath they win should not have the debris vanish — but
   // frozen behind a menu like everything else the player can look at.
   updateBossGibs(gameState.paused ? 0 : dt);
+  // The same clock and the same gate, for the same reasons: pieces of a man
+  // sink on their own schedule rather than the eater's, so they keep settling
+  // over a death, and they hold still behind a menu.
+  updateGore(gameState.paused ? 0 : dt);
   // And the body the wreckage is still inside. Two clocks, both of them
   // needed: the countdown to the burst is racing a shutter and so runs on the
   // WALL clock, while the drift, the sink and the roll are the world's and run

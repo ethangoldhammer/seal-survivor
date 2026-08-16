@@ -5,6 +5,7 @@ import { emit } from '../entities/particles.js';
 import { createVisual, hasModel, makeOutlineMaterial } from '../assets.js';
 import { attachDissolve, dissolveUniforms, roundedNormalBox } from './dissolve.js';
 import { buildHumanoidRig, bindHumanoidRig, aimBone, anchorToHips } from './humanoidRig.js';
+import { spawnGore } from './gore.js';
 
 // The man on the boat.
 //
@@ -1141,13 +1142,32 @@ export function crewPosition(f) {
 // Eaten. Returns what the meal was worth, or null if this one was already
 // taken — two hunters can reach the same body on the same frame, and only one
 // of them can have it.
-export function eatCrew(scene, f) {
+//
+// `opts.vx`/`opts.vy` are the EATER's velocity, not the body's, and are passed
+// straight through to the gore burst so what comes out of him carries a share
+// of what took him.
+//
+// THE GORE IS FIRED FROM HERE rather than from the callers' `onCrewEaten`
+// hooks, and that is the whole reason this function is worth reading. There
+// are four mouths in the game — the seal, a hunting shark, an orca, and the
+// pod's grabber — and only three of them go through a hook; the seal's own
+// meal, the one the player actually causes, is a bare call in main.js. This is
+// the one line every single one of them passes through.
+export function eatCrew(scene, f, opts = {}) {
   if (!f || f.eaten || !crew.includes(f)) return null;
   const food = cfg().food ?? {};
   const hips = f.rig.points.hips;
   const at = { x: hips.x, y: hips.y, xp: food.xp ?? 12, healMul: food.healMul ?? 2.5 };
   f.eaten = true;
-  emit('bite', at.x, at.y, { scale: 1.2 });
+  // The `emit('bite')` that used to be here is gone, not moved: the gore burst
+  // below is ninety particles across three layers and the twenty-six pink
+  // specks of a fish being swallowed were invisible inside it. The feedback
+  // event's own `emit` went with it for the same reason — see
+  // CONFIG.feedback.crewEaten.
+  //
+  // His own height is the only scale the thrown pieces are sized against — see
+  // the note in systems/gore.js about why nothing there is in world units.
+  spawnGore(at.x, at.y, { height: f.height, vx: opts.vx ?? 0, vy: opts.vy ?? 0 });
   const i = crew.indexOf(f);
   if (i !== -1) crew.splice(i, 1);
   disposeFigure(scene, f);

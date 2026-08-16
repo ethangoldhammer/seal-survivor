@@ -4,7 +4,7 @@ import { FILTER_OPTIONS, bloomEnabled, setSetting, screenFilter } from './settin
 import { feedbackState } from './feedback.js';
 import { suffocationPixelSize } from './oxygenFx.js';
 import { cineLens } from './cineCamera.js';
-import { gooLayer, setGooDivisor } from '../entities/particles.js';
+import { gooLayer, activeGooGroups, setGooDivisor } from '../entities/particles.js';
 
 // Three passes, no EffectComposer:
 //   1. render the scene at full res
@@ -822,15 +822,24 @@ export function createPost(renderer) {
     return readTarget;
   }
 
-  // Splat the goo particles into their own target, threshold it, and lay the
+  // Splat one goo group into the density target, threshold it, and lay the
   // result over the scene — BEFORE the bright pass, so the goo blooms, gets
   // defocused and takes the screen filter exactly like anything drawn as
   // geometry. Anywhere later in the chain and it would be a sticker on the
   // finished picture.
-  function renderGoo(sceneCamera) {
+  //
+  // Groups run one after another through the SAME target rather than one target
+  // each: the field is cleared, filled, thresholded and composited before the
+  // next group touches it, so the memory cost is one buffer no matter how many
+  // substances the game grows, and the frame cost is only for the groups that
+  // have something alive in them.
+  function renderGooGroup(sceneCamera, group) {
     const layer = gooLayer();
     if (!layer) return;
-    const g = CONFIG.fx.goo;
+    const g = group.def;
+
+    layer.material.uniforms.uGroup.value = group.index;
+    layer.material.uniforms.uGooRadius.value = g.radius ?? 3.2;
 
     const u = gooPass.uniforms;
     u.uIso.value = g.iso ?? 1;
@@ -869,6 +878,32 @@ export function createPost(renderer) {
     renderer.autoClear = autoClear;
   }
 
+  // COMPILE THE GOO PROGRAMS BEFORE THE FIRST KILL, not on it.
+  //
+  // warmPipeline draws one real frame to compile the passes that only exist
+  // inside this file — but the goo pass is skipped on any frame with no goo
+  // alive, which is every frame at boot. So the two programs it needs (the
+  // density splat and the threshold) were linking on the frame of the first
+  // kill of every run: tens of milliseconds on Chrome's ANGLE path, in the
+  // middle of a fight, which is precisely the hitch systems/shaderWarmup.js
+  // exists to prevent.
+  //
+  // Drawing it with nothing alive is enough — every point is parked outside the
+  // frustum and every fragment of the threshold discards, but both programs
+  // link, against the same render targets the real path uses so the cache keys
+  // match. Deliberately NOT gated on `fx.goo.enabled`: switching the effect on
+  // from the tuner mid-session should not pay for a compile either.
+  function warmGoo(sceneCamera) {
+    const layer = gooLayer();
+    if (!layer) return;
+    const groups = CONFIG.fx?.goo?.groups ?? {};
+    const first = Object.values(groups)[0] ?? {};
+    // Index -1 matches no particle — including the sprite particles, which are
+    // group 0 and would otherwise all be splatted into the field by the warm
+    // draw. The draw still happens, which is all a link needs.
+    renderGooGroup(sceneCamera, { name: 'warm', index: -1, def: first });
+  }
+
   function render(sceneToRender, sceneCamera, dt) {
     clock += dt;
     finalUniforms.uTime.value = clock;
@@ -897,8 +932,8 @@ export function createPost(renderer) {
     // passthrough while goo is in flight would not "turn the effect off", it
     // would delete the burst. Zero cost with nothing goopy on screen, which is
     // almost every frame.
-    const goo = gooLayer() !== null;
-    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 1 || cine || goo;
+    const goo = activeGooGroups();
+    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 1 || cine || goo.length > 0;
     if (!postActive) {
       renderer.setRenderTarget(null);
       renderer.render(sceneToRender, sceneCamera);
@@ -923,7 +958,7 @@ export function createPost(renderer) {
     renderer.clear();
     renderer.render(sceneToRender, sceneCamera);
 
-    if (goo) renderGoo(sceneCamera);
+    for (const group of goo) renderGooGroup(sceneCamera, group);
 
     // The flares are sampled from the bloom buffer, so they need it filled
     // even when bloom itself is switched off — the bright pass is what finds
@@ -978,5 +1013,5 @@ export function createPost(renderer) {
   applyPreset(activePreset());
   resize();
 
-  return { render, resize, cyclePreset, applyPreset, warm };
+  return { render, resize, cyclePreset, applyPreset, warm, warmGoo };
 }

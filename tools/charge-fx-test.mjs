@@ -295,14 +295,38 @@ section('THE INK LINE');
   const inkThick = () => inkMat.userData.__outlineThickness.value;
   const inkCfg = CONFIG.playerOutline.inner;
 
-  check('the ink is flat black', inkMat.color.r === 0 && inkMat.color.g === 0 && inkMat.color.b === 0);
+  // DARK AND NEUTRAL, not literally zero. The shipped ink is #212121 — a lifted
+  // black, which is what it is for: an absolute 0 against a bloomed rim reads as
+  // a hole cut in the picture, and a few points of lift keeps it a line. What
+  // the ink must not become is either bright (a second rim, and the fringe stops
+  // reading as a fringe) or coloured (two hues fighting on one silhouette), so
+  // those are what this asks about instead of an exact value somebody has to
+  // come back and edit every time they nudge it.
+  const { r, g, b } = inkMat.color;
+  const spread = Math.max(r, g, b) - Math.min(r, g, b);
+  check('the ink is dark', Math.max(r, g, b) <= 0.2,
+    `peak channel ${Math.max(r, g, b).toFixed(3)}`);
+  check('...and neutral, not a second colour', spread <= 0.05,
+    `channel spread ${spread.toFixed(3)}`);
   check('...at its own width, in world units over the scale',
     Math.abs(inkThick() - inkCfg.thickness / PARENT_SCALE) < 1e-9,
     `${inkThick()} vs ${inkCfg.thickness}/${PARENT_SCALE}`);
   // The whole effect is the DIFFERENCE between the two hulls. At equal widths
-  // there is no glow left to peek out.
-  check('...and thinner than the rim it sits inside',
-    inkThick() < thickOf(), `ink ${inkThick()} vs rim ${thickOf()}`);
+  // there is no second band at all — whichever loses the depth test is simply
+  // not on screen, and the seal gets one outline instead of two.
+  //
+  // WHICH ONE IS WIDER IS A LOOK, NOT A RULE. This used to require the ink to be
+  // the thinner of the two, on the original design of a glow fringe around an
+  // ink line. The shipped tuning is the other way up — ink 0.105 against a 0.01
+  // rim — and that is a legible outline either way: the hulls are offset along
+  // the normal and the thinner one's back faces are nearer the camera, so it
+  // wins the overlap and the wider one becomes the outer band. Inverted, that
+  // reads as a bold black outline with the glow as a bright line hugging the
+  // body, which is a drawing decision rather than a broken one. What is NOT
+  // survivable is the two being the same, so that is what is asked here.
+  const [thin, thick] = [Math.min(inkThick(), thickOf()), Math.max(inkThick(), thickOf())];
+  check('...at a different width from the rim, so both bands read',
+    thick > thin * 1.2, `ink ${inkThick()} vs rim ${thickOf()}`);
   check('it draws after the glow and before the seal',
     inkShell.renderOrder > glowShell.renderOrder && inkShell.renderOrder < (body.renderOrder ?? 0),
     `glow ${glowShell.renderOrder}, ink ${inkShell.renderOrder}, seal ${body.renderOrder ?? 0}`);

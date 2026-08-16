@@ -215,6 +215,9 @@ export function attachBossPerk(scene, enemy, perk) {
     // fireVolley. Kept on the perk rather than derived from the clock so a
     // volley always alternates evenly however the cooldown is tuned.
     muzzle: 0,
+    // Fractional lobes of aura fill owed from the last frame, so a rate below
+    // one per frame still averages out instead of being rounded to nothing.
+    fillCarry: 0,
   };
 
   const fx = CONFIG.boss?.perkFx ?? {};
@@ -294,6 +297,74 @@ export function activeBossPerk() {
 function place(obj, e, worldRadius) {
   obj.position.copy(e.mesh.position);
   obj.scale.setScalar(worldRadius);
+}
+
+// HOW FAR PAST ITS OWN CENTRE AN AURA LOBE CAN REACH, in world units: half the
+// width it draws, plus everything its own motion can add over its whole life.
+//
+// The aura fill is the one goo in the game placed against a line it must not
+// cross, and both halves of that are easy to get wrong in the same way. A goo
+// particle draws `size x the group's radius` across, which is several times the
+// sprite it would otherwise be — and it then MOVES, so where it is born is not
+// where it ends up. The drift is solved with the closed form the vertex shader
+// uses (velocity under linear drag, at t = infinity, which is speed/drag) so
+// this cannot drift from what is actually drawn.
+//
+// Read out of config rather than written down, so retuning the emitter or the
+// group moves the margin with it instead of quietly invalidating it. The
+// LARGEST values the emitter can roll, because the rule has to hold for every
+// lobe rather than for the average one.
+function auraLobeReach() {
+  const def = CONFIG.emitters?.auraField;
+  if (!def) return 0;
+  const size = Array.isArray(def.size) ? def.size[1] : (def.size ?? 0.5);
+  const goo = CONFIG.fx?.goo;
+  const half = (goo && goo.enabled !== false)
+    ? size * (goo.groups?.[def.goo]?.radius ?? goo.radius ?? 3) * 0.5
+    : size * 0.5;
+  const speed = Array.isArray(def.speed) ? def.speed[1] : (def.speed ?? 1);
+  const drift = speed * (CONFIG.boss?.perkFx?.electric?.fillDrift ?? 1.1)
+    / Math.max(0.05, def.drag ?? 3);
+  // ...plus what the current can add. The global turbulence pushes every
+  // particle by `strength x the emitter's own share x its age`, and the longest
+  // life this emitter rolls is the most of it any lobe can collect.
+  const tb = CONFIG.fx?.turbulence;
+  const life = Array.isArray(def.life) ? def.life[1] : (def.life ?? 1);
+  // 1.5 is the field's peak per axis (a sine plus a half-amplitude harmonic),
+  // and both axes can peak at once, so the worst-case RADIAL push is that times
+  // root two. Over-estimating here costs a few tenths of a unit of unused zone;
+  // under-estimating puts goo on the boundary.
+  const push = (tb && tb.enabled !== false)
+    ? (tb.strength ?? 0) * (def.turbulence ?? 1) * life * 1.5 * Math.SQRT2
+    : 0;
+  return half + drift + push;
+}
+
+// HOW FAR A LOBE FALLS BEHIND A MOVING BOSS over its whole life, in world units.
+//
+// The ring is drawn on the animal every frame; the field is not, because a
+// particle here cannot be parented to anything — its path is a closed form
+// solved from where it was born (see entities/particles.js). So a boss that
+// swims away from its own aura leaves lobes sitting outside the ring, which is
+// the exact failure the inset exists to prevent, arriving half a second late
+// and only ever while the boss is moving.
+//
+// `inherit: 1` on the emitter is most of the answer: each lobe leaves at the
+// boss's own velocity and keeps station until drag bleeds that off. This is
+// what drag leaves unpaid — the boss's travel over the lobe's life, minus the
+// distance the lobe was carried after it, both under the same closed form.
+//
+// At high speed it can exceed the whole usable radius, and then no lobes are
+// emitted at all: a boss sprinting has no field, the same way a hull holding
+// station has no keel wake (systems/boatWake.js). Degrading to nothing is
+// always available and is never wrong.
+function auraLobeLag(speed) {
+  const def = CONFIG.emitters?.auraField;
+  if (!def || !(speed > 0)) return 0;
+  const life = Array.isArray(def.life) ? def.life[1] : (def.life ?? 1);
+  const k = Math.max(0.05, def.drag ?? 3);
+  const carried = (def.inherit ?? 0) * speed * (1 - Math.exp(-k * life)) / k;
+  return Math.max(0, speed * life - carried);
 }
 
 /**
@@ -503,6 +574,51 @@ function updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks) {
     for (let k = 0; k < 6; k++) active.arcPositions[o + k] = 0;
   }
   active.arcs.geometry.attributes.position.needsUpdate = true;
+
+  // --- THE FIELD INSIDE THE RING --------------------------------------------
+  // Lobes of charged water filling the zone, so it reads as a space rather than
+  // as a circle. They FUSE — see the `aura` group in CONFIG.fx.goo — which is
+  // what makes a handful of particles look like a medium instead of like a
+  // handful of particles.
+  //
+  // WHY THIS IS NOT ALLOWED TO BE THE EDGE. The ring is the hitbox, and the
+  // note on `pulse` above says why its boundary is never permitted to move by
+  // more than it breathes: a damage boundary the player cannot trust is worse
+  // than no art at all. A thresholded density field has a wobbling edge by
+  // construction. So the fill is held INSIDE, by a margin that accounts for how
+  // wide a lobe actually draws — `auraLobeReach()` — and the ring goes on being
+  // the only thing that says where the damage stops.
+  if (fx.fillEnabled !== false) {
+    active.fillCarry += (fx.fillPerSecond ?? 9) * dt;
+    let lobes = Math.floor(active.fillCarry);
+    active.fillCarry -= lobes;
+    // The same hitch guard the wake's churn has: one long frame must not empty
+    // a second of the field into a single spot.
+    lobes = Math.min(lobes, 3);
+    // How far from the centre a lobe may be BORN so that its outer edge, after
+    // it has drifted as far as it can, still stops short of the rim.
+    const inset = Math.min(0.98, Math.max(0, fx.inset ?? 0.82));
+    const speed = Math.hypot(e.vx ?? 0, e.vy ?? 0);
+    const usable = reach * inset - auraLobeReach() - auraLobeLag(speed);
+    for (let i = 0; i < lobes && usable > 0; i++) {
+      // Area-uniform rather than radius-uniform (sqrt of the roll): spread
+      // evenly along the radius, a ring's worth of lobes piles up in the middle
+      // and the field reads as a lump on the boss rather than as a zone.
+      const a = Math.random() * Math.PI * 2;
+      const rr = Math.sqrt(Math.random()) * usable;
+      emit('auraField', e.mesh.position.x + Math.cos(a) * rr, e.mesh.position.y + Math.sin(a) * rr, {
+        // Drift is INWARD-ish and slow — outward drift would walk the field at
+        // the boundary it is not allowed to touch.
+        dirX: -Math.cos(a),
+        dirY: -Math.sin(a),
+        speedMul: fx.fillDrift ?? 1.1,
+        // The boss's own velocity, taken whole (`inherit: 1`), so the field
+        // travels with the animal instead of being left in the water behind it.
+        vx: e.vx ?? 0,
+        vy: e.vy ?? 0,
+      });
+    }
+  }
 
   if (dist < reach && hooks.onPlayerHit) {
     // Away from the boss, like every other contact shove — being shocked

@@ -76,6 +76,29 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+// HOW WIDE A FOAM LOBE ACTUALLY DRAWS, in world units, measured from its centre.
+//
+// A goo particle is not a sprite: its splat is `size x the group's radius`
+// across (see the goo note in entities/particles.js), so the shipped 0.3 x 3.0
+// is nearly a unit wide where the bubble it sits next to is a fifth of that.
+// Every placement rule in this file is about where a particle is BORN, which is
+// only the same question as where it is DRAWN while the drawn thing is small.
+//
+// Read from config rather than written down so that retuning either half moves
+// the hull clearance with it. The largest size the emitter can roll, because
+// the guarantee has to hold for every lobe and not for the average one. Falls
+// back to the group's default radius, then to the sprite's own size when goo is
+// off entirely — where the blob genuinely is just the sprite.
+function foamHalfExtent() {
+  const def = CONFIG.emitters?.hullFoam;
+  if (!def) return 0;
+  const size = Array.isArray(def.size) ? def.size[1] : (def.size ?? 0.2);
+  const goo = CONFIG.fx?.goo;
+  if (!goo || goo.enabled === false) return size * 0.5;
+  const radius = goo.groups?.[def.goo]?.radius ?? goo.radius ?? 3;
+  return size * radius * 0.5;
+}
+
 // THE OTHER HALF OF A WAKE, and it is not particles at all.
 //
 // Bubbles say a hull is churning; they cannot say it is SITTING IN something.
@@ -106,6 +129,7 @@ export function resetHullWake(hull) {
   if (!hull) return;
   hull.wakeChurn = 0;
   hull.wakeSpray = 0;
+  hull.wakeFoam = 0;
 }
 
 /**
@@ -292,6 +316,48 @@ export function updateHullWake(dt, hull, o) {
       vx: vx * (underKeel ? (c.keelCarry ?? 0) : (c.carry ?? 0.35)),
       vy: 0,
     });
+  }
+
+  // --- the white water --------------------------------------------------------
+  // The foam the bubbles above are boiling out of, as one fusing mass rather
+  // than as more dots (see `hullFoam` in CONFIG.emitters). Astern only: the
+  // keel zone's whole safety argument is that a bubble is flushed out from
+  // under the boat before it can rise into it, and a blob several times the
+  // size of a bubble is not flushed by the same margin.
+  if (c.foamEnabled !== false) {
+    hull.wakeFoam = (hull.wakeFoam ?? 0) + (c.foamPerSecond ?? 5) * hullScale * drive * dt;
+    let lobes = Math.floor(hull.wakeFoam);
+    hull.wakeFoam -= lobes;
+    lobes = Math.min(lobes, cap);
+
+    // THE CLEARANCE IS DERIVED, NOT TYPED, and this is the whole reason the
+    // foam is not simply `hullWake` with a group name on it.
+    //
+    // Every placement rule above is about where a particle is BORN, because a
+    // sprite is a tenth of a unit across and its centre is as good as its
+    // edge. A goo blob is not: it draws `size x radius` wide — the shipped
+    // numbers are 0.3 x 3.0, or nine tenths of a unit — so a lobe born legally
+    // one hair astern of the transom still paints a third of itself across the
+    // hull. Reading both values here means retuning either one moves the
+    // clearance with it instead of silently invalidating the guarantee that
+    // `npm run test:wake` makes.
+    const clear = halfLength + foamHalfExtent() + Math.max(0, c.foamGap ?? 0.08);
+    const span = halfLength * Math.max(0, c.foamSpan ?? 0.55);
+
+    for (let i = 0; i < lobes; i++) {
+      const x = o.x - dir * (clear + Math.random() * span);
+      // At the line, a touch under it. Foam is what is left ON the water.
+      const y = surfaceHeightAt(x) - Math.max(0, c.foamDepth ?? 0.06);
+      emit('hullFoam', x, y, {
+        dirX: -dir,
+        dirY: 0.35,
+        // More of the hull's speed than the bubbles take: this mass is being
+        // dragged along by the boat that made it, and foam that instantly
+        // stops dead reads as a stain rather than as a wake.
+        vx: vx * (c.carry ?? 0.35) * 1.4,
+        vy: 0,
+      });
+    }
   }
 
   // --- the dent in the water --------------------------------------------------

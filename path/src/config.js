@@ -3754,20 +3754,87 @@ export const CONFIG = {
       attackIntervalFloor: 1.0,
       chargeSpeed: 22,
       chargeSpeedPerLevel: 1.4,
-      cruiseSpeed: 9,
-      hitRadius: 2.0, // how close a charging orca must get to land the hit
-      huntRange: 34, // how far it will travel to find a boat
+      hitRadius: 2.4, // how close a charging orca must get to land the hit
+      huntRange: 26, // how far it will travel to find a boat
       // Falls back to fish only above this radius — the pod ignores minnows even
-      // when idle, so it never looks like a third seal team.
+      // when idle, so it never looks like a third seal team. 0.9 is the line
+      // between the dolphin (0.85) and the sea turtle (1.0) in enemies.csv:
+      // everything at or above it is an apex, a turtle or a boss body, which is
+      // exactly the "big things" half of what this card promises.
       fallbackMinRadius: 0.9,
       knockback: 6,
-      // Formation while there's nothing to hunt: a loose line abreast trailing
-      // the seal, spaced so they read as a family group rather than a stack.
+      // READ THIS AGAINST hitRadius AND chargeSpeed. The tightest circle a
+      // charging orca can fly is chargeSpeed / turnRate, and that is not
+      // decoration — an orca that arrives off-line and whose circle is wider
+      // than hitRadius physically cannot close, so it orbits its target at the
+      // one radius it is unable to shrink. That was the pod's whole read for
+      // months: saved tuning held 4.5, which against a chargeSpeed of 22 is a
+      // 4.9-unit circle around a 2-unit hit. 8.5 brings it to 2.6 — close
+      // enough that most runs connect, wide enough that a miss is still
+      // possible, which is what the overshoot test in systems/orca.js catches.
+      turnRate: 8.5,
+      // Only ever one orca out of the line, and this long between break-offs on
+      // top of that. The pair is the whole "family" read: two animals holding
+      // formation while the third makes a run, rotating. Raise maxAttackers and
+      // the pod goes back to leaving as a cloud.
+      maxAttackers: 1,
+      breakStagger: 1.4,
+      // How long a single run may last before the orca gives up and comes back,
+      // and how far it may drift back from its closest approach before the run
+      // counts as a miss. The second is what actually catches a circling orca:
+      // a charge that starts getting further away is over.
+      chargeMaxTime: 2.6,
+      overshootSlack: 1.4,
+      // How far from the SEAL a run may drag an orca before it breaks off. An
+      // escort that crosses the arena chasing something has stopped being one.
+      // Deliberately ABOVE huntRange: below it the leash would abort chases the
+      // acquisition was still happily starting, and the pod would twitch in and
+      // out of formation at the boundary between the two.
+      leash: 38,
+      // Seconds before it may pick a new target after a miss. Shorter than a
+      // landed hit's `attackInterval` — the run cost it nothing.
+      abortCooldown: 1.2,
+      // How much of the intercept a charge leads by, 0 = aim at where the
+      // target is now, 1 = solve it exactly. Deliberately partial: a perfect
+      // lead reads as a homing missile rather than an animal chasing.
+      leadFactor: 0.6,
+      // THE FOLLOW-THROUGH. Every run ends by carrying through at speed and
+      // easing back to the seal's pace over `overrunTime`, at `overrunDrag`
+      // e-folds a second, rather than stopping on the hit. It is what makes a
+      // strike a PASS, and it is also what carries a miss clear of its target
+      // before the orca is allowed to look for another one.
+      overrunTime: 0.6,
+      overrunDrag: 2.4,
+      breachChance: 0.35, // odds an attack run on a hull carries up through the surface
+
+      // --- formation ------------------------------------------------------------
+      // Where the pod sits while there is nothing to hunt: a loose line abreast
+      // trailing the seal, spaced so they read as a family group rather than a
+      // stack.
       formationSpacing: 2.6,
+      // [ALONG, ACROSS] the seal's own heading, not world X and Y — first how
+      // far back the line sits, second which side of the wake it favours. In
+      // world axes this was a fixed offset up and to the left, so the pod was
+      // behind the seal swimming one way and directly in front of it swimming
+      // the other.
       formationOffset: [-3.4, 1.6],
       formationFollow: 5.5,
-      breachChance: 0.35, // odds an attack run carries through the surface
-      turnRate: 5.5,
+      formationDamping: 6,
+      // The station-keeping spring is solved in the SEAL'S FRAME: the pod
+      // inherits the player's velocity and `cruiseSpeed` caps only the CLOSING
+      // speed on top of it. Read as an absolute speed through the water (which
+      // is what it used to be) 9 is a third of the seal's 34, so the pod could
+      // not keep up with the animal it escorts — it trailed, caught up and swung
+      // past, forever. `maxFollowSpeed` is the ceiling on the total, so a
+      // launched seal doesn't hand the pod a speed no animal should swim at.
+      cruiseSpeed: 14,
+      maxFollowSpeed: 40,
+      // How fast the formation swings around to follow a change of the seal's
+      // heading, and the speed below which it stops asking. At a standstill the
+      // direction of travel is noise, and a formation that rotated with it would
+      // spin the pod around a stationary seal.
+      leadLerp: 2.2,
+      leadMinSpeed: 3,
 
       // --- facing ---------------------------------------------------------------
       // How the pod turns, as opposed to where it goes. All of this exists
@@ -5767,6 +5834,31 @@ export const CONFIG = {
           // How hard the ring breathes, 0-1, and how fast.
           pulse: 0.22,
           pulseHz: 3.5,
+
+          // --- THE FIELD INSIDE THE RING (goo group `aura`) -------------------
+          // A charged medium filling the zone, so it reads as a SPACE that is
+          // no longer free rather than as a circle drawn on the water.
+          //
+          // IT IS NOT THE BOUNDARY AND MUST NEVER BECOME ONE. The ring is the
+          // hitbox and the contract with the player (see updateElectric); a
+          // metaball surface wobbles by construction, and a wobbling edge on a
+          // damage zone is one the player will — correctly — stop trusting.
+          // So the fill is held clear of the rim by `inset`, and the ring
+          // stays exactly as it was: the authority on where the damage is.
+          //
+          // This is also the one goo in the game that runs CONTINUOUSLY rather
+          // than in bursts, so it is the one place the pass costs something
+          // every frame it is on screen. `fillPerSecond` is the dial for that.
+          fillEnabled: true,
+          fillPerSecond: 16,
+          // The outermost fraction of the reach a lobe's own EDGE may touch.
+          // The gap it leaves is deliberately large enough to read as a gap at
+          // fight scale — the eye has to be able to see that the field stops
+          // short of the line it is being warned about.
+          inset: 0.74,
+          // How much of the zone the lobes drift through while they live. Low:
+          // a field that visibly swirls competes with the arcs for attention.
+          fillDrift: 1.1,
         },
         // The blink. Two flashes — one where it left, one where it arrived —
         // so the eye is given somewhere to go rather than having to find a
@@ -7550,16 +7642,146 @@ export const CONFIG = {
       killGoo: {
         count: 14, speed: [1.2, 5], size: [0.26, 0.5], life: [0.7, 1.4],
         colors: [0xff4d6d, 0xff2e55, 0xffb347], cone: 0, drag: 3.4,
-        gravity: [0, -1.1], inherit: 0.35, glow: 1.0, goo: true,
+        gravity: [0, -1.1], inherit: 0.35, glow: 1.0, goo: 'blood',
         // Held under the emitter's usual pull: the current is what folds the
         // mass, and at full strength it pulls the lobes apart faster than the
         // isoline can hold them together.
         turbulence: 0.55,
     },
+
+      // --- THE WATER LINE BREAKING (goo group `foam`) --------------------------
+      // Fired alongside `splash` and `reentry`, which stay exactly as they are:
+      // those are the DROPS, this is the sheet of water they come off. The
+      // sheet is the thing a sprite burst has never been able to draw — forty
+      // individual droplets read as forty droplets no matter how many you add,
+      // where a fused mass tearing into strands reads as water.
+      //
+      // Thrown UP and OUT in a wide cone rather than in a ball, because a body
+      // crossing the surface pushes water aside; `inherit` is high, so the
+      // sheet leans the way the seal was already going. Short lives: a sheet
+      // that hangs reads as slime. `killAtSurface: false` is load-bearing —
+      // these are born ON the water line and the surface clip would delete
+      // half of them on their first frame.
+      breachFoam: {
+        count: 16, speed: [3, 11], size: [0.22, 0.44], life: [0.32, 0.7],
+        colors: [0xdff4ff, 0xffffff, 0xa9dcff], cone: 1.0, drag: 2.6,
+        gravity: [0, -9], inherit: 0.5, glow: 1.3, goo: 'foam',
+        killAtSurface: false, turbulence: 0.4,
+    },
+      // COMING BACK DOWN. Same substance, the same relationship `reentry` has
+      // to `splash`: more of it, thrown harder and wider, because a slam
+      // displaces water sideways rather than lifting a column of it. The extra
+      // life is the crown of foam sitting on the water after the seal has gone
+      // through it.
+      reentryFoam: {
+        count: 30, speed: [5, 19], size: [0.26, 0.55], life: [0.4, 0.95],
+        colors: [0xdff4ff, 0xffffff, 0x9fd8ff], cone: 1.7, drag: 2.2,
+        gravity: [0, -11], inherit: 0.35, glow: 1.5, goo: 'foam',
+        killAtSurface: false, turbulence: 0.4,
+    },
       bite: {
         count: 26, speed: [3, 14], size: [0.1, 0.28], life: [0.3, 0.8],
         colors: [0xff5566, 0xff8899, 0xffd0d8], cone: 0, drag: 2.4,
         gravity: [0, -0.8], inherit: 0.2, glow: 1.5,
+    },
+
+      // --- A MAN EATEN IN THE WATER (systems/gore.js) --------------------------
+      // Three emitters, fired together, because a body coming apart is three
+      // things happening at once and no single burst can be all of them: a hard
+      // spray that says the instant it happened, a fine haze that hangs where it
+      // happened, and a mass in the water that is still there afterwards.
+      //
+      // ALL ONE FAMILY — deep arterial red through to a pale pink — so the
+      // palette rule above holds: this colour on the screen means a person, and
+      // nothing else in the game uses it. `bite` above is the neighbouring ramp
+      // deliberately (a shark snapping at a fish is the same event one notch
+      // down), and the separation between them is SHAPE: three times the count,
+      // twice the speed, and a mist and a mass that a fish never leaves.
+      //
+      // DARKER THAN `playerHit`, which is the other red on screen. The player's
+      // own damage flash is hot and bright because it has to be read instantly
+      // from the corner of the eye; this is meant to be looked AT, and blood in
+      // water is dark.
+      // SIZES AND SPEEDS ARE SET AGAINST THE ARENA, NOT AGAINST THE MAN, and
+      // this is the one thing about these three emitters that is easy to get
+      // wrong and impossible to see while getting it wrong. A man is 1.25 units
+      // in an arena fifty units tall; a burst sized to look right in a
+      // close-up of him is a coloured dot in the frame the game is actually
+      // played in. `npm run looks:gore` renders both, and the fight-scale row
+      // at the bottom of that sheet is the only one worth tuning against.
+      gore: {
+        count: 90, speed: [8, 40], size: [0.28, 0.85], life: [0.4, 1.1],
+        // Dark. Blood is not neon, and these are ADDITIVE sprites — a colour
+        // picked to look right on a swatch arrives on screen with the water
+        // added underneath it and comes out a shade of raspberry. The palest
+        // entry is the spray catching the light and is deliberately the only
+        // one anywhere near bright.
+        colors: [0x6b0710, 0xa50f1d, 0xcc1e30, 0xe8737f], cone: 0, drag: 2.6,
+        gravity: [0, -1.6], inherit: 0.3, glow: 1.1,
+    },
+      // The haze. Barely thrown and long-lived, so it stays where the body was
+      // while the spray above is already gone — that lingering smudge is what
+      // makes the water look like something died in it rather than like an
+      // effect having been played there. Heavy turbulence: this is the one part
+      // of the burst that should visibly be carried off by the current.
+      goreMist: {
+        count: 54, speed: [0.8, 7], size: [0.55, 1.5], life: [1.4, 3.2],
+        colors: [0x3d060b, 0x5e0a12, 0x8f0d18], cone: 0, drag: 3.8,
+        gravity: [0, -0.35], inherit: 0.12, glow: 0.45, turbulence: 1.6,
+    },
+      // THE MASS, AND THE MAIN EVENT. `goo: true` sends these to the density
+      // pass (CONFIG.fx.goo) instead of drawing them as sprites, so they FUSE
+      // into one body of liquid rather than reading as a group of dots — the
+      // same trick `killGoo` above uses on a kill, turned up and turned red.
+      //
+      // Blood in water is a BODY of liquid, not a spray of specks, and that is
+      // the whole reason this layer exists: the two sprite layers above can
+      // only ever be dots, however many of them there are. So this one carries
+      // the read and they decorate it — see the weights in CONFIG.gore, where
+      // `cloud` sits above `spray` deliberately.
+      //
+      // THE NUMBERS ARE THE OPPOSITE OF AN EXPLOSION and have to be. Fusion is
+      // a question of whether neighbours still OVERLAP in the density field: a
+      // burst that opens fast tears the blobs apart within a few frames and
+      // leaves the pass thresholding a scatter of separate droplets, which is
+      // the exact look this exists to avoid. Hence a narrow speed band, heavy
+      // drag, and a long life — a mass that travels together and then hangs.
+      //
+      // SIZES ARE DENSITY RADII, not drawn radii — multiplied again by
+      // `fx.goo.radius` — and they are bigger than `killGoo`'s because a man is
+      // bigger than a mackerel and because the burst has to still be a body at
+      // FIGHT SCALE, forty units from the camera, where the kill goo's blob is
+      // about a pixel. `npm run looks:gore` is the sheet that shows the
+      // difference; the magnifying-glass panels flatter it badly.
+      goreCloud: {
+        // SIZE AND SPEED MOVE TOGETHER OR NOT AT ALL. Both are roughly twice
+        // `killGoo`'s, in the same proportion, and that pairing is the entire
+        // trick: a blob twice as big thrown twice as far is the same SHAPE at
+        // twice the size, and it fuses exactly as well, because fusion is a
+        // question of how far neighbours have separated relative to their own
+        // radius. Move one without the other and it fails immediately and
+        // convincingly — bigger blobs alone melt into a flat featureless disc,
+        // faster blobs alone tear into a scatter of loose round dots. Both were
+        // tried here; both looked like decisions.
+        //
+        // The count is up only a little on `killGoo`'s 14. Piling more splats
+        // into the same space does not make a bigger body, it makes a denser
+        // one, and past about twenty-five the lobes stop reading at all.
+        count: 22, speed: [2.4, 10], size: [0.5, 1.05], life: [1.3, 2.8],
+        // DARKER THAN IT LOOKS IT SHOULD BE. The density pass adds a brightened
+        // rim just inside the surface and a specular off the gradient, so a
+        // colour that reads as blood in a swatch comes out of the pass as a hot
+        // raspberry — the mass has to be authored below where it lands.
+        colors: [0x4a060c, 0x740a13, 0x9c1220], cone: 0, drag: 3.8,
+        // ITS OWN GOO GROUP, not the shared `blood` one a kill uses: this mass
+        // has to hold together at arena scale and a kill's does not, and the
+        // splat radius that buys that would fatten every fish death in the game
+        // if it were set on the default. See CONFIG.fx.goo.groups.gore.
+        gravity: [0, -0.8], inherit: 0.4, glow: 0.6, goo: 'gore',
+        // Held under the emitter's usual pull: the current is what folds the
+        // mass, and at full strength it pulls the lobes apart faster than the
+        // isoline can hold them together.
+        turbulence: 0.55,
     },
       pickup: {
         count: 10, speed: [2, 7], size: [0.08, 0.18], life: [0.25, 0.5],
@@ -7746,6 +7968,60 @@ export const CONFIG = {
         count: 3, speed: [2.6, 5.6], size: [0.07, 0.2], life: [0.7, 1.8],
         colors: [0xdff6ff, 0xffffff, 0xbfefff], cone: 0.16, drag: 1.4,
         gravity: [0, 3.6], inherit: 0.12, glow: 1.0, surfacePop: 'bubbleBurst',
+    },
+      // THE WHITE WATER ITSELF (goo group `foam`). The two emitters above are
+      // BUBBLES — each one a dot that rises and pops — and a wake made only of
+      // dots is a wake you read one particle at a time. This is the mass they
+      // are boiling out of: a handful of blobs astern that fuse into a single
+      // churning body and are pulled apart by the current.
+      //
+      // Born AT the line rather than under it, and `killAtSurface: false` says
+      // so — the surface clip exists to burst rising bubbles, and foam sitting
+      // on the water is the one thing here that belongs at the line. Slow,
+      // draggy and long-lived: this is water that has already been disturbed
+      // and is settling, not water being thrown.
+      //
+      // HOW FAR ASTERN IT IS BORN IS NOT A NUMBER HERE. A goo blob draws
+      // `size x fx.goo.groups.foam.radius` across — several times the sprite it
+      // replaces — so the hull clearance that keeps a bubble off the boat is
+      // not enough for one of these. systems/boatWake.js derives the offset
+      // from those two values instead, so retuning either keeps the guarantee.
+      // Sizes are DENSITY radii and bigger than they look: the cubic falloff
+      // means only the middle of a splat clears the `foam` isoline, so a lobe
+      // authored at the size of the bubbles beside it draws smaller than they
+      // do. These are set so one lobe reads as a patch of white water at fight
+      // scale, and the hull clearance follows them automatically.
+      hullFoam: {
+        count: 3, speed: [0.3, 1.8], size: [0.24, 0.45], life: [0.9, 2.2],
+        colors: [0xdff6ff, 0xffffff, 0xbfefff], cone: 0.9, drag: 2.4,
+        gravity: [0, 0.7], inherit: 0.45, glow: 1.0, goo: 'foam',
+        killAtSurface: false, turbulence: 0.8,
+    },
+      // THE CHARGED WATER INSIDE AN ELECTRIC AURA (goo group `aura`). One lobe
+      // per emission, placed on a ring inside the zone by systems/bossPerks.js
+      // — the placement is the whole safety argument, so it lives there and not
+      // in the `cone` here.
+      //
+      // Barely moving and short-lived by the standards of the other goo: this
+      // is a MEDIUM, not a burst. It should look like the water in the zone is
+      // charged, which means the lobes have to sit still enough to read as a
+      // volume rather than as something being thrown outward from the boss.
+      // No surface clip: an aura can straddle the water line and is not
+      // bubbles. Its palette is the aura's own blue, like every other
+      // non-death emitter — the perk's colour is not passed in.
+      // `inherit: 1` and a short life are BOTH about the boss MOVING. A lobe
+      // does not follow the animal that made it — nothing in this particle
+      // system can — so a swimming boss leaves its own field behind, and field
+      // outside the ring is exactly the lie the ring exists to prevent. Full
+      // inheritance sends each lobe off at the boss's own velocity so it keeps
+      // station for as long as the water lets it, and the short life caps how
+      // far it can fall behind once drag has taken that away. What is left over
+      // is subtracted from the usable radius in systems/bossPerks.js.
+      auraField: {
+        count: 1, speed: [0.2, 1.1], size: [0.55, 0.95], life: [0.45, 0.8],
+        colors: [0x8fe6ff, 0xd8f6ff, 0x5fc8ff], cone: 0, drag: 3.2,
+        gravity: [0, 0], inherit: 1, glow: 1.6, goo: 'aura',
+        killAtSurface: false, turbulence: 0.5,
     },
       // THE BOW WAVE — the other half of a wake, and the only half that happens
       // in the AIR: water thrown off the stem as the hull shoulders it aside.
@@ -8104,9 +8380,22 @@ export const CONFIG = {
       // still resolves as separate sounds instead of a buzz.
       uiType:    { emit: null, shake: 0, hitstop: 0, glow: 0, sfx: 'uiType',
                    haptic: null, sfxMinGap: 0.03 },
-      // A body swallowed. The heaviest `bite` in the game — it is the biggest
-      // single mouthful there is — and it reads as eating, not as a kill.
-      crewEaten: { emit: 'bite',        shake: 0.18, hitstop: 0.03,  glow: 0.5,  ripple: { strength: 2.2, radius: 9 },   sfx: 'bite',     haptic: [24, 20, 30] },
+      // A BODY TAKEN APART. The biggest single mouthful in the game, and now
+      // the nastiest thing on screen — see CONFIG.gore and systems/gore.js.
+      //
+      // `emit` IS DELIBERATELY NULL, which is the one thing here worth reading
+      // twice. The particles are fired by spawnGore, from inside eatCrew, one
+      // frame earlier and in three layers; naming an emitter here as well would
+      // put a fourth burst on top of them — and the one it used to name was
+      // `bite`, twenty-six pink specks now completely invisible inside a
+      // ninety-particle red one. This event is the CAMERA and the SOUND, and
+      // that is all it should ever have been.
+      //
+      // Shake and hit-stop are up from 0.18/0.03: a man coming apart should
+      // land harder than a fish being swallowed, and the pieces need the beat
+      // to be thrown into. Still well under `boatExplosion` (1.0/0.09) — a hull
+      // going up is a bigger EVENT even though this is a worse one.
+      crewEaten: { emit: null,          shake: 0.34, hitstop: 0.05,  glow: 0.8,  ripple: { strength: 3.4, radius: 13 },  sfx: 'crewEaten', haptic: [30, 24, 44] },
       // A man taken off a deck. Light and wet rather than explosive — he is not
       // an enemy and killing him is not an achievement; it should read as
       // something knocked into the sea.
@@ -8131,7 +8420,7 @@ export const CONFIG = {
       // Its own sound now rather than the generic `splash`, which is what a body
       // knocked off a boat makes. Coming out of the water and landing in it are
       // opposite events and were sharing one voice.
-      breach:    { emit: 'splash',      shake: 0.2,  hitstop: 0,     glow: 0.3,  ripple: { strength: 2.0, radius: 9 },   sfx: 'breach',   haptic: [12] },
+      breach:    { emit: 'splash',      goo: 'breachFoam', shake: 0.2,  hitstop: 0,     glow: 0.3,  ripple: { strength: 2.0, radius: 9 },   sfx: 'breach',   haptic: [12] },
       // ...and the other half of that pair. `breach` fires on BOTH crossings
       // and always did, which meant the seal leaving the water and the seal
       // arriving back through it were literally the same event — the loudest
@@ -8145,7 +8434,7 @@ export const CONFIG = {
       // and a slam is also something a good player does every few seconds. 0.05
       // is what survives being repeated. No `sfxMinGap` — you cannot re-enter
       // the water twice inside a window, so there is nothing to collapse.
-      reentry:   { emit: 'reentry',     shake: 0.55, hitstop: 0.05,  glow: 0.9,  ripple: { strength: 5.0, radius: 18 },  sfx: 'reentry',  haptic: [22, 14, 30] },
+      reentry:   { emit: 'reentry',     goo: 'reentryFoam', shake: 0.55, hitstop: 0.05,  glow: 0.9,  ripple: { strength: 5.0, radius: 18 },  sfx: 'reentry',  haptic: [22, 14, 30] },
       // The mid-air relaunch. No hitstop and almost no shake on purpose: it is
       // a movement verb, and freezing the frame on a jump makes the jump feel
       // like it hit something. Whatever punch it has is in the sound.
@@ -8615,7 +8904,17 @@ export const CONFIG = {
         // Resolution divisor for the density field. Also the softness of the
         // surface — the isoline is found on a bilinear upsample, so a coarser
         // field is a wobblier, more molten edge. 2 reads as surface tension.
+        // Shared by every group: it sizes the one buffer they take turns in.
         divisor: 2,
+
+        // THE DEFAULT SURFACE. Every key below is what a group gets when it
+        // does not say otherwise — a group is a DIFF against this block, the
+        // same shape as the biolumSkin presets. Two reasons it is arranged
+        // that way rather than every group carrying a full copy: the sliders
+        // in the tuner stay pointed at one place and move the whole look at
+        // once, and an emitter that says `goo: true` instead of naming a group
+        // still lands on a fully-specified surface.
+        //
         // Splat diameter, as a multiple of the particle's own `size`. THE
         // control that decides whether anything fuses at all: blobs have to
         // overlap in the field to sum above the isoline between them, and
@@ -8645,6 +8944,124 @@ export const CONFIG = {
         normal: 6,
         lightX: -0.5,
         lightY: 0.85,
+
+        // ONE GROUP PER SUBSTANCE, and the split is not cosmetic. Everything
+        // in a group's field SUMS, so two substances sharing one would weld to
+        // each other — a kill happening at the water line would grow a neck
+        // into the seal's foam — and they would have to share one surface,
+        // when thick blood and thin foam are different surfaces by definition.
+        //
+        // Each group is one extra draw of a buffer that is already resident
+        // plus one fullscreen pass, and ONLY while it has something alive. A
+        // group nothing is emitting into costs nothing at all.
+        //
+        // Order is composite order: a later group lands on top of an earlier
+        // one. An emitter joins a group by name — `goo: 'foam'`.
+        groups: {
+          // WHAT A KILL LEAVES, and what a body coming apart leaves. Thick,
+          // opaque, its colour taken from the creature that died (see the tint
+          // rule in CONFIG.emitters). It is the DEFAULT surface exactly —
+          // every key above was authored for it — so it declares nothing, and
+          // the group that `goo: true` resolves to is this one.
+          blood: {},
+
+          // THE WATER LINE BREAKING. Everything here is the opposite of blood
+          // and for one reason: foam is AERATED WATER, not a fluid with a
+          // skin. So it is additive (it adds light to the water rather than
+          // hiding it), thin (a low iso, so it sheets rather than balls up),
+          // soft-edged, and carries no specular — a highlight implies a
+          // surface holding its shape, which is the one thing spray does not
+          // do. What it keeps from blood is the fusion, which is the whole
+          // point: a breach should throw a SHEET of water that tears into
+          // strands, not forty individual droplets.
+          // THE INSIDE OF A DAMAGE ZONE. The one group that runs continuously
+          // rather than in bursts (the electric aura, CONFIG.boss.perkFx.electric)
+          // and the one whose job is READABILITY rather than mess — so it is
+          // held tight and dim: a high isoline so the field stays a set of
+          // distinct lobes instead of a single filled disc that would hide the
+          // boss inside it, and a low opacity so what is drawn on top of it —
+          // the ring, the arcs, the animal — always wins.
+          aura: {
+            radius: 4.4,
+            // BELOW 1, and this one is not a taste call. A splat peaks at 1.0
+            // by construction, so an isoline above that means nothing shows up
+            // until two lobes OVERLAP — which is right for a burst, where
+            // everything is emitted at one point, and renders literally
+            // nothing for a field: a dozen lobes spread thinly across a
+            // ten-unit disc are never near enough to sum. Set at 1.15 first,
+            // and the zone drew a ring with empty water inside it while the
+            // containment test happily reported 36 lobes in flight.
+            //
+            // LOW rather than merely under 1, and for the same reason one step
+            // further on. The falloff is cubic, so the part of a splat that
+            // clears the isoline is a good deal smaller than the splat: at 0.7
+            // it is barely a third of the radius, which turned every lobe into
+            // a dot. This is where a lone lobe still reads as a body of water.
+            iso: 0.32,
+            soft: 0.22,
+            opacity: 0.55,
+            additive: true,
+            rim: 0.5,
+            rimWidth: 0.8,
+            spec: 0,
+            normal: 2,
+          },
+          foam: {
+            radius: 3.0,
+            iso: 0.55,
+            soft: 0.45,
+            opacity: 0.85,
+            additive: true,
+            rim: 0.35,
+            rimWidth: 0.9,
+            spec: 0,
+            normal: 3,
+          },
+
+          // A MAN EMPTYING INTO THE WATER (systems/gore.js). Its own group
+          // rather than reusing `blood` above, and the reason is scale: a kill
+          // burst is judged at the size of a fish and this one has to still be
+          // a body of liquid at the size of the ARENA, forty units from the
+          // camera, where the kill goo's mass is about a pixel across.
+          //
+          // SCALE IS NOT SET HERE, and this is the whole lesson of the group.
+          // Every knob in this block was tried as the way to make the mass
+          // bigger and every one of them broke it, because `radius` and `iso`
+          // do not describe a SIZE — they describe the relationship between the
+          // splats and each other:
+          //
+          //   a WIDER splat with the blobs thrown no further just makes every
+          //   splat overlap every other one, and the mass comes out as a flat
+          //   featureless disc with no lobes and no edge. It looks deliberate.
+          //
+          //   raising `iso` to pull that disc back into lobes only shrinks it
+          //   again, because a higher isoline needs more splats piled up before
+          //   anything shows at all.
+          //
+          // What actually makes a bigger body is scaling the EMITTER's sizes
+          // and speeds by the same factor and leaving these alone: twice the
+          // blob thrown twice as far is the same shape at twice the size, which
+          // is exactly what "bigger" should mean. See the note on
+          // CONFIG.emitters.goreCloud, which is where the gore's scale lives.
+          //
+          // SO WHAT IS THIS GROUP FOR? Colour. `rim` and `spec` are the two
+          // things that brighten the surface, and at `blood`'s 0.75/0.55 a deep
+          // arterial red comes out of the pass as a hot raspberry — the mass
+          // reads as fruit rather than as a person, and no palette change fixes
+          // it because the brightening happens after the tint. Both are pulled
+          // down here until the body is dark with a wet edge, which is what
+          // blood in water looks like. The edge is a little harder than
+          // `blood`'s for the same reason: this is thicker.
+          //
+          // No `additive` — this hides the water behind it, the way a heavy
+          // liquid does, and unlike the foam above.
+          gore: {
+            soft: 0.16,
+            rim: 0.32,
+            rimWidth: 0.85,
+            spec: 0.22,
+          },
+        },
       },
 
       shakeDecay: 0.0004, // fraction of shake left after 1s
@@ -9895,6 +10312,41 @@ export const CONFIG = {
         '/sfx/Seal_PlayerDeath_03.mp3',
       ], gain: 2.2, filter: 900, pitchVary: 0.06, filterVary: 0.15 },
       bite:      { src: null, type: 'noise', filter: 1200,     decay: 0.18, gain: 0.26, pitchVary: 0.14, filterVary: 0.25 },
+      // A MAN EATEN IN THE WATER. Its own voice as of the gore burst, and it
+      // needed one: it was borrowing `bite` above, which is the snap a shark
+      // makes at a mackerel. The loudest thing that can happen to a person in
+      // this game sounded exactly like the smallest thing that can happen to a
+      // fish, and no amount of particles fixes a sound that says "minnow".
+      //
+      // WHAT IT IS. A `boom` rather than a `noise`: `bite` is a filtered click
+      // with no body, and what this event needs is MASS — something with a
+      // bottom to it that a snap does not have. The pitch falls from 190 to 34,
+      // which is further and lower than `bigKill` (150 -> 32 is the biggest
+      // explosion in the game, and this should sit just under it rather than
+      // over it — a boat going up is a bigger event, it is simply not as nasty).
+      //
+      // `noise` at 0.9 is nearly all of what you hear: the tone is the weight
+      // and the noise is the wet, and this is the one sound in the table where
+      // the wet is the point. Filtered low at 620Hz so it is a tearing thud
+      // rather than a splash — everything above that is what makes `splash`
+      // sound like water rather than like something in it.
+      //
+      // The decay is long for an impact (0.52s) because the pieces are still
+      // arriving: the burst throws sixteen solids that splash their way back
+      // in over the next second, and a sound that has finished before they land
+      // leaves the whole second half of the effect silent.
+      //
+      // PITCH VARIATION IS HIGH, unlike `bossArrive` and `chumChunkSpawn` which
+      // are deliberately identical every time. Those two are CUES — the player
+      // has to recognise them. This one is texture: a boat of four men going
+      // one after another needs four different noises, or the fourth reads as a
+      // sound file being retriggered.
+      //
+      // AND IT IS READY FOR REAL TAKES: drop recordings onto this voice in the
+      // Sound workbench and `srcs` fills itself in. Nothing else here has to
+      // change — a voice with takes on it plays them and ignores the synth
+      // fields below, which stay as the fallback.
+      crewEaten: { src: null, srcs: [], type: 'boom', freq: [190, 34], decay: 0.52, gain: 0.42, noise: 0.9, filter: 620, pitchVary: 0.18, filterVary: 0.3 },
       // The hoover, not the bite: darker, softer and shorter than `bite`, so a
       // crab working through an orb sits under the fight instead of on top of
       // it. Wide pitch/filter variation because several animals feed at once and
@@ -13252,6 +13704,146 @@ export const CONFIG = {
     chumXp: 1,
   },
 
+  // ---------------------------------------------------------------------------
+  // GORE — what is left when a man is eaten in the water (systems/gore.js).
+  //
+  // Fired from ONE place, eatCrew() in systems/crew.js, which is the single
+  // route every mouth in the game takes to a body: the seal swimming into one,
+  // a shark or an orca that broke off its hunt to get there, all of them.
+  // Hanging it off the four `onCrewEaten` hooks instead would have been four
+  // copies of it, and the seal's own meal — the one the player actually causes
+  // — goes through a fifth path that has no hook at all.
+  //
+  // TWO HALVES, and they are separate on purpose because they fail in
+  // different ways. The RED is particles, always available, and is the whole
+  // effect on its own. The PIECES are lit, tumbling solids thrown out of the
+  // body — bones, once there are bone models to throw, and a set of procedural
+  // shapes until then. A pool with no models in it does not disable the effect;
+  // it falls back, so this reads correctly today and gets better the moment a
+  // model lands in `pieces.assets`.
+  //
+  // It is a top-level block rather than `boats.crew.gore` because the crew are
+  // only the first humans in the water, not the definition of one.
+  // ---------------------------------------------------------------------------
+  gore: {
+    enabled: true,
+
+    // --- the red -------------------------------------------------------------
+    // Scales on the three emitters of the same names, so each layer can be
+    // pulled back on its own. 0 switches one off entirely; the emitters
+    // themselves (CONFIG.emitters.gore / goreMist / goreCloud) are where the
+    // colour, speed and size live.
+    //
+    // `cloud` IS THE BIGGEST OF THE THREE, on purpose. It is the only layer
+    // that goes through the density pass, so it is the only one that can be a
+    // BODY of liquid rather than a cloud of dots — blood in water is a mass,
+    // and the two sprite layers exist to give that mass an edge and a smudge.
+    // Pull this one down and the effect immediately reverts to confetti.
+    spray: 1.0,  // the hard burst — the instant it happened
+    mist: 1.2,   // the haze that hangs where it happened
+    cloud: 1.7,  // the blob: the body of blood, and the read
+    // How much of the EATER's speed the burst carries. A shark that takes a
+    // body at a run and leaves the red hanging perfectly still behind it looks
+    // like two unrelated things on the same frame.
+    carry: 0.35,
+
+    // --- the pieces ----------------------------------------------------------
+    pieces: {
+      enabled: true,
+      // WHICH MODELS ARE THROWN. Asset keys from assets.js — every separate
+      // MESH inside each one becomes one shape in the pool, so a single .glb
+      // holding a dozen bones as a dozen meshes is a dozen shapes for free.
+      // (A pack exported as one merged mesh is one shape; `npm run split` cuts
+      // it apart first.) Each shape is centred and normalised to unit size when
+      // the pool is built, so neither the model's authored scale nor the tuner's
+      // Size slider can change how big a thrown piece comes out.
+      //
+      // EMPTY IS FINE: the procedural shapes below stand in, and the pool is
+      // rebuilt the first time a listed key finishes loading — including one
+      // uploaded mid-session.
+      assets: ['gorebone'],
+      // MIX THE PROCEDURAL FLESH LUMPS IN alongside whatever is listed above,
+      // at `1 - boneShare`. On by default and it earns it: bone.glb is a single
+      // mesh, so the pool it gives is ONE shape, and sixteen copies of one
+      // femur read as a crate being dropped rather than as a man coming apart.
+      // The lumps are the only other material in the burst and the only thing
+      // in it that is the colour of the red around it.
+      //
+      // Turn it off for a pack that already holds enough different bones to
+      // carry the burst on its own.
+      flesh: true,
+      // How many pieces a body throws, and the pool they come out of. A second
+      // meal on top of the first takes what it needs from the oldest pieces in
+      // the water rather than being thrown a handful.
+      //
+      // `max` IS A TRIANGLE BUDGET as much as a look one: bone.glb is ~3k
+      // triangles, so a full pool is a few hundred thousand of them — one draw
+      // call, but not free on a phone. Raise it with a heavier bone and watch
+      // the frame, not just the water.
+      count: 16,
+      max: 96,
+      // Piece size as a share of the MAN'S HEIGHT (crew.height), never in world
+      // units — a body is the only thing on screen that sets the scale these
+      // read against, and a hand-typed size stops matching it the first time
+      // that number moves.
+      // A MULTIPLE OF HIS HEIGHT, and set against the FIGHT frame rather than
+      // against a close-up of him: at 0.3 a bone was a third of a unit in an
+      // arena fifty units tall, which is a speck the player never sees. 0.6 is
+      // most of a man's height per piece — anatomically silly and correct on
+      // screen, which is the trade every readable effect in this game makes.
+      size: 0.6,
+      sizeJitter: 0.7,
+      // NON-UNIFORM jitter, on top of the overall size above, applied along
+      // each shape's OWN long axis (recorded when the pool normalises it). This
+      // is what turns one bone model into a scatter of different bones: a femur
+      // stretched and thinned, a stub squashed and thickened. Without it a
+      // single-mesh pack is sixteen identical objects at sixteen sizes, which
+      // the eye reads as one object immediately.
+      //
+      // Both are FRACTIONS, symmetric about 1 — 0.5 means "anywhere from three
+      // quarters to one and a quarter". Push `lengthJitter` past ~1.2 and the
+      // long ones stop reading as bone and start reading as sticks.
+      lengthJitter: 0.75,
+      girthJitter: 0.4,
+      // Thrown out from where the body was, in arena units/sec, plus a lift so
+      // the underside of the burst opens too rather than just dropping.
+      speed: [5, 22],
+      upBias: 3.2,
+      scatter: 3.4,
+      spin: 11,
+      // The water. Both are scaled per piece by how small it is, so a finger
+      // bone stalls and drifts while a femur carries on — which is most of what
+      // sells a pool of shapes as one material at many sizes.
+      drag: 2.0,
+      waterGravity: 3.6,
+      sink: 1.1,
+      spinDamp: 1.4,
+      splashScale: 0.22,
+      // How long a piece lasts, and how much of that it spends shrinking away.
+      // Long, because these are the wreckage of the best pickup in the game and
+      // the player should have time to notice what just happened.
+      life: 5.5,
+      lifeJitter: 0.4,
+      fade: 1.1,
+      // Colour. Bone is the ivory; meat is what the softer procedural shapes
+      // and any unrecognised model come out as. An asset with a signature
+      // colour of its own uses that instead — see assetBaseColor.
+      boneColor: 0xe4dcc4,
+      // Lighter than the goo's darkest red on purpose. These are LIT solids,
+      // not additive sprites, so the key light is most of what they get — and
+      // at the mass's own #4a060c a lump came out as a near-black polygon
+      // against dark water, which reads as a rock rather than as part of him.
+      meatColor: 0xa32330,
+      // How much piece-to-piece brightness variation. At 0 they read as one
+      // flat mass moving together.
+      tint: 0.45,
+      // What share of the burst is bone rather than meat, when the pool is the
+      // procedural fallback. Ignored once real models are listed above: then
+      // every shape is whatever the model is.
+      boneShare: 0.6,
+    },
+  },
+
   // THE WAKE. What a hull leaves in the water it is sitting in, and the one
   // description every boat in the game shares: the rowboat and the trawler that
   // sail past (systems/boats.js), and both boat bosses — the trawler hull and
@@ -13332,6 +13924,27 @@ export const CONFIG = {
     keelRise: 0.22,
     keelMargin: 0.15,
     keelSpanMax: 0.3,
+
+    // --- THE WHITE WATER ------------------------------------------------------
+    // The foam mass astern (emitter `hullFoam`, goo group `foam`). Rate is per
+    // second at the top of the ramp, scaled by hull size like the churn.
+    // Deliberately a fraction of `churnPerSecond`: each of these is a whole
+    // lobe of a body of foam, not a bubble, and a dozen a second welds into a
+    // slab that follows the boat around.
+    foamEnabled: true,
+    foamPerSecond: 9,
+    // Where it sits relative to the water line. Just under, so it reads as
+    // being IN the water rather than floating on top of it.
+    foamDepth: 0.06,
+    // How far astern the band of foam extends, in half-lengths, measured from
+    // the hull clearance outward. The clearance itself is NOT here — it is
+    // derived from the blob's drawn size in systems/boatWake.js, because a
+    // number typed here would silently stop being enough the moment anyone
+    // touched `hullFoam.size` or the group's `radius`.
+    foamSpan: 0.55,
+    // A hair more than the derived clearance, for the hull's roll and bob —
+    // the same job `asternFrom` being 1.04 rather than 1.0 does for bubbles.
+    foamGap: 0.08,
 
     // --- the bow wave ---------------------------------------------------------
     sprayEnabled: true,
@@ -16796,12 +17409,12 @@ export const TUNER_SCHEMA = [
       { path: 'strike.foodChain.punch', min: 0, max: 0.2, step: 0.005, label: 'FOOD CHAIN!: camera punch' },
       { path: 'strike.foodChain.punchPerChain', min: 0, max: 0.05, step: 0.002, label: 'FOOD CHAIN!: punch per link' },
       { path: 'strike.breachChain.linksPerLevel', min: 1, max: 4, step: 1, label: 'Porpoising: links per breach, per stack' },
-      // Camera-wide settings, surfaced here because the food chain is the only
-      // thing that punches the lens today — if that changes they want their
-      // own group.
-      { path: 'camera.punch.enabled', type: 'bool', label: 'camera punch-in' },
-      { path: 'camera.punch.max', min: 0, max: 0.4, step: 0.01, label: 'camera punch: max zoom' },
-      { path: 'camera.punch.decay', min: 1, max: 20, step: 0.5, label: 'camera punch: release speed' },
+      // The two rows above are how hard the food chain HITS the lens. What the
+      // lens then does with it — whether it punches at all, how far, and how
+      // fast it lets go — is camera-wide and lives with the rest of the camera,
+      // under `Main camera` in the Camera section of the ` panel. It was here
+      // because the food chain was the only thing punching the lens; that made
+      // a camera-wide switch look like a strike setting.
     ],
   },
   {
@@ -16838,6 +17451,33 @@ export const TUNER_SCHEMA = [
       { path: 'aimIndicator.reticle.dot', min: 0, max: 1.5, step: 0.02, label: 'reticle: centre dot (0 = none)' },
       { path: 'aimIndicator.reticle.spinSpeed', min: -4, max: 4, step: 0.05, label: 'reticle: spin (rad/s)' },
       { path: 'aimIndicator.reticle.glow', min: 0, max: 4, step: 0.05, label: 'reticle: glow' },
+    ],
+  },
+  {
+    // The camera the game actually ships with — the fixed frame, plus the two
+    // things that move it. This is the rig the cine camera sits ON TOP of: with
+    // `cinematic follow camera` off, everything below is the whole of what the
+    // camera does, and the punch is the only motion in the game that changes
+    // what is in frame.
+    //
+    // These lived under `Strike / boost` in the Companions tab, because the
+    // food chain was the only thing that punched the lens. Camera-wide
+    // settings do not belong on an ability's panel, and the answer to "why is
+    // the frame moving" should be in one place — this section.
+    group: 'Main camera',
+    section: 'Camera',
+    items: [
+      // Off in the shipped tuning: the arena is one fixed frame and the seal
+      // swims inside it. Turning this on without the cine rig is the plain
+      // follow — no dead zone, no lead, no clamp beyond the arena's own.
+      { path: 'camera.followPlayer', type: 'bool', label: 'plain follow (the pre-cine camera)' },
+      { path: 'camera.followLerp', min: 0.01, max: 0.6, step: 0.01, label: 'plain follow: catch-up per frame' },
+      // The punch-in. Independent of the follow above and of the cine rig —
+      // it rides on whichever camera is running, which is why it is here and
+      // not in either of their groups.
+      { path: 'camera.punch.enabled', type: 'bool', label: 'camera punch-in' },
+      { path: 'camera.punch.max', min: 0, max: 0.4, step: 0.01, label: 'camera punch: max zoom' },
+      { path: 'camera.punch.decay', min: 1, max: 20, step: 0.5, label: 'camera punch: release speed' },
     ],
   },
   {
@@ -16901,7 +17541,12 @@ export const TUNER_SCHEMA = [
       { path: 'cinecam.lens.droplets.slide', min: 0, max: 1.6, step: 0.05, label: 'droplets: run distance (cell heights)' },
       { path: 'cinecam.lens.droplets.stretch', min: 0, max: 4, step: 0.05, label: 'droplets: vertical stretch when running' },
       { path: 'cinecam.lens.droplets.taper', min: 0, max: 0.9, step: 0.02, label: 'droplets: teardrop tail' },
-      { path: 'cinecam.lens.droplets.slide', min: 0, max: 1, step: 0.02, label: 'droplets: how far they creep down' },
+      // `droplets.slide` was listed twice in this group, the second time at
+      // max 1 — the same value on two sliders that disagreed about its
+      // ceiling, so the shipped 1.15 sat off the end of one of them and
+      // dragging it could only cut the run short. 1.6 is the real ceiling and
+      // it is a shader limit, not a taste one: see the note in the droplets
+      // block up top.
     ],
   },
   {
@@ -16991,6 +17636,41 @@ export const TUNER_SCHEMA = [
       { path: 'cinecam.states.deathFloor.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'floor hit: sharp radius' },
       { path: 'cinecam.states.deathFloor.flare', min: 0, max: 2, step: 0.02, label: 'floor hit: flare' },
       { path: 'cinecam.states.deathFloor.vignette', min: 0, max: 1, step: 0.02, label: 'floor hit: vignette' },
+    ],
+  },
+  {
+    // THE KILL SHOT — the one camera move the game makes on its own, and the
+    // photograph it takes while it is there. systems/bossKill.js pushes in on
+    // the seal; systems/bossShot.js reads the frame partway through the hold.
+    //
+    // It is a boss EVENT, and it used to be tuned as one — these rows sat in
+    // the middle of the boss group on the Enemies tab, between the perks and
+    // the gibs. But what they tune is the camera: a push-in with a zoom, a
+    // weight and its two blend times, which is the same vocabulary as the
+    // states above and nothing at all like a perk. The rest of the ceremony —
+    // the slow motion it rides on, the audio and the silence, the wreckage —
+    // is still under `The boss — arrival & perks`, because those are things
+    // the boss does rather than things the camera does.
+    //
+    // The shutter's own timing is NOT here on purpose. `snapshot.at` is a
+    // fraction of the hold, and the corpse and the burst are both derived from
+    // snapshotMoment() — dragging it live would leave the body coming apart on
+    // the wrong side of the picture. It is tuned in config.js next to the
+    // derivation, with the rest of the print's layout.
+    group: 'Kill shot & trophy',
+    section: 'Camera',
+    items: [
+      { path: 'boss.kill.cam.enabled', type: 'bool', label: 'push in on the seal at the kill' },
+      { path: 'boss.kill.cam.zoom', min: 1, max: 4, step: 0.05, label: 'close-up zoom' },
+      { path: 'boss.kill.cam.weight', min: 0, max: 1, step: 0.05, label: 'how much frame it takes' },
+      { path: 'boss.kill.cam.pushTime', min: 0.05, max: 2, step: 0.05, label: 'push in over (s)' },
+      { path: 'boss.kill.cam.releaseTime', min: 0.05, max: 2, step: 0.05, label: 'let go over (s)' },
+      // The only part of the share image worth a switch: everything else about
+      // it is layout, and this is the one thing that changes what the picture
+      // is FOR. Sized and coloured in config.js next to the rest of the
+      // snapshot, because a code somebody is going to scan is not something to
+      // discover the limits of with a slider.
+      { path: 'boss.kill.snapshot.qr.enabled', type: 'bool', label: 'QR to the game on shared images' },
     ],
   },
   {
@@ -17277,11 +17957,10 @@ export const TUNER_SCHEMA = [
       { path: 'boss.kill.dilateTime', min: 0.02, max: 1, step: 0.02, label: 'time to reach it (s)' },
       { path: 'boss.kill.beatTime', min: 0, max: 4, step: 0.05, label: 'the beat, held for (s)' },
       { path: 'boss.kill.returnTime', min: 0.05, max: 3, step: 0.05, label: 'speed back up over (s)' },
-      { path: 'boss.kill.cam.enabled', type: 'bool', label: '...and push in on the seal' },
-      { path: 'boss.kill.cam.zoom', min: 1, max: 4, step: 0.05, label: 'close-up zoom' },
-      { path: 'boss.kill.cam.weight', min: 0, max: 1, step: 0.05, label: 'how much frame it takes' },
-      { path: 'boss.kill.cam.pushTime', min: 0.05, max: 2, step: 0.05, label: 'push in over (s)' },
-      { path: 'boss.kill.cam.releaseTime', min: 0.05, max: 2, step: 0.05, label: 'let go over (s)' },
+      // The push-in the slow motion is there FOR, and the photograph taken
+      // during it, are under `Kill shot & trophy` in the Camera section of the
+      // ` panel — with the cine rig and states, which is the only place the
+      // rest of the game's camera moves can be seen next to it.
       { path: 'boss.kill.audio.follow', min: 0, max: 1, step: 0.05, label: 'how far sound follows' },
       { path: 'boss.kill.audio.minRate', min: 0.1, max: 1, step: 0.02, label: 'slowest playback rate' },
       // --- the silence and its tail (hushMusic, systems/music.js) ---
@@ -17293,13 +17972,6 @@ export const TUNER_SCHEMA = [
       { path: 'boss.kill.music.tailLevel', min: 0, max: 3, step: 0.05, label: 'tail level (x music)' },
       { path: 'boss.kill.music.send', min: 0, max: 2, step: 0.05, label: 'how hard the room is hit' },
       { path: 'boss.kill.music.returnFade', min: 0, max: 3, step: 0.05, label: 'music back up over (s)' },
-      // --- the trophy (systems/bossShot.js) ---
-      // The only part of the share image worth a switch: everything else about
-      // it is layout, and this is the one thing that changes what the picture
-      // is FOR. Sized and coloured in config.js next to the rest of the
-      // snapshot, because a code somebody is going to scan is not something to
-      // discover the limits of with a slider.
-      { path: 'boss.kill.snapshot.qr.enabled', type: 'bool', label: 'QR to the game on shared images' },
       // --- the wreckage (systems/bossGibs.js) ---
       { path: 'boss.gibs.enabled', type: 'bool', label: 'bosses come apart into chunks' },
       { path: 'boss.gibs.count', min: 0, max: 300, step: 5, label: 'chunks (before size)' },
@@ -17335,6 +18007,17 @@ export const TUNER_SCHEMA = [
       { path: 'boss.perkFx.electric.arcRate', min: 0, max: 60, step: 1, label: 'arcs per second' },
       { path: 'boss.perkFx.electric.pulse', min: 0, max: 1, step: 0.02, label: 'ring breath depth' },
       { path: 'boss.perkFx.electric.pulseHz', min: 0.2, max: 12, step: 0.1, label: 'ring breath rate' },
+      // The charged field inside the ring. `inset` is a SAFETY number as much
+      // as a look one — it is what keeps a wobbling surface off a boundary the
+      // player has to trust — so its range stops well short of 1 and the
+      // guarantee is measured by `npm run test:bossperks`, not by this slider.
+      { path: 'boss.perkFx.electric.fillEnabled', type: 'bool', label: 'charged field inside the ring' },
+      { path: 'boss.perkFx.electric.fillPerSecond', min: 0, max: 40, step: 1, label: 'field lobes per second' },
+      { path: 'boss.perkFx.electric.inset', min: 0.3, max: 0.92, step: 0.02, label: 'field stops at (share of the reach)' },
+      { path: 'boss.perkFx.electric.fillDrift', min: 0, max: 3, step: 0.1, label: 'field drift' },
+      { path: 'fx.goo.groups.aura.iso', min: 0.2, max: 3, step: 0.05, label: 'field surface (high = separate lobes)' },
+      { path: 'fx.goo.groups.aura.opacity', min: 0, max: 1, step: 0.05, label: 'field opacity' },
+      { path: 'fx.goo.groups.aura.radius', min: 1, max: 8, step: 0.1, label: 'field lobe size' },
       { path: 'boss.perkFx.teleport.color', type: 'color', label: 'blink flash colour' },
       { path: 'boss.perkFx.teleport.flashScale', min: 0.5, max: 4, step: 0.05, label: 'blink flash size (x body)' },
       // The flicker ramp is the whole disappearance — see the note in
@@ -17990,6 +18673,52 @@ export const TUNER_SCHEMA = [
     ],
   },
 
+  // What is left when a man is eaten in the water. Under Boats because the
+  // crew are the only humans there are so far, and its own group because the
+  // effect is not about boats at all — see CONFIG.gore and systems/gore.js.
+  //
+  // NO SLIDER FOR `pieces.assets`: which models are thrown is a list of asset
+  // keys, not a number, and a row that rendered it would be a row that invents
+  // a value for every preset that has none. It is edited in config.js.
+  {
+    group: 'Eaten alive',
+    panel: 'enemies',
+    section: 'Boats',
+    items: [
+      { path: 'gore.enabled', type: 'bool', label: 'gore' },
+      { path: 'gore.spray', min: 0, max: 4, step: 0.1, label: 'red: the burst' },
+      { path: 'gore.mist', min: 0, max: 4, step: 0.1, label: 'red: the haze that hangs' },
+      { path: 'gore.cloud', min: 0, max: 4, step: 0.1, label: 'red: the mass in the water' },
+      { path: 'gore.carry', min: 0, max: 1, step: 0.05, label: 'pieces carried by the eater' },
+      { path: 'emitters.gore.count', min: 1, max: 240, step: 2, label: 'burst particles' },
+      { path: 'emitters.gore.glow', min: 0, max: 8, step: 0.1, label: 'burst glow' },
+      { path: 'emitters.goreMist.count', min: 1, max: 160, step: 2, label: 'haze particles' },
+      { path: 'emitters.goreMist.turbulence', min: 0, max: 4, step: 0.1, label: 'haze taken by the current' },
+      { path: 'emitters.goreCloud.count', min: 1, max: 80, step: 1, label: 'blobs in the mass' },
+      // --- the solids ---
+      { path: 'gore.pieces.enabled', type: 'bool', label: 'bones & pieces' },
+      { path: 'gore.pieces.count', min: 0, max: 60, step: 1, label: 'pieces per body' },
+      { path: 'gore.pieces.max', min: 8, max: 400, step: 4, label: 'pieces in the water at once' },
+      // A MULTIPLE of the man's height, never world units: a body is the only
+      // thing on screen that sets the scale these read against.
+      { path: 'gore.pieces.size', min: 0.05, max: 1, step: 0.01, label: 'piece size (x his height)' },
+      { path: 'gore.pieces.sizeJitter', min: 0, max: 1.5, step: 0.05, label: 'piece size variation' },
+      { path: 'gore.pieces.speed.0', min: 0, max: 20, step: 0.5, label: 'thrown: slowest' },
+      { path: 'gore.pieces.speed.1', min: 0, max: 40, step: 0.5, label: 'thrown: fastest' },
+      { path: 'gore.pieces.upBias', min: 0, max: 10, step: 0.1, label: 'upward kick' },
+      { path: 'gore.pieces.scatter', min: 0, max: 10, step: 0.1, label: 'scatter' },
+      { path: 'gore.pieces.spin', min: 0, max: 30, step: 0.5, label: 'tumble' },
+      { path: 'gore.pieces.drag', min: 0.1, max: 8, step: 0.1, label: 'water drag' },
+      { path: 'gore.pieces.sink', min: 0, max: 6, step: 0.1, label: 'sink speed' },
+      { path: 'gore.pieces.life', min: 0.5, max: 20, step: 0.5, label: 'how long a piece lasts' },
+      { path: 'gore.pieces.fade', min: 0.1, max: 6, step: 0.1, label: 'shrink-away time' },
+      { path: 'gore.pieces.boneShare', min: 0, max: 1, step: 0.05, label: 'share that is bone (stand-in shapes only)' },
+      { path: 'gore.pieces.boneColor', type: 'color', label: 'bone colour' },
+      { path: 'gore.pieces.meatColor', type: 'color', label: 'flesh colour' },
+      { path: 'gore.pieces.tint', min: 0, max: 1, step: 0.05, label: 'piece-to-piece variation' },
+    ],
+  },
+
   // The wake, and it is its own group rather than more rows under Boats
   // because it is not only the boats': the same numbers drive both boat bosses.
   // See CONFIG.boatWake.
@@ -18019,6 +18748,16 @@ export const TUNER_SCHEMA = [
       { path: 'boatWake.keelRise', min: 0.05, max: 1, step: 0.01, label: 'keel: assumed rise time (safety)' },
       { path: 'boatWake.keelMargin', min: 0, max: 1, step: 0.05, label: 'keel: clearance margin (safety)' },
       { path: 'boatWake.keelSpanMax', min: 0, max: 1, step: 0.02, label: 'keel: longest usable stretch (x half-length)' },
+      // The foam mass astern. `foamGap` is the only clearance number here on
+      // purpose — the real one is derived from the lobe's drawn size in
+      // systems/boatWake.js, and a slider for it would be a slider that can
+      // put foam on the boat.
+      { path: 'boatWake.foamEnabled', type: 'bool', label: 'white water astern' },
+      { path: 'boatWake.foamPerSecond', min: 0, max: 30, step: 1, label: 'foam rate at full speed' },
+      { path: 'boatWake.foamSpan', min: 0, max: 2, step: 0.05, label: 'foam band length (x half-length)' },
+      { path: 'boatWake.foamDepth', min: 0, max: 0.6, step: 0.02, label: 'foam depth under the line' },
+      { path: 'boatWake.foamGap', min: 0, max: 1, step: 0.02, label: 'foam: extra clearance astern' },
+      { path: 'emitters.hullFoam.count', min: 0, max: 12, step: 1, label: 'foam lobes per burst' },
       { path: 'boatWake.sprayEnabled', type: 'bool', label: 'bow wave' },
       { path: 'boatWake.sprayMinRamp', min: 0, max: 0.95, step: 0.05, label: 'bow wave: speed it starts at' },
       { path: 'boatWake.sprayPerSecond', min: 0, max: 40, step: 1, label: 'bow wave rate' },
@@ -18730,11 +19469,13 @@ export const TUNER_SCHEMA = [
       { path: 'fx.turbulence.frequency', min: 0.05, max: 2, step: 0.05, label: 'turbulence eddy size (low = big)' },
       { path: 'fx.turbulence.timeScale', min: 0, max: 4, step: 0.05, label: 'turbulence churn speed' },
       { path: 'fx.turbulence.dragVary', min: 0, max: 0.95, step: 0.05, label: 'particle drag spread' },
-      // GOO — what a kill leaves in the water. `blob size` first: it is the
-      // one that decides whether the burst fuses into a body at all or stays a
-      // handful of separate droplets. `surface` is then the shape of that body
-      // — up, it tightens and splits; down, it swells into one blanket.
-      { path: 'fx.goo.enabled', type: 'bool', label: 'kill goo' },
+      // GOO — particles that FUSE instead of reading as separate dots. These
+      // rows are the DEFAULT surface, which is also the blood one: kills, and
+      // anything else that joins the `blood` group. `blob size` first — it is
+      // the one that decides whether a burst fuses into a body at all or stays
+      // a handful of droplets. `surface` is then the shape of that body: up, it
+      // tightens and splits; down, it swells into one blanket.
+      { path: 'fx.goo.enabled', type: 'bool', label: 'goo (kills, breaches)' },
       { path: 'fx.goo.radius', min: 1, max: 8, step: 0.1, label: 'goo blob size' },
       { path: 'fx.goo.iso', min: 0.2, max: 3, step: 0.05, label: 'goo surface (high = tighter)' },
       { path: 'fx.goo.soft', min: 0.02, max: 1.2, step: 0.02, label: 'goo edge softness' },
@@ -18746,7 +19487,17 @@ export const TUNER_SCHEMA = [
       { path: 'fx.goo.specPower', min: 2, max: 64, step: 1, label: 'goo highlight tightness' },
       { path: 'fx.goo.normal', min: 0, max: 24, step: 0.5, label: 'goo surface relief' },
       { path: 'fx.goo.divisor', min: 1, max: 6, step: 1, label: 'goo field resolution (high = cheaper, softer)' },
-      { path: 'emitters.killGoo.count', min: 0, max: 60, step: 1, label: 'goo lobes' },
+      { path: 'emitters.killGoo.count', min: 0, max: 60, step: 1, label: 'kill goo lobes' },
+      // THE FOAM SURFACE — the breach and the landing. Only the keys that
+      // differ from the block above are rows here; anything not listed is
+      // inherited from it, so dragging `blob size` moves both substances and
+      // these four move only the water.
+      { path: 'fx.goo.groups.foam.radius', min: 1, max: 8, step: 0.1, label: 'foam blob size' },
+      { path: 'fx.goo.groups.foam.iso', min: 0.2, max: 3, step: 0.05, label: 'foam surface (low = sheets)' },
+      { path: 'fx.goo.groups.foam.soft', min: 0.02, max: 1.2, step: 0.02, label: 'foam edge softness' },
+      { path: 'fx.goo.groups.foam.opacity', min: 0, max: 1, step: 0.05, label: 'foam opacity' },
+      { path: 'emitters.breachFoam.count', min: 0, max: 60, step: 1, label: 'breach foam lobes' },
+      { path: 'emitters.reentryFoam.count', min: 0, max: 90, step: 1, label: 'landing foam lobes' },
       { path: 'audio.masterVolume', min: 0, max: 1, step: 0.05 },
       { path: 'audio.enabled', type: 'bool', label: 'sound' },
       { path: 'haptics.enabled', type: 'bool', label: 'haptics' },
@@ -19460,6 +20211,29 @@ function withoutTableOwnedKeys(snapshot) {
   // merged from disk AND from localStorage, and the cached copy is usually the
   // NEWER of the two, so editing the file left the browser free to paint them
   // green again on the next load. Stripped on the way in, both copies lose it.
+  // THE ORCA POD'S THREE CHANGED UNITS, in the same category as the claw's
+  // reach above: not stale numbers but numbers that no longer mean what they
+  // meant when they were saved.
+  //
+  //   `cruiseSpeed` was the pod's absolute speed through the water and is the
+  //   CLOSING speed on top of the seal's velocity now (see the note there).
+  //   Read the old way, 9 is a third of the seal's top speed, and a pod that
+  //   cannot match the animal it escorts spends the whole run trailing,
+  //   catching up and swinging past.
+  //
+  //   `formationOffset` was [world X, world Y] and is [along, across] the
+  //   seal's heading now — the same two numbers put the pod behind the seal
+  //   one way and directly in its path the other.
+  //
+  //   `turnRate` is read against hitRadius and chargeSpeed now, and the saved
+  //   4.5 is the one number that made the pod read as a vortex: it is a
+  //   4.9-unit turning circle around a 2-unit hit, so an orca that arrived
+  //   off-line orbited its target permanently. There is no honest conversion
+  //   for any of the three; they go, and config.js owns them.
+  //
+  // Everything else under `orca` — the damage, the cadence, the hunt range,
+  // what counts as a big enough fish — means exactly what it always did and
+  // merges normally. That is real tuning and is left alone.
   for (const dead of [
     'arena.airGravity',
     'boats.crew.gravity',
@@ -19467,6 +20241,9 @@ function withoutTableOwnedKeys(snapshot) {
     'pickups.toss.gravity',
     'enemies.dolphin.porpoise.gravity',
     'assetLooks.sealTeam',
+    'orca.cruiseSpeed',
+    'orca.formationOffset',
+    'orca.turnRate',
   ]) {
     const keys = dead.split('.');
     const field = keys.pop();

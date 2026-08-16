@@ -63,7 +63,7 @@ export function resolvePredation(dt, scene, hooks) {
         && dx * dx + dy * dy <= (reach * (CONFIG.bite.lead ?? 1)) ** 2) triggerBite(pred);
       continue;
     }
-    const meal = eatCrew(scene, body);
+    const meal = eatCrew(scene, body, { vx: pred.vx, vy: pred.vy });
     pred.humanTarget = null;
     if (!meal) continue; // somebody else got there first
     triggerBite(pred);

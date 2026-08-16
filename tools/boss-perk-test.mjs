@@ -40,6 +40,7 @@ import { projectiles, resetProjectiles, updateProjectiles } from '../path/src/en
 import { beams, resetBeams } from '../path/src/systems/beams.js';
 import { attachBossPerk, updateBossPerks, resetBossPerks, activeBossPerk } from '../path/src/systems/bossPerks.js';
 import { parseBossPerkCsv, rollBossPerk, PERK_IDS } from '../path/src/bossPerkTable.js';
+import { initParticles, resetParticles, updateParticles } from '../path/src/entities/particles.js';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +57,14 @@ const check = (name, cond, detail = '') => {
 };
 
 const scene = new THREE.Scene();
+// The particle buffer, for the aura-field section at the bottom. Read straight
+// off the attributes the way tools/boat-wake-test.mjs does — what a lobe was
+// given at birth is the only thing that decides where it is drawn.
+initParticles(scene);
+const points = scene.children.find((c) => c.isPoints);
+const attrs = points.geometry.attributes;
+const CAP = attrs.aStart.count;
+
 const PERKS = parseBossPerkCsv(readFileSync(PERKS_CSV, 'utf8'), () => {});
 const perkById = (id) => PERKS.find((p) => p.id === id);
 
@@ -393,6 +402,105 @@ check('...held between the boss and the player', shells.length === 0 || ahead.le
 // what makes the answer "move" rather than "shoot through it".
 check('...and they cannot be killed', shells.every((t) => t.hp > 1000),
   `hp ${shells[0]?.hp}`);
+
+// ---------------------------------------------------------------------------
+// 3. THE ELECTRIC AURA'S FIELD STAYS INSIDE ITS OWN RING
+// ---------------------------------------------------------------------------
+// The aura is the one zone in the game whose art IS its hitbox: the ring is
+// drawn at the radius the row gives it, and updateElectric's own note explains
+// why its boundary is never allowed to move by more than it breathes. A boundary
+// the player stops trusting is worse than no art at all.
+//
+// The field inside it (goo group `aura`) is a thresholded density surface, which
+// wobbles by construction — so it is held clear of the rim, and this is the
+// check that says so. Two ways it could fail, and only one of them is visible
+// in a still frame:
+//
+//   TOO BIG    a lobe draws `size x the group's radius`, several times the
+//              sprite it would otherwise be, so a lobe whose CENTRE is legal
+//              can still paint itself across the ring.
+//   LEFT BEHIND  the ring is redrawn on the animal every frame and a particle
+//              cannot be: its path is solved from where it was born. A boss
+//              swimming away from its own field leaves lobes outside the ring
+//              a fraction of a second later, which is the same lie arriving
+//              late — and it is invisible unless the boss is MOVING in the test.
+{
+  const fx = CONFIG.boss?.perkFx?.electric ?? {};
+  const perk = perkById('electric');
+  const goo = CONFIG.fx?.goo;
+  const def = CONFIG.emitters.auraField;
+  const groupRadius = goo?.groups?.[def.goo]?.radius ?? goo?.radius ?? 3;
+
+  for (const [label, speed] of [['holding station', 0], ['cruising', 3], ['sprinting', 9]]) {
+    fresh();
+    resetParticles();
+    const b = put('bossShark', { boss: true });
+    attachBossPerk(scene, b, perk);
+    const reach = (b.def.radius ?? 1) * (b.sizeMul ?? 1) + (perk.radius ?? 9);
+
+    const seen = new Map();
+    const lobes = [];
+    // The boss is driven by hand rather than through updateEnemies: what is
+    // being tested is the geometry of the field against a moving centre, and a
+    // steered animal would wander out of the straight line that makes the lag
+    // worst.
+    for (let f = 0; f < 60 * 4; f++) {
+      b.vx = speed;
+      b.vy = 0;
+      b.mesh.position.x += speed * DT;
+      updateBossPerks(DT, scene, playerFar, hooks);
+      for (let i = 0; i < CAP; i++) {
+        const start = attrs.aStart.array[i];
+        if (start < -1e8 || seen.get(i) === start || attrs.aGoo.array[i] === 0) continue;
+        seen.set(i, start);
+        lobes.push({
+          x: attrs.position.array[i * 3], y: attrs.position.array[i * 3 + 1],
+          vx: attrs.aVelocity.array[i * 3], vy: attrs.aVelocity.array[i * 3 + 1],
+          drag: attrs.aDrag.array[i], life: attrs.aLife.array[i],
+          size: attrs.aSize.array[i],
+          // Where the boss was when this lobe was born, and when — enough to
+          // put the ring where it will be at any point in the lobe's flight.
+          bx: b.mesh.position.x, by: b.mesh.position.y, at: f * DT,
+        });
+      }
+      updateParticles(DT);
+    }
+
+    // Walked over each lobe's whole life against a ring that is moving with the
+    // boss. Sampling the birth frame alone would pass on every one of these.
+    let outside = 0;
+    let worst = 0;
+    for (const p of lobes) {
+      const half = p.size * groupRadius * 0.5;
+      const steps = 30;
+      for (let s = 0; s <= steps; s++) {
+        const age = (p.life * s) / steps;
+        const k = Math.max(p.drag, 1e-4);
+        const f = (1 - Math.exp(-k * age)) / k;
+        const x = p.x + p.vx * f;
+        const y = p.y + p.vy * f;
+        // The ring's centre at that moment: where the boss will have got to.
+        const cx = p.bx + speed * age;
+        const edge = Math.hypot(x - cx, y - p.by) + half;
+        worst = Math.max(worst, edge / reach);
+        if (edge > reach) outside += 1;
+      }
+    }
+    check(`the aura field never crosses its own ring — ${label}`, outside === 0,
+      `worst lobe edge reached ${(worst * 100).toFixed(0)}% of the ${reach.toFixed(1)}u reach`);
+    // ...and the check must not be passing because the field is empty. At a
+    // sprint it legitimately can be — the lag eats the whole usable radius, and
+    // going quiet is the designed degradation — so that case asserts the rule
+    // rather than the population.
+    if (speed <= 3) {
+      check(`  ...with a field to check — ${label}`, lobes.length > 0, `${lobes.length} lobes`);
+    } else {
+      check(`  ...a sprinting boss simply has no field — ${label}`,
+        lobes.length === 0 || worst <= 1,
+        `${lobes.length} lobes emitted`);
+    }
+  }
+}
 
 // The cleanup. A perk that left `perkDrive` raised on three animals would
 // leave them frozen in the water for the rest of the run.

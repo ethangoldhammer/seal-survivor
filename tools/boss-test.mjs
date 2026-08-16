@@ -40,7 +40,7 @@ import { inSpawnGroup, spawnGroupsOf } from '../path/src/enemyTable.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossState, bossBanner, capBossDamage, resetBossDamageCap } from '../path/src/systems/boss.js';
 import { difficultyRamp } from '../path/src/config.js';
 import { SENTINEL_HP } from '../path/src/systems/playtest.js';
-import { parseBossNameCsv, rollBossName, FALLBACK_BOSS_NAME } from '../path/src/bossNameTable.js';
+import { parseBossNameCsv, rollBossName, FALLBACK_BOSS_NAME, NAME_SLOTS } from '../path/src/bossNameTable.js';
 import { parseBossCsv, newBossBag, nextBoss, eligibleBosses } from '../path/src/bossTable.js';
 import { parseBossPerkCsv, rollBossPerk, PERK_IDS } from '../path/src/bossPerkTable.js';
 import { attachBossPerk, updateBossPerks, resetBossPerks, activeBossPerk } from '../path/src/systems/bossPerks.js';
@@ -800,10 +800,32 @@ section('THE NAME — parts in, names out');
     parts.prefix.length > 1 && parts.root.length > 1 && parts.epithet.length > 1,
     `${parts.prefix.length} prefixes, ${parts.root.length} roots, ${parts.epithet.length} epithets`);
 
+  // ROLLED FOR A REAL ARCHETYPE, and it has to be. This used to pass `{}` — no
+  // boss id at all — which was a fair stand-in when every row was general, and
+  // stopped being one the moment the table grew archetype tags: all 50 roots
+  // now name the bosses they fit, and poolFor deliberately SKIPS a narrowed row
+  // when there is no id to match it against, so a shark-only word can never
+  // turn up on something that is not a shark. With no id the root pool is
+  // therefore empty, the build falls through to FALLBACK_BOSS_NAME, and this
+  // read "1 distinct names in 400 rolls" — the table being well-tagged looking
+  // exactly like the generator being broken.
+  //
+  // Every archetype in the roster, not one: a slot left unwritten for a single
+  // boss is the failure that matters here, and it hides completely behind any
+  // other boss's rolls.
+  const rosterIds = parseBossCsv(readFileSync(BOSSES_CSV, 'utf8'), null, quiet).map((b) => b.id);
+  for (const boss of rosterIds) {
+    const rng = seeded(99);
+    const rolled = new Set();
+    for (let i = 0; i < 400; i++) rolled.add(rollBossName(parts, { boss }, rng));
+    check(`${boss}: names vary`, rolled.size > 40, `${rolled.size} distinct names in 400 rolls`);
+    check(`${boss}: ...and none of them is the fallback`, !rolled.has(FALLBACK_BOSS_NAME),
+      rolled.has(FALLBACK_BOSS_NAME) ? `rolled "${FALLBACK_BOSS_NAME}"` : 'no empty slot');
+  }
+
   const rng = seeded(99);
   const rolled = new Set();
-  for (let i = 0; i < 400; i++) rolled.add(rollBossName(parts, {}, rng));
-  check('names vary', rolled.size > 40, `${rolled.size} distinct names in 400 rolls`);
+  for (let i = 0; i < 400; i++) rolled.add(rollBossName(parts, { boss: 'bossShark' }, rng));
   check('every name is non-empty and single-line',
     [...rolled].every((n) => n.trim().length > 3 && !n.includes('\n')));
   // The bar is a strip across the top of the screen; a name long enough to
@@ -1037,9 +1059,18 @@ section('THE NAME — narrowed by archetype and by perk');
   // the whole reason perks drive names, and a name that only sometimes carried
   // the perk would be a telegraph the player learns not to trust.
   for (const perk of perks) {
+    // EVERY SLOT A PERK CAN SPEAK THROUGH, which is NAME_SLOTS and not SLOTS.
+    // Scanning only prefix/root/epithet missed the two hand-written pools, and
+    // missed them in the one way that looks like a broken guarantee: a perk
+    // whose vocabulary includes a solo row ("It's a Big Ass Shark!" for `giant`)
+    // rolls that row perfectly often, and every one of those rolls was counted
+    // as the perk failing to show — 109 of 600 for a mechanism that was working
+    // exactly as designed. A nickname REPLACES the prefix and root, so a name
+    // built from it can never contain a prefix-slot word; the whole point is
+    // that it does not have to.
     const words = [];
-    for (const slot of ['prefix', 'root', 'epithet']) {
-      for (const p of parts[slot]) if (p.perk === perk.id) words.push(p.text);
+    for (const slot of NAME_SLOTS) {
+      for (const p of parts[slot] ?? []) if (p.perk === perk.id) words.push(p.text);
     }
     if (!words.length) {
       check(`${perk.id} has name parts of its own`, false, 'none tagged in bossNames.csv');
