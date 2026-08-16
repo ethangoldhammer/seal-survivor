@@ -15,11 +15,22 @@ dist-crab-look
 dist-layout-audit
 .DS_Store
 .env
+# Wrangler's local state, one directory per worker — `wrangler dev --local`
+# keeps a whole simulated KV in here. A pattern per worker rather than a bare
+# `.wrangler`, which would also swallow one at the repo root if it ever mattered.
 server/.wrangler
+server/playtest/.wrangler
 
 # Recorded playtest runs — session data, not source. `npm run playtest`
-# reads this; delete it any time to start a fresh body of evidence.
-playtest/
+# reads this; delete it any time to start a fresh body of evidence. Runs pulled
+# from the live site land here too, as remote.jsonl.
+#
+# LEADING SLASH REQUIRED. Unanchored, this matches a directory called
+# `playtest` at ANY depth — which silently swallowed the whole of
+# `server/playtest/` (the collection worker) the moment it was written. Nothing
+# reports that: the files exist, the tests pass, and they are simply absent
+# from every clone.
+/playtest/
 
 # The rendered sound atlas — a megabyte of it is base64'd audio, regenerated
 # by `npm run sfx:atlas`. The data file it is built from (tools/sfx-atlas.json)

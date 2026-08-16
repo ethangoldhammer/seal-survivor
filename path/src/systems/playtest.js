@@ -25,8 +25,16 @@
 
 const BUCKET_SECONDS = 30;
 const STORAGE_KEY = 'seal-survivor-playtest-runs';
+const CLIENT_KEY = 'seal-survivor-playtest-client';
 const STORED_RUN_LIMIT = 25;
 const ENDPOINT = '/__playtest';
+
+// Where a run goes when there's no dev server to write it to disk — the
+// collection worker in server/playtest/. Inlined by Vite at BUILD time, so a
+// deployed build has to be rebuilt after changing it. Unset (the default, and
+// what `npm run dev` wants) means runs stay in the browser exactly as they
+// always did.
+const REMOTE_URL = (import.meta.env?.VITE_PLAYTEST_URL ?? '').replace(/\/+$/, '');
 
 // Below 30% health is "one mistake from over" — the threshold the analysis
 // uses for how much of a run was played on the edge. Here rather than in the
@@ -118,6 +126,10 @@ export function beginRun(config = {}) {
     score: 0,
     startMaxHp: config.playerMaxHp ?? 100,
     config,
+    // Stamped at the START, not at persist time, so the localStorage copy and
+    // the disk copy carry it too — a run that only grows its provenance on
+    // the way to the collector is a run that can't be grouped anywhere else.
+    meta: runMeta(),
     buckets: [],
     upgradePicks: [], // [{t, id}] — the build order, for reading a run back
     controlEvents: {}, // source -> count, for the damageless abilities
@@ -358,13 +370,119 @@ export function endRun(reason = 'death', extra = null) {
 }
 
 // ---------------------------------------------------------------------------
+// Provenance
+//
+// A pile of runs from unknown places is not data. Three questions have to be
+// answerable before an aggregate means anything, and none of them can be
+// recovered after the fact:
+//
+//   WHICH BUILD? The single most important field here. Runs from before and
+//   after a balance change describe different games, and averaging them
+//   together produces a number that was never true of either — the exact
+//   failure mode that makes collected telemetry worse than no telemetry.
+//   `npm run playtest -- --build <sha>` exists because of this field.
+//
+//   WHOSE HANDS? Not who they are — a random per-browser id, so that thirty
+//   runs can be read as "one player learning" rather than thirty players
+//   agreeing. It also separates the developer's own runs from the public's,
+//   which otherwise dominate each other by turns.
+//
+//   ON WHAT? Frame times are meaningless without the machine. A p99 of 40ms
+//   is a disaster on a desktop and unremarkable on a four-year-old phone.
+//
+// WHAT IS DELIBERATELY NOT COLLECTED: no name, no IP (the worker never stores
+// one), no user-agent string, no URL, no referrer, no storage of anything the
+// player typed. The device fields below are coarse buckets that thousands of
+// devices share — enough to read a frame-time distribution, not enough to
+// pick a person out of the collection.
+// ---------------------------------------------------------------------------
+
+/**
+ * The build this run was played on. Injected by vite.config.js as the short
+ * git sha; `dev` when running from source, `unknown` in a plain Node import
+ * where the define never happened. Guarded rather than read directly because
+ * an undeclared global is a ReferenceError, and this file is imported by
+ * terminal tests that have no bundler.
+ */
+function buildId() {
+  try {
+    return typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * A stable random id for this browser, minted on first use.
+ *
+ * NOT AN IDENTITY. It survives until site data is cleared, it says nothing
+ * about who is holding the mouse, and two people sharing a laptop share one.
+ * All it has to do is let the report say "these forty runs came from the same
+ * hands", which is the difference between a learning curve and a consensus.
+ */
+function clientId() {
+  try {
+    const existing = localStorage.getItem(CLIENT_KEY);
+    if (existing) return existing;
+    const minted = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem(CLIENT_KEY, minted);
+    return minted;
+  } catch {
+    // Private browsing, or storage disabled. The run is still worth having;
+    // it just can't be grouped with the others from this browser.
+    return 'anon';
+  }
+}
+
+/** Coarse hardware class, for reading the frame-time record against. */
+function deviceProfile() {
+  const nav = typeof navigator === 'object' ? navigator : null;
+  const scr = typeof screen === 'object' ? screen : null;
+  return {
+    cores: nav?.hardwareConcurrency ?? 0,
+    // Chrome only, and already rounded to a power of two by the spec.
+    mem: nav?.deviceMemory ?? 0,
+    // The rendered pixel count is what costs, and it's dpr that decides it —
+    // two 800px windows at 1x and 3x are not the same machine's problem.
+    dpr: typeof devicePixelRatio === 'number' ? Math.round(devicePixelRatio * 100) / 100 : 0,
+    w: scr?.width ?? 0,
+    h: scr?.height ?? 0,
+    // Touch as the coarse desktop/handheld split. Read from the pointer type
+    // rather than the user-agent string: it's the property that actually
+    // predicts the frame budget, and it isn't a fingerprint.
+    touch: !!(nav?.maxTouchPoints > 0),
+  };
+}
+
+function runMeta() {
+  return {
+    build: buildId(),
+    client: clientId(),
+    device: deviceProfile(),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Persistence
 //
-// Two destinations, deliberately: localStorage so a run survives a reload with
-// no dev server involved, and — in dev only — an append to playtest/runs.jsonl
-// on disk, which is what makes a body of runs big enough to draw conclusions
-// from. Neither can fail the game: both are wrapped, and a rejected fetch is a
-// console warning, not an exception into the frame that called endRun.
+// Three destinations, in order of how sure they are to work:
+//
+//   localStorage — always. A run survives a reload with no server of any kind
+//     involved, and it is what the B overlay and the download button read.
+//   playtest/runs.jsonl — during `npm run dev` only, through the Vite
+//     middleware. Direct to disk, no worker in the loop.
+//   the collection worker — when VITE_PLAYTEST_URL is set, which in practice
+//     means the deployed build. This is what makes runs played by other
+//     people on the live site readable from a terminal at all.
+//
+// The last two are EXCLUSIVE, not both. A dev run already lands on disk by
+// the shorter path, and posting it to the collection as well would fill the
+// shared record with runs played against half-finished tuning — the one thing
+// that would make the aggregate untrustworthy. Dev noise stays local.
+//
+// None of the three can fail the game: every one is wrapped, and a rejected
+// fetch is a console warning, not an exception into the frame that called
+// endRun.
 // ---------------------------------------------------------------------------
 
 function persist(finished) {
@@ -382,13 +500,43 @@ function persist(finished) {
     }
   }
 
-  if (!import.meta.env?.DEV) return;
-  fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(finished),
-    keepalive: true, // so a run filed on tab close still lands
-  }).catch((err) => console.warn('[playtest] run not written to disk —', err?.message ?? err));
+  if (import.meta.env?.DEV) {
+    post(ENDPOINT, finished, 'run not written to disk');
+    return;
+  }
+  if (REMOTE_URL) post(`${REMOTE_URL}/runs`, finished, 'run not sent to the collection');
+}
+
+/**
+ * Fire and forget. `keepalive` is the whole reason this is a fetch and not an
+ * XHR: a run ends when the player dies, and the tab can be closed on the game
+ * over screen a second later — without it the request is cancelled with the
+ * page and the run is lost exactly when the run was most decisive.
+ *
+ * The response is ignored on purpose. There is nothing the game could do
+ * about a rejected run, and nothing the player should see either way; the
+ * warning is for a developer with a console open.
+ *
+ * `keepalive` carries a 64KB body limit, and a body over it fails rather than
+ * being sent unkeepalived. Real records sit well under: 148 runs on disk
+ * measured a 2.2KB median and a 19KB worst case, because the recorder
+ * aggregates into 30-second buckets instead of logging events. If a future
+ * accumulator ever changes that, this is where it would start silently
+ * dropping the longest runs — the ones most worth having.
+ */
+function post(url, run_, what) {
+  try {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(run_),
+      keepalive: true,
+    }).catch((err) => console.warn(`[playtest] ${what} —`, err?.message ?? err));
+  } catch (err) {
+    // A synchronous throw — no fetch in this environment, or a body over the
+    // keepalive limit. Same handling: the run is already in localStorage.
+    console.warn(`[playtest] ${what} —`, err?.message ?? err);
+  }
 }
 
 export function loadStoredRuns() {

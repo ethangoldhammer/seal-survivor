@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { baseStats, applyLevelGrowth } from '../stats.js';
+import { baseStats, applyLevelGrowth, applyDamageScaling } from '../stats.js';
 import { applyWithRarity, baseRarity } from '../systems/rarity.js';
 import { createVisual, getAssetSizeMultiplier } from '../assets.js';
 import { bounds, clampToArena, midWater } from '../arena.js';
@@ -126,6 +126,16 @@ export const player = {
   // thrust, the speed ceiling AND the dash turn rate together, so a combo is
   // uniformly more agile rather than fast-but-unsteerable.
   comboSpeedMul: 1,
+  // HOW MANY BODIES THE SEAL HAS SWALLOWED THIS RUN. Maneater's whole payload,
+  // and the only run-scoped number the stat block is built against other than
+  // `level`. It lives here rather than in the stats because it is not a stat:
+  // recomputeStats() throws the block away and rebuilds it several times a
+  // minute, so a total kept there would be reset by every level-up.
+  //
+  // main.js is the only writer — the seal's own meal, not a shark's or an
+  // orca's, which take bodies the player never got (see eatCrew in
+  // systems/crew.js for the four mouths).
+  humansEaten: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -228,6 +238,10 @@ export function recomputeStats() {
 
   // Baseline growth applied AFTER upgrades — see stats.js for the why.
   applyLevelGrowth(s, player.level);
+  // ...and the two damage-scaling cards after THAT, so Maneater and Iron Lung
+  // multiply the finished numbers rather than a partial block. Both are
+  // no-ops on a run that holds neither. See applyDamageScaling in stats.js.
+  applyDamageScaling(s, player.humansEaten);
 
   player.stats = s;
   player.hp = Math.min(player.hp, s.maxHp);
@@ -294,6 +308,9 @@ export function resetPlayer() {
   player.mirrorT = 1;
   player.mirrorDuration = 0;
   player.upgrades.length = 0;
+  // Before recomputeStats() below, not after — the block is built against this
+  // and a new run must not open carrying the last one's Maneater bonus.
+  player.humansEaten = 0;
   player.invuln = 0;
   player.dashTimer = 0;
   player.comboSpeedMul = 1;

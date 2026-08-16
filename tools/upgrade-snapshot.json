@@ -1162,6 +1162,26 @@
       }
     ]
   },
+  "ironLung": {
+    "cap": 5,
+    "perStack": [
+      {
+        "ironLungLevel": 101
+      },
+      {
+        "ironLungLevel": 102
+      },
+      {
+        "ironLungLevel": 103
+      },
+      {
+        "ironLungLevel": 104
+      },
+      {
+        "ironLungLevel": 105
+      }
+    ]
+  },
   "bakalar": {
     "cap": 8,
     "perStack": [
@@ -1397,6 +1417,46 @@
       },
       {
         "orcaLevel": 106
+      }
+    ]
+  },
+  "homingShot": {
+    "cap": 5,
+    "perStack": [
+      {
+        "homingShotLevel": 101
+      },
+      {
+        "homingShotLevel": 102
+      },
+      {
+        "homingShotLevel": 103
+      },
+      {
+        "homingShotLevel": 104
+      },
+      {
+        "homingShotLevel": 105
+      }
+    ]
+  },
+  "maneater": {
+    "cap": 5,
+    "perStack": [
+      {
+        "maneaterLevel": 101
+      },
+      {
+        "maneaterLevel": 102
+      },
+      {
+        "maneaterLevel": 103
+      },
+      {
+        "maneaterLevel": 104
+      },
+      {
+        "maneaterLevel": 105
       }
     ]
   },

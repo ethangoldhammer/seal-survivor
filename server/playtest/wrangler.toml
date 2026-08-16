@@ -1,0 +1,15 @@
+name = "seal-survivor-playtest"
+main = "playtest-worker.js"
+compatibility_date = "2025-01-01"
+
+# The id below is filled in by `wrangler kv namespace create PLAYTEST` — see
+# server/playtest/README.md. A separate namespace from the leaderboard's, so
+# wiping collected runs can never touch the board.
+[[kv_namespaces]]
+binding = "PLAYTEST"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# PULL_TOKEN is a SECRET, not a var — it is set with
+# `npx wrangler secret put PULL_TOKEN` and deliberately does not appear here,
+# because this file is in git. Until it is set, every read of the collection is
+# refused (the worker fails closed).

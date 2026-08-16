@@ -31,6 +31,9 @@ import { updateHullWake, resetHullWake } from '../../path/src/systems/boatWake.j
 import { attachBossPerk, updateBossPerks, resetBossPerks } from '../../path/src/systems/bossPerks.js';
 import { parseBossPerkCsv } from '../../path/src/bossPerkTable.js';
 import { spawnNamed, resetEnemies } from '../../path/src/entities/enemies.js';
+import { initBossImpacts, updateBossImpacts, spawnBossImpact } from '../../path/src/systems/bossImpact.js';
+import { boats, updateBoats, damageBoat, resetBoats } from '../../path/src/systems/boats.js';
+import { elementColor } from '../../path/src/systems/elements.js';
 import PERKS_CSV from '../../path/src/bossPerks.csv?raw';
 
 const logEl = document.getElementById('log');
@@ -107,6 +110,7 @@ scene.add(water);
 
 await preloadAssets();
 initParticles(scene);
+initBossImpacts(scene);
 const post = createPost(gl);
 
 const VIEW = 9;
@@ -116,6 +120,12 @@ const ortho = (h) => {
   return c;
 };
 const camera = ortho(VIEW);
+// A hull is six units of boat and its smoke climbs well above the deck, so the
+// burning panels get their own frame — the close camera crops the column and
+// the arena one loses it.
+const smokeCam = ortho(18);
+smokeCam.position.y = 3;
+const ORIGIN = new THREE.Vector3();
 // The frame the player is actually given: at zoom 1 the frustum IS the arena.
 const fightCam = ortho(bounds.top - bounds.bottom);
 
@@ -524,6 +534,129 @@ section('A boss damage zone <span>— the ring is the hitbox, the field is not</
   present('A moving boss', 'lobes leave at the boss\'s own velocity, so the field travels with it', true);
   resetBossPerks();
   resetEnemies(scene);
+}
+
+// --- WHERE THE BOSS IS BEING HIT --------------------------------------------
+// The mark, through the REAL impact system — same call the game makes, with the
+// creature's own measured hit shape under it. What it is here to show is the
+// TINT: this is the only readout in the game of what is actually landing on a
+// boss, so the same three hits are drawn in four different builds' colours.
+section('Where the boss is being hit <span>— tinted by whatever did the damage</span>', 4);
+{
+  // A boss is several times the size of anything else on this page, so these
+  // panels get their own frame — at the 9-unit view above, the animal is bigger
+  // than the picture and the marks land on what looks like empty water.
+  const bossCam = ortho(17);
+  const boss = createVisual('bossShark');
+  if (boss) {
+    boss.rotation.z = -Math.PI / 2; // createVisual points a body nose-up
+    boss.position.set(0, 0, 0);
+  }
+
+  // Three hits down the body, fired at the same three places every time so the
+  // panels differ only by colour.
+  const SITES = [[-2.6, 1.5], [1.1, -0.7], [3.4, 1.2]];
+  function hits({ color, frames = 8 } = {}) {
+    resetParticles();
+    reseed();
+    Object.assign(GOO, BASE);
+    if (boss) scene.add(boss);
+    updateParticleScale(bossCam, gl);
+    for (const [hx, hy] of SITES) {
+      // The normal points away from the body's centre, which is what the real
+      // hit shape hands over — the burst has to come OFF the animal.
+      const len = Math.hypot(hx, hy) || 1;
+      spawnBossImpact({ x: hx, y: hy, nx: hx / len, ny: hy / len }, { color, scale: 1.4, wound: false });
+    }
+    for (let f = 0; f < frames; f++) {
+      updateBossImpacts(DT);
+      updateParticles(DT);
+      post.resize();
+      post.render(scene, bossCam, DT);
+    }
+    if (boss) scene.remove(boss);
+  }
+
+  for (const [label, color, note] of [
+    ['Plain shot', undefined, 'no element · the impact\'s own cold blue'],
+    ['Venom', elementColor('venom'), 'the run\'s element decides it'],
+    ['Chill', elementColor('chill'), 'same three hits, same boss'],
+    ['Infection', elementColor('infection'), 'what is landing, not what was hit'],
+  ]) {
+    hits({ color });
+    present(label, note, label === 'Venom');
+  }
+
+  section('...and how long it lasts <span>— a marker, not a coat of paint</span>', 3);
+  for (const [f, note] of [[3, 'the frame it lands'], [10, 'a sixth of a second'], [20, 'a third of a second — nearly gone']]) {
+    hits({ color: elementColor('venom'), frames: f });
+    present(`${f} frames`, note, f === 10);
+  }
+}
+
+// --- A HULL BURNING ---------------------------------------------------------
+// Smoke off the places a boat has actually been hit, at a rate that climbs as
+// the hull fails. Driven through the real boats system: the scars are recorded
+// by damageBoat and the puffs are placed by updateBoats.
+section('A hull burning <span>— the middle of a boat\'s arc, which did not exist</span>', 3);
+{
+  function burn({ hp = 0.15, seconds = 2.2, hits = [[2.2, 0.2]] } = {}) {
+    resetBoats(scene);
+    resetParticles();
+    reseed();
+    Object.assign(GOO, BASE);
+    // Borrow one hull off the real spawner, which is on a random timer.
+    //
+    // RE-ENABLED HERE, not once at the top. Left switched off from the previous
+    // panel this loop spins 4000 frames, finds nothing, and returns — and
+    // `present()` then captures whatever was still in the framebuffer, which is
+    // the LAST PANEL'S PICTURE. Two panels of this section shipped as copies of
+    // the one above them, both perfectly plausible, before it was noticed.
+    CONFIG.boats.enabled = true;
+    let guard = 0;
+    while (!boats.length && guard++ < 4000) updateBoats(DT, scene, 1, ORIGIN, {});
+    if (!boats.length) return false;
+    // One hull for the rest of the panel: a second boat sailing through would
+    // be an undamaged hull in a panel about damage.
+    CONFIG.boats.enabled = false;
+    const b = boats[0];
+    // Parked in frame rather than sailing through it, so the column is the
+    // subject instead of the boat's exit.
+    b.speed = 0;
+    b.body.vx = 0;
+    b.body.place(0, bounds.surfaceY);
+    b.mesh.updateMatrixWorld(true);
+    for (const h of hits) {
+      damageBoat(scene, 0, 0, {}, null, { x: b.mesh.position.x + h[0], y: b.mesh.position.y + h[1] }, false);
+    }
+    b.hp = b.maxHp * hp;
+    updateParticleScale(smokeCam, gl);
+    const frames = Math.round(seconds / DT);
+    for (let f = 0; f < frames; f++) {
+      if (!boats.length) break;
+      boats[0].hp = boats[0].maxHp * hp;
+      boats[0].body.vx = 0;
+      // The camera rides the hull. A parked boat still drifts a little under
+      // its own buoyancy and thrust, and a fixed frame that loses the boat is a
+      // panel of empty water with a wisp in the corner — which is what this
+      // first rendered as.
+      smokeCam.position.x = boats[0].mesh.position.x;
+      updateBoats(DT, scene, 1, ORIGIN, {});
+      updateParticles(DT);
+      post.resize();
+      post.render(scene, smokeCam, DT);
+    }
+  }
+
+  const burned = burn({ hp: 0.95 });
+  check('a hull was borrowed for the burning panels', burned !== false, 'no boat spawned');
+  present('Barely scratched', 'under `startAt` · a clean hull, as today');
+  burn({ hp: 0.45 });
+  present('Half gone', 'one column, off the place it was hit', true);
+  burn({ hp: 0.05, hits: [[2.2, 0.2], [-1.6, 0.1], [0.3, 0.5]] });
+  present('One shot from going up', 'three sites, and hard to look at', true);
+  resetBoats(scene);
+  CONFIG.boats.enabled = true;
 }
 
 // --- WHAT IT COSTS ----------------------------------------------------------

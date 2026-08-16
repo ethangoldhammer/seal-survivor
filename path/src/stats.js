@@ -115,7 +115,16 @@ export function baseStats() {
     // rare projectile card.
     abilityDamageMul: 1,
 
+    // --- the two damage-scaling cards ----------------------------------------
+    // Neither of these grants an ability either, and neither is spent inside
+    // apply(): what they are worth depends on something apply() cannot see. So
+    // apply() only counts the stacks, and applyDamageScaling() below spends
+    // them once the rest of the block is built. See the note there.
+    maneaterLevel: 0,
+    ironLungLevel: 0,
+
     // Upgrade-gated systems — 0/false until the matching upgrade is taken.
+    homingShotLevel: 0,
     missileCount: 0,
     shrapnelCount: 0,
     breachChainLevel: 0,
@@ -169,6 +178,7 @@ export const INTEGER_STATS = new Set([
   'multishot', 'pierce', 'missileCount', 'shrapnelCount', 'shrimpCount',
   'scallopCount', 'bounceMaxBounces', 'projectileBonus',
   'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'starfishLevel',
+  'maneaterLevel', 'ironLungLevel', 'homingShotLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
   'dumboLevel', 'harpLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'musselVolleyLevel',
   'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel',
@@ -200,5 +210,77 @@ export function applyLevelGrowth(s, level) {
   s.damage += CONFIG.weapon.damagePerLevel * (lvl - 1);
   s.speed += CONFIG.weapon.speedPerLevel * (lvl - 1);
   s.multishot += Math.floor((lvl - 1) / CONFIG.weapon.levelsPerExtraShot);
+  return s;
+}
+
+// ============================================================================
+// THE TWO CARDS THAT SCALE EVERYTHING, spent here rather than in their apply().
+//
+// Maneater and Iron Lung both promise "+damage to everything", and neither one
+// can be written as arithmetic inside apply():
+//
+//   MANEATER is paid per HUMAN EATEN, which is a running total that climbs
+//   mid-level. apply() runs in recomputeStats() and is replayed from scratch
+//   every time — it has no access to the run, and it must not have any: the
+//   card-text prober and tools/upgrade-test.mjs both replay apply() against a
+//   synthetic stat block, and an apply() that read live run state would report
+//   whatever the last run happened to be doing.
+//
+//   IRON LUNG is paid per point of MAX OXYGEN, which is a stat OTHER cards
+//   move. apply() runs in PICK ORDER — the same reason Clone Warz is spent at
+//   the point of use (see projectileBonus above) — so an Iron Lung taken
+//   before Deep Lungs would be measured against a tank that had not grown yet,
+//   and taking the same two cards in the other order would be a different run.
+//
+// So apply() only COUNTS the stacks and this spends them, once, after every
+// upgrade has been replayed and after applyLevelGrowth. Both are pure
+// functions of the block plus one number the caller supplies, which keeps the
+// whole thing replayable in Node.
+//
+// WHAT "ALL DAMAGE" REACHES. The multiplier lands on the four stats every
+// damage number in the game is eventually derived from: the gun (`damage`,
+// which the eel also fires at), the dash (`strikeDamage`, and the strike
+// family rides on top of it), everything thrown or launched
+// (`abilityDamageMul`, spent through scaling.abilityDamage) and every escort
+// (`companionDamageMul`, spent through scaling.companionDamage). A handful of
+// auras and beams still read their damage straight off CONFIG and are NOT
+// scaled by this — see the note on abilityDamageMul above for why those
+// numbers live where they do.
+//
+// Mutates `s` and returns it.
+// ============================================================================
+
+/** The accumulated Maneater bonus as a multiplier — 1 for a run without it. */
+export function maneaterMul(s, humansEaten = 0) {
+  const c = CONFIG.maneater ?? {};
+  const level = s.maneaterLevel ?? 0;
+  if (!c.enabled || level <= 0) return 1;
+  const meals = Math.max(0, humansEaten);
+  const bonus = (c.damagePerMeal ?? 0) * level * meals;
+  return 1 + Math.min(bonus, c.maxBonus ?? Infinity);
+}
+
+/**
+ * The Iron Lung bonus as a multiplier — 1 for a run without it.
+ *
+ * Read off `s.maxOxygen`, which is the whole point of the card: every stack of
+ * Deep Lungs, and anything else that ever widens the tank, is a damage upgrade
+ * for as long as this is held.
+ */
+export function ironLungMul(s) {
+  const c = CONFIG.ironLung ?? {};
+  const level = s.ironLungLevel ?? 0;
+  if (!c.enabled || level <= 0) return 1;
+  const bonus = (c.damagePerOxygen ?? 0) * level * Math.max(0, s.maxOxygen ?? 0);
+  return 1 + Math.min(bonus, c.maxBonus ?? Infinity);
+}
+
+export function applyDamageScaling(s, humansEaten = 0) {
+  const mul = maneaterMul(s, humansEaten) * ironLungMul(s);
+  if (mul === 1) return s;
+  s.damage *= mul;
+  s.strikeDamage *= mul;
+  s.abilityDamageMul *= mul;
+  s.companionDamageMul *= mul;
   return s;
 }

@@ -15,7 +15,7 @@ import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeS
 import { projectileCount } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
-import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement } from './systems/elements.js';
+import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement, activeElement, elementColor } from './systems/elements.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossState, capBossDamage } from './systems/boss.js';
@@ -25,7 +25,7 @@ import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChu
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
-import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake } from './systems/feedback.js';
+import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice } from './systems/feedback.js';
 import { initAudio, unlockAudio, prefetchSamples, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
@@ -1304,6 +1304,33 @@ const pendingBursts = [];
 //
 // Returns true when it fired, which is the caller's cue to skip the generic
 // bullet-hit feedback for this one.
+// WHAT IS DOING THE DAMAGE, as a colour.
+//
+// The mark left on a boss's skin (systems/bossImpact.js) is the only readout in
+// the game of what is actually landing on it, so it is tinted by the source
+// rather than by a fixed palette — a venom build and an ice build should not
+// leave the same coloured hits on the same animal.
+//
+// Resolved in order of how SPECIFIC each answer is:
+//
+//   the ordnance itself   a mussel is a mussel whatever element is riding it;
+//                         its own body colour is what the player watched fly in
+//   the run's element     every ordinary pellet carries it, and it is the thing
+//                         the player chose
+//   the impact's own      no element, no special ordnance: a plain shot
+//
+// Returns undefined rather than a default, so the caller's own fallback stays
+// the single place the plain-shot colour is written down.
+function damageSourceColor(projectile) {
+  if (projectile?.mesh?.name === 'missile') {
+    const key = projectile.assetKey ?? projectile.mesh?.userData?.assetKey;
+    const own = key ? assetBaseColor(key) : null;
+    if (own != null) return own;
+  }
+  const el = activeElement();
+  return el ? elementColor(el) : undefined;
+}
+
 function missileImpactFeedback(assetKey, x, y, dmg, projectile, targetRadius = 0) {
   if (projectile?.mesh?.name !== 'missile') return false;
   const cfg = CONFIG.missile.impact ?? {};
@@ -1418,9 +1445,23 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at = null) {
   // every target, and this is the target's, drawn on its actual skin — and a
   // boss that swallowed the ordinary hit feedback would feel LESS responsive
   // to shoot than a reef fish.
+  // What it is made of, going in. Gated on being a boss rather than on having a
+  // measured shape (the impact below), because the two answer different
+  // questions: the mark needs a surface to sit on, and the voice only needs the
+  // fight to be a boss fight. Throttled per class in CONFIG.feedback, or
+  // multishot turns it into a rattle.
+  if (e.isBoss) {
+    bossVoice('hit', e.assetKey ?? e.def?.asset, {
+      x: x ?? e.mesh.position.x,
+      y: y ?? e.mesh.position.y,
+      scale: Math.min(1.6, 0.7 + dmg / 40),
+    });
+  }
+
   if (at?.sphere && e.hitShape) {
     spawnBossImpact(at, {
       shape: e.hitShape,
+      color: damageSourceColor(projectile),
       // Against the animal's own health, not against a fixed number: the same
       // pellet should read as a chip on a fresh boss and the effect should
       // grow as the fight does. Square-rooted so the range is usable — a hit
@@ -1684,6 +1725,16 @@ function onEnemyKilledFeedback(e, killEvent = null) {
     // colour, or off undefined for any def that only lists `assets`.
     color: assetBaseColor(e.assetKey ?? e.def.asset) ?? undefined,
   });
+
+  // ...and what it was MADE OF, under that. Bosses only: this is a fight
+  // ending, and firing a material voice for every minnow would put a second
+  // sound under the most frequent event in the game.
+  if (e.isBoss) {
+    bossVoice('die', e.assetKey ?? e.def.asset, {
+      x: e.mesh.position.x,
+      y: e.mesh.position.y,
+    });
+  }
 
   return { points, schoolWipe };
 }
@@ -2002,6 +2053,29 @@ function shotSfxOpts(interval) {
   return opts;
 }
 
+// The spawn options that turn a basic pellet into a seeker, or null for a run
+// that never took Sonar Teeth.
+//
+// Returned as an object to spread rather than as individual arguments so the
+// no-card case adds NOTHING to the spawn — see the call site. `acquireRadius`
+// is the one number here that goes through scaling: it is an acquisition
+// radius like every other one in the game, so Splash Zone widens it (gently —
+// see systems/scaling.js on why reach and acquisition are split).
+function homingShotOpts(level) {
+  const c = CONFIG.homingShot ?? {};
+  if (!c.enabled || !(level > 0)) return null;
+  const extra = level - 1;
+  return {
+    homing: true,
+    orient: true,
+    turnRate: (c.turnRate ?? 0) + (c.turnRatePerLevel ?? 0) * extra,
+    acquireRadius: targeting((c.acquireRadius ?? 0) + (c.acquireRadiusPerLevel ?? 0) * extra),
+    homingDelay: c.homingDelay ?? 0,
+    sizeBias: (c.sizeBias ?? 0) + (c.sizeBiasPerLevel ?? 0) * extra,
+    sizeRefRadius: c.refRadius ?? 1,
+  };
+}
+
 function fire() {
   const s = player.stats;
   const rapid = rapidFireTimer > 0;
@@ -2044,6 +2118,13 @@ function fire() {
   // single-point volley falls back to the normal spread so it still fans.
   const fan = origins > 1 ? CONFIG.weapon.finSpread : s.spread;
 
+  // Sonar Teeth. Resolved once per volley rather than per pellet — every
+  // pellet in a volley is the same gun, and the object is spread into each
+  // spawn below. `null` for a run without the card, which is the only reason
+  // the spread is safe: nothing is added to the spawn options at all, so an
+  // un-upgraded bullet is byte-for-byte the projectile it always was.
+  const seek = homingShotOpts(s.homingShotLevel);
+
   for (let o = 0; o < origins; o++) {
     for (let i = 0; i < perOrigin; i++) {
       const offset = (i - (perOrigin - 1) / 2) * fan;
@@ -2063,6 +2144,10 @@ function fire() {
         pierce: s.pierce,
         asset: 'bullet',
         source: 'gun',
+        // Points the shot at things instead of along the aim. `orient` comes
+        // with it so a curving bullet visibly faces where it is going — a
+        // seeker drawn on its launch heading reads as a rendering bug.
+        ...seek,
       });
     }
   }
@@ -2254,6 +2339,14 @@ function onBoatDestroyed(boat, chum) {
     x: boat.mesh.position.x, y: boat.mesh.position.y,
     scale: boat.isTrawler ? 2.4 : 1.7,
     sfxOpts: { pitch: boat.isTrawler ? 0.7 : 0.85, decayMul: 1.6 },
+  });
+  // The hull's own death under the blast — the deepest voice in the bank, and
+  // the thing that makes a boat going up sound like a boat going up rather than
+  // like a large fish dying. Pitched down for a trawler on the same rule the
+  // blast above uses.
+  bossVoice('die', boat.assetKey ?? boat.mesh?.name, {
+    x: boat.mesh.position.x, y: boat.mesh.position.y,
+    sfxOpts: { pitch: boat.isTrawler ? 0.82 : 1, decayMul: boat.isTrawler ? 1.3 : 1 },
   });
   // A trawler going down is a bigger moment than a rowboat.
   if (boat.isTrawler) world.grid.ripple(boat.mesh.position.x, boat.mesh.position.y, 6, 20);
@@ -3350,6 +3443,11 @@ function animate(now) {
         // or 'trawler'), which is what the colour is read from.
         // Hulls are long boxes, so their enclosing radius overstates them —
         // halved, or a mussel on a trawler blooms across half the screen.
+        // STEEL, under whichever impact plays. A hull is the one target in the
+        // game that rings when it is hit, and it is the only readout the player
+        // gets that a boat is a different KIND of thing from a tough fish —
+        // every boat, not only the boss, because they are all the same steel.
+        bossVoice('hit', boat.assetKey ?? boat.mesh?.name, { x, y, scale: 1.1 });
         if (missileImpactFeedback(boat.mesh?.name, x, y, dmg, projectile, boat.radius * 0.5)) return;
         feedback('bulletHit', { x, y, scale: 1.1 });
       },
@@ -3722,6 +3820,22 @@ function animate(now) {
         if (at) {
           collectChum(at.xp, at.x, at.y, at.healMul);
           feedback('crewEaten', { x: at.x, y: at.y });
+          // MANEATER. Counted on every meal whether or not the card is held —
+          // the total is what the card is worth the moment it IS taken, and a
+          // count that only started on the pick would make an early Maneater
+          // strictly better than a late one for reasons the player can't see.
+          //
+          // The recompute is the whole mechanic: the bonus lives in the stat
+          // block (see applyDamageScaling in stats.js), so the block has to be
+          // rebuilt for a meal to be worth anything. Gated on the card because
+          // this is the only place in the game that would rebuild it during
+          // play rather than on a level-up, and a run without Maneater has no
+          // reason to pay for that.
+          player.humansEaten += 1;
+          if (player.stats.maneaterLevel > 0) {
+            recomputeStats();
+            feedback('maneaterFeed', { x: at.x, y: at.y });
+          }
         }
       }
     }

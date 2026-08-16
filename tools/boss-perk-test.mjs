@@ -431,6 +431,13 @@ check('...and they cannot be killed', shells.every((t) => t.hp > 1000),
   const def = CONFIG.emitters.auraField;
   const groupRadius = goo?.groups?.[def.goo]?.radius ?? goo?.radius ?? 3;
 
+  // Switched on for the duration. The fill ships OFF — the job it was built for
+  // is now done by the hit marker in systems/bossImpact.js — but the guarantee
+  // it makes is the reason the mechanism can be switched back on at all, so it
+  // is still measured rather than left to rot behind a false boolean.
+  const shippedFill = fx.fillEnabled;
+  fx.fillEnabled = true;
+
   for (const [label, speed] of [['holding station', 0], ['cruising', 3], ['sprinting', 9]]) {
     fresh();
     resetParticles();
@@ -500,6 +507,7 @@ check('...and they cannot be killed', shells.every((t) => t.hp > 1000),
         `${lobes.length} lobes emitted`);
     }
   }
+  fx.fillEnabled = shippedFill;
 }
 
 // The cleanup. A perk that left `perkDrive` raised on three animals would

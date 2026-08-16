@@ -43,3 +43,6 @@ club,Basic Baby Club,"Clubs on both fins, swung by your own swimming. Whacked en
 clubThrow,Throwin' Clubs,"Strike release hurls homing clubs — the harder you charged, the more of them",5,TRUE,1,SeaLion,
 clubBoom,Boom Boom Club,"Every club hit detonates — swung, caromed or thrown",5,TRUE,1,SeaAnemone,
 clubIce,Iced Out in the Club,"Club hits chill what they touch, and freeze it solid once the chill saturates",5,TRUE,1,Periwinkles,
+homingShot,Sonar Teeth,"Your shots hunt. They bend toward whatever's closest — and lean hard toward whatever's biggest.",5,TRUE,1,MorayEel,
+maneater,Maneater,"You've developed a taste. Every swimmer you swallow makes everything you do hurt a little more, for the rest of the run.",5,TRUE,0.7,GreatWhite,
+ironLung,Iron Lung,"Everything you do hurts in proportion to the air in your chest. Every lungful you can hold is damage — so go get a bigger set.",5,TRUE,0.7,Humpback,

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { shapeLocalToWorld, worldToShapeLocal } from './hitShape.js';
+import { emit } from '../entities/particles.js';
 
 // ---------------------------------------------------------------------------
 // HITTING SOMETHING BIG
@@ -549,6 +550,30 @@ export function spawnBossImpact(at, opts = {}) {
   fireRing(at, nx, ny, scale, c);
   fireShards(at, nx, ny, scale, c);
   if (opts.wound !== false) fireWound(at, opts.shape, scale, c, nx, ny);
+
+  // THE SPLASH OF WHATEVER IS DOING THE DAMAGE. A fusing burst thrown off the
+  // surface along its normal — see CONFIG.emitters.bossHitGoo and the goo note
+  // in entities/particles.js.
+  //
+  // A third channel next to the break and the wound, answering a third
+  // question: not "did I connect" and not "how is this fight going", but WHAT
+  // is landing. It carries the damage source's own colour, which is why this is
+  // one of the two emitters in the game allowed to be tinted from outside.
+  //
+  // Deliberately NOT scaled by the hit's size the way the ring and shards are.
+  // Those say how hard; this one says where and what, and a marker that shrinks
+  // to nothing on a chip stops doing its job on exactly the small, frequent
+  // hits it is most useful on. Only the count is trimmed at the low end.
+  if (c.goo !== false) {
+    emit('bossHitGoo', at.x, at.y, {
+      dirX: nx,
+      dirY: ny,
+      color: opts.color ?? c.color ?? 0x9ff4ff,
+      // `scale` in emit() is the COUNT multiplier, not a size one — trimmed at
+      // the low end and never allowed above 1 here, for the reason above.
+      scale: Math.min(1, 0.55 + scale * 0.45),
+    });
+  }
 }
 
 function fireRing(at, nx, ny, scale, c) {

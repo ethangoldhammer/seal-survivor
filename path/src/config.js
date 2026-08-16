@@ -1729,6 +1729,104 @@ export const CONFIG = {
     },
 
     // ---------------------------------------------------------------------------
+    // THE SEEKING SHOT — Sonar Teeth. Not a second weapon like the mussels
+    // below: this turns the BASIC shot into a seeker, so every pellet the gun
+    // already fires (Multishot, Clone Warz, the level cadence, the rapid-fire
+    // pickup) is a seeker too. There is no new projectile and no new cadence.
+    //
+    // The whole mechanic is already in entities/projectiles.js — `homing` has
+    // driven the mussels since they existed. What this card adds is `sizeBias`,
+    // and it is the reason the card is worth taking over Hot Rounds: a plain
+    // seeker takes whatever minnow is nearest, which is the WORST target on
+    // the board, and a volley of them locked onto the front of a school is a
+    // downgrade from a volley that flew through it. Size bias makes a big body
+    // count as CLOSER than it is, on exactly the same footing the strike's
+    // paint does (CONFIG.strike.mark.homingPull), so the pellets pick the
+    // shark over the sardine in front of it without ever ignoring range.
+    // ---------------------------------------------------------------------------
+    homingShot: {
+      enabled: true,
+      // How sharply a pellet may curve, radians/sec. Deliberately well under
+      // the mussel's 9.5: a bullet that turns as hard as a guided shell never
+      // misses anything, and the miss is what leaves the gun a gun. At this
+      // rate a pellet corrects onto a target ahead of it and overshoots one
+      // that crosses close and fast — which is the counterplay the turn limit
+      // has always been (see steerToward in entities/projectiles.js).
+      turnRate: 3.4,
+      turnRatePerLevel: 0.85,
+      // How far a pellet will look for something to bend toward. Short on
+      // purpose — this is a correction, not a homing missile. Rides
+      // `targetingMul`, so Splash Zone widens it like every other acquisition
+      // radius in the game.
+      acquireRadius: 11,
+      acquireRadiusPerLevel: 2.2,
+      // Seconds of straight flight before the seeker engages, so the volley
+      // visibly leaves the fins on the heading it was aimed at and THEN bends.
+      // Much shorter than the mussel's — a bullet that hesitates reads as lag.
+      homingDelay: 0.05,
+      // HOW MUCH BIGGER READS AS NEARER. A target's effective distance is
+      // divided by (radius / refRadius) ^ sizeBias, so 0 is "nearest wins,
+      // exactly as every other seeker in the game" and 1 is "a body twice the
+      // size counts as half as far". Between the two, at the shipped 0.55, a
+      // shark (radius 1.2) beats a fish (0.4) out to 1.83x the fish's distance
+      // and no further — the pellets still fight what is in front of them when
+      // nothing big is in reach. npm run test:damagecards measures that.
+      sizeBias: 0.55,
+      sizeBiasPerLevel: 0.05,
+      // The radius that counts as "ordinary", i.e. the size that gets no bias
+      // either way. The plain fish, which is the thing the bias exists to stop
+      // the volley wasting itself on.
+      refRadius: 0.4,
+    },
+
+    // ---------------------------------------------------------------------------
+    // THE TWO DAMAGE-SCALING CARDS. Neither grants an ability; both multiply
+    // every damage number the run has. What they are worth is decided outside
+    // apply() — see applyDamageScaling in stats.js for why that had to be so,
+    // and for exactly which numbers the multiplier reaches.
+    // ---------------------------------------------------------------------------
+
+    // MANEATER — the run's only stat that is EARNED IN THE WATER rather than
+    // picked on a menu. Every human the seal swallows makes everything it does
+    // hurt slightly more, permanently, for the rest of the run.
+    //
+    // It is deliberately tied to the crew and not to kills. Bodies come off
+    // boats, boats are a place you choose to go, and a body already competes
+    // with the fight around it — so this card pays for a decision the player
+    // was already making rather than for time spent alive. `maxBonus` is what
+    // keeps that from being the whole run: the boats never stop coming, so
+    // without a ceiling a long run compounds into an arbitrary number.
+    maneater: {
+      enabled: true,
+      // Added per human, per stack, as a fraction of ALL damage. "Slightly" is
+      // the brief and 2% is what that means — a full boat's crew is worth a
+      // few percent, and the card is a build you feed rather than a switch.
+      damagePerMeal: 0.02,
+      // Ceiling on the accumulated bonus. +150% is a large number reached
+      // slowly: 75 bodies at one stack, 15 at five. Stacking the card buys the
+      // RATE, not the ceiling, so a second copy is worth taking early and
+      // worth nothing once the cap is already sitting there.
+      maxBonus: 1.5,
+    },
+
+    // IRON LUNG — damage as a function of how much air the seal can hold.
+    // Reads `maxOxygen` off the stat block, so every other card that widens
+    // the tank (Deep Lungs today, anything later) is a damage upgrade while
+    // this is held. That synergy IS the card; the flat bonus a bare Iron Lung
+    // gives on the starting tank is only the floor under it.
+    ironLung: {
+      enabled: true,
+      // Fraction of all damage per POINT of max oxygen, per stack. At the
+      // starting tank of 100 that is +20% a stack; with Deep Lungs maxed (250)
+      // the same stack is worth +50%.
+      damagePerOxygen: 0.002,
+      // Ceiling, so a tank widened by something unforeseen later cannot turn
+      // this into the whole game. +300% is deliberately far above what the
+      // oxygen cards can reach on their own (5 stacks of each is +250%).
+      maxBonus: 3,
+    },
+
+    // ---------------------------------------------------------------------------
     // HOMING MISSILES — a second weapon that fires alongside the main gun once
     // the upgrade is taken. Each level adds one more missile per volley.
     // ---------------------------------------------------------------------------
@@ -5783,7 +5881,34 @@ export const CONFIG = {
       // each one reads on screen: colours, sizes, and how hard a tell flashes.
       // Nothing below can make a boss stronger, which is the test for whether
       // a value belongs in a panel the game ships with.
-      perkFx: {
+    // WHAT EACH BOSS IS MADE OF, for the voices in CONFIG.sfx (bossHit* and
+    // bossDie*). Keyed by ASSET, because that is what the thing actually is —
+    // an archetype id would have to be kept in step with bossTable.js, and a
+    // creature wearing a different body would still sound like its old one.
+    //
+    // Anything not listed sounds like flesh, which is right for a roster that
+    // is mostly animals: a new boss added tomorrow gets a sensible voice with
+    // no edit here, and only a boss made of something else needs a row.
+    voiceClass: {
+      bossCrab: 'shell',
+      // Every hull, boss or not — the boat boss and the trawlers and rowboats
+      // that sail past use the same pair. A boat is a boat.
+      boat: 'hull',
+      trawler: 'hull',
+      // The boat boss wears `bossBoat` (see the `boatBoss` row in the
+      // roster). Named here as the asset the archetype actually loads, not as
+      // the archetype id — the id would go stale the moment it was renamed
+      // and the yacht would quietly start sounding like a shark.
+      bossBoat: 'hull',
+    },
+    voiceDefault: 'flesh',
+    // The floor between two hit voices lives on the EVENTS (`sfxMinGap` on
+    // bossHitFlesh and its siblings), not here — one number per class, in the
+    // same place every other event's throttle is written. A boss under
+    // multishot takes a dozen pellets a second and the sound of that is a
+    // rattle; feedback() keeps the closest one and drops the rest.
+
+    perkFx: {
         // WHICH NODE THE EYE BEAMS COME OUT OF, per creature. Empty or missing
         // falls back to the body-frame guess in systems/bossPerks.js, so a new
         // boss works without this and simply fires from its face rather than
@@ -5822,7 +5947,8 @@ export const CONFIG = {
           trailSeconds: 0.28,
           trailColor: 0xfff1c4,
         },
-        // The electric aura. Drawn at the radius bossPerks.csv gives it, so
+
+      // The electric aura. Drawn at the radius bossPerks.csv gives it, so
         // what you can see and what can hurt you are the same circle — an aura
         // whose art is smaller than its reach is a lie the player pays for.
         electric: {
@@ -5849,7 +5975,17 @@ export const CONFIG = {
           // This is also the one goo in the game that runs CONTINUOUSLY rather
           // than in bursts, so it is the one place the pass costs something
           // every frame it is on screen. `fillPerSecond` is the dial for that.
-          fillEnabled: true,
+          // OFF. The zone fill was built to answer "where is the damage", and
+          // the answer the game actually wanted was a mark where the boss is
+          // being HIT — which is now its own thing, tinted by whatever landed
+          // (CONFIG.emitters.bossHitGoo). A permanent field inside the ring on
+          // top of that is one glowing thing too many in the same circle.
+          //
+          // Left switched off rather than deleted: the mechanism and its
+          // containment guarantee are intact and measured by
+          // `npm run test:bossperks`, so this is one boolean away if the aura
+          // ever does want a medium in it.
+          fillEnabled: false,
           fillPerSecond: 16,
           // The outermost fraction of the reach a lobe's own EDGE may touch.
           // The gap it leaves is deliberately large enough to read as a gap at
@@ -7997,6 +8133,50 @@ export const CONFIG = {
         gravity: [0, 0.7], inherit: 0.45, glow: 1.0, goo: 'foam',
         killAtSurface: false, turbulence: 0.8,
     },
+      // A HULL BURNING (goo group `smoke`). Fired from the places a boat has
+      // actually been HIT, at a rate that climbs as its hull goes — see
+      // `smoke` in CONFIG.boats and the scars in systems/boats.js.
+      //
+      // Rises and spreads rather than being thrown: this is the one emitter in
+      // the game with an upward gravity bigger than its own launch speed, which
+      // is what makes a puff look like it is being carried up off the deck
+      // instead of shot out of it. Long-lived and slow, so a wounded hull
+      // trails a column rather than a stream of separate pops. Never clipped at
+      // the surface — smoke lives ABOVE the water line, which is the one place
+      // in this game a particle is normally deleted.
+      // AUTHORED MUCH LIGHTER THAN SMOKE LOOKS, and that is not a mistake to be
+      // corrected. The composite writes its colour straight to the framebuffer
+      // with no sRGB conversion (systems/post.js is a raw ShaderMaterial), so
+      // every value lands about a stop and a half darker than its hex. A
+      // sensible charcoal — 0x2b3138, which is what this shipped as for an
+      // afternoon — arrives as very nearly black and is invisible against dark
+      // water. These greys draw as the charcoal that was wanted.
+      hullSmoke: {
+        count: 2, speed: [0.4, 1.6], size: [0.28, 0.62], life: [1.1, 2.4],
+        colors: [0x9aa6b2, 0xc2ced9, 0x76828e], cone: 1.2, drag: 1.6,
+        gravity: [0, 2.6], inherit: 0.5, glow: 0.35, goo: 'smoke',
+        killAtSurface: false, turbulence: 1.4,
+    },
+      // WHERE THE BOSS IS BEING HIT (goo group `hit`). Fired by
+      // systems/bossImpact.js at the point on the skin a shot actually reached,
+      // on top of the break and the wound that already fire there.
+      //
+      // THE ONE EMITTER BESIDES A DEATH THAT TAKES ITS COLOUR FROM OUTSIDE, and
+      // the exception is the same shape as the death's: the whole job of this
+      // burst is to say WHAT is hitting the boss — venom, ice, shock, plain
+      // shot — so the source's colour is the information, not decoration. The
+      // palette below is only the fallback for a hit with no element on it.
+      //
+      // SHORT. This marks a hit and then gets out of the way: at multishot
+      // rates a lingering blob per pellet welds into a permanent coat of paint
+      // over the animal, which hides the very thing it is pointing at. A third
+      // of a second is about as long as it can live before that starts.
+      bossHitGoo: {
+        count: 4, speed: [4, 11], size: [0.16, 0.3], life: [0.14, 0.3],
+        colors: [0x9ff4ff, 0xffffff, 0x6fd3ff], cone: 1.1, drag: 5.5,
+        gravity: [0, 0], inherit: 0.2, glow: 2.2, goo: 'hit',
+        killAtSurface: false, turbulence: 0.3,
+    },
       // THE CHARGED WATER INSIDE AN ELECTRIC AURA (goo group `aura`). One lobe
       // per emission, placed on a ring inside the zone by systems/bossPerks.js
       // — the placement is the whole safety argument, so it lives there and not
@@ -8396,6 +8576,17 @@ export const CONFIG = {
       // to be thrown into. Still well under `boatExplosion` (1.0/0.09) — a hull
       // going up is a bigger EVENT even though this is a worse one.
       crewEaten: { emit: null,          shake: 0.34, hitstop: 0.05,  glow: 0.8,  ripple: { strength: 3.4, radius: 13 },  sfx: 'crewEaten', haptic: [30, 24, 44] },
+      // MANEATER TOOK ITS CUT. Fires on the same frame as `crewEaten` above,
+      // and is therefore deliberately almost nothing: a glow lift and a
+      // fingertip tap, no emitter, no shake, no sound. The meal already has a
+      // full event — this is only the seal getting stronger ON it, and a
+      // second impact stacked into the same frame would read as one louder
+      // meal rather than as a permanent upgrade landing.
+      //
+      // A card that pays out invisibly is a card players report as broken, so
+      // it does need to exist; it just needs to be the quietest thing in the
+      // table. No `sfxMinGap` because it has no sound to gap.
+      maneaterFeed: { emit: null,       shake: 0,    hitstop: 0,     glow: 0.55, ripple: null,                            sfx: null,       haptic: [{ duration: 18, magnitude: 0.3 }] },
       // A man taken off a deck. Light and wet rather than explosive — he is not
       // an enemy and killing him is not an achievement; it should read as
       // something knocked into the sea.
@@ -8417,6 +8608,23 @@ export const CONFIG = {
       // The hull itself going up, which is a bigger event than the biggest kill:
       // it throws the crew, the wreckage and the catch all at once.
       boatExplosion: { emit: 'bigExplosion', shake: 1.0, hitstop: 0.09, glow: 1.6, ripple: { strength: 6, radius: 24 },  sfx: 'bigKill',  haptic: [40, 30, 60] },
+
+      // --- THE MATERIAL VOICES ---------------------------------------------
+      // SOUND AND NOTHING ELSE. Each of these fires alongside the event that
+      // already owns the moment — `kill`/`bigKill` for a boss, `boatExplosion`
+      // for a hull — so the shake, the burst, the hit-stop and the ripple are
+      // still authored in exactly one place and these six only add a voice.
+      // Every other field is deliberately absent: two events both shaking the
+      // camera for the same hit is how a screen ends up unreadable.
+      //
+      // Which pair fires is CONFIG.boss.voiceClass; see the note there and the
+      // voices themselves in CONFIG.sfx.
+      bossHitFlesh: { emit: null, sfx: 'bossHitFlesh', sfxMinGap: 0.11 },
+      bossDieFlesh: { emit: null, sfx: 'bossDieFlesh' },
+      bossHitShell: { emit: null, sfx: 'bossHitShell', sfxMinGap: 0.11 },
+      bossDieShell: { emit: null, sfx: 'bossDieShell' },
+      bossHitHull:  { emit: null, sfx: 'bossHitHull',  sfxMinGap: 0.11 },
+      bossDieHull:  { emit: null, sfx: 'bossDieHull' },
       // Its own sound now rather than the generic `splash`, which is what a body
       // knocked off a boat makes. Coming out of the water and landing in it are
       // opposite events and were sharing one voice.
@@ -8981,6 +9189,39 @@ export const CONFIG = {
           // distinct lobes instead of a single filled disc that would hide the
           // boss inside it, and a low opacity so what is drawn on top of it —
           // the ring, the arcs, the animal — always wins.
+          // A HIT LANDING ON A BOSS. Tight, bright and additive — this is a
+          // marker, not a substance: it has to read instantly at the moment it
+          // appears and then be gone. Additive so it lights the skin it is on
+          // rather than hiding it, and a low isoline so a single lobe still
+          // reads (see the note in `aura` about what the cubic falloff does to
+          // anything above about a half).
+          // SMOKE OFF A BURNING HULL. The one goo that is DARKER than what is
+          // behind it: alpha, not additive, and a soft wide edge, because a
+          // crisp silhouette reads as liquid and smoke is the one substance
+          // here that is not. No rim and no highlight for the same reason —
+          // both of them are wetness.
+          smoke: {
+            radius: 3.4,
+            iso: 0.34,
+            soft: 0.5,
+            opacity: 0.6,
+            additive: false,
+            rim: 0,
+            rimWidth: 0.6,
+            spec: 0,
+            normal: 1.5,
+          },
+          hit: {
+            radius: 3.2,
+            iso: 0.3,
+            soft: 0.2,
+            opacity: 0.85,
+            additive: true,
+            rim: 0.9,
+            rimWidth: 0.5,
+            spec: 0,
+            normal: 3,
+          },
           aura: {
             radius: 4.4,
             // BELOW 1, and this one is not a taste call. A splat peaks at 1.0
@@ -10283,6 +10524,48 @@ export const CONFIG = {
       thunderRumble: { src: null, type: 'noise', filter: 320,   decay: 2.4, gain: 0.26, pitchVary: 0.2, filterVary: 0.35 },
       kill:      { src: null, type: 'boom',  freq: [220, 50],  decay: 0.34, gain: 0.34, noise: 0.5, filter: 1400, pitchVary: 0.12, filterVary: 0.18 },
       bigKill:   { src: null, type: 'boom',  freq: [150, 32],  decay: 0.6,  gain: 0.45, noise: 0.7, filter: 900,  pitchVary: 0.12, filterVary: 0.18 },
+
+      // --- WHAT A BIG THING IS MADE OF ------------------------------------
+      // Every boss had exactly the same voice as a minnow: `hit` when you shot
+      // it and `bigKill` when it went. Three pairs instead, one per MATERIAL,
+      // because that is the distinction the ear can actually use — the game
+      // has flesh, shell and steel in it, and which one you are shooting is
+      // information you currently only get by looking.
+      //
+      // Shared by class rather than authored per boss (CONFIG.boss.voiceClass
+      // is the map). Five bosses and a boat with six voices between them is a
+      // bank someone can keep in their head; thirty is one that goes stale the
+      // first time an archetype is added.
+      //
+      // Synthesised, like `kill` and `bigKill` above and for the same reason —
+      // there is nothing in the sfx library for any of this. Each takes a
+      // `src`/`srcs` the moment there is a recording worth using instead.
+
+      // FLESH — sharks, orcas, the squid. A wet slap with no ring to it: a
+      // low-passed noise burst and nothing else, because a tone is what a
+      // hollow thing does and a body is not hollow.
+      bossHitFlesh: { src: null, type: 'noise', filter: 820,  decay: 0.13, gain: 0.30, pitchVary: 0.14, filterVary: 0.22 },
+      // ...and the death. Low, long and mostly noise — the tail is the size of
+      // the animal, the same trick `thunderCrack` uses to sound like weather.
+      bossDieFlesh: { src: null, type: 'boom', freq: [130, 24], decay: 1.15, gain: 0.52, noise: 0.72, filter: 620, pitchVary: 0.10, filterVary: 0.16 },
+
+      // SHELL — the king crab. The opposite of flesh in every parameter that
+      // matters: bright, short, and hard-edged, with the filter well up where
+      // a crack lives. Nothing about this should sound wet.
+      bossHitShell: { src: null, type: 'noise', filter: 5200, decay: 0.055, gain: 0.26, pitchVary: 0.18, filterVary: 0.25 },
+      // A shell failing is a snap with a body under it, so this one keeps a
+      // tone: the crack is the oscillator, the collapse is the noise bed.
+      bossDieShell: { src: null, type: 'boom', freq: [420, 70], decay: 0.75, gain: 0.48, noise: 0.85, filter: 2600, pitchVary: 0.12, filterVary: 0.2 },
+
+      // STEEL — every hull, boss or not. The one class with a real tone in its
+      // hit: a struck plate rings, which is exactly what neither of the others
+      // may do, and it is what makes shooting a boat feel like shooting a
+      // different KIND of thing rather than a tougher fish.
+      bossHitHull:  { src: null, type: 'boom', freq: [900, 260], decay: 0.16, gain: 0.24, noise: 0.35, filter: 3200, wave: 'triangle', pitchVary: 0.16, filterVary: 0.2 },
+      // A hull going up: the deepest and longest voice in the table, under the
+      // blast that fires with it. Below `bigKill` on purpose — a boat is the
+      // biggest single thing that explodes in this game.
+      bossDieHull:  { src: null, type: 'boom', freq: [95, 18],  decay: 1.4,  gain: 0.55, noise: 0.8, filter: 520, pitchVary: 0.08, filterVary: 0.14 },
       // Nine takes, and it needs every one of them: getting hit is the sound a
       // player hears most in a bad run, and a repeated yelp stops reading as pain
       // and starts reading as a sound file.
@@ -13583,6 +13866,40 @@ export const CONFIG = {
       strength: 11,
       trawlerMul: 1.4, // a trawler goes up harder and reaches further
     },
+    // SMOKE FROM THE DAMAGE, before any of that happens.
+    //
+    // A hull used to go from untouched to gone with nothing in between: the
+    // only thing a boat's health did on the way down was flash white per hit,
+    // which says a shot landed and nothing about how close the thing is to
+    // going up. This is the middle of that arc — puffs off the places it has
+    // actually been HIT, at a rate that climbs as the hull fails, so a boat you
+    // have nearly finished looks nearly finished from across the arena.
+    //
+    // The places are real: systems/boats.js keeps the last few hits in the
+    // HULL'S OWN FRAME (see `scars`), so the smoke rides the boat as it rolls
+    // and bobs rather than being sprayed from its centre.
+    smoke: {
+      enabled: true,
+      // Nothing smokes until the hull has lost this share of its health. A boat
+      // that puffs from the first pellet has no arc left to show.
+      startAt: 0.25,
+      // Puffs a second at zero health, ramped from `startAt`. The rate is the
+      // whole readout, so it is worth being generous at the top end — a hull
+      // one shot from going up should be hard to look at.
+      perSecond: 7,
+      // How many hit sites are remembered. Small on purpose: the newest damage
+      // is what the smoke should be coming from, and a long memory turns a
+      // chewed hull into a uniform cloud with no shape.
+      sites: 4,
+      // Where a puff is born, as a share of the hull's half-length/height from
+      // the scar. A little scatter, or every puff from one site is a column.
+      scatter: 0.12,
+      // Puffs are born this far above the hull's own centre line at least, so
+      // smoke leaves the DECK rather than boiling out of the waterline.
+      lift: 0.15,
+      // A trawler is a bigger fire.
+      trawlerMul: 1.5,
+    },
     // THE CREW. Ragdoll figures standing on the deck who bail once the hull is
     // clearly going down, and who are thrown by the explosion if they left it
     // too late. Placeholder art (a box per bone) over a real humanoid joint
@@ -15527,6 +15844,13 @@ export const CONFIG = {
     // --- oxygen line --------------------------------------------------------
     { id: 'oxygenMax', family: 'utility', name: 'Deep Lungs', desc: '+30 max oxygen', apply: (s) => { s.maxOxygen += 30; }, maxStacks: 5 },
     { id: 'oxygenRefill', family: 'utility', name: 'Second Wind', desc: '+40% surface refill speed', apply: (s) => { s.oxygenRefillRate *= 1.4; }, maxStacks: 5 },
+    // The third card in the line, and the one that makes the other two into
+    // damage. Family 'gun' rather than 'utility' on purpose: a high-tier roll
+    // has to pay into something, and rarity's utility payout would hand this
+    // card more of the stat it already has (see systems/rarity.js).
+    { id: 'ironLung', family: 'gun', name: 'Iron Lung', desc: 'All damage scales with the size of your lungs',
+      perLevelName: true,
+      apply: (s) => { s.ironLungLevel = (s.ironLungLevel ?? 0) + 1; }, maxStacks: 5 },
 
     // --- new companions -----------------------------------------------------
     { id: 'bakalar', family: 'companion', name: "Bakalar's Boat", desc: 'Trawler drags a net that hauls fish away: +net size, +sailings', apply: (s) => { s.bakalarLevel = (s.bakalarLevel ?? 0) + 1; }, maxStacks: 8 },
@@ -15565,6 +15889,24 @@ export const CONFIG = {
     // levels would mean the first card bought a lone orca, and a lone orca is
     // not what the fantasy is.
     { id: 'orcaFamily', family: 'companion', name: 'Orca Family', desc: 'Three orcas hunt enemy boats: +damage, +speed', apply: (s) => { s.orcaLevel = (s.orcaLevel ?? 0) + 1; }, maxStacks: 6 },
+
+    // --- the seeking shot -----------------------------------------------------
+    // Turns the gun the run already has into a seeker, rather than adding a
+    // weapon beside it — see CONFIG.homingShot for what a stack buys and why
+    // the turn rate is deliberately below the mussel's.
+    { id: 'homingShot', family: 'gun', name: 'Sonar Teeth', desc: 'Your shots seek the nearest and biggest thing in the water',
+      perLevelName: true,
+      levelDescs: { 1: 'Every shot you fire curves onto a target, favouring the big ones' },
+      apply: (s) => { s.homingShotLevel = (s.homingShotLevel ?? 0) + 1; }, maxStacks: 5 },
+
+    // --- eaten, not picked ----------------------------------------------------
+    // The only card in the game whose value is earned after the pick. See
+    // CONFIG.maneater, and applyDamageScaling in stats.js for where it is
+    // spent — apply() can only count the stacks, because the meals happen
+    // in the water and apply() is replayed against a synthetic block.
+    { id: 'maneater', family: 'gun', name: 'Maneater', desc: 'Every human you swallow makes everything you do hurt more',
+      perLevelName: true,
+      apply: (s) => { s.maneaterLevel = (s.maneaterLevel ?? 0) + 1; }, maxStacks: 5 },
 
     // --- the cross-cutting four ----------------------------------------------
     // Every upgrade above this line grants or deepens ONE ability. These four
@@ -18758,6 +19100,17 @@ export const TUNER_SCHEMA = [
       { path: 'boatWake.foamDepth', min: 0, max: 0.6, step: 0.02, label: 'foam depth under the line' },
       { path: 'boatWake.foamGap', min: 0, max: 1, step: 0.02, label: 'foam: extra clearance astern' },
       { path: 'emitters.hullFoam.count', min: 0, max: 12, step: 1, label: 'foam lobes per burst' },
+      // A hull burning where it was hit. `starts at` is the arc: below it a
+      // boat is clean, above it the rate climbs to `at zero health`.
+      { path: 'boats.smoke.enabled', type: 'bool', label: 'damaged hulls smoke' },
+      { path: 'boats.smoke.startAt', min: 0, max: 0.9, step: 0.05, label: 'smoke starts at (share of hp lost)' },
+      { path: 'boats.smoke.perSecond', min: 0, max: 30, step: 1, label: 'smoke puffs/s at zero health' },
+      { path: 'boats.smoke.sites', min: 1, max: 12, step: 1, label: 'hit sites remembered' },
+      { path: 'boats.smoke.lift', min: 0, max: 1, step: 0.05, label: 'smoke leaves the deck at (x half-height)' },
+      { path: 'boats.smoke.trawlerMul', min: 1, max: 3, step: 0.1, label: 'trawler smoke multiplier' },
+      { path: 'fx.goo.groups.smoke.opacity', min: 0, max: 1, step: 0.05, label: 'smoke opacity' },
+      { path: 'fx.goo.groups.smoke.radius', min: 1, max: 8, step: 0.1, label: 'smoke puff size' },
+      { path: 'fx.goo.groups.smoke.soft', min: 0.02, max: 1.2, step: 0.02, label: 'smoke edge softness' },
       { path: 'boatWake.sprayEnabled', type: 'bool', label: 'bow wave' },
       { path: 'boatWake.sprayMinRamp', min: 0, max: 0.95, step: 0.05, label: 'bow wave: speed it starts at' },
       { path: 'boatWake.sprayPerSecond', min: 0, max: 40, step: 1, label: 'bow wave rate' },
@@ -19488,6 +19841,14 @@ export const TUNER_SCHEMA = [
       { path: 'fx.goo.normal', min: 0, max: 24, step: 0.5, label: 'goo surface relief' },
       { path: 'fx.goo.divisor', min: 1, max: 6, step: 1, label: 'goo field resolution (high = cheaper, softer)' },
       { path: 'emitters.killGoo.count', min: 0, max: 60, step: 1, label: 'kill goo lobes' },
+      // The mark left where a boss is being hit, tinted by whatever landed. Its
+      // LIFE is the one to watch: this fires several times a second under
+      // multishot, and anything much longer welds into a coat of paint over the
+      // animal it is supposed to be pointing at.
+      { path: 'bossImpact.goo', type: 'bool', label: 'boss hits leave a mark' },
+      { path: 'emitters.bossHitGoo.count', min: 0, max: 20, step: 1, label: 'hit mark lobes' },
+      { path: 'fx.goo.groups.hit.radius', min: 1, max: 8, step: 0.1, label: 'hit mark size' },
+      { path: 'fx.goo.groups.hit.opacity', min: 0, max: 1, step: 0.05, label: 'hit mark opacity' },
       // THE FOAM SURFACE — the breach and the landing. Only the keys that
       // differ from the block above are rows here; anything not listed is
       // inherited from it, so dragging `blob size` moves both substances and
@@ -19945,9 +20306,13 @@ const PATH_TABLES = [
     // how many mid-air jumps you get) and is judged over a run, while the trail
     // is judged by eye in the second it happens. Same split as the ability
     // blocks above — see the note on CONFIG.airborne.
+    // `homingShot`, `maneater` and `ironLung` are here whole rather than fenced
+    // to a sub-block: every number in all three IS throughput — turn rate,
+    // acquisition, and two damage curves read against the rest of the economy
+    // — and none of the three has a single value judged by eye.
     roots: ['weapon', 'missile', 'bounce', 'shrimpRing', 'scallop', 'oyster', 'seagullBomb',
       'eel', 'sealTeam', 'beluga', 'club', 'clubThrow', 'clubBoom', 'clubIce', 'strike',
-      'airborne', 'octoGrab', 'harp'],
+      'airborne', 'octoGrab', 'harp', 'homingShot', 'maneater', 'ironLung'],
   }),
   createPathTable({
     label: 'behaviour', file: 'behaviour.csv', text: behaviourCsv,

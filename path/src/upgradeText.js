@@ -128,6 +128,17 @@ export const STAT_TEXT = {
   clubThrowLevel:     { label: 'thrown club', kind: 'level', unlock: 'hurled homing clubs on a strike' },
   clubBoomLevel:      { label: 'club blast', kind: 'level', unlock: 'every club hit detonates' },
   clubIceLevel:       { label: 'club ice', kind: 'level', unlock: 'every club hit chills, and freezes when it saturates' },
+  homingShotLevel:    { label: 'sonar teeth', kind: 'level', unlock: 'shots that seek, favouring the biggest body in reach' },
+
+  // --- the two cards whose worth is not in their apply() ---
+  // Both count stacks and nothing else, deliberately: what a stack is WORTH
+  // depends on a running total (Maneater) or on a stat other cards move (Iron
+  // Lung), and neither is visible from inside apply(). See applyDamageScaling
+  // in stats.js. That makes 'level' the honest kind here — {effect} on either
+  // card would otherwise have to invent a number, which is the exact failure
+  // the measured descriptions exist to prevent.
+  maneaterLevel:      { label: 'maneater', kind: 'level', unlock: 'a taste for swimmers — every one you eat raises all your damage' },
+  ironLungLevel:      { label: 'iron lung', kind: 'level', unlock: 'all damage scaling with your maximum oxygen' },
 };
 
 // ---------------------------------------------------------------------------

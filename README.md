@@ -40,12 +40,18 @@ with what's deployed, so it suits an urgent fix rather than daily use.
 
 ### What pushing does NOT cover
 
-**The leaderboard worker deploys separately.** It is its own Cloudflare Worker
-and the Pages pipeline never touches it. After changing
+**The workers deploy separately.** Each is its own Cloudflare Worker and the
+Pages pipeline never touches either. After changing
 `server/leaderboard-worker.js`:
 
 ```bash
 cd server && npx wrangler deploy
+```
+
+After changing anything in `server/playtest/` (the run collection):
+
+```bash
+cd server/playtest && npx wrangler deploy
 ```
 
 **Tuning done on the deployed site never comes back.** Under `?tune`, a
@@ -138,6 +144,37 @@ Two numbers do most of the work:
 `--last N`, `--since <date>`, `--runs` (full per-run reports) and `--json` all
 work. Runs recorded under different `spawn.ramp` values are reported separately,
 because they aren't the same game.
+
+### Runs from the live site
+
+`playtest/runs.jsonl` only ever catches runs played against `npm run dev` — it
+is written by a Vite middleware, so a deployed build has nothing to write to.
+Runs played on `seal-survivor.pages.dev` go to the collection worker instead
+(`server/playtest/`), and come down with:
+
+```bash
+npm run playtest:pull
+npm run playtest -- --remote
+```
+
+Always read `--who` before trusting the aggregate:
+
+```bash
+npm run playtest -- --remote --who
+```
+
+It prints the build and browser breakdown, because the two ways a pile of
+collected runs lies are both invisible in an average — most of the runs being
+**one player**, and several **builds** averaged together as one game. Every run
+now carries the git sha it was played on, so:
+
+```bash
+npm run playtest -- --remote --build a1b2c3d
+```
+
+reads exactly one version of the game. `--all` pools the local dev log and the
+collected runs when you do want both. Setup and the privacy details are in
+[server/playtest/README.md](server/playtest/README.md).
 
 Where things live: `systems/playtest.js` records, `systems/playtestAnalysis.js`
 judges (pure functions, no imports — the panel and the CLI both run it, so they

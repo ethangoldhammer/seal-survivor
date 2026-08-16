@@ -65,6 +65,40 @@ export function initFeedback(gridSystem) {
  *                       Every other burst leaves it off and takes the emitter's
  *                       colour. See CONFIG.emitters for why that split exists.
  */
+/**
+ * WHAT THIS THING IS MADE OF, as a feedback event.
+ *
+ * A boss used to sound exactly like a minnow: `hit` going in, `bigKill` going
+ * out, whether it was a shark, a crab or forty tonnes of steel. These are one
+ * pair of voices per MATERIAL — flesh, shell, steel — resolved from the asset
+ * because the asset is what the thing actually is (CONFIG.boss.voiceClass).
+ *
+ * Fired ALONGSIDE the event that already owns the moment rather than instead of
+ * it: the events these name carry a sound and nothing else, so the shake, the
+ * burst and the hit-stop stay authored in one place. Routing through feedback()
+ * rather than playSfx is what gets the class voice the same distance banding,
+ * throttle and mixer ranking as every other sound in the game.
+ *
+ * @param kind 'hit' or 'die'
+ * @param key  the asset the thing is wearing — `e.assetKey`, or the hull's own
+ * @param at   the usual { x, y, scale } feedback payload
+ */
+export function bossVoice(kind, key, at = {}) {
+  const b = CONFIG.boss ?? {};
+  const cls = b.voiceClass?.[key] ?? b.voiceDefault ?? 'flesh';
+  // Built into variables rather than inline. The event audit in
+  // tools/upgrade-test.mjs reads the string literals inside every
+  // `feedback(...)` call to catch a typo'd event name — which is worth far more
+  // than it costs here — and a ternary spelling the name inside those brackets
+  // reads to it as three events called 'Hit', 'Die' and 'die'.
+  const verb = kind === 'die' ? 'Die' : 'Hit';
+  const event = `boss${verb}${cls[0].toUpperCase()}${cls.slice(1)}`;
+  // An unknown class would be a silently missing sound — playSfx returns for a
+  // name it does not have — so it falls back rather than going quiet.
+  const fallback = `boss${verb}Flesh`;
+  feedback(CONFIG.feedback[event] ? event : fallback, at);
+}
+
 export function feedback(event, at = {}) {
   const def = CONFIG.feedback[event];
   if (!def) {

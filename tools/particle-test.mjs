@@ -195,6 +195,24 @@ const MAIN = fs.readFileSync(path.join(HERE, '../path/src/main.js'), 'utf8');
 const killCall = /function onEnemyKilledFeedback[\s\S]*?\n}/.exec(MAIN)?.[0] ?? '';
 check('the kill feedback passes a colour', /color:\s*assetBaseColor\(/.test(killCall));
 
+// THE SECOND EXCEPTION, and there are exactly two.
+//
+// A boss hit is the other place a burst's colour is information rather than
+// decoration: the mark left on the skin says WHAT is landing — venom, ice,
+// shock, a plain shot — and a fixed palette there would be a readout that
+// reports the same answer whatever the player built. Same shape of argument as
+// the death's, and it earns the same exemption.
+//
+// Held to the ONE call, though, and to the resolver behind it: `color:` in
+// spawnBossImpact's own emit, fed from damageSourceColor in main.js. Anything
+// else tinting a burst is still the rainbow this whole block exists to keep out.
+const IMPACT = fs.readFileSync(path.join(HERE, '../path/src/systems/bossImpact.js'), 'utf8');
+check('the boss hit mark passes the damage source colour',
+  /emit\('bossHitGoo'[\s\S]{0,400}?color:\s*opts\.color/.test(IMPACT));
+check('...resolved from what actually did the damage',
+  /function damageSourceColor[\s\S]*?elementColor\(/.test(MAIN)
+  && /spawnBossImpact\([\s\S]{0,200}?color:\s*damageSourceColor\(/.test(MAIN));
+
 // Every other feedback() call in the game must NOT. Comments are allowed to
 // discuss it; code isn't.
 const strip = (s) => s.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -233,7 +251,11 @@ for (const file of srcFiles) {
   for (const args of [...callArgs(code, 'feedback'), ...callArgs(code, 'emit')]) {
     if (!/\bcolor:/.test(args)) continue;
     if (file.endsWith('main.js') && /assetBaseColor\(/.test(args)) continue; // the kill
-    strayTints.push(path.relative(path.join(HERE, '..'), file));
+    // The boss hit mark, checked properly above. Matched on the emitter name
+    // rather than on the file, so bossImpact.js is not a blanket exemption —
+    // a second tinted burst added there is still a failure.
+    if (/emit\(\s*'bossHitGoo'/.test(`emit('bossHitGoo'${args}`) && /\bcolor:\s*opts\.color/.test(args)) continue;
+    strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }
 check('and no other burst in the game passes one', strayTints.length === 0,

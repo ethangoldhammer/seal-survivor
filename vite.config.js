@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import { writeFile, mkdir, appendFile, readdir, stat, unlink } from 'node:fs/promises';
+import { execSync } from 'node:child_process';
 import { resolve, extname, basename, dirname } from 'node:path';
 
 const TUNING_FILE = resolve(import.meta.dirname, 'path/src/imported-tuning.json');
@@ -330,8 +331,43 @@ export function reloadHold() {
   };
 }
 
-export default defineConfig({
+// The commit a build came from, stamped into every run record the game files
+// (see the provenance note in systems/playtest.js). Without it a collection of
+// runs is a single undifferentiated pile: runs from before and after a balance
+// change average together into a number that was never true of either game.
+//
+// `--dirty` is not cosmetic here. A build with uncommitted changes is not the
+// commit it claims to be, and runs from one must be distinguishable from runs
+// from the real thing — otherwise a shipped build and a half-finished local
+// one share a label and the aggregate quietly mixes them.
+//
+// Falls back rather than throwing: an export from a tarball with no .git still
+// has to build, it just can't say which commit it is.
+function buildId() {
+  try {
+    const sha = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+    const dirty = execSync('git status --porcelain', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+    return dirty ? `${sha}-dirty` : sha;
+  } catch {
+    return 'nogit';
+  }
+}
+
+// The function form, only so `command` is available: NODE_ENV is not reliably
+// set while the config is being evaluated, and a build that mislabelled itself
+// `dev` would be worse than one with no label at all.
+export default defineConfig(({ command }) => ({
   plugins: [tuningWriter(), sfxLibrary(), reloadHold()],
+  define: {
+    // A string literal, so it survives into the bundle as one — `define`
+    // substitutes the text verbatim, and an unquoted sha would be pasted in
+    // as an identifier and fail to parse.
+    __BUILD_ID__: JSON.stringify(command === 'build' ? buildId() : 'dev'),
+  },
   server: {
     // Vite has no built-in PORT support — without this it always takes 5173
     // (then walks upward when that's busy), which means a harness that hands
@@ -342,4 +378,4 @@ export default defineConfig({
     // set, so a plain `npm run dev` behaves exactly as it always has.
     port: process.env.PORT ? Number(process.env.PORT) : undefined,
   },
-});
+}));

@@ -9,6 +9,7 @@ import { spawnCrewFor, updateCrew, resetCrew, releaseCrew, blastCrew, clearDeckC
 import { snapSide } from './facing.js';
 import { RigidBody, addBody, removeBody, blastBodies } from './rigidBody.js';
 import { updateHullWake } from './boatWake.js';
+import { emit } from '../entities/particles.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
@@ -22,6 +23,11 @@ export const attractorOrbs = [];
 
 let spawnTimer = 0;
 let clock = 0;
+
+// Scratch for the world<->hull conversions the scars need. Two of them and one
+// per frame each, so they are held rather than allocated.
+const _scar = new THREE.Vector3();
+const _puff = new THREE.Vector3();
 
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
@@ -151,6 +157,10 @@ function spawnBoat(scene, difficulty) {
     assetKey,
     hp,
     maxHp: hp,
+    // Where this hull has been hit, in its own frame, newest last — see
+    // damageBoat. Empty until something lands on it.
+    scars: [],
+    smokeCarry: 0,
     dir,
     speed: CONFIG.boats.speed + Math.random() * CONFIG.boats.speedVariance,
     // The hull box, and a circle that encloses it for the broad checks
@@ -220,6 +230,64 @@ export function spawnAttractorOrb(scene, pos) {
   attractorOrbs.push({ mesh, life: CONFIG.attractorOrb.lifetime });
 }
 
+// A HULL BURNING WHERE IT WAS HIT.
+//
+// The middle of a boat's arc, which did not exist: a hull went from untouched
+// to gone with nothing in between but a white flash per pellet, so "nearly
+// dead" and "just arrived" looked identical from any distance the player
+// actually fights at.
+//
+// Two things make it read as the boat's own damage rather than as an effect
+// parked on top of it. The rate is the hull's REMAINING HEALTH, ramped from
+// `startAt` so an untouched boat is clean and a doomed one is hard to look at;
+// and every puff comes out of a place the hull was actually HIT, remembered in
+// the boat's own frame (see damageBoat) so the column rides the roll and the
+// bob instead of sliding off the deck.
+//
+// The puffs FUSE — goo group `smoke`, see CONFIG.emitters.hullSmoke — which is
+// what separates a column of smoke from a stream of grey dots.
+function updateHullSmoke(dt, b) {
+  const c = CONFIG.boats?.smoke;
+  if (!c?.enabled || !b.scars.length) return;
+
+  const startAt = Math.min(0.95, Math.max(0, c.startAt ?? 0.25));
+  const lost = 1 - Math.max(0, b.hp) / Math.max(1, b.maxHp);
+  if (lost <= startAt) return;
+  // Ramped across whatever is left above the threshold, so the dial reads the
+  // same on a rowboat and on a trawler with four times the health.
+  const hurt = (lost - startAt) / Math.max(1e-3, 1 - startAt);
+
+  const rate = (c.perSecond ?? 7) * hurt * (b.isTrawler ? (c.trawlerMul ?? 1.5) : 1);
+  b.smokeCarry = (b.smokeCarry ?? 0) + rate * dt;
+  let puffs = Math.floor(b.smokeCarry);
+  b.smokeCarry -= puffs;
+  // The same hitch guard every other emitter in this file has: one long frame
+  // must not dump a second of smoke at one point.
+  puffs = Math.min(puffs, 3);
+
+  const scatter = (c.scatter ?? 0.12);
+  for (let i = 0; i < puffs; i++) {
+    // The newest damage smokes hardest — a scar is picked at random but the
+    // list is short and the oldest falls off it, so the fire follows the fight.
+    const scar = b.scars[Math.floor(Math.random() * b.scars.length)];
+    _puff.set(
+      scar.x + (Math.random() * 2 - 1) * scatter * b.halfLength,
+      Math.max(scar.y, (c.lift ?? 0.15) * b.halfHeight)
+        + (Math.random() * 2 - 1) * scatter * b.halfHeight,
+      0,
+    );
+    b.mesh.localToWorld(_puff);
+    emit('hullSmoke', _puff.x, _puff.y, {
+      dirX: 0,
+      dirY: 1,
+      // Half the hull's speed: smoke leaves with the boat and is then left
+      // behind by it, which is what draws the trail back over the water.
+      vx: b.body.vx,
+      vy: 0,
+    });
+  }
+}
+
 // hooks: { onBoatDestroyed(boat), onChumSpawned(n) }
 export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
   clock += dt;
@@ -287,6 +355,8 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
       speed: Math.abs(b.body.vx),
       vx: b.body.vx,
     });
+
+    updateHullSmoke(dt, b);
 
     // Sailed off the far side — despawn quietly, no reward. Its crew goes with
     // it: they're still standing on a boat that just left the arena. Measured
@@ -415,6 +485,22 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
   if (!b) return false;
   b.hp -= amount;
   b.flash = CONFIG.fx.hitFlash;
+
+  // WHERE IT WAS HIT, remembered in the HULL'S OWN FRAME. The smoke that comes
+  // off a failing boat is fired from these, and a hit position stored in world
+  // coordinates would be left behind by the boat within a second — this hull
+  // sails, rolls and bobs. Converted once here rather than every frame.
+  //
+  // `at` is null for damage with no contact point (a splash, a ram resolved by
+  // the physics solver), and then there is nothing to remember: those hits
+  // still bring the hull down, they just don't decide where it burns.
+  if (at) {
+    const local = _scar.set(at.x, at.y, 0);
+    b.mesh.worldToLocal(local);
+    b.scars.push({ x: local.x, y: local.y });
+    const keep = Math.max(1, CONFIG.boats.smoke?.sites ?? 4);
+    if (b.scars.length > keep) b.scars.shift();
+  }
 
   // Damage-scaled and capped, the same way the creatures' hit impulse is: a
   // chip of splash nudges the hull, a big hit visibly staggers it. The hull's

@@ -29,6 +29,8 @@
     "test:csv": "node tools/csv-editor-test.mjs",
     "placeholder": "node tools/make-placeholder-ship.mjs",
     "playtest": "node tools/playtest-report.mjs",
+    "playtest:pull": "node tools/playtest-pull.mjs",
+    "test:collect": "node tools/playtest-collect-test.mjs",
     "test:ledger": "node --import ./tools/vite-loader.mjs tools/playtest-ledger-test.mjs",
     "perf": "node tools/perf-runs.mjs",
     "tex": "node tools/texture-audit.mjs",
@@ -78,10 +80,11 @@
     "test:mosasaur": "node --import ./tools/vite-loader.mjs tools/mosasaur-test.mjs",
     "test:knockback": "node --import ./tools/vite-loader.mjs tools/player-knockback-test.mjs",
     "test:hitshape": "node --import ./tools/vite-loader.mjs tools/hit-shape-test.mjs",
+    "test:voices": "node --import ./tools/vite-loader.mjs tools/boss-voice-test.mjs",
     "test:bossperks": "node --import ./tools/vite-loader.mjs tools/boss-perk-test.mjs",
     "test:ragdoll": "node --import ./tools/vite-loader.mjs tools/boss-ragdoll-test.mjs",
     "ship": "node tools/ship.mjs",
-    "test": "npm run test:upgrades && npm run test:updebug && npm run test:elements && npm run test:abilities && npm run test:orca && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:skin && npm run test:boats && npm run test:wake && npm run test:swimtrail && npm run test:grass && npm run test:crabs && npm run test:claw && npm run test:crabboss && npm run test:club && npm run test:tables && npm run test:ledger && npm run test:prune && npm run test:strike && npm run test:impact && npm run test:meter && npm run test:physics && npm run test:gravity && npm run test:rig && npm run test:celebrate && npm run test:animdebug && npm run test:surfacerest && npm run test:apexspring && npm run test:sharkswim && npm run test:nightlife && npm run test:glowphase && npm run test:waves && npm run test:boss && npm run test:boat && npm run test:yacht && npm run test:bossbar && npm run test:bossshot && npm run test:qr && npm run test:bossrig && npm run test:bossnames && npm run test:mosasaur && npm run test:knockback && npm run test:hitshape && npm run test:bossperks && npm run test:ragdoll && npm run test:kraken && npm run test:width && npm run test:beat && npm run test:sky && npm run test:celestial && npm run test:nightsky && npm run test:horizon && npm run test:ambient && npm run test:emissive && npm run test:bus && npm run test:sfxdebug && npm run test:menusound && npm run test:tunerrow && npm run test:text && npm run test:textdesign && npm run test:tooltip && npm run test:music && npm run test:chargefx && npm run test:damagefx && npm run test:quips && npm run test:particles && npm run test:gore && npm run test:touchglow && npm run test:spriteglow && npm run test:modelshare && npm run test:instancing && npm run test:perf && npm run test:pool && npm run test:chumglow && npm run test:xp && npm run test:ramp && npm run test:csv && npm run test:callouts && npm run test:device && npm run test:pause && npm run test:stage && npm run test:facing && npm run test:chunks && npm run test:airtime",
+    "test": "npm run test:upgrades && npm run test:updebug && npm run test:elements && npm run test:abilities && npm run test:orca && npm run test:crowd && npm run test:octopus && npm run test:biolum && npm run test:skin && npm run test:boats && npm run test:wake && npm run test:swimtrail && npm run test:grass && npm run test:crabs && npm run test:claw && npm run test:crabboss && npm run test:club && npm run test:tables && npm run test:ledger && npm run test:collect && npm run test:prune && npm run test:strike && npm run test:impact && npm run test:meter && npm run test:physics && npm run test:gravity && npm run test:rig && npm run test:celebrate && npm run test:animdebug && npm run test:surfacerest && npm run test:apexspring && npm run test:sharkswim && npm run test:nightlife && npm run test:glowphase && npm run test:waves && npm run test:boss && npm run test:boat && npm run test:yacht && npm run test:bossbar && npm run test:bossshot && npm run test:qr && npm run test:bossrig && npm run test:bossnames && npm run test:mosasaur && npm run test:knockback && npm run test:hitshape && npm run test:voices && npm run test:bossperks && npm run test:ragdoll && npm run test:kraken && npm run test:width && npm run test:beat && npm run test:sky && npm run test:celestial && npm run test:nightsky && npm run test:horizon && npm run test:ambient && npm run test:emissive && npm run test:bus && npm run test:sfxdebug && npm run test:menusound && npm run test:tunerrow && npm run test:text && npm run test:textdesign && npm run test:tooltip && npm run test:music && npm run test:chargefx && npm run test:damagefx && npm run test:quips && npm run test:particles && npm run test:gore && npm run test:touchglow && npm run test:spriteglow && npm run test:modelshare && npm run test:instancing && npm run test:perf && npm run test:pool && npm run test:chumglow && npm run test:xp && npm run test:ramp && npm run test:csv && npm run test:callouts && npm run test:device && npm run test:pause && npm run test:stage && npm run test:facing && npm run test:chunks && npm run test:airtime && npm run test:damagecards",
     "test:ambient": "node --import ./tools/vite-loader.mjs tools/ambient-test.mjs",
     "test:emissive": "node --import ./tools/vite-loader.mjs tools/emissive-flip-test.mjs",
     "glow": "node --import ./tools/vite-loader.mjs tools/glow-audit.mjs",
@@ -119,7 +122,8 @@
     "test:airtime": "node --import ./tools/vite-loader.mjs tools/airtime-test.mjs",
     "sim:chain": "node --import ./tools/vite-loader.mjs tools/chain-sim.mjs",
     "test:kraken": "node --import ./tools/vite-loader.mjs tools/kraken-test.mjs",
-    "test:tooltip": "node tools/upgrade-tooltip-test.mjs"
+    "test:tooltip": "node tools/upgrade-tooltip-test.mjs",
+    "test:damagecards": "node --import ./tools/vite-loader.mjs tools/damage-cards-test.mjs"
   },
   "dependencies": {
     "@rive-app/canvas": "^2.39.2",

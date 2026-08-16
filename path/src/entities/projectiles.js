@@ -20,6 +20,12 @@ export const projectiles = [];
 export function spawnProjectile(scene, {
   origin, dir, faction, damage, speed, life, radius, pierce = 0, asset, source = null,
   homing = false, turnRate = 4, acquireRadius = Infinity, targetType = null, homingDelay = 0,
+  // HOW MUCH A BIG TARGET COUNTS AS A NEAR ONE. 0 (every seeker that existed
+  // before Sonar Teeth) is plain nearest-wins. See updateHoming for the curve
+  // and CONFIG.homingShot for why the basic shot wants this and a mussel does
+  // not: one pellet of a volley is cheap enough to spend on the wrong fish, a
+  // whole volley of them is not.
+  sizeBias = 0, sizeRefRadius = 1,
   // Who a homing shot is FOR. Null means the enemy list, which is the seal's
   // own ordnance and every homing shot that existed before the boat boss. A
   // `{ mesh }` handed in here is followed instead, and never re-acquired —
@@ -85,6 +91,8 @@ export function spawnProjectile(scene, {
     chase,
     turnRate,
     acquireRadius,
+    sizeBias,
+    sizeRefRadius,
     targetType, // e.g. 'walkingCrab' — restricts homing to only that enemy type
     target: null,
     bounce,
@@ -168,6 +176,25 @@ function updateJet(p, dt) {
   return true;
 }
 
+// HOW MUCH NEARER A BODY OF THIS SIZE READS, as a divisor on its distance.
+//
+// (radius / ref) ^ sizeBias. At sizeBias 0 that is 1 for everything — every
+// seeker in the game before Sonar Teeth, unchanged — and at 1 it is the plain
+// size ratio, so twice the body is half the distance. The exponent is what
+// makes the middle useful: it compounds gently, so the bias never turns into
+// "always pick the biggest thing on screen regardless of range", which is a
+// seeker that ignores the fight the player is actually in.
+//
+// A target with no radius (a boat hull reached through the mark list) reads as
+// ordinary rather than as zero-sized — dividing by a ratio of 0 would put it
+// infinitely far away and quietly make marked hulls unhittable.
+function sizePull(p, radius) {
+  if (!p.sizeBias) return 1;
+  const ref = p.sizeRefRadius > 0 ? p.sizeRefRadius : 1;
+  if (!(radius > 0)) return 1;
+  return Math.pow(radius / ref, p.sizeBias);
+}
+
 function updateHoming(p, dt, enemiesList) {
   // A SHOT WITH SOMETHING TO CHASE NEVER SHOPS AROUND. The re-acquire below
   // walks the enemy list, which for an enemy-faction missile is a list of its
@@ -196,7 +223,7 @@ function updateHoming(p, dt, enemiesList) {
       if (p.targetType && e.type !== p.targetType) continue;
       const dx = e.mesh.position.x - p.mesh.position.x;
       const dy = e.mesh.position.y - p.mesh.position.y;
-      const d = Math.hypot(dx, dy) * markWeight(e);
+      const d = Math.hypot(dx, dy) * markWeight(e) / sizePull(p, e.radius);
       if (d < bestD) { bestD = d; best = e; }
     }
     // Hulls are not in the enemy list and are not normally something a homing
