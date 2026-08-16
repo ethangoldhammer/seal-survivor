@@ -115,23 +115,45 @@ const sentinels = rows.filter((r) => num(r.hp) >= SENTINEL_FLOOR);
 
 section('DROPPED — neither side of the ledger books a placeholder');
 
-const TURTLE = num(rows.find((r) => r.id === 'seaTurtle')?.hp);
-check('seaTurtle is still the sentinel this was written for', TURTLE >= SENTINEL_FLOOR,
-  `hp ${TURTLE.toExponential(0)}`);
+// THE PLACEHOLDER IS SYNTHETIC NOW, and that is the point of this block rather
+// than a weakening of it.
+//
+// This used to read seaTurtle's hp straight out of enemies.csv, because the
+// turtle WAS the sentinel — it carried hp 1000000000 to mean "cannot be
+// killed". That is no longer how the table says it: `invincible` is a flag on
+// the row, the turtle carries an ordinary 250, and no species is a placeholder
+// any more (see `no table row is a placeholder` below, and
+// tools/invincible-test.mjs).
+//
+// The guard still has to work. It is what stands between a future row typed in
+// haste and a month of poisoned reports, and a test that sourced its input from
+// the table would have quietly stopped exercising it the moment the table was
+// cleaned — passing with nothing to guard against, which is the failure mode
+// worth avoiding here. So the value is written down.
+const PLACEHOLDER = 1e9;
+check('the guard is set below a placeholder-scale number', PLACEHOLDER >= SENTINEL_FLOOR,
+  `${PLACEHOLDER.toExponential(0)} vs floor ${SENTINEL_FLOOR.toExponential(0)}`);
+
+// And the migration itself: the table no longer expresses invincibility as
+// arithmetic. Asserted here as well as in the invincibility test, because this
+// is the file that explains what went wrong when it did.
+check('no table row is a placeholder any more', sentinels.length === 0,
+  sentinels.map((r) => `${r.id} ${num(r.hp).toExponential(0)}`).join(', ') || 'none');
 
 // The failing run, in miniature: eight turtles struck by lightning alongside
-// one ability doing real work.
+// one ability doing real work. This is the shape of the run that filed 8.1e9
+// against `lightning` and took every other ability to a 0% share.
 let b = runWith(() => {
-  for (let i = 0; i < 8; i++) playtest.recordDamage('lightning', TURTLE, { id: `turtle${i}` });
+  for (let i = 0; i < 8; i++) playtest.recordDamage('lightning', PLACEHOLDER, { id: `turtle${i}` });
   playtest.recordDamage('missile', 268617, { id: 'shark' });
 });
 check('damage side books nothing for a placeholder', b.dealtBySource.lightning === undefined,
-  `raw would have been ${(8 * TURTLE).toExponential(2)}`);
+  `raw would have been ${(8 * PLACEHOLDER).toExponential(2)}`);
 check('the real ability is the whole table again', b.dealtBySource.missile === 268617,
   `missile at 100% share, was 0%`);
 
 b = runWith(() => {
-  playtest.recordSpawn(TURTLE);
+  playtest.recordSpawn(PLACEHOLDER);
   for (let i = 0; i < 78; i++) playtest.recordSpawn(7.9);
 });
 check('spawn side books nothing for it either', Math.round(b.spawnHp) === Math.round(78 * 7.9),
@@ -200,13 +222,13 @@ check('nothing is parked ambiguously near the line',
 section('HONEST — the guard is instrumentation, not gameplay');
 
 b = runWith(() => {
-  playtest.recordSpawn(TURTLE);
+  playtest.recordSpawn(PLACEHOLDER);
   for (let i = 0; i < 78; i++) playtest.recordSpawn(7.9);
 });
 check('a dropped spawn is still COUNTED as a spawn', b.spawns === 79, `got ${b.spawns}`);
 
 b = runWith(() => {
-  playtest.recordDamage('lightning', TURTLE, { id: 'turtle' });
+  playtest.recordDamage('lightning', PLACEHOLDER, { id: 'turtle' });
   playtest.recordKill({ id: 'turtle' }, 'lightning');
 });
 check('a dropped hit still credits its kill', b.killsBySource.lightning === 1);

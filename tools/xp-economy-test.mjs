@@ -113,9 +113,34 @@ function simulate({ hunt = 7, clear = 0.8, seed = 1, foodChainMul = () => 1 } = 
 
       // THE HUNT. Walk backwards: removeEnemy takes an INDEX and splices, so a
       // forward walk would skip the creature that slid into the hole.
+      //
+      // `hunt` is the time-to-kill for a BASIC FISH at this moment, and every
+      // other creature is scaled off it by hp — a shark carries about twelve
+      // times a fish's health at any point in a run, so it takes about twelve
+      // times as long to clear and it stands in the water that much longer.
+      //
+      // This used to be one flat rate for the whole roster, which is fine while
+      // the composition never changes and silently wrong the moment it does:
+      // moving the spawn mix toward big bodies then read as pure extra income,
+      // because the model collected a megalodon's 40 xp at a sardine's speed.
+      // Measured, it was worth 15,000 xp/min of pure fiction and two whole
+      // levels on the ladder.
+      //
+      // Divided by the fish's OWN ramped hp rather than by a constant, so the
+      // roster-wide hp ramp cancels out: the seal's damage grows over a run
+      // too, and `hunt` is the knob that says how well it keeps up. What
+      // survives the division is the spread WITHIN the roster at one moment,
+      // which is the thing a composition change actually moves. Clamped at both
+      // ends — nothing clears faster than about a clownfish, and the sea
+      // turtle's invincible-sentinel hp would otherwise divide the hazard to
+      // zero and pin the arena (see the note on xp.toughness.max in config.js).
+      const fishDef = CONFIG.enemies.fish;
+      const refHp = Math.max(1, (fishDef.hp + (fishDef.hpPerDifficulty ?? 0) * gameState.difficulty)
+        * difficultyRamp('hp', gameState.difficulty));
       const hazard = dt / Math.max(0.1, hunt);
       for (let n = enemies.length - 1; n >= 0; n--) {
-        if (rand() >= hazard) continue;
+        const toughness = Math.max(1 / 40, Math.min(1.5, refHp / Math.max(1, enemies[n].hp ?? refHp)));
+        if (rand() >= hazard * toughness) continue;
         const e = enemies[n];
         // The real drop, so the tier table and the early holdback are the
         // shipped ones. e.xp, not e.def.xp — a lull fish is worth a fraction.

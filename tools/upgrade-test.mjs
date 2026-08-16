@@ -340,7 +340,7 @@ for (const event of configured) {
 // failure mode that looks like working code: the call site is there, the key
 // is there, and nothing happens. Saved nulls in imported-tuning.json beat the
 // defaults in config.js, which is exactly how an entry ends up inert.
-const CHANNELS = ['emit', 'shake', 'hitstop', 'glow', 'ripple', 'sfx', 'haptic'];
+const CHANNELS = ['emit', 'shake', 'hitstop', 'glow', 'ripple', 'sfx', 'haptic', 'toast'];
 for (const [event, def] of Object.entries(CONFIG.feedback)) {
   if (def == null) {
     fail('feedback', `CONFIG.feedback.${event} is null in the merged config — every call to it is a no-op. Check imported-tuning.json.`);
@@ -351,7 +351,7 @@ for (const [event, def] of Object.entries(CONFIG.feedback)) {
     return Array.isArray(v) ? v.length > 0 : v != null && v !== 0 && v !== false;
   });
   if (!live.length) {
-    fail('feedback', `CONFIG.feedback.${event} has no live channel — no particles, shake, glow, ripple, sound or haptic.`);
+    fail('feedback', `CONFIG.feedback.${event} has no live channel — no particles, shake, glow, ripple, sound, haptic or toast.`);
   }
 }
 

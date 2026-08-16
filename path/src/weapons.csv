@@ -6,7 +6,7 @@ missile.turnRate,9.5,0.5,12,missile turn rate
 missile.speed,14,4,40,missile speed
 missile.homingDelay,0.18,0,1,missile straight-flight time
 bounce.fireRate,0.86,0.1,2,bounce base fire rate
-bounce.damage,8,1,60,bounce damage
+bounce.damage,14,1,60,bounce damage
 bounce.life,3,0.5,8,bounce base lifespan
 bounce.maxBounces,2,0,10,bounce base max bounces
 bounce.maxBouncesPerLevel,2,0,6,bounce +bounces per level
@@ -35,7 +35,7 @@ seagullBomb.baseFireRate,2.3,0.5,10,seagull seconds between runs at level 1
 seagullBomb.fireRatePerLevel,0.85,0.5,1,seagull fire rate mult per level
 seagullBomb.damage,87,1,150,seagull direct hit damage
 seagullBomb.splashDamage,41,0,80,seagull splash damage
-seagullBomb.splashRadius,5.2,0.5,10,seagull splash radius
+seagullBomb.splashRadius,6.2,0.5,10,seagull splash radius
 eel.fireRate,2,0.2,4,eel seconds between zaps
 eel.baseDamage,32,1,80,eel damage per hop
 eel.damagePerLevel,7,0,30,eel damage per level
@@ -118,9 +118,9 @@ octoGrab.reachStretch,1.9,1,2.5,octopus: how far past its real length an arm may
 harp.interval,2.2,0.3,10,harp: seconds between plucks at level 1
 harp.intervalPerLevel,0.16,0,1,harp: cadence gain per level
 harp.intervalFloor,0.85,0.2,5,harp: fastest allowed cadence
-harp.range,13,2,40,harp: how far from the player it looks for a target
+harp.range,20,2,40,harp: how far from the player it looks for a target
 harp.rangePerLevel,0.7,0,4,harp: target range per level
-harp.damage,16,0,120,harp: music note impact damage
+harp.damage,22,0,120,harp: music note impact damage
 harp.damagePerLevel,5,0,40,harp: note damage per level
 harp.speed,17,4,60,harp: note flight speed
 harp.turnRate,4.5,0.5,15,harp: note homing turn rate (rad/sec)

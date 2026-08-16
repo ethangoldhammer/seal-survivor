@@ -1660,6 +1660,30 @@
     "hitRadius": 0.55,
     "divePitch": 96
   },
+  "whale": {
+    "depthMin": 0.28,
+    "depthMax": 0.66,
+    "offscreenMargin": 22,
+    "driftAmplitude": 2.4,
+    "driftSpeed": 0.22,
+    "cruiseGape": 0.35,
+    "feedGape": 1,
+    "gapeOpen": 0.7,
+    "gapeClose": 2.6,
+    "gapeHold": 6.5,
+    "gapeLead": 2.2,
+    "intakePull": 15,
+    "intakeFalloff": 2.2,
+    "intakeEatTime": 0.35,
+    "crumbRate": 7,
+    "spoutEnabled": true,
+    "spoutDepth": 0.2,
+    "spoutRise": 0.18,
+    "spoutFall": 0.7,
+    "wagState": "whaleCruise",
+    "bank": 7,
+    "bankSmooth": 1.6
+  },
   "sealTeam": {
     "orbitRadius": 2.6,
     "orbitSpeed": 0.9,
@@ -2178,7 +2202,6 @@
       }
     },
     "groupMaxAlive": {
-      "shark": 2,
       "crab": 10
     },
     "nightDifficulty": {
@@ -2500,7 +2523,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 6,
         "spread": 4
       },
       "swarm": {
@@ -2542,8 +2564,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 4,
-        "max": 10,
         "spread": 4
       },
       "swarm": {
@@ -2563,8 +2583,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 5,
-        "max": 12,
         "spread": 4
       },
       "swarm": {
@@ -2584,8 +2602,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 5,
-        "max": 12,
         "spread": 4
       },
       "swarm": {
@@ -2605,8 +2621,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 4,
-        "max": 9,
         "spread": 4
       },
       "swarm": {
@@ -2626,8 +2640,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 3,
-        "max": 7,
         "spread": 4
       },
       "swarm": {
@@ -2647,8 +2659,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 4,
-        "max": 10,
         "spread": 4
       },
       "swarm": {
@@ -2669,8 +2679,6 @@
       "prey": true,
       "nightAsset": "enemyGlowFishesA",
       "group": {
-        "min": 4,
-        "max": 10,
         "spread": 4
       },
       "swarm": {
@@ -2691,8 +2699,6 @@
       "prey": true,
       "nightAsset": "enemyGlowFishesB",
       "group": {
-        "min": 3,
-        "max": 8,
         "spread": 4
       },
       "swarm": {
@@ -2713,8 +2719,6 @@
       "prey": true,
       "nightAsset": "enemyGlowFishesC",
       "group": {
-        "min": 4,
-        "max": 11,
         "spread": 4
       },
       "swarm": {
@@ -2735,8 +2739,6 @@
       "prey": true,
       "nightAsset": "enemyGlowBrownFish",
       "group": {
-        "min": 4,
-        "max": 10,
         "spread": 4
       },
       "swarm": {
@@ -2757,8 +2759,6 @@
       "prey": true,
       "nightAsset": "enemyGlowClownFish",
       "group": {
-        "min": 6,
-        "max": 14,
         "spread": 3.2
       },
       "swarm": {
@@ -2779,8 +2779,6 @@
       "prey": true,
       "nightAsset": "enemyGlowSurgeonFish",
       "group": {
-        "min": 5,
-        "max": 12,
         "spread": 4
       },
       "swarm": {
@@ -2801,8 +2799,6 @@
       "prey": true,
       "nightAsset": "enemyGlowTuna",
       "group": {
-        "min": 3,
-        "max": 8,
         "spread": 4.5
       },
       "swarm": {
@@ -2822,8 +2818,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 4,
-        "max": 9,
         "spread": 4
       },
       "swarm": {
@@ -2843,8 +2837,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 5,
-        "max": 11,
         "spread": 5.5
       },
       "swarm": {
@@ -2864,8 +2856,6 @@
       "faceMotion": true,
       "prey": true,
       "group": {
-        "min": 6,
-        "max": 12,
         "spread": 3
       },
       "swarm": {
@@ -3372,8 +3362,6 @@
       "behavior": "chase",
       "faceMotion": true,
       "group": {
-        "min": 3,
-        "max": 5,
         "spread": 2.5
       }
     },
@@ -3384,8 +3372,6 @@
       "faceMotion": true,
       "nightAsset": "enemyGlowSailfish",
       "group": {
-        "min": 2,
-        "max": 3,
         "spread": 3
       }
     },
@@ -4222,6 +4208,34 @@
       ],
       "inherit": 0,
       "glow": 2.8
+    },
+    "procGain": {
+      "count": 12,
+      "speed": [
+        1.4,
+        4.5
+      ],
+      "size": [
+        0.08,
+        0.2
+      ],
+      "life": [
+        0.5,
+        1
+      ],
+      "colors": [
+        10478591,
+        14677759,
+        16777215
+      ],
+      "cone": 0,
+      "drag": 4.5,
+      "gravity": [
+        0,
+        3.2
+      ],
+      "inherit": 0.1,
+      "glow": 2.4
     },
     "chumChunkSpawn": {
       "count": 34,
@@ -5265,19 +5279,22 @@
         }
       ]
     },
-    "maneaterFeed": {
-      "emit": null,
+    "maneaterProc": {
+      "emit": "procGain",
       "shake": 0,
       "hitstop": 0,
       "glow": 0.55,
       "ripple": null,
-      "sfx": null,
+      "sfx": "procGain",
       "haptic": [
         {
           "duration": 18,
           "magnitude": 0.3
         }
-      ]
+      ],
+      "sfxMinGap": 0.12,
+      "toast": "maneater",
+      "toastMinGap": 1
     },
     "crewHit": {
       "emit": "splash",
@@ -5676,7 +5693,7 @@
       ]
     },
     "boostEmpty": {
-      "emit": "hullSmoke",
+      "emit": null,
       "shake": 0,
       "hitstop": 0,
       "glow": 0,
@@ -6375,6 +6392,78 @@
           "magnitude": 0.5
         }
       ]
+    },
+    "whaleArrive": {
+      "emit": null,
+      "shake": 0.22,
+      "hitstop": 0,
+      "glow": 0.2,
+      "ripple": {
+        "strength": 1.8,
+        "radius": 26
+      },
+      "sfx": "whaleCall",
+      "haptic": [
+        {
+          "duration": 140,
+          "magnitude": 0.35
+        }
+      ]
+    },
+    "whaleGulp": {
+      "emit": "bite",
+      "shake": 0.1,
+      "hitstop": 0,
+      "glow": 0.18,
+      "sfx": "whaleGulp",
+      "sfxMinGap": 0.22,
+      "haptic": [
+        {
+          "duration": 30,
+          "magnitude": 0.3
+        }
+      ]
+    },
+    "whaleRobbed": {
+      "emit": "chumCrumbs",
+      "shake": 0.06,
+      "hitstop": 0,
+      "glow": 0.3,
+      "sfx": "whaleRobbed",
+      "sfxMinGap": 0.3
+    },
+    "whaleCrumbs": {
+      "emit": "chumCrumbs",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.05,
+      "sfx": null
+    },
+    "whaleSpout": {
+      "emit": "splash",
+      "shake": 0.12,
+      "hitstop": 0,
+      "glow": 0.25,
+      "ripple": {
+        "strength": 1.4,
+        "radius": 12
+      },
+      "sfx": "whaleSpout",
+      "sfxMinGap": 0.5
+    },
+    "whaleShove": {
+      "emit": "wakeBubbles",
+      "shake": 0.18,
+      "hitstop": 0,
+      "glow": 0.1,
+      "sfx": "whaleShove",
+      "sfxMinGap": 0.35,
+      "haptic": [
+        {
+          "duration": 60,
+          "magnitude": 0.5
+        }
+      ]
     }
   },
   "fx": {
@@ -6554,6 +6643,12 @@
         "headBob": 0.04,
         "clipTimeScale": 1.2
       },
+      "whaleCruise": {
+        "wagSpeed": 1.15,
+        "wagAmplitude": 0.22,
+        "headBob": 0.05,
+        "clipTimeScale": 1
+      },
       "strike": {
         "clipTimeScale": 1.6,
         "fade": 0.06,
@@ -6621,7 +6716,9 @@
       "roleLooseness": {
         "tail": 1,
         "fin": 0.8,
-        "arm": 2.4
+        "arm": 2.4,
+        "whaleBody": 2.9,
+        "whaleFin": 1.5
       }
     }
   },
@@ -7162,6 +7259,18 @@
         "/sfx/Seal_01.mp3",
         "/sfx/Seal_13.mp3"
       ]
+    },
+    "procGain": {
+      "src": null,
+      "type": "blip",
+      "wave": "triangle",
+      "freq": [
+        720,
+        1180
+      ],
+      "decay": 0.16,
+      "gain": 0.055,
+      "pitchVary": 0.04
     },
     "chumChunkSpawn": {
       "src": null,
@@ -7790,6 +7899,62 @@
       "gain": 0.16,
       "pitchVary": 0.1
     },
+    "whaleCall": {
+      "src": null,
+      "type": "blip",
+      "wave": "sine",
+      "freq": [
+        78,
+        44
+      ],
+      "decay": 2.6,
+      "gain": 0.4,
+      "pitchVary": 0.06
+    },
+    "whaleGulp": {
+      "src": null,
+      "type": "noise",
+      "filter": 420,
+      "decay": 0.52,
+      "gain": 0.24,
+      "pitchVary": 0.12,
+      "filterVary": 0.24
+    },
+    "whaleRobbed": {
+      "src": null,
+      "type": "blip",
+      "wave": "triangle",
+      "freq": [
+        620,
+        180
+      ],
+      "decay": 0.34,
+      "gain": 0.15,
+      "pitchVary": 0.14
+    },
+    "whaleSpout": {
+      "src": null,
+      "type": "noise",
+      "filter": 2800,
+      "decay": 0.45,
+      "gain": 0.26,
+      "pitchVary": 0.1,
+      "filterVary": 0.28
+    },
+    "whaleShove": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        120,
+        40
+      ],
+      "decay": 0.42,
+      "gain": 0.34,
+      "noise": 0.55,
+      "filter": 700,
+      "pitchVary": 0.1,
+      "filterVary": 0.2
+    },
     "scallopLaunch": {
       "srcs": [
         "/sfx/Seal_ScallopSquirt_01.mp3",
@@ -8331,31 +8496,32 @@
         "shellColor": 13534719
       },
       "abyssHunter": {
-        "pattern": "stripes",
+        "pattern": "marble",
         "scale": 0.55,
         "coverage": 0.28,
         "contrast": 3,
         "strength": 0.95,
         "tailBias": -0.35,
-        "hueSpread": 0.55,
         "pulseAmp": 0.45,
         "pulseSpeed": 0.6,
         "pulseSync": "4 bars",
         "phaseSteps": 0,
-        "colorA": 16731438,
-        "colorB": 16754219,
-        "colorC": 16773544,
+        "colorA": 13421772,
+        "colorB": 8553090,
+        "colorC": 7434607,
         "bodyDarken": 0.53,
         "warp": 1.5,
-        "phaseSpread": 0.5,
-        "hueScale": 2.05,
+        "phaseSpread": 0.58,
+        "hueScale": 2.95,
         "eyeStrength": 3,
         "eyeFalloff": 4.5,
         "eyePulse": 0.5,
         "schoolAmp": 0.5,
         "schoolScale": 15.5,
         "flickerRate": 6.1,
-        "floor": 0.5
+        "floor": 0.5,
+        "flowSync": "2 bars",
+        "shellColor": 4210752
       },
       "carapace": {
         "schoolAmp": 0,
@@ -8915,6 +9081,18 @@
       "shadow": 10,
       "glow": 16
     },
+    "proc": {
+      "font": "global",
+      "size": 13,
+      "weight": 700,
+      "tracking": 0.08,
+      "case": "UPPER",
+      "useInk": false,
+      "color": 10478591,
+      "alpha": 1,
+      "shadow": 8,
+      "glow": 10
+    },
     "warn": {
       "font": "global",
       "size": 24,
@@ -9017,6 +9195,27 @@
       },
       "colorHot": 16744506,
       "hotAt": 8
+    },
+    "proc": {
+      "life": 1.6,
+      "rise": 34,
+      "riseVary": 0,
+      "gravity": 46,
+      "scatter": 0,
+      "in": {
+        "time": 0.16,
+        "ease": "outCubic",
+        "scale": 1.4,
+        "fade": 0,
+        "lift": 0
+      },
+      "out": {
+        "time": 0.5,
+        "ease": "inQuad",
+        "scale": 1,
+        "fade": 0,
+        "lift": -14
+      }
     },
     "warn": {
       "in": {
@@ -9698,6 +9897,25 @@
       }
     }
   },
+  "emissivePulse": {
+    "enabled": true,
+    "moneyRoll1": {
+      "pulseSync": "1/4",
+      "pulseRate": 2,
+      "min": 0.35,
+      "max": 1.75,
+      "attack": 0.08,
+      "curve": "outCubic"
+    },
+    "moneyRoll3": {
+      "pulseSync": "1/4",
+      "pulseRate": 2,
+      "min": 0.35,
+      "max": 1.75,
+      "attack": 0.08,
+      "curve": "outCubic"
+    }
+  },
   "render": {
     "pixelRatio": 0.65
   },
@@ -10002,5 +10220,5 @@
     "overlayOpacity": 0.32,
     "overlayColor": 0
   },
-  "_savedAt": 1786859981322
+  "_savedAt": 1786917378093
 }

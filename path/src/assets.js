@@ -47,6 +47,18 @@ import { createRockGeometry, startTumble } from './systems/rocks.js';
 //            { roughness, metalness, emissive (hex), emissiveIntensity }
 //            This is how lighting response is tuned per model — a lower
 //            roughness makes the key light's highlight sharper and brighter.
+//   emissiveFromMap
+//            true = the model's OWN base-colour texture is also its emissive
+//            map, so the thing lights up wearing its own art rather than
+//            flooding with one flat colour. For a model whose texture IS the
+//            effect — a banknote, a screen, a sign — which is the case a flat
+//            emissive cannot serve: `emissive` is a single colour, and glow on
+//            a lit model multiplies it, so turning the glow up on a printed
+//            object washes the print away exactly when you wanted to see it.
+//            Needs `material.emissiveIntensity` to be visible at all (a lit
+//            material is seeded at 0 — see processMaterial), and is exclusive
+//            with `texture.emissive`: both own `emissiveMap`, and the mask
+//            wins because its toggle rewrites that slot on every flip.
 //   texture  optional { map: '/textures/foo.png' } — loads a replacement base
 //            colour texture over whatever the model shipped with. Missing
 //            file logs a warning and keeps the model's original texture.
@@ -62,6 +74,10 @@ import { createRockGeometry, startTumble } from './systems/rocks.js';
 //            bone chain to drive procedurally. See CONFIG.animation.
 //            { axis: 'x'|'y'|'z', wagChain: [...bone names, root to tip],
 //              headChain: [...bone names] }
+//   morphs   { ourName: 'TargetNameInTheFile', ... } — named handles on the
+//            model's blend shapes, resolved per instance by morphControl().
+//            Influences are per-instance (the material is not), so this is how
+//            one animal opens its mouth without every other one doing the same.
 //   animations  { idle: 'ClipName', swim: 'ClipName', boost: 'ClipName' } —
 //            if the model DOES ship clips with these names, they're used
 //            instead of the procedural rig fallback.
@@ -685,6 +701,122 @@ export const ASSETS = {
     animations: { idle: 'seagullGlide', swim: 'seagullFlap', boost: 'seagullDive' },
     shape: 'cone', radius: 0.3, height: 0.7, color: 0xf2f2f2, unlit: true,
   },
+
+  // THE BOWHEAD — the arena sweeper. See systems/whale.js.
+  //
+  // Built by tools/build-whale.mjs from a hand re-export of the pack's .c4d.
+  // Do NOT point this at the pack's own Bowhead_Whale_2009-3.fbx: that file is
+  // FBX **6100** (2009), which three.js's FBXLoader and Blender both refuse
+  // outright, so it cannot be read by anything in this repo.
+  //
+  // NO `animations` BLOCK, and that is not an omission. The re-export ships one
+  // clip, "Take 001", and it is empty: 0.033s, three channels, and posing the
+  // skin across the whole of it moves every sampled vertex by 0.00 units. The
+  // build step drops it precisely so nothing here can bind it — a named clip of
+  // the right shape would be picked up as a locomotion state and would suppress
+  // the procedural wag below, leaving a whale that crosses the arena rigid with
+  // no error anywhere. The source never had a swim cycle; its .fbx says the
+  // same thing in its own format (`Channel: "Visibility", KeyCount 1`).
+  whale: {
+    model: '/models/whale.glb',
+    // 12 x the 2.6 in assets.csv = 31.2 world units of animal, against a
+    // frame 80 wide. Deliberately larger than any boss body (the mosasaur is
+    // 27.2, and it is the biggest thing in the game otherwise): the sweep only
+    // works as a relief event if the thing arriving is unmistakably not
+    // another enemy, and size is the whole of that read at a glance.
+    fit: 12,
+    forward: '+Z', up: '+Y',
+    // Measured, not read off the names. The mouth morphs are centred at z=+66
+    // and the blowhole at y=+29, so the head is +Z and the dorsal side +Y;
+    // the pectoral fins hang to y=-30, which is the check that settles it.
+    //
+    // Nose-ward pivot like every other swimmer, and further forward than most:
+    // this animal is a third head, and the gulp is measured off the mouth, so
+    // rotating about a point near the skull keeps the jaw where the geometry
+    // says it is when the body banks.
+    pivot: 0.18,
+    rig: {
+      // THE BEND AXIS, and the one thing on this rig worth measuring twice.
+      // Rotating a spine bone about its local z displaces skin along world
+      // +Y — a DORSOVENTRAL stroke, which is how a whale swims. Local y gives
+      // the lateral sweep of a fish and is what a guess would have picked,
+      // since 'y' is this project's default and every fish in the roster uses
+      // it. A bowhead swimming like a trout is wrong in a way that reads
+      // instantly at this size.
+      axis: 'z',
+      // Each bone's own length runs along its local +X: every child in this
+      // hierarchy sits at a pure +X offset from its parent (Spine2 +11.57,
+      // Spine3 +14.00, Spine6 +18.40, Tail +9.83, and so on). Not the +Y
+      // default, which would have the spring solver measuring across the body
+      // instead of along it.
+      boneAxis: '+X',
+      // Root to tip, and every one of these drives a contiguous band of the
+      // mesh — mean z runs 22.6, 9.3, -11.3, -24.2, -29.8, -52.1, -64.7, -77.3
+      // with no gaps and no overlaps, which is what a real spine chain looks
+      // like from the weights.
+      wagChain: ['Spine1', 'Spine2', 'Spine3', 'Spine4', 'Spine5', 'Spine6', 'Spine7', 'Tail'],
+      // A LOOSE BODY. The spring that rides this chain defaults to the `tail`
+      // role, which is the unscaled baseline shared by every fish in the game —
+      // and at 31 world units that baseline holds the spine nearly rigid, so the
+      // whole animal turns as one piece and the fluke tops its stroke at the
+      // same moment as the shoulder. A whale reads the other way round: the
+      // stroke starts at the shoulder and runs down the body, and the fluke
+      // finishes last. See CONFIG.animation.spring.roleLooseness.whaleBody.
+      wagRole: 'whaleBody',
+      // `Head` is not a neck — it drives 6,594 of the mesh's 8,436 vertices,
+      // i.e. the entire forebody. That is right for a bowhead, whose skull is
+      // a third of its length, and it is why the headBob it gets is worth
+      // having: CONFIG.animation's 0.03 rad at swim is under two degrees, and
+      // two degrees of the whole front of the animal nodding into the stroke
+      // is the difference between swimming and being towed.
+      headChain: ['Head'],
+      // THE PECTORALS, and only the pectorals.
+      //
+      // They hang off Clavicle_L/R, which hang off Skeleton_Root — outside the
+      // wag chain entirely — so without these they are welded rigid to a body
+      // that is undulating behind them. Exactly the fault the mosasaur's fins
+      // had.
+      //
+      // The two FLUKE lobes (joint16..19 and joint24..27) are deliberately NOT
+      // here, for the same reason the orca's are not: they fork off `Tail`,
+      // which is the last bone of the wag chain, so they already ride its lag.
+      // Springing them again would be a second solver fighting the first.
+      // joint19/joint23/joint27 and joint10/joint11/joint15/joint25/joint17
+      // drive zero vertices and are pure tips — listing them buys nothing.
+      springChains: [
+        { role: 'whaleFin', names: ['Clavicle_L', 'Fin_L1', 'Fin_L2'] },
+        { role: 'whaleFin', names: ['Clavicle_R', 'Fin_R1', 'Fin_R2'] },
+      ],
+    },
+    // The three shape targets, named by tools/build-whale.mjs — the C4D
+    // exporter writes none, so they arrive as 0/1/2 and would otherwise be
+    // reachable only by an index that shifts on the next export. systems/
+    // whale.js drives `mouthNarrow` and `mouthWide` as a two-stage gape and
+    // pops `blowhole` at the surface.
+    morphs: { blowhole: 'blowhole', mouthNarrow: 'mouthNarrow', mouthWide: 'mouthWide' },
+    // Cold rim, not the warm one the companions wear — this is not an ability
+    // and not on your side, it just does not hunt you. Thickness is OBJECT
+    // space, i.e. this file's units, and the body is 180.4 of them long: at
+    // fit 12 over that box one object unit is 0.0665 world before the 2.6 size
+    // multiplier, so 1.1 buys a 0.19-world rim, a little heavier than the
+    // 0.12 a shark carries because there is a lot more silhouette to hold.
+    outline: { color: 0x9fd8e8, thickness: 1.1, glow: 1.6 },
+    // THE FILE IS PURE WHITE. Its one material is an untextured
+    // MeshStandardMaterial at #ffffff — not an art choice, just the slot the
+    // exporter left behind, and the pack's own 4096x4096 diffuse is never wired
+    // to it. Rendered as shipped this is a beluga, not a bowhead: a white
+    // 31-unit body against dark water reads as the brightest thing on screen,
+    // which is a claim on the eye that a non-threat should not be making.
+    //
+    // Tinted rather than textured. A 4096 map is a lot of VRAM for an animal
+    // that appears for fifteen seconds every minute or so, and at the size it
+    // crosses at, the read is the silhouette and the pale rim — not skin
+    // detail. Dark slate keeps the outline doing the work.
+    tint: 0x3d4b57,
+    material: { roughness: 0.72, metalness: 0.0 },
+    shape: 'cone', radius: 2.4, height: 14, color: 0x51606b, unlit: true,
+  },
+
   belugaDrone: {
     model: '/models/beluga.fbx',
     // Built from the source diffuse (beluga_whale_diff.png) in the C4D
@@ -1274,6 +1406,21 @@ export const ASSETS = {
   // dull brown. The bills carry their own colour and the trail supplies the
   // glow, so nothing here has to be overdriven to be seen.
   //
+  // AND THEY LIGHT UP WEARING THEIR OWN PRINT. `emissiveFromMap` hands the
+  // model's base-colour texture straight to the emissive slot, which is the one
+  // way to make money GLOW and still look like money: a flat emissive colour is
+  // multiplied over the whole surface, so the harder it glows the more of the
+  // banding it eats, and at the intensity that reads across a fight the roll is
+  // a green pill with a trail on it. Lit from its own art, the bands are the
+  // brightest thing on it and the paper between them stays dark.
+  //
+  // `emissiveIntensity` here is the RESTING level, and it is what the Look
+  // panel's glow slider writes. On the two rolls the yacht actually fires it is
+  // then multiplied every frame by the beat pulse — CONFIG.emissivePulse, see
+  // systems/emissivePulse.js — so this number is the height of the whole thing
+  // and the pulse is its shape. moneyRoll2 and moneyRoll4 have no pulse row for
+  // the same reason they have no trail: nothing fires them.
+  //
   // `forward: '+Y'` is the cylinder axis, which is what the splitter aligned
   // them to. On a gun with `orient: true` that flies the roll END-ON, like a
   // shell; a gun that wants it broadside and tumbling turns `orient` off and
@@ -1282,28 +1429,32 @@ export const ASSETS = {
     model: '/models/moneyroll1.glb',
     fit: 1,
     forward: '+Y', up: '+Z',
+    emissiveFromMap: true,
     // Paper, not metal. A high roughness keeps the key light off the curved
     // side as a broad sheen instead of a hot line, which at this size would be
     // the only thing on screen and would read as chrome.
-    material: { roughness: 0.85, metalness: 0 },
+    material: { roughness: 0.85, metalness: 0, emissiveIntensity: 0.8 },
   },
   moneyRoll2: {
     model: '/models/moneyroll2.glb',
     fit: 1,
     forward: '+Y', up: '+Z',
-    material: { roughness: 0.85, metalness: 0 },
+    emissiveFromMap: true,
+    material: { roughness: 0.85, metalness: 0, emissiveIntensity: 0.8 },
   },
   moneyRoll3: {
     model: '/models/moneyroll3.glb',
     fit: 0.9,
     forward: '+Y', up: '+Z',
-    material: { roughness: 0.85, metalness: 0 },
+    emissiveFromMap: true,
+    material: { roughness: 0.85, metalness: 0, emissiveIntensity: 0.8 },
   },
   moneyRoll4: {
     model: '/models/moneyroll4.glb',
     fit: 0.9,
     forward: '+Y', up: '+Z',
-    material: { roughness: 0.85, metalness: 0 },
+    emissiveFromMap: true,
+    material: { roughness: 0.85, metalness: 0, emissiveIntensity: 0.8 },
   },
 
   // A BONE, thrown out of a man being eaten. Not a creature and not a pickup:
@@ -3842,6 +3993,27 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
         if (dm.emissive != null && 'emissive' in m2) m2.emissive.set(dm.emissive);
         if (dm.emissiveIntensity != null && 'emissiveIntensity' in m2) m2.emissiveIntensity = dm.emissiveIntensity;
       }
+      // THE MODEL'S OWN ART AS ITS GLOW. `emissiveFromMap` puts the base
+      // colour texture in the emissive slot as well, so what lights up is the
+      // print rather than a flat colour behind it — the roll of hundreds keeps
+      // its banding when it flares instead of turning into a green pill.
+      //
+      // The emissive COLOUR has to be white here, and that is the whole trick:
+      // three.js multiplies emissiveMap by `emissive`, so anything else tints
+      // the art on its way out, and the seeding block just below — which copies
+      // the diffuse colour into a black emissive — would do exactly that. It is
+      // skipped because this ran first and left emissive non-black.
+      //
+      // Exclusive with a mask by construction: both want `emissiveMap`, and
+      // applyEmissiveMode rewrites that slot (to the mask, or to null) on every
+      // flip of the global toggle, so a model carrying both would lose this on
+      // the first flip. The mask keeps the slot and this stands down, rather
+      // than the two racing for it.
+      if (def.emissiveFromMap && !emissiveTex && 'emissiveMap' in m2 && m2.map) {
+        m2.emissiveMap = m2.map;
+        m2.emissive.set(def.material?.emissive ?? 0xffffff);
+        m2.userData.__emissiveFromMap = true;
+      }
       // Glow on a LIT model scales emissiveIntensity — which does nothing at
       // all while emissive is still black, the default in most exported
       // materials. Seeding emissive from the diffuse colour means turning the
@@ -3927,6 +4099,7 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
   wrapper.userData.biteRig = def.biteRig ?? null;
   wrapper.userData.clawRig = def.clawRig ?? null;
   wrapper.userData.breathRig = def.breathRig ?? null;
+  wrapper.userData.morphs = def.morphs ?? null;
   wrapper.userData.animationNames = def.animations ?? {};
   return wrapper;
 }
@@ -3965,6 +4138,68 @@ export function setSpawnDecorator(fn) {
   spawnDecorator = fn;
 }
 
+// ---------------------------------------------------------------------------
+// MORPH TARGETS — a named handle on one instance's blend shapes.
+//
+// `ASSETS.<key>.morphs` maps a name this codebase uses to the name the target
+// actually has in the file, and this resolves that to the (mesh, index) pairs
+// needed to drive it. Two things make the indirection worth having:
+//
+//   1. AN INDEX IS NOT A NAME. glTF stores target names in a mesh `extras`
+//      that plenty of exporters simply do not write — the whale's C4D export
+//      is one, and its three targets arrive as "0", "1", "2" with an empty
+//      morphTargetDictionary. tools/build-whale.mjs names them by MEASURING
+//      what each one moves, so by the time a file reaches here the names are
+//      real; asking for `mouthWide` then fails loudly if a re-export drops
+//      them, where a hardcoded `influences[2]` would quietly gape the wrong
+//      part of the animal.
+//   2. A TARGET CAN LIVE ON ANY MESH, and a model split across several would
+//      otherwise need every caller to know which. `set` writes every mesh
+//      carrying that name.
+//
+// Influences are PER INSTANCE (three's Mesh.copy slices the array), unlike the
+// material, which every clone shares — so this is safe to drive per animal in
+// a way that tinting is not. See the note on biolumSkin in createVisual.
+export function morphControl(visual) {
+  const names = visual?.userData?.morphs ?? null;
+  const bound = new Map(); // our name -> [{ mesh, index }, ...]
+  if (names) {
+    visual.traverse((o) => {
+      const dict = o.morphTargetDictionary;
+      if (!dict || !o.morphTargetInfluences) return;
+      for (const [ours, theirs] of Object.entries(names)) {
+        const index = dict[theirs];
+        if (index == null) continue;
+        if (!bound.has(ours)) bound.set(ours, []);
+        bound.get(ours).push({ mesh: o, index });
+      }
+    });
+    for (const ours of Object.keys(names)) {
+      if (!bound.has(ours)) {
+        console.warn(`[assets] morph "${ours}" (target "${names[ours]}") is not on this model — `
+          + 'the export lost its target names. Re-run the model\'s build step.');
+      }
+    }
+  }
+  return {
+    // Whether anything at all resolved. A caller that drives a gape can skip
+    // the work entirely rather than writing into nothing every frame.
+    get available() { return bound.size > 0; },
+    has(name) { return bound.has(name); },
+    set(name, value) {
+      const slots = bound.get(name);
+      if (!slots) return false;
+      const v = Math.max(0, Math.min(1, value));
+      for (const { mesh, index } of slots) mesh.morphTargetInfluences[index] = v;
+      return true;
+    },
+    get(name) {
+      const slots = bound.get(name);
+      return slots ? slots[0].mesh.morphTargetInfluences[slots[0].index] : 0;
+    },
+  };
+}
+
 export function createVisual(key) {
   const def = ASSETS[key];
   if (!def) {
@@ -3985,6 +4220,7 @@ export function createVisual(key) {
     inst.userData.biteRig = template.userData.biteRig;
     inst.userData.clawRig = template.userData.clawRig;
     inst.userData.breathRig = template.userData.breathRig;
+    inst.userData.morphs = template.userData.morphs;
     inst.userData.animationNames = template.userData.animationNames;
     if (sizeMul) inst.scale.multiplyScalar(sizeMul);
     // A glowing creature gets its OWN material here, unlike every other clone,
@@ -4535,12 +4771,55 @@ export function assetBaseColor(key) {
   return ASSETS[key]?.color ?? null;
 }
 
-// Sizes come from assets.csv, applied AFTER the saved looks above so the file
-// wins over anything a snapshot still carries. Exported and called from the
-// same places, so a CSV edit takes effect on the next apply rather than only
-// on a cold boot.
+// Which procedural skin an asset wears, from the `skin` column of assets.csv.
+//
+// Writes the asset DEFINITION rather than a side map, because that field is
+// what instantiateParsedModel reads on its way past — one source of truth for
+// "does this body have a pattern", shared by the loader, glowIsProcedural and
+// the panel's own note. A CSV row and a hand-written `biolumSkin:` in this file
+// therefore cannot disagree: the row simply wins, which is the whole point of
+// having the column.
+//
+// Null clears it, and clears `biolumEdges` with it. Leaving the edge split
+// behind would keep splitting a body's geometry — one vertex per triangle
+// corner, so a real cost in memory and upload — for a pattern that is no longer
+// attached to read it.
+export function setAssetSkin(key, preset) {
+  const def = ASSETS[key];
+  if (!def) return;
+  if (preset == null) {
+    delete def.biolumSkin;
+    delete def.biolumEdges;
+    return;
+  }
+  def.biolumSkin = preset;
+  // `wireframe` is the one pattern that needs something OF THE MESH — see
+  // splitForEdges. A CSV row can now put that pattern on a body that never
+  // declared the split, and without it the body has no barycentric attribute,
+  // reads distance 0 at every fragment and renders as a solid glowing blob...
+  // except the shader's own guard draws it as NOTHING instead, which is a
+  // creature that silently fails to appear. Opting the split in here is the
+  // only place that knows both facts.
+  if (CONFIG.biolumSkin?.presets?.[preset]?.pattern === 'wireframe') def.biolumEdges = true;
+}
+
+// Sizes and skins come from assets.csv, applied AFTER the saved looks above so
+// the file wins over anything a snapshot still carries. Exported and called
+// from the same places, so a CSV edit takes effect on the next apply rather
+// than only on a cold boot.
+//
+// The SIZE half of that is genuinely live; the SKIN half is not, and cannot be.
+// attachBiolumSkin runs once, when a model is parsed, so re-applying here
+// updates the definition for everything loaded after this moment and changes
+// nothing already on screen. In practice that means a reload — see the note on
+// applyAssetTable, and the line the Models tab prints next to the skin.
 export function applyAssetSizesFromTable() {
-  applyAssetTable(setAssetSizeMultiplier, (key) => key in ASSETS);
+  applyAssetTable({
+    setSize: setAssetSizeMultiplier,
+    setSkin: setAssetSkin,
+    knownKey: (key) => key in ASSETS,
+    knownSkin: (name) => !!CONFIG.biolumSkin?.presets?.[name],
+  });
 }
 
 // Applied at MODULE LOAD, not only from applySavedAssetLooks(). The file is
@@ -4548,6 +4827,10 @@ export function applyAssetSizesFromTable() {
 // anything can call createVisual — not merely once whatever boot path happens
 // to call the saved-looks hook has run. The call inside that hook stays, so a
 // re-apply after a CSV edit still lands.
+//
+// The skin column depends on this placement rather than merely benefiting from
+// it: preloadAssets parses every model, and the definition has to already carry
+// its skin by then or the pattern is decided before the file was read.
 applyAssetSizesFromTable();
 
 // IS THIS ASSET'S GLOW PROCEDURAL? True for a creature whose light comes from
@@ -4954,6 +5237,11 @@ function assetMaterialsFor(key) {
 export function setAssetTexture(key, texture) {
   for (const m of getAssetMaterials(key)) {
     m.map = texture ?? m.userData.__originalMap ?? null;
+    // A model whose glow IS its art has to have both slots move together (see
+    // `emissiveFromMap`), or an upload leaves the OLD print glowing through the
+    // new one — two textures on one object, which reads as a broken material
+    // rather than as the wrong image.
+    if (m.userData.__emissiveFromMap) m.emissiveMap = m.map;
     m.needsUpdate = true;
   }
 }

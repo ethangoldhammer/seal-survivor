@@ -248,6 +248,19 @@ const STYLES = `
      own size, so it tracks whatever the Chain banner role is set to. */
   .sv-chain-x { font-size: 0.76em; margin-left: 7px; font-weight: 700;
     font-variant-numeric: tabular-nums; opacity: 0.9; }
+  /* AN UPGRADE PAYING OUT — "MANEATER +12%". Same layer and same loop as the
+     numbers, and deliberately smaller and cooler than the chain banner: this
+     is a receipt, not an announcement. One line per upgrade at a time; a
+     second proc of the same card updates the one that is up (spawnProcToast). */
+  .sv-proc { position: absolute; font-size: 13px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap;
+    text-shadow: 0 2px 5px rgba(0,0,0,0.95), 0 0 10px currentColor;
+    pointer-events: none; transform: translate(-50%, -50%);
+    will-change: transform, opacity; }
+  /* em, like the chain's count, and for the same reason — the value is part of
+     the line rather than a thing with a size of its own. */
+  .sv-proc-val { font-size: 1.08em; margin-left: 6px; font-weight: 800;
+    font-variant-numeric: tabular-nums; }
   .sv-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(232,236,243,0.55); font-weight: 500; }
   .sv-value { font-size: 15px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; }
@@ -2158,19 +2171,17 @@ export function spawnScoreToast(camera, worldX, worldY, points, multiplier = 1) 
 // carries for its whole life. The arrival and departure curves are NOT rolled
 // here — they're read per frame, so dragging a slider re-shapes the numbers
 // already in the air instead of only the next kill.
+function rollTravel(t) {
+  const m = motionFor(t.kind);
+  // Slight horizontal scatter so simultaneous kills in a school don't
+  // stack into one illegible clump.
+  t.vx = (Math.random() - 0.5) * (m.scatter ?? 0);
+  t.vy = -((m.rise ?? 0) + Math.random() * (m.riseVary ?? 0));
+  return t;
+}
+
 function pushToast(node, x, y, kind) {
-  const m = motionFor(kind);
-  const t = {
-    node,
-    kind,
-    x,
-    y,
-    // Slight horizontal scatter so simultaneous kills in a school don't
-    // stack into one illegible clump.
-    vx: (Math.random() - 0.5) * (m.scatter ?? 0),
-    vy: -((m.rise ?? 0) + Math.random() * (m.riseVary ?? 0)),
-    age: 0,
-  };
+  const t = rollTravel({ node, kind, x, y, age: 0 });
   toasts.push(t);
   return t;
 }
@@ -2240,8 +2251,70 @@ function chainToastAt(x, y, chain) {
   return chainToast;
 }
 
+// --- an upgrade paying out -------------------------------------------------
+// AN OTHERWISE INVISIBLE PROC, said out loud. Maneater's whole effect is a
+// multiplier being rebuilt inside the stat block; without a line naming it, the
+// card is a permanent upgrade that never once tells you it is working.
+//
+// ONE LINE PER UPGRADE, re-used, exactly as the chain banner is — and here the
+// reasoning is stronger than it is there. A boat's crew is four or five bodies
+// swallowed inside a couple of seconds, so a line per meal would be a stack of
+// MANEATERs climbing the screen, each showing a number the one above it has
+// already superseded. The card's bonus is a RUNNING TOTAL: there is exactly one
+// true value at any moment, so there is exactly one line.
+//
+// A repeat therefore always updates the text, and only re-pops (replays the
+// arrival) once `minGap` has passed — see the note on the `toast` channel in
+// systems/feedback.js. That split is what lets a proc that fires every frame
+// use this without turning into a strobe.
+const procToasts = new Map();
+
+export function spawnProcToast(camera, { key, label, value, x, y, minGap = 0 }) {
+  if (!el.svToastLayer || !camera) return null;
+  PROJECT_V.set(x, y, 0);
+  projectToScreen(camera, PROJECT_V, screenPt);
+
+  const live = procToasts.get(key);
+  if (live && toasts.includes(live)) {
+    // ALWAYS the newest total, whether or not the line is re-announced.
+    live.val.textContent = value ?? '';
+    // Old enough to be re-announced. Winding the age back replays the arrival
+    // AND buys the line a fresh life, which is the point: the proc happened
+    // again, so the receipt should be up for another full read. The anchor and
+    // the travel are re-rolled with it, so the line comes off wherever the seal
+    // is NOW — moving it without restarting the rise would drop a half-risen
+    // line back to the water and read as a glitch rather than as an update.
+    if (live.age >= minGap) {
+      live.x = screenPt.x;
+      live.y = screenPt.y;
+      live.age = 0;
+      rollTravel(live);
+    }
+    return live;
+  }
+
+  const node = document.createElement('div');
+  node.className = 'sv-proc';
+  node.textContent = label;
+  const val = document.createElement('span');
+  val.className = 'sv-proc-val';
+  val.textContent = value ?? '';
+  node.appendChild(val);
+  el.svToastLayer.appendChild(node);
+
+  const t = pushToast(node, screenPt.x, screenPt.y, 'proc');
+  t.val = val;
+  t.procKey = key;
+  procToasts.set(key, t);
+  return t;
+}
+
 function removeToast(i) {
   if (toasts[i] === chainToast) chainToast = null;
+  // Dropped from the index as well as from the layer, or the next proc of this
+  // upgrade would find a dead entry, see it is not in `toasts`, and build a
+  // second node while the map still pointed at the first.
+  if (toasts[i].procKey) procToasts.delete(toasts[i].procKey);
   toasts[i].node.remove();
   toasts.splice(i, 1);
 }
@@ -2403,6 +2476,20 @@ export function previewToasts() {
     t.age = -i * 0.09;
   }
   chainToastAt(cx, cy - 90, 6);
+
+  // A proc line, so the Upgrade proc role can be judged next to the numbers it
+  // shares a layer with. Built here rather than through spawnProcToast because
+  // the specimen has no camera to project through — the position is already in
+  // screen pixels, which is the one thing that function exists to work out.
+  const proc = document.createElement('div');
+  proc.className = 'sv-proc';
+  proc.textContent = 'MANEATER';
+  const procVal = document.createElement('span');
+  procVal.className = 'sv-proc-val';
+  procVal.textContent = '+12%';
+  proc.appendChild(procVal);
+  el.svToastLayer.appendChild(proc);
+  pushToast(proc, cx, cy - 40, 'proc');
 }
 
 // The floating hp/air bars are pinned to the seal by projecting its world

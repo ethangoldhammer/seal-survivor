@@ -129,7 +129,7 @@ export function initStagePanel(sceneGetter) {
     // What the event actually does, so the list is pickable without knowing
     // all 77 names by heart.
     const def = CONFIG.feedback[name] ?? {};
-    const has = [def.sfx ? '♪' : '', def.haptic ? '≈' : '', def.emit ? '✦' : ''].filter(Boolean).join('');
+    const has = [def.sfx ? '♪' : '', def.haptic ? '≈' : '', def.emit ? '✦' : '', def.toast ? '“”' : ''].filter(Boolean).join('');
     opt.textContent = has ? `${name}  ${has}` : name;
     select.appendChild(opt);
   }
@@ -325,6 +325,7 @@ function refreshStatus() {
     def.emit ? `burst ${def.emit}` : null,
     def.shake ? `shake ${def.shake}` : null,
     def.hitstop ? `hit-stop ${def.hitstop}s` : null,
+    def.toast ? `toast "${def.toast}"` : null,
   ].filter(Boolean);
   const safety = stageState.safe ? '' : ' · <b>mortal</b>';
   const world = stageState.sim ? 'spawns paused' : '<b>world held</b>';

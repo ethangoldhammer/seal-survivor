@@ -30,7 +30,8 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { CONFIG } from '../../path/src/config.js';
-import { preloadAssets, createVisual, hasModel } from '../../path/src/assets.js';
+import { preloadAssets, createVisual, hasModel, getAssetMaterials } from '../../path/src/assets.js';
+import { pulseLevel } from '../../path/src/systems/emissivePulse.js';
 import { bounds, updateBounds } from '../../path/src/arena.js';
 import {
   projectiles, spawnProjectile, updateProjectiles, resetProjectiles,
@@ -298,6 +299,65 @@ flight({ asset: ORD.barrels.asset, spin: ORD.barrels.spin, tilt: ORD.barrels.til
 present('The explosive', `${ORD.barrels.asset} · tumbles, canted ${ORD.barrels.tilt}, wider ribbon, fuse`, true);
 flight({ asset: ORD.missiles.asset, orient: true, speed: 13 });
 present('The seeker', `${ORD.missiles.asset} · points at you, faster, narrower ribbon, no fuse`, true);
+
+// --- THE GLOW ---------------------------------------------------------------
+// The rolls light themselves now (ASSETS.moneyRoll1 `emissiveFromMap`), and
+// the level is scaled every frame off the beat grid — CONFIG.emissivePulse,
+// systems/emissivePulse.js. Two questions on this row, and only the second is
+// about the pulse:
+//
+//   1. WHY THE TEXTURE AND NOT A COLOUR. A flat emissive is multiplied over the
+//      whole surface, so it lifts the dark paper between the bands as much as
+//      the bands themselves and the print dissolves as it brightens. The last
+//      panel is that comparison at the same intensity.
+//
+//   2. HOW FAR THE PULSE SWINGS. The trough has to sit clearly under the
+//      resting glow or the flash reads as an object that is simply bright.
+//
+// NO BLOOM ON THIS SHEET — it is a bare renderer with no post chain, so
+// anything past 1.0 clips to white here where the game would spread it into a
+// halo. The peak panel therefore UNDERSTATES the flash and overstates the
+// clipping; judge the shape here and the halo in the game.
+//
+// The multiplier comes from the shipping curve rather than from three numbers
+// typed into this file, so a retuned `attack` or `curve` moves these panels.
+function glow(asset, level, { flat = null } = {}) {
+  const mats = getAssetMaterials(asset);
+  const saved = mats.map((m) => ({ m, i: m.emissiveIntensity, c: m.emissive.getHex(), map: m.emissiveMap }));
+  for (const m of mats) {
+    m.emissiveIntensity = level;
+    if (flat != null) { m.emissive.set(flat); m.emissiveMap = null; }
+    m.needsUpdate = true;
+  }
+  still(asset, 0.9);
+  for (const s of saved) {
+    s.m.emissiveIntensity = s.i;
+    s.m.emissive.set(s.c);
+    s.m.emissiveMap = s.map;
+    s.m.needsUpdate = true;
+  }
+}
+
+const PULSE = CONFIG.emissivePulse[ORD.barrels.asset];
+// Read off the MATERIAL, not off the asset def: the def is only where it
+// starts, and a saved Look-panel glow beats it (see setAssetGlow) — which is
+// exactly the value the pulse would be multiplying in a real run.
+const REST = getAssetMaterials(ORD.barrels.asset)[0].emissiveIntensity;
+section(`Lighting itself — ${PULSE.pulseSync} on the beat grid, x${PULSE.min} to x${PULSE.max} of the resting glow`, 4);
+glow(ORD.barrels.asset, 0);
+present('Unlit', 'emissiveIntensity 0 · what every other projectile does — the key light is all of it');
+glow(ORD.barrels.asset, REST * pulseLevel(PULSE, 0));
+present('Trough', `x${PULSE.min} · off the beat, most of the cycle`, true);
+glow(ORD.barrels.asset, REST);
+present('Resting', `emissiveIntensity ${REST} · the Look panel's glow slider, which the pulse multiplies`);
+glow(ORD.barrels.asset, REST * pulseLevel(PULSE, PULSE.attack));
+present('Peak', `x${PULSE.max} · on the beat · clipped here, haloed in game`, true);
+
+section('Why the print and not a colour', 2);
+glow(ORD.barrels.asset, REST * pulseLevel(PULSE, PULSE.attack));
+present('The model\'s own map', 'emissiveFromMap · the bands are the bright part, the paper between them is not', true);
+glow(ORD.barrels.asset, REST * pulseLevel(PULSE, PULSE.attack), { flat: 0xbfe0a8 });
+present('A flat emissive', 'the same intensity, one colour · a green pill where the money was');
 
 // --- THE DETONATION ---------------------------------------------------------
 const rainRadius = CONFIG.bossBoat.patterns.rain.blastRadius;

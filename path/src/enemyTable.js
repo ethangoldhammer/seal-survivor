@@ -155,7 +155,20 @@ const OPTIONAL = {
 // Blank means no, which is the answer that makes an unedited table behave the
 // way the feature was asked for: a boss fight clears the ocean. Fill in the
 // column to keep a species around as an escort.
-const FLAGS = ['bioluminescent', 'bossMinion'];
+// `invincible` says a creature CANNOT BE KILLED, as a fact about the creature
+// rather than as an arithmetic accident. It earns its place in this column for
+// the same reason the two above do: it is read down the table next to `hp`,
+// and it is the answer to "what is this one" — scenery the player swims past,
+// not an opponent.
+//
+// It replaces the way this used to be spelled. A turtle carried hp
+// 1000000000, which is not a quantity but a sentence — "this does not die" —
+// written in the one field that had to hold a number. Everything downstream
+// then read it AS a number: one turtle killed by a lethal hazard booked a
+// billion damage and took every other ability in the report to a 0% share,
+// and one turtle spawning made that minute look like a billion hp of enemy
+// had flooded in unkilled. A flag cannot be mistaken for a measurement.
+const FLAGS = ['bioluminescent', 'bossMinion', 'invincible'];
 
 // Every field this file owns, in one place — config.js needs the same list to
 // strip these out of saved tuning, so that a snapshot can't quietly become a

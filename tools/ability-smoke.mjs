@@ -86,6 +86,11 @@ function fakeBoat(x, y, hp = 60) {
     mesh, hp, maxHp: hp, isTrawler: false, assetKey: 'boat',
     halfLength: 3, halfHeight: 0.8, offsetX: 0, offsetY: 0, radius: 3.2,
     knockX: 0, knockY: 0, rockVel: 0, flash: 0, dir: 1, sailX: x, spawnScale: 1,
+    // The real boat carries this (systems/boats.js, `scars: []`), and
+    // damageBoat pushes to it on every hit. A stub without it throws the
+    // moment an orca connects — the standing hazard of building the subject by
+    // hand instead of through the constructor under test.
+    scars: [],
   };
 }
 

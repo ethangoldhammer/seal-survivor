@@ -198,6 +198,14 @@ export function recordDamage(source, amount, target) {
   // Credit still moves even when the figure doesn't — whatever last touched a
   // creature owns its kill, and a placeholder's death is still a death.
   if (target && typeof target === 'object') lastDamager.set(target, source);
+  // DAMAGE TO SCENERY IS NOT DAMAGE. An invincible creature absorbs the write
+  // to its hp (entities/enemies.js, makeInvincible), so an ability that swings
+  // at a turtle accomplishes nothing — but the ability still calls in the
+  // figure it *tried* to deal. Booking that would credit every weapon for work
+  // it did not do, and would rank whichever one happens to swing near scenery
+  // most often. The guard lives here rather than at the eighteen call sites for
+  // the same reason the seal on `hp` does: this is the one place they all meet.
+  if (target && typeof target === 'object' && target.invincible) return;
   if (amount >= SENTINEL_HP) return;
   add(bucket.dealtBySource, source, amount);
 }

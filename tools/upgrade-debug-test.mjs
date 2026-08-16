@@ -58,7 +58,18 @@ function makeEl() {
   };
   return node;
 }
-globalThis.document = { createElement: makeEl, createElementNS: makeEl, body: makeEl() };
+// `canvas` is handed back to dom-stub's own element. Everything else here is a
+// bag of children that remembers its listeners, which dom-stub's is not — but
+// three.js asks for a canvas by name during a spawn, and a canvas that is a bag
+// of children throws from inside the renderer rather than from anything this
+// file wrote. Keeping both is what lets the creature spawner below run against
+// a real THREE.Scene in the same process as the panel.
+const stubCreate = globalThis.document.createElement.bind(globalThis.document);
+globalThis.document = {
+  createElement: (tag) => (tag === 'canvas' ? stubCreate(tag) : makeEl()),
+  createElementNS: makeEl,
+  body: makeEl(),
+};
 
 const keyHandlers = [];
 globalThis.window.addEventListener = (type, fn) => { if (type === 'keydown') keyHandlers.push(fn); };
@@ -96,8 +107,9 @@ const { activeElement, resetElements } = await import('../path/src/systems/eleme
 const { rarityMul } = await import('../path/src/systems/rarity.js');
 const {
   initUpgradeDebug, setUpgradeDebugVisible, setUpgradeDebugChoice,
-  upgradeDebugState, grantUpgrade,
+  upgradeDebugState, grantUpgrade, spawnCreature,
 } = await import('../path/src/ui/upgradeDebug.js');
+const { bossArchetypes } = await import('../path/src/systems/boss.js');
 
 // The boot order the game uses: a stat block exists before anything grants.
 recomputeStats();
@@ -242,6 +254,105 @@ if (disabled) {
 } else {
   check('no disabled upgrades in the table right now', true, 'nothing to check');
 }
+
+// ---------------------------------------------------------------------------
+section('THE CREATURE PICKER');
+// ---------------------------------------------------------------------------
+// The roster half of the same door. What is worth checking without a scene is
+// the OFFER — that the list is the spawnable roster and nothing else — because
+// the failure mode here is silent in both directions: a creature missing from
+// the list is one nobody looks at, and a BOSS in the list is a body that would
+// arrive without its arrival, its bar or its name, and read as a bug in the
+// boss rather than as a bug in this panel.
+const offered = findAll((n) => n.dataset?.creature).map((n) => n.dataset.creature);
+const bossBodies = bossArchetypes().map((b) => b.enemy);
+const roster = Object.keys(CONFIG.enemies).filter((k) => !bossBodies.includes(k));
+check('every spawnable creature is offered', offered.length === roster.length
+  && roster.every((k) => offered.includes(k)),
+  `${offered.length} of ${roster.length}`);
+check('...and no boss body is', !offered.some((k) => bossBodies.includes(k)),
+  offered.filter((k) => bossBodies.includes(k)).join(', ')
+    || `${bossBodies.length} boss bodies held back for the block above`);
+
+setUpgradeDebugChoice({ creature: 'shark', count: 1 });
+chipNamed('6').click();
+check('the count chip selects', upgradeDebugState().count === 6, `count ${upgradeDebugState().count}`);
+check('...and the body picker holds what it was set to', upgradeDebugState().creature === 'shark');
+
+// The panel is wired without a world here (initUpgradeDebug above takes only a
+// clock), which is the same state it is in before main.js hands it the scene.
+// Clicking then has to REPORT that rather than throw — a debug panel that dies
+// on a click takes the run with it.
+check('spawning with no scene returns null rather than throwing', spawnCreature('shark', 1) === null);
+findAll((n) => n.textContent === 'Spawn creature')[0].click();
+check('...and the button says why', /no scene/.test(upgradeDebugState().status),
+  upgradeDebugState().status);
+
+// ---------------------------------------------------------------------------
+section('THE CREATURE SPAWNER — against a real scene');
+// ---------------------------------------------------------------------------
+// Now with a scene and a seal, because the half worth proving is the LAYOUT.
+// The spawn itself is spawnNamed's, tested where the spawner is tested; what
+// is this panel's own is where the bodies are put, and every one of those
+// rules is a thing that reads as a bug in the creature rather than as a bug
+// here: a shark in the air, a crab falling out of the sky, a row of twelve
+// that spills out of the arena and gets dragged back into a heap.
+const THREE = await import('three');
+const { initPlayer, player: seal } = await import('../path/src/entities/player.js');
+const { enemies, resetEnemies } = await import('../path/src/entities/enemies.js');
+const { bounds } = await import('../path/src/arena.js');
+
+const scene = new THREE.Scene();
+initPlayer(scene);
+const gameState = { difficulty: 20, level: 15 };
+initUpgradeDebug(() => 12.5, () => ({ scene, gameState }));
+setUpgradeDebugVisible(true);
+
+seal.mesh.position.set(0, -20, 0);
+resetEnemies(scene);
+check('the button puts bodies in the water', (() => {
+  setUpgradeDebugChoice({ creature: 'fish', count: 6 });
+  findAll((n) => n.textContent === 'Spawn creature')[0].click();
+  return enemies.length === 6;
+})(), `${enemies.length} alive · ${upgradeDebugState().status}`);
+check('...spread out rather than stacked on one spot',
+  new Set(enemies.map((e) => e.mesh.position.x.toFixed(2))).size === enemies.length);
+check('...clear of the seal',
+  enemies.every((e) => e.mesh.position.y > seal.mesh.position.y),
+  'a body spawned on the player is contact damage before you have looked at it');
+
+// The caps are the thing you are trying to see past, so the door has to ignore
+// them — this is the check that would fail if `ignoreCaps` were ever dropped.
+resetEnemies(scene);
+const sharkCap = CONFIG.spawn.groupMaxAlive?.shark ?? Infinity;
+spawnCreature('shark', sharkCap + 3);
+check('the family cap does not apply to a hand-placed spawn',
+  enemies.length === sharkCap + 3, `${enemies.length} sharks against a cap of ${sharkCap}`);
+
+check('...and a row too long for the arena still fits inside it',
+  enemies.every((e) => e.mesh.position.x >= bounds.left && e.mesh.position.x <= bounds.right),
+  `x from ${Math.min(...enemies.map((e) => e.mesh.position.x)).toFixed(1)} `
+  + `to ${Math.max(...enemies.map((e) => e.mesh.position.x)).toFixed(1)} in a ${bounds.width}-wide ocean`);
+
+// The seal spends a lot of the run AT the surface, which is where the +3 lift
+// would otherwise put a shark in the air.
+resetEnemies(scene);
+seal.mesh.position.set(0, bounds.surfaceY - 0.5, 0);
+spawnCreature('shark', 2);
+check('a spawn beside a surfaced seal stays in the water',
+  enemies.every((e) => e.mesh.position.y + e.radius <= bounds.surfaceY + 1e-6),
+  enemies.map((e) => e.mesh.position.y.toFixed(2)).join(', '));
+
+// A crab is a seabed animal whose `radius` is its resting height, not its size.
+resetEnemies(scene);
+seal.mesh.position.set(0, -20, 0);
+spawnCreature('walkingCrab', 2);
+check('a seabed dweller arrives on the sand, not in mid-water',
+  enemies.length === 2 && enemies.every((e) => Math.abs(e.mesh.position.y - (bounds.bottom + e.radius)) < 1e-6),
+  enemies.map((e) => e.mesh.position.y.toFixed(2)).join(', ') + ` · floor ${bounds.bottom}`);
+
+check('an unknown key spawns nothing and does not throw', spawnCreature('notACreature', 3) === 0);
+resetEnemies(scene);
 
 // ---------------------------------------------------------------------------
 section('CLEAR ALL');

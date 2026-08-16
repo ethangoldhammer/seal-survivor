@@ -3,6 +3,7 @@ import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } fr
 import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, clearVisualPool } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
+import { updateEmissivePulse } from './systems/emissivePulse.js';
 import { pulseDemoFor, panDemoFor, resolvedGlow, describeGlow } from './systems/glowDebug.js';
 import { updateBeatSync } from './systems/beatSync.js';
 import { reseatDecor } from './systems/decor.js';
@@ -12,7 +13,7 @@ import {
   initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput,
 } from './input.js';
 import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, applyRecoil, applyPlayerKnockback, rebuildShipBody } from './entities/player.js';
-import { projectileCount } from './stats.js';
+import { projectileCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
 import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement, activeElement, elementColor } from './systems/elements.js';
@@ -25,7 +26,7 @@ import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChu
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
-import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice } from './systems/feedback.js';
+import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink } from './systems/feedback.js';
 import { initAudio, unlockAudio, prefetchSamples, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
@@ -65,6 +66,7 @@ import { startAmbient, stopAmbient, preloadAmbient } from './systems/ambient.js'
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls } from './systems/seagull.js';
+import { spawnWhale, updateWhales, resetWhales, resetWhaleClock, updateWhaleClock } from './systems/whale.js';
 import { updateBoats, resetBoats, boats, hitsBoat, damageBoat, jostleBoat, impactBoat } from './systems/boats.js';
 import { setWakeGrid } from './systems/boatWake.js';
 import { stepBodies } from './systems/rigidBody.js';
@@ -95,7 +97,7 @@ import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates,
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { highScore } from './systems/leaderboard.js';
-import { initUI, showStartMenu, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
+import { initUI, showStartMenu, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS } from './systems/tutorial.js';
 import { initCallouts, updateCalloutUi, clearCalloutUi } from './ui/callout.js';
@@ -151,6 +153,13 @@ initGore(world.scene);
 initHitShapeDebug(world.scene);
 initMarks(world.scene);
 initFeedback(world.grid);
+// WHERE A `toast` CHANNEL LANDS. feedback() describes the line — its label, its
+// value, where in the world it happened — and knows nothing about the screen;
+// this is the one place that turns it into a node. Wired here rather than
+// imported inside systems/feedback.js so that module stays DOM-free and every
+// Node harness that fires an event keeps working (the channel is simply inert
+// with no sink, which is the right behaviour headless).
+setToastSink((t) => spawnProcToast(world.camera, t));
 // The hulls warp the same lattice the seal does — see the note in
 // systems/boatWake.js for why the grid is handed over rather than threaded
 // through systems/boats.js and systems/bossBoat.js.
@@ -210,6 +219,11 @@ let rapidFireSpawnTimer = 0;
 // place.
 let starfishCooldown = 0;
 let seagullCooldown = 0;
+// Rate limit on the crumb trail coming off chum being hoovered by a whale. One
+// counter for the whole sweep rather than one per orb: the emitter is tiny by
+// design and the point is a trickle, so a whole chum pile streaming in should
+// still shed crumbs at the rate one orb would.
+let whaleCrumbTimer = 0;
 let simClock = 0; // free-running clock for the beluga drone's orbit
 let muzzleCursor = 0; // which flipper the next ALTERNATING volley starts from (missiles)
 const muzzlePoint = new THREE.Vector3(); // scratch — spawnProjectile copies it immediately
@@ -960,6 +974,8 @@ function startGame() {
   resetOxygenFx();
   resetCrabSpawner();
   resetSeagulls(world.scene);
+  resetWhales(world.scene);
+  resetWhaleClock();
   resetBoats(world.scene);
   resetEel();
   resetEelBolts(world.scene);
@@ -1020,6 +1036,7 @@ function startGame() {
   resetChumChunkSpawner();
   starfishCooldown = 0;
   seagullCooldown = 0;
+  whaleCrumbTimer = 0;
   simClock = 0;
   feedbackState.shake = 0;
   feedbackState.hitstop = 0;
@@ -1501,6 +1518,14 @@ function processPendingSplashes() {
       const dx = other.mesh.position.x - s.x;
       const dy = other.mesh.position.y - s.y;
       if (dx * dx + dy * dy > s.radius * s.radius) continue;
+
+      // Scenery is not something a bolt "kills for 0" — it is not a target at
+      // all, so the splash skips it rather than playing a hit on it. Without
+      // this arm a lethal splash asks an invincible creature for its health,
+      // books that as damage against the hazard, and flashes a turtle that
+      // was never in danger. This is the arm that used to file a BILLION
+      // damage per turtle, back when "cannot be killed" was spelled as hp 1e9.
+      if (other.invincible) continue;
 
       // `lethal` is not "a very large number" — a splash that has to kill
       // whatever it touches asks for exactly the health that is left, so the
@@ -2985,6 +3010,45 @@ function animate(now) {
         feedback('bigKill', { x, y, scale: 1.1 });
       },
     });
+
+    // THE BOWHEAD SWEEP. The clock is fed the live population because the whale
+    // is a pressure valve rather than a timer — see systems/whale.js.
+    if (updateWhaleClock(dt, enemies.length)) {
+      const w = spawnWhale(world.scene);
+      // Announced from the edge it entered at, not from the middle of the
+      // screen: the whole value of the call is telling you which way it is
+      // coming from while there is still time to swim the other way.
+      feedback('whaleArrive', { x: w.container.position.x, y: w.container.position.y });
+    }
+    updateWhales(dt, world.scene, enemies, {
+      // The same radius every enemy contact check uses (see the contact pass in
+      // entities/enemies.js), not a number of the whale's own — a body you can
+      // be shoved by has to be a body you touch at the size you touch
+      // everything else at.
+      player: { position: player.mesh.position, radius: player.stats?.hitRadius ?? CONFIG.player.hitRadius },
+      // Deliberately NOT onEnemyKilledFeedback. Nothing here is a kill: it
+      // does not count toward `gameState.kills`, it earns no combo, it drops no
+      // chum and it is not attributed to any ability in the playtest ledger.
+      // Same call systems/predation.js makes when a shark eats a fish — that
+      // was your meal and something else had it.
+      onGulp: (x, y, n) => feedback('whaleGulp', { x, y, scale: Math.min(1.6, 0.8 + n * 0.08) }),
+      onOrbsEaten: (x, y, n) => feedback('whaleRobbed', { x, y, scale: Math.min(1.4, 0.8 + n * 0.06) }),
+      // Crumbs off an orb WHILE it is being dragged in, the same trickle a
+      // feeding crab leaves. Rate-limited here rather than in whale.js because
+      // the emitter is tiny by design and a burst per orb per frame across a
+      // whole chum pile is a haze, not a trail.
+      onOrbHoover: (x, y) => {
+        whaleCrumbTimer -= dt;
+        if (whaleCrumbTimer > 0) return;
+        whaleCrumbTimer = 1 / Math.max(0.1, CONFIG.whale.crumbRate ?? 6);
+        feedback('whaleCrumbs', { x, y });
+      },
+      onSpout: (x, y) => feedback('whaleSpout', { x, y: bounds.surfaceY, scale: 1.1 }),
+      onShove: (nx, ny, force, x, y) => {
+        applyPlayerKnockback(nx, ny, force);
+        feedback('whaleShove', { x, y });
+      },
+    });
     updateBoats(dt, world.scene, gameState.difficulty, player.mesh.position, {
       onBoatDestroyed,
     });
@@ -3834,7 +3898,10 @@ function animate(now) {
           player.humansEaten += 1;
           if (player.stats.maneaterLevel > 0) {
             recomputeStats();
-            feedback('maneaterFeed', { x: at.x, y: at.y });
+            // The readout is MEASURED off the same function the damage
+            // multiplier comes out of (stats.js), not recomputed here — the
+            // line on screen and the number in the stat block cannot disagree.
+            feedback('maneaterProc', { x: at.x, y: at.y, toastValue: maneaterReadout(player.stats, player.humansEaten) });
           }
         }
       }
@@ -4328,6 +4395,12 @@ function animate(now) {
   // purpose: a lanternfish's own glow has no business stopping because the
   // game froze for 60ms on a hit.
   updateBiolumSkin(rawDt);
+  // And the objects that do, which is a different mechanism for a different
+  // problem: a creature's glow is a pattern generated across its body, this is
+  // an asset's own texture pushed into its emissive slot and scaled on the beat
+  // (the yacht's rolls of cash). Same clock, same raw dt, and after
+  // updateBeatSync for the same reason everything above it is.
+  updateEmissivePulse(rawDt);
 
   // Surface first: it advances the wave, and bubbles bursting at the water line
   // are solved against wherever the wave ended up this frame, not last frame's.

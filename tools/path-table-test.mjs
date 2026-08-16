@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG, TUNER_SCHEMA } from '../path/src/config.js';
 import { ENEMY_TABLE_FIELDS } from '../path/src/enemyTable.js';
 import { createPathTable, stripAllTables } from '../path/src/pathTable.js';
-import { ASSET_ROWS, applyAssetTable, withoutAssetTableFields } from '../path/src/assetTable.js';
+import { ASSET_ROWS, applyAssetTable, applyAssetTableRow, withoutAssetTableFields } from '../path/src/assetTable.js';
 import { ASSETS, getAssetSizeMultiplier } from '../path/src/assets.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -220,15 +220,42 @@ section('MODEL SIZES');
 
   // A size that would collapse or invert a model is refused, not applied.
   const seen = new Map();
-  applyAssetTable((k, v) => seen.set(k, v), () => true, () => {});
+  applyAssetTable({ setSize: (k, v) => seen.set(k, v), knownKey: () => true, warn: () => {} });
   check('a zero or negative size is refused', true, 'guarded in applyAssetTable');
 
   // A row naming an asset that no longer exists must be reported, not silently
   // inert — a renamed asset otherwise leaves a row that scales nothing.
   let warned = 0;
-  applyAssetTable(() => {}, (k) => k !== 'enemyWalkingCrab', () => { warned++; });
+  applyAssetTable({ setSize: () => {}, knownKey: (k) => k !== 'enemyWalkingCrab', warn: () => { warned++; } });
   check('a row for a missing asset warns rather than passing silently', warned === 1,
     `${warned} warning(s)`);
+
+  // THE SKIN COLUMN. Three distinct meanings for a cell, and the failure worth
+  // guarding is the middle one: a misspelled preset must not read as "off".
+  // Passing it through attaches a material whose config lookup misses and falls
+  // back to the family default, which looks deliberate and is nearly invisible.
+  const skins = new Map();
+  let skinWarnings = 0;
+  const rows = [
+    ['enemyShark', { skin: 'hide' }],
+    ['enemyOtter', { skin: 'none' }],
+    ['enemyTuna', { skin: '' }],
+    ['enemyTrout', { skin: 'hyde' }],
+  ];
+  for (const [key, row] of rows) {
+    applyAssetTableRow(key, row, {
+      setSize: () => {},
+      setSkin: (k, v) => skins.set(k, v),
+      knownKey: () => true,
+      knownSkin: (n) => n === 'hide',
+      warn: () => { skinWarnings++; },
+    });
+  }
+  check('a named preset is assigned', skins.get('enemyShark') === 'hide', String(skins.get('enemyShark')));
+  check('"none" clears a skin the code declared', skins.get('enemyOtter') === null, String(skins.get('enemyOtter')));
+  check('a blank cell leaves the asset alone', !skins.has('enemyTuna'), 'setSkin not called');
+  check('a misspelled preset warns and changes nothing', !skins.has('enemyTrout') && skinWarnings === 1,
+    `${skinWarnings} warning(s)`);
 
   // ...and the panel can no longer put a stale drag back over the file.
   const snap = { enemyWalkingCrab: { sizeMultiplier: 10.46, glow: 2 }, enemyShark: { sizeMultiplier: 9 } };

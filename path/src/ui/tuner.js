@@ -209,7 +209,7 @@ export function initTuner(onChange) {
   // version of the problem this split was meant to solve.
   const elsewhere = document.createElement('div');
   elsewhere.className = 'sv-t-elsewhere';
-  elsewhere.textContent = 'Companions (seal team, beluga, eel, shrimp, garlic, starfish, seagull, strike) and enemies (schools, sharks, spawn rates, boats, crabs, difficulty) are in the Look & Sound panel — press T.';
+  elsewhere.textContent = 'Companions (seal team, beluga, eel, shrimp, garlic, starfish, seagull, strike) and enemies (schools, sharks, spawn rates, boats, crabs, difficulty) are in the Look & Sound panel — press T. So are the procedural skins: every glow and shell pattern is on that panel’s Models tab now, with the tints and textures they stand in for.';
   panel.appendChild(elsewhere);
 
   document.body.appendChild(panel);

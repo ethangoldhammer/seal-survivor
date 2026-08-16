@@ -4,7 +4,8 @@ spawn.baseInterval,1.4,0.1,4,Seconds between spawn ticks at difficulty 0.
 spawn.minInterval,0.35,0.05,2,Floor on that interval however long the run gets.
 spawn.countPerDifficulty,0.28,0,3,Extra creatures per tick per difficulty point.
 spawn.maxAlive,220,20,400,Hard ceiling on bodies on screen. EVERY spawner bails at it - including the crab summoner.
-spawn.groupMaxAlive.apex,8,0,27,Max sharks/whales on screen at once.
+spawn.groupMaxAlive.apex,16,0,27,"Max big rigged bodies on screen at once - sharks, the dolphin, the kraken. THE ceiling on how much of a late run is predator: at 8, against a maxAlive of 220, the big bodies could not be more than 4% of the water however the weights were set, and the big-body share FELL through a run instead of climbing. Every species below it still has its own maxConcurrent in enemies.csv."
+spawn.groupMaxAlive.shark,6,0,27,"The tighter cap inside `apex`, and the one that binds for the six sharks - they carry BOTH groups (`apex shark` in enemies.csv) and the tighter one decides. Deliberately well under apex: a screen of nothing but sharks reads as one enemy, and the point of the family is that a run keeps trading a small shark for a bigger one."
 spawn.nightlife.enabled,1,0,1,Whether the sun going down swaps the cast. 0 = one roster all run.
 spawn.nightlife.dusk,0.05,0,1,Darkness the day/night changeover starts at.
 spawn.nightlife.dark,0.45,0,1,Darkness it completes at.
@@ -18,6 +19,18 @@ spawn.ramp.damage,0.032,0,0.15,Roster-wide enemy damage growth per 20s. This is 
 spawn.ramp.damageMax,8,1,16,Cap on that damage growth (x). Was 4 while hp's cap was 30; a run that made enemies 139x tougher and 3.4x more dangerous is one that ends in bullet sponges. Contact damage is per SECOND of contact and swarms stack it - raise this one in small steps.
 spawn.ramp.speed,0.013,0,0.06,Roster-wide enemy speed growth per 20s.
 spawn.ramp.speedMax,1.9,1,4,Cap on that speed growth (x).
+whale.enabled,1,0,1,Whether the bowhead sweep happens at all. 0 = no whales all run.
+whale.firstAt,75,0,300,Seconds into a run before the FIRST sweep can be called. Long on purpose - the sweep is a relief valve for a crowded screen and there is nothing to relieve in the opening minute.
+whale.maxAlive,1,1,4,Sweeps in the water at once. A crossing lasts ~29s at the shipped speed and the crowded interval is shorter than that - without this a busy screen just fills with whales.
+whale.intervalMin,85,10,300,Shortest gap between sweeps. Measured from one STARTING - so it has to move whenever whale.speed does.
+whale.intervalMax,140,10,400,Longest gap between sweeps. The gap is rolled fresh each time so the cadence is not a metronome you can set your watch by.
+whale.crowdThreshold,60,0,400,Live bodies above which the NEXT sweep is hurried. This is what makes it a valve rather than a timer - at 220 maxAlive the screen is soup well before the cap and the whale should not be waiting out a full interval.
+whale.crowdRush,0.45,0.05,1,Interval multiplier while over crowdThreshold. 0.45 roughly doubles the sweep rate on a busy screen.
+whale.speed,8,2,40,"How fast it crosses (u/s). One crossing is the arena plus both margins - 231 units - so this sets how long the event lasts: ~29s at 8, of which ~12 are on screen. Was 15, which was over before you could react to the call."
+whale.mouthRadius,8,1,15,Where a creature is actually SWALLOWED - centred on the jaw. THE main dial on how much one sweep takes out of the water.
+whale.intakeReach,2.6,1,6,"How far the suction reaches, as a MULTIPLE of mouthRadius - so the two can never drift apart. 2.6 is ~14 units, about half the animal's length: a school is visibly streaming in before the head arrives, and the field never reaches off screen."
+whale.maxPreyRadius,0.75,0,3,Biggest creature radius it will swallow. 0.75 takes the schools and the otter (0.7) and leaves every shark (1.2+) - see enemies.csv. Raise this and the sweep starts eating the threats you were meant to fight.
+whale.shoveForce,26,0,80,How hard the body pushes the seal aside on contact. NOT damage - the whale never bites. 0 = you swim through it.
 crabSpawn.enabled,1,0,1,Whether chum on the seabed summons crabs at all.
 crabSpawn.pileThreshold,6,1,40,Settled orbs needed before a wave is called. THE main dial on how often you see crabs.
 crabSpawn.orbsPerCrab,3,1,20,Each orb over the threshold buys 1/this of an extra crab.
@@ -33,10 +46,12 @@ crabSpawn.deathPile.maxCrabs,22,1,40,Ceiling on the pile-on including crabs alre
 crabSpawn.deathPile.spawnWindow,1.6,0.1,8,Seconds they straggle in over. All at once reads as a spawn.
 xp.first,10,5,60,xp for level 2
 xp.mul,1.35,1.05,2.2,xp growth; levels 1-5
-xp.midMul,1.6,1.05,2.2,xp growth; mid levels
+xp.midMul,1.6,1.05,2.2,xp growth; mid levels (6-12)
 xp.midFrom,6,2,20,mid band starts at level
-xp.lateMul,1.42,1.05,2.2,xp growth; late levels
-xp.lateFrom,17,5,40,late band starts at level
+xp.lateMul,1.34,1.05,2.2,"xp growth; the eased band (13-20). Income climbs through here but slower than 1.6 compounds, which is what made 13-20 the wall - levels cost 60s against the 20s of a level in the 11-13 band. 1.34 holds them to about the same wall-clock as 11-13."
+xp.lateFrom,13,5,40,late band starts at level
+xp.endMul,1.6,1.05,2.2,"xp growth; level 21 to the end of the run. The curve re-steepening once the eased band is behind it - at 1.34 all the way a 15-minute run ended at level 26 with every upgrade already taken, and the old 1.42 still ended at 25. 1.6 puts it back at 24."
+xp.endFrom,21,5,60,end band starts at level. Set it above any level a run reaches to switch the fourth band off.
 xp.dropRamp.start,0.12,0.05,1,What an orb pays in the first seconds of a run (x; 1 = off). Baked into the orb where it DROPS - it keeps that value however long it sits on the seabed.
 xp.dropRamp.fullAt,26,1,40,Difficulty at which orbs pay their full listed xp. 26 is about five minutes at the saved difficultyPerSecond.
 xp.dropRamp.curve,2,1,4,Shape of the climb between the two rows above. 1 = straight line (what this was); higher holds the opening down longer and climbs later. A straight line is why the holdback never held - it was already paying 60% one minute in.

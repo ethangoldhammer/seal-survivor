@@ -2997,6 +2997,156 @@ export const CONFIG = {
     },
 
     // ---------------------------------------------------------------------------
+    // THE BOWHEAD SWEEP — a whale that crosses the arena on a timer and hoovers
+    // up the small stuff. systems/whale.js.
+    //
+    // WHAT IT IS FOR. A late run puts a lot of small bodies on screen at once —
+    // the roster caps at `spawn.maxAlive` 220 — and the schools are the bulk of
+    // it. Past a certain density the fight stops being readable: the seal is
+    // swimming through soup, the individual threats are invisible inside it, and
+    // the frame cost is being spent on creatures nobody can pick out. The sweep
+    // is the pressure valve. It arrives, takes a corridor of small fish and
+    // loose food out of the water, and leaves.
+    //
+    // IT IS NOT AN ABILITY AND NOT AN ENEMY, which is why it lives here rather
+    // than in weapons.csv or enemies.csv. The player does not buy it, cannot aim
+    // it, and gets nothing back from it: everything it swallows is GONE,
+    // including uncollected xp orbs and chum. That is the whole tension —
+    // hearing one coming is a reason to go and collect what is on the seabed
+    // NOW, and a run that ignores the warning pays for it in income.
+    //
+    // AND IT DOES NOT BITE. Contact shoves the seal aside on the existing
+    // knockback path and deals no damage. A 31-unit body crossing the arena at
+    // speed is already something you have to deal with; making it lethal as well
+    // would turn a housekeeping event into an unavoidable death, since there is
+    // no counterplay to a wall that wide.
+    //
+    // THE NUMBERS ARE SPLIT. Cadence, reach, speed and what it is allowed to eat
+    // are judged over minutes and against each other, so they live in
+    // spawning.csv (see pathTable.js). Everything below is look and feel —
+    // judged by eye, while it happens.
+    // ---------------------------------------------------------------------------
+    whale: {
+      // --- gameplay, owned by spawning.csv ------------------------------------
+      // Present here because a path table takes its TYPE from the built-in at
+      // that path and reports any path that matches nothing. These are the
+      // defaults a build with a missing CSV row falls back to, not the live
+      // values — edit them in spawning.csv with `npm run csv`.
+      enabled: true,
+      firstAt: 75, // seconds into a run before the first sweep can be called
+      // Widened with the slower crossing. The gap is measured from one sweep
+      // STARTING to the next being allowed, and a 29-second animal inside a
+      // 55-second gap is a whale on screen half the time — so these have to
+      // move whenever `speed` does. `maxAlive` is the backstop, but a cap doing
+      // the work every cycle means the cadence is really "always".
+      intervalMin: 85,
+      intervalMax: 140,
+      maxAlive: 1, // sweeps in the water at once
+      // A crossing is the whole arena plus both margins — 231 units at the
+      // shipped arena.widthScale — so this is about 29 seconds of animal, of
+      // which roughly 12 are on screen. Halved from the first pass: at 15 the
+      // sweep was over before you could decide to react to it, which defeats
+      // the point of announcing it.
+      speed: 8,
+      mouthRadius: 5.5, // where a creature is actually swallowed, centred on the jaw
+      // HOW FAR THE SUCTION REACHES, as a multiple of mouthRadius above. See
+      // intakeRadius() in systems/whale.js for why it is a multiple and not a
+      // length of its own. 2.6 puts the field at ~14 units — about half the
+      // animal's body length, which is far enough that a school is visibly
+      // streaming in before the head arrives and near enough that it never
+      // reaches off screen.
+      intakeReach: 2.6,
+      maxPreyRadius: 0.75, // biggest creature it will swallow
+      crowdThreshold: 90, // live bodies above which the next sweep is hurried
+      crowdRush: 0.45, // interval multiplier while over that threshold
+      shoveForce: 26, // how hard the body pushes the seal aside
+
+      // --- where it swims ------------------------------------------------------
+      // A band rather than a fixed depth, rolled per sweep, so two whales in one
+      // run do not trace the same line. Fractions of the water column: 0 is the
+      // surface, 1 the seabed. Kept off both ends — a sweep along the floor
+      // would scrape the crab layer it is not meant to touch, and one along the
+      // surface would hide behind the waves.
+      depthMin: 0.28,
+      depthMax: 0.66,
+      // How far past the arena edge it spawns and despawns. Has to clear the
+      // half-length of a 31-unit animal or it pops into existence mid-screen.
+      offscreenMargin: 22,
+      // Gentle vertical drift across the crossing, so the line is not a ruler.
+      driftAmplitude: 2.4, // world units either side of the chosen depth
+      driftSpeed: 0.22, // cycles per second
+
+      // --- the gape ------------------------------------------------------------
+      // Two-stage, off the model's two mouth morphs. `mouthNarrow` is the
+      // cruising gape it holds the whole way across; `mouthWide` opens on top of
+      // it when there is actually something in reach. A whale that swims the
+      // arena with its jaw shut and snaps only on contact reads as a fish; one
+      // that holds a gape and widens into a mouthful reads as feeding.
+      cruiseGape: 0.35, // mouthNarrow influence while crossing
+      feedGape: 1, // mouthWide influence with prey in reach
+      gapeOpen: 0.7, // seconds to widen
+      // SLOW, and much slower than it opens. A jaw that shuts as fast as it
+      // opens is a bite; this animal does not bite anything.
+      gapeClose: 2.6,
+      // THE FLOOR ON HOW LONG AN OPENING LASTS, refreshed every frame prey is
+      // in reach. This is the number that makes it a feeding whale rather than
+      // a snapping one: a school is a scatter of individuals, so the raw "is
+      // anything in reach" answer flickers several times a second as the whale
+      // swims through, and a jaw tracking it exactly chatters. Long enough here
+      // to bridge a whole school, so the mouth opens once at the near edge and
+      // shuts once, slowly, well after the far edge. Combined with gapeClose
+      // the jaw is visibly open for the best part of ten seconds.
+      gapeHold: 6.5,
+      // How far ahead of the mouth it looks when deciding to widen, as a
+      // multiple of mouthRadius. Opening ON the gulp is opening too late — the
+      // fish is already gone by the time the jaw has moved.
+      gapeLead: 2.2,
+
+      // --- the intake ----------------------------------------------------------
+      // Small fish and loose chum are DRAGGED into the mouth rather than
+      // deleted where they float. Before this the sweep removed whatever
+      // crossed `mouthRadius` on the frame it crossed, which is the same fault
+      // the crabs' chum-eating had until it grew a hoover: a fish blinking out
+      // near a whale is indistinguishable from a fish despawning on its own,
+      // and nothing on screen said the whale had done it.
+      //
+      // The pull is scaled by the gape, so suction and jaw are one movement.
+      intakePull: 15, // fraction of the remaining gap closed per second, at the lips
+      // Shape of the ramp from the rim to the lips. 1 is a straight line;
+      // higher keeps the outer field gentle and puts the grip near the mouth,
+      // which is what lets a fast fish visibly struggle at the edge and get
+      // away while nothing escapes the last body-length. It is the difference
+      // between a vacuum cleaner and a tractor beam.
+      intakeFalloff: 2.2,
+      // Seconds an orb spends being worried at the lips before it goes down.
+      // Short — a whale inhales, it does not pick — but not zero, because this
+      // is the window the shrink and the crumbs happen in.
+      intakeEatTime: 0.35,
+      crumbRate: 7, // crumb bursts per second while anything is being hoovered
+
+      // --- the spout -----------------------------------------------------------
+      // The blowhole morph, popped when the animal is near the surface. Only
+      // fires if the sweep's depth band actually brings it up there, so a deep
+      // crossing simply never spouts.
+      spoutEnabled: true,
+      spoutDepth: 0.2, // fires above this fraction of the water column
+      spoutRise: 0.18, // seconds to pop the bump
+      spoutFall: 0.7, // seconds to settle it back
+
+      // --- the body ------------------------------------------------------------
+      // Which locomotion state drives the procedural wag. A whale's stroke is
+      // slow and long, so this is 'idle' rather than the 'swim' its speed would
+      // pick through stateForSpeed — see CONFIG.animation.states for the two
+      // wagSpeed/wagAmplitude pairs those names actually mean. Its own state
+      // rather than a borrowed one — see the note on `whaleCruise` there.
+      wagState: 'whaleCruise',
+      // Degrees of bank into the vertical drift, so the body leans through the
+      // shallow climbs and dips rather than sliding along level.
+      bank: 7,
+      bankSmooth: 1.6, // how fast the lean chases the target angle
+    },
+
+    // ---------------------------------------------------------------------------
     // BABY BELUGA BUBBLE BLASTER — a small drone that orbits the ship and
     // periodically fires a bubble at the nearest enemy; a hit traps that enemy
     // (frozen in place, harmless) for a fixed duration. Level scales bubble size
@@ -4405,10 +4555,43 @@ export const CONFIG = {
       first: 10,
       add: 5,
       mul: 1.35, // levels 1-5: the opening stays quick, four or five fast picks
-      midMul: 1.6, // levels 6-16: the window where spawn income explodes
+      midMul: 1.6, // levels 6-12: the window where spawn income explodes
       midFrom: 6,
-      lateMul: 1.42, // level 17+: income growth is linear by here, so this is plenty
-      lateFrom: 17,
+
+      // LEVELS 13-20 — THE BAND THAT WAS THE WALL, and the reason there are four
+      // of these rather than three.
+      //
+      // Income does keep climbing here (6.5x from minutes 3-5 to minutes 10-14,
+      // measured in npm run test:xp — that is what CONFIG.xp.toughness bought),
+      // but it climbs slower than 1.6x per level compounds, so this was the
+      // stretch where the ladder visibly slowed down: a level in the 17-19 band
+      // cost 2.3x the wall-clock of one in the 11-13 band, 60-second levels
+      // against 20-second ones, and the run ended in the middle of it.
+      //
+      // 1.34 is chosen against the measured income curve rather than picked as a
+      // round number: it is the growth rate that holds a level in this band to
+      // roughly the wall-clock of a level in the 11-13 band, which is what
+      // "13 to 20 should not be so difficult" actually means. Levels 13-20 land
+      // in 3.6 minutes instead of 5.5.
+      lateMul: 1.34,
+      lateFrom: 13,
+
+      // LEVEL 21+ — the curve re-steepening once the eased band is behind it.
+      //
+      // A fourth band exists so that easing 13-20 does not silently become
+      // "easier forever". With 1.34 running to the end of the run a fifteen
+      // minute run finished at level 26 — six picks past where the game is
+      // built to end, and a last third with nothing left to want. The old late
+      // band's 1.42 was not enough on its own either (25), because these levels
+      // now compound off a cheaper 13-20 and the player arrives here with most
+      // of the run still to go.
+      //
+      // 1.6 puts a fifteen-minute run back at 24, the top of the range
+      // tools/xp-economy-test.mjs asserts, and it costs nothing in feel: this
+      // band is entered around minute seven and a half rather than minute ten,
+      // so the levels it holds back are ones the old curve never reached.
+      endMul: 1.6,
+      endFrom: 21,
 
       // EARLY CHUM HOLDBACK. A multiplier on the xp an orb is worth, applied
       // where it drops and baked into that orb for good.
@@ -4766,15 +4949,27 @@ export const CONFIG = {
       // among seven shark species meant a perfectly legal shiver of six — six
       // separate 26-damage bodies converging, none of them individually over
       // any limit, and none of them readable as THE shark you are meant to be
-      // dealing with. Two is the number: one is the fight, a second is
-      // pressure, a third is a crowd.
+      // dealing with.
       //
       // Every shark carries `spawnGroup: 'apex shark'` (see enemies.csv) so
       // both caps bind, and the boss counts against this too — a boss fight is
-      // the boss plus at most one ordinary shark, never a boss lost in a
-      // shiver of its own kind. Raise this and the whole family loosens at
-      // once, which is the point of it being one number.
-      groupMaxAlive: { apex: 8, shark: 2, crab: 10 },
+      // the boss plus a shark or two, never a boss lost in a shiver of its own
+      // kind. Raise this and the whole family loosens at once, which is the
+      // point of it being one number.
+      //
+      // WHY THESE ARE 14 AND 4 rather than the 8 and 2 they were. The
+      // readability argument above is about how many can be ON you, and that
+      // is not what these numbers decide any more — CONFIG.apexCrowd does.
+      // Only `feedingSlots` (2) of them may close on the seal at once; the
+      // rest hold at `standoff` and rotate through, which is a shiver
+      // circling rather than a pile-on, and it is the read the low caps were
+      // reaching for before that system existed. What 8 and 2 did decide was
+      // the CENSUS: against a maxAlive of 220 they held every large body in
+      // the game under 4% of the water, so a run escalated into more minnows
+      // and the big-body share fell from 22% at level 10 to 7% at level 21.
+      // See the size census in npm run test:ramp, and spawning.csv, which
+      // owns both values.
+      groupMaxAlive: { apex: 16, shark: 6, crab: 10 },
 
       // NIGHTLIFE — the sun going down swaps the CAST, not just the light.
       //
@@ -6076,7 +6271,25 @@ export const CONFIG = {
         contactDamage: 3,
         xp: 2,
         // Fish arrive as a school rather than one at a time.
-        group: { min: 6, max: 14, spread: 4 },
+        //
+        // `min` and `max` ARE OWNED BY behaviour.csv — all nineteen of them,
+        // for every school and for the two hunters that arrive as a pack. They
+        // are the strongest lever on what the water is made of and they are
+        // judged against each other, which is the test for a table (see
+        // pathTable.js). They were also the exact failure that rule exists to
+        // prevent: only `fish.group.max` was ever in the file, so every other
+        // school's size was whatever the tuner last saved, and editing these
+        // literals did nothing at all.
+        //
+        // Why it matters more than `weight`: the spawner spends its per-tick
+        // budget in CREATURES, so a school pick buys a whole school where a
+        // shark pick buys one shark. At 6-14 the arena was 75-81% minnows by
+        // headcount at every point in a run. The floor on cutting them is the
+        // chum economy — the schools are the food, and tools/xp-economy-test.mjs
+        // is the file that says how far they can be thinned before levelling
+        // starves. `spread` is not in the table: it is how tightly they sit
+        // together, judged by eye.
+        group: { min: 4, max: 9, spread: 4 },
         swarm: {
           cohesion: 2.2, // pull toward the school's centre
           separation: 5.0, // push apart from close neighbours
@@ -6217,7 +6430,7 @@ export const CONFIG = {
         asset: 'enemyTrout', behavior: 'swarm', faceMotion: true, prey: true,
         radius: 0.42, hp: 7, hpPerDifficulty: 0.9, speed: 5.5, speedVariance: 1.3,
         contactDamage: 3, xp: 3,
-        group: { min: 4, max: 10, spread: 4 },
+        group: { min: 3, max: 6, spread: 4 },
         swarm: { cohesion: 2.0, separation: 4.5, separationDist: 1.3, alignment: 1.5, towardPlayer: 1.3, fleeFromPredators: 8.5, fleeRadius: 7, wander: 1.1 },
         weight: 0.7, weightPerDifficulty: 0.05, maxWeight: 1.4, maxConcurrent: 60, minDifficulty: 0,
     },
@@ -6225,7 +6438,7 @@ export const CONFIG = {
         asset: 'enemyTang', behavior: 'swarm', faceMotion: true, prey: true,
         radius: 0.4, hp: 6, hpPerDifficulty: 0.8, speed: 5, speedVariance: 1.2,
         contactDamage: 3, xp: 3,
-        group: { min: 5, max: 12, spread: 4 },
+        group: { min: 3, max: 7, spread: 4 },
         swarm: { cohesion: 2.2, separation: 4.8, separationDist: 1.3, alignment: 1.6, towardPlayer: 1.4, fleeFromPredators: 8.8, fleeRadius: 7, wander: 1.2 },
         weight: 0.7, weightPerDifficulty: 0.05, maxWeight: 1.4, maxConcurrent: 60, minDifficulty: 0,
     },
@@ -6233,7 +6446,7 @@ export const CONFIG = {
         asset: 'enemyReeffish', behavior: 'swarm', faceMotion: true, prey: true,
         radius: 0.38, hp: 6, hpPerDifficulty: 0.8, speed: 5.5, speedVariance: 1.4,
         contactDamage: 3, xp: 3,
-        group: { min: 5, max: 12, spread: 4 },
+        group: { min: 3, max: 7, spread: 4 },
         swarm: { cohesion: 2.1, separation: 4.6, separationDist: 1.3, alignment: 1.5, towardPlayer: 1.3, fleeFromPredators: 8.6, fleeRadius: 7, wander: 1.15 },
         weight: 0.6, weightPerDifficulty: 0.04, maxWeight: 1.2, maxConcurrent: 60, minDifficulty: 0,
     },
@@ -6242,21 +6455,21 @@ export const CONFIG = {
       fishPackA: {
         asset: 'enemyFishPackA', behavior: 'swarm', faceMotion: true, prey: true,
         radius: 0.35, hp: 6, hpPerDifficulty: 0.8, speed: 5, speedVariance: 1.2, contactDamage: 3, xp: 3,
-        group: { min: 4, max: 9, spread: 4 },
+        group: { min: 3, max: 6, spread: 4 },
         swarm: { cohesion: 2.1, separation: 4.6, separationDist: 1.3, alignment: 1.5, towardPlayer: 1.3, fleeFromPredators: 8.5, fleeRadius: 7, wander: 1.1 },
         weight: 0.35, weightPerDifficulty: 0.02, maxWeight: 0.7, maxConcurrent: 40, minDifficulty: 0,
     },
       fishPackB: {
         asset: 'enemyFishPackB', behavior: 'swarm', faceMotion: true, prey: true,
         radius: 0.42, hp: 7, hpPerDifficulty: 0.9, speed: 4.6, speedVariance: 1, contactDamage: 3, xp: 4,
-        group: { min: 3, max: 7, spread: 4 },
+        group: { min: 2, max: 5, spread: 4 },
         swarm: { cohesion: 2.0, separation: 4.4, separationDist: 1.4, alignment: 1.4, towardPlayer: 1.2, fleeFromPredators: 8.2, fleeRadius: 7, wander: 1.0 },
         weight: 0.35, weightPerDifficulty: 0.02, maxWeight: 0.7, maxConcurrent: 40, minDifficulty: 0,
     },
       fishPackC: {
         asset: 'enemyFishPackC', behavior: 'swarm', faceMotion: true, prey: true,
         radius: 0.32, hp: 5, hpPerDifficulty: 0.7, speed: 5.4, speedVariance: 1.3, contactDamage: 2, xp: 3,
-        group: { min: 4, max: 10, spread: 4 },
+        group: { min: 3, max: 6, spread: 4 },
         swarm: { cohesion: 2.2, separation: 4.8, separationDist: 1.2, alignment: 1.6, towardPlayer: 1.4, fleeFromPredators: 8.8, fleeRadius: 7, wander: 1.2 },
         weight: 0.35, weightPerDifficulty: 0.02, maxWeight: 0.7, maxConcurrent: 40, minDifficulty: 0,
     },
@@ -6283,7 +6496,7 @@ export const CONFIG = {
         asset: 'enemyFishesA', behavior: 'swarm', faceMotion: true, prey: true,
         nightAsset: 'enemyGlowFishesA',
         radius: 0.34, hp: 6, hpPerDifficulty: 0.8, speed: 5.2, speedVariance: 1.3, contactDamage: 3, xp: 3,
-        group: { min: 4, max: 10, spread: 4 },
+        group: { min: 3, max: 6, spread: 4 },
         swarm: { cohesion: 2.1, separation: 4.6, separationDist: 1.3, alignment: 1.5, towardPlayer: 1.3, fleeFromPredators: 8.5, fleeRadius: 7, wander: 1.15 },
         weight: 0.22, weightPerDifficulty: 0.015, maxWeight: 0.45, maxConcurrent: 40, minDifficulty: 0,
     },
@@ -6291,7 +6504,7 @@ export const CONFIG = {
         asset: 'enemyFishesB', behavior: 'swarm', faceMotion: true, prey: true,
         nightAsset: 'enemyGlowFishesB',
         radius: 0.4, hp: 7, hpPerDifficulty: 0.9, speed: 4.8, speedVariance: 1.1, contactDamage: 3, xp: 4,
-        group: { min: 3, max: 8, spread: 4 },
+        group: { min: 2, max: 5, spread: 4 },
         swarm: { cohesion: 2.0, separation: 4.4, separationDist: 1.4, alignment: 1.4, towardPlayer: 1.2, fleeFromPredators: 8.2, fleeRadius: 7, wander: 1.0 },
         weight: 0.22, weightPerDifficulty: 0.015, maxWeight: 0.45, maxConcurrent: 40, minDifficulty: 0,
     },
@@ -6299,7 +6512,7 @@ export const CONFIG = {
         asset: 'enemyFishesC', behavior: 'swarm', faceMotion: true, prey: true,
         nightAsset: 'enemyGlowFishesC',
         radius: 0.33, hp: 6, hpPerDifficulty: 0.8, speed: 5.6, speedVariance: 1.4, contactDamage: 3, xp: 3,
-        group: { min: 4, max: 11, spread: 4 },
+        group: { min: 3, max: 7, spread: 4 },
         swarm: { cohesion: 2.2, separation: 4.8, separationDist: 1.2, alignment: 1.6, towardPlayer: 1.4, fleeFromPredators: 8.8, fleeRadius: 7, wander: 1.2 },
         weight: 0.22, weightPerDifficulty: 0.015, maxWeight: 0.45, maxConcurrent: 40, minDifficulty: 0,
     },
@@ -6320,7 +6533,7 @@ export const CONFIG = {
         asset: 'enemyBrownFish', behavior: 'swarm', faceMotion: true, prey: true,
         nightAsset: 'enemyGlowBrownFish',
         radius: 0.36, hp: 7, hpPerDifficulty: 0.85, speed: 5.3, speedVariance: 1.3, contactDamage: 3, xp: 3,
-        group: { min: 4, max: 10, spread: 4 },
+        group: { min: 3, max: 6, spread: 4 },
         swarm: { cohesion: 2.1, separation: 4.6, separationDist: 1.3, alignment: 1.5, towardPlayer: 1.3, fleeFromPredators: 8.5, fleeRadius: 7, wander: 1.15 },
         weight: 0.26, weightPerDifficulty: 0.018, maxWeight: 0.52, maxConcurrent: 40, minDifficulty: 0,
     },
@@ -6332,7 +6545,7 @@ export const CONFIG = {
         asset: 'enemyClownFish', behavior: 'swarm', faceMotion: true, prey: true,
         nightAsset: 'enemyGlowClownFish',
         radius: 0.3, hp: 5, hpPerDifficulty: 0.7, speed: 5.0, speedVariance: 1.2, contactDamage: 2, xp: 3,
-        group: { min: 6, max: 14, spread: 3.2 },
+        group: { min: 4, max: 9, spread: 3.2 },
         swarm: { cohesion: 2.6, separation: 5.0, separationDist: 1.1, alignment: 1.8, towardPlayer: 1.3, fleeFromPredators: 9.0, fleeRadius: 7, wander: 1.25 },
         weight: 0.26, weightPerDifficulty: 0.018, maxWeight: 0.52, maxConcurrent: 48, minDifficulty: 0,
     },
@@ -6340,7 +6553,7 @@ export const CONFIG = {
         asset: 'enemySurgeonFish', behavior: 'swarm', faceMotion: true, prey: true,
         nightAsset: 'enemyGlowSurgeonFish',
         radius: 0.34, hp: 6, hpPerDifficulty: 0.8, speed: 5.4, speedVariance: 1.3, contactDamage: 3, xp: 3,
-        group: { min: 5, max: 12, spread: 4 },
+        group: { min: 3, max: 7, spread: 4 },
         swarm: { cohesion: 2.2, separation: 4.8, separationDist: 1.3, alignment: 1.6, towardPlayer: 1.4, fleeFromPredators: 8.8, fleeRadius: 7, wander: 1.2 },
         weight: 0.26, weightPerDifficulty: 0.018, maxWeight: 0.52, maxConcurrent: 40, minDifficulty: 0,
     },
@@ -6363,7 +6576,7 @@ export const CONFIG = {
         asset: 'enemyTuna', behavior: 'swarm', faceMotion: true, prey: true,
         nightAsset: 'enemyGlowTuna',
         radius: 0.4, hp: 12, hpPerDifficulty: 1.3, speed: 7.6, speedVariance: 1.5, contactDamage: 4, xp: 6,
-        group: { min: 3, max: 8, spread: 4.5 },
+        group: { min: 2, max: 5, spread: 4.5 },
         // Looser than a reef shoal and much more aligned: an open-water school
         // moves as a direction rather than as a clump.
         swarm: { cohesion: 1.8, separation: 4.2, separationDist: 1.5, alignment: 2.4, towardPlayer: 1.1, fleeFromPredators: 9.5, fleeRadius: 9, wander: 0.9 },
@@ -6387,7 +6600,7 @@ export const CONFIG = {
         bioluminescent: true, // held back until the sun is down — enemies.csv owns this
         radius: 0.4, hp: 7, hpPerDifficulty: 0.9, speed: 5.8, speedVariance: 1.4,
         contactDamage: 3, xp: 4,
-        group: { min: 4, max: 9, spread: 4 },
+        group: { min: 3, max: 6, spread: 4 },
         swarm: {
           cohesion: 2.4, // tighter than the plain fish — the lights cluster
           separation: 5.0, separationDist: 1.4, alignment: 1.8,
@@ -6413,7 +6626,7 @@ export const CONFIG = {
         contactDamage: 3, xp: 4,
         // Bigger and looser than the lanternfish: a broad, slow curtain of
         // warm light, against the lanternfish's tight cold knot.
-        group: { min: 5, max: 11, spread: 5.5 },
+        group: { min: 3, max: 7, spread: 5.5 },
         swarm: {
           cohesion: 1.8, separation: 4.6, separationDist: 1.5, alignment: 1.5,
           towardPlayer: 1.3, fleeFromPredators: 8.5, fleeRadius: 7, wander: 1.3,
@@ -6428,7 +6641,7 @@ export const CONFIG = {
         contactDamage: 3, xp: 4,
         // Small, fast and tightly packed — the one that arrives as a knot and
         // scatters hard when something big turns toward it.
-        group: { min: 6, max: 12, spread: 3 },
+        group: { min: 4, max: 8, spread: 3 },
         swarm: {
           cohesion: 3.0, separation: 5.6, separationDist: 1.1, alignment: 2.2,
           towardPlayer: 1.5, fleeFromPredators: 11.0, fleeRadius: 8.5, wander: 1.0,
@@ -8008,6 +8221,23 @@ export const CONFIG = {
         colors: [0x7ad7ff, 0xbfefff, 0xffffff], cone: 0, drag: 1.6,
         gravity: [0, 1], inherit: 0, glow: 2.8,
     },
+      // A PASSIVE UPGRADE TAKING ITS CUT. The level-up burst's palette at a
+      // twentieth of its count, because it is the same KIND of event — you got
+      // permanently stronger — happening quietly and repeatedly rather than
+      // once with the game stopped for it.
+      //
+      // Deliberately not an impact. It fires on the same frame as whatever
+      // triggered it (a body being swallowed, which already throws a full
+      // burst), so it has to read as something else entirely or it just makes
+      // that burst look bigger: few, slow, and RISING out of the event with
+      // almost no spread — heavy drag stops them travelling, and the positive
+      // gravity carries what is left upward, which is the one direction
+      // nothing else on that frame is going.
+      procGain: {
+        count: 12, speed: [1.4, 4.5], size: [0.08, 0.2], life: [0.5, 1.0],
+        colors: [0x9fe3ff, 0xdff6ff, 0xffffff], cone: 0, drag: 4.5,
+        gravity: [0, 3.2], inherit: 0.1, glow: 2.4,
+    },
       // A CHUNK ARRIVING. Bright and warm and over quickly — this is a flash,
       // not a plume: its job is to move the eye to a spot, and whatever it is
       // announcing is still sitting there afterwards to be looked at. Heavy
@@ -8577,16 +8807,40 @@ export const CONFIG = {
       // going up is a bigger EVENT even though this is a worse one.
       crewEaten: { emit: null,          shake: 0.34, hitstop: 0.05,  glow: 0.8,  ripple: { strength: 3.4, radius: 13 },  sfx: 'crewEaten', haptic: [30, 24, 44] },
       // MANEATER TOOK ITS CUT. Fires on the same frame as `crewEaten` above,
-      // and is therefore deliberately almost nothing: a glow lift and a
-      // fingertip tap, no emitter, no shake, no sound. The meal already has a
-      // full event — this is only the seal getting stronger ON it, and a
-      // second impact stacked into the same frame would read as one louder
-      // meal rather than as a permanent upgrade landing.
+      // and every channel on it is chosen to be a DIFFERENT KIND of thing from
+      // the meal it rides on, rather than a smaller copy of it. The meal is an
+      // impact: shake, hit-stop, a wet burst, a heavy sound. This is a
+      // permanent upgrade landing, so it has no shake and no hit-stop at all,
+      // its burst rises where the meal's sprays, its sound climbs where the
+      // meal's falls, and it says its own name.
       //
-      // A card that pays out invisibly is a card players report as broken, so
-      // it does need to exist; it just needs to be the quietest thing in the
-      // table. No `sfxMinGap` because it has no sound to gap.
-      maneaterFeed: { emit: null,       shake: 0,    hitstop: 0,     glow: 0.55, ripple: null,                            sfx: null,       haptic: [{ duration: 18, magnitude: 0.3 }] },
+      // A card that pays out invisibly is a card players report as broken —
+      // and Maneater is the extreme case, since its entire effect is a
+      // multiplier being rebuilt inside the stat block. The `toast` is what
+      // actually fixes that: the running total, in words, on the seal. Its
+      // value is an UPGRADE ID, not the words — the line reads whatever
+      // upgrades.csv calls that card today (see systems/feedback.js).
+      //
+      // `toastMinGap` is a whole second because a boat's crew goes down in a
+      // rapid handful and the line is a running total — every meal updates the
+      // number in place regardless, and this only decides how often it replays
+      // its arrival. `sfxMinGap` is much shorter: the sound is per meal, and a
+      // second body being worth a second tick is the point of it.
+      //
+      // IT USED TO BE CALLED `maneaterFeed`, AND THE RENAME IS THE FIX. That
+      // entry was auto-saved into imported-tuning.json back when it carried no
+      // burst and no sound, as an explicit `emit: null, sfx: null` — and saved
+      // tuning beats config.js in the merge, so adding either of them here
+      // under the old name would have been a channel that reads as live in this
+      // file and is dead in the running game, with nothing anywhere to say so.
+      // A new key is owned by config.js outright, and the stale one is cleaned
+      // up on its own: the key prune drops a saved value config.js no longer
+      // declares and says so on the console ("dropped 1 saved value(s)").
+      //
+      // THE `<id>Proc` NAME IS THE CONVENTION for this whole class of event:
+      // one entry per passive upgrade that pays out during play, carrying that
+      // card's own label. See the other candidates listed on CONFIG.upgrades.
+      maneaterProc: { emit: 'procGain', shake: 0,   hitstop: 0,     glow: 0.55, ripple: null,                            sfx: 'procGain', haptic: [{ duration: 18, magnitude: 0.3 }], sfxMinGap: 0.12, toast: 'maneater', toastMinGap: 1 },
       // A man taken off a deck. Light and wet rather than explosive — he is not
       // an enemy and killing him is not an achievement; it should read as
       // something knocked into the sea.
@@ -9061,6 +9315,42 @@ export const CONFIG = {
       // feel through the floor rather than the crack of an impact.
       seabedImpact: { emit: 'silt', shake: 0.35, hitstop: 0, glow: 0.15, ripple: { strength: 2.6, radius: 16 },
                       sfx: 'seabedThud', haptic: [{ duration: 90, magnitude: 0.5 }] },
+
+      // --- THE BOWHEAD SWEEP (systems/whale.js) -----------------------------
+      // A long, low announcement rather than a jolt. The whale is not a threat
+      // and nothing about its arrival should read as one — the shake is the
+      // kind you feel through the water from something big and far away, and
+      // there is no hitstop anywhere in this group because nothing here is an
+      // impact.
+      whaleArrive: { emit: null, shake: 0.22, hitstop: 0, glow: 0.2,
+                     ripple: { strength: 1.8, radius: 26 },
+                     sfx: 'whaleCall', haptic: [{ duration: 140, magnitude: 0.35 }] },
+      // A mouthful closing. Fires once per frame that swallowed anything, not
+      // once per creature — a whale taking eleven fish out of a school in one
+      // pass would otherwise stack eleven copies of this on one frame, which is
+      // both a wall of noise and eleven times the shake budget.
+      whaleGulp: { emit: 'bite', shake: 0.1, hitstop: 0, glow: 0.18, sfx: 'whaleGulp',
+                   sfxMinGap: 0.22, haptic: [{ duration: 30, magnitude: 0.3 }] },
+      // Your uncollected chum going down with it. Deliberately its own event
+      // and not a quieter `whaleGulp`: this is the one thing in the sweep that
+      // COSTS the player something, and it should be legible as a loss rather
+      // than folded into the ambient sound of a whale feeding.
+      whaleRobbed: { emit: 'chumCrumbs', shake: 0.06, hitstop: 0, glow: 0.3,
+                     sfx: 'whaleRobbed', sfxMinGap: 0.3 },
+      // Crumbs off chum on its way down the intake — the trickle that makes the
+      // drag visible along its whole length rather than only at the two ends.
+      // No shake and no sound: this fires several times a second for as long as
+      // a pile is streaming in, and anything audible here would become a drone.
+      // The same reasoning the crab's own chum crumbs carry.
+      whaleCrumbs: { emit: 'chumCrumbs', shake: 0, hitstop: 0, glow: 0.05, sfx: null },
+      whaleSpout: { emit: 'splash', shake: 0.12, hitstop: 0, glow: 0.25,
+                    ripple: { strength: 1.4, radius: 12 }, sfx: 'whaleSpout', sfxMinGap: 0.5 },
+      // Being pushed aside. Shares the shove's own feel with the boat jostle
+      // rather than the damage events — no red, no hit flash, because nothing
+      // has hurt you.
+      whaleShove: { emit: 'wakeBubbles', shake: 0.18, hitstop: 0, glow: 0.1,
+                    sfx: 'whaleShove', sfxMinGap: 0.35,
+                    haptic: [{ duration: 60, magnitude: 0.5 }] },
     },
 
     fx: {
@@ -9534,6 +9824,31 @@ export const CONFIG = {
         boost:       { wagSpeed: 7.5, wagAmplitude: 0.34, headBob: 0.0,  clipTimeScale: 1.4 },
         surfaceIdle: { wagSpeed: 1.2, wagAmplitude: 0.10, headBob: 0.05, clipTimeScale: 1.0, beatsPerLoop: 8 },
         surfaceMove: { wagSpeed: 3.6, wagAmplitude: 0.20, headBob: 0.04, clipTimeScale: 1.2 },
+        // THE WHALE'S OWN STROKE. Its own state rather than a borrowed one, and
+        // it is SPEED that makes that necessary rather than amplitude: a
+        // bowhead's stroke is slow, and every locomotion pair above was tuned on
+        // fish. `idle` is 1.6 and `swim` is 4.2 — a sprinting mackerel's tempo
+        // on a body ten times the length. 0.85 is one stroke per 7.4 seconds.
+        //
+        // Amplitude is close to `idle`'s on purpose. `wagAmplitude` is an ANGLE
+        // PER BONE, so it already scales into travel with the animal — 0.22 rad
+        // puts this fluke through 14% of its own body length per cycle, which
+        // is a cruise. The number LOOKS timid next to 31 world units and is not.
+        //
+        // Measured on the real rig by `npm run looks:whale`, which prints the
+        // sweep as a fraction of body length — and the reason that page exists
+        // is that this number was first set from a bad measurement. The whale
+        // previews nose-up (createVisual points `forward` at world +Y), so a
+        // sweep read off world Y before laying the body flat is reading the
+        // animal's THICKNESS, not its stroke. That said 1.0% and argued for
+        // 0.62 rad, which is a whale having a seizure.
+        // wagSpeed is set AGAINST THE TRAVEL, not picked for feel: 1.15 is one
+        // full stroke per 5.5s, and at CONFIG.whale.speed of 8 that is 44 world
+        // units of travel per stroke — about 1.4 body lengths. A swimmer that
+        // covers wildly more or less than its own length per beat is foot-
+        // sliding, and on a body this size it is obvious. Re-solve this when
+        // `speed` moves.
+        whaleCruise: { wagSpeed: 1.15, wagAmplitude: 0.22, headBob: 0.05, clipTimeScale: 1.0 },
         // One-shots. Short fades so they punch in rather than easing in.
         // `maxDuration` caps how long the one-shot may hold locomotion —
         // these clips are full authored performances (bark is 6.8s, roll 6.7s,
@@ -9645,6 +9960,28 @@ export const CONFIG = {
           // by every pectoral, dorsal and fluke on the roster — see SQUID_RIG in
           // assets.js, which is the only thing that asks for this one.
           arm: 2.4,
+          // THE WHALE'S BODY AND FLUKE. The second role above 1, and the first
+          // one worn by a WAG chain rather than by a limb — see `rig.wagRole`
+          // in assets.js, which exists for this.
+          //
+          // `tail` is the shared baseline, tuned on bodies under three world
+          // units long, and stiffness is an absolute here rather than something
+          // scaled by the animal. On a 31-unit bowhead those numbers hold the
+          // spine almost rigid: the procedural sine still bends it, but nothing
+          // TRAILS, so the body turns as one piece and the fluke arrives at the
+          // top of its stroke at the same instant as the shoulder. A whale's
+          // whole read is the opposite of that — the stroke starts at the
+          // shoulder and runs down the body, and the fluke finishes last.
+          //
+          // 2.9 rather than the squid's 2.4 because this chain is eight bones
+          // long against the arms' five, and the lag has to spread over all of
+          // them without the last two doing all of it.
+          whaleBody: 2.9,
+          // The pectorals. Looser than a `fin` — a whale's flippers are held
+          // out and flex through the stroke rather than being steered with, and
+          // at the fin's 0.8 they read as welded to a body that is visibly
+          // flexing behind them.
+          whaleFin: 1.5,
         },
     },
     },
@@ -10641,6 +10978,19 @@ export const CONFIG = {
       // the note. pitchVary stays 0 so that reading isn't muddied by noise.
       pickup:    { src: null, type: 'blip',  wave: 'triangle', freq: [620, 1180], decay: 0.12, gain: 0.16, pitchVary: 0 },
       levelUp:   { src: null, type: 'blip',  wave: 'triangle', freq: [440, 1320], decay: 0.5,  gain: 0.26, pitchVary: 0.03 },
+      // A PASSIVE UPGRADE PAYING OUT. `levelUp`'s shape — a triangle sweeping
+      // up, because up is what "you are permanently stronger" sounds like in
+      // this table — but a fifth of its gain, a third of its length and a much
+      // shorter climb. Same family, far enough down the mix that it decorates
+      // whatever it fired alongside instead of competing with it.
+      //
+      // It is the quietest voice here on purpose. This is a sound the player
+      // may hear five times inside a couple of seconds while a boat comes
+      // apart around them: anything with presence would turn a crew going into
+      // the water into a slot machine. `pitchVary` is small but not zero —
+      // this is a cue rather than texture, and it should read as the same
+      // event every time with just enough life to survive being repeated.
+      procGain:  { src: null, type: 'blip',  wave: 'triangle', freq: [720, 1180], decay: 0.16, gain: 0.055, pitchVary: 0.04 },
       // A chunk hitting the water. A soft heavy plop with a rising tail on it —
       // the weight says "that is a big piece of meat", the rise says "and it is
       // for you". Sweeping UPWARD is the whole trick: every other heavy sound
@@ -10923,6 +11273,28 @@ export const CONFIG = {
       harpAura:   { src: null, type: 'blip',  wave: 'sine',     freq: [520, 780],   decay: 0.16, gain: 0.05, pitchVary: 0.26 },
       // The dive. Falling sawtooth — a bird committing to a stoop.
       seagullDive:{ src: null, type: 'blip',  wave: 'sawtooth', freq: [1500, 480], decay: 0.30, gain: 0.16, pitchVary: 0.10 },
+
+      // THE BOWHEAD SWEEP. The lowest group in this table on purpose: nothing
+      // else in the game lives down here, so the whale owns a band of the mix
+      // and its arrival is audible under a full fight without having to be loud.
+      //
+      // whaleCall is the longest single voice in the game at 2.6s. That is what
+      // buys the warning — the sweep takes several seconds to cross and the
+      // player needs time to decide whether to go and collect the seabed before
+      // it arrives, so the announcement has to outlast a moment of combat noise.
+      // A sine sweep rather than a `boom`: the noise half of a boom is a
+      // percussive transient and this is a moan, not a hit.
+      whaleCall:  { src: null, type: 'blip',  wave: 'sine',   freq: [78, 44],   decay: 2.60, gain: 0.40, pitchVary: 0.06 },
+      // Wet and low, an octave under `bite` (1200) with three times the tail —
+      // a mouthful, not a snap.
+      whaleGulp:  { src: null, type: 'noise', filter: 420,    decay: 0.52, gain: 0.24, pitchVary: 0.12, filterVary: 0.24 },
+      // Your chum leaving. Falling tone, because the one thing it has to say is
+      // that something was lost — and quiet, because it can fire several times
+      // across one crossing and must not become the loudest part of the event.
+      whaleRobbed:{ src: null, type: 'blip',  wave: 'triangle', freq: [620, 180], decay: 0.34, gain: 0.15, pitchVary: 0.14 },
+      whaleSpout: { src: null, type: 'noise', filter: 2800,   decay: 0.45, gain: 0.26, pitchVary: 0.10, filterVary: 0.28 },
+      // Body against body: the low thump plus the water it moves.
+      whaleShove: { src: null, type: 'boom',  freq: [120, 40], decay: 0.42, gain: 0.34, noise: 0.55, filter: 700, pitchVary: 0.10, filterVary: 0.2 },
 
       // Scallops. The launch is a wet spit; the jet is deliberately the
       // quietest thing in this table — it fires dozens of times a second across
@@ -11527,6 +11899,25 @@ export const CONFIG = {
       // or as a bright animal — at 1 the pattern washes into an already-lit
       // body and the shapes disappear.
       bodyDarken: 0.35,
+      // HOW MUCH OF THE MODEL'S OWN TEXTURE THIS PATTERN REPLACES.
+      //
+      // 0 is light only — the pattern is added after the lighting chunks, the
+      // way every preset in this file worked before the knob existed, and the
+      // model's texture still shows through underneath at `bodyDarken`.
+      //
+      // 1 is PAINT. The pattern becomes the diffuse colour and the scene lights
+      // shade it, so it reads as a hide rather than as a decal, and the model's
+      // texture is never sampled at all. That last part is the point: a species
+      // at full pigment does not need the jpeg baked into its .glb, which is
+      // 12MB across the model folder.
+      //
+      // A pigment preset lives or dies on `shellColor` — that is the colour
+      // BETWEEN the markings, which on a full-coverage hide is most of the
+      // animal. Leaving it at the family default paints the creature orange.
+      //
+      // Not exclusive with the glow: a shell in pigment with a few lit organs
+      // is pigment 1 at a low `strength`, which is one preset, not two.
+      pigment: 0,
       colorA: 0x00e5ff, // the ramp, low to high
       colorB: 0x7b2dff,
       colorC: 0xffd166,
@@ -12213,6 +12604,134 @@ export const CONFIG = {
         drift: 0,
         tailBias: 0,
         luminous: true,
+      },
+
+      // =====================================================================
+      // THE PIGMENT FAMILY — presets whose job is to REPLACE a texture file,
+      // not to add light to one. Everything above this line paints with the
+      // additive term and leaves the model's own jpeg showing through
+      // underneath; everything below sets `pigment: 1`, which makes the
+      // pattern the diffuse colour the scene lights actually shade.
+      //
+      // WHY THEY ARE FEW, AND SHARED. There are ~60 model assets with no
+      // procedural skin, and the instinct is one preset each. That is the
+      // wrong axis: what differs between a shark and a tuna is not the ALGORITHM
+      // that draws a hide, it is the colour of the hide — and the colour is
+      // already a per-asset control, the tint swatch on the Models tab, which
+      // the pigment path multiplies by. So four species share `hide` and come
+      // out four colours, exactly the way four glowing fish already share
+      // `lantern`. Sixty presets would be sixty near-identical tuner groups and
+      // sixty chances for two animals meant to match to drift apart.
+      //
+      // ALL THREE ARE `luminous: false`. That keeps them out of the night-gated
+      // roster (see the note on `luminous` in `base`) — a shark's hide is not a
+      // reason for it to only spawn after dark.
+      //
+      // `shellColor` is the body and `colorA..C` are the markings, which is the
+      // opposite emphasis to a glowing preset, where the shell is usually off.
+      // On a full-coverage hide the negative space is most of the animal.
+      //
+      // AUTHOR THESE PALE. The ramp is multiplied by the tint and then lit;
+      // a preset authored dark has nowhere for a dark tint to go, and every
+      // species wearing it comes out black. The tint darkens — this cannot.
+      // =====================================================================
+
+      // SKIN ON A BIG SWIMMER. Soft mottling with no hard edges, the way light
+      // through water falls on a shark, a dolphin, an orca. Marble rather than
+      // blotches because turbulence-folded veining has grain running along the
+      // body, which reads as muscle; blotches read as camouflage patches, which
+      // is a different animal.
+      hide: {
+        luminous: false,
+        pigment: 1,
+        // No light at all. The pattern is entirely paint here, which is what
+        // lets the tuned bloom threshold stay where it is with sixty more
+        // creatures wearing generated surfaces.
+        strength: 0,
+        pattern: 'marble',
+        // Big features — a hide has two or three tonal regions down its length,
+        // not a texture. Small numbers here give a marbled countertop.
+        scale: 0.62,
+        coverage: 0.42,
+        // Soft. The single number that separates skin from a paint job.
+        contrast: 0.9,
+        warp: 1.1,
+        // Belly-to-back, which every large swimmer has and no noise field will
+        // produce on its own: countershading is the strongest single cue that
+        // a generated surface is an animal.
+        tailBias: 0,
+        hueBias: 0.45,
+        colorA: 0xb9c6d2, // pale underside
+        colorB: 0x8fa1b0,
+        colorC: 0xdfe8ee, // the highlights along the back
+        hueSpread: 0.85,
+        hueScale: 1.6,
+        shellColor: 0x9aa9b6, // the body between the markings — most of it
+        shellGlow: 0,
+        // Still. A hide does not breathe, flicker or drift, and each of these
+        // at its family default is a different way of giving the game away.
+        pulseAmp: 0, flickerAmp: 0, flow: 0, schoolAmp: 0,
+        phaseSpread: 0, phaseSteps: 0,
+        eyeStrength: 0,
+      },
+
+      // SCALES. The same idea at a fish's scale of detail: a fine net of
+      // borders rather than tonal regions, which is what a scaled flank is when
+      // you stop being able to resolve individual scales.
+      scales: {
+        luminous: false,
+        pigment: 1,
+        strength: 0,
+        pattern: 'net',
+        // Fine, and this is the number to reach for first per species: at 0.09
+        // the cells are scales, at 0.3 they are plates.
+        scale: 0.09,
+        coverage: 0.5,
+        contrast: 2.2,
+        tailBias: 0,
+        // Along the body, so the back and the belly are not the same metal.
+        hueBias: 0.5,
+        colorA: 0xc8d8e4,
+        colorB: 0x9fb6c8,
+        colorC: 0xeef4f8,
+        hueSpread: 0.7,
+        hueScale: 2.2,
+        shellColor: 0xa8bccc,
+        shellGlow: 0,
+        pulseAmp: 0, flickerAmp: 0, flow: 0, schoolAmp: 0,
+        phaseSpread: 0, phaseSteps: 0,
+        eyeStrength: 0,
+      },
+
+      // ARMOUR. Big hard-edged plates for the things that are built rather than
+      // grown — turtle shell, oyster, hull timber. `lattice` and not `net`
+      // because the cells are regular: a shell's plates tile, and voronoi's
+      // irregularity reads as cracked mud.
+      //
+      // The lattice's spring rides pulseAmp, which is 0 here, so it is a still
+      // shell — see the note on that pairing in biolumSkin.js.
+      plate: {
+        luminous: false,
+        pigment: 1,
+        strength: 0,
+        pattern: 'lattice',
+        scale: 0.26,
+        // The seam width. Wide, because a plate boundary is a groove with
+        // width, not a drawn line.
+        coverage: 0.62,
+        contrast: 1.6,
+        tailBias: 0,
+        hueBias: 0.2,
+        colorA: 0x6f6250, // the grooves between plates
+        colorB: 0xa8967a,
+        colorC: 0xd8c9a8, // the crowns that catch the light
+        hueSpread: 0.6,
+        hueScale: 1.3,
+        shellColor: 0xbdae92,
+        shellGlow: 0,
+        pulseAmp: 0, flickerAmp: 0, flow: 0, schoolAmp: 0,
+        phaseSpread: 0, phaseSteps: 0,
+        eyeStrength: 0,
       },
 
     },
@@ -13198,6 +13717,26 @@ export const CONFIG = {
       // it, reached at CONFIG.strike.chain-ish depth (see spawnChainToast).
       colorHot: 0xff803a,
       hotAt: 8, // link count at which colorHot is fully reached
+    },
+    // AN UPGRADE PAYING OUT — "MANEATER +12%". Held longer than any of the
+    // three above (1.6s) and moved less, because this one is READ rather than
+    // noticed: the number on it is the whole message, and a receipt that has
+    // drifted forty pixels and faded halfway before it is legible has said
+    // nothing. No scatter for the same reason the chain banner has none —
+    // there is only ever one of these per upgrade on screen, so it has nothing
+    // to get out of the way of.
+    //
+    // It rises SLOWLY and settles: the gravity beats the rise well before the
+    // life is up, so the line comes off the seal, stops, and sits there to be
+    // read instead of leaving on its own momentum.
+    proc: {
+      life: 1.6,
+      rise: 34,
+      riseVary: 0,
+      gravity: 46,
+      scatter: 0,
+      in: { time: 0.16, ease: 'outCubic', scale: 1.4, fade: 0, lift: 0 },
+      out: { time: 0.5, ease: 'inQuad', scale: 1, fade: 0, lift: -14 },
     },
     // THE WARNING BAND — "Oxygen low!", "Health low!", "Warning!".
     // Screen-anchored, so the four travel fields above (rise,
@@ -15426,6 +15965,51 @@ export const CONFIG = {
   },
 
   // ---------------------------------------------------------------------------
+  // EMISSIVE PULSE — a lit model breathing its own glow on the beat.
+  // ---------------------------------------------------------------------------
+  // KEYED ON THE ASSET KEY, exactly like CONFIG.trails above and looked up the
+  // same way, so wiring a new object into this is one row and no code. Every
+  // key here needs `emissiveFromMap` or a `material.emissive` on its asset def
+  // — this scales emissiveIntensity, and scaling it on a material whose
+  // emissive is black is multiplying nothing.
+  //
+  // A MULTIPLIER, NOT A LEVEL. The numbers below are factors on whatever the
+  // material's resting emissiveIntensity happens to be, which is the asset
+  // def's and, after somebody drags it, the Look panel's glow slider. That is
+  // the one arrangement where both controls keep meaning something: the slider
+  // is how bright the object is, this is the shape of its breath. Writing an
+  // absolute level here instead would have made that slider a dead row on every
+  // asset that pulses — see systems/emissivePulse.js, which re-reads the base
+  // the moment anything else writes the property.
+  //
+  // ON THE GRID, not on a rate in seconds — `pulseSync` is a name out of
+  // beatDivisions.js and the phase is derived from the transport (see
+  // systems/beatSync.js), so it stays locked to the music however long the run
+  // goes and retimes itself when the tempo moves. Which matters more here than
+  // on a creature's breath: the yacht is a party boat, and money flashing a
+  // fraction off the beat is money flashing at random. `pulseRate` is the
+  // free-running fallback in cycles per second, and only does anything at
+  // 'free' — the same pairing every other synced effect in here uses.
+  emissivePulse: {
+    enabled: true,
+    // THE YACHT'S MONEY. Both rolls on the same division and the same shape, so
+    // every piece of cash in the water flares together — a boat throwing money
+    // to a beat, rather than two objects that each happen to flicker. They are
+    // the same prop at two sizes (see ASSETS.moneyRoll1); telling them apart is
+    // the job of how they FLY, which is what the `ordnance` block sets up.
+    //
+    // `attack` is the fraction of the cycle spent rising: short, so the level
+    // snaps up on the beat and falls away over the rest of it. That is what
+    // makes it read as a hit rather than as a throb — pushed up towards 0.5
+    // with a `smoothstep` curve, this same row is a slow swell instead.
+    //
+    // `min` well under 1 is deliberate: the trough has to fall clearly BELOW
+    // the resting glow or the pulse reads as an object that is simply bright.
+    moneyRoll1: { pulseSync: '1/4', pulseRate: 2, min: 0.35, max: 1.75, attack: 0.08, curve: 'outCubic' },
+    moneyRoll3: { pulseSync: '1/4', pulseRate: 2, min: 0.35, max: 1.75, attack: 0.08, curve: 'outCubic' },
+  },
+
+  // ---------------------------------------------------------------------------
   // BLOOM — the neon glow. Independent of the CRT/VHS preset system above;
   // either can be on without the other. Bright-pass threshold + ping-pong
   // blur at half resolution, composited additively before the screen filters.
@@ -16377,6 +16961,15 @@ const SYNCED_FX = [
   // the day anyone turns that amplitude up, the effect is beat-synced and
   // absent from the one list that is supposed to show every synced effect.
   ['walking crab (static)', () => resolveBiolumCfg('biolumSkin.presets.carapace'), ['pulseSync', 'flickerSync']],
+  // THE PIGMENT FAMILY, and every one of them is silent for the same reason
+  // `carapace` above is: these are paint, and paint on a grid is a strobing
+  // animal. Listed anyway, and this is the case that argument was written for —
+  // there are three of them now, they are the presets most likely to be worn by
+  // most of the roster, and the day one of them is given an amplitude it would
+  // put sixty creatures on the beat with nothing in this inventory saying so.
+  ['hide — painted (static)', () => resolveBiolumCfg('biolumSkin.presets.hide'), ['pulseSync', 'flickerSync']],
+  ['scales — painted (static)', () => resolveBiolumCfg('biolumSkin.presets.scales'), ['pulseSync', 'flickerSync']],
+  ['armour plate — painted (static)', () => resolveBiolumCfg('biolumSkin.presets.plate'), ['pulseSync', 'flickerSync']],
   // The only WIREFRAME preset on the grid. Its `pulseAmp` is 1 — the charge
   // running head to tail is the whole read of the effect — so its breath is
   // the most visible thing in this list, not a formality. `flowSync` is left
@@ -16394,6 +16987,13 @@ const SYNCED_FX = [
   ['grass', () => CONFIG.grass?.sway ?? {}, ['speedSync', 'flutterSync']],
   ['bakalar beam', () => CONFIG.bakalar?.beam ?? {}, ['bandSync']],
   ['night sky', () => CONFIG.constellations ?? {}, ['bloomSync']],
+  // The only rows here that are not a shader: the yacht's ordnance flashes by
+  // scaling a material's emissiveIntensity (systems/emissivePulse.js). Listed
+  // all the same, because the question this inventory answers is "what is on
+  // the grid", and an effect that flashes a fifth of a beat off the rest of the
+  // screen is exactly as wrong whether a fragment shader drew it or not.
+  ['yacht cash — barrel', () => CONFIG.emissivePulse?.moneyRoll1 ?? {}, ['pulseSync']],
+  ['yacht cash — seeker', () => CONFIG.emissivePulse?.moneyRoll3 ?? {}, ['pulseSync']],
 ];
 
 // The generic version of the bioluminescence timing rows, for the effects that
@@ -16636,6 +17236,11 @@ function biolumSkinItems(prefix) {
     { path: at('coverage'), min: 0, max: 1, step: 0.01, label: 'how much of the body lights' },
     { path: at('contrast'), min: 0.1, max: 6, step: 0.05, label: 'edge hardness' },
     { path: at('bodyDarken'), min: 0.05, max: 1, step: 0.01, label: 'body darkening under the glow' },
+    // Directly under the darkening it supersedes: at 1 the body's own texture
+    // is gone entirely and this pattern is what the lights are shading, so the
+    // slider above stops mattering. Reading the two in that order is the
+    // clearest statement of what the pair does.
+    { path: at('pigment'), min: 0, max: 1, step: 0.01, label: 'paint the body with it (1 = replaces the texture)' },
     { path: at('tailBias'), min: -1, max: 1, step: 0.05, label: 'head ← → tail bias' },
     { path: at('hueBias'), min: -1, max: 1, step: 0.05, label: 'colour shift along the body' },
     // Only does anything on a creature whose asset declares `eyeStalks` —
@@ -16701,6 +17306,21 @@ function biolumSkinItems(prefix) {
   ];
 }
 
+// WHERE THESE GROUPS LIVE, and why they moved off the ` panel.
+//
+// A skin is a property of a MODEL — it is the thing standing in for that
+// model's texture — so it belongs on the same panel as the model's tint and
+// its texture upload, not two panels away under Look & FX. They were split
+// because a glow used to be an effect; it is a surface now, and a surface with
+// no texture file behind it is the only surface some of these animals have.
+//
+// The section string is what puts every preset in ONE collapsible folder
+// rather than N loose groups in a flat scroll — see buildSectionedTunerGroups.
+// It has to match the entry in SECTION_ORDER.models in ui/textures.js or these
+// land in that tab's trailing "More", which is visible but unfiled.
+export const SKIN_SECTION = 'Procedural skins';
+const SKIN_PANEL = 'models';
+
 // Read off CONFIG rather than hardcoded, so adding a preset to the config adds
 // its tuner group with it and neither can drift from the other.
 function biolumSkinGroups() {
@@ -16719,10 +17339,22 @@ function biolumSkinGroups() {
     // one crab preset whose EYES are the point. Named for the animal rather
     // than the key so it sorts next to the other two crabs in the panel.
     kingCrab: 'Shell pattern — king crab (boss)',
+    // Was falling through to the generated 'Bioluminescence — wireframeGlow',
+    // which is the key rather than an animal and the only row in the folder
+    // that read as a variable name.
+    wireframeGlow: 'Bioluminescence — orca family',
+    // THE PIGMENT FAMILY. Named for what they ARE rather than for a species,
+    // because unlike every row above these are meant to be worn by several —
+    // the animal is the tint, the preset is the surface. Prefixed so they sort
+    // together at the bottom of the folder, under the glowing ones.
+    hide: 'Painted skin — hide (sharks, whales, big swimmers)',
+    scales: 'Painted skin — scales (fish flanks)',
+    plate: 'Painted skin — armour plate (shells, hulls)',
   };
   const groups = [{
     group: 'Bioluminescence — shared base',
-    section: 'Look & FX',
+    panel: SKIN_PANEL,
+    section: SKIN_SECTION,
     items: [
       { path: 'biolumSkin.enabled', type: 'bool', label: 'glowing skin (all species)' },
       // The current the world-space wave drifts on. Base only, and offered
@@ -16735,7 +17367,8 @@ function biolumSkinGroups() {
   for (const name of Object.keys(CONFIG.biolumSkin?.presets ?? {})) {
     groups.push({
       group: LABELS[name] ?? `Bioluminescence — ${name}`,
-      section: 'Look & FX',
+      panel: SKIN_PANEL,
+      section: SKIN_SECTION,
       items: biolumSkinItems(`biolumSkin.presets.${name}`),
     });
   }
@@ -16887,6 +17520,11 @@ function textPanelGroups() {
       { path: 'textMotion.chain.colorHot', type: 'color', label: 'colour at a deep chain' },
       { path: 'textMotion.chain.hotAt', min: 3, max: 20, step: 1, label: '...reached at this many links' },
     ],
+  }, {
+    group: 'Upgrade proc — motion',
+    section: 'Popups',
+    panel: 'text',
+    items: popupMotionItems('proc'),
   }, {
     group: 'Warning band — motion',
     section: 'Popups',
@@ -18449,6 +19087,47 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
+    // THE BOWHEAD SWEEP. Cadence, speed, reach and the menu are spawning.csv's
+    // — they are judged over minutes and against the roster, which is not what
+    // a slider is for. Everything here is judged by eye while it crosses.
+    group: 'The whale sweep',
+    panel: 'enemies',
+    section: 'Crabs & crawlers',
+    items: [
+      // --- the line it swims ---
+      // Fractions of the water column, 0 = surface, 1 = seabed. Kept off both
+      // ends: along the floor it scrapes the crab layer, along the surface it
+      // hides behind the waves.
+      { path: 'whale.depthMin', min: 0, max: 1, step: 0.01, label: 'shallowest crossing' },
+      { path: 'whale.depthMax', min: 0, max: 1, step: 0.01, label: 'deepest crossing' },
+      { path: 'whale.offscreenMargin', min: 0, max: 60, step: 1, label: 'spawn distance off-screen' },
+      { path: 'whale.driftAmplitude', min: 0, max: 12, step: 0.1, label: 'vertical drift' },
+      { path: 'whale.driftSpeed', min: 0, max: 2, step: 0.01, label: 'drift cycles/sec' },
+      { path: 'whale.bank', min: 0, max: 45, step: 0.5, label: 'lean into the climb (deg)' },
+      { path: 'whale.bankSmooth', min: 0.1, max: 10, step: 0.1, label: 'how fast the lean chases' },
+      // --- the gape ---
+      // Two morph targets on one jaw: `cruiseGape` is held the whole way
+      // across and the feed gape opens on top of it. Both are morph influences,
+      // so 1 is as wide as the model was authored to open.
+      { path: 'whale.cruiseGape', min: 0, max: 1, step: 0.01, label: 'gape while cruising' },
+      { path: 'whale.feedGape', min: 0, max: 1, step: 0.01, label: 'gape with prey in reach' },
+      { path: 'whale.gapeOpen', min: 0.05, max: 3, step: 0.05, label: 'seconds to widen' },
+      { path: 'whale.gapeClose', min: 0.05, max: 8, step: 0.05, label: 'seconds to relax' },
+      { path: 'whale.gapeHold', min: 0, max: 20, step: 0.25, label: 'jaw stays open at least (s)' },
+      // --- the intake ---
+      { path: 'whale.intakePull', min: 0, max: 40, step: 0.5, label: 'suction strength at the lips' },
+      { path: 'whale.intakeFalloff', min: 0.5, max: 5, step: 0.1, label: 'suction ramp (higher = gentler rim)' },
+      { path: 'whale.intakeEatTime', min: 0.05, max: 2, step: 0.05, label: 'seconds an orb takes to go down' },
+      // A multiple of mouthRadius, not a distance — it has to move with the
+      // reach or the jaw stops leading the gulp the moment that is retuned.
+      { path: 'whale.gapeLead', min: 1, max: 6, step: 0.1, label: 'look-ahead (x mouth radius)' },
+      // --- the spout ---
+      { path: 'whale.spoutDepth', min: 0, max: 0.6, step: 0.01, label: 'spouts above this depth' },
+      { path: 'whale.spoutRise', min: 0.02, max: 1.5, step: 0.02, label: 'seconds to pop' },
+      { path: 'whale.spoutFall', min: 0.05, max: 3, step: 0.05, label: 'seconds to settle' },
+    ],
+  },
+  {
     group: 'Animation',
     section: 'Creature rigging',
     items: [
@@ -19717,6 +20396,36 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
+    group: 'Emissive pulse (the yacht’s money)',
+    section: 'Look & FX',
+    items: [
+      { path: 'emissivePulse.enabled', type: 'bool', label: 'glow pulses on the beat' },
+      ...['moneyRoll1', 'moneyRoll3'].flatMap((k) => ([
+        // The label says which gun rather than which file — 'moneyRoll3' is
+        // the asset key and means nothing to somebody watching the fight.
+        { path: `emissivePulse.${k}.pulseSync`, type: 'choice', options: BEAT_DIVISIONS,
+          label: `${k === 'moneyRoll1' ? 'barrel' : 'seeker'} — one flash per` },
+        { path: `emissivePulse.${k}.pulseRate`, min: 0.1, max: 8, step: 0.1,
+          label: '…or free-running, per second' },
+        { path: `emissivePulse.${k}.min`, min: 0, max: 2, step: 0.05, label: '…trough (x resting glow)' },
+        { path: `emissivePulse.${k}.max`, min: 0, max: 4, step: 0.05, label: '…peak (x resting glow)' },
+        // 0.5 is a symmetrical swell; anything under about 0.15 is a hit with a
+        // tail. Above 0.5 the fall is faster than the rise, which is the shape
+        // of something charging up rather than being struck — a real look, and
+        // not this one.
+        { path: `emissivePulse.${k}.attack`, min: 0.02, max: 0.98, step: 0.02, label: '…rise, as a fraction of the cycle' },
+        { path: `emissivePulse.${k}.curve`, type: 'choice', options: EASINGS, label: '…curve' },
+      ])),
+      // What the two rows above cost in real seconds at the tempo playing, and
+      // what the resting glow they multiply currently is — the peak is a
+      // number nobody can judge without both.
+      { type: 'readout', label: 'timing', lines: () => fxTimingReadout([
+        ['barrel', 'emissivePulse.moneyRoll1.pulseSync', () => 1 / Math.max(0.1, CONFIG.emissivePulse?.moneyRoll1?.pulseRate ?? 1)],
+        ['seeker', 'emissivePulse.moneyRoll3.pulseSync', () => 1 / Math.max(0.1, CONFIG.emissivePulse?.moneyRoll3?.pulseRate ?? 1)],
+      ]) },
+    ],
+  },
+  {
     group: 'Rocks (ammo & pickups)',
     section: 'Gameplay',
     items: [
@@ -20051,11 +20760,13 @@ const BUILT_IN_KEY_PATHS = collectKeyPaths(
 // only ever be a single multiplier.
 export function xpForNextLevel(level, previous) {
   const c = CONFIG.xp;
-  const factor = level >= (c.lateFrom ?? Infinity)
-    ? (c.lateMul ?? c.mul)
-    : level >= (c.midFrom ?? Infinity)
-      ? (c.midMul ?? c.mul)
-      : c.mul;
+  const factor = level >= (c.endFrom ?? Infinity)
+    ? (c.endMul ?? c.lateMul ?? c.mul)
+    : level >= (c.lateFrom ?? Infinity)
+      ? (c.lateMul ?? c.mul)
+      : level >= (c.midFrom ?? Infinity)
+        ? (c.midMul ?? c.mul)
+        : c.mul;
   return Math.floor(previous * factor + c.add);
 }
 
@@ -20289,10 +21000,32 @@ const PATH_TABLES = [
     // CONFIG.pickups is the magnet and the glow, which are judged by eye and
     // belong on their sliders. Widening the root without the fence would put
     // every one of those within reach of a typo in a spreadsheet.
-    roots: ['spawn', 'crabSpawn', 'xp', 'chumChunk', 'pickups'],
-    forbid: (id) => (id.startsWith('pickups.') && !id.startsWith('pickups.mass.')
-      ? 'spawning.csv owns pickups.mass only — the magnet and the glow are tuner sliders'
-      : null),
+    //
+    // `whale` is here because the bowhead sweep is a SPAWN control, whatever
+    // else it looks like: its cadence is read against `spawn.maxAlive` and the
+    // roster's ramp rows, and `maxPreyRadius` is read against the radius column
+    // of enemies.csv. Those are the comparisons the file exists to make. Its
+    // look — the depth band, the gape timings, the spout, the bank — stays on
+    // sliders in CONFIG.whale, same split as chumChunk above.
+    roots: ['spawn', 'crabSpawn', 'xp', 'chumChunk', 'pickups', 'whale'],
+    forbid: (id) => {
+      if (id.startsWith('pickups.') && !id.startsWith('pickups.mass.')) {
+        return 'spawning.csv owns pickups.mass only — the magnet and the glow are tuner sliders';
+      }
+      // Fenced the same way, and for the same reason: widening the root to
+      // reach ten throughput rows must not put the gape timings and the drift
+      // within range of a typo in a spreadsheet.
+      const WHALE_OWNED = new Set([
+        'whale.enabled', 'whale.firstAt', 'whale.intervalMin', 'whale.intervalMax',
+        'whale.crowdThreshold', 'whale.crowdRush', 'whale.speed', 'whale.maxAlive',
+        'whale.mouthRadius', 'whale.maxPreyRadius', 'whale.shoveForce',
+        'whale.intakeReach',
+      ]);
+      if (id.startsWith('whale.') && !WHALE_OWNED.has(id)) {
+        return 'spawning.csv owns the sweep\'s cadence and reach only — the gape, the drift and the spout are tuner sliders';
+      }
+      return null;
+    },
   }),
   createPathTable({
     label: 'weapons', file: 'weapons.csv', text: weaponsCsv,

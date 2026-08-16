@@ -296,9 +296,16 @@ export function createAnimationController(instance) {
     const solver = makeSpring(bones, boneAxis);
     if (solver) springs.push({ solver, role });
   };
-  // The wag chain is the body's own undulation, so it is a tail by definition
+  // The wag chain is the body's own undulation, so it is a tail by default
   // whatever the creature is.
-  if (wagBones.length) addSpring(wagBones, 'tail');
+  //
+  // `rig.wagRole` overrides that for creatures whose body is not a fish's.
+  // `tail` is the unscaled baseline every wag chain in the game shares, so it
+  // cannot be retuned for one animal without retuning all of them — and a
+  // 31-unit whale wants a far looser body than a 0.4-unit fish. Declaring a
+  // role is how one creature gets its own without touching the rest of the
+  // roster. See CONFIG.animation.spring.roleLooseness.
+  if (wagBones.length) addSpring(wagBones, rig?.wagRole ?? 'tail');
   for (const entry of rig?.springChains ?? []) {
     const { names, role } = chainSpec(entry);
     const bones = names.map((name) => instance.getObjectByName(name)).filter(Boolean);

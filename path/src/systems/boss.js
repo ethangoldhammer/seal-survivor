@@ -69,6 +69,26 @@ import { playSfx } from './audio.js';
 // Parsed once — the files can't change without a page reload, since it's the
 // dev server that notices the write. Same deal as the quip table.
 const ROSTER = parseBossCsv(bossesCsv, CONFIG.enemies);
+
+// The enemy defs the boss roster is built out of, as a set of the def OBJECTS
+// rather than of ids — `e.def` is the object, so a caller holding a creature
+// can ask about it without knowing what it is called.
+//
+// This exists because `e.isBoss` is a LIVE FLAG and there are windows where a
+// boss body is in `enemies` without it: the tuner's disable path clears it off
+// a creature still in the water, and the corpse hold keeps a body around after
+// the fight. A caller that only wants to know "is this creature a boss body"
+// gets the wrong answer in exactly those windows, and for most callers that is
+// harmless. It is not harmless for systems/whale.js, whose whole menu is a
+// radius test: `bossCrab` has a radius of 0.5 — smaller than a puffer, because
+// the king crab's size lives in its sizeMul — so it is the one boss the sweep
+// could otherwise swallow whole.
+const BOSS_DEFS = new Set(ROSTER.map((b) => CONFIG.enemies[b.enemy]).filter(Boolean));
+
+/** Is this creature's def one the boss roster spawns? Independent of `isBoss`. */
+export function isBossDef(def) {
+  return !!def && BOSS_DEFS.has(def);
+}
 const PERKS = parseBossPerkCsv(bossPerksCsv);
 // The name table is parsed LAST and handed the other two, so a name part
 // tagged for an archetype or a perk that no longer exists is caught at boot

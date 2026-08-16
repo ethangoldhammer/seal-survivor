@@ -154,7 +154,7 @@ for (const [label, libKey] of [['lit (standard)', 'standard'], ['unlit (basic)',
     shader.vertexShader.includes('attribute vec3 aBioPos') &&
     shader.vertexShader.includes('vBioAxis = aBioAxis'));
   check(`${label}: glow is added to the final colour`,
-    shader.fragmentShader.includes('gl_FragColor.rgb += bioRamp(bioHue)'));
+    shader.fragmentShader.includes('gl_FragColor.rgb += bioRampCol'));
   // The eyes ride the same injection. Checked on BOTH materials because that
   // is the entire reason they are a vertex attribute rather than an emissive
   // map — an unlit creature has no emissive slot to put one in.
@@ -200,7 +200,33 @@ for (const [label, libKey] of [['lit (standard)', 'standard'], ['unlit (basic)',
   // The one that would otherwise fail silently as a washed-out fish rather
   // than as a missing effect.
   check(`${label}: body darkening landed on the base colour`,
-    shader.fragmentShader.includes('diffuseColor.rgb *= uBioBodyDarken'));
+    shader.fragmentShader.includes('diffuseColor.rgb * uBioBodyDarken'));
+
+  // PIGMENT RUNS BEFORE THE LIGHTS AND EMISSION RUNS AFTER, which is the whole
+  // reason the body is two strings instead of one. Both would still "land" in
+  // the wrong order — the substring checks above pass either way — and the
+  // result is a hide the lights never touch: flat, identical at noon and at
+  // midnight, and indistinguishable from a decal. So the ORDER is the check.
+  //
+  // <lights_fragment_begin> is the first chunk that reads diffuseColor for
+  // shading, and it is absent from the basic material entirely (nothing shades
+  // an unlit body), so the comparison is against whichever landmark that
+  // material actually has.
+  {
+    const frag = shader.fragmentShader;
+    const paint = frag.indexOf('clamp(uBioPigment');
+    const emit = frag.indexOf('gl_FragColor.rgb += bioRampCol');
+    const lights = frag.indexOf('#include <lights_fragment_begin>');
+    check(`${label}: pigment is written before the emission reads it`,
+      paint > 0 && emit > paint, `paint at ${paint}, emit at ${emit}`);
+    if (lights > 0) {
+      check(`${label}: ...and before the lighting that has to shade it`,
+        paint < lights && emit > lights, `paint ${paint} < lights ${lights} < emit ${emit}`);
+    }
+  }
+  check(`${label}: the pigment uniform reached the shader`,
+    !!shader.uniforms.uBioPigment && shader.uniforms.uBioPigment.value === 0,
+    `default ${shader.uniforms.uBioPigment?.value} — 0 keeps every tuned preset unmoved`);
   check(`${label}: every pattern branch is present`,
     BIOLUM_PATTERNS.every((_, i) => i === BIOLUM_PATTERNS.length - 1
       || shader.fragmentShader.includes(`uBioPattern == ${i}`)),

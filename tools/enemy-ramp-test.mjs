@@ -31,6 +31,7 @@
 
 import './dom-stub.mjs';
 import * as THREE from 'three';
+import { ASSETS, getAssetSizeMultiplier } from '../path/src/assets.js';
 import { CONFIG, difficultyRamp } from '../path/src/config.js';
 import { enemies, resetEnemies, removeEnemy, spawnNamed, updateSpawning } from '../path/src/entities/enemies.js';
 import { resetWaves } from '../path/src/systems/waves.js';
@@ -196,6 +197,34 @@ section('WHAT THE WATER IS MADE OF — aggressive share of the population');
     .filter(([, d]) => ['hunt', 'chase', 'porpoise'].includes(d.behavior))
     .map(([k]) => k));
 
+  // HOW BIG THE BODIES ARE, measured the way the player sees them: the asset's
+  // `fit` (its length in world units at scale 1) times its assets.csv size
+  // multiplier. NOT the enemies.csv `radius` column, which is the hitbox at
+  // scale 1 and is therefore a fraction of the on-screen animal — and not a
+  // consistent fraction either, which is the whole reason this measure exists:
+  // enemyHammerhead and enemyDolphin had no assets.csv row at all, so a shark
+  // whose radius said 1.3 swam past at 4.0 units against the shark's 10.1.
+  // The king crab is the one body this flatters (its radius is a resting height
+  // off the sand, see CONFIG.enemies.bossCrab) and it is a boss, so it never
+  // reaches this census anyway.
+  const assetKeyOf = (key) => {
+    const d = CONFIG.enemies[key];
+    return d?.assets?.[0] ?? d?.asset ?? key;
+  };
+  const bodyLength = (key) => {
+    const k = assetKeyOf(key);
+    const fit = ASSETS[k]?.fit;
+    return (typeof fit === 'number' ? fit : 1) * (getAssetSizeMultiplier(k) ?? 1);
+  };
+  // Three classes, cut where the roster actually clusters rather than on round
+  // numbers: every school fish is under 1.6 units, the mid-tier hunters and
+  // grazers run 2.4-5.3, and everything from the crabs (6.4) up is a body you
+  // fight rather than eat.
+  const sizeClass = (key) => {
+    const len = bodyLength(key);
+    return len < 2 ? 'small' : len < 6 ? 'mid' : 'big';
+  };
+
   // Levels by minute, off the measured ladder in tools/xp-economy-test.mjs —
   // the spawner gates on player level as well as difficulty, so a flat level
   // would hold back everything with a minPlayerLevel.
@@ -223,7 +252,7 @@ section('WHAT THE WATER IS MADE OF — aggressive share of the population');
     try {
       for (let m = 0; m < LEVEL_AT.length; m++) {
         gameState.level = LEVEL_AT[m];
-        let agg = 0, tot = 0, samples = 0;
+        let agg = 0, tot = 0, samples = 0, small = 0, mid = 0, big = 0;
         for (let i = 0; i < 60 / dt; i++) {
           t += dt;
           gameState.difficulty = t * dps;
@@ -239,10 +268,17 @@ section('WHAT THE WATER IS MADE OF — aggressive share of the population');
           if (i % 10 === 0) {
             samples += 1;
             tot += enemies.length;
-            for (const e of enemies) if (AGGRO.has(e.type)) agg += 1;
+            for (const e of enemies) {
+              if (AGGRO.has(e.type)) agg += 1;
+              const c = sizeClass(e.type);
+              if (c === 'small') small += 1; else if (c === 'mid') mid += 1; else big += 1;
+            }
           }
         }
-        out.push({ agg: agg / samples, tot: tot / samples });
+        out.push({
+          agg: agg / samples, tot: tot / samples,
+          small: small / samples, mid: mid / samples, big: big / samples,
+        });
       }
     } finally { Math.random = orig; }
     return out;
@@ -286,6 +322,46 @@ section('WHAT THE WATER IS MADE OF — aggressive share of the population');
   check('at least one aggressive species arrives as a group',
     packs.length > 0,
     packs.map(([k, d]) => `${k} ${d.group.min}-${d.group.max}`).join(', ') || 'none — weight alone cannot move the mix');
+
+  // ---------------------------------------------------------------------------
+  // ...AND HOW BIG IT IS. A second cut of the same census, because "aggressive"
+  // and "big" are not the same complaint. The water was 90% minnows by
+  // headcount at every point in a run: the schools arrive 6-14 at a time and
+  // everything else arrives alone, so a run that was meant to escalate into
+  // bigger animals escalated into MORE of the same small ones. That is a
+  // structural effect of the group sizes, not of the weights.
+  const cls = (m, f) => mean(m, f) / Math.max(1, mean(m, 'tot'));
+  console.log('');
+  console.log('  small <2u  ' + LEVEL_AT.map((_, m) => `${(cls(m, 'small') * 100).toFixed(0)}%`.padStart(6)).join(''));
+  console.log('  mid 2-6u   ' + LEVEL_AT.map((_, m) => `${(cls(m, 'mid') * 100).toFixed(0)}%`.padStart(6)).join(''));
+  console.log('  big 6u+    ' + LEVEL_AT.map((_, m) => `${(cls(m, 'big') * 100).toFixed(0)}%`.padStart(6)).join(''));
+
+  const bigLate = cls(11, 'big') + cls(11, 'mid');
+  check('a late run is not just a bigger cloud of minnows',
+    bigLate >= 0.3, `${(bigLate * 100).toFixed(0)}% of the water is a mid or large body at level ${LEVEL_AT[11]}`);
+
+  check('...and the biggest bodies are a standing presence, not a rarity',
+    cls(11, 'big') >= 0.1, `${(cls(11, 'big') * 100).toFixed(0)}% of the water is a 6-unit-plus body at level ${LEVEL_AT[11]}`);
+
+  // The same both-ends guard the aggressive share gets. The schools are the
+  // chum economy — see tools/xp-economy-test.mjs — and an arena of nothing but
+  // big bodies starves the xp ladder as surely as one of nothing but minnows
+  // bores it.
+  check('...but the schools are still the bulk of the food',
+    cls(11, 'small') >= 0.45, `${(cls(11, 'small') * 100).toFixed(0)}% of the water is still a school fish`);
+
+  // THE GROWTH CLAIM, AND WHY IT IS ON THE MID TIER RATHER THAN THE BIG ONE.
+  // Every 6-unit-plus body is headcount-capped — spawn.groupMaxAlive for the
+  // apex family, maxConcurrent for the rays and the turtle — while the schools
+  // are limited only by spawn.maxAlive, which the arena reaches. So the big
+  // share NECESSARILY peaks mid-run and settles as the water fills, and an
+  // assertion that it climbs to the end would be asking the caps to be
+  // something they are not. The 2-6 unit tier is where a run can genuinely
+  // keep trading up: the barracuda, the sailfish and the squid are the only
+  // aggressive species outside those caps, and their weight ramps peak late.
+  check('the water keeps trading up in body size after the mid-game',
+    cls(11, 'mid') >= cls(4, 'mid'),
+    `${(cls(4, 'mid') * 100).toFixed(0)}% mid-sized at level ${LEVEL_AT[4]} → ${(cls(11, 'mid') * 100).toFixed(0)}% at level ${LEVEL_AT[11]}`);
 }
 
 // ---------------------------------------------------------------------------

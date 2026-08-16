@@ -400,8 +400,22 @@ check('...held between the boss and the player', shells.length === 0 || ahead.le
   `${ahead.length}/${shells.length} on the player's side of the boss`);
 // They are furniture, not a health bar: a turtle cannot be killed, which is
 // what makes the answer "move" rather than "shoot through it".
-check('...and they cannot be killed', shells.every((t) => t.hp > 1000),
-  `hp ${shells[0]?.hp}`);
+//
+// ASSERTED ON THE PROPERTY, NOT ON A BIG NUMBER. This used to read `hp > 1000`,
+// which was true only because the turtle carried hp 1e9 to mean "unkillable" —
+// a proxy that passed for the right reason by accident and would have gone on
+// passing if the turtle had merely become very tough. Invincibility is a flag
+// on the row now (`invincible` in enemies.csv), so the test can make the claim
+// directly: shoot one and see that it does not die.
+check('...and they carry the invincible flag', shells.every((t) => t.invincible === true),
+  `invincible=${shells[0]?.invincible}`);
+if (shells.length) {
+  const t = shells[0];
+  const before = t.hp;
+  t.hp -= 1e6;
+  check('...and they cannot be killed', t.hp === before && t.hp > 0,
+    `hp ${before} -> ${t.hp} after a 1,000,000 hit`);
+}
 
 // ---------------------------------------------------------------------------
 // 3. THE ELECTRIC AURA'S FIELD STAYS INSIDE ITS OWN RING

@@ -125,8 +125,18 @@ check('every shark is also an apex', sharkKeys.every((k) => apexKeys.includes(k)
 check('"apex shark" parses as two groups',
   spawnGroupsOf(CONFIG.enemies.shark).length === 2,
   spawnGroupsOf(CONFIG.enemies.shark).join(' + '));
-check('the shark cap exists and is small', (CONFIG.spawn.groupMaxAlive?.shark ?? Infinity) <= 2,
-  `groupMaxAlive.shark = ${CONFIG.spawn.groupMaxAlive?.shark}`);
+// Written as a RELATIONSHIP rather than as `<= 2`, which is what it used to
+// say. The absolute number is a balance call and it has already moved once (2
+// to 6, when the size census in npm run test:ramp showed every large body in
+// the game pinned under 4% of the water); what must not move is the shape —
+// the shark ceiling has to exist, and it has to be tighter than the apex
+// allowance it sits inside, or the six shark species divide the whole apex
+// budget between them and a run fields a shiver the width of the screen.
+const sharkCap = CONFIG.spawn.groupMaxAlive?.shark ?? Infinity;
+const apexCap = CONFIG.spawn.groupMaxAlive?.apex ?? Infinity;
+check('the shark cap exists and is tighter than the apex allowance it sits inside',
+  Number.isFinite(sharkCap) && sharkCap <= apexCap / 2,
+  `groupMaxAlive.shark = ${sharkCap} of apex ${apexCap}`);
 // The dolphin is apex but is NOT a shark; if it ever gets swept into the
 // tighter cap, the apex allowance quietly becomes 2 for everything.
 check('the dolphin is apex but not a shark',
@@ -633,9 +643,19 @@ section('THE CYCLE — the water builds back between bosses');
     }
     check('something is back in the water within a few seconds of the kill', firstAt < 6,
       Number.isFinite(firstAt) ? `first spawn at ${firstAt.toFixed(1)}s` : 'nothing came back');
-    const big = [...new Set(enemies.map((e) => e.type))].filter((k) => inSpawnGroup(CONFIG.enemies[k], 'apex'));
-    check('...and it is small fry, not the next apex', big.length === 0,
-      big.length ? `got ${big.join(', ')}` : `${enemies.length} in the water`);
+    // Measured as a SHARE rather than as "no apex at all", which is what this
+    // said while the apex family was capped at 8 bodies against a maxAlive of
+    // 220 — at those weights zero was simply what the roll produced, so the
+    // assertion was reading a scarcity it had not asked for. The roster is
+    // deliberately more predatory now (see the size census in npm run
+    // test:ramp), and the claim that has to survive that is the one the respite
+    // is actually made of: what comes back is a screen of minnows, and a
+    // hunter in it is the exception rather than the shape of it.
+    const apexAlive = enemies.filter((e) => inSpawnGroup(CONFIG.enemies[e.type], 'apex'));
+    const apexShare = apexAlive.length / Math.max(1, enemies.length);
+    check('...and it is small fry, not the next apex', apexShare <= 0.1,
+      `${apexAlive.length} apex of ${enemies.length} back in the water`
+      + (apexAlive.length ? ` (${[...new Set(apexAlive.map((e) => e.type))].join(', ')})` : ''));
     resetEnemies(scene);
     resetWaves(gameState.difficulty);
     setBossCycle(0);
@@ -1837,8 +1857,16 @@ section('A WALL, NOT A COIN FLIP — health, damage, and the ceilings');
   // against the wild orca it shared a model with, and that creature no longer
   // exists. A comparison that names its own baseline goes stale the moment the
   // roster does; this one cannot.
+  // `invincible` is the load-bearing exclusion, not the hp arm. Scenery is not
+  // a difficulty benchmark — the sea turtle cannot be fought at all, so a boss
+  // being "an order above" it would say nothing about the boss. This used to
+  // fall out of the hp test for free, because unkillable was spelled as hp 1e9
+  // and that sat above SENTINEL_HP; now that the turtle carries an ordinary
+  // 250 it is the highest-hp non-boss row in the table and would silently
+  // become the baseline. The hp arm stays as a backstop for a future
+  // placeholder.
   const wildest = Object.entries(CONFIG.enemies)
-    .filter(([k, d]) => !k.startsWith('boss') && d.hp < SENTINEL_HP
+    .filter(([k, d]) => !k.startsWith('boss') && !d.invincible && d.hp < SENTINEL_HP
       && ((d.weight ?? 0) > 0 || (d.weightPerDifficulty ?? 0) > 0))
     .sort((a, b) => b[1].hp - a[1].hp)[0];
   // MEASURED AT A DIFFICULTY A BOSS ACTUALLY SPAWNS AT, not at the authored

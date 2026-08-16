@@ -35,6 +35,18 @@ export function addSustainedShake(amount) {
 let grid = null;
 let hitstopCooldown = 0;
 
+// WHERE A `toast` CHANNEL GOES. Injected rather than imported, for the same
+// reason `grid` is: this module is reached by half a dozen Node harnesses that
+// have no DOM, and ui/ui.js builds its markup at import time. Nothing is wired
+// on a harness, so the channel is simply inert there — which is what you want
+// from a channel that only exists to put words on a screen.
+let toastSink = null;
+
+/** @param {(t: {key,label,value,x,y,minGap}) => void} fn */
+export function setToastSink(fn) {
+  toastSink = fn;
+}
+
 // event name -> seconds left before that event's SOUND may play again.
 //
 // An event's `sfxMinGap` throttles its sound and nothing else — the particles,
@@ -59,7 +71,10 @@ export function initFeedback(gridSystem) {
 
 /**
  * @param {string} event key in CONFIG.feedback
- * @param {object} at    { x, y, dirX, dirY, vx, vy, scale, color }
+ * @param {object} at    { x, y, dirX, dirY, vx, vy, scale, color, toastValue }
+ *                       `toastValue` is the number a `toast` channel prints
+ *                       beside its label — what this proc was worth, which is
+ *                       the one part of the line the table cannot author.
  *                       `color` is for DEATHS only — a kill burst is always the
  *                       dying creature's own emissive, never a generic palette.
  *                       Every other burst leaves it off and takes the emitter's
@@ -196,6 +211,38 @@ export function feedback(event, at = {}) {
     } else {
       playSfx(def.sfx, Math.min(1.6, scale), sfxOpts);
     }
+  }
+  // A LINE OF TEXT NAMING WHAT JUST FIRED. The channel for the upgrades that
+  // pay out invisibly: a passive whose whole effect is a number moving inside
+  // the stat block has nothing on screen to say it worked, and a card that
+  // pays out invisibly is a card players report as broken.
+  //
+  // THE LABEL IS THE CARD'S OWN NAME, LOOKED UP. `toast` holds an UPGRADE ID,
+  // and what the player reads is whatever upgrades.csv currently calls that
+  // upgrade — so renaming a card renames the line that announces it, with no
+  // second copy of the name anywhere to go stale. Same rule as an upgrade
+  // description measuring itself instead of quoting a number that was true
+  // once. A `toast` that matches no upgrade id is printed as written, which is
+  // what a proc that is not an upgrade would want.
+  //
+  // The VALUE is per call — `toastValue` on the payload — because it is what
+  // the proc was actually worth this time, and only the call site knows that.
+  //
+  // `toastMinGap` is NOT the sound's throttle in another suit. A repeat never
+  // drops: the live line is updated in place with the new value, always, so
+  // the number on screen is never stale. What the gap limits is the RE-POP —
+  // whether the line replays its arrival — because a proc firing every frame
+  // would otherwise restart its own animation forever and never be readable.
+  if (def.toast && toastSink) {
+    const card = CONFIG.upgrades?.find((u) => u.id === def.toast);
+    toastSink({
+      key: event,
+      label: card?.name ?? def.toast,
+      value: at.toastValue ?? null,
+      x,
+      y,
+      minGap: def.toastMinGap ?? 0,
+    });
   }
   if (def.haptic) {
     // Controller rumble and phone buzz are different hardware reached through

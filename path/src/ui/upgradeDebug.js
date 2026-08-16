@@ -6,6 +6,8 @@ import { expandDesc } from '../upgradeText.js';
 import * as playtest from '../systems/playtest.js';
 import { isTypingTarget } from './typing.js';
 import { bossArchetypes, bossPerkList, bossState, forceBoss, previewBossNames } from '../systems/boss.js';
+import { enemies, resetEnemies, spawnNamed } from '../entities/enemies.js';
+import { bounds, clampBelowSurface } from '../arena.js';
 
 // ---------------------------------------------------------------------------
 // THE UPGRADE PANEL — press U.
@@ -84,6 +86,14 @@ let bossPick = ROLL;
 let perkPick = ROLL;
 let rolledNames = [];
 
+// What the next CREATURE spawn will be. A key from enemies.csv and how many of
+// it. `fish` and 1 because that is the cheapest thing to put in the water and
+// the one you want when you are checking that the door works at all.
+let creaturePick = 'fish';
+let creatureCount = 1;
+let creatureSelect = null;
+let countRow = null;
+
 // Set by main.js — the run clock, for the playtest record. Passed in rather
 // than imported because `gameState` is a local in main.js, and a panel reaching
 // into the game loop's own state would be a worse dependency than a getter.
@@ -137,6 +147,7 @@ export function initUpgradeDebug(getTime = null, getWorld = null) {
   familyRow = row('show');
   controls.append(rarityRow.wrap, elementRow.wrap, familyRow.wrap);
   controls.appendChild(bossControls());
+  controls.appendChild(creatureControls());
   panel.appendChild(controls);
 
   listEl = document.createElement('div');
@@ -247,6 +258,158 @@ function bossControls() {
   wrap.appendChild(namesEl);
 
   return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// THE CREATURE BLOCK
+// ---------------------------------------------------------------------------
+// The same problem again, one layer DOWN. Which creature is in the water is a
+// weighted roll gated by minDifficulty, minPlayerLevel, the day/night swap and
+// two headcount caps, so "what does a megalodon look like next to the seal"
+// costs eight minutes of run and a bit of luck — and the things you most want
+// to compare (a shark against a great white, a school against one fish) are
+// specifically the ones the spawner will not hand you together.
+//
+// It goes through spawnNamed at the run's CURRENT difficulty, so what arrives
+// carries the hp, the speed and the size ramp of the minute you are standing
+// in rather than a minute-one body wearing a late-run name. `ignoreCaps`,
+// because refusing a shark when there are already six is the debug door
+// declining to be a debug door — the caps are the thing you are trying to see
+// past. maxAlive still binds (it is a memory bound, see spawnNamed).
+//
+// A SELECT RATHER THAN CHIPS, unlike every other row here: the roster is
+// thirty-five bodies against the boss table's eight, and that many chips would
+// push the upgrade list — the panel's actual job — off the bottom of the
+// screen.
+function creatureControls() {
+  const wrap = document.createElement('div');
+  wrap.style.cssText =
+    'display:flex;flex-direction:column;gap:5px;margin-top:3px;padding-top:6px;'
+    + 'border-top:1px solid rgba(232,236,243,0.12);';
+
+  const heading = document.createElement('div');
+  heading.style.cssText = `color:${C.dim};letter-spacing:0.14em;font-size:9px;`;
+  heading.textContent = 'CREATURE — SPAWN ANY ROSTER BODY';
+  wrap.appendChild(heading);
+
+  const bodyRow = row('body');
+  creatureSelect = document.createElement('select');
+  // autocomplete=off for the reason the stage bar's picker has it: a reload
+  // otherwise restores the browser's idea of the selection while the module's
+  // own state says something else, and the button then spawns the other one.
+  creatureSelect.autocomplete = 'off';
+  creatureSelect.style.cssText =
+    'background:rgba(232,236,243,0.08);border:1px solid rgba(232,236,243,0.16);'
+    + 'border-radius:5px;color:inherit;font:inherit;font-size:10px;padding:2px 5px;max-width:210px;';
+  creatureSelect.addEventListener('change', () => {
+    creaturePick = creatureSelect.value;
+    render();
+  });
+  bodyRow.body.appendChild(creatureSelect);
+
+  countRow = row('many');
+  wrap.append(bodyRow.wrap, countRow.wrap);
+
+  const buttons = document.createElement('div');
+  buttons.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;';
+  buttons.append(
+    button('Spawn creature', () => {
+      const made = spawnCreature(creaturePick, creatureCount);
+      status = made == null
+        ? 'no scene — creature spawning is not wired'
+        : (made
+          ? `spawned ${made} × ${creaturePick} · ${enemies.length} in the water`
+          : `nothing spawned — the arena is at spawn.maxAlive (${CONFIG.spawn.maxAlive})`);
+      render();
+    }),
+    // Here as well as on the stage bar, because this is the panel you spawn
+    // FROM: a comparison is set up by clearing the water and putting two
+    // bodies in it, and reaching for another panel to do half of that is how
+    // you end up judging a shark against yesterday's leftovers.
+    button('Clear creatures', () => {
+      const w = world();
+      if (!w?.scene) { status = 'no scene — nothing to clear'; render(); return; }
+      const n = enemies.length;
+      resetEnemies(w.scene);
+      status = `cleared ${n} creature${n === 1 ? '' : 's'}`;
+      render();
+    }),
+  );
+  wrap.appendChild(buttons);
+
+  return wrap;
+}
+
+// Every creature the ordinary spawner can send. Derived by SUBTRACTING the boss
+// table rather than by listing the roster, so a new row in enemies.csv turns up
+// here with nothing edited and a new boss stops appearing here for free — the
+// block above already spawns bosses, and through the arrival ceremony, which is
+// the only way a boss should ever enter the water.
+function rosterKeys() {
+  const bossBodies = new Set(bossArchetypes().map((b) => b.enemy));
+  return Object.keys(CONFIG.enemies).filter((k) => !bossBodies.has(k));
+}
+
+/**
+ * Put `count` of `key` in the water beside the seal.
+ *
+ * Exported for the same reason grantUpgrade is: the panel is buttons around
+ * this function, and this is the half worth calling from the console.
+ *
+ * Returns how many actually arrived, or null if the scene is not wired yet.
+ */
+export function spawnCreature(key, count = 1) {
+  const w = world();
+  if (!w?.scene) return null;
+  const origin = player.mesh?.position;
+  if (!origin) return null;
+
+  const made = [];
+  for (let i = 0; i < Math.max(1, count); i++) {
+    const e = spawnNamed(w.scene, key, w.gameState?.difficulty ?? 0,
+      { x: origin.x, y: origin.y }, { ignoreCaps: true });
+    // maxAlive is the one limit spawnNamed still enforces here, so a null part
+    // way through a batch means the arena is full, not that the key is wrong.
+    if (!e) break;
+    made.push(e);
+  }
+  if (!made.length) return 0;
+
+  // LAID OUT AFTER THE FACT, because the spacing has to come from the body and
+  // the body's size is not known until it exists: `radius` is the authored
+  // radius times whatever assets.csv scaled the model by, so a megalodon needs
+  // five times the gap a sardine does and neither number is in enemies.csv.
+  //
+  // Capped so the row fits the arena. Twelve sharks at their own spacing is 85
+  // units of lineup in an 80-unit ocean, and the ones off the end would be
+  // dragged back in by the wall clamp on the first frame into a heap — which
+  // looks like the spawner is broken rather than like the row is too long.
+  const radius = made[0].radius ?? 1;
+  const spacing = Math.min(
+    Math.max(2.5, radius * 2.4),
+    (bounds.width - radius * 2) / Math.max(1, made.length - 1),
+  );
+  made.forEach((e, i) => {
+    const x = origin.x + (i - (made.length - 1) / 2) * spacing;
+    e.mesh.position.x = Math.max(bounds.left + e.radius, Math.min(bounds.right - e.radius, x));
+    // Seabed dwellers go on the sand, at the height the crawl update rests
+    // them at — `bounds.bottom + radius`, which for a crab is a resting height
+    // and not a body size (see the note on chumRadius in enemyTable.js). A
+    // crab handed three units of water instead falls out of the sky.
+    //
+    // Everything else is put clear of the seal rather than on top of it: a big
+    // body spawned at the player's own position starts the fight already
+    // touching, and contact damage is per second. Clamped under the surface,
+    // because the seal is often at it and a shark is not an air-breather.
+    e.mesh.position.y = (e.def?.floorSpawn || e.def?.behavior === 'crawl')
+      ? bounds.bottom + e.radius
+      : origin.y + 3 + radius;
+    clampBelowSurface(e.mesh.position, e.radius);
+    // `entering` suppresses the side walls for a creature walking on from off
+    // screen; one placed deliberately inside the arena has already arrived.
+    e.entering = false;
+  });
+  return made.length;
 }
 
 // A labelled row of chips. `content` lets the family row build its own buttons
@@ -475,6 +638,29 @@ function render() {
   }
   namesEl.textContent = rolledNames.join('\n');
 
+  // CREATURE. Rebuilt from the roster for the same reason the boss chips are,
+  // and the selection is re-asserted afterwards: rebuilding the options drops
+  // the browser's idea of which one is chosen, and a picker showing one body
+  // while the button spawns another is worse than no picker.
+  creatureSelect.textContent = '';
+  for (const key of rosterKeys()) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.dataset.creature = key;
+    opt.textContent = key;
+    creatureSelect.appendChild(opt);
+  }
+  creatureSelect.value = creaturePick;
+  countRow.body.textContent = '';
+  // A school arrives 4-9 strong (see the group blocks in config.js), so the
+  // counts step across that: one body to look at, three to read a shape, and
+  // six or twelve for what a school actually feels like coming at you.
+  for (const n of [1, 3, 6, 12]) {
+    countRow.body.appendChild(
+      chip(String(n), () => creatureCount === n, () => { creatureCount = n; render(); }),
+    );
+  }
+
   // THE LIST. Table order, not alphabetical: upgrades.csv is the order the
   // designer put them in, and a list that reorders itself is one you have to
   // re-read every time.
@@ -573,14 +759,20 @@ export function upgradeDebugState() {
     element,
     family,
     status,
+    creature: creaturePick,
+    count: creatureCount,
     held: player.upgrades.map((p) => ({ id: p.id, rarity: p.rarity })),
   };
 }
 
 /** Panel state the keyboard also drives, so a test can set it without a click. */
-export function setUpgradeDebugChoice({ rarity: tier, element: elementId, family: fam } = {}) {
+export function setUpgradeDebugChoice({
+  rarity: tier, element: elementId, family: fam, creature, count,
+} = {}) {
   if (tier !== undefined) rarity = tier;
   if (elementId !== undefined) element = elementId;
   if (fam !== undefined) family = fam;
+  if (creature !== undefined) creaturePick = creature;
+  if (count !== undefined) creatureCount = count;
   if (visible) render();
 }

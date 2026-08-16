@@ -118,6 +118,14 @@ export const TEXT_ROLES = [
   { key: 'chain', label: 'Chain banner', selector: '.sv-chain', section: 'Popups',
     sample: 'FOOD CHAIN! ×6', inlineColor: true, motion: 'chain',
     style: { font: FONT_GLOBAL, size: 21, weight: 800, tracking: 0.1, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 10, glow: 16 } },
+  // AN UPGRADE PAYING OUT — "MANEATER +12%", fired by a `toast` channel on a
+  // feedback event (systems/feedback.js). Cool where the chain banner is gold,
+  // and well under half its size: both ride the same layer, and a proc reading
+  // as loudly as a chain extension would have the quietest event in the game
+  // shouting over the loudest. It is a receipt, and a receipt is read once.
+  { key: 'proc', label: 'Upgrade proc', selector: '.sv-proc', section: 'Popups',
+    sample: 'MANEATER +12%', motion: 'proc',
+    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.08, case: 'UPPER', useInk: false, color: 0x9fe3ff, alpha: 1, shadow: 8, glow: 10 } },
 
   // --- the band: the one line that is not about the score ------------------
   // Screen-anchored rather than flying off a kill, but it is the same node

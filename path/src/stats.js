@@ -261,6 +261,25 @@ export function maneaterMul(s, humansEaten = 0) {
 }
 
 /**
+ * WHAT MANEATER IS WORTH SO FAR, as the line printed on its proc toast — the
+ * accumulated bonus to all damage, and whether it has stopped climbing.
+ *
+ * Derived from maneaterMul rather than re-multiplying `damagePerMeal` here, for
+ * the same reason an upgrade card's description is measured instead of typed:
+ * two copies of the arithmetic drift the moment one of them is retuned, and the
+ * copy that drifted would be the one the player is reading. The cap in
+ * particular is the number the card is silently ABOUT — once it is reached,
+ * every further body is worth nothing, and a readout that kept saying "+150%"
+ * without saying that would be telling the truth and lying at the same time.
+ */
+export function maneaterReadout(s, humansEaten = 0) {
+  const bonus = maneaterMul(s, humansEaten) - 1;
+  const pct = `+${Math.round(bonus * 100)}%`;
+  const max = CONFIG.maneater?.maxBonus ?? Infinity;
+  return bonus >= max ? `${pct} MAX` : pct;
+}
+
+/**
  * The Iron Lung bonus as a multiplier — 1 for a run without it.
  *
  * Read off `s.maxOxygen`, which is the whole point of the card: every stack of

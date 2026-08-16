@@ -248,7 +248,12 @@ section('CAN THE PAN BE SEEN — how far the pattern travels, and in what');
 // rather than trusted from the list in glowDebug.js. A branch that gains or
 // loses `drift` is a one-word edit that would otherwise make that list — and
 // every pan figure computed from it — quietly wrong.
-const frag = __shaderSource.FRAG_BODY;
+// The pattern branches all live in the SURFACE half now — the body was split
+// in two when pigment arrived, because paint has to be written before the
+// lighting chunks and light has to be added after them. Both halves are joined
+// here so this stays a question about the whole shader rather than about
+// whichever half the branches happen to sit in today.
+const frag = `${__shaderSource.FRAG_SURFACE}\n${__shaderSource.FRAG_EMIT}`;
 // The VERTEX injection is not exported — it lives inside attachBiolumSkin — so
 // the source text is the only way to check it from here.
 const SRC_BIOLUM = readFileSync(new URL('../path/src/systems/biolumSkin.js', import.meta.url), 'utf8');

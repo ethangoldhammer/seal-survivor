@@ -129,6 +129,24 @@ uniform float uBioHueBias;
 uniform float uBioWarp;
 uniform float uBioFlickerAmp;
 uniform float uBioBodyDarken;
+// PIGMENT, NOT LIGHT — how much of the BASE COLOUR this pattern replaces.
+//
+// The glow above is additive and lands after the lighting chunks have run, so
+// it is light coming off a body no matter what the sun is doing. That is right
+// for an organ and wrong for a hide: a shark painted additively is a decal, lit
+// identically at noon and at midnight, with no shading anywhere on it.
+//
+// At 1 the pattern IS the diffuse colour — the ramp where the mask is bright,
+// uBioShellColor where it is dark — so the standard lighting chunks shade it
+// exactly as they would a photograph, and the model's own texture is never
+// read. That is the whole point: a species on full pigment has no use for the
+// jpeg baked into its .glb, and the file can lose it.
+//
+// At 0 this is bit-for-bit what shipped before the uniform existed — the base
+// colour is only darkened, and every luminous preset stays exactly as tuned.
+// The two are not exclusive; a pigment shell with a few glowing organs is
+// pigment 1 with a low strength.
+uniform float uBioPigment;
 uniform vec3  uBioColorA;
 uniform vec3  uBioColorB;
 uniform vec3  uBioColorC;
@@ -377,7 +395,23 @@ float bioMask(float v) {
 // is disturbed. 'mask' and 'hue' are computed per pattern; everything after
 // the branch is shared, which is what keeps the seven looking like one
 // creature's biology rather than seven unrelated effects.
-const FRAG_BODY = `
+// THE PATTERN, EVALUATED ONCE, AT <map_fragment>.
+//
+// It used to run at <dithering_fragment> with everything else, which is after
+// the lighting chunks — the only place an additive glow can go. Pigment cannot
+// live there: a colour written after the lights is a colour the lights never
+// touched. So the evaluation moved forward to the base-colour chunk, and the
+// three values the emission still needs are declared OUTSIDE the block so they
+// survive down to it. Same maths, same cost — one evaluation, read twice.
+//
+// The names are all bio-prefixed for a reason that is not style: these are at
+// main()'s scope now, alongside every local three.js's own chunks declare, and
+// a collision there is a compile error that renders every glowing creature in
+// the ocean as nothing. Everything that can stay inside the block does.
+const FRAG_SURFACE = `
+  float bioMaskV = 0.0;
+  vec3  bioRampCol = vec3(0.0);
+  float bioBreathe = 1.0;
   {
     vec3 bp = vBioPos / max(0.01, uBioScale);
     // The whole field moves. On a still pattern this is what stops it looking
@@ -402,7 +436,8 @@ const FRAG_BODY = `
     // existing preset changes.
     vec3 drift = uBioDrift;
 
-    float bioMaskV = 0.0;
+    // bioMaskV is declared above this block, not here — the emission half
+    // reads it after the lighting chunks have run.
     float bioHue = 0.0;
 
     if (uBioPattern == 0) {          // blotches
@@ -636,6 +671,8 @@ const FRAG_BODY = `
     // Mixed toward rather than multiplied in, so amp 0 is exactly "off" and
     // no flicker maths can dim a creature that asked for none.
     breathe *= mix(1.0, bioFlicker(uBioFlickerT), uBioFlickerAmp);
+    // Local while the school wave is still being folded in below; published to
+    // the outer scope at the end of the block.
 
     // THE SCHOOL WAVE, over the top of both — see the note by its uniforms.
     // The field travels along X, which is the long axis of a side-on arena and
@@ -655,7 +692,53 @@ const FRAG_BODY = `
       breathe *= mix(1.0, field, uBioSchoolAmp);
     }
 
-    gl_FragColor.rgb += bioRamp(bioHue) * (bioMaskV * uBioStrength * breathe);
+    bioRampCol = bioRamp(bioHue);
+    bioBreathe = breathe;
+  }
+
+  // PIGMENT. The one line in this file that writes the base colour rather than
+  // adding to it, and the reason the evaluation above had to move up here.
+  //
+  // Where the mask is bright the body takes the ramp; where it is dark it takes
+  // uBioShellColor, which is already "what the animal looks like where the
+  // light isn't" for the emissive half and means the same thing here. So a
+  // preset describes a whole hide with the colours it already had.
+  //
+  // The mix's first arm is the untouched original: at uBioPigment 0 this
+  // compiles to the same multiply that was here before, and every luminous
+  // preset in the file is unmoved.
+  //
+  // NOT breathed and NOT flickered, on purpose. Pigment does not pulse — a
+  // hide that brightened on the beat is the animal being lit from outside,
+  // which is the same argument the shell floor below makes. bioBreathe belongs
+  // to the light only.
+  //
+  // TIMES THE PER-SPECIES TINT, and that multiply is what makes one preset
+  // serve a roster. The uniform named diffuse is the material colour before any
+  // texture — the thing the Models tab's tint swatch writes — so four animals
+  // can share one pattern and still be four colours, exactly the way four fish
+  // already share the lantern preset. Reading diffuseColor instead would fold
+  // in the model's own texture, which is the thing being replaced.
+  //
+  // Every material three.js compiles this into declares it: basic, lambert,
+  // phong and standard alike.
+  //
+  // NO BACKTICKS IN THIS STRING — see the note by the eyes. Naming the uniform
+  // in code font here ended the literal and pointed the SyntaxError at a
+  // comment, which is the failure that note exists to prevent.
+  diffuseColor.rgb = mix(
+    diffuseColor.rgb * uBioBodyDarken,
+    mix(uBioShellColor, bioRampCol, clamp(bioMaskV, 0.0, 1.0)) * diffuse,
+    clamp(uBioPigment, 0.0, 1.0)
+  );
+`;
+
+// THE EMISSION, at <dithering_fragment> — after every lighting chunk, which is
+// the only place additive light can go and be light rather than paint. Reads
+// the three values FRAG_SURFACE left at main()'s scope.
+const FRAG_EMIT = `
+  {
+    gl_FragColor.rgb += bioRampCol * (bioMaskV * uBioStrength * bioBreathe);
 
     // ...and the shell it sits on. Faded out where the pattern is bright, so
     // the two never stack into white — the floor is what the animal looks like
@@ -844,6 +927,9 @@ function freshUniforms() {
     uBioWarp: { value: 0.8 },
     uBioFlickerAmp: { value: 0 },
     uBioBodyDarken: { value: 0.35 },
+    // 0 by default, which is exactly the behaviour that shipped before pigment
+    // existed: every preset already tuned keeps painting with light only.
+    uBioPigment: { value: 0 },
     uBioColorA: { value: new THREE.Color(0x00e5ff) },
     uBioColorB: { value: new THREE.Color(0x7b2dff) },
     uBioColorC: { value: new THREE.Color(0xffd166) },
@@ -934,13 +1020,18 @@ varying vec3 vBioEdge;`)
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${GLSL}`)
-      // Darkening runs at <map_fragment> — on the base colour, BEFORE the
-      // glow is added — so a bright pattern sits on a dark body instead of
-      // being washed out by it, and so the darkening can never dim the glow
-      // it exists to make legible.
-      .replace('#include <map_fragment>', `#include <map_fragment>
-  diffuseColor.rgb *= uBioBodyDarken;`)
-      .replace('#include <dithering_fragment>', `${FRAG_BODY}\n#include <dithering_fragment>`);
+      // The pattern and the base colour it writes run at <map_fragment> — on
+      // the base colour, BEFORE any lighting chunk — so a bright pattern sits
+      // on a dark body instead of being washed out by it, so the darkening can
+      // never dim the glow it exists to make legible, and so pigment is a
+      // surface the lights can actually shade.
+      //
+      // <map_fragment> is in the source of basic, lambert, phong and standard
+      // alike, and its USE_MAP test is INSIDE the chunk — so this lands on a
+      // material with no texture at all, which is the case that matters most
+      // here.
+      .replace('#include <map_fragment>', `#include <map_fragment>\n${FRAG_SURFACE}`)
+      .replace('#include <dithering_fragment>', `${FRAG_EMIT}\n#include <dithering_fragment>`);
   };
   material.needsUpdate = true;
 }
@@ -1411,6 +1502,11 @@ export function applyBiolumSkinSettings(only = null) {
     // a machine whose imported-tuning.json already pins every `strength`.
     u.uBioStrength.value = off ? 0 : (cfg.strength ?? 1.6) * (cfg.glow ?? 1);
     u.uBioBodyDarken.value = off ? 1 : (cfg.bodyDarken ?? 0.35);
+    // Switched off with the rest of it. `off` has to hand the model its own
+    // texture back intact, and a pigment left at 1 would keep the whole body
+    // painted after the system that painted it was disabled — an "off" that
+    // still owns the animal's colour is the worst of both.
+    u.uBioPigment.value = off ? 0 : (cfg.pigment ?? 0);
     u.uBioScale.value = cfg.scale ?? 0.25;
     u.uBioContrast.value = cfg.contrast ?? 1.4;
     u.uBioCoverage.value = cfg.coverage ?? 0.45;
@@ -1585,4 +1681,4 @@ export function biolumSkinMaterialCount() {
 // against the real three.js shader source — the failure this guards against
 // is a three upgrade renaming a chunk, at which point the replace silently
 // no-ops and the fish just never lights up.
-export const __shaderSource = { GLSL, FRAG_BODY };
+export const __shaderSource = { GLSL, FRAG_SURFACE, FRAG_EMIT };

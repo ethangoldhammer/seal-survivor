@@ -4,7 +4,44 @@ enemies.fish.swarm.separation,5,0,15,The school
 enemies.fish.swarm.alignment,1.6,0,10,The school
 enemies.fish.swarm.towardPlayer,1.1,0,10,The school
 enemies.fish.swarm.fleeFromPredators,9.5,0,20,The school
-enemies.fish.group.max,14,1,30,school size max
+enemies.fish.group.min,4,1,30,"HOW MANY ARRIVE PER PICK - the single strongest lever on what the water is made of, which is why all 19 of these are here rather than in config.js. The spawner spends its per-tick budget in CREATURES: a school pick buys a whole school and a shark pick buys one shark, so a roster of 6-14 schools made the arena 75-81% minnows by headcount at every point in a run and the big-body share FELL from 22% at level 10 to 7% at level 21. Only fish.group.max used to live in this file; every other school's numbers were whatever the tuner last saved, so editing config.js did nothing. Measured by npm run test:ramp."
+enemies.fish.group.max,9,1,30,school size max
+enemies.trout.group.min,3,1,30,
+enemies.trout.group.max,6,1,30,
+enemies.tang.group.min,3,1,30,
+enemies.tang.group.max,7,1,30,
+enemies.reeffish.group.min,3,1,30,
+enemies.reeffish.group.max,7,1,30,
+enemies.fishPackA.group.min,3,1,30,
+enemies.fishPackA.group.max,6,1,30,
+enemies.fishPackB.group.min,2,1,30,
+enemies.fishPackB.group.max,5,1,30,
+enemies.fishPackC.group.min,3,1,30,
+enemies.fishPackC.group.max,6,1,30,
+enemies.fishesA.group.min,3,1,30,
+enemies.fishesA.group.max,6,1,30,
+enemies.fishesB.group.min,2,1,30,
+enemies.fishesB.group.max,5,1,30,
+enemies.fishesC.group.min,3,1,30,
+enemies.fishesC.group.max,7,1,30,
+enemies.brownfish.group.min,3,1,30,
+enemies.brownfish.group.max,6,1,30,
+enemies.clownfish.group.min,4,1,30,the tightest school in the game - a clownfish is the smallest body in the roster and travels in the biggest crowd
+enemies.clownfish.group.max,9,1,30,
+enemies.surgeonfish.group.min,3,1,30,
+enemies.surgeonfish.group.max,7,1,30,
+enemies.tuna.group.min,2,1,30,
+enemies.tuna.group.max,5,1,30,
+enemies.lanternfish.group.min,3,1,30,
+enemies.lanternfish.group.max,6,1,30,
+enemies.glowTang.group.min,3,1,30,
+enemies.glowTang.group.max,7,1,30,
+enemies.glowDarter.group.min,4,1,30,
+enemies.glowDarter.group.max,8,1,30,
+enemies.barracuda.group.min,3,1,30,"NOT a school - the two aggressive species that arrive as a pack. Weight alone cannot move the mix while every hunter spawns one at a time against schools of a dozen, so these two are the counterweight to the rows above and are deliberately left where they were when the schools were cut."
+enemies.barracuda.group.max,5,1,30,
+enemies.sailfish.group.min,2,1,30,
+enemies.sailfish.group.max,3,1,30,
 enemies.shark.hunt.preyRadius,18,0,60,Sharks
 enemies.shark.hunt.healPerMeal,8,0,60,Sharks
 apexCrowd.enabled,1,,,apex predators share the player

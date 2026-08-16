@@ -1732,13 +1732,17 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // flooding arena is made of are exactly the ones that never get killed, and
   // a kill-based tally would be blind to them.
   //
-  // Scenery is excluded. The sea turtle carries hp 1e9 to mean "cannot be
-  // killed", and counting that as hp the player is expected to clear made one
-  // turtle spawn read as 628 MILLION hp/sec of pressure — which silently
-  // pinned that whole window's clear rate at zero and would have had every
-  // report blaming the difficulty ramp for a turtle. Hp this large is a flag,
-  // not a quantity.
-  if (hp < SENTINEL_HP) recordSpawn(hp);
+  // Scenery is excluded, and it says so with `invincible` now rather than with
+  // an enormous hp. Counting an unkillable creature as hp the player is
+  // expected to clear made one turtle spawn read as 628 MILLION hp/sec of
+  // pressure — which silently pinned that whole window's clear rate at zero
+  // and would have had every report blaming the difficulty ramp for a turtle.
+  //
+  // The SENTINEL_HP arm stays as a backstop. Nothing in the table needs it any
+  // more, but it costs one comparison and it is the difference between a
+  // future placeholder being a nuisance and it poisoning a month of reports
+  // before anyone notices. Belt and braces, deliberately.
+  if (!def.invincible && hp < SENTINEL_HP) recordSpawn(hp);
 
   // Any model with clips or a procedural rig gets a controller; static
   // THE DRIVERS RIDE WITH THE BODY. Each of these binds to a specific bone
@@ -2056,7 +2060,44 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     hitShape: def.hitShape ? attachHitShape(visual, assetKey) : null,
   });
 
+  if (def.invincible) makeInvincible(enemies[enemies.length - 1]);
   if (def.rigidBody) attachRigidBody(enemies[enemies.length - 1], def.rigidBody);
+}
+
+/**
+ * Make a creature genuinely unkillable — the seagrass-and-scenery kind, not the
+ * boss's `invuln` timer.
+ *
+ * DONE BY SEALING `hp` RATHER THAN BY CHECKING A FLAG AT EVERY HIT, because
+ * there is no single place a hit goes through. Eighteen systems own the line
+ * `e.hp -= something` (combat, club, beams, garlic, elements, shrimpRing,
+ * strike, orca, calamari, sealTeam, eel, seagull, …) and a dozen more decide
+ * death with `hp <= 0`. A flag consulted at each of them would work exactly
+ * until the nineteenth ability was written, and would fail silently then — the
+ * turtle would simply start dying to the one weapon nobody remembered.
+ *
+ * `invuln` is not the mechanism to reuse here either, for the same reason
+ * turned inside out: only five systems honour it. Garlic and the club go
+ * straight through it, so a turtle wearing `invuln` would still die.
+ *
+ * Absorbing the WRITE is the one intervention every path already runs through,
+ * whatever it is called and whoever writes it next. `e.hp -= 40` reads the
+ * floor, subtracts, and writes a smaller number that never lands; `hp <= 0` is
+ * never true; nothing dies. The property stays enumerable so anything that
+ * spreads or serialises a creature still sees an ordinary number.
+ */
+function makeInvincible(e) {
+  const sealed = e.hp;
+  Object.defineProperty(e, 'hp', {
+    get: () => sealed,
+    set: () => { /* absorbed — that is the whole point */ },
+    configurable: true,
+    enumerable: true,
+  });
+  // A plain marker alongside it, so the few places that SHOULD know — the
+  // damage ledger, the lethal-splash arm — can ask without probing the
+  // property descriptor.
+  e.invincible = true;
 }
 
 // Give a creature a real body. `profile` names the block under CONFIG.physics

@@ -5,7 +5,7 @@ import {
   lookLeader, glowIsProcedural, assetGlowPreset,
 } from '../assets.js';
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
-import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
+import { CONFIG, TUNER_SCHEMA, SKIN_SECTION, saveTuningToStorage } from '../config.js';
 import { expandDesc } from '../upgradeText.js';
 import { buildSection, buildSectionedTunerGroups, buildExpandAllToggle } from './tunerControls.js';
 import { isTypingTarget } from './typing.js';
@@ -116,6 +116,13 @@ const MODEL_LABELS = new Map(EDITABLE_SECTIONS.flatMap(([, entries]) => entries)
 const SECTION_ORDER = {
   companions: ['Your weapon', 'Strike & movement', 'Escorts', 'Auras & orbits', 'Thrown & launched'],
   enemies: ['Apex predators', 'Fish & schools', 'Crabs & crawlers', 'Boats', 'Spawning & difficulty', 'Look & motion'],
+  // ONE entry, because one folder is the whole point. Every generated preset
+  // group carries this same section (SKIN_SECTION in config.js), so the
+  // fourteen-odd of them collapse into a single header above the model rows
+  // instead of unrolling the tab. Renaming it in one place and not the other
+  // does not break anything visibly — the groups just reappear under "More",
+  // which is why the two are imported rather than typed twice.
+  models: [SKIN_SECTION],
 };
 
 
@@ -328,6 +335,18 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
   document.body.appendChild(panel);
 
   const creaturesPanel = panel.querySelector('#svTexPanelCreatures');
+  // THE SKIN PRESETS SIT ABOVE THE ROWS, not below them, and not on their own
+  // tab. A preset is shared — four glowing fish wear `lantern` and tell
+  // themselves apart with their own tint — so it is not a property of any one
+  // row, and the row it would otherwise have to live on does not exist. Above,
+  // because the tab is 48 rows long and anything under them is found by
+  // accident.
+  //
+  // Collapsed by default like every other section, so the cost of it being
+  // here is one header.
+  creaturesPanel.appendChild(buildSectionedTunerGroups(
+    TUNER_SCHEMA.filter((g) => g.panel === 'models'), SECTION_ORDER.models, onTuningChanged, 'models',
+  ));
   appendSectioned(creaturesPanel, 'models', MODEL_SECTIONS, [...MODEL_LABELS.keys()], (key) => {
     const row = buildCreatureRow(key, MODEL_LABELS.get(key), onAssetChanged);
     rows.set(key, row);
@@ -579,7 +598,8 @@ function buildCreatureRow(key, label, onAssetChanged) {
       note.style.opacity = '0.72';
       note.style.display = 'block';
       note.textContent = `Glow is procedural on this model — the "${assetGlowPreset(key)}" `
-        + 'pattern is its emissive mask. Tune it under Bioluminescence, not here.';
+        + `pattern is its emissive mask. Tune it under ${SKIN_SECTION}, at the top of this tab. `
+        + 'Tint below still works, and is how species sharing this pattern tell themselves apart.';
       el.append(note);
     } else if (supportsEmissive(key)) {
       const emissiveRow = document.createElement('div');
@@ -686,6 +706,30 @@ function buildCreatureRow(key, label, onAssetChanged) {
   sizeVal.textContent = `${getAssetSizeMultiplier(key)}x — edit in assets.csv (npm run csv)`;
   sizeRow.append(sizeLabel, sizeVal);
 
+  // Skin — READ ONLY for the same shape of reason as Size, but a different one.
+  //
+  // Size is a table because it is balance. This is a table because it CANNOT be
+  // live: attachBiolumSkin runs once, when the model is parsed, and bakes two
+  // per-vertex attributes off the geometry while it is there. Nothing short of
+  // re-parsing the model puts a pattern on a body that loaded without one, so a
+  // dropdown here would be a control that appears to work and silently waits
+  // for a reload — the failure the Size slider was removed for.
+  //
+  // Named on the row it belongs to all the same, because "does this animal have
+  // a generated surface, and which one" is the question you arrive with, and
+  // the alternative is reading a CSV to find out.
+  const skinRow = document.createElement('div');
+  skinRow.className = 'sv-tex-glowrow';
+  const skinLabel = document.createElement('label');
+  skinLabel.textContent = 'Skin';
+  const skinVal = document.createElement('span');
+  skinVal.className = 'sv-tex-variant-name';
+  const preset = assetGlowPreset(key);
+  skinVal.textContent = preset
+    ? `${preset} — tune it above; change it in assets.csv, then reload`
+    : 'none — set one in assets.csv (npm run csv), then reload';
+  skinRow.append(skinLabel, skinVal);
+
   // 3D model / 2D sprite upload — replaces this asset's mesh with an uploaded
   // .glb / .gltf / .fbx, or with a flat quad cut to an uploaded image's aspect
   // ratio. Saved to IndexedDB (not localStorage — a model is megabytes, well
@@ -762,7 +806,7 @@ function buildCreatureRow(key, label, onAssetChanged) {
   });
   modelRow.append(modelLabel, modelBtn, modelClear, modelFile);
 
-  el.append(sizeDivider, sizeRow, modelRow, modelStatus);
+  el.append(sizeDivider, sizeRow, skinRow, modelRow, modelStatus);
 
   // Restore a model uploaded in a previous session.
   loadModelFromDB(key).then((file) => {

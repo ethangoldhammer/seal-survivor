@@ -278,6 +278,7 @@ const DOCS = {
     spawnGroup: 'Family-wide headcount cap, see CONFIG.spawn.groupMaxAlive.',
     bioluminescent: 'Only spawns once the sun is down.',
     bossMinion: 'Stays in the water during a boss fight. Everything without this swims out when a boss arrives, and only minions spawn until it is dead.',
+    invincible: 'Cannot be killed — scenery, not an opponent. Damage to it is absorbed and never counted, and it is not counted as pressure to clear. Set this rather than typing a huge hp: a big number gets read AS a number, and one lethal hit on a creature with hp 1e9 books a billion damage against whatever did it.',
   },
   'upgrades.csv': {
     id: 'Must match an id in CONFIG.upgrades. The join key — renaming it here orphans the row.',
@@ -294,6 +295,7 @@ const DOCS = {
   'assets.csv': {
     id: 'The ASSET key from assets.js \u2014 not a creature id. One asset can back several creatures, and plenty (grass, boats, the escorts) are not creatures at all.',
     size: 'Spawn scale for this model. Applies to FUTURE spawns; anything already on screen keeps the size it was created at. The hitbox is derived from it, so a bigger model is a genuinely bigger target.',
+    skin: 'Which procedural skin this model wears \u2014 a preset name from the Procedural skins folder on the T panel. Blank keeps whatever assets.js declares; "none" takes one away. A preset on full pigment PAINTS the body, so the model no longer needs its own texture. Takes effect on the next RELOAD: the pattern is baked into the material when the model is parsed.',
     notes: 'Free text \u2014 nothing reads it.',
   },
   'weapons.csv': { __sharedWith: 'spawning.csv' },
@@ -374,7 +376,7 @@ const BLANK_MEANS = {
     scaleVariance: '0',
     weightPerDifficulty: '0', maxWeight: '∞', maxConcurrent: '∞',
     minDifficulty: '0', minPlayerLevel: '0', spawnRateMul: '1',
-    spawnGroup: 'no group', bioluminescent: 'no', bossMinion: 'no',
+    spawnGroup: 'no group', bioluminescent: 'no', bossMinion: 'no', invincible: 'no',
   },
   'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up' },
   'quips.csv': { enabled: 'enabled', weight: '1', causes: 'any death' },
@@ -387,7 +389,7 @@ const BLANK_MEANS = {
   'spawning.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
   'weapons.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
   'behaviour.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
-  'assets.csv': { size: '1 (unscaled)', notes: '—' },
+  'assets.csv': { size: '1 (unscaled)', skin: 'whatever assets.js declares', notes: '—' },
 };
 
 // ---------------------------------------------------------------------------
