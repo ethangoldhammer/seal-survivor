@@ -42,7 +42,8 @@ import { createBelugaDrone, updateBeluga, resetBeluga, trapSeconds } from '../pa
 import { weatherState } from '../path/src/systems/weather.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, suctionAt, __beamShader } from '../path/src/systems/bakalar.js';
 import { fireMusselBarrage, barrageCount, barrageDamage } from '../path/src/systems/musselVolley.js';
-import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpStats } from '../path/src/systems/harp.js';
+import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpStats, harpNoteCount } from '../path/src/systems/harp.js';
+import { installNoteGlyphs } from '../path/src/systems/noteStorm.js';
 import { bounds } from '../path/src/arena.js';
 
 const scene = new THREE.Scene();
@@ -806,6 +807,24 @@ enemies.length = 0;
 // the whole run, which looks like the model failed to load rather than like a
 // rotation, and no amount of staring at the axis NAMES would tell you. So it
 // is measured where the vertices actually ended up, after orientation and fit.
+// The note glyphs, from the REAL file rather than a stub plane. The field is
+// silent without them — no throw, no warning, just nothing drawn — so a harness
+// that skipped this would certify a working ring around an empty scene. See
+// [[harness-tests-bypass-the-asset-pipeline]]: they go in through
+// installNoteGlyphs because preloadAssets fetches by URL and this is a terminal
+// script.
+const NOTES_MODEL = resolve(dirname(fileURLToPath(import.meta.url)), '../public/models/musicnotes.glb');
+if (existsSync(NOTES_MODEL)) {
+  const raw = readFileSync(NOTES_MODEL);
+  const gltf = await new GLTFLoader().parseAsync(
+    raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), '',
+  );
+  const geoms = [];
+  gltf.scene.traverse((o) => { if (o.isMesh) geoms.push(o.geometry); });
+  installNoteGlyphs(geoms);
+  check('the note glyphs loaded', geoms.length === 8, `${geoms.length} glyph(s)`);
+}
+
 const HARP_MODEL = resolve(dirname(fileURLToPath(import.meta.url)), '../public/models/harp.glb');
 if (existsSync(HARP_MODEL)) {
   const raw = readFileSync(HARP_MODEL);
@@ -959,8 +978,14 @@ check('...and never its own host', host.hp === hostHpBefore, `host took ${hostHp
 check('...and nothing outside it', bystander.hp === 9999, `bystander took ${9999 - bystander.hp}`);
 check('the ring reported ticking', auraTicks > 0 && auraCaught > 0,
   `${auraTicks} tick(s), ${auraCaught} caught`);
-check('the ring is actually drawn', harpGroup.children.filter((o) => o.visible).length > 1,
-  `${harpGroup.children.filter((o) => o.visible).length} visible mesh(es)`);
+// The notes are NOT in harpGroup any more — they are instances in one field at
+// the scene root (systems/noteStorm.js), because an InstancedMesh carries world
+// transforms and cannot hang off a group that moves. Counting the group's
+// visible children would now pass forever at 1, which is why this asks the
+// field. The glyph geometries were installed above; without them the field
+// draws nothing and throws nothing, and this is the check that would catch it.
+check('the ring is actually drawn', harpNoteCount() >= CONFIG.harp.auraNotes,
+  `${harpNoteCount()} live note(s)`);
 
 // Two charmed bodies side by side must not saw each other apart — that loses
 // both grinders in about a second and reads as a bug.
@@ -974,9 +999,7 @@ check('two charmed bodies leave each other alone', victim.hp === pairHp,
 // one pluck, and the timer is the only thing standing between those.
 tickHarp(Math.ceil((payload.auraDuration + 0.5) / dt));
 check('the ring wears off', !(host.harpAura > 0), `${host.harpAura}s left`);
-check('...and its notes go dark with it',
-  harpGroup.children.filter((o) => o.visible).length <= 1,
-  `${harpGroup.children.filter((o) => o.visible).length} visible mesh(es)`);
+check('...and its notes go with it', harpNoteCount() === 0, `${harpNoteCount()} live note(s)`);
 
 // Levelling has to buy something on every axis the card promises.
 const h1 = currentHarpStats(1);

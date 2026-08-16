@@ -24,6 +24,16 @@
 //                       falls back to an EMPTY Object3D — an invisible
 //                       creature still dealing contact damage. Neither is a
 //                       typo you want a spreadsheet to be able to make.
+//   `nightAsset`        the same creature's body after dark, and it is here
+//                       for the same reason `asset` is: it names a model. A
+//                       species carrying one keeps ONE row in this file — the
+//                       hp, speed, xp and caps below describe the animal, not
+//                       what it is wearing, and duplicating them into a second
+//                       row per costume is how the two drift apart. It also
+//                       changes which nightlife curve the row walks (see the
+//                       weight maths in entities/enemies.js pickType): a dual
+//                       species is in season all run, where a `bioluminescent`
+//                       one is deleted from the daylight ocean outright.
 //   the flags           `prey`, `separates`, `collides`, `faceMotion`,
 //                       `faceCamera`, `canBreach`, `floorSpawn`, `gaitTravel`.
 //                       These pair a creature with its model and its code

@@ -1610,14 +1610,70 @@ export const CONFIG = {
         enemyMightyMeg: true,
         enemyOrca: true,
         enemyDolphin: true,
+        // `enemyOrca` above is a DEAD KEY and is left only because saved tuning
+        // still carries it. The orca was split into three bodies by
+        // tools/orca-split.mjs and the single-asset key went with it, so that
+        // switch has been outlining nothing; these two are the live ones.
+        enemyOrcaBull: true,
+        enemyOrcaCow: true,
+        // The abyss shark was simply never listed, and a key that is not here
+        // never builds shells at all — so the darkest, latest apex in the game
+        // was also the only one with no rim to find it by.
+        enemyAbyssShark: true,
         // Everything else large enough for a rim to read on. Off by default:
         // these are not the threats the outline exists to call out, and several
         // of them can be on screen in numbers.
         enemyOtter: false,
-        enemySeaTurtle: false,
         enemyStingray: false,
         enemyWalkingCrab: false,
+        // ON, unlike its neighbours here, and for a reason that is about the
+        // MODEL rather than about threat. seaturtle.glb ships no textures at
+        // all — not one image, in the repo copy or in the source download —
+        // so it renders as one flat colour and the only way to read its shape
+        // is the rim. It is also the one creature you are meant to find and
+        // play with rather than avoid.
+        enemySeaTurtle: true,
     },
+    },
+
+    // ---------------------------------------------------------------------------
+    // THE THINGS ON YOUR SIDE
+    //
+    // A third rim, separate from the player's and the creatures', because it
+    // answers a third question. `playerOutline` is "where am I";
+    // `creatureOutline` is "what is hunting me"; this is "what is mine" — and
+    // it has to be ONE colour across every escort and companion or it does not
+    // answer that at all. Two allies wearing different rims are just two more
+    // things in the water.
+    //
+    // Cool white-gold against the creature rim's hot orange: the two are read
+    // at a glance in a dark, crowded frame, and the difference that matters is
+    // friend/threat rather than which species.
+    //
+    // Same mechanism and the same units as creatureOutline — WORLD units,
+    // divided by each model's own scale before it reaches the shader, so one
+    // number is the same on-screen width on a 1.5-unit seal and a 686-unit
+    // orca. That conversion is the entire reason this is a config block and
+    // not an `outline` on each asset: the three escort orcas carried
+    // `outline: { thickness: 0.022 }` in assets.js, which is object space, and
+    // 0.022 on a 686-unit model is a rim 3 thousandths of a percent of the
+    // body. It was never visible.
+    companionOutline: {
+      color: 0xffd27a,
+      thickness: 0.1, // just under the creature rim, so a threat still wins
+      glow: 2.0,
+      opacity: 1,
+      // Keyed by ASSET key, exactly as creatureOutline.on is. A key not listed
+      // never builds shells.
+      on: {
+        sealTeam: true,
+        orcaFriendBull: true,
+        orcaFriendCow: true,
+        orcaFriendCalf: true,
+        dumboOcto: true,
+        belugaDrone: true,
+        eelCompanion: true,
+      },
     },
 
     weapon: {
@@ -3867,6 +3923,38 @@ export const CONFIG = {
       auraNoteScale: 0.55,
       auraNoteBob: 0.35, // how far a note rises and falls over its own cycle
       auraNoteTilt: 0.5, // fraction of the radius the ring swings through depth
+      // --- the storm thrown when a note lands (systems/noteStorm.js) ---
+      // TWO bursts on the same frame, and they are doing different jobs: the
+      // `bloom` half throws a ring outward and stops it hard, which is the
+      // moment; the `updraft` half sends a slower column climbing out of the
+      // animal that is still going after the first has gone. Either alone is a
+      // pop with no tail, or a tail with no pop.
+      stormNotes: 22,
+      stormRiseNotes: 12,
+      stormScale: 0.5,
+      // Every note on screen at once, across every charmed body and every
+      // storm in flight. A cap rather than a queue: past it a burst is trimmed,
+      // because a storm that thins out under load still reads as a storm and
+      // one that vanishes reads as a bug.
+      maxNotes: 320,
+      // --- the colour a charmed body's notes wear ---
+      // ONE HUE PER BODY, rolled when the charm lands, so two grinders standing
+      // near each other stay countable.
+      //
+      // THE WHEEL IS RESTRICTED, and it is a bloom decision rather than a taste
+      // one. The bright pass thresholds Rec.709 luminance, where blue is worth
+      // 0.0722 — measured against this project's own threshold of 0.58, a fully
+      // saturated blue note lands at 0.28 and never blooms at all, while green
+      // sits at 1.77. A third of the wheel is dead. Over 0.08..0.50 — amber,
+      // yellow, lime, green, spring, cyan — luminance runs 1.12 to 1.77, a
+      // 1.57x spread with nothing close to dying, and the arc also keeps the
+      // notes off the water's own dark blue.
+      //
+      // Widening this is not free: see rollNoteColor in systems/noteStorm.js
+      // for the two ways to get red and violet back, and what each costs.
+      hueFrom: 0.08,
+      hueTo: 0.50,
+      noteGlow: 1.9, // peak channel — overdrive, so the note clears the threshold
     },
 
     // ---------------------------------------------------------------------------
@@ -5965,6 +6053,7 @@ export const CONFIG = {
       // 40 more skinned fish would.
       fishesA: {
         asset: 'enemyFishesA', behavior: 'swarm', faceMotion: true, prey: true,
+        nightAsset: 'enemyGlowFishesA',
         radius: 0.34, hp: 6, hpPerDifficulty: 0.8, speed: 5.2, speedVariance: 1.3, contactDamage: 3, xp: 3,
         group: { min: 4, max: 10, spread: 4 },
         swarm: { cohesion: 2.1, separation: 4.6, separationDist: 1.3, alignment: 1.5, towardPlayer: 1.3, fleeFromPredators: 8.5, fleeRadius: 7, wander: 1.15 },
@@ -5972,6 +6061,7 @@ export const CONFIG = {
     },
       fishesB: {
         asset: 'enemyFishesB', behavior: 'swarm', faceMotion: true, prey: true,
+        nightAsset: 'enemyGlowFishesB',
         radius: 0.4, hp: 7, hpPerDifficulty: 0.9, speed: 4.8, speedVariance: 1.1, contactDamage: 3, xp: 4,
         group: { min: 3, max: 8, spread: 4 },
         swarm: { cohesion: 2.0, separation: 4.4, separationDist: 1.4, alignment: 1.4, towardPlayer: 1.2, fleeFromPredators: 8.2, fleeRadius: 7, wander: 1.0 },
@@ -5979,6 +6069,7 @@ export const CONFIG = {
     },
       fishesC: {
         asset: 'enemyFishesC', behavior: 'swarm', faceMotion: true, prey: true,
+        nightAsset: 'enemyGlowFishesC',
         radius: 0.33, hp: 6, hpPerDifficulty: 0.8, speed: 5.6, speedVariance: 1.4, contactDamage: 3, xp: 3,
         group: { min: 4, max: 11, spread: 4 },
         swarm: { cohesion: 2.2, separation: 4.8, separationDist: 1.2, alignment: 1.6, towardPlayer: 1.4, fleeFromPredators: 8.8, fleeRadius: 7, wander: 1.2 },
@@ -5999,6 +6090,7 @@ export const CONFIG = {
       // where that shows up rather than in the arithmetic here.
       brownfish: {
         asset: 'enemyBrownFish', behavior: 'swarm', faceMotion: true, prey: true,
+        nightAsset: 'enemyGlowBrownFish',
         radius: 0.36, hp: 7, hpPerDifficulty: 0.85, speed: 5.3, speedVariance: 1.3, contactDamage: 3, xp: 3,
         group: { min: 4, max: 10, spread: 4 },
         swarm: { cohesion: 2.1, separation: 4.6, separationDist: 1.3, alignment: 1.5, towardPlayer: 1.3, fleeFromPredators: 8.5, fleeRadius: 7, wander: 1.15 },
@@ -6010,6 +6102,7 @@ export const CONFIG = {
       // in the roster and the cohesion the highest.
       clownfish: {
         asset: 'enemyClownFish', behavior: 'swarm', faceMotion: true, prey: true,
+        nightAsset: 'enemyGlowClownFish',
         radius: 0.3, hp: 5, hpPerDifficulty: 0.7, speed: 5.0, speedVariance: 1.2, contactDamage: 2, xp: 3,
         group: { min: 6, max: 14, spread: 3.2 },
         swarm: { cohesion: 2.6, separation: 5.0, separationDist: 1.1, alignment: 1.8, towardPlayer: 1.3, fleeFromPredators: 9.0, fleeRadius: 7, wander: 1.25 },
@@ -6017,6 +6110,7 @@ export const CONFIG = {
     },
       surgeonfish: {
         asset: 'enemySurgeonFish', behavior: 'swarm', faceMotion: true, prey: true,
+        nightAsset: 'enemyGlowSurgeonFish',
         radius: 0.34, hp: 6, hpPerDifficulty: 0.8, speed: 5.4, speedVariance: 1.3, contactDamage: 3, xp: 3,
         group: { min: 5, max: 12, spread: 4 },
         swarm: { cohesion: 2.2, separation: 4.8, separationDist: 1.3, alignment: 1.6, towardPlayer: 1.4, fleeFromPredators: 8.8, fleeRadius: 7, wander: 1.2 },
@@ -6039,6 +6133,7 @@ export const CONFIG = {
       // answer it with.
       tuna: {
         asset: 'enemyTuna', behavior: 'swarm', faceMotion: true, prey: true,
+        nightAsset: 'enemyGlowTuna',
         radius: 0.4, hp: 12, hpPerDifficulty: 1.3, speed: 7.6, speedVariance: 1.5, contactDamage: 4, xp: 6,
         group: { min: 3, max: 8, spread: 4.5 },
         // Looser than a reef shoal and much more aligned: an open-water school
@@ -7059,6 +7154,7 @@ export const CONFIG = {
       // with, well over a schooling fish's 3, and never a fight.
       puffer: {
         asset: 'enemyPuffer', behavior: 'glide', faceMotion: true,
+        nightAsset: 'enemyGlowPuffer',
         radius: 0.45, hp: 22, hpPerDifficulty: 2,
         speed: 3.2, speedVariance: 0.6, contactDamage: 11, xp: 6,
         glide: { height: 4, bandSpread: 2.5 },
@@ -7156,6 +7252,7 @@ export const CONFIG = {
       sailfish: {
         separates: true,
         asset: 'enemySailfish', behavior: 'chase', faceMotion: true,
+        nightAsset: 'enemyGlowSailfish',
         radius: 0.5, hp: 30, hpPerDifficulty: 2.6,
         speed: 12, speedVariance: 1.6, contactDamage: 24, xp: 13,
         turnRate: 3.2,
@@ -8172,6 +8269,15 @@ export const CONFIG = {
       // sweep's pips are heard — just spread into a run.
       strikePip:   { emit: null, shake: 0, hitstop: 0, glow: 0.06, sfx: 'strikePip',
                      haptic: [{ duration: 18, magnitude: 0.22 }] },
+      // ASKED FOR A STRIKE ON A DEAD METER — the press that bought nothing, and
+      // the one moment the empty bar is news (see the "Boost Empty!" line in
+      // main.js). Nothing but a sound and a short tap: this is a REFUSAL, and
+      // a refusal that shook the camera or sprayed particles would be louder
+      // than the strike it failed to be. `sfxMinGap` covers the player
+      // hammering the button on an empty tank, which is exactly what a player
+      // does the moment they hit one.
+      boostEmpty:  { emit: null, shake: 0, hitstop: 0, glow: 0, sfx: 'boostEmpty',
+                     haptic: [{ duration: 14, magnitude: 0.2 }], sfxMinGap: 0.12 },
       // FOOD CHAIN! — fires once per EXTENSION, on top of the per-link
       // `strikeChain` above, and it's the one event in the table whose job is
       // weight rather than information. The hitstop is deliberately longer than
@@ -9832,6 +9938,14 @@ export const CONFIG = {
       // pitch IS the reading — how close the bar is to full — and randomness
       // would blur the one thing it says.
       strikePip: { src: null, type: 'blip', wave: 'triangle', freq: [660, 900], decay: 0.09, gain: 0.13, pitchVary: 0 },
+      // THE REFUSAL. Deliberately the strikePip's sweep run backwards and an
+      // octave down — the same instrument saying the opposite thing, so a
+      // player who has learned what a pip filling sounds like already knows
+      // what this is without being taught. Square rather than triangle for the
+      // buzz that reads as a "no", short enough to be over before the next
+      // button press, and quiet: it fires while nothing else in the strike loop
+      // is making a sound, so it does not have to compete to be heard.
+      boostEmpty: { src: null, type: 'blip', wave: 'square', freq: [440, 150], decay: 0.11, gain: 0.14, pitchVary: 0.03 },
       // The FOOD CHAIN! announcement. Pitched up per link by the caller like
       // `strikeChain` is, so a deep chain climbs — but where that one is a thin
       // tick riding on top of an impact, this is the fanfare underneath it, so
@@ -11620,16 +11734,30 @@ export const CONFIG = {
     armLag: 0.06,
 
     // --- geometry ------------------------------------------------------------
-    // How far the player can be and still be pinched, in multiples of the
-    // crab's own radius. The arm's real reach is measured off the skeleton at
-    // runtime, so this is the GAMEPLAY range, deliberately kept a little
-    // shorter than what the arm can physically cover — a pinch that connects
-    // at the exact limit of the IK looks like a miss.
-    range: 2.4,
+    // How far the player can be and still be pinched, as a FRACTION OF THE
+    // ARM — the reach the driver measures off each crab's own skeleton, which
+    // is 2.20 world units on the walking crab as it ships. The player's radius
+    // is added on top, so at 0.65 the pinch lands out to 2.43 centre to centre
+    // against a contact range of 1.20.
+    //
+    // These were multiples of the crab's `radius` and that is the bug this
+    // block shipped with twice. A crawler's radius is small for reasons that
+    // have nothing to do with its arms (it doubles as the resting height off
+    // the sand — see enemies.walkingCrab), so 2.4 x 0.2 put the whole mechanic
+    // 0.28 units outside touching distance and it read as dead. See pinchReach.
+    //
+    // Under 1 on purpose and by a clear margin: the solver never puts the tip
+    // at full extension in the play plane (measured max, mid-pinch, is 1.92 of
+    // the 2.20 the chain could cover), and a pinch that connects at the exact
+    // limit of the IK looks like a miss. There is headroom to about 0.87 here
+    // before the damage starts landing further than the claw visibly gets.
+    range: 0.65,
     // ...and how far inside that range the crab has to be before it commits.
     // Without this a crab at the edge of range starts a windup, the player
     // drifts a hair further out, and the whole 0.9s gesture plays to nobody.
-    commitRange: 2.1,
+    // Same fraction-of-the-arm units as `range` above; the ratio between the
+    // two is what matters and it is unchanged from when both were radii.
+    commitRange: 0.55,
     // Windup offsets, as fractions of the arm's measured reach: how far the
     // claw lifts above the aim line, and how far back along it the claw draws
     // before coming forward.
@@ -12254,8 +12382,8 @@ export const CONFIG = {
       colorHot: 0xff803a,
       hotAt: 8, // link count at which colorHot is fully reached
     },
-    // THE WARNING BAND — "Oxygen low!", "Health low!", "Boost Empty!",
-    // "Warning!". Screen-anchored, so the four travel fields above (rise,
+    // THE WARNING BAND — "Oxygen low!", "Health low!", "Warning!".
+    // Screen-anchored, so the four travel fields above (rise,
     // riseVary, gravity, scatter) mean nothing here and are left out rather
     // than set to zero: a slider that moves nothing is worse than an absent
     // one. `life` is absent for the same reason — how long a warning holds is
@@ -12280,7 +12408,9 @@ export const CONFIG = {
       in: { time: 0.3, ease: 'outCubic', scale: 1.06, fade: 0, lift: 18, bloom: 8 },
       out: { time: 0.5, ease: 'inQuad', scale: 1, fade: 0, lift: -10, bloom: 0 },
     },
-    // "BOOST EMPTY!" — the small line riding the boost ring, not the band.
+    // THE LINES RIDING THE BOOST RING, not the band — "STRIKE NOW!" while a
+    // banked strike is sitting on an empty tank, and "Boost Empty!" on a press
+    // that bought nothing at all.
     //
     // IT BLOOMS IN AND BLOOMS OUT, and that is doing the work the size gave up.
     // At twelve pixels on top of a lit instrument there is no room to pop or to
@@ -12318,7 +12448,8 @@ export const CONFIG = {
     // The fallback for a callouts.csv row with a blank `hold`.
     hold: 1.6,
 
-    // WHERE THE `player`-ANCHORED LINE SITS — "Boost Empty!". A gap in WORLD
+    // WHERE THE `player`-ANCHORED LINES SIT — "STRIKE NOW!" and "Boost
+    // Empty!", which share the one slot on the ring. A gap in WORLD
     // units above the top of the boost ring, so it holds its place on the
     // animal as the camera zooms and stays put if the ring is resized or
     // pushed around (CONFIG.strike.ring.scale / offsetY). Measuring it off the
@@ -13418,8 +13549,20 @@ export const CONFIG = {
   // ---------------------------------------------------------------------------
   crabSpawn: {
     enabled: true,
-    checkInterval: 3, // seconds between pile checks
+    // COOLDOWN AFTER A WAVE, not a poll clock. The pile is tested every frame
+    // so the walk-on starts on the frame the chum arrives; this is only what
+    // keeps a growing heap from calling a second wave immediately behind the
+    // first. (It was a poll, and a poll is up to three seconds of a pile
+    // sitting there with nothing happening — which reads as the seabed not
+    // caring rather than as a cadence.)
+    checkInterval: 3,
     floorHeight: 1.5, // how close to the seabed counts as "on the floor"
+    // ARRIVING, not arrived. The summon counts chum still on its way down
+    // within this height of the floor, so the crabs set off while it falls and
+    // walk in as it lands instead of starting the journey afterwards. Bigger
+    // than floorHeight on purpose, and only the SUMMON uses it: a crab still
+    // won't swim up for an orb that hasn't settled (see nearestFloorPickup).
+    summonHeight: 5,
     pileThreshold: 6, // orbs piled before crabs start spawning at all
     orbsPerCrab: 3, // each additional this-many orbs spawns one more crab
     maxCrabsPerWave: 5,
@@ -14423,7 +14566,15 @@ export const CONFIG = {
       },
     },
     collectRadius: 0.6,
-    sinkSpeed: 1.2, // xp orbs drift down through the water
+    // How fast chum falls through the water. The column is about 40 units
+    // deep, so at the old 1.2 an orb dropped in open water took the better
+    // part of twenty seconds to reach the seabed — long enough that a kill
+    // near the surface paid out into a cloud that was still drifting when the
+    // next wave arrived, and long enough that the crabs (which are summoned by
+    // chum ON the floor) turned up a fight and a half late. Well under the
+    // magnet's pull speed of 14, so an orb on its way down is still collected
+    // by swimming near it rather than needing to be chased.
+    sinkSpeed: 3.5,
     maxAlive: 140, // oldest orbs are recycled past this
     // A drop that was THROWN rather than placed — boat chum spilling out of a
     // hull. The throw is temporary: gravity above the water line, drag below
@@ -17135,8 +17286,12 @@ export const TUNER_SCHEMA = [
       { path: 'crabClaw.strike', min: 0.05, max: 0.6, step: 0.01, label: 'strike' },
       { path: 'crabClaw.recover', min: 0.1, max: 1, step: 0.02, label: 'recover' },
       { path: 'crabClaw.cooldown', min: 0.3, max: 8, step: 0.1, label: 'between pinches' },
-      { path: 'crabClaw.range', min: 1, max: 6, step: 0.1, label: 'reach (x crab radius)' },
-      { path: 'crabClaw.commitRange', min: 1, max: 6, step: 0.1, label: 'range it commits at' },
+      // Fractions of the ARM's measured reach now, not multiples of the crab's
+      // hitbox — the old min of 1 is why these two carry a migration on the way
+      // in (see withoutTableOwnedKeys): every saved value is above this
+      // slider's whole new range.
+      { path: 'crabClaw.range', min: 0.1, max: 1.2, step: 0.05, label: 'reach (x arm reach)' },
+      { path: 'crabClaw.commitRange', min: 0.1, max: 1.2, step: 0.05, label: 'range it commits at' },
       { path: 'crabClaw.damageMul', min: 0, max: 3, step: 0.05, label: 'damage (x contact damage)' },
       { path: 'crabClaw.knockback', min: 0, max: 4, step: 0.1, label: 'knockback' },
       // --- what the pinch looks like ---
@@ -17439,6 +17594,16 @@ export const TUNER_SCHEMA = [
         path: `creatureOutline.on.${key}`,
         type: 'bool',
         label: key.replace(/^enemy/, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase(),
+      })),
+      { path: 'companionOutline.color', type: 'color', label: 'ally outline colour' },
+      { path: 'companionOutline.thickness', min: 0, max: 0.6, step: 0.005, label: 'ally outline thickness' },
+      { path: 'companionOutline.glow', min: 0, max: 8, step: 0.1, label: 'ally outline glow' },
+      { path: 'companionOutline.opacity', min: 0, max: 1, step: 0.05, label: 'ally outline opacity' },
+      // Same trick as the creature switches above, on the allies' list.
+      ...Object.keys(CONFIG.companionOutline.on).map((key) => ({
+        path: `companionOutline.on.${key}`,
+        type: 'bool',
+        label: `ally: ${key.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()}`,
       })),
     ],
   },
@@ -18253,6 +18418,17 @@ export const TUNER_SCHEMA = [
       { path: 'harp.auraNoteScale', min: 0.1, max: 2, step: 0.05, label: 'note size' },
       { path: 'harp.auraNoteBob', min: 0, max: 2, step: 0.05, label: 'note bob' },
       { path: 'harp.auraNoteTilt', min: 0, max: 1.5, step: 0.05, label: 'note ring tilt (depth)' },
+      { path: 'harp.stormNotes', min: 0, max: 60, step: 1, label: 'storm: notes thrown outward' },
+      { path: 'harp.stormRiseNotes', min: 0, max: 40, step: 1, label: 'storm: notes sent climbing' },
+      { path: 'harp.stormScale', min: 0.1, max: 2, step: 0.05, label: 'storm: note size' },
+      { path: 'harp.maxNotes', min: 40, max: 600, step: 20, label: 'every note on screen at once' },
+      // The two ends of the hue arc a charmed body's colour is rolled from.
+      // Dragging either outside 0.08..0.50 is how you find the dead part of the
+      // wheel — the notes stop blooming rather than changing colour. The long
+      // note on CONFIG.harp.hueFrom has the measurements.
+      { path: 'harp.hueFrom', min: 0, max: 1, step: 0.01, label: 'charm hue: from' },
+      { path: 'harp.hueTo', min: 0, max: 1, step: 0.01, label: 'charm hue: to' },
+      { path: 'harp.noteGlow', min: 0.5, max: 4, step: 0.05, label: 'charm note glow (overdrive)' },
     ],
   },
   {
@@ -19133,6 +19309,37 @@ function withoutTableOwnedKeys(snapshot) {
   if (rest.audio && 'maxConcurrent' in rest.audio) {
     const { maxConcurrent, ...audio } = rest.audio;
     rest.audio = audio;
+  }
+  // HOW FAST CHUM FALLS, for the same reason. There is no slider for it and
+  // spawning.csv is fenced to `pickups.mass.*`, so the `sinkSpeed` in every
+  // snapshot is an echo of the config.js default on the day it was saved —
+  // and an echo that WINS, which is why the number sat at 1.2 in the live game
+  // no matter what source said. Stripped so config.js owns it outright; the
+  // rest of CONFIG.pickups is the magnet and the glow and merges normally.
+  if (rest.pickups && 'sinkSpeed' in rest.pickups) {
+    const { sinkSpeed, ...pickups } = rest.pickups;
+    rest.pickups = pickups;
+  }
+  // THE CLAW'S REACH CHANGED UNITS. `range` and `commitRange` were multiples
+  // of the crab's hitbox radius and are fractions of the arm's measured reach
+  // now (see pinchReach). The two scales are not comparable and the old
+  // numbers are not merely stale, they are dangerous: a saved 2.4 read as a
+  // fraction is 2.4 arm-lengths, which is a crab pinching from six world units
+  // away — and it would arrive from a file, silently, on a machine where the
+  // source said 0.65.
+  //
+  // Dropped rather than converted. A conversion would need the crab's radius
+  // AND its arm reach as they were on the day of the save, and the arm is
+  // measured off a skeleton at runtime; there is no honest number to compute
+  // here. The bound is the slider's own new maximum, so a value that could
+  // only have come from the old scale goes and anything a person could set
+  // today survives — including a deliberate 1.2.
+  if (rest.crabClaw) {
+    const claw = { ...rest.crabClaw };
+    for (const k of ['range', 'commitRange']) {
+      if (typeof claw[k] === 'number' && claw[k] > 1.2) delete claw[k];
+    }
+    rest.crabClaw = claw;
   }
   // GRAVITY'S OLD ADDRESSES. It used to be five numbers in five sections —
   // the player's `airGravity`, a ragdoll's, a debris chunk's, a tossed orb's

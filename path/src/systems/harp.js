@@ -6,6 +6,7 @@ import { removeEnemy } from '../entities/enemies.js';
 import { orbitTarget } from './orbit.js';
 import { aoe, targeting, abilityDamage, companionScale } from './scaling.js';
 import { canHold } from './control.js';
+import { createNoteField, rollNoteColor } from './noteStorm.js';
 
 // ===========================================================================
 // HARP SEAL — the pun, and the ability that grew out of it.
@@ -45,14 +46,19 @@ import { canHold } from './control.js';
 // find the bodies this one already has in hand.
 // ===========================================================================
 
-// The harp, and the pool of note meshes the auras are drawn with. One group so
-// main.js adds and forgets, exactly like the shrimp ring.
+// The harp itself. One group so main.js adds and forgets, exactly like the
+// shrimp ring.
 let group = null;
 let harpMesh = null;
-// Grown on demand and never shrunk — a note mesh costs nothing parked at
-// visible:false, and a stack that peaks at four charmed bodies would otherwise
-// churn meshes every time one wore off.
-let notePool = [];
+// Every note that is not the harp — the rings around charmed bodies and the
+// storms thrown when a note lands — lives in one instanced field instead of in
+// this group. See systems/noteStorm.js: the notes are eight glyphs sharing one
+// material, so the only per-note colour that exists is instanceColor, and that
+// is what lets each charmed body wear a hue of its own.
+//
+// Built on the first update rather than in createHarpVisual because the pool
+// needs the scene, and createHarpVisual is handed nothing.
+let notes = null;
 let fireTimer = 0;
 let clock = 0;
 
@@ -70,13 +76,12 @@ export function createHarpVisual() {
 
 // Same shape as rebuildDumboOcto: the harp is a singleton built once at boot,
 // so a model uploaded from the T panel needs an explicit swap or it wouldn't
-// appear until a full reload. The note pool goes with it — those are clones of
-// a second asset that may have been re-uploaded in the same breath.
+// appear until a full reload. The note field is NOT rebuilt with it — the notes
+// are geometry loaded once from musicnotes.glb rather than an asset entry, so
+// nothing the T panel can do to `harp` reaches them.
 export function rebuildHarp() {
   if (!group) return;
   if (harpMesh) group.remove(harpMesh);
-  for (const n of notePool) group.remove(n);
-  notePool = [];
   harpMesh = createVisual('harp');
   group.add(harpMesh);
 }
@@ -85,8 +90,17 @@ export function resetHarp() {
   fireTimer = 0;
   clock = 0;
   hosts.length = 0;
-  for (const n of notePool) n.visible = false;
+  notes?.reset();
   if (group) group.visible = false;
+}
+
+/**
+ * Live notes — rings and storms together. Diagnostics and harnesses: it is the
+ * only way to see the field from outside, since it deliberately isn't in
+ * `group` (an InstancedMesh spanning the arena has to sit at the origin).
+ */
+export function harpNoteCount() {
+  return notes?.count ?? 0;
 }
 
 /** Everything the ability's numbers do with a level, in one place. */
@@ -155,47 +169,77 @@ function scaleTo(obj, mul) {
   obj.scale.setScalar(obj.userData.harpBaseScale * mul);
 }
 
-function noteAt(index) {
-  while (notePool.length <= index) {
-    const n = createVisual('musicNote');
-    n.visible = false;
-    group.add(n);
-    notePool.push(n);
+/**
+ * Roll the colour this body's notes will wear, once, when the charm lands.
+ *
+ * PER HOST, not per note: a charmed body is a grinder parked in a crowd, and
+ * two of them near each other have to stay countable. One hue each does that;
+ * a hue each per NOTE would be forty pieces of confetti saying nothing.
+ *
+ * The wheel is restricted to CONFIG.harp.hues rather than open, and that is a
+ * bloom decision, not a taste one — see rollNoteColor. Stamped on the creature
+ * so it survives everything that happens to the ring afterwards, including the
+ * host being re-charmed before the aura wore off.
+ */
+function colorFor(e) {
+  const c = CONFIG.harp;
+  if (!e.harpColor) {
+    e.harpColor = rollNoteColor(Math.random, { hues: [c.hueFrom, c.hueTo], glow: c.noteGlow });
   }
-  return notePool[index];
+  return e.harpColor;
 }
 
 /**
- * Draw the ring of notes around one charmed body.
- *
- * Placed on the MEASURED aura radius, not on a decorative one, so the picture
- * cannot disagree with what is being hurt. Sized by scale only and never by
- * opacity: every clone of `musicNote` shares one material (see the note in
- * assets.js), so fading one note would fade every note in the game including
- * the ones in flight.
- *
- * The group is at the origin, so these take world positions directly.
+ * The ring, built from CONFIG every time it is attached rather than held as a
+ * constant, so the tuner rows that already exist for it keep working. `squash`
+ * is the one number with no slider: a ring lying flat, seen side-on, is an
+ * ellipse, and 0.6 is what it has always been drawn at.
  */
-function drawAuraNotes(e, radius, slot) {
+function ringPreset() {
   const c = CONFIG.harp;
-  const count = Math.max(0, Math.round(c.auraNotes));
-  const fade = Math.min(1, e.harpAura / 0.35); // shrink away over the last beat
-  for (let i = 0; i < count; i++) {
-    const n = noteAt(slot + i);
-    const angle = clock * c.auraNoteSpin + (i / count) * Math.PI * 2;
-    n.visible = true;
-    n.position.set(
-      e.mesh.position.x + Math.cos(angle) * radius,
-      e.mesh.position.y + Math.sin(angle) * radius * 0.6
-        + Math.sin(clock * 2.6 + i) * c.auraNoteBob,
-      e.mesh.position.z + Math.sin(angle) * radius * c.auraNoteTilt,
-    );
-    // Tumbling on its own axis rather than facing anywhere — a note is a glyph,
-    // and one pointing carefully at something reads as a projectile.
-    n.rotation.z = angle * 0.5;
-    scaleTo(n, c.auraNoteScale * companionScale() * fade);
-  }
-  return count;
+  return {
+    kind: 'ring', spin: c.auraNoteSpin, tilt: c.auraNoteTilt, squash: 0.6, bob: c.auraNoteBob,
+  };
+}
+
+/**
+ * Everything that happens the first frame a body is seen carrying an aura: the
+ * ring goes on, and the storm goes off.
+ *
+ * TWO BURSTS, not one. `bloom` throws a ring outward and stops it hard, which
+ * is the moment landing; `updraft` sends a slower column up out of the animal
+ * that is still climbing after the first has gone. Fired together they are one
+ * event with a fast half and a slow half — either alone reads as either a pop
+ * with no tail or a tail with no pop.
+ *
+ * Placed on the MEASURED aura radius, so the picture cannot disagree with what
+ * is being hurt.
+ */
+function startNotes(e) {
+  const c = CONFIG.harp;
+  const color = colorFor(e);
+  const p = e.mesh.position;
+  notes.attach(e, {
+    count: Math.max(0, Math.round(c.auraNotes)),
+    color,
+    preset: ringPreset(),
+    scale: c.auraNoteScale * companionScale(),
+    radius: e.harpAuraRadius ?? 0,
+  });
+  notes.burst(p.x, p.y, p.z, {
+    count: Math.max(0, Math.round(c.stormNotes)),
+    color,
+    preset: 'bloom',
+    scale: c.stormScale * companionScale(),
+    radius: (e.def?.radius ?? e.radius ?? 1) * (e.sizeMul ?? 1) * 0.7,
+  });
+  notes.burst(p.x, p.y, p.z, {
+    count: Math.max(0, Math.round(c.stormRiseNotes)),
+    color,
+    preset: 'updraft',
+    scale: c.stormScale * companionScale(),
+    radius: (e.def?.radius ?? e.radius ?? 1) * (e.sizeMul ?? 1) * 0.5,
+  });
 }
 
 /**
@@ -211,13 +255,18 @@ function drawAuraNotes(e, radius, slot) {
  */
 export function updateHarp(dt, scene, playerPos, level, enemiesList, hooks = {}) {
   if (!group) return;
+  // The field lives in the scene rather than in `group`, because an
+  // InstancedMesh spanning the arena has to be at the origin — its instances
+  // carry world transforms. Built here rather than in createHarpVisual, which
+  // is not handed a scene.
+  if (!notes) notes = createNoteField(scene, { max: CONFIG.harp.maxNotes });
 
   const active = level > 0;
   group.visible = active;
   if (!active) {
     // Anything still carrying a ring when the ability goes away (a tuner reset
-    // mid-run) stops being drawn, or the notes would hang in the water.
-    for (const n of notePool) n.visible = false;
+    // mid-run) drops it, or the notes would hang in the water.
+    notes.reset();
     return;
   }
 
@@ -247,6 +296,12 @@ export function updateHarp(dt, scene, playerPos, level, enemiesList, hooks = {})
 
   // --- the note rings ------------------------------------------------------
   tickAuras(dt, scene, enemiesList, hooks);
+
+  // Late, after tickAuras has aged every timer and started any new ring. The
+  // predicate is what drops a host's notes: a body whose aura ran out, or that
+  // died, releases its instances on the same frame rather than on a callback
+  // from whatever killed it.
+  notes.update(dt, (e) => e.harpAura > 0 && e.hp > 0);
 }
 
 /**
@@ -346,10 +401,15 @@ function tickAuras(dt, scene, enemiesList, hooks) {
   for (const e of enemiesList) {
     if (!(e.harpAura > 0)) continue;
     e.harpAura = Math.max(0, e.harpAura - dt);
-    if (e.harpAura > 0) hosts.push(e);
+    if (e.harpAura > 0) { hosts.push(e); continue; }
+    // Wearing off clears BOTH marks. The colour has to go with the flag: an
+    // enemy object outliving its aura and being charmed again — or a recycled
+    // one — would otherwise wear the dead ring's hue and never fire a storm,
+    // which looks like the second charm did nothing.
+    e.harpNotesOn = false;
+    e.harpColor = null;
   }
 
-  let slot = 0;
   let caught = 0;
   let lastX = 0;
   let lastY = 0;
@@ -361,7 +421,20 @@ function tickAuras(dt, scene, enemiesList, hooks) {
     if (host.hp <= 0 || !host.mesh?.parent) continue;
 
     const radius = host.harpAuraRadius ?? 0;
-    slot += drawAuraNotes(host, radius, slot);
+    // The first frame this body is seen carrying a ring is when the ring goes
+    // on and the storm goes off. Keyed on a flag rather than on the timer being
+    // full, because a body re-charmed while its aura was still running must not
+    // fire a second storm — that is the same no-clobber intent as charmTimer's.
+    if (!host.harpNotesOn) {
+      host.harpNotesOn = true;
+      startNotes(host);
+    } else {
+      // Shrink the ring away over its last beat. Scale rather than opacity:
+      // every note shares one material, so a fade would fade the whole field —
+      // and would take the notes still in flight from other hosts with it.
+      const fade = Math.min(1, host.harpAura / 0.35);
+      notes.scaleHost(host, CONFIG.harp.auraNoteScale * companionScale() * fade);
+    }
 
     host.harpAuraTick = (host.harpAuraTick ?? 0) - dt;
     if (host.harpAuraTick > 0) continue;
@@ -399,10 +472,6 @@ function tickAuras(dt, scene, enemiesList, hooks) {
       }
     }
   }
-
-  // Everything the rings didn't need this frame goes dark. Parked rather than
-  // removed — see the note on the pool.
-  for (let i = slot; i < notePool.length; i++) notePool[i].visible = false;
 
   // One event for the whole frame's worth of ticking, with the count. A tick
   // that caught nothing is not an event: a charmed fish drifting alone in open

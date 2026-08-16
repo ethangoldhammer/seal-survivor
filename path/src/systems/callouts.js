@@ -27,7 +27,8 @@ import { shoulderLabel } from '../devices.js';
 // reading — and "Boost Empty!" competing with "Warning!" for the middle of the
 // screen would mean the meter could never speak during the fight where running
 // it dry actually costs you something. Within either surface it is still
-// strictly one line.
+// strictly one line: the ring's two lines ("STRIKE NOW!" and "Boost Empty!")
+// take turns on the one slot like everything else does.
 //
 // PRIORITY DECIDES, and coach lines outrank every warning. That looks backwards
 // — surely "Health low!" matters more than a tip? — but a coach line only ever
@@ -45,7 +46,7 @@ import { shoulderLabel } from '../devices.js';
 export const CALLOUTS = parseCalloutCsv(calloutsCsv);
 
 /** Every warning the game knows how to fire. The join to callouts.csv. */
-export const WARN_IDS = ['boss', 'health', 'oxygen', 'boost'];
+export const WARN_IDS = ['boss', 'health', 'oxygen', 'boost', 'strikeNow'];
 
 // --- {token}s ---------------------------------------------------------------
 // A tip may name a control as `{strike}` or `{bumper}`, which becomes whatever
@@ -304,9 +305,9 @@ export function activeCallout(anchor = 'band', device = undefined, tokens = unde
   };
 }
 
-// A row's motion block, which is also its text role. The boost line has its own
-// because it is its own size in its own place; everything else on the band is
-// either a warning or a tip.
+// A row's motion block, which is also its text role. The lines on the ring have
+// their own because they are their own size in their own place; everything else
+// on the band is either a warning or a tip.
 function motionKeyFor(row) {
   if (row.anchor === 'player') return 'boostWarn';
   return row.kind === 'coach' ? 'coach' : 'warn';

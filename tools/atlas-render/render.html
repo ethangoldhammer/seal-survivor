@@ -39,12 +39,90 @@ function orient(obj, forward, up) {
   obj.applyMatrix4(m);
 }
 
-function frame(root) {
-  const box = new THREE.Box3().setFromObject(root);
-  const size = new THREE.Vector3(); box.getSize(size);
+// Where the posed model's vertices ACTUALLY are.
+//
+// `Box3.setFromObject` is wrong for a skinned mesh and wrong quietly. It takes
+// the geometry's own bounding box and pushes it through the mesh's world
+// matrix — but a skinned vertex is placed by its BONES, and the mesh's own
+// matrix has nothing to do with where it lands. On a rig whose skin space sits
+// near the origin while its armature sits somewhere else, the two answers are
+// nowhere near each other: the otter, the tuna and the brown fish framed on a
+// box the animal was not in and rendered as three blank 24KB PNGs — no error,
+// no warning, just nothing.
+//
+// So the vertices are skinned in software and measured directly, which is the
+// only honest way to ask a posed rig where it is. `updateMatrixWorld(true)` is
+// forced first: without it every bone reports its rest matrix and the whole
+// exercise silently measures the bind pose.
+function meshBoxes(root) {
+  root.updateMatrixWorld(true);
+  const out = [];
+  const v = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    const pos = o.geometry.attributes.position;
+    const box = new THREE.Box3();
+    if (o.isSkinnedMesh) o.skeleton.update();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      if (o.isSkinnedMesh) o.applyBoneTransform(i, v);
+      box.expandByPoint(o.localToWorld(v));
+    }
+    out.push({ obj: o, box, verts: pos.count });
+  });
+  return out;
+}
+
+// The box the CAMERA should frame, and the strays it refused to include.
+//
+// A part that sits thousands of body-lengths from the body is not part of the
+// silhouette, it is a fault in the file — and framing on the union of the two
+// puts the animal off-screen while the fault sits dead centre. The otter is
+// the live example: its 442-vertex eye mesh is bound such that it lands 2,784
+// units from a body 0.97 units long, IN BIND POSE, so the render came back as
+// two black circles floating in white and nothing else.
+//
+// The anchor is the mesh with the most vertices — the body, on anything shaped
+// like an animal — and anything whose centre is more than 20 radii away from
+// it is dropped and named. Twenty is far enough that no eye, fin or prop on a
+// sane model is ever excluded, and near enough to catch a bind matrix that has
+// gone to the moon.
+function posedBox(root, strays) {
+  const parts = meshBoxes(root);
+  if (!parts.length) return new THREE.Box3();
+  const anchor = parts.reduce((a, b) => (b.verts > a.verts ? b : a));
+  const c = anchor.box.getCenter(new THREE.Vector3());
+  const r = Math.max(anchor.box.getSize(new THREE.Vector3()).length() / 2, 1e-6);
+  const box = new THREE.Box3();
+  for (const p of parts) {
+    const d = p.box.getCenter(new THREE.Vector3()).distanceTo(c);
+    if (p !== anchor && d > r * 20) {
+      strays?.push(`${p.obj.name || 'mesh'} at ${(d / r).toFixed(0)}x body radius`);
+      p.obj.visible = false;
+      continue;
+    }
+    box.union(p.box);
+  }
+  return box;
+}
+
+// Centre the model and report the radius the camera has to clear.
+//
+// THE BOUNDING SPHERE, not the longest axis. The camera looks from a
+// three-quarter angle, so the silhouette it sees is not the box's longest
+// side — a deep, chunky body presents its diagonal, and framing on the long
+// axis put seven of the roster (the otter, the tuna, the brown fish and all
+// four money rolls) partly outside the canvas, where the crop then trimmed
+// tight against a cut-off animal and looked deliberate. A sphere is the one
+// bound that is the same from every angle.
+function frame(root, strays) {
+  const box = posedBox(root, strays);
+  if (box.isEmpty()) return 0.5;
   const centre = new THREE.Vector3(); box.getCenter(centre);
   root.position.sub(centre);
-  return Math.max(size.x, size.y, size.z) || 1;
+  const sphere = new THREE.Sphere();
+  box.translate(centre.clone().negate()).getBoundingSphere(sphere);
+  return sphere.radius || 0.5;
 }
 
 function makeScene() {
@@ -173,19 +251,27 @@ async function shoot(spec) {
   holder.add(root);
   orient(holder, spec.forward, spec.up);
   scene.add(holder);
-  const span = frame(holder);
+  const strays = [];
+  const radius = frame(holder, strays);
 
   // Three-quarter view: round to the front-left and slightly above, which
   // reads a body's depth where a flat side-on does not.
-  const cam = new THREE.PerspectiveCamera(30, 1, span / 100, span * 20);
-  const d = span * 2.05;
+  //
+  // The distance is derived rather than dialled in. A sphere of radius R fits
+  // a vertical fov f at d = R / sin(f/2), so this is that with 6% of air —
+  // enough that the crop has an antialiased edge to find rather than the
+  // canvas boundary.
+  const FOV = 30;
+  const cam = new THREE.PerspectiveCamera(FOV, 1, radius / 100, radius * 40);
+  const d = (radius / Math.sin((FOV / 2) * Math.PI / 180)) * 1.06;
   cam.position.set(-d * 0.42, d * 0.30, d * 0.86);
   cam.lookAt(0, 0, 0);
 
   renderer.render(scene, cam);
   const blob = await new Promise((res) => crop(renderer.domElement).toBlob(res, 'image/png'));
   await fetch('/shot/' + spec.key + '.png', { method: 'POST', body: blob });
-  return `${spec.key}: ${(blob.size / 1024).toFixed(0)}KB, ${posed}`;
+  const note = strays.length ? `  STRAY GEOMETRY DROPPED: ${strays.join('; ')}` : '';
+  return `${spec.key}: ${(blob.size / 1024).toFixed(0)}KB, ${posed}${note}`;
 }
 
 const specs = await (await fetch('/list.json')).json();

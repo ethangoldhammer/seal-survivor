@@ -642,7 +642,9 @@ export async function saveBossShot(index) {
   const shot = shotAt(index);
   if (!shot?.url) return 'unavailable';
   const card = await cardImage(shot);
-  return download(card?.url ?? shot.url, fileName(shot));
+  // The blob as well as the url — see download(). Without it the anchor gets a
+  // 2MB data: URL, which is the form Safari refuses outright.
+  return download(card?.url ?? shot.url, fileName(shot), card?.blob ?? shot.blob);
 }
 
 // ---------------------------------------------------------------------------
@@ -747,13 +749,25 @@ export async function shareRunSheet(run = {}) {
  */
 export async function saveRunSheet(run = {}) {
   if (!await buildSheet(run)) return 'unavailable';
-  return download(sheet.url, 'seal-survivor-run.png');
+  return download(sheet.url, 'seal-survivor-run.png', sheet.blob);
 }
 
 // Compose once, keep it. Returns false when there is nothing to compose —
 // which is not a failure, it is a run that never met a boss.
+//
+// THE BLOB IS AWAITED, and that one word is the difference between the share
+// sheet opening and not. `canvas.toBlob` is a CALLBACK, so the version of this
+// that fired it and returned on the next line handed `sheet.blob` — still null,
+// and null for another frame or two — to handOver, which saw no file, skipped
+// navigator.share entirely and fell through to the download. On a phone that is
+// the whole bug: "Share all" could not open the sheet even once, because the
+// picture it was meant to attach did not exist yet on the line that asked for
+// it. Nothing about it looked broken, either — the fallback ran, and the
+// fallback is silent on iOS (see download).
 async function buildSheet(run) {
-  if (sheet.url) return true;
+  // Both halves, not just the url: a sheet cached by an older build could have
+  // a url and no blob, and this is exactly the check that would wave it through.
+  if (sheet.url && sheet.blob) return true;
   try {
     // Async now that the cells are Rive cards — each one has to be given time
     // to write itself on before it can be read off a canvas. Still composed
@@ -761,10 +775,63 @@ async function buildSheet(run) {
     const canvas = await composeRunSheet(run);
     if (!canvas) return false;
     sheet.url = canvas.toDataURL('image/png');
-    canvas.toBlob?.((blob) => { sheet.blob = blob; }, 'image/png');
+    sheet.blob = await blobOf(canvas);
     return true;
   } catch (err) {
     console.warn(`[bossShot] could not compose the run sheet — ${err}`);
+    return false;
+  }
+}
+
+/** canvas.toBlob as a promise. Resolves null rather than rejecting — every
+ *  caller already copes with having no blob, and one that throws here would
+ *  take down a share that could still have happened as a download. */
+function blobOf(canvas) {
+  return new Promise((resolve) => {
+    if (!canvas.toBlob) { resolve(null); return; }
+    canvas.toBlob((blob) => resolve(blob ?? null), 'image/png');
+  });
+}
+
+/**
+ * Compose the run sheet NOW, before anybody presses anything — the same warm-up
+ * warmShareCards does for the single trophies, and for the same reason.
+ *
+ * navigator.share needs TRANSIENT ACTIVATION: it must be called while the click
+ * that triggered it is still recent, and iOS is strict about it. Composing the
+ * sheet inside the handler spends that activation — it is eight Rive cards
+ * drawn and read back, hundreds of milliseconds across many frames — so by the
+ * time share was asked for, the browser had stopped believing a human asked.
+ * The failure is a NotAllowedError that lands in the catch below and turns into
+ * a silent download.
+ *
+ * Warmed here instead, seconds earlier, while the player is still reading the
+ * top of the score card. Failures are swallowed on purpose: the button still
+ * works without this, it just pays for the compose itself.
+ */
+export async function warmRunSheet(run = {}) {
+  try {
+    await buildSheet(run);
+  } catch { /* the button will try again, and say so if it fails */ }
+}
+
+/**
+ * Can this device hand a PICTURE to the OS? Not `navigator.share` on its own —
+ * that exists on desktop Safari and on Android for sharing a LINK, and refuses
+ * a file — so the question is asked with a real file in it, which is the only
+ * form of it that answers what we need to know.
+ *
+ * Exported because the score screen changes shape on the answer: where the OS
+ * sheet exists it is also how you save (iOS calls it "Save Image"), so a
+ * separate save button there is a second button doing the first one's job. See
+ * wireTrophy in ui/ui.js.
+ */
+export function canShareImages() {
+  if (typeof navigator === 'undefined' || !navigator.canShare || !navigator.share) return false;
+  try {
+    const probe = new File([new Blob([''], { type: 'image/png' })], 'probe.png', { type: 'image/png' });
+    return navigator.canShare({ files: [probe] });
+  } catch {
     return false;
   }
 }
@@ -786,22 +853,72 @@ async function handOver(blob, url, name, title, text) {
       console.warn(`[bossShot] share failed, saving instead — ${err}`);
     }
   }
-  return download(url, name);
+  return download(url, name, blob);
 }
 
-function download(url, name) {
-  if (!url) return 'unavailable';
+/**
+ * Straight to the filesystem, where there is one.
+ *
+ * THE BLOB IS PREFERRED OVER THE DATA URL, which is not a micro-optimisation.
+ * A kill shot is a ~1.5MB PNG and its data URL is ~2MB of base64 in an href;
+ * Safari refuses to navigate to a data: URL of any size from an anchor at all
+ * (it has since 2018, as an anti-phishing measure), and iOS ignores the
+ * `download` attribute on one. Put together, the old path did LITERALLY NOTHING
+ * on an iPhone: the anchor was created, clicked and removed, no file arrived,
+ * no error was raised, and this function returned 'saved'. The button was not
+ * broken so much as it was lying.
+ *
+ * A blob: URL is same-origin and navigable, so the anchor works where anchors
+ * work — and where it doesn't, opening it in a tab at least puts the picture
+ * on screen where it can be long-pressed and saved, which is how you save an
+ * image on a phone anyway.
+ */
+function download(url, name, blob = null) {
+  // The object URL is an UPGRADE on the data URL, not a replacement for it, so
+  // failing to mint one falls back to what this always used rather than to
+  // nothing. createObjectURL genuinely can refuse — it is absent in a worker,
+  // and a Blob built by one realm is not a Blob to another realm's URL, which
+  // is exactly what a jsdom harness hands it.
+  let href = url;
+  let objectUrl = null;
+  if (blob) {
+    try {
+      objectUrl = URL.createObjectURL(blob);
+      href = objectUrl;
+    } catch (err) {
+      console.warn(`[bossShot] no object URL for the save, using the data URL — ${err}`);
+    }
+  }
+  if (!href) return 'unavailable';
+  // Revoked on a timer rather than immediately after the click: the download is
+  // started by the click but not finished by it, and pulling the URL out from
+  // under a 2MB transfer cancels it. A minute is far longer than any local
+  // save takes and the page is a score screen, not a long-lived document.
+  const release = () => { if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000); };
+
   try {
     const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    return 'saved';
+    // `'download' in a` is false on iOS Safari, which is the browser this whole
+    // branch exists for. Asked rather than sniffed for a platform, so a browser
+    // that gains or loses the attribute is handled by the fact rather than by a
+    // user-agent string that will be wrong eventually.
+    if ('download' in a) {
+      a.href = href;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      release();
+      return 'saved';
+    }
   } catch (err) {
     console.warn(`[bossShot] could not save — ${err}`);
-    window.open(url, '_blank');
-    return 'opened';
   }
+
+  // No anchor download on this browser. Open the picture instead — a tab with
+  // the image in it is something a player can act on; a button that did nothing
+  // is not.
+  const opened = window.open(href, '_blank');
+  release();
+  return opened ? 'opened' : 'unavailable';
 }

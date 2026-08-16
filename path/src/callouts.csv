@@ -2,7 +2,8 @@ id,kind,text,textTouch,textPad,devices,enabled,anchor,priority,hold,repeat,arrow
 boss,warn,Warning!,,,,TRUE,band,50,1.8,,
 health,warn,Health low!,,,,TRUE,band,40,1.6,5,
 oxygen,warn,Oxygen low!,,,,TRUE,band,30,1.6,4,
-boost,warn,Boost Empty!,,,,TRUE,player,20,1.2,6,
+boost,warn,Boost Empty!,,,,TRUE,player,20,0.8,,
+strikeNow,warn,STRIKE NOW!,,,,TRUE,player,25,1.1,1.6,
 surface,coach,Swim up for air,,,,TRUE,band,80,6,,surface
 swim,coach,,First touch swims,Left stick to swim,touch pad,TRUE,band,65,5,,
 aim,coach,,Second touch aims,Right stick to aim,touch pad,TRUE,band,60,5,,

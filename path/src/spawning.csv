@@ -22,8 +22,9 @@ crabSpawn.enabled,1,0,1,Whether chum on the seabed summons crabs at all.
 crabSpawn.pileThreshold,6,1,40,Settled orbs needed before a wave is called. THE main dial on how often you see crabs.
 crabSpawn.orbsPerCrab,3,1,20,Each orb over the threshold buys 1/this of an extra crab.
 crabSpawn.maxCrabsPerWave,5,1,15,Ceiling on one wave however big the pile is.
-crabSpawn.checkInterval,3,0.5,15,Seconds between pile checks.
+crabSpawn.checkInterval,3,0.5,15,Cooldown after a wave. The pile is tested every frame so crabs set off the moment the chum arrives - this is only the gap before the NEXT wave can be called.
 crabSpawn.floorHeight,1,0.3,8,How close to the seabed an orb counts as being on the floor. Orbs settle 0.8 above it.
+crabSpawn.summonHeight,5,0.5,15,How close to the seabed falling chum has to get to call a wave. Bigger than floorHeight so the crabs walk in from the wings as the pile lands rather than after it. Only the summon uses this - a crab still won't eat an orb until it settles.
 crabSpawn.spawnMargin,3,0,15,How far off-screen crabs walk on from.
 crabSpawn.clusterRadius,6,1,20,How close two orbs must be to count as one pile.
 crabSpawn.deathPile.enabled,1,0,1,Whether crabs swarm the corpse when the run ends.

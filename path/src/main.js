@@ -29,6 +29,7 @@ import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShak
 import { initAudio, unlockAudio, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
+import { loadNoteGlyphs } from './systems/noteStorm.js';
 import { warmShaders, warmPipeline } from './systems/shaderWarmup.js';
 import { perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary } from './systems/perfLog.js';
 import { showLoading } from './ui/loading.js';
@@ -78,7 +79,7 @@ import { createHarpVisual, updateHarp, resetHarp, rebuildHarp } from './systems/
 import { firePearl, burstPearl, updateOyster, resetOyster } from './systems/oyster.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab, rebuildOctoGrabber } from './systems/octoGrab.js';
 import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
-import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines } from './systems/outlines.js';
+import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines } from './systems/outlines.js';
 import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginRestartTransition } from './systems/deathDive.js';
 import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime } from './systems/levelUpTime.js';
 import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossKillFraming } from './systems/bossKill.js';
@@ -94,7 +95,7 @@ import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { highScore } from './systems/leaderboard.js';
 import { initUI, showStartMenu, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
-import { updateCallouts, resetCallouts, checkCallouts } from './systems/callouts.js';
+import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS } from './systems/tutorial.js';
 import { initCallouts, updateCalloutUi, clearCalloutUi } from './ui/callout.js';
 import { hidePauseMenu, isPauseOpen, showPauseMenu, updatePauseNav } from './ui/pauseMenu.js';
@@ -253,6 +254,13 @@ async function boot() {
   // feels longer, and the warm-up's own share is smoothed inside that third.
   const ASSET_SHARE = 0.66;
   await preloadAssets((p) => loading.setProgress(p * ASSET_SHARE));
+  // The harp's note glyphs. NOT an ASSETS entry, so preloadAssets never sees
+  // them: systems/noteStorm.js wants the raw geometries to instance, and the
+  // asset pipeline's job is to hand back a built Mesh with a material shared
+  // across every copy — which is the one thing per-note colour cannot have.
+  // Awaited rather than fired and forgotten so the first charm of a run has
+  // notes; failing is not fatal, the field simply draws nothing.
+  await loadNoteGlyphs().catch((e) => console.warn('[notes] glyphs failed to load', e));
   // Uploaded models must be in place BEFORE initPlayer and the ability
   // singletons build their meshes below, or they'd start life holding the
   // built-in model and only pick up the upload when something rebuilt them.
@@ -740,6 +748,8 @@ function handleTunerChange(path) {
   // Same — one shared material per species, so a toggle or a colour reaches
   // every creature already swimming without touching the scene graph.
   if (path === '*' || path.startsWith('creatureOutline')) applyCreatureOutlines();
+  // The allies' rim, same deal on its own config block.
+  if (path === '*' || path.startsWith('companionOutline')) applyCompanionOutlines();
   // Type. One call rebuilds the whole role stylesheet, so all three prefixes
   // land in the same place — a role's colour and the global ink are the same
   // rule in the end. textMotion is in the list because a Reset ('*') has to
@@ -2952,6 +2962,12 @@ function animate(now) {
         // would leave a player who mashed the button once having been shown the
         // sentence and never the thing.
         noteTutorialEvent('strike');
+        // "STRIKE NOW!", obeyed. Taken off the ring on the frame the dash
+        // launches rather than left to age out: every other callout describes a
+        // STATE and can sensibly linger a moment after it clears, but this one
+        // is an instruction, and an instruction still on screen after it has
+        // been followed reads as the game not having noticed.
+        clearCallout(CALLOUTS.get('strikeNow'));
         // THE FOOD CHAIN LINK, if this release earned one — a bar refilled
         // since the last strike, spent again before the window shut. Scored
         // inside tryStrike (the strike system owns the counter) and reported
@@ -3874,6 +3890,25 @@ function animate(now) {
   const o2Frac = player.oxygen / Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max);
   const hpFrac = player.hp / Math.max(1, player.stats.maxHp);
   const oxygenLow = !!CONFIG.oxygen.enabled && o2Frac < (calloutCfg.oxygenLow ?? 0.25);
+  // The charge meter, read once and used by both of the seal's own lines below.
+  //
+  // `strikeBanked` is minFire and not "anything at all", because a release
+  // under that threshold fires nothing (tryStrike) and KEEPS the pending power
+  // — so a fumbled release leaves the seal holding a sliver it cannot spend,
+  // and telling that player to STRIKE NOW! would be advice that does nothing
+  // when taken. Below the threshold the honest reading is the empty one.
+  const chargeEmpty = strikeState.charge <= (calloutCfg.boostEmpty ?? 0.02);
+  const strikeBanked = strikeState.pending >= (CONFIG.strike.charge.minFire ?? 0.2);
+  // A press against a dead meter. One frame by construction, so it cannot hold
+  // its own callout up — the row's `hold` is what keeps it on screen.
+  const boostDenied = CONFIG.strike.enabled && input.strike && chargeEmpty && !strikeBanked;
+  // The sound is fired here rather than from the callout system, which has no
+  // audio in it on purpose (it is driven by a headless harness). Gated on the
+  // same liveness as the line it accompanies, or an empty-meter press on the
+  // score card would blip at a player who is not in a fight.
+  if (boostDenied && bandLive && !gameState.paused) {
+    feedback('boostEmpty', { x: player.mesh.position.x, y: player.mesh.position.y });
+  }
   updateCallouts(realDt, {
     // The held breath before a boss and the ceremony after it are one
     // continuous stretch (boss.js hands off between them inside a single
@@ -3881,12 +3916,24 @@ function animate(now) {
     boss: bossState.hushing || bossState.arriving,
     health: hpFrac < (calloutCfg.healthLow ?? 0.3),
     oxygen: oxygenLow,
-    // NOT simply "the meter is empty". The meter is empty after every full
-    // strike, and a band that fired there would be shouting at the player for
-    // playing correctly. It fires when they ASK for boost and there is none —
-    // the button down against an empty meter, which is the only moment the
-    // fact is news.
-    boost: input.strikeHeld && strikeState.charge <= (calloutCfg.boostEmpty ?? 0.02),
+    // TWO DIFFERENT THINGS AN EMPTY METER CAN MEAN, and they want opposite
+    // sentences. Both live on the seal (callouts.csv, `anchor`), so neither is
+    // competing with the band above for the eye.
+    //
+    //   STRIKE NOW!  the wind-up burned the tank dry with a fireable strike
+    //                already banked. Nothing is wrong: the meter is empty
+    //                because it has all become power, and every extra frame of
+    //                holding is doing nothing at all. What the player needs is
+    //                not "you are out of boost" — which reads as a scolding for
+    //                playing correctly — it is LET GO.
+    //   Boost Empty! there is nothing banked and nothing to bank. Fires on the
+    //                PRESS (`input.strike`, one frame) rather than on the hold,
+    //                because that is the moment the fact is news: they asked
+    //                for a strike and the game gave them nothing. Held down, it
+    //                would nag for as long as a finger stayed on a button that
+    //                was never going to answer.
+    strikeNow: chargeEmpty && input.strikeHeld && strikeBanked,
+    boost: boostDenied,
   }, bandLive && !gameState.paused);
 
   updateTutorial(realDt, {

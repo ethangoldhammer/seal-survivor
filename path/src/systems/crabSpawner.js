@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
-import { countFloorPickups, bestChumTarget } from '../entities/pickups.js';
+import { countFloorPickups, bestChumTarget, arrivingChumX } from '../entities/pickups.js';
 import { bossLockout, enemies, spawnNamed, nightlifeWeight } from '../entities/enemies.js';
 import { inSpawnGroup } from '../enemyTable.js';
 
@@ -122,7 +122,9 @@ let pileTimer = 0;
 let pileGap = 0;
 
 export function resetCrabSpawner() {
-  timer = CONFIG.crabSpawn.checkInterval;
+  // 0, not a full interval: the timer is a cooldown on the last wave and there
+  // has not been one, so a run starts able to answer the first pile at once.
+  timer = 0;
   pileLeft = 0;
   pileTimer = 0;
 }
@@ -134,8 +136,12 @@ export function resetCrabSpawner() {
 function edgeFloorPoint() {
   const margin = CONFIG.crabSpawn.spawnMargin ?? 3;
   const pile = bestChumTarget(0, bounds.bottom, Infinity, CONFIG.crabSpawn.clusterRadius ?? 6);
-  const pileX = pile ? pile.mesh.position.x : 0;
   const mid = (bounds.left + bounds.right) * 0.5;
+  // Settled pile first; failing that the chum that is still coming down, which
+  // is usually the whole answer now that the wave is called on arrival rather
+  // than after it. Only if there is neither does this fall back to the middle.
+  const pileX = pile ? pile.mesh.position.x
+    : (arrivingChumX(CONFIG.crabSpawn.summonHeight ?? CONFIG.crabSpawn.floorHeight) ?? mid);
   // Further edge, with a little randomness so a wave doesn't file in from one
   // side in a perfectly straight line.
   const fromLeft = pileX > mid ? Math.random() < 0.85 : Math.random() < 0.15;
@@ -191,16 +197,37 @@ export function updateDeathPile(dt, scene, difficulty, at) {
   if (key) spawnNamed(scene, key, difficulty, edgePointNear(at?.x ?? 0), { ignoreCaps: true });
 }
 
-// Checked on its own timer (not every frame — counting the pickup pile is
-// cheap but there's no reason to do it 60 times a second).
+// THE TIMER IS A COOLDOWN, NOT A POLL. It used to be a poll — the pile was
+// counted every `checkInterval` seconds and a wave called if it was big enough
+// — which put up to three seconds between chum reaching the seabed and
+// anything noticing, on top of the walk in from the wings. The pile is tested
+// every frame now and the cooldown charged when the pile clears the threshold,
+// so the reaction is immediate while the spacing BETWEEN waves is exactly what
+// it was.
+//
+// The per-frame half is deliberately the cheap one: counting pickups is a
+// single pass over an array capped at 140. Everything costly below the
+// threshold test (reading the crab family out of CONFIG.enemies, counting the
+// crabs already on the seabed) still runs at most once per `checkInterval` —
+// which matters, because a wave that is refused by the family cap or by a boss
+// lockout leaves the pile sitting above the threshold, and without charging
+// the cooldown there that refusal would be re-computed every frame for as long
+// as the chum lasts.
 export function updateCrabSpawner(dt, scene, difficulty) {
   if (!CONFIG.crabSpawn.enabled) return;
-  timer -= dt;
-  if (timer > 0) return;
-  timer = CONFIG.crabSpawn.checkInterval;
+  if (timer > 0) {
+    timer -= dt;
+    return;
+  }
 
-  const floorCount = countFloorPickups();
+  // Counts the chum still ON ITS WAY DOWN too — see crabSpawn.summonHeight.
+  // Crabs walk on from off the side of the arena, so setting off while the
+  // pile is falling is what has them arrive WITH it rather than after it.
+  const floorCount = countFloorPickups(
+    CONFIG.crabSpawn.summonHeight ?? CONFIG.crabSpawn.floorHeight,
+  );
   if (floorCount < CONFIG.crabSpawn.pileThreshold) return;
+  timer = CONFIG.crabSpawn.checkInterval;
 
   const over = floorCount - CONFIG.crabSpawn.pileThreshold;
   const desired = Math.min(CONFIG.crabSpawn.maxCrabsPerWave, 1 + Math.floor(over / CONFIG.crabSpawn.orbsPerCrab));

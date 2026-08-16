@@ -1453,6 +1453,27 @@ export function nightlifeWeight(glowing) {
   return day + (night - day) * t;
 }
 
+// Is the water dark enough that a creature with two forms should be wearing
+// its night one?
+//
+// DERIVED FROM THE CURVES rather than from a threshold of its own, and that is
+// the whole point: this returns true at exactly the moment the glowing roster
+// becomes more welcome than the daylight one, so the cast swap and the costume
+// swap are the same event by construction. A separate `if (night > 0.3)` here
+// would be a second changeover to keep in sync with the first, and it would
+// drift the first time anyone dragged `dusk`.
+//
+// With the cycle off both curves stand down to 1 and this is false — a world
+// with no night is a permanent noon, and every dual species wears its day
+// clothes, which is the same answer nightlifeWeight gives.
+//
+// Read at SPAWN only. A fish already in the water keeps the body it was born
+// with, exactly as the day roster lingers at 8% after sunset instead of
+// blinking out — the ocean changes over a sunset, it does not cut.
+export function wearsNightForm() {
+  return nightlifeWeight(true) > nightlifeWeight(false);
+}
+
 // `lull` is the wave clock's quiet stretch (see systems/waves.js): a fourth
 // kind of "not yet", alongside minDifficulty, minPlayerLevel and the nightlife
 // gate. Unlike those three it asks nothing about the creature's place in the
@@ -1516,7 +1537,19 @@ function pickType(difficulty, playerLevel = 1, lull = false) {
     // After the cap, not before: `maxWeight` is a ceiling on how common a
     // species gets over a long run, and the changeover is meant to scale the
     // result of that curve rather than be clipped by it.
-    w *= def.bioluminescent ? glowMul : dayMul;
+    // THREE KINDS OF CREATURE, not two. `bioluminescent` is a species that
+    // only exists after dark and `nightAsset` is one that exists all run and
+    // CHANGES CLOTHES at dusk — so the second must not walk either curve
+    // alone. The glowing curve would delete it from the daylight ocean (its
+    // `day` end is 0) and the daylight curve would throttle it to 8% at night,
+    // which is the whole roster going quiet exactly when its night form was
+    // supposed to be the thing you were looking at.
+    //
+    // `max` rather than a third tunable curve: the two ends it needs are 1 and
+    // 1, and both already exist as the OTHER curve's live end. A dual species
+    // therefore tracks whichever roster is currently in season, which is what
+    // "it is always in season" means when the two curves are complementary.
+    w *= def.bioluminescent ? glowMul : (def.nightAsset ? Math.max(dayMul, glowMul) : dayMul);
     if (w <= 0) continue;
     total += w;
     pool.push({ key, def, w });
@@ -1587,10 +1620,24 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // everything downstream that asks what this individual is made of (the
   // hitbox, the recycler, the look) has to get the same answer as the body
   // that was actually built. Reading the list again later would re-roll it.
+  // `nightAsset` wins over both, and is checked FIRST rather than folded into
+  // the list above: a species with two forms has one body per form, not a bag
+  // of interchangeable ones, so rolling it in with `assets` would let a dual
+  // species come up in its day clothes at midnight one spawn in two.
+  //
+  // A SECOND ASSET KEY IS THE ONLY WAY TO DO THIS. The glow is injected into
+  // the material by onBeforeCompile and materials are shared per asset key
+  // (instantiateParsedModel), so one key cannot be lit at noon and luminous at
+  // midnight — and Material.clone() drops the injected shader, so cloning per
+  // instance loses the glow silently. What this DOESN'T need is a second
+  // enemy id: the balance row, the ramp and the caps are properties of the
+  // species, not of what it is wearing.
   const choices = Array.isArray(def.assets) ? def.assets.filter(Boolean) : null;
-  const assetKey = choices?.length
-    ? choices[(Math.random() * choices.length) | 0]
-    : (def.asset ?? key);
+  const assetKey = (def.nightAsset && wearsNightForm())
+    ? def.nightAsset
+    : choices?.length
+      ? choices[(Math.random() * choices.length) | 0]
+      : (def.asset ?? key);
   const visual = acquireVisual(assetKey);
   // This individual's own palette, from skins.csv — a heap of crabs is nine
   // shells rather than one repeated. Rolled here rather than inside
@@ -2927,12 +2974,18 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
       // Through pinchReach, so this measures the same way the damage half in
       // systems/combat.js does — see the note there. `ctx.dist` is centre to
       // centre, and the seal's body is a whole world unit of it; leaving that
-      // out is what killed the mechanic when the crab's hitbox shrank.
+      // out is what killed the mechanic the first time, when the crab's hitbox
+      // shrank. The reach comes off the ARM rather than off `e.radius` — a
+      // 0.2-unit hitbox on a six-unit crab put this gate 0.22 units outside
+      // contact, which is the second way the same mechanic died. Asked of the
+      // driver every frame rather than cached on the creature: it measures
+      // once and returns the same number after, and a copy on `e` is one more
+      // thing to go stale.
       // CONFIG.player.hitRadius rather than the live stat because stats.js
       // copies it through unmodified and no upgrade writes it — if one ever
       // does, this is the line that has to be handed player.stats instead.
       if (canPinch && e.pinchTimer <= 0 && !e.claw.isStriking()
-        && ctx.dist < pinchReach(e.radius, CONFIG.player.hitRadius, pc.commitRange ?? 2.1)) {
+        && ctx.dist < pinchReach(e.claw.reach(), CONFIG.player.hitRadius, pc.commitRange ?? 0.55)) {
         if (e.claw.strike()) e.pinchTimer = pc.cooldown ?? 2.6;
       }
 

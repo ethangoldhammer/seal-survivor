@@ -1,0 +1,925 @@
+<title>Seal Survivor &#8212; Model Atlas</title>
+<style>
+:root{
+  --paper:#EFF2F1; --paper-2:#E5EBEA; --card:#F7F9F8;
+  --ink:#0D2028; --ink-2:#3C5560; --ink-3:#6B838C;
+  --rule:#C3D2D2; --rule-2:#D8E2E1;
+  --accent:#0E7A70; --accent-soft:#D3E7E4;
+  --amber:#9A6714; --amber-soft:#F0E3CB;
+  --alert:#A03A41; --alert-soft:#F2DCDC;
+  --d1:#CFE0DE; --d2:#A7C6C6; --d3:#71A3A8; --d4:#3F7C89; --d5:#1E5566; --d6:#0F3846;
+  --shadow:0 1px 2px rgba(13,32,40,.07), 0 6px 18px -10px rgba(13,32,40,.18);
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#07161A; --paper-2:#0B1F24; --card:#0C2229;
+    --ink:#D9E8E7; --ink-2:#9DB6B8; --ink-3:#6E8A8E;
+    --rule:#1E3B43; --rule-2:#162F36;
+    --accent:#47CFC0; --accent-soft:#0E3A3B;
+    --amber:#E0A64A; --amber-soft:#3A2C15;
+    --alert:#E2696F; --alert-soft:#3A1B1E;
+    --d1:#1D454C; --d2:#255C66; --d3:#2E7682; --d4:#3B929B; --d5:#57AFB0; --d6:#7FD2CA;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 22px -12px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#07161A; --paper-2:#0B1F24; --card:#0C2229;
+  --ink:#D9E8E7; --ink-2:#9DB6B8; --ink-3:#6E8A8E;
+  --rule:#1E3B43; --rule-2:#162F36;
+  --accent:#47CFC0; --accent-soft:#0E3A3B;
+  --amber:#E0A64A; --amber-soft:#3A2C15;
+  --alert:#E2696F; --alert-soft:#3A1B1E;
+  --d1:#1D454C; --d2:#255C66; --d3:#2E7682; --d4:#3B929B; --d5:#57AFB0; --d6:#7FD2CA;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 22px -12px rgba(0,0,0,.7);
+}
+:root[data-theme="light"]{
+  --paper:#EFF2F1; --paper-2:#E5EBEA; --card:#F7F9F8;
+  --ink:#0D2028; --ink-2:#3C5560; --ink-3:#6B838C;
+  --rule:#C3D2D2; --rule-2:#D8E2E1;
+  --accent:#0E7A70; --accent-soft:#D3E7E4;
+  --amber:#9A6714; --amber-soft:#F0E3CB;
+  --alert:#A03A41; --alert-soft:#F2DCDC;
+  --d1:#CFE0DE; --d2:#A7C6C6; --d3:#71A3A8; --d4:#3F7C89; --d5:#1E5566; --d6:#0F3846;
+  --shadow:0 1px 2px rgba(13,32,40,.07), 0 6px 18px -10px rgba(13,32,40,.18);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:0 22px 90px}
+
+/* ---------- masthead ---------- */
+.mast{padding:52px 0 26px;border-bottom:2px solid var(--ink)}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);margin:0 0 14px}
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(2.3rem,5.5vw,3.6rem);line-height:1.02;
+  margin:0 0 14px;letter-spacing:-.015em;text-wrap:balance}
+.lede{max-width:63ch;color:var(--ink-2);font-size:16.5px;margin:0}
+.lede code{font-family:var(--mono);font-size:.86em;background:var(--paper-2);
+  padding:.1em .35em;border-radius:3px;color:var(--ink)}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule);margin:30px 0 0}
+.stat{background:var(--paper);padding:13px 15px}
+.stat b{display:block;font-family:var(--mono);font-size:1.5rem;font-weight:500;
+  letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.15}
+.stat span{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);margin-top:3px}
+
+.changelog{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin-top:18px;
+  padding:12px 15px;border-left:2px solid var(--amber);background:var(--amber-soft)}
+.changelog b{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--amber);white-space:nowrap;padding-top:2px}
+.changelog span{font-size:13px;color:var(--ink-2);max-width:78ch}
+.changelog code{font-family:var(--mono);font-size:.88em;color:var(--ink)}
+@media (max-width:640px){.changelog{grid-template-columns:1fr}}
+
+/* ---------- sections ---------- */
+section{margin-top:64px;scroll-margin-top:20px}
+.shead{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid var(--ink);
+  padding-bottom:9px;margin-bottom:8px;flex-wrap:wrap}
+.shead h2{font-family:var(--serif);font-size:1.65rem;font-weight:600;margin:0;letter-spacing:-.01em}
+.shead .tag{font-family:var(--mono);font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink-3);margin-left:auto}
+.snote{color:var(--ink-2);max-width:70ch;margin:14px 0 22px;font-size:14.5px}
+
+/* ---------- scale lineup ---------- */
+.scaleframe{border:1px solid var(--rule);background:var(--card);overflow-x:auto;overflow-y:hidden}
+.lineup{position:relative;display:flex;align-items:flex-end;gap:11px;
+  padding:26px 22px 0;min-width:min-content}
+.fig{position:relative;flex:0 0 auto;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
+.fig .box{border:1px solid var(--ink);border-bottom:none;position:relative}
+.fig .cap{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);white-space:nowrap;
+  transform:rotate(-90deg);transform-origin:left top;position:absolute;left:50%;bottom:-4px;
+  margin-left:4px}
+.baseline{height:2px;background:var(--ink);margin:0 22px}
+.ruler{position:relative;height:34px;margin:0 22px 18px;min-width:min-content}
+.tick{position:absolute;top:0;width:1px;height:7px;background:var(--rule)}
+.tick.major{height:11px;background:var(--ink-3)}
+.tick b{position:absolute;top:12px;left:0;transform:translateX(-50%);font-family:var(--mono);
+  font-size:10px;font-weight:500;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:14px 0 0;font-size:12px;color:var(--ink-2)}
+.legend i{display:inline-block;width:11px;height:11px;margin-right:6px;vertical-align:-1px;
+  border:1px solid var(--ink)}
+
+/* ---------- ledger ---------- */
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:720px}
+th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500;padding:11px 13px;border-bottom:1px solid var(--rule);
+  white-space:nowrap;background:var(--paper-2)}
+td{padding:9px 13px;border-bottom:1px solid var(--rule-2);vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--paper-2)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.kname{font-family:var(--mono);font-size:12.5px;font-weight:500}
+.fname{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.bar{display:block;height:9px;background:var(--d4);border-right:1px solid var(--ink);min-width:1px}
+.barcell{width:38%;min-width:150px}
+
+/* ---------- chips ---------- */
+.chip{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+  text-transform:uppercase;padding:2px 6px;border:1px solid var(--rule);color:var(--ink-2);
+  white-space:nowrap;border-radius:2px}
+.chip.role{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.chip.warn{border-color:var(--amber);color:var(--amber);background:var(--amber-soft)}
+.chip.bad{border-color:var(--alert);color:var(--alert);background:var(--alert-soft)}
+
+/* ---------- plates ---------- */
+.plates{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}
+.plate{border:1px solid var(--rule);background:var(--card);box-shadow:var(--shadow);
+  display:flex;flex-direction:column}
+.phead{padding:13px 15px 11px;border-bottom:1px solid var(--rule)}
+.ptitle{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.ptitle h3{font-family:var(--mono);font-size:14px;font-weight:600;margin:0;letter-spacing:-.01em}
+.pfile{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:3px}
+.psrc{font-size:11.5px;color:var(--ink-3);margin-top:5px}
+.psrc.warn{color:var(--accent)}
+
+.pbody{display:flex;gap:14px;padding:14px 15px;border-bottom:1px solid var(--rule-2);align-items:center}
+.propbox{flex:0 0 108px;height:96px;display:flex;align-items:center;justify-content:center;
+  background:var(--paper-2);border:1px solid var(--rule-2);position:relative}
+.prop{border:1.5px solid var(--accent);background:var(--accent-soft);min-width:2px;min-height:2px}
+.propdim{position:absolute;bottom:3px;left:0;right:0;text-align:center;font-family:var(--mono);
+  font-size:9px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.sizecalc{flex:1;min-width:0}
+.calcrow{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;
+  display:flex;align-items:baseline;gap:5px;flex-wrap:wrap}
+.calcrow .op{color:var(--ink-3)}
+.calcrow .res{font-size:19px;font-weight:600;color:var(--accent)}
+.calclbl{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);
+  font-family:var(--mono);margin-top:7px}
+
+.tex{display:flex;gap:7px;padding:12px 15px;flex-wrap:wrap;border-bottom:1px solid var(--rule-2)}
+.tex figure{margin:0;width:56px}
+.tex img{width:56px;height:56px;object-fit:cover;border:1px solid var(--rule);display:block;
+  background:var(--paper-2)}
+.tex figcaption{font-family:var(--mono);font-size:8.5px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--ink-3);margin-top:3px;text-align:center;line-height:1.3}
+.notex{font-size:12px;color:var(--ink-3);font-style:italic;padding:2px 0}
+
+.specs{padding:12px 15px;display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:12.5px;
+  align-content:start}
+.specs dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink-3);white-space:nowrap;padding-top:1px}
+.specs dd{margin:0;font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;
+  overflow-wrap:anywhere}
+.swatch{display:inline-block;width:10px;height:10px;border:1px solid var(--ink);vertical-align:-1px;
+  margin-right:5px}
+.pfoot{margin-top:auto;padding:10px 15px;border-top:1px solid var(--rule-2);display:flex;
+  gap:5px;flex-wrap:wrap}
+
+/* ---------- findings ---------- */
+.finds{display:flex;flex-direction:column;gap:0;border:1px solid var(--rule);background:var(--card)}
+.find{padding:16px 18px;border-bottom:1px solid var(--rule-2);display:grid;
+  grid-template-columns:88px 1fr;gap:16px;align-items:start}
+.find:last-child{border-bottom:none}
+.find .sev{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  padding:3px 0;text-align:center;border:1px solid;border-radius:2px}
+.sev.a{color:var(--alert);border-color:var(--alert);background:var(--alert-soft)}
+.sev.b{color:var(--amber);border-color:var(--amber);background:var(--amber-soft)}
+.sev.c{color:var(--ink-3);border-color:var(--rule)}
+.find h4{margin:0 0 5px;font-size:14.5px;font-family:var(--sans);font-weight:600}
+.find p{margin:0;color:var(--ink-2);font-size:13.5px;max-width:78ch}
+.find code{font-family:var(--mono);font-size:.88em;background:var(--paper-2);padding:.08em .32em;
+  border-radius:3px;color:var(--ink)}
+
+.foot{margin-top:64px;padding-top:20px;border-top:1px solid var(--rule);font-size:12.5px;
+  color:var(--ink-3);max-width:76ch}
+.foot p{margin:0 0 7px}
+.foot code{font-family:var(--mono);font-size:.9em}
+
+/* ---------- rendered portraits ---------- */
+/* Renders are cropped to their content, so each has its own aspect ratio -- a
+   shark is wide, the seagull is tall. Both boxes below are therefore a fixed
+   HEIGHT with the image contained inside it, which keeps the grid on a regular
+   baseline while letting every model be drawn as large as it fits. */
+.portrait{background:var(--paper-2);border-bottom:1px solid var(--rule-2);
+  display:flex;align-items:center;justify-content:center;padding:8px;height:150px}
+.portrait img{display:block;max-width:100%;max-height:100%;width:auto;height:auto}
+
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule)}
+.gcell{background:var(--card);padding:8px 8px 9px;display:flex;flex-direction:column;
+  align-items:center;gap:4px}
+.gcell .shot{height:104px;width:100%;display:flex;align-items:center;justify-content:center}
+.gcell .shot img{display:block;max-width:100%;max-height:100%;width:auto;height:auto}
+.gcell b{font-family:var(--mono);font-size:10.5px;font-weight:500;color:var(--ink-2);
+  text-align:center;line-height:1.25;overflow-wrap:anywhere}
+.gcell span{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);
+  font-variant-numeric:tabular-nums}
+
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:640px){
+  .find{grid-template-columns:1fr;gap:8px}
+  .find .sev{justify-self:start;padding:3px 10px}
+  .pbody{flex-direction:column;align-items:stretch}
+  .propbox{flex:0 0 auto;width:100%;height:110px}
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Seal Survivor &#183; asset survey &#183; 10 August 2026 (rev 3)</p>
+  <h1>Model Atlas</h1>
+  <p class="lede">Every 3D model the game actually loads, measured at the size it renders. Sizes are
+    <code>fit &#215; sizeMultiplier</code> &#8212; the <code>fit</code> written in <code>assets.js</code> times the
+    Look&nbsp;&amp;&nbsp;Sound multiplier saved in <code>imported-tuning.json</code>, which is what the
+    merged config produces at boot. Geometry, textures and clip names were read out of the binaries
+    themselves, and the proportions come from <code>Box3.setFromObject</code> on the real three.js
+    loaders &#8212; the same measurement <code>assets.js</code> uses to compute scale.</p>
+  <div class="stats" id="stats"></div>
+  <div class="changelog">
+    <b>Changed 10 Aug 2026</b>
+    <span><b>The crab got a claw that opens.</b> <code>crabwalking.glb</code> could not pinch at
+      any price: every arm chain ended at a leaf <code>...ArmPalm</code> bone and the claw head
+      was one closed 424-vertex lump with no interior gap on any of its own three axes &#8212; a
+      shut fist. Both crabs now load <code>crabpincer.glb</code>, whose wrist forks into two
+      finger chains driving separate geometry; rotating the movable one takes the tip-to-tip
+      aperture from 9% of finger length to 33%, a measured <b>+277%</b> on the bone and +356% in
+      play. The arm rides the same CCD IK the octopus uses, rooted at the shoulder.
+      <b>It is also cheaper than what it replaced</b>: the download was 8.64&nbsp;MB and 92,491
+      triangles &#8212; more than double the heaviest asset in this roster, on the one creature
+      that spawns twenty at a time &#8212; so <code>tools/optimize-crab.mjs</code> welds,
+      decimates to 13%, quantises and re-encodes the three 1024&#178; maps to WebP, landing at
+      <b>1.09&nbsp;MB and 12,012 triangles</b> against the old crab's 2.74&nbsp;MB and 8,520.
+      The script re-measures the two finger chains afterwards and fails if the simplifier ate
+      them, because a claw that has lost its prongs looks perfectly fine standing still and
+      simply never opens. The one thing that did get dearer is the skeleton: <b>126 bones
+      against 42</b>. <code>crabwalking.glb</code> is now unreferenced and still on disk.</span>
+    <b>Added 10 Aug 2026</b>
+    <span><b>A second crab.</b> <code>enemyEmberCrab</code> shares the new binary, rig and
+      2.42&times; size, so every geometry figure in its row is the walking crab's. What differs
+      is the surface: <code>modelUnlit</code> over a near-black tint wearing the new
+      <code>emberClaw</code> pattern &#8212; a dark shell with ember claws, made by biasing one
+      colour ramp along the body rather than by adding a second material. That bias needed the
+      pattern's body axis to be <b>declared</b> rather than derived: a crab is wider than it is
+      long, so the longest-side rule picks the axis running from one claw to the other and would
+      have lit one claw while blacking out the other. Neither crab is drawn by the weighted spawn
+      pool (<code>spawnRateMul&nbsp;0</code>) &#8212; <code>crabSpawner.js</code> summons them and
+      splits between the two on the same dusk curve the rest of the roster changes cast on. Both
+      also picked up a telegraphed pinch: 0.42&nbsp;s of windup before 0.16&nbsp;s of strike. The
+      roster is 24 creatures.</span>
+    <b>Note 10 Aug 2026</b>
+    <span>The two crab plates carry <b>no portrait</b> this revision. Their old renders were of
+      <code>crabwalking.glb</code>, which is not the model either of them loads any more, and a
+      picture of the wrong animal is worse than none. Re-run <code>tools/atlas-render</code>
+      against <code>crabpincer.glb</code> to restore them.</span>
+    <b>Corrected 10 Aug 2026</b>
+    <span>The three <b>fish packs were wrong on this page, and wrong in the same way twice</b>.
+      They are one binary holding three different fish, picked apart by <code>meshIndex</code>,
+      and neither the measuring pass nor the renderer honoured it &#8212; so all three reported
+      <code>fishpack.glb</code>'s entire 24,370 triangles and identical proportions, and all three
+      drew the whole file, which is why they looked like the same creature. The game itself was
+      always right: <code>assets.js</code> prunes to the chosen mesh on load. Measured properly
+      they are 9,842 / 3,926 / 10,602 triangles and three quite different shapes, and the renders
+      now show a bass, a discus and a small reef fish. Anything else sharing a file by index would
+      have had the same problem; these are the only three.</span>
+    <b>Removed 10 Aug 2026</b>
+    <span><code>enemyAnimatedCrab</code> and its creature definition, tuner rows, outline toggle,
+      texture-panel entry and saved tuning, plus <code>animatedcrab.glb</code> (688 KB) and its
+      emissive mask. <code>public/models</code> is down to 45.9 MB and the roster to 23 creatures.
+      The seabed crab layer is <code>walkingCrab</code> alone again.</span>
+    <b>Added 10 Aug 2026</b>
+    <span><b>The models are now shown, not just measured.</b> Every asset is rendered from its own
+      binary and embedded here &#8212; a gallery up top and a portrait on each plate. They are made
+      by loading each file with the same three.js build the game ships, posing anything animated a
+      third of the way into its swim clip, lighting it identically, and framing on the asset's own
+      declared <code>forward</code>/<code>up</code>; the images are then cropped to their content,
+      which is why a shark is wide and the seagull is tall. Rendering them turned up two faults
+      that no amount of measuring would have: the hammerhead's mesh had <b>no UV coordinates</b>
+      &#8212; its optimiser had welded the mesh and dropped <code>TEXCOORD_0</code> with the
+      textures, so the material could never be mapped, and three.js does not warn about this. It
+      samples one undefined texel and paints the whole animal that colour, so it read as a dark
+      shark rather than as a broken one. Rebuilt from the 2.25 MB source keeping the UVs, and it
+      came out <i>smaller</i> than the version without them (279 KB against 295 KB) by quantising
+      skin weights and joints to bytes. Then its texture rendered with hard black-and-white patches
+      on the fins alone, which is the tell for a vertically mirrored atlas: its sidecars need
+      <code>flipY: true</code> even though it is a glTF, because they were not thresholded from
+      this model's own maps the way every other mask here was &#8212; the file has none.</span>
+    <b>Added 10 Aug 2026</b>
+    <span>One new creature, and it was already most of the way here:
+      <code>enemyHammerhead</code>. <code>Hammerhead_opt.glb</code> was optimised on 8 Aug in the
+      same batch as the orca family and the harbor porpoise, its diffuse and emissive were baked
+      out and <b>committed</b> to <code>public/textures</code>, and then the binary was never
+      copied into <code>public/models</code> and no asset entry was ever written &#8212; so the
+      atlas has been listing <code>hammerhead.jpg</code> under unused masks ever since. It is now
+      wired: 288 KB, 6,764 triangles, a 12-bone rig, one 2.0s clip, taking
+      <code>public/models</code> from 46.3 MB to 46.6 MB. It is the <b>only</b> asset in the
+      roster whose base colour is a loose file rather than an image inside its own binary &#8212;
+      the optimiser stripped the images to sidecars, so <code>assets.js</code> declares
+      <code>texture: { map }</code> for it and nothing else. Two rig facts worth knowing: its
+      bones run along local <b>+X</b>, the only file here that does not use +Y, and it has
+      <b>no jaw bone at all</b>, which makes it the one hunter in the roster that closes without a
+      gape. The porpoise and orca-family art from that same batch is still unwired &#8212;
+      <code>porpoise.jpg</code>, <code>orca_male.jpg</code> and <code>orca_female.jpg</code>
+      remain in the unused list, and the orca the game loads is still the older low-poly file.</span>
+    <b>Changed 10 Aug 2026</b>
+    <span>Secondary motion now runs on far more of each apex skeleton than the tail. Every apex
+      carries three to five independent spring chains where most carried one, the abyss shark got
+      a rig at all (it had none, so it neither trailed nor flinched), and chains declare a
+      <code>tail</code>/<code>fin</code> role so a short fin is not solved at a tail's looseness.
+      None of this changes a number on this page &#8212; no <code>fit</code>, texture or binary
+      moved &#8212; but it is why the hammerhead's 12-bone rig is worth reading closely: it is the
+      smallest apex skeleton in the set and supports only three chains.</span>
+    <b>Rebuilt 9 Aug 2026</b>
+    <span>Three abyss creatures joined the roster on the bioluminescent skin work &#8212;
+      <code>enemyAbyssShark</code>, <code>enemyLanternRay</code> and
+      <code>enemyLanternfish</code> &#8212; all three re-pointing at binaries already on disk
+      (<code>greatwhite.glb</code>, <code>stingray.glb</code>, <code>fish.glb</code>), so they cost
+      no download. <code>grass</code> now carries a model and is listed here for the first time.
+      <code>fisherman.glb</code> was optimised from 7.03 MB to 1.29 MB, taking
+      <code>public/models</code> from 49.5 MB down to 44.2 MB. Tuning moved on five assets:
+      <code>enemyStingray</code> to a <code>3.1&times;</code> size multiplier,
+      <code>dumboOcto</code> to 1.9, <code>enemyBarracuda</code> to 1.78,
+      <code>octoGrabber</code> to 1.34 and <code>trawler</code> to 0.84, while
+      <code>enemySeaTurtle</code> came back down to 3.08.</span>
+    <b>Corrected 9 Aug 2026</b>
+    <span>The <b>role</b> column is now measured rather than declared. It used to come from a
+      hand-kept list of ten keys, so the other 44 fell through to &ldquo;Unused&rdquo; &mdash;
+      <code>octoGrabber</code>, <code>grass</code>, <code>fisherman</code>,
+      <code>orcaFriend</code> and <code>scallopShell</code> were all labelled that way while
+      being spawned by name from <code>systems/</code>. Roles now come from a scan of every
+      reference in <code>path/src</code>, excluding the tuner and texture panels because those
+      walk the whole roster and would make everything look used. Each plate lists the files that
+      name it. Separately, the emissive masks on the three FBX creatures
+      (<code>seagull</code>, <code>belugaDrone</code>, <code>eelCompanion</code>) were being
+      applied upside-down &mdash; <code>flipY</code> was hardcoded to the glTF value &mdash; and
+      are now oriented per model format.</span>
+    <b>Added 9 Aug 2026</b>
+    <span>Seven assets arrived with the four new abilities: <code>fisherman</code>,
+      <code>octoGrabber</code>, <code>orcaFriend</code>, <code>scallopShell</code> and three
+      procedural shapes (<code>pearl</code>, <code>pearlBomblet</code>, <code>voicemailBomb</code>).
+      Two new binaries &#8212; <code>fisherman.glb</code> and <code>octopus_rig.glb</code> &#8212; pushed
+      <code>public/models</code> to 49 MB and the triangle budget from 191k to 265k.
+      <code>orcaFriend</code> and <code>scallopShell</code> add no files at all: they re-point at
+      <code>orca.glb</code> and <code>oyster.glb</code> at a different <code>fit</code>. Tuning also
+      moved &#8212; <code>enemySeaTurtle</code> went to a <b>4.08&times;</b> size multiplier and
+      <code>enemyStingray</code> to 1.55 glow.</span>
+    <b>Changed 8 Aug 2026</b>
+    <span><code>enemySchoolPod</code> &#183; <code>enemySquid</code> &#183; <code>enemyCrabClaw</code> &#183;
+      <code>enemySharkLowpoly</code> &#8212; with their four enemy definitions, their tuner panels, their
+      saved <code>assetLooks</code> and enemy tuning, their entries in the playtest/perf/inspector
+      lists, and the four binaries
+      (<code>schoolpod.glb</code>, <code>squid.glb</code>, <code>crabclaw.fbx</code>,
+      <code>sharklowpoly.glb</code>). <code>public/models</code> went from 60 MB to 42 MB.
+      Added two-tone emissive masks for <code>seagull</code>, <code>eelCompanion</code> and
+      <code>belugaDrone</code>, built from the source diffuses in the C4D library since none of those
+      FBX files carries a usable one. All three were then checked against their model's own UVs by
+      rasterising the mapped triangles onto the sheet; the seagull's threshold was rebuilt at
+      <code>--lit 0.8</code> after that check showed the wings had been cut.</span>
+  </div>
+</header>
+
+<section id="gallery">
+  <div class="shead"><h2>What they actually look like</h2><span class="tag" id="gallery-tag"></span></div>
+  <p class="snote">Every model rendered from its own binary with the three.js version the game
+    ships, lit the same way and framed the same way: the asset's declared <code>forward</code>
+    points right and its <code>up</code> points up, so the boats and the moray come out rotated
+    here exactly as they are rotated in play. Anything with an animation is posed a third of the
+    way into its swim clip rather than shown in bind pose &#8212; a skinned creature standing in
+    its rest pose reads as a specimen, not an animal. Sized to fill the frame, so these show
+    shape and finish, not scale; scale is the next two sections.</p>
+  <div class="gallery" id="gallery-grid"></div>
+</section>
+
+<section id="scale">
+  <div class="shead"><h2>Everything, to scale</h2><span class="tag">drag / scroll sideways</span></div>
+  <p class="snote">Each rectangle is one asset drawn at its true rendered size: length along its declared
+    <code>forward</code> axis, height along its <code>up</code> axis, sharing one world-unit ruler.
+    Fill depth encodes size band. The three boats and the moray sit rotated relative to the swimmers &#8212;
+    their <code>forward</code>/<code>up</code> pair is deliberately mapped to the side-view frame,
+    so their long axis reads as height here.</p>
+  <div class="scaleframe">
+    <div class="lineup" id="lineup"></div>
+    <div class="baseline" id="baseline"></div>
+    <div class="ruler" id="ruler"></div>
+  </div>
+  <div class="legend" id="legend"></div>
+</section>
+
+<section id="ledger">
+  <div class="shead"><h2>The size ledger</h2><span class="tag" id="ledger-tag"></span></div>
+  <p class="snote">Sorted largest first. <b>World</b> is the longest axis after scaling &#8212; the number the
+    game hands to <code>createVisual()</code>. <b>Hitbox</b> is the enemy's config <code>radius</code>
+    times the same multiplier, which is how <code>enemies.js</code> derives it, so it tracks the body you
+    actually see.</p>
+  <div class="tablewrap"><table id="ledger-table"></table></div>
+</section>
+
+<section id="plates">
+  <div class="shead"><h2>Plates</h2><span class="tag">one per asset</span></div>
+  <p class="snote">Texture swatches are the base-colour maps lifted out of the <code>.glb</code> binaries.
+    Where a plate says <b>untextured</b>, the file ships maps the loader cannot reach &#8212; noted per plate
+    and explained in the findings.</p>
+  <div class="plates" id="plate-grid"></div>
+</section>
+
+<section id="texlib">
+  <div class="shead"><h2>Loose texture library</h2><span class="tag">public/textures &#183; public/sprites</span></div>
+  <p class="snote">Files layered on top of a model rather than shipped inside one, wired in
+    <code>assets.js</code> via <code>texture: { emissive }</code>. Two kinds, and the difference matters:
+    a <b>two-tone</b> mask is white markings on black, so only the markings emit &#8212; what
+    <code>CONFIG.glow</code> describes. A <b>composite</b> is the creature's whole base texture with its
+    brightest region blown to white, so the entire body emits. Ten are composites left over from the
+    tool's default mode; the three generated from external source art are two-tone.</p>
+  <div id="texlib-grid"></div>
+</section>
+
+<section id="procedural">
+  <div class="shead"><h2>Procedural assets</h2><span class="tag">no model file</span></div>
+  <p class="snote">The other 13 entries in <code>ASSETS</code> are built from code &#8212; displaced icospheres,
+    primitives, and one sprite pool. They carry size multipliers too, so they belong in the same ledger.</p>
+  <div class="tablewrap"><table id="proc-table"></table></div>
+</section>
+
+<section id="findings">
+  <div class="shead"><h2>What the survey turned up</h2><span class="tag" id="finds-tag"></span></div>
+  <p class="snote">Nothing here is broken gameplay &#8212; most of it is weight and drift. Ordered by how much
+    it costs.</p>
+  <div class="finds" id="finds"></div>
+</section>
+
+<div class="foot">
+  <p><b>How this was measured.</b> Asset definitions and the size multipliers come from bundling
+  <code>path/src/assets.js</code> and <code>path/src/config.js</code> with esbuild and reading the merged
+  <code>CONFIG</code> &#8212; so every number reflects <code>imported-tuning.json</code> deep-merged over the
+  <code>config.js</code> defaults, not the source literals. Triangles, bones, embedded images and clip
+  names were parsed straight out of the GLB/FBX binaries. Bounding proportions come from running the real
+  <code>GLTFLoader</code> and <code>FBXLoader</code> under Node and calling
+  <code>Box3.setFromObject</code>, which is what <code>assets.js</code> itself does to compute
+  <code>fit</code>.</p>
+  <p><b>The renders.</b> Made by loading each binary with the project's own three.js under real
+  WebGL, sampling its swim clip at 33% so skinned creatures are posed rather than in bind pose,
+  and framing on the declared <code>forward</code>/<code>up</code> pair so every asset is shown in
+  the frame the game shows it in. Cropped to the alpha bounds, so each keeps its own aspect ratio.
+  They are lit by one fixed three-light rig, which means finish and colour are comparable between
+  plates but none of this is the game's own shading &#8212; no <code>modelUnlit</code>, no glow, no
+  outline, no water.</p>
+  <p><b>Read-only.</b> Nothing in <code>public/</code> was modified except
+  <code>models/hammerhead.glb</code>, which was rebuilt from its source to restore the UVs it had
+  been shipped without. No tuning save was triggered.</p>
+</div>
+
+</div>
+
+<script id="atlas-data" type="application/json">__ATLAS_DATA__</script>
+<script>
+(function(){
+const D = JSON.parse(document.getElementById('atlas-data').textContent);
+const rows = D.rows, shapes = D.shapes, tex = D.tex;
+const hex = (n) => n == null ? null : '#' + n.toString(16).padStart(6, '0');
+const fmtB = (b) => b == null ? '\u2014' : b >= 1e6 ? (b/1048576).toFixed(1) + ' MB' : Math.round(b/1024) + ' KB';
+const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c;
+  if (h != null) e.innerHTML = h; return e; };
+
+/* depth band by world size */
+const BANDS = [[1.2,'--d1'],[2.5,'--d2'],[4.5,'--d3'],[7,'--d4'],[11,'--d5'],[1e9,'--d6']];
+const band = (w) => BANDS.find((b) => w <= b[0])[1];
+
+/* ---------- stats ---------- */
+const files = {}; rows.forEach((r) => files[r.file] = r);
+const fileList = Object.values(files);
+const totalBytes = fileList.reduce((s, r) => s + (r.bytes||0), 0);
+const totalTris  = fileList.reduce((s, r) => s + (r.tris||0), 0);
+const imgBytes   = fileList.reduce((s, r) => s + (r.imgBytes||0), 0);
+const tuned      = rows.filter((r) => r.sizeMul !== 1).length;
+[[String(rows.length),'model assets'],[String(fileList.length),'binaries'],
+ [(totalBytes/1048576).toFixed(0)+' MB','on disk'],
+ [totalTris.toLocaleString(),'triangles'],
+ [(imgBytes/1048576).toFixed(0)+' MB','embedded maps'],
+ [tuned+'/'+rows.length,'size-tuned']
+].forEach(([b,s]) => {
+  const d = el('div','stat'); d.appendChild(el('b',null,b)); d.appendChild(el('span',null,s));
+  document.getElementById('stats').appendChild(d);
+});
+
+/* ---------- scale lineup ---------- */
+const PX = 15;                                   // px per world unit
+const sorted = rows.slice().sort((a,b) => b.world - a.world);
+const lineup = document.getElementById('lineup');
+sorted.forEach((r) => {
+  const fig = el('div','fig');
+  const box = el('div','box');
+  box.style.width  = Math.max(2, r.lenW * PX) + 'px';
+  box.style.height = Math.max(2, r.hgtW * PX) + 'px';
+  box.style.background = 'var(' + band(r.world) + ')';
+  box.title = r.key + ' \u2014 ' + r.lenW + ' \u00d7 ' + r.hgtW + ' world units';
+  const cap = el('div','cap', r.key.replace(/^enemy/,'') + ' ' + r.world);
+  fig.appendChild(box); fig.appendChild(cap);
+  fig.style.paddingBottom = '78px';
+  lineup.appendChild(fig);
+});
+/* Ruler spanning the same content width. Measured synchronously rather than in a
+   rAF callback \u2014 a backgrounded tab never fires one, and the ruler is not optional. */
+(function drawRuler(){
+  const w = lineup.scrollWidth;
+  const ruler = document.getElementById('ruler');
+  const inner = Math.max(0, w - 44);
+  document.getElementById('baseline').style.width = inner + 'px';
+  ruler.style.width = inner + 'px';
+  const span = Math.ceil(inner / PX);
+  for (let u = 0; u <= span; u++) {
+    const major = u % 5 === 0;
+    const t = el('div','tick' + (major ? ' major' : ''));
+    t.style.left = (u * PX) + 'px';
+    if (major) t.appendChild(el('b', null, String(u)));
+    ruler.appendChild(t);
+  }
+})();
+const legend = document.getElementById('legend');
+[['--d1','under 1.2'],['--d2','1.2 \u2013 2.5'],['--d3','2.5 \u2013 4.5'],['--d4','4.5 \u2013 7'],
+ ['--d5','7 \u2013 11'],['--d6','over 11']].forEach(([v,t]) => {
+  const s = el('span', null, '<i style="background:var(' + v + ')"></i>' + t + ' world units');
+  legend.appendChild(s);
+});
+
+/* ---------- ledger ---------- */
+document.getElementById('ledger-tag').textContent =
+  rows.length + ' assets \u00b7 ' + fileList.length + ' files';
+const maxW = sorted[0].world;
+const lt = document.getElementById('ledger-table');
+lt.innerHTML = '<thead><tr><th>Asset</th><th>Source file</th><th class="num">fit</th>' +
+  '<th class="num">size \u00d7</th><th class="num">world</th><th class="barcell">relative</th>' +
+  '<th class="num">hitbox</th><th class="num">tris</th><th>role</th></tr></thead>';
+const tb = el('tbody');
+sorted.forEach((r) => {
+  const tr = el('tr');
+  tr.innerHTML =
+    '<td class="kname">' + r.key + '</td>' +
+    '<td class="fname">' + r.file + '</td>' +
+    '<td class="num">' + r.fit + '</td>' +
+    '<td class="num">' + (r.sizeMul === 1 ? '<span style="color:var(--ink-3)">1</span>' : r.sizeMul) + '</td>' +
+    '<td class="num"><b>' + r.world + '</b></td>' +
+    '<td class="barcell"><i class="bar" style="width:' + (r.world/maxW*100).toFixed(1) +
+      '%;background:var(' + band(r.world) + ')"></i></td>' +
+    '<td class="num">' + (r.hitR != null ? r.hitR : '\u2014') + '</td>' +
+    '<td class="num">' + (r.tris ? r.tris.toLocaleString() : '\u2014') + '</td>' +
+    '<td><span class="chip role">' + r.role + '</span></td>';
+  tb.appendChild(tr);
+});
+lt.appendChild(tb);
+
+/* ---------- plates ---------- */
+/* ---------- gallery ---------- */
+(function buildGallery(){
+  var grid = document.getElementById('gallery-grid');
+  var shown = 0;
+  sorted.forEach(function (r) {
+    if (!r.render) return;
+    shown++;
+    var cell = el('div','gcell');
+    var shot = el('div','shot');
+    var im = document.createElement('img');
+    im.src = r.render;
+    im.alt = r.key + ' rendered from ' + r.file;
+    im.loading = 'lazy';
+    shot.appendChild(im);
+    cell.appendChild(shot);
+    cell.appendChild(el('b', null, r.key));
+    cell.appendChild(el('span', null, r.tris ? r.tris.toLocaleString() + ' tris' : r.fmt));
+    grid.appendChild(cell);
+  });
+  document.getElementById('gallery-tag').textContent = shown + ' rendered';
+})();
+
+
+const grid = document.getElementById('plate-grid');
+const FBX_UNTEX = {
+  'seagull.fbx':'every texture slot is a 3dsMax HwShaderParams map the loader skips',
+  'trout.fbx':'maps are .dds, which FBXLoader refuses',
+  'beluga.fbx':'maps point at absolute D:\\ paths that cannot resolve in a browser',
+  'morayeel.fbx':'no texture maps in the file',
+};
+/* file -> the asset keys backed by it, for the shared-file note below. */
+const byFile = {};
+rows.forEach(function (r) { (byFile[r.file] = byFile[r.file] || []).push(r.key); });
+const shareCount = {};
+Object.keys(byFile).forEach(function (f) { shareCount[f] = byFile[f].length; });
+
+sorted.forEach((r) => {
+  const p = el('div','plate');
+
+  const head = el('div','phead');
+  const t = el('div','ptitle');
+  t.appendChild(el('h3', null, r.key));
+  t.appendChild(el('span','chip role', r.role));
+  head.appendChild(t);
+  head.appendChild(el('div','pfile', r.file + ' \u00b7 ' + r.fmt.toUpperCase() + ' \u00b7 ' + fmtB(r.bytes)));
+  head.appendChild(el('div','psrc', r.source));
+
+  /* Who actually names this key in code, measured from path/src rather than
+     from a hand-kept list. The tuner and the texture panel are excluded: they
+     walk the whole roster, so they name every key and would make everything
+     look used. An enemy legitimately shows nothing here -- it is spawned from
+     the CONFIG.enemies table, not from a call site. */
+  if (r.drivers && r.drivers.length) {
+    head.appendChild(el('div','psrc', 'used by ' +
+      r.drivers.map(function (d) { return d[0] + ' &times;' + d[1]; }).join(', ')));
+  }
+  /* One file can back several asset keys, so deleting it is not a one-row
+     decision. Say so on every row that shares. */
+  if (shareCount[r.file] > 1) {
+    head.appendChild(el('div','psrc warn', 'shared file &mdash; also ' +
+      byFile[r.file].filter(function (k) { return k !== r.key; }).join(', ')));
+  }
+  p.appendChild(head);
+
+  /* The model itself, same render as the gallery. It goes above the proportion
+     box rather than replacing it: the box carries the measured length-to-height
+     ratio at true scale, which a framed portrait deliberately throws away. */
+  if (r.render) {
+    var port = el('div','portrait');
+    var pim = document.createElement('img');
+    pim.src = r.render;
+    pim.alt = r.key + ' rendered from ' + r.file;
+    pim.loading = 'lazy';
+    port.appendChild(pim);
+    p.appendChild(port);
+  }
+
+
+  /* proportion + size maths */
+  const body = el('div','pbody');
+  const pb = el('div','propbox');
+  const inner = el('div','prop');
+  const scale = Math.min(78 / Math.max(r.lenW, .01), 62 / Math.max(r.hgtW, .01));
+  inner.style.width  = Math.max(3, r.lenW * scale) + 'px';
+  inner.style.height = Math.max(3, r.hgtW * scale) + 'px';
+  pb.appendChild(inner);
+  pb.appendChild(el('div','propdim', r.lenW + ' \u00d7 ' + r.hgtW));
+  body.appendChild(pb);
+
+  const calc = el('div','sizecalc');
+  calc.innerHTML =
+    '<div class="calcrow"><span>' + r.fit + '</span><span class="op">\u00d7</span>' +
+    '<span>' + r.sizeMul + '</span><span class="op">=</span>' +
+    '<span class="res">' + r.world + '</span></div>' +
+    '<div class="calclbl">fit \u00d7 size multiplier = world units</div>';
+  body.appendChild(calc);
+  p.appendChild(body);
+
+  /* textures */
+  const tx = el('div','tex');
+  if (r.thumbs && r.thumbs.length) {
+    r.thumbs.forEach((th) => {
+      const f = document.createElement('figure');
+      const im = document.createElement('img');
+      im.src = th.thumb; im.alt = r.key + ' ' + th.role + ' map'; im.loading = 'lazy';
+      f.appendChild(im);
+      f.appendChild(el('figcaption', null, th.role + '<br>' + fmtB(th.bytes)));
+      tx.appendChild(f);
+    });
+    if (r.imgCount > r.thumbs.length)
+      tx.appendChild(el('div','notex', '+ ' + (r.imgCount - r.thumbs.length) + ' more'));
+  }
+  if (r.emissiveMap) {
+    const src = tex[r.emissiveMap];
+    if (src) {
+      const f = document.createElement('figure');
+      const im = document.createElement('img');
+      im.src = src.thumb; im.alt = r.key + ' emissive mask'; im.loading = 'lazy';
+      f.appendChild(im);
+      f.appendChild(el('figcaption', null, (src.pure ? 'emissive<br>two-tone' : 'emissive<br>composite')));
+      tx.appendChild(f);
+    }
+  }
+  // The "untextured" note is about the MODEL, so it still belongs on a plate
+  // that has a mask hanging off it \u2014 the mask is layered on, not shipped in.
+  const noBase = !(r.thumbs && r.thumbs.length);
+  if (noBase) {
+    tx.appendChild(el('div','notex',
+      r.fmt === 'fbx' ? 'Model untextured \u2014 ' + (FBX_UNTEX[r.file] || 'no maps reach the renderer') + '.'
+                      : 'No textures in the file \u2014 colour comes from tint and emissive.'));
+  }
+  p.appendChild(tx);
+
+  /* specs */
+  const dl = el('dl','specs');
+  const add = (k, v) => { if (v == null || v === '') return;
+    dl.appendChild(el('dt', null, k)); dl.appendChild(el('dd', null, v)); };
+  add('geometry', (r.tris ? r.tris.toLocaleString() + ' tris' : '\u2014') +
+      ' \u00b7 ' + (r.verts ? r.verts.toLocaleString() + ' verts' : '\u2014') +
+      (r.bones ? ' \u00b7 ' + r.bones + ' bones' : ''));
+  add('axes', 'forward ' + r.forward + ' \u00b7 up ' + r.up + (r.pivot != null ? ' \u00b7 pivot ' + r.pivot : ''));
+  if (r.meshIndex != null) add('mesh', 'index ' + r.meshIndex + ' of the shared file');
+  const look = [];
+  if (r.tint != null) look.push('<span class="swatch" style="background:' + hex(r.tint) + '"></span>tint ' + hex(r.tint));
+  if (r.emissive != null) look.push('<span class="swatch" style="background:' + hex(r.emissive) + '"></span>emissive ' + hex(r.emissive));
+  if (r.glow != null && r.glow !== 1) look.push('glow ' + r.glow);
+  if (r.roughness != null) look.push('rough ' + r.roughness);
+  if (look.length) add('look', look.join('<br>'));
+  if (r.emissiveMap) add('mask', r.emissiveMap.replace('/textures/emissive/',''));
+  const clipTxt = r.clips && r.clips.length
+    ? r.clips.length + ' clip' + (r.clips.length > 1 ? 's' : '') +
+      '<br><span style="color:var(--ink-3)">' +
+      r.clips.slice(0,4).map((c) => {
+        const short = c.length > 34 ? '\u2026' + c.slice(-32) : c;
+        const d = r.clipDur && r.clipDur[c];
+        return short + (d ? ' (' + d + 's)' : '');
+      }).join('<br>') + (r.clips.length > 4 ? '<br>+ ' + (r.clips.length-4) + ' more' : '') + '</span>'
+    : 'none';
+  add('clips', clipTxt);
+  if (r.enemies && r.enemies.length) {
+    const e = r.enemies[0];
+    add('combat', 'hp ' + e.hp + ' \u00b7 contact ' + e.contact + ' \u00b7 xp ' + e.xp +
+        '<br>speed ' + e.speed + ' \u00b7 ' + e.behavior +
+        (e.maxConc ? '<br>max ' + e.maxConc + ' at once' : ''));
+    add('gates', 'difficulty \u2265 ' + (e.minDiff ?? 0) + (e.minLvl ? ' \u00b7 level \u2265 ' + e.minLvl : '') +
+        (e.group ? ' \u00b7 ' + e.group : ''));
+  }
+  p.appendChild(dl);
+
+  /* flags */
+  const foot = el('div','pfoot');
+  const flags = [];
+  if ((r.extensions||[]).indexOf('KHR_materials_pbrSpecularGlossiness') >= 0)
+    flags.push(['bad','specGloss dropped']);
+  if (r.fmt === 'fbx') flags.push(['warn','untextured']);
+  if (r.bytes > 3e6) flags.push(['warn', fmtB(r.bytes) + ' file']);
+  if (r.tris > 15000) flags.push(['warn', (r.tris/1000).toFixed(0) + 'k tris']);
+  if (r.noiseShader) flags.push(['', 'noise shader']);
+  if (r.aimRig) flags.push(['', 'aim rig']);
+  if (r.outline) flags.push(['', 'outline shell']);
+  if (r.modelUnlit) flags.push(['', 'unlit silhouette']);
+  if (r.enemies && r.enemies[0] && r.enemies[0].scalePerDiff)
+    flags.push(['', 'grows \u00d7' + r.enemies[0].maxGrowth]);
+  if (!flags.length) flags.push(['','clean']);
+  flags.forEach(([c,t2]) => foot.appendChild(el('span','chip ' + c, t2)));
+  p.appendChild(foot);
+
+  grid.appendChild(p);
+});
+
+/* ---------- texture library ---------- */
+const tl = document.getElementById('texlib-grid');
+const tlw = el('div','tablewrap');
+const tt = el('table');
+tt.innerHTML = '<thead><tr><th style="width:76px">Map</th><th>File</th><th>Used by</th>' +
+  '<th>Kind</th><th class="num">pixels</th><th class="num">size</th></tr></thead>';
+const USEDBY = {};
+rows.forEach((r) => { if (r.emissiveMap) USEDBY[r.emissiveMap] = r.key; });
+const ttb = el('tbody');
+Object.keys(tex).forEach((k) => {
+  const v = tex[k];
+  const isSprite = v.kind === 'sprite';
+  const kind = isSprite ? '<span class="chip">sprite</span>'
+             : v.pure ? '<span class="chip role">two-tone</span>'
+                      : '<span class="chip warn">composite</span>';
+  const tr = el('tr');
+  tr.innerHTML =
+    '<td><img src="' + v.thumb + '" alt="' + k + '" loading="lazy" ' +
+      'style="width:56px;height:56px;object-fit:contain;border:1px solid var(--rule);' +
+      'background:var(--paper-2);display:block"></td>' +
+    '<td class="fname">' + k + '</td>' +
+    '<td>' + (isSprite ? '<span class="kname">starfish</span> <span style="color:var(--ink-3)">\u2014 1 of 5, picked per throw</span>'
+                       : '<span class="kname">' + (USEDBY[k] || '\u2014') + '</span>') + '</td>' +
+    '<td>' + kind + '</td>' +
+    '<td class="num">' + v.w + '\u00d7' + v.h + '</td>' +
+    '<td class="num">' + fmtB(v.bytes) + '</td>';
+  ttb.appendChild(tr);
+});
+tt.appendChild(ttb); tlw.appendChild(tt); tl.appendChild(tlw);
+
+/* ---------- procedural ---------- */
+const pt = document.getElementById('proc-table');
+pt.innerHTML = '<thead><tr><th>Asset</th><th>Built from</th><th class="num">base</th>' +
+  '<th class="num">size \u00d7</th><th class="num">world</th><th class="num">glow</th><th>colour</th></tr></thead>';
+const ptb = el('tbody');
+shapes.slice().sort((a,b) => b.world - a.world).forEach((s) => {
+  const c = s.tint != null ? s.tint : s.color;
+  const tr = el('tr');
+  tr.innerHTML =
+    '<td class="kname">' + s.key + '</td>' +
+    '<td>' + s.shape + (s.rockVariants ? ' <span style="color:var(--ink-3)">\u00b7 ' + s.rockVariants + ' variants</span>' : '') +
+      (s.sprites ? ' <span style="color:var(--ink-3)">\u00b7 ' + s.sprites.length + ' images</span>' : '') + '</td>' +
+    '<td class="num">' + (s.radius != null ? s.radius : '\u2014') + '</td>' +
+    '<td class="num">' + (s.sizeMul === 1 ? '<span style="color:var(--ink-3)">1</span>' : s.sizeMul) + '</td>' +
+    '<td class="num"><b>' + s.world + '</b></td>' +
+    '<td class="num">' + (s.glow != null ? s.glow : '\u2014') + '</td>' +
+    '<td class="fname">' + (c != null ? '<span class="swatch" style="background:' + hex(c) + '"></span>' + hex(c) : '\u2014') + '</td>';
+  ptb.appendChild(tr);
+});
+pt.appendChild(ptb);
+
+/* ---------- findings ---------- */
+const FINDS = [
+  ['a','The two new binaries are the two heaviest models in the game',
+   '<code>fisherman.glb</code> lands at <b>43,164</b> triangles and 7.0 MB, and ' +
+   '<code>octopus_rig.glb</code> at <b>31,260</b> \u2014 first and second heaviest, ahead of the ' +
+   'megalodon\'s 30,100. Together they are most of the jump from 191k to 265k triangles. Neither is ' +
+   'a crowd asset, so the count matters far less than it would on an enemy, but two points are worth ' +
+   'knowing: <code>octopus_rig.glb</code> ships <b>no textures and no clips</b>, so it is 31k ' +
+   'triangles of untextured, unanimated geometry; and the fisherman\'s clips are named ' +
+   '<code>Armature|idol</code> (sic) and <code>Armature|walk cycle&nbsp;</code> \u2014 that one has a ' +
+   '<b>trailing space</b>. <code>assets.js</code> matches it exactly, so it works, but it is the kind ' +
+   'of string that breaks silently the moment anyone tidies it.'],
+  ['a','Ten of the thirteen masks are composites, not the high-contrast masks the config describes',
+   '<code>tools/make-emissive-masks.mjs</code> defaults to <em>compositing</em> the threshold mask over ' +
+   "the model's own base-colour texture with a <code>lighten</code> blend, so those ten are photographic " +
+   "JPEGs \u2014 the creature's full texture with roughly its brightest 15% pushed to white. That is " +
+   'deliberate in the tool (a black region emits nothing, so the body would go dark down deep), but it ' +
+   'is not what <code>CONFIG.glow</code> promises: that comment describes a mask where "only the bright ' +
+   'markings glow and the body stays dark". Since three multiplies <code>emissiveMap</code> by the ' +
+   'emissive colour, a composite lights the whole body \u2014 the flood the toggle exists to avoid. The ' +
+   'two-tone version is the tool\'s <code>--pure</code> flag, and until now it had never been run: there ' +
+   'were no <code>.png</code> masks at all. The seagull, moray and beluga are now two-tone; the other ' +
+   'ten are ' +
+   'unchanged, because regenerating them alters ten tuned creatures and <code>--pure</code> writes ' +
+   '<code>.png</code>, so each <code>texture: { emissive }</code> path needs its extension changed too. ' +
+   'It also needs <code>sharp</code>, which is deliberately not a project dependency.'],
+  ['b','Emissive maps are switched off globally anyway',
+   '<code>CONFIG.glow.emissiveMaps</code> is <code>false</code>, so none of the ten masks are attached ' +
+   'at boot \u2014 it is an A/B you flip in the tuner\'s Glow panel. Worth knowing when judging whether a ' +
+   'mask "works": with the toggle off it renders identically either way.'],
+  ['b','fishingboat.glb loses 2.5 MB of maps to a dead extension',
+   'Its base colour sits under <code>KHR_materials_pbrSpecularGlossiness</code>, which three r183 ' +
+   'dropped \u2014 the loader prints <code>Unknown extension</code> and builds a default material, so all ' +
+   'four 1024\u00b2 images download and are never sampled. It happens not to matter visually: ' +
+   '<code>boat</code> sets <code>modelUnlit</code> with a near-black tint to render as a flat ' +
+   'silhouette. That makes the 2.5 MB pure download weight. It is the last file with this problem \u2014 ' +
+   'the other two carrying it were removed.'],
+  ['b','All four FBX models render untextured',
+   '<code>seagull.fbx</code> routes every map through 3dsMax <code>HwShaderParams</code> slots the ' +
+   'loader skips (and points at <code>.dds</code> besides); <code>trout.fbx</code> embeds real DDS ' +
+   'data, which FBXLoader refuses outright; <code>beluga.fbx</code> references absolute ' +
+   '<code>D:\\artworks\\\u2026</code> paths that cannot resolve from a browser; <code>morayeel.fbx</code> ' +
+   'ships no maps at all. Each is already driven by tint, emissive and glow in the tuning, so this ' +
+   'reads as settled rather than broken. It is also why the seagull, moray and beluga masks are built ' +
+   'from the source art in the C4D library rather than from the model. The beluga is the clearest ' +
+   'case: its FBX names the exact right texture, <code>beluga_whale_diff.png</code>, at a path that ' +
+   'only ever existed on the original author\'s machine \u2014 the file itself is sitting in the C4D ' +
+   'library. All three source paths are recorded in the tool\'s <code>EXTERNAL</code> table so the ' +
+   'step repeats.'],
+  ['b','A mask can align perfectly and still be wrong: the seagull lost its wings to the default threshold',
+   'The first seagull mask lit the body and left the entire wing fan black \u2014 the largest island on the ' +
+   'sheet. The instinct is to suspect the texture, since it comes from the C4D library rather than ' +
+   'from the model. Rasterising the FBX\'s own mapped triangles onto the sheet ruled that out: ' +
+   '<b>0.6%</b> of the mapped area lands on background, so the art and the UVs agree. The fault was ' +
+   'the pivot. The gull\'s art sits at luminance p25=139, p50=160, p90=217, and the tool\'s default ' +
+   '<code>--lit 0.15</code> chose a pivot of <b>210</b> \u2014 above the ninth decile \u2014 so only the white ' +
+   'body cleared it. At <code>--lit 0.8</code> the pivot drops to 125 and the mask holds body, wings, ' +
+   'head and tail while keeping the black wingtip band, eye and feet dark, which is the reason to mask ' +
+   'this bird at all. The percentile default assumes markings are the brightest thing on a darker ' +
+   'body; on a white animal it inverts, and the same trap is why the beluga needed 0.5. Worth checking ' +
+   'alignment before threshold, but not worth assuming misalignment is the answer.'],
+  ['b','The beluga ships one animation of eleven, and all three states point at it',
+   '<code>public/models/beluga.fbx</code> is byte-identical to ' +
+   '<code>_belugawhale_swim1.FBX</code> in the C4D source \u2014 not to the base ' +
+   '<code>beluga whale.FBX</code>, which carries the same mesh with <em>no clips at all</em>. ' +
+   'The source ships eleven exports: a base mesh plus ten more takes \u2014 swim2, breathe, twist, ' +
+   'blowing-bubbles, and six turn variants (L/R with start and end). Each is the same 74-mesh, ' +
+   '24,536-triangle whale with one differently-baked <code>Take 001</code>, which is why ' +
+   '<code>animations</code> maps idle, swim and boost all onto the same clip. Real states are ' +
+   'available, but not for free: every export re-ships the whole mesh, so adding one clip by ' +
+   'adding one file costs about 3.8 MB. Merging the takes into a single rig is the cheap version.'],
+  ['b','crabbase.glb is referenced nowhere',
+   '207 KB sitting in <code>public/models/</code> with no <code>ASSETS</code> entry and no mention ' +
+   'anywhere in <code>path/</code>, <code>tools/</code> or the preview pages. The walking crab uses ' +
+   '<code>crabwalking.glb</code>; this looks like its predecessor.'],
+  ['b','19 of the 29 emissive masks are unused',
+   'Only ten are wired up through <code>texture: { emissive }</code>. The rest \u2014 the numbered ' +
+   '<code>shark__0\u20263</code>, <code>megalodon__*</code>, <code>mightymeg__*</code>, ' +
+   '<code>fishpack__*</code> and <code>trawler__*</code> sets, plus <code>hammerhead</code>, ' +
+   '<code>orca_male</code>, <code>orca_female</code> and <code>porpoise</code> \u2014 were generated by ' +
+   '<code>tools/make-emissive-masks.mjs</code> and never attached. The multi-material ones cannot be ' +
+   'wired as-is: <code>texture.emissive</code> is a single path applied to every material on the asset. ' +
+   'The four loose creature JPEGs in <code>public/textures/</code> and the two <code>GHCrab</code> maps ' +
+   'are unreferenced too.'],
+  ['c','Three saved looks point at assets that no longer exist',
+   '<code>imported-tuning.json</code> still holds <code>assetLooks</code> for <code>enemyChaser</code>, ' +
+   '<code>enemyShooter</code> and <code>enemyGlowingShark</code>. Config already logs and drops the ' +
+   'matching enemy tuning on load \u2014 the look entries are inert, just carried along. Left in place; ' +
+   'they were not part of the removal.'],
+  ['c','The <code>particle</code> asset entry is dead',
+   '<code>ASSETS.particle</code> is a 0.08-radius white sphere that nothing reads: ' +
+   '<code>entities/particles.js</code> runs its own instanced system and never calls ' +
+   '<code>createVisual</code>. It is the only <code>ASSETS</code> key with no saved look, which is the ' +
+   'tell \u2014 the tuner never built a panel for it.'],
+];
+document.getElementById('finds-tag').textContent = FINDS.length + ' items';
+const fdiv = document.getElementById('finds');
+FINDS.forEach(([sev, title, body]) => {
+  const f = el('div','find');
+  f.appendChild(el('div','sev ' + sev, sev === 'a' ? 'weight' : sev === 'b' ? 'drift' : 'cruft'));
+  const c = el('div');
+  c.appendChild(el('h4', null, title));
+  c.appendChild(el('p', null, body));
+  f.appendChild(c);
+  fdiv.appendChild(f);
+});
+
+/* Every horizontally scrollable container starts at its left edge. Browsers
+   anchor scroll positions while content streams in, which otherwise leaves the
+   scale chart and the wide tables opened part-way along. */
+document.querySelectorAll('.scaleframe, .tablewrap').forEach((n) => { n.scrollLeft = 0; });
+})();
+</script>
+
+</body></html>

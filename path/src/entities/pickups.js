@@ -703,13 +703,39 @@ export function gulpPickups(scene, x, y, radius, onCollect) {
   return n;
 }
 
-// How many xp orbs are currently settled on the seabed — the crab-spawn
-// system's trigger signal.
-export function countFloorPickups() {
-  const floorY = bounds.bottom + CONFIG.crabSpawn.floorHeight;
+// How many xp orbs are on (or nearly on) the seabed — the crab-spawn system's
+// trigger signal.
+//
+// `height` is how far above bounds.bottom still counts, and the caller passes
+// crabSpawn.summonHeight rather than floorHeight: the crabs walk in from off
+// the side of the arena, so counting only what has already landed spends the
+// whole walk with the pile sitting there untouched. Defaults to floorHeight so
+// a caller that means "settled" gets settled.
+export function countFloorPickups(height = CONFIG.crabSpawn.floorHeight) {
+  const floorY = bounds.bottom + height;
   let n = 0;
   for (const p of pickups) if (p.mesh.position.y <= floorY) n++;
   return n;
+}
+
+// Mean x of the chum within `height` of the seabed, or null if there is none.
+//
+// Which edge a summoned wave walks on from is decided by where the food is,
+// and the summon now fires while the pile is still falling — but bestChumTarget
+// below only sees orbs that have LANDED (it reads `onFloor`), so on its own it
+// answers "nowhere" for exactly the pile that just called the wave, and the
+// crabs pick their side on a coin flip. The mean is enough for a left/right
+// decision and costs one pass.
+export function arrivingChumX(height = CONFIG.crabSpawn.floorHeight) {
+  const floorY = bounds.bottom + height;
+  let sum = 0;
+  let n = 0;
+  for (const p of pickups) {
+    if (p.mesh.position.y > floorY) continue;
+    sum += p.mesh.position.x;
+    n++;
+  }
+  return n ? sum / n : null;
 }
 
 // ---------------------------------------------------------------------------

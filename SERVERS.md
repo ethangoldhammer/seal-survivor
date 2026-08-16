@@ -119,6 +119,19 @@ Nothing in the repo depends on them; they're always safe to kill.
 `npm run build`. Useful for the minute after a build, misleading forever after.
 Not part of normal work.
 
+**The layout audit** (`npm run layout`, port `4650`) builds `tools/layout/` and
+serves it, and **stays up** — open the page, it sweeps 48 tiles of real
+interface at real device sizes, prints what does not fit to the terminal, and
+keeps serving so you can click any tile to remount and inspect it. It **cannot
+write tuning**: a build served read-only, with no `/__tuning` endpoint — the
+same reason the look pages are built rather than run on a second dev server.
+Safe to kill at any time. `--once` is the check-runner mode: report and exit,
+non-zero if anything overflows.
+
+```bash
+npm run layout
+```
+
 `server/` is not a dev server at all — it's the Cloudflare Worker source for
 the leaderboard, deployed with wrangler.
 

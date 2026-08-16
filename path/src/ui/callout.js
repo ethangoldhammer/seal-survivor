@@ -50,7 +50,34 @@ const STYLES = `
   /* Type here is the FALLBACK, same as the rest of ui.js: every font value is
      re-stated by ui/typography.js from the Warning band, First-run tip and
      Boost warning roles. Position, centring and the will-change hint are real. */
-  .sv-callout { position: absolute; left: 50%; white-space: nowrap; text-align: center;
+  /* WRAPS, and this is the whole of the mobile tutorial fix.
+     This was "white-space: nowrap" — no backticks in here, the whole block is
+     a template literal and one would end it — which is right for "Warning!"
+     and wrong for
+     every coach line in callouts.csv: at 24px with 0.1em of tracking, "Keep
+     going — jump clean out of the water" is 437px of unbreakable text centred
+     on a 375px screen, so 31px of it hung off each edge — the FIRST and LAST
+     words of the one sentence teaching a new player what to do. It cost nothing
+     on a desktop, which is why it survived.
+     max-width earns the wrap: without it the line grows to the layer and never
+     breaks. min() rather than a plain vw so a phrase that fits stays on one
+     line on a wide screen — this only ever wraps when it has to.
+
+     "width: max-content" is what makes that max-width mean anything, and it is
+     not decoration. This box is absolutely positioned at left: 50%, so the room
+     available to it is the half of the screen to its right — 187px on a phone —
+     and a shrink-to-fit box takes that as its width no matter what max-width
+     says. The line fitted, and wrapped into THREE ragged lines inside half the
+     screen while the other half sat empty. max-content sizes it to the sentence
+     first; max-width then clamps that to the screen, and the wrap happens at
+     the width the text can actually have. The centring is done by the transform
+     (translate -50%), not by the box, so widening it moves nothing.
+     line-height is stated here because a two-line band needs one and the role
+     sheet (ui/typography.js) does not write it; balance splits the two lines
+     evenly instead of leaving one word alone on the second. */
+  .sv-callout { position: absolute; left: 50%; text-align: center;
+    white-space: normal; width: max-content; max-width: min(720px, 88vw); line-height: 1.25;
+    text-wrap: balance; overflow-wrap: break-word;
     font-size: 24px; font-weight: 800; letter-spacing: 0.1em; color: #ff5566;
     text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 18px currentColor;
     pointer-events: none; will-change: transform, opacity, filter; }

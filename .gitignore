@@ -6,6 +6,10 @@ dist
 # them. The PAGES are tracked; their output is not.
 dist-cash-look
 dist-yacht-look
+
+# The layout audit's build and its report (npm run layout). Same deal as the
+# look pages: the page and the runner are tracked, what they generate is not.
+dist-layout-audit
 .DS_Store
 .env
 server/.wrangler

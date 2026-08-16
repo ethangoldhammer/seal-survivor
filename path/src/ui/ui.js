@@ -13,7 +13,7 @@ import { menuInput, resetMenuInput } from '../input.js';
 import { touchPrimary } from '../devices.js';
 import { mountRiveSplash } from './riveSplash.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
-import { bossShot, bossShots, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards } from '../systems/bossShot.js';
+import { bossShot, bossShots, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
 import { buildPrintPaper, initSnapshotPrints } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import {
@@ -86,14 +86,46 @@ const STYLES = `
   .sv-ui { position: fixed; inset: 0; pointer-events: none; z-index: 10;
     font-family: var(--sv-font, 'Inter', system-ui, sans-serif); }
   .sv-hud { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: flex-start; color: #e8ecf3; }
-  .sv-panel { background: rgba(12,14,22,0.72); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 10px 14px; backdrop-filter: blur(6px); }
+  /* NO BOX. This was a 72%-opaque slab with a border, a 10px radius and a 6px
+     backdrop blur behind the score and the clock. The numbers are read off the
+     water directly now — over an ocean that is mostly dark, a panel is a hole
+     cut in the picture to hold two figures that were already legible. */
+  .sv-panel { padding: 0; }
+  /* The gap the "Time" caption used to provide. Without it the score and the
+     clock stack into one four-line block of digits. */
+  .sv-hud-time { margin-top: 4px; opacity: 0.7; }
+  /* The read-outs, as one movable block. margin-left:auto is what pushes the
+     group to the right-hand end of the HUD row, and it is the same declaration
+     the score panel carried before this wrapper existed — so on a desktop it
+     sits exactly where it always has.
+
+     Right-aligned because without the box there is no edge but the screen's:
+     left-aligned text pinned to a right corner leaves a ragged edge facing in.
+
+     THE LEGIBILITY IS A drop-shadow AND NOT A text-shadow, deliberately. The
+     panel background was doing that job, and the two roles underneath it
+     (.sv-label and .sv-value) are set to shadow: 0 — in the saved tuning as
+     well as in the defaults, so raising it in textRoles.js would be a silent
+     no-op. ui/typography.js owns text-shadow on those selectors outright and
+     rewrites it whenever the Text panel moves, so a second writer here would be
+     the bug where one of them never wins. drop-shadow is a different property
+     nothing else touches, applied to the group: it shadows the glyphs as
+     rendered, and the Text panel keeps full control of the type. */
+  .sv-hud-corner { margin-left: auto; display: flex; align-items: flex-start;
+    gap: 0; text-align: right;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9)) drop-shadow(0 0 7px rgba(0,0,0,0.6)); }
 
   /* XP spans the full width at the very top — it's the run-long progress
      bar, so it reads as a frame around the screen rather than a widget. */
   .sv-xptop { position: absolute; top: 0; left: 0; right: 0; height: 6px;
     background: rgba(255,255,255,0.07); overflow: hidden; }
-  .sv-xptop-fill { height: 100%; width: 0%; background: #7ad7ff;
-    box-shadow: 0 0 10px rgba(122,215,255,0.75); transition: width 0.15s ease; }
+  /* SCALED, not sized. The fill is always the full track and is squashed along
+     one axis by --sv-xp (written by updateHUD as a 0..1 fraction), which is what
+     lets the responsive block below turn the same element on its side without
+     the JS knowing. transform-origin is the end it grows FROM. */
+  .sv-xptop-fill { height: 100%; width: 100%; background: #7ad7ff;
+    transform: scaleX(var(--sv-xp, 0)); transform-origin: 0 50%;
+    box-shadow: 0 0 10px rgba(122,215,255,0.75); transition: transform 0.15s ease; }
   .sv-xptop-level { position: absolute; top: 9px; left: 14px; font-size: 10px;
     letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;
     color: rgba(232,236,243,0.5); text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
@@ -437,6 +469,128 @@ const STYLES = `
   @media (prefers-reduced-motion: reduce) {
     .sv-ui * { transition: none !important; animation: none !important; }
   }
+
+  /* =========================================================================
+     THE SMALL SCREEN.
+     Everything above this line was written at desktop size, and a phone is not
+     a small desktop — it is a different shape, held in a hand, with a thumb
+     over part of it. What is here is the set of changes that shape needs, and
+     nothing else: the desktop layout is not touched by any of it.
+
+     KEYED ON THE VIEWPORT, deliberately, with one exception. A width and a
+     height are facts about the screen the game is being drawn on, and they can
+     be reproduced exactly — which is what lets "npm run layout" build every one
+     of these surfaces at every size and measure whether it fits. The exception
+     is tap-target size, which is a fact about the player's HAND and rides the
+     .sv-touch class instead (see markTouch).
+
+     Every rule below was written against a finding from that audit. The numbers
+     in the comments are what it measured before the rule existed.
+     ========================================================================= */
+
+  /* --- THE LEVEL METER, UP THE LEFT EDGE ---------------------------------
+     A run-long progress bar wants the longest edge it can have, and on a phone
+     held upright that is the side, not the top: 667px of travel instead of
+     375px, in the margin beside the thumb rather than across the water.
+     It fills UPWARD (transform-origin at the bottom) because levelling is a
+     climb, and because a meter that fills toward the sky next to a seal
+     swimming down reads without a label.
+
+     "position: fixed" is what gets it out of .sv-hud — that box is inset 14px
+     and only as tall as the corner panels it holds, so a "bottom: 0" inside it
+     would end an inch below the top of the screen. Neither .sv-ui nor .sv-hud
+     carries a transform or a filter, so fixed here resolves against the
+     viewport, which is the frame this bar is actually about. */
+  @media (max-width: 700px) {
+    .sv-xptop { position: fixed; top: 0; bottom: 0; left: 0; right: auto;
+      width: 6px; height: auto; }
+    .sv-xptop-fill { width: 100%; height: 100%;
+      transform: scaleY(var(--sv-xp, 0)); transform-origin: 50% 100%; }
+    /* At the foot of the bar it belongs to, clear of its 6px and clear of the
+       home indicator. Horizontal — a rotated label is a thing to decode, and
+       this one is read at a glance mid-fight or not at all. */
+    .sv-xptop-level { top: auto; bottom: 14px; left: 14px; position: fixed; }
+  }
+
+  /* --- THE TOP BAND BELONGS TO THE BOSS ----------------------------------
+     Score and time move to the BOTTOM right on a phone, and the boss bar takes
+     the width they were using.
+     The reason is that the top of a phone screen is the one place two things
+     genuinely cannot share. The boss bar is centred and its name runs to forty
+     characters ("Wicked Grimgullet the Chumbucket Rumbler"), so at 62vw it was
+     wrapping to three lines under a bar squeezed into two thirds of a screen
+     that is already only 375px — while a Score/Time panel sat in the corner
+     showing two numbers that do not change fast enough to need the best real
+     estate on the display. Downstairs they cost nothing, and the fight gets the
+     whole band.
+     fixed, not absolute: .sv-hud is anchored at the TOP (and its floating
+     hp/air bars are positioned inside it per frame from the seal's projected
+     position), so moving the row itself would drag those bars off the animal.
+     Only this group moves. */
+  @media (max-width: 700px) {
+    /* Column rather than row: anything that joins the score and the clock later
+       grows the block UPWARD into empty water, rather than sideways across a
+       screen that has none to spare. */
+    .sv-hud-corner { position: fixed; right: 14px; bottom: 14px; margin-left: 0;
+      flex-direction: column; align-items: flex-end; gap: 8px; }
+
+    /* Up to where the Rive bar already sits (bossBarRive mounts at top: 14px),
+       so the coded fallback and the real one arrive in the same place. The
+       WIDTH is not set here on purpose — updateBossBar writes it inline per
+       boss, which beats any rule, so the phone widening lives in
+       bossBarWidth() instead. */
+    .sv-bossbar { top: 14px; }
+  }
+
+  /* --- THE UPGRADE CARDS, STACKED ----------------------------------------
+     Three 210px hexes side by side need 630px and a phone has 375. They
+     already wrapped, into a column three cards tall — 630px of cards in a
+     667px screen with a title above them, which put 53px of the menu off the
+     top AND the bottom at once, so the first card and the last were both
+     unreachable.
+     Sized off the HEIGHT instead, which is the axis that ran out: whatever is
+     left after the menu's own chrome, split three ways. The card art is square
+     and the text inside auto-fits (see fitCardText), so a smaller card is a
+     smaller card rather than a broken one.
+     Portrait only. A phone on its side has 852px of width and the row fits
+     there already — the audit confirms it, and stacking would break it. */
+  @media (max-width: 700px) and (orientation: portrait) {
+    .sv-cards { flex-direction: column; flex-wrap: nowrap; align-items: center; gap: 6px; }
+    .sv-card { width: min(210px, calc((100vh - 160px) / 3));
+      height: min(210px, calc((100vh - 160px) / 3)); }
+    .sv-menu { padding: 20px 18px; max-width: 94vw; }
+  }
+
+  /* --- MENUS ON A SHORT SCREEN -------------------------------------------
+     A phone on its side is 393px tall. The score card — quip, stats, the roll
+     of kill shots, the name row, the leaderboard and a button — ran 17px past
+     the bottom of it, and the thing off the bottom was "Try again", which is
+     the one control on that screen that has to work.
+     A scroll rather than a squeeze: there is genuinely more here than fits, and
+     the alternative to scrolling it is deciding which of those the player is
+     not allowed to see. overscroll-behavior stops a flick at the end of the
+     list turning into a pull on the page behind it. */
+  @media (max-height: 560px) {
+    .sv-menu { max-height: 92vh; overflow-y: auto; overscroll-behavior: contain;
+      padding: 16px 20px; }
+    .sv-leaderboard { max-height: 120px; }
+  }
+
+  /* --- TAP TARGETS -------------------------------------------------------
+     Apple's own minimum is 44px and every button in this game was 34-36px
+     tall: the four share buttons, the name submit, and "Try again". A thumb is
+     about 10mm across and lands on a 36px control most of the time, which is
+     the worst way for this to be wrong — it feels like the button is broken
+     rather than like it was missed.
+     Only where there is a thumb: a 44px button on a desktop is a different
+     design, and this is not the place to make that choice for a mouse. */
+  .sv-touch .sv-btn, .sv-touch .sv-name-input {
+    min-height: 44px; padding-top: 11px; padding-bottom: 11px; }
+  .sv-touch .sv-btn-sm { min-width: 44px; padding-left: 18px; padding-right: 18px; }
+  /* A row of buttons that wraps needs the gap a thumb needs, not the gap an
+     eye needs — two 44px targets 8px apart are one 96px target as far as a
+     mis-tap is concerned. */
+  .sv-touch .sv-trophy-row, .sv-touch .sv-name-row { gap: 12px; }
 `;
 
 export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart }) {
@@ -448,6 +602,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
 
   root = document.createElement('div');
   root.className = 'sv-ui';
+  markTouch(root);
   root.innerHTML = `
     <div class="sv-toast-layer" id="svToastLayer"></div>
 
@@ -458,15 +613,31 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
         <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" id="svHpBar"></div></div>
         <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2" id="svO2Bar"></div></div>
       </div>
-      <div class="sv-panel" style="margin-left:auto;">
-        <div class="sv-label">Score</div>
-        <div class="sv-value" id="svScore">0</div>
-        <div class="sv-label" style="margin-top:8px;">Time</div>
-        <div class="sv-value" id="svTime">0:00</div>
-      </div>
-      <div class="sv-panel" id="svRapidFirePanel" style="display:none;">
-        <div class="sv-label">Rapid Fire</div>
-        <div class="sv-value" id="svRapidFireTime">0s</div>
+      <!-- THE CORNER. Score, time and whatever else is currently true about the
+           run, as ONE block rather than as loose panels in the HUD's flex row —
+           because on a phone the whole group moves to the opposite corner of the
+           screen (see .sv-hud-corner in the responsive block) and a group that
+           moves has to be a thing that can be moved. On a desktop this changes
+           nothing: the wrapper carries the same margin-left:auto the score panel
+           used to, and lays its children out in the same row. -->
+      <!-- THE RAPID FIRE READ-OUT IS GONE, on purpose. It was a second panel
+           here counting a timer down, and it said nothing the fight was not
+           already saying — rapid fire is visible in the firing itself. The
+           timer is still tracked and still passed to updateHUD; what was
+           removed is the box. -->
+      <!-- NO LABELS. "Score" over a five-figure number and "Time" over 7:01
+           are captions on two things that already say what they are: a running
+           total counts up, a clock is punctuated like a clock. They cost two
+           lines of the corner and a glance each to skip past.
+           Both are .sv-value so the Text panel still owns them as one role
+           (path/src/textRoles.js) — the clock is set back with opacity, which
+           is a property typography.js does not write, rather than with a size
+           or a colour it would overwrite on the next tuning change. -->
+      <div class="sv-hud-corner" id="svCorner">
+        <div class="sv-panel">
+          <div class="sv-value" id="svScore">0</div>
+          <div class="sv-value sv-hud-time" id="svTime">0:00</div>
+        </div>
       </div>
       <!-- strike charges are drawn as a ring around the ship (systems/strikeRing.js) -->
     </div>
@@ -546,7 +717,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     'svStartMenu', 'svLevelUpMenu', 'svLevelUpBox', 'svGameOverMenu', 'svCards', 'svGameOverStats',
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
     'svBossBar', 'svBossName', 'svBossFill',
-    'svHighScoreLabel', 'svHighScore', 'svRapidFirePanel', 'svRapidFireTime',
+    'svHighScoreLabel', 'svHighScore', 'svCorner',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
     'svFan', 'svSheetShare', 'svSheetSave',
     // Try again is the one control on the score card that has to work — it is
@@ -626,6 +797,29 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
       el.svNameInput.setSelectionRange?.(caret - 1, caret - 1);
     }
   });
+}
+
+// --- the one thing CSS cannot ask about itself -----------------------------
+// `.sv-touch` on the UI root, whenever the primary pointer is a thumb.
+//
+// WHY A CLASS AND NOT A MEDIA QUERY. Everything else adaptive in this file keys
+// off the VIEWPORT, which is the honest input for a question about layout and
+// has the useful property that it can be reproduced exactly — an iframe 375px
+// wide is a 375px viewport, which is what makes `npm run layout` able to check
+// any of this. Tap-target size is the exception: it is a question about the
+// player's HAND, not their screen, and `pointer: coarse` is unfakeable from
+// outside — an iframe inherits it from the machine the browser is running on,
+// so a rule written as a media query would be a rule the audit could never
+// exercise and never verify. Routed through a class, the game sets it from the
+// real query and the audit sets it from the device it is pretending to be.
+//
+// Re-evaluated on change, not only at boot: plugging a mouse into a tablet (or
+// pulling a keyboard off one) flips this, and a UI sized for the wrong hand
+// until the next reload is the kind of thing nobody reports.
+function markTouch(node) {
+  const apply = () => node.classList.toggle('sv-touch', touchPrimary());
+  apply();
+  window.matchMedia?.('(hover: none) and (pointer: coarse)')?.addEventListener?.('change', apply);
 }
 
 export function setHighScore(score) {
@@ -1753,7 +1947,14 @@ const screenPt = { x: 0, y: 0 };
 
 export function updateHUD(gameState, player, strikeState = null, rapidFireTimer = 0, camera = null) {
   el.svHpBar.style.width = `${Math.max(0, (player.hp / player.stats.maxHp) * 100)}%`;
-  el.svXpBar.style.width = `${Math.max(0, Math.min(1, gameState.xp / gameState.xpToNext)) * 100}%`;
+  // A FRACTION, not a width. The level meter runs left-to-right across the top
+  // of a desktop screen and bottom-to-top up the left edge of a phone (see the
+  // responsive block in STYLES), and which axis it fills is a layout question
+  // that CSS is allowed to answer differently at different sizes. Writing
+  // `style.width` here took that answer away: an inline width beats any rule,
+  // so the vertical bar would have sat at zero height with a full-width fill
+  // inside it — visibly nothing, on the one meter that is up for the whole run.
+  el.svXpBar.style.setProperty('--sv-xp', Math.max(0, Math.min(1, gameState.xp / gameState.xpToNext)));
   el.svLevel.textContent = gameState.level;
   el.svScore.textContent = Math.floor(gameState.score ?? 0).toLocaleString();
   el.svTime.textContent = formatTime(gameState.time);
@@ -1775,12 +1976,12 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
     el.svPlayerBars.style.opacity = idle ? '0.25' : '1';
   }
 
-  if (rapidFireTimer > 0) {
-    el.svRapidFirePanel.style.display = '';
-    el.svRapidFireTime.textContent = `${rapidFireTimer.toFixed(1)}s`;
-  } else if (el.svRapidFirePanel) {
-    el.svRapidFirePanel.style.display = 'none';
-  }
+  // `rapidFireTimer` is still taken and still true — it is simply not DRAWN any
+  // more. The panel it used to fill said nothing the fight was not already
+  // saying, so it was removed rather than hidden (a hidden panel is a panel
+  // somebody has to keep laying out and testing). The parameter stays in the
+  // signature because every caller passes it and the read-out may well come
+  // back somewhere better; nothing here reads it today.
 }
 
 // --- the boss bar ---------------------------------------------------------
@@ -1833,10 +2034,38 @@ export function bossBarSpan(maxHp) {
   return Math.max(0, Math.min(1, t));
 }
 function bossBarWidth(maxHp) {
+  const span = bossBarSpan(maxHp);
+  // ON A PHONE THE TOP BAND IS THE BOSS'S ALONE — score and time move to the
+  // bottom corner (see .sv-hud-corner) — so the bar is given it, over a much
+  // higher floor. 44vw of a 375px screen is 165px, and a forty-character boss
+  // name across 165px is three wrapped lines over a bar squeezed into two
+  // thirds of an already narrow screen.
+  //
+  // The SPAN still reads, which is why this remaps the range rather than
+  // pinning the bar to one width: a bigger boss still arrives with a visibly
+  // longer bar, over a band that starts wide enough to carry its name.
+  //
+  // Done here rather than as a CSS override because the width is written
+  // INLINE by updateBossBar, and an inline style beats any rule — a media query
+  // would have been a declaration that silently never applied. The 700px is the
+  // same breakpoint the responsive block in STYLES uses.
+  if (narrowScreen()) return `${78 + span * 14}vw`;
   // Both ends are in vw so the bar keeps its proportion of the screen on every
   // display, and the ceiling is short of the full width because a bar running
   // edge to edge reads as a loading screen rather than as part of the HUD.
-  return `${44 + bossBarSpan(maxHp) * 40}vw`;
+  return `${44 + span * 40}vw`;
+}
+
+/**
+ * Is this a phone-shaped viewport? The JS half of the 700px breakpoint in
+ * STYLES, for the handful of values CSS cannot own because they are written
+ * inline per frame.
+ *
+ * Asked every time rather than latched at boot: a desktop window dragged narrow, or
+ * a phone turned on its side, crosses this line without a reload.
+ */
+function narrowScreen() {
+  return window.matchMedia?.('(max-width: 700px)').matches ?? false;
 }
 
 export function updateBossBar(banner) {
@@ -2262,7 +2491,13 @@ function showTrophy() {
   // Render every polaroid NOW, while the screen is arriving. Left until a
   // button is pressed, the render would spend the click's transient activation
   // and navigator.share would refuse the sheet — see warmShareCards.
-  warmShareCards();
+  //
+  // The whole-run sheet is warmed the same way and for the same reason, on the
+  // far side of the cards: it is composed FROM them, so starting it first would
+  // only make it wait. It is the more expensive of the two and the one whose
+  // share button was failing, because a compose that runs inside the click
+  // handler outlives the click's activation. See warmRunSheet.
+  warmShareCards().then(() => warmRunSheet(recapRun ?? {}));
   el.svTrophyStatus.textContent = '';
   el.svTrophy.classList.remove('sv-hidden');
   wireTrophy();
@@ -2295,10 +2530,34 @@ function wireTrophy() {
   const told = (how) => say({
     shared: 'Shared',
     saved: 'Saved to your downloads',
-    opened: 'Opened in a new tab',
+    // On a phone this is the picture opening full screen, where saving it is a
+    // long press. Worth saying, because it is a different gesture from the one
+    // the button implied.
+    opened: 'Opened — press and hold the picture to save it',
     cancelled: '',
     unavailable: 'Nothing to share',
   }[how] ?? '');
+
+  // WHERE THE OS HAS A SHARE SHEET, THAT SHEET IS ALSO HOW YOU SAVE. iOS puts
+  // "Save Image" in it, one tap from where the player already is — so a
+  // separate save button there is a second control doing the first one's job,
+  // and it is the one that cannot work properly: a phone browser has no
+  // downloads folder to put a file in, which is why the save buttons appeared
+  // dead on iOS rather than merely awkward (see download() in bossShot.js).
+  //
+  // Removed rather than hidden with a class, so nothing — the pad's menu
+  // navigation especially, which walks this row by name — can land on a control
+  // that isn't there. Desktop is untouched and keeps all four.
+  if (canShareImages()) {
+    el.svTrophySave?.remove();
+    el.svSheetSave?.remove();
+    el.svTrophySave = null;
+    el.svSheetSave = null;
+    // "Share" is now the only verb on the row, so it no longer needs to be
+    // distinguished from saving — these say which PICTURE they act on.
+    if (el.svTrophyShare) el.svTrophyShare.textContent = 'Share this print';
+    if (el.svSheetShare) el.svSheetShare.textContent = 'Share the whole run';
+  }
 
   el.svTrophyShare?.addEventListener('click', async () => {
     say('…');

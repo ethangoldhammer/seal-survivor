@@ -356,7 +356,20 @@ section('A REAL RUN — cold boot, clock running, nobody scrubbing anything');
 // whatever spawned first — every later minute would report the same numbers
 // and a gate that had stopped working would look identical to one that hadn't.
 const TARGET_ALIVE = 70; // roughly what a player who is keeping up holds
-const isGlow = (type) => !!CONFIG.enemies[type]?.bioluminescent;
+// GLOWING IS A PROPERTY OF THE BODY, not of the species. This used to read
+// `CONFIG.enemies[type].bioluminescent`, which was the same question while
+// every glowing creature was a creature that only existed after dark. It
+// stopped being the same question when species grew a `nightAsset`: those keep
+// one row, one id and no tag, and change into a luminous body at dusk (see the
+// asset pick in entities/enemies.js spawnOne). Counting the tag would have
+// reported the night getting dimmer as more of it started to glow.
+//
+// So it asks the ASSET THE INDIVIDUAL WAS ACTUALLY BUILT FROM — `assetKey` is
+// resolved once at spawn and carried on the creature for exactly this reason —
+// and whether that asset carries a `biolumSkin`. A fish that spawned in
+// daylight and lived into the night still counts as dark, which is correct:
+// it really is still wearing its day body.
+const isGlowBody = (e) => !!ASSETS[e?.assetKey]?.biolumSkin;
 
 function playRun(startHour, minutes) {
   CONFIG.dayNight.paused = false;
@@ -384,7 +397,7 @@ function playRun(startHour, minutes) {
       const t = enemies[n].type;
       spawned += 1;
       bySpecies.set(t, (bySpecies.get(t) ?? 0) + 1);
-      if (isGlow(t)) {
+      if (isGlowBody(enemies[n])) {
         glowing += 1;
         if (firstGlowAt == null) firstGlowAt = gs.time;
       }
@@ -409,7 +422,7 @@ function playRun(startHour, minutes) {
   // describe. It differs from the spawn share because schools arrive in
   // different sizes and persist for different lengths of time, so neither one
   // stands in for the other.
-  const aliveGlowing = enemies.filter((e) => isGlow(e.type)).length;
+  const aliveGlowing = enemies.filter(isGlowBody).length;
   return { perMinute, firstGlowAt, bySpecies, aliveGlowing, alive: enemies.length };
 }
 
@@ -477,7 +490,14 @@ check('...and they are the MAJORITY of what spawns once their own gates are past
 // failing on trees nobody had touched.
 const aliveShares = nightRuns.map((r) => r.aliveGlowing / Math.max(1, r.alive));
 const aliveShare = mean(aliveShares);
-const glowCap = pooled.reduce((a, k) => a + (CONFIG.enemies[k].maxConcurrent ?? Infinity), 0);
+// Both halves of the night cast, because both can be on screen glowing: the
+// tagged roster that only exists after dark, and the dual species that changed
+// into a luminous body at dusk. Counting only the first understated the
+// ceiling by most of it and would send whoever read this failure to the
+// suppression dial over a cap that was never binding.
+const glowCap = pooled
+  .concat(Object.keys(CONFIG.enemies).filter((k) => CONFIG.enemies[k].nightAsset))
+  .reduce((a, k) => a + (CONFIG.enemies[k].maxConcurrent ?? Infinity), 0);
 check('...and the majority of the bodies on screen', aliveShare > 0.5,
   `${pct(aliveShare)} of the bodies alive at lights-out, across ${NIGHT_SEEDS.length} seeded runs`
   + ` (${aliveShares.map(pct).join(' ')})`

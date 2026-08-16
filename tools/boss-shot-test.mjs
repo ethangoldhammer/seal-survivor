@@ -89,9 +89,24 @@ dom.window.HTMLCanvasElement.prototype.toDataURL = function toDataURL() {
   lastPngWidth = this.width;
   return 'data:image/png;base64,STUBBEDPNG';
 };
+// ASYNCHRONOUS, like the real one. This used to call back on the spot, and a
+// synchronous toBlob is the one condition under which the run sheet's share
+// button worked: the code fired toBlob and read the blob on the very next line,
+// which is correct only in a harness that answers immediately. In a browser the
+// blob is still null there, so navigator.share was never handed a file and
+// every "Share all" silently became a download. A stub that is easier to write
+// than the thing it stands for is a stub that certifies the bug.
 dom.window.HTMLCanvasElement.prototype.toBlob = function toBlob(cb) {
-  cb(new dom.window.Blob(['png'], { type: 'image/png' }));
+  setTimeout(() => cb(new dom.window.Blob(['png'], { type: 'image/png' })), 0);
 };
+// jsdom has no object URLs. The real one is what a save on iOS depends on (see
+// download in bossShot.js), so it is stubbed rather than left to throw — and
+// the href it produces is what the checks below read to tell a blob: save from
+// the 2MB data: URL that iOS Safari refuses.
+let objectUrls = 0;
+dom.window.URL.createObjectURL = (blob) => `blob:http://localhost/${++objectUrls}-${blob?.type ?? ''}`;
+dom.window.URL.revokeObjectURL = () => {};
+globalThis.URL = dom.window.URL;
 
 const { registerHooks } = await import('node:module');
 registerHooks({
@@ -302,6 +317,76 @@ downloads = 0;
 check('the Save button does the same on its own', await SHOT.saveBossShot() === 'saved');
 check('...once', downloads === 1, `${downloads}`);
 document.createElement = realCreate;
+
+// ---------------------------------------------------------------------------
+section('ON A PHONE — the sheet, and the save that is not a download');
+// ---------------------------------------------------------------------------
+// Both of the failures here were reported as "the save and share buttons don't
+// work on mobile", and neither of them raised anything. One handed the share
+// sheet nothing to share; the other clicked an anchor iOS ignores. What they
+// have in common is that the fallback path is silent, so a broken share and a
+// working one look identical from the desktop they were written on.
+
+// A device with a share sheet that takes files — a phone.
+let phoneShare = null;
+navigator.canShare = (d) => Array.isArray(d?.files) && d.files.length > 0;
+navigator.share = async (d) => { phoneShare = d; };
+
+// THE RUN SHEET, ON THE FIRST PRESS. Composing it is asynchronous — eight cards
+// drawn and read back — and the blob it ends with arrives a tick after the
+// canvas does. The version that returned before that tick handed handOver a
+// null blob, so this came back 'saved' on a device whose whole point is that it
+// can share. It is the FIRST press that matters: a second one finds the sheet
+// cached and would have passed all along, which is why this asks once.
+const runRecap = { score: 45300, level: 12, kills: 212, time: 754, bosses: 1 };
+const firstPress = await SHOT.shareRunSheet(runRecap);
+check('the whole run reaches the share sheet on the first press', firstPress === 'shared', firstPress);
+check('...with the image actually attached',
+  phoneShare?.files?.length === 1 && phoneShare.files[0].type === 'image/png',
+  `${phoneShare?.files?.length ?? 0} file(s)`);
+check('...named as a run rather than as a boss',
+  phoneShare?.files?.[0]?.name === 'seal-survivor-run.png', phoneShare?.files?.[0]?.name);
+
+// THE SAVE ROUTE. On a browser with no share sheet this falls to an anchor, and
+// what that anchor is POINTED AT is the whole bug: a data: URL is refused
+// outright by Safari and ignored by iOS, so the click did nothing at all and
+// this function still reported success.
+let lastHref = '';
+const hrefCatcher = (tag) => {
+  const e = realCreate(tag);
+  if (tag === 'a') {
+    const c = e.click.bind(e);
+    e.click = () => { lastHref = e.getAttribute('href') ?? ''; c?.(); };
+  }
+  return e;
+};
+document.createElement = hrefCatcher;
+navigator.canShare = undefined;
+navigator.share = undefined;
+check('saving a print hands the anchor a blob, not two megabytes of base64',
+  await SHOT.saveBossShot() === 'saved' && lastHref.startsWith('blob:'), lastHref.slice(0, 24));
+lastHref = '';
+check('...and so does saving the whole run',
+  await SHOT.saveRunSheet(runRecap) === 'saved' && lastHref.startsWith('blob:'), lastHref.slice(0, 24));
+document.createElement = realCreate;
+
+// WHICH BUTTONS THE SCORE SCREEN SHOULD OFFER. The answer is asked with a real
+// file in it, because navigator.share exists on desktops that will not take
+// one — and a save button removed on a machine that cannot share instead is the
+// same bug pointed the other way.
+navigator.canShare = undefined;
+navigator.share = undefined;
+check('with no sheet, the score screen keeps its save buttons', SHOT.canShareImages() === false);
+navigator.canShare = (d) => Array.isArray(d?.files) && d.files.length > 0;
+navigator.share = async () => {};
+check('...and drops them where the OS sheet can save the picture itself',
+  SHOT.canShareImages() === true);
+// A desktop that can share a LINK but not a file must keep them.
+navigator.canShare = (d) => !d?.files;
+check('...but not merely because the browser can share a link',
+  SHOT.canShareImages() === false);
+navigator.canShare = undefined;
+navigator.share = undefined;
 
 // ---------------------------------------------------------------------------
 section('THE SWITCH');

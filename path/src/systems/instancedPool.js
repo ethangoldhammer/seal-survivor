@@ -178,6 +178,29 @@ export function createInstancedPool(scene, name = 'instances') {
   }
 
   /**
+   * Per-instance colour as raw channel values, ABOVE 1 allowed.
+   *
+   * setColor above goes through THREE.Color, which is the right thing when the
+   * caller has a hex — it applies colour management, so a tier colour lands
+   * where material.color would have put it. But a hex cannot express an
+   * overdrive: (2.4, 0.9, 0.3) round-trips to (1, 0.9, 0.3) and the instance
+   * loses exactly the headroom that was going to give it a halo. The scene
+   * target is HalfFloat and the bright pass reads it, so the values over 1 are
+   * the whole point — see the note on setGlow.
+   *
+   * The caller owns the colour space here. Anything doing hue arithmetic should
+   * build the colour with THREE.Color, then scale the channels itself.
+   */
+  function setColorRGB(mesh, r, g_, b) {
+    const g = colored(mesh);
+    if (!g) return;
+    const i = mesh.userData.__poolSlot * 3;
+    const c = g.mesh.instanceColor.array;
+    c[i] = r; c[i + 1] = g_; c[i + 2] = b;
+    g.colorDirty = true;
+  }
+
+  /**
    * Per-instance BRIGHTNESS: a grey multiplier over whatever colour the shared
    * material is already carrying, rather than a colour of its own. Hue is left
    * exactly where the material (and the texture panel's tint and glow slider)
@@ -249,5 +272,5 @@ export function createInstancedPool(scene, name = 'instances') {
     return { instances, draws: groups.size };
   }
 
-  return { acquire, release, setColor, setGlow, flush, reset, stats };
+  return { acquire, release, setColor, setColorRGB, setGlow, flush, reset, stats };
 }

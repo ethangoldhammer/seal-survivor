@@ -335,8 +335,23 @@ const creatureScales = new Map();
 // applySavedAssetLooks (so size multipliers are known), but BEFORE the first
 // createVisual call, or whatever spawned early comes up bare.
 export function initCreatureOutlines() {
-  setSpawnDecorator(attachCreatureOutline);
+  setSpawnDecorator(attachOutline);
   applyCreatureOutlines();
+  applyCompanionOutlines();
+}
+
+// ONE decorator, because assets.js only holds one. Creatures and companions
+// are otherwise kept apart on purpose — separate colours, separate switch
+// lists, separate reasons to exist — so this dispatches rather than merging
+// them, and an asset key that somehow appeared in both lists would be a
+// creature (a thing that can hurt you should never be wearing the friendly
+// rim because of a typo).
+function attachOutline(visual, key) {
+  if (CONFIG.creatureOutline?.on && key in CONFIG.creatureOutline.on) {
+    attachCreatureOutline(visual, key);
+    return;
+  }
+  attachCompanionOutline(visual, key);
 }
 
 // Called for every visual createVisual builds. Attaches shells to the ones
@@ -383,6 +398,48 @@ function applyCreatureOutline(key) {
   // clones, so there is no single one to flip, but they all point at this.
   material.visible = cfg.on?.[key] === true;
   applyLook(material, cfg, creatureScales.get(key) ?? 1);
+}
+
+// ---------------------------------------------------------------------------
+// The things on your side
+// ---------------------------------------------------------------------------
+//
+// A straight copy of the creature path against CONFIG.companionOutline, and
+// deliberately a copy rather than a shared parameterised one. What these two
+// share is `applyLook` — the four numbers and how they are interpreted, which
+// is the part that must never drift. What they do NOT share is which list they
+// read or which colour they carry, and folding those together is how an escort
+// ends up wearing the threat rim the first time somebody adds a switch.
+
+const companionMaterials = new Map();
+const companionScales = new Map();
+
+function attachCompanionOutline(visual, key) {
+  const on = CONFIG.companionOutline?.on;
+  if (!on || !(key in on)) return;
+
+  let material = companionMaterials.get(key);
+  if (!material) {
+    material = makeOutlineMaterial({ color: CONFIG.companionOutline?.color ?? 0xffffff });
+    companionMaterials.set(key, material);
+  }
+
+  const shells = addOutlineShells(visual, { material });
+  if (!shells.length) return;
+  companionScales.set(key, accumulatedScale(shells[0]));
+  applyCompanionOutline(key);
+}
+
+export function applyCompanionOutlines() {
+  for (const key of companionMaterials.keys()) applyCompanionOutline(key);
+}
+
+function applyCompanionOutline(key) {
+  const cfg = CONFIG.companionOutline ?? {};
+  const material = companionMaterials.get(key);
+  if (!material) return;
+  material.visible = cfg.on?.[key] === true;
+  applyLook(material, cfg, companionScales.get(key) ?? 1);
 }
 
 // ---------------------------------------------------------------------------

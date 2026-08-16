@@ -346,8 +346,33 @@ section('two surfaces: the band, and the line on the seal');
 // ---------------------------------------------------------------------------
 {
   check('the boost warning is anchored to the seal', CALLOUTS.get('boost').anchor === 'player');
-  const bandRows = [...CALLOUTS.values()].filter((r) => r.anchor === 'band');
-  check('...and it is the only one that is', bandRows.length === CALLOUTS.size - 1);
+  check('...and so is the line telling you to spend what you banked',
+    CALLOUTS.get('strikeNow').anchor === 'player');
+  const sealRows = [...CALLOUTS.values()].filter((r) => r.anchor === 'player');
+  check('...and they are the only two off the band', sealRows.length === 2,
+    sealRows.map((r) => r.id).join(','));
+}
+{
+  // THE TWO THINGS AN EMPTY METER MEANS. They share the seal's one slot, and
+  // when both are somehow true the one with a strike in hand wins: "let go" is
+  // actionable and "you have nothing" is not.
+  resetCallouts();
+  runBand(0.2, { boost: true, strikeNow: true });
+  check('a banked strike outranks the empty meter on the seal',
+    bandStates.player.row?.id === 'strikeNow', bandStates.player.row?.id ?? 'silent');
+}
+{
+  // The empty-meter line is fired by a PRESS in main.js — one frame — so it
+  // must not carry a repeat of its own. A row that nagged would keep shouting
+  // for as long as the condition it is handed happened to stay true.
+  check('the empty meter says it once per press', CALLOUTS.get('boost').repeat == null,
+    String(CALLOUTS.get('boost').repeat));
+  check('...and is quick about it', holdFor(CALLOUTS.get('boost')) <= 0.8,
+    `${holdFor(CALLOUTS.get('boost'))}s`);
+  // The other one is handed a HELD button, so it does repeat: the advice is
+  // still true, and still not being taken.
+  check('the strike-now line nags while the button stays down',
+    CALLOUTS.get('strikeNow').repeat > 0, String(CALLOUTS.get('strikeNow').repeat));
 }
 {
   // THE WHOLE REASON THE ANCHOR EXISTS. The boost line is the quietest warning

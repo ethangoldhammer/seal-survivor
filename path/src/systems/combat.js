@@ -251,13 +251,16 @@ export function resolveCombat(dt, scene, hooks) {
       const pc = CONFIG.crabClaw;
       const px = e.mesh.position.x - pPos.x;
       const py = e.mesh.position.y - pPos.y;
-      // Scaled by the crab's own radius, so a crab that has grown over a long
-      // run reaches proportionally further — the same rule the driver aims by.
+      // Scaled by the crab's own ARM — the reach the IK solver actually aims
+      // by, measured off this individual's skeleton, so a crab that grew over
+      // a long run reaches proportionally further. It was scaled by `e.radius`
+      // instead, which is a 0.2-unit hitbox on a six-unit animal; see
+      // pinchReach for how that quietly shrank the whole mechanic to nothing.
       // Shared with the COMMIT gate in entities/enemies.js rather than restated:
       // the two are one mechanic measured twice, and the last time they were
       // written separately only this one added `pRadius`, which silently killed
-      // the pinch the moment the crab's hitbox was retuned. See pinchReach.
-      const reachSq = pinchReach(e.radius, pRadius, pc.range ?? 2.4) ** 2;
+      // the pinch the moment the crab's hitbox was retuned.
+      const reachSq = pinchReach(e.claw?.reach() ?? 0, pRadius, pc.range ?? 0.65) ** 2;
       if (px * px + py * py <= reachSq && !isInvulnerable()) {
         const base = e.contactDamage ?? e.def.contactDamage;
         hooks.onPlayerHit(

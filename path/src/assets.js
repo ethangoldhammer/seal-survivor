@@ -457,15 +457,39 @@ export const ASSETS = {
   // multiply it — that's the intent, not an oversight.
   missile: { shape: 'oval', radius: 0.16, elongate: 1.8, color: 0x07070a, unlit: true },
   bounceShot: { shape: 'octahedron', radius: 0.2, color: 0x66ddff, unlit: true },
-  // The harp's music note. A PROCEDURAL STAND-IN, like `harp` below: an
-  // elongated bead, bright enough to bloom, which is what actually makes it
-  // legible as a small fast thing at this size. Both keys take an upload from
-  // the T panel the day real note art exists, and nothing else has to change.
+  // The harp's music note — a real eighth-note glyph, cut out of the Particle
+  // Flow bake by tools/note-glyphs.mjs. 32 triangles and no texture at all.
+  //
+  // The axes are the harp's, and for the same reason: the glyph is authored
+  // FLAT in model X-Y with nothing at all in Z, so '+Y'/'-X' is what stands it
+  // up facing the camera. Get the `up` sign wrong and a zero-thickness plane is
+  // presented edge-on for its whole flight, which looks like the model failed
+  // to load rather than like a rotation.
   //
   // `orient: true` on the projectile lines the long axis up with its flight,
   // so the note noses onto the curve as the seeker pulls it round rather than
-  // sliding through the arc sideways — see the note on 'oval' in getGeometry.
-  musicNote: { shape: 'oval', radius: 0.16, elongate: 2.1, color: 0xffe9a3, unlit: true },
+  // sliding through the arc sideways.
+  //
+  // The oval stays as the fallback and still earns its place: a note glyph at
+  // this size on a fast-moving projectile is a bright smear either way, and the
+  // fallback has to be legible if the file ever fails to load.
+  musicNote: {
+    model: '/models/musicnote.glb',
+    fit: 0.85,
+    forward: '+Y', up: '-X',
+    // Unlit and warm. The glyph ships white so per-instance colour has an
+    // identity to multiply into (see systems/noteStorm.js); the PROJECTILE is
+    // not instanced and takes its colour here, where it can also be retinted
+    // from the T panel.
+    tint: 0xffe9a3,
+    // The glyph is a zero-thickness plane, so it has to ignore scene lights or
+    // it goes dark the moment it turns away from the key — and the T panel's
+    // glow slider only reaches past the bloom threshold on an unlit material.
+    // The file already declares KHR_materials_unlit and doubleSided; this is
+    // the asset layer agreeing with it rather than relying on it.
+    modelUnlit: true,
+    shape: 'oval', radius: 0.16, elongate: 2.1, color: 0xffe9a3, unlit: true,
+  },
   // Orbiting shrimp. `fit` is its size at CONFIG.shrimpRing.scale === 1; the
   // ring multiplies by the live slider value, so the size control still does
   // something now that a model ships (it used to be inert whenever one had
@@ -1066,7 +1090,12 @@ export const ASSETS = {
     // clip here would opt out of that and pin all three to one rate.
     rig: ORCA_RIG,
     lookRig: orcaLook(91.5),
-    outline: { color: 0xffd27a, thickness: 0.022 },
+    // NO `outline` HERE ANY MORE. It said `{ color: 0xffd27a, thickness: 0.022 }`,
+    // and thickness on an asset def is OBJECT space — 0.022 on a model whose
+    // source units run to 686 is a rim three thousandths of a percent of the
+    // body, which is to say invisible. The escorts are on CONFIG.companionOutline
+    // now, whose thickness is WORLD units divided by each model's own scale, so
+    // the bull, the cow and the calf finally wear the same rim as each other.
     shape: 'icosahedron', radius: 1.1, color: 0x2c3a4a, unlit: true,
   },
   orcaFriendCow: {
@@ -1080,7 +1109,12 @@ export const ASSETS = {
     forward: '+Z', up: '+Y',
     rig: ORCA_RIG,
     lookRig: orcaLook(75.5),
-    outline: { color: 0xffd27a, thickness: 0.022 },
+    // NO `outline` HERE ANY MORE. It said `{ color: 0xffd27a, thickness: 0.022 }`,
+    // and thickness on an asset def is OBJECT space — 0.022 on a model whose
+    // source units run to 686 is a rim three thousandths of a percent of the
+    // body, which is to say invisible. The escorts are on CONFIG.companionOutline
+    // now, whose thickness is WORLD units divided by each model's own scale, so
+    // the bull, the cow and the calf finally wear the same rim as each other.
     shape: 'icosahedron', radius: 1.05, color: 0x2c3a4a, unlit: true,
   },
   orcaFriendCalf: {
@@ -1090,7 +1124,12 @@ export const ASSETS = {
     forward: '+Z', up: '+Y',
     rig: ORCA_RIG,
     lookRig: orcaLook(44.4),
-    outline: { color: 0xffd27a, thickness: 0.022 },
+    // NO `outline` HERE ANY MORE. It said `{ color: 0xffd27a, thickness: 0.022 }`,
+    // and thickness on an asset def is OBJECT space — 0.022 on a model whose
+    // source units run to 686 is a rim three thousandths of a percent of the
+    // body, which is to say invisible. The escorts are on CONFIG.companionOutline
+    // now, whose thickness is WORLD units divided by each model's own scale, so
+    // the bull, the cow and the calf finally wear the same rim as each other.
     shape: 'icosahedron', radius: 0.8, color: 0x2c3a4a, unlit: true,
   },
 
@@ -1823,7 +1862,29 @@ export const ASSETS = {
     // the only light on it, which is the whole proposition.
     modelUnlit: true,
     biolumSkin: 'abyssHunter',
-    tint: 0x141c24,
+    // THE TINT MULTIPLIES THE SHARK'S OWN TEXTURE, it does not replace it, and
+    // that is why this number matters more than it looks.
+    //
+    // greatwhite.glb does ship a base-colour map — 225 KB of it, the same one
+    // enemyGreatWhite wears. `modelUnlit` keeps it (processMaterial copies
+    // `map` onto the MeshBasicMaterial); the tint then multiplies it. At the
+    // old 0x141c24 that was a factor of 0.08/0.11/0.14, which crushed a
+    // perfectly good shark to within a few percent of black and left the
+    // additive pattern as the only thing on screen. It did not read as a dark
+    // animal, it read as a solid glowing shape.
+    //
+    // 0x7a8794 is about 6x that. The texture comes back as texture — the
+    // counter-shading and the gill slits read again — while the body still
+    // lands around 0.2 luminance against a pattern that peaks near 0.9, so the
+    // glow is comfortably the brightest thing on the animal. That balance is
+    // the whole reason a tint is here at all (see enemyLanternfish for the
+    // argument); the fault was the magnitude, not the idea.
+    //
+    // Picked by arithmetic rather than off the auditioned plate, because the
+    // plate is LIT and this material is not: in game `modelUnlit` makes the
+    // pixel exactly texture x tint with no light on it, so a render that looks
+    // right in the studio rig is a stop or so too dark in the water.
+    tint: 0x7a8794,
     shape: 'cone', radius: 0.9, height: 2.6, color: 0x141c24, unlit: true,
   },
 
@@ -2255,6 +2316,156 @@ export const ASSETS = {
     biolumSkin: 'dartGlow',
     tint: 0x1a1526,
     shape: 'icosahedron', radius: 0.38, color: 0x1a1526, unlit: true,
+  },
+
+  // ---------------------------------------------------------------------------
+  // NIGHT FORMS — the nine new fish after dark
+  //
+  // These are NOT nine new species. Each one is the night costume of a
+  // creature that already has a row in enemies.csv, reached through
+  // `nightAsset` on that row rather than through a second enemy id (see the
+  // asset pick in entities/enemies.js spawnOne). The three glow creatures
+  // above this block are the older arrangement — their own ids, their own
+  // balance numbers, tagged `bioluminescent` so they only exist after sunset —
+  // and it is worth being clear about why these did not copy it: a second id
+  // is a second set of hp, speed, xp, weight, caps and ramp behaviour to keep
+  // in step with the first, forever, for a creature that is the same animal.
+  // What a costume needs is a material, and a material is what an asset key
+  // is.
+  //
+  // A SECOND KEY IS STILL UNAVOIDABLE. attachBiolumSkin injects the pattern
+  // through onBeforeCompile and materials are shared across every clone of a
+  // key, so lighting the day fish's key would light the day fish. Nor can it
+  // be done per instance: Material.clone() drops onBeforeCompile, so the copy
+  // comes back with its userData still claiming the shader is attached and
+  // nothing rendering. Nine keys is the floor, and it is the cheap half —
+  // these carry no numbers anyone has to balance.
+  //
+  // NO NEW PRESETS, deliberately. The four these share are already measured
+  // (`npm run glow` reports every ramp stop against the bloom threshold, and
+  // the family was rescaled together — see lantern.strength), and a preset
+  // authored by eye is a preset that sits under 0.58 and never haloes while
+  // looking perfectly reasonable in the file. Sharing also buys per-individual
+  // variety for free: skins.csv joins by PRESET, not by creature, so every row
+  // listed against `lantern` already applies to all three fish wearing it.
+  //
+  // Which preset each one wears is chosen by body and by role, not spread
+  // round for the sake of it:
+  //   reefGlow    net — seams and cell borders, a coral read. The reef fish.
+  //   lantern     speckle — a fine shimmering dust. The open shoals.
+  //   dartGlow    spots — discrete photophores, cold violet, the most nervous
+  //               tempo of the three. The small fast ones.
+  //   abyssHunter stripes in ember, the one preset meant to read as a threat
+  //               rather than as scenery. The sailfish, and nothing else here.
+  //
+  // Every tint is much darker than the day body it copies, and that IS the
+  // effect rather than a side effect — the pattern is ADDITIVE, so what it is
+  // added to decides whether the animal reads as light coming out of a fish or
+  // as a bright fish. See enemyLanternfish, which explains it at length.
+  // ---------------------------------------------------------------------------
+  enemyGlowFishesA: {
+    model: '/models/fishes.glb', meshIndex: 0,
+    fit: 1.0, forward: '-Z', up: '+Y',
+    pivot: 0.15,
+    modelUnlit: true,
+    biolumSkin: 'reefGlow',
+    tint: 0x14231f,
+    shape: 'icosahedron', radius: 0.34, color: 0x14231f, unlit: true,
+  },
+  enemyGlowFishesB: {
+    model: '/models/fishes.glb', meshIndex: 1,
+    fit: 1.25, forward: '-Z', up: '+Y',
+    pivot: 0.15,
+    modelUnlit: true,
+    biolumSkin: 'lantern',
+    tint: 0x18293a,
+    shape: 'icosahedron', radius: 0.4, color: 0x18293a, unlit: true,
+  },
+  enemyGlowFishesC: {
+    model: '/models/fishes.glb', meshIndex: 2,
+    fit: 1.1, forward: '-Z', up: '+Y',
+    pivot: 0.15,
+    modelUnlit: true,
+    biolumSkin: 'dartGlow',
+    tint: 0x1a1526,
+    shape: 'icosahedron', radius: 0.33, color: 0x1a1526, unlit: true,
+  },
+  enemyGlowBrownFish: {
+    model: '/models/brownfish.glb',
+    fit: 1.15,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    modelUnlit: true,
+    biolumSkin: 'lantern',
+    tint: 0x1b2b3a,
+    shape: 'icosahedron', radius: 0.36, color: 0x1b2b3a, unlit: true,
+  },
+  // The tightest shoal in the roster (6-14) gets the preset built for a knot
+  // of small bodies: dartGlow's spots are discrete organs rather than a wash,
+  // so fourteen of them read as a scatter of moving points instead of one
+  // luminous cloud with no edges.
+  enemyGlowClownFish: {
+    model: '/models/clownfish.glb',
+    fit: 0.85,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    modelUnlit: true,
+    biolumSkin: 'dartGlow',
+    tint: 0x1d1728,
+    shape: 'icosahedron', radius: 0.3, color: 0x1d1728, unlit: true,
+  },
+  enemyGlowSurgeonFish: {
+    model: '/models/surgeonfish.glb',
+    fit: 1.0,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    modelUnlit: true,
+    biolumSkin: 'reefGlow',
+    tint: 0x13221d,
+    shape: 'icosahedron', radius: 0.34, color: 0x13221d, unlit: true,
+  },
+  enemyGlowTuna: {
+    model: '/models/tunafish.glb',
+    fit: 1.5,
+    pivot: 0.12,
+    forward: '+Z', up: '+Y',
+    modelUnlit: true,
+    biolumSkin: 'lantern',
+    tint: 0x17273a,
+    shape: 'cone', radius: 0.4, height: 1.2, color: 0x17273a, unlit: true,
+  },
+  // reefGlow rather than one of the faster two, for the tempo and not the
+  // pattern: its flicker and pulse both run at half the lanternfish's rate,
+  // and a puffer moving at 3.2 with a nervous sixteenth-note shimmer on it
+  // would read as two animals at once.
+  enemyGlowPuffer: {
+    model: '/models/puffer.glb',
+    fit: 1.4,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    modelUnlit: true,
+    biolumSkin: 'reefGlow',
+    tint: 0x162420,
+    shape: 'icosahedron', radius: 0.45, color: 0x162420, unlit: true,
+  },
+  // The only one here wearing the shark's preset, and the only one that should:
+  // abyssHunter is stripes in ember on a mostly-dark body — a warning rather
+  // than a light show — and the sailfish is the one fish in this group with
+  // teeth and a body long enough for wide bands to land on.
+  enemyGlowSailfish: {
+    model: '/models/sailfish.glb',
+    fit: 3.0,
+    pivot: 0.1,
+    forward: '+Z', up: '+Y',
+    animations: {
+      idle: 'Armature|Swim',
+      swim: 'Armature|Swim',
+      boost: 'Armature|SwimFast',
+    },
+    modelUnlit: true,
+    biolumSkin: 'abyssHunter',
+    tint: 0x241a14,
+    shape: 'cone', radius: 0.4, height: 1.9, color: 0x241a14, unlit: true,
   },
 
   // --- seabed dwellers ---

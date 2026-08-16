@@ -557,7 +557,7 @@
   "cinecam": {
     "enabled": true,
     "base": {
-      "zoom": 1.18,
+      "zoom": 1.24,
       "zoomMax": 3,
       "zoomStiffness": 26,
       "zoomDamping": 0.8,
@@ -605,26 +605,26 @@
         "zoomDampMul": 0.72,
         "stiffMul": 1.5,
         "zoomStiffMul": 1.5,
-        "lookAheadMul": 0.35,
+        "lookAheadMul": 1,
         "aimBiasMul": 0.4,
         "deadZoneMul": 0.4,
         "defocus": 0.64,
         "focusRadius": 0.19,
         "focusFeather": 0.3,
         "flare": 0.5,
-        "vignette": 0.5,
+        "vignette": 0.34,
         "path": 1
       },
       "boosting": {
         "blendIn": 0.12,
-        "blendOut": 0.22,
+        "blendOut": 0.86,
         "zoom": 1.18,
         "stiffMul": 0.55,
         "zoomStiffMul": 2.9,
         "dampMul": 0.75,
         "lookAheadMul": 2,
         "aimBiasMul": 0.2,
-        "defocus": 0.48,
+        "defocus": 0.32,
         "focusRadius": 0.34,
         "focusFeather": 0.2,
         "flare": 0.9,
@@ -634,7 +634,7 @@
         "hold": 1.1,
         "blendIn": 0.08,
         "blendOut": 0.9,
-        "zoom": 1.41,
+        "zoom": 1.27,
         "stiffMul": 2.2,
         "zoomStiffMul": 2.2,
         "lookAheadMul": 0.3,
@@ -1256,13 +1256,31 @@
       "enemyMightyMeg": true,
       "enemyOrca": true,
       "enemyDolphin": true,
+      "enemyOrcaBull": true,
+      "enemyOrcaCow": true,
+      "enemyAbyssShark": true,
       "enemyOtter": false,
-      "enemySeaTurtle": false,
       "enemyStingray": false,
       "enemyWalkingCrab": false,
+      "enemySeaTurtle": false,
       "enemySharkLowpoly": true,
       "enemyCrabClaw": false,
       "enemySchoolPod": false
+    }
+  },
+  "companionOutline": {
+    "color": 16765562,
+    "thickness": 0.1,
+    "glow": 2,
+    "opacity": 1,
+    "on": {
+      "sealTeam": true,
+      "orcaFriendBull": true,
+      "orcaFriendCow": true,
+      "orcaFriendCalf": true,
+      "dumboOcto": true,
+      "belugaDrone": true,
+      "eelCompanion": true
     }
   },
   "weapon": {
@@ -1993,7 +2011,14 @@
     "auraNoteSpin": 2.4,
     "auraNoteScale": 0.55,
     "auraNoteBob": 0.35,
-    "auraNoteTilt": 0.5
+    "auraNoteTilt": 0.5,
+    "stormNotes": 22,
+    "stormRiseNotes": 12,
+    "stormScale": 0.5,
+    "maxNotes": 320,
+    "hueFrom": 0.08,
+    "hueTo": 0.5,
+    "noteGlow": 1.9
   },
   "biolum": {
     "enabled": true,
@@ -2665,6 +2690,90 @@
         "fleeFromPredators": 8.8,
         "fleeRadius": 7,
         "wander": 1.2
+      }
+    },
+    "brownfish": {
+      "asset": "enemyBrownFish",
+      "behavior": "swarm",
+      "faceMotion": true,
+      "prey": true,
+      "group": {
+        "min": 4,
+        "max": 10,
+        "spread": 4
+      },
+      "swarm": {
+        "cohesion": 2.1,
+        "separation": 4.6,
+        "separationDist": 1.3,
+        "alignment": 1.5,
+        "towardPlayer": 1.3,
+        "fleeFromPredators": 8.5,
+        "fleeRadius": 7,
+        "wander": 1.15
+      }
+    },
+    "clownfish": {
+      "asset": "enemyClownFish",
+      "behavior": "swarm",
+      "faceMotion": true,
+      "prey": true,
+      "group": {
+        "min": 6,
+        "max": 14,
+        "spread": 3.2
+      },
+      "swarm": {
+        "cohesion": 2.6,
+        "separation": 5,
+        "separationDist": 1.1,
+        "alignment": 1.8,
+        "towardPlayer": 1.3,
+        "fleeFromPredators": 9,
+        "fleeRadius": 7,
+        "wander": 1.25
+      }
+    },
+    "surgeonfish": {
+      "asset": "enemySurgeonFish",
+      "behavior": "swarm",
+      "faceMotion": true,
+      "prey": true,
+      "group": {
+        "min": 5,
+        "max": 12,
+        "spread": 4
+      },
+      "swarm": {
+        "cohesion": 2.2,
+        "separation": 4.8,
+        "separationDist": 1.3,
+        "alignment": 1.6,
+        "towardPlayer": 1.4,
+        "fleeFromPredators": 8.8,
+        "fleeRadius": 7,
+        "wander": 1.2
+      }
+    },
+    "tuna": {
+      "asset": "enemyTuna",
+      "behavior": "swarm",
+      "faceMotion": true,
+      "prey": true,
+      "group": {
+        "min": 3,
+        "max": 8,
+        "spread": 4.5
+      },
+      "swarm": {
+        "cohesion": 1.8,
+        "separation": 4.2,
+        "separationDist": 1.5,
+        "alignment": 2.4,
+        "towardPlayer": 1.1,
+        "fleeFromPredators": 9.5,
+        "fleeRadius": 9,
+        "wander": 0.9
       }
     },
     "lanternfish": {
@@ -4549,8 +4658,8 @@
       "hitstop": 0,
       "glow": 0.6,
       "ripple": {
-        "strength": 2.4,
-        "radius": 10
+        "strength": 0.2,
+        "radius": 6
       },
       "sfx": "kill",
       "haptic": [
@@ -4568,8 +4677,8 @@
       "hitstop": 0.07,
       "glow": 1.2,
       "ripple": {
-        "strength": 4.5,
-        "radius": 20
+        "strength": 1,
+        "radius": 7
       },
       "sfx": "bigKill",
       "haptic": [
@@ -5165,6 +5274,20 @@
           "magnitude": 0.22
         }
       ]
+    },
+    "boostEmpty": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "sfx": "boostEmpty",
+      "haptic": [
+        {
+          "duration": 14,
+          "magnitude": 0.2
+        }
+      ],
+      "sfxMinGap": 0.12
     },
     "foodChain": {
       "emit": "levelUp",
@@ -6667,6 +6790,18 @@
       "gain": 0.13,
       "pitchVary": 0
     },
+    "boostEmpty": {
+      "src": null,
+      "type": "blip",
+      "wave": "square",
+      "freq": [
+        440,
+        150
+      ],
+      "decay": 0.11,
+      "gain": 0.14,
+      "pitchVary": 0.03
+    },
     "foodChain": {
       "srcs": [
         "/sfx/Seal_FoodChain_01.mp3",
@@ -7453,9 +7588,9 @@
     "enabled": true,
     "base": {
       "pattern": "blotches",
-      "scale": 0.25,
+      "scale": 0.53,
       "strength": 1.8,
-      "glow": 1.35,
+      "glow": 2.15,
       "contrast": 1.6,
       "coverage": 0.45,
       "flow": 0.3,
@@ -7493,28 +7628,28 @@
     "presets": {
       "lantern": {
         "pattern": "speckle",
-        "scale": 0.22,
-        "coverage": 0.5,
+        "scale": 0.4,
+        "coverage": 0.69,
         "contrast": 2.4,
-        "strength": 0.8,
+        "strength": 5,
         "flow": 0.6,
         "tailBias": 0.1,
         "flickerAmp": 0.35,
         "flickerRate": 5,
-        "pulseAmp": 0.2,
+        "pulseAmp": 0.74,
         "pulseSpeed": 2.4,
         "pulseSync": "1 bar",
         "flickerSync": "1/16",
         "bodyDarken": 0.53,
-        "warp": 1.5,
+        "warp": 2.5,
         "phaseSpread": 0.5,
         "hueSpread": 0.5,
         "hueScale": 2.05,
-        "eyeStrength": 3,
+        "eyeStrength": 4.6,
         "eyeFalloff": 4.5,
         "eyePulse": 0.5,
-        "schoolAmp": 0.5,
-        "schoolScale": 15.5,
+        "schoolAmp": 0.74,
+        "schoolScale": 22.5,
         "floor": 0.5
       },
       "veil": {
@@ -7549,20 +7684,20 @@
       },
       "reefGlow": {
         "pattern": "net",
-        "scale": 0.3,
-        "coverage": 0.42,
+        "scale": 0.13,
+        "coverage": 0.85,
         "contrast": 2,
-        "strength": 0.8,
-        "tailBias": 0.15,
-        "flickerAmp": 0.18,
-        "pulseAmp": 0.28,
+        "strength": 3.5,
+        "tailBias": 0.85,
+        "flickerAmp": 0.68,
+        "pulseAmp": 0.76,
         "pulseSpeed": 1.2,
         "colorA": 16761165,
         "colorB": 8115819,
-        "colorC": 16773816,
-        "bodyDarken": 0.53,
-        "eyeStrength": 3,
-        "eyeFalloff": 4.5,
+        "colorC": 1336319,
+        "bodyDarken": 0.61,
+        "eyeStrength": 4.85,
+        "eyeFalloff": 5,
         "eyePulse": 0.5,
         "warp": 1.5,
         "schoolAmp": 0.5,
@@ -7570,36 +7705,40 @@
         "phaseSpread": 0.5,
         "hueSpread": 0.5,
         "hueScale": 2.05,
-        "floor": 0.5
+        "floor": 0.5,
+        "eyeColor": 16729927,
+        "flowSync": "1 bar",
+        "shellColor": 16775930
       },
       "dartGlow": {
         "pattern": "spots",
-        "scale": 0.18,
-        "coverage": 0.34,
-        "contrast": 2.8,
-        "strength": 0.8,
-        "tailBias": -0.1,
+        "scale": 0.19,
+        "contrast": 0.7,
+        "strength": 3.5,
+        "tailBias": 0.45,
         "flickerAmp": 0.4,
         "flickerSync": "1/16",
         "flickerRate": 7,
-        "pulseAmp": 0.22,
+        "pulseAmp": 0.71,
         "pulseSync": "1 bar",
         "pulseSpeed": 2.8,
-        "phaseSteps": 8,
         "colorA": 13134847,
         "colorB": 4938751,
         "colorC": 15325183,
         "bodyDarken": 0.53,
         "eyeStrength": 3,
         "eyeFalloff": 4.5,
-        "eyePulse": 0.5,
+        "eyePulse": 0.64,
         "warp": 1.5,
-        "schoolAmp": 0.5,
+        "schoolAmp": 0.14,
         "schoolScale": 15.5,
-        "phaseSpread": 0.5,
+        "phaseSpread": 0.92,
         "hueSpread": 0.5,
         "hueScale": 2.05,
-        "floor": 0.5
+        "floor": 0.5,
+        "eyeColor": 16711680,
+        "flowSync": "1 bar",
+        "shellColor": 13534719
       },
       "abyssHunter": {
         "pattern": "stripes",
@@ -7658,15 +7797,15 @@
         "floor": 0.5
       },
       "emberClaw": {
-        "shellGlow": 0.1,
-        "pattern": "veins",
-        "scale": 0.26,
-        "coverage": 0.3,
-        "contrast": 2.6,
-        "strength": 0.59,
-        "flowSync": "1 bar",
-        "flowSteps": 4,
-        "flowSpan": 2.2,
+        "shellGlow": 0.53,
+        "shellColor": 12432819,
+        "pattern": "lattice",
+        "scale": 0.69,
+        "coverage": 0.22,
+        "strength": 1.65,
+        "flowSync": "8 bars",
+        "flowSteps": 16,
+        "flowSpan": 7.4,
         "flow": 0.44,
         "tailBias": 0.55,
         "hueBias": 0.45,
@@ -7674,22 +7813,23 @@
         "colorA": 14790071,
         "colorB": 12724764,
         "colorC": 16756810,
-        "bodyDarken": 0.55,
-        "eyeStrength": 0.65,
-        "eyeColor": 16777215,
-        "eyeFalloff": 3.2,
+        "bodyDarken": 0.6,
+        "eyeStrength": 6,
+        "eyeColor": 16773360,
+        "eyeFalloff": 1.1,
         "eyePulse": 0.22,
-        "pulseAmp": 0.45,
+        "pulseAmp": 0.76,
         "pulseSpeed": 2.749,
         "pulseSync": "1 bar",
-        "flickerAmp": 0.18,
-        "flickerSync": "1/4",
+        "flickerAmp": 0.76,
+        "flickerSync": "2 bars",
         "flickerRate": 1.75,
+        "phaseSteps": 8,
         "floor": 0.18,
         "warp": 1.5,
-        "hueScale": 2.05,
+        "hueScale": 2.5,
         "schoolAmp": 0.5,
-        "schoolScale": 15.5
+        "schoolScale": 20
       },
       "kingCrab": {
         "luminous": false,
@@ -7718,7 +7858,7 @@
       },
       "wireframeGlow": {
         "pattern": "wireframe",
-        "scale": 0.3,
+        "scale": 0.41,
         "coverage": 0.38,
         "contrast": 1.4,
         "strength": 1.15,
@@ -7827,8 +7967,8 @@
     "cooldown": 1.8,
     "connectAt": 0.85,
     "armLag": 0.06,
-    "range": 2.4,
-    "commitRange": 2.1,
+    "range": 0.65,
+    "commitRange": 0.55,
     "rise": 0.55,
     "draw": 0.3,
     "reachStretch": 1.05,
@@ -8348,7 +8488,7 @@
     "hold": 1.6,
     "ringGap": 0.55,
     "oxygenLow": 0.25,
-    "healthLow": 0.3,
+    "healthLow": 0.2,
     "boostEmpty": 0.02,
     "arrow": {
       "gap": 2,
@@ -9033,7 +9173,7 @@
       }
     },
     "collectRadius": 0.6,
-    "sinkSpeed": 1.2,
+    "sinkSpeed": 3.5,
     "maxAlive": 140,
     "toss": {
       "airDrag": 1.2,
@@ -9218,5 +9358,5 @@
     "overlayOpacity": 0.38,
     "overlayColor": 0
   },
-  "_savedAt": 1786827457135
+  "_savedAt": 1786835426810
 }

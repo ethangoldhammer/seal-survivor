@@ -36,7 +36,7 @@ import { stageState, onStageChanged } from '../systems/stage.js';
 const RAIL_SECTIONS = [
   ['Your weapon', ['shoot', 'hit', 'bulletHit', 'kill', 'bigKill', 'bounce', 'missileLaunch', 'missileImpact']],
   ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'breach', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'bubblePop', 'oxygenWarn']],
-  ['Strike & food chain', ['strike', 'strikeChain', 'strikeBurst', 'strikeRam', 'strikeMark', 'foodChain']],
+  ['Strike & food chain', ['strike', 'strikeChain', 'strikeBurst', 'strikeRam', 'strikeMark', 'boostEmpty', 'foodChain']],
   ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'levelUp']],
   ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaSplit', 'belugaTrap', 'belugaPop', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],

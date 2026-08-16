@@ -91,8 +91,21 @@ function rememberChain(arm) {
 }
 
 /**
- * How far a pinch reaches, SURFACE TO SURFACE — the crab's body, plus the
- * player's, plus the arm.
+ * How far a pinch reaches, SURFACE TO SURFACE — the arm, plus the player's
+ * body.
+ *
+ * SCALED OFF THE ARM, NOT OFF THE HITBOX. It used to be a multiple of the
+ * crab's `radius`, and that is a quantity with nothing to do with how far a
+ * claw can get: `radius` is 0.2 on the walking crab — it doubles as the
+ * crawler's resting height off the sand, which is why it is small — while the
+ * body draws 2.4 x 6.4 world units and the arm itself measures 2.20. The gate
+ * that came out of that was 1.42 against a contact range of 1.20, so the claw
+ * only ever fired from 0.22 units outside touching distance, on an animal six
+ * units long, with three quarters of a unit of arm never used. It read exactly
+ * like the mechanic being switched off, and every test passed, because both
+ * halves agreed — on the wrong quantity. `mul` is a FRACTION of the arm now
+ * (see CONFIG.crabClaw.range), so a bigger crab, a re-rigged arm or a retuned
+ * hitbox each move it in the direction they should.
  *
  * One function because there are two halves to a pinch and they must agree:
  * entities/enemies.js decides whether to start the gesture (`commitRange`) and
@@ -108,13 +121,15 @@ function rememberChain(arm) {
  * nothing failed: tools/crab-claw-test.mjs calls strike() itself, so it proved
  * the gesture worked while the gate that fires it was dead.
  *
- * @param {number} bodyRadius  the crab's `radius` — its own, per instance, so a
- *                             crab that grew over a long run reaches further
+ * @param {number} armReach  what the driver's `reach()` measured off THIS
+ *                           crab's skeleton, so a crab that grew over a run
+ *                           reaches further without anyone restating the rule
  * @param {number} playerRadius  the seal's hitRadius
- * @param {number} mul  `CONFIG.crabClaw.commitRange` or `.range`
+ * @param {number} mul  `CONFIG.crabClaw.commitRange` or `.range`, as a
+ *                      fraction of the arm
  */
-export function pinchReach(bodyRadius, playerRadius, mul) {
-  return (bodyRadius ?? 0) * (mul ?? 0) + (playerRadius ?? 0);
+export function pinchReach(armReach, playerRadius, mul) {
+  return (armReach ?? 0) * (mul ?? 0) + (playerRadius ?? 0);
 }
 
 /**
@@ -252,6 +267,35 @@ export function createClawDriver(instance) {
 
     isStriking() {
       return t >= 0;
+    },
+
+    /**
+     * How far this arm can physically reach, shoulder to claw tip, in WORLD
+     * units at this crab's size — which is the number both range checks are
+     * scaled off (see pinchReach).
+     *
+     * Measured once and cached. Two things make that safe: the chain's length
+     * is bone-to-bone distances, so it does not move as the arm poses (only
+     * SCALE changes it), and a crab's scale is set once at spawn — growth over
+     * a run and the per-individual jitter are both baked in before this ever
+     * runs. It does need the skeleton posed and its world matrices current,
+     * which is why it is lazy rather than measured in the constructor; every
+     * caller asks from inside the update, after the animation controller.
+     *
+     * A 0 here would silently switch the whole mechanic off, exactly as a
+     * mismeasured gate did before, so it says so rather than returning a
+     * number nobody checks.
+     */
+    reach() {
+      if (!reach) {
+        reach = measureReach(arms[0].chain, 1);
+        if (!(reach > 0)) {
+          console.warn('[crabClaw] the arm measured no reach at all — every pinch gate is now '
+            + 'the player\'s radius alone, which is inside contact range, so no crab will ever pinch. '
+            + 'Check the clawRig bone run against the model.');
+        }
+      }
+      return reach;
     },
 
     // True for exactly one frame, on the frame the claws shut. This is the

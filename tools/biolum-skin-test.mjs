@@ -1054,21 +1054,52 @@ section('SKIN ROSTER (skins.csv)');
 
   check('the preset is readable off a built body', biolumSkinPresetOf(root) === 'emberClaw');
 
-  // Force the lattice row, then check the uniform actually moved — the whole
-  // point of the roster is that this individual stops looking like its preset.
+  // Force a row that REPAINTS THE PATTERN, then check the uniform moved — the
+  // whole point of the roster is that this individual stops looking like its
+  // preset.
+  //
+  // THE ROW IS CHOSEN AGAINST THE LIVE PRESET, not named. This used to force
+  // `lattice` and then assert the template still read `veins`, which were
+  // config.js's shipped values on both sides — and a saved snapshot beats a
+  // config default, so the day the preset was tuned to lattice in game the
+  // template legitimately read lattice and a check about LEAKING started
+  // failing about TUNING. Worse than the noise: had the roll been left naming
+  // lattice while the preset became lattice too, both sides would have agreed
+  // and the leak check would have passed on a template that was being
+  // repainted every spawn.
+  //
+  // So it takes the preset's current pattern as the baseline and rolls the
+  // first skin that disagrees with it. Nothing here can be satisfied by two
+  // values that happen to match.
   const roster = skinRoster();
-  const idx = roster.emberClaw.findIndex((s) => s.id === 'lattice');
-  const at = (idx + 0.5) / roster.emberClaw.length;
+  const presetPattern = patternIndex(CONFIG.biolumSkin.presets.emberClaw.pattern);
+  const differing = roster.emberClaw.findIndex(
+    (s) => s.look?.pattern !== undefined && patternIndex(s.look.pattern) !== presetPattern);
+  check('the roster still has a skin that repaints the pattern',
+    differing >= 0,
+    differing >= 0
+      ? `"${roster.emberClaw[differing].id}" (${roster.emberClaw[differing].look.pattern}) against the preset's ${CONFIG.biolumSkin.presets.emberClaw.pattern}`
+      : `every emberClaw skin inherits ${CONFIG.biolumSkin.presets.emberClaw.pattern} — the leak check below would be vacuous`);
+  const want = roster.emberClaw[differing];
+  const at = (differing + 0.5) / roster.emberClaw.length;
   const rolled = rollBiolumSkinVariant(root, () => at);
   const u = inst.material.userData.__bioSkinUniforms;
+  // The warp is only asserted when the rolled skin actually declares one.
+  // Blank means INHERIT, not zero — that is the rule the whole table is built
+  // on — so a palette-or-pattern-only row like `marble` is supposed to leave
+  // the uniform at the preset's value, and demanding it moved would be
+  // demanding the opposite of the documented behaviour.
   check('a spawn takes the rolled skin',
-    rolled?.__skin === 'lattice'
-    && u.uBioPattern.value === patternIndex('lattice')
-    && Math.abs(u.uBioWarp.value - rolled.warp) < 1e-9,
-    `${rolled?.__skin} pattern ${u.uBioPattern.value} warp ${u.uBioWarp.value?.toFixed(3)}`);
+    rolled?.__skin === want.id
+    && u.uBioPattern.value === patternIndex(want.look.pattern)
+    && (rolled.warp === undefined || Math.abs(u.uBioWarp.value - rolled.warp) < 1e-9),
+    `${rolled?.__skin} pattern ${u.uBioPattern.value} warp ${u.uBioWarp.value?.toFixed(3)}`
+    + (rolled?.warp === undefined ? ' (inherited — the row declares none)' : ''));
   check('...and the shared template is not repainted by it',
-    tpl.material.userData.__bioSkinUniforms.uBioPattern.value === patternIndex('veins'),
-    `template pattern ${tpl.material.userData.__bioSkinUniforms.uBioPattern.value}`);
+    tpl.material.userData.__bioSkinUniforms.uBioPattern.value === presetPattern,
+    `template pattern ${tpl.material.userData.__bioSkinUniforms.uBioPattern.value},`
+    + ` preset ${CONFIG.biolumSkin.presets.emberClaw.pattern} (${presetPattern}),`
+    + ` individual rolled ${want.look.pattern} (${patternIndex(want.look.pattern)})`);
 
   // THE SHELL BETWEEN THE MARKINGS. This used to assert that the night crab's
   // preset lifts its own black point — `shellGlow > 0`, the deep orange in the
