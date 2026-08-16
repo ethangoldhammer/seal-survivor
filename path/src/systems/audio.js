@@ -535,22 +535,117 @@ function resumeOnFirstGesture() {
   for (const type of events) window.addEventListener(type, resume, { once: false });
 }
 
-export async function preloadSamples() {
-  for (const [name, def] of Object.entries(CONFIG.sfx)) {
-    const sources = sourcesFor(def);
-    if (!sources.length) continue;
-    // Fetch this entry's variations together rather than one after another —
-    // a dozen short files loaded serially is a dozen round-trips on boot.
-    const decoded = await Promise.all(sources.map(async (src) => {
+// --- getting the bank into memory -------------------------------------------
+// THE BUG THIS SHAPE EXISTS TO PREVENT: a sound that has samples playing its
+// synth anyway, but only on the deployed build.
+//
+// Nothing here can be allowed to load the bank ENTRY BY ENTRY. This used to be
+// a `for` loop with an `await` in its body, which meant an entry's fetch did
+// not begin until every entry before it had fully landed — 25 sequential round
+// trips before `strike`, the 24th sampled entry, so much as asked for its
+// first file. Off local disk that is nothing and the bug is invisible; over a
+// network it is a window at the top of every run in which the samples are not
+// there yet and playSfx falls through to the synth. Measured against the
+// deployed site on a fast wired connection, `strike` was not ready until 1.25s
+// in, and `uiClick` — dead last — until 1.9s. On a phone it is several seconds.
+//
+// So the bank is fetched ALL AT ONCE (below), and it is fetched from boot
+// rather than from the gesture that starts the run (see prefetchSamples).
+//
+// Both caches are keyed by SRC, not by sound name, because the same file is
+// often several sounds: Seal_Boost_01.mp3 is a variation of both `airJump` and
+// `strike`, Seal_56.mp3 of both `breach` and `seabedThud`. Keyed by name they
+// would each be fetched and decoded once per sound that mentions them.
+const rawBytes = new Map();   // src -> Promise<ArrayBuffer | null>
+const decodedBySrc = new Map(); // src -> Promise<AudioBuffer | null>
+
+// Enough to keep the pipe full without this competing with everything else the
+// page is pulling down. The whole bank is under 2MB, so this is about being a
+// good citizen during boot rather than about throughput.
+const PREFETCH_WIDTH = 8;
+let prefetching = null;
+
+// Every file the bank references, deduplicated — see the note above about the
+// same mp3 belonging to more than one sound.
+function allSampleSources() {
+  const srcs = new Set();
+  for (const def of Object.values(CONFIG.sfx)) {
+    for (const src of sourcesFor(def)) srcs.add(src);
+  }
+  return [...srcs];
+}
+
+// The bytes for one file, fetched at most once. Deliberately NOT decoding:
+// decoding needs an AudioContext and an AudioContext needs a gesture, but
+// downloading needs neither — which is the whole reason this can start at boot
+// while the menu is still up.
+function bytesFor(src) {
+  let pending = rawBytes.get(src);
+  if (!pending) {
+    pending = (async () => {
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.arrayBuffer();
+    })().catch((err) => {
+      console.warn(`[audio] could not fetch ${src} —`, err?.message ?? err);
+      return null;
+    });
+    rawBytes.set(src, pending);
+  }
+  return pending;
+}
+
+/**
+ * Start pulling the sample bank down. Safe to call before any gesture and
+ * before there is an AudioContext at all, which is the point: called from
+ * boot() once the loading screen is done, the bank downloads while the splash
+ * and the menu are on screen, and by the time the player presses start the
+ * bytes are already here and unlockAudio only has to decode them.
+ *
+ * Idempotent — later calls get the same promise rather than a second fetch.
+ */
+export function prefetchSamples() {
+  if (prefetching) return prefetching;
+  const queue = allSampleSources();
+  const worker = async () => {
+    while (queue.length) await bytesFor(queue.shift());
+  };
+  const width = Math.min(PREFETCH_WIDTH, queue.length);
+  prefetching = Promise.all(Array.from({ length: width }, worker));
+  return prefetching;
+}
+
+// One file, decoded at most once.
+function decodeFor(src) {
+  let pending = decodedBySrc.get(src);
+  if (!pending) {
+    pending = bytesFor(src).then(async (bytes) => {
+      if (!bytes) return null;
       try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await ctx.decodeAudioData(await res.arrayBuffer());
+        // SLICED, never handed over: decodeAudioData detaches the ArrayBuffer
+        // it is given, and these bytes are shared between every sound that
+        // names the file. Passing the cached copy would leave the second
+        // sound to want it decoding a zero-length buffer — which throws, gets
+        // caught, and comes out as a synth fallback with no obvious cause.
+        return await ctx.decodeAudioData(bytes.slice(0));
       } catch (err) {
-        console.warn(`[audio] "${name}" could not load ${src} —`, err?.message ?? err);
+        console.warn(`[audio] could not decode ${src} —`, err?.message ?? err);
         return null;
       }
-    }));
+    });
+    decodedBySrc.set(src, pending);
+  }
+  return pending;
+}
+
+export async function preloadSamples() {
+  // Every entry at once. Each one still lands independently — its buffers go
+  // into the map the moment its own files decode, so sounds become playable as
+  // they arrive rather than all together at the end.
+  await Promise.all(Object.entries(CONFIG.sfx).map(async ([name, def]) => {
+    const sources = sourcesFor(def);
+    if (!sources.length) return;
+    const decoded = await Promise.all(sources.map(decodeFor));
     // A partly-failed set still plays: only the variations that decoded are
     // kept, and an entry that lost all of them falls back to the synth.
     const ok = decoded.filter(Boolean);
@@ -559,13 +654,13 @@ export async function preloadSamples() {
     // still has a synth behind it will make A sound, just not the right one;
     // one that doesn't will make none at all, and that is worth shouting about
     // because on a deployed build it is the only warning there is.
-    else if (CONFIG.sfx[name]?.type) {
+    else if (def.type) {
       console.warn(`[audio] "${name}" has no usable samples — using the synth instead.`);
     } else {
       console.error(`[audio] "${name}" has no usable samples and no synth fallback — it will be SILENT. `
         + `Check that these files are deployed: ${sources.join(', ')}`);
     }
-  }
+  }));
   notifySamplesChanged();
 }
 
@@ -578,22 +673,22 @@ export async function reloadSample(name) {
   const def = CONFIG.sfx[name];
   if (!def || !ctx) return;
   const sources = sourcesFor(def);
+  // Dropped from both caches before anything is re-read. This is the path an
+  // upload takes, and an upload WRITES public/sfx/<file> — the URL is the same
+  // one already fetched but the file behind it is a different sound. Serving
+  // this from cache would play the old one and look like the upload had not
+  // stuck, which is the exact failure this function exists to prevent.
+  for (const src of sources) {
+    rawBytes.delete(src);
+    decodedBySrc.delete(src);
+  }
   if (!sources.length) {
     buffers.delete(name);
     lastPick.delete(name);
     notifySamplesChanged();
     return;
   }
-  const decoded = await Promise.all(sources.map(async (src) => {
-    try {
-      const res = await fetch(src);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await ctx.decodeAudioData(await res.arrayBuffer());
-    } catch (err) {
-      console.warn(`[audio] "${name}" could not load ${src} —`, err?.message ?? err);
-      return null;
-    }
-  }));
+  const decoded = await Promise.all(sources.map(decodeFor));
   const ok = decoded.filter(Boolean);
   if (ok.length) buffers.set(name, ok);
   else buffers.delete(name);

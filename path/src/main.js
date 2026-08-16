@@ -26,7 +26,7 @@ import { initParticles, updateParticles, resetParticles, updateParticleScale, pa
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake } from './systems/feedback.js';
-import { initAudio, unlockAudio, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener } from './systems/audio.js';
+import { initAudio, unlockAudio, prefetchSamples, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
 import { loadNoteGlyphs } from './systems/noteStorm.js';
@@ -342,6 +342,15 @@ async function boot() {
   }
   loading.setProgress(1);
   loading.remove();
+
+  // The sample bank starts downloading HERE — not on the gesture that starts
+  // the run, which is where it used to start and which is why a strike in the
+  // first second of a deployed run came out as its synth. Fetching needs no
+  // AudioContext and so needs no gesture; only decoding does. Started after
+  // the loading screen rather than alongside it so it isn't competing with the
+  // models for the bar the player is actually watching, and fired and
+  // forgotten because the splash and the menu are all the head start it needs.
+  prefetchSamples();
 
   initUI({
     onStart: startGame,

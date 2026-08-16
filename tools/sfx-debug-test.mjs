@@ -92,7 +92,16 @@ class FakeCtx {
   // `/sfx/padded.mp3` is the shape the real bank is in: 0.2s of sound followed
   // by 0.8s of digital silence, the way every Seal_*.mp3 was exported.
   async decodeAudioData(bytes) {
-    const src = bytes?.src ?? null;
+    // Rejects an empty buffer the way the real one does, and that is the whole
+    // point of it: decodeAudioData DETACHES what it is handed, and the same
+    // file belongs to more than one sound in the real bank. A loader that
+    // passes its cached bytes straight in leaves the second sound to want a
+    // file decoding a zero-length buffer — which is caught upstream and comes
+    // out as a silent synth fallback. Without this the harness returns a
+    // perfectly good take for a buffer that no longer has anything in it, and
+    // certifies exactly the bug it should be catching.
+    if (bytes && bytes.byteLength === 0) throw new Error('buffer is detached or empty');
+    const src = bytes ? new TextDecoder().decode(bytes) : null;
     if (src !== '/sfx/padded.mp3') return { duration: 1, src };
     const rate = 48000;
     const data = new Float32Array(rate);
@@ -122,8 +131,14 @@ let perf = 0;
 globalThis.performance = { now: () => perf };
 
 const SERVED = new Set(['/sfx/a.mp3', '/sfx/b.mp3', '/sfx/padded.mp3']);
+// A REAL ArrayBuffer, not a marker object. It used to be `{ src: url }`, which
+// is convenient to read back but has none of the behaviour that matters here:
+// no byteLength, no slice, and no way to be detached. The url is written into
+// the bytes instead so decodeAudioData above can still say which file it got,
+// and everything the loader does to a buffer — copying it, exhausting it — now
+// does what it would do in a browser.
 globalThis.fetch = async (url) => (SERVED.has(url)
-  ? { ok: true, status: 200, arrayBuffer: async () => ({ src: url }) }
+  ? { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(url).buffer }
   : { ok: false, status: 404 });
 
 const warnings = [];
