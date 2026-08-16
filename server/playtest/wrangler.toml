@@ -7,7 +7,7 @@ compatibility_date = "2025-01-01"
 # wiping collected runs can never touch the board.
 [[kv_namespaces]]
 binding = "PLAYTEST"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "e5af885fb3f74cbc96b0efd475bb12e2"
 
 # PULL_TOKEN is a SECRET, not a var — it is set with
 # `npx wrangler secret put PULL_TOKEN` and deliberately does not appear here,

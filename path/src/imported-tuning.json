@@ -1225,14 +1225,14 @@
   },
   "playerOutline": {
     "enabled": true,
-    "color": 16777215,
-    "thickness": 0.02,
-    "glow": 6.1,
+    "color": 543884,
+    "thickness": 0.11,
+    "glow": 2.8,
     "opacity": 0.9,
     "inner": {
       "enabled": true,
-      "color": 2171169,
-      "thickness": 0.21,
+      "color": 16777215,
+      "thickness": 0.175,
       "opacity": 1
     },
     "hit": {
@@ -1305,6 +1305,15 @@
       "fitDecay": true,
       "decayHeadroom": 0.85
     }
+  },
+  "homingShot": {
+    "enabled": true
+  },
+  "maneater": {
+    "enabled": true
+  },
+  "ironLung": {
+    "enabled": true
   },
   "missile": {
     "life": 4,
@@ -1942,19 +1951,32 @@
     "attackIntervalFloor": 1,
     "chargeSpeed": 22,
     "chargeSpeedPerLevel": 1.4,
-    "cruiseSpeed": 9,
     "hitRadius": 2,
     "huntRange": 34,
     "fallbackMinRadius": 0.7,
     "knockback": 6,
+    "turnRate": 8.5,
+    "maxAttackers": 1,
+    "breakStagger": 1.4,
+    "chargeMaxTime": 2.6,
+    "overshootSlack": 1.4,
+    "leash": 38,
+    "abortCooldown": 1.2,
+    "leadFactor": 0.6,
+    "overrunTime": 0.6,
+    "overrunDrag": 2.4,
+    "breachChance": 0.35,
     "formationSpacing": 2.6,
     "formationOffset": [
       -3.4,
       1.6
     ],
     "formationFollow": 6,
-    "breachChance": 0.35,
-    "turnRate": 4.5,
+    "formationDamping": 6,
+    "cruiseSpeed": 14,
+    "maxFollowSpeed": 40,
+    "leadLerp": 2.2,
+    "leadMinSpeed": 3,
     "faceLerp": 5,
     "minSpeedToTurn": 2.2,
     "mirrorDeadZone": 0.35,
@@ -2397,6 +2419,13 @@
       "tint": 0.4,
       "fallbackColor": 12873820
     },
+    "voiceClass": {
+      "bossCrab": "shell",
+      "boat": "hull",
+      "trawler": "hull",
+      "bossBoat": "hull"
+    },
+    "voiceDefault": "flesh",
     "perkFx": {
       "eyeNodes": {
         "bossShark": [
@@ -2426,7 +2455,11 @@
         "arcRate": 14,
         "arcSeconds": 0.09,
         "pulse": 0.22,
-        "pulseHz": 3.5
+        "pulseHz": 3.5,
+        "fillEnabled": false,
+        "fillPerSecond": 16,
+        "inset": 0.74,
+        "fillDrift": 1.1
       },
       "teleport": {
         "color": 13214463,
@@ -3703,6 +3736,98 @@
       "inherit": 0.15,
       "glow": 4
     },
+    "killGoo": {
+      "count": 14,
+      "speed": [
+        1.2,
+        5
+      ],
+      "size": [
+        0.26,
+        0.5
+      ],
+      "life": [
+        0.7,
+        1.4
+      ],
+      "colors": [
+        16731501,
+        16723541,
+        16757575
+      ],
+      "cone": 0,
+      "drag": 3.4,
+      "gravity": [
+        0,
+        -1.1
+      ],
+      "inherit": 0.35,
+      "glow": 1,
+      "goo": "blood",
+      "turbulence": 0.55
+    },
+    "breachFoam": {
+      "count": 16,
+      "speed": [
+        3,
+        11
+      ],
+      "size": [
+        0.22,
+        0.44
+      ],
+      "life": [
+        0.32,
+        0.7
+      ],
+      "colors": [
+        14677247,
+        16777215,
+        11132159
+      ],
+      "cone": 1,
+      "drag": 2.6,
+      "gravity": [
+        0,
+        -9
+      ],
+      "inherit": 0.5,
+      "glow": 1.3,
+      "goo": "foam",
+      "killAtSurface": false,
+      "turbulence": 0.4
+    },
+    "reentryFoam": {
+      "count": 30,
+      "speed": [
+        5,
+        19
+      ],
+      "size": [
+        0.26,
+        0.55
+      ],
+      "life": [
+        0.4,
+        0.95
+      ],
+      "colors": [
+        14677247,
+        16777215,
+        10475775
+      ],
+      "cone": 1.7,
+      "drag": 2.2,
+      "gravity": [
+        0,
+        -11
+      ],
+      "inherit": 0.35,
+      "glow": 1.5,
+      "goo": "foam",
+      "killAtSurface": false,
+      "turbulence": 0.4
+    },
     "bite": {
       "count": 26,
       "speed": [
@@ -3730,6 +3855,94 @@
       ],
       "inherit": 0.2,
       "glow": 1.5
+    },
+    "gore": {
+      "count": 90,
+      "speed": [
+        8,
+        40
+      ],
+      "size": [
+        0.28,
+        0.85
+      ],
+      "life": [
+        0.4,
+        1.1
+      ],
+      "colors": [
+        7014160,
+        10817309,
+        13377072,
+        15233919
+      ],
+      "cone": 0,
+      "drag": 2.6,
+      "gravity": [
+        0,
+        -1.6
+      ],
+      "inherit": 0.3,
+      "glow": 1.1
+    },
+    "goreMist": {
+      "count": 54,
+      "speed": [
+        0.8,
+        7
+      ],
+      "size": [
+        0.55,
+        1.5
+      ],
+      "life": [
+        1.4,
+        3.2
+      ],
+      "colors": [
+        3999243,
+        6162962,
+        9375000
+      ],
+      "cone": 0,
+      "drag": 3.8,
+      "gravity": [
+        0,
+        -0.35
+      ],
+      "inherit": 0.12,
+      "glow": 0.45,
+      "turbulence": 1.6
+    },
+    "goreCloud": {
+      "count": 22,
+      "speed": [
+        2.4,
+        10
+      ],
+      "size": [
+        0.5,
+        1.05
+      ],
+      "life": [
+        1.3,
+        2.8
+      ],
+      "colors": [
+        4851212,
+        7604755,
+        10228256
+      ],
+      "cone": 0,
+      "drag": 3.8,
+      "gravity": [
+        0,
+        -0.8
+      ],
+      "inherit": 0.4,
+      "glow": 0.6,
+      "goo": "gore",
+      "turbulence": 0.55
     },
     "pickup": {
       "count": 48,
@@ -4238,6 +4451,130 @@
       "glow": 1,
       "surfacePop": "bubbleBurst"
     },
+    "hullFoam": {
+      "count": 3,
+      "speed": [
+        0.3,
+        1.8
+      ],
+      "size": [
+        0.24,
+        0.45
+      ],
+      "life": [
+        0.9,
+        2.2
+      ],
+      "colors": [
+        14677759,
+        16777215,
+        12578815
+      ],
+      "cone": 0.9,
+      "drag": 2.4,
+      "gravity": [
+        0,
+        0.7
+      ],
+      "inherit": 0.45,
+      "glow": 1,
+      "goo": "foam",
+      "killAtSurface": false,
+      "turbulence": 0.8
+    },
+    "hullSmoke": {
+      "count": 2,
+      "speed": [
+        0.4,
+        1.6
+      ],
+      "size": [
+        0.28,
+        0.62
+      ],
+      "life": [
+        1.1,
+        2.4
+      ],
+      "colors": [
+        10135218,
+        12766937,
+        7766670
+      ],
+      "cone": 1.2,
+      "drag": 1.6,
+      "gravity": [
+        0,
+        2.6
+      ],
+      "inherit": 0.5,
+      "glow": 0.35,
+      "goo": "smoke",
+      "killAtSurface": false,
+      "turbulence": 1.4
+    },
+    "bossHitGoo": {
+      "count": 4,
+      "speed": [
+        4,
+        11
+      ],
+      "size": [
+        0.16,
+        0.3
+      ],
+      "life": [
+        0.14,
+        0.3
+      ],
+      "colors": [
+        10482943,
+        16777215,
+        7328767
+      ],
+      "cone": 1.1,
+      "drag": 5.5,
+      "gravity": [
+        0,
+        0
+      ],
+      "inherit": 0.2,
+      "glow": 2.2,
+      "goo": "hit",
+      "killAtSurface": false,
+      "turbulence": 0.3
+    },
+    "auraField": {
+      "count": 1,
+      "speed": [
+        0.2,
+        1.1
+      ],
+      "size": [
+        0.55,
+        0.95
+      ],
+      "life": [
+        0.45,
+        0.8
+      ],
+      "colors": [
+        9430783,
+        14219007,
+        6277375
+      ],
+      "cone": 0,
+      "drag": 3.2,
+      "gravity": [
+        0,
+        0
+      ],
+      "inherit": 1,
+      "glow": 1.6,
+      "goo": "aura",
+      "killAtSurface": false,
+      "turbulence": 0.5
+    },
     "hullSpray": {
       "count": 4,
       "speed": [
@@ -4611,7 +4948,7 @@
         "strength": 1.1,
         "radius": 6
       },
-      "sfx": null,
+      "sfx": "strike",
       "haptic": [
         {
           "duration": 45,
@@ -4663,6 +5000,7 @@
     },
     "kill": {
       "emit": "explosion",
+      "goo": "killGoo",
       "shake": 0,
       "hitstop": 0,
       "glow": 0.6,
@@ -4682,6 +5020,7 @@
     },
     "bigKill": {
       "emit": "bigExplosion",
+      "goo": "killGoo",
       "shake": 0.7,
       "hitstop": 0.07,
       "glow": 1.2,
@@ -4758,12 +5097,13 @@
       "sfx": "playerDeath",
       "haptic": [
         {
-          "duration": 70,
-          "magnitude": 1
+          "duration": 26,
+          "magnitude": 1,
+          "delay": 0
         },
         {
-          "duration": 120,
-          "magnitude": 0.45,
+          "duration": 126,
+          "magnitude": 0.6,
           "delay": 60
         }
       ]
@@ -4801,18 +5141,19 @@
     },
     "chumEaten": {
       "emit": "bite",
-      "shake": 0.04,
+      "shake": 0,
       "hitstop": 0,
-      "glow": 0.15,
+      "glow": 0.3,
       "ripple": {
-        "strength": 0.7,
-        "radius": 4
+        "strength": 0.2,
+        "radius": 3
       },
-      "sfx": "bite",
+      "sfx": "chumEaten",
       "haptic": [
         {
           "duration": 10,
-          "magnitude": 0.14
+          "magnitude": 0.33,
+          "delay": 0
         }
       ],
       "sfxMinGap": 0.12
@@ -4902,7 +5243,7 @@
       "sfxMinGap": 0.03
     },
     "crewEaten": {
-      "emit": "bite",
+      "emit": null,
       "shake": 0.18,
       "hitstop": 0.03,
       "glow": 0.5,
@@ -4912,9 +5253,30 @@
       },
       "sfx": "bite",
       "haptic": [
-        24,
-        20,
-        30
+        {
+          "duration": 24,
+          "magnitude": 0.89,
+          "delay": 0
+        },
+        {
+          "duration": 30,
+          "magnitude": 0.6050303065738976,
+          "delay": 20
+        }
+      ]
+    },
+    "maneaterFeed": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.55,
+      "ripple": null,
+      "sfx": null,
+      "haptic": [
+        {
+          "duration": 18,
+          "magnitude": 0.3
+        }
       ]
     },
     "crewHit": {
@@ -4978,8 +5340,36 @@
         60
       ]
     },
+    "bossHitFlesh": {
+      "emit": null,
+      "sfx": "bossHitFlesh",
+      "sfxMinGap": 0.11
+    },
+    "bossDieFlesh": {
+      "emit": null,
+      "sfx": "bossDieFlesh"
+    },
+    "bossHitShell": {
+      "emit": null,
+      "sfx": "bossHitShell",
+      "sfxMinGap": 0.11
+    },
+    "bossDieShell": {
+      "emit": null,
+      "sfx": "bossDieShell"
+    },
+    "bossHitHull": {
+      "emit": null,
+      "sfx": "bossHitHull",
+      "sfxMinGap": 0.11
+    },
+    "bossDieHull": {
+      "emit": null,
+      "sfx": "bossDieHull"
+    },
     "breach": {
       "emit": "splash",
+      "goo": "breachFoam",
       "shake": 0.2,
       "hitstop": 0,
       "glow": 0.3,
@@ -4994,6 +5384,7 @@
     },
     "reentry": {
       "emit": "reentry",
+      "goo": "reentryFoam",
       "shake": 0.55,
       "hitstop": 0.05,
       "glow": 0.9,
@@ -5285,7 +5676,7 @@
       ]
     },
     "boostEmpty": {
-      "emit": null,
+      "emit": "hullSmoke",
       "shake": 0,
       "hitstop": 0,
       "glow": 0,
@@ -5995,6 +6386,75 @@
       "timeScale": 0.6,
       "dragVary": 0.5
     },
+    "goo": {
+      "enabled": true,
+      "divisor": 2,
+      "radius": 3.4,
+      "iso": 0.9,
+      "soft": 0.22,
+      "opacity": 1,
+      "additive": false,
+      "rim": 0.75,
+      "rimWidth": 0.7,
+      "spec": 0.55,
+      "specPower": 16,
+      "normal": 6,
+      "lightX": -0.5,
+      "lightY": 0.85,
+      "groups": {
+        "blood": {},
+        "smoke": {
+          "radius": 3.4,
+          "iso": 0.34,
+          "soft": 0.5,
+          "opacity": 0.6,
+          "additive": false,
+          "rim": 0,
+          "rimWidth": 0.6,
+          "spec": 0,
+          "normal": 1.5
+        },
+        "hit": {
+          "radius": 3.2,
+          "iso": 0.3,
+          "soft": 0.2,
+          "opacity": 0.85,
+          "additive": true,
+          "rim": 0.9,
+          "rimWidth": 0.5,
+          "spec": 0,
+          "normal": 3
+        },
+        "aura": {
+          "radius": 4.4,
+          "iso": 0.32,
+          "soft": 0.22,
+          "opacity": 0.55,
+          "additive": true,
+          "rim": 0.5,
+          "rimWidth": 0.8,
+          "spec": 0,
+          "normal": 2
+        },
+        "foam": {
+          "radius": 3,
+          "iso": 0.55,
+          "soft": 0.45,
+          "opacity": 0.85,
+          "additive": true,
+          "rim": 0.35,
+          "rimWidth": 0.9,
+          "spec": 0,
+          "normal": 3
+        },
+        "gore": {
+          "soft": 0.16,
+          "rim": 0.32,
+          "rimWidth": 0.85,
+          "spec": 0.22
+        }
+      }
+    },
     "shakeDecay": 0.0004,
     "maxShake": 0.15,
     "hitstopScale": 0.15,
@@ -6278,7 +6738,7 @@
   "emitPoints": {
     "bullet": "fins",
     "missile": "fins",
-    "bounce": "mouth",
+    "bounce": "fins",
     "starfish": "tail",
     "scallop": "mouth",
     "oyster": "fins"
@@ -6515,6 +6975,81 @@
         "/sfx/HG_UI_SynthMoan.mp3"
       ]
     },
+    "bossHitFlesh": {
+      "src": null,
+      "type": "noise",
+      "filter": 820,
+      "decay": 0.13,
+      "gain": 0.3,
+      "pitchVary": 0.14,
+      "filterVary": 0.22
+    },
+    "bossDieFlesh": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        130,
+        24
+      ],
+      "decay": 1.15,
+      "gain": 0.52,
+      "noise": 0.72,
+      "filter": 620,
+      "pitchVary": 0.1,
+      "filterVary": 0.16
+    },
+    "bossHitShell": {
+      "src": null,
+      "type": "noise",
+      "filter": 5200,
+      "decay": 0.055,
+      "gain": 0.26,
+      "pitchVary": 0.18,
+      "filterVary": 0.25
+    },
+    "bossDieShell": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        420,
+        70
+      ],
+      "decay": 0.75,
+      "gain": 0.48,
+      "noise": 0.85,
+      "filter": 2600,
+      "pitchVary": 0.12,
+      "filterVary": 0.2
+    },
+    "bossHitHull": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        900,
+        260
+      ],
+      "decay": 0.16,
+      "gain": 0.24,
+      "noise": 0.35,
+      "filter": 3200,
+      "wave": "triangle",
+      "pitchVary": 0.16,
+      "filterVary": 0.2
+    },
+    "bossDieHull": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        95,
+        18
+      ],
+      "decay": 1.4,
+      "gain": 0.55,
+      "noise": 0.8,
+      "filter": 520,
+      "pitchVary": 0.08,
+      "filterVary": 0.14
+    },
     "playerHit": {
       "srcs": [
         "/sfx/Seal_PlayerHit_01.mp3",
@@ -6544,10 +7079,12 @@
       "srcs": [
         "/sfx/Seal_Death_01.mp3",
         "/sfx/Seal_Death_02.mp3",
-        "/sfx/Seal_PlayerDeath_03.mp3"
+        "/sfx/Seal_PlayerDeath_03.mp3",
+        "/sfx/Seal_05.mp3",
+        "/sfx/Seal_01.mp3"
       ],
-      "gain": 2.2,
-      "filter": 900,
+      "gain": 4.731512589614805,
+      "filter": 2860,
       "pitchVary": 0.06,
       "filterVary": 0.15,
       "type": "boom",
@@ -6556,19 +7093,35 @@
         40
       ],
       "decay": 0.9,
-      "noise": 0.6
+      "noise": 0.6,
+      "src": null
     },
     "bite": {
       "src": null,
       "type": "noise",
-      "filter": 680,
+      "filter": 4820,
       "decay": 0.19,
-      "gain": 0.47315125896148047,
-      "pitchVary": 0.14,
-      "filterVary": 0.25,
+      "gain": 0.5956621435290105,
+      "pitchVary": 0.34,
+      "filterVary": 0.11,
       "srcs": [
         "/sfx/02_Muttley_Bites_Dastardly_on_the_Butt.mp3"
       ]
+    },
+    "crewEaten": {
+      "src": null,
+      "srcs": [],
+      "type": "boom",
+      "freq": [
+        190,
+        34
+      ],
+      "decay": 0.52,
+      "gain": 0.42,
+      "noise": 0.9,
+      "filter": 620,
+      "pitchVary": 0.18,
+      "filterVary": 0.3
     },
     "chumSlurp": {
       "src": null,
@@ -6588,9 +7141,11 @@
         1180
       ],
       "decay": 0.12,
-      "gain": 0.08912509381337455,
+      "gain": 3.758374042884441,
       "pitchVary": 0,
-      "srcs": []
+      "srcs": [
+        "/sfx/pickup1.mp3"
+      ]
     },
     "levelUp": {
       "src": null,
@@ -6602,9 +7157,10 @@
       ],
       "decay": 1.26,
       "gain": 1,
-      "pitchVary": 0.05,
+      "pitchVary": 0.28,
       "srcs": [
-        "/sfx/HG_SF_FX_beboplex_2.mp3"
+        "/sfx/Seal_01.mp3",
+        "/sfx/Seal_13.mp3"
       ]
     },
     "chumChunkSpawn": {
@@ -6658,7 +7214,8 @@
       "srcs": [
         "/sfx/Seal_Breach_01.mp3",
         "/sfx/Seal_56.mp3",
-        "/sfx/Seal_Boost_01.mp3"
+        "/sfx/Seal_Boost_01.mp3",
+        "/sfx/fluteseal_01.mp3"
       ],
       "gain": 4.216965034285822,
       "filter": 3400,
@@ -6755,7 +7312,8 @@
         "/sfx/Seal_Boost_01.mp3",
         "/sfx/Seal_Boost_02.mp3",
         "/sfx/Seal_Boost_03.mp3",
-        "/sfx/Seal_Boost_04.mp3"
+        "/sfx/Seal_Boost_04.mp3",
+        "/sfx/dash.mp3"
       ],
       "gain": 1.51,
       "filter": 6000,
@@ -6808,8 +7366,11 @@
         150
       ],
       "decay": 0.11,
-      "gain": 0.14,
-      "pitchVary": 0.03
+      "gain": 1.9952623149688795,
+      "pitchVary": 0.16,
+      "srcs": [
+        "/sfx/Seal_07.mp3"
+      ]
     },
     "foodChain": {
       "srcs": [
@@ -6838,18 +7399,18 @@
         1046,
         990
       ],
-      "decay": 0.1,
+      "decay": 0.56,
       "gain": 0.13,
       "pitchVary": 0
     },
     "breathIn": {
       "src": null,
       "type": "noise",
-      "filter": 1700,
+      "filter": 1160,
       "decay": 0.99,
-      "gain": 2.6607250597988097,
-      "pitchVary": 0.25,
-      "filterVary": 0.25,
+      "gain": 5.956621435290105,
+      "pitchVary": 0.39,
+      "filterVary": 0.48,
       "srcs": [
         "/sfx/HG_FLY_Breath_Jers.mp3"
       ]
@@ -6864,7 +7425,10 @@
       ],
       "decay": 0.09,
       "gain": 0.22,
-      "pitchVary": 0.18
+      "pitchVary": 0.18,
+      "srcs": [
+        "/sfx/pickup2.mp3"
+      ]
     },
     "missileLaunch": {
       "src": null,
@@ -7468,6 +8032,21 @@
       "decay": 0.1,
       "gain": 0.13,
       "pitchVary": 0
+    },
+    "chumEaten": {
+      "src": null,
+      "type": "blip",
+      "wave": "triangle",
+      "freq": [
+        1255,
+        1180
+      ],
+      "decay": 0.12,
+      "gain": 3.758374042884441,
+      "pitchVary": 0.47,
+      "srcs": [
+        "/sfx/pickup1.mp3"
+      ]
     }
   },
   "flightSfx": {
@@ -8717,6 +9296,15 @@
       "strength": 11,
       "trawlerMul": 1.4
     },
+    "smoke": {
+      "enabled": true,
+      "startAt": 0.25,
+      "perSecond": 7,
+      "sites": 4,
+      "scatter": 0.12,
+      "lift": 0.15,
+      "trawlerMul": 1.5
+    },
     "crew": {
       "enabled": true,
       "count": 2,
@@ -8769,6 +9357,45 @@
     "chumSpread": 5.6,
     "chumXp": 1
   },
+  "gore": {
+    "enabled": true,
+    "spray": 1,
+    "mist": 1.2,
+    "cloud": 1.7,
+    "carry": 0.35,
+    "pieces": {
+      "enabled": true,
+      "assets": [
+        "gorebone"
+      ],
+      "flesh": true,
+      "count": 16,
+      "max": 96,
+      "size": 0.6,
+      "sizeJitter": 0.7,
+      "lengthJitter": 0.75,
+      "girthJitter": 0.4,
+      "speed": [
+        5,
+        22
+      ],
+      "upBias": 3.2,
+      "scatter": 3.4,
+      "spin": 11,
+      "drag": 2,
+      "waterGravity": 3.6,
+      "sink": 1.1,
+      "spinDamp": 1.4,
+      "splashScale": 0.22,
+      "life": 5.5,
+      "lifeJitter": 0.4,
+      "fade": 1.1,
+      "boneColor": 14998724,
+      "meatColor": 10691376,
+      "tint": 0.45,
+      "boneShare": 0.6
+    }
+  },
   "boatWake": {
     "enabled": true,
     "speedRef": 5,
@@ -8786,6 +9413,11 @@
     "keelRise": 0.22,
     "keelMargin": 0.15,
     "keelSpanMax": 0.3,
+    "foamEnabled": true,
+    "foamPerSecond": 9,
+    "foamDepth": 0.06,
+    "foamSpan": 0.55,
+    "foamGap": 0.08,
     "sprayEnabled": true,
     "sprayMinRamp": 0.35,
     "sprayPerSecond": 9,
@@ -9367,8 +9999,8 @@
     }
   },
   "levelUpCards": {
-    "overlayOpacity": 0.38,
+    "overlayOpacity": 0.32,
     "overlayColor": 0
   },
-  "_savedAt": 1786845698759
+  "_savedAt": 1786859981322
 }
