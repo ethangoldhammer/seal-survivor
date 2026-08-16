@@ -77,6 +77,9 @@ export function feedback(event, at = {}) {
   const y = at.y ?? 0;
 
   if (def.emit) emit(def.emit, x, y, at);
+  // The goo burst rides on the same `at` — including the death tint, which is
+  // the whole point: the mass left in the water is the creature's own colour.
+  if (def.goo) emit(def.goo, x, y, at);
 
   if (def.ripple && grid) {
     grid.ripple(x, y, def.ripple.strength * scale, def.ripple.radius);

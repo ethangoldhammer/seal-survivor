@@ -7530,6 +7530,32 @@ export const CONFIG = {
         colors: [0xff4d6d, 0xff7a3d, 0xffb347, 0xffffff], cone: 0, drag: 1.8,
         gravity: [0, -1.2], inherit: 0.15, glow: 3.5,
     },
+      // THE GOO. Fired alongside `explosion` on a kill, not instead of it: the
+      // spray is the event and this is what the event leaves in the water.
+      // `goo: true` sends these particles to the density pass (CONFIG.fx.goo)
+      // rather than drawing them as sprites.
+      //
+      // Everything about the numbers is the opposite of an explosion, and it
+      // has to be. Fusion is a question of whether neighbours still OVERLAP:
+      // `explosion` opens from 4 to 24 units/s, which tears any blob apart
+      // within a few frames and leaves the pass thresholding a scatter of
+      // separate droplets — the exact look it exists to avoid. So: a narrow
+      // speed band, heavy drag, and a long life, which makes a mass that
+      // travels together and then hangs in the current. Slight downward
+      // gravity, because goo sinks.
+      //
+      // Sizes are large because they are DENSITY radii, not drawn radii —
+      // multiplied again by `goo.radius` — and count is low because each
+      // particle is a whole lobe of the body rather than a speck.
+      killGoo: {
+        count: 14, speed: [1.2, 5], size: [0.26, 0.5], life: [0.7, 1.4],
+        colors: [0xff4d6d, 0xff2e55, 0xffb347], cone: 0, drag: 3.4,
+        gravity: [0, -1.1], inherit: 0.35, glow: 1.0, goo: true,
+        // Held under the emitter's usual pull: the current is what folds the
+        // mass, and at full strength it pulls the lobes apart faster than the
+        // isoline can hold them together.
+        turbulence: 0.55,
+    },
       bite: {
         count: 26, speed: [3, 14], size: [0.1, 0.28], life: [0.3, 0.8],
         colors: [0xff5566, 0xff8899, 0xffd0d8], cone: 0, drag: 2.4,
@@ -7961,8 +7987,12 @@ export const CONFIG = {
       // several copies of one sound stacked, which is the same smear `bulletHit`
       // has always guarded against. Shorter than bulletHit's gap on purpose — a
       // kill is rarer and worth hearing individually for longer.
-      kill:      { emit: 'explosion',   shake: 0.22, hitstop: 0,     glow: 0.6,  ripple: { strength: 2.4, radius: 10 },  sfx: 'kill',     haptic: [18], sfxMinGap: 0.05 },
-      bigKill:   { emit: 'bigExplosion',shake: 0.7,  hitstop: 0.07,  glow: 1.2,  ripple: { strength: 4.5, radius: 18 },  sfx: 'bigKill',  haptic: [30, 25, 45] },
+      // `goo` is a SECOND emitter fired from the same event, and the only
+      // reason it is its own field rather than a longer `emit` list is that it
+      // is a different KIND of thing: `emit` is the spray, `goo` is what the
+      // spray leaves behind. Both are tinted by the creature that died.
+      kill:      { emit: 'explosion',   goo: 'killGoo', shake: 0.22, hitstop: 0,     glow: 0.6,  ripple: { strength: 2.4, radius: 10 },  sfx: 'kill',     haptic: [18], sfxMinGap: 0.05 },
+      bigKill:   { emit: 'bigExplosion',goo: 'killGoo', shake: 0.7,  hitstop: 0.07,  glow: 1.2,  ripple: { strength: 4.5, radius: 18 },  sfx: 'bigKill',  haptic: [30, 25, 45] },
       // A bolt landing on the water. The heaviest shake in the table — heavier
       // than bigKill — because unlike everything else here it is not something
       // the player did, and the only way an event with no input behind it reads
@@ -8563,6 +8593,58 @@ export const CONFIG = {
         // a rigid shell that all stops on the same frame; this is what lets the
         // light bits stall in the water while the heavy ones carry on.
         dragVary: 0.5,
+      },
+
+      // GOO. A kill throws a handful of particles that FUSE — near neighbours
+      // weld into one body with a concave neck between them instead of
+      // overlapping as separate discs, and the mass shears and folds in the
+      // current above before it melts.
+      //
+      // It is a rendering trick and not a simulation one: nothing attracts
+      // anything, and the sim underneath is the same closed form every other
+      // particle uses. The flagged particles are splatted as soft density into
+      // a small offscreen field and that field is thresholded at an isoline —
+      // entities/particles.js writes it, systems/post.js finds the surface, and
+      // the long version of why is at both places.
+      //
+      // Cost is one draw of a buffer that is already resident plus one
+      // fullscreen pass, ONLY on frames where a goo burst is still alive.
+      // Cheaper than the bloom chain it feeds into.
+      goo: {
+        enabled: true,
+        // Resolution divisor for the density field. Also the softness of the
+        // surface — the isoline is found on a bilinear upsample, so a coarser
+        // field is a wobblier, more molten edge. 2 reads as surface tension.
+        divisor: 2,
+        // Splat diameter, as a multiple of the particle's own `size`. THE
+        // control that decides whether anything fuses at all: blobs have to
+        // overlap in the field to sum above the isoline between them, and
+        // below about 2 a burst is just a group of separate droplets.
+        radius: 3.4,
+        // Where the surface is, in accumulated density. Higher pulls the goo
+        // in tighter and breaks it into more separate bodies; lower swells it
+        // into one blanket. A single splat peaks at 1 by construction, so an
+        // iso above 1 means NO particle can show up alone — only pairs.
+        iso: 0.9,
+        // Half-width of the transition, in density. Small is a hard wet edge;
+        // large is a soft cloud and stops reading as liquid.
+        soft: 0.22,
+        opacity: 1,
+        // Alpha (a thick body that hides the water behind it) or additive (a
+        // glowing slick lying in it).
+        additive: false,
+        // The wet edge: a brightened band just inside the surface, where a
+        // thick liquid gathers the light it is carrying.
+        rim: 0.75,
+        rimWidth: 0.7,
+        // A highlight lit off the density gradient, which points out of the
+        // goo and so serves as a normal. This is most of what separates
+        // "viscous" from "flat silhouette".
+        spec: 0.55,
+        specPower: 16,
+        normal: 6,
+        lightX: -0.5,
+        lightY: 0.85,
       },
 
       shakeDecay: 0.0004, // fraction of shake left after 1s
@@ -18648,6 +18730,23 @@ export const TUNER_SCHEMA = [
       { path: 'fx.turbulence.frequency', min: 0.05, max: 2, step: 0.05, label: 'turbulence eddy size (low = big)' },
       { path: 'fx.turbulence.timeScale', min: 0, max: 4, step: 0.05, label: 'turbulence churn speed' },
       { path: 'fx.turbulence.dragVary', min: 0, max: 0.95, step: 0.05, label: 'particle drag spread' },
+      // GOO — what a kill leaves in the water. `blob size` first: it is the
+      // one that decides whether the burst fuses into a body at all or stays a
+      // handful of separate droplets. `surface` is then the shape of that body
+      // — up, it tightens and splits; down, it swells into one blanket.
+      { path: 'fx.goo.enabled', type: 'bool', label: 'kill goo' },
+      { path: 'fx.goo.radius', min: 1, max: 8, step: 0.1, label: 'goo blob size' },
+      { path: 'fx.goo.iso', min: 0.2, max: 3, step: 0.05, label: 'goo surface (high = tighter)' },
+      { path: 'fx.goo.soft', min: 0.02, max: 1.2, step: 0.02, label: 'goo edge softness' },
+      { path: 'fx.goo.opacity', min: 0, max: 1, step: 0.05, label: 'goo opacity' },
+      { path: 'fx.goo.additive', type: 'bool', label: 'goo glows instead of hiding the water' },
+      { path: 'fx.goo.rim', min: 0, max: 2.5, step: 0.05, label: 'goo wet rim' },
+      { path: 'fx.goo.rimWidth', min: 0.05, max: 2, step: 0.05, label: 'goo rim depth' },
+      { path: 'fx.goo.spec', min: 0, max: 2.5, step: 0.05, label: 'goo highlight' },
+      { path: 'fx.goo.specPower', min: 2, max: 64, step: 1, label: 'goo highlight tightness' },
+      { path: 'fx.goo.normal', min: 0, max: 24, step: 0.5, label: 'goo surface relief' },
+      { path: 'fx.goo.divisor', min: 1, max: 6, step: 1, label: 'goo field resolution (high = cheaper, softer)' },
+      { path: 'emitters.killGoo.count', min: 0, max: 60, step: 1, label: 'goo lobes' },
       { path: 'audio.masterVolume', min: 0, max: 1, step: 0.05 },
       { path: 'audio.enabled', type: 'bool', label: 'sound' },
       { path: 'haptics.enabled', type: 'bool', label: 'haptics' },

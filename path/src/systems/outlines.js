@@ -486,8 +486,25 @@ function applyLook(material, cfg, scale) {
 // Averages the three components so a non-uniform `scaleXYZ` gives one sensible
 // width instead of the shader picking a direction; the shells are a
 // readability aid, not a measurement.
+//
+// THE SKINNED CASE IS NOT THE PARENT CHAIN. A skinned shell is added as a
+// SIBLING of the mesh it copies, not a child (addOutlineShells explains why),
+// so this walk misses any scale sitting on that mesh's own node — while the
+// vertices it offsets are placed by the SKELETON, which does carry it. The two
+// only agree when the skinned mesh's node is at scale 1, which is every rigged
+// .glb in the game and is why this went unnoticed: morayeel.fbx is the one
+// outlined model exported in centimetres, and its mesh node carries the 100.
+// A 0.1 rim came out 100x wide — a 20-unit amber sphere with an eel somewhere
+// inside it. `__outlineSource` is the mesh the shell was copied from; see
+// assets.js addOutlineShells.
 function accumulatedScale(obj) {
   let s = 1;
-  for (let o = obj; o; o = o.parent) s *= (Math.abs(o.scale.x) + Math.abs(o.scale.y) + Math.abs(o.scale.z)) / 3;
+  for (let o = obj; o; o = o.parent) s *= axisAverage(o.scale);
+  const source = obj?.userData?.__outlineSource;
+  if (source) s *= axisAverage(source.scale);
   return s;
+}
+
+function axisAverage(v) {
+  return (Math.abs(v.x) + Math.abs(v.y) + Math.abs(v.z)) / 3;
 }

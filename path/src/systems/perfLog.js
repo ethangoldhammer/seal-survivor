@@ -83,6 +83,65 @@ let hitchNeither = 0;
 let programsAdded = 0;
 let texturesAdded = 0;
 
+// --- WHICH shader, and whether it had been built before ---------------------
+//
+// `programsAdded` says forty programs were linked and stops there, which is the
+// difference between two completely different bugs:
+//
+//   forty DISTINCT keys   the warm-up missed forty material configurations.
+//                         Annoying, bounded, and paid once — the fortieth is
+//                         the last one.
+//   one key, forty times  something is releasing a program and rebuilding the
+//                         identical shader. That is unbounded: it goes on for
+//                         as long as the run does, and no amount of warming
+//                         helps because the program WAS warm and got thrown
+//                         away. This is the one worth chasing.
+//
+// three's own numbers cannot tell them apart. `info.programs.length` is the
+// live set, so a release-and-rebuild leaves it unchanged; `programsAdded` (max
+// id, see programsEverBuilt in main.js) counts both cases identically. The
+// cache key is what separates them, and three hangs it on every program.
+//
+// Keyed by the cache key, counting builds. A key with a count above one is a
+// rebuild — the same shader, linked again.
+const programBuilds = new Map(); // cacheKey -> times built this run
+let lastProgramId = -1;          // highest program id seen, so new ones are new
+let programRebuilds = 0;         // builds of a key already built this run
+
+// Bounded, because the map is keyed on strings three builds by concatenating
+// every program parameter and they are not short. Past this the count for keys
+// already in the map keeps rising — which is the number that matters, since a
+// rebuild is by definition a key that has been seen — and genuinely new keys
+// stop being added. A run that reaches this has already answered the question.
+const KEYS_KEPT = 400;
+
+/**
+ * Fold this frame's program list in. Takes three's live array
+ * (`renderer.info.programs`), and picks out the ones built since the last call
+ * by id — ids come from a counter that only goes up, so anything above the
+ * high-water mark is new.
+ *
+ * Silent and free when the caller passes nothing, which is every Node harness:
+ * there is no GL context there and so no programs to read.
+ */
+function notePrograms(list) {
+  if (!list?.length) return;
+  let highest = lastProgramId;
+  for (const p of list) {
+    if (p.id <= lastProgramId) continue;
+    if (p.id > highest) highest = p.id;
+    const key = p.cacheKey ?? '(no key)';
+    const seen = programBuilds.get(key);
+    if (seen !== undefined) {
+      programBuilds.set(key, seen + 1);
+      programRebuilds++;
+    } else if (programBuilds.size < KEYS_KEPT) {
+      programBuilds.set(key, 1);
+    }
+  }
+  lastProgramId = highest;
+}
+
 // The fourth answer, and the one the other three were hiding: the JS heap.
 // A collection is the only thing that makes used heap go DOWN, so a stall on a
 // frame where it dropped is the collector and a stall where it didn't is real
@@ -98,7 +157,7 @@ let heapPeak = 0;
  * screen and a shader warm-up, and folding those into a run's distribution
  * would put a 3000ms frame at the top of every report forever.
  */
-export function perfRunStart(stamp = performance.now(), programs = 0, textures = 0, heap = 0) {
+export function perfRunStart(stamp = performance.now(), programs = 0, textures = 0, heap = 0, programList = null) {
   histogram.fill(0);
   recent.fill(0);
   recentAt = 0;
@@ -118,6 +177,14 @@ export function perfRunStart(stamp = performance.now(), programs = 0, textures =
   hitchNeither = 0;
   programsAdded = 0;
   texturesAdded = 0;
+  // Seeded from the live set rather than from -1: everything the warm-up built
+  // is already there, and counting it as "built during the run" would put the
+  // whole boot compile at the top of every report. Same reasoning as the
+  // `programs` seed above.
+  programBuilds.clear();
+  programRebuilds = 0;
+  lastProgramId = -1;
+  for (const p of programList ?? []) if (p.id > lastProgramId) lastProgramId = p.id;
   lastHeap = heap;
   hitchGC = 0;
   heapFreed = 0;
@@ -133,10 +200,16 @@ export function perfStop() {
  * One frame. Takes the rAF timestamp and does its own subtraction — see the
  * note at the top about why it cannot take the loop's dt.
  */
-export function perfFrame(stamp, programs = lastPrograms, textures = lastTextures, heap = lastHeap) {
+export function perfFrame(stamp, programs = lastPrograms, textures = lastTextures, heap = lastHeap, programList = null) {
   if (!recording) return;
   const ms = stamp - lastStamp;
   lastStamp = stamp;
+
+  // Before the early return below, deliberately. A program built on the frame a
+  // backgrounded tab came back is still a program that got built, and dropping
+  // it would leave the rebuild count quietly short by however many times the
+  // player alt-tabbed.
+  notePrograms(programList);
 
   // Deltas first, and consumed whether or not this frame turns out to be a
   // hitch — otherwise a compile on a fast frame would still be sitting in the
@@ -246,8 +319,29 @@ export function perfSummary() {
     // warm-up that missed 40 programs, however they were distributed.
     programsAdded,
     texturesAdded,
+    // And the split that says which kind of problem those programs are. See
+    // the note above programBuilds: `programRebuilds` above zero is a shader
+    // being thrown away and rebuilt, which no warm-up can fix.
+    programRebuilds,
+    programKeys: programBuilds.size,
+    topPrograms: topPrograms(),
     worst: worst.slice(),
   };
+}
+
+// The keys built most often, worst first. Trimmed hard: a three cache key runs
+// to hundreds of characters of parameter soup, and the part that identifies the
+// shader — the material type and whatever customProgramCacheKey pinned — is at
+// the front of it. The whole string in a run record would dwarf the run.
+const KEY_CHARS = 90;
+const TOP_KEPT = 6;
+
+function topPrograms() {
+  return [...programBuilds.entries()]
+    .filter(([, n]) => n > 1)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, TOP_KEPT)
+    .map(([key, builds]) => ({ builds, key: key.slice(0, KEY_CHARS) }));
 }
 
 function clock(seconds) {
@@ -274,9 +368,14 @@ export function perfRunReport(label = 'run', extra = '') {
     `       median ${s.medianMs}ms · p95 ${s.p95Ms}ms · p99 ${s.p99Ms}ms · worst ${s.worstMs.toFixed(0)}ms`,
     `       hitches (>${HITCH_MS}ms): ${s.hitches}  ·  spikes (>${SPIKE_MS}ms): ${s.spikes}`,
     `       of those: ${s.hitchCompile} shader link · ${s.hitchUpload} texture upload · ${s.hitchGC} collection · ${s.hitchNeither} none of those`,
-    `       built this run: ${s.programsAdded} programs, ${s.texturesAdded} textures`
+    `       built this run: ${s.programsAdded} programs (${s.programKeys} distinct, ${s.programRebuilds} rebuilt), ${s.texturesAdded} textures`
       + (s.heapPeakMB > 0 ? `  ·  heap peak ${s.heapPeakMB.toFixed(0)}MB, ${s.heapFreedMB.toFixed(0)}MB collected` : ''),
   ];
+  // Only when something actually rebuilt. A clean run should print nothing
+  // here, so the block appearing at all is the signal.
+  for (const p of s.topPrograms) {
+    lines.push(`       rebuilt ${p.builds}x: ${p.key}`);
+  }
   if (s.worst.length) {
     lines.push(`       worst frames: ${s.worst.map((w) => `${w.ms.toFixed(0)}ms @ ${clock(w.at)}${w.why ? ` (${w.why})` : ''}`).join(' · ')}`);
   }

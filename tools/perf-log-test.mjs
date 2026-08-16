@@ -209,6 +209,75 @@ check('a browser with no heap API attributes nothing to GC', s.hitchGC === 0,
   `${s.hitchGC} — falls to "none of those" instead`);
 
 // ===========================================================================
+section('Which shader, and whether it had been built before');
+
+// The distinction the count above cannot make. Forty distinct keys is a
+// warm-up gap and it ends; one key forty times is a rebuild loop and it does
+// not. Both read as "40 programs" without the cache keys.
+const prog = (id, key) => ({ id, cacheKey: key });
+
+// Everything the warm-up built is already in the list when the run starts, and
+// none of it may be counted against the run.
+perfRunStart(0, 0, 0, 0, [prog(0, 'water'), prog(1, 'sky'), prog(2, 'seal')]);
+t = 0;
+const gl = (ms, list) => { t += ms; perfFrame(t, undefined, undefined, undefined, list); };
+
+gl(16, [prog(0, 'water'), prog(1, 'sky'), prog(2, 'seal')]);
+s = perfSummary();
+check('the warm-up\'s programs are not the run\'s', s.programKeys === 0 && s.programRebuilds === 0,
+  `${s.programKeys} keys, ${s.programRebuilds} rebuilt`);
+
+// Four new material configurations appearing across a run: a warm-up gap.
+gl(16, [prog(3, 'megalodon'), prog(4, 'crab')]);
+gl(16, [prog(5, 'pearl'), prog(6, 'lantern')]);
+s = perfSummary();
+check('four first draws are four distinct keys', s.programKeys === 4, `${s.programKeys}`);
+check('and none of them is a rebuild', s.programRebuilds === 0, `${s.programRebuilds}`);
+check('so nothing is named as churn', s.topPrograms.length === 0,
+  `${s.topPrograms.length} named`);
+
+// The same shader, released and built again — new ids, key already seen.
+gl(16, [prog(7, 'crab')]);
+gl(16, [prog(8, 'crab')]);
+gl(16, [prog(9, 'crab')]);
+s = perfSummary();
+check('a key built again is a rebuild', s.programRebuilds === 3, `${s.programRebuilds}`);
+check('and the distinct-key count does not move', s.programKeys === 4, `${s.programKeys}`);
+check('the offender is named with its count',
+  s.topPrograms[0]?.key === 'crab' && s.topPrograms[0]?.builds === 4,
+  `${s.topPrograms[0]?.key} x${s.topPrograms[0]?.builds}`);
+check('and it is the only one named', s.topPrograms.length === 1, `${s.topPrograms.length}`);
+
+// Ids only ever go up, and the list three hands over is the LIVE set — a
+// released program is simply gone from it. Re-reading the same list on the
+// next frame must not count anything twice.
+const live = [prog(10, 'kelp')];
+gl(16, live);
+gl(16, live);
+gl(16, live);
+s = perfSummary();
+check('re-reading the same live list counts one build', s.programKeys === 5 && s.programRebuilds === 3,
+  `${s.programKeys} keys, ${s.programRebuilds} rebuilt`);
+
+// A Node harness has no GL context and passes nothing. That must be silent
+// rather than a crash or a phantom rebuild.
+gl(16, null);
+gl(16, []);
+s = perfSummary();
+check('no program list at all is harmless', s.programKeys === 5 && s.programRebuilds === 3,
+  `${s.programKeys} keys, ${s.programRebuilds} rebuilt`);
+
+// A frame long enough to be dropped as a background-tab gap still built its
+// programs — the rebuild count must not be short by however often the player
+// alt-tabbed.
+const framesBefore = perfSummary().frames;
+gl(5000, [prog(11, 'crab')]);
+s = perfSummary();
+check('a dropped frame still reports its build',
+  s.frames === framesBefore && s.programRebuilds === 4,
+  `${s.frames} frames, ${s.programRebuilds} rebuilt`);
+
+// ===========================================================================
 section('Not recording');
 
 perfStop();

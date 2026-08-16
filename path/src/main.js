@@ -822,6 +822,7 @@ function startGame() {
     programsEverBuilt(),
     world.renderer.info.memory.textures,
     heapUsed(),
+    world.renderer.info.programs,
   );
 
   unlockAudio(); // browsers need a gesture before any sound can play
@@ -2532,7 +2533,17 @@ function animate(now) {
   // time something is drawn, and both are invisible in a profile taken after
   // the fact — but a 400ms frame that coincides with a new program is a
   // different bug from a 400ms frame that coincides with neither.
-  perfFrame(stamp, programsEverBuilt(), world.renderer.info.memory.textures, heapUsed());
+  // The program LIST as well as the count. The count says how many linked; the
+  // list carries each one's cache key, which is what separates "the warm-up
+  // missed this material" from "this shader is being rebuilt over and over".
+  // See the programBuilds note in systems/perfLog.js.
+  perfFrame(
+    stamp,
+    programsEverBuilt(),
+    world.renderer.info.memory.textures,
+    heapUsed(),
+    world.renderer.info.programs,
+  );
   const rawDt = Math.min((stamp - lastTime) / 1000, 0.05);
   lastTime = stamp;
 

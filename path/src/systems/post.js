@@ -4,6 +4,7 @@ import { FILTER_OPTIONS, bloomEnabled, setSetting, screenFilter } from './settin
 import { feedbackState } from './feedback.js';
 import { suffocationPixelSize } from './oxygenFx.js';
 import { cineLens } from './cineCamera.js';
+import { gooLayer, setGooDivisor } from '../entities/particles.js';
 
 // Three passes, no EffectComposer:
 //   1. render the scene at full res
@@ -441,6 +442,65 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
+// --- the goo surface --------------------------------------------------------
+// Reads the density field that entities/particles.js splatted (see the goo note
+// there) and finds its isoline. Everything below the line is not there at all;
+// everything above it is liquid. That single threshold is what fuses separate
+// particles into one body — nothing here knows there were ever particles.
+//
+// The extra shading is what stops the result reading as a flat sticker. A fake
+// normal is taken from the GRADIENT of the density field — the field falls off
+// fastest at the surface, so its gradient points out of the goo, which is a
+// normal in everything but name — and that drives a specular highlight. The rim
+// term brightens the band just inside the edge, which is where a thick liquid
+// concentrates the light it is carrying. Four extra taps for both.
+//
+// Sampled with explicit texel offsets rather than dFdx/dFdy: derivatives are an
+// extension in GLSL ES 1.00 and this shader has no business caring which one
+// it compiled under.
+const gooFragmentShader = /* glsl */ `
+  uniform sampler2D tDiffuse;
+  uniform vec2 uTexel;
+  uniform float uIso;       // density at the surface
+  uniform float uSoft;      // half-width of the transition, in density
+  uniform float uOpacity;
+  uniform float uRim;
+  uniform float uRimWidth;
+  uniform float uSpec;
+  uniform float uSpecPower;
+  uniform float uNormal;    // how much the density gradient bends the normal
+  uniform vec2 uLight;
+  varying vec2 vUv;
+
+  void main() {
+    vec4 s = texture2D(tDiffuse, vUv);
+    float dens = s.a;
+    float a = smoothstep(uIso - uSoft, uIso + uSoft, dens);
+    // The field is empty over most of the screen on most frames. Bailing here
+    // is most of what makes this pass cheap.
+    if (a <= 0.002) discard;
+
+    // Back out of the premultiplied accumulation. Where two bursts overlap this
+    // is a density-weighted average of their tints, so the weld between them
+    // is a blend rather than whichever one drew last.
+    vec3 col = s.rgb / max(dens, 1e-4);
+
+    float dl = texture2D(tDiffuse, vUv - vec2(uTexel.x, 0.0)).a;
+    float dr = texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)).a;
+    float dd = texture2D(tDiffuse, vUv - vec2(0.0, uTexel.y)).a;
+    float du = texture2D(tDiffuse, vUv + vec2(0.0, uTexel.y)).a;
+    vec3 n = normalize(vec3(-(dr - dl) * uNormal, -(du - dd) * uNormal, 1.0));
+    vec3 l = normalize(vec3(uLight, 0.8));
+    float spec = pow(max(dot(n, l), 0.0), uSpecPower) * uSpec;
+
+    // A band that is 1 at the isoline and 0 once the goo is properly thick.
+    float rim = (1.0 - smoothstep(uIso, uIso + uRimWidth, dens)) * uRim;
+
+    vec3 lit = col * (1.0 + rim) + spec * mix(vec3(1.0), col, 0.35);
+    gl_FragColor = vec4(lit, a * uOpacity);
+  }
+`;
+
 function makeFullscreenPass(fragShader, extraUniforms) {
   const uniforms = { tDiffuse: { value: null }, ...extraUniforms };
   const material = new THREE.ShaderMaterial({ vertexShader, fragmentShader: fragShader, uniforms, depthTest: false, depthWrite: false });
@@ -483,6 +543,15 @@ export function createPost(renderer) {
   // same blur shader, different source — only the bright pass is skipped.
   const defocusA = new THREE.WebGLRenderTarget(1, 1, bloomOpts);
   const defocusB = new THREE.WebGLRenderTarget(1, 1, bloomOpts);
+
+  // The density field the goo particles splat into. HalfFloat is not optional
+  // here: densities SUM, the isoline sits above 1 by design, and on an 8-bit
+  // target every overlap would clamp to 1 — which is the same value a single
+  // lonely splat reaches, so nothing would ever fuse. Alpha is the field; rgb
+  // is the premultiplied tint.
+  const gooTarget = new THREE.WebGLRenderTarget(1, 1, {
+    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, type: THREE.HalfFloatType,
+  });
 
   const camera = new THREE.Camera();
 
@@ -534,6 +603,25 @@ export function createPost(renderer) {
   };
   const finalPass = makeFullscreenPass(fragmentShader, finalUniforms);
 
+  const gooPass = makeFullscreenPass(gooFragmentShader, {
+    uTexel: { value: new THREE.Vector2(1, 1) },
+    uIso: { value: 1 },
+    uSoft: { value: 0.25 },
+    uOpacity: { value: 1 },
+    uRim: { value: 0.6 },
+    uRimWidth: { value: 0.6 },
+    uSpec: { value: 0.5 },
+    uSpecPower: { value: 18 },
+    uNormal: { value: 6 },
+    uLight: { value: new THREE.Vector2(-0.5, 0.8) },
+  });
+  // Composited over the scene, so it needs to blend — and a ShaderMaterial with
+  // `transparent: false` has its blending disabled outright by three, whatever
+  // `blending` says. Every other pass here writes to a target it owns and never
+  // wanted blending; this is the first one that draws ON TOP of something.
+  gooPass.material.transparent = true;
+  const gooClearColor = new THREE.Color();
+
   let clock = 0;
 
   function applyPreset(name) {
@@ -576,6 +664,18 @@ export function createPost(renderer) {
     defocusA.setSize(dw, dh);
     defocusB.setSize(dw, dh);
     finalUniforms.uResolution.value.set(w, h);
+
+    // The goo runs below full res too, and unlike the bloom that is not purely
+    // a saving: the threshold is evaluated on a bilinear upsample of the field,
+    // so the divisor is also the SOFTNESS of the surface. At 2 the edge wobbles
+    // just enough to read as surface tension; much coarser and it reads as a
+    // low-resolution image of goo.
+    const gdiv = Math.max(1, Math.round(CONFIG.fx?.goo?.divisor ?? 2));
+    const gw = Math.max(1, Math.floor(w / gdiv));
+    const gh = Math.max(1, Math.floor(h / gdiv));
+    gooTarget.setSize(gw, gh);
+    gooPass.uniforms.uTexel.value.set(1 / gw, 1 / gh);
+    setGooDivisor(gdiv);
   }
 
   // Push the cinematic camera's published lens into the composite. Everything
@@ -722,6 +822,53 @@ export function createPost(renderer) {
     return readTarget;
   }
 
+  // Splat the goo particles into their own target, threshold it, and lay the
+  // result over the scene — BEFORE the bright pass, so the goo blooms, gets
+  // defocused and takes the screen filter exactly like anything drawn as
+  // geometry. Anywhere later in the chain and it would be a sticker on the
+  // finished picture.
+  function renderGoo(sceneCamera) {
+    const layer = gooLayer();
+    if (!layer) return;
+    const g = CONFIG.fx.goo;
+
+    const u = gooPass.uniforms;
+    u.uIso.value = g.iso ?? 1;
+    u.uSoft.value = Math.max(0.001, g.soft ?? 0.25);
+    u.uOpacity.value = g.opacity ?? 1;
+    u.uRim.value = g.rim ?? 0;
+    u.uRimWidth.value = Math.max(0.001, g.rimWidth ?? 0.6);
+    u.uSpec.value = g.spec ?? 0;
+    u.uSpecPower.value = Math.max(1, g.specPower ?? 18);
+    u.uNormal.value = g.normal ?? 6;
+    u.uLight.value.set(g.lightX ?? -0.5, g.lightY ?? 0.8);
+    // Additive is the OTHER liquid: alpha reads as a thick opaque body that
+    // hides the water behind it, additive as a glowing slick lying in it. Both
+    // are one state change, so this is a genuine choice rather than a preset.
+    gooPass.material.blending = g.additive ? THREE.AdditiveBlending : THREE.NormalBlending;
+
+    // Cleared explicitly to transparent black rather than trusting the
+    // renderer's clear state: this target is a density FIELD, and a clear
+    // colour set anywhere else in the game would show up here as a screen-wide
+    // sheet of goo sitting just under the isoline.
+    renderer.getClearColor(gooClearColor);
+    const clearAlpha = renderer.getClearAlpha();
+    renderer.setClearColor(0x000000, 0);
+    renderer.setRenderTarget(gooTarget);
+    renderer.clear();
+    renderer.render(layer.scene, sceneCamera);
+    renderer.setClearColor(gooClearColor, clearAlpha);
+
+    // autoClear off for the composite, or this draw wipes the scene it is
+    // supposed to be landing on.
+    gooPass.uniforms.tDiffuse.value = gooTarget.texture;
+    const autoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.setRenderTarget(sceneTarget);
+    renderer.render(gooPass.scene, camera);
+    renderer.autoClear = autoClear;
+  }
+
   function render(sceneToRender, sceneCamera, dt) {
     clock += dt;
     finalUniforms.uTime.value = clock;
@@ -745,7 +892,13 @@ export function createPost(renderer) {
     const cine = CONFIG.cinecam?.enabled && cineLens.active
       && (cineLens.defocus > 0 || cineLens.flare > 0 || cineLens.droplets > 0
           || cineLens.vignette > 0 || cineLens.pathVignette > 0);
-    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 1 || cine;
+    // ...and a fifth: goo in the water. The sprite layer hands those particles
+    // over to a pass that only exists inside this pipeline, so taking the
+    // passthrough while goo is in flight would not "turn the effect off", it
+    // would delete the burst. Zero cost with nothing goopy on screen, which is
+    // almost every frame.
+    const goo = gooLayer() !== null;
+    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 1 || cine || goo;
     if (!postActive) {
       renderer.setRenderTarget(null);
       renderer.render(sceneToRender, sceneCamera);
@@ -769,6 +922,8 @@ export function createPost(renderer) {
     renderer.setRenderTarget(sceneTarget);
     renderer.clear();
     renderer.render(sceneToRender, sceneCamera);
+
+    if (goo) renderGoo(sceneCamera);
 
     // The flares are sampled from the bloom buffer, so they need it filled
     // even when bloom itself is switched off — the bright pass is what finds

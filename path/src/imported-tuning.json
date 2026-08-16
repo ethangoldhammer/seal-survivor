@@ -558,7 +558,7 @@
     "enabled": true,
     "base": {
       "zoom": 1.24,
-      "zoomMax": 3,
+      "zoomMax": 3.15,
       "zoomStiffness": 26,
       "zoomDamping": 0.8,
       "stiffness": {
@@ -2634,6 +2634,7 @@
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
+      "nightAsset": "enemyGlowFishesA",
       "group": {
         "min": 4,
         "max": 10,
@@ -2655,6 +2656,7 @@
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
+      "nightAsset": "enemyGlowFishesB",
       "group": {
         "min": 3,
         "max": 8,
@@ -2676,6 +2678,7 @@
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
+      "nightAsset": "enemyGlowFishesC",
       "group": {
         "min": 4,
         "max": 11,
@@ -2697,6 +2700,7 @@
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
+      "nightAsset": "enemyGlowBrownFish",
       "group": {
         "min": 4,
         "max": 10,
@@ -2718,6 +2722,7 @@
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
+      "nightAsset": "enemyGlowClownFish",
       "group": {
         "min": 6,
         "max": 14,
@@ -2739,6 +2744,7 @@
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
+      "nightAsset": "enemyGlowSurgeonFish",
       "group": {
         "min": 5,
         "max": 12,
@@ -2760,6 +2766,7 @@
       "behavior": "swarm",
       "faceMotion": true,
       "prey": true,
+      "nightAsset": "enemyGlowTuna",
       "group": {
         "min": 3,
         "max": 8,
@@ -3308,6 +3315,7 @@
       "asset": "enemyPuffer",
       "behavior": "glide",
       "faceMotion": true,
+      "nightAsset": "enemyGlowPuffer",
       "glide": {
         "height": 4,
         "bandSpread": 2.5
@@ -3341,6 +3349,7 @@
       "asset": "enemySailfish",
       "behavior": "chase",
       "faceMotion": true,
+      "nightAsset": "enemyGlowSailfish",
       "group": {
         "min": 2,
         "max": 3,
@@ -7713,6 +7722,7 @@
       "dartGlow": {
         "pattern": "spots",
         "scale": 0.19,
+        "coverage": 0.34,
         "contrast": 0.7,
         "strength": 3.5,
         "tailBias": 0.45,
@@ -7722,6 +7732,7 @@
         "pulseAmp": 0.71,
         "pulseSync": "1 bar",
         "pulseSpeed": 2.8,
+        "phaseSteps": 8,
         "colorA": 13134847,
         "colorB": 4938751,
         "colorC": 15325183,
@@ -7802,6 +7813,7 @@
         "pattern": "lattice",
         "scale": 0.69,
         "coverage": 0.22,
+        "contrast": 2.6,
         "strength": 1.65,
         "flowSync": "8 bars",
         "flowSteps": 16,
@@ -8908,10 +8920,10 @@
       "openGate": true,
       "rampFloor": 1,
       "life": 2.2,
-      "rate": 1.9,
-      "glow": 1.8,
+      "rate": 2.45,
+      "glow": 4.1,
       "width": 1.3,
-      "blowOut": 1.5
+      "blowOut": 2.2
     },
     "water": {
       "enabled": true,
@@ -9358,5 +9370,5 @@
     "overlayOpacity": 0.38,
     "overlayColor": 0
   },
-  "_savedAt": 1786835426810
+  "_savedAt": 1786845698759
 }

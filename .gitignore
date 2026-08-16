@@ -6,6 +6,8 @@ dist
 # them. The PAGES are tracked; their output is not.
 dist-cash-look
 dist-yacht-look
+dist-note-look
+dist-goo-look
 
 # The layout audit's build and its report (npm run layout). Same deal as the
 # look pages: the page and the runner are tracked, what they generate is not.

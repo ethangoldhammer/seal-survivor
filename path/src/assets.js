@@ -4403,6 +4403,13 @@ export function addOutlineShells(model, spec) {
       // and nesting it under the skinned mesh would apply that transform a
       // second time.
       mesh.parent?.add(shell);
+      // Being a sibling means the shell's parent chain does NOT include any
+      // scale on `mesh` itself — but the skeleton still places its vertices at
+      // that scale, so a caller sizing the rim by walking the shell's parents
+      // would be off by exactly it. Kept as a reference to the mesh rather
+      // than a copied number so a rig that is rescaled later stays honest.
+      // See accumulatedScale in systems/outlines.js.
+      shell.userData.__outlineSource = mesh;
     } else {
       shell = new THREE.Mesh(mesh.geometry, mat);
       // Child with an identity transform, so it tracks the mesh exactly

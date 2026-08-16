@@ -36,7 +36,26 @@ const TURBULENCE_GLSL = /* glsl */ `
   }
 `;
 
-const vertexShader = /* glsl */ `
+// --- goo --------------------------------------------------------------------
+// A second pass over the SAME buffer, for emitters flagged `goo: true`.
+// Nothing about the simulation changes: the vertex stage below is shared, and
+// the only differences are which particles it keeps, how big it draws them and
+// what the fragment stage writes. That matters — the sim here is a closed form
+// with no CPU-side positions at all (see the note at the top), and a fluid look
+// that needed to know where particles were would have meant giving that up.
+//
+// Instead the fusion happens in SCREEN SPACE. This material renders the flagged
+// particles into a small offscreen target as soft radial DENSITY splats, summed
+// additively; systems/post.js then thresholds that field at an isoline. Two
+// splats near each other sum above the line in the gap BETWEEN them, so they
+// weld into one silhouette with a concave neck instead of overlapping as two
+// discs — which is the whole difference between "goopy" and "more sprites".
+//
+// Colour survives the sum because it is accumulated PREMULTIPLIED by density
+// (rgb += colour * density, a += density) and divided back out at the
+// threshold. Two kills of different creatures overlapping blend their tints
+// across the weld rather than one winning.
+const vertexShaderFor = (goo) => /* glsl */ `
   attribute vec3 aVelocity;
   attribute vec3 aColor;
   attribute vec2 aGravity;
@@ -46,10 +65,14 @@ const vertexShader = /* glsl */ `
   attribute float aDrag;
   attribute float aTurb;    // how hard the current takes this one
   attribute float aClip;    // 1 = die at the water line rather than sail through it
+  attribute float aGoo;     // 1 = belongs to the goo layer, not the sprite layer
 
   uniform float uTime;
   uniform float uScale; // device pixels per world unit
   uniform vec3 uTurb;   // x = strength, y = spatial frequency, z = time scale
+  ${goo
+    ? 'uniform float uGooRadius; // splat diameter, x the particle\'s own size'
+    : 'uniform float uGooHide;   // 1 while the goo pass is drawing them instead'}
 
   // The water line, transcribed from WAVE in arena.js — see grid.js for the
   // same block and the same warning about decimal points.
@@ -95,6 +118,13 @@ ${TURBULENCE_GLSL}
     // sky. Nothing gets past this.
     alive *= 1.0 - aClip * step(surfaceHeightAt(pos.x), pos.y);
 
+    // The two passes split the buffer between them. The sprite pass drops a goo
+    // particle only while the goo pass is actually running (uGooHide): with the
+    // effect switched off, nobody would be drawing them and a kill burst would
+    // simply be invisible — the failure mode of a look toggle should be the old
+    // look, not a missing one.
+    ${goo ? 'alive *= aGoo;' : 'alive *= 1.0 - aGoo * uGooHide;'}
+
     // Park dead points outside the frustum so they never rasterise.
     pos.z -= (1.0 - alive) * 100000.0;
 
@@ -102,8 +132,39 @@ ${TURBULENCE_GLSL}
 
     float fade = 1.0 - t;
     vColor = aColor;
+${goo ? `
+    // Density is held flat for most of the life and let go at the end, rather
+    // than fading linearly from spawn. A blob whose density falls steadily
+    // spends its whole life crossing the isoline, so the mass visibly shrinks
+    // from the moment it lands; holding it means the goo sits there and then
+    // melts, which is what a liquid does.
+    vAlpha = alive * smoothstep(0.0, 0.4, fade);
+    gl_PointSize = aSize * uGooRadius * uScale * (0.55 + 0.45 * clamp(fade, 0.0, 1.0)) * alive;
+` : `
     vAlpha = alive * clamp(fade, 0.0, 1.0);
     gl_PointSize = aSize * uScale * (0.35 + 0.65 * clamp(fade, 0.0, 1.0)) * alive;
+`}
+  }
+`;
+
+const vertexShader = vertexShaderFor(false);
+
+// The density splat. Cubic falloff — smooth in value AND slope at the rim, so
+// the sprite's own square edge never shows up as a straight line in the
+// silhouette once the field is thresholded.
+const gooFragmentShader = /* glsl */ `
+  varying vec3 vColor;
+  varying float vAlpha;
+
+  void main() {
+    vec2 uv = gl_PointCoord - 0.5;
+    float d = dot(uv, uv) * 4.0; // 1.0 at the sprite's edge
+    if (d > 1.0) discard;
+    float f = 1.0 - d;
+    f = f * f * f;
+    float w = f * vAlpha;
+    // Premultiplied: the threshold pass divides rgb back out by a.
+    gl_FragColor = vec4(vColor * w, w);
   }
 `;
 
@@ -141,6 +202,26 @@ let geometry = null;
 let capacity = 0;
 let cursor = 0;
 let clock = 0;
+
+// The goo layer. Its own Scene rather than a second object in the game's,
+// because post.js has to draw it into a target of its own — and it shares the
+// SAME BufferGeometry as the sprite layer, so it costs one extra draw of a
+// buffer that is already resident and not one byte more of CPU work.
+let gooPoints = null;
+let gooMat = null;
+let gooRoot = null;
+let gooDivisor = 2;
+let pixelScale = 40;
+// When the last goo particle in flight dies. Everything the goo pass does is
+// skipped outright before this — no target bind, no clear, no fullscreen quad —
+// so a run with no kills on screen pays nothing at all for the effect.
+let gooUntil = -1;
+
+function gooSettings() {
+  const g = CONFIG.fx?.goo;
+  if (!g || g.enabled === false) return null;
+  return g;
+}
 
 const attrs = {};
 
@@ -230,6 +311,7 @@ export function initParticles(scene) {
   attrs.aDrag = new THREE.Float32BufferAttribute(new Float32Array(capacity), 1);
   attrs.aTurb = new THREE.Float32BufferAttribute(new Float32Array(capacity), 1);
   attrs.aClip = new THREE.Float32BufferAttribute(new Float32Array(capacity), 1);
+  attrs.aGoo = new THREE.Float32BufferAttribute(new Float32Array(capacity), 1);
 
   for (const [name, attr] of Object.entries(attrs)) {
     attr.setUsage(THREE.DynamicDrawUsage);
@@ -254,6 +336,7 @@ export function initParticles(scene) {
       uWaveT: { value: 0 },
       uWaveAmp: { value: sea.amp },
       uChop: { value: sea.chop },
+      uGooHide: { value: 0 },
     },
   });
 
@@ -261,17 +344,76 @@ export function initParticles(scene) {
   points.frustumCulled = false;
   points.renderOrder = 10;
   scene.add(points);
+
+  gooMat = new THREE.ShaderMaterial({
+    vertexShader: vertexShaderFor(true),
+    fragmentShader: gooFragmentShader,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    // One/One on BOTH channels, which three's AdditiveBlending is not: that
+    // preset multiplies the colour by its own alpha on the way in, and the
+    // fragment above has already premultiplied. The alpha channel is the
+    // density field itself and has to sum untouched.
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneFactor,
+    blendEquationAlpha: THREE.AddEquation,
+    blendSrcAlpha: THREE.OneFactor,
+    blendDstAlpha: THREE.OneFactor,
+    uniforms: {
+      uTime: material.uniforms.uTime,
+      uScale: { value: 40 },
+      uTurb: material.uniforms.uTurb,
+      uSurfaceY: material.uniforms.uSurfaceY,
+      uWaveT: material.uniforms.uWaveT,
+      uWaveAmp: material.uniforms.uWaveAmp,
+      uChop: material.uniforms.uChop,
+      uGooRadius: { value: 3.2 },
+    },
+  });
+
+  // The shared uniform OBJECTS above are deliberate: the two materials solve
+  // the same closed form, and a goo blob drifting on a different current from
+  // the spray around it is exactly what a second copy of these values would
+  // eventually produce. Only uScale differs (the goo target is smaller).
+  gooPoints = new THREE.Points(geometry, gooMat);
+  gooPoints.frustumCulled = false;
+  gooRoot = new THREE.Scene();
+  gooRoot.add(gooPoints);
 }
 
 export function disposeParticles(scene) {
   tracked.length = 0;
+  gooUntil = -1;
   if (!points) return;
   scene.remove(points);
   geometry.dispose();
   material.dispose();
+  gooMat.dispose();
+  gooRoot = null;
+  gooPoints = null;
+  gooMat = null;
   points = null;
   geometry = null;
   material = null;
+}
+
+/**
+ * The goo layer, for systems/post.js — the only caller. Returns null when the
+ * effect is off or nothing goopy is in flight, which is the fast path.
+ */
+export function gooLayer() {
+  if (!gooRoot || !gooSettings() || clock >= gooUntil) return null;
+  return { scene: gooRoot, material: gooMat };
+}
+
+// Post owns the goo target's size, and point sizes are in the TARGET's pixels:
+// left at the screen's scale, every blob would draw `divisor` times too big and
+// the whole field would be one welded slab.
+export function setGooDivisor(d) {
+  gooDivisor = Math.max(1, d || 1);
 }
 
 // Points are sized in pixels, so the world-to-pixel ratio has to follow the
@@ -283,7 +425,9 @@ export function updateParticleScale(camera, renderer) {
   // them grows — particles visibly shrinking on the frame the screen punches.
   const viewHeight = (camera.top - camera.bottom) / (camera.zoom || 1);
   if (viewHeight <= 0) return;
-  material.uniforms.uScale.value = renderer.domElement.height / viewHeight;
+  pixelScale = renderer.domElement.height / viewHeight;
+  material.uniforms.uScale.value = pixelScale;
+  if (gooMat) gooMat.uniforms.uScale.value = pixelScale / gooDivisor;
 }
 
 function rand(range, fallback) {
@@ -333,6 +477,10 @@ export function emit(name, x, y, opts = {}) {
   // were BORN under it. A puff let out mid-breach started in the air and has no
   // surface left to reach; flagging it would delete it on its first frame.
   const clipsAtSurface = (def.killAtSurface ?? !!def.surfacePop) && y < surfaceHeightAt(x);
+
+  // A goo emitter's particles are drawn by the density pass instead of as
+  // sprites — but only while that pass is running. See uGooHide in the shader.
+  const isGoo = def.goo && gooSettings() ? 1 : 0;
 
   const color = new THREE.Color();
 
@@ -431,6 +579,11 @@ export function emit(name, x, y, opts = {}) {
     attrs.aDrag.array[idx] = drag;
     attrs.aTurb.array[idx] = turb;
     attrs.aClip.array[idx] = clipsAtSurface ? 1 : 0;
+    attrs.aGoo.array[idx] = isGoo;
+    // Measured from the LONGEST life this burst rolled, not the emitter's
+    // figure: the pass has to still be running on the frame the last blob
+    // actually dies, or the goo vanishes a few frames early and reads as a pop.
+    if (isGoo) gooUntil = Math.max(gooUntil, clock + life);
 
     // The shader kills every flagged particle at the surface no matter what;
     // this list is only about the BURST one leaves behind, which needs a
@@ -536,6 +689,10 @@ export function updateParticles(dt) {
     u.uWaveT.value = waveTimeNow();
     u.uWaveAmp.value = sea.amp;
     u.uChop.value = sea.chop;
+
+    const goo = gooSettings();
+    u.uGooHide.value = goo ? 1 : 0;
+    if (gooMat) gooMat.uniforms.uGooRadius.value = goo?.radius ?? 3.2;
   }
   updateSurfacePops();
 }
@@ -552,6 +709,7 @@ export function resetParticles() {
   markWhole(attrs.aStart);
   cursor = 0;
   tracked.length = 0;
+  gooUntil = -1;
 }
 
 export function particleCount() {
