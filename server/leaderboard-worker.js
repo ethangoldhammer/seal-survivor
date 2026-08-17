@@ -17,7 +17,7 @@
 const BOARD_KEY = 'board:v1';
 const MAX_ENTRIES = 100;
 const RETURNED_ENTRIES = 10;
-// Must match MAX_NAME_LEN in path/src/systems/leaderboard.js. This one is the
+// Must match MAX_NAME_LEN in path/src/systems/playerName.js. This one is the
 // authority — the client's copy only keeps the field from showing a name that
 // would be cut here.
 const MAX_NAME_LEN = 24;

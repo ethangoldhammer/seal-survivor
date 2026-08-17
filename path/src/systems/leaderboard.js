@@ -10,12 +10,7 @@
 // See server/leaderboard-worker.js for the other end.
 
 const STORAGE_KEY = 'seal-survivor-leaderboard-v1';
-const NAME_KEY = 'seal-survivor-player-name';
 const MAX_ENTRIES = 10;
-// Must match MAX_NAME_LEN in server/leaderboard-worker.js — the server is the
-// authority and truncates anything longer, so raising it here alone would let
-// players type a name the board then silently cuts.
-const MAX_NAME_LEN = 24;
 
 // Trailing slash trimmed so the URL works whether or not it was pasted with
 // one. Empty/unset means "no backend" — checked via isGlobal() everywhere.
@@ -30,42 +25,18 @@ export function isGlobal() {
 }
 
 // ---------------------------------------------------------------------------
-// Player name
+// Player name — MOVED OUT, to systems/playerName.js.
+//
+// It lived here for as long as the name was a leaderboard concern. It is now
+// read by callouts.csv, quips.csv and upgrades.csv through the {player} token,
+// and a text table importing the LEADERBOARD to find out what to call somebody
+// would be an absurd dependency for one string. So the name has its own module
+// and this file is one consumer of it, like the others.
+//
+// Deliberately NOT re-exported from here. A second door would mean two import
+// paths to the same value, and the next person to add a name-shaped thing gets
+// to pick the wrong one.
 // ---------------------------------------------------------------------------
-
-// Remembered across runs so a returning player gets their name pre-filled
-// instead of retyping it after every death.
-export function loadPlayerName() {
-  try {
-    return sanitizeName(localStorage.getItem(NAME_KEY) ?? '');
-  } catch {
-    return '';
-  }
-}
-
-export function savePlayerName(name) {
-  const clean = sanitizeName(name);
-  try {
-    if (clean) localStorage.setItem(NAME_KEY, clean);
-  } catch (err) {
-    console.warn('[leaderboard] could not save name —', err?.message ?? err);
-  }
-  return clean;
-}
-
-// Mirrors the worker's cleanName so what you see in the input is what lands on
-// the board — a name silently rewritten server-side reads as the game eating
-// your input. Angle brackets and quotes go because these strings end up in
-// innerHTML on the way back out.
-export function sanitizeName(raw) {
-  return String(raw ?? '')
-    .replace(/[<>&"'\\]/g, '')
-    .replace(/\s+/g, ' ')
-    .trimStart()
-    .slice(0, MAX_NAME_LEN);
-}
-
-export { MAX_NAME_LEN };
 
 // ---------------------------------------------------------------------------
 // Local board

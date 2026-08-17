@@ -80,6 +80,7 @@ dom.window.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,
 // write so the numbers can be asserted rather than assumed.
 const riveLog = {
   built: [],       // constructor options, one per instance
+  instances: [],   // the stub instances themselves, for driving triggers
   writes: [],      // every property write, in order
   played: 0,
   paused: 0,
@@ -111,18 +112,44 @@ function prop(name) {
   let v = 0;
   return { get value() { return v; }, set value(x) { v = x; L.writes.push([name, x]); } };
 }
+// A TRIGGER, and the direction that matters is Rive -> game. The real runtime
+// dispatches these from inside advance(), after the state machine has run, so
+// \`fire()\` here stands in for the artboard's own Start button being pressed —
+// which is the only way a run begins now. \`on\`/\`off\` mirror
+// ViewModelInstanceValue's, including that off() with no argument clears all.
+function trig(name) {
+  const cbs = [];
+  return {
+    on(cb) { cbs.push(cb); },
+    off(cb) { const i = cb ? cbs.indexOf(cb) : -1; if (i >= 0) cbs.splice(i, 1); else if (!cb) cbs.length = 0; },
+    trigger() { L.writes.push([name, 'fired-by-game']); },
+    fire() { for (const cb of [...cbs]) cb(); },
+    get listeners() { return cbs.length; },
+  };
+}
 export class Rive {
   constructor(opts) {
     L.built.push(opts);
+    // The instance as well as its options: the splash test has to play the
+    // ARTBOARD'S part (fire tStart), which needs the view model, not the
+    // constructor arguments.
+    L.instances.push(this);
     this.opts = opts;
     this.stateMachineNames = ['State Machine 1'];
     const vmi = {
       _p: { numBossHealth: prop('numBossHealth'), numHealthBarSize: prop('numHealthBarSize') },
-      _s: { strBossName: prop('strBossName') },
+      _s: { strBossName: prop('strBossName'), strPlayerName: prop('strPlayerName') },
+      _t: { tStart: trig('tStart') },
       number(n) { return C.mode === 'missing-prop' && n === 'numHealthBarSize' ? null : (this._p[n] ?? null); },
       string(n) { return this._s[n] ?? null; },
+      // 'no-trigger' is an export whose Start button was renamed or lost. The
+      // splash has to survive it, because a splash that can only be dismissed
+      // by a trigger that does not exist is a game nobody can start.
+      trigger(n) { return C.mode === 'no-trigger' ? null : (this._t[n] ?? null); },
     };
     this.viewModelInstance = C.mode === 'no-vm' ? null : vmi;
+    // Handed to the test so it can play the artboard's part.
+    this.__vmi = vmi;
     // Held, not fired: the caller decides when loading finishes, which is the
     // only way to test what the game draws WHILE it is still loading. A QUEUE
     // rather than one slot — the splash builds an instance too, and a single
@@ -363,13 +390,145 @@ section('THE BAR — a later boss is visibly longer');
 }
 
 // ---------------------------------------------------------------------------
+section('THE SPLASH — a name goes in, a trigger starts the run');
+// ---------------------------------------------------------------------------
+// EVERYTHING HERE FAILS SILENTLY IN A BROWSER, which is why it is worth a
+// harness. A missing autoBind, a trigger nobody subscribed to, a name written
+// to a property that does not exist — none of them throws, none of them logs,
+// and all of them look like a splash that simply sits there. The one that
+// cannot be caught by looking is the last: the artwork is perfect and the game
+// is unstartable.
+{
+  const { mountRiveSplash } = await import('../path/src/ui/riveSplash.js');
+  const NAME = await import('../path/src/systems/playerName.js');
+  const SPLASH = (await import('../path/src/ui/riveContract.js')).SPLASH_BINDINGS;
+
+  // Mount one, load it, and hand back the pieces the artboard's side needs.
+  //
+  // SCOPED TO THE WRAPPER THIS CALL CREATED, and that is not fussiness: the
+  // artboard-naming check further up mounted a splash and never dismissed it,
+  // so a document-wide `.sv-riv input` finds THAT one and every assertion below
+  // silently measures the wrong splash. It read as five unrelated failures.
+  const mount = (opts = {}) => {
+    const before = riveLog.instances.length;
+    const handle = mountRiveSplash({ parent: document.body, ...opts });
+    globalThis.__riveControl.release();
+    const inst = riveLog.instances[before];
+    const wraps = document.body.querySelectorAll('.sv-riv');
+    const wrap = wraps[wraps.length - 1];
+    return { handle, inst, wrap, vmi: inst?.__vmi, input: wrap?.querySelector('input') };
+  };
+  const typeInto = (input, text) => {
+    input.value = text;
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  };
+
+  NAME.clearPlayerName();
+  {
+    const { handle, inst, vmi, input, wrap } = mount();
+    check('the splash binds its view model, or every write is a silent no-op',
+      inst?.opts?.autoBind === true, String(inst?.opts?.autoBind));
+    check('there is a real input for the player to type into', !!input);
+    check('...which takes no pointer events, or Rive never sees its own button',
+      input?.style.pointerEvents === 'none', input?.style.pointerEvents);
+    check('...and is capped at the length the leaderboard will accept',
+      input?.maxLength === NAME.MAX_NAME_LEN, String(input?.maxLength));
+
+    typeInto(input, 'Ethan');
+    check('typing reaches the artboard live',
+      vmi?._s[SPLASH.name]?.value === 'Ethan', vmi?._s[SPLASH.name]?.value);
+
+    // The sanitiser runs on the way IN, so the artboard shows exactly what will
+    // be stored — a player watching a character not appear learns immediately,
+    // where one who finds it missing from the board later just sees a bug.
+    // Sanitised on the way IN. The claim worth asserting is not which
+    // characters go — that is the sanitiser's own test — but that the artboard,
+    // the field and what would be stored are all the SAME string, so a player
+    // watching a character fail to appear learns it immediately rather than
+    // finding their name cut on the board later.
+    typeInto(input, 'Zo<b>e</b>');
+    check('...sanitised on the way in, so the artboard cannot promise a name the board would cut',
+      vmi?._s[SPLASH.name]?.value === input.value && !/[<>]/.test(input.value),
+      `artboard "${vmi?._s[SPLASH.name]?.value}" vs field "${input.value}"`);
+
+    // THE RUN BEGINS BECAUSE THE ARTBOARD SAYS SO.
+    typeInto(input, 'Ethan');
+    check('the splash subscribed to the start trigger',
+      vmi?._t?.tStart?.listeners === 1, String(vmi?._t?.tStart?.listeners));
+    vmi._t.tStart.fire();
+    check('firing it from the artboard ends the splash', handle.isDestroyed);
+    check('...and banks the name that was typed', NAME.loadPlayerName() === 'Ethan',
+      NAME.loadPlayerName());
+    check('...unsubscribing on the way out, so a second fire cannot start twice',
+      vmi?._t?.tStart?.listeners === 0, String(vmi?._t?.tStart?.listeners));
+    check('...and takes the field off the DOM with it, so no keyboard over the run',
+      !wrap.querySelector('input'));
+  }
+
+  {
+    // A RETURNING PLAYER. Both the field and the artboard start from the name
+    // already on file — read after load, not at mount, or the state machine's
+    // own defaults land on top of it.
+    NAME.savePlayerName('Ada');
+    const { handle, vmi, input } = mount();
+    check('a remembered name pre-fills the field', input?.value === 'Ada', input?.value);
+    check('...and is on the artboard before a key is pressed',
+      vmi?._s[SPLASH.name]?.value === 'Ada', vmi?._s[SPLASH.name]?.value);
+    handle.destroy('test');
+    check('backing out without typing does not erase it', NAME.loadPlayerName() === 'Ada',
+      NAME.loadPlayerName());
+  }
+
+  {
+    // THE GESTURE, and why it is separate from the dismiss. `tStart` arrives
+    // from inside Rive's advance — a rAF, not a gesture — so an AudioContext
+    // built there comes up suspended and the run is silent. The press that
+    // pushed Rive's button has to be reported a frame earlier.
+    let gestures = 0;
+    const { handle, vmi, wrap } = mount({ onGesture: () => gestures++ });
+    wrap.dispatchEvent(new dom.window.Event('pointerup', { bubbles: true }));
+    check('a press on the splash is reported as a gesture', gestures === 1, String(gestures));
+    check('...without ending the splash, which is the artboard\'s call now',
+      !handle.isDestroyed);
+    vmi._t.tStart.fire();
+    check('...and the trigger still ends it', handle.isDestroyed);
+  }
+
+  {
+    // THE EXPORT THAT LOST ITS TRIGGER. Without the fallback this is a splash
+    // with no way past it, on every device, with nothing thrown.
+    globalThis.__riveControl.mode = 'no-trigger';
+    const warns = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => warns.push(a.join(' '));
+    const { handle, wrap } = mount();
+    console.warn = realWarn;
+    check('a file with no start trigger says so', warns.some((w) => w.includes('tStart')),
+      warns.join(' | '));
+    check('...and is not yet dismissed', !handle.isDestroyed);
+    wrap.dispatchEvent(new dom.window.Event('pointerup', { bubbles: true }));
+    check('...but any press gets past it, so the game is still playable',
+      handle.isDestroyed);
+    globalThis.__riveControl.mode = 'ok';
+  }
+  NAME.clearPlayerName();
+}
+
+// ---------------------------------------------------------------------------
 section('THE SHIPPED FILE — what is actually in path/src/ui/seal_survivor.riv');
 // ---------------------------------------------------------------------------
 // The one thing every check above takes on trust: that the .riv in the repo —
 // the copy Vite hashes into the bundle and deploys — still contains the
 // artboards and bindings the code asks for. It is a binary this project does
-// not author, swapped in by hand from a Rive export (see npm run riv), and a
-// rename in the editor breaks it with nothing failing to compile.
+// not author — Rive exports straight over it — and a rename in the editor
+// breaks it with nothing failing to compile.
+//
+// THIS IS NOW THE ONLY GUARD. There used to be a sync tool that validated an
+// export on its way in from a second copy under ~/Documents; both are gone (a
+// one-way sync between two editable copies reverted a finished export once).
+// So the check that used to be a courtesy at copy time is the whole of the
+// safety net, which is the right place for it anyway: it runs in `npm test`
+// and therefore gates a deploy, where a tool nobody remembered to run did not.
 //
 // A scan for the name strings rather than a parse of the format: Rive stores
 // them as plain text in the file, so this catches a rename, a dropped binding

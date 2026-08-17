@@ -14206,7 +14206,7 @@ export const CONFIG = {
   // ---------------------------------------------------------------------------
   // THE FIRST-RUN COACH — see systems/tutorial.js for the design.
   // ---------------------------------------------------------------------------
-  // Nine tips, once per browser, each cleared by doing the thing or by its own
+  // Fourteen tips, once per browser, each cleared by doing the thing or by its own
   // clock. The words and the timings are callouts.csv (the `coach` rows); what
   // is here is only the handful of moments the steps ask about.
   tutorial: {

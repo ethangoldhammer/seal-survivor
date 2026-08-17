@@ -309,7 +309,7 @@ const DOCS = {
   },
   'quips.csv': {
     id: 'A short handle for the row. Never shown to the player — it exists so a reworded line keeps its identity in a diff.',
-    text: 'The game-over headline itself.',
+    text: 'The game-over headline itself. `{player}` becomes whatever the player is called — the name they typed, or "Seal" if they never did.',
     enabled: 'FALSE takes it out of rotation. Blank means enabled.',
     weight: 'Likelihood relative to the other rows. Blank = 1, 0 is never shown.',
     causes: 'What has to have killed you for this line to fire. BLANK MEANS ANY DEATH. A line written for a cause BEATS the general pool rather than competing with it — die to a crab and only the crab lines are drawn from, so tagging one makes it certain, not merely likelier. Tick several and the line covers all of them.',
@@ -317,7 +317,7 @@ const DOCS = {
   'callouts.csv': {
     id: 'WHICH callout this is, and it joins to code — the condition that fires a warning, or the step that offers a tip. Renaming one takes it out of the game; rewording `text` does not. Adding a row does nothing on its own: something has to fire it.',
     kind: '`warn` for a state you must fix now (fires every run, forever) or `coach` for a first-run tip (fires ONCE EVER per device and then never again). Anything else is ignored, loudly.',
-    text: 'The line itself. This is the whole point of the row, and the one column you can change freely.',
+    text: 'The line itself. This is the whole point of the row, and the one column you can change freely. `{player}` becomes whatever the player is called — the name they typed, or "Seal" if they never did — and unlike a key token it needs no textPad, since a name reads the same in any pair of hands.',
     textTouch: 'What to say instead on a touchscreen. Blank uses `text`. Fill it in wherever the line names a control — "press Space" is nonsense held in two hands.',
     textPad: 'What to say instead on a controller. Blank uses `text`. A `{strike}` token becomes whatever strike is bound to right now and `{bumper}` becomes what THIS pad calls its shoulders, so neither a rebind nor a change of controller can make the line lie. A row carrying a key token with no `textPad` tells a controller player to press Space, which is the exact failure this column exists to prevent.',
     devices: 'Which devices this row exists on at all — space-separated `kbm`, `touch`, `pad`. Blank is all of them, which is nearly every row. An unrecognised name is dropped rather than widening the list, and a row left with nothing to say on a device it can still appear on is dropped outright, the same as a row with no text.',
@@ -326,7 +326,7 @@ const DOCS = {
     priority: 'Who gets the surface when two rows on the SAME anchor want it at once — higher wins, and the loser is DROPPED rather than queued. For a tip it is also the order tips are offered in, and a tip that becomes ready INTERRUPTS a lower one. Every coach row outranks every warning regardless of this number.',
     hold: 'Seconds on screen. For a tip this is also its patience: do the thing and it goes at once, ignore it and it goes at this. Blank falls back to Callout placement in the Text panel (Y).',
     repeat: 'Seconds before a warning may say itself AGAIN while its condition is still true. Blank = say it once per crossing and then stay quiet until the trouble clears and comes back. Ignored on a tip — those never repeat.',
-    arrow: 'What the arrow points at while this line is up: `chum` (the nearest bite in the water) or `surface` (straight up, out of it). Blank is no arrow, which is most rows.',
+    arrow: 'What the arrow points at while this line is up. Two of them name a THING and can come up empty, because it can be eaten or expire mid-sentence: `chum` is the nearest bite, `pickup` is the nearest orb OF THIS ROW\'S OWN KIND (the row id names it, which is why there is one arrow value for five pickup tips rather than five). The other two name a DIRECTION and always answer: `surface` is straight up out of the water, `seabed` straight down at the floor. Blank is no arrow, which is most rows.',
   },
   'bossNames.csv': {
     id: 'A short handle for the row. Never shown to the player — it exists so a reworded part keeps its identity in a diff.',
@@ -587,7 +587,16 @@ function columnSpec(file, name, rows) {
         labels: { warn: 'warn  (every run)', coach: 'coach  (first run only)' } };
     }
     if (name === 'arrow') {
-      return { ...base, type: 'enum', options: ['', ...ARROW_TARGETS], labels: { '': '—  (no arrow)' } };
+      return { ...base,
+        type: 'enum',
+        options: ['', ...ARROW_TARGETS],
+        labels: {
+          '': '—  (no arrow)',
+          chum: 'chum  (the nearest bite)',
+          pickup: 'pickup  (the nearest orb of this row\'s own kind)',
+          surface: 'surface  (straight up)',
+          seabed: 'seabed  (straight down)',
+        } };
     }
     if (name === 'anchor') {
       return { ...base, type: 'enum', options: ['', ...CALLOUT_ANCHORS],

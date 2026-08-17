@@ -26,6 +26,7 @@ import { CONFIG, LEVELUP_IMAGE_KEYS } from '../path/src/config.js';
 import { baseStats } from '../path/src/stats.js';
 import { parseUpgradeCsv, applyUpgradeTable } from '../path/src/upgradeTable.js';
 import { STAT_TEXT, TOKENS, measure, measureTotal, phraseAll, expandDesc } from '../path/src/upgradeText.js';
+import { savePlayerName, clearPlayerName, expandPlayer, DEFAULT_PLAYER_NAME } from '../path/src/systems/playerName.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 let failed = 0;
@@ -138,6 +139,23 @@ ok(warned.length === 2, `and both warn (${warned.length} warnings)`);
 const exploding = { id: 'boom', name: 'Boom', apply: () => { throw new Error('nope'); } };
 ok(expandDesc('{effect}', exploding, { owned: 0 }) === '{effect}', 'an apply() that throws leaves the token, it does not crash');
 ok(TOKENS.length > 0 && TOKENS.every((t) => t.token && t.help), `TOKENS documents all ${TOKENS.length} placeholders for the editor`);
+
+// {player} — the one token here that is not about the card. It is worth a
+// check on THIS path specifically: a card resolves its tokens through
+// expandDesc and a callout resolves the same token through fillBindings, so
+// "they agree" is a claim about two code paths that share only the module the
+// name lives in. A second copy of the name is what this catches.
+clearPlayerName();
+ok(expandDesc('{player} did it', r, { owned: 0 }) === `${DEFAULT_PLAYER_NAME} did it`,
+  '{player} falls back to the default on a card');
+savePlayerName('Ethan');
+ok(expandDesc('{player} did it', r, { owned: 0 }) === 'Ethan did it',
+  '...and follows the typed name');
+ok(expandDesc('{player}', r, { owned: 0 }) === expandPlayer('{player}'),
+  '...to exactly what the other text tables say');
+ok(TOKENS.some((t) => t.token === '{player}'),
+  '...and it is documented for the editor, like every other placeholder');
+clearPlayerName();
 
 // ===========================================================================
 console.log('\n4. content — the tokens actually written in upgrades.csv today');

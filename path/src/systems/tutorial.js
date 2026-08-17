@@ -4,7 +4,9 @@ import { calloutOnDevice } from '../calloutTable.js';
 
 // ---------------------------------------------------------------------------
 // THE FIRST-RUN COACH — a handful of short sentences, once per device, and then
-// never again. Seven on a keyboard, nine on a phone or a pad.
+// never again. Twelve on a keyboard, fourteen on a phone or a pad — but almost
+// nobody meets all of them in one run, which is the point of the per-step
+// ledger further down.
 //
 // THEY COME IN TWO HALVES. The first is the CONTROLS, handed out one input at a
 // time and chained to each other. The second is the OCEAN — chum, power-ups,
@@ -66,6 +68,58 @@ import { calloutOnDevice } from '../calloutTable.js';
 // storage — which they would not do, and should not have to.
 const STORAGE_KEY = 'sealSurvivor.tips.v1';
 
+// ---------------------------------------------------------------------------
+// ONE TIP PER PICKUP TYPE, BUILT RATHER THAN WRITTEN OUT FIVE TIMES.
+//
+// WHY FIVE AND NOT ONE. They were one tip ("that is a power-up") and it taught
+// nothing: the five pickups do five unrelated things — the blue orb is the
+// boost meter, a bubble is air, the yellow one is fire rate, a chunk is
+// health, an attractor drags the seabed to you — and the only thing a single
+// sentence can honestly say about all of them is that they glow, which the
+// player can see. What is worth a tip is WHICH ONE THIS IS, and that is five
+// sentences.
+//
+// They are generated because the shape really is identical — one of these is
+// in the water, swim into it, the tip is spent — and five hand-written copies
+// of that would be five places for it to drift. Everything that DIFFERS
+// between them is in the table: the words and the timing are their callouts.csv
+// rows, and the one behavioural difference is `swim` below.
+//
+// THE ID IS ONE STRING END TO END: the step, the callouts row, the ctx query
+// and the mesh name in assets.js. That is what lets the arrow point at the
+// right orb by reading the row's own id (see arrowTarget in ui/callout.js), and
+// it is why there is no mapping table anywhere on the path — a mapping is
+// exactly how a tip ends up firing for the wrong pickup.
+const PICKUP_TIPS = {
+  // Ordered as a reader meets them; who speaks first is the `priority` column.
+  bubbleOrb: { swim: true },
+  strikeOrb: { swim: true },
+  rapidFireOrb: { swim: true },
+  chumChunk: { swim: true },
+  // THE ODD ONE, and the reason this is a table rather than a list of names.
+  // An attractor is a FIELD, not a collectable: it rises where the trawler
+  // dropped it and drags every scrap of chum in the arena to the seal. There
+  // is nothing to swim into, so there is nothing that can answer the tip and
+  // it ends on its own clock — the same contract `invincible` has.
+  attractorOrb: { swim: false },
+};
+
+function pickupSteps() {
+  const out = {};
+  for (const [id, { swim }] of Object.entries(PICKUP_TIPS)) {
+    out[id] = {
+      // Gated on the strike being taught and on nothing else. NOT chained to
+      // each other or to `chum`: the priority column already decides who
+      // speaks when two are ready on the same frame, and a chain here would
+      // mean a player whose first bubble arrives before their first kill is
+      // shown nothing at all about it.
+      ready: (ctx, events, done) => done.has('strike') && !!ctx.pickupInWater?.(id),
+      done: swim ? (ctx, events) => events.has(id) : () => false,
+    };
+  }
+  return out;
+}
+
 /**
  * The steps, richest-in-context first. Each one is:
  *
@@ -126,12 +180,12 @@ const STEPS = {
     ready: (ctx, events, done) => done.has('strike') && ctx.chumInWater,
     done: (ctx, events) => events.has('chum'),
   },
-  // --- the four things in the water that are not a control ------------------
-  // Everything below here is taught by the OCEAN rather than by a button, and
-  // none of them is gated on any other step. They are ordered by the `priority`
-  // column alone, which is enough: a run puts them in the water in roughly that
-  // order anyway, and hard-chaining them would mean a player who never sees a
-  // whale never gets told about crabs.
+  // --- everything the OCEAN teaches, rather than a button -------------------
+  // None of what follows is chained to anything except where a tip literally
+  // cannot be understood without an earlier one. They are ordered by the
+  // `priority` column, which is enough: a run puts them in the water in roughly
+  // that order anyway, and hard-chaining them would mean a player who never
+  // sees a whale never gets told about crabs.
   //
   // What they have in common is that the moment is not repeatable. A power-up
   // orb expires, a whale leaves, the seabed pile gets eaten — so each of these
@@ -139,15 +193,24 @@ const STEPS = {
   // its window simply waits for the next one rather than firing into blank
   // water. That is the same contract the chum tip has always had.
 
-  // A power-up in the water. Not gated behind `chum` in code — the priority
-  // column already puts chum first when both are ready on the same frame, and
-  // a player whose first orb arrives before their first kill should be told
-  // about the orb rather than shown nothing.
-  pickup: {
-    ready: (ctx, events, done) => done.has('strike') && ctx.pickupInWater,
-    // Any of the three. The lesson is "glowing things are for swimming into",
-    // which the first one taken proves whichever it was.
-    done: (ctx, events) => events.has('pickup'),
+  // The five pickups, one tip each — see PICKUP_TIPS at the top of the file.
+  ...pickupSteps(),
+
+  // THE FOOD CHAIN, and it is the only tip in the file about a LOOP rather
+  // than about a thing. Taught after `chum`, because it is the sentence that
+  // joins the two halves the player now has: they can strike, and they know
+  // eating fills the meter, and nobody has said that doing them in that order
+  // on a clock is the whole engine of the game.
+  //
+  // Offered while a combo window is actually open, which is the only moment the
+  // instruction is performable. It outlives the window — the hold is longer
+  // than CONFIG.strike.chainWindow — and that is fine and deliberate: the line
+  // is a rule to carry, not a prompt to obey inside two seconds.
+  foodChain: {
+    ready: (ctx, events, done) => done.has('chum') && ctx.feeding && ctx.chumInWater,
+    // A link actually scored. The one tip whose answer is the thing it
+    // described happening, rather than a button or a pickup.
+    done: (ctx, events) => events.has('chainLink'),
   },
   // Chum reaching the floor, which is the moment the seabed becomes a place
   // with rules. Offered as it lands rather than when the first crab walks on:

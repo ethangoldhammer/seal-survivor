@@ -20,15 +20,15 @@ import {
   fetchGlobalBoard,
   highScore,
   isGlobal,
-  MAX_NAME_LEN,
   loadLeaderboard,
-  loadPlayerName,
-  sanitizeName,
-  savePlayerName,
   submitScore,
 } from '../systems/leaderboard.js';
+// The name itself is not the leaderboard's any more — see the note where it
+// used to live. The board is one consumer of it; the {player} token in
+// callouts.csv, quips.csv and upgrades.csv is the rest.
+import { MAX_NAME_LEN, loadPlayerName, sanitizeName, savePlayerName, expandPlayer } from '../systems/playerName.js';
 import { feedback } from '../systems/feedback.js';
-import { playSfx } from '../systems/audio.js';
+import { playSfx, unlockAudio } from '../systems/audio.js';
 // The popups' arrival and departure curves, by name — the same shared table the
 // boss bar's fill and the camera moves read from (path/src/ease.js).
 import { ease } from '../ease.js';
@@ -870,6 +870,13 @@ export function showStartMenu() {
       // starts the run anyway instead of stranding the player on a blank
       // screen with no way forward now that there's no menu to fall back to.
       onDismiss: beginRun,
+      // AUDIO UNLOCKS ON THE PRESS, not on the dismiss, and that split is new.
+      // The run now begins when the artboard fires `tStart`, which reaches us
+      // from inside Rive's advance — a rAF, not a gesture — and an AudioContext
+      // built there comes up suspended. The press that pushed Rive's button
+      // arrives here a frame earlier and is a real gesture, so the context is
+      // already awake by the time the trigger lands.
+      onGesture: unlockAudio,
     });
     return;
   }
@@ -881,11 +888,17 @@ export function showStartMenu() {
 }
 
 // Called SYNCHRONOUSLY from the splash's dismiss handler, not deferred to the
-// next frame: startGame calls unlockAudio, and an AudioContext built outside the
-// call stack of a real user gesture comes up suspended and stays silent. The
-// press that dismissed the splash is that gesture, so it has to still be on the
-// stack. startGame clears pending input edges itself, so the same keypress
+// next frame. startGame clears pending input edges itself, so the same keypress
 // doesn't also spend a boost charge on frame one.
+//
+// THE AUDIO HALF OF THAT REASONING HAS MOVED, and this is worth reading before
+// anyone "simplifies" it back. This used to be the gesture: an AudioContext
+// built outside a real user gesture comes up suspended and stays silent, and
+// the press that dismissed the splash was on the stack right here. It is not
+// any more — the run begins when the artboard fires `tStart`, which arrives
+// from inside Rive's advance, one rAF removed from the press that caused it.
+// So the unlock moved to `onGesture`, which fires on the press itself. This
+// call site is still synchronous, but the reason is now only the input edges.
 function beginRun() {
   showHud();
   callbacks.onStart();
@@ -1863,9 +1876,14 @@ function updateGameOverNav() {
 // everything, the score card is the only thing up when a run has ended, and
 // the cards are the only thing up mid-run.
 export function updateMenuNav() {
-  // The splash asks for "press anything", and on a pad that is a poll rather
-  // than a listener. Its own pointer and key handlers still do the same job
-  // for the other two input methods — see riveSplash.js.
+  // A PAD STILL PRESSES ANYTHING TO START, and it is now the only input that
+  // does. Keyboard and touch go through the artboard's own Start button (see
+  // riveSplash.js) because they can type a name into it, and "any input starts
+  // the run" would mean the first letter of that name did. A pad cannot type,
+  // so there is nothing for it to interrupt — it gets whatever name is
+  // remembered, or none.
+  //
+  // A poll rather than a listener because the Gamepad API has no events.
   if (splash) {
     if (splash.isDestroyed) splash = null;
     else {
@@ -2671,7 +2689,12 @@ export function showGameOver(gameState, extra = {}) {
   // `deathCauses` is the Set killPlayer resolved at the moment of death. The
   // demo score screen (svDemo, below) passes a plain object with no such key,
   // and gets the whole table — which is what a preview of the screen wants.
-  el.svGameOverTitle.textContent = pickQuip(QUIPS, Math.random, gameState.deathCauses);
+  // expandPlayer LAST, after the draw: a quip may be written "Nice try,
+  // {player}", and the token has to be spent on the row that actually won
+  // rather than on the whole table. textContent, not innerHTML, so a typed
+  // name is text no matter what is in it — sanitizeName strips the dangerous
+  // characters on the way in as well, and neither guard is the only one.
+  el.svGameOverTitle.textContent = expandPlayer(pickQuip(QUIPS, Math.random, gameState.deathCauses));
   const score = Math.floor(gameState.score ?? 0);
   // THE SCORECARD. The same five figures the shared image carries (see
   // drawScorecard in systems/bossShot.js), so a player looking at the picture
@@ -2751,6 +2774,11 @@ async function submitPendingRun() {
   const run = pendingRun;
   pendingRun = null; // claim it before any await — a double click must not post twice
 
+  // 'ANON' and NOT DEFAULT_PLAYER_NAME, and the difference is deliberate. The
+  // token's fallback is the game's VOICE — "Nice one, Seal" reads fine to
+  // somebody who never typed a name. A board is a list of PEOPLE, and a public
+  // top ten with four rows called Seal reads as four players with the same
+  // name rather than as four who declined to give one.
   const name = savePlayerName(el.svNameInput.value) || 'ANON';
   el.svNameSubmit.disabled = true;
   el.svNameInput.disabled = true;

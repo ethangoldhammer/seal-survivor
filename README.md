@@ -568,30 +568,32 @@ shape. A bad asset never breaks the build.
 
 ### Swapping the Rive file
 
-Two copies exist and only one of them ships:
+**`path/src/ui/seal_survivor.riv` is the only copy. Export straight over it.**
 
-| | |
-|---|---|
-| `~/Documents/_DesignSystems/SealSurvivor/RIV/seal_survivor.riv` | what Rive exports |
-| **`path/src/ui/seal_survivor.riv`** | **what the game reads** |
+`ui/riveSplash.js` and `ui/bossBarRive.js` import it `?url`, so Vite hashes it
+into the bundle. There is nothing to sync and nowhere else to look.
 
-`ui/riveSplash.js` and `ui/bossBarRive.js` import the second one `?url`, so Vite
-hashes it into the bundle. Nothing in the build ever looks at Documents — a
-re-export that isn't copied across is invisible, because the editor keeps
-showing the new artwork and the game keeps shipping the old.
+There used to be a second copy under `~/Documents` and an `npm run riv` that
+installed it into the repo. That is gone, and the reason is worth keeping: two
+copies with a one-way sync means the newer file is whichever one you edited
+last, and the tool could not know which that was. It reverted a fresh export of
+the kill-shot card because the Documents copy predated it — a silent
+undo of finished work, in the one direction the tool was built to be safe in.
+One file cannot go stale against itself.
+
+What the sync tool was actually worth was its *validation*, and that survives
+in a better place:
 
 ```bash
-npm run riv          # install the latest export, with a validation pass
-npm run riv:watch    # ...and keep doing it, every time you re-export
-npm run riv -- --check   # validate, change nothing
+npm run test:bossbar   # re-scans the shipped .riv against the contract
 ```
 
-It refuses an export that has stopped containing the names the code depends on
-— the two artboards and the three data-binding properties declared in
-`path/src/ui/riveContract.js`. Rename one of those in the editor and nothing
+It fails if the file has stopped containing the names the code depends on — the
+three artboards, the two view models and the data-binding properties declared
+in `path/src/ui/riveContract.js`. Rename one of those in the editor and nothing
 fails to compile: the splash comes up blank, or the boss health bar draws
-perfectly and never moves. `npm run test:bossbar` re-checks the shipped copy, so
-a bad swap can't reach a deploy either.
+perfectly and never moves. It runs inside `npm test`, so a bad export cannot
+reach a deploy.
 
 You can also just export straight to `path/src/ui/seal_survivor.riv` from Rive's
 export dialog and skip the copy — but then nothing validates it.

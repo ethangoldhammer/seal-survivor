@@ -163,8 +163,10 @@ export function clearCalloutUi() {
  *                              every frame of every run it would be a scan of
  *                              a hundred and forty pickups to answer a question
  *                              nobody is asking.
- *   nearestPickup(x, y)        the nearest power-up orb, for `arrow: pickup`.
- *                              A function for the same reason.
+ *   nearestPickup(x, y, kind)  the nearest pickup OF ONE KIND, for an
+ *                              `arrow: pickup` row. `kind` is the row's own id
+ *                              — see arrowTarget. A function for the same
+ *                              reason nearestChum is.
  *   surfaceY    the waterline above the seal, for an `arrow: surface` row
  *   seabedY     the floor below it, for an `arrow: seabed` row
  *   device      what the player is holding, which decides the WORDING of a row
@@ -255,7 +257,7 @@ function applyBloom(node, px) {
 }
 
 function drawArrow(dt, callout, bandPose, ctx) {
-  const target = callout ? arrowTarget(callout.arrow, ctx) : null;
+  const target = callout ? arrowTarget(callout.arrow, ctx, callout.id) : null;
   if (!target || !ctx.camera) {
     arrowEl.classList.add('sv-hidden');
     arrowHasAim = false;
@@ -345,9 +347,16 @@ function orbitRadiusPx(ctx) {
 // The second case is real: the chum arrow's target can be eaten by a crab
 // mid-tip, and an arrow left pointing at where it used to be is worse than no
 // arrow at all.
-function arrowTarget(kind, ctx) {
+function arrowTarget(kind, ctx, id) {
   if (kind === 'chum') return ctx.nearestChum?.(ctx.playerX ?? 0, ctx.playerY ?? 0) ?? null;
-  if (kind === 'pickup') return ctx.nearestPickup?.(ctx.playerX ?? 0, ctx.playerY ?? 0) ?? null;
+  // THE ONLY ARROW THAT ASKS WHICH ROW IS ASKING, and it has to. There is one
+  // tip per pickup type and they all point with `arrow: pickup`, so the target
+  // is decided by the ROW'S OWN ID — the id, the step, the callouts row and the
+  // orb's name in assets.js are deliberately one string end to end. The
+  // alternative, a `pickup:bubbleOrb` arrow value or five arrow targets, would
+  // be the same name written twice per row with nothing stopping them
+  // disagreeing.
+  if (kind === 'pickup') return ctx.nearestPickup?.(ctx.playerX ?? 0, ctx.playerY ?? 0, id) ?? null;
   if (kind === 'surface') {
     // Straight up, at the waterline. Not at the seal's own x offset by
     // anything: "up" is the entire content of this arrow, and aiming it at a

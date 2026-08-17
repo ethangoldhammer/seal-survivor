@@ -101,6 +101,10 @@ const {
   pushCallout, clearCallout, holdFor, checkCalloutBindings,
 } = await import('../path/src/systems/callouts.js');
 const { settings, bindKey } = await import('../path/src/systems/settings.js');
+const {
+  playerName, loadPlayerName, savePlayerName, clearPlayerName, expandPlayer,
+  sanitizeName, DEFAULT_PLAYER_NAME, MAX_NAME_LEN,
+} = await import('../path/src/systems/playerName.js');
 const { DEVICES } = await import('../path/src/devices.js');
 const {
   COACH_IDS, updateTutorial, resetTutorial, resetTutorialRun, noteTutorialEvent,
@@ -452,6 +456,14 @@ section('bloom in, bloom out');
 section('the first-run coach');
 // ---------------------------------------------------------------------------
 
+// Put one kind of pickup in the water, or take it out. A helper rather than an
+// inline Set edit because a run script says "a bubble is floating there for
+// eight seconds" far more often than it says anything else about the ctx.
+function setWater(ctx, kind, on) {
+  if (on) ctx.inWater.add(kind);
+  else ctx.inWater.delete(kind);
+}
+
 // A whole first run, driven a frame at a time. `ctx` is the same shape main.js
 // assembles; the script below is a player who does each thing in turn.
 //
@@ -471,7 +483,13 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
     airTime: 0,
     nearSurface: false,
     chumInWater: false,
-    pickupInWater: false,
+    // Which pickup types are in the water. A Set the script adds to, wrapped in
+    // the same one-kind-at-a-time function main.js hands over — the whole point
+    // of the split is that taking a bubble must not answer the blue orb's tip,
+    // and a boolean here could not tell those apart.
+    inWater: new Set(),
+    pickupInWater: (kind) => ctx.inWater.has(kind),
+    feeding: false,
     chumOnSeabed: false,
     unkillableNear: false,
   };
@@ -529,23 +547,79 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
     // A kill: chum in the water, eaten a couple of seconds later.
     ctx.chumInWater = t > 5;
     if (t > 8 && t < 8.05) noteTutorialEvent('chum');
-    // An orb spawns, and is swum into.
-    ctx.pickupInWater = t > 12 && t < 20;
-    if (t > 16 && t < 16.05) noteTutorialEvent('pickup');
+    // A combo window, and a link scored inside it.
+    ctx.feeding = t > 10 && t < 14;
+    if (t > 12 && t < 12.05) noteTutorialEvent('chainLink');
+    // A bubble spawns, and is swum into.
+    setWater(ctx, 'bubbleOrb', t > 16 && t < 24);
+    if (t > 20 && t < 20.05) noteTutorialEvent('bubbleOrb');
     // Chum reaches the floor, and is cleared.
-    ctx.chumOnSeabed = t > 22 && t < 30;
+    ctx.chumOnSeabed = t > 26 && t < 34;
     // And a turtle drifts past.
-    ctx.unkillableNear = t > 33 && t < 36;
-  }, { seconds: 45 });
+    ctx.unkillableNear = t > 37 && t < 40;
+  }, { seconds: 48 });
   const order = seen.map((s) => s.id);
-  check('the orb tip comes after chum', order.indexOf('pickup') > order.indexOf('chum'),
+  check('the food chain is taught after eating', order.indexOf('foodChain') > order.indexOf('chum'),
+    order.join(' → '));
+  check('the orb tip comes after chum', order.indexOf('bubbleOrb') > order.indexOf('chum'),
     order.join(' → '));
   check('the seabed tip fires when chum lands', order.includes('crab'), order.join(' → '));
   check('the unkillable tip fires when one swims past', order.includes('invincible'),
     order.join(' → '));
-  check('all four water tips ran', ['chum', 'pickup', 'crab', 'invincible']
+  check('every water tip the run offered ran', ['chum', 'foodChain', 'bubbleOrb', 'crab', 'invincible']
     .every((id) => order.includes(id)), order.join(' → '));
   check('...each exactly once', order.length === new Set(order).size, order.join(' → '));
+  check('...and a pickup the water never held stayed unspent',
+    !order.includes('strikeOrb') && !tutorialDone().has('strikeOrb'), order.join(' → '));
+}
+
+{
+  // TAKING ONE PICKUP MUST NOT SPEND THE OTHER FOUR. This is the whole reason
+  // the tips and the events are per type: under a single shared `pickup` event
+  // the first orb a player swam into would silently mark off the blue orb, the
+  // bubble, the chunk and the attractor, and four of the five lines would never
+  // be seen by anybody. It fails completely silently — every check above this
+  // one passes with a single shared id.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const seen = coachRun((ctx, t) => {
+    if (t > 3 && t < 3.05) noteTutorialEvent('strike');
+    // All four collectable kinds in the water at once, and ONE of them taken.
+    setWater(ctx, 'bubbleOrb', true);
+    setWater(ctx, 'strikeOrb', true);
+    setWater(ctx, 'rapidFireOrb', true);
+    setWater(ctx, 'chumChunk', true);
+    if (t > 8 && t < 8.05) noteTutorialEvent('bubbleOrb');
+  }, { seconds: 60 });
+  const done = tutorialDone();
+  check('taking a bubble spends the bubble tip', done.has('bubbleOrb'), [...done].join(','));
+  check('...and the other three still each got their own line',
+    ['strikeOrb', 'rapidFireOrb', 'chumChunk'].every((id) => seen.some((s) => s.id === id)),
+    seen.map((s) => s.id).join(' → '));
+  check('...in the priority order the csv asked for',
+    seen.map((s) => s.id).filter((id) => id.endsWith('Orb') || id === 'chumChunk')
+      .join(' → ') === 'bubbleOrb → strikeOrb → rapidFireOrb → chumChunk',
+    seen.map((s) => s.id).join(' → '));
+}
+
+{
+  // THE ATTRACTOR IS NOT SWUM INTO. It is a field a trawler drops — it rises
+  // and drags the seabed to you — so its tip is the second in the file with no
+  // answer, and the only thing that can end it is its own hold. A `done` copied
+  // from the four orbs beside it would leave this line on the band until
+  // something louder took it, every run, forever.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  coachRun((ctx, t) => {
+    if (t > 3 && t < 3.05) noteTutorialEvent('strike');
+    setWater(ctx, 'attractorOrb', t > 6);
+  }, { seconds: 40 });
+  check('the attractor tip ends on its own clock with nothing to collect',
+    tutorialDone().has('attractorOrb'), [...tutorialDone()].join(','));
 }
 
 {
@@ -716,6 +790,16 @@ section('the words follow the device');
       'loud,coach,Press {strike},,,TRUE,10,2',
       'fine,coach,Press {strike},Squeeze it,kbm pad,TRUE,10,2',
       'quiet,coach,No token here,,,TRUE,10,2',
+      // NOT A KEY, and this is what the check has to be able to tell apart. A
+      // name reads identically in every pair of hands, so demanding a `textPad`
+      // for it would be a warning with no action behind it — and a developer
+      // who learns this check cries wolf is a developer who stops reading it on
+      // the row that really is about to tell a phone to press Space.
+      'named,coach,Nice one {player},,,TRUE,10,2',
+      // Nor is the hardware token: `{bumper}` answers itself on all three.
+      'hw,coach,Squeeze {bumper},,,TRUE,10,2',
+      // ...but a key token is still a key token when it shares a row with one.
+      'mixed,coach,{player} press {strike},,,TRUE,10,2',
     ].join('\n'),
     () => {},
   );
@@ -727,11 +811,89 @@ section('the words follow the device');
   check('a row that covers the devices it reaches is quiet',
     !warns.some((w) => w.includes('"fine"')));
   check('a row with no token is quiet', !warns.some((w) => w.includes('"quiet"')));
+  check('a {player} row is not mistaken for a key binding',
+    !warns.some((w) => w.includes('"named"')), warns.join(' | '));
+  check('...nor is {bumper}, which answers itself everywhere',
+    !warns.some((w) => w.includes('"hw"')), warns.join(' | '));
+  check('...but a real key on the same row still warns',
+    warns.some((w) => w.includes('"mixed"')), warns.join(' | '));
 
   // And the file we actually ship, which is the point of the guard.
   const live = [];
   checkCalloutBindings(CALLOUTS, (m) => live.push(m));
   check('the shipping table is quiet too', live.length === 0, live.join(' | '));
+}
+// ---------------------------------------------------------------------------
+section('{player} — one name, every text table');
+// ---------------------------------------------------------------------------
+{
+  // THE POINT OF THE TOKEN IS THAT ALL THREE SURFACES AGREE. Each of the three
+  // reaches the name a different way — the band resolves it beside the key
+  // bindings, a card resolves it beside its measured {effect}, a quip has no
+  // token machinery of its own — so "they all say the same thing" is a claim
+  // about three separate code paths and is exactly what a second copy of the
+  // name would quietly break.
+  const table = parseCalloutCsv(
+    ['id,kind,text,enabled,priority,hold', 'hi,coach,Nice one {player},TRUE,10,4'].join('\n'),
+    () => {},
+  );
+
+  clearPlayerName();
+  check('a player who never typed one is called something',
+    playerName() === DEFAULT_PLAYER_NAME, playerName());
+  check('...but the input field still comes up blank', loadPlayerName() === '',
+    JSON.stringify(loadPlayerName()));
+
+  resetCallouts();
+  pushCallout(table.get('hi'));
+  const before = activeCallout('band', 'kbm', {})?.text;
+  check('the band spends the token on the default', before === `Nice one ${DEFAULT_PLAYER_NAME}`, before);
+  check('...and the quip surface agrees', expandPlayer('Nice one {player}') === before, expandPlayer('Nice one {player}'));
+
+  savePlayerName('  Ethan  ');
+  const after = activeCallout('band', 'kbm', {})?.text;
+  check('a name typed mid-session reaches a line already on the band',
+    after === 'Nice one Ethan', after);
+  // THE FIELD AND THE SENTENCE WANT OPPOSITE THINGS about a trailing space,
+  // which is why there are two accessors. The box keeps it (eating it fights a
+  // typist mid-word); a line reading "Ethan , watch out!" is just broken.
+  check('...the field keeps the trailing space for the typist',
+    loadPlayerName() === 'Ethan ', JSON.stringify(loadPlayerName()));
+  check('...and the token never spends it',
+    expandPlayer('{player}, watch out') === 'Ethan, watch out',
+    expandPlayer('{player}, watch out'));
+  check('...with every surface moved together',
+    expandPlayer('{player}') === 'Ethan', expandPlayer('{player}'));
+
+  // The sanitiser is the server's rule, and these strings reach innerHTML on
+  // the board. A name that could carry markup through the token would carry it
+  // onto three more screens than the board.
+  savePlayerName('<img src=x>Bob & "friends"');
+  check('markup and quotes are stripped before the token can spend them',
+    !/[<>&"']/.test(playerName()), playerName());
+  check('...and the length is the board\'s, not the field\'s',
+    savePlayerName('x'.repeat(80)).length === MAX_NAME_LEN, String(playerName().length));
+
+  // Blank must not FORGET a name — every caller today is a field that can be
+  // empty for reasons other than intent.
+  savePlayerName('Ethan');
+  savePlayerName('');
+  check('an empty submit does not erase the name', playerName() === 'Ethan', playerName());
+  clearPlayerName();
+  check('...and clearing really does', playerName() === DEFAULT_PLAYER_NAME, playerName());
+}
+{
+  // The token has to survive being the ONLY thing in a line, and a line with
+  // no token at all must not pay for the machinery.
+  savePlayerName('Ann');
+  check('a bare token is the whole line', expandPlayer('{player}') === 'Ann', expandPlayer('{player}'));
+  check('twice in one line, both times', expandPlayer('{player} vs {player}') === 'Ann vs Ann',
+    expandPlayer('{player} vs {player}'));
+  check('a line with no braces comes back identical',
+    expandPlayer('nothing here') === 'nothing here');
+  check('an unknown token is left standing, not eaten',
+    expandPlayer('hi {whoops}') === 'hi {whoops}', expandPlayer('hi {whoops}'));
+  clearPlayerName();
 }
 {
   // THE CONTROLS, ONE INPUT AT A TIME. The whole shape of the touch and pad
@@ -872,12 +1034,20 @@ section('the words follow the device');
     ctx.aboveSurface = t >= 15 && t < 16;
     ctx.nearSurface = t >= 15;
     ctx.airTime = t > 20 ? 0.5 : 0;
-    // The water half, each subject arriving and then being dealt with.
-    ctx.pickupInWater = t > 24 && t < 32;
-    if (t > 28 && t < 28.05) noteTutorialEvent('pickup');
-    ctx.chumOnSeabed = t > 32 && t < 40;
-    ctx.unkillableNear = t > 42;
-  }, { device: 'kbm', seconds: 55 });
+    // The water half, each subject arriving and then being dealt with. Every
+    // pickup type gets its own window, because the ledger is per type and a run
+    // that only ever showed one orb would leave the coach four steps short.
+    ctx.feeding = t > 22 && t < 26;
+    if (t > 24 && t < 24.05) noteTutorialEvent('chainLink');
+    let at = 28;
+    for (const kind of ['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'chumChunk', 'attractorOrb']) {
+      setWater(ctx, kind, t > at && t < at + 8);
+      if (t > at + 4 && t < at + 4.05) noteTutorialEvent(kind);
+      at += 9;
+    }
+    ctx.chumOnSeabed = t > 74 && t < 82;
+    ctx.unkillableNear = t > 84;
+  }, { device: 'kbm', seconds: 95 });
   check('a keyboard player finishes without the two stick steps',
     tutorialComplete('kbm'), [...tutorialDone()].join(','));
   check('...and the same ledger is NOT finished on a phone',
@@ -988,7 +1158,8 @@ section('the words follow the device');
       // The water half. Like the air pair above, these follow the ledger: the
       // seabed tip is READY on a floor with chum on it and DONE on one without,
       // so a fixed value would either never offer it or never let it finish.
-      pickupInWater: true, chumOnSeabed: !done.has('crab'), unkillableNear: true,
+      pickupInWater: () => true, feeding: true,
+      chumOnSeabed: !done.has('crab'), unkillableNear: true,
     };
     updateCallouts(DT, {}, true);
     updateTutorial(DT, ctx, true);
@@ -1000,7 +1171,12 @@ section('the words follow the device');
     // which is exactly how it ends in the game.
     noteTutorialEvent('strike');
     noteTutorialEvent('chum');
-    noteTutorialEvent('pickup');
+    noteTutorialEvent('chainLink');
+    // Every pickup type, since each is spent only by its own kind now. Read off
+    // the step list rather than typed out, so a sixth pickup added to
+    // PICKUP_TIPS cannot leave this loop spinning against a step it has no way
+    // to answer — which would show up as a timeout, not as a useful failure.
+    for (const id of COACH_IDS) noteTutorialEvent(id);
     ctx.moving = true;
     ctx.aiming = true;
     ctx.charging = true;
@@ -1196,7 +1372,7 @@ section('drawing it, and where the arrow points');
   // wrong thing under a line about power-ups nearly every time it mattered.
   resetCallouts();
   clearCalloutUi();
-  pushCallout(CALLOUTS.get('pickup'));
+  pushCallout(CALLOUTS.get('bubbleOrb'));
   updateCalloutUi(0.016, {
     camera, playerX: 0, playerY: 0,
     nearestChum: () => ({ x: -10, y: 0 }),
@@ -1209,6 +1385,35 @@ section('drawing it, and where the arrow points');
   }
   updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, nearestPickup: () => null });
   check('...and goes when the orb expires mid-tip', arrow.className.includes('sv-hidden'));
+
+  // --- ...AND IT ASKS FOR THE RIGHT KIND OF ORB ---
+  // Five rows share `arrow: pickup`, and which orb each means is the ROW'S OWN
+  // ID. Nothing else in this file would notice if that argument were dropped:
+  // every check above passes with an arrow that points at whichever pickup
+  // happens to be nearest, and the bug on screen is a line about doubling your
+  // fire rate with an arrow on a bubble.
+  for (const id of ['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'chumChunk']) {
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get(id));
+    let asked = null;
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0,
+      nearestPickup: (x, y, kind) => { asked = kind; return { x: 10, y: 0 }; },
+    });
+    check(`the ${id} arrow asks for ${id}`, asked === id, `asked for ${asked}`);
+  }
+  {
+    // And the attractor deliberately has none: it drags the chum to you, so
+    // there is nowhere to send the player.
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get('attractorOrb'));
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, nearestPickup: () => ({ x: 10, y: 0 }),
+    });
+    check('the attractor tip draws no arrow', arrow.className.includes('sv-hidden'));
+  }
 
   // --- the seabed arrow means DOWN ---
   resetCallouts();

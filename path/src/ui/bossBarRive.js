@@ -27,7 +27,7 @@ import { Rive, Layout, Fit, Alignment } from '@rive-app/canvas';
 // anything that constructs a Rive instance — see riveRuntime.js.
 import './riveRuntime.js';
 import rivUrl from './seal_survivor.riv?url';
-// The artboard name and the three property names, shared with tools/riv-sync.mjs
+// The artboard name and the three property names, shared with the export check
 // so a re-export that renames one is refused before it reaches the game rather
 // than discovered as a bar that never moves. See riveContract.js.
 import { BOSS_BAR_ARTBOARD, BOSS_BAR_BINDINGS } from './riveContract.js';

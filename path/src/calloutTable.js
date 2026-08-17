@@ -49,6 +49,13 @@
 //             systems/callouts.js, which also warns about a key token on a row
 //             with no `textPad`: a controller player told to press Space is
 //             the exact failure these columns exist to prevent.
+//
+//             `{player}` is the third kind and is about neither the hardware
+//             nor the bindings — it becomes whatever the player is called (the
+//             name they typed, or "Seal" if they never did), and it works the
+//             same way in quips.csv and upgrades.csv. It does NOT need a
+//             `textPad`, because a name reads identically in every pair of
+//             hands. See systems/playerName.js.
 //   textTouch what to say instead on a touchscreen. Blank = use `text`.
 //   textPad   what to say instead on a controller. Blank = use `text`.
 //   devices   which devices this row exists on at all, space-separated

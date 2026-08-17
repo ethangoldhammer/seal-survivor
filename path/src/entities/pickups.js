@@ -868,44 +868,65 @@ export function nearestChum(x, y, maxDist = Infinity) {
   return best;
 }
 
+// ---------------------------------------------------------------------------
+// ASKING ABOUT ONE KIND OF PICKUP AT A TIME
+//
+// The first-run coach has a tip PER PICKUP TYPE, because they do four
+// completely unrelated things — a blue orb is the boost meter, a bubble is air,
+// the yellow one is fire rate, a chunk is health — and one sentence covering
+// all of them ("that is a power-up") teaches the player nothing they could not
+// see. So both questions below take the kind: is there one in the water, and
+// where is the nearest.
+//
+// KEYED BY THE SAME NAME assets.js gives the mesh, which is also the callouts
+// row id and the tutorial step id. One name end to end rather than a mapping
+// table per hop: the failure a mapping invites is a tip that fires for the
+// wrong orb, and that reads as a bug in the pickup rather than in a lookup.
+//
+// An unknown kind answers "no" and "nowhere" rather than throwing. This is
+// reached from a CSV row's arrow column, so the bad input is a typo in a
+// spreadsheet — and a first-run tip is not worth taking a run down for.
+// ---------------------------------------------------------------------------
+function listFor(kind) {
+  if (kind === 'strikeOrb') return strikeOrbs;
+  if (kind === 'bubbleOrb') return bubbleOrbs;
+  if (kind === 'rapidFireOrb') return rapidFireOrbs;
+  if (kind === 'chumChunk') return chumChunks;
+  return null;
+}
+
+/** Is there one of `kind` in the water right now? A first-run tip's cue. */
+export function pickupTypeInWater(kind) {
+  return (listFor(kind)?.length ?? 0) > 0;
+}
+
 /**
- * The nearest POWER-UP orb — blue, bubble or rapid-fire — as a plain { x, y }
- * or null. The other half of the arrow, and deliberately a separate question
- * from nearestChum above rather than a flag on it.
+ * The nearest pickup of `kind`, as a plain { x, y } or null — what the arrow
+ * under a pickup tip points at.
  *
- * The two are different KINDS of thing and the tips that point at them say
- * different sentences: chum is the loop (it is everywhere, you eat it
- * constantly, and the tip is about the meter it fills), where a power-up is a
- * one-off worth crossing water for. An arrow that could answer with either
- * would send a player after a chum orb under a line about power-ups perhaps
- * nine times in ten, since chum outnumbers these by roughly a hundred to one.
+ * Deliberately NOT nearestChum with a filter. Chum outnumbers these by roughly
+ * a hundred to one, so an arrow that could fall back to it would point at a
+ * chum orb under a line about power-ups nearly every time it mattered, and
+ * would look right in almost every screenshot.
  *
- * No per-type bias: all three are worth the same detour, which is not true of
- * a chunk against an orb, and inventing a ranking here would be a balance
- * decision made in a targeting helper.
- *
- * A copy, for the same reason nearestChum returns one.
+ * A copy, for the same reason nearestChum returns one: the orb it describes can
+ * be swallowed a frame later.
  */
-export function nearestPickup(x, y, maxDist = Infinity) {
+export function nearestPickup(x, y, kind, maxDist = Infinity) {
+  const list = listFor(kind);
+  if (!list) return null;
   let best = null;
   let bestD2 = maxDist * maxDist;
-  for (const list of [strikeOrbs, bubbleOrbs, rapidFireOrbs]) {
-    for (const o of list) {
-      const dx = o.mesh.position.x - x;
-      const dy = o.mesh.position.y - y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < bestD2) {
-        bestD2 = d2;
-        best = { x: o.mesh.position.x, y: o.mesh.position.y };
-      }
+  for (const o of list) {
+    const dx = o.mesh.position.x - x;
+    const dy = o.mesh.position.y - y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = { x: o.mesh.position.x, y: o.mesh.position.y };
     }
   }
   return best;
-}
-
-/** Is there a power-up orb in the water at all? The first-run tip's cue. */
-export function anyPickupOrb() {
-  return strikeOrbs.length > 0 || bubbleOrbs.length > 0 || rapidFireOrbs.length > 0;
 }
 
 // Still in play? A crab holds a reference across frames, and the player may

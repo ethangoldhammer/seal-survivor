@@ -35,6 +35,7 @@
 
 import { CONFIG } from './config.js';
 import { baseStats } from './stats.js';
+import { playerName } from './systems/playerName.js';
 
 // ---------------------------------------------------------------------------
 // WHAT EACH STAT IS CALLED, in the words a card would use.
@@ -334,6 +335,7 @@ export const TOKENS = [
   { token: '{owned}', help: 'How many you already have. 0 before the first pick.' },
   { token: '{stacks}', help: 'The cap from `maxStacks`, or "unlimited" when blank.' },
   { token: '{cfg:weapon.damage}', help: 'Any number from CONFIG, so tuned values quote themselves.' },
+  { token: '{player}', help: 'What the player is called — the name they typed, or "Seal" if they never did. The same token works in callouts.csv and quips.csv.' },
 ];
 
 // Deliberately NOT memoised. A cache keyed on upgrade id would be stale the
@@ -377,6 +379,12 @@ export function expandDesc(text, upgrade, { owned = 0, warn = null } = {}) {
         return String(owned);
       case 'stacks':
         return upgrade?.maxStacks == null ? 'unlimited' : String(upgrade.maxStacks);
+      // The one token in this list that is not about the card. It resolves the
+      // same way here as it does on the band and on the game-over headline,
+      // because it reads the one module that owns the name rather than
+      // formatting it locally — see systems/playerName.js.
+      case 'player':
+        return playerName();
       case 'cfg': {
         const v = readConfigPath(arg ?? '');
         if (v == null || typeof v === 'object') {

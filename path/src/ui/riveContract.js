@@ -6,13 +6,20 @@
 // blank splash or a health bar that never moves.
 //
 // So they live in one dependency-free module, imported by the code that uses
-// them AND by the tool that swaps the file in (tools/riv-sync.mjs), which
-// refuses an export that has stopped containing them. That is the only reason
-// this file exists: a constant used in one place would be better off inline,
-// but a constant that a build step has to check has to be reachable without
-// dragging in the config, the runtime, or a canvas.
+// them AND by the check that scans the shipped .riv for them
+// (tools/rive-boss-test.mjs, `npm run test:bossbar`), which fails an export
+// that has stopped containing them. That is the only reason this file exists:
+// a constant used in one place would be better off inline, but a constant a
+// test has to scan a binary for has to be reachable without dragging in the
+// config, the runtime, or a canvas.
 //
-// Deliberately no imports. The sync tool runs before anything is built.
+// Deliberately no imports, so the check needs no loader and no build.
+//
+// THERE IS ONE COPY OF THE FILE, `path/src/ui/seal_survivor.riv`, and Rive
+// exports straight over it. There was briefly a second under ~/Documents with
+// a sync tool between them; it is gone, because a one-way sync cannot know
+// which of two copies is newer and reverted a finished export once. See the
+// README.
 
 /** The title-screen artboard. Named explicitly since the file gained a second. */
 export const SPLASH_ARTBOARD = 'Splash Screen';
@@ -22,6 +29,29 @@ export const BOSS_BAR_ARTBOARD = 'Boss Health';
 
 /** The kill-shot card — the polaroid the run's trophies are printed on. */
 export const SNAPSHOT_ARTBOARD = 'Polaroid';
+
+/**
+ * The splash's own two properties, and they are the only place in this file
+ * where the traffic runs BOTH WAYS.
+ *
+ *   name   a string the game writes on every keystroke. Rive has no text
+ *          input — 2.39's focus system does Tab traversal and nothing else —
+ *          so a hidden DOM <input> owns the typing and this property is purely
+ *          the display of it. That is also the only way the on-screen keyboard
+ *          comes up on a phone; a raw keydown listener never raises it.
+ *   start  a TRIGGER the artboard fires and the GAME listens to. Rive's own
+ *          Start button decides when a run begins, rather than the splash
+ *          being torn down by any stray input the way it used to be.
+ *
+ * The listen direction is worth stating because it is the less obvious half of
+ * the runtime: Rive.advance() calls handleCallbacks() straight after the
+ * artboard advances, so a trigger the state machine fires reaches a JS
+ * `.on()` callback on that same frame. See ui/riveSplash.js.
+ */
+export const SPLASH_BINDINGS = {
+  name: 'strPlayerName',  // what the player is typing, mirrored in live
+  start: 'tStart',        // Rive -> game: begin the run
+};
 
 /**
  * The data-binding properties the boss bar drives, by role. All three sit on
@@ -104,7 +134,11 @@ export function riveRequirements(bossArtboard = BOSS_BAR_ARTBOARD) {
     artboards: [SPLASH_ARTBOARD, bossArtboard, SNAPSHOT_ARTBOARD],
     // Deduped: `strBossName` is on both view models, and a validator that
     // listed it twice would report the same name passing (or failing) twice.
-    bindings: [...new Set([...Object.values(BOSS_BAR_BINDINGS), ...Object.values(SNAPSHOT_BINDINGS)])],
+    bindings: [...new Set([
+      ...Object.values(SPLASH_BINDINGS),
+      ...Object.values(BOSS_BAR_BINDINGS),
+      ...Object.values(SNAPSHOT_BINDINGS),
+    ])],
     viewModels: Object.values(VIEW_MODELS),
   };
 }

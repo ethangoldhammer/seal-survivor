@@ -22,7 +22,7 @@ import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossState, capBossDamage } from './systems/boss.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, anyPickupOrb, countFloorPickups, chumRadiusOf, pickups, chumChunks } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickups, chumChunks } from './entities/pickups.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
@@ -39,7 +39,7 @@ import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -68,7 +68,7 @@ import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls } from './systems/seagull.js';
 import { spawnWhale, updateWhales, resetWhales, resetWhaleClock, updateWhaleClock, whaleDistance } from './systems/whale.js';
-import { updateBoats, resetBoats, boats, hitsBoat, damageBoat, jostleBoat, impactBoat } from './systems/boats.js';
+import { updateBoats, resetBoats, boats, attractorOrbs, hitsBoat, damageBoat, jostleBoat, impactBoat } from './systems/boats.js';
 import { setWakeGrid } from './systems/boatWake.js';
 import { stepBodies } from './systems/rigidBody.js';
 import { damageDebris } from './systems/boatDebris.js';
@@ -1790,6 +1790,13 @@ function onChainHit(chain, source) {
   const x = player.mesh.position.x;
   const y = player.mesh.position.y;
 
+  // The first-run "strike then keep eating" tip, answered by the loop it
+  // described actually closing. Here rather than in chainFrom because this is
+  // the funnel every source of a link comes through — a strike paid for in
+  // food, a school emptied, a breach with Porpoising — and the tip is about
+  // the chain rather than about any one way of extending it.
+  noteTutorialEvent('chainLink');
+
   // FIRST, before the impact events below, and deliberately so: hit-stop is
   // rate-limited globally (see feedback.js) and whichever event asks first
   // claims the window. The extension is the bigger of the two things
@@ -1856,6 +1863,18 @@ function onChainHit(chain, source) {
 // One call per event even when `links` > 1 (Porpoising stacks): the count
 // jumps by three, but three copies of the same fanfare on one frame is a
 // smear, not three times the feedback.
+// Is there a pickup of `kind` in the water? The first-run coach's cue, one tip
+// per type — see PICKUP_TIPS in systems/tutorial.js.
+//
+// It lives here rather than in entities/pickups.js because of the attractor
+// alone: that one belongs to systems/boats.js, since a trawler drops it, and it
+// is the only pickup the pickups module has never owned. This is the one place
+// that already imports both.
+function pickupInWater(kind) {
+  if (kind === 'attractorOrb') return attractorOrbs.length > 0;
+  return pickupTypeInWater(kind);
+}
+
 function chainFrom(source, links = 1) {
   const chain = chainStrike(source, links);
   if (chain) onChainHit(chain, source);
@@ -3984,10 +4003,11 @@ function animate(now) {
     updatePickups(
       dt, world.scene, player, collectChum,
       (x, y) => {
-        // The first-run "swim into a glowing orb" tip, answered here and in the
-        // two callbacks below it. All three, because the tip does not name a
-        // colour: whichever one they reached first is the one that proves it.
-        noteTutorialEvent('pickup');
+        // The first-run tip for THIS orb, answered here and nowhere else.
+        // There is one tip per pickup type and each is spent by taking its own
+        // kind — a shared event would mean the first orb a player swam into
+        // silently marked off the other four.
+        noteTutorialEvent('strikeOrb');
         // The blue orb skips the wind-up entirely: a full meter, instantly.
         // If that fill lands inside a combo it reaches the chain the same way
         // chum does — through the meter, which is the only route orbs have.
@@ -3999,7 +4019,7 @@ function animate(now) {
         if (filled) chargeCrossed();
       },
       (x, y) => {
-        noteTutorialEvent('pickup');
+        noteTutorialEvent('bubbleOrb');
         // ...AND IT FEEDS THE METER. Every orb in the water now pays into the
         // strike bar, not just the blue one: the meter is the game's second
         // currency and a pickup that ignored it read as a pickup for a
@@ -4021,7 +4041,7 @@ function animate(now) {
         feedback('bubblePop', { x, y, scale: 0.8 + 0.6 * need, sfxOpts: { pitch: 1.25 - 0.45 * need } });
       },
       (x, y) => {
-        noteTutorialEvent('pickup');
+        noteTutorialEvent('rapidFireOrb');
         rapidFireTimer = CONFIG.rapidFirePickup.duration;
         // Same top-up as the bubble — see the note there. Slightly bigger,
         // because this orb is rarer.
@@ -4034,6 +4054,7 @@ function animate(now) {
       // strike bar would make the rest of the economy something you wait out.
       // It is a break, not a jackpot.
       (chunk) => {
+        noteTutorialEvent('chumChunk');
         const x = chunk.mesh.position.x;
         const y = chunk.mesh.position.y;
         player.hp = Math.min(player.stats.maxHp, player.hp + player.stats.maxHp * chunk.healFrac);
@@ -4252,9 +4273,18 @@ function animate(now) {
     // like the ones above them — a step asks what is true, and whether the
     // answer took a scan to find is this file's problem and not the coach's.
 
-    // Any of the three power-up orbs. Not chum: those are a different tip
-    // pointing at a different thing (see nearestPickup in entities/pickups.js).
-    get pickupInWater() { return anyPickupOrb(); },
+    // WHICH PICKUP, not whether there is one — there is a tip per type and
+    // they do five unrelated things. A function rather than five getters
+    // because the coach asks about one kind at a time and the steps that ask
+    // are themselves generated from a table (see PICKUP_TIPS in tutorial.js);
+    // five fields here would be that table written out a second time. Passed
+    // by reference, like nearestChum below, rather than written inline — this
+    // object is rebuilt every frame of every run and a closure literal here
+    // would be an allocation per frame forever.
+    pickupInWater,
+    // Is a combo window open? The one moment "strike then keep eating" is an
+    // instruction rather than a description.
+    feeding: isFeeding(),
     // Chum that has reached the floor — the same count the crab spawner reads,
     // and deliberately the same one: the tip is a warning about exactly the
     // condition that summons a wave, so a second definition of "on the seabed"
@@ -4292,7 +4322,9 @@ function animate(now) {
     // and as crabs carry pieces off, and an arrow still pointing at an orb that
     // has been eaten is worse than no arrow.
     nearestChum,
-    // Same deal, and the same reason it is the function and not a position.
+    // Same deal, and the same reason it is the function and not a position —
+    // except this one is asked WHICH KIND, because the row that wants the arrow
+    // is one of five and each points at its own orb. See arrowTarget.
     nearestPickup,
     surfaceY: bounds.surfaceY,
     // The top of the seabed rather than bounds.bottom: the floor plane hangs a
