@@ -12,7 +12,6 @@ import { CONFIG } from '../config.js';
 //   mightymeg.glb    1 clip, "Take 001"
 //   orca.glb         5 clips: idle / swim / rushbeach / two jump POSES
 //   dolphin.glb      2 clips: "move" and a T-pose
-//   otter.glb        1 clip, "fast_swim_steady_baked"
 //   greatwhite.glb   3 clips — and one of them is called "Bite", which is a
 //                    trap. It has duration 0 and 13 single-key tracks whose
 //                    values are the REST pose (several are the q/-q negation

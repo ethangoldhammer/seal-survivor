@@ -163,7 +163,10 @@ export function clearCalloutUi() {
  *                              every frame of every run it would be a scan of
  *                              a hundred and forty pickups to answer a question
  *                              nobody is asking.
+ *   nearestPickup(x, y)        the nearest power-up orb, for `arrow: pickup`.
+ *                              A function for the same reason.
  *   surfaceY    the waterline above the seal, for an `arrow: surface` row
+ *   seabedY     the floor below it, for an `arrow: seabed` row
  *   device      what the player is holding, which decides the WORDING of a row
  *               that has more than one — see calloutTable.js
  *   tokens      what to call the hardware, for a line that names a control —
@@ -344,6 +347,7 @@ function orbitRadiusPx(ctx) {
 // arrow at all.
 function arrowTarget(kind, ctx) {
   if (kind === 'chum') return ctx.nearestChum?.(ctx.playerX ?? 0, ctx.playerY ?? 0) ?? null;
+  if (kind === 'pickup') return ctx.nearestPickup?.(ctx.playerX ?? 0, ctx.playerY ?? 0) ?? null;
   if (kind === 'surface') {
     // Straight up, at the waterline. Not at the seal's own x offset by
     // anything: "up" is the entire content of this arrow, and aiming it at a
@@ -351,6 +355,15 @@ function arrowTarget(kind, ctx) {
     // place rather than in a direction.
     if (ctx.surfaceY == null) return null;
     return { x: ctx.playerX ?? 0, y: ctx.surfaceY };
+  }
+  if (kind === 'seabed') {
+    // Straight down, for the same reason and in the same way. Deliberately NOT
+    // the nearest orb on the floor: the tip it serves is about where chum ENDS
+    // UP, which is a place the player has to learn is down there at all, and an
+    // arrow that swung sideways to whichever piece happened to have landed
+    // would be teaching a pickup instead of a direction.
+    if (ctx.seabedY == null) return null;
+    return { x: ctx.playerX ?? 0, y: ctx.seabedY };
   }
   return null;
 }

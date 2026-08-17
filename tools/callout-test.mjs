@@ -471,6 +471,9 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
     airTime: 0,
     nearSurface: false,
     chumInWater: false,
+    pickupInWater: false,
+    chumOnSeabed: false,
+    unkillableNear: false,
   };
   for (let t = 0; t < seconds; t += DT) {
     ctx.runTime = t;
@@ -511,6 +514,92 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
   check('air comes when the air runs out', order[2] === 'surface', order.join(' → '));
   check('breaching comes last', order[3] === 'breach', order.join(' → '));
   check('every step ran', new Set(order).size === 4, order.join(' → '));
+}
+
+{
+  // THE FOUR TIPS THE OCEAN TEACHES, in a run that puts each of their subjects
+  // in the water in turn. The controls are answered up front so the water half
+  // is what the rest of the run is about.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const seen = coachRun((ctx, t) => {
+    if (t > 3 && t < 3.05) noteTutorialEvent('strike');
+    // A kill: chum in the water, eaten a couple of seconds later.
+    ctx.chumInWater = t > 5;
+    if (t > 8 && t < 8.05) noteTutorialEvent('chum');
+    // An orb spawns, and is swum into.
+    ctx.pickupInWater = t > 12 && t < 20;
+    if (t > 16 && t < 16.05) noteTutorialEvent('pickup');
+    // Chum reaches the floor, and is cleared.
+    ctx.chumOnSeabed = t > 22 && t < 30;
+    // And a turtle drifts past.
+    ctx.unkillableNear = t > 33 && t < 36;
+  }, { seconds: 45 });
+  const order = seen.map((s) => s.id);
+  check('the orb tip comes after chum', order.indexOf('pickup') > order.indexOf('chum'),
+    order.join(' → '));
+  check('the seabed tip fires when chum lands', order.includes('crab'), order.join(' → '));
+  check('the unkillable tip fires when one swims past', order.includes('invincible'),
+    order.join(' → '));
+  check('all four water tips ran', ['chum', 'pickup', 'crab', 'invincible']
+    .every((id) => order.includes(id)), order.join(' → '));
+  check('...each exactly once', order.length === new Set(order).size, order.join(' → '));
+}
+
+{
+  // A TIP WITH NO ANSWER STILL ENDS, AND STILL COUNTS. `invincible` is the one
+  // step in the file whose `done` never returns true — there is nothing to do
+  // about a turtle — so the only thing that can take it off the band is its own
+  // `hold`. If that path ever stopped marking it done, the tip would come back
+  // every single run forever, and nothing else in this file would notice.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const ctx = { runTime: 10, device: 'kbm', charging: true, unkillableNear: true };
+  for (let t = 0; t < 20; t += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+  }
+  check('a tip with nothing to obey comes off the band on its own clock',
+    tutorialState.active !== 'invincible', `active: ${tutorialState.active}`);
+  check('...and is marked done, so it never returns', tutorialDone().has('invincible'));
+}
+
+{
+  // THE SEABED TIP IS OBEYED BY CLEARING THE FLOOR, which is the one water tip
+  // with a real action — and it must not be answered by the pile merely being
+  // there. A `done` that read the wrong way round would clear on the frame it
+  // appeared and read as a flicker.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  // The strike tip outranks this one and is ready on any run past the opening
+  // delay, so it is answered and waited out first — otherwise what this block
+  // measures is the control half of the coach, not the seabed tip.
+  const ctx = { runTime: 10, device: 'kbm', charging: true, chumOnSeabed: true };
+  while (!tutorialDone().has('strike')) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+  }
+  let sawIt = false;
+  for (let t = 0; t < 3; t += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+    if (tutorialState.active === 'crab') sawIt = true;
+  }
+  check('the seabed tip stays up while chum is still down there', sawIt && tutorialState.active === 'crab',
+    `active: ${tutorialState.active}`);
+  ctx.chumOnSeabed = false;
+  for (let t = 0; t < 3; t += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+  }
+  check('...and clears once the floor is', tutorialState.active !== 'crab' && tutorialDone().has('crab'),
+    `active: ${tutorialState.active}`);
 }
 // ---------------------------------------------------------------------------
 section('the words follow the device');
@@ -783,7 +872,12 @@ section('the words follow the device');
     ctx.aboveSurface = t >= 15 && t < 16;
     ctx.nearSurface = t >= 15;
     ctx.airTime = t > 20 ? 0.5 : 0;
-  }, { device: 'kbm' });
+    // The water half, each subject arriving and then being dealt with.
+    ctx.pickupInWater = t > 24 && t < 32;
+    if (t > 28 && t < 28.05) noteTutorialEvent('pickup');
+    ctx.chumOnSeabed = t > 32 && t < 40;
+    ctx.unkillableNear = t > 42;
+  }, { device: 'kbm', seconds: 55 });
   check('a keyboard player finishes without the two stick steps',
     tutorialComplete('kbm'), [...tutorialDone()].join(','));
   check('...and the same ledger is NOT finished on a phone',
@@ -891,20 +985,29 @@ section('the words follow the device');
       moving: false, aiming: false, charging: false,
       chumInWater: true, oxygenLow: !done.has('surface'),
       aboveSurface: false, airTime: 0, nearSurface: true,
+      // The water half. Like the air pair above, these follow the ledger: the
+      // seabed tip is READY on a floor with chum on it and DONE on one without,
+      // so a fixed value would either never offer it or never let it finish.
+      pickupInWater: true, chumOnSeabed: !done.has('crab'), unkillableNear: true,
     };
     updateCallouts(DT, {}, true);
     updateTutorial(DT, ctx, true);
     if (!tutorialState.active) continue;
     // Answer everything at once — whichever step is up, one of these is what it
-    // asked for — then hold until it has had its legible moment and gone.
+    // asked for — then hold until it has had its legible moment and gone. The
+    // unkillable tip is the exception and needs nothing here: it has no answer,
+    // and the inner loop below runs long enough for its own hold to end it,
+    // which is exactly how it ends in the game.
     noteTutorialEvent('strike');
     noteTutorialEvent('chum');
+    noteTutorialEvent('pickup');
     ctx.moving = true;
     ctx.aiming = true;
     ctx.charging = true;
     ctx.aboveSurface = true;
     ctx.oxygenLow = false;
     ctx.airTime = 1;
+    ctx.chumOnSeabed = false;
     for (let f = 0; f < 600 && tutorialState.active; f++) {
       updateCallouts(DT, {}, true);
       updateTutorial(DT, ctx, true);
@@ -1084,6 +1187,47 @@ section('drawing it, and where the arrow points');
     updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, nearestChum: () => null });
     check('the arrow goes when its target does', arrow.className.includes('sv-hidden'));
     check('...and the line explaining it stays', !band.className.includes('sv-hidden'));
+  }
+
+  // --- the power-up arrow reads its OWN target, not the chum one ---
+  // The failure this catches is a one-word slip in arrowTarget: with a hundred
+  // chum orbs in the water to one power-up, an arrow that fell through to
+  // nearestChum would look right in almost every screenshot and point at the
+  // wrong thing under a line about power-ups nearly every time it mattered.
+  resetCallouts();
+  clearCalloutUi();
+  pushCallout(CALLOUTS.get('pickup'));
+  updateCalloutUi(0.016, {
+    camera, playerX: 0, playerY: 0,
+    nearestChum: () => ({ x: -10, y: 0 }),
+    nearestPickup: () => ({ x: 10, y: 0 }),
+  });
+  {
+    const ax = at(arrow, 'left') + CONFIG.callouts.arrow.size / 2;
+    check('the power-up arrow points at the orb, not at the chum', ax > sealX + 40,
+      `x ${ax.toFixed(0)} vs seal ${sealX}`);
+  }
+  updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, nearestPickup: () => null });
+  check('...and goes when the orb expires mid-tip', arrow.className.includes('sv-hidden'));
+
+  // --- the seabed arrow means DOWN ---
+  resetCallouts();
+  clearCalloutUi();
+  pushCallout(CALLOUTS.get('crab'));
+  updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, seabedY: -10 });
+  {
+    // The mirror of the surface check above, and worth its own: the two are one
+    // line apart in arrowTarget, and a seabed arrow pointing at the sky is the
+    // exact bug that would survive every other check in this file.
+    const sealScreenY = window.innerHeight / 2;
+    const size = CONFIG.callouts.arrow.size;
+    const ax = at(arrow, 'left') + size / 2;
+    const ay = at(arrow, 'top') + size / 2;
+    check('the seabed arrow is drawn', !arrow.className.includes('sv-hidden'));
+    check('...below the seal, not above it', ay > sealScreenY + 20,
+      `arrow y ${ay.toFixed(0)} vs seal ${sealScreenY}`);
+    check('...and straight down, not off to one side', Math.abs(ax - sealX) < 6,
+      `arrow x ${ax.toFixed(0)} vs seal ${sealX}`);
   }
 
   // --- the line on the seal ---

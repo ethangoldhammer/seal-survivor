@@ -123,6 +123,12 @@ export const STAT_TEXT = {
   oysterLevel:        { label: 'oyster blaster', kind: 'level', unlock: 'bursting pearls' },
   octoGrabLevel:      { label: 'octopus grabber', kind: 'level', unlock: 'tentacles that reel fish in' },
   orcaLevel:          { label: 'orca family', kind: 'level', unlock: 'three orcas hunting the boats' },
+  // The card that raises this is a STUB — disabled in upgrades.csv, and no
+  // system reads the stat yet (see CONFIG.upgrades.dolphinPod). The label is
+  // here anyway because npm run test:text fails on a stat without one, which
+  // is the check working: the day the card is switched on, its `{effect}`
+  // has to render as English rather than as `dolphinPodLevel`.
+  dolphinPodLevel:    { label: 'dolphin pod', kind: 'level', unlock: 'a pod of dolphins working the surface' },
   musselVolleyLevel:  { label: 'mussel barrage', kind: 'level', unlock: 'a barrage on a full-charge strike' },
   clubLevel:          { label: 'club', kind: 'level', unlock: 'a club on each fin tip' },
   clubThrowLevel:     { label: 'thrown club', kind: 'level', unlock: 'hurled homing clubs on a strike' },

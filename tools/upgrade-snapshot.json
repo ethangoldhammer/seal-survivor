@@ -1420,6 +1420,29 @@
       }
     ]
   },
+  "dolphinPod": {
+    "cap": 6,
+    "perStack": [
+      {
+        "dolphinPodLevel": 101
+      },
+      {
+        "dolphinPodLevel": 102
+      },
+      {
+        "dolphinPodLevel": 103
+      },
+      {
+        "dolphinPodLevel": 104
+      },
+      {
+        "dolphinPodLevel": 105
+      },
+      {
+        "dolphinPodLevel": 106
+      }
+    ]
+  },
   "homingShot": {
     "cap": 5,
     "perStack": [

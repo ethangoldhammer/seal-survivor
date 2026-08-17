@@ -155,8 +155,13 @@ export function approachVector(self, toward, crowd, cfg) {
 
   // `inCrowd` is what keeps this to the tagged bodies. Without it, any hunter
   // outside the apex group would read as "never given a slot" and circle the
-  // stand-off ring forever without ever closing — the otter hunts with this
-  // same behavior and is not apex.
+  // stand-off ring forever without ever closing.
+  //
+  // It is now also the opt-OUT for the wildlife sharks, which set it false
+  // (CONFIG.cruiseHunt.standoffRing): a hunter whose pursuit turning circle is
+  // twice the ring cannot converge on the player anyway, so the ring only ever
+  // added a second circle to something already circling. They still steer
+  // around each other — crowdAvoid below is separate and unconditional.
   if (cfg?.enabled && self.inCrowd === true && self.feeding === false) {
     const ring = self.standoffDist ?? cfg.standoff ?? 7;
     // How wrong the current distance is, as a signed fraction of the ring.

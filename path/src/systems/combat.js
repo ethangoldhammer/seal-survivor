@@ -100,8 +100,11 @@ export function resolveCombat(dt, scene, hooks) {
       // A note from the harp. Also before the death check, and for a reason
       // that is not cosmetic here: a note that KILLS what it charmed has to
       // report the charm anyway or the sting and the corpse disagree about
-      // what just happened. `applyHarpCharm` refuses a boss and says so, which
-      // is what stops the event firing on a note that only did damage.
+      // what just happened. `applyHarpCharm` reports whether the note did
+      // anything at all — on a boss that is a DAZE rather than a charm, which
+      // is a real event and says so, and it is false only when even that was
+      // refused (a boss still inside its daze recovery), where the note was
+      // worth its damage and nothing more.
       if (b.charm && applyHarpCharm(e, b.charm)) {
         hooks.onCharmed?.(e, contact.x, contact.y);
       }

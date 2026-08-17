@@ -812,12 +812,54 @@ function renderGlobal() {
     'How every shake decays, and how often hit-stop is allowed to land at all.');
   slider(cam, 'max shake', { max: 1, get: () => fx.maxShake, set: (v) => { fx.maxShake = v; } });
   slider(cam, 'shake decay', { max: 0.005, step: 0.0001, dp: 4, get: () => fx.shakeDecay, set: (v) => { fx.shakeDecay = v; } });
+  // The master switch, above the two numbers it governs. Off, no event starts
+  // a stop at all — see CONFIG.fx.hitstopEnabled. The sliders stay live rather
+  // than greying out: what you want mid-A/B is to set the scale you're about
+  // to compare against while the freeze is still switched off.
+  const stopRow = document.createElement('div');
+  stopRow.className = 'sv-wb-f';
+  const stopLab = document.createElement('label');
+  stopLab.textContent = 'hit-stop';
+  stopLab.title = 'Every hit-stop in the game. Off, the events keep their shake, glow, sound and rumble — only the freeze goes.';
+  const stopBox = document.createElement('input');
+  stopBox.type = 'checkbox';
+  stopBox.autocomplete = 'off';
+  stopBox.checked = fx.hitstopEnabled !== false;
+  stopBox.addEventListener('change', () => {
+    fx.hitstopEnabled = stopBox.checked;
+    changed();
+    camNote.textContent = noteText();
+  });
+  stopRow.append(stopLab, stopBox);
+  cam.appendChild(stopRow);
   slider(cam, 'hitstop scale', { max: 1, get: () => fx.hitstopScale, set: (v) => { fx.hitstopScale = v; } });
   slider(cam, 'hitstop gap', { max: 2, step: 0.05, get: () => fx.hitstopCooldown, set: (v) => { fx.hitstopCooldown = v; } });
+  const noteText = () => (fx.hitstopEnabled === false
+    ? 'Hit-stop is OFF — these two are what it will come back at.'
+    : `The gap is why most events' hit-stop never lands: one every ${fx.hitstopCooldown}s, whoever asks first.`);
   const camNote = document.createElement('div');
   camNote.className = 'sv-wb-none';
-  camNote.textContent = `The gap is why most events' hit-stop never lands: one every ${fx.hitstopCooldown}s, whoever asks first.`;
+  camNote.textContent = noteText();
   cam.appendChild(camNote);
+
+  // One number over every sprite burst in the game. It lives here rather than
+  // on the per-event Burst cards because it is the only control that is about
+  // the SCREEN instead of about an event: the counts on those cards set how big
+  // each burst is relative to the others, and this sets how much of all of them
+  // there is. The goo is deliberately not on the same slider — see the note in
+  // CONFIG.fx.spriteDensity.
+  const par = card(cols, 'sv-wb-imp', 'Particle density',
+    'How many sprite particles every burst throws, as a multiplier on the counts authored per event. The goo is not scaled by it.');
+  slider(par, 'sprites', {
+    min: 0.1, max: 1.5, step: 0.05,
+    get: () => fx.spriteDensity ?? 1,
+    set: (v) => { fx.spriteDensity = v; },
+    title: 'Scales every emitter\'s count at once. 1 is the counts as authored; the floor of one particle per burst means nothing disappears entirely.',
+  });
+  const parNote = document.createElement('div');
+  parNote.className = 'sv-wb-none';
+  parNote.textContent = 'Applies on the next burst — bits already in the water live out their lives.';
+  par.appendChild(parNote);
 
   const h = CONFIG.haptics;
   const hap = card(cols, 'sv-wb-hap', 'Rumble mix',

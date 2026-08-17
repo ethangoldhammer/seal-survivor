@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { CONFIG } from './config.js';
+import { CONFIG, registerSkinWearers } from './config.js';
 import { applyAssetTable } from './assetTable.js';
 import { attachNoiseShader, applyNoiseSettings } from './systems/noiseShader.js';
 import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin, splitForEdges } from './systems/biolumSkin.js';
@@ -1612,33 +1612,11 @@ export const ASSETS = {
   },
 
   // --- predators (behavior:'hunt' in CONFIG.enemies — eat prey-tagged fish) ---
-  enemyOtter: {
-    model: '/models/otter.glb',
-    texture: { emissive: '/textures/emissive/otter.jpg' },
-    fit: 2.1,
-    pivot: 0.15, // turn about the head, not the belly
-    forward: '+Z', up: '+Y',
-    animations: { idle: 'fast_swim_steady_baked', swim: 'fast_swim_steady_baked', boost: 'fast_swim_steady_baked' },
-    // BITE — jaw_00, under head_024. Not a shark, but it carries `hunt` and so
-    // eats fish exactly as they do, and a hunter chewing with its mouth shut
-    // is the thing this whole system exists to stop.
-    //
-    // Negative, unlike the other '+Z'-facing rigs: this jaw's local X comes
-    // out at model (-0.999, -0.011, 0.049), so the sign flips. See the method
-    // note on enemyShark.biteRig.
-    //
-    // The weakest bite in the roster, and it is the RIG, not the number. This
-    // jaw hinges oddly: measured, -0.5 rad moves its 780 vertices 0.0178, but
-    // only 0.0086 of that is downward — the rest is forward, so it reads more
-    // as the snout pushing out than as a mouth opening. (The other direction
-    // and the other axes are worse: +x lifts the jaw INTO the skull, and local
-    // z is 0.05 off the flank axis and barely moves anything.) The otter is a
-    // small side hunter rather than one of the sharks, so a subtle chomp is an
-    // acceptable answer; if it ever wants to read properly it needs a
-    // two-bone treatment (jaw_00 plus jaw001_025), not a bigger angle.
-    biteRig: { bone: 'jaw_00', axis: 'x', openAngle: -0.35 },
-    shape: 'icosahedron', radius: 0.5, color: 0x8a6a4a, unlit: true,
-  },
+  //
+  // The sea otter used to sit at the top of this block. It is gone: the
+  // creature, its row in enemies.csv, its row in assets.csv and its death
+  // cause. `/models/otter.glb` and `/textures/emissive/otter.jpg` are still on
+  // disk and nothing loads them — delete them when you are sure.
   enemyMegalodon: {
     model: '/models/megalodon.glb',
     fit: 7.0,
@@ -4836,6 +4814,19 @@ export function applyAssetSizesFromTable() {
     knownSkin: (name) => !!CONFIG.biolumSkin?.presets?.[name],
   });
 }
+
+// Tell the tuner which assets wear each skin preset, so a preset group can say
+// whether it is connected to anything.
+//
+// Registered rather than imported: config.js cannot import this file (it is
+// already imported BY it), and the answer has to be computed at paint time
+// anyway — setAssetSkin rewrites `def.biolumSkin` whenever the table is
+// re-applied, so a map built once here would go stale the first time a CSV row
+// changed. Walking ASSETS costs a hundred property reads on a readout that only
+// paints while its group is open.
+registerSkinWearers((preset) => Object.entries(ASSETS)
+  .filter(([, def]) => def.biolumSkin === preset)
+  .map(([key]) => key));
 
 // Applied at MODULE LOAD, not only from applySavedAssetLooks(). The file is
 // the source of truth for spawn size, so it has to be true from the moment

@@ -336,12 +336,37 @@ section('WHAT THE WATER IS MADE OF — aggressive share of the population');
   console.log('  mid 2-6u   ' + LEVEL_AT.map((_, m) => `${(cls(m, 'mid') * 100).toFixed(0)}%`.padStart(6)).join(''));
   console.log('  big 6u+    ' + LEVEL_AT.map((_, m) => `${(cls(m, 'big') * 100).toFixed(0)}%`.padStart(6)).join(''));
 
+  // THE TWO FLOORS BELOW WERE 0.30 AND 0.10, and they came down with the
+  // roster rather than because they were failing. Read this before moving them
+  // again, in either direction.
+  //
+  // They were fitted to an ocean that had a DOLPHIN in it. The dolphin was
+  // apex-without-being-a-shark, so the tighter shark cap never saw it, and it
+  // held 7.5 of the 13.3 apex bodies alive at level 20 — more than the six
+  // sharks between them, and every one of them in the 6u+ class here. It was
+  // removed from the weighted pool outright (CONFIG.enemies.dolphin, weight 0
+  // and spawnRateMul 0), the shark cap went 6 to 5, and the two megalodon-class
+  // bodies were put under a `leviathan` cap of 2. That is a deliberate cut of
+  // roughly two thirds of the big bodies, asked for in those words, and the
+  // census moved with it: mid+big 33% -> 27%, big 13% -> 9%.
+  //
+  // So the floors are re-derived, not relaxed to make a red line go away — and
+  // they are still floors that can catch something. What they no longer do is
+  // assert the size of a roster that was changed on purpose.
+  //
+  // THE THING TO WATCH, because these numbers are where it will show up first:
+  // cutting predators does not hold the rest of the mix still, it hands their
+  // spawn budget to the schools. Small bodies went 66% -> 75% of the water
+  // across this same change. If a late run starts reading as a cloud of
+  // minnows, the lever is spawn.maxAlive or the school group sizes in
+  // behaviour.csv — NOT putting the big bodies back, which is the complaint
+  // this all came from.
   const bigLate = cls(11, 'big') + cls(11, 'mid');
   check('a late run is not just a bigger cloud of minnows',
-    bigLate >= 0.3, `${(bigLate * 100).toFixed(0)}% of the water is a mid or large body at level ${LEVEL_AT[11]}`);
+    bigLate >= 0.24, `${(bigLate * 100).toFixed(0)}% of the water is a mid or large body at level ${LEVEL_AT[11]}`);
 
   check('...and the biggest bodies are a standing presence, not a rarity',
-    cls(11, 'big') >= 0.1, `${(cls(11, 'big') * 100).toFixed(0)}% of the water is a 6-unit-plus body at level ${LEVEL_AT[11]}`);
+    cls(11, 'big') >= 0.075, `${(cls(11, 'big') * 100).toFixed(0)}% of the water is a 6-unit-plus body at level ${LEVEL_AT[11]}`);
 
   // The same both-ends guard the aggressive share gets. The schools are the
   // chum economy — see tools/xp-economy-test.mjs — and an arena of nothing but

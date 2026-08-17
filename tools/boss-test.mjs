@@ -125,22 +125,57 @@ check('every shark is also an apex', sharkKeys.every((k) => apexKeys.includes(k)
 check('"apex shark" parses as two groups',
   spawnGroupsOf(CONFIG.enemies.shark).length === 2,
   spawnGroupsOf(CONFIG.enemies.shark).join(' + '));
-// Written as a RELATIONSHIP rather than as `<= 2`, which is what it used to
-// say. The absolute number is a balance call and it has already moved once (2
-// to 6, when the size census in npm run test:ramp showed every large body in
-// the game pinned under 4% of the water); what must not move is the shape —
-// the shark ceiling has to exist, and it has to be tighter than the apex
-// allowance it sits inside, or the six shark species divide the whole apex
-// budget between them and a run fields a shiver the width of the screen.
+// Written as a RELATIONSHIP rather than as an absolute, which is what it used
+// to say. The numbers are a balance call and have moved twice; what must not
+// move is the shape — the shark ceiling has to exist and has to leave the apex
+// allowance room ON TOP of it, because a boss counts against both and a boss
+// that could not spawn because five sharks were already swimming would be a
+// bug whose only symptom is silence.
+//
+// It used to demand `shark <= apex / 2`, and that rule died with the roster it
+// described. `apex` held the dolphin then — a big body that was apex WITHOUT
+// being a shark — so half the allowance was genuinely other animals. The
+// dolphin is out of the pool now (weight 0, spawnRateMul 0), which leaves
+// `apex` as the sharks plus whatever boss is in the water, and a factor of two
+// between the two caps would mean half the apex budget permanently reserved
+// for nobody. `+ 1` is the honest version of what the gap is for.
 const sharkCap = CONFIG.spawn.groupMaxAlive?.shark ?? Infinity;
 const apexCap = CONFIG.spawn.groupMaxAlive?.apex ?? Infinity;
-check('the shark cap exists and is tighter than the apex allowance it sits inside',
-  Number.isFinite(sharkCap) && sharkCap <= apexCap / 2,
+check('the shark cap exists, and leaves the apex allowance room for a boss on top',
+  Number.isFinite(sharkCap) && sharkCap + 1 <= apexCap,
   `groupMaxAlive.shark = ${sharkCap} of apex ${apexCap}`);
-// The dolphin is apex but is NOT a shark; if it ever gets swept into the
-// tighter cap, the apex allowance quietly becomes 2 for everything.
+
+// THE THIRD RING. `leviathan` is inside `shark` the way `shark` is inside
+// `apex` (and it is NOT called `giant`, which is already a boss perk),
+// and it holds the two megalodon-class bodies — which each carry
+// maxConcurrent 2, so without it the pair could field four of the biggest
+// animals in the game at once, and they unlock together at minPlayerLevel 8.
+// Asserted as a relationship for the same reason as above: the number is a
+// balance call, the nesting is not.
+const levCap = CONFIG.spawn.groupMaxAlive?.leviathan ?? Infinity;
+const levKeys = Object.keys(CONFIG.enemies).filter((k) => inSpawnGroup(CONFIG.enemies[k], 'leviathan'));
+check('the leviathans have a ceiling of their own, tighter than the sharks',
+  Number.isFinite(levCap) && levCap < sharkCap,
+  `groupMaxAlive.leviathan = ${levCap} of shark ${sharkCap}`);
+check('...and every leviathan is a shark and an apex too, so all three bind',
+  levKeys.length > 0 && levKeys.every((k) => sharkKeys.includes(k)),
+  levKeys.join(', ') || 'nothing is tagged `leviathan` — the cap holds nothing');
+// Tighter than what either of them could field alone, or the ring is
+// decoration: two species at maxConcurrent 2 is four bodies without it.
+check('...and tighter than the two of them would manage unchecked',
+  levCap < levKeys.reduce((n, k) => n + (CONFIG.enemies[k].maxConcurrent ?? Infinity), 0),
+  levKeys.map((k) => `${k} ${CONFIG.enemies[k].maxConcurrent}`).join(' + '));
+
+// The dolphin is apex but is NOT a shark, and that distinction is the reason
+// it is out of the pool at all: it spent an allowance the tighter cap could
+// not see. The row is kept (it is the companion stub — see the note on
+// CONFIG.enemies.dolphin), so the tagging still has to be right in case it
+// ever comes back.
 check('the dolphin is apex but not a shark',
   inSpawnGroup(CONFIG.enemies.dolphin, 'apex') && !inSpawnGroup(CONFIG.enemies.dolphin, 'shark'));
+check('...and is out of the weighted pool, by both switches, not one',
+  (CONFIG.enemies.dolphin.weight ?? 0) === 0 && (CONFIG.enemies.dolphin.spawnRateMul ?? 1) === 0,
+  `weight ${CONFIG.enemies.dolphin.weight}, spawnRateMul ${CONFIG.enemies.dolphin.spawnRateMul}`);
 
 // THERE IS NO WILD ORCA. It used to be a full apex hunter held out of the pool
 // by weight 0, and this check used to verify that weight. Weight 0 is a

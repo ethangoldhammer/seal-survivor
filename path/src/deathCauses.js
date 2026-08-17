@@ -70,8 +70,11 @@ export const DEATH_CAUSES = [
   // own food; the puffer is solitary mid-tier traffic in the ray's tier, and
   // the ray gets its own cause for exactly the same reason.
   { id: 'puffer', label: 'a pufferfish', sources: ['puffer'] },
+  // Kept although the dolphin no longer spawns as wildlife (CONFIG.enemies
+  // .dolphin is weight 0 — see the note there): the body is still in the game
+  // as the companion stub, and a cause that exists costs nothing while a
+  // missing one is a death with no name.
   { id: 'dolphin', label: 'a dolphin', sources: ['dolphin'] },
-  { id: 'otter', label: 'an otter', sources: ['otter'] },
   { id: 'turtle', label: 'the turtle', sources: ['seaTurtle'] },
   { id: 'oyster', label: 'an oyster', sources: ['oyster'] },
   // The small fry. Being nibbled to death by the things you were supposed to

@@ -508,6 +508,61 @@ check('bubble emitters name a burst to leave behind',
   !!CONFIG.emitters.breathBubbles.surfacePop && !!CONFIG.emitters.wakeBubbles.surfacePop);
 
 // ===========================================================================
+// THE GLOBAL THINNING KNOB
+// ===========================================================================
+// CONFIG.fx.spriteDensity scales every SPRITE burst in the game and leaves the
+// goo emitters alone. Both halves of that need a test, and the second half is
+// the one that matters: the goo counts are single digits, so a multiplier that
+// leaked onto them would drop a lobe or two out of a mass and the isoline would
+// come apart — a look someone would read as a goo bug, not as a density
+// setting, and go tuning `radius` and `iso` to chase.
+//
+// Every emitter is fired, because this is a rule about ALL of them, and a new
+// emitter is exactly the thing that quietly gets it wrong.
+section('Sprite density: one knob over the sprites, none over the goo');
+
+const DENSITY = CONFIG.fx.spriteDensity ?? 1;
+const gooGroupKeys = Object.keys(CONFIG.fx.goo?.groups ?? {});
+// The same resolution emit() does: `goo: true` means the first group, and a
+// name that is not a group at all falls through to a sprite burst.
+const gooGroupOf = (def) => {
+  if (!def.goo || !CONFIG.fx.goo?.enabled) return null;
+  const want = def.goo === true ? gooGroupKeys[0] : def.goo;
+  return gooGroupKeys.includes(want) ? want : null;
+};
+
+const wrongCount = [];
+const thinned = [];
+let fullStrength = 0;
+for (const [name, def] of Object.entries(CONFIG.emitters)) {
+  resetParticles();
+  const got = burst(name, 0, -10).length;
+  const isGoo = gooGroupOf(def) !== null;
+  const want = Math.max(1, Math.round((def.count ?? 8) * (isGoo ? 1 : DENSITY)));
+  if (got !== want) wrongCount.push(`${name} ${got} != ${want}`);
+  if (isGoo) fullStrength++;
+  // The floor is what a one- or two-particle emitter hits, and it is meant to:
+  // an event that fires is an event you can see. Only the ones above it can be
+  // expected to have actually come down.
+  else if (want < (def.count ?? 8)) thinned.push(name);
+}
+
+check('every burst is its count times the knob', wrongCount.length === 0,
+  wrongCount.length ? wrongCount.slice(0, 4).join(', ') : `${Object.keys(CONFIG.emitters).length} emitters`);
+check('the goo emitters are at full strength', fullStrength > 0 && gooGroupKeys.length > 0,
+  `${fullStrength} goo emitters across ${gooGroupKeys.length} groups`);
+// If the knob is at 1 there is nothing to thin, and this says so rather than
+// failing — the invariant above is the real test, this is the reality check
+// that the setting is doing something.
+check(DENSITY < 1 ? 'and the sprites are thinner than authored' : 'the knob is at full (nothing thinned)',
+  DENSITY < 1 ? thinned.length > 0 : thinned.length === 0,
+  `spriteDensity ${DENSITY} — ${thinned.length} emitters below their authored count`);
+// A burst is allowed to be sparse and never allowed to vanish.
+check('and no emitter was thinned out of existence',
+  Object.keys(CONFIG.emitters).every((n) => { resetParticles(); return burst(n, 0, -10).length >= 1; }),
+  `${Object.keys(CONFIG.emitters).length} emitters still emit`);
+
+// ===========================================================================
 // UPLOADS: only the slots that changed
 // ===========================================================================
 //
@@ -564,10 +619,14 @@ check('and the range is the burst, not the buffer',
 resetParticles();
 const capacity = A.aStart.count;
 // Park the cursor a known distance from the end. emit() advances it by exactly
-// round(def.count * scale) per call, so the walk is arithmetic rather than a
-// search — and `scale` is how the count is set, since the emitter's own count
-// is a tuned number this test has no business depending on.
-const per = (n) => n / CONFIG.emitters.explosion.count;
+// round(def.count * scale * spriteDensity) per call, so the walk is arithmetic
+// rather than a search — and `scale` is how the count is set, since both the
+// emitter's own count and the global thinning multiplier are tuned numbers this
+// test has no business depending on. Divide by BOTH: dividing by the count
+// alone asks for a hundred particles and gets sixty, and the walk then parks
+// the cursor somewhere that never straddles the join — a green test for a
+// buffer wrap that was never exercised.
+const per = (n) => n / (CONFIG.emitters.explosion.count * (CONFIG.fx.spriteDensity ?? 1));
 const STRIDE = 100;
 for (let i = 0; i < Math.floor((capacity - 50) / STRIDE); i++) emit('explosion', 0, -4, { scale: per(STRIDE) });
 emit('explosion', 0, -4, { scale: per((capacity - 50) % STRIDE) }); // now exactly 50 from the end

@@ -8,7 +8,7 @@ import { pulseDemoFor, panDemoFor, resolvedGlow, describeGlow } from './systems/
 import { updateBeatSync } from './systems/beatSync.js';
 import { reseatDecor } from './systems/decor.js';
 import { createWorld } from './world.js';
-import { midWater, bounds } from './arena.js';
+import { midWater, bounds, seabedTopY } from './arena.js';
 import {
   initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput,
 } from './input.js';
@@ -17,11 +17,12 @@ import { projectileCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
 import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement, activeElement, elementColor } from './systems/elements.js';
+import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossState, capBossDamage } from './systems/boss.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, chumRadiusOf, pickups, chumChunks } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, anyPickupOrb, countFloorPickups, chumRadiusOf, pickups, chumChunks } from './entities/pickups.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
@@ -37,7 +38,7 @@ import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow } from './systems/club.js';
-import { fireMusselBarrage } from './systems/musselVolley.js';
+import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
@@ -66,7 +67,7 @@ import { startAmbient, stopAmbient, preloadAmbient } from './systems/ambient.js'
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls } from './systems/seagull.js';
-import { spawnWhale, updateWhales, resetWhales, resetWhaleClock, updateWhaleClock } from './systems/whale.js';
+import { spawnWhale, updateWhales, resetWhales, resetWhaleClock, updateWhaleClock, whaleDistance } from './systems/whale.js';
 import { updateBoats, resetBoats, boats, hitsBoat, damageBoat, jostleBoat, impactBoat } from './systems/boats.js';
 import { setWakeGrid } from './systems/boatWake.js';
 import { stepBodies } from './systems/rigidBody.js';
@@ -186,6 +187,9 @@ let aimIndicator = null;
 let dumboOcto = null;
 let harpGroup = null;
 let octoGrabber = null;
+// Reused by the daze drain below, so the one-entry-a-fight announcement costs
+// no allocation on the frames it fires and none at all on the ones it doesn't.
+const dazedThisFrame = [];
 
 const gameState = {
   running: false,
@@ -923,6 +927,10 @@ function startGame() {
   resetShrimpRing();
   resetClub();
   resetStrike();
+  // Shells the last run's final dash queued but never got to throw. Without
+  // this they arrive in the opening seconds of the new run, from a seal that
+  // has not struck yet.
+  resetMusselVolley();
   // The meter's display state, both halves. The springs would otherwise open
   // the new run mid-flight from wherever the last one ended, and the skin's
   // bucket cache would think it had already stamped a body that has since been
@@ -939,6 +947,9 @@ function startGame() {
   // last run's numbers.
   resetElements(world.scene);
   clearStatuses(enemies);
+  // ...and the boss-side half of the same thing: an announcement queued on the
+  // frame the run ended would otherwise go off over the new one.
+  resetControl();
   // Disarms both trigger zones and puts the sun and moon back to a cold glow —
   // a run that ended mid-flare would otherwise open on a flickering sky, and
   // the cooldown from the last run's pass would still be running down.
@@ -3465,6 +3476,11 @@ function animate(now) {
       // the eater's own motion so they stream off the food rather than puffing
       // out of it — a shark hoovering on the pass leaves a wake of scraps.
       feedback('chumHoover', { x, y, vx: -e.vx, vy: -e.vy, scale: 0.7 });
+    }, (x, y, e) => {
+      // THE CHOMP, and the only place it is fired: a set of jaws closing on the
+      // seal. Ambient feeding is `preyEaten` and is silent — see the note on
+      // CONFIG.feedback.bite.
+      feedback('bite', { x, y, vx: e.vx, vy: e.vy });
     });
 
     // THE PHYSICS FRAME. Everything that owns a body (the boats above, the sea
@@ -3540,7 +3556,13 @@ function animate(now) {
       // else. Counted as control alongside the beluga and the dumbo.
       onCharmed: (e, x, y) => {
         playtest.recordControl('harp');
-        feedback('harpCharm', { x, y, scale: 1.2 });
+        // The sting is the CHARM's, and a note that landed on a boss did not
+        // charm anything — it dazed it, and the daze has its own louder event
+        // fired from the drain below. Two of them on the same frame is the
+        // mud the whole one-event-per-moment rule exists to avoid. The control
+        // record above still goes to the harp either way: the note is what
+        // bought the moment, whichever shape it took.
+        if (e.charmTimer > 0) feedback('harpCharm', { x, y, scale: 1.2 });
       },
     });
     processPendingSplashes(); // safe now that resolveCombat's own loop has finished
@@ -3634,7 +3656,13 @@ function animate(now) {
     updateDumbo(dt, player.mesh.position, player.stats.dumboLevel, enemies, simClock, {
       onCharm: (e) => {
         playtest.recordControl('dumbo');
-        feedback('dumboCharm', { x: e.mesh.position.x, y: e.mesh.position.y, scale: 1.1 });
+        // Same split the harp's charm makes below: a pulse that landed on a
+        // boss dazed it rather than charming it, and the daze fires its own
+        // event from the drain further down. The pulse stays credited here
+        // either way.
+        if (e.charmTimer > 0) {
+          feedback('dumboCharm', { x: e.mesh.position.x, y: e.mesh.position.y, scale: 1.1 });
+        }
       },
     });
     updateHarp(dt, world.scene, player.mesh.position, player.stats.harpLevel, enemies, {
@@ -3764,6 +3792,21 @@ function animate(now) {
       onChum: (x, y) => spawnXpOrb(world.scene, { x, y, z: 0 }, CONFIG.bakalar.bomb.chumXp, 0.8),
     });
 
+    // EVERY STATUS THAT LANDED ON A BOSS THIS FRAME, announced in one place.
+    // Drained here, after every ability that can throw one has run, because the
+    // whole point of the daze is that it is ONE event whichever of the six
+    // threw it — a harp note, an octopus pulse and a saturating freeze all buy
+    // the same two seconds, and they must not each teach the player a different
+    // picture of it. The abilities themselves stay silent about it: none of
+    // them knows the conversion happened. See systems/control.js.
+    for (const e of consumeDazes(dazedThisFrame)) {
+      feedback('bossDaze', { x: e.mesh.position.x, y: e.mesh.position.y, scale: 1.3 });
+      // Its own callout rather than the ability's, for the same reason: the
+      // sentence the player needs is about the boss, not about which card did
+      // it.
+      world.grid.ripple(e.mesh.position.x, e.mesh.position.y, 4, e.radius * 3);
+    }
+
     // Strike system: chain-hit damage, charge recharge, and the orb timer.
     const { spawnOrb } = updateStrike(dt, world.scene, player.mesh.position, player.stats, enemies, {
       onEnemyDamaged: (e, dmg) => {
@@ -3822,6 +3865,12 @@ function animate(now) {
       },
     });
     if (spawnOrb) spawnStrikeOrb(world.scene, randomArenaPoint());
+
+    // The barrage's remaining shells, thrown a few frames apart from wherever
+    // the seal has got to. Immediately after updateStrike so the queue drains
+    // on the same clock the dash advances on — the whole point of the stagger
+    // is that the two are the same gesture.
+    updateMusselVolley(dt);
 
     // A dash goes THROUGH floating wreckage. Driven from here rather than from
     // inside updateStrike so the strike system keeps knowing only about
@@ -3922,8 +3971,10 @@ function animate(now) {
 
     // Sharks feed on fish whether or not the player is involved.
     resolvePredation(dt, world.scene, {
+      // Silent — see CONFIG.feedback.preyEaten. A shark eating a fish is
+      // something to look at, not something to hear over your own fight.
       onFishEaten: (fish, pred) => {
-        feedback('bite', { x: fish.mesh.position.x, y: fish.mesh.position.y, vx: pred.vx, vy: pred.vy });
+        feedback('preyEaten', { x: fish.mesh.position.x, y: fish.mesh.position.y, vx: pred.vx, vy: pred.vy });
       },
       // A hunter taking a body out of the water. The player gets nothing for
       // it — that was their meal and something else had it.
@@ -3933,6 +3984,10 @@ function animate(now) {
     updatePickups(
       dt, world.scene, player, collectChum,
       (x, y) => {
+        // The first-run "swim into a glowing orb" tip, answered here and in the
+        // two callbacks below it. All three, because the tip does not name a
+        // colour: whichever one they reached first is the one that proves it.
+        noteTutorialEvent('pickup');
         // The blue orb skips the wind-up entirely: a full meter, instantly.
         // If that fill lands inside a combo it reaches the chain the same way
         // chum does — through the meter, which is the only route orbs have.
@@ -3944,6 +3999,7 @@ function animate(now) {
         if (filled) chargeCrossed();
       },
       (x, y) => {
+        noteTutorialEvent('pickup');
         // ...AND IT FEEDS THE METER. Every orb in the water now pays into the
         // strike bar, not just the blue one: the meter is the game's second
         // currency and a pickup that ignored it read as a pickup for a
@@ -3965,6 +4021,7 @@ function animate(now) {
         feedback('bubblePop', { x, y, scale: 0.8 + 0.6 * need, sfxOpts: { pitch: 1.25 - 0.45 * need } });
       },
       (x, y) => {
+        noteTutorialEvent('pickup');
         rapidFireTimer = CONFIG.rapidFirePickup.duration;
         // Same top-up as the bubble — see the note there. Slightly bigger,
         // because this orb is rarer.
@@ -4046,8 +4103,10 @@ function animate(now) {
     // where the seal actually is rather than where it was when it died.
     setSfxListener(player.mesh.position.x, player.mesh.position.y);
     resolvePredation(dt, world.scene, {
+      // Silent — see CONFIG.feedback.preyEaten. A shark eating a fish is
+      // something to look at, not something to hear over your own fight.
       onFishEaten: (fish, pred) => {
-        feedback('bite', { x: fish.mesh.position.x, y: fish.mesh.position.y, vx: pred.vx, vy: pred.vy });
+        feedback('preyEaten', { x: fish.mesh.position.x, y: fish.mesh.position.y, vx: pred.vx, vy: pred.vy });
       },
       // A hunter taking a body out of the water. The player gets nothing for
       // it — that was their meal and something else had it.
@@ -4180,6 +4239,47 @@ function animate(now) {
     // whatever the arena has been resized to.
     nearSurface: (bounds.surfaceY - player.mesh.position.y) <= (CONFIG.tutorial?.nearSurface ?? 12),
     chumInWater: pickups.length > 0 || chumChunks.length > 0,
+
+    // THE LAST THREE ARE GETTERS, and that is the whole of why they cost
+    // nothing. Each one walks an array — up to 140 pickups, up to 220 creatures
+    // — and this object is built on every frame of every run for the rest of
+    // the game's life, where the questions are only ever asked on a first run:
+    // updateTutorial returns before touching the ctx once the set is finished,
+    // so a getter is simply never called after that. As plain fields they would
+    // be three array scans a frame, forever, to answer nobody.
+    //
+    // Written as getters rather than as functions because the STEPS should read
+    // like the ones above them — a step asks what is true, and whether the
+    // answer took a scan to find is this file's problem and not the coach's.
+
+    // Any of the three power-up orbs. Not chum: those are a different tip
+    // pointing at a different thing (see nearestPickup in entities/pickups.js).
+    get pickupInWater() { return anyPickupOrb(); },
+    // Chum that has reached the floor — the same count the crab spawner reads,
+    // and deliberately the same one: the tip is a warning about exactly the
+    // condition that summons a wave, so a second definition of "on the seabed"
+    // here would be a tip that fires when no crab is coming, or doesn't when
+    // one is.
+    get chumOnSeabed() { return countFloorPickups() > 0; },
+    // A turtle, or the whale, close enough to be looked at. The two live in
+    // completely different systems — one is an enemy with a flag, the other is
+    // its own thing that was never an enemy at all — and the player has no idea
+    // there is a difference, which is why one tip covers both.
+    get unkillableNear() {
+      const range = CONFIG.tutorial?.showRange ?? 22;
+      if (whaleDistance(player.mesh.position.x, player.mesh.position.y) <= range) return true;
+      const r2 = range * range;
+      for (const e of enemies) {
+        if (!e.invincible && !e.def?.invincible) continue;
+        const dx = e.mesh.position.x - player.mesh.position.x;
+        const dy = e.mesh.position.y - player.mesh.position.y;
+        // Its own body counts as reach, so a big shell is "near" from further
+        // out than a small one — the same reasoning whaleDistance uses.
+        const reach = range + (e.radius ?? 0);
+        if (dx * dx + dy * dy <= Math.max(r2, reach * reach)) return true;
+      }
+      return false;
+    },
   }, bandLive);
 
   updateCalloutUi(realDt, {
@@ -4192,7 +4292,14 @@ function animate(now) {
     // and as crabs carry pieces off, and an arrow still pointing at an orb that
     // has been eaten is worse than no arrow.
     nearestChum,
+    // Same deal, and the same reason it is the function and not a position.
+    nearestPickup,
     surfaceY: bounds.surfaceY,
+    // The top of the seabed rather than bounds.bottom: the floor plane hangs a
+    // skirt below that line to cover the death dive's camera overshoot, so
+    // bounds.bottom is under the sand and an arrow aimed there points past the
+    // place the tip is talking about.
+    seabedY: seabedTopY(),
     // Which wording a line with more than one is read in. Asked for here, at
     // the point of drawing, rather than latched at the start of the run: a pad
     // picked up mid-run should change the words on the very next frame.

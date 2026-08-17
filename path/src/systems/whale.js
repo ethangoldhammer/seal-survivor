@@ -62,6 +62,33 @@ export function whaleCount() {
   return whales.length;
 }
 
+/**
+ * How far the closest whale's body is from (x, y), or Infinity when there is
+ * none in the water.
+ *
+ * The distance and not a boolean, because the caller's threshold is not this
+ * file's business — the one asking today is the first-run coach, which wants
+ * "close enough that the player can SEE it" and owns that number in
+ * CONFIG.tutorial.
+ *
+ * Measured to the BODY, not to the container's origin. A bowhead is tens of
+ * units long and swims flat, so its centre can be most of a screen away while
+ * its flank fills the frame — a plain centre distance would report "nothing
+ * near you" about a whale the seal is currently swimming alongside. The two
+ * extents are different numbers for the same reason: `length` runs along the
+ * crossing (x) and `bodyRadius` across it (y), and using the smaller of them
+ * both ways is what would put the nose thirty units away.
+ */
+export function whaleDistance(x, y) {
+  let best = Infinity;
+  for (const w of whales) {
+    const dx = Math.max(0, Math.abs(w.container.position.x - x) - w.length * 0.5);
+    const dy = Math.max(0, Math.abs(w.container.position.y - y) - w.bodyRadius);
+    best = Math.min(best, Math.hypot(dx, dy));
+  }
+  return best;
+}
+
 // ---------------------------------------------------------------------------
 // THE CLOCK
 // ---------------------------------------------------------------------------

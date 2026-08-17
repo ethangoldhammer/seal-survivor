@@ -550,7 +550,7 @@
     "followLerp": 0.08,
     "punch": {
       "enabled": true,
-      "max": 0.14,
+      "max": 0.27,
       "decay": 7
     }
   },
@@ -558,7 +558,7 @@
     "enabled": true,
     "base": {
       "zoom": 1.24,
-      "zoomMax": 3.15,
+      "zoomMax": 3.55,
       "zoomStiffness": 26,
       "zoomDamping": 0.8,
       "stiffness": {
@@ -678,9 +678,9 @@
         "vignette": 0.6
       },
       "deathFloor": {
-        "blendIn": 0.8,
+        "blendIn": 1,
         "blendOut": 0.8,
-        "zoom": 1.48,
+        "zoom": 1.91,
         "stiffMul": 0.8,
         "zoomStiffMul": 0.8,
         "lookAheadMul": 0,
@@ -689,7 +689,7 @@
         "defocus": 0.9,
         "focusRadius": 0.22,
         "focusFeather": 0.3,
-        "flare": 0.46,
+        "flare": 0.7,
         "vignette": 0.86
       }
     },
@@ -1226,13 +1226,13 @@
   "playerOutline": {
     "enabled": true,
     "color": 543884,
-    "thickness": 0.11,
+    "thickness": 0.025,
     "glow": 2.8,
     "opacity": 0.9,
     "inner": {
       "enabled": true,
-      "color": 16777215,
-      "thickness": 0.175,
+      "color": 13750737,
+      "thickness": 0.08,
       "opacity": 1
     },
     "hit": {
@@ -1240,8 +1240,8 @@
       "color": 16722456,
       "time": 0.24,
       "minTime": 0.18,
-      "glowAdd": 5.9,
-      "thicknessAdd": 0.12
+      "glowAdd": 6.7,
+      "thicknessAdd": 0.185
     }
   },
   "creatureOutline": {
@@ -2283,13 +2283,13 @@
       "returnTime": 0.4,
       "cam": {
         "enabled": true,
-        "zoom": 2.2,
+        "zoom": 2.05,
         "weight": 0.9,
         "frameBoth": true,
         "subjectBias": 0.42,
         "framePad": 1.8,
         "minZoom": 1,
-        "pushTime": 0.3,
+        "pushTime": 0.45,
         "frameTime": 0.18,
         "releaseTime": 0.55
       },
@@ -3416,7 +3416,7 @@
     "wakeSpeedGain": 0.02,
     "touchGlow": {
       "enabled": true,
-      "radius": 6,
+      "radius": 4.5,
       "gain": 1.2,
       "alpha": 0.5,
       "push": 0.5,
@@ -3431,7 +3431,7 @@
         "liftScale": 0.55
       },
       "charge": {
-        "grow": 0.8,
+        "grow": 0.6,
         "power": 0.6,
         "pulseAt": 0.46,
         "pulseAtFull": 0.13,
@@ -3753,7 +3753,7 @@
       "turbulence": 0.55
     },
     "breachFoam": {
-      "count": 16,
+      "count": 22,
       "speed": [
         3,
         11
@@ -4528,7 +4528,7 @@
       "turbulence": 1.4
     },
     "bossHitGoo": {
-      "count": 4,
+      "count": 9,
       "speed": [
         4,
         11
@@ -6477,15 +6477,15 @@
     },
     "goo": {
       "enabled": true,
-      "divisor": 2,
+      "divisor": 3,
       "radius": 3.4,
       "iso": 0.9,
       "soft": 0.22,
       "opacity": 1,
       "additive": false,
-      "rim": 0.75,
+      "rim": 1.05,
       "rimWidth": 0.7,
-      "spec": 0.55,
+      "spec": 1.2,
       "specPower": 16,
       "normal": 6,
       "lightX": -0.5,
@@ -6504,7 +6504,7 @@
           "normal": 1.5
         },
         "hit": {
-          "radius": 3.2,
+          "radius": 5.8,
           "iso": 0.3,
           "soft": 0.2,
           "opacity": 0.85,
@@ -6526,8 +6526,8 @@
           "normal": 2
         },
         "foam": {
-          "radius": 3,
-          "iso": 0.55,
+          "radius": 4.4,
+          "iso": 0.85,
           "soft": 0.45,
           "opacity": 0.85,
           "additive": true,
@@ -6546,6 +6546,7 @@
     },
     "shakeDecay": 0.0004,
     "maxShake": 0.15,
+    "hitstopEnabled": false,
     "hitstopScale": 0.15,
     "hitstopCooldown": 0.4,
     "hitFlash": 0.12,
@@ -8633,17 +8634,17 @@
         "tailBias": 0
       },
       "squidGlow": {
-        "pattern": "spots",
-        "scale": 0.34,
-        "coverage": 0.22,
+        "pattern": "speckle",
+        "scale": 0.81,
+        "coverage": 0.63,
         "contrast": 3.4,
-        "strength": 0.9,
-        "tailBias": -0.25,
+        "strength": 3.35,
+        "tailBias": 0.15,
         "flow": 0,
         "pulseAmp": 0.55,
         "pulseSpeed": 1.2,
-        "flickerAmp": 0.12,
-        "flickerSync": "1/4",
+        "flickerAmp": 0.49,
+        "flickerSync": "1 bar",
         "flickerRate": 2,
         "phaseSteps": 0,
         "schoolAmp": 0,
@@ -8652,8 +8653,9 @@
         "colorC": 14221302,
         "hueSpread": 0.55,
         "shellColor": 5917294,
-        "shellGlow": 0.16,
-        "bodyDarken": 0.42
+        "shellGlow": 0.43,
+        "bodyDarken": 0.2,
+        "flowSync": "2 bars"
       },
       "hide": {
         "luminous": false,
@@ -8802,7 +8804,8 @@
     "woundColor": 8384720,
     "woundGlow": 1.8,
     "woundOpacity": 0.9,
-    "woundLift": 0.12
+    "woundLift": 0.12,
+    "goo": true
   },
   "apexCrowd": {
     "incumbentBonus": 2.5
@@ -9387,7 +9390,8 @@
     "openDelay": 2.5,
     "minShow": 1.6,
     "nearSurface": 12,
-    "breachAir": 0.3
+    "breachAir": 0.3,
+    "showRange": 22
   },
   "facing": {
     "time": 0.4,
@@ -9991,7 +9995,7 @@
   "emissivePulse": {
     "enabled": true,
     "moneyRoll1": {
-      "pulseSync": "1/4",
+      "pulseSync": "1 bar",
       "pulseRate": 2,
       "min": 0.35,
       "max": 1.75,
@@ -10008,7 +10012,7 @@
     }
   },
   "render": {
-    "pixelRatio": 0.65
+    "pixelRatio": 1.5
   },
   "bloom": {
     "enabled": true,
@@ -10311,5 +10315,5 @@
     "overlayOpacity": 0.32,
     "overlayColor": 0
   },
-  "_savedAt": 1786922401067
+  "_savedAt": 1786932275658
 }

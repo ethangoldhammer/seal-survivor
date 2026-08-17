@@ -868,6 +868,46 @@ export function nearestChum(x, y, maxDist = Infinity) {
   return best;
 }
 
+/**
+ * The nearest POWER-UP orb — blue, bubble or rapid-fire — as a plain { x, y }
+ * or null. The other half of the arrow, and deliberately a separate question
+ * from nearestChum above rather than a flag on it.
+ *
+ * The two are different KINDS of thing and the tips that point at them say
+ * different sentences: chum is the loop (it is everywhere, you eat it
+ * constantly, and the tip is about the meter it fills), where a power-up is a
+ * one-off worth crossing water for. An arrow that could answer with either
+ * would send a player after a chum orb under a line about power-ups perhaps
+ * nine times in ten, since chum outnumbers these by roughly a hundred to one.
+ *
+ * No per-type bias: all three are worth the same detour, which is not true of
+ * a chunk against an orb, and inventing a ranking here would be a balance
+ * decision made in a targeting helper.
+ *
+ * A copy, for the same reason nearestChum returns one.
+ */
+export function nearestPickup(x, y, maxDist = Infinity) {
+  let best = null;
+  let bestD2 = maxDist * maxDist;
+  for (const list of [strikeOrbs, bubbleOrbs, rapidFireOrbs]) {
+    for (const o of list) {
+      const dx = o.mesh.position.x - x;
+      const dy = o.mesh.position.y - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = { x: o.mesh.position.x, y: o.mesh.position.y };
+      }
+    }
+  }
+  return best;
+}
+
+/** Is there a power-up orb in the water at all? The first-run tip's cue. */
+export function anyPickupOrb() {
+  return strikeOrbs.length > 0 || bubbleOrbs.length > 0 || rapidFireOrbs.length > 0;
+}
+
 // Still in play? A crab holds a reference across frames, and the player may
 // have collected it (or the maxAlive recycler dropped it) in between.
 export function pickupAlive(p) {

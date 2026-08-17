@@ -5,7 +5,7 @@ import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { orbitTarget, springFollow } from './orbit.js';
 import { aoe, applyCompanionScale } from './scaling.js';
-import { canHold } from './control.js';
+import { canControl, charmEnemy } from './control.js';
 
 // Dumbo Octopus — a companion that swims alongside the seal and charms
 // enemies. A charmed creature is PACIFIED and nothing more: it stops chasing,
@@ -20,6 +20,12 @@ import { canHold } from './control.js';
 // Charm uses `e.charmTimer`, kept separate from the beluga's `e.trapTimer` so
 // the two can overlap without cutting each other short. The "harmless" half is
 // enforced in combat.js, which skips contact damage for either timer.
+//
+// AGAINST A BOSS the pulse lands as a DAZE — a couple of seconds of heavy slow
+// with the heading weaving, its next tell cancelled, and its contact damage
+// still on. It is not a charm and never becomes one: a boss fighting for you is
+// the fight being over. The conversion is charmEnemy's, not this file's, so the
+// octopus does not know it is happening — see systems/control.js.
 
 // Two nested objects, the mandatory convention for anything that swims —
 // see the long note in systems/beluga.js for why these can't share an object:
@@ -116,11 +122,15 @@ export function updateDumbo(dt, playerPos, level, enemiesList, clock, hooks = {}
   const candidates = [];
   for (const e of enemiesList) {
     if (e.charmTimer > 0) continue;
-    // A boss is not charmed. Out of the candidate list rather than refused
-    // after the sort, so a pulse with `targets: 2` still pacifies two fish
-    // instead of spending one of them on the one creature it cannot touch.
-    // See systems/control.js.
-    if (!canHold(e)) continue;
+    // A boss is still never CHARMED — it takes the daze instead (see
+    // systems/control.js), which is why this asks canControl rather than
+    // canHold. The distinction earns its keep during the recovery window: a
+    // boss that has just shaken one off drops out of the candidate list
+    // entirely, so the pulse pacifies the fish beside it instead of being
+    // spent on a creature that cannot take anything right now. Out of the list
+    // rather than refused after the sort, so a pulse with `targets: 2` always
+    // spends both on something.
+    if (!canControl(e)) continue;
     const dx = e.mesh.position.x - octo.position.x;
     const dy = e.mesh.position.y - octo.position.y;
     const d2 = dx * dx + dy * dy;
@@ -132,7 +142,9 @@ export function updateDumbo(dt, playerPos, level, enemiesList, clock, hooks = {}
   candidates.sort((a, b) => a.d2 - b.d2);
   for (let i = 0; i < Math.min(s.targets, candidates.length); i++) {
     const e = candidates[i].e;
-    e.charmTimer = s.duration;
-    hooks.onCharm?.(e);
+    // Through charmEnemy rather than writing the field, which is what buys the
+    // boss's daze conversion for free — and the latch, so a pulse landing on a
+    // fish another source already charmed can only ever lengthen it.
+    if (charmEnemy(e, s.duration)) hooks.onCharm?.(e);
   }
 }

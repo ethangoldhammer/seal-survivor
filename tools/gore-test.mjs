@@ -275,9 +275,17 @@ section('The red is the effect; the solids are the garnish');
   check('a meal throws a lot of red', full > 100, `${full} particles`);
   // The three layers are separately tunable and separately switchable, which is
   // the only reason they are three emitters rather than one.
-  const declared = Math.round(CONFIG.emitters.gore.count * CONFIG.gore.spray)
-    + Math.round(CONFIG.emitters.goreMist.count * CONFIG.gore.mist)
-    + Math.round(CONFIG.emitters.goreCloud.count * CONFIG.gore.cloud);
+  // What one layer is worth: its authored count, the gore system's own scale
+  // for that layer, and — for the two SPRITE layers — the global thinning knob
+  // on top. `goreCloud` is the goo layer and is not scaled by it, which is
+  // exactly the asymmetry this sum has to carry or the check reads as a gore
+  // bug the next time the knob moves.
+  const layer = (name, scale) => Math.round(
+    CONFIG.emitters[name].count * scale * (CONFIG.emitters[name].goo ? 1 : (CONFIG.fx.spriteDensity ?? 1)),
+  );
+  const declared = layer('gore', CONFIG.gore.spray)
+    + layer('goreMist', CONFIG.gore.mist)
+    + layer('goreCloud', CONFIG.gore.cloud);
   check('all three layers fired', full === declared, `${full} vs ${declared} declared`);
 
   const savedPieces = P().enabled;

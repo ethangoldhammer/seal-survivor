@@ -86,7 +86,6 @@ const EDITABLE_SECTIONS = [
     ['enemyOrcaBull', 'Orca boss — bull'],
     ['enemyOrcaCow', 'Orca boss — cow'],
     ['enemyBarracuda', 'Barracuda'],
-    ['enemyOtter', 'Otter'],
     ['enemyDolphin', 'Dolphin'],
   ]],
   ['Fish & schools', [

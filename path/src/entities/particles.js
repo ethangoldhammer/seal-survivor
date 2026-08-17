@@ -506,7 +506,6 @@ export function emit(name, x, y, opts = {}) {
   const def = CONFIG.emitters[name];
   if (!def || !geometry) return;
 
-  const count = Math.max(1, Math.round((def.count ?? 8) * (opts.scale ?? 1)));
   const speedMul = Math.max(0, opts.speedMul ?? 1);
   const colors = def.colors ?? [0xffffff];
   const cone = def.cone ?? 0;
@@ -540,6 +539,18 @@ export function emit(name, x, y, opts = {}) {
   if (wantsGroup && gooGroup === 0) {
     console.warn(`[particles] emitter "${name}" wants goo group "${def.goo}", which is not in CONFIG.fx.goo.groups`);
   }
+
+  // One thinning knob over every SPRITE burst in the game — see
+  // CONFIG.fx.spriteDensity. Deliberately not applied to the goo emitters:
+  // their counts are already tiny and each particle there is a whole lobe of a
+  // body, so dropping even two of them opens a hole in the isoline rather than
+  // making the mass sparser. Keyed on the resolved group, not on `def.goo`, so
+  // an emitter that named a group which does not exist — and is therefore
+  // drawing as sprites — is thinned along with the rest of them.
+  const density = gooGroup > 0 ? 1 : Math.max(0, CONFIG.fx?.spriteDensity ?? 1);
+  // Still at least one particle: an event that fires is an event you can see.
+  // Thinning is allowed to make a burst sparse, never to delete it silently.
+  const count = Math.max(1, Math.round((def.count ?? 8) * (opts.scale ?? 1) * density));
 
   const color = new THREE.Color();
 

@@ -31,6 +31,7 @@ import { attachHitShape, releaseHitShape } from '../systems/hitShape.js';
 import { createJawDriver } from '../systems/jaw.js';
 import { createClawDriver, pinchReach } from '../systems/crabClaw.js';
 import { rollBiolumSkinVariant } from '../systems/biolumSkin.js';
+import { tickDaze, dazeSpeedMul, dazeVeer } from '../systems/control.js';
 import { player } from './player.js';
 
 export const enemies = [];
@@ -436,7 +437,11 @@ function clampVertical(pos, radius) {
 }
 
 // Blend toward a desired velocity instead of snapping to it.
-function steerTo(e, dx, dy, dt, responsiveness = 6, speedMul = 1) {
+//
+// `turnLimit` is an optional ceiling BELOW the creature's own turnRate, for a
+// caller that wants a gentler correction than the body is capable of — see the
+// cruise-hunt block below. Null means "spend whatever you have".
+function steerTo(e, dx, dy, dt, responsiveness = 6, speedMul = 1, turnLimit = null) {
   const len = Math.hypot(dx, dy);
   if (len < 1e-6) return;
   const tvx = (dx / len) * e.speed * speedMul;
@@ -445,7 +450,11 @@ function steerTo(e, dx, dy, dt, responsiveness = 6, speedMul = 1) {
   // e.turnRate is the per-instance value baked at spawn (the species' own
   // turnRate times whatever CONFIG.hunterRamp has added by then); e.def is the
   // fallback for creatures spawned before that field existed.
-  const turnRate = e.turnRate ?? e.def.turnRate;
+  let turnRate = e.turnRate ?? e.def.turnRate;
+  // A budget INSIDE turnRate, never a way around it: a creature with no turn
+  // limit of its own keeps the velocity-lerp branch below, because giving it
+  // one here would silently change how every non-shark steers.
+  if (turnRate && turnLimit != null) turnRate = Math.min(turnRate, turnLimit);
   if (turnRate) {
     // Turn-limited: arc toward the target rather than pivoting on the spot.
     const want = Math.atan2(tvy, tvx);
@@ -522,8 +531,9 @@ function setLookTarget(e, x, y) {
 
 // ---------------------------------------------------------------------------
 // SHARK CRUISE — see CONFIG.enemies.<key>.hunt.lateral, and `null` there (or a
-// missing block) opts a creature out entirely, which is how the dolphin, orca
-// and otter keep the free movement their behaviour is built on.
+// missing block) opts a creature out entirely, which is how the dolphin keeps
+// the free movement its behaviour is built on. It is also the flag CONFIG
+// .cruiseHunt reads to decide who is a cruise hunter — see trackTurn.
 //
 // A hunter used to steer straight at whatever it wanted, in whatever direction
 // that happened to be. On a side-on camera that reads badly: `steerTo` drives
@@ -671,6 +681,135 @@ function weaveLook(e, x, y, cfg) {
   return { x: x + -Math.sin(h) * amp * s, y: y + Math.cos(h) * amp * s };
 }
 
+/**
+ * THE IDLE CRUISE: swim on, weave, and pick a new shallow heading now and then.
+ *
+ * Its own function rather than the tail of `hunt` because it is now reached
+ * two ways. A hunter with nothing in mind falls in here as it always did — and
+ * so does a CRUISE HUNTER that wants something outside its cone (see
+ * trackTurn), which is the whole trick: instead of pivoting after a fish that
+ * has slipped past its flank, the shark holds its line, keeps its weave, and
+ * comes back round on its own arc.
+ *
+ * The wander angle used to be uniformly random, and that was the single
+ * biggest source of vertical wandering in the game: a shark was as likely to
+ * head straight up as along the reef, and steerTo drives at full speed along
+ * the heading, so "up" meant a body-length a second of climb for no reason.
+ * `wanderPitch` keeps the choice and confines it to a shallow cone either side
+ * of horizontal.
+ *
+ * @param opts.look false leaves the look target alone, so a shark cruising past
+ *                  something it decided not to turn for is still watching it —
+ *                  the head-look and the jaw are unchanged by any of this.
+ * @param opts.swim false skips updateSwim, for a caller that has already ticked
+ *                  the climb gain against a real target this frame. Ticking it
+ *                  twice would hand the second call `null` and drag the gain
+ *                  back to the floor while the shark is still engaged.
+ *
+ * `speedMul` DEFAULTS TO 1 and the idle caller leaves it there on purpose. It
+ * is the lunge burst (CONFIG.bite.lunge), and the idle cruise has never carried
+ * it — a shark with nothing in mind is not mid-bite, whatever its lunge timer
+ * still says. Passing it here by accident during the extraction moved the
+ * megalodon's approach shape enough to fail tools/shark-swim-test.mjs about
+ * one run in three, which is what that flake was. The fall-through callers DO
+ * pass it: they are inside a pursuit branch that always applied it.
+ */
+function cruiseOn(e, dt, h, lat, speedMul = 1, opts = {}) {
+  const px = e.mesh.position.x;
+  const py = e.mesh.position.y;
+
+  e.wanderTimer -= dt;
+  if (e.wanderTimer <= 0) {
+    e.wanderTimer = h.wanderChange ?? 2;
+    if (lat) {
+      const pitch = lat.wanderPitch ?? 0.22;
+      const side = Math.random() < 0.5 ? 0 : Math.PI;
+      e.wanderAngle = side + (Math.random() * 2 - 1) * pitch;
+    } else {
+      e.wanderAngle = Math.random() * Math.PI * 2;
+    }
+  }
+
+  if (opts.swim !== false) updateSwim(e, dt, null, lat);
+
+  if (opts.look !== false) {
+    if (lat) {
+      // A cruising shark still LOOKS somewhere: down its own path, swinging
+      // slowly to each side. That look point is the whole of the idle weave —
+      // headLook aims the snout at it and the spring chain trails the body
+      // after it, so an unengaged shark reads as swimming rather than as being
+      // towed. Cleared only when it has opted out of this block.
+      const ahead = lat.weaveLead ?? 6;
+      const look = weaveLook(
+        e,
+        px + Math.cos(e.wanderAngle) * ahead,
+        py + Math.sin(e.wanderAngle) * ahead,
+        lat,
+      );
+      setLookTarget(e, look.x, look.y);
+    } else {
+      e.lookTarget = null;
+    }
+  }
+
+  const go = shapeSwim(e, Math.cos(e.wanderAngle), Math.sin(e.wanderAngle), lat);
+  steerTo(e, go.x, go.y, dt, 6, speedMul);
+}
+
+// ---------------------------------------------------------------------------
+// CRUISE HUNT — a shark does not chase. See CONFIG.cruiseHunt for the whole
+// argument; this is the mechanism.
+//
+// Two functions. `cruiseHunter` decides whether a creature is one of these at
+// all, and `trackTurn` answers the only question the behaviour asks per frame:
+// how much of my turning is this thing worth right now?
+// ---------------------------------------------------------------------------
+
+// The wildlife sharks. They opt in by declaring `hunt.lateral` — the same
+// block that gates the rest of the cruise shaping, and the same set — and a
+// boss opts back out with `lateral.cruise: false`, because a boss that made
+// lazy passes would be a fight you could ignore.
+//
+// The DECLARATION is what decides, not `e.isBoss`, which is a live flag set
+// after spawn by systems/boss.js and cleared again in windows where a boss
+// body is still in the water (see the note on isBossDef there). isBoss is kept
+// as the second half of the test anyway: it is the net under a new boss whose
+// author forgot the flag, and the two can only disagree in those windows,
+// where the answer does not matter. Asking boss.js directly is not an option —
+// it imports this module.
+function cruiseHunter(e) {
+  const lat = e.def.hunt?.lateral;
+  return CONFIG.cruiseHunt?.enabled === true
+    && lat != null
+    && lat.cruise !== false
+    && e.isBoss !== true;
+}
+
+/**
+ * The turn rate this hunter may spend steering at (dx, dy) this frame.
+ *
+ *   null  no limit — not a cruise hunter, steer as hunters always did.
+ *   >0    turn, but only this fast.
+ *   0     don't turn for it at all: it is outside the forward cone, so the
+ *         caller should keep cruising and come back round on its own arc.
+ *
+ * `player` picks the looser of the two budgets — see CONFIG.cruiseHunt for why
+ * the seal is worth more of a shark's attention than a minnow is.
+ */
+function trackTurn(e, dx, dy, player = false) {
+  if (!cruiseHunter(e)) return null;
+  const cfg = CONFIG.cruiseHunt;
+  const rate = (player ? cfg.playerTrackRate : cfg.trackRate) ?? 0.5;
+  const cone = (player ? cfg.playerTrackCone : cfg.trackCone) ?? 1.15;
+  // Measured off `heading`, which is the field the turn-limited branch of
+  // steerTo actually integrates — reading it off the velocity instead would
+  // disagree with it by a frame mid-lunge and make the cone flicker.
+  let diff = Math.atan2(dy, dx) - (e.heading ?? 0);
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return Math.abs(diff) > cone ? 0 : rate;
+}
+
 // apexCrowd works on plain { x, y, radius } so it can be tested without a
 // scene. Each creature OWNS its view (`e.crowdView`) rather than the adapter
 // handing out one shared object: the view is what goes into the crowd list, so
@@ -682,11 +821,26 @@ function crowdSelf(e) {
   if (!v) {
     v = e.crowdView = {
       x: 0, y: 0, radius: 1, feeding: false, orbitDir: 1, standoffDist: null, feedTimer: 0, e,
-      // Only the tagged bodies queue for a feeding slot. Everything else that
-      // hunts (the otter) still steers around them, but closes as it always did.
-      inCrowd: inSpawnGroup(e.def, 'apex'),
     };
   }
+  // Only the tagged bodies queue for a feeding slot. Everything else that
+  // hunts still steers around them, but closes as it always did — and so does
+  // a cruise hunter, which opts out of the ring on purpose (CONFIG.cruiseHunt
+  // .standoffRing): its correction is already too small to converge on a
+  // point, so the ring only ever added a second circle to something already
+  // circling. The crowd AVOIDANCE, which is what actually keeps bodies apart,
+  // is a separate term and is unaffected either way.
+  //
+  // Recomputed every frame rather than baked into the view above, for the same
+  // reason spawnGroupsOf refuses to cache: both inputs are LIVE. `spawnGroup`
+  // is rewritten in place whenever enemies.csv is re-applied, and the cruise
+  // gate reads a CONFIG block with sliders on it — a value cached at spawn
+  // would leave every creature already in the water answering for the previous
+  // file, which is the worst possible behaviour for a knob you tune by feel
+  // while the game is running. Two property reads and a string compare with a
+  // fast path, for at most `groupMaxAlive.apex` bodies.
+  v.inCrowd = inSpawnGroup(e.def, 'apex')
+    && !(cruiseHunter(e) && CONFIG.cruiseHunt?.standoffRing === false);
   v.x = e.mesh.position.x;
   v.y = e.mesh.position.y;
   v.radius = e.radius;
@@ -1017,7 +1171,12 @@ const BEHAVIORS = {
       const avoid = crowdAvoid(crowdSelf(e), ctx.apex, CONFIG.apexCrowd);
       updateSwim(e, dt, d, lat);
       setLookTarget(e, at.x, at.y);
-      steerTo(e, dx / d + avoid.x, dy / d + avoid.y, dt, 6, speedMul);
+      // A body in the water rates the PLAYER budget, not a minnow's: it is the
+      // one thing in the game a hunter is supposed to abandon everything for,
+      // and it only exists for a few seconds after a boat goes down.
+      const turn = trackTurn(e, dx, dy, true);
+      if (turn === 0) cruiseOn(e, dt, h, lat, speedMul, { look: false, swim: false });
+      else steerTo(e, dx / d + avoid.x, dy / d + avoid.y, dt, 6, speedMul, turn);
       return;
     }
     e.humanTarget = null;
@@ -1056,12 +1215,25 @@ const BEHAVIORS = {
       const avoid = crowdAvoid(crowdSelf(e), ctx.apex, CONFIG.apexCrowd);
       updateSwim(e, dt, pd, lat);
       setLookTarget(e, target.mesh.position.x, target.mesh.position.y);
-      steerTo(
-        e,
-        (target.mesh.position.x - px) / pd + avoid.x,
-        (target.mesh.position.y - py) / pd + avoid.y,
-        dt, 6, speedMul,
-      );
+      // THE BRANCH THE SPINNING CAME OUT OF. A shark is in here almost
+      // permanently — preyRadius is 18-24 units and most of the water is
+      // school fish — and the nearest fish changes every few frames as a
+      // school scatters, so at full turnRate this was a body with a 2.5-unit
+      // turning circle whipping between targets. `trackTurn` makes it a small
+      // correction, and a fish already past its flank gets none at all: the
+      // shark cruises on, still watching it, and eats whatever it happens to
+      // swim through (resolvePredation is on INTERSECTION, not on target).
+      const turn = trackTurn(e, target.mesh.position.x - px, target.mesh.position.y - py);
+      if (turn === 0) {
+        cruiseOn(e, dt, h, lat, speedMul, { look: false, swim: false });
+      } else {
+        steerTo(
+          e,
+          (target.mesh.position.x - px) / pd + avoid.x,
+          (target.mesh.position.y - py) / pd + avoid.y,
+          dt, 6, speedMul, turn,
+        );
+      }
       return;
     }
 
@@ -1094,6 +1266,15 @@ const BEHAVIORS = {
           e.chumTarget = null;
           e.eating = false;
           e.scavengeCooldown = sc.cooldown ?? 4;
+          // AND THE CLOCK GOES BACK TO ZERO. It reads "how long have I been
+          // after THIS orb", and there is no longer a this orb — leaving it
+          // pinned at maxChase through the whole `cooldown` is stale state
+          // that outlives what it describes. It is also read from outside:
+          // tools/crab-crowd-test.mjs counts a give-up by watching this cross
+          // the threshold, and a value frozen ON the threshold for 180 frames
+          // turned one abandoned orb into 182 of them. Re-acquiring already
+          // set it to 0 below, which is why nothing had noticed.
+          e.chumChase = 0;
         }
       }
       e.chumTimer = (e.chumTimer ?? 0) - dt;
@@ -1115,6 +1296,24 @@ const BEHAVIORS = {
         setLookTarget(e, ox, oy);
         e.eating = cd <= (sc.eatRange ?? 2.6);
         // Swims straight through it either way — the gulp happens in passing.
+        //
+        // FULL turnRate, and the ONE branch of the five that keeps it. The
+        // cruise budget was tried here and it is wrong twice over. It is wrong
+        // in principle for the same reason the vertical flattening skips this
+        // branch (see the note at the top of `hunt`): a scrap of chum is a
+        // fixed point on the seabed, and going to get it is a deliberate act,
+        // not the drifting after a moving target that CONFIG.cruiseHunt exists
+        // to stop. And it is wrong in fact — measured, it took shark
+        // scavenging from 182 successful gulps in 20s to 1 swallowed against
+        // 182 abandoned, because an orb sits still and a shark on a 13-unit
+        // pursuit circle cannot get back to one inside `maxChase`. That is
+        // tools/crab-crowd-test.mjs's "it connects more often than it whiffs",
+        // and it is the reason that check exists.
+        //
+        // The spinning this was all for is a FISH problem: the chum orbiting
+        // it could cause was already bounded by `maxChase` and `cooldown`
+        // above, which is a shark giving up on a scrap rather than a shark
+        // circling one forever.
         steerTo(e, ox - px, oy - py, dt, 6, speedMul);
         return;
       }
@@ -1132,50 +1331,19 @@ const BEHAVIORS = {
       if (e.standoffDist == null) e.standoffDist = pickStandoff(CONFIG.apexCrowd);
       const want = approachVector(crowdSelf(e), ctx, ctx.apex, CONFIG.apexCrowd);
       const go = shapeSwim(e, want.x, want.y, lat);
-      steerTo(e, go.x, go.y, dt, 6, speedMul);
+      // Same budget as the fish branch, on the looser player numbers. Measured
+      // off `want` rather than off the raw direction to the seal, because the
+      // crowd avoidance is already folded into it and steering at a heading you
+      // then refuse to turn toward is how a hunter ends up stuck against a
+      // neighbour it is trying to swim around.
+      const turn = trackTurn(e, go.x, go.y, true);
+      if (turn === 0) cruiseOn(e, dt, h, lat, speedMul, { look: false, swim: false });
+      else steerTo(e, go.x, go.y, dt, 6, speedMul, turn);
       return;
     }
 
-    // Cruising with nothing in mind. The uniformly random angle this used to
-    // pick is the single biggest source of vertical wandering in the game: a
-    // shark was as likely to head straight up as along the reef, and since
-    // steerTo drives at full speed along the heading, "up" meant a body-length
-    // a second of climb for no reason at all.
-    //
-    // `wanderPitch` keeps the same wander but confines it to a shallow cone
-    // either side of horizontal, so the direction is still a real choice — it
-    // just stops being a vertical one.
-    e.wanderTimer -= dt;
-    if (e.wanderTimer <= 0) {
-      e.wanderTimer = h.wanderChange ?? 2;
-      if (lat) {
-        const pitch = lat.wanderPitch ?? 0.22;
-        const side = Math.random() < 0.5 ? 0 : Math.PI;
-        e.wanderAngle = side + (Math.random() * 2 - 1) * pitch;
-      } else {
-        e.wanderAngle = Math.random() * Math.PI * 2;
-      }
-    }
-    updateSwim(e, dt, null, lat);
-    if (lat) {
-      // A cruising shark still LOOKS somewhere: down its own path, swinging
-      // slowly to each side. That look point is the whole of the idle weave —
-      // headLook aims the snout at it and the spring chain trails the body
-      // after it, so an unengaged shark reads as swimming rather than as being
-      // towed. Cleared only when it has opted out of this block.
-      const ahead = lat.weaveLead ?? 6;
-      const look = weaveLook(
-        e,
-        px + Math.cos(e.wanderAngle) * ahead,
-        py + Math.sin(e.wanderAngle) * ahead,
-        lat,
-      );
-      setLookTarget(e, look.x, look.y);
-    } else {
-      e.lookTarget = null;
-    }
-    const go = shapeSwim(e, Math.cos(e.wanderAngle), Math.sin(e.wanderAngle), lat);
-    steerTo(e, go.x, go.y, dt);
+    // Cruising with nothing in mind. No `speedMul` — see cruiseOn.
+    cruiseOn(e, dt, h, lat);
   },
 
   // A shark that periodically leaves the water. Between arcs it hunts exactly
@@ -1994,6 +2162,16 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // dispatch below skips a creature carrying it — the perk owns vx/vy that
     // frame — which is the same door `leaving` goes through.
     perkDrive: false,
+    // --- the daze (systems/control.js) ---------------------------------------
+    // What a hold becomes when it lands on something that cannot be held. Only
+    // ever non-zero on a boss, and seeded on everything for exactly the reason
+    // `invuln` above is: an unseeded timer is a NaN timer, and a NaN timer
+    // never expires. `dazeCooldown` is the recovery that runs AFTER it, which
+    // is the whole no-stacking guarantee — see CONFIG.boss.control.daze.
+    dazeTimer: 0,
+    dazeCooldown: 0,
+    dazePhase: 0,
+    dazeSign: 1,
     // --- elemental status (Glow Up!, systems/elements.js) --------------------
     // Seeded here rather than created on first application, for the reason
     // every stat field is seeded in stats.js: `undefined - dt` is NaN, and a
@@ -2566,7 +2744,14 @@ export function animateEnemiesIdle(dt) {
 // happened". Kept as a callback like its neighbour rather than reaching for
 // feedback() in here: this module owns creatures, and every sound, particle
 // and screen shake in the game is main.js's to place.
-export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
+//
+// `onPlayerBitten(x, y, enemy)` fires on the frame a hunter's jaws actually
+// snap at the SEAL, and it is the reason the other two are callbacks: the
+// chomp is now the sound of being bitten and nothing else (CONFIG.feedback
+// .bite), so the one place that knows a snap was aimed at the player has to be
+// able to say so. Optional, like its neighbours — a harness that passes four
+// arguments simply gets no bite feedback.
+export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, onPlayerBitten) {
   clock += dt;
 
   // Pile sizes for the whole frame, so every scavenging crab reads one shared
@@ -2637,6 +2822,13 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
     // schedule instead of one masking the other.
     if (e.charmTimer > 0) e.charmTimer = Math.max(0, e.charmTimer - dt);
     if (e.trapTimer > 0) e.trapTimer = Math.max(0, e.trapTimer - dt);
+    // ...and the boss's version of both. Ticked here beside them rather than in
+    // a pass of its own, because it is a status on a body exactly as they are
+    // and a second walk of the enemy list to age one number would be a walk for
+    // nothing. It does NOT gate the behaviour below: a dazed boss keeps
+    // steering — badly, and slowly — which is the whole difference between a
+    // daze and a hold.
+    tickDaze(e, dt);
     // LAUNCHED. A body travelling faster than it could ever swim is not
     // swimming — it is cargo, and it stops steering until it has slowed down
     // to something it could have done under its own power. Without this the
@@ -2697,7 +2889,12 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
     // eating you from one drifting through you.
     if (e.def.hunt && !e.hunting && e.biteCooldown <= 0) {
       const reach = playerBiteReach(e) * (CONFIG.bite.lead ?? 1);
-      if (ctx.dist < reach) triggerBite(e);
+      // triggerBite returns whether the snap actually fired (it is rate-limited
+      // by the species' own eat cooldown), so the chomp lands on the frame the
+      // jaws move rather than on every frame the seal is inside the reach.
+      if (ctx.dist < reach && triggerBite(e)) {
+        onPlayerBitten?.(e.mesh.position.x, e.mesh.position.y, e);
+      }
     }
 
     // CHILL scales the STEP, not the steering. Applied at the integrator so it
@@ -2706,9 +2903,42 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover) {
     // turns to face you at full rate while crawling toward you at a fraction of
     // its speed. Slowing the steering instead would read as a fish that had
     // lost interest, which is a different feeling entirely.
+    // THE DAZE'S WEAVE, applied to the VELOCITY rather than to the step below —
+    // a body has to be pointed where it is going or the facing (which is read
+    // off the direction of travel) says it is still tracking you while it
+    // slides off sideways. A turn rate, so the heading wanders as the integral
+    // of a slow swing and the creature's own steering can fight it back;
+    // written into vx/vy for the same reason chill is NOT, which is that this
+    // is a change of course and chill is a change of pace. Skipped entirely
+    // while a perk is driving the body — see dazeSpeedMul.
+    const veer = dazeVeer(e) * dt;
+    if (veer !== 0) {
+      // THE HEADING IS WHERE THIS HAS TO LAND, and it is the whole reason this
+      // is three lines rather than one. Every shark and every boss is
+      // TURN-LIMITED: steerTo re-derives vx/vy from `e.heading` on the next
+      // frame (see the turnRate branch there), so a rotation applied only to
+      // the velocity is overwritten before it has moved the animal anywhere —
+      // measurably nothing, which is exactly how it read when it was written
+      // that way. Pushing the heading instead makes the daze a tug of war with
+      // the creature's own turn rate, which is the picture: it is trying to
+      // come back onto you and only half managing it.
+      if (e.heading != null) e.heading += veer;
+      // ...and the velocity as well, so the frame already in flight veers too
+      // rather than waiting a frame, and so creatures with no turn limit (the
+      // lerp branch in steerTo) get the same treatment.
+      const cos = Math.cos(veer);
+      const sin = Math.sin(veer);
+      const vx = e.vx * cos - e.vy * sin;
+      e.vy = e.vx * sin + e.vy * cos;
+      e.vx = vx;
+    }
+
     const chill = e.chillTimer > 0 ? 1 - e.chillSlow : 1;
-    e.mesh.position.x += e.vx * chill * dt;
-    e.mesh.position.y += e.vy * chill * dt;
+    // ...and the daze's slow, at the same place and for the same reason chill
+    // is: a tax on the step, not on the decision.
+    const daze = dazeSpeedMul(e);
+    e.mesh.position.x += e.vx * chill * daze * dt;
+    e.mesh.position.y += e.vy * chill * daze * dt;
 
     // THE SEAL'S SHOVE, integrated on top of whatever the steering asked for
     // and decaying exponentially back to nothing. Added here rather than into

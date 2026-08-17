@@ -153,7 +153,13 @@ export function feedback(event, at = {}) {
 
   // Hit-stop only lands if it has had time to breathe. Without this every
   // bullet impact chains one, and the game runs in permanent slow motion.
-  if (def.hitstop && hitstopCooldown <= 0) {
+  //
+  // Gated here rather than in updateFeedback so that switching hit-stop off
+  // leaves no state behind: nothing is started, the cooldown is never armed,
+  // and the scale below is read only by a stop that was allowed to begin. A
+  // stop already running when the switch flips finishes — it is 90ms at the
+  // very worst, and cutting it mid-freeze is itself a hitch.
+  if (def.hitstop && CONFIG.fx.hitstopEnabled && hitstopCooldown <= 0) {
     feedbackState.hitstop = Math.max(feedbackState.hitstop, def.hitstop);
     hitstopCooldown = CONFIG.fx.hitstopCooldown;
   }

@@ -418,9 +418,12 @@ function vent(charge, seconds, rig = rigBoth, velocity = STILL, dt = 1 / 60, abo
 
 const BC = CONFIG.bubbles.charge;
 // Particles in one full-power burst: both emitters, each emitter's own count
-// scaled by the vent's size multiplier and rounded the way emit() rounds it.
-const PER_BURST = Math.max(1, Math.round(CONFIG.emitters.breathBubbles.count * CONFIG.bubbles.breath.scale * BC.scaleMax))
-  + Math.max(1, Math.round(CONFIG.emitters.wakeBubbles.count * CONFIG.bubbles.wake.scale * BC.scaleMax));
+// scaled by the vent's size multiplier AND by the global sprite-thinning knob
+// (bubbles are sprites, not goo), rounded the way emit() rounds it.
+const DENSITY = CONFIG.fx.spriteDensity ?? 1;
+const perEmitter = (name, scale) => Math.max(1, Math.round(CONFIG.emitters[name].count * scale * BC.scaleMax * DENSITY));
+const PER_BURST = perEmitter('breathBubbles', CONFIG.bubbles.breath.scale)
+  + perEmitter('wakeBubbles', CONFIG.bubbles.wake.scale);
 
 section('VENT — a wind-up opens both emitters');
 {

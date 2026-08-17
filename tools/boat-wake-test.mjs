@@ -367,7 +367,11 @@ for (const [name, halfLength, speed] of [
 // Counted as BURSTS rather than particles, so a change to the emitter's own
 // `count` doesn't move the expectation.
 {
-  const per = CONFIG.emitters.hullWake.count;
+  // Particles per burst, which is what divides the particle count back into a
+  // burst count: the authored figure AND the global sprite-thinning knob, since
+  // emit() applies that to every non-goo emitter and the hull wake is one.
+  // Without it the division comes out short and reads as a churn-rate bug.
+  const per = Math.max(1, Math.round(CONFIG.emitters.hullWake.count * (CONFIG.fx.spriteDensity ?? 1)));
   function bursts(o, seconds) {
     return run({}, o, seconds).filter((p) => p.clip === 1).length / per / seconds;
   }
@@ -399,8 +403,15 @@ for (const [name, halfLength, speed] of [
   setWaveTime(0);
   updateHullWake(1.0, hull, { x: 0, halfLength: YACHT, dir: 1, speed: 8, vx: 8 });
   const n = live().length;
-  const cap = c.maxPerFrame * (CONFIG.emitters.hullWake.count
-    + CONFIG.emitters.hullSpray.count + CONFIG.emitters.hullFoam.count);
+  // Thinned like the rate above. Left at the authored counts the ceiling is
+  // 1/spriteDensity too high, which is still a true statement and a much weaker
+  // one — the guard would go on passing well after the cap had stopped working.
+  // The foam layer is goo, and goo is never thinned — see CONFIG.fx.spriteDensity.
+  const emitted = (name) => {
+    const def = CONFIG.emitters[name];
+    return Math.max(1, Math.round(def.count * (def.goo ? 1 : (CONFIG.fx.spriteDensity ?? 1))));
+  };
+  const cap = c.maxPerFrame * (emitted('hullWake') + emitted('hullSpray') + emitted('hullFoam'));
   check('a one-second frame is capped', n <= cap, `${n} particles, cap is ${cap}`);
 }
 

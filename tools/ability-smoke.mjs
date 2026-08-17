@@ -41,7 +41,14 @@ import { eelCfg } from '../path/src/systems/eel.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, trapSeconds } from '../path/src/systems/beluga.js';
 import { weatherState } from '../path/src/systems/weather.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, suctionAt, __beamShader } from '../path/src/systems/bakalar.js';
-import { fireMusselBarrage, barrageCount, barrageDamage } from '../path/src/systems/musselVolley.js';
+import {
+  fireMusselBarrage, updateMusselVolley, resetMusselVolley,
+  barrageCount, barrageDamage, barrageShells, chargePips, pendingShells,
+} from '../path/src/systems/musselVolley.js';
+import { strikeState, pipCount } from '../path/src/systems/strike.js';
+import {
+  isDazed, dazeReady, canControl, canHold, charmEnemy, holdEnemy, tickDaze, clearDaze, dazeSpeedMul,
+} from '../path/src/systems/control.js';
 import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpStats, harpNoteCount } from '../path/src/systems/harp.js';
 import { installNoteGlyphs } from '../path/src/systems/noteStorm.js';
 import { bounds } from '../path/src/arena.js';
@@ -755,14 +762,21 @@ Math.random = realRandom;
 }
 
 // --- mussel barrage ---------------------------------------------------------
-// The one ability with no update() — it fires once, from the strike release —
-// so what matters is the gate and the fan, not what it does over time.
+// The gate, the fan, the pip payment and the stagger. The first two are the
+// design; the last two are the two ways this ability can quietly stop being
+// what it says — a flight that never finishes leaving, and a flight that all
+// leaves on one frame anyway.
 console.log('\nMUSSEL BARRAGE');
 resetProjectiles(scene);
+resetMusselVolley();
 enemies.length = 0;
 
 const dash = { x: 1, y: 0 };
-const originAt = () => new THREE.Vector3(0, 0, 0);
+// Walks with the dash, so the LAUNCH POINTS can be measured. A callback that
+// always returned the origin would pass a staggered barrage and a simultaneous
+// one identically.
+let sealX = 0;
+const originAt = () => new THREE.Vector3(sealX, 0, 0);
 
 // THE GATE. This is the whole design — below the threshold a strike is just a
 // dash — so it is checked from both sides rather than only the happy path.
@@ -771,17 +785,53 @@ check('a half-charged strike throws nothing', weak === 0, `${weak} shell(s)`);
 const unlearned = fireMusselBarrage(scene, 1, 0, dash, originAt);
 check('...and neither does a full charge without the upgrade', unlearned === 0, `${unlearned} shell(s)`);
 check('neither put a projectile in the scene', projectiles.length === 0, `${projectiles.length} live`);
+check('and neither queued anything for later', pendingShells() === 0, `${pendingShells()} queued`);
+
+// THE CHARGE PAYS IN PIPS. The card's count is the floor; a full bar adds one
+// shell per pip on top, which is the buff the whole ability now hangs on.
+check('a full bar is worth its whole pip count',
+  chargePips(1) === pipCount(), `${chargePips(1)} of ${pipCount()} pips`);
+check('...and a part-filled bar is FLOORED, never rounded up',
+  chargePips(0.99) < pipCount() && chargePips(0.99) === pipCount() - 1,
+  `${chargePips(0.99)} pips at 0.99 of a ${pipCount()}-pip bar`);
+check('a full charge throws more than the card alone',
+  barrageShells(1, 1) === barrageCount(1) + Math.min(chargePips(1), CONFIG.musselVolley.pipShellsMax),
+  `${barrageCount(1)} + ${chargePips(1)} pips -> ${barrageShells(1, 1)}`);
 
 const thrown = fireMusselBarrage(scene, 1, 1, dash, originAt);
-check('a full charge throws the whole flight at level 1',
-  thrown === CONFIG.musselVolley.count, `${thrown} shell(s)`);
-check('every shell became a live projectile',
-  projectiles.length === thrown, `${projectiles.length} of ${thrown}`);
+check('a full charge buys card + pips at level 1',
+  thrown === barrageShells(1, 1), `${thrown} shell(s)`);
+
+// THE STAGGER. One shell on the release frame — the moment the player pressed —
+// and the rest still owed.
+check('the first shell leaves on the release frame', projectiles.length === 1, `${projectiles.length} live`);
+check('...and the rest are queued', pendingShells() === thrown - 1, `${pendingShells()} of ${thrown - 1}`);
+
+// Pump the queue, walking the seal as a dash would. Frames rather than one big
+// step, because a gap shorter than a frame has to still fire one per frame in
+// order rather than dumping the backlog.
+const launchXs = [projectiles[0].mesh.position.x];
+for (let f = 0; f < 240 && pendingShells() > 0; f++) {
+  sealX += 0.2;
+  const before = projectiles.length;
+  updateMusselVolley(dt);
+  for (let i = before; i < projectiles.length; i++) launchXs.push(projectiles[i].mesh.position.x);
+}
+check('every shell the release bought eventually leaves',
+  projectiles.length === thrown && pendingShells() === 0, `${projectiles.length} of ${thrown}, ${pendingShells()} stuck`);
+check('they left from points spread along the dash, not from one spot',
+  new Set(launchXs.map((x) => x.toFixed(3))).size === thrown,
+  `${new Set(launchXs.map((x) => x.toFixed(3))).size} distinct launch points`);
+// Monotonic: shell i always leaves at or behind shell i+1 down the dash. Out of
+// order here would mean the fan's edges arriving in the middle of the line.
+check('...in launch order, down the line',
+  launchXs.every((x, i) => i === 0 || x > launchXs[i - 1]), launchXs.map((x) => x.toFixed(1)).join(' '));
+
 check('they all seek', projectiles.every((p) => p.homing), `${projectiles.filter((p) => p.homing).length} homing`);
 
-// The fan has to be a FAN. Eight shells that all left on the same heading is
-// the failure mode this catches — it looks like one fat missile, and homing
-// would hide it within a few frames of launch.
+// The fan has to be a FAN. Shells that all left on the same heading is the
+// failure mode this catches — it looks like one fat missile, and homing would
+// hide it within a few frames of launch.
 const barrageHeadings = projectiles.map((p) => Math.atan2(p.vy ?? p.dir?.y ?? 0, p.vx ?? p.dir?.x ?? 1));
 const barrageSweep = Math.max(...barrageHeadings) - Math.min(...barrageHeadings);
 check('the shells leave across a wide arc',
@@ -789,6 +839,40 @@ check('the shells leave across a wide arc',
 // Centred on the dash, not offset to one side of it.
 const barrageMean = barrageHeadings.reduce((a, b) => a + b, 0) / barrageHeadings.length;
 check('the fan is centred on the dash heading', Math.abs(barrageMean) < 0.3, `centre ${barrageMean.toFixed(2)} rad off`);
+
+// TWO BARRAGES OVERLAPPING. The eat-and-strike loop releases again well inside
+// a previous dash's flight, so a queue that only ever looked at its front
+// entry would hold the new barrage's opening shot behind the old one's tail —
+// input lag on the loudest frame in the game, in exactly the case the whole
+// mechanic exists to reward.
+resetProjectiles(scene);
+resetMusselVolley();
+fireMusselBarrage(scene, 1, 1, dash, originAt);
+updateMusselVolley(dt); // a frame into the first flight, with shells still owed
+const owed = pendingShells();
+const before = projectiles.length;
+fireMusselBarrage(scene, 1, 1, dash, originAt);
+check('a second barrage fires its first shell immediately, behind or not',
+  projectiles.length > before && owed > 0,
+  `${projectiles.length - before} left on the release frame with ${owed} still owed`);
+resetProjectiles(scene);
+resetMusselVolley();
+
+// THE FLIGHT FITS THE DASH. A big barrage must compress rather than run on
+// after the seal has stopped — that is the one thing the stagger can get wrong
+// that still looks like it is working.
+resetProjectiles(scene);
+resetMusselVolley();
+strikeState.dashDuration = 0.4;
+const fitted = fireMusselBarrage(scene, 1, 5, dash, originAt);
+let fitFrames = 0;
+while (pendingShells() > 0 && fitFrames < 600) { updateMusselVolley(dt); fitFrames += 1; }
+check(`a ${fitted}-shell flight still finishes inside the dash`,
+  fitFrames * dt <= strikeState.dashDuration + dt * 2,
+  `${(fitFrames * dt).toFixed(3)}s of a ${strikeState.dashDuration}s dash`);
+strikeState.dashDuration = 0;
+resetProjectiles(scene);
+resetMusselVolley();
 
 // Levelling has to buy something visible. Both numbers, because the card
 // promises more shells and they are meant to hit harder too.
@@ -948,9 +1032,42 @@ check('a boss alone is still played at', projectiles.length === 1, `${projectile
 
 // --- the charm and its ring ------------------------------------------------
 const payload = projectiles[0].charm;
-check('a boss takes the damage but not the charm',
-  applyHarpCharm(bossFish, payload) === false
-  && !(bossFish.charmTimer > 0) && !(bossFish.harpAura > 0));
+// A BOSS TAKES THE DAZE, NOT THE CHARM. Three separate claims in one moment,
+// and the ability is broken in a different way if any of them slips: charmed
+// would mean a boss fighting for you, an aura would mean a grinder on the one
+// body that should never carry one, and nothing at all is the bug this change
+// exists to fix.
+check('a boss note lands as a daze', applyHarpCharm(bossFish, payload) === true);
+check('...it is not charmed and grows no ring',
+  !(bossFish.charmTimer > 0) && !(bossFish.harpAura > 0),
+  `charm ${bossFish.charmTimer}, aura ${bossFish.harpAura}`);
+check('...and the daze is measured in a couple of seconds',
+  isDazed(bossFish) && bossFish.dazeTimer <= CONFIG.boss.control.daze.max,
+  `${bossFish.dazeTimer.toFixed(2)}s of a ${CONFIG.boss.control.daze.max}s ceiling`);
+// THE BUDGET. Everything the roster can throw at it while it is already reeling
+// is worth nothing extra — this is the whole "don't let it stack" rule, and it
+// is checked from the two directions it can fail: a second source landing NOW,
+// and a source landing the moment the timer runs out.
+{
+  const held = bossFish.dazeTimer;
+  applyHarpCharm(bossFish, payload);
+  charmEnemy(bossFish, 99);
+  holdEnemy(bossFish, 99);
+  check('a second status cannot extend a live daze',
+    bossFish.dazeTimer <= held, `${bossFish.dazeTimer.toFixed(2)}s vs ${held.toFixed(2)}s`);
+
+  // Run it out, then try again inside the recovery window.
+  for (let i = 0; i < 600 && isDazed(bossFish); i++) tickDaze(bossFish, dt);
+  check('...and the recovery window refuses the next one outright',
+    charmEnemy(bossFish, 99) === false && !isDazed(bossFish),
+    `${bossFish.dazeCooldown.toFixed(2)}s of recovery left`);
+
+  // ...and it does come back. A one-shot daze would pass every check above.
+  for (let i = 0; i < 1200 && bossFish.dazeCooldown > 0; i++) tickDaze(bossFish, dt);
+  check('...but once it is over the boss can be dazed again',
+    charmEnemy(bossFish, 3) === true && isDazed(bossFish), `${bossFish.dazeTimer.toFixed(2)}s`);
+  clearDaze(bossFish);
+}
 
 check('an ordinary body takes both halves', (() => {
   applyHarpCharm(shark, payload);

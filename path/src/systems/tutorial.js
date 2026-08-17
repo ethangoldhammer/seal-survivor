@@ -4,7 +4,13 @@ import { calloutOnDevice } from '../calloutTable.js';
 
 // ---------------------------------------------------------------------------
 // THE FIRST-RUN COACH — a handful of short sentences, once per device, and then
-// never again. Four on a keyboard, six on a phone or a pad.
+// never again. Seven on a keyboard, nine on a phone or a pad.
+//
+// THEY COME IN TWO HALVES. The first is the CONTROLS, handed out one input at a
+// time and chained to each other. The second is the OCEAN — chum, power-ups,
+// the seabed, the things that cannot be killed — and those are not chained to
+// anything, because the water decides when each of them is teachable and a
+// single run may never contain one of them at all.
 //
 // WHAT IT SAYS DEPENDS ON WHAT THEY ARE HOLDING, and so does WHICH STEPS EXIST.
 // Both halves live in callouts.csv rather than here: a step can be worded three
@@ -119,6 +125,55 @@ const STEPS = {
   chum: {
     ready: (ctx, events, done) => done.has('strike') && ctx.chumInWater,
     done: (ctx, events) => events.has('chum'),
+  },
+  // --- the four things in the water that are not a control ------------------
+  // Everything below here is taught by the OCEAN rather than by a button, and
+  // none of them is gated on any other step. They are ordered by the `priority`
+  // column alone, which is enough: a run puts them in the water in roughly that
+  // order anyway, and hard-chaining them would mean a player who never sees a
+  // whale never gets told about crabs.
+  //
+  // What they have in common is that the moment is not repeatable. A power-up
+  // orb expires, a whale leaves, the seabed pile gets eaten — so each of these
+  // is READY only while its subject is actually there, and a step that misses
+  // its window simply waits for the next one rather than firing into blank
+  // water. That is the same contract the chum tip has always had.
+
+  // A power-up in the water. Not gated behind `chum` in code — the priority
+  // column already puts chum first when both are ready on the same frame, and
+  // a player whose first orb arrives before their first kill should be told
+  // about the orb rather than shown nothing.
+  pickup: {
+    ready: (ctx, events, done) => done.has('strike') && ctx.pickupInWater,
+    // Any of the three. The lesson is "glowing things are for swimming into",
+    // which the first one taken proves whichever it was.
+    done: (ctx, events) => events.has('pickup'),
+  },
+  // Chum reaching the floor, which is the moment the seabed becomes a place
+  // with rules. Offered as it lands rather than when the first crab walks on:
+  // by then the answer ("get there first") is already gone, and a tip that
+  // arrives with the consequence teaches nothing that the consequence didn't.
+  crab: {
+    ready: (ctx) => ctx.chumOnSeabed,
+    // Clearing the floor is the action, and it is a real one — this is the only
+    // tip down here that can be obeyed. Polled rather than evented because what
+    // matters is the PILE being gone, not one orb of it going down: a player
+    // who eats one and swims off has not done the thing.
+    done: (ctx) => !ctx.chumOnSeabed,
+  },
+  // A turtle, or the whale. One step and one line for both, because what a
+  // player has to learn is the same fact in both cases and it is a fact about
+  // the ocean rather than about either animal: some of what swims past is not
+  // an opponent. Whichever arrives first says it.
+  invincible: {
+    ready: (ctx) => ctx.unkillableNear,
+    // Nothing to do about it — this tip is a fact, not an instruction, so it
+    // is the only one in the file with no answer. It ends on its row's `hold`
+    // through the "or the clock" half of the contract at the top of this file.
+    // Deliberately NOT "the creature left": that is not the player doing
+    // anything, and it would let a turtle drifting out of range cut the
+    // sentence off mid-read.
+    done: () => false,
   },
   // The emergency, and the one tip that answers a warning: it fires on the
   // same condition as "Oxygen low!" and says the thing that warning does not.

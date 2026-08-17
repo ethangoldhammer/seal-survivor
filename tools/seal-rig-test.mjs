@@ -576,7 +576,11 @@ section('WAKE — where the bursts are actually born');
         Math.abs((1 - onTips) - W.tailShare) < 0.1,
         `${((1 - onTips) * 100).toFixed(0)}% off the tail, tailShare ${W.tailShare}`);
 
-      const perBurst = Math.max(1, Math.round(CONFIG.emitters.wakeBubbles.count * W.scale));
+      // The authored count, the wake's own scale, and the global sprite
+      // thinning knob — bubbles are sprites, so emit() applies it here too.
+      const perBurst = Math.max(1, Math.round(
+        CONFIG.emitters.wakeBubbles.count * W.scale * (CONFIG.fx.spriteDensity ?? 1),
+      ));
       const expected = W.perSecond * perBurst * 2; // two seconds at top speed
       check('and one burst is still one burst — the rate is unchanged',
         Math.abs(pts.length - expected) < expected * 0.1, `${pts.length} particles vs ~${expected}`);

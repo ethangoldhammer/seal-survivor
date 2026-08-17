@@ -148,6 +148,11 @@ export function baseStats() {
     oysterLevel: 0,
     octoGrabLevel: 0,
     orcaLevel: 0,
+    // STUBBED — the card that would raise this is disabled in upgrades.csv and
+    // nothing reads it yet. Seeded anyway, because the seed is what stops the
+    // first stack reading `undefined` and turning every later sum into NaN,
+    // and a stub whose first real pick crashes is worse than no stub.
+    dolphinPodLevel: 0,
     musselVolleyLevel: 0,
     clubLevel: 0,
     clubThrowLevel: 0,
@@ -180,7 +185,8 @@ export const INTEGER_STATS = new Set([
   'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'starfishLevel',
   'maneaterLevel', 'ironLungLevel', 'homingShotLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
-  'dumboLevel', 'harpLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'musselVolleyLevel',
+  'dumboLevel', 'harpLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'dolphinPodLevel',
+  'musselVolleyLevel',
   'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel',
 ]);
 

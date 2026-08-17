@@ -4,6 +4,7 @@ import { spawnBeam } from './beams.js';
 import { spawnProjectile, projectiles } from '../entities/projectiles.js';
 import { enemies, spawnNamed } from '../entities/enemies.js';
 import { emit } from '../entities/particles.js';
+import { isDazed } from './control.js';
 
 // ===========================================================================
 // BOSS PERKS — the one special thing a boss can do.
@@ -428,6 +429,16 @@ export function updateBossPerks(dt, scene, playerPos, hooks = {}) {
   }
   if (active.ring) active.ring.visible = true;
 
+  // DAZED. The tell it was building is cancelled and no new one starts while
+  // it is reeling — but anything it has already COMMITTED to (a lunge in
+  // flight, a blink half-taken, a fade half-finished) runs to the end. That
+  // split is the whole rule: a wind-up is a promise the boss has not kept yet,
+  // and a committed attack is one it has. Freezing a body mid-tell is what
+  // control.js's original refusal existed to prevent, and it would still be
+  // wrong if the thing doing the freezing were called a daze.
+  if (isDazed(e) && interruptBossPerk(e)) return;
+  if (isDazed(e) && active.stage === 'ready') return;
+
   const dx = playerPos.x - e.mesh.position.x;
   const dy = playerPos.y - e.mesh.position.y;
   const dist = Math.hypot(dx, dy) || 0.0001;
@@ -441,6 +452,52 @@ export function updateBossPerks(dt, scene, playerPos, hooks = {}) {
   // `giant` and `swift` are absent on purpose — they did everything they do in
   // attachBossPerk and have nothing to tick. A perk that changed the body and
   // then also ran every frame would be two perks.
+}
+
+// The stages a perk can be talked out of: the ones where the boss has told you
+// what it is about to do and has not done it yet. Everything else — 'dash',
+// 'gone', 'fadeIn' — is already spent and plays out.
+//
+// A SET OF STAGE NAMES, not a per-perk flag, because that is what the state
+// machines actually share: four of them independently call their tell 'windup'
+// and phase calls its 'fadeOut'. A fifth perk written tomorrow inherits the
+// interrupt by naming its tell the same thing everyone else does, and if it
+// invents a new name the failure is the safe direction — the tell finishes.
+const INTERRUPTIBLE = new Set(['windup', 'fadeOut']);
+
+/**
+ * Cancel a tell this boss has not committed to yet, and hand the body back.
+ *
+ * Returns whether anything was actually cancelled — the caller uses it to
+ * decide whether the perk still gets its frame. Everything a wind-up can have
+ * done to the creature or to the screen is undone here: the drive, the ring,
+ * the flare, the charge halos and the flicker phase's half-hidden body. Missing
+ * one of those is not a visual bug, it is a boss stuck invisible or an animal
+ * that never steers again — the same contract releaseBoss() keeps.
+ *
+ * The perk goes back to `ready` on a SHORT timer rather than a full cooldown.
+ * The player bought a window, not a denial: it re-telegraphs a beat after the
+ * daze lets go, so landing control on a wind-up is worth a reposition and not
+ * worth deleting the perk from the fight.
+ */
+export function interruptBossPerk(e) {
+  if (!active || active.enemy !== e) return false;
+  if (!INTERRUPTIBLE.has(active.stage)) return false;
+
+  e.perkDrive = false;
+  // The lunge multiplies contact damage at the END of its wind-up, so this is
+  // belt and braces — but a cancelled perk that left the multiplier standing
+  // would be a boss quietly hitting for double for the rest of the fight.
+  if (baseContactDamage > 0) e.contactDamage = baseContactDamage;
+  if (e.visual) e.visual.visible = true;
+  if (active.flare) active.flare.visible = false;
+  if (active.marker) active.marker.visible = false;
+  for (const ring of active.charges ?? []) ring.visible = false;
+  active.flicker = 0;
+
+  active.stage = 'ready';
+  active.timer = Math.max(0.2, (e.dazeTimer ?? 0) + (CONFIG.boss?.control?.daze?.perkRecovery ?? 0.6));
+  return true;
 }
 
 // ---------------------------------------------------------------------------

@@ -1576,7 +1576,7 @@ export const CONFIG = {
     // is an informed one:
     //
     //   1 mesh   greatWhite, orca, dolphin, seaTurtle, stingray, walkingCrab
-    //   2-5      otter 2, mightyMeg 3, megalodon 4, shark 5
+    //   2-5      mightyMeg 3, megalodon 4, shark 5
     //
     // The apex family is capped at 8 bodies on screen (enemies.groupMaxAlive),
     // so the whole apex row switched on is bounded at a few dozen extra calls,
@@ -3931,12 +3931,18 @@ export const CONFIG = {
     // MUSSEL BARRAGE — the octopus's second trick, and the payoff for
     // committing to a full charge.
     //
-    // Releasing a strike at or above `chargeThreshold` throws the whole flight
-    // of homing mussels at once, in a wide fan around the dash heading. It is
+    // Releasing a strike at or above `chargeThreshold` strews a flight of
+    // homing mussels across the dash, in a wide fan around its heading. It is
     // deliberately the Hades multishot bow: you do not get a stream, you get
     // ONE loud moment that costs you a full wind-up, and the fan is wide
     // enough that it is an area answer rather than an aimed one — the homing
     // is what turns the spread back into hits.
+    //
+    // The shells are STAGGERED a few frames apart (`shotGap`) and each is born
+    // wherever the seal has got to, so the moment is a line of mussels laid
+    // down the length of the dash rather than a bouquet dropped where it
+    // started. How MANY there are is the card plus the charge: one extra shell
+    // per whole pip of bar the release spent — see `pipShellsMax`.
     //
     // WHY IT HANGS OFF THE STRIKE rather than being another auto-firing
     // companion: the strike meter is already the game's commitment currency
@@ -3956,6 +3962,22 @@ export const CONFIG = {
       chargeThreshold: 0.85,
       count: 8, // shells per barrage at level 1
       countPerLevel: 2,
+      // ...plus ONE SHELL PER WHOLE PIP the release spent. The bar is drawn in
+      // pips and the player watched it fill, so this is the one size rule in
+      // the game they can read off the HUD before they commit — and it is what
+      // lets the threshold stay high without the ability being a binary. A
+      // chained bar runs to CONFIG.strike.charge.maxPips, so it is capped:
+      // past about a dozen extra the barrage stops being a fan and becomes a
+      // screen of its own projectiles.
+      pipShellsMax: 8,
+      // The stagger. A few frames between shells, so the flight is laid down
+      // the LENGTH of the dash instead of dropped at the release point — the
+      // launch site is re-asked per shell, so the seal strews them as it goes.
+      // Compressed to fit inside the dash when the flight is big enough to
+      // outlast it (see shellGap); `shotGapFloor` is where that compression
+      // stops, one frame, below which it is a simultaneous dump again.
+      shotGap: 0.05,
+      shotGapFloor: 0.016,
       // The fan, in radians, centred on the dash heading. Wide: the barrage is
       // meant to clear the space you are diving into, not to snipe.
       arc: 2.1,
@@ -4957,19 +4979,34 @@ export const CONFIG = {
       // kind. Raise this and the whole family loosens at once, which is the
       // point of it being one number.
       //
-      // WHY THESE ARE 14 AND 4 rather than the 8 and 2 they were. The
-      // readability argument above is about how many can be ON you, and that
-      // is not what these numbers decide any more — CONFIG.apexCrowd does.
-      // Only `feedingSlots` (2) of them may close on the seal at once; the
-      // rest hold at `standoff` and rotate through, which is a shiver
-      // circling rather than a pile-on, and it is the read the low caps were
-      // reaching for before that system existed. What 8 and 2 did decide was
-      // the CENSUS: against a maxAlive of 220 they held every large body in
-      // the game under 4% of the water, so a run escalated into more minnows
-      // and the big-body share fell from 22% at level 10 to 7% at level 21.
-      // See the size census in npm run test:ramp, and spawning.csv, which
-      // owns both values.
-      groupMaxAlive: { apex: 16, shark: 6, crab: 10 },
+      // `leviathan` is the THIRD ring, inside `shark`, and it holds the two
+      // (NOT `giant`, which is already the name of a boss perk — see
+      // bossPerks.csv. Two unrelated meanings for one word, in a codebase where
+      // both turn up in the same paragraph, is a bug waiting for a reader.)
+      // megalodon-class bodies (megalodon and mightyMeg, radius 2.0-2.2
+      // against a great white's 1.4). Each carries maxConcurrent 2, so before
+      // this the pair could field FOUR of the largest animals in the game at
+      // once, and they unlock together at minPlayerLevel 8 — which is exactly
+      // the cliff a run felt after level 7. Two is the whole family, so the
+      // biggest thing on screen stays a thing rather than a crowd.
+      //
+      // WHY apex IS 8. It was 16, sized for a world where the dolphin was
+      // apex-without-being-a-shark and spent this allowance the shark cap
+      // could not see — measured at 7.5 of 13.3 apex bodies alive at level 20,
+      // more than the six sharks between them. With the dolphin out of the
+      // pool (see CONFIG.enemies.dolphin) this family is sharks plus whatever
+      // boss is in the water, so a number well above 16 was describing a world
+      // that no longer exists. 8 is the shark cap plus a boss plus headroom;
+      // `shark` is what actually binds in ordinary play.
+      //
+      // How many can be ON you is a separate question, and CONFIG.apexCrowd
+      // answers it: only `feedingSlots` of them close on the seal at once.
+      // These decide the CENSUS — against a maxAlive of 220, caps of 8 and 2
+      // held every large body in the game under 4% of the water, so a run
+      // escalated into more minnows and the big-body share FELL from 22% at
+      // level 10 to 7% at level 21. See the size census in npm run test:ramp,
+      // and spawning.csv, which owns all three values.
+      groupMaxAlive: { apex: 8, shark: 5, leviathan: 2, crab: 10 },
 
       // NIGHTLIFE — the sun going down swaps the CAST, not just the light.
       //
@@ -5330,6 +5367,67 @@ export const CONFIG = {
         // code as well as here means a tuning snapshot that predates this key
         // still gets the rule.
         immune: true,
+
+        // -------------------------------------------------------------------
+        // THE DAZE — what a refused hold becomes instead of nothing.
+        // -------------------------------------------------------------------
+        // Every hold in the game (harp charm, dumbo charm, Cold Snap's freeze,
+        // bubble, net, grab, club) lands on a boss as a couple of seconds of
+        // heavy slow with its heading weaving off you and its next tell
+        // cancelled. It keeps its turn — it moves, it steers, it still hurts on
+        // contact — so this is a bad two seconds for the boss rather than the
+        // fight being switched off. See the long note in systems/control.js.
+        //
+        // ONE BUDGET, ON THE CREATURE. Six abilities landing together are worth
+        // one daze, because they all latch the same timer and then all wait out
+        // the same recovery. That is what stops a control-stacked build from
+        // owning the fight, and it is why none of these numbers live on the
+        // abilities themselves.
+        daze: {
+          enabled: true,
+          // What an ability's own hold duration is worth here, before the
+          // clamps. Well under 1 on purpose: a harp charm runs for seconds on
+          // a fish and must not on three tonnes of animal.
+          fraction: 0.35,
+          // ...and the clamps. `min` is what keeps the shortest source in the
+          // game (a freeze) still legible as a stagger; `max` is the promise
+          // that nothing in the roster can buy more than this, however deep
+          // the card is stacked or however many land at once.
+          min: 0.5,
+          max: 1.6,
+          // Immunity AFTER the daze wears off, not between dazes — so a long
+          // daze cannot be followed instantly by another. This number is the
+          // whole anti-lock guarantee: at 5s a boss spends at most about a
+          // quarter of the fight reeling even against a build carrying every
+          // control ability in the game.
+          cooldown: 5,
+          // How much of its swimming it loses while dazed. High enough to be
+          // the window the player is buying, short of a stop — a stopped boss
+          // is a held boss under another name.
+          slow: 0.55,
+          // The weave: how hard the daze pushes the body's HEADING off its own
+          // line (radians per second), and how fast that push swings back
+          // through zero. This is the "confused" half — it is still coming for
+          // you, it just cannot hold the line.
+          //
+          // MEASURED AGAINST THE CREATURE'S TURN RATE, not picked by eye. Every
+          // shark and every boss is turn-limited (see steerTo in
+          // entities/enemies.js) and spends its whole turn budget coming back
+          // onto you, so anything under about twice that budget is corrected
+          // away inside a few frames and does not reach the screen at all: at
+          // 0.9 a dazed boss tracks you as accurately as an undazed one (27
+          // degrees of mean heading error against 26 — i.e. nothing). At 4 it
+          // runs at about 60 degrees off, which is visibly reeling while still
+          // closing. Past about 7 it swims away instead, which is a different
+          // and worse thing than confusion.
+          veer: 4,
+          veerRate: 2.2,
+          // A cancelled wind-up waits this long past the end of the daze before
+          // it may telegraph again. Deliberately short: the player bought a
+          // window to reposition in, not a denial — a full cooldown reset here
+          // would let a control build refuse a perk for most of the fight.
+          perkRecovery: 0.6,
+        },
       },
 
       // ---------------------------------------------------------------------
@@ -6565,7 +6663,7 @@ export const CONFIG = {
       // a shoal of them scatters ahead of you and has to be cut off rather
       // than driven into. It pays for the trouble in xp.
       //
-      // Still `prey`, so the sharks and otters hunt it too, and a hunter
+      // Still `prey`, so the sharks hunt it too, and a hunter
       // chasing something that can actually run is a better thing to watch
       // than a hunter mowing through a wall.
       //
@@ -6651,14 +6749,6 @@ export const CONFIG = {
       },
 
       // --- new predators, alongside the original 'shark' ---
-      otter: {
-        separates: true,
-        asset: 'enemyOtter', behavior: 'hunt', faceMotion: true,
-        radius: 0.7, hp: 26, hpPerDifficulty: 3, speed: 8, speedVariance: 1.5,
-        contactDamage: 10, xp: 7, turnRate: 4.5,
-        hunt: { preyRadius: 14, biteRange: 1.3, biteCooldown: 0.7, healPerMeal: 6, maxOverheal: 1.4, growPerMeal: 0.015, maxGrow: 1.2, wanderChange: 1.6 },
-        weight: 0.3, weightPerDifficulty: 0.04, maxWeight: 0.6, maxConcurrent: 8, minDifficulty: 0.3,
-    },
       greatWhite: {
         separates: true,
         asset: 'enemyGreatWhite', behavior: 'hunt', faceMotion: true,
@@ -6725,7 +6815,12 @@ export const CONFIG = {
         hunt: { preyRadius: 24, biteRange: 2.6, biteCooldown: 1.4, healPerMeal: 16, maxOverheal: 1.4, growPerMeal: 0.02, maxGrow: 1.25, wanderChange: 2.4,
                 lateral: { climbRange: 18, climbFull: 7, climbFloor: 0.1, climbEase: 0.6, weavePeriod: 8, weaveLead: 10, weaveAmp: 3.4, weaveBody: 0.08, wanderPitch: 0.11 } },
         weight: 0.05, weightPerDifficulty: 0.015, maxWeight: 0.18, maxConcurrent: 2, minDifficulty: 3,
-        spawnGroup: 'apex shark',
+        // THREE families, and `leviathan` is the one that binds — see CONFIG
+        // .spawn.groupMaxAlive. It holds this and mightyMeg between them,
+        // because the two unlock together at minPlayerLevel 8, and four
+        // megalodon-class bodies at once is what a run felt right after
+        // level 7.
+        spawnGroup: 'apex shark leviathan',
     },
       mightyMeg: {
         separates: true,
@@ -6736,7 +6831,8 @@ export const CONFIG = {
         hunt: { preyRadius: 22, biteRange: 2.4, biteCooldown: 1.3, healPerMeal: 15, maxOverheal: 1.4, growPerMeal: 0.02, maxGrow: 1.25, wanderChange: 2.2,
                 lateral: { climbRange: 17, climbFull: 6.5, climbFloor: 0.1, climbEase: 0.65, weavePeriod: 7.4, weaveLead: 9, weaveAmp: 3.2, weaveBody: 0.08, wanderPitch: 0.12 } },
         weight: 0.05, weightPerDifficulty: 0.015, maxWeight: 0.18, maxConcurrent: 2, minDifficulty: 2.6,
-        spawnGroup: 'apex shark',
+        // `leviathan` again — see megalodon, whose allowance this shares.
+        spawnGroup: 'apex shark leviathan',
     },
 
       // THE BOSS. A megalodon's body at CONFIG.boss.sizeMul, with a rolled
@@ -6785,7 +6881,13 @@ export const CONFIG = {
         // this size is the same as the counterplay to every shark — circle
         // inside its arc.
         hunt: { preyRadius: 26, biteRange: 3.0, biteCooldown: 1.5, healPerMeal: 18, maxOverheal: 1.3, growPerMeal: 0, maxGrow: 1, wanderChange: 2.6,
-                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.55, weavePeriod: 9, weaveLead: 11, weaveAmp: 3.6, weaveBody: 0.07, wanderPitch: 0.1 } },
+                // NOT a cruise hunter: `cruise: false` is what keeps CONFIG
+                // .cruiseHunt off a boss. The wildlife sharks make lazy passes
+                // now and eat what they swim through; a boss doing that is a
+                // fight you could stand still and ignore. It keeps every other
+                // line of this block — the flattening and the weave are what a
+                // big body swimming looks like, and are not about pursuit.
+                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.55, weavePeriod: 9, weaveLead: 11, weaveAmp: 3.6, weaveBody: 0.07, wanderPitch: 0.1, cruise: false } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         spawnGroup: 'apex shark',
     },
@@ -6992,7 +7094,13 @@ export const CONFIG = {
         // and a smaller amplitude read as an animal working at you rather than
         // sweeping past, which is the difference the speed is there to sell.
         hunt: { preyRadius: 26, biteRange: 2.8, biteCooldown: 1.2, healPerMeal: 18, maxOverheal: 1.3, growPerMeal: 0, maxGrow: 1, wanderChange: 2.2,
-                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.7, weavePeriod: 6.5, weaveLead: 9, weaveAmp: 2.8, weaveBody: 0.09, wanderPitch: 0.13 } },
+                // NOT a cruise hunter: `cruise: false` is what keeps CONFIG
+                // .cruiseHunt off a boss. The wildlife sharks make lazy passes
+                // now and eat what they swim through; a boss doing that is a
+                // fight you could stand still and ignore. It keeps every other
+                // line of this block — the flattening and the weave are what a
+                // big body swimming looks like, and are not about pursuit.
+                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.7, weavePeriod: 6.5, weaveLead: 9, weaveAmp: 2.8, weaveBody: 0.09, wanderPitch: 0.13, cruise: false } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex` and NOT `shark` — it holds an apex slot for the fight like
         // any other big body, but it is not one of the sharks and must not eat
@@ -7066,7 +7174,13 @@ export const CONFIG = {
         // is not trying to catch and chew you; it is trying to arrive, and the
         // arrival is the attack.
         hunt: { preyRadius: 26, biteRange: 2.6, biteCooldown: 1.3, healPerMeal: 16, maxOverheal: 1.3, growPerMeal: 0, maxGrow: 1, wanderChange: 2,
-                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.75, weavePeriod: 5.5, weaveLead: 8, weaveAmp: 2.4, weaveBody: 0.1, wanderPitch: 0.14 } },
+                // NOT a cruise hunter: `cruise: false` is what keeps CONFIG
+                // .cruiseHunt off a boss. The wildlife sharks make lazy passes
+                // now and eat what they swim through; a boss doing that is a
+                // fight you could stand still and ignore. It keeps every other
+                // line of this block — the flattening and the weave are what a
+                // big body swimming looks like, and are not about pursuit.
+                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.75, weavePeriod: 5.5, weaveLead: 8, weaveAmp: 2.4, weaveBody: 0.1, wanderPitch: 0.14, cruise: false } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex shark` — unlike the orca and the mosasaur, this one genuinely
         // is a shark and belongs under the shark family's tighter ceiling.
@@ -7131,7 +7245,13 @@ export const CONFIG = {
         // working at you, which is what a body that cannot corner should look
         // like it is doing. These are the enemies.csv values — the row wins.
         hunt: { preyRadius: 28, biteRange: 3.6, biteCooldown: 2, healPerMeal: 20, maxOverheal: 1.3, growPerMeal: 0, maxGrow: 1, wanderChange: 3,
-                lateral: { climbRange: 22, climbFull: 9, climbFloor: 0.1, climbEase: 0.5, weavePeriod: 11, weaveLead: 13, weaveAmp: 4.2, weaveBody: 0.06, wanderPitch: 0.09 } },
+                // NOT a cruise hunter: `cruise: false` is what keeps CONFIG
+                // .cruiseHunt off a boss. The wildlife sharks make lazy passes
+                // now and eat what they swim through; a boss doing that is a
+                // fight you could stand still and ignore. It keeps every other
+                // line of this block — the flattening and the weave are what a
+                // big body swimming looks like, and are not about pursuit.
+                lateral: { climbRange: 22, climbFull: 9, climbFloor: 0.1, climbEase: 0.5, weavePeriod: 11, weaveLead: 13, weaveAmp: 4.2, weaveBody: 0.06, wanderPitch: 0.09, cruise: false } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex` and not `apex shark` — it is an apex body holding an apex slot,
         // but a mosasaur is a reptile and must not eat the shark family's much
@@ -7525,6 +7645,21 @@ export const CONFIG = {
 
       // Faster than a shark and leaves the water on a timer — `canBreach` lets
       // it above the surface, and `porpoise` does the ballistic arc.
+      //
+      // NO LONGER WILDLIFE. Disabled the same way the wild orca above is —
+      // weight 0 AND spawnRateMul 0 in enemies.csv, both, so a stray edit to
+      // either does not put it back in the water — because it was the single
+      // biggest thing wrong with a late run's roster: measured over five
+      // seeded runs it held 7.5 of the 13.3 apex bodies alive at level 20,
+      // more than the six sharks between them. It was also `apex` without
+      // being a shark, so it spent the allowance the shark cap exists to
+      // ration and the tighter cap never saw it.
+      //
+      // The BODY stays, and this whole block with it, because the dolphin is
+      // wanted as a COMPANION rather than as an enemy — see the `dolphinPod`
+      // stub in upgrades.csv. A row at weight 0 is one edit away from coming
+      // back, and anything that spawns by NAME ignores the pool entirely,
+      // which is the door a companion would come through.
       dolphin: {
         separates: true, canBreach: true,
         asset: 'enemyDolphin', behavior: 'porpoise', faceMotion: true,
@@ -7535,12 +7670,12 @@ export const CONFIG = {
         // No `gravity` of its own — the arc is arena.gravity's, like every
         // other body in the air. `launchSpeedY` is what sets how high it goes.
         porpoise: { interval: 6, launchSpeedX: 9, launchSpeedY: 17, launchDepth: 6 },
-        weight: 0.12, weightPerDifficulty: 0.025, maxWeight: 0.4,
-        maxConcurrent: 4, minDifficulty: 1, spawnRateMul: 1, minPlayerLevel: 3,
+        weight: 0, weightPerDifficulty: 0, maxWeight: 0,
+        maxConcurrent: 4, minDifficulty: 1, spawnRateMul: 0, minPlayerLevel: 3,
         // Grouped with the sharks as a whale, on the reading that "sharks and
         // whales" is about big rigged bodies competing for screen. It is by far
-        // the lightest of them, though, so if the apex allowance starts feeling
-        // like it's spent on dolphins, this is the tag to drop first.
+        // the lightest of them, though — which is why it is the tag that got
+        // dropped when the apex allowance turned out to be spent on dolphins.
         spawnGroup: 'apex',
     },
 
@@ -8712,7 +8847,25 @@ export const CONFIG = {
       // would, so one stacked on top of it just delays the dive's first frame.
       playerDeath: { emit: 'bigExplosion', shake: 1.0, hitstop: 0, glow: 1.4, ripple: { strength: 5.5, radius: 22 }, sfx: 'playerDeath',
                      haptic: [{ duration: 70, magnitude: 1 }, { duration: 120, magnitude: 0.45, delay: 60 }] },
+      // THE CHOMP, and it is now only ever aimed at the seal. This used to fire
+      // on every fish any predator ate anywhere in the arena — five sharks in a
+      // school is several a second, each with a screen shake and a haptic —
+      // which is why the one sound in the game that should mean "something has
+      // its teeth in YOU" meant nothing at all. Ambient feeding moved to
+      // `preyEaten` below; this is fired from the player snap in main.js.
       bite:      { emit: 'bite',        shake: 0.10, hitstop: 0,     glow: 0.35, ripple: { strength: 1.6, radius: 7 },   sfx: 'bite',     haptic: [14] },
+      // A predator taking a fish, somewhere that is not you. SILENT and with no
+      // shake and no haptic, on purpose: it happens constantly and none of it is
+      // addressed to the player. What it keeps is everything you can SEE — the
+      // burst, the ripple, the glow — so the food chain is still legible when
+      // you are looking at it and costs nothing when you are not.
+      //
+      // Its own event rather than a quieter `bite` because the saved tuning
+      // carries a full copy of every feedback row (see withoutEnemyTableFields
+      // and the tuning notes at the top of this file): turning `bite` down in
+      // here would have lost to the snapshot and changed nothing in the game.
+      // A new key has no saved opinion, so config.js owns it outright.
+      preyEaten: { emit: 'bite',        shake: 0,    hitstop: 0,     glow: 0.35, ripple: { strength: 1.6, radius: 7 },   sfx: null,       haptic: null },
       // A light tick, not nothing. Chum arrives constantly, so this is near the
       // bottom of the scale — but it IS the game's main reward loop, and it was
       // the only rewarding event in the table you couldn't feel at all.
@@ -8879,6 +9032,19 @@ export const CONFIG = {
       bossDieShell: { emit: null, sfx: 'bossDieShell' },
       bossHitHull:  { emit: null, sfx: 'bossHitHull',  sfxMinGap: 0.11 },
       bossDieHull:  { emit: null, sfx: 'bossDieHull' },
+      // A STATUS LANDING ON A BOSS — the daze (see CONFIG.boss.control.daze).
+      // Every hold in the game resolves to this one event whichever ability
+      // threw it, and that is the point: the player has to learn ONE picture
+      // for "the big one is reeling", or six abilities would each teach a
+      // different tell for the same two seconds.
+      //
+      // Loud for a control event, because it is rare — the recovery window
+      // means it can happen at most every few seconds — and because it is the
+      // only moment in a boss fight where the player is the one interrupting.
+      // The hitstop is small but real, which is what makes it land as a
+      // stagger rather than as a sparkle on a creature that kept moving.
+      bossDaze:  { emit: 'trapPop', shake: 0.18, hitstop: 0.05, glow: 0.5, ripple: { strength: 1.4, radius: 8 },
+                   sfx: 'bossDaze', haptic: [{ duration: 40, magnitude: 0.5 }], sfxMinGap: 0.2 },
       // Its own sound now rather than the generic `splash`, which is what a body
       // knocked off a boat makes. Coming out of the water and landing in it are
       // opposite events and were sharing one voice.
@@ -9356,6 +9522,25 @@ export const CONFIG = {
     fx: {
       maxParticles: 8000, // ring buffer; oldest bursts are overwritten
 
+      // HOW MANY SPRITE PARTICLES THE WHOLE GAME THROWS, as a multiplier on
+      // every emitter's own `count`. 1 is the counts exactly as authored in
+      // CONFIG.emitters; below that the screen thins out uniformly.
+      //
+      // This is one knob rather than a pass over eighty emitters because the
+      // problem it solves is a WHOLE-SCREEN one: no single burst was too big,
+      // but a late wave fires thirty of them a second and the water turns to
+      // confetti. Retuning each emitter down would have destroyed the relative
+      // sizes between them — the thing that says a boss gib is bigger news than
+      // a pellet hit — and it is exactly that ordering that should survive.
+      //
+      // The goo emitters are NOT scaled by this (see entities/particles.js).
+      // Their counts are already single digits and each particle is a lobe of a
+      // body in the density field, so thinning them makes the mass break up
+      // rather than get sparser. Kill goo, foam, gore and the auras all stay at
+      // full strength here, which is the point: what comes off a death still
+      // reads as heavy while the spray around it gets out of the way.
+      spriteDensity: 0.6,
+
       // THE CURRENT. One divergence-free swirl field covering the whole arena
       // that every particle in the game is pushed by — see entities/particles.js
       // for the shape of it. Global on purpose: two bursts going off next to
@@ -9597,6 +9782,13 @@ export const CONFIG = {
 
       shakeDecay: 0.0004, // fraction of shake left after 1s
       maxShake: 0.85, // ceiling, so a busy fight can't pin the camera
+      // The A/B kill switch for every hit-stop in the game, separate from the
+      // scale so that turning it off and back on doesn't cost you the tuned
+      // value. Off, feedback() never starts a stop at all — the events keep
+      // their shake, glow, ripple, sound and rumble, and only the freeze goes.
+      // It exists because a stop is the one feedback that LOOKS like a fault:
+      // when the game is stuttering, this is the first thing to rule out.
+      hitstopEnabled: true,
       hitstopScale: 0.12, // time scale during a hit-stop, not a full freeze
       hitstopCooldown: 0.4, // minimum gap between hit-stops
       hitFlash: 0.12, // seconds an enemy pops when hit
@@ -10903,6 +11095,13 @@ export const CONFIG = {
       // blast that fires with it. Below `bigKill` on purpose — a boat is the
       // biggest single thing that explodes in this game.
       bossDieHull:  { src: null, type: 'boom', freq: [95, 18],  decay: 1.4,  gain: 0.55, noise: 0.8, filter: 520, pitchVary: 0.08, filterVary: 0.14 },
+      // THE DAZE. A FALLING pitch, which is the whole brief — every other
+      // control sound in the bank rises (belugaTrap 170->880, elementFreeze is
+      // the exception that proves it) because something closed or seized. This
+      // one is a big animal losing the thread, so it slides down and takes its
+      // time about it. Long decay for a control voice: it has to still be
+      // audible under the fight while the daze it announces is running.
+      bossDaze:     { src: null, type: 'boom', freq: [420, 90], decay: 0.55, gain: 0.34, noise: 0.4, filter: 1400, wave: 'sine', pitchVary: 0.1, filterVary: 0.2 },
       // Nine takes, and it needs every one of them: getting hit is the sound a
       // player hears most in a bad run, and a repeated yelp stops reading as pain
       // and starts reading as a sound file.
@@ -13106,6 +13305,69 @@ export const CONFIG = {
   },
 
   // ---------------------------------------------------------------------------
+  // A SHARK DOES NOT CHASE — see the cruise-hunt block in entities/enemies.js.
+  //
+  // Every hunter used to steer at whatever it wanted at its FULL turnRate, and
+  // in a busy arena that is a permanent state: `preyRadius` is 18-24 units and
+  // the water is 70% school fish, so a shark always had a fish inside it, and
+  // the nearest fish changes every few frames as a school scatters. The result
+  // was a body with a 2.5-unit turning circle whipping between targets it was
+  // never going to line up on — which reads, correctly, as spinning on the
+  // spot. It was worst exactly where there was most to eat.
+  //
+  // Two ideas, and neither is a new movement system:
+  //
+  //   THE CORRECTION IS SMALL. A cruise hunter may spend `trackRate` rad/s on
+  //   what it wants, not the `turnRate` its body is capable of. turnRate still
+  //   bounds it — this is a budget inside that, not a replacement — so a
+  //   hammerhead is still the sharpest turner in the roster, it just doesn't
+  //   spend it all on every minnow.
+  //
+  //   IT DOESN'T TURN AROUND. Anything more than `trackCone` off the nose is
+  //   not steered for AT ALL: the shark holds its cruise, weave and wander (it
+  //   keeps LOOKING at the target — the head-look and the jaw are unchanged)
+  //   and comes back round on its own wide arc. This is what stops the
+  //   yo-yoing, and it is the difference between a hunter and a homing missile.
+  //
+  // The meal still happens. Predation resolves on INTERSECTION — resolvePredation
+  // eats any prey inside `biteRange` whether or not it was the target — so a
+  // shark cruising through a school takes fish out of it on the pass, which is
+  // the behaviour this is for.
+  //
+  // Scope: hunters that declare `hunt.lateral` (the six wildlife sharks) and
+  // are not bosses. A boss that made lazy passes would be a broken fight, so
+  // `isBoss` is excluded outright; the dolphin and the orca declare no lateral
+  // block and are untouched, as they are by the rest of the cruise shaping.
+  // ---------------------------------------------------------------------------
+  cruiseHunt: {
+    enabled: true,
+    // Radians/sec of heading correction a cruising shark may spend on a target.
+    // Against a shark's own turnRate of 2.6 this is about a fifth, which puts
+    // its pursuit turning circle at 6.5/0.5 = 13 units — twice the standoff
+    // ring, so it physically cannot orbit anything at conversation distance.
+    // THE dial: raise it toward turnRate and the old chase comes back.
+    trackRate: 0.5,
+    // Radians either side of the nose within which a target is worth turning
+    // for. 1.15 is about 66 degrees — a wide forward arc, so it still commits
+    // to anything it is broadly pointing at, and simply lets go of whatever
+    // has slipped past its flank.
+    trackCone: 1.15,
+    // The player gets a slightly better cone and rate than a fish does. A
+    // shark that treats the seal exactly like a minnow never closes on it at
+    // all, and these are separate numbers so "less chasey" and "still a
+    // threat" can be tuned against each other rather than traded.
+    playerTrackRate: 0.85,
+    playerTrackCone: 1.55,
+    // The stand-off ring, for these creatures only. apexCrowd's slots put
+    // whoever is not feeding on a circle around the player — which was the
+    // OTHER thing on screen that read as spinning, and it is redundant now:
+    // at trackRate 0.5 a shark cannot converge on a point anyway, and the
+    // crowd AVOIDANCE (which is what actually keeps them off each other) is
+    // untouched by this. False = a cruise hunter never queues for a slot.
+    standoffRing: false,
+  },
+
+  // ---------------------------------------------------------------------------
   // CRAB CLAW — the telegraphed pinch (systems/crabClaw.js).
   //
   // A crab used to be a walking contact hitbox: nothing it did on screen said
@@ -13944,7 +14206,7 @@ export const CONFIG = {
   // ---------------------------------------------------------------------------
   // THE FIRST-RUN COACH — see systems/tutorial.js for the design.
   // ---------------------------------------------------------------------------
-  // Five tips, once per browser, each cleared by doing the thing or by its own
+  // Nine tips, once per browser, each cleared by doing the thing or by its own
   // clock. The words and the timings are callouts.csv (the `coach` rows); what
   // is here is only the handful of moments the steps ask about.
   tutorial: {
@@ -13974,6 +14236,16 @@ export const CONFIG = {
     // Air time that counts as having breached. Short — this is "you left the
     // water on purpose", not "you got big air".
     breachAir: 0.3,
+    // How near the seal a creature has to be, in world units, before a tip is
+    // allowed to be ABOUT it. Only the unkillable tip asks so far.
+    //
+    // A tip pointing out something off the edge of the frame is worse than no
+    // tip: the player reads "some creatures can't be killed", looks up, sees
+    // nothing that could be meant, and learns that the band says things which
+    // are not about anything. The arena is 80 wide and 40 tall, so this is
+    // comfortably inside the shot at any zoom — the whole point is that they
+    // are looking at the animal while they read the line.
+    showRange: 22,
   },
 
   // ---------------------------------------------------------------------------
@@ -16557,6 +16829,32 @@ export const CONFIG = {
     // not what the fantasy is.
     { id: 'orcaFamily', family: 'companion', name: 'Orca Family', desc: 'Three orcas hunt enemy boats: +damage, +speed', apply: (s) => { s.orcaLevel = (s.orcaLevel ?? 0) + 1; }, maxStacks: 6 },
 
+    // A STUB, and deliberately a whole one: the row exists, the stat is seeded
+    // (path/src/stats.js) and the card is `enabled` FALSE in upgrades.csv, so
+    // it is out of the deal but everything a real implementation would need is
+    // already joined up and named the same thing.
+    //
+    // The idea. The dolphin came OUT of the enemy roster (CONFIG.enemies
+    // .dolphin, weight 0 and spawnRateMul 0) rather than being deleted, and
+    // this is what it was kept for. It is the one big body in the game that
+    // already leaves the water on a timer — `porpoise` gives it a real
+    // ballistic arc off arena.gravity — so a pod of them is a companion with a
+    // silhouette nothing else has: it works the surface, where the seal's own
+    // breaches happen, instead of orbiting like the shrimp or trailing like the
+    // seals. See systems/orca.js for the closest existing shape to copy; a pod
+    // that arrives whole on the first pick and grows in strength (rather than
+    // in headcount) is the lesson that card already learned.
+    //
+    // WHAT IS STILL MISSING, in the order the layers want doing: a
+    // systems/dolphinPod.js that reads `s.dolphinPodLevel` and drives the
+    // bodies, spawned by NAME so the weight-0 row never has to change; a
+    // CONFIG.dolphinPod block for its numbers; a CONFIG.feedback event for the
+    // hit; card art and a `desc` written with `{effect}`; then flip `enabled`
+    // to TRUE. Nothing reads the stat today, so taking it in a debug build
+    // does exactly nothing rather than half of something.
+    { id: 'dolphinPod', family: 'companion', name: 'Dolphin Pod', desc: 'A pod of dolphins works the surface alongside you.',
+      apply: (s) => { s.dolphinPodLevel = (s.dolphinPodLevel ?? 0) + 1; }, maxStacks: 6 },
+
     // --- the seeking shot -----------------------------------------------------
     // Turns the gun the run already has into a seeker, rather than adding a
     // weapon beside it — see CONFIG.homingShot for what a stack buys and why
@@ -16947,6 +17245,62 @@ function relLuminance(hex) {
     + 0.0722 * ((n & 255) / 255);
 }
 
+// ---------------------------------------------------------------------------
+// WHO ACTUALLY WEARS THIS PRESET.
+//
+// The row that exists because a preset group looks EXACTLY THE SAME whether it
+// is on twelve animals or on none. Every group under Procedural skins is
+// generated from CONFIG.biolumSkin.presets, and a preset is a set of numbers
+// that exists whether or not any asset names it — so adding one puts a full
+// 36-control group in the panel that is, until a row in assets.csv points at
+// it, connected to nothing. Dragging those sliders changes what you see by
+// zero, and there is no error, because nothing is wrong: you are editing a
+// preset, correctly, and it is worn by no one.
+//
+// That happened on the first preset added through the new path, which is a good
+// enough sample. The fix is to print the answer rather than to make the panel
+// clever about it.
+//
+// The wearer lookup is INJECTED rather than imported. ASSETS lives in
+// assets.js, assets.js already imports this file, and importing it back would
+// close the loop — the same reason assetTable.js gives for owning the size
+// apply. assets.js registers on module load; before it does (a Node harness
+// that imported config.js alone) the row says so instead of claiming zero.
+// ---------------------------------------------------------------------------
+let skinWearerLookup = null;
+
+export function registerSkinWearers(fn) {
+  skinWearerLookup = fn;
+}
+
+function biolumWearerReadout(prefix) {
+  const PRESETS = 'biolumSkin.presets.';
+  // The shared base is worn by everything with a skin, by definition — asking
+  // "who wears base" is not a question, so the row says what it is instead.
+  if (!prefix.startsWith(PRESETS)) {
+    return ['every creature with a skin falls through to this'];
+  }
+  const name = prefix.slice(PRESETS.length);
+  if (!skinWearerLookup) return ['(asset table not loaded — no answer available here)'];
+
+  const worn = skinWearerLookup(name);
+  if (!worn.length) {
+    return [
+      'WORN BY NOTHING — these sliders change nothing on screen.',
+      `Point an asset at it: set skin=${name} on a row in assets.csv`,
+      '(npm run csv), then RELOAD — the pattern is baked in at model load.',
+    ];
+  }
+  // Named, not counted. "3 assets" still leaves you opening assets.csv to find
+  // out whether the one you are looking at is among them, and the whole point
+  // of the row is to answer that without leaving the panel.
+  return [
+    `${worn.length} asset${worn.length === 1 ? '' : 's'}: ${worn.join(', ')}`,
+    'Edits here reach every one of them — colour them apart with each',
+    "model's own tint, on the Models tab.",
+  ];
+}
+
 function biolumBloomReadout(prefix) {
   const cfg = resolveBiolumCfg(prefix);
   // What the shader adds at a FULLY LIT pixel, at the top of the breath. The
@@ -17290,6 +17644,11 @@ function constellationReadout() {
 function biolumSkinItems(prefix) {
   const at = (k) => `${prefix}.${k}`;
   return [
+    // FIRST ROW IN THE GROUP, above even the pattern. It answers the question
+    // that comes before every other control here — is anything wearing this —
+    // and a group whose answer is "nothing" should say so before you have
+    // dragged a single slider, not after.
+    { type: 'readout', label: 'worn by', lines: () => biolumWearerReadout(prefix) },
     {
       path: at('pattern'), label: 'pattern',
       options: [
@@ -19676,6 +20035,7 @@ export const TUNER_SCHEMA = [
       { path: 'tutorial.openDelay', min: 0, max: 10, step: 0.5, label: 'tips: wait this long into a run (s)' },
       { path: 'tutorial.nearSurface', min: 2, max: 40, step: 1, label: 'tips: "near the surface" is within (units)' },
       { path: 'tutorial.breachAir', min: 0.05, max: 2, step: 0.05, label: 'tips: air time that counts as a breach (s)' },
+      { path: 'tutorial.showRange', min: 5, max: 60, step: 1, label: 'tips: a creature must be this close to be talked about (units)' },
     ],
   },
   {
@@ -20591,6 +20951,9 @@ export const TUNER_SCHEMA = [
     group: 'Feel',
     section: 'Look & FX',
     items: [
+      // Above the two numbers it switches off, so the A/B is one click and the
+      // tuned values are still sitting there when you click back.
+      { path: 'fx.hitstopEnabled', type: 'bool', label: 'hit-stop (all events)' },
       { path: 'fx.hitstopScale', min: 0.01, max: 1, step: 0.01, label: 'hit-stop slowdown' },
       { path: 'fx.hitstopCooldown', min: 0, max: 2, step: 0.05, label: 'hit-stop cooldown' },
       { path: 'fx.maxShake', min: 0, max: 3, step: 0.05, label: 'max shake' },
@@ -20609,6 +20972,11 @@ export const TUNER_SCHEMA = [
       { path: 'fx.playerDamage.gain', min: 0, max: 12, step: 0.1, label: 'hit size per hp fraction' },
       { path: 'fx.playerDamage.flashFraction', min: 0.05, max: 1, step: 0.01, label: 'hp lost for a full rim flash' },
       { path: 'feedback.kill.ripple.strength', min: 0, max: 10, step: 0.1, label: 'kill grid punch' },
+      // Above the per-emitter counts on purpose: this is the one to move when
+      // the screen as a whole is too busy, and the counts below it are for when
+      // one particular burst is wrong. It leaves the goo alone — see the note
+      // at CONFIG.fx.spriteDensity for why that is not an oversight.
+      { path: 'fx.spriteDensity', min: 0.1, max: 1.5, step: 0.05, label: 'sprite particles (all emitters)' },
       { path: 'emitters.explosion.count', min: 0, max: 200, step: 5, label: 'explosion bits' },
       // The current every particle in the game swims in. `drag spread` is the
       // one to reach for first — it costs nothing and is most of the

@@ -446,7 +446,12 @@ const u = mesh.material.userData.__bioSkinUniforms;
 {
   const dropdowns = TUNER_SCHEMA
     .filter((g) => g.group?.startsWith('Bioluminescence'))
-    .map((g) => g.items.find((i) => i.path.endsWith('.pattern')));
+    // `i.path?.` — readout rows carry no path, and one of them is now the FIRST
+    // item in every group. This used to read `i.path.` and passed only because
+    // the pattern dropdown happened to sit at index 0, so `find` short-circuited
+    // before reaching a pathless row. Any reordering of the group would have
+    // thrown, which is not a thing a reorder should be able to do.
+    .map((g) => g.items.find((i) => i.path?.endsWith('.pattern')));
   check('every bioluminescence group has a pattern dropdown',
     dropdowns.length >= 4 && dropdowns.every(Boolean),
     `${dropdowns.length} groups`);

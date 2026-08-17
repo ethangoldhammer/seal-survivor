@@ -281,6 +281,9 @@ let sharkHoover = 0;
 let sawTarget = false;
 let sawGulp = false;
 let gaveUp = 0;
+let connected = 0;
+let chasing = false;
+let ateAtStart = 0;
 // The player sits far away and there are no fish, so chum is the only thing on
 // offer — which is the ranking under test: prey first, then chum, then you.
 const away = makePlayer(bounds.right - 3, bounds.surfaceY - 2);
@@ -291,8 +294,24 @@ for (let i = 0; i < 60 * 20; i++) {
   });
   if (shark.chumTarget) sawTarget = true;
   if (shark.eating) sawGulp = true;
-  // A target held right up to the give-up timer was abandoned, not eaten.
-  if (shark.chumChase > (sc.maxChase ?? 5) - dt && shark.chumChase < (sc.maxChase ?? 5) + dt) gaveUp++;
+  // WHAT HAPPENED TO EACH TARGET IT TOOK. Counted as one verdict per chase —
+  // the chase ends, and it ended either in a meal or in a whiff — rather than
+  // as frames inside a window, which is how it used to be counted and was
+  // wrong twice over. `chumChase` sat pinned exactly on maxChase for the whole
+  // three-second `cooldown` that follows an abandonment, so ONE whiff was
+  // counted 182 times and the check below could never pass again once it
+  // happened at all. (enemies.js now zeroes that clock on abandon, which is
+  // the other half of the fix.) And the window could not see an abandonment
+  // that took a different number of frames to reach.
+  //
+  // The discriminator is the EAT COUNTER, not any flag on the shark: the orb
+  // vanishing and the shark giving up look identical from here — both clear
+  // `chumTarget` — and `scavengeCooldown` is set by both paths too.
+  if (!chasing && shark.chumTarget) { chasing = true; ateAtStart = sharkAte; }
+  else if (chasing && !shark.chumTarget) {
+    chasing = false;
+    if (sharkAte > ateAtStart) connected++; else gaveUp++;
+  }
 }
 check('the shark targets fallen chum', sawTarget);
 check('...swims into range and gulps', sawGulp);
@@ -301,8 +320,8 @@ check('...visibly, with crumbs', sharkHoover > 0, `${sharkHoover} crumb burst(s)
 // A hunter that mostly fails to catch stationary food on the seabed is a
 // hunter whose eatRange or turning circle is wrong, and it would read on
 // screen as a shark circling a pile it never touches.
-check('it connects more often than it whiffs', sharkAte > gaveUp,
-  `${sharkAte} swallowed against ${gaveUp} abandoned in 20s`);
+check('it connects more often than it whiffs', connected > gaveUp,
+  `${connected} chase(s) ended in a meal against ${gaveUp} abandoned, ${sharkAte} orb(s) swallowed in 20s`);
 check('it never parks on the pile — a shark keeps swimming',
   Math.hypot(shark.vx, shark.vy) > 1, `moving at ${Math.hypot(shark.vx, shark.vy).toFixed(1)}`);
 

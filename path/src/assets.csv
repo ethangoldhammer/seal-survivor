@@ -26,10 +26,10 @@ enemyMightyMeg,2,,
 enemyMosasaur,2.3,,"The mosasaur boss. Same multiplier as the megalodon on purpose - the two fit values (7.4 and 7.0) are what separate them, so this column stays comparable between the two biggest bodies. 7.4 x 2.3 = 17.0 on screen, and bossMosasaur's 1.6 takes it to 27.2. Measured by tools/boss-scale-check.mjs"
 enemyOrcaBull,2.8,,The boss orca bull. Cut from the family file by tools/orca-split.mjs.
 enemyOrcaCow,2.8,,The boss orca cow. bossOrca rolls between this and the bull per arrival.
-enemyOtter,2.28,,
 enemyOyster,2.9,,
 enemySeaTurtle,3.08,,
 enemyShark,2.66,,
+enemySquid,1,squidGlow,"Added for the SKIN, not the size. size=1 is what this asset already had - it has never carried a row, and an asset with no row spawns at 1 - so this changes nothing about how big the squid is or how big it is to hit. Left deliberately: the hitbox is derived from the visual scale, so retuning it here would be a balance edit smuggled in with a look. Its 2.8 fit against enemyShark's 2.66x2.5 is a separate question, worth asking on its own."
 enemyStingray,3.1,,
 enemyWalkingCrab,2.3,,matched to enemyEmberCrab; 2.3 reproduces the old crab's on-screen height on the new rig
 harp,1,,"the orbiting harp - fit is 1.6 world units against the seal's 2.6, so this column is the multiple of a deliberately under-sized instrument"

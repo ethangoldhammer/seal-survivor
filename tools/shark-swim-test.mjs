@@ -17,6 +17,7 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
+import { resolvePredation } from '../path/src/systems/predation.js';
 
 const scene = new THREE.Scene();
 
@@ -51,7 +52,49 @@ const HIGH = -6;   // near the surface, but under it
 // and is turn-limited, so the first half-second of any run is it swinging round
 // to face what it wants — which in a short window swamps the thing being
 // measured and reports a flattened shark as climbing.
-function run(type, { playerAt, seconds = 12, from = { x: 0, y: 0 }, warmup = 0 }) {
+//
+// `chase` is the one option that is not about the scenario. Most of the
+// sections below are claims about the CLIMB SHAPING — updateSwim's eased gain
+// and shapeSwim's slope budget — and they measure it through a shark
+// approaching a player, because that is the only way to make it climb. That
+// scenario stopped existing when CONFIG.cruiseHunt landed: a cruise hunter
+// spends `trackRate` on the player rather than its full turnRate, so it no
+// longer commits to an approach at all and the horizontal gap it is being
+// judged on is whatever its wander happened to leave. Those sections pass
+// `chase: true`, which switches the pursuit budget off for the run so the one
+// variable under test is the only one moving. The cruise-hunt behaviour itself
+// gets its own section at the bottom, measured on its own terms.
+//
+// SEEDED, and this is not decoration. A creature spawns on a random heading
+// with a random speed off `speedVariance`, and a run is a dozen seconds of
+// integrating that — so the same assertion passed or failed depending on the
+// draw. Measured before this: three of twelve invocations failed, always on the
+// slowest bodies and usually on "megalodon: rises later in the approach", which
+// is a threshold nothing was actually near. That is a quarter of runs telling
+// you that you broke something you did not touch, and the cost is not the
+// re-run — it is that a real regression in this file now has to argue with a
+// reputation for crying wolf. `seed` is per scenario so two scenarios are still
+// independent draws; it just stops them being different ones each invocation.
+function run(type, { playerAt, seconds = 12, from = { x: 0, y: 0 }, warmup = 0, chase = false, seed = 1 }) {
+  const rand = seeded(seed);
+  const orig = Math.random;
+  Math.random = rand;
+  try {
+    return runInner(type, { playerAt, seconds, from, warmup, chase });
+  } finally { Math.random = orig; }
+}
+
+function seeded(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function runInner(type, { playerAt, seconds, from, warmup, chase }) {
   resetEnemies(scene);
   const e = spawnNamed(scene, type, 0, { x: from.x, y: from.y }, { ignoreCaps: true });
   if (!e) throw new Error(`could not spawn ${type}`);
@@ -61,13 +104,17 @@ function run(type, { playerAt, seconds = 12, from = { x: 0, y: 0 }, warmup = 0 }
   const looks = [];
   const steps = Math.round(seconds / dt);
   const skip = Math.round(warmup / dt);
-  for (let i = 0; i < steps + skip; i++) {
-    updateEnemies(dt, scene, player.position, () => {}, () => {});
-    if (i < skip) continue;
-    path.push({ x: e.mesh.position.x, y: e.mesh.position.y });
-    gains.push(e.climbGain ?? 0);
-    if (e.lookTarget) looks.push({ x: e.lookTarget.x, y: e.lookTarget.y });
-  }
+  const wasCruise = CONFIG.cruiseHunt.enabled;
+  if (chase) CONFIG.cruiseHunt.enabled = false;
+  try {
+    for (let i = 0; i < steps + skip; i++) {
+      updateEnemies(dt, scene, player.position, () => {}, () => {});
+      if (i < skip) continue;
+      path.push({ x: e.mesh.position.x, y: e.mesh.position.y });
+      gains.push(e.climbGain ?? 0);
+      if (e.lookTarget) looks.push({ x: e.lookTarget.x, y: e.lookTarget.y });
+    }
+  } finally { CONFIG.cruiseHunt.enabled = wasCruise; }
   return { e, path, gains, looks };
 }
 
@@ -104,8 +151,8 @@ console.log('\nVERTICAL AUTHORITY IS EARNED, NOT GIVEN');
 for (const type of SHARKS) {
   const cfg = CONFIG.enemies[type].hunt.lateral;
   // Far: gain should sit at the floor. Near: it should open up.
-  const far = run(type, { playerAt: { x: 70, y: MID }, seconds: 6, from: { x: 0, y: MID } });
-  const near = run(type, { playerAt: { x: 0, y: MID + 2 }, seconds: 6, from: { x: 0, y: MID } });
+  const far = run(type, { playerAt: { x: 70, y: MID }, seconds: 6, from: { x: 0, y: MID }, chase: true });
+  const near = run(type, { playerAt: { x: 0, y: MID + 2 }, seconds: 6, from: { x: 0, y: MID }, chase: true });
   const farGain = far.gains[far.gains.length - 1];
   const nearGain = Math.max(...near.gains);
   check(`${type}: stays flat at range`, farGain <= cfg.climbFloor + 0.02,
@@ -121,7 +168,7 @@ for (const type of SHARKS) {
 console.log('\nTHE CLIMB IS NOT ABRUPT');
 for (const type of SHARKS) {
   const cfg = CONFIG.enemies[type].hunt.lateral;
-  const { gains } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 } });
+  const { gains } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 }, chase: true });
   let worst = 0;
   for (let i = 1; i < gains.length; i++) worst = Math.max(worst, Math.abs(gains[i] - gains[i - 1]));
   // At 60fps an exponential ease of rate k moves at most k*dt per frame.
@@ -130,7 +177,7 @@ for (const type of SHARKS) {
     `worst frame step ${worst.toFixed(5)} against a bound of ${bound.toFixed(5)}`);
 
   // And the same for the path itself: no sudden vertical velocity changes.
-  const { path } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 } });
+  const { path } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 }, chase: true });
   let worstAccel = 0;
   for (let i = 2; i < path.length; i++) {
     const v1 = (path[i].y - path[i - 1].y) / dt;
@@ -180,7 +227,13 @@ console.log('\nCETACEANS ARE LEFT ALONE');
 // at all. The BOSS orca cannot stand in for it: it declares a lateral block
 // deliberately, so listing it would turn this check inside out and assert the
 // opposite of what it says. Dolphin and otter carry the claim.
-for (const type of ['dolphin', 'otter']) {
+// The dolphin carries this alone now: the sea otter was deleted from the
+// roster, and `CONFIG.enemies.otter?.hunt?.lateral == null` passed vacuously
+// for a creature that no longer exists — which is worse than no check at all.
+// The dolphin is still declared (it is the companion stub) even though it no
+// longer spawns as wildlife, and it is still the discriminating case here.
+check('dolphin: exists to carry this claim', CONFIG.enemies.dolphin?.hunt != null);
+for (const type of ['dolphin']) {
   check(`${type}: declares no lateral block`,
     CONFIG.enemies[type]?.hunt?.lateral == null);
 }
@@ -192,7 +245,7 @@ for (const type of ['dolphin', 'otter']) {
 // no longer a flattening case at all — the shark is already underneath it, and
 // coming up is the whole point.
 {
-  const away = { playerAt: { x: 45, y: -4 }, seconds: 3, from: { x: -20, y: -34 }, warmup: 0.8 };
+  const away = { playerAt: { x: 45, y: -4 }, seconds: 3, from: { x: -20, y: -34 }, warmup: 0.8, chase: true };
   const shark = travel(run('shark', away).path);
   const lc = CONFIG.enemies.shark.hunt.lateral;
   const flat = lc.flatSlope ?? 0.35;
@@ -221,7 +274,7 @@ for (const type of SHARKS) {
   const gap = 68;   // most of the arena, so the flat run-in is the bulk of the trip
   const seconds = (gap / CONFIG.enemies[type].speed) * 1.8 + 3;
   const { path } = run(type, {
-    playerAt: { x: gap / 2, y: -5 }, seconds, from: { x: -gap / 2, y: -34 }, warmup: 0.6,
+    playerAt: { x: gap / 2, y: -5 }, seconds, from: { x: -gap / 2, y: -34 }, warmup: 0.6, chase: true,
   });
   const half = Math.floor(path.length / 2);
   const early = travel(path.slice(0, half));
@@ -234,6 +287,109 @@ for (const type of SHARKS) {
   const climbed = Math.max(...path.map((p) => p.y)) - path[0].y;
   check(`${type}: does eventually close the vertical gap`, climbed > 6,
     `rose ${climbed.toFixed(1)} units`);
+}
+
+// ---------------------------------------------------------------------------
+// A SHARK DOES NOT CHASE — CONFIG.cruiseHunt.
+//
+// Every section above measures the shark alone with the player, because that
+// isolates the cruise SHAPING. This one needs the opposite: a school in the
+// water, because a shark on an empty screen never had the problem. `preyRadius`
+// is 18-24 units and the water is mostly school fish, so a shark always had a
+// fish inside it, and the nearest fish changes every few frames as a school
+// scatters — at full turnRate that is a 2.5-unit turning circle whipping
+// between targets, which is what "spinning in place" was.
+//
+// Measured as HEADING CHANGE, not as position: a body doing tight circles
+// travels a perfectly ordinary distance and only its rate of turn gives it
+// away. `flips` — sign changes of that turn — is the second half of the tell,
+// because a steady arc and a yo-yo can have the same total.
+//
+// Run against a control with cruiseHunt off rather than against a fixed
+// threshold, for the reason every comparison here is: these are numbers nobody
+// can read in the absolute, and the claim is about the change.
+//
+// Seeded and averaged over seeds. Unseeded, the turn rate moved by a third
+// between invocations, which is more than the effect on two of the species.
+console.log('\nA SHARK DOES NOT CHASE');
+{
+  // A shark, a player, and a school drifting around both. Restocked as it is
+  // eaten, or the arena empties and the measurement quietly turns back into the
+  // empty-screen one every other section already covers.
+  function hunted(type, seed, { cruise, seconds = 40 }) {
+    const rand = seeded(seed);
+    const orig = Math.random;
+    const wasCruise = CONFIG.cruiseHunt.enabled;
+    Math.random = rand;
+    CONFIG.cruiseHunt.enabled = cruise;
+    try {
+      resetEnemies(scene);
+      player.position.set(0, MID, 0);
+      const e = spawnNamed(scene, type, 6, { x: -18, y: MID - 2 }, { ignoreCaps: true });
+      const stock = () => spawnNamed(scene, 'fish', 6,
+        { x: (rand() * 2 - 1) * 26, y: MID + 2 + (rand() * 2 - 1) * 9 }, { ignoreCaps: true });
+      for (let i = 0; i < 26; i++) stock();
+      let turn = 0;
+      let flips = 0;
+      let eaten = 0;
+      let last = e.heading;
+      let lastSign = 0;
+      const steps = Math.round(seconds / dt);
+      for (let i = 0; i < steps; i++) {
+        updateEnemies(dt, scene, player.position, () => {}, () => {});
+        resolvePredation(dt, scene, { onFishEaten: () => { eaten += 1; } });
+        if (enemies.length < 14) stock();
+        let d = e.heading - last;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        turn += Math.abs(d);
+        const s = Math.sign(d);
+        if (s !== 0 && lastSign !== 0 && s !== lastSign) flips += 1;
+        if (s !== 0) lastSign = s;
+        last = e.heading;
+      }
+      return { turn: turn / seconds, flips: flips / seconds, eaten };
+    } finally {
+      Math.random = orig;
+      CONFIG.cruiseHunt.enabled = wasCruise;
+    }
+  }
+
+  const SEEDS = [1, 2, 3, 4, 5];
+  const avg = (type, cruise, field) => SEEDS
+    .reduce((s, seed) => s + hunted(type, seed, { cruise })[field], 0) / SEEDS.length;
+
+  for (const type of SHARKS) {
+    const was = avg(type, false, 'turn');
+    const now = avg(type, true, 'turn');
+    // Two thirds is what the shipped numbers measure at; the check is set at a
+    // third so it is testing that the mechanism is connected and pointing the
+    // right way, not pinning `trackRate` to the value it happens to hold.
+    check(`${type}: turns far less while hunting`, now < was * 0.66,
+      `${now.toFixed(2)} rad/s against ${was.toFixed(2)} uncapped`);
+
+    // ...AND IT STILL EATS. The whole design is that the meal comes from
+    // swimming through a school rather than from running one down —
+    // resolvePredation takes any prey inside biteRange whether or not it was
+    // the target — so a shark that stopped feeding would mean the cone had
+    // simply broken the food chain instead of loosening it.
+    const meals = avg(type, true, 'eaten');
+    check(`${type}: still feeds on what it swims through`, meals >= 4,
+      `${meals.toFixed(1)} fish in 40s without chasing any of them`);
+  }
+
+  // The bosses opt out, and they do it in the DATA rather than by being
+  // recognised at runtime: `e.isBoss` is a live flag set after spawn and
+  // cleared again in windows where a boss body is still in the water, so a
+  // boss spawned by name in a harness — or held as a corpse in a real run —
+  // would read as ordinary wildlife. Every boss that declares a lateral block
+  // has to declare `cruise: false` inside it, and that is what this asserts.
+  for (const key of ['bossShark', 'bossOrca', 'bossHammerhead', 'bossMosasaur']) {
+    const lat = CONFIG.enemies[key]?.hunt?.lateral;
+    check(`${key}: declares itself out of the cruise hunt`,
+      lat != null && lat.cruise === false,
+      lat == null ? 'no lateral block at all' : `cruise: ${lat.cruise}`);
+  }
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}\n`);

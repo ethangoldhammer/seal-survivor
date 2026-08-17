@@ -5,13 +5,17 @@
 // Two rules a boss fight now has, checked against the real systems rather than
 // against the config that is supposed to drive them.
 //
-//   1. A BOSS CANNOT BE HELD. Six systems in this game stop a creature moving
-//      — the beluga's bubbles, the octopus grab, the bakalar's net, the club's
-//      ice, the club's own launch, the dumbo's charm — and every one of them
-//      is on a cooldown short enough that two together mean a boss that never
-//      gets a turn. The rule is enforced at the CREATURE (systems/control.js),
-//      so what is checked here is that every one of those six routes actually
-//      goes through it, and that ordinary fish are untouched by the change.
+//   1. A BOSS CANNOT BE HELD — IT IS DAZED INSTEAD. Six systems in this game
+//      stop a creature moving — the beluga's bubbles, the octopus grab, the
+//      bakalar's net, the club's ice, the club's own launch, the dumbo's charm
+//      — and every one of them is on a cooldown short enough that two together
+//      mean a boss that never gets a turn. So a hold on a boss converts to a
+//      couple of seconds of heavy slow with its heading weaving and its next
+//      tell cancelled, on ONE shared budget with a recovery window after it.
+//      The rule is enforced at the CREATURE (systems/control.js), so what is
+//      checked here is that the conversion happens, that it cannot be stacked
+//      or chained, that a dazed boss is still a boss that moves and hurts, and
+//      that ordinary fish are untouched by any of it.
 //
 //      Tested through each system's own entry point where one exists, and
 //      through the shared gate where the entry point needs half the game
@@ -31,7 +35,10 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
-import { canHold, holdEnemy, charmEnemy, controlImmune } from '../path/src/systems/control.js';
+import {
+  canHold, holdEnemy, charmEnemy, controlImmune,
+  isDazed, dazeReady, clearDaze, dazeSpeedMul, dazeVeer, tickDaze,
+} from '../path/src/systems/control.js';
 import { chillEnemy } from '../path/src/systems/elements.js';
 import {
   enemies, resetEnemies, spawnNamed, updateEnemies, updateSpawning,
@@ -144,37 +151,92 @@ const fish = put('fish');
 check('the rule is on for bosses', controlImmune(boss) && !controlImmune(fish));
 check('canHold refuses the boss and allows the fish', !canHold(boss) && canHold(fish));
 
-// The two writers everything else goes through.
-check('holdEnemy refuses a boss', holdEnemy(boss, 5) === false && !(boss.trapTimer > 0));
+// The two writers everything else goes through. A boss is still never HELD —
+// what changed is that the refusal is no longer silence: the hold is converted
+// into a daze, and the return says so, which is what lets a caller spend its
+// charge on the conversion.
+check('holdEnemy never traps a boss', !(boss.trapTimer > 0));
+check('...but it does daze one, and reports it', holdEnemy(boss, 5) === true && isDazed(boss),
+  `${boss.dazeTimer.toFixed(2)}s`);
 check('...and takes on a fish', holdEnemy(fish, 5) === true && fish.trapTimer > 0);
-check('charmEnemy refuses a boss', charmEnemy(boss, 5) === false && !(boss.charmTimer > 0));
+check('a fish is never dazed — that is the boss\'s version of the status',
+  !isDazed(fish) && !dazeReady(fish));
+clearDaze(boss);
+check('charmEnemy never charms a boss',
+  charmEnemy(boss, 5) === true && !(boss.charmTimer > 0) && isDazed(boss));
 check('...and takes on a fish', charmEnemy(fish, 5) === true && fish.charmTimer > 0);
+
+// THE CEILING, from the direction that matters: the longest hold any card in
+// the game can ask for is still only worth a couple of seconds.
+clearDaze(boss);
+holdEnemy(boss, 999);
+check('no source can buy more than the cap',
+  boss.dazeTimer <= CONFIG.boss.control.daze.max,
+  `${boss.dazeTimer.toFixed(2)}s of a ${CONFIG.boss.control.daze.max}s ceiling`);
+clearDaze(boss);
 
 // Latching, not assignment: two holds on one fish is the longer of the two.
 holdEnemy(fish, 2);
 check('a shorter hold cannot cut a longer one short', fish.trapTimer >= 5,
   `${fish.trapTimer.toFixed(2)}s left`);
 
-// COLD SNAP is the one with a partial answer, and the part that still lands is
-// the point: the slow stacks on a boss and only the freeze at saturation is
-// refused. A boss immune to the whole element would make Iced Out in the Club
-// a dead card in the fight it was bought for.
+// COLD SNAP against a boss, and the whole cycle: the slow stacks, saturation
+// converts to a daze rather than a freeze, and the cold is SPENT by the
+// conversion exactly as it is on a fish — so the element ramps again from
+// nothing instead of parking the boss at max slow for the rest of the fight.
 fresh();
 const iceBoss = put('bossShark', { boss: true });
 const iceFish = put('fish', { at: { x: 6, y: 0 } });
 let froze = false;
-for (let i = 0; i < 12; i++) {
-  froze = chillEnemy(iceBoss, 0.2, 3, 1.5, {}, 0, 0) || froze;
+let slowAtFreeze = 0;
+let slowAfterFreeze = 0;
+for (let i = 0; i < 12 && !froze; i++) {
+  slowAtFreeze = iceBoss.chillSlow ?? 0;
+  froze = chillEnemy(iceBoss, 0.2, 3, 1.5, {}, 0, 0);
+  if (froze) slowAfterFreeze = iceBoss.chillSlow ?? 0;
 }
-check('cold snap never freezes a boss', !froze && !(iceBoss.trapTimer > 0),
+check('cold snap never freezes a boss solid', !(iceBoss.trapTimer > 0),
   `trapTimer ${iceBoss.trapTimer ?? 0}`);
-check('...but the slow still stacks on it', iceBoss.chillSlow > 0,
-  `chillSlow ${iceBoss.chillSlow?.toFixed(2)}`);
+check('...it saturates into a daze instead', froze && isDazed(iceBoss),
+  `${iceBoss.dazeTimer?.toFixed(2)}s`);
+check('...the slow stacked on the way there', slowAtFreeze > 0,
+  `chillSlow ${slowAtFreeze.toFixed(2)} on the hit before`);
+// Measured ON the converting hit, not at the end of the loop — the cold starts
+// building again immediately afterwards, so a later reading says nothing.
+check('...and saturation SPENT the cold, same as on a fish',
+  slowAfterFreeze < slowAtFreeze,
+  `chillSlow ${slowAtFreeze.toFixed(2)} -> ${slowAfterFreeze.toFixed(2)}`);
+// It ramps back up rather than being locked out of the fight — the whole
+// rhythm the conversion is for.
+for (let i = 0; i < 12; i++) chillEnemy(iceBoss, 0.2, 3, 1.5, {}, 0, 0);
+check('...then the cold builds again while the boss recovers',
+  (iceBoss.chillSlow ?? 0) > slowAfterFreeze,
+  `chillSlow back to ${iceBoss.chillSlow?.toFixed(2)}`);
 let frozeFish = false;
 for (let i = 0; i < 12; i++) {
   frozeFish = chillEnemy(iceFish, 0.2, 3, 1.5, {}, 0, 0) || frozeFish;
 }
 check('...and an ordinary fish still freezes solid', frozeFish && iceFish.trapTimer > 0);
+
+// A DAZED BOSS STILL GETS A TURN. This is the line the whole feature is drawn
+// against, and every one of these is a way it could quietly become a hold.
+check('a dazed boss is slowed, not stopped',
+  dazeSpeedMul(iceBoss) > 0 && dazeSpeedMul(iceBoss) < 1, `x${dazeSpeedMul(iceBoss).toFixed(2)}`);
+check('...it is not inert — no trap, no charm',
+  !(iceBoss.trapTimer > 0) && !(iceBoss.charmTimer > 0));
+check('...and its heading is being pushed off the line', (() => {
+  // The weave crosses zero, so one sample proves nothing — walk it and look
+  // for the swing.
+  let lo = 0;
+  let hi = 0;
+  for (let i = 0; i < 120; i++) {
+    const v = dazeVeer(iceBoss);
+    lo = Math.min(lo, v);
+    hi = Math.max(hi, v);
+    tickDaze(iceBoss, DT);
+  }
+  return hi - lo > 0.2;
+})(), 'the veer swings across its heading');
 
 // The debug door, both ways round. A rule with an off switch that doesn't
 // switch anything off is worse than no switch.
@@ -530,6 +592,144 @@ resetBossPerks();
 check('releasing the perk hands the turtles back',
   shells.every((t) => !t.perkDrive && t.leaving));
 check('...and forgets the perk entirely', activeBossPerk() === null);
+
+// ===========================================================================
+section('A DAZED BOSS SWIMS BADLY — MEASURED, NOT ASSUMED');
+// ===========================================================================
+// The two halves of the daze that actually reach the water, run through the
+// real integrator and measured AGAINST A CONTROL RUN. A boss out-swims any
+// absolute threshold you could type here — the only honest question is "how
+// much of what it would have done did it manage".
+{
+  const chase = (dazed) => {
+    fresh();
+    const b = put('bossShark', { boss: true, at: { x: 20, y: 0 } });
+    const to = { x: 0, y: 0, z: 0 };
+    // Let it settle into its approach before the clock starts, or the first
+    // frames measure a standing start rather than a chase.
+    for (let i = 0; i < 60; i++) updateEnemies(DT, scene, to, () => {}, () => {});
+    if (dazed) charmEnemy(b, 5);
+    const from = Math.hypot(b.mesh.position.x - to.x, b.mesh.position.y - to.y);
+    // How far its heading sits off the bearing to the player, averaged over the
+    // second. A boss holds a standoff rather than swimming straight down your
+    // throat (see systems/apexCrowd.js) so this never reads zero — which is
+    // why it is compared against a control run and never against a number.
+    let off = 0;
+    for (let i = 0; i < 60; i++) {
+      updateEnemies(DT, scene, to, () => {}, () => {});
+      const want = Math.atan2(to.y - b.mesh.position.y, to.x - b.mesh.position.x);
+      let d = Math.atan2(b.vy, b.vx) - want;
+      d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+      off += Math.abs(d);
+    }
+    const to2 = Math.hypot(b.mesh.position.x - to.x, b.mesh.position.y - to.y);
+    return { closed: from - to2, off: off / 60 };
+  };
+
+  // AVERAGED, because the weave starts at a random phase and lists a random
+  // way (see dazeEnemy) — a single daze that happens to live near the zero
+  // crossing of its own swing barely veers at all, and a single run comparing
+  // one of those against one control is a coin toss. Eight of each is the
+  // difference between measuring the rule and measuring the roll.
+  const avg = (dazed, key, n = 8) => {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += chase(dazed)[key];
+    return sum / n;
+  };
+
+  const freeClosed = avg(false, 'closed');
+  const heldClosed = avg(true, 'closed');
+  check('a dazed boss closes far less ground in the same second',
+    heldClosed < freeClosed * 0.7,
+    `${heldClosed.toFixed(2)}u against ${freeClosed.toFixed(2)}u`);
+  check('...but it is still coming — this is a slow, not a stop',
+    heldClosed > 0, `${heldClosed.toFixed(2)}u`);
+
+  // THE WEAVE, isolated. Compared against a daze with the veer dialled to zero
+  // rather than against an undazed boss, so the only difference between the two
+  // runs is the thing being measured — the slow is present in both.
+  //
+  // This is the check that caught the veer being written to the velocity
+  // instead of to the heading, where it was overwritten by the next steer and
+  // moved the animal by measurably nothing. A "does the config exist" test
+  // would have passed the whole time.
+  const heldOff = avg(true, 'off');
+  const shippedVeer = CONFIG.boss.control.daze.veer;
+  let offNoVeer = 0;
+  try {
+    CONFIG.boss.control.daze.veer = 0;
+    offNoVeer = avg(true, 'off');
+  } finally {
+    CONFIG.boss.control.daze.veer = shippedVeer;
+  }
+  check('...and the weave genuinely takes it off the line',
+    heldOff > offNoVeer + 0.25,
+    `${(heldOff * 57.3).toFixed(0)} deg against ${(offNoVeer * 57.3).toFixed(0)} deg with the veer off`);
+}
+
+// ===========================================================================
+section('A DAZE INTERRUPTS A TELL, NOT A COMMITMENT');
+// ===========================================================================
+// The split this whole feature stands on. A wind-up is a promise the boss has
+// not kept yet and control can talk it out of; a lunge already travelling is
+// one it has kept, and stopping THAT is the "frozen mid-tell" failure the rule
+// in systems/control.js exists to prevent — the telegraph would become a lie.
+//
+// Driven through the lunge because it is the perk where both halves are
+// visible in one field: `perkDrive` is raised for the wind-up and the dash
+// alike, and the dash is the only one that also carries a big velocity.
+{
+  const lunge = perkById('lunge');
+  const at = { x: 0, y: 0 };
+
+  // --- the wind-up, cancelled ---------------------------------------------
+  fresh();
+  const windBoss = put('bossShark', { boss: true });
+  attachBossPerk(scene, windBoss, lunge);
+  let sawWindup = false;
+  for (let i = 0; i < 60 * 20 && !sawWindup; i++) {
+    updateBossPerks(DT, scene, at, hooks);
+    sawWindup = activeBossPerk()?.stage === 'windup';
+  }
+  check('the lunge reaches its wind-up at all', sawWindup, activeBossPerk()?.stage ?? 'none');
+  charmEnemy(windBoss, 5);
+  updateBossPerks(DT, scene, at, hooks);
+  check('...and a status landing on it cancels the tell',
+    activeBossPerk()?.stage === 'ready', activeBossPerk()?.stage ?? 'none');
+  check('...handing the body back rather than leaving it driven',
+    windBoss.perkDrive === false);
+  // A cancelled tell must not be a deleted perk. The player bought a window.
+  check('...but only for a beat — it re-telegraphs after the daze',
+    activeBossPerk().timer <= windBoss.dazeTimer + (CONFIG.boss.control.daze.perkRecovery ?? 0.6) + 1e-6,
+    `${activeBossPerk().timer.toFixed(2)}s vs a ${lunge.cooldown}s cooldown`);
+  // ...and nothing new starts while it is still reeling.
+  for (let i = 0; i < 10; i++) updateBossPerks(DT, scene, at, hooks);
+  check('...and nothing new starts while it is still dazed',
+    activeBossPerk()?.stage === 'ready' && isDazed(windBoss));
+
+  // --- the dash, untouched -------------------------------------------------
+  fresh();
+  const dashBoss = put('bossShark', { boss: true });
+  attachBossPerk(scene, dashBoss, lunge);
+  let sawDash = false;
+  for (let i = 0; i < 60 * 30 && !sawDash; i++) {
+    updateBossPerks(DT, scene, at, hooks);
+    sawDash = activeBossPerk()?.stage === 'dash';
+  }
+  check('the lunge commits to a dash', sawDash, activeBossPerk()?.stage ?? 'none');
+  charmEnemy(dashBoss, 5);
+  updateBossPerks(DT, scene, at, hooks);
+  check('...and a status landing mid-flight does NOT stop it',
+    activeBossPerk()?.stage === 'dash' && dashBoss.perkDrive === true,
+    activeBossPerk()?.stage ?? 'none');
+  check('...it is still travelling at lunge speed',
+    Math.hypot(dashBoss.vx, dashBoss.vy) > (lunge.speed ?? 34) * 0.5,
+    `${Math.hypot(dashBoss.vx, dashBoss.vy).toFixed(1)} u/s`);
+  // The daze must not quietly slow a committed dash either — that is the same
+  // interruption wearing a different hat.
+  check('...and the daze does not tax the dash\'s step',
+    dazeSpeedMul(dashBoss) === 1 && dazeVeer(dashBoss) === 0);
+}
 
 fresh();
 console.log(failures ? `\n${failures} FAILED\n` : '\nall good\n');

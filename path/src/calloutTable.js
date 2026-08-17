@@ -72,9 +72,17 @@
 //             quiet until the condition clears and comes back — which is what
 //             you want for the boss, and NOT what you want for oxygen.
 //             Ignored for coach rows: those fire once and are done.
-//   arrow     what the arrow points at while the line is up: `chum` (the
-//             nearest bite in the water) or `surface` (straight up, out of the
-//             water). Blank = no arrow, which is most rows.
+//   arrow     what the arrow points at while the line is up. Two of them name
+//             a THING and can come up empty — the tip is up because something
+//             is in the water, and it can be eaten or expire mid-sentence:
+//               chum     the nearest bite
+//               pickup   the nearest power-up orb
+//             The other two name a DIRECTION and are always answerable, which
+//             is why they are separate targets rather than "the nearest bubble"
+//             and "the nearest seabed orb": what they mean is up and down.
+//               surface  straight up, out of the water
+//               seabed   straight down, at the floor
+//             Blank = no arrow, which is most rows.
 // ============================================================================
 
 import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
@@ -90,7 +98,7 @@ const FILE = 'callouts.csv';
 const DEVICE_TEXT_COLUMN = { touch: 'textTouch', pad: 'textPad' };
 
 export const CALLOUT_KINDS = ['warn', 'coach'];
-export const ARROW_TARGETS = ['chum', 'surface'];
+export const ARROW_TARGETS = ['chum', 'pickup', 'surface', 'seabed'];
 /** The surfaces a callout can appear on. First entry is the default. */
 export const CALLOUT_ANCHORS = ['band', 'player'];
 

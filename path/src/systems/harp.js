@@ -5,7 +5,7 @@ import { spawnProjectile } from '../entities/projectiles.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { orbitTarget } from './orbit.js';
 import { aoe, targeting, abilityDamage, companionScale } from './scaling.js';
-import { canHold } from './control.js';
+import { canHold, canControl, charmEnemy } from './control.js';
 import { createNoteField, rollNoteColor } from './noteStorm.js';
 
 // ===========================================================================
@@ -29,8 +29,11 @@ import { createNoteField, rollNoteColor } from './noteStorm.js';
 //   charmTimer  the SHARED field (systems/control.js). Pacification: it stops
 //               chasing and stops dealing contact damage, enforced in
 //               combat.js and enemies.js exactly as the dumbo's charm is. Going
-//               through charmEnemy() is what buys the boss immunity and the
-//               no-clobber latch for free.
+//               through charmEnemy() is what buys the no-clobber latch and the
+//               BOSS CONVERSION for free — a note that lands on a boss dazes it
+//               (heavy slow, weaving heading, next tell cancelled) instead of
+//               charming it, and grows no aura. That is the whole of the harp's
+//               boss-fight value and this file does not implement a line of it.
 //   harpAura    this ability's own. How long the note ring keeps hurting.
 //
 // They are started together and never again assumed to agree, for the same
@@ -145,10 +148,15 @@ function bulk(e) {
  */
 export function applyHarpCharm(e, payload) {
   if (!e || !payload) return false;
-  // The shared gate. A boss is never charmed — and because the aura is set
-  // below this line rather than beside it, a boss never grows one either.
-  if (!canHold(e)) return false;
-  e.charmTimer = Math.max(e.charmTimer ?? 0, payload.duration);
+  // The shared verb, which is also the shared gate. On a boss this lands as a
+  // DAZE instead of a charm and returns true — the note DID something, and the
+  // caller should say so. See systems/control.js.
+  if (!charmEnemy(e, payload.duration)) return false;
+  // ...but only a genuinely charmed body grows a ring. A boss is not fighting
+  // for you and has no crowd around it to grind; a note ring spinning on three
+  // tonnes of animal that is about to eat you would read as the ability having
+  // done far more than it did.
+  if (!canHold(e)) return true;
   e.harpAura = Math.max(e.harpAura ?? 0, payload.auraDuration);
   e.harpAuraRadius = payload.auraRadius;
   e.harpAuraDamage = payload.auraDamage;
@@ -310,12 +318,15 @@ export function updateHarp(dt, scene, playerPos, level, enemiesList, hooks = {})
  * the same fish drifting in and out of range twice a second depending on where
  * the ring happened to have carried the instrument.
  *
- * Charmable bodies win outright, even over something bigger that cannot be
- * held: a note spent on a boss buys damage, and a note spent on the shark
- * beside it buys damage AND the aura, which is the entire ability. But a boss
- * with nothing else in the water is still worth playing at — that is the
- * fallback, and it is why this is two tiers rather than the dumbo's flat
- * "skip what you cannot hold".
+ * Bodies a note can put a STATUS on win outright, even over something bigger
+ * that cannot take one: a note spent on a creature already reeling buys damage,
+ * and a note spent on the shark beside it buys damage AND the aura. A boss is
+ * in that first tier whenever it is dazeable, which is what makes the harp
+ * genuinely worth having in a boss fight — and it drops out of it while the
+ * daze and its recovery run, so the notes go back to the forage school instead
+ * of hammering a creature that cannot take another status yet. The second tier
+ * is what keeps a note worth playing at all when nothing in range can be
+ * touched: damage is damage.
  */
 function pickTarget(playerPos, range, enemiesList) {
   const r2 = range * range;
@@ -334,7 +345,7 @@ function pickTarget(playerPos, range, enemiesList) {
     if (dx * dx + dy * dy > r2) continue;
 
     const size = bulk(e);
-    if (canHold(e)) {
+    if (canControl(e)) {
       if (size > bestBulk) { bestBulk = size; best = e; }
     } else if (size > fallbackBulk) {
       fallbackBulk = size; fallback = e;
