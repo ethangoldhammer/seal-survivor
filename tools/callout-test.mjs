@@ -108,7 +108,7 @@ const {
 const { DEVICES } = await import('../path/src/devices.js');
 const {
   COACH_IDS, updateTutorial, resetTutorial, resetTutorialRun, noteTutorialEvent,
-  tutorialState, tutorialDone, tutorialComplete,
+  tutorialState, tutorialDone, tutorialComplete, legibleFor,
 } = await import('../path/src/systems/tutorial.js');
 const {
   parseCalloutCsv, checkCalloutIds, calloutText, calloutOnDevice,
@@ -1085,9 +1085,15 @@ section('{player} — one name, every text table');
   resetTutorial();
   resetCallouts();
   resetTutorialRun();
+  // LONG ENOUGH FOR THE TIP TO FINISH BEING READ. This was 6 seconds, which
+  // was comfortably past the old fixed 1.6s floor and is not past the strike
+  // line's own: the minimum is derived from the sentence's LENGTH now, so a
+  // fifty-character tip is held four seconds even by a player who answers it
+  // at once. A run that ends mid-tip leaves the step unspent — correctly — and
+  // this block is about the ledger, not about the clock.
   coachRun((ctx, t) => {
     if (t > 4 && t < 4.05) noteTutorialEvent('strike');
-  }, { seconds: 6 });
+  }, { seconds: 14 });
   const afterFirst = tutorialDone();
   check('the step the player answered is done', afterFirst.has('strike'));
   check('...and it was written to storage',
@@ -1101,6 +1107,114 @@ section('{player} — one name, every text table');
     !second.some((s) => s.id === 'strike'), second.map((s) => s.id).join(' → '));
   check('...and picks up where it left off',
     second.some((s) => s.id === 'chum'), second.map((s) => s.id).join(' → '));
+}
+// ---------------------------------------------------------------------------
+section('the pace — how long a tip stays, and the quiet after it');
+// ---------------------------------------------------------------------------
+{
+  // A LONG LINE IS HELD LONGER THAN A SHORT ONE. The whole point of deriving
+  // the floor from the sentence: a fixed one is either too short to read the
+  // food-chain tip or far too long for "Swim up for air", and the table now
+  // holds both.
+  const short = CALLOUTS.get('surface');
+  const long = CALLOUTS.get('foodChain');
+  const sMin = legibleFor(short, 'kbm');
+  const lMin = legibleFor(long, 'kbm');
+  check('a long tip is held longer than a short one', lMin > sMin,
+    `${short.id} ${sMin.toFixed(2)}s vs ${long.id} ${lMin.toFixed(2)}s`);
+  check('...the short one still gets the floor', sMin >= CONFIG.tutorial.minShow - 1e-9,
+    `${sMin.toFixed(2)}s vs floor ${CONFIG.tutorial.minShow}s`);
+  check('...and neither outlasts its own hold, or its timer could not end it',
+    sMin <= holdFor(short) + 1e-9 && lMin <= holdFor(long) + 1e-9,
+    `${lMin.toFixed(2)}s vs hold ${holdFor(long)}s`);
+  // The wording is per device, so the timing has to be too — a phone reading
+  // the keyboard line's length would hurry its own, longer one.
+  const strike = CALLOUTS.get('strike');
+  check('the min follows the wording this device is shown',
+    legibleFor(strike, 'kbm') !== legibleFor(strike, 'touch'),
+    `kbm ${legibleFor(strike, 'kbm').toFixed(2)}s vs touch ${legibleFor(strike, 'touch').toFixed(2)}s`);
+}
+{
+  // ANSWERED ON THE FRAME IT APPEARS, and it still has to be readable. This is
+  // the case the floor exists for and the one a confident player hits every
+  // time: the tip asks for a thing they are already doing.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const ctx = { runTime: 99, device: 'kbm', charging: true };
+  let shown = 0;
+  for (let t = 0; t < 12 && !tutorialDone().has('strike'); t += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+    if (tutorialState.active === 'strike') shown += DT;
+  }
+  const want = legibleFor(CALLOUTS.get('strike'), 'kbm');
+  check('a tip answered instantly is still held for its minimum',
+    shown >= want - DT * 2, `${shown.toFixed(2)}s of ${want.toFixed(2)}s`);
+  check('...and not for its whole hold, since it was obeyed',
+    shown < holdFor(CALLOUTS.get('strike')), `${shown.toFixed(2)}s vs hold ${holdFor(CALLOUTS.get('strike'))}s`);
+}
+{
+  // THE QUIET BETWEEN TIPS. Five pickup tips arriving back to back is one wall
+  // of text rather than five things learnt — this is the check that they are
+  // spaced. Every collectable in the water at once, all answered, so nothing
+  // but the gap decides the timing.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const seen = coachRun((ctx, t) => {
+    if (t > 3 && t < 3.05) noteTutorialEvent('strike');
+    for (const k of ['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'chumChunk']) setWater(ctx, k, true);
+  }, { seconds: 90 });
+  const gaps = [];
+  for (let i = 1; i < seen.length; i++) gaps.push(seen[i].t - seen[i - 1].t);
+  check('every pickup tip still fires', ['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'chumChunk']
+    .every((id) => seen.some((s) => s.id === id)), seen.map((s) => s.id).join(' → '));
+  // Against the GAP alone, not gap + the last tip's time on screen: what is
+  // being checked is that a line does not land on the frame the last one left,
+  // and asserting the whole spacing would be re-deriving the table's holds.
+  check('...with real silence between them, not one wall of text',
+    gaps.every((g) => g >= CONFIG.tutorial.gap), gaps.map((g) => g.toFixed(2)).join(', '));
+}
+{
+  // ...BUT AN ESCALATION IGNORES IT. Running out of air must not queue behind
+  // an explanation of the yellow orb. The gap blocks a step at or below the
+  // priority of the one that just spoke, and nothing else.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  // Driven by hand rather than through coachRun, because the moment being
+  // tested is one frame wide: the air has to run out AFTER the bubble tip has
+  // left the band, so that the quiet it armed is the only thing in the way.
+  // Scripted on the clock instead, the air went low while the STRIKE tip was
+  // still up, preempted it, and the check passed without ever reaching the gap.
+  const ctx = {
+    runTime: 99, device: 'kbm', charging: true,
+    inWater: new Set(['bubbleOrb']),
+    pickupInWater: (k) => ctx.inWater.has(k),
+    oxygenLow: false, aboveSurface: false,
+  };
+  const step = () => { updateCallouts(DT, {}, true); updateTutorial(DT, ctx, true); };
+
+  // Past the strike tip, then the bubble tip, answered.
+  for (let t = 0; t < 30 && !tutorialDone().has('strike'); t += DT) step();
+  for (let t = 0; t < 30 && tutorialState.active !== 'bubbleOrb'; t += DT) step();
+  check('the bubble tip is up', tutorialState.active === 'bubbleOrb', `${tutorialState.active}`);
+  noteTutorialEvent('bubbleOrb');
+  for (let t = 0; t < 30 && tutorialState.active === 'bubbleOrb'; t += DT) step();
+  check('...and ends', tutorialDone().has('bubbleOrb'));
+
+  // The band is now free and the quiet is running. Air goes.
+  ctx.oxygenLow = true;
+  let waited = 0;
+  for (; waited < 10 && tutorialState.active !== 'surface'; waited += DT) step();
+  check('the air tip arrives during the quiet a lesser tip bought',
+    tutorialState.active === 'surface', `${tutorialState.active}`);
+  check('...without waiting it out', waited < CONFIG.tutorial.gap,
+    `${waited.toFixed(2)}s of a ${CONFIG.tutorial.gap}s gap`);
 }
 {
   // Dying mid-sentence must not spend the step.

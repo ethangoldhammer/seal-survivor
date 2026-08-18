@@ -5,6 +5,7 @@ import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { CONFIG, registerSkinWearers } from './config.js';
 import { applyAssetTable } from './assetTable.js';
 import { attachNoiseShader, applyNoiseSettings } from './systems/noiseShader.js';
+import { attachToonShade, applyToonSettings } from './systems/toonShade.js';
 import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin, splitForEdges } from './systems/biolumSkin.js';
 import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
 import { createRockGeometry, startTumble } from './systems/rocks.js';
@@ -4018,7 +4019,14 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
       // (CONFIG.sealShader). Attached here so it survives every later path
       // that rebuilds a look — tint, glow and the emissive toggle all write
       // uniforms or colours, none of which disturb the injected shader.
-      if (def.noiseShader) attachNoiseShader(m2);
+      if (def.noiseShader) attachNoiseShader(m2, typeof def.noiseShader === 'string' ? def.noiseShader : null);
+      // Banded lighting (CONFIG.toonShade). ATTACHED AFTER the noise and BEFORE
+      // the biolum skin, and the order is not arbitrary: attachToonShade chains
+      // onto whatever onBeforeCompile is already there rather than assigning
+      // over it, so it has to go on after any injection it must not erase and
+      // before any that will chain onto it in turn. See the note in
+      // systems/toonShade.js about the assignment bug this avoids.
+      if (def.toonShade) attachToonShade(m2, typeof def.toonShade === 'string' ? def.toonShade : null);
       // Procedural glow patterns (CONFIG.biolumSkin). Attached in the same
       // place and for the same reason as the noise above — it survives tint,
       // glow and the emissive toggle, all of which write colours or uniforms
@@ -5378,7 +5386,7 @@ function applyEmissiveMode(m) {
 // Flip every loaded asset between masked and uniform glow. Cheap enough to
 // call from a tuner checkbox — it only touches materials that actually have a
 // mask stashed, so assets without one are skipped rather than reset.
-export { applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings };
+export { applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings };
 
 export function setEmissiveMapsEnabled(on) {
   if (!CONFIG.glow) CONFIG.glow = {};

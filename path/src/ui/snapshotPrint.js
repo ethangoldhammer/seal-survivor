@@ -2,7 +2,7 @@ import { CONFIG } from '../config.js';
 import { cssEase } from '../ease.js';
 import {
   initSnapshotCards, snapshotCardsLive, buildSnapshotCard,
-  settleSnapshotCard, releaseAllSnapshotCards, cardTextFor,
+  settleSnapshotCard, releaseAllSnapshotCards, cardTextFor, playCardWriteOn,
 } from './snapshotCard.js';
 
 // ---------------------------------------------------------------------------
@@ -132,10 +132,13 @@ const STYLES = `
     font-variant-numeric: tabular-nums; }
 
   /* THE RIVE PAPER. The artboard draws the whole print — paper, photograph,
-     chin and all — so there is no border and no chin to style here; what is
-     left is the frame the develop happens in. The canvas deliberately carries
-     .sv-print-photo so the emulsion transition above applies to it unchanged:
-     one develop, whichever renderer drew the print underneath it.
+     chin and all — so there is no border and no chin to style here.
+
+     IT ALSO OWNS THE DEVELOP. The canvas used to carry .sv-print-photo so the
+     emulsion above applied to it too, one develop whichever renderer drew the
+     print. That is over: the artboard fades its photograph in itself as part
+     of tWriteOn, and a sheet of emulsion over the canvas would hide exactly
+     the animation the trigger exists to play. Nothing here fades a Rive print.
 
      drop-shadow rather than box-shadow, because the canvas is transparent
      around the paper and a box shadow would trace the CANVAS — a hard
@@ -412,21 +415,29 @@ export function buildPrintPaper(url, meta = {}, width = 240) {
     const el = document.createElement('div');
     el.className = 'sv-print sv-print-riv';
     el.style.width = `${w}px`;
-    el.style.setProperty('--sv-emulsion', c.emulsion ?? '#e7ebec');
-    el.style.setProperty('--sv-develop', `${num(c.developMs, 620)}ms`);
-    el.style.setProperty('--sv-develop-delay', `${num(c.developDelayMs, 120)}ms`);
+    // NO EMULSION, AND NO DEVELOP FILTER, and that is the whole difference
+    // between the two papers now. The artboard fades its own photograph in as
+    // part of `tWriteOn` — a grey sheet over the canvas would cover the
+    // animation it exists to play, and a saturate/contrast filter on the
+    // canvas would be a second develop fighting the first.
+    //
+    // So the card carries neither `.sv-print-photo` nor a `.sv-print-dev`
+    // sibling, which leaves the `.sv-print-wet` / `.sv-print-dry` classes the
+    // flight still sets on it matching nothing. They are left on rather than
+    // branched around: they are how the flight describes its own state, and
+    // the coded paper below reads them exactly as it always did.
     const frame = document.createElement('div');
     frame.className = 'sv-print-frame-riv';
-    card.canvas.classList.add('sv-print-photo');
     card.canvas.setAttribute('role', 'img');
     card.canvas.setAttribute('aria-label', meta.name ? `You beat ${meta.name}` : 'Your boss kill');
-    const dev = document.createElement('div');
-    dev.className = 'sv-print-dev';
-    frame.append(card.canvas, dev);
+    frame.appendChild(card.canvas);
     el.appendChild(frame);
     // Held so the flight can stop the card drawing once it has parked, and so
     // a reset can drop the runtime instance rather than the element alone.
     el._svCard = card.canvas;
+    // Held so the flight can wait for the card to finish binding before firing
+    // its write-on. Only the flight uses it; the score screen's fan never does.
+    el._svCardReady = card.ready;
     return el;
   }
 
@@ -517,13 +528,36 @@ export function showSnapshotPrint(url, meta = {}) {
     el.classList.add('sv-print-dry');
   }));
 
+  // THE WRITE-ON, on the frame the print stops moving.
+  //
+  // WHY NOT AT THE POP. The card is built, bound and playing while it is still
+  // below the bottom of the screen, and it then crosses the whole frame. An
+  // animation fired there is one nobody sees the start of and most of nobody
+  // sees at all — it would be over, or nearly, by the time the paper arrives.
+  // "Fully visible" is the end of the eject, which is this timer.
+  //
+  // ONCE PER PRINT, AND ONLY HERE. buildPrintPaper is also how the score
+  // screen lays out its fan, and those are the same photographs a second time
+  // — a card that writes itself on again every time it is laid out is an
+  // animation about nothing. Firing from the flight rather than from the build
+  // is what keeps that distinction, and it is why this is not inside
+  // buildSnapshotCard where it would look more natural.
+  //
+  // Same generation guard as the park below: a run restarted mid-flight must
+  // not fire a trigger at a card whose runtime has already been dropped.
+  const era = generation;
+  const writeOnAt = eject;
+  window.setTimeout(() => {
+    if (era !== generation) return;
+    if (el._svCard) playCardWriteOn(el._svCard, el._svCardReady);
+  }, writeOnAt);
+
   // Held long enough to be looked at, then away to the corner. On timers
   // rather than on transitionend: `transitionend` fires per property and can
   // be missed entirely if the tab is backgrounded mid-flight, and a print that
   // never gets its park class is one stuck across the middle of the screen for
   // the rest of the run.
   const park = num(c.parkMs, 520);
-  const era = generation;
   window.setTimeout(() => {
     if (era !== generation) return;
     el.style.transition = `transform ${park}ms cubic-bezier(0.5, 0, 0.2, 1)`;
@@ -542,7 +576,13 @@ export function showSnapshotPrint(url, meta = {}) {
       // print was still crossing the screen toward it.
       armHide();
     }, park + 40);
-  }, eject + num(c.holdMs, 620));
+    // The longer of the beat and the write-on, not the sum: they are the same
+    // stillness. The print stops moving, the artboard draws itself on, and the
+    // paper leaves once BOTH the animation has finished and the print has been
+    // stood still long enough to look at. Must agree with printPhaseSeconds in
+    // systems/bossKill.js, or the ocean comes back under a print that is still
+    // on its way to the corner.
+  }, eject + Math.max(num(c.holdMs, 620), num(c.writeOnMs, 800)));
 
   return el;
 }

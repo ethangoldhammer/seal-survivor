@@ -1,0 +1,641 @@
+// The icon renderer, as one implementation shared by both pages.
+//
+//   render.html   drives it over a whole spec list and POSTs the PNGs
+//   picker.html   drives it for one spec, live, so the angles can be chosen
+//
+// SHARED ON PURPOSE. The picker exists to choose numbers that the batch render
+// then bakes, so the two have to agree about what a number MEANS. A picker with
+// its own copy of the framing, the toon pass or the outline maths is a picker
+// that shows you something the icons will not look like — and the drift would
+// appear as "the render came out different from the preview", which is the one
+// bug this tool cannot afford to have.
+//
+// Everything here was lifted out of render.html unchanged; the comments explain
+// why each part is the way it is and they came with it.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+export const SIZE = 512;
+
+export function makeRenderer(size = SIZE) {
+  // Renders on demand and never inside a rAF loop: these pages have to work in
+  // a backgrounded tab, where rAF simply does not fire.
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(2);
+  renderer.setSize(size, size);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  return renderer;
+}
+
+const AXES = { '+X': [1,0,0], '-X': [-1,0,0], '+Y': [0,1,0], '-Y': [0,-1,0], '+Z': [0,0,1], '-Z': [0,0,-1] };
+const v = (n) => new THREE.Vector3().fromArray(AXES[n] ?? AXES['+Z']);
+
+// Every creature is shown in the same frame: its declared `forward` points
+// screen-right and its `up` points screen-up, so the boats and the moray come
+// out rotated here exactly as they are rotated in the game.
+function orient(obj, forward, up) {
+  const f = v(forward), u = v(up).normalize();
+  u.addScaledVector(f, -u.dot(f)).normalize();       // orthogonalise
+  const r = new THREE.Vector3().crossVectors(f, u);  // model's own right
+  // Columns are where the model's axes should land: forward -> +X, up -> +Y.
+  const m = new THREE.Matrix4().makeBasis(f, u, r).invert();
+  obj.applyMatrix4(m);
+}
+
+// Where the posed model's vertices ACTUALLY are.
+//
+// `Box3.setFromObject` is wrong for a skinned mesh and wrong quietly. It takes
+// the geometry's own bounding box and pushes it through the mesh's world
+// matrix — but a skinned vertex is placed by its BONES, and the mesh's own
+// matrix has nothing to do with where it lands. On a rig whose skin space sits
+// near the origin while its armature sits somewhere else, the two answers are
+// nowhere near each other: the otter, the tuna and the brown fish framed on a
+// box the animal was not in and rendered as three blank 24KB PNGs — no error,
+// no warning, just nothing.
+//
+// So the vertices are skinned in software and measured directly, which is the
+// only honest way to ask a posed rig where it is. `updateMatrixWorld(true)` is
+// forced first: without it every bone reports its rest matrix and the whole
+// exercise silently measures the bind pose.
+function meshBoxes(root) {
+  root.updateMatrixWorld(true);
+  const out = [];
+  const p = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    const pos = o.geometry.attributes.position;
+    const box = new THREE.Box3();
+    if (o.isSkinnedMesh) o.skeleton.update();
+    for (let i = 0; i < pos.count; i++) {
+      p.fromBufferAttribute(pos, i);
+      if (o.isSkinnedMesh) o.applyBoneTransform(i, p);
+      box.expandByPoint(o.localToWorld(p));
+    }
+    out.push({ obj: o, box, verts: pos.count });
+  });
+  return out;
+}
+
+// The box the CAMERA should frame, and the strays it refused to include.
+//
+// A part that sits thousands of body-lengths from the body is not part of the
+// silhouette, it is a fault in the file — and framing on the union of the two
+// puts the animal off-screen while the fault sits dead centre. The otter is
+// the live example: its 442-vertex eye mesh is bound such that it lands 2,784
+// units from a body 0.97 units long, IN BIND POSE, so the render came back as
+// two black circles floating in white and nothing else.
+//
+// The anchor is the mesh with the most vertices — the body, on anything shaped
+// like an animal — and anything whose centre is more than 20 radii away from
+// it is dropped and named.
+function posedBox(root, strays) {
+  const parts = meshBoxes(root);
+  if (!parts.length) return new THREE.Box3();
+  const anchor = parts.reduce((a, b) => (b.verts > a.verts ? b : a));
+  const c = anchor.box.getCenter(new THREE.Vector3());
+  const r = Math.max(anchor.box.getSize(new THREE.Vector3()).length() / 2, 1e-6);
+  const box = new THREE.Box3();
+  for (const p of parts) {
+    const d = p.box.getCenter(new THREE.Vector3()).distanceTo(c);
+    if (p !== anchor && d > r * 20) {
+      strays?.push(`${p.obj.name || 'mesh'} at ${(d / r).toFixed(0)}x body radius`);
+      p.obj.visible = false;
+      continue;
+    }
+    box.union(p.box);
+  }
+  return box;
+}
+
+// Centre the model and report the radius the camera has to clear.
+//
+// THE BOUNDING SPHERE, not the longest axis. The camera looks from a
+// three-quarter angle, so the silhouette it sees is not the box's longest
+// side — a deep, chunky body presents its diagonal. A sphere is the one bound
+// that is the same from every angle, which is also what lets the picker spin
+// the camera without the framing breathing in and out.
+function frame(root, strays) {
+  const box = posedBox(root, strays);
+  if (box.isEmpty()) return 0.5;
+  const centre = new THREE.Vector3(); box.getCenter(centre);
+  root.position.sub(centre);
+  const sphere = new THREE.Sphere();
+  box.translate(centre.clone().negate()).getBoundingSphere(sphere);
+  return sphere.radius || 0.5;
+}
+
+function makeScene(toon) {
+  const scene = new THREE.Scene();
+  // TOON WANTS FEWER, HARDER LIGHTS. Banding is a function of how much of the
+  // body sits on each side of a step, and four overlapping sources put almost
+  // every surface in the top band — which is a flat sticker, the one thing the
+  // shading was added to avoid. One dominant key and a low ambient floor gives
+  // two readable steps and a shadow side.
+  if (toon) {
+    scene.add(new THREE.HemisphereLight(0xbfd8e0, 0x39474d, 0.85));
+    const key = new THREE.DirectionalLight(0xfff6e8, 2.9); key.position.set(-3, 4, 5); scene.add(key);
+    return scene;
+  }
+  // Neutral studio light: a cool sky/ground hemisphere so nothing goes pure
+  // black in shadow, a warm key from front-left-above, and a dim rim behind to
+  // separate a dark animal from a transparent background.
+  scene.add(new THREE.HemisphereLight(0xbfd8e0, 0x2a3438, 2.1));
+  const key = new THREE.DirectionalLight(0xfff2e0, 2.6); key.position.set(-3, 4, 5); scene.add(key);
+  const fill = new THREE.DirectionalLight(0xcfe4ff, 0.9); fill.position.set(4, 1, 3); scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xffffff, 1.2); rim.position.set(1, 2, -5); scene.add(rim);
+  return scene;
+}
+
+// The step ramp toon shading quantises against.
+//
+// Every part of the ramp is a control, because "toon" is not one look:
+//
+//   bands     how many steps            2 is a hard cel, 6 is nearly smooth
+//   bandLow   the shadow band's value   never 0 — see below
+//   bandHigh  the lit band's value      under 255 keeps a white body off clipping
+//   bandGamma where the steps FALL      >1 pushes the terminator into the light,
+//                                       <1 drags it into the shadow. This is the
+//                                       one that decides how much of the body
+//                                       reads as lit, and it cannot be had by
+//                                       moving the light without also moving
+//                                       every highlight.
+//   bandSoft  how sharp each step is    0 is a hard edge; above 0 the texture is
+//                                       widened and the steps are blended across
+//                                       a few texels, which is the only way to
+//                                       soften a step without going back to a
+//                                       gradient — see the filter note below.
+//
+// NearestFilter with soft 0 is the whole point of a cel look: a linear filter on
+// an N-pixel texture interpolates between the steps and hands back exactly the
+// smooth ramp the material was swapped in to get rid of. So softness is baked
+// into the DATA at a higher resolution instead, and the filter stays nearest.
+function gradientMap(o = {}) {
+  const bands = Math.max(2, (o.bands ?? 3) | 0);
+  const low = o.bandLow ?? 70;
+  const high = o.bandHigh ?? 255;
+  const gamma = o.bandGamma ?? 1;
+  const soft = Math.max(0, Math.min(1, o.bandSoft ?? 0));
+
+  // A hard ramp needs exactly one texel per band. A soft one needs room to
+  // blend in, so it is oversampled and each texel decides which band it is in.
+  const res = soft > 0 ? Math.max(bands * 16, 64) : bands;
+  const data = new Uint8Array(res * 4);
+  for (let i = 0; i < res; i++) {
+    // Position along the ramp, gamma-shaped. Applied to the LOOKUP rather than
+    // to the output value, so it moves where the steps sit instead of how bright
+    // they are — brightness is what bandLow/bandHigh are for.
+    const t = res === 1 ? 0 : i / (res - 1);
+    const shaped = Math.pow(t, gamma);
+    const scaled = shaped * bands;
+    let step = Math.min(bands - 1, Math.floor(scaled));
+    let level = bands === 1 ? 1 : step / (bands - 1);
+    if (soft > 0) {
+      // Distance into this band, 0..1. Only the first `soft` of each band is a
+      // ramp from the previous level; the rest is flat, so the bands stay
+      // visible as bands however soft the transitions get.
+      const frac = scaled - step;
+      if (frac < soft && step > 0) {
+        const prev = (step - 1) / (bands - 1);
+        level = prev + (level - prev) * (frac / soft);
+      }
+    }
+    // Never reaches 0: the darkest band is a shadow, not a hole. A body whose
+    // shadow side reaches black is indistinguishable from the outline around it
+    // at icon size, which welds the silhouette shut.
+    const val = Math.round(low + (high - low) * level);
+    data.set([val, val, val, 255], i * 4);
+  }
+  const tex = new THREE.DataTexture(data, res, 1, THREE.RGBAFormat);
+  tex.minFilter = tex.magFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// A normal averaged across every vertex that shares a position.
+//
+// THIS IS WHY AN INVERTED-HULL OUTLINE COMES OUT JAGGED. Exporters split
+// vertices wherever the shading or the UVs break — a hard crease, a texture
+// seam, the edge of a fin — so one point in space becomes several vertices with
+// DIFFERENT normals. The real mesh does not care: each triangle uses its own
+// copy. The shell does, because it pushes each copy along its own normal, so at
+// every seam the shell tears open and the rim shows notches, spikes and gaps
+// exactly along the lines the modeller creased.
+//
+// Welding by position and averaging gives one direction per point, so the shell
+// expands as a single surface. The seams stay in the model's own shading; only
+// the offset stops using them.
+//
+// Quantised into a key rather than compared exactly: positions that a modeller
+// welded can still differ in the last bits after an export round trip, and two
+// vertices a hair apart are the same corner as far as a rim is concerned.
+function smoothNormals(geometry) {
+  const pos = geometry.attributes.position;
+  const nor = geometry.attributes.normal;
+  if (!pos || !nor) return null;
+  const sums = new Map();
+  const key = (i) => {
+    const q = 1e4;
+    return `${Math.round(pos.getX(i) * q)},${Math.round(pos.getY(i) * q)},${Math.round(pos.getZ(i) * q)}`;
+  };
+  for (let i = 0; i < pos.count; i++) {
+    const k = key(i);
+    const cur = sums.get(k);
+    if (cur) {
+      cur[0] += nor.getX(i); cur[1] += nor.getY(i); cur[2] += nor.getZ(i);
+    } else {
+      sums.set(k, [nor.getX(i), nor.getY(i), nor.getZ(i)]);
+    }
+  }
+  const out = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const s = sums.get(key(i));
+    const len = Math.hypot(s[0], s[1], s[2]) || 1;
+    out[i * 3] = s[0] / len;
+    out[i * 3 + 1] = s[1] / len;
+    out[i * 3 + 2] = s[2] / len;
+  }
+  return new THREE.BufferAttribute(out, 3);
+}
+
+// Swap every material for a toon one, keeping what identifies the animal.
+//
+// The base colour map is carried across — without it the whole roster comes out
+// as untextured grey bodies, which is a worse version of the problem the toon
+// pass is meant to fix. Only the SHADING is being replaced.
+function toonify(root, opts, flatColor) {
+  const ramp = gradientMap(opts);
+  root.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    // Toon shading is a function of the normal, so a model that ships without
+    // them renders as one flat band. Nothing errors; it just looks unlit.
+    if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const swapped = mats.map((m) => {
+      // `flatColor` throws the file's own materials away and shades one tone.
+      //
+      // Two jobs. The first is the assets whose materials DO NOT SURVIVE THE
+      // TRIP: beluga.fbx names its diffuse as an absolute D:\ path that cannot
+      // resolve, and its body carries ten material slots of which six are pure
+      // #000000 with no map, so the honest render of what the loader produced is
+      // a black whale. The game never sees this because it lights the beluga
+      // through an emissive mask (ASSETS.belugaDrone) — a treatment an icon
+      // cannot borrow.
+      //
+      // The second is ART DIRECTION. Six of the fifteen renderable icons are
+      // white marine mammals, and no camera angle makes a white body on a dark
+      // hex into six distinguishable things. A deliberate tone per icon is the
+      // lever that does, which is why this is authored per icon in the spec
+      // rather than being beluga's private workaround.
+      const t = new THREE.MeshToonMaterial({
+        color: flatColor != null ? new THREE.Color(flatColor)
+          : (m.color ? m.color.clone() : new THREE.Color(0xffffff)),
+        map: flatColor != null ? null : (m.map ?? null),
+        gradientMap: ramp,
+        side: THREE.DoubleSide,
+        transparent: flatColor == null && m.transparent === true && m.opacity < 1,
+        opacity: flatColor != null ? 1 : (m.opacity ?? 1),
+      });
+      m.dispose?.();
+      return t;
+    });
+    o.material = Array.isArray(o.material) ? swapped : swapped[0];
+  });
+}
+
+// Drop meshes by name. For files that are an animal PLUS a scene.
+//
+// beluga.fbx ships 72 `buublesphere_NNN` meshes around the whale — a bubble
+// field the game never instantiates. They are close enough to the body to
+// survive the stray-geometry guard, so they pad the bounding sphere the camera
+// frames on and the whale ends up smaller than every other icon for no visible
+// reason.
+function dropMeshes(root, pattern) {
+  const doomed = [];
+  root.traverse((o) => {
+    if ((o.isMesh || o.isSkinnedMesh) && o.name.includes(pattern)) doomed.push(o);
+  });
+  for (const o of doomed) o.parent?.remove(o);
+  return doomed.length;
+}
+
+function axisAverage(vec) {
+  return (Math.abs(vec.x) + Math.abs(vec.y) + Math.abs(vec.z)) / 3;
+}
+
+// Copied from systems/outlines.js, and the comment there is why this is not
+// just `obj.scale`: a SKINNED shell is a SIBLING of the mesh it copies, so
+// walking its parents misses any scale on that mesh's own node — while the
+// skeleton that places its vertices does carry it. morayeel.fbx is the live
+// case, exported in centimetres with the 100 sitting on the mesh node. Get this
+// wrong there and the eel's rim comes out a hundred times too wide: a solid
+// black blob with an animal somewhere inside it.
+function accumulatedScale(obj) {
+  let s = 1;
+  for (let o = obj; o; o = o.parent) s *= axisAverage(o.scale);
+  const source = obj?.userData?.__outlineSource;
+  if (source) s *= axisAverage(source.scale);
+  return s;
+}
+
+// The solid black rim: an inverted hull, exactly as assets.js builds it.
+//
+// A back-facing copy of the geometry, pushed out along its normals and drawn
+// BEFORE the model so the model wins the depth test everywhere the two overlap,
+// leaving only the part that sticks out — the line.
+//
+// `width` is in WORLD units and is divided down per mesh, because the shader
+// offsets in OBJECT space. A single hardcoded thickness across a roster whose
+// source files range from centimetres to metres is the documented way to get an
+// invisible rim on one model and a blob on the next.
+function addOutline(root, width) {
+  const targets = [];
+  root.traverse((o) => { if ((o.isMesh || o.isSkinnedMesh) && !o.userData.__isOutline) targets.push(o); });
+
+  for (const mesh of targets) {
+    // The welded normal, cached on the geometry so a second shell on the same
+    // mesh does not pay for the walk again. Added to the geometry the REAL mesh
+    // shares: an attribute no other shader declares costs one upload and is
+    // otherwise inert, which is cheaper than cloning the buffers.
+    if (!mesh.geometry.attributes.aOutlineNormal) {
+      const smooth = smoothNormals(mesh.geometry);
+      if (smooth) mesh.geometry.setAttribute('aOutlineNormal', smooth);
+    }
+    const smoothed = !!mesh.geometry.attributes.aOutlineNormal;
+
+    const mat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
+    const uOutline = { value: 0 };
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uOutline = uOutline;
+      // The welded normal when there is one, the raw one otherwise — a model
+      // with no normal attribute at all still gets a rim rather than an error.
+      const dir = smoothed ? 'aOutlineNormal' : 'normal';
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>',
+          `#include <common>\nuniform float uOutline;${smoothed ? '\nattribute vec3 aOutlineNormal;' : ''}`)
+        // BEFORE skinning runs, so the shell deforms with the pose instead of
+        // tearing away from it. `normal` rather than `objectNormal`: the latter
+        // is defined by <beginnormal_vertex>, which MeshBasicMaterial does not
+        // include, and referencing it fails to compile — which renders NOTHING
+        // and reports nothing.
+        .replace('#include <begin_vertex>', `#include <begin_vertex>\n\ttransformed += ${dir} * uOutline;`);
+    };
+
+    let shell;
+    if (mesh.isSkinnedMesh) {
+      shell = new THREE.SkinnedMesh(mesh.geometry, mat);
+      shell.bind(mesh.skeleton, mesh.bindMatrix);
+      mesh.parent?.add(shell);           // sibling — the skeleton already places it
+      shell.userData.__outlineSource = mesh;
+    } else {
+      shell = new THREE.Mesh(mesh.geometry, mat);
+      mesh.add(shell);                   // child with an identity transform
+    }
+    shell.name = `${mesh.name}__outline`;
+    shell.renderOrder = (mesh.renderOrder ?? 0) - 1;
+    shell.userData.__isOutline = true;
+    shell.frustumCulled = false;
+    const s = accumulatedScale(shell);
+    uOutline.value = s > 1e-6 ? width / s : width;
+  }
+}
+
+// FBX clips hang off the loaded object rather than coming back beside it, the
+// way glTF's do. Returning `[]` for them (as this did) is a silent downgrade:
+// every FBX asset renders in its bind pose and the log says so in the same
+// words it uses for a model that genuinely ships no animation, so there is
+// nothing to notice. Three of the ability assets are FBX — the seagull, the
+// beluga and the moray — and all three were being posed as specimens.
+async function loadModel(spec) {
+  const url = '/models/' + spec.file;
+  if (spec.fmt === 'fbx') {
+    const root = await new FBXLoader().loadAsync(url);
+    return { root, clips: root.animations ?? [] };
+  }
+  const g = await new GLTFLoader().loadAsync(url);
+  return { root: g.scene, clips: g.animations ?? [] };
+}
+
+// Keep only the mesh this asset actually uses, exactly as assets.js does.
+//
+// Several assets share one binary and pick a mesh out of it by index — the
+// three fish packs are one file with three different fish in it.
+function isolateMesh(root, index) {
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) meshes.push(o); });
+  const target = meshes[index];
+  if (!target) return meshes.length;
+  const keep = new Set();
+  for (let o = target; o; o = o.parent) keep.add(o);
+  for (const m of meshes) if (!keep.has(m)) m.parent?.remove(m);
+  return 1;
+}
+
+// Trim the transparent margin off a render.
+//
+// Reads the alpha channel to find the real bounds. A few pixels of padding are
+// kept so antialiased edges are not clipped.
+export function crop(canvas, pad = 6) {
+  // WebGL canvases have no 2d context, so copy through one first.
+  const src = document.createElement('canvas');
+  src.width = canvas.width; src.height = canvas.height;
+  const sctx = src.getContext('2d');
+  sctx.drawImage(canvas, 0, 0);
+  const { data, width, height } = sctx.getImageData(0, 0, src.width, src.height);
+  let x0 = width, y0 = height, x1 = -1, y1 = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] > 8) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (x1 < 0) return src;                 // fully transparent: nothing to trim
+  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
+  x1 = Math.min(width - 1, x1 + pad); y1 = Math.min(height - 1, y1 + pad);
+  const out = document.createElement('canvas');
+  out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
+  out.getContext('2d').drawImage(src, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+
+// Put the crop back in the middle of a square.
+//
+// The atlas wants the tight crop: its plates are laid out individually and the
+// empty margin is wasted bytes. An ICON wants the opposite. Cropped tight, an
+// orca comes out 4:1 and a scallop nearly 1:1, and dropped onto same-sized hex
+// faces the scallop renders three times the orca — the crop has quietly turned
+// "how long is this animal" into "how big is this icon".
+export function pad(canvas) {
+  const side = Math.max(canvas.width, canvas.height);
+  const out = document.createElement('canvas');
+  out.width = out.height = side;
+  out.getContext('2d').drawImage(
+    canvas,
+    Math.round((side - canvas.width) / 2),
+    Math.round((side - canvas.height) / 2),
+  );
+  return out;
+}
+
+// Everything up to but NOT including the camera.
+//
+// Split there deliberately, and it is what makes the picker usable: yaw, pitch
+// and zoom only move the camera, so dragging re-renders without reloading a
+// model, re-posing a rig or rebuilding an outline. Only the fields that change
+// the SCENE (clipAt, flatColor, bands, outline, dropMeshes) need this called
+// again.
+export async function buildIcon(spec) {
+  const { root, clips } = await loadModel(spec);
+  if (spec.meshIndex != null) isolateMesh(root, spec.meshIndex);
+  // Before anything measures the model, so the scenery cannot reach the frame.
+  const dropped = spec.dropMeshes ? dropMeshes(root, spec.dropMeshes) : 0;
+
+  // A skinned creature in its bind pose reads as a specimen, not an animal.
+  // Sampling the clip a third of the way in gives it a real swimming shape — a
+  // tail mid-beat, fins spread. `clipAt` overrides the third per spec: an icon
+  // of the harp wants the frame where the note is leaving it.
+  let posed = 'bind pose';
+  let clipName = null, clipDuration = 0;
+  if (clips.length) {
+    const wanted = spec.wantClips?.swim ?? spec.wantClips?.idle;
+    const clip = (wanted && clips.find((c) => c.name === wanted)) || clips[0];
+    if (clip && clip.duration > 0) {
+      const at = spec.clipAt ?? 0.33;
+      const mixer = new THREE.AnimationMixer(root);
+      mixer.clipAction(clip).play();
+      mixer.setTime(clip.duration * at);
+      posed = `posed at ${(at * 100).toFixed(0)}% of "${clip.name}"`;
+      clipName = clip.name;
+      clipDuration = clip.duration;
+    }
+  }
+
+  // The hammerhead is the one asset whose base colour lives outside its binary,
+  // so without this it would render as flat untextured grey.
+  if (spec.baseColorMap) {
+    const tex = await new THREE.TextureLoader().loadAsync(spec.baseColorMap);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    // Same override assets.js honours: a sidecar on a model that ships no maps
+    // of its own carries the baking tool's convention, not the model's.
+    tex.flipY = spec.flipY ?? (spec.fmt === 'fbx');
+    root.traverse((o) => {
+      if (o.isMesh || o.isSkinnedMesh) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const mm of mats) { mm.map = tex; mm.needsUpdate = true; }
+      }
+    });
+  }
+
+  root.traverse((o) => {
+    if (o.isMesh || o.isSkinnedMesh) {
+      o.frustumCulled = false;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const mm of mats) {
+        mm.side = THREE.DoubleSide;      // several of these are single-sided fins
+        if (mm.transparent && mm.opacity === 1) mm.transparent = false;
+      }
+    }
+  });
+
+  // Toon BEFORE the shells are built, or the pass would swap the rim's own
+  // black MeshBasicMaterial for a lit toon one and the outline would light up.
+  if (spec.toon) toonify(root, spec, spec.flatColor);
+
+  const scene = makeScene(!!spec.toon);
+  const holder = new THREE.Group();
+  holder.add(root);
+  orient(holder, spec.forward, spec.up);
+
+  // ROLL, and yaw/pitch cannot substitute for it.
+  //
+  // The camera orbits with lookAt, which pins its up vector to world +Y — so
+  // spinning it never rotates the subject WITHIN the frame. Any asset whose long
+  // axis does not land on screen-X after orient is therefore stuck there: the
+  // moray comes out as a vertical bar down the middle of a hexagon that is wider
+  // than it is tall, and every angle in the orbit leaves it vertical.
+  //
+  // Rolls the MODEL rather than the camera, and before framing, so the bounding
+  // sphere is measured on the pose that will actually be photographed.
+  if (spec.roll) holder.rotateZ(spec.roll * Math.PI / 180);
+
+  scene.add(holder);
+  const strays = [];
+  const radius = frame(holder, strays);
+
+  // AFTER framing, and that ordering is load-bearing twice over. posedBox()
+  // measures every mesh in the tree and picks the anchor by vertex count — a
+  // shell is a mesh with EXACTLY the vertex count of the thing it copies, so
+  // building them first both inflates the box by the rim and makes the anchor a
+  // coin toss between a model and its own outline.
+  if (spec.outline) addOutline(root, radius * spec.outline);
+
+  return { scene, radius, posed, strays, dropped, clipName, clipDuration };
+}
+
+// The camera, from two angles in degrees.
+//
+// The distance is derived rather than dialled in. A sphere of radius R fits a
+// vertical fov f at d = R / sin(f/2), so this is that with 6% of air — enough
+// that the crop has an antialiased edge to find rather than the canvas boundary.
+//
+// The defaults are the atlas's own hand-tuned vector to four figures: yaw -26,
+// pitch 17.4 and 0.3% of extra distance reproduce (-0.42, 0.30, 0.86) exactly,
+// so a spec naming neither is framed identically to before these were fields.
+export function cameraFor(spec, radius) {
+  const FOV = 30;
+  const cam = new THREE.PerspectiveCamera(FOV, 1, radius / 100, radius * 40);
+  const d = (radius / Math.sin((FOV / 2) * Math.PI / 180)) * 1.06 * (spec.zoom ?? 1.003);
+  const yaw = (spec.yaw ?? -26) * Math.PI / 180;
+  const pitch = (spec.pitch ?? 17.4) * Math.PI / 180;
+  cam.position.set(
+    d * Math.cos(pitch) * Math.sin(yaw),
+    d * Math.sin(pitch),
+    d * Math.cos(pitch) * Math.cos(yaw),
+  );
+  cam.lookAt(0, 0, 0);
+  return cam;
+}
+
+// Downsample to the size the icon actually ships at.
+//
+// THE SECOND HALF OF "SMOOTH THE EDGES". The scene renders at 512 with a pixel
+// ratio of 2 — 1024 real pixels — and an icon is used at 56. Something has to
+// throw 94% of those pixels away, and which thing does it decides whether the
+// rim is a clean line or a staircase. Doing it here, in one high-quality step
+// from the full-resolution render, is a ~4x supersample of the final image;
+// leaving it to an external `sips -Z` pass afterwards was resampling an already
+// -cropped intermediate, and leaving it to the BROWSER at draw time is worst of
+// all — the hive would scale a 900px PNG down to 56 on the fly, per tile.
+function resize(canvas, side) {
+  if (!side || (canvas.width <= side && canvas.height <= side)) return canvas;
+  const scale = side / Math.max(canvas.width, canvas.height);
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(canvas.width * scale));
+  out.height = Math.max(1, Math.round(canvas.height * scale));
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvas, 0, 0, out.width, out.height);
+  return out;
+}
+
+/** The finished image for a spec: crop, pad back to square, downsample. */
+export function finish(canvas, spec) {
+  const cropped = spec.square ? pad(crop(canvas)) : crop(canvas);
+  return resize(cropped, spec.outSize);
+}
+
+/** Build, render and hand back the PNG plus the line to log. Used by render.html. */
+export async function shootToBlob(renderer, spec) {
+  const built = await buildIcon(spec);
+  renderer.render(built.scene, cameraFor(spec, built.radius));
+  const shot = finish(renderer.domElement, spec);
+  const blob = await new Promise((res) => shot.toBlob(res, 'image/png'));
+  const note = (built.strays.length ? `  STRAY GEOMETRY DROPPED: ${built.strays.join('; ')}` : '')
+    + (built.dropped ? `  dropped ${built.dropped} mesh(es) matching "${spec.dropMeshes}"` : '')
+    + (spec.flatColor != null ? '  FLAT COLOUR (file materials ignored)' : '');
+  return { blob, log: `${spec.key}: ${(blob.size / 1024).toFixed(0)}KB, ${built.posed}${note}` };
+}

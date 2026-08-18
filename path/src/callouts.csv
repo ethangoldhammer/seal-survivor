@@ -3,16 +3,16 @@ boss,warn,Warning!,,,,TRUE,band,50,1.8,,
 health,warn,Health low!,,,,TRUE,band,40,1.6,5,
 oxygen,warn,Oxygen low!,,,,TRUE,band,30,1.6,4,
 boost,warn,Boost Empty!,,,,TRUE,player,20,0.8,,
-strikeNow,warn,STRIKE NOW!,,,,TRUE,player,25,1.1,1.6,
+strikeNow,warn,STRIKE NOW!,,,,TRUE,player,25,.8,1.6,
 surface,coach,Swim up for air,,,,TRUE,band,80,6,,surface
 swim,coach,,First touch swims,Left stick to swim,touch pad,TRUE,band,65,5,,
 aim,coach,,Second touch aims,Right stick to aim,touch pad,TRUE,band,60,5,,
 strike,coach,Hold {strike} or click to charge — let go to strike,Third touch charges a strike,{bumper} to charge a strike,,TRUE,band,50,6,,
-chum,coach,Eat chum to refill your boost.,,,,TRUE,band,45,7,,chum
-foodChain,coach,Strike then keep eating. Every mouthful holds the food chain open,,,,TRUE,band,42,7,,chum
-bubbleOrb,coach,Bubbles are air. Swim into one before you run out,,,,TRUE,band,38,6,,pickup
-strikeOrb,coach,Swim into that orb — it fills your boost meter outright,,,,TRUE,band,36,6,,pickup
-rapidFireOrb,coach,Swim into that orb to double your fire rate for a few seconds,,,,TRUE,band,34,6,,pickup
+chum,coach,Eat chum to refill your boost.,,,,TRUE,band,45,6,,chum
+foodChain,coach,Strike then hoover the chum to keep a FOOD CHAIN going. ,,,,TRUE,band,42,5,,chum
+bubbleOrb,coach,Air bubbles. These fill your oxygen without having to breach.,,,,TRUE,band,38,6,,pickup
+strikeOrb,coach,This krill bucket gives you quick boost pips.,,,,TRUE,band,36,6,,pickup
+rapidFireOrb,coach,This tasty morsel doubles your shot rate for a hot sec...,,,,TRUE,band,34,6,,pickup
 chumChunk,coach,That big catch is worth real health,,,,TRUE,band,32,6,,pickup
 attractorOrb,coach,That attractor is dragging every scrap of chum to you,,,,TRUE,band,30,6,,
 crab,coach,Chum sinks. Crabs come for what lands,,,,TRUE,band,28,6,,seabed

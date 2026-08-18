@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } from './config.js';
-import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, clearVisualPool } from './assets.js';
+import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, clearVisualPool } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { updateEmissivePulse } from './systems/emissivePulse.js';
@@ -99,6 +99,7 @@ import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { highScore } from './systems/leaderboard.js';
 import { initUI, showStartMenu, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
+import { setHiveUpgrades, setHiveLayout, setHiveStyle, toggleHive } from './ui/upgradeHive.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS } from './systems/tutorial.js';
 import { initCallouts, updateCalloutUi, clearCalloutUi } from './ui/callout.js';
@@ -308,6 +309,7 @@ async function boot() {
   // tuning) onto the uniforms, so a tuned size applies on the first frame
   // rather than only after the slider is next touched.
   applyNoiseSettings();
+  applyToonSettings();
   applyGrassSettings();
   applyBiolumSkinSettings();
   // Must come after the looks above (it reads the size multipliers to keep
@@ -608,9 +610,29 @@ function bindGlobalKeys() {
       post.cyclePreset();
       refreshTuner();
     }
-    // X: the hex-tile alignment overlay. Debug-only, nothing persisted.
-    if (e.key.toLowerCase() === 'x' && !isTypingTarget(e.target) && !e.repeat) {
-      world.hexTiles.toggle();
+    // H / Shift+H / Alt+H: the upgrade hive — on, layout, style.
+    //
+    // Three keys rather than a tuner panel because the whole point is to judge
+    // it WHILE the water is moving: the question "does the cluster read better
+    // than the rows" is answered in a fight with nine tiles firing, and any
+    // answer arrived at with the game paused behind a menu is an answer about a
+    // still image. Cycling writes CONFIG, so a layout settled on can then be
+    // saved with the rest of the tuning like anything else.
+    if (e.key.toLowerCase() === 'h' && !isTypingTarget(e.target) && !e.repeat) {
+      const hive = CONFIG.upgradeHive;
+      if (e.shiftKey) {
+        const modes = ['cluster', 'rows', 'arc'];
+        const next = modes[(modes.indexOf(hive.layout) + 1) % modes.length];
+        setHiveLayout(next);
+        console.log(`[hive] layout ${next}`);
+      } else if (e.altKey) {
+        const styles = ['ink', 'rarity', 'art'];
+        const next = styles[(styles.indexOf(hive.style) + 1) % styles.length];
+        setHiveStyle(next);
+        console.log(`[hive] style ${next}`);
+      } else {
+        console.log(`[hive] ${toggleHive() ? 'on' : 'off'}`);
+      }
     }
     // Shift+L: deal a level-up NOW, without earning one.
     //
@@ -758,6 +780,7 @@ function handleTunerChange(path) {
   // Pure uniform writes on already-compiled shaders — no rebuild, so this is
   // safe to fire from a slider's every input event.
   if (path === '*' || path.startsWith('sealShader')) applyNoiseSettings();
+  if (path === '*' || path.startsWith('toonShade')) applyToonSettings();
   if (path === '*' || path.startsWith('grass')) applyGrassSettings();
   // Same again for the trap bubble's film. Its material is built on the first
   // spawn and cached forever after, so this is the only thing that moves those
@@ -918,6 +941,10 @@ function startGame() {
   // it still open would begin parked, in slow motion, with nothing spawning.
   resetStage();
   resetPlayer();
+  // The corner empties with the rest of the run. resetPlayer has just cleared
+  // the pick list, so this reads an empty array and drops every tile — without
+  // it the new run opens holding the dead run's build.
+  setHiveUpgrades(player.upgrades);
   // AFTER resetPlayer, not before: the rig places itself on the seal rather
   // than springing to it on its first frame, so it has to be reset once the
   // seal is back at midwater. Reset before, and a run opens with the frame
@@ -1288,6 +1315,10 @@ function applyLevelChoice(choice) {
   // recomputeStats, which replays every held upgrade at the rarity it arrived
   // with rather than at whatever the ladder says today.
   addUpgrade(choice.id, choice.rarity);
+  // The corner picks the new tile up here rather than on a timer. setHiveUpgrades
+  // no-ops when the folded set has not changed, so calling it on every pick is
+  // the cheap path, not a rebuild per level.
+  setHiveUpgrades(player.upgrades);
   // Timestamped, so the report can charge an ability only for the time it was
   // actually held — a pick taken at minute nine hasn't had a run to prove
   // itself and shouldn't be ranked as if it had.
@@ -4570,7 +4601,6 @@ function animate(now) {
     charging: strikeState.charging,
     charge: strikeState.pending,
   });
-  world.hexTiles.update(player.mesh.position);
   // The death shot: the frame closes in on the body and rides it down. Claimed
   // per frame, immediately before the camera update that consumes it — the
   // dive owns the timing, world.js owns the framing maths (and the clamp that

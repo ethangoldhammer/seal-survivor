@@ -16,6 +16,7 @@ import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
 import { buildPrintPaper, initSnapshotPrints } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
+import { initUpgradeHive } from './upgradeHive.js';
 import {
   fetchGlobalBoard,
   highScore,
@@ -114,6 +115,162 @@ const STYLES = `
   .sv-hud-corner { margin-left: auto; display: flex; align-items: flex-start;
     gap: 0; text-align: right;
     filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9)) drop-shadow(0 0 7px rgba(0,0,0,0.6)); }
+
+  /* --- THE HEX HIVE ------------------------------------------------------
+     One tile per upgrade held, packed into the corner. See ui/upgradeHive.js
+     for the layouts and what each pulse means; this is only how a tile looks.
+
+     OUTSIDE the corner's drop-shadow filter, and that is not cosmetic: a
+     a 'filter' on an ancestor makes it the containing block for anything
+     positioned 'fixed' inside it, and the corner already moves to fixed on a
+     phone. The hive is its own block for the same reason the boss bar is.
+
+     TILES ARE ABSOLUTE inside .sv-hive-host, whose size upgradeHive.js stamps
+     from the layout it just computed — nothing here reads a layout property, so
+     a fight that fires nine abilities a second costs nine class writes.
+
+     A SIBLING of .sv-hud rather than a child, and fixed rather than in its flex
+     row. Three reasons, all of which bit: that row is space-between and a fifth
+     child re-proportions the other four; the corner group inside it goes
+     'position: fixed' on a phone and would drag the hive with it into the score
+     panel; and .sv-hud-corner carries a drop-shadow filter, which makes it the
+     containing block for any fixed descendant and would pin the hive to the
+     corner box instead of to the screen.
+
+     BOTTOM LEFT by default. The score and clock take the bottom right on a
+     phone, the boss bar owns the top band, and the hp/air bars float on the
+     seal — the lower left is the one corner of this HUD with nothing in it. */
+  .sv-hive { pointer-events: none; position: fixed; z-index: 3; }
+  .sv-hive[data-corner="bl"] { left: 14px; bottom: 14px; }
+  .sv-hive[data-corner="br"] { right: 14px; bottom: 14px; }
+  .sv-hive[data-corner="tl"] { left: 14px; top: 34px; }
+  .sv-hive[data-corner="tr"] { right: 14px; top: 34px; }
+  .sv-hive-host { position: relative; }
+  /* A SQUARE BOX, CLIPPED ON THE ART'S OWN VERTICES — the same polygon .sv-card
+     uses, for the same reason. The hex art is drawn with a margin inside a
+     square image (measured: 5.5%-94.1% across, 12.7%-89.8% down, including the
+     dark border), so the box has to be square or background-size:100% 100%
+     squashes the drawing, and the clip has to be on THOSE vertices or it cuts
+     through the border instead of following it.
+     upgradeHive.js packs on the visible hexagon, so neighbouring boxes overlap
+     — which is why nothing here may paint outside the clip. */
+  .sv-hive-tile { position: absolute;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    display: grid; place-items: center;
+    /* The pulse animates this, and only this. Transform and opacity are the two
+       properties that never cost a layout, which is the whole reason a tile can
+       flash on the same frame the hit lands. */
+    transform-origin: 50% 50%; }
+  /* THE RIM IS A LAYER, NOT A BOX-SHADOW.
+     An inset box-shadow paints the element's BORDER BOX — a rectangle — and a
+     clip-path then keeps only the parts of that rectangle that fall inside the
+     hexagon. What you get is rim along the flat top and bottom and a stub at
+     each side vertex, with the four diagonal edges bare: a border that looks
+     cut off, because it is. Nothing warns; the shadow is perfectly valid.
+     So the rim is the TILE's own background, and the face is the same hexagon
+     inset on top of it. Both are clipped, so the rim follows all six edges. */
+  .sv-hive-face { position: absolute; inset: 2px;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%); }
+  /* 55% of the BOX, which is as large as a square can be inside this hexagon:
+     the widest centred square in a flat-top hexagon is 0.634 of its width, and
+     the hexagon is 0.882 of the box. Sized off the box because that is what the
+     percentage resolves against — the number already has the hexagon in it. */
+  .sv-hive-icon { position: relative; width: 55%; height: 55%; object-fit: contain;
+    /* Every render is lit by the same neutral studio, so the only separation
+       between a white beluga and the water behind it is this. */
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.75)); }
+  .sv-hive-mono { position: relative; font: 700 15px/1 system-ui, sans-serif;
+    color: rgba(255,255,255,0.92); letter-spacing: 0.02em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  /* Inside the hexagon, not the box. The box's bottom-right corner is empty
+     space the clip throws away, so a badge placed there is simply not drawn —
+     this sits above the flat bottom edge, where the shape is solid. */
+  .sv-hive-pip { position: absolute; right: 26%; bottom: 14%;
+    font: 700 11px/1 ui-monospace, monospace; color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.95), 0 0 4px rgba(0,0,0,0.8); }
+
+  /* ink — a dark face with the rarity as a rim. The default: it is the only one
+     of the three that leaves the icon as the brightest thing on the tile. */
+  .sv-hive[data-style="ink"] .sv-hive-tile { background: var(--sv-hive-rarity, #b8c2cc); }
+  .sv-hive[data-style="ink"] .sv-hive-face {
+    background: linear-gradient(160deg, rgba(28,74,99,0.92), rgba(9,26,36,0.94)); }
+  /* rarity — the tier floods the face. Loudest, and the one that answers "what
+     did this run actually roll" from across the room.
+     THE RIM IS NOT DECORATION. Without it this style has no edge at its dark
+     end: the gradient lands on the same near-black the water is, so a Common
+     tile stops having a silhouette and its icon reads as floating loose in the
+     corner. */
+  .sv-hive[data-style="rarity"] .sv-hive-tile {
+    background: color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) 55%, #0b1a24); }
+  .sv-hive[data-style="rarity"] .sv-hive-face {
+    background: linear-gradient(160deg, var(--sv-hive-rarity, #b8c2cc), rgba(9,26,36,0.96) 78%); }
+  /* art — the biome hex the card was dealt on. It cannot identify an upgrade
+     (a dozen cards share Beach_001), so it is texture, dimmed so the mark on
+     top stays the subject.
+     NO RIM AND NO INSET: this art is DRAWN with a dark outline, and that
+     outline is the whole reason the tiles read as tiles. Insetting the face to
+     make room for a synthetic rim crops the drawn one — and then the tile has
+     two borders, one of them sliced. The art gets the full hexagon. */
+  .sv-hive[data-style="art"] .sv-hive-face {
+    inset: 0;
+    background-image: var(--sv-hive-art, none);
+    background-size: 100% 100%; background-position: center; }
+  .sv-hive[data-style="art"] .sv-hive-face::after {
+    content: ''; position: absolute; inset: 0; background: rgba(6,18,26,0.45); }
+
+  /* --- FIRING -------------------------------------------------------------
+     One class, four animations, picked by the tile's family (data-pulse). They
+     are all under 400ms on purpose: this fires as often as the ability does,
+     and anything with a tail long enough to overlap its own next firing turns
+     into a tile that is simply always lit. */
+  .sv-hive-tile[data-pulse="pop"].sv-hive-firing { animation: sv-hive-pop 220ms ease-out; }
+  .sv-hive-tile[data-pulse="flash"].sv-hive-firing { animation: sv-hive-flash 260ms ease-out; }
+  .sv-hive-tile[data-pulse="swell"].sv-hive-firing { animation: sv-hive-swell 380ms ease-in-out; }
+  .sv-hive-tile[data-pulse="lean"].sv-hive-firing { animation: sv-hive-lean 340ms ease-out; }
+  .sv-hive-tile[data-pulse="glow"].sv-hive-firing { animation: sv-hive-glow 300ms ease-out; }
+
+  /* The Balatro punch: overshoot, undershoot, settle. The undershoot is what
+     makes it read as a POP rather than as a grow — a curve that only ever gets
+     bigger reads as the tile inflating. */
+  @keyframes sv-hive-pop {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.28); filter: brightness(1.9); }
+    65%  { transform: scale(0.94); }
+    100% { transform: scale(1); }
+  }
+  @keyframes sv-hive-flash {
+    0%   { transform: scale(1) rotate(0deg); filter: brightness(1); }
+    18%  { transform: scale(1.34) rotate(-3deg); filter: brightness(3.2) saturate(0.4); }
+    100% { transform: scale(1) rotate(0deg); filter: brightness(1); }
+  }
+  /* An aura has no moment of release, so this has no spike: it breathes out and
+     back, which is what a field doing continuous work looks like. */
+  @keyframes sv-hive-swell {
+    0%   { transform: scale(1); filter: brightness(1); }
+    50%  { transform: scale(1.12); filter: brightness(1.45); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+  /* A companion acts on its own schedule, so its tile leans the way an animal
+     turns rather than pulsing on your beat. */
+  @keyframes sv-hive-lean {
+    0%   { transform: rotate(0deg) scale(1); }
+    30%  { transform: rotate(-7deg) scale(1.1); }
+    60%  { transform: rotate(5deg) scale(1.04); }
+    100% { transform: rotate(0deg) scale(1); }
+  }
+  @keyframes sv-hive-glow {
+    0%   { filter: brightness(1); }
+    40%  { filter: brightness(1.7); }
+    100% { filter: brightness(1); }
+  }
+
+  /* A player who asked for less motion gets the state without the movement:
+     the tile still says WHICH ability fired, it just says it by brightening. */
+  @media (prefers-reduced-motion: reduce) {
+    .sv-hive-tile.sv-hive-firing { animation: sv-hive-glow 300ms ease-out !important; }
+  }
 
   /* XP spans the full width at the very top — it's the run-long progress
      bar, so it reads as a frame around the screen rather than a widget. */
@@ -747,6 +904,11 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   // it appends its own overlay to `root`, and the order decides which sits on
   // top of which when two are somehow up at once.
   initPauseMenu({ root, reveal: runReveal, revealSeconds, onResume, onRestart: onPauseRestart });
+
+  // The hive goes into `root` rather than into .sv-hud — see the CSS for the
+  // three separate reasons that flex row cannot hold it. main.js drives what it
+  // shows; this only puts it on the screen.
+  initUpgradeHive(root);
 
   // The Rive boss bar starts loading NOW, on the title screen, rather than on
   // the frame a boss arrives — see initBossBarRive. Into `root` rather than

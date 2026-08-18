@@ -114,11 +114,36 @@ export function bossVoice(kind, key, at = {}) {
   feedback(CONFIG.feedback[event] ? event : fallback, at);
 }
 
+// Anyone who wants to know that an event fired, without being wired into the
+// forty-odd systems that fire them.
+//
+// The hex hive is the first caller: a tile has to flash on the frame its
+// ability goes off, and every ability already announces itself here — the
+// alternative was a pulse call added to each system, which is the same
+// information gathered forty times and forty chances to forget one.
+//
+// OBSERVERS ONLY. A listener that throws must not take the burst, the shake and
+// the sound down with it, so each is called in its own try — a HUD bug should
+// cost you a tile animation, not the feel of the hit.
+const listeners = new Set();
+
+export function onFeedback(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
 export function feedback(event, at = {}) {
   const def = CONFIG.feedback[event];
   if (!def) {
     console.warn(`[feedback] unknown event "${event}"`);
     return;
+  }
+
+  // Before the effects rather than after: an observer that wants to be in step
+  // with the hit should not be waiting on a particle burst to finish being set
+  // up first, and nothing below this depends on it having run.
+  for (const fn of listeners) {
+    try { fn(event, at); } catch (err) { console.warn('[feedback] listener failed', err); }
   }
 
   const scale = at.scale ?? 1;

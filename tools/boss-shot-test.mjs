@@ -527,7 +527,12 @@ section('THE MOMENT — long enough for the print to land in');
 // across the middle of the screen, which reads as a UI bug rather than as a
 // flourish.
 const P = CONFIG.boss.kill.print;
-const flight = (P.ejectMs + P.holdMs + P.parkMs) / 1000;
+// writeOnMs is in here for the same reason it is in printPhaseSeconds: the
+// print sits still in the middle of the screen while the artboard writes
+// itself on, and the world must not come back underneath that. Re-derived from
+// CONFIG rather than typed, which is the whole point of the check below — a
+// literal here would pass while the two drifted apart.
+const flight = (P.ejectMs + Math.max(P.holdMs, P.writeOnMs) + P.parkMs) / 1000;
 
 function runShot() {
   KILL.resetBossKill();
@@ -769,7 +774,7 @@ check('it ejects into the middle of the frame',
   /translate\(-50%, -50%\)/.test(el.style.transform), el.style.transform);
 check('...and develops on the way', el.classList.contains('sv-print-dry'));
 
-await new Promise((r) => setTimeout(r, P.ejectMs + P.holdMs + 60));
+await new Promise((r) => setTimeout(r, P.ejectMs + Math.max(P.holdMs, P.writeOnMs) + 60));
 const parkedTo = el.style.transform;
 const dx = Number(parkedTo.match(/-50% \+ (-?\d+)px/)?.[1]);
 const dy = Number(parkedTo.match(/-50% \+ (-?\d+)px/g)?.[1]?.match(/(-?\d+)/)?.[1]);
@@ -783,7 +788,7 @@ check('...to the corner size the config asks for',
 // THE PILE. Each print lands beside the last rather than on top of it, or the
 // corner would show one kill however many the run made.
 const second2 = PRINT.showSnapshotPrint('data:image/png;base64,STUBBEDPNG', { ...printMeta, level: 24 });
-await new Promise((r) => setTimeout(r, P.ejectMs + P.holdMs + P.parkMs + 80));
+await new Promise((r) => setTimeout(r, P.ejectMs + Math.max(P.holdMs, P.writeOnMs) + P.parkMs + 80));
 check('the next kill lands beside the last, not on top of it',
   PRINT.snapshotPrintCount() === 2 && second2.style.transform !== el.style.transform);
 
@@ -792,7 +797,7 @@ check('the next kill lands beside the last, not on top of it',
 for (let i = 0; i < P.stackMax + 3; i++) {
   PRINT.showSnapshotPrint('data:image/png;base64,STUBBEDPNG', printMeta);
 }
-await new Promise((r) => setTimeout(r, P.ejectMs + P.holdMs + 120));
+await new Promise((r) => setTimeout(r, P.ejectMs + Math.max(P.holdMs, P.writeOnMs) + 120));
 check('the pile has a depth', PRINT.snapshotPrintCount() <= P.stackMax,
   `${PRINT.snapshotPrintCount()} of ${P.stackMax}`);
 
@@ -804,7 +809,7 @@ check('a new run starts with an empty corner', PRINT.snapshotPrintCount() === 0)
 // in the next run's pile.
 PRINT.showSnapshotPrint('data:image/png;base64,STUBBEDPNG', printMeta);
 PRINT.resetSnapshotPrints();
-await new Promise((r) => setTimeout(r, P.ejectMs + P.holdMs + 120));
+await new Promise((r) => setTimeout(r, P.ejectMs + Math.max(P.holdMs, P.writeOnMs) + 120));
 check('a print in flight when the run restarts leaves nothing behind',
   PRINT.snapshotPrintCount() === 0, `${PRINT.snapshotPrintCount()} left`);
 

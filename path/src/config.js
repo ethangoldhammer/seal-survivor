@@ -5802,10 +5802,48 @@ export const CONFIG = {
           // has been looked at by then, and a slow drift to the corner is the
           // moment sagging.
           ejectMs: 260,
+          // HOW LONG THE PRINT STANDS STILL in the middle of the screen before
+          // it flies to the corner. The write-on below plays INSIDE this, not
+          // after it — see the note there.
           holdMs: 620,
           parkMs: 520,
-          // The develop runs UNDER the eject and outlasts it, so the picture
-          // is still coming up as the paper settles — a print that has already
+          // THE ARTBOARD WRITING ITSELF ON — how long `tWriteOn` runs for.
+          //
+          // The game fires that trigger on the frame the print stops moving
+          // (see ui/snapshotPrint.js), and the print then stands still for
+          // whichever is LONGER, this or `holdMs` — the write-on plays inside
+          // the beat that already existed rather than being added to it.
+          //
+          // That is not arithmetic tidiness, it is what keeps the pacing
+          // budget below intact. The old beat was 620ms of a print that had
+          // stopped changing (the CSS develop was finishing under it); filling
+          // that time with the animation costs nothing at all, and only the
+          // amount the write-on runs PAST it is new stillness.
+          //
+          // MATCH IT TO THE ARTBOARD. Too short and the print flies to the
+          // corner mid-write; too long and the moment sags with nothing
+          // happening. Nothing in the code can measure the Rive timeline, so
+          // this is the one number here that has to be kept in step by hand.
+          //
+          // It lengthens the slow-motion phase even on the coded fallback
+          // paper, which has no write-on. That is deliberate: printPhaseSeconds
+          // is answered before a print exists and must not depend on whether a
+          // 1.7MB WASM file finished loading, or the length of the held beat
+          // after a boss dies would vary from run to run.
+          //
+          // THERE IS A BUDGET AND IT IS ENFORCED. The whole kill shot has to
+          // come in under three and a half seconds (npm run test:boss) — past
+          // that a flourish becomes a cutscene, and a run that reaches level 40
+          // sees eight of them. Anything here up to `holdMs` is free; past it,
+          // every millisecond is one the shot did not have.
+          writeOnMs: 800,
+          // The develop — the emulsion coming off the picture. THE CODED PAPER
+          // ONLY. The Rive print fades its own photograph in as part of the
+          // write-on, and a sheet of emulsion over that artboard would hide
+          // the animation it exists to play.
+          //
+          // It runs UNDER the eject and outlasts it, so the picture is still
+          // coming up as the paper settles — a print that has already
           // developed by the time it stops moving looks like a screenshot
           // being slid around.
           developMs: 620,
@@ -14145,7 +14183,17 @@ export const CONFIG = {
     // bar at the top, and the band wants to be between them rather than on
     // top of either. High enough to clear the top edge of the upgrade card box
     // as well, because the one tip that fires over a menu fires over that one.
+    // A PREFERENCE, NOT A POSITION. A callout that would land on the HUD is
+    // moved off it — see keepOffChrome in ui/callout.js — so this is where the
+    // band sits when there is room, which on a desktop is always. It stops
+    // being true on a short screen, where a quarter of the height is inside
+    // the boss bar.
     y: 0.26,
+    // How much clear space to leave between a callout and the HUD furniture it
+    // has been moved off. Not zero: a line resting exactly on the edge of the
+    // boss bar reads as touching it, and the two are different colours of
+    // urgent text a few pixels apart.
+    uiGap: 10,
     // The fallback for a callouts.csv row with a blank `hold`.
     hold: 1.6,
 
@@ -14228,7 +14276,29 @@ export const CONFIG = {
     // Answering still COUNTS immediately; it is only the clearing that waits.
     // And it never outlasts the row's own `hold` — a floor above the hold would
     // be a tip that its own timer could not end.
+    //
+    // THIS IS THE FLOOR, NOT THE ANSWER. A long tip is held longer, worked out
+    // from its own length — see readCharsPerSec.
     minShow: 1.6,
+    // How fast a tip is assumed to be read, in characters per second, while
+    // the fight carries on underneath it. The min time on screen is the line's
+    // length divided by this, floored at `minShow` and capped at the row's own
+    // `hold` — so rewording a tip re-times it and there is no second number in
+    // callouts.csv to keep in step.
+    //
+    // 12 is deliberately slow. Ordinary prose is read at three or four times
+    // this; none of it is read while a shark is arriving, and a tip that is
+    // gone before it is understood may as well not have fired.
+    readCharsPerSec: 12,
+    // SILENCE AFTER A TIP, before the next may speak. The whole reason the coach
+    // stopped feeling like a wall of text: five pickup tips in a row, each
+    // landing on the frame the last one left, is one long unskippable message
+    // rather than five things learnt.
+    //
+    // A step that OUTRANKS the one that just spoke ignores this — running out
+    // of air does not queue behind an explanation of the yellow orb. See the
+    // note on `quiet` in systems/tutorial.js.
+    gap: 1.2,
     // How close to the surface the seal has to be, in world units below the
     // waterline, before "jump clean out of the water" is a suggestion rather
     // than a way to drown.
@@ -17174,6 +17244,59 @@ export const CONFIG = {
     overlayOpacity: 0.55,
     overlayColor: 0x000000,
   },
+
+  // BANDED (CEL) LIGHTING on a creature's own surface — see
+  // systems/toonShade.js, which injects it into MeshStandardMaterial rather than
+  // swapping the material, so it stacks with a painted pattern instead of
+  // replacing one.
+  //
+  // Shaped like CONFIG.biolumSkin on purpose: a `base` every wearer starts from
+  // and a `presets` block a species overrides, so one slider moves the family
+  // while a species still gets to disagree. An asset opts in with
+  // `toonShade: '<preset name>'` in ASSETS.
+  //
+  // Tuned in the skin lab: npm run looks:skinlab
+  toonShade: {
+    enabled: true,
+    base: {
+      strength: 1,   // 0 is an ordinary photographic surface; 1 is full cel
+      steps: 3,      // how many bands
+      low: 0.28,     // the shadow band's level — never 0, or the shadow side
+                     // welds shut against the outline around it
+      high: 1.0,     // the lit band's level
+      gamma: 1,      // >1 pushes the terminator into the light, <1 into shadow
+      soft: 0,       // 0 is a hard cel edge; a shoulder on each band above that
+      range: 1,      // what counts as "fully lit" — below 1 spreads the bands
+                     // over the part of the ramp a dim animal actually occupies
+    },
+    presets: {
+      // The two the tool was built for. Sharks and orcas are big, smooth,
+      // near-untextured bodies, which is exactly where photographic shading has
+      // least to say and banding has most.
+      shark: { steps: 3, low: 0.3, gamma: 1.15, soft: 0.12 },
+      orca: { steps: 2, low: 0.22, high: 1.0, soft: 0.06 },
+    },
+  },
+
+  // THE HEX HIVE — the build you are holding, tiled into a corner.
+  //
+  // Look-and-feel only, which is why it is here at all: where the tiles sit and
+  // what they are made of are things to be judged mid-run with the water moving,
+  // not numbers to be reasoned about in a table. Nothing in this block changes
+  // what an upgrade DOES.
+  //
+  // See ui/upgradeHive.js for what each value means and what the pulses are
+  // saying. Cycled live with H / Shift+H / Alt+H in dev.
+  upgradeHive: {
+    enabled: true,
+    layout: 'cluster',   // cluster | rows | arc
+    style: 'ink',        // ink | rarity | art
+    corner: 'bl',        // bl | br | tl | tr
+    size: 52,            // tile width in px; height follows the hex ratio
+    gap: 2,
+    perRow: 5,           // `rows` only
+    bow: 0.55,           // `arc` only — how far the middle of the run bulges
+  },
 };
 
 // Kept separate from the actual image data (in ui/levelUpImages.js) so this
@@ -17999,6 +18122,7 @@ function textPanelGroups() {
     panel: 'text',
     items: [
       { path: 'callouts.y', min: 0.1, max: 0.8, step: 0.01, label: 'band height (0 = top, 1 = bottom)' },
+      { path: 'callouts.uiGap', min: 0, max: 60, step: 1, label: 'clear space to leave around the HUD (px)' },
       { path: 'callouts.hold', min: 0.4, max: 6, step: 0.1, label: 'default time on screen (s)' },
       // World units, unlike everything else in this group, and it has to be:
       // it is measured off the boost ring so it holds its place on the animal
@@ -19098,6 +19222,9 @@ export const TUNER_SCHEMA = [
       // snapshot, because a code somebody is going to scan is not something to
       // discover the limits of with a slider.
       { path: 'boss.kill.snapshot.qr.enabled', type: 'bool', label: 'QR to the game on shared images' },
+      // The one number here that has to be matched to the Rive timeline by
+      // eye — nothing in the code can measure how long tWriteOn runs for.
+      { path: 'boss.kill.print.writeOnMs', min: 0, max: 2000, step: 25, label: 'print: write-on length, match the artboard (ms)' },
     ],
   },
   {
@@ -20033,6 +20160,9 @@ export const TUNER_SCHEMA = [
       { path: 'callouts.boostEmpty', min: 0, max: 0.3, step: 0.01, label: 'boost counts as empty at' },
       { path: 'tutorial.enabled', type: 'bool', label: 'first-run tips (window.__tips.reset() to see them again)' },
       { path: 'tutorial.openDelay', min: 0, max: 10, step: 0.5, label: 'tips: wait this long into a run (s)' },
+      { path: 'tutorial.minShow', min: 0.2, max: 8, step: 0.1, label: 'tips: shortest time on screen (s)' },
+      { path: 'tutorial.readCharsPerSec', min: 4, max: 40, step: 1, label: 'tips: reading speed, sets the min for a long line (chars/s)' },
+      { path: 'tutorial.gap', min: 0, max: 6, step: 0.1, label: 'tips: silence between one tip and the next (s)' },
       { path: 'tutorial.nearSurface', min: 2, max: 40, step: 1, label: 'tips: "near the surface" is within (units)' },
       { path: 'tutorial.breachAir', min: 0.05, max: 2, step: 0.05, label: 'tips: air time that counts as a breach (s)' },
       { path: 'tutorial.showRange', min: 5, max: 60, step: 1, label: 'tips: a creature must be this close to be talked about (units)' },

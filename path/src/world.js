@@ -4,7 +4,6 @@ import { resolutionScale } from './systems/settings.js';
 import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT } from './arena.js';
 import { createGrid } from './systems/grid.js';
 import { createConstellations } from './systems/constellations.js';
-import { createHexTiles } from './systems/hexTiles.js';
 import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime } from './systems/water.js';
 import { createSkyMaterial, updateSkyMaterial, skyPlaneMetrics } from './systems/sky.js';
 import { createCelestials } from './systems/celestial.js';
@@ -103,7 +102,6 @@ export function createWorld(container) {
 
   const warpGrid = createGrid(scene);
   const constellations = createConstellations(scene);
-  const hexTiles = createHexTiles(scene);
   // Outside the backdrop group: it owns its own rebuild off `bounds`, same as
   // the grid, and disposeBackdrop would take its merged geometry with it.
   const wallRocks = createWallRocks(scene);
@@ -705,5 +703,5 @@ export function createWorld(container) {
   // frame in world units, and that is a fact about this asymmetric frustum
   // that nothing outside this file can work out for itself. See applyFraming
   // in systems/bossKill.js, which frames the seal and the boss it just killed.
-  return { scene, camera, renderer, resize, applyRenderScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, halfExtents, updateSurface, updateColors, updateLighting, grid, constellations, hexTiles, wallRocks, rain, lightning, setLightningHandler };
+  return { scene, camera, renderer, resize, applyRenderScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, halfExtents, updateSurface, updateColors, updateLighting, grid, constellations, wallRocks, rain, lightning, setLightningHandler };
 }

@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { CALLOUTS, pushCallout, clearCallout, bandState, holdFor } from './callouts.js';
-import { calloutOnDevice } from '../calloutTable.js';
+import { calloutOnDevice, calloutText } from '../calloutTable.js';
 
 // ---------------------------------------------------------------------------
 // THE FIRST-RUN COACH — a handful of short sentences, once per device, and then
@@ -294,8 +294,33 @@ let answered = false;
  * the contract unreachable and the step stuck talking until something louder
  * took the band.
  */
-function legibleFor(row) {
-  return Math.min(CONFIG.tutorial?.minShow ?? 1.6, holdFor(row));
+// Exported for the harness, which asserts the timing directly rather than by
+// counting frames: "a long tip is held longer than a short one" is a claim
+// about this function, and measuring it through a whole simulated run would be
+// measuring the run.
+export function legibleFor(row, device) {
+  const c = CONFIG.tutorial ?? {};
+  // THE FLOOR SCALES WITH THE SENTENCE, because a fixed one is wrong at both
+  // ends of the table. 1.6 seconds is plenty for "Swim up for air" and is not
+  // close to enough for "Strike then hoover the chum to keep a FOOD CHAIN
+  // going. Each level of chain adds a score multiplier." — a hundred
+  // characters, read while something is trying to eat you.
+  //
+  // Measured off the wording this player is actually being shown, not the
+  // `text` column: the touch and pad variants are different lengths, and a
+  // phone reading the keyboard line's length would hurry its own longer one.
+  //
+  // Derived rather than a per-row column on purpose. A `minShow` cell in
+  // callouts.csv would be a number to keep in step with the words beside it,
+  // and it would go stale the first time anybody reworded a tip — which is the
+  // one edit this file is built to make cheap.
+  const chars = (calloutText(row, device) ?? '').length;
+  const perSec = Math.max(1, c.readCharsPerSec ?? 12);
+  const want = Math.max(c.minShow ?? 1.6, chars / perSec);
+  // NEVER LONGER THAN THE ROW'S OWN HOLD, which is unchanged and is the MAX.
+  // A floor above the hold would be a tip whose timer could not end it — see
+  // the note this function has always carried.
+  return Math.min(want, holdFor(row));
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +385,12 @@ export function resetTutorial() {
 export function resetTutorialRun() {
   events.clear();
   endStep(false);
+  // ...and the silence endStep just armed goes with it. A run opens on a camera
+  // move over empty water and the first tip already waits out `openDelay`; a
+  // gap left over from the last run would be a second delay stacked on that
+  // one, for a reason belonging to a run that is over.
+  quiet = 0;
+  spokePriority = -Infinity;
 }
 
 /**
@@ -373,6 +404,29 @@ export function noteTutorialEvent(name) {
   events.add(name);
 }
 
+// ---------------------------------------------------------------------------
+// THE QUIET BETWEEN TIPS
+//
+// Nothing used to separate them. A step ended and the next one that was ready
+// took the band on the very next frame, which was survivable when the water
+// half of the coach was one line and is not now: a player swimming through a
+// bubble, a blue orb and a chunk gets three sentences back to back, each
+// arriving before the last has been understood, and the whole set reads as one
+// long unskippable wall.
+//
+// SO A TIP BUYS SILENCE AFTER IT. `gap` seconds during which the coach says
+// nothing, counted from the moment the last line left the band.
+//
+// ...UNLESS THE NEXT ONE IS MORE IMPORTANT. An escalation always gets through,
+// and that is what `spokeAt` is for rather than a second exemption knob: the
+// gap blocks a step whose priority is at or below the one that just spoke, so
+// running out of air (80) interrupts the quiet after a bubble tip (38) while a
+// second orb tip (36) waits its turn. The coach will not chatter, but it will
+// always escalate.
+// ---------------------------------------------------------------------------
+let quiet = 0;
+let spokePriority = -Infinity;
+
 function endStep(markDone) {
   const id = tutorialState.active;
   answered = false;
@@ -381,7 +435,13 @@ function endStep(markDone) {
     doneIds.add(id);
     saveDone();
   }
-  clearCallout(CALLOUTS.get(id));
+  const row = CALLOUTS.get(id);
+  // Armed on the way out whether or not the step was spent. A tip cut off by
+  // dying still occupied the band a moment ago, and the next line should not
+  // land on the frame the last one vanished either way.
+  quiet = Math.max(0, CONFIG.tutorial?.gap ?? 1.2);
+  spokePriority = row?.priority ?? 0;
+  clearCallout(row);
   tutorialState.active = null;
 }
 
@@ -415,7 +475,7 @@ export function updateTutorial(dt, ctx = {}, live = true) {
     // moment it has been read, without needing the player to hold the stick
     // there until the floor is up.
     if (!answered && step.done(ctx, events, doneIds)) answered = true;
-    if (answered && bandState.age >= legibleFor(CALLOUTS.get(activeId))) {
+    if (answered && bandState.age >= legibleFor(CALLOUTS.get(activeId), ctx.device)) {
       // Read, and answered. Off the band now rather than at the end of its
       // hold — the tip has been obeyed, and holding it there would be the game
       // arguing with something the player has already done.
@@ -444,7 +504,22 @@ export function updateTutorial(dt, ctx = {}, live = true) {
   }
 
   if (!tutorialState.active) {
+    // The quiet only runs while the band is FREE. Counted here rather than at
+    // the top of the frame so a long tip does not spend its own hold burning
+    // down the silence that is meant to follow it — otherwise a 7-second line
+    // arrives, and the next one lands the instant it leaves.
+    if (quiet > 0) quiet = Math.max(0, quiet - dt);
+
     const next = bestReady(ctx, -Infinity);
+    // Held back unless it outranks the line that just spoke — see the note on
+    // `quiet`. A step refused here is NOT spent: it stays ready and is offered
+    // again the moment the silence is up, which is the same contract
+    // pushCallout's refusal has always had.
+    const escalating = (next?.row?.priority ?? 0) > spokePriority;
+    if (quiet > 0 && !escalating) {
+      events.clear();
+      return;
+    }
     // `pushCallout` has the final say, and its answer is respected: a step that
     // could not be shown is not started, so it stays available for the next
     // frame rather than being spent on a line nobody saw.

@@ -9,286 +9,68 @@ canvas{display:block;margin:8px auto;background:#222}</style>
 {"imports":{"three":"/three/build/three.module.js","three/addons/":"/three/examples/jsm/"}}
 </script>
 <script type="module">
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+// The batch driver: read a spec list, render every entry, POST each PNG back.
+//
+// All the actual rendering lives in iconRender.js, shared with picker.html so
+// the angles chosen there mean the same thing here. See that file's header.
+import { makeRenderer, shootToBlob } from './iconRender.js';
 
-const SIZE = 512;
 const log = (m) => { document.getElementById('log').textContent += '\n' + m; };
-
-// Renders on demand and never inside a rAF loop: this page has to work in a
-// backgrounded tab, where rAF simply does not fire.
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(2);
-renderer.setSize(SIZE, SIZE);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
+const renderer = makeRenderer();
 document.body.appendChild(renderer.domElement);
 
-const AXES = { '+X': [1,0,0], '-X': [-1,0,0], '+Y': [0,1,0], '-Y': [0,-1,0], '+Z': [0,0,1], '-Z': [0,0,-1] };
-const v = (n) => new THREE.Vector3().fromArray(AXES[n] ?? AXES['+Z']);
-
-// Every creature is shown in the same frame: its declared `forward` points
-// screen-right and its `up` points screen-up, so the boats and the moray come
-// out rotated here exactly as they are rotated in the game.
-function orient(obj, forward, up) {
-  const f = v(forward), u = v(up).normalize();
-  u.addScaledVector(f, -u.dot(f)).normalize();       // orthogonalise
-  const r = new THREE.Vector3().crossVectors(f, u);  // model's own right
-  // Columns are where the model's axes should land: forward -> +X, up -> +Y.
-  const m = new THREE.Matrix4().makeBasis(f, u, r).invert();
-  obj.applyMatrix4(m);
-}
-
-// Where the posed model's vertices ACTUALLY are.
+// `?list=icons.json` picks a different spec file; the default is the atlas's.
 //
-// `Box3.setFromObject` is wrong for a skinned mesh and wrong quietly. It takes
-// the geometry's own bounding box and pushes it through the mesh's world
-// matrix — but a skinned vertex is placed by its BONES, and the mesh's own
-// matrix has nothing to do with where it lands. On a rig whose skin space sits
-// near the origin while its armature sits somewhere else, the two answers are
-// nowhere near each other: the otter, the tuna and the brown fish framed on a
-// box the animal was not in and rendered as three blank 24KB PNGs — no error,
-// no warning, just nothing.
-//
-// So the vertices are skinned in software and measured directly, which is the
-// only honest way to ask a posed rig where it is. `updateMatrixWorld(true)` is
-// forced first: without it every bone reports its rest matrix and the whole
-// exercise silently measures the bind pose.
-function meshBoxes(root) {
-  root.updateMatrixWorld(true);
-  const out = [];
-  const v = new THREE.Vector3();
-  root.traverse((o) => {
-    if (!o.isMesh && !o.isSkinnedMesh) return;
-    const pos = o.geometry.attributes.position;
-    const box = new THREE.Box3();
-    if (o.isSkinnedMesh) o.skeleton.update();
-    for (let i = 0; i < pos.count; i++) {
-      v.fromBufferAttribute(pos, i);
-      if (o.isSkinnedMesh) o.applyBoneTransform(i, v);
-      box.expandByPoint(o.localToWorld(v));
-    }
-    out.push({ obj: o, box, verts: pos.count });
-  });
-  return out;
+// FETCHED WITH ITS OWN ERROR PATH, because the failure is otherwise invisible.
+// The server answers a missing file with the body `missing`, .json() throws on
+// the `m`, and since this is module top level the throw takes the whole script
+// out — leaving the page showing "booting…" and a blank canvas forever, which
+// reads as a hung renderer rather than as a file that isn't there. Both lists
+// are generated, so a fresh checkout hits this on the first run every time.
+const listName = new URLSearchParams(location.search).get('list') ?? 'list.json';
+let specs;
+try {
+  const res = await fetch('/' + listName);
+  if (!res.ok) throw new Error(`${res.status} — ${listName} is generated; run the tool that writes it`);
+  specs = await res.json();
+} catch (err) {
+  document.getElementById('log').textContent =
+    `CANNOT LOAD /${listName}\n\n${err.message}\n\n` +
+    `  upgrade icons:  node --import ./tools/vite-loader.mjs tools/upgrade-icons.mjs\n` +
+    `                  then open render.html?list=icons.json\n` +
+    `                  (or pick the angles by eye: picker.html)\n\n` +
+    `  model atlas:    node --import ./tools/vite-loader.mjs tools/atlas-data.mjs --out <dir>\n` +
+    `                  then copy <dir>/list.json next to this page`;
+  throw err;
 }
 
-// The box the CAMERA should frame, and the strays it refused to include.
-//
-// A part that sits thousands of body-lengths from the body is not part of the
-// silhouette, it is a fault in the file — and framing on the union of the two
-// puts the animal off-screen while the fault sits dead centre. The otter is
-// the live example: its 442-vertex eye mesh is bound such that it lands 2,784
-// units from a body 0.97 units long, IN BIND POSE, so the render came back as
-// two black circles floating in white and nothing else.
-//
-// The anchor is the mesh with the most vertices — the body, on anything shaped
-// like an animal — and anything whose centre is more than 20 radii away from
-// it is dropped and named. Twenty is far enough that no eye, fin or prop on a
-// sane model is ever excluded, and near enough to catch a bind matrix that has
-// gone to the moon.
-function posedBox(root, strays) {
-  const parts = meshBoxes(root);
-  if (!parts.length) return new THREE.Box3();
-  const anchor = parts.reduce((a, b) => (b.verts > a.verts ? b : a));
-  const c = anchor.box.getCenter(new THREE.Vector3());
-  const r = Math.max(anchor.box.getSize(new THREE.Vector3()).length() / 2, 1e-6);
-  const box = new THREE.Box3();
-  for (const p of parts) {
-    const d = p.box.getCenter(new THREE.Vector3()).distanceTo(c);
-    if (p !== anchor && d > r * 20) {
-      strays?.push(`${p.obj.name || 'mesh'} at ${(d / r).toFixed(0)}x body radius`);
-      p.obj.visible = false;
-      continue;
-    }
-    box.union(p.box);
-  }
-  return box;
-}
-
-// Centre the model and report the radius the camera has to clear.
-//
-// THE BOUNDING SPHERE, not the longest axis. The camera looks from a
-// three-quarter angle, so the silhouette it sees is not the box's longest
-// side — a deep, chunky body presents its diagonal, and framing on the long
-// axis put seven of the roster (the otter, the tuna, the brown fish and all
-// four money rolls) partly outside the canvas, where the crop then trimmed
-// tight against a cut-off animal and looked deliberate. A sphere is the one
-// bound that is the same from every angle.
-function frame(root, strays) {
-  const box = posedBox(root, strays);
-  if (box.isEmpty()) return 0.5;
-  const centre = new THREE.Vector3(); box.getCenter(centre);
-  root.position.sub(centre);
-  const sphere = new THREE.Sphere();
-  box.translate(centre.clone().negate()).getBoundingSphere(sphere);
-  return sphere.radius || 0.5;
-}
-
-function makeScene() {
-  const scene = new THREE.Scene();
-  // Neutral studio light: a cool sky/ground hemisphere so nothing goes pure
-  // black in shadow, a warm key from front-left-above, and a dim rim behind to
-  // separate a dark animal from a transparent background.
-  scene.add(new THREE.HemisphereLight(0xbfd8e0, 0x2a3438, 2.1));
-  const key = new THREE.DirectionalLight(0xfff2e0, 2.6); key.position.set(-3, 4, 5); scene.add(key);
-  const fill = new THREE.DirectionalLight(0xcfe4ff, 0.9); fill.position.set(4, 1, 3); scene.add(fill);
-  const rim = new THREE.DirectionalLight(0xffffff, 1.2); rim.position.set(1, 2, -5); scene.add(rim);
-  return scene;
-}
-
-async function loadModel(spec) {
-  const url = '/models/' + spec.file;
-  if (spec.fmt === 'fbx') return { root: await new FBXLoader().loadAsync(url), clips: [] };
-  const g = await new GLTFLoader().loadAsync(url);
-  return { root: g.scene, clips: g.animations ?? [] };
-}
-
-// Trim the transparent margin off a render.
-//
-// The camera frames on the model's LONGEST axis against a square canvas, so a
-// shark -- 4x longer than it is tall -- leaves most of the height empty. Left
-// uncropped that empty space is what the page ends up laying out around: every
-// gallery cell gets sized for a square that is three-quarters nothing, and the
-// wasted pixels are carried in the base64 too.
-//
-// Reads the alpha channel to find the real bounds. A few pixels of padding are
-// kept so antialiased edges are not clipped.
-function crop(canvas, pad = 6) {
-  const ctx = canvas.getContext('2d') ?? null;
-  // WebGL canvases have no 2d context, so copy through one first.
-  const src = document.createElement('canvas');
-  src.width = canvas.width; src.height = canvas.height;
-  const sctx = src.getContext('2d');
-  sctx.drawImage(canvas, 0, 0);
-  const { data, width, height } = sctx.getImageData(0, 0, src.width, src.height);
-  let x0 = width, y0 = height, x1 = -1, y1 = -1;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3] > 8) {
-        if (x < x0) x0 = x; if (x > x1) x1 = x;
-        if (y < y0) y0 = y; if (y > y1) y1 = y;
-      }
-    }
-  }
-  if (x1 < 0) return src;                 // fully transparent: nothing to trim
-  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
-  x1 = Math.min(width - 1, x1 + pad); y1 = Math.min(height - 1, y1 + pad);
-  const out = document.createElement('canvas');
-  out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
-  out.getContext('2d').drawImage(src, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
-  return out;
-}
-
-// Keep only the mesh this asset actually uses, exactly as assets.js does.
-//
-// Several assets share one binary and pick a mesh out of it by index — the
-// three fish packs are one file with three different fish in it. Without this
-// all three render as the whole file, which is to say identically, and the
-// atlas reports each of them as carrying the other two's triangles as well.
-function isolateMesh(root, index) {
-  const meshes = [];
-  root.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) meshes.push(o); });
-  const target = meshes[index];
-  if (!target) return meshes.length;
-  const keep = new Set();
-  for (let o = target; o; o = o.parent) keep.add(o);
-  for (const m of meshes) if (!keep.has(m)) m.parent?.remove(m);
-  return 1;
-}
-
-async function shoot(spec) {
-  const { root, clips } = await loadModel(spec);
-  if (spec.meshIndex != null) isolateMesh(root, spec.meshIndex);
-
-  // A skinned creature in its bind pose reads as a specimen, not an animal.
-  // Sampling the swim clip a third of the way in gives it a real swimming
-  // shape — a tail mid-beat, fins spread — which is the whole point of asking
-  // for the skinned appearance rather than the geometry.
-  let posed = 'bind pose';
-  if (clips.length) {
-    const wanted = spec.wantClips?.swim ?? spec.wantClips?.idle;
-    const clip = (wanted && clips.find((c) => c.name === wanted)) || clips[0];
-    if (clip && clip.duration > 0) {
-      const mixer = new THREE.AnimationMixer(root);
-      const action = mixer.clipAction(clip);
-      action.play();
-      mixer.setTime(clip.duration * 0.33);
-      posed = `posed at 33% of "${clip.name}"`;
-    }
-  }
-
-  // The hammerhead is the one asset whose base colour lives outside its
-  // binary, so without this it would render as flat untextured grey — the very
-  // thing the plate is meant to show is not the case.
-  if (spec.baseColorMap) {
-    const tex = await new THREE.TextureLoader().loadAsync(spec.baseColorMap);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    // Same override assets.js honours: a sidecar on a model that ships no
-    // maps of its own carries the baking tool's convention, not the model's.
-    tex.flipY = spec.flipY ?? (spec.fmt === 'fbx');
-    root.traverse((o) => {
-      if (o.isMesh || o.isSkinnedMesh) {
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        for (const mm of mats) { mm.map = tex; mm.needsUpdate = true; }
-      }
-    });
-  }
-
-  root.traverse((o) => {
-    if (o.isMesh || o.isSkinnedMesh) {
-      o.frustumCulled = false;
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      for (const mm of mats) {
-        mm.side = THREE.DoubleSide;      // several of these are single-sided fins
-        if (mm.transparent && mm.opacity === 1) mm.transparent = false;
-      }
-    }
-  });
-
-  const scene = makeScene();
-  const holder = new THREE.Group();
-  holder.add(root);
-  orient(holder, spec.forward, spec.up);
-  scene.add(holder);
-  const strays = [];
-  const radius = frame(holder, strays);
-
-  // Three-quarter view: round to the front-left and slightly above, which
-  // reads a body's depth where a flat side-on does not.
-  //
-  // The distance is derived rather than dialled in. A sphere of radius R fits
-  // a vertical fov f at d = R / sin(f/2), so this is that with 6% of air —
-  // enough that the crop has an antialiased edge to find rather than the
-  // canvas boundary.
-  const FOV = 30;
-  const cam = new THREE.PerspectiveCamera(FOV, 1, radius / 100, radius * 40);
-  const d = (radius / Math.sin((FOV / 2) * Math.PI / 180)) * 1.06;
-  cam.position.set(-d * 0.42, d * 0.30, d * 0.86);
-  cam.lookAt(0, 0, 0);
-
-  renderer.render(scene, cam);
-  const blob = await new Promise((res) => crop(renderer.domElement).toBlob(res, 'image/png'));
-  await fetch('/shot/' + spec.key + '.png', { method: 'POST', body: blob });
-  const note = strays.length ? `  STRAY GEOMETRY DROPPED: ${strays.join('; ')}` : '';
-  return `${spec.key}: ${(blob.size / 1024).toFixed(0)}KB, ${posed}${note}`;
-}
-
-const specs = await (await fetch('/list.json')).json();
 window.__total = specs.length;
 window.__done = 0;
 window.__fails = [];
 document.getElementById('log').textContent = `rendering ${specs.length} models`;
 
+// A spec list can now hold rows this page has no business rendering: an icon set
+// to a drawn file, and one deliberately set to no picture at all. Both are
+// skipped rather than failed — `--bake` is what reads those, and a FAIL line for
+// every monogram would bury the real failures. The atlas's own list names no
+// `kind`, so all of it still renders.
+let skipped = 0;
 for (const spec of specs) {
+  const kind = spec.kind ?? 'render';
+  if (kind !== 'render') { skipped++; window.__done++; continue; }
   try {
-    log(await shoot(spec));
+    const { blob, log: line } = await shootToBlob(renderer, spec);
+    await fetch('/shot/' + spec.key + '.png', { method: 'POST', body: blob });
+    log(line);
   } catch (err) {
     window.__fails.push(spec.key + ': ' + (err?.message ?? err));
     log(`FAIL ${spec.key}: ${err?.message ?? err}`);
   }
   window.__done++;
 }
+window.__skipped = skipped;
 window.__finished = true;
-log(`\nDONE ${window.__done}/${specs.length}, ${window.__fails.length} failed`);
+log(`\nDONE ${window.__done - skipped}/${specs.length - skipped} rendered`
+  + (skipped ? `, ${skipped} not renders (drawn or none)` : '')
+  + `, ${window.__fails.length} failed`);
 </script>

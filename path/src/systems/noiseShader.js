@@ -116,12 +116,16 @@ const attached = new Set();
  * Inject the noise into one material. Safe to call on a material that has
  * already been processed — it no-ops rather than stacking a second copy.
  */
-export function attachNoiseShader(material) {
+export function attachNoiseShader(material, preset = null) {
   if (!material || material.userData.__noiseAttached) return;
   // Needs a diffuseColor to modulate, which the unlit/basic materials the
   // procedural fallback shapes use do have, but the sprite path does not.
   if (!('color' in material)) return;
   material.userData.__noiseAttached = true;
+  // Which block under CONFIG.sealShader.presets this material wears. Null means
+  // the base — which is every material that existed before per-species noise,
+  // so nothing changes for the seal or the escorts.
+  material.userData.__noisePreset = preset;
 
   const u = {
     uNoiseSize: { value: 0.4 },
@@ -264,13 +268,25 @@ export function applyNoiseSettings() {
   for (const m of attached) {
     const u = m.userData.__noiseUniforms;
     if (!u) continue;
-    u.uNoiseSize.value = cfg.size ?? 0.4;
+    // BASE, THEN THE SPECIES' OWN OVERRIDES — the same fall-through
+    // CONFIG.biolumSkin and CONFIG.toonShade use.
+    //
+    // This started as one global set of four numbers, because the only thing
+    // wearing it was the seal. A shark and an orca want different mottling from
+    // each other and from the animal it was authored for, and with one global
+    // block the second species to be tuned silently retunes the first. A
+    // material with no preset reads the base alone, so every existing wearer is
+    // bit-for-bit what it was.
+    const preset = m.userData.__noisePreset;
+    const p = preset ? { ...cfg, ...(cfg.presets?.[preset] ?? {}) } : cfg;
+    u.uNoiseSize.value = p.size ?? 0.4;
     // `enabled` folds into strength rather than branching in the shader:
     // one less uniform for the fragment to test per pixel, and it makes the
     // toggle fade the same way the slider does instead of popping.
-    u.uNoiseStrength.value = cfg.enabled === false ? 0 : (cfg.strength ?? 0.35);
-    u.uNoiseContrast.value = cfg.contrast ?? 1;
-    u.uNoiseColor.value.set(cfg.color ?? 0x0a2233);
+    u.uNoiseStrength.value = (cfg.enabled === false || p.enabled === false)
+      ? 0 : (p.strength ?? 0.35);
+    u.uNoiseContrast.value = p.contrast ?? 1;
+    u.uNoiseColor.value.set(p.color ?? 0x0a2233);
   }
 }
 

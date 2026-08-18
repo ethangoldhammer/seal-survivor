@@ -25,6 +25,18 @@ const flag = (name, fallback) => {
 };
 const ROOT = resolve(argv.find((a) => !a.startsWith('--')) ?? '.');
 const SHOTS = resolve(flag('--out', join(ROOT, 'shots')));
+
+// Writes into the drop box, RE-CREATING IT FIRST.
+//
+// The out dir usually lives inside the built directory, and every `vite build`
+// runs with emptyOutDir — so a rebuild while this server is up deletes the box
+// from under it. Without the mkdir the next POST throws ENOENT and takes the
+// whole server down, which presents as the page's save button failing for no
+// visible reason several minutes after the thing that actually caused it.
+async function drop(name, body) {
+  await mkdir(SHOTS, { recursive: true });
+  await writeFile(join(SHOTS, name), body);
+}
 const PORT = Number(flag('--port', 4600));
 await mkdir(SHOTS, { recursive: true });
 
@@ -60,12 +72,30 @@ function resolveSafe(urlPath) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
+  // A look page saving the numbers it just chose. Same drop box as the shots:
+  // this server never imports config.js, so a saved preset is a file for a human
+  // to paste, not a write into the game's tuning. See SERVERS.md.
+  if (req.method === 'POST' && url.pathname.startsWith('/skin/')) {
+    const name = url.pathname.slice('/skin/'.length).replace(/[^\w.-]/g, '');
+    if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = Buffer.concat(chunks);
+    try { JSON.parse(body.toString()); } catch (err) {
+      res.writeHead(400).end('not valid json: ' + err.message); return;
+    }
+    await drop(name, body);
+    res.writeHead(200).end('ok');
+    console.log(`  wrote ${name} (${body.length} bytes)`);
+    return;
+  }
+
   if (req.method === 'POST' && url.pathname.startsWith('/shot/')) {
     const name = url.pathname.slice('/shot/'.length).replace(/[^\w.-]/g, '');
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const body = Buffer.concat(chunks);
-    await writeFile(join(SHOTS, name), body);
+    await drop(name, body);
     res.writeHead(200).end('ok');
     console.log(`  wrote ${name} (${(body.length / 1024).toFixed(0)} KB)`);
     return;

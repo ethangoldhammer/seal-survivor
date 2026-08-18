@@ -1,0 +1,576 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>icon picker</title>
+<!--
+  PICK THE ANGLE BY EYE, THEN SAVE THE NUMBERS.
+
+    node tools/atlas-render/server.mjs --out <dir>
+    open http://localhost:4599/picker.html
+
+  The batch renderer takes a yaw, a pitch and a clip time per icon. Choosing
+  those by editing JSON and re-rendering fifteen models to see what happened is
+  the loop this page exists to remove: drag to orbit, scrub the pose, pick a
+  flat colour, and watch the result on a real hex at the size it ships at.
+
+  IT RENDERS THROUGH iconRender.js — the same module render.html uses. That is
+  the point. A preview with its own copy of the framing or the outline maths
+  would let the two drift, and the failure would show up as "the icon came out
+  different from the preview", which makes the tool worse than useless.
+
+  Saving POSTs the whole list back to icons.json. The generator merges rather
+  than overwrites (see tools/upgrade-icons.mjs), so re-running it later keeps
+  every angle chosen here and only re-derives the facts it owns.
+-->
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0d1418; color: #d6e6ef;
+    font: 13px ui-monospace, SFMono-Regular, monospace; display: flex; height: 100vh; }
+  #list { width: 190px; flex: none; overflow-y: auto; border-right: 1px solid #1e3542; padding: 8px 0; }
+  #list button { display: block; width: 100%; text-align: left; background: none; border: 0;
+    color: #9dc0d2; padding: 6px 12px; font: inherit; cursor: pointer; }
+  #list button:hover { background: #142934; color: #eaf6fc; }
+  #list button.on { background: #1d4e68; color: #fff; }
+  #list button .dot { color: #ffb020; }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+  #top { display: flex; gap: 16px; padding: 14px; align-items: flex-start; min-height: 0; }
+  #stage { position: relative; background:
+      linear-gradient(45deg, #16242c 25%, transparent 25%, transparent 75%, #16242c 75%) 0 0/20px 20px,
+      linear-gradient(45deg, #16242c 25%, transparent 25%, transparent 75%, #16242c 75%) 10px 10px/20px 20px,
+      #101b21;
+    border: 1px solid #1e3542; cursor: grab; flex: none; }
+  #stage.drag { cursor: grabbing; }
+  #stage canvas { display: block; width: 380px; height: 380px; }
+  #previews { display: flex; flex-direction: column; gap: 14px; flex: none; }
+  .pv { text-align: center; }
+  .pv .lab { font-size: 10px; color: #6f97aa; margin-top: 4px; }
+  /* The same hexagon the hive uses — the art's own vertices on a square box.
+     See .sv-hive-tile in ui/ui.js; if these ever disagree the picker is lying
+     about the one thing it is for. */
+  .hex { position: relative; background: linear-gradient(160deg, #1c4a63, #0e2735);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    display: grid; place-items: center; margin: 0 auto; }
+  .hex img { width: 55%; height: 55%; object-fit: contain;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.75)); }
+  .h96 { width: 96px; height: 96px; }
+  .h56 { width: 56px; height: 56px; }
+  .h38 { width: 38px; height: 38px; }
+  #panel { flex: 1; min-width: 240px; display: grid; gap: 9px; align-content: start; }
+  .row { display: grid; grid-template-columns: 74px 1fr 54px; gap: 8px; align-items: center; }
+  .row label { color: #82a9bc; font-size: 11px; }
+  .row output { text-align: right; color: #cfe6f2; }
+  input[type=range] { width: 100%; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  button.act { background: #17455c; color: #dff0f8; border: 1px solid #2b6d8d;
+    padding: 7px 12px; border-radius: 3px; cursor: pointer; font: inherit; }
+  button.act:hover { background: #1e5a78; }
+  button.act.warn { background: #5c3a17; border-color: #8d6a2b; }
+  #status { color: #7fbf95; min-height: 16px; font-size: 11px; }
+  #status.err { color: #e08a8a; }
+  #notes { color: #8aa8b8; font-size: 11px; padding: 0 14px 10px; white-space: pre-wrap; }
+  .swatches { display: flex; gap: 4px; flex-wrap: wrap; }
+  .swatches button { width: 20px; height: 20px; border: 1px solid #2b4b5c; border-radius: 2px;
+    cursor: pointer; padding: 0; }
+  .chk { display: flex; align-items: center; gap: 6px; color: #82a9bc; font-size: 11px; }
+  .kinds { display: grid; gap: 3px; margin: 2px 0 6px; }
+  .kinds label { display: flex; align-items: center; gap: 6px; color: #a8c8d8; font-size: 11px; cursor: pointer; }
+  .kinds input:disabled + * , .kinds label:has(input:disabled) { color: #4e6b7a; cursor: not-allowed; }
+  #list .group { color: #557185; font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+    padding: 10px 12px 3px; border-top: 1px solid #162b36; margin-top: 4px; }
+  #list button.off { color: #5d7684; font-style: italic; }
+  #list button.nomodel::after { content: ' ·'; color: #40606f; }
+  .sprites { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .sprites .hint { width: 100%; color: #6f97aa; font-size: 10px; }
+  .sprites button.sprite { display: grid; place-items: center; gap: 2px; width: 52px; padding: 4px;
+    background: #12252e; border: 1px solid #24485a; border-radius: 3px; cursor: pointer; color: #9dc0d2; }
+  .sprites button.sprite img { width: 32px; height: 32px; object-fit: contain; }
+  .sprites button.sprite span { font-size: 8px; }
+  /* A `none` row previews the monogram the hive will draw, using the tile itself
+     as the type's box — same idea as .sv-hive-mono. */
+  .hex[data-mono]:not([data-mono=""])::after { content: attr(data-mono);
+    font: 700 clamp(9px, 26%, 26px)/1 system-ui, sans-serif; color: rgba(255,255,255,0.92);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  button.act:disabled { opacity: .45; cursor: not-allowed; }
+</style>
+<script type="importmap">
+{"imports":{"three":"/three/build/three.module.js","three/addons/":"/three/examples/jsm/"}}
+</script>
+
+<div id="list"></div>
+<main>
+  <div id="top">
+    <div id="stage"></div>
+    <div id="previews">
+      <div class="pv"><div class="hex h96"><img id="pv96"></div><div class="lab">96</div></div>
+      <div class="pv"><div class="hex h56"><img id="pv56"></div><div class="lab">56 — ships</div></div>
+      <div class="pv"><div class="hex h38"><img id="pv38"></div><div class="lab">38</div></div>
+    </div>
+    <div id="panel"></div>
+  </div>
+  <div id="notes"></div>
+</main>
+
+<script type="module">
+import { makeRenderer, buildIcon, cameraFor, finish } from './iconRender.js';
+
+const $ = (id) => document.getElementById(id);
+const renderer = makeRenderer();
+$('stage').appendChild(renderer.domElement);
+
+const LIST = new URLSearchParams(location.search).get('list') ?? 'icons.json';
+let specs = [];
+let cur = null;      // the spec being edited (a live reference into `specs`)
+let built = null;    // { scene, radius, ... } from buildIcon
+const dirty = new Set();
+
+function status(msg, isErr) {
+  $('status') && ($('status').textContent = msg, $('status').className = isErr ? 'err' : '');
+}
+
+// --- the controls ---------------------------------------------------------
+// `structural` marks the fields that change the SCENE rather than the camera.
+// Those need a rebuild — a reload, a re-pose, a new outline — and the rest are
+// a camera move, which is why dragging stays smooth on a 45,000-vertex whale.
+const CONTROLS = [
+  { key: 'yaw',     label: 'yaw',      min: -180, max: 180, step: 0.5, def: -26 },
+  { key: 'pitch',   label: 'pitch',    min: -89,  max: 89,  step: 0.5, def: 17.4 },
+  { key: 'zoom',    label: 'zoom',     min: 0.6,  max: 2.2, step: 0.01, def: 1.003 },
+  // Structural because it is applied to the model before the frame is
+  // measured — see the note in iconRender.js. It is the only control here
+  // that rotates the subject within the hexagon rather than moving the eye.
+  { key: 'roll',    label: 'roll',     min: -180, max: 180, step: 1,    def: 0, structural: true },
+  { key: 'clipAt',  label: 'pose',     min: 0,    max: 1,   step: 0.01, def: 0.33, structural: true },
+  { key: 'outline', label: 'outline',  min: 0,    max: 0.06, step: 0.001, def: 0.02, structural: true },
+  // The ramp, in full. `bands` alone was never enough: it says how MANY steps
+  // there are and nothing about where they fall or how far apart they are, which
+  // is most of what separates a cel look from a muddy one. See gradientMap.
+  { key: 'bands',    label: 'bands',   min: 2,    max: 8,   step: 1,    def: 3,   structural: true },
+  { key: 'bandGamma',label: 'terminator', min: 0.3, max: 3, step: 0.05, def: 1,   structural: true },
+  { key: 'bandLow',  label: 'shadow',  min: 0,    max: 200, step: 1,    def: 70,  structural: true },
+  { key: 'bandHigh', label: 'light',   min: 100,  max: 255, step: 1,    def: 255, structural: true },
+  { key: 'bandSoft', label: 'softness',min: 0,    max: 1,   step: 0.02, def: 0,   structural: true },
+];
+
+// Only meaningful when the icon is a render. An image or a `none` row has no
+// camera and no shading, and live controls that cannot do anything are worse
+// than hidden ones.
+const RENDER_ONLY = new Set(CONTROLS.map((c) => c.key));
+
+// Colours worth reaching for: the five rarity tiers plus the elements, because
+// what a flat colour is FOR is telling six white mammals apart, and the run
+// already has a palette that means something.
+const SWATCHES = ['#e8f4f8', '#b8c2cc', '#5ee07a', '#4aa8ff', '#b565ff', '#ffb020',
+                  '#ff7043', '#4dd0e1', '#9ccc65', '#f06292'];
+
+function buildPanel() {
+  const p = $('panel');
+  p.innerHTML = '';
+  for (const c of CONTROLS) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label for="c_${c.key}">${c.label}</label>
+      <input id="c_${c.key}" type="range" min="${c.min}" max="${c.max}" step="${c.step}">
+      <output id="o_${c.key}"></output>`;
+    p.appendChild(row);
+    row.querySelector('input').addEventListener('input', (e) => {
+      cur[c.key] = parseFloat(e.target.value);
+      markDirty();
+      if (c.structural) rebuild(); else draw();
+    });
+  }
+
+  // WHAT THIS ICON IS, before anything about how to render it.
+  //
+  // Three kinds, and the third one is not a placeholder. Most of the roster
+  // fires a primitive or grants no object at all, so `none` — show the card's
+  // monogram — is the RIGHT answer for it, and the spec has to be able to say
+  // that rather than leaving a row that merely looks unfinished.
+  const kindBox = document.createElement('div');
+  kindBox.innerHTML = `
+    <div class="kinds">
+      <label><input type="radio" name="kind" value="render"> render from model</label>
+      <label><input type="radio" name="kind" value="image"> drawn file</label>
+      <label><input type="radio" name="kind" value="none"> no icon (monogram)</label>
+    </div>
+    <div id="imgBox" style="display:none">
+      <div class="row" style="grid-template-columns:74px 1fr">
+        <label for="imgFile">upload</label><input type="file" id="imgFile" accept=".webp,.png,.jpg,.jpeg">
+      </div>
+      <div class="row" style="grid-template-columns:74px 1fr">
+        <label for="imgPath">path</label><input type="text" id="imgPath" placeholder="/sprites/starfish-1.webp">
+      </div>
+      <div class="sprites" id="spriteList"></div>
+    </div>`;
+  p.appendChild(kindBox);
+  for (const r of kindBox.querySelectorAll('input[name=kind]')) {
+    r.addEventListener('change', () => {
+      cur.kind = r.value;
+      markDirty(); syncPanel(); rebuild();
+    });
+  }
+  $('imgPath').addEventListener('change', (e) => {
+    cur.image = e.target.value.trim() || undefined;
+    if (!cur.image) delete cur.image;
+    markDirty(); rebuild();
+  });
+  $('imgFile').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    // Named after the UPGRADE, not after whatever the file was called on disk.
+    // Two icons given files both called `icon.webp` would otherwise overwrite
+    // each other, and the loser would silently show the winner's picture.
+    const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+    status('uploading…');
+    try {
+      const res = await fetch(`/custom/${cur.key}${ext}`, { method: 'POST', body: f });
+      if (!res.ok) throw new Error(await res.text());
+      const { path, bytes } = await res.json();
+      cur.image = path;
+      cur.kind = 'image';
+      $('imgPath').value = path;
+      markDirty(); syncPanel(); rebuild();
+      status(`uploaded ${path} (${(bytes / 1024).toFixed(0)}KB)`);
+    } catch (err) {
+      status('upload failed: ' + err.message, true);
+    }
+  });
+
+  // flatColor, per icon. A checkbox as well as a picker because ABSENT and
+  // WHITE are different things: absent keeps the model's own materials and its
+  // texture, white throws them away and shades one tone. A colour input alone
+  // has no way to say "not set".
+  const fc = document.createElement('div');
+  fc.innerHTML = `
+    <div class="chk"><input type="checkbox" id="fcOn"><label for="fcOn">flat colour (ignore file materials)</label></div>
+    <div class="row" style="grid-template-columns:74px 1fr;margin-top:6px">
+      <label for="fcVal">colour</label><input type="color" id="fcVal">
+    </div>
+    <div class="swatches" id="fcSwatches"></div>`;
+  p.appendChild(fc);
+  $('fcOn').addEventListener('change', (e) => {
+    cur.flatColor = e.target.checked ? cssToInt($('fcVal').value) : undefined;
+    if (!e.target.checked) delete cur.flatColor;
+    markDirty(); rebuild();
+  });
+  $('fcVal').addEventListener('input', (e) => {
+    $('fcOn').checked = true;
+    cur.flatColor = cssToInt(e.target.value);
+    markDirty(); rebuild();
+  });
+  for (const hex of SWATCHES) {
+    const b = document.createElement('button');
+    b.style.background = hex; b.title = hex;
+    b.addEventListener('click', () => {
+      $('fcVal').value = hex; $('fcOn').checked = true;
+      cur.flatColor = cssToInt(hex);
+      markDirty(); rebuild();
+    });
+    $('fcSwatches').appendChild(b);
+  }
+
+  const btns = document.createElement('div');
+  btns.className = 'btns';
+  btns.innerHTML = `
+    <button class="act" id="bSave">save icons.json</button>
+    <button class="act" id="bShoot">render this PNG</button>
+    <button class="act warn" id="bReset">reset this icon</button>`;
+  p.appendChild(btns);
+  const st = document.createElement('div');
+  st.id = 'status';
+  p.appendChild(st);
+
+  $('bSave').addEventListener('click', () => save());
+  $('bShoot').addEventListener('click', shoot);
+  $('bReset').addEventListener('click', () => {
+    for (const c of CONTROLS) cur[c.key] = c.def;
+    delete cur.flatColor;
+    markDirty(); syncPanel(); rebuild();
+  });
+}
+
+// The same two letters ui/upgradeHive.js derives, off the CARD name — so what
+// this shows for a `none` row is what the run will show.
+function monogram(spec) {
+  const words = (spec.name ?? spec.key).split(/[\s''-]+/).filter(Boolean);
+  return words.length > 1
+    ? (words[0][0] + words[1][0]).toUpperCase()
+    : (spec.name ?? spec.key).slice(0, 2).toUpperCase();
+}
+
+const cssToInt = (s) => parseInt(s.slice(1), 16);
+const intToCss = (n) => '#' + (n >>> 0).toString(16).padStart(6, '0');
+
+function syncPanel() {
+  const kind = cur.kind ?? 'render';
+  for (const r of document.querySelectorAll('input[name=kind]')) r.checked = r.value === kind;
+  // An upgrade with no model cannot be a render, and offering the option would
+  // produce a row that fails every batch run forever.
+  const renderable = !!cur.file;
+  document.querySelector('input[name=kind][value=render]').disabled = !renderable;
+
+  for (const c of CONTROLS) {
+    const val = cur[c.key] ?? c.def;
+    $('c_' + c.key).value = val;
+    $('o_' + c.key).textContent = c.step >= 1 ? val : (+val).toFixed(c.step < 0.01 ? 3 : 2);
+    $('c_' + c.key).closest('.row').style.display = kind === 'render' ? '' : 'none';
+  }
+  $('fcOn').closest('.chk').style.display = kind === 'render' ? '' : 'none';
+  $('fcVal').closest('.row').style.display = kind === 'render' ? '' : 'none';
+  $('fcSwatches').style.display = kind === 'render' ? '' : 'none';
+  $('imgBox').style.display = kind === 'image' ? '' : 'none';
+  $('bShoot').disabled = kind !== 'render';
+
+  const on = cur.flatColor != null;
+  $('fcOn').checked = on;
+  $('fcVal').value = on ? intToCss(cur.flatColor) : '#e8f4f8';
+  $('imgPath').value = cur.image ?? '';
+  // The pose slider is meaningless on a model with no clip, and a live control
+  // that cannot do anything is worse than a disabled one.
+  $('c_clipAt').disabled = !built?.clipName;
+}
+
+function markDirty() {
+  dirty.add(cur.key);
+  buildList();
+  for (const c of CONTROLS) {
+    const val = cur[c.key] ?? c.def;
+    $('o_' + c.key).textContent = c.step >= 1 ? val : (+val).toFixed(c.step < 0.01 ? 3 : 2);
+  }
+}
+
+// Sorted so the work sorts itself: everything still on `none` floats to the top,
+// because with forty-eight rows the useful question is "what have I not done".
+const KIND_ORDER = { none: 0, render: 1, image: 2 };
+
+function buildList() {
+  const l = $('list');
+  l.innerHTML = '';
+  const sorted = [...specs].sort((a, b) =>
+    (KIND_ORDER[a.kind ?? 'render'] - KIND_ORDER[b.kind ?? 'render'])
+    || a.key.localeCompare(b.key));
+  let lastKind = null;
+  for (const s of sorted) {
+    const kind = s.kind ?? 'render';
+    if (kind !== lastKind) {
+      const h = document.createElement('div');
+      h.className = 'group';
+      h.textContent = { none: 'no icon', render: 'rendered', image: 'drawn' }[kind] ?? kind;
+      l.appendChild(h);
+      lastKind = kind;
+    }
+    const b = document.createElement('button');
+    // The card name, not the id: it is what the player reads and what the
+    // monogram comes from.
+    b.textContent = s.name ?? s.key;
+    b.title = s.key;
+    if (!s.enabled) b.classList.add('off');
+    if (!s.file) b.classList.add('nomodel');
+    if (dirty.has(s.key)) {
+      const d = document.createElement('span');
+      d.className = 'dot'; d.textContent = ' •';
+      b.appendChild(d);
+    }
+    if (cur && s.key === cur.key) b.classList.add('on');
+    b.addEventListener('click', () => select(s));
+    l.appendChild(b);
+  }
+}
+
+// --- rendering ------------------------------------------------------------
+function draw() {
+  if (!built) return;
+  for (const id of ['pv96', 'pv56', 'pv38']) {
+    $(id).style.display = '';
+    $(id).parentElement.dataset.mono = '';
+  }
+  renderer.render(built.scene, cameraFor(cur, built.radius));
+  // The hex previews take the FINISHED image — cropped and padded exactly as
+  // the baked icon will be — rather than the raw canvas. The crop is what
+  // decides how big the animal looks on the tile, so previewing before it
+  // answers a different question than the one being asked.
+  const url = finish(renderer.domElement, cur).toDataURL('image/png');
+  for (const id of ['pv96', 'pv56', 'pv38']) $(id).src = url;
+}
+
+async function rebuild() {
+  if (!cur) return;
+  const kind = cur.kind ?? 'render';
+
+  // Neither of these two touches WebGL. `none` shows what the hive will actually
+  // show — the monogram — rather than an empty box, because "no icon" is a
+  // decision with a look and you should be able to see it.
+  if (kind !== 'render') {
+    built = null;
+    const url = kind === 'image' ? (cur.image ? '/' + cur.image.replace(/^\//, '') : '') : '';
+    for (const id of ['pv96', 'pv56', 'pv38']) {
+      const img = $(id);
+      // removeAttribute, NOT src = ''. An empty src is a relative URL that
+      // resolves to the page itself, so the browser dutifully re-fetches
+      // picker.html for every preview and the console fills with 404s that look
+      // like a missing icon.
+      if (url) img.src = url; else img.removeAttribute('src');
+      img.style.display = url ? '' : 'none';
+      img.parentElement.dataset.mono = url ? '' : monogram(cur);
+    }
+    $('notes').textContent = kind === 'image'
+      ? `${cur.key} — drawn file ${cur.image ?? '(none named)'}`
+      : `${cur.key} — no icon; the hive shows the monogram "${monogram(cur)}"`;
+    syncPanel();
+    status('');
+    return;
+  }
+
+  status('building…');
+  try {
+    built = await buildIcon(cur);
+    $('notes').textContent =
+      `${cur.key} — ${cur.file} (${cur.fmt}), ${built.posed}` +
+      (built.clipDuration ? `  clip ${built.clipDuration.toFixed(2)}s` : '') +
+      (built.dropped ? `\ndropped ${built.dropped} mesh(es) matching "${cur.dropMeshes}"` : '') +
+      (built.strays.length ? `\nSTRAY GEOMETRY DROPPED: ${built.strays.join('; ')}` : '') +
+      (cur.flatColor != null ? `\nflat colour ${intToCss(cur.flatColor)} — file materials ignored` : '');
+    syncPanel();
+    draw();
+    status('');
+  } catch (err) {
+    status(err.message, true);
+    $('notes').textContent = `FAILED to build ${cur.key}: ${err.message}`;
+  }
+}
+
+// The drawn art already in the repo, offered as one click each. public/sprites is
+// mounted by the server for exactly this.
+let spriteNames = null;
+async function fillSprites() {
+  if (spriteNames) return;
+  // No directory listing on the server, and adding one for five files is not
+  // worth a route — these are probed instead, so a sprite that is not there
+  // simply does not appear as a button.
+  const candidates = ['starfish-1.webp', 'starfish-2.webp', 'starfish-3.webp',
+                      'starfish-4.webp', 'starfish-5.webp'];
+  spriteNames = [];
+  for (const n of candidates) {
+    try { if ((await fetch('/sprites/' + n, { method: 'GET' })).ok) spriteNames.push(n); } catch {}
+  }
+  const box = $('spriteList');
+  box.innerHTML = spriteNames.length ? '<div class="hint">in the repo:</div>' : '';
+  for (const n of spriteNames) {
+    const b = document.createElement('button');
+    b.className = 'sprite';
+    b.innerHTML = `<img src="/sprites/${n}" alt=""><span>${n.replace('.webp', '')}</span>`;
+    b.addEventListener('click', () => {
+      cur.image = '/sprites/' + n;
+      cur.kind = 'image';
+      markDirty(); syncPanel(); rebuild();
+    });
+    box.appendChild(b);
+  }
+}
+
+function select(spec) {
+  cur = spec;
+  buildList();
+  syncPanel();
+  fillSprites();
+  rebuild();
+}
+
+// --- orbit ----------------------------------------------------------------
+// Dragging writes yaw and pitch straight into the spec, so the numbers being
+// saved are literally the ones on screen. Pitch is clamped to the slider's own
+// range: past ±90 the camera crosses its own up vector and the image flips,
+// which reads as the model jumping rather than as the camera going over the top.
+(() => {
+  const stage = $('stage');
+  let dragging = false, lx = 0, ly = 0;
+  stage.addEventListener('pointerdown', (e) => {
+    dragging = true; lx = e.clientX; ly = e.clientY;
+    stage.classList.add('drag'); stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!dragging || !cur) return;
+    const dx = e.clientX - lx, dy = e.clientY - ly;
+    lx = e.clientX; ly = e.clientY;
+    cur.yaw = ((cur.yaw ?? -26) + dx * 0.4 + 180 + 360) % 360 - 180;
+    cur.pitch = Math.max(-89, Math.min(89, (cur.pitch ?? 17.4) + dy * 0.3));
+    $('c_yaw').value = cur.yaw; $('c_pitch').value = cur.pitch;
+    markDirty(); draw();
+  });
+  const stop = (e) => { dragging = false; stage.classList.remove('drag'); };
+  stage.addEventListener('pointerup', stop);
+  stage.addEventListener('pointercancel', stop);
+  stage.addEventListener('wheel', (e) => {
+    if (!cur) return;
+    e.preventDefault();
+    cur.zoom = Math.max(0.6, Math.min(2.2, (cur.zoom ?? 1.003) * (1 + Math.sign(e.deltaY) * 0.05)));
+    $('c_zoom').value = cur.zoom;
+    markDirty(); draw();
+  }, { passive: false });
+})();
+
+// --- saving ---------------------------------------------------------------
+// The mtime this page's copy of the list was read at. Sent back on save so the
+// server can refuse to let a stale tab flatten someone else's work — see the
+// conflict check in server.mjs. A save that is refused leaves the dirty marks
+// alone, so nothing is lost and the choice is the operator's.
+let loadedMtime = '';
+
+async function save(force) {
+  try {
+    const qs = `?since=${encodeURIComponent(loadedMtime)}${force ? '&force=1' : ''}`;
+    const res = await fetch('/spec/' + LIST + qs, {
+      method: 'POST',
+      body: JSON.stringify(specs, null, 2) + '\n',
+    });
+    if (res.status === 409) {
+      status('icons.json changed on disk since this page loaded — reload to merge, or save again to overwrite', true);
+      // The next click overwrites deliberately. Retitled so the button says what
+      // it will now do rather than quietly changing meaning.
+      $('bSave').textContent = 'overwrite icons.json';
+      $('bSave').onclick = () => { save(true); $('bSave').textContent = 'save icons.json'; $('bSave').onclick = () => save(); };
+      return;
+    }
+    if (!res.ok) throw new Error(await res.text());
+    const { mtime } = await res.json();
+    if (mtime) loadedMtime = mtime;
+    dirty.clear(); buildList();
+    status(`saved ${LIST} — now: render.html?list=${LIST}`);
+  } catch (err) {
+    status('save failed: ' + err.message, true);
+  }
+}
+
+async function shoot() {
+  if (!built) return;
+  status('rendering…');
+  try {
+    renderer.render(built.scene, cameraFor(cur, built.radius));
+    const shotCanvas = finish(renderer.domElement, cur);
+    const blob = await new Promise((r) => shotCanvas.toBlob(r, 'image/png'));
+    const res = await fetch('/shot/' + cur.key + '.png', { method: 'POST', body: blob });
+    if (!res.ok) throw new Error(await res.text());
+    status(`wrote ${cur.key}.png (${(blob.size / 1024).toFixed(0)}KB)`);
+  } catch (err) {
+    status('render failed: ' + err.message, true);
+  }
+}
+
+// --- boot -----------------------------------------------------------------
+// Same explicit error path as render.html, and for the same reason: a missing
+// spec file is the normal state of a fresh checkout, and .json() on the
+// server's `missing` body throws at module top level with nothing on screen.
+try {
+  const res = await fetch('/' + LIST);
+  if (!res.ok) throw new Error(`${res.status} — ${LIST} is generated`);
+  loadedMtime = res.headers.get('x-mtime') ?? '';
+  specs = await res.json();
+} catch (err) {
+  document.body.innerHTML =
+    `<pre style="padding:20px;color:#e08a8a">CANNOT LOAD /${LIST}\n\n${err.message}\n\n` +
+    `generate it first:\n  node --import ./tools/vite-loader.mjs tools/upgrade-icons.mjs</pre>`;
+  throw err;
+}
+
+buildPanel();
+if (specs.length) select(specs[0]);
+else document.body.innerHTML = '<pre style="padding:20px">the spec list is empty</pre>';
+</script>

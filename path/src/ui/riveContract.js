@@ -86,6 +86,19 @@ export const SNAPSHOT_BINDINGS = {
   time: 'strTime',          // "4:12" — the game's own m:ss, unpadded minutes
   score: 'strScore',        // STUB — declared, not placed on the card yet
   wordmark: 'strWordmark',  // STUB — declared, not placed on the card yet
+  // THE WRITE-ON, and it is a trigger the GAME fires — the opposite direction
+  // from the splash's `tStart`, which the artboard fires at us. The card is
+  // built, bound and written long before anybody sees it (it is ejected from
+  // the bottom of the screen and flown into the middle), so the artboard has
+  // no way to know the moment it is actually being looked at. The game does,
+  // and this is how it says so.
+  //
+  // FIRED ONCE PER PRINT, on the frame the flight lands — see
+  // playCardWriteOn in ui/snapshotCard.js and the landing in
+  // ui/snapshotPrint.js. Deliberately NOT on the score screen's fan: those are
+  // the same photographs a second time, and a card that writes itself on again
+  // every time it is laid out is an animation about nothing.
+  writeOn: 'tWriteOn',
 };
 
 /**

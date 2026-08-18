@@ -56,6 +56,18 @@ const VIEWPORTS = [
 // callouts.csv, which is the one that has to fit.
 const SURFACES = ['start', 'HUD', 'coach', 'boss', 'cards', 'score card'];
 
+// THE FURNITURE A CALLOUT MAY NOT COVER. The same list ui/callout.js clears
+// itself of, restated here ON PURPOSE rather than imported: this is the check,
+// and a check that reads its expectation out of the code it is checking passes
+// by construction. Delete a selector from CHROME in callout.js and the band
+// starts landing on that element — which is exactly the regression this exists
+// to catch, and importing the list would hide it.
+const CALLOUT_CHROME = [
+  '.sv-bossbar', '.sv-xptop', '.sv-xptop-level', '.sv-hud-corner', '.sv-print',
+];
+// ...and the callouts themselves, which is what must stay off it.
+const CALLOUT_LINES = ['.sv-callout', '.sv-callout-boost'];
+
 // Apple's Human Interface Guidelines minimum, and the reason a button can look
 // fine and still be missed by a thumb.
 const TAP_MIN = 44;
@@ -214,6 +226,7 @@ function describe(f) {
   if (f.type === 'tap') return `${f.what} — tap target ${f.w}x${f.h}, under ${TAP_MIN}`;
   if (f.type === 'clipped') return `${f.what} — clipped, content ${f.contentW}px in a ${f.boxW}px box`;
   if (f.type === 'threw') return `surface failed to build — ${f.what}`;
+  if (f.type === 'callout-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;
   return `${f.what} — ${f.type} by ${f.by}px`;
 }
 
@@ -313,6 +326,25 @@ async function buildSurface(surface, ui, callout, callouts) {
   }
 
   if (surface === 'coach') {
+    // THE WORST CASE IS NOT A TIP ON AN EMPTY SCREEN. It is a tip during a boss
+    // fight, with the run's prints already in the corner — every piece of top
+    // chrome the band has to clear, all up at once. Built before the line so
+    // the band is measured against a screen that is genuinely occupied; an
+    // empty HUD would let a broken position pass on every viewport.
+    ui.updateBossBar({ name: 'Wicked Grimgullet the Chumbucket Rumbler', hp: 4200, maxHp: 9000 });
+    const print = await import('../../path/src/ui/snapshotPrint.js');
+    print.initSnapshotPrints();
+    // The parked pile, not a print in flight: a flying one is mid-transition
+    // and its rect is wherever the animation happens to be, which is the same
+    // unmeasurable thing PER_FRAME exists to keep out of this tool. Two of
+    // them, because the corner fans and the second sits lower than the first.
+    for (let i = 0; i < 2; i++) {
+      const paper = print.buildPrintPaper('', { name: 'Grimgullet', level: 14, time: 421 }, 132);
+      paper.style.cssText = 'position:absolute; left:16px; '
+        + `top:${40 + i * 18}px; width:132px;`;
+      ui.uiRoot().appendChild(paper);
+    }
+
     // THE LONGEST LINE IN THE TABLE, for this frame's device. Not a made-up
     // string: a hand-typed sample would keep passing after somebody wrote a
     // longer tip into callouts.csv, which is exactly when this needs to fail.
@@ -395,8 +427,15 @@ function measure() {
 
     // Clipped by its own box — the `overflow: hidden` case, where nothing goes
     // off screen and the text is cut off anyway.
+    // ...UNLESS THE TRUNCATION WAS ASKED FOR. `text-overflow: ellipsis` is a
+    // declaration that this text is expected to be too long and that cutting it
+    // with a visible "…" is the intended answer — a boss name across a 132px
+    // print in the corner, which is never going to fit and is not meant to.
+    // Reporting those is reporting a fix as a bug, and it is the same mistake
+    // the scrolled-out check above exists to avoid.
     const clips = style.overflowX !== 'visible' || style.overflowY !== 'visible';
-    if (clips && node.scrollWidth > node.clientWidth + 1 && node.clientWidth > 0) {
+    const truncatesOnPurpose = style.textOverflow === 'ellipsis';
+    if (clips && !truncatesOnPurpose && node.scrollWidth > node.clientWidth + 1 && node.clientWidth > 0) {
       once('clipped', { contentW: node.scrollWidth, boxW: node.clientWidth });
     }
 
@@ -406,7 +445,56 @@ function measure() {
       once('tap', { w: Math.round(r.width), h: Math.round(r.height) });
     }
   }
+
+  findings.push(...measureCalloutOverlap());
   return findings;
+}
+
+// A CALLOUT SITTING ON THE HUD.
+//
+// Not part of the sweep above, and it could not be: that walks one element at a
+// time asking whether it fits the screen, and this is a question about a PAIR —
+// two boxes that each fit perfectly and are in the same place. It is also the
+// one kind of finding here that a screenshot makes obvious and a rectangle does
+// not, which is why it took a rule rather than an eye to catch.
+//
+// Measured in screen space with getBoundingClientRect, so it accounts for the
+// arrival scale, the lift, and every transform between the layer and the line.
+function measureCalloutOverlap() {
+  const out = [];
+  const chrome = [];
+  for (const node of document.querySelectorAll(CALLOUT_CHROME.join(','))) {
+    if (node.classList.contains('sv-hidden')) continue;
+    const style = getComputedStyle(node);
+    if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) continue;
+    const r = node.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    chrome.push({ what: path(node), r });
+  }
+
+  for (const node of document.querySelectorAll(CALLOUT_LINES.join(','))) {
+    if (node.classList.contains('sv-hidden')) continue;
+    const style = getComputedStyle(node);
+    if (style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+    const r = node.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    for (const c of chrome) {
+      // A pixel of tolerance, for the same reason the edge checks round: two
+      // boxes that share a boundary are adjacent, not overlapping, and
+      // sub-pixel layout puts half a pixel of everything past every edge.
+      const ox = Math.min(r.right, c.r.right) - Math.max(r.left, c.r.left);
+      const oy = Math.min(r.bottom, c.r.bottom) - Math.max(r.top, c.r.top);
+      if (ox > 1 && oy > 1) {
+        out.push({
+          type: 'callout-over-ui',
+          what: path(node),
+          over: c.what,
+          by: `${Math.round(ox)}x${Math.round(oy)}`,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 // AT THE BOTTOM, and it has to be. Function declarations hoist but `const` does

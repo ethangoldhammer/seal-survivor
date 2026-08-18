@@ -265,11 +265,66 @@ export function buildSnapshotCard({ photo, meta, width = 340, pixelRatio } = {})
 
     const machines = rive.stateMachineNames ?? [];
     if (machines.length) rive.play(machines[0]); else rive.play();
-    live.set(canvas, { rive });
+    // The view model is kept alongside the instance so the write-on can be
+    // fired later, from the flight, without re-reading it off a Rive object
+    // the caller has no business holding.
+    live.set(canvas, { rive, vmi });
     return rive;
   })();
 
   return { canvas, ready };
+}
+
+/**
+ * Play the card's write-on — the artboard drawing itself onto the paper.
+ *
+ * SEPARATE FROM BUILDING IT, because the two happen seconds apart and in the
+ * wrong order to be one step. A card is built, bound, given its photograph and
+ * set playing while it is still off the bottom of the screen; it becomes
+ * something a player is LOOKING at only once the flight has landed it in the
+ * middle. The artboard cannot know that moment. This is the game telling it.
+ *
+ * Awaits the card's own `ready` when it is handed one, because a print can land
+ * before its image has finished decoding on a slow frame — and a trigger fired
+ * at a view model that does not exist yet is the quietest possible failure:
+ * the print simply sits there fully drawn, having skipped its own animation,
+ * with nothing logged.
+ *
+ * Returns whether it actually fired, for the test and for nothing else.
+ */
+export async function playCardWriteOn(canvas, ready = null) {
+  if (!canvas) return false;
+  try {
+    if (ready) await ready;
+  } catch { /* the card failed to load; the paper below it is still fine */ }
+  const vmi = live.get(canvas)?.vmi;
+  if (!vmi) return false;
+  try {
+    const trigger = vmi.trigger(SNAPSHOT_BINDINGS.writeOn);
+    if (!trigger) {
+      // An export without it. Worth one line, because the visible result is
+      // "the print is a bit flat" rather than anything anybody would report.
+      warnNoWriteOn();
+      return false;
+    }
+    trigger.trigger();
+    return true;
+  } catch (err) {
+    warnNoWriteOn(err);
+    return false;
+  }
+}
+
+// Once per session. A run that beats eight bosses would otherwise print the
+// same complaint eight times, and it is the same missing property every time.
+let warnedNoWriteOn = false;
+function warnNoWriteOn(err) {
+  if (warnedNoWriteOn) return;
+  warnedNoWriteOn = true;
+  console.warn(
+    `[snapshotCard] the Polaroid artboard has no "${SNAPSHOT_BINDINGS.writeOn}" trigger — `
+    + 'prints will appear without their write-on.', err?.message ?? '',
+  );
 }
 
 /**

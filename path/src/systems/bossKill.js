@@ -133,7 +133,18 @@ export function printPhaseSeconds() {
   const k = CONFIG.boss?.kill ?? {};
   const p = k.print ?? {};
   if (p.enabled === false || k.snapshot?.enabled === false) return 0;
-  const flight = ((p.ejectMs ?? 260) + (p.holdMs ?? 620) + (p.parkMs ?? 520)) / 1000;
+  // The print stands still for whichever is longer, the beat or the artboard's
+  // write-on — they are the same stillness, so this is a max and not a sum
+  // (see CONFIG.boss.kill.print.writeOnMs). The world must not come back while
+  // the artboard is still drawing itself, which is what puts writeOnMs in here
+  // at all.
+  //
+  // Counted even though only the Rive print HAS a write-on: this is answered
+  // before any print exists, and a phase length that depended on whether a
+  // 1.7MB WASM file had finished loading would make the held beat after a boss
+  // dies a different length from run to run.
+  const still = Math.max(p.holdMs ?? 620, p.writeOnMs ?? 800);
+  const flight = ((p.ejectMs ?? 260) + still + (p.parkMs ?? 520)) / 1000;
   const beat = Math.max(0, k.beatTime ?? 1.5);
   const leftOfBeat = beat * (1 - Math.max(0, Math.min(1, k.snapshot?.at ?? 0.6)));
   return Math.max(0, flight - leftOfBeat);

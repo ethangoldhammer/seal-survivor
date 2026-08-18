@@ -138,6 +138,7 @@ function describe(f) {
   if (f.type === 'tap') return `${f.what} — tap target ${f.w}x${f.h}, under 44`;
   if (f.type === 'clipped') return `${f.what} — clipped, content ${f.contentW}px in a ${f.boxW}px box`;
   if (f.type === 'threw') return `surface failed to build — ${f.what}`;
+  if (f.type === 'callout-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;
   return `${f.what} — ${f.type} by ${f.by}px`;
 }
 

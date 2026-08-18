@@ -42,6 +42,16 @@ import { popupPose, worldToScreen } from './ui.js';
 // the cards opened has to play out where it can be read, and a band that a menu
 // can cover would finish behind it. Safe because nothing here takes
 // pointer events — the band cannot swallow a click on a card underneath it.
+//
+// ...AND THEREFORE IT MUST NOT LAND ON THE HUD. Being on top of everything is
+// what makes a callout readable and it is also what makes it dangerous: the
+// band is a fixed fraction down the screen (CONFIG.callouts.y), which was
+// picked on a desktop where a quarter of the height clears the boss bar
+// comfortably. On a phone held sideways a quarter of 375px is 97px, and the
+// print pile, the boss bar and the level label are all up there. The line
+// lands on top of the score, or the boss's health, at exactly the moment both
+// of those matter. See keepOffChrome — the position in CONFIG is a PREFERENCE
+// now, and the clear space wins when they disagree.
 // ---------------------------------------------------------------------------
 
 const STYLES = `
@@ -195,6 +205,100 @@ export function updateCalloutUi(dt, ctx = {}) {
   drawArrow(dt, owner, owner === band ? bandPose : null, ctx);
 }
 
+// ---------------------------------------------------------------------------
+// KEEPING OUT OF THE HUD
+// ---------------------------------------------------------------------------
+
+/**
+ * The furniture a callout may not cover, as selectors.
+ *
+ * FIXED CHROME ONLY, and the omissions are the design. `.sv-playerbars` is not
+ * here and must not be: the health and oxygen bars ride the SEAL, so a band
+ * that avoided them would slide up and down the screen as the animal swam,
+ * which is a worse read than a moment of overlap and is the kind of motion
+ * nobody can trace back to a rule. Same for the on-seal callout itself. The
+ * toast layer is out for a related reason — toasts come and go in under a
+ * second, and a band that flinched every time one arrived would never be still.
+ *
+ * `.sv-print` is each individual polaroid rather than `.sv-print-layer` or
+ * `.sv-print-pile`, both of which are `inset: 0` and would report the whole
+ * screen as occupied.
+ */
+const CHROME = ['.sv-bossbar', '.sv-xptop', '.sv-xptop-level', '.sv-hud-corner', '.sv-print'];
+
+// Rects, gathered fresh. Deliberately not cached: this runs only on the frames
+// a callout is actually on screen — a few seconds per run — and everything it
+// measures moves. The boss bar arrives mid-fight and animates its own width,
+// prints fly in and park, and the whole HUD reflows on a rotate. A cache would
+// be right about the common case and wrong about every case that matters.
+function chromeRects(layer) {
+  const root = layer?.ownerDocument ?? document;
+  const out = [];
+  for (const node of root.querySelectorAll(CHROME.join(','))) {
+    // Hidden furniture is not furniture. The boss bar exists in the DOM for
+    // the whole run and is only on screen during a fight.
+    if (node.classList.contains('sv-hidden')) continue;
+    const style = getComputedStyle(node);
+    if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) continue;
+    const r = node.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    out.push(r);
+  }
+  return out;
+}
+
+/**
+ * Move `top` until a box of `height` centred on the screen's width does not sit
+ * on any of the chrome it overlaps horizontally. Returns the new top.
+ *
+ * PUSHES AWAY FROM WHICHEVER SIDE THE FURNITURE IS ON — down past a boss bar,
+ * up above a score corner — rather than always downward, because the two live
+ * at opposite ends of the screen and on a phone the corner is at the BOTTOM.
+ * A one-directional nudge would clear the bar by shoving the line onto the
+ * score.
+ *
+ * Iterated a few times because clearing one piece can push into another (the
+ * boss bar down onto a print), and capped rather than looped to convergence: a
+ * screen with no clear space at all would spin forever, and the honest answer
+ * there is "the best position found", not a hang.
+ */
+function keepOffChrome(top, height, width, centreX, rects, gap) {
+  const H = window.innerHeight;
+  // Both surfaces are centred on their own anchor (translateX(-50%)), but not
+  // on the SAME anchor: the band is centred on the screen and the on-seal line
+  // on the animal. Passed in rather than assumed, because assuming the screen
+  // would have the seal's line testing a column of chrome it is nowhere near —
+  // and clearing furniture it was never going to touch.
+  const left = centreX - width / 2;
+  const right = left + width;
+  let y = top;
+
+  for (let pass = 0; pass < 4; pass++) {
+    let moved = false;
+    for (const r of rects) {
+      // Only what is actually in the line's way. A score panel in the corner of
+      // a wide screen shares no columns with a centred band and is none of its
+      // business.
+      if (r.right <= left || r.left >= right) continue;
+      if (r.bottom <= y || r.top >= y + height) continue;
+      // Whichever way is nearer out. Measured against the OVERLAP rather than
+      // against screen halves, so a tall print down the side of a short screen
+      // is escaped by the shorter move instead of by a rule about where things
+      // usually are.
+      const down = r.bottom + gap;
+      const up = r.top - gap - height;
+      y = (Math.abs(down - y) <= Math.abs(up - y)) ? down : up;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+
+  // Never off the screen itself. A band pushed above the top edge by a piece of
+  // chrome it could not clear is a line nobody reads at all, which is strictly
+  // worse than the overlap it was avoiding.
+  return Math.max(gap, Math.min(y, H - height - gap));
+}
+
 // Returns the pose it drew with, so the arrow can ride the same fade.
 function drawBand(callout) {
   if (!callout) {
@@ -210,7 +314,20 @@ function drawBand(callout) {
   // distance from the end however long this particular line was given.
   const pose = popupPose(callout.motion, callout.age, callout.hold);
   const y = (CONFIG.callouts?.y ?? 0.26) * window.innerHeight;
-  bandEl.style.top = `${y + pose.lift}px`;
+
+  // WHERE IT WANTS TO BE, then where it may be. offsetWidth/offsetHeight and
+  // not getBoundingClientRect: the box is scaled by the arrival curve, and a
+  // measured rect would be a fraction of its size on the frame it appears —
+  // so the line would clear the boss bar comfortably at scale 0.2 and then
+  // grow straight back into it.
+  const h = bandEl.offsetHeight;
+  const w = bandEl.offsetWidth;
+  const gap = CONFIG.callouts?.uiGap ?? 10;
+  // `lift` is part of the arrival, not part of where it lives, so it is added
+  // AFTER the clamp: folding it in would let a line drift back onto the HUD
+  // for the few frames the curve is lifting it.
+  const top = keepOffChrome(y - h / 2, h, w, window.innerWidth / 2, chromeRects(bandEl), gap);
+  bandEl.style.top = `${top + h / 2 + pose.lift}px`;
   bandEl.style.transform = `translate(-50%, -50%) scale(${pose.scale})`;
   bandEl.style.opacity = `${pose.alpha}`;
   applyBloom(bandEl, pose.bloom);
@@ -236,8 +353,22 @@ function drawOnSeal(callout, ctx) {
   worldToScreen(ctx.camera, (ctx.playerX ?? 0) + (ring.offsetX ?? 0), top, anchorPt);
 
   const pose = popupPose(callout.motion, callout.age, callout.hold);
+  // KEPT OFF THE HUD TOO, and it needs it more than the band does: this line
+  // rides the seal, so it goes wherever the animal goes — and a seal at the
+  // surface puts it straight through the boss bar, during a boss fight, which
+  // is the only time both are on screen.
+  //
+  // Clamped in the axis it hangs in. The box hangs UPWARD off the anchor
+  // (translate -100%), so its top is anchor - height, and what is clamped is
+  // that top edge; the left is left alone, because this line's whole job is to
+  // be above the ring and a horizontal nudge would take it off the instrument
+  // it is reporting on.
+  const bh = boostEl.offsetHeight;
+  const bw = boostEl.offsetWidth;
+  const bgap = CONFIG.callouts?.uiGap ?? 10;
+  const btop = keepOffChrome(anchorPt.y - bh, bh, bw, anchorPt.x, chromeRects(boostEl), bgap);
   boostEl.style.left = `${anchorPt.x}px`;
-  boostEl.style.top = `${anchorPt.y + pose.lift}px`;
+  boostEl.style.top = `${btop + bh + pose.lift}px`;
   // translate(-50%,-100%) rather than -50%: the anchor is the point the line
   // must sit ABOVE, so the box hangs upward off it. Centring it on the anchor
   // would put half the text through the top of the ring.
