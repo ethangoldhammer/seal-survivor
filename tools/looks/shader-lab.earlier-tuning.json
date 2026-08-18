@@ -1,0 +1,48 @@
+{
+  "toonShade": {
+    "shark": {
+      "steps": 3,
+      "high": 0.57,
+      "strength": 0.46
+    },
+    "orca": {
+      "strength": 1,
+      "range": 1.8,
+      "gamma": 3,
+      "low": 0.12,
+      "soft": 0.04,
+      "steps": 2
+    }
+  },
+  "sealShader": {
+    "shark": {
+      "size": 1.04,
+      "strength": 0.5
+    },
+    "orca": {
+      "contrast": 2.55,
+      "strength": 0.32
+    }
+  },
+  "biolumSkin": {
+    "hide": {
+      "pattern": "marble",
+      "colorB": 0,
+      "shellColor": 2762535,
+      "contrast": 1.85,
+      "strength": 1.66,
+      "flow": 0.9,
+      "scale": 0.38,
+      "colorC": 6119263,
+      "colorA": 0,
+      "pigment": 0.38,
+      "coverage": 1
+    }
+  },
+  "creatureOutline": {
+    "__flat": {
+      "color": 0,
+      "thickness": 0.035
+    }
+  }
+}

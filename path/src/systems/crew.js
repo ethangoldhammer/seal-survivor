@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { emit } from '../entities/particles.js';
-import { createVisual, hasModel, makeOutlineMaterial } from '../assets.js';
+import { createVisual, hasModel, makeOutlineMaterial, ensureOutlineNormal } from '../assets.js';
 import { attachDissolve, dissolveUniforms, roundedNormalBox } from './dissolve.js';
 import { buildHumanoidRig, bindHumanoidRig, aimBone, anchorToHips } from './humanoidRig.js';
 import { spawnGore } from './gore.js';
@@ -221,6 +221,11 @@ function buildBoxBody(rig, kit, h) {
     group.add(mesh);
     let rim = null;
     if (kit.shell) {
+      // The rim shader offsets along `aOutlineNormal`, not the raw normal, and a
+      // geometry without it reads (0,0,0) and simply has no rim — silently, the
+      // way a missing attribute always fails. These shells are built here rather
+      // than by addOutlineShells, so the attribute has to be asked for here too.
+      ensureOutlineNormal(geometry);
       rim = new THREE.Mesh(geometry, kit.shell);
       rim.renderOrder = -1;
       group.add(rim);

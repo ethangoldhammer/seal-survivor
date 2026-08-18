@@ -80,7 +80,7 @@ export function applyAssetTable(opts) {
  * misspelled preset do" is not a question to answer by misspelling one in the
  * file everybody's game reads.
  */
-export function applyAssetTableRow(key, row, { setSize, setSkin, knownKey, knownSkin, warn = console.warn }) {
+export function applyAssetTableRow(key, row, { setSize, setSkin, setNoise, setToon, knownKey, knownSkin, warn = console.warn }) {
   if (knownKey && !knownKey(key)) {
     warn(`[${LABEL}] "${key}" is not an asset in this build — skipped. `
       + 'Check the spelling against ASSETS in assets.js.');
@@ -88,7 +88,20 @@ export function applyAssetTableRow(key, row, { setSize, setSkin, knownKey, known
   }
   // Before the size, and deliberately not sharing its early exits: a row may
   // name a good skin and a bad size, and the skin should still land.
-  applySkin(key, row, setSkin, knownSkin, warn);
+  //
+  // `surface` first, and if it decided anything the `skin` column is not
+  // consulted at all — one writer per field, always.
+  const claimed = applySurface(key, row, { setSkin, setNoise, setToon, knownSkin }, warn);
+  if (claimed) {
+    const skinCell = String(row.skin ?? '').trim();
+    const surfaceCell = String(row.surface ?? '').trim();
+    if (skinCell && !surfaceCell.toLowerCase().startsWith('biolum')) {
+      warn(`[${LABEL}] "${key}" sets surface="${surfaceCell}" and skin="${skinCell}" — `
+        + 'the surface column wins and the skin cell is ignored. Clear one of them.');
+    }
+  } else {
+    applySkin(key, row, setSkin, knownSkin, warn);
+  }
 
   const raw = String(row.size ?? '').trim();
   // Blank means "leave it at 1", which is what an asset with no row gets.
@@ -101,6 +114,66 @@ export function applyAssetTableRow(key, row, { setSize, setSkin, knownKey, known
     return;
   }
   setSize?.(key, n);
+}
+
+// THE SURFACE COLUMN — which of the three treatments this species wears.
+//
+// Written by the shader lab (npm run looks:shaderlab, then tools/apply-shaders.mjs).
+// One cell, because the three are a CHOICE and not three layers: a body painted
+// with Perlin noise AND a biolum pattern carries two unrelated fields and reads
+// as double-textured, which is the note systems/noiseShader.js makes about the
+// seal. Encoding it as one value is what makes that unrepresentable.
+//
+//   texture            the model's own baked map; clears both procedural fields
+//   noise[:preset]     Perlin mottling, banded by the toon step
+//   biolum[:preset]    a biolumSkin pattern at full pigment, replacing the map
+//   (blank)            the asset keeps whatever it declares in code
+//
+// IT WINS OVER THE `skin` COLUMN, and says so when they disagree. `skin` also
+// assigns a biolum preset, so leaving both live would give one field two writers
+// and make which-one-won depend on the order this file happens to run them in —
+// the exact class of bug the tuning file taught us to design out.
+const SURFACE_OFF = new Set(['', 'none', 'off']);
+
+function applySurface(key, row, setters, warn) {
+  const { setSkin, setNoise, setToon, knownSkin } = setters;
+  const raw = String(row.surface ?? '').trim();
+  if (SURFACE_OFF.has(raw.toLowerCase())) return false;
+
+  const [kindRaw, presetRaw] = raw.split(':');
+  const kind = kindRaw.trim().toLowerCase();
+  const preset = (presetRaw ?? '').trim() || null;
+
+  if (kind === 'texture') {
+    setSkin?.(key, null);
+    setNoise?.(key, null);
+    setToon?.(key, null);
+    return true;
+  }
+  if (kind === 'noise') {
+    setSkin?.(key, null);   // exclusive: the pattern comes off
+    setNoise?.(key, preset ?? true);
+    setToon?.(key, preset ?? true);
+    return true;
+  }
+  if (kind === 'biolum') {
+    // A biolum surface with no preset falls back to the `skin` cell, which is
+    // where every existing assignment already lives — so adopting this column
+    // does not mean retyping the roster.
+    const name = preset ?? (String(row.skin ?? '').trim() || null);
+    if (name && knownSkin && !knownSkin(name)) {
+      warn(`[${LABEL}] "${key}" asks for surface="${raw}", but "${name}" is not a `
+        + 'preset in CONFIG.biolumSkin.presets — left as it was.');
+      return true;
+    }
+    setNoise?.(key, null);
+    setToon?.(key, null);
+    setSkin?.(key, name);
+    return true;
+  }
+  warn(`[${LABEL}] "${key}" has surface="${raw}", which is not texture, noise or `
+    + 'biolum — ignored. Set it in the shader lab (npm run looks:shaderlab).');
+  return false;
 }
 
 function applySkin(key, row, setSkin, knownSkin, warn) {

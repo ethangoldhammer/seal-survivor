@@ -24,6 +24,7 @@
 // ============================================================================
 
 import { execSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,7 +44,7 @@ const sh = (cmd) => {
 // what is MISSING, and a dead CSV editor looks identical to one you never
 // started.
 // ---------------------------------------------------------------------------
-const ROLES = {
+export const ROLES = {
   dev: {
     need: 'one',
     label: 'game — vite dev',
@@ -61,6 +62,24 @@ const ROLES = {
     label: 'built bundle — vite preview',
     start: 'npm run preview',
     why: 'Serves dist/ as last built. Only useful right after a build; goes stale silently.',
+  },
+  hub: {
+    need: 'one',
+    label: 'workbench hub',
+    start: 'npm run hub',
+    why: 'The index of every tool in the repo, on a port that never moves. Read-only.',
+  },
+  looks: {
+    need: 'none',
+    label: 'look page — static server',
+    start: 'npm run looks:<name>',
+    why: 'Serves one built look page read-only. Never imports config.js, so it cannot touch tuning.',
+  },
+  atlas: {
+    need: 'none',
+    label: 'atlas renderer',
+    start: 'node tools/atlas-render/server.mjs',
+    why: 'Renders model portraits in a real browser. Read-only; only writes into its own shots dir.',
   },
   scratch: {
     need: 'none',
@@ -138,6 +157,9 @@ function ownerOf(pid, table) {
 function classify(proc) {
   const text = `${proc.command} ${proc.parentCommand}`;
   if (/csv-editor\.mjs/.test(text)) return 'csv';
+  if (/hub\.mjs/.test(text)) return 'hub';
+  if (/looks[/\\]serve\.mjs/.test(text)) return 'looks';
+  if (/atlas-render[/\\]server\.mjs/.test(text)) return 'atlas';
   if (/vite\s+preview/.test(text)) return 'preview';
   if (/[/\s]vite($|\s)/.test(text)) return 'dev';
   if (/claude-\d+|scratchpad/.test(`${proc.cwd} ${text}`)) return 'scratch';
@@ -157,7 +179,7 @@ function humanAge(seconds) {
   return `${(seconds / 86400).toFixed(1)}d`;
 }
 
-function survey() {
+export function survey() {
   const sockets = listeners();
   const pids = [...sockets.keys()];
   const table = processTable(pids);
@@ -184,13 +206,15 @@ function survey() {
     .filter((p) => p.role === role)
     .sort((a, b) => a.age - b.age)[0];
 
-  const keepers = new Set([newestOf('dev')?.pid, newestOf('csv')?.pid].filter(Boolean));
+  const keepers = new Set([newestOf('dev')?.pid, newestOf('csv')?.pid, newestOf('hub')?.pid].filter(Boolean));
 
   for (const p of found) {
     if (keepers.has(p.pid)) { p.verdict = 'keep'; p.note = 'this is the one you are using'; }
     else if (p.role === 'dev') { p.verdict = 'stomp'; p.note = 'older dev server — a tab on it can overwrite your tuning'; }
     else if (p.role === 'csv') { p.verdict = 'stale'; p.note = 'duplicate CSV editor'; }
+    else if (p.role === 'hub') { p.verdict = 'stale'; p.note = 'duplicate hub'; }
     else if (p.role === 'preview') { p.verdict = 'stale'; p.note = 'serving a build from ' + humanAge(p.age) + ' ago'; }
+    else if (p.role === 'looks' || p.role === 'atlas') { p.verdict = 'stale'; p.note = 'read-only render server, still up from ' + humanAge(p.age) + ' ago'; }
     else if (p.role === 'scratch') { p.verdict = 'stale'; p.note = 'left behind by an agent session'; }
     else { p.verdict = 'unknown'; p.note = 'not started by this repo'; }
   }
@@ -228,7 +252,7 @@ function panel() {
 
   // What SHOULD be up, including the ones that are not.
   console.log(`\n${C.bold}  WHAT YOU NEED${C.off}\n`);
-  for (const role of ['dev', 'csv', 'preview']) {
+  for (const role of ['dev', 'csv', 'hub', 'preview']) {
     const up = found.some((p) => p.role === role && p.verdict === 'keep');
     const want = ROLES[role].need === 'one';
     const state = up ? `${C.green}running${C.off}` : want ? `${C.red}NOT RUNNING${C.off}  →  ${ROLES[role].start}` : `${C.dim}not running (fine)${C.off}`;
@@ -254,7 +278,7 @@ function panel() {
   }
 }
 
-function stop(pid, label) {
+export function stop(pid, label) {
   try { process.kill(pid, 'SIGTERM'); console.log(`  stopped ${label} (pid ${pid})`); }
   catch (err) { console.log(`  could not stop pid ${pid} — ${err.message}`); }
 }
@@ -269,10 +293,17 @@ function clean() {
   console.log('');
 }
 
-const [cmd, arg] = process.argv.slice(2);
-if (cmd === 'clean') clean();
-else if (cmd === 'stop' && arg) {
-  const target = survey().find((p) => p.ports.includes(Number(arg)) || p.pid === Number(arg));
-  if (!target) console.log(`\n  nothing of ours on ${arg}\n`);
-  else { console.log(''); stop(target.pid, ROLES[target.role].label); console.log(''); }
-} else panel();
+// The panel is the CLI, but survey()/stop() are also the hub's eyes and hands
+// (tools/hub.mjs) — so this only runs when the file was invoked directly. An
+// import must not print a panel, and must never be able to kill anything as a
+// side effect of being read.
+const invokedDirectly = process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+if (invokedDirectly) {
+  const [cmd, arg] = process.argv.slice(2);
+  if (cmd === 'clean') clean();
+  else if (cmd === 'stop' && arg) {
+    const target = survey().find((p) => p.ports.includes(Number(arg)) || p.pid === Number(arg));
+    if (!target) console.log(`\n  nothing of ours on ${arg}\n`);
+    else { console.log(''); stop(target.pid, ROLES[target.role].label); console.log(''); }
+  } else panel();
+}

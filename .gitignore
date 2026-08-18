@@ -8,7 +8,9 @@ dist-cash-look
 dist-yacht-look
 dist-note-look
 dist-goo-look
+dist-core-look
 dist-crab-look
+dist-eye-look
 dist-whale-look
 
 # The layout audit's build and its report (npm run layout). Same deal as the
@@ -55,3 +57,10 @@ tools/atlas-render/shots/
 # model has been seen in game — nothing can regenerate a source texture.
 .model-orig/
 dist-skins-look
+
+# The shader lab's build (npm run looks:shaderlab). Same deal as the other look
+# pages: the page, the apply tool and tools/looks/shader-lab.json are tracked,
+# the build output is not.
+dist-shaderlab
+dist-skinlab
+dist-splash-probe

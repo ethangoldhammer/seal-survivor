@@ -295,6 +295,7 @@ const DOCS = {
   'assets.csv': {
     id: 'The ASSET key from assets.js \u2014 not a creature id. One asset can back several creatures, and plenty (grass, boats, the escorts) are not creatures at all.',
     size: 'Spawn scale for this model. Applies to FUTURE spawns; anything already on screen keeps the size it was created at. The hitbox is derived from it, so a bigger model is a genuinely bigger target.',
+    surface: 'WHICH TREATMENT PAINTS THIS BODY \u2014 one of three, never a mix. "texture" keeps the model\u2019s own baked map. "noise" or "noise:<preset>" is procedural Perlin mottling banded by the toon step. "biolum" or "biolum:<preset>" is a pattern at full pigment, replacing the map. Blank leaves whatever assets.js declares. Set it in the shader lab (npm run looks:shaderlab) and write it here with npm run shaders:apply. It WINS over the skin column \u2014 two writers on one field is how you get a look that depends on load order. Takes effect on the next RELOAD.',
     skin: 'Which procedural skin this model wears \u2014 a preset name from the Procedural skins folder on the T panel. Blank keeps whatever assets.js declares; "none" takes one away. A preset on full pigment PAINTS the body, so the model no longer needs its own texture. Takes effect on the next RELOAD: the pattern is baked into the material when the model is parsed.',
     notes: 'Free text \u2014 nothing reads it.',
   },
@@ -389,7 +390,7 @@ const BLANK_MEANS = {
   'spawning.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
   'weapons.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
   'behaviour.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
-  'assets.csv': { size: '1 (unscaled)', skin: 'whatever assets.js declares', notes: '—' },
+  'assets.csv': { size: '1 (unscaled)', skin: 'whatever assets.js declares', surface: 'whatever assets.js declares', notes: '—' },
 };
 
 // ---------------------------------------------------------------------------

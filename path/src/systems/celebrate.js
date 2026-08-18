@@ -107,6 +107,18 @@ export const celebrationState = {
   duration: 0,
   // When the pose is meant to be at full extension, in the same wall seconds.
   peakAt: 0,
+  // How long the blend-out at the end takes. Held on the state rather than
+  // read from CONFIG.celebrate.release at every use, because a caller may set
+  // its own (the level-up salute does — see playCelebration): envelope() and
+  // `duration` have to be computed from the SAME number, or the pose is still
+  // at full weight on the frame it is torn down and the flippers snap.
+  release: 0,
+  // Whether the escorts join this one. The boss kill wants the squad clapping
+  // along; the level-up salute does not, because the run is PAUSED for it and
+  // systems/sealTeam.js does not tick while it is — the squad would arm on the
+  // frame the player picked a card and clap seconds after the moment they were
+  // supposed to be reacting to. See armCelebration.
+  escorts: true,
 };
 
 function cfg() {
@@ -120,10 +132,18 @@ function cfg() {
 // from, and because the pose below is the main thing that reads it.
 export { snapshotMoment };
 
-/** Pick a variant by weight. Returns null when every weight is 0 or absent. */
-function pickVariant(rng) {
-  const weights = cfg().weights ?? {};
-  const entries = Object.entries(weights).filter(([, w]) => Number.isFinite(w) && w > 0);
+/**
+ * Pick a variant by weight. Returns null when every weight is 0 or absent.
+ *
+ * Unknown names are dropped rather than picked. A caller supplying its own
+ * roster (see playCelebration) is a place a typo can reach, and a variant with
+ * no pose in POSES starts a celebration that runs its whole clock posing
+ * nothing at all — the seal simply stands there, which is the one failure that
+ * looks exactly like the feature being switched off.
+ */
+function pickVariant(rng, weights = cfg().weights ?? {}) {
+  const entries = Object.entries(weights)
+    .filter(([name, w]) => Number.isFinite(w) && w > 0 && POSES[name]);
   if (!entries.length) return null;
   const total = entries.reduce((sum, [, w]) => sum + w, 0);
   let roll = rng() * total;
@@ -135,9 +155,57 @@ function pickVariant(rng) {
 }
 
 /**
+ * PUT THE SEAL IN A POSE, on the caller's clock.
+ *
+ * The engine under startCelebration below, and the entry point for anything
+ * that is not a boss kill. It is separate because the kill shot's timing is
+ * not a general timing: `peakAt` there is derived from the trophy shutter,
+ * which is over a second in — right for a photograph and much too late for a
+ * moment that has to land inside half a second. See CONFIG.levelUp.salute.
+ *
+ * Every duration is WALL seconds, like everything else in this file.
+ *
+ * @param variant  a name from CELEBRATION_VARIANTS. Used when `weights` is
+ *                 absent or rolls nothing.
+ * @param weights  { name: weight } to roll from instead, so a caller can carry
+ *                 its own roster without touching the boss kill's.
+ * @param peakAt   when full extension lands. Defaults to the trophy shutter.
+ * @param hold     seconds held at full extension after the peak.
+ * @param release  seconds easing back into the swim cycle.
+ * @param escorts  false to keep the squad out of it.
+ * @returns the variant that will play, or null if nothing was started.
+ */
+export function playCelebration({
+  variant = null, weights = null, peakAt = null,
+  hold = null, release = null, escorts = true, rng = Math.random,
+} = {}) {
+  const c = cfg();
+  if (c.enabled === false) return null;
+  const name = (weights ? pickVariant(rng, weights) : null) ?? variant;
+  if (!name || !POSES[name]) return null;
+
+  const peak = Math.max(0.05, peakAt ?? (snapshotMoment() - (c.peakLead ?? 0.03)));
+  celebrationState.active = true;
+  celebrationState.variant = name;
+  celebrationState.seq++;
+  celebrationState.clock = 0;
+  celebrationState.peakAt = peak;
+  celebrationState.release = release ?? c.release ?? 0.5;
+  celebrationState.escorts = escorts;
+  celebrationState.duration = peak + (hold ?? c.hold ?? 0.35) + celebrationState.release;
+  return name;
+}
+
+/**
  * Roll for a celebration. Called the instant a boss dies, from the same place
  * that starts the kill shot — both are the aftermath of one event and both run
  * on the wall clock from the same zero.
+ *
+ * The default peak lands full extension a hair BEFORE the shutter rather than
+ * exactly on it. The pose is smoothed (the IK chains slerp toward their
+ * solution), so it is still arriving for a frame or two after the envelope
+ * says it got there, and a picture taken on the leading edge of that catches
+ * the seal on its way into the pose instead of in it.
  *
  * @param rng  injectable for the tests, which must not be at the mercy of a
  *             coin flip (see tools/celebrate-test.mjs).
@@ -147,22 +215,7 @@ export function startCelebration(rng = Math.random) {
   const c = cfg();
   if (c.enabled === false) return null;
   if (rng() > (c.chance ?? 0)) return null;
-  const variant = pickVariant(rng);
-  if (!variant) return null;
-
-  // Land full extension a hair BEFORE the shutter rather than exactly on it.
-  // The pose is smoothed (the IK chains slerp toward their solution), so it is
-  // still arriving for a frame or two after the envelope says it got there,
-  // and a picture taken on the leading edge of that catches the seal on its
-  // way into the pose instead of in it.
-  const peak = Math.max(0.05, snapshotMoment() - (c.peakLead ?? 0.03));
-  celebrationState.active = true;
-  celebrationState.variant = variant;
-  celebrationState.seq++;
-  celebrationState.clock = 0;
-  celebrationState.peakAt = peak;
-  celebrationState.duration = peak + (c.hold ?? 0.35) + (c.release ?? 0.5);
-  return variant;
+  return playCelebration({ weights: c.weights ?? {}, rng });
 }
 
 /**
@@ -181,6 +234,8 @@ export function resetCelebration() {
   celebrationState.clock = 0;
   celebrationState.duration = 0;
   celebrationState.peakAt = 0;
+  celebrationState.release = 0;
+  celebrationState.escorts = true;
 }
 
 /**
@@ -192,7 +247,9 @@ export function resetCelebration() {
 function envelope() {
   const { clock, peakAt, duration } = celebrationState;
   const phase = peakAt > 0 ? Math.min(1, clock / peakAt) : 1;
-  const release = cfg().release ?? 0.5;
+  // THIS performance's release, not the config's — a caller may have set its
+  // own, and `duration` was computed from that one. See celebrationState.
+  const release = celebrationState.release || (cfg().release ?? 0.5);
   const releaseFrom = Math.max(0, duration - release);
   let weight;
   if (clock <= peakAt) weight = smoothstep(0, 1, phase);

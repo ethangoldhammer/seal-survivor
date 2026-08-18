@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Skin lab — banded shading and painted pattern on one animal</title>
+    <title>Shader lab — banded shading and painted pattern on one animal</title>
     <style>
       :root { color-scheme: dark; }
       html, body { margin: 0; height: 100%; background: #070d14; color: #cfe6ff;
@@ -47,6 +47,17 @@
       .row select, .row input[type=text] { background: #0d1a26; border: 1px solid #1e3b52;
         color: #cfe6ff; font: inherit; font-size: 11px; padding: 2px 4px; border-radius: 3px; }
       input[type=range] { width: 100%; }
+      /* The "this model cannot band" notice — a full-width amber line above the
+         toon sliders, rather than a third column, because it is a sentence. */
+      .warnrow { grid-template-columns: 78px 1fr; }
+      .warnrow output { grid-column: 2; text-align: left; color: #ffc46b;
+        font-size: 10px; line-height: 1.35; }
+  .surf { display: grid; grid-template-columns: 16px 1fr; gap: 2px 7px; align-items: center;
+    padding: 4px 2px; cursor: pointer; }
+  .surf b { color: #cfe6ff; font-weight: 600; font-size: 11px; }
+  .surf i { grid-column: 2; color: #6f92b4; font-style: normal; font-size: 10px; }
+  .surf input { grid-row: span 2; }
+
       .cols { display: flex; gap: 6px; align-items: center; }
       .cols input[type=color] { width: 34px; height: 22px; padding: 0; border: 1px solid #2b4b5c; }
       .btns { display: flex; gap: 7px; flex-wrap: wrap; padding: 2px 0 0; }
@@ -60,7 +71,6 @@
       textarea { width: 100%; height: 120px; background: #0a1520; color: #bcd8ea;
         border: 1px solid #1e3b52; font: 11px/1.4 ui-monospace, monospace; border-radius: 3px; }
     </style>
-    <script type="module" crossorigin src="../../assets/skin-lab-BNU3GRrs.js"></script>
   </head>
   <body>
     <div id="list"></div>
@@ -72,5 +82,6 @@
       <div id="status"></div>
       <div id="notes"></div>
     </main>
+    <script type="module" src="./shader-lab.js"></script>
   </body>
 </html>

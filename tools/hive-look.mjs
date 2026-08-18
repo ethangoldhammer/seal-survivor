@@ -100,6 +100,24 @@ const BUILDS = {
   ],
 };
 
+// THE LAYERING SHOT. A hive at a late-run size with the level-up menu over the
+// top of it — the one arrangement that shows whether the z-order is right, and
+// the arrangement that was wrong until the ladder was made explicit.
+let layerShot = '';
+{
+  hive.setHiveLayout('cluster');
+  hive.setHiveStyle('ink');
+  hive.setHiveUpgrades(Object.values(BUILDS)[2].map(([id, rarity]) => ({ id, rarity })));
+  const menu = document.getElementById('svLevelUpMenu');
+  menu.classList.remove('sv-hidden');
+  layerShot = `${document.querySelector('.sv-hive').outerHTML}
+    <div class="sv-center" style="position:absolute;inset:0">
+      <div class="sv-menu"><div class="sv-title">Level up</div>
+      <div class="sv-sub">the menu has to win — the hive is a readout, not a prompt</div></div>
+    </div>`;
+  menu.classList.add('sv-hidden');
+}
+
 const shots = [];
 for (const [buildName, picks] of Object.entries(BUILDS)) {
   const list = picks.map(([id, rarity]) => ({ id, rarity }));
@@ -143,6 +161,9 @@ ${css}
     font: 600 11px system-ui; padding: 6px 12px; border-radius: 3px; cursor: pointer; }
 </style>
 <h1>Hex hive &mdash; every layout against every style</h1>
+<h2>the layer order</h2>
+<div class="cap">A 22-pick hive with a menu over it. The hive is z-index 1, menus are 4, toasts 6 &mdash; it used to be 3 against menus with no z-index at all, so it painted on top of the level-up cards.</div>
+<div class="grid"><div class="cell" style="position:relative;width:520px;height:330px;overflow:hidden">${layerShot}</div></div>
 <div class="cap">Built by the real ui.js and upgradeHive.js. Icons are the atlas renders; letters are the fallback monogram for the two thirds of the roster that fires a primitive or nothing at all.</div>
 <p><button onclick="fireAll()">fire everything &mdash; watch the four pulses</button></p>
 ${Object.keys(BUILDS).map((b) => `

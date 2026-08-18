@@ -25,6 +25,13 @@
 //               (add to e.vx) moves a flocking fish and does nothing at all to
 //               a shark — and nothing throws.
 //
+//               ...and that the shove is BIG ENOUGH TO SEE, which is a second
+//               claim entirely and the one that shipped broken: the seal is
+//               travelling at dashSpeed when it connects and the camera rides
+//               the seal, so a shove slower than the dash is displacement
+//               moving the wrong way on screen. Measured against an identical
+//               unhit shark AND against the seal's own motion.
+//
 //   MARK        that a ram paints big bodies and not minnows, that the paint
 //               expires, that it survives being re-rammed, and that it drops
 //               the moment the target leaves the scene. A mark holds a strong
@@ -259,10 +266,34 @@ function travel(type, { knocked, seed = 12345, warmup = 0.5, seconds = 0.2 }) {
   }
   const startX = e.mesh.position.x;
   const push = knocked ? applyKnockback(e, 1, 0, 1) : 0;
+  // The falloff THIS body took, which is no longer one number for the whole
+  // roster: a big animal that survives the ram is shoved harder and its shove
+  // bleeds off slower (CONFIG.strike.knockback.heavy). Both halves are read
+  // off the creature rather than out of CONFIG, so the numbers below describe
+  // the hit that actually landed.
+  const decay = e.knockDecay || CONFIG.strike.knockback.decay;
   for (let i = 0; i < Math.round(seconds / dt); i++) {
     updateEnemies(dt, scene, playerPos, () => {}, () => {});
   }
-  const out = { push, moved: e.mesh.position.x - startX, residual: e.knockX };
+  const moved = e.mesh.position.x - startX;
+  // ...and then run on to three time constants of that decay before reading
+  // what is left of the shove. A fixed window would ask a heavy knock to be
+  // as far spent as a light one at the same moment, which is precisely the
+  // thing that is meant to be different about it — and the check below is
+  // about whether the shove ENDS, not about how quickly.
+  for (let i = 0; i < Math.round(Math.max(0, 3 / decay - seconds) / dt); i++) {
+    updateEnemies(dt, scene, playerPos, () => {}, () => {});
+  }
+  const out = {
+    push,
+    decay,
+    // How far the shove is worth in units: a velocity decaying exponentially
+    // integrates to speed/decay. THE comparable number between two bodies,
+    // now that they do not share a falloff.
+    reach: knocked ? push / decay : 0,
+    moved,
+    residual: e.knockX,
+  };
   Math.random = realRandom;
   return out;
 }
@@ -284,19 +315,39 @@ for (const type of ['fish', 'shark', 'walkingCrab']) {
   // is still going is a launch, and the difference is whether a rammed body
   // comes back at you or sails out of the fight.
   check(`${type}: and the shove bled off rather than launching it`,
-    Math.abs(hit.residual) < hit.push * 0.15,
-    `residual ${hit.residual.toFixed(2)} of ${hit.push.toFixed(1)}`);
+    Math.abs(hit.residual) < hit.push * 0.1,
+    `residual ${hit.residual.toFixed(2)} of ${hit.push.toFixed(1)} at decay ${hit.decay}`);
 }
 playerPos.set(0, -20, 0);
 
-// Size resists. Same shove, two very different bodies.
+// SIZE RESISTS — among the bodies that are actually knocked around, which is
+// the comparison worth making. A minnow is NOT one of them: the dash EATS
+// anything under `preyCull.maxRadius`, so a fish handed a shove is a corpse
+// being shoved, and it takes the light knock by the `hp > 0` test rather than
+// by its size. Comparing it against a megalodon compares two different rules.
+//
+// Compared as DISTANCES rather than as launch speeds, because the two classes
+// do not share a falloff and a speed comparison across them means nothing.
+// Distance is speed/decay.
+resetEnemies(scene);
+const heavyOne = spawnAt('shark', 0, -20);
+const meg = spawnAt('megalodon', 6, -20);
+const bigReach = applyKnockback(heavyOne, 1, 0, 1) / (heavyOne.knockDecay || 1);
+const megReach = applyKnockback(meg, 1, 0, 1) / (meg.knockDecay || 1);
+check('a shark is thrown further than a megalodon by the same ram',
+  bigReach > megReach * 1.5,
+  `${bigReach.toFixed(2)} units vs ${megReach.toFixed(2)}`);
+
+// ...and the line between the two classes is the CULL's line, so there is no
+// band of fish too big to swallow and too small to be shoved properly.
 resetEnemies(scene);
 const minnow = spawnAt('fish', 0, -20);
-const meg = spawnAt('megalodon', 6, -20);
-const minnowPush = applyKnockback(minnow, 1, 0, 1);
-const megPush = applyKnockback(meg, 1, 0, 1);
-check('a minnow is thrown further than a megalodon by the same ram',
-  minnowPush > megPush * 1.5, `${minnowPush.toFixed(1)} vs ${megPush.toFixed(1)}`);
+applyKnockback(minnow, 1, 0, 1);
+check('the heavy knock starts exactly where the dash stops eating',
+  CONFIG.strike.knockback.heavy.minRadius === CONFIG.strike.preyCull.maxRadius,
+  `heavy ${CONFIG.strike.knockback.heavy.minRadius}, cull ${CONFIG.strike.preyCull.maxRadius}`);
+check('...so a fish the seal swallows takes the light knock',
+  minnow.knockDecay === CONFIG.strike.knockback.decay && minnow.staggerTimer === 0);
 
 // Charge scales it.
 resetEnemies(scene);
@@ -304,6 +355,140 @@ const a = spawnAt('shark', 0, -20);
 const b = spawnAt('shark', 8, -20);
 check('a full charge shoves harder than a flick',
   applyKnockback(a, 1, 0, 1) > applyKnockback(b, 1, 0, 0.1) * 1.5);
+
+// ---------------------------------------------- can the player SEE it happen
+//
+// The check this section was missing, and the reason a shove that measured
+// fine read as nothing in the game: the seal is travelling at `dashSpeed` when
+// it connects, AND THE CAMERA RIDES THE SEAL. A shark shoved along the dash
+// slower than the dash is a shark the seal overtakes — real displacement,
+// moving the wrong way on screen, indistinguishable from swimming past it.
+//
+// So this drives the REAL dash: the hit loop in updateStrike, with the player
+// advancing at dashSpeed for the dash's own duration, measured against an
+// identical unhit shark on the same seed.
+{
+  const dashSpeed = CONFIG.strike.dashSpeed;
+  const c = CONFIG.strike.charge;
+
+  function rammed({ knocked, power, seconds, seed = 99 }) {
+    seedRandom(seed);
+    resetEnemies(scene);
+    resetStrike();
+    const seal = new THREE.Vector3(-6, -20, 0);
+    const e = spawnAt('shark', 0, -20);
+    e.hp = 1e6; // it SURVIVES — that is the case being measured
+    for (let i = 0; i < 30; i++) updateEnemies(dt, scene, seal, () => {}, () => {});
+
+    const duration = stats.strikeDashDuration
+      * (c.reachMulMin + (c.reachMulMax - c.reachMulMin) * power);
+    if (knocked) armDash(power, { x: 1, y: 0 });
+    let rams = 0;
+    let overtaken = false;
+    for (let i = 0; i < Math.round(seconds / dt); i++) {
+      const t = i * dt;
+      if (knocked) {
+        if (t < duration) seal.x += dashSpeed * dt;
+        updateStrike(dt, scene, seal, stats, enemies, { onRam: () => { rams++; } });
+        // Only while the dash is still running: afterwards the seal coasts and
+        // being level with it means nothing.
+        if (rams > 0 && t < duration && e.mesh.position.x < seal.x) overtaken = true;
+      }
+      updateEnemies(dt, scene, seal, () => {}, () => {});
+    }
+    Math.random = realRandom;
+    return { x: e.mesh.position.x, rams, overtaken };
+  }
+
+  const seeds = [11, 99, 4242, 777, 31337];
+  const gained = (power, seconds) => seeds.reduce((sum, seed) => {
+    const hit = rammed({ knocked: true, power, seconds, seed });
+    const ctl = rammed({ knocked: false, power, seconds, seed });
+    return sum + (hit.x - ctl.x);
+  }, 0) / seeds.length;
+
+  check('the dash actually reaches a shark through the real hit loop',
+    rammed({ knocked: true, power: 0.35, seconds: 0.5 }).rams === 1);
+
+  // A shark's body is about six world units end to end. Anything under a
+  // fraction of that is a shove nobody can pick out of the animal's own
+  // swimming, which is exactly what shipped first.
+  const normal = gained(0.35, 0.5);
+  const full = gained(1, 0.5);
+  check('a normal-charge ram visibly moves a shark that survives it',
+    normal > 3, `${normal.toFixed(1)} units on an identical unhit shark, half a second in`);
+  check('...and a full-charge one moves it further still',
+    full > normal, `${full.toFixed(1)} vs ${normal.toFixed(1)} units`);
+
+  // The one that catches the invisible version: the shove has to be worth more
+  // than the dash carrying the seal through it.
+  resetEnemies(scene);
+  const launched = applyKnockback(spawnAt('shark', 0, -20), 1, 0, 1);
+  check('a full-charge shove leaves faster than the seal is dashing',
+    launched > dashSpeed,
+    `${launched.toFixed(0)} u/s against a ${dashSpeed} u/s dash`);
+  check('...so the seal never overtakes what it just rammed',
+    !rammed({ knocked: true, power: 1, seconds: 0.5 }).overtaken);
+}
+
+// ------------------------------------------------ the ones that survive it
+//
+// A ram on a shark used to be a couple of units of shove laid on top of an
+// animal swimming seven units a second straight back at you: the physics was
+// there and it was invisible. CONFIG.strike.knockback.heavy is the answer —
+// a harder shove that carries, and the animal knocked off its own stroke
+// while it travels. All three parts are checked here, because each one alone
+// reads as "nothing happened" (the shove is swum through) or as a bug (a
+// shark that stops dead, a shark that never recovers).
+
+resetEnemies(scene);
+{
+  const shark = spawnAt('shark', 0, -20);
+  const minnow = spawnAt('fish', 6, -20);
+  applyKnockback(shark, 1, 0, 1);
+  applyKnockback(minnow, 1, 0, 1);
+  check('a shark that survives the ram is knocked off its stroke',
+    shark.staggerTimer > 0, `${shark.staggerTimer.toFixed(2)}s`);
+  check('...and its shove carries further than an ordinary one',
+    shark.knockDecay < CONFIG.strike.knockback.decay,
+    `decay ${shark.knockDecay} vs ${CONFIG.strike.knockback.decay}`);
+  check('a minnow is not staggered, it is simply thrown',
+    minnow.staggerTimer === 0 && minnow.knockDecay === CONFIG.strike.knockback.decay);
+
+  // It recovers. A stagger that never expired would be a stun-lock bought with
+  // a mechanic that deals no damage.
+  for (let i = 0; i < Math.ceil((CONFIG.strike.knockback.heavy.stagger + 0.2) / dt); i++) {
+    updateEnemies(dt, scene, playerPos, () => {}, () => {});
+  }
+  check('...and it is swimming again a moment later', shark.staggerTimer === 0,
+    'the stagger is a beat, not a hold');
+}
+
+// A body that DIED to the same hit takes the ordinary knock. `hp` is already
+// spent by the time the shove is applied (see the hit loop in strike.js), so
+// this is the branch that decides which of the two a corpse gets — and a
+// corpse being staggered would slow the gore down.
+resetEnemies(scene);
+{
+  const doomed = spawnAt('shark', 0, -20);
+  doomed.hp = 0;
+  applyKnockback(doomed, 1, 0, 1);
+  check('a shark that died to the ram is not staggered by it',
+    doomed.staggerTimer === 0 && doomed.knockDecay === CONFIG.strike.knockback.decay);
+}
+
+// And a boss is never held by it. A boss owns what crowd control does to it
+// (CONFIG.boss.control.daze); a ram is not allowed to open that door round the
+// back, so the guard is on the knock itself rather than on the caller.
+resetEnemies(scene);
+{
+  const impostor = spawnAt('shark', 0, -20);
+  impostor.isBoss = true;
+  applyKnockback(impostor, 1, 0, 1);
+  check('a boss is shoved but never staggered',
+    impostor.staggerTimer === 0 && impostor.knockX > 0,
+    `knock ${impostor.knockX.toFixed(1)} u/s`);
+}
 
 // ------------------------------------------------------------------ the mark
 
@@ -417,7 +602,15 @@ section('SCATTER — small fish break away from a strike');
 // A school sitting still, with the player far below so `towardPlayer` is not
 // what moves them. Measured as distance from the point the strike is centred
 // on, which is what "getting out of the way" means.
-function schoolDrift({ dashing, power, seconds = 0.6 }) {
+function schoolDrift({ dashing, power, seconds = 0.6, seed = 4242 }) {
+  // Seeded, for the reason `travel` above is: every fish rolls a heading and a
+  // speed at spawn and the boids roll again every frame, so three unseeded
+  // runs are three different schools and the comparison between them is a
+  // coin flip decided by which way they happened to be pointed. The margins
+  // here are tenths of a unit — this failed about one run in fifteen before,
+  // and it fails on whatever ran BEFORE it, which makes it look like the last
+  // thing anyone added.
+  seedRandom(seed);
   resetEnemies(scene);
   const fish = [];
   for (let i = 0; i < 8; i++) fish.push(spawnAt('fish', -1 + i * 0.35, -20 + (i % 3) * 0.3));
@@ -430,6 +623,7 @@ function schoolDrift({ dashing, power, seconds = 0.6 }) {
   }
   const after = fish.map((f) => Math.hypot(f.mesh.position.x - focus.x, f.mesh.position.y - focus.y));
   setStrikeThreat(null);
+  Math.random = realRandom;
   const mean = (xs) => xs.reduce((s, v) => s + v, 0) / xs.length;
   return mean(after) - mean(before);
 }

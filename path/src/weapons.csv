@@ -95,6 +95,7 @@ strike.damage,40,1,200,strike nominal damage — what Bone Shrapnel and Glow Up!
 strike.cardDamage,5,0,30,strike damage added per strike-family card
 strike.chainDamageMul,1.11,1,1.5,strike food-chain damage mult per link — COMPOUNDS over links AND over Killer Instinct stacks
 strike.chainWindow,2.2,0.4,4,food chain: seconds without a mouthful before the chain lapses. THE number that decides whether a chain can be kept up — at 1.1 a link needed a strike every 1.5s (npm run sim:chain)
+strike.charge.perfectAt,1,0.5,1,perfect charge: the fraction of a full bank that counts as perfectly loaded. The meter pops here and mechanics will be hung off it — below 1 the top of the bar becomes a window a player can hit early rather than a ceiling they hold against
 airborne.enabled,1,,,air time: master switch for everything a breach is worth
 airborne.rampTime,1.1,0.2,5,air time: seconds of hang for a full ramp
 airborne.jumpRamp,0.4,0,1.5,air time: ramp added per mid-air jump used

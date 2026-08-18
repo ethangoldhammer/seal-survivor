@@ -4,6 +4,8 @@ import { fontLabel } from '../fonts.js';
 import { buildSectionedTunerGroups, buildExpandAllToggle, refreshTunerRows } from './tunerControls.js';
 import { previewToasts, popupPose, previewScreen, PREVIEW_SCREENS } from './ui.js';
 import { isTypingTarget } from './typing.js';
+import { CALLOUTS, resolveCalloutText } from '../systems/callouts.js';
+import { DEVICES } from '../devices.js';
 
 // THE TEXT PANEL (Y) — where every piece of type in the game is designed.
 //
@@ -71,12 +73,30 @@ const STYLES = `
   .sv-txp-line.sv-txp-on { background: rgba(122,215,255,0.16); }
   /* The popup roles are positioned absolutely in the game and the level strip
      is pinned to the top of the screen — wearing their real classes brings
-     that with them, and three of the fifteen lines would stack in the corner
-     instead of sitting in the list. Position is the ONE thing the specimen
-     overrides; every other declaration is the live rule, untouched. */
+     that with them, and those lines would stack in the corner instead of
+     sitting in the list. Position is the ONE thing the specimen overrides;
+     every other declaration is the live rule, untouched.
+
+     THE THREE CALLOUT ROLES WERE MISSING FROM THIS LIST, and had been since
+     they were added. ui/callout.js pins .sv-callout at left: 50% and the boost
+     line at left: 0, both absolute, so the warning band, the first-run tip and
+     the boost line were laid on top of each other in the corner of the strip
+     — the exact failure this rule was written to prevent, in the roles it was
+     never extended to. It stayed invisible while all three samples were short
+     single lines that happened to land in roughly the right place.
+
+     The width goes with the position for the same reason. .sv-callout is
+     "width: max-content" up to 88vw, which is a sentence that does not wrap in
+     a 320px panel and hangs out of it instead; in the game that box is the
+     width of the screen. Capped to the strip so the specimen wraps where the
+     panel does, which is also the only way to see that a long tip wraps at
+     all. */
   .sv-txp-spec .sv-toast, .sv-txp-spec .sv-chain, .sv-txp-spec .sv-xptop-level,
-  .sv-txp-spec .sv-bossbar, .sv-txp-spec .sv-boss-name {
+  .sv-txp-spec .sv-bossbar, .sv-txp-spec .sv-boss-name,
+  .sv-txp-spec .sv-callout, .sv-txp-spec .sv-callout-boost {
     position: static; transform: none; inset: auto; }
+  .sv-txp-spec .sv-callout, .sv-txp-spec .sv-callout-boost {
+    display: block; width: auto; max-width: 100%; text-align: left; }
   /* The button role paints a fill as well as text, so it wants to be a shape
      rather than a run of inline words. */
   .sv-txp-spec .sv-btn { display: inline-block; }
@@ -274,6 +294,62 @@ function indexGroups(root) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE THREE ROLES WHOSE WORDS ARE IN A SPREADSHEET
+//
+// Every other role's specimen is a hand-typed `sample` in textRoles.js, and for
+// most of them that is right: there is no table of titles, and "184,200" stands
+// in for a score perfectly well.
+//
+// The callout roles are different, because their lines ARE a table — and the
+// hand-typed samples had gone stale in the worst direction. The first-run tip's
+// was "Swim up for air": fifteen characters, the SHORTEST row in callouts.csv,
+// on a role that also has to render a hundred-and-one-character line about food
+// chains that wraps onto three. So the panel showed a comfortable single line
+// while the case that actually decides the type — where it breaks, whether the
+// wrap is balanced, whether three lines of it still clear the HUD — was
+// invisible in the one tool built for looking at it.
+//
+// THE LONGEST LINE IN THE TABLE, then, and across every device's wording rather
+// than this machine's: a specimen is for designing against the worst case, and
+// the worst case for a role is the longest string it will ever be asked to set.
+// Same reasoning as the layout audit's coach surface, which picks its line the
+// same way and for the same reason.
+//
+// Read live rather than baked in, so writing a longer tip into the CSV changes
+// what this panel shows without anybody remembering to update it. textRoles.js
+// stays a leaf module with no imports — the substitution belongs here, in the
+// tool, not in the list of roles.
+// ---------------------------------------------------------------------------
+
+// role key -> which rows it draws. `warn` and `coach` share the band (a tip
+// wears both classes), so they are told apart by KIND rather than by anchor;
+// the boost line is the one that is told apart by where it sits.
+const ROLE_ROWS = {
+  warn: (row) => row.kind === 'warn' && row.anchor === 'band',
+  coach: (row) => row.kind === 'coach',
+  boostWarn: (row) => row.anchor === 'player',
+};
+
+function sampleFor(role) {
+  const wants = ROLE_ROWS[role.key];
+  if (!wants) return role.sample;
+  let best = '';
+  for (const row of CALLOUTS.values()) {
+    if (!wants(row)) continue;
+    for (const device of DEVICES) {
+      // Resolved, so a line naming a control sets the words the player
+      // would actually read rather than a brace and a token name.
+      const text = resolveCalloutText(row, device);
+      if (text.length > best.length) best = text;
+    }
+  }
+  // A table that failed to parse falls back to the hand-typed line rather than
+  // to an empty specimen — a blank row in here reads as the role being broken,
+  // which is a worse lie than a short sample.
+  return best || role.sample;
+}
+
 function buildSpecimen() {
   specEl.replaceChildren();
   for (const role of TEXT_ROLES) {
@@ -292,7 +368,7 @@ function buildSpecimen() {
     // title is styled by — not by an approximation of it maintained separately.
     const sample = document.createElement('span');
     sample.className = role.selector.replace(/^\./, '');
-    sample.textContent = role.sample;
+    sample.textContent = sampleFor(role);
     // The chain banner's colour is written inline in the game, so the specimen
     // has to write one too or it would be the only line rendering unstyled.
     if (role.inlineColor) sample.dataset.inlineColor = '1';

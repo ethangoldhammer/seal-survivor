@@ -14,7 +14,7 @@ import { recordSpawn, SENTINEL_HP } from '../systems/playtest.js';
 import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
 import { updateWaves, waveSpawn, resetWaves, lullEligible } from '../systems/waves.js';
 import { inSpawnGroup, spawnGroupsOf } from '../enemyTable.js';
-import { RigidBody, addBody, removeBody } from '../systems/rigidBody.js';
+import { RigidBody, addBody, removeBody, wrapAngle } from '../systems/rigidBody.js';
 import { attachHitShape, releaseHitShape } from '../systems/hitShape.js';
 
 // Above this, a creature's hp means "invincible scenery" rather than a real
@@ -178,8 +178,51 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
     return launch;
   }
 
-  e.knockX = (e.knockX ?? 0) + (dirX / len) * push;
-  e.knockY = (e.knockY ?? 0) + (dirY / len) * push;
+  // IT LIVED, AND IT IS BIG. See CONFIG.strike.knockback.heavy: the size
+  // divisor above is written for the schools, and on a shark it left a shove
+  // smaller than one stroke of the animal's own swimming. A body over the
+  // pivot that is still alive gets the hit at its proper scale instead —
+  // harder, carrying further, and staggered so its own propulsion stops
+  // erasing it. `e.hp` is already down to what the strike left it at by the
+  // time this is called, which is what makes "survived" answerable here.
+  //
+  // Not a boss: a boss owns what a hold does to it (CONFIG.boss.control.daze)
+  // and a ram is not allowed to open that door round the back.
+  const hv = k.heavy ?? {};
+  const heavy = hv.enabled !== false
+    && e.hp > 0
+    && !e.isBoss
+    && size >= (hv.minRadius ?? pivot);
+
+  const boost = heavy ? (hv.speedMul ?? 1.7) : 1;
+  e.knockX = (e.knockX ?? 0) + (dirX / len) * push * boost;
+  e.knockY = (e.knockY ?? 0) + (dirY / len) * push * boost;
+  // Per-body, because the two decays are different journeys: an ordinary
+  // knock is over in a fifth of a second and a heavy one is a throw. Read by
+  // the integrator, so the last hit a body took owns its falloff.
+  e.knockDecay = heavy ? (hv.decay ?? 9) : (k.decay ?? 12);
+
+  if (heavy) {
+    // Scaled by charge like everything else the strike does, and taken as the
+    // LONGER of what it already had rather than added: two dashes through the
+    // same shark stagger it twice, they do not hold it still for a second.
+    const secs = (hv.stagger ?? 0.45) * scale;
+    if (secs > (e.staggerTimer ?? 0)) {
+      e.staggerTimer = secs;
+      e.staggerFor = secs;
+    }
+    // AND ITS AIM. A turn-limited hunter re-derives vx/vy from `heading` every
+    // frame, so a shove that only moved it arrived with the animal still
+    // pointed exactly where it was — see steerTo. Pushing the heading toward
+    // the dash costs it the line it was on, and its own turnRate is what buys
+    // that back, which is the tug of war the daze already uses.
+    const kick = (hv.headingKick ?? 0) * scale;
+    if (kick > 0 && e.heading != null) {
+      const want = Math.atan2(dirY / len, dirX / len);
+      const off = wrapAngle(want - e.heading);
+      e.heading += Math.max(-kick, Math.min(kick, off));
+    }
+  }
 
   // The two dressings a body already has for being hit: the skeleton flinch
   // every creature carries, and the tumble that only bodies which roll (crabs)
@@ -197,7 +240,8 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
   if (e.def?.faceCamera) {
     e.tumbleVel = (e.tumbleVel ?? 0) + (k.spin ?? 5) * scale * (Math.random() < 0.5 ? -1 : 1);
   }
-  return push;
+  // What was actually imparted, boost and all — callers price feedback off it.
+  return push * boost;
 }
 
 // The speed above which a simulated creature counts as LAUNCHED rather than
@@ -2212,6 +2256,16 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // before it has moved the body. See applyKnockback.
     knockX: 0,
     knockY: 0,
+    // How fast that shove bleeds off, and how long this body is knocked off
+    // its own stroke for. Both are stamped on by the hit rather than read from
+    // CONFIG at integration time, because a heavy knock and an ordinary one
+    // are different journeys and a body may be carrying either. Seeded here
+    // for the reason every timer in this record is: `undefined - dt` is NaN,
+    // and a NaN timer never expires — a fish would be permanently staggered
+    // with nothing on screen to say why.
+    knockDecay: 0,
+    staggerTimer: 0,
+    staggerFor: 0,
     bumpCooldown: 0,
     // Rest pose, rolled once per individual (see the crowd-variation block on
     // enemies.walkingCrab). `restLean` is the angle the locked broadside
@@ -2937,8 +2991,19 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // ...and the daze's slow, at the same place and for the same reason chill
     // is: a tax on the step, not on the decision.
     const daze = dazeSpeedMul(e);
-    e.mesh.position.x += e.vx * chill * daze * dt;
-    e.mesh.position.y += e.vy * chill * daze * dt;
+    // ...and the ram's. A big body that has just been shoved is off its stroke
+    // for a moment, ramping back in rather than switching on — see
+    // CONFIG.strike.knockback.heavy. Without this the shove below is added to
+    // an animal still swimming at full speed in the direction it chose, and
+    // most of a ram on a shark is spent cancelling the shark.
+    let stagger = 1;
+    if (e.staggerTimer > 0) {
+      e.staggerTimer = Math.max(0, e.staggerTimer - dt);
+      const share = e.staggerFor > 0 ? e.staggerTimer / e.staggerFor : 0;
+      stagger = 1 - (CONFIG.strike?.knockback?.heavy?.staggerSlow ?? 0.85) * share;
+    }
+    e.mesh.position.x += e.vx * chill * daze * stagger * dt;
+    e.mesh.position.y += e.vy * chill * daze * stagger * dt;
 
     // THE SEAL'S SHOVE, integrated on top of whatever the steering asked for
     // and decaying exponentially back to nothing. Added here rather than into
@@ -2952,7 +3017,10 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     if (e.knockX || e.knockY) {
       e.mesh.position.x += e.knockX * dt;
       e.mesh.position.y += e.knockY * dt;
-      const drop = Math.exp(-(CONFIG.strike?.knockback?.decay ?? 5.5) * dt);
+      // The falloff the hit that landed it chose, so a heavy throw carries and
+      // an ordinary knock is over in a moment. Falls back to the shared decay
+      // for a shove that arrived from somewhere that never stamped one on.
+      const drop = Math.exp(-(e.knockDecay || CONFIG.strike?.knockback?.decay || 5.5) * dt);
       e.knockX *= drop;
       e.knockY *= drop;
       if (Math.abs(e.knockX) < 0.01) e.knockX = 0;

@@ -428,6 +428,32 @@ export const ASSETS = {
       tail: { bones: ['tail00_019', 'tail01_020', 'tail02_023'], tipLength: 0.16 },
       anchors: {
         mouth: { bone: 'mouth_08', offset: [0, 0.14, 0] },
+        // THE EYE SOCKETS. `eye_L_09` / `eye_R_010` are real bones parented to
+        // head_07 that drive real eyeball geometry — 17 and 29 vertices each,
+        // a flat disc 0.049 across and 0.003 thick — so these ride the head IK
+        // and the swim clip for free. See systems/eyeLights.js for the orbs
+        // that sit in them and systems/laserEyes.js for the beams that leave
+        // from them.
+        //
+        // MEASURED, not guessed, by skinning the discs and taking their
+        // centroid in each bone's own local frame: (0.000, 0.024, 0.000) for
+        // the left and (0.002, 0.025, 0.000) for the right, which is one
+        // number for both. The bone ORIGIN is 0.024 short of that — it sits at
+        // the rim of the disc, not its middle, so an anchor at [0,0,0] would
+        // put the orb on the edge of the eye.
+        //
+        // The +Z is the lift out of the socket. The disc is set flush into the
+        // skull (the skin reaches only 0.005 world units past the eyeball
+        // centroid within 0.1 of the eye axis), so 0.006 model units — 0.014
+        // world at the seal's 2.36 fit — is proud of the face without floating
+        // off it.
+        //
+        // `normal` is the disc's own facing, which is bone-local +Z on both
+        // eyes: the rig is mirrored, so the same local axis points OUT of the
+        // face on each side. It is what tells the near eye from the far one in
+        // a camera that only ever sees this animal side-on.
+        eyeL: { bone: 'eye_L_09', offset: [0, 0.0245, 0.006], normal: [0, 0, 1] },
+        eyeR: { bone: 'eye_R_010', offset: [0, 0.0245, 0.006], normal: [0, 0, 1] },
         // Still the tail tip, and still what CONFIG.emitPoints 'tail' fires
         // from. The bubbles no longer use it on this model — see finL/finR
         // above — but it stays the sane fallback for one that has no fin
@@ -4650,6 +4676,107 @@ function paintHeadTint(model, def) {
   }
 }
 
+// THE NORMAL THE SHELL IS PUSHED ALONG, welded across the seams the exporter
+// split. Ported from tools/atlas-render/iconRender.js, where it fixed exactly
+// this on the icons.
+//
+// WHY THE RAW `normal` ATTRIBUTE TEARS. An exporter duplicates a vertex wherever
+// two faces disagree about anything the fragment stage reads — a UV island edge,
+// a smoothing-group boundary, a second material. One point on the surface then
+// exists as several vertices carrying DIFFERENT normals, and the inverted hull
+// pushes each of them a different way. The shell splits open along every one of
+// those seams, and because the gap is a hole in a back-faced hull you see the
+// rim double back on itself: the ragged, doubled edges on the orca's mouth and
+// the roots of its fins.
+//
+// Welding is by QUANTISED POSITION rather than by index, because the seam is
+// precisely where the index does NOT join the vertices — that is what a seam is.
+// 1e4 is a tenth of a millimetre in model units, coarse enough to survive the
+// float drift of an export round trip and fine enough not to weld a thin fin to
+// itself. Averaging the normals of everything at one point reconstructs the
+// normal the surface would have had if it had never been split.
+// A SMOOTHING ANGLE, which is the one thing this adds to the icon renderer's
+// version, and it is what makes the function safe to run on everything.
+//
+// iconRender only ever sees exported organic models, so it can average every
+// normal sharing a position. This runs on the crew's boxes and the boat debris
+// cells as well, and a box's corner is THREE normals 90 degrees apart: averaging
+// those points the corner vertex diagonally inward, the hull stops reaching the
+// mitre, and the rim rounds off the corners of every crate in the game.
+//
+// A seam is different in kind from a hard edge, and the angle is what tells them
+// apart. Two vertices split by a UV island carry normals that agree to within a
+// degree or two — the split is about texture coordinates, not about shape — so
+// they average to the normal the surface always had. A genuine crease disagrees
+// by tens of degrees and is left alone, which is what keeps a box a box.
+const OUTLINE_WELD_COS = Math.cos(40 * Math.PI / 180);
+
+function smoothNormals(geometry) {
+  const pos = geometry.attributes.position;
+  const nor = geometry.attributes.normal;
+  if (!pos || !nor) return null;
+
+  // Vertices sharing a point in space. Keyed on QUANTISED position rather than
+  // on the index, because a seam is precisely where the index does not join
+  // them. 1e4 is a tenth of a millimetre in model units — coarse enough to
+  // survive the float drift of an export round trip, fine enough not to weld a
+  // thin fin to its own other side.
+  const buckets = new Map();
+  const key = (i) => {
+    const q = 1e4;
+    return `${Math.round(pos.getX(i) * q)},${Math.round(pos.getY(i) * q)},${Math.round(pos.getZ(i) * q)}`;
+  };
+  for (let i = 0; i < pos.count; i++) {
+    const k = key(i);
+    const cur = buckets.get(k);
+    if (cur) cur.push(i); else buckets.set(k, [i]);
+  }
+
+  const out = new Float32Array(pos.count * 3);
+  for (const group of buckets.values()) {
+    for (const i of group) {
+      const nx = nor.getX(i), ny = nor.getY(i), nz = nor.getZ(i);
+      let sx = 0, sy = 0, sz = 0;
+      // Only the neighbours this vertex actually agrees with, so one point
+      // carrying both a seam and a crease resolves each side on its own.
+      for (const j of group) {
+        const jx = nor.getX(j), jy = nor.getY(j), jz = nor.getZ(j);
+        if (nx * jx + ny * jy + nz * jz < OUTLINE_WELD_COS) continue;
+        sx += jx; sy += jy; sz += jz;
+      }
+      const len = Math.hypot(sx, sy, sz);
+      // A degenerate sum can only mean this vertex agreed with nothing, itself
+      // included — a zero-length normal. Its own value is the honest answer.
+      const ok = len > 1e-8;
+      out[i * 3] = ok ? sx / len : nx;
+      out[i * 3 + 1] = ok ? sy / len : ny;
+      out[i * 3 + 2] = ok ? sz / len : nz;
+    }
+  }
+  return new THREE.BufferAttribute(out, 3);
+}
+
+/**
+ * Give a geometry the welded normal the outline shader reads, once.
+ *
+ * EVERY geometry that will wear an outline material has to go through this,
+ * including the ones whose shells are built by hand (systems/crew.js and
+ * systems/boatDebris.js make their own meshes rather than calling
+ * addOutlineShells). The shader declares `aOutlineNormal` unconditionally, and
+ * WebGL feeds a missing attribute as (0,0,0) rather than failing — so a geometry
+ * that skips this loses its rim completely and reports nothing.
+ */
+export function ensureOutlineNormal(geometry) {
+  if (!geometry || geometry.attributes.aOutlineNormal) return geometry;
+  // A model with no normals at all still needs something to push along;
+  // computing them is what the raw `normal` path was implicitly relying on
+  // three to have done at load.
+  if (!geometry.attributes.normal) geometry.computeVertexNormals();
+  const smooth = smoothNormals(geometry);
+  if (smooth) geometry.setAttribute('aOutlineNormal', smooth);
+  return geometry;
+}
+
 export function addOutlineShells(model, spec) {
   const shared = spec.material ?? null;
   const targets = [];
@@ -4659,6 +4786,18 @@ export function addOutlineShells(model, spec) {
   model.traverse((o) => { if (o.isMesh && !o.userData.__isOutline) targets.push(o); });
 
   for (const mesh of targets) {
+    // EVERY outlined geometry gets the attribute, not just the ones that need
+    // welding, and that is a requirement rather than tidiness: one outline
+    // material is shared across all of an asset's meshes (see spec.material),
+    // so its shader declares `aOutlineNormal` once for all of them. A mesh
+    // missing the attribute would read it as (0,0,0) and lose its rim entirely
+    // — silently, since an absent attribute is not an error in WebGL.
+    //
+    // Cached on the geometry the real mesh shares, so clones and a second shell
+    // pay for the walk once. An attribute no other shader declares costs one
+    // upload and is otherwise inert.
+    ensureOutlineNormal(mesh.geometry);
+
     const mat = shared ?? makeOutlineMaterial(spec);
 
     let shell;
@@ -4722,7 +4861,10 @@ export function makeOutlineMaterial(spec = {}) {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uOutline = uOutline;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uOutline;')
+      .replace(
+        '#include <common>',
+        '#include <common>\nuniform float uOutline;\nattribute vec3 aOutlineNormal;'
+      )
       // Offset in OBJECT space, immediately after begin_vertex sets
       // `transformed` and BEFORE skinning runs. Skinning then transforms the
       // already-offset position, so the shell deforms with the animation
@@ -4731,10 +4873,15 @@ export function makeOutlineMaterial(spec = {}) {
       // Must not use `objectNormal` or `mvPosition`: the first is only
       // defined by <beginnormal_vertex>, which MeshBasicMaterial doesn't
       // include, and the second isn't declared until <project_vertex>.
-      // `normal` is a default attribute and is always available here.
+      //
+      // `aOutlineNormal` rather than the raw `normal`, and that is what closes
+      // the torn rim: the built-in attribute is split at every UV and smoothing
+      // seam, so the hull came apart along each one. addOutlineShells guarantees
+      // the attribute exists on every geometry it outlines — WebGL would
+      // silently feed (0,0,0) here otherwise and the rim would vanish.
       .replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\n\ttransformed += normal * uOutline;'
+        '#include <begin_vertex>\n\ttransformed += aOutlineNormal * uOutline;'
       );
   };
   return mat;
@@ -4818,6 +4965,11 @@ export function applyAssetSizesFromTable() {
   applyAssetTable({
     setSize: setAssetSizeMultiplier,
     setSkin: setAssetSkin,
+    // The other two thirds of the `surface` column. Same shape as setAssetSkin:
+    // null clears whatever the asset declared in code, a string names a preset,
+    // and `true` means "on, at the base settings".
+    setNoise: (key, v) => { if (ASSETS[key]) ASSETS[key].noiseShader = v ?? undefined; },
+    setToon: (key, v) => { if (ASSETS[key]) ASSETS[key].toonShade = v ?? undefined; },
     knownKey: (key) => key in ASSETS,
     knownSkin: (name) => !!CONFIG.biolumSkin?.presets?.[name],
   });

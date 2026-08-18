@@ -259,6 +259,33 @@ export const inputStatus = {
   device: defaultDevice(),
 };
 
+/**
+ * A mouse position from somewhere that ISN'T the canvas.
+ *
+ * The listener above is on the canvas, which is right for a run and wrong for
+ * every moment the game is showing a full-screen overlay: an element with
+ * `pointer-events: all` on top of the canvas swallows the move events, and the
+ * seal goes on aiming at wherever the pointer last was before the overlay
+ * appeared. That is invisible on a menu the seal isn't in — and it is the whole
+ * feature on the title screen, where the animal is meant to be watching the
+ * cursor while the card is up. See systems/titleSeal.js.
+ *
+ * Deliberately the exact body of the canvas listener rather than a second path:
+ * anything else and the seal would aim by two slightly different rules
+ * depending on what was on top of it.
+ *
+ * MOUSE ONLY at the call site, and that gate matters. Feeding a touch through
+ * here would set `hasMouse` and leave `lastAimDevice` at 'mouse' on a phone,
+ * and the mouse fallback in updateInput would then aim the seal at a stale
+ * fingerprint for the whole run whenever no thumb was down.
+ */
+export function feedMouse(clientX, clientY) {
+  lastAimDevice = 'mouse';
+  hasMouse = true;
+  markMouseDevice();
+  updateMouseNDC(clientX, clientY);
+}
+
 export function initInput(canvas) {
   domElement = canvas;
 
@@ -280,12 +307,7 @@ export function initInput(canvas) {
     console.info('[input] gamepad disconnected');
   });
 
-  canvas.addEventListener('mousemove', (e) => {
-    lastAimDevice = 'mouse';
-    hasMouse = true;
-    markMouseDevice();
-    updateMouseNDC(e.clientX, e.clientY);
-  });
+  canvas.addEventListener('mousemove', (e) => feedMouse(e.clientX, e.clientY));
   canvas.addEventListener('mousedown', (e) => {
     hasMouse = true;
     markMouseDevice();

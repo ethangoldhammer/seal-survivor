@@ -39,7 +39,7 @@ import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable, perfectCrossed } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -85,15 +85,17 @@ import { createOctoGrabber, updateOctoGrab, resetOctoGrab, rebuildOctoGrabber } 
 import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
 import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines } from './systems/outlines.js';
 import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginRestartTransition } from './systems/deathDive.js';
-import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime } from './systems/levelUpTime.js';
+import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime, cardsArriveAt, saluteEnabled } from './systems/levelUpTime.js';
 import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossKillFraming } from './systems/bossKill.js';
 import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } from './systems/bossCorpse.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
-import { updateCelebration } from './systems/celebrate.js';
+import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
+import { updateCelebration, playCelebration } from './systems/celebrate.js';
 import { captureBossShot, resetBossShot, bossShot } from './systems/bossShot.js';
 import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
+import { beginTitleSeal, endTitleSeal, titleSealEngaged, updateTitleSeal } from './systems/titleSeal.js';
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
@@ -185,6 +187,7 @@ let belugaDrone = null;
 let eelCompanionMesh = null;
 let strikeRing = null;
 let aimIndicator = null;
+let eyeLights = null;
 let dumboOcto = null;
 let harpGroup = null;
 let octoGrabber = null;
@@ -335,6 +338,12 @@ async function boot() {
   world.scene.add(strikeRing);
   aimIndicator = createAimIndicator();
   world.scene.add(aimIndicator);
+  // The seal's lit eyes. World space rather than parented to the eye bones,
+  // for the reason the clubs above are: a mesh hung off a skinned bone
+  // inherits that bone's scale. The aim rig publishes both sockets in world
+  // space every frame anyway — see systems/eyeLights.js.
+  eyeLights = createEyeLights();
+  world.scene.add(eyeLights);
   dumboOcto = createDumboOcto();
   world.scene.add(dumboOcto);
   // One group for the harp AND the note rings its charms leave on other
@@ -378,6 +387,9 @@ async function boot() {
   prefetchSamples();
 
   initUI({
+    // The Rive card is going up. The seal is framed BEFORE it, so the push-in
+    // is already under way while the artboard parses — see systems/titleSeal.js.
+    onSplash: beginTitleSeal,
     onStart: startGame,
     onRestart: restartRun,
     onLevelChoice: applyLevelChoice,
@@ -797,6 +809,11 @@ function handleTunerChange(path) {
   // slider moved while the bar is parked would otherwise do nothing visible
   // until the next mouthful.
   if (path === '*' || path.startsWith('sealCharge')) invalidateChargeSkin();
+  // The eye orbs bake their colour through hdr() into two materials at build
+  // time (peak-channel push, so cyan actually crosses the bright pass), so a
+  // colour slider reads as dead until this re-stamps it. Sizes and opacities
+  // are read every frame and need nothing.
+  if (path === '*' || path.startsWith('eyeLights')) applyEyeLightColours();
   // Also a pure material/uniform write on shells that already exist, so every
   // input event can drive it — no rebuild, and the toggle just hides them.
   if (path === '*' || path.startsWith('playerOutline')) applyPlayerOutline();
@@ -851,6 +868,12 @@ function restartRun() {
 }
 
 function startGame() {
+  // The title card is gone. Releases the hero framing rather than dropping it,
+  // so the frame glides back to the run's over the first fraction of a second
+  // instead of cutting on the exact frame the player pressed Start. A no-op on
+  // every route into a run that never showed the card — a restart, `?sandbox`,
+  // or reduced motion.
+  endTitleSeal();
   // A run abandoned by restarting still has data worth keeping — file it
   // before the new one clears the recorder, or the only runs ever recorded
   // are the ones that ended in death.
@@ -930,6 +953,7 @@ function startGame() {
   resetBossKill();
   resetBeams(world.scene);
   resetLaserEyes();
+  resetEyeLights();
   // The last run's trophy goes with it, or the death screen would offer this
   // run's player a picture of somebody else's boss.
   resetBossShot();
@@ -1304,6 +1328,43 @@ function openLevelUp() {
   // filled — the level is worth watching land, and a menu over the top of it
   // is a screenshot of the fight you were in the middle of.
   startLevelUpTime(showLevelUp);
+  startSalute();
+}
+
+/**
+ * THE SALUTE — the seal reacting to its own level, in the half second the
+ * cards are held back for (CONFIG.levelUp.salute).
+ *
+ * Three parts, and this function owns only the third. The BEAT and the SNAP
+ * ZOOM belong to systems/levelUpTime.js, which is already the module that
+ * decides when the menu is allowed to arrive; the POSE is fired from here
+ * because the two systems have no business importing each other — one runs a
+ * clock, the other runs an IK solver — and main.js is where every other
+ * cross-system moment in this file is assembled.
+ *
+ * WHY IT IS TIMED OFF cardsArriveAt() RATHER THAN OFF ITS OWN NUMBERS: the
+ * pose has to be at full extension as the menu lands and not a beat after it,
+ * and the menu's arrival is a sum of three tunable times. Hand-typing a peak
+ * next to them means the first person to drag `beat` leaves the seal saluting
+ * into a screen that is already covered. `poseLead` is how far ahead of the
+ * cards full extension is reached, which is the thing actually worth tuning.
+ *
+ * Nothing here is on the dilated clock — see the header of celebrate.js. The
+ * world is easing to half speed underneath the seal, which is most of why the
+ * pose reads: the animal moves at its own pace against a slowed ocean.
+ */
+function startSalute() {
+  if (!saluteEnabled()) return;
+  const s = CONFIG.levelUp?.salute ?? {};
+  const peak = Math.max(0.05, cardsArriveAt() - (s.poseLead ?? 0.12));
+  playCelebration({
+    weights: s.poses ?? {},
+    peakAt: peak,
+    hold: s.poseHold ?? 0.22,
+    release: s.poseRelease ?? 0.4,
+    // The squad is frozen for all of this — see the note in sealTeam.js.
+    escorts: false,
+  });
 }
 
 function applyLevelChoice(choice) {
@@ -3177,6 +3238,19 @@ function animate(now) {
       chargeHapticTimer = 0;
     }
 
+    // THE PERFECT CHARGE LANDING — the wind-up fully banked. An edge, consumed
+    // once, exactly like chargeCrossed above it: `strikeState.perfect` is a
+    // latch that stays true for the rest of the hold, and firing the sound off
+    // the latch would play it every frame until the release.
+    //
+    // The meter is already drawing this (the core pops, see
+    // systems/strikeRing.js); what the event adds is the half of it that
+    // reaches a player looking at what they are about to hit rather than at
+    // their own animal.
+    if (perfectCrossed()) {
+      feedback('strikePerfect', { x: player.mesh.position.x, y: player.mesh.position.y });
+    }
+
     // The let-go is what launches, and it spends however much power the hold
     // managed to bank. No input buffer: power is only ever banked while the
     // button is held, so a release under the threshold can't become fireable
@@ -3372,6 +3446,10 @@ function animate(now) {
         // power actually spent, so a fizzle pops and a full commitment
         // detonates. See CONFIG.strike.charge.outline.
         flarePlayerOutline(strikeState.power);
+        // ...and the eyes, from the same frame and scaled by the same power.
+        // Deliberately here rather than at the end of the dash: the wind-up is
+        // what has been building, so the pop belongs where the building stops.
+        flareEyeLights(strikeState.power);
 
         // THE GULP. The wind-up held the mouth shut while chum gathered around
         // the seal; this is the swallow. Runs after the strike's own feedback
@@ -3464,7 +3542,14 @@ function animate(now) {
     // The seal's own eyes, BEFORE updateBeams so a beam lit this frame is
     // resolved on the frame it was asked for rather than the next one.
     setLaserAim(input.aim);
-    updateLaserEyes(dt, world.scene, player.mesh.position, player.stats.laserEyesLevel, input.aim);
+    // The rig goes in so the beams leave the eye sockets the orbs are sitting
+    // in rather than a point near the middle of the body — see the origin note
+    // in systems/laserEyes.js. Null on a model with no eye bones, which puts
+    // that file back on its old body-relative offset.
+    updateLaserEyes(
+      dt, world.scene, player.mesh.position, player.stats.laserEyesLevel, input.aim,
+      player.aimRig,
+    );
     // The beams the perks above just lit — and, once the seal owns a pair, its
     // own. AFTER the perk update so a beam ignited this frame is placed, drawn
     // and resolved on the same frame it was asked for: a frame of lag here is a
@@ -4402,7 +4487,17 @@ function animate(now) {
     // slack. The other half is the `limp` flag — see updateAimRig — which
     // keeps the tail's spring live through the death clip so it trails and
     // flops off the body's own tumble.
-    updateAimRig(realDt, deathState.active ? null : input.aim, false, 0, deathState.active);
+    // `engaged` is normally false here — nobody is shooting on a menu — with
+    // the one exception of the title card, where the whole shot IS the aim: at
+    // `idleWeight` the flippers keep most of the swim clip and only gesture at
+    // the cursor, which reads as the seal ignoring you. See systems/titleSeal.js.
+    updateAimRig(
+      realDt,
+      deathState.active ? null : input.aim,
+      titleSealEngaged(),
+      0,
+      deathState.active,
+    );
   }
 
   // THE VICTORY LAP, and it goes here for two reasons.
@@ -4431,12 +4526,20 @@ function animate(now) {
   // freezing it mid-throb would read as the charge having stalled. The wind-up
   // argument goes to 0 the moment a run isn't live, which eases the rim back to
   // its tuned look on the game-over screen instead of leaving it lit.
-  updatePlayerOutline(
-    realDt,
-    gameState.running && !gameState.paused && CONFIG.strike.enabled && input.strikeHeld
-      ? strikeState.pending
-      : 0,
-  );
+  // THE WIND-UP, computed once and handed to both readouts that show it. It
+  // follows the BUTTON rather than `strikeState.charging`, which goes false
+  // the instant the bar runs dry — the tell must not cut out halfway through a
+  // hold the player is still committing to, it plateaus at whatever was
+  // banked. It goes to 0 the moment a run isn't live, which eases the rim and
+  // the eyes back to rest on the game-over screen instead of leaving them lit.
+  //
+  // One local rather than two copies of the expression: the rim and the eyes
+  // are two readings of ONE thing, and they drifted apart the moment they were
+  // written twice.
+  const windUp = gameState.running && !gameState.paused && CONFIG.strike.enabled && input.strikeHeld
+    ? strikeState.pending
+    : 0;
+  updatePlayerOutline(realDt, windUp);
   // Real time, like the ring above: the indicator is a readout of where you
   // are pointing RIGHT NOW, and a hit-stop must not freeze it a frame behind
   // the cursor. The guns run themselves, so this reads autofire rather than a
@@ -4446,6 +4549,16 @@ function animate(now) {
     CONFIG.weapon.autofire,
     gameState.running && !gameState.paused,
   );
+  // The eyes. Real time and outside the pause gate, like the ring and the
+  // indicator above: they are a readout of a head that is still pointing
+  // somewhere, and a hit-stop that froze them would read as the seal having
+  // blinked. The sockets themselves only move when the rig solves, so a paused
+  // seal simply keeps its stare.
+  //
+  // The gate is being ALIVE rather than the run being live — the orbs stay lit
+  // through the level-up cards and the pause menu, and go out over a beat when
+  // the seal dies rather than switching off on the frame of the bite.
+  updateEyeLights(realDt, player.aimRig, { lit: deathState.active ? 0 : 1, charge: windUp });
   updateProjectileTrails(realDt, world.scene, projectiles);
   // The RGB smear the seal drags through the air. Real time, like the trails
   // above and for the same reason: the cloud is weather, and a hit-stop that
@@ -4609,6 +4722,13 @@ function animate(now) {
   // BELOW the death dive's claim so a death that lands inside a victory takes
   // the frame off it — a claim is last-writer-wins, and of the two shots only
   // one has a run riding on it.
+  // The level-up salute's snap zoom, claimed on the same terms and FIRST of
+  // the three, because a claim is last-writer-wins and both of the others
+  // outrank it: a boss dying grants levels, so the two genuinely overlap, and
+  // the shot of the thing you just killed is the one worth keeping.
+  if (levelUpState.camWeight > 0) {
+    world.focusCamera(player.mesh.position, levelUpState.camZoom, levelUpState.camWeight);
+  }
   if (bossKillState.active) {
     // NOT the seal's position: the kill shot frames the seal AND the body it
     // just killed, and publishes the point between them it settled on. See
@@ -4624,6 +4744,17 @@ function animate(now) {
   if (deathState.active) {
     world.focusCamera(player.mesh.position, deathState.camZoom, deathState.camWeight);
   }
+  // The title card's push-in, claimed the same way and by the same rules. It
+  // can never overlap either of the two above — there is no run to die in while
+  // the card is up — and it goes last of the three anyway, because its own
+  // release deliberately runs on over the first second of a run.
+  //
+  // This call also poses the seal's body toward the cursor. That happens here,
+  // one step after the aim rig solved further up the frame, so the neck and
+  // flippers are solving against the body orientation this wrote last frame —
+  // a lag the crane already accepts by design (see poseBody in
+  // entities/player.js) and the alternative to posing the body twice.
+  updateTitleSeal(realDt, world);
   // The stage parks the shot on the seal, and records where it is so a staged
   // event fires ON the seal rather than at wherever the world origin happens
   // to be. Unconditional — the position has to be current the moment the panel

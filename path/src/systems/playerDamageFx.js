@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { feedback } from './feedback.js';
 import { flashPlayerOutlineDamage } from './outlines.js';
+import { flashEyeLightsDamage } from './eyeLights.js';
 
 // Everything that happens to the presentation when the SEAL takes damage. One
 // door, so every source of player damage — a bullet, a crab's claw, a body
@@ -117,9 +118,16 @@ export function playerDamageFx(dmg, maxHp, at = {}) {
   // The rim saturates sooner than the camera does — see `flashFraction`. It is
   // the channel you can actually read mid-fight, so it should be at full red
   // well before the shake is at full rattle.
-  flashPlayerOutlineDamage(Math.min(1, Math.max(
+  const flash = Math.min(1, Math.max(
     cfg.minFlash ?? 0.3,
     lost / Math.max(0.001, cfg.flashFraction ?? 0.3),
-  )));
+  ));
+  flashPlayerOutlineDamage(flash);
+  // The eyes go red on the same reading, through this same door. Two surfaces,
+  // one measure of how bad it was — the eye is the thing you are already
+  // looking at while you aim, and the rim is the thing you can find anywhere
+  // on screen. Unlike the rim, red takes the eye OUTRIGHT rather than being
+  // added over a wind-up glow; see the priority note in systems/eyeLights.js.
+  flashEyeLightsDamage(flash);
   return spent;
 }

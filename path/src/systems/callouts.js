@@ -106,6 +106,22 @@ function namesKey(text) {
   return false;
 }
 
+/**
+ * A row's words, resolved, for something that is not the band.
+ *
+ * The Text panel's specimen is the caller: it sets the longest line in the
+ * table to show what the role has to survive, and a raw `{strike}` in there
+ * would be both wrong on screen and the wrong LENGTH — eight characters
+ * standing in for the five of "Space".
+ *
+ * Exported rather than duplicated because the resolution has a real rule in it
+ * (hardware beats bindings, unknown tokens stay visible) and a second copy in a
+ * panel would be a second answer to "what does this line say".
+ */
+export function resolveCalloutText(row, device, tokens = {}) {
+  return fillBindings(calloutText(row, device) ?? '', tokens);
+}
+
 function fillBindings(text, tokens = {}) {
   if (!text.includes('{')) return text;
   return text.replace(BINDING_TOKEN, (whole, name) => {

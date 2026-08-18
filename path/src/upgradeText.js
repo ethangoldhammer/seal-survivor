@@ -49,10 +49,10 @@ import { playerName } from './systems/playerName.js';
 //   flat     an additive number shown as-is: "+30 max HP".
 //   count    an additive whole number of things, with a noun that pluralises:
 //            "+1 projectile", "+2 projectiles".
-//   level    an ability's level. The 0 -> 1 stack UNLOCKS the ability and says
-//            so; every stack after that is "+1 level", because what a level
-//            does lives in that ability's own config and is not measurable
-//            from the stat block.
+//   level    an ability's level. The 0 -> 1 stack turns the ability on and
+//            names it ("chain lightning"); every stack after that is
+//            "+1 level", because what a level does lives in that ability's own
+//            config and is not measurable from the stat block.
 //
 // A stat with no entry here still works — it falls back to its raw name — so a
 // new stat is a missing label, never a missing card.
@@ -269,13 +269,16 @@ export function phrase(change, stack = 1) {
   const t = STAT_TEXT[change.stat] ?? { label: change.stat, kind: 'flat' };
 
   if (t.kind === 'level') {
-    // Exactly 0 -> 1 is the card that turns the ability on, and "unlocks chain
-    // lightning" is the only text that tells a player what they just bought.
+    // Exactly 0 -> 1 is the card that turns the ability on, and naming the
+    // thing itself — "chain lightning" — is the only text that tells a player
+    // what they just bought. The bare noun phrase, with no "unlocks" in front
+    // of it: the card IS the offer, so the verb was only ever restating the
+    // screen the player is looking at.
     //
     // The `to === 1` half is not redundant: {total} measures 0 -> 9 across a
     // maxed Sea Garlic, which also starts at zero, and calling nine levels
-    // "unlocks a damaging aura" would quietly lose the nine.
-    if (change.from === 0 && change.to === 1 && t.unlock) return `unlocks ${t.unlock}`;
+    // "a damaging aura" would quietly lose the nine.
+    if (change.from === 0 && change.to === 1 && t.unlock) return t.unlock;
     const step = change.how === 'add' ? change.amount : change.to - change.from;
     return `+${num(step)} ${t.label} level${Math.abs(step) === 1 ? '' : 's'}`;
   }
@@ -304,8 +307,8 @@ export function phrase(change, stack = 1) {
 // A "+1 level" that arrives alongside real stats is dropped: bounceShot moves
 // bounceLevel AND three ricochet numbers, and the level adds nothing next to
 // the numbers that say what it did. An UNLOCK is kept even so — on the first
-// ricochet card, "unlocks a chaining ricochet shot" is the part that says what
-// was just bought, and the three numbers are the footnote.
+// ricochet card, "a chaining ricochet shot" is the part that says what was
+// just bought, and the three numbers are the footnote.
 export function phraseAll(changes, stack = 1) {
   if (!changes.length) return '';
   const keep = changes.filter((c) => {
@@ -352,6 +355,26 @@ function readConfigPath(path) {
   return node;
 }
 
+// SENTENCE CASE, applied to whatever the card ends up saying.
+//
+// The measured phrases are fragments by design — "a chaining ricochet shot",
+// "+25% fire rate" — because a desc can wrap one mid-sentence ("Shots pierce
+// {effect}"). But most descs ARE the fragment, and a card that opens lowercase
+// reads like a cut-off sentence. So the capital is applied once, at the end,
+// to the finished string rather than inside phrase(): only there is it known
+// whether a fragment is starting a sentence or continuing one.
+//
+// Only a LETTER is touched. "+25% fire rate" opens on a plus sign and stays
+// exactly as measured — upper-casing "25" is not a thing, and forcing a word
+// to the front to have something to capitalise is how the numbers start
+// disagreeing with apply() again.
+// The opening word, and any word that starts a new sentence — bounceShot's
+// "All balls, no pit. {effect}" puts a measured fragment straight after a full
+// stop, so the rule has to reach past the first character.
+export function sentenceCase(text) {
+  return String(text ?? '').replace(/(^|[.!?]\s+)([a-z])/g, (_, lead, ch) => lead + ch.toUpperCase());
+}
+
 // Replace every {token} in `text`.
 //
 // An unknown token is LEFT ON THE CARD as literal "{whoops}" rather than
@@ -359,10 +382,11 @@ function readConfigPath(path) {
 // bug and gets reported as one; the token spelled out points straight at the
 // cell that has the typo in it.
 export function expandDesc(text, upgrade, { owned = 0, warn = null } = {}) {
-  if (!text || !text.includes('{')) return text ?? '';
+  if (!text) return '';
+  if (!text.includes('{')) return sentenceCase(text);
   const level = owned + 1;
 
-  return String(text).replace(/\{([a-zA-Z]+)(?::([^}]*))?\}/g, (whole, key, arg) => {
+  return sentenceCase(String(text).replace(/\{([a-zA-Z]+)(?::([^}]*))?\}/g, (whole, key, arg) => {
     switch (key) {
       case 'effect': {
         const stack = arg ? Number(arg) : level;
@@ -397,5 +421,5 @@ export function expandDesc(text, upgrade, { owned = 0, warn = null } = {}) {
         warn?.(`[upgrades] "${upgrade?.id}" uses {${key}}, which isn't a known placeholder — leaving it on the card. Known: ${TOKENS.map((t) => t.token).join(' ')}`);
         return whole;
     }
-  });
+  }));
 }

@@ -33,9 +33,10 @@ import { CONFIG } from '../path/src/config.js';
 import { installModel, createVisual } from '../path/src/assets.js';
 import { createAnimationController } from '../path/src/systems/animation.js';
 import {
-  celebrationState, startCelebration, updateCelebration, resetCelebration,
+  celebrationState, startCelebration, playCelebration, updateCelebration, resetCelebration,
   createCelebrationDriver, snapshotMoment, celebrationSpin, CELEBRATION_VARIANTS,
 } from '../path/src/systems/celebrate.js';
+import { cardsArriveAt } from '../path/src/systems/levelUpTime.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SEAL = resolve(HERE, '../public/models/furseal.glb');
@@ -309,6 +310,174 @@ console.log('\nthe seal comes back — no ratchet across repeated celebrations')
     check(`${bone} matches a seal that never celebrated`, drift < 0.02,
       `${drift.toFixed(4)} apart after 8 celebrations`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE LEVEL-UP SALUTE, on the real rig.
+//
+// The same poses on a MUCH shorter clock: the boss kill peaks at the trophy
+// shutter, over a second in, while a level has to be reacted to inside the
+// beat the cards are held back for. That difference is not free — the IK
+// chains slerp toward their solution at CONFIG.celebrate.ik.smoothing per
+// second, so a pose given half the time may simply never arrive, and the
+// symptom is a seal that gestures vaguely instead of saluting. Nothing in the
+// timing test (npm run test:salute) can see that; it takes bones.
+//
+// tools/levelup-salute-test.mjs owns the beat, the snap zoom and the roll.
+// This owns the one question only the rig can answer: does the animal actually
+// get there in time.
+// ---------------------------------------------------------------------------
+console.log('\nthe level-up salute reaches full height inside its own beat');
+{
+  const sal = CONFIG.levelUp.salute;
+  const cards = cardsArriveAt();
+  // main.js's startSalute, derived rather than copied — see the note there.
+  const peak = Math.max(0.05, cards - (sal.poseLead ?? 0.12));
+
+  // A FRESH PAIR OF SEALS, one saluting and one only swimming, for the reason
+  // the ratchet test above builds its own: every measurement here is the
+  // difference between them on the same frame, and the shared `body` at this
+  // point in the file is carrying eight celebrations' worth of swim phase.
+  // Measured against the `rest` captured at the top instead, the right flipper
+  // reads +0.05 where the left reads +0.51 — which is the swim cycle, not the
+  // pose, and it looks exactly like a broken chain.
+  const mine = createVisual('ship');
+  const mineScene = new THREE.Scene();
+  mineScene.add(mine);
+  const control = createVisual('ship');
+  const controlScene = new THREE.Scene();
+  controlScene.add(control);
+  mineScene.updateMatrixWorld(true);
+  controlScene.updateMatrixWorld(true);
+  const mineAnim = createAnimationController(mine);
+  const mineDriver = createCelebrationDriver(mine);
+  const controlAnim = createAnimationController(control);
+
+  // Settle both past the controller's opening crossfade, or the celebration
+  // captures its entry pose mid-fade. Same reason as the ratchet test.
+  resetCelebration();
+  for (let i = 0; i < 60; i++) {
+    mineAnim.update(DT, 'swim', false);
+    mineDriver.update(DT);
+    controlAnim.update(DT, 'swim', false);
+  }
+
+  const at = (root, name) => root.worldToLocal(root.getObjectByName(name).getWorldPosition(new THREE.Vector3()));
+
+  // Salute on one seal, plain swim on the other, frame for frame.
+  //
+  // ALWAYS RUN TO COMPLETION, and take the measurement from inside the run.
+  // Abandoning a performance partway — resetCelebration() while the flippers
+  // are still up — skips the one frame on which the driver puts the bones back
+  // (see entryQ in celebrate.js), so the NEXT celebration snapshots its entry
+  // pose out of the last one's raised flipper and every seal after it is half
+  // a metre out. That is a property of the harness, not of the game: a level
+  // cannot cancel the salute it just started.
+  const BONES = ['hand_L_014', 'hand_R_018', 'head_07'];
+  const snap = () => {
+    mineScene.updateMatrixWorld(true);
+    controlScene.updateMatrixWorld(true);
+    const out = { active: celebrationState.active };
+    for (const b of BONES) out[b] = { mine: at(mine, b), control: at(control, b) };
+    return out;
+  };
+
+  // @param cues  wall seconds to photograph the pair at. Returns one snapshot
+  //              per cue, in order.
+  const runSalute = (variant, cues) => {
+    resetCelebration();
+    mineDriver.reset();
+    playCelebration({
+      variant, peakAt: peak, hold: sal.poseHold, release: sal.poseRelease, escorts: false,
+    });
+    const total = celebrationState.duration + 0.2;
+    const shots = [];
+    let next = 0;
+    for (let t = 0; t < total; t += DT) {
+      mineAnim.update(DT, 'swim', false);
+      updateCelebration(DT);
+      mineDriver.update(DT);
+      controlAnim.update(DT, 'swim', false);
+      if (next < cues.length && t + DT >= cues[next]) { shots.push(snap()); next++; }
+    }
+    while (shots.length < cues.length) shots.push(snap());
+    return shots;
+  };
+
+  // Cued on the frame the cards arrive — the last moment the pose has the
+  // screen to itself, and the whole question this block exists to answer.
+  const [measured] = runSalute('finsUp', [cards]);
+  const lift = (b) => dorsal(measured[b].mine) - dorsal(measured[b].control);
+  const liftL = lift('hand_L_014');
+  const liftR = lift('hand_R_018');
+  // The same bar the boss kill's finsUp is held to. Half a flipper of dorsal
+  // travel is the difference between saluting and drifting upward.
+  check('both flippers are up by the time the cards land', liftL > 0.35 && liftR > 0.35,
+    `L +${liftL.toFixed(3)}, R +${liftR.toFixed(3)} dorsal over a seal that only swam`);
+  check('the head went with them', lift('head_07') > 0);
+  check('and the pose is still up as they land', measured.active === true);
+
+  // THE CLAP, measured as its own TRAVEL rather than against a resting seal.
+  // `close` runs on a raised cosine of 1.5 beats, so the flippers are at their
+  // widest two thirds of the way to the peak and in contact on it — the two
+  // moments to photograph. A gap compared against a swimming control instead
+  // says almost nothing: the pose also lifts the flippers, which carries them
+  // outward on this rig, and the two effects very nearly cancel.
+  const [open, shut] = runSalute('clap', [peak * (2 / 3), cards]);
+  const gapOf = (shot) => Math.abs(shot.hand_L_014.mine.z - shot.hand_R_018.mine.z);
+  // HOW CLOSED CAN THIS RIG EVER GET, measured rather than assumed. The
+  // flippers do not meet: `close: 0.08` of reach from the centreline is past
+  // what the CCD solver will give up under CONFIG.celebrate.ik's fold and bend
+  // stops, so the contact is asymptotic and the ceiling depends on the swim
+  // phase the clap started from. Given four seconds this seal closes to 75% of
+  // its open gap and no further — so the question the salute has to answer is
+  // not "do they touch" but "does the beat get them as far as they go".
+  const ceiling = (() => {
+    resetCelebration();
+    mineDriver.reset();
+    playCelebration({ variant: 'clap', peakAt: 4, hold: sal.poseHold, release: sal.poseRelease, escorts: false });
+    let shot = null;
+    for (let t = 0; t < celebrationState.duration; t += DT) {
+      mineAnim.update(DT, 'swim', false);
+      updateCelebration(DT);
+      mineDriver.update(DT);
+      controlAnim.update(DT, 'swim', false);
+      if (!shot && t + DT >= 4) shot = snap();
+    }
+    return gapOf(shot) / gapOf(open);
+  })();
+  const closed = gapOf(shut) / gapOf(open);
+  check('the clap visibly closes in the salute\'s shorter beat', closed < 0.85,
+    `${gapOf(open).toFixed(3)} wide -> ${gapOf(shut).toFixed(3)} on the cards`);
+  check('and gets as far as this rig closes at all', closed < ceiling + 0.05,
+    `${(100 * closed).toFixed(0)}% of open, against a ${(100 * ceiling).toFixed(0)}% ceiling`);
+  // A clap is two flippers moving TOWARD EACH OTHER — the same assertion the
+  // boss kill's clap carries, because one flipper swinging across the other
+  // measures as a closing gap just as well.
+  const inwardL = shut.hand_L_014.mine.z - open.hand_L_014.mine.z;
+  const inwardR = shut.hand_R_018.mine.z - open.hand_R_018.mine.z;
+  check('both flippers moved inward', inwardL > 0 && inwardR < 0,
+    `L ${inwardL.toFixed(3)} (want +), R ${inwardR.toFixed(3)} (want -)`);
+  check('and the contact lands while the pose is still up', shut.active === true);
+
+  // And it lets go on its own, well before the player could have read three
+  // cards — a salute still running a second later is a seal that levels up and
+  // then forgets to put its flippers down.
+  check('the salute releases itself once its clock runs out', celebrationState.active === false);
+  // Past the release, with the IK smoothing given time to unwind, both seals
+  // have to be in the same place again.
+  for (let i = 0; i < 120; i++) {
+    mineAnim.update(DT, 'swim', false);
+    mineDriver.update(DT);
+    controlAnim.update(DT, 'swim', false);
+  }
+  mineScene.updateMatrixWorld(true);
+  controlScene.updateMatrixWorld(true);
+  for (const bone of ['hand_L_014', 'hand_R_018', 'head_07']) {
+    const drift = at(mine, bone).distanceTo(at(control, bone));
+    check(`${bone} comes home after a salute`, drift < 0.02, `${drift.toFixed(4)} apart`);
+  }
+  resetCelebration();
 }
 
 console.log('\nthe pose is actually gone once it releases');

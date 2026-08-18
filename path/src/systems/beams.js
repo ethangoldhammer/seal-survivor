@@ -50,11 +50,22 @@ function cfg() {
 // in isolation. Normalising on the peak channel and then scaling means a red
 // beam and a blue one at the same `overdrive` reach the bright pass equally.
 // See CONFIG.bloom and npm run glow.
-function hdr(color, overdrive) {
-  const c = new THREE.Color(color);
-  const peak = Math.max(c.r, c.g, c.b) || 1;
-  c.multiplyScalar(overdrive / peak);
-  return c;
+// Exported because the seal's eye orbs (systems/eyeLights.js) are the muzzle
+// this beam comes out of, and a socket that reached the bright pass on
+// different terms from the line leaving it would read as two light sources.
+export function hdr(color, overdrive) {
+  return hdrInto(new THREE.Color(), color, overdrive);
+}
+
+// The same rule, in place. Beams only ever ask at spawn, so allocating a Color
+// per call costs nothing here — but systems/eyeLights.js re-derives its glow on
+// the RENDER PATH every frame, and two Colors a frame is two Colors a frame
+// forever. One implementation, two shapes: a second peak-channel normalise
+// written out somewhere else is a second one to get wrong.
+export function hdrInto(out, color, overdrive) {
+  out.set(color);
+  const peak = Math.max(out.r, out.g, out.b) || 1;
+  return out.multiplyScalar(overdrive / peak);
 }
 
 // THE PROFILE — a taper along the beam and a soft falloff across it, drawn
@@ -141,7 +152,9 @@ function beamProfile() {
 // already and what the eye reads as a bright thing spilling onto its
 // surroundings. It also costs one quad instead of a forward-render light.
 let GLOW_SPRITE = null;
-function glowSprite() {
+// Shared with systems/eyeLights.js — same soft radial, and one 64x64 upload
+// for the whole run rather than one per system that wants a glow.
+export function glowSprite() {
   if (GLOW_SPRITE) return GLOW_SPRITE;
   const S = 64;
   const cv = document.createElement('canvas');

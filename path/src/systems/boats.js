@@ -208,6 +208,19 @@ function spawnBoat(scene, difficulty) {
     // NO CAPSIZE WHILE IT FLOATS: going over is what SINKING looks like, and a
     // hull that is still alive has not earned it. See damageBoat.
     maxAngle: CONFIG.boats.hitReaction.maxRoll ?? 0.55,
+    // ...AND IT ROCKS. The nod above is fore-and-aft only, which is one
+    // gesture: a hull hit anywhere answered by dipping its bow. The heel is
+    // the other axis — the deck tipping away from the seal that just came up
+    // under it and swinging back — and it is the one that reads as a boat on
+    // water rather than as a prop being nudged. See `banks` in
+    // systems/rigidBody.js for where the torque comes from.
+    banks: p.banks !== false,
+    bankSpin: p.bankSpin ?? 0.12,
+    bankSlap: p.bankSlap ?? 0.02,
+    bankRighting: p.bankRighting ?? 26,
+    bankDamping: p.bankDamping ?? 2.4,
+    bankDrag: p.bankDrag ?? 0.3,
+    maxBank: p.maxBank ?? 0.5,
     // Sails straight through the arena walls — leaving is how a boat despawns.
     walls: false,
   }));

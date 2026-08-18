@@ -25,6 +25,7 @@ import { CONFIG } from '../config.js';
 import { UPGRADE_ICONS } from './upgradeIcons.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { onFeedback } from '../systems/feedback.js';
+import { cssEase } from '../ease.js';
 
 // Which upgrade a feedback event belongs to.
 //
@@ -96,6 +97,7 @@ const state = {
   tiles: new Map(),   // upgrade id -> tile element
   held: '',           // signature of the last built set, so rebuilds are rare
   lastPicks: null,    // what to re-lay-out from when the LAYOUT changes
+  newestId: null,     // the tile the shift wave and the ripple radiate from
   off: null,
 };
 
@@ -307,6 +309,19 @@ function buildTile(entry) {
 function rebuild(held) {
   const host = state.host;
   if (!host) return;
+
+  // WHERE EVERY TILE WAS, before the new packing throws it away.
+  //
+  // A cluster relayouts on almost every pick — one more hexagon changes the
+  // ring, and half the corner moves a few pixels. Rebuilt cold, that is a jump
+  // cut: the hive is simply arranged differently on the next frame, and the eye
+  // reads it as the whole readout flickering rather than as one tile joining.
+  // Captured here, replayed as a slide in flipTiles() below.
+  const before = new Map();
+  for (const [id, el] of state.tiles) {
+    before.set(id, { left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0 });
+  }
+
   host.textContent = '';
   state.tiles.clear();
 
@@ -348,11 +363,89 @@ function rebuild(held) {
 
   host.style.width = `${maxX - minX + hexW}px`;
   host.style.height = `${maxY - minY + hexH}px`;
+
+  flipTiles(before);
 }
+
+// Slide every tile that moved from where it used to be to where it now is.
+//
+// FLIP, and it has to be: the tiles were destroyed and rebuilt at their new
+// coordinates, so there is nothing left to animate FROM. Each one is instead
+// offset back to its old spot with a transform and then released — the browser
+// animates the transform to identity, which looks like the tile travelling even
+// though it was never anywhere else.
+//
+// TRANSFORM ONLY. `left`/`top` are already correct and are never touched here,
+// so nothing in this relayout costs a second layout pass, and the pulse
+// animations (which also use transform) take over cleanly once it settles.
+//
+// STAGGERED FROM THE NEWCOMER OUTWARD. A dozen tiles all starting together is a
+// block of pixels sliding, which reads as the panel resizing; the same dozen
+// starting a few milliseconds apart in order of distance reads as the new tile
+// pushing its way in and the others giving way. That is the whole effect.
+function flipTiles(before) {
+  const cfg = CONFIG.upgradeHive?.shift ?? {};
+  if (cfg.enabled === false || !before.size) return;
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+
+  const secs = cfg.seconds ?? 0.42;
+  const stagger = cfg.stagger ?? 0.022;
+  const curve = cssEase(cfg.ease ?? 'outBack');
+
+  // Distance is measured from the tile that just arrived, so the wave starts
+  // where the new hexagon lands. With nothing new (a layout cycled by hand) it
+  // falls back to the first tile, which still reads as a wave rather than a
+  // block.
+  const originEl = state.tiles.get(state.newestId) ?? state.tiles.values().next().value;
+  const ox = parseFloat(originEl?.style.left) || 0;
+  const oy = parseFloat(originEl?.style.top) || 0;
+
+  const moved = [];
+  for (const [id, el] of state.tiles) {
+    const old = before.get(id);
+    if (!old) continue;                       // brand new: it has no old place
+    const nx = parseFloat(el.style.left) || 0;
+    const ny = parseFloat(el.style.top) || 0;
+    const dx = old.left - nx;
+    const dy = old.top - ny;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;   // it did not move
+    moved.push({ el, dx, dy, dist: Math.hypot(nx - ox, ny - oy) });
+  }
+  if (!moved.length) return;
+
+  moved.sort((a, b) => a.dist - b.dist);
+  moved.forEach((m, i) => {
+    m.el.style.transform = `translate(${m.dx}px, ${m.dy}px)`;
+  });
+
+  // One forced reflow for the whole batch, not one per tile: the offsets above
+  // have to be committed before the transitions are armed, and doing that inside
+  // the loop would lay the corner out once per tile.
+  void host().offsetWidth;
+
+  moved.forEach((m, i) => {
+    m.el.style.transition = `transform ${secs}s ${curve} ${(i * stagger).toFixed(3)}s`;
+    m.el.style.transform = '';
+    // The transition is cleared once it lands, so a pulse firing later is not
+    // fighting a leftover transition on the same property — that is the bug
+    // where a tile's flash slides instead of snapping.
+    const clear = () => { m.el.style.transition = ''; };
+    m.el.addEventListener('transitionend', clear, { once: true });
+    setTimeout(clear, Math.round((secs + i * stagger) * 1000) + 120);
+  });
+}
+
+function host() { return state.host; }
 
 /** Rebuild from the player's pick list. Cheap to call every level-up. */
 export function setHiveUpgrades(picks) {
   if (!state.host) return;
+  // Which id is new SINCE THE LAST CALL — the wave radiates from it, and the
+  // slam belongs to it. Worked out before the rebuild, because after it every
+  // tile is equally new.
+  const had = new Set(state.tiles.keys());
+  const arriving = (picks ?? []).map((p) => p.id).find((id) => !had.has(id));
+  state.newestId = arriving ?? null;
   // Kept BEFORE the early return, so a layout change mid-run has something to
   // rebuild from even when the held set has not moved since the last call —
   // which is the usual case, since cycling layouts is something you do while
@@ -363,6 +456,63 @@ export function setHiveUpgrades(picks) {
   if (sig === state.held) return;
   state.held = sig;
   rebuild(held);
+}
+
+// WHERE A TILE ACTUALLY IS, so the card can be flown to it.
+//
+// MEASURED, never predicted. The alternative is recomputing the lattice from
+// CONFIG a second time in the caller — which means two implementations of the
+// packing that have to agree forever, and the failure is a card that lands next
+// to its tile instead of on it. Reading the box back off the element is one
+// source of truth and it is correct by construction, including while the corner
+// is mid-relayout because a stack just changed the count.
+//
+// Returns null when there is no tile: the hive is switched off, or the pick
+// somehow isn't held. Callers treat that as "no flight".
+export function hiveTileRect(id) {
+  const el = state.tiles.get(id);
+  if (!el || !state.root || state.root.classList.contains('sv-hidden')) return null;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 ? r : null;
+}
+
+/**
+ * Hide a tile while something else stands in for it.
+ *
+ * `visibility`, not `display`: the tile has to keep its box so the corner does
+ * not reflow the moment a flight starts and re-land every other tile a few
+ * pixels over — which would make the destination this returns stale before the
+ * card got there.
+ */
+export function setTileVisible(id, on) {
+  const el = state.tiles.get(id);
+  if (el) el.style.visibility = on ? '' : 'hidden';
+}
+
+/**
+ * The transform that carries one square box exactly onto another.
+ *
+ * Pulled out as a function of two rectangles so it can be checked with real
+ * numbers instead of eyeballed: in jsdom every element measures zero, so a test
+ * that drove the DOM could only ever confirm that nothing moved.
+ *
+ * WITH transform-origin AT 0 0 this is exact rather than approximate. The scale
+ * pins the top-left corner and grows the box from there, so translating that one
+ * corner onto the destination's corner and scaling by the size ratio puts every
+ * other point where it belongs — and because a card and a tile are both SQUARE
+ * and clipped on the same hexagon vertices, the two hexagons coincide too. With
+ * a centred origin the scale pulls the box back toward its own middle and the
+ * landing misses by half the difference in size, which looks like a near miss
+ * rather than like a bug.
+ */
+export function flyTransform(from, to) {
+  const scale = to.width / from.width;
+  return {
+    scale,
+    dx: to.left - from.left,
+    dy: to.top - from.top,
+    css: `translate(${to.left - from.left}px, ${to.top - from.top}px) scale(${scale})`,
+  };
 }
 
 /** Flash the tile for one upgrade. Safe to call for an upgrade not held. */
@@ -376,6 +526,60 @@ export function pulseHive(id) {
   el.classList.remove('sv-hive-firing');
   void el.offsetWidth;
   el.classList.add('sv-hive-firing');
+}
+
+/**
+ * The new tile hits, and the corner feels it.
+ *
+ * Two beats, in order, because they mean different things: the SLAM is the tile
+ * arriving under its own weight, and the RIPPLE is the rest of the hive
+ * registering it. Fired together they read as the whole panel flashing, which
+ * says nothing about which upgrade was just taken — the sequence is the message.
+ *
+ * The ripple is ordered by distance from the newcomer, not by index, so it
+ * spreads outward as a wave rather than sweeping in whatever order the tiles
+ * happen to sit in the map.
+ */
+export function slamAndRipple(id) {
+  const el = state.tiles.get(id);
+  if (!el) return;
+  const cfg = CONFIG.upgradeHive?.ripple ?? {};
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+    pulseHive(id);
+    return;
+  }
+
+  el.classList.remove('sv-hive-arriving');
+  void el.offsetWidth;                     // restart it if one is already running
+  el.classList.add('sv-hive-arriving');
+  el.addEventListener('animationend', () => el.classList.remove('sv-hive-arriving'), { once: true });
+
+  if (cfg.enabled === false) return;
+
+  const ox = parseFloat(el.style.left) || 0;
+  const oy = parseFloat(el.style.top) || 0;
+  // ms per pixel of distance — how fast the wave crosses the corner. Slower
+  // than it sounds: a 250px hive at 0.9 takes about a fifth of a second to
+  // cross, which is the difference between a wave and everything at once.
+  const perPx = cfg.msPerPx ?? 0.9;
+  const delay = cfg.delay ?? 90;           // after the slam starts, not with it
+
+  const others = [];
+  for (const [otherId, other] of state.tiles) {
+    if (otherId === id) continue;
+    const d = Math.hypot((parseFloat(other.style.left) || 0) - ox,
+                         (parseFloat(other.style.top) || 0) - oy);
+    others.push({ other, d });
+  }
+  for (const { other, d } of others) {
+    setTimeout(() => {
+      other.classList.remove('sv-hive-rippling');
+      void other.offsetWidth;
+      other.classList.add('sv-hive-rippling');
+      other.addEventListener('animationend',
+        () => other.classList.remove('sv-hive-rippling'), { once: true });
+    }, delay + d * perPx);
+  }
 }
 
 export function setHiveLayout(layout) {

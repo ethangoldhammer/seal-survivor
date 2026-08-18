@@ -1,3 +1,18 @@
+#!/usr/bin/env node
+// ---------------------------------------------------------------------------
+// npm run test:meter
+//
+// The boost meter — the pips under the seal, and the chain economy behind
+// them. Every claim here is about a COUNT that has to come out whole: how many
+// mouthfuls fill the bar, how many pips a chain link adds, what a blue orb is
+// worth. A meter that is a tenth of a pip out looks perfect and pays wrong.
+//
+// The pip count is not a constant anywhere — it is derived from the refill per
+// mouthful, so changing what a mouthful is worth silently changes how many
+// segments the bar draws. That is the thing this file pins down: the derived
+// count, the boundaries where a pip is booked, the floor it drains on, and the
+// two ways a part-pip could round itself up into a whole one.
+// ---------------------------------------------------------------------------
 import './dom-stub.mjs';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
@@ -10,6 +25,7 @@ import {
   strikeState, resetStrike, feedChum, updateStrike, restoreCharge,
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
   chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips, cancelDash,
+  updateCharge, perfectCrossed,
 } from '../path/src/systems/strike.js';
 import { magnetRadius, magnetSpeed, magnetDistance, magnetState } from '../path/src/systems/chumMagnet.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
@@ -441,6 +457,78 @@ check('a shark (r 1.2) is not', !(1.2 < cull.maxRadius));
 // enough to eat or big enough to paint, never both and never neither.
 check('the cull line matches the mark line',
   cull.maxRadius === CONFIG.strike.mark.minRadius);
+
+// ============================================================================
+// THE PERFECT CHARGE — the wind-up fully banked.
+//
+// A LATCH AND AN EDGE, and the difference between them is the whole section.
+// `pending` clamps at 1 and then sits there for as long as the button is held,
+// so anything that asks "is it full?" fires every frame of a long hold — which
+// is a sound and a rumble per frame at the top of every wind-up. The latch is
+// what a payoff will read (it describes the strike that is LOADED, not the
+// frame it loaded on) and the edge is what the one-shots ride.
+//
+// Nothing in the dash reads it yet, deliberately: the tell ships first so the
+// timing is familiar before it starts paying. What is pinned here is the
+// bookkeeping, because that is the part a later mechanic will be built on.
+// ============================================================================
+
+console.log('\nTHE PERFECT CHARGE LATCHES ONCE, AND CLEARS WHEN IT IS SPENT');
+resetStrike();
+const perfectAt = CONFIG.strike.charge.perfectAt ?? 1;
+check('a fresh run has no perfect charge banked', strikeState.perfect === false);
+check('...and no edge waiting to be consumed', perfectCrossed() === false);
+
+// Hold from a full bar. `time` seconds of holding banks exactly one bar.
+let crossings = 0;
+let held = 0;
+while (held < 240 && strikeState.pending < perfectAt - 1e-9) {
+  updateCharge(1 / 60, true, stats());
+  if (perfectCrossed()) crossings++;
+  held++;
+}
+check('holding a full bar reaches a perfect charge', strikeState.perfect === true);
+check(`  ...in about the ${CONFIG.strike.charge.time}s the bar is worth`,
+  Math.abs(held / 60 - CONFIG.strike.charge.time * perfectAt) < 0.05,
+  `${(held / 60).toFixed(2)}s`);
+check('  ...announced exactly once', crossings === 1, `${crossings} crossing(s)`);
+
+const popTime = CONFIG.strike.charge.perfectFlashTime ?? 0.5;
+check('  ...and the pop is lit for the ring to draw', strikeState.perfectFlash > 0,
+  `${strikeState.perfectFlash.toFixed(2)}s of ${popTime}s`);
+
+// The part a level test would miss entirely.
+for (let i = 0; i < 60; i++) {
+  updateCharge(1 / 60, true, stats());
+  if (perfectCrossed()) crossings++;
+}
+check('a second of holding past it announces nothing more', crossings === 1, `${crossings} crossing(s)`);
+check('  ...and the latch is still set', strikeState.perfect === true);
+// The pop is an ANNOUNCEMENT, not a state: it has to be over while the latch
+// it announced is still true, or a held wind-up sits there flashing.
+check('  ...while the pop it fired has long since rung out',
+  strikeState.perfectFlash === 0, `${strikeState.perfectFlash.toFixed(2)}s left`);
+
+// Spending it. The dash keeps what it was bought with; the latch does not.
+const fired = tryStrike({ x: 1, y: 0 }, stats());
+check('the release fires', fired === true);
+check('  ...stamped as a perfect strike, for whatever comes to read it',
+  strikeState.perfectStrike === true);
+check('  ...and the latch is clear, so the next hold earns its own',
+  strikeState.perfect === false);
+cancelDash();
+
+// A perfect charge that could not be spent would be a tell for a thing the
+// player is not allowed to do. The two thresholds are set independently, in
+// two different files — `perfectAt` in weapons.csv, `minFire` in config.js —
+// so nothing but this stops them being tuned past each other.
+check('a perfect charge is always enough to fire',
+  perfectAt >= CONFIG.strike.charge.minFire,
+  `perfectAt ${perfectAt} vs minFire ${CONFIG.strike.charge.minFire}`);
+
+resetStrike();
+check('a reset clears the latch, the stamp and the pop',
+  strikeState.perfect === false && strikeState.perfectStrike === false && strikeState.perfectFlash === 0);
 
 // ============================================================================
 // THE PIPS PLOP UP ONE AT A TIME — even when a whole bar lands on one frame.

@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Seal Survivor — Workbench</title>
+<style>
+  :root {
+    --bg: #0b0d13; --panel: #11141c; --panel2: #161a24; --line: #232838;
+    --ink: #e8ecf3; --dim: #8b93a3; --faint: #5b6274;
+    --go: #6bff8f; --warn: #ffd36b; --stop: #ff6b6b; --link: #7ad7ff; --acc: #b78bff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink);
+         font: 13px/1.5 'Inter', -apple-system, system-ui, sans-serif;
+         padding-bottom: 42vh; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+  /* ---- top bar ---- */
+  header { position: sticky; top: 0; z-index: 20; background: rgba(11,13,19,0.94);
+           backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+           padding: 12px 20px; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; }
+  h1 span { color: var(--faint); font-weight: 400; }
+  .here { font-size: 11px; color: var(--faint); font-family: ui-monospace, Menlo, monospace; }
+  #q { flex: 1; min-width: 180px; max-width: 340px; background: var(--panel2);
+       border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+       color: var(--ink); font-size: 12px; }
+  #q:focus { outline: 1px solid var(--acc); }
+  .tabs { display: flex; gap: 2px; margin-left: auto; }
+  .tabs button { padding: 5px 11px; border-radius: 6px; font-size: 11px; color: var(--dim);
+                 letter-spacing: .06em; text-transform: uppercase; }
+  .tabs button[data-on] { background: var(--panel2); color: var(--ink); }
+
+  main { padding: 20px; max-width: 1180px; }
+  section { margin-bottom: 30px; }
+  h2 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim);
+       font-weight: 600; margin-bottom: 4px; }
+  .lede { font-size: 11.5px; color: var(--faint); margin-bottom: 12px; max-width: 62ch; }
+
+  /* ---- rows ---- */
+  .row { display: flex; gap: 12px; align-items: baseline; padding: 9px 12px;
+         border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+         margin-bottom: 6px; }
+  .row .name { font-family: ui-monospace, Menlo, monospace; font-size: 12px; min-width: 168px; }
+  .row .blurb { color: var(--dim); flex: 1; min-width: 0; font-size: 12px; }
+  .row .acts { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .row.hit { border-color: var(--acc); }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; }
+  .dot.keep { background: var(--go); box-shadow: 0 0 8px var(--go); }
+  .dot.stomp { background: var(--stop); box-shadow: 0 0 8px var(--stop); }
+  .dot.stale { background: var(--warn); }
+  .dot.unknown, .dot.down { background: var(--faint); }
+
+  .btn { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
+         background: var(--panel2); font-size: 11px; color: var(--ink); white-space: nowrap; }
+  .btn:hover { border-color: var(--acc); }
+  .btn.go { color: var(--go); }
+  .btn.danger { color: var(--stop); }
+  .btn:disabled { color: var(--faint); cursor: not-allowed; border-color: var(--line); }
+  .btn:disabled:hover { border-color: var(--line); }
+
+  .chip { font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+          padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--faint); }
+  .chip.writes { color: var(--warn); border-color: #4a3f1e; }
+  .chip.publish { color: var(--stop); border-color: #4a2222; }
+  .chip.serves { color: var(--link); border-color: #1e3a4a; }
+  .chip.running { color: var(--acc); border-color: #382a4a; }
+  .chip.passed { color: var(--go); border-color: #1e4a2a; }
+  .chip.failed { color: var(--stop); border-color: #4a2222; }
+
+  /* ---- cards ---- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 8px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+          padding: 11px 13px; display: flex; flex-direction: column; gap: 5px; }
+  .card.hit { border-color: var(--acc); }
+  .card .t { font-weight: 600; font-size: 12.5px; }
+  .card .b { color: var(--dim); font-size: 11.5px; flex: 1; }
+  .card .f { display: flex; gap: 6px; align-items: center; }
+  .card .path { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--faint);
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  details { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+            margin-bottom: 8px; overflow: hidden; }
+  summary { padding: 9px 13px; cursor: pointer; font-size: 11px; letter-spacing: .1em;
+            text-transform: uppercase; color: var(--dim); font-weight: 600; }
+  summary::marker { color: var(--faint); }
+  summary b { color: var(--ink); }
+  details .body { padding: 0 10px 10px; }
+  details .row { background: var(--panel2); }
+
+  .empty { color: var(--faint); font-size: 12px; padding: 10px 12px;
+           border: 1px dashed var(--line); border-radius: 8px; }
+
+  /* ---- output drawer ---- */
+  #drawer { position: fixed; left: 0; right: 0; bottom: 0; height: 40vh; z-index: 30;
+            background: #080a0f; border-top: 1px solid var(--line);
+            display: flex; flex-direction: column; transition: transform .18s ease; }
+  #drawer.hid { transform: translateY(calc(100% - 34px)); }
+  #dbar { display: flex; gap: 8px; align-items: center; padding: 7px 14px;
+          border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  #dbar .who { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  #runsel { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+            color: var(--ink); font-size: 11px; padding: 3px 6px; max-width: 260px; }
+  #out { flex: 1; overflow: auto; padding: 10px 14px; white-space: pre-wrap;
+         font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; line-height: 1.45;
+         color: #c6cddb; }
+  #out .fail { color: var(--stop); }
+  #out .ok { color: var(--go); }
+  #out .hd { color: var(--acc); }
+  .links { display: flex; gap: 8px; margin-left: auto; align-items: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Seal Survivor <span>— Workbench</span></h1>
+  <span class="here">localhost:<b id="hubport">5178</b></span>
+  <input id="q" placeholder="filter — tool, script, or what it does" autocomplete="off" />
+  <nav class="tabs" id="tabs"></nav>
+</header>
+
+<main>
+  <section id="s-servers">
+    <h2>Servers</h2>
+    <p class="lede">What is listening right now. The game's port moves every time it restarts,
+      so every link below is resolved against the live socket table, not remembered.</p>
+    <div id="servers"></div>
+  </section>
+
+  <section id="s-pages">
+    <h2>Pages</h2>
+    <p class="lede">Browser tools. The ones marked <i>needs the game server</i> are served by
+      <code>npm run dev</code>; the rest bring their own.</p>
+    <div id="pages" class="cards"></div>
+  </section>
+
+  <section id="s-commands">
+    <h2>Commands</h2>
+    <p class="lede">Every script in package.json, described by the header comment of the file it
+      runs. Run streams the output below. Publish scripts have no button on purpose.</p>
+    <div id="commands"></div>
+  </section>
+</main>
+
+<div id="drawer" class="hid">
+  <div id="dbar">
+    <button class="btn" id="dtoggle">output</button>
+    <select id="runsel"></select>
+    <span class="who" id="dstatus"></span>
+    <span class="links" id="dlinks"></span>
+    <button class="btn danger" id="dstop">stop</button>
+  </div>
+  <div id="out"></div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+const api = (p, body) => fetch(p, body ? { method: 'POST', body: JSON.stringify(body) } : undefined).then((r) => r.json());
+
+let CAT = { commands: [], pages: [], groups: [] };
+let ST = { origins: {}, servers: [], runs: [], missing: [] };
+let filter = '';
+let watching = null;   // run id shown in the drawer
+let seen = 0;          // lines already rendered for `watching`
+
+const age = (s) => s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? (s / 3600).toFixed(1) + 'h' : (s / 86400).toFixed(1) + 'd';
+const matches = (...bits) => !filter || bits.join(' ').toLowerCase().includes(filter);
+
+// --- servers ---------------------------------------------------------------
+function drawServers() {
+  const box = $('#servers');
+  box.textContent = '';
+
+  // The ones that should be up and are not come FIRST, as rows you can act on.
+  // A panel that only lists what is running cannot tell you what is missing,
+  // and a dead CSV editor looks exactly like one you never started.
+  const wants = { dev: ['the game', 'npm run dev'], csv: ['CSV editor', 'npm run csv'] };
+  for (const role of ST.missing) {
+    const [what, cmd] = wants[role];
+    const row = el('div', 'row');
+    row.append(el('span', 'dot down'));
+    row.append(el('span', 'name', what));
+    row.append(el('span', 'blurb', 'not running'));
+    const acts = el('div', 'acts');
+    const b = el('button', 'btn go', 'start');
+    b.onclick = () => run(role);
+    acts.append(b, copyBtn(cmd));
+    row.append(acts);
+    box.append(row);
+  }
+
+  for (const s of ST.servers) {
+    const row = el('div', 'row');
+    row.append(el('span', 'dot ' + s.verdict));
+    row.append(el('span', 'name', s.label));
+    const b = el('span', 'blurb');
+    b.append(el('span', null, s.note));
+    const meta = el('span', null, ' — port ' + s.ports.join(', ') + ' · up ' + age(s.age) + ' · ' + s.owner);
+    meta.style.color = 'var(--faint)';
+    b.append(meta);
+    row.append(b);
+
+    const acts = el('div', 'acts');
+    const open = el('a', 'btn', 'open');
+    open.href = 'http://localhost:' + s.ports[0] + (s.role === 'atlas' ? '/render.html' : '/');
+    open.target = '_blank';
+    acts.append(open);
+    // `unknown` is something listening that this repo did not start. The
+    // servers panel refuses to touch those on `clean` for the same reason:
+    // guessing is how you kill someone's unrelated work.
+    if (s.verdict !== 'keep' && s.verdict !== 'unknown') {
+      const k = el('button', 'btn danger', 'stop');
+      k.onclick = async () => { await api('/api/stop-server', { pid: s.pid }); poll(); };
+      acts.append(k);
+    }
+    row.append(acts);
+    box.append(row);
+  }
+  if (!ST.servers.length && !ST.missing.length) box.append(el('div', 'empty', 'nothing listening'));
+}
+
+// --- pages -----------------------------------------------------------------
+function drawPages() {
+  const box = $('#pages');
+  box.textContent = '';
+  let shown = 0;
+
+  for (const p of CAT.pages) {
+    if (!matches(p.title, p.blurb || '', p.file)) continue;
+    shown++;
+    const card = el('div', 'card' + (filter ? ' hit' : ''));
+    card.append(el('div', 't', p.title));
+    card.append(el('div', 'b', p.blurb || ''));
+
+    const foot = el('div', 'f');
+    if (p.on === 'dev' || p.on === 'own') {
+      const origin = p.on === 'dev' ? ST.origins.dev
+        : p.server === 'csv' ? ST.origins.csv
+        : ST.origins.atlas;
+      if (origin) {
+        const a = el('a', 'btn go', 'open');
+        a.href = origin + p.path;
+        a.target = '_blank';
+        foot.append(a);
+      } else if (p.on === 'dev') {
+        const b = el('button', 'btn', 'start the game server');
+        b.onclick = () => run('dev');
+        foot.append(b);
+      } else if (p.script) {
+        // The server that would host this page is not up. Start it by name —
+        // the hub only ever runs package.json scripts, which is why anything
+        // it offers to start has to be one.
+        const b = el('button', 'btn', p.server === 'csv' ? 'start the editor' : 'start the server');
+        b.onclick = () => run(p.script);
+        foot.append(b);
+      } else {
+        foot.append(copyBtn(p.start || p.file));
+      }
+    } else if (p.on === 'built') {
+      // A look page is a vite build, so there is no URL until something builds
+      // and serves it. Run the script; the link appears when the server it
+      // starts prints its own address.
+      const live = ST.runs.find((r) => r.name === p.script && r.status === 'running' && r.urls.length);
+      if (live) {
+        const a = el('a', 'btn go', 'open');
+        a.href = live.urls[0];
+        a.target = '_blank';
+        foot.append(a);
+      } else {
+        const b = el('button', 'btn', 'build & serve');
+        b.onclick = () => run(p.script);
+        foot.append(b);
+      }
+      foot.append(el('span', 'chip serves', p.script));
+    }
+    foot.append(el('span', 'path', p.file));
+    card.append(foot);
+    box.append(card);
+  }
+  $('#s-pages').style.display = shown ? '' : 'none';
+}
+
+// --- commands --------------------------------------------------------------
+function drawCommands() {
+  const box = $('#commands');
+  const open = new Set([...box.querySelectorAll('details[open]')].map((d) => d.dataset.g));
+  box.textContent = '';
+  let shown = 0;
+
+  for (const group of CAT.groups) {
+    // Servers are NOT skipped here even though the section above shows them
+    // live. That section answers "what is up"; this list answers "what is
+    // there", and the moment it stops being every script in package.json it
+    // stops being trustworthy.
+    const items = CAT.commands.filter((c) => c.group === group && matches(c.name, c.blurb, c.file));
+    if (!items.length) continue;
+    shown += items.length;
+
+    const d = el('details');
+    d.dataset.g = group;
+    d.open = filter ? true : open.has(group) || group === 'Audits';
+    const sum = el('summary');
+    sum.append(el('b', null, group));
+    sum.append(el('span', null, '  ' + items.length));
+    d.append(sum);
+
+    const body = el('div', 'body');
+    for (const c of items) body.append(commandRow(c));
+    d.append(body);
+    box.append(d);
+  }
+  $('#s-commands').style.display = shown ? '' : 'none';
+}
+
+function commandRow(c) {
+  const row = el('div', 'row' + (filter ? ' hit' : ''));
+  row.append(el('span', 'name', c.name));
+  row.append(el('span', 'blurb', c.blurb || c.command));
+
+  const acts = el('div', 'acts');
+  const live = ST.runs.find((r) => r.name === c.name);
+  if (live) {
+    const chip = el('span', 'chip ' + live.status, live.status === 'running' ? 'running' : live.status);
+    chip.style.cursor = 'pointer';
+    chip.onclick = () => watch(live.id);
+    acts.append(chip);
+  }
+  if (c.risk !== 'check') acts.append(el('span', 'chip ' + c.risk, c.risk));
+
+  if (c.risk === 'publish') {
+    // No button, by design. See the RISK note in hub-catalogue.mjs.
+    acts.append(copyBtn('npm run ' + c.name));
+  } else {
+    const b = el('button', 'btn' + (c.risk === 'check' ? ' go' : ''), c.risk === 'serves' ? 'start' : 'run');
+    b.onclick = () => run(c.name);
+    acts.append(b, copyBtn('npm run ' + c.name));
+  }
+  row.append(acts);
+  return row;
+}
+
+function copyBtn(text) {
+  const b = el('button', 'btn', 'copy');
+  b.title = text;
+  b.onclick = () => {
+    navigator.clipboard.writeText(text);
+    b.textContent = 'copied';
+    setTimeout(() => { b.textContent = 'copy'; }, 1100);
+  };
+  return b;
+}
+
+// --- running ---------------------------------------------------------------
+async function run(name) {
+  const r = await api('/api/run', { name });
+  if (r.error) { alert(r.error); return; }
+  watch(r.id);
+  poll();
+}
+
+function watch(id) {
+  watching = id;
+  seen = 0;
+  $('#out').textContent = '';
+  $('#drawer').classList.remove('hid');
+  pumpLog();
+}
+
+// Output arrives as a tail, so `seen` counts what is on screen and the server
+// hands back everything past it. A run whose ring buffer has wrapped simply
+// resets — the tail is what you are reading anyway.
+async function pumpLog() {
+  if (!watching) return;
+  const r = await api('/api/log?id=' + watching + '&since=' + seen);
+  if (r.error) return;
+  if (r.total < seen) { seen = 0; $('#out').textContent = ''; }
+
+  const out = $('#out');
+  const stuck = out.scrollHeight - out.scrollTop - out.clientHeight < 60;
+  for (const line of r.lines) {
+    const cls = /\bFAIL|✗|Error|error:/.test(line) ? 'fail'
+      : /\bok\b|✓|PASS/.test(line) ? 'ok'
+      : /^[A-Z][A-Z .,'—-]{6,}$/.test(line.trim()) ? 'hd' : '';
+    const n = el('div', cls, line || ' ');
+    out.append(n);
+  }
+  seen = r.total;
+  if (stuck) out.scrollTop = out.scrollHeight;
+
+  $('#dstatus').textContent = r.name + ' · ' + r.status + (r.exit != null ? ' (' + r.exit + ')' : '');
+  const links = $('#dlinks');
+  links.textContent = '';
+  for (const u of r.urls) {
+    const a = el('a', null, u.replace('http://localhost:', ':'));
+    a.href = u; a.target = '_blank';
+    links.append(a);
+  }
+  $('#dstop').disabled = r.status !== 'running';
+}
+
+function drawRunSelect() {
+  const sel = $('#runsel');
+  const was = sel.value;
+  sel.textContent = '';
+  for (const r of ST.runs) {
+    const o = el('option', null, r.name + ' — ' + r.status);
+    o.value = r.id;
+    sel.append(o);
+  }
+  sel.value = watching != null ? String(watching) : was;
+}
+
+// --- polling ---------------------------------------------------------------
+// One state poll for everything. Two seconds is idle-cheap and still feels
+// immediate next to a process that takes at least that long to say anything.
+async function poll() {
+  ST = await api('/api/state');
+  $('#hubport').textContent = ST.port;
+  drawServers();
+  drawPages();
+  drawCommands();
+  drawRunSelect();
+}
+
+function draw() { drawServers(); drawPages(); drawCommands(); }
+
+$('#q').oninput = (e) => { filter = e.target.value.trim().toLowerCase(); draw(); };
+document.addEventListener('keydown', (e) => {
+  if (e.key === '/' && document.activeElement !== $('#q')) { e.preventDefault(); $('#q').focus(); }
+  if (e.key === 'Escape') { $('#q').value = ''; filter = ''; draw(); $('#q').blur(); }
+});
+$('#dtoggle').onclick = () => $('#drawer').classList.toggle('hid');
+$('#runsel').onchange = (e) => watch(Number(e.target.value));
+$('#dstop').onclick = async () => { await api('/api/stop-run', { id: watching }); pumpLog(); poll(); };
+
+// Jump links, built from the sections that exist.
+for (const [id, label] of [['s-servers', 'servers'], ['s-pages', 'pages'], ['s-commands', 'commands']]) {
+  const b = el('button', null, label);
+  b.onclick = () => document.getElementById(id).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#tabs').append(b);
+}
+
+(async () => {
+  CAT = await api('/api/catalogue');
+  await poll();
+  setInterval(poll, 2000);
+  setInterval(() => { if (watching) pumpLog(); }, 700);
+})();
+</script>
+</body>
+</html>

@@ -67,6 +67,29 @@ export function mountRiveSplash({
   // `tStart`, which is the only thing standing between a bad export and an
   // unstartable game.
   startFallback = false,
+  // What the wrapper paints BEHIND the artboard, which is fitted `Contain` and
+  // so never covers the whole screen on its own.
+  //
+  // Opaque is the value this shipped with and still the default, because for
+  // most of the game's life there was nothing behind the splash worth seeing.
+  // There is now: the title screen holds the seal up against the lens and lets
+  // the player move it (systems/titleSeal.js), and that is drawn on the game
+  // canvas underneath this wrapper. Anything with alpha in it reveals that.
+  //
+  // Passing a transparent value here is NOT on its own enough if the artboard
+  // carries a full-bleed background rectangle of its own — that is a change in
+  // the .riv, not one this option can make.
+  background = '#05070d',
+  // Every pointer move over the splash, as client coordinates plus the pointer
+  // type. The wrapper is `pointer-events: all` and covers the canvas, so the
+  // game's own mousemove listener — which is ON the canvas — receives nothing
+  // at all while this is up. Without this the seal underneath aims at whatever
+  // the cursor was doing before the page finished loading.
+  //
+  // A callback rather than a call into input.js for the reason at the top of
+  // this file: this module knows nothing about the rest of the game, and a test
+  // page hands in nothing.
+  onPointer,
   // A REAL USER GESTURE, reported the moment one lands on the splash — before
   // anything decides what it meant.
   //
@@ -95,7 +118,7 @@ export function mountRiveSplash({
   // game, and that container is pointer-events:none so the 3D scene below it
   // stays clickable.
   wrap.style.cssText =
-    'position:absolute; inset:0; pointer-events:all; z-index:20; background:#05070d;';
+    `position:absolute; inset:0; pointer-events:all; z-index:20; background:${background};`;
 
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'display:block; width:100%; height:100%;';
@@ -256,7 +279,16 @@ export function mountRiveSplash({
     writeName(clean);
   };
 
+  // MOUSE ONLY, and the filter is the important half. Forwarding a touchmove
+  // here would leave a phone convinced it had a mouse — see feedMouse in
+  // input.js for what that costs for the rest of the run.
+  const onSplashMove = (e) => {
+    if (e.pointerType && e.pointerType !== 'mouse') return;
+    onPointer?.(e.clientX, e.clientY);
+  };
+
   const inputListeners = [
+    [wrap, 'pointermove', onSplashMove],
     [wrap, 'pointerup', onSplashPointer],
     [window, 'keydown', dismiss],
     [nameInput, 'input', onNameInput],

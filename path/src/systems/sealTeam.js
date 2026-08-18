@@ -271,8 +271,13 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {})
 
   // After resize, so a seal earned this frame is in the squad to be armed.
   if (celebrationState.active && celebrationState.seq !== armedSeq) {
+    // Consumed either way, so a performance the squad is sitting out cannot
+    // stay pending and arm on some later frame. That is not hypothetical: the
+    // level-up salute runs with the run PAUSED, which is to say with this
+    // whole function not being called, so without consuming the seq here the
+    // squad would arm on the frame the card was picked and clap at nothing.
     armedSeq = celebrationState.seq;
-    armCelebration();
+    if (celebrationState.escorts !== false) armCelebration();
   }
 
   const cfg = CONFIG.sealTeam;

@@ -66,6 +66,24 @@ export const strikeState = {
   charging: false, // holding AND there is fuel left to burn
   power: 0,        // the banked power the CURRENT dash was launched with, 0..1
   flash: 0,        // >0 = the bar is flashing, just spent (see strikeRing.js)
+  // THE PERFECT CHARGE — the wind-up fully banked, `perfectAt` of the bar.
+  //
+  // Today this is a READOUT and nothing else: the meter's core pops on the
+  // frame it lands (systems/strikeRing.js) so the moment has a shape the
+  // player can learn, and `perfectCrossed()` below hands the edge to main.js
+  // for the sound and the shake. NOTHING IN THE DASH READS IT YET — power is
+  // still a continuous 0..1 and a perfect strike is exactly as strong as the
+  // arithmetic says. That is deliberate: the tell ships first so the timing is
+  // already familiar by the time it buys anything.
+  //
+  // WHERE THE MECHANIC GOES. `perfect` is a latch that survives until the
+  // power is spent or thrown away, so a payoff can read it in tryStrike (a
+  // damage or reach bonus, a free link, a wider gulp) without caring which
+  // frame it landed on. `perfectAt` is in weapons.csv because the moment it
+  // pays for anything it is a balance number, not a look.
+  perfect: false,  // the wind-up reached a full bank, and hasn't been spent
+  perfectFlash: 0, // seconds left of the pop that announced it
+  perfectStrike: false, // ...and whether the dash IN FLIGHT was bought with one
   active: false,
   dashTimeLeft: 0,
   dashDuration: 0, // what this dash's length was set to, for the i-frames
@@ -294,7 +312,9 @@ export function resetStrike() {
   // Starts full: the run opens with one strike ready rather than a second of
   // holding before anything can happen.
   strikeState.charge = 1;
-  strikeState.pending = 0;
+  clearPending();
+  strikeState.perfectFlash = 0;
+  strikeState.perfectStrike = false;
   strikeState.charging = false;
   strikeState.power = 0;
   strikeState.flash = 0;
@@ -329,6 +349,13 @@ export function resetStrike() {
  * fraction under `minFire` and pressing again continues the same wind-up
  * instead of throwing the fuel already spent on it away.
  */
+// Consumed once by main.js on the frame it happens, exactly like chargeCrossed
+// in systems/chargeSkin.js: the sound, the shake and the rumble are one-shots
+// and `perfect` is a level, so something has to carry the edge between them.
+// The ring reads `perfectFlash` instead and needs no edge — it is drawing a
+// decay, not firing an event.
+let perfectEdge = false;
+
 export function updateCharge(dt, held, stats) {
   if (!CONFIG.strike.enabled) return;
 
@@ -339,7 +366,40 @@ export function updateCharge(dt, held, stats) {
     strikeState.charge -= burn;
     strikeState.pending = Math.min(1, strikeState.pending + burn);
   }
+
+  // THE PERFECT CHARGE LANDING. An EDGE, latched — `pending` clamps at 1 and
+  // then sits there for as long as the button is held, so a test of the level
+  // ("is it full?") would fire this every frame of a long hold. The latch is
+  // cleared where the power leaves (tryStrike and cancelCharge below), which
+  // is also what makes it readable as a mechanic later: perfect describes the
+  // strike that is loaded, not the frame it loaded on.
+  const perfectAt = Math.min(1, CONFIG.strike.charge.perfectAt ?? 1);
+  if (!strikeState.perfect && strikeState.pending >= perfectAt - 1e-6) {
+    strikeState.perfect = true;
+    strikeState.perfectFlash = CONFIG.strike.charge.perfectFlashTime ?? 0.5;
+    perfectEdge = true;
+  }
+  if (strikeState.perfectFlash > 0) strikeState.perfectFlash = Math.max(0, strikeState.perfectFlash - dt);
+
   if (strikeState.flash > 0) strikeState.flash = Math.max(0, strikeState.flash - dt);
+}
+
+/** True once, on the frame the wind-up reached a perfect charge. */
+export function perfectCrossed() {
+  if (!perfectEdge) return false;
+  perfectEdge = false;
+  return true;
+}
+
+/**
+ * Throw away a wind-up that will never be spent — a death, a pause that ate
+ * the release, a run ending. Clears the latch as well as the power, so the
+ * next hold has to earn its own perfect.
+ */
+function clearPending() {
+  strikeState.pending = 0;
+  strikeState.perfect = false;
+  perfectEdge = false;
 }
 
 /**
@@ -364,7 +424,12 @@ export function tryStrike(aimDir, stats) {
   // the whole dash, so clearing `pending` on the next line can't retroactively
   // weaken a strike already in flight.
   strikeState.power = strikeState.pending;
-  strikeState.pending = 0;
+  // `perfectStrike` is what a payoff will read — see the note on `perfect` in
+  // strikeState. Snapshotted onto the launched dash for the same reason
+  // `power` is: the latch clears on the next line, and a dash already in
+  // flight must not be able to lose what it was bought with.
+  strikeState.perfectStrike = strikeState.perfect;
+  clearPending();
   strikeState.charging = false;
   // The bar flashing as the fuel becomes a strike.
   strikeState.flash = c.flashTime ?? 0.28;

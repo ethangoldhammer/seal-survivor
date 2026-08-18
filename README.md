@@ -14,6 +14,24 @@ npm install
 npm run dev
 ```
 
+## The workbench
+
+```bash
+npm run hub
+```
+
+**<http://localhost:5178>** is one page listing every tool in this repo — the
+servers, the two dozen browser pages, and all ~135 npm scripts, each with a
+description read out of the header comment of the file it runs. Checks and
+audits run from the page and stream their output back; deploys deliberately do
+not. It also tracks where the dev server landed, which is the one thing a
+bookmark can never do (see [SERVERS.md](SERVERS.md)).
+
+Nothing in it is a hand-written list: `tools/hub-catalogue.mjs` reads
+package.json and the tool files themselves, and `npm run test:hub` fails if a
+script is added without a description, a drawer, or — for anything that
+deploys or publishes — the classification that keeps it off a button.
+
 ## Deploying
 
 The public build is **https://seal-survivor.pages.dev**, on Cloudflare Pages.

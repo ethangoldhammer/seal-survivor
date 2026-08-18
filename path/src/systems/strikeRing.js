@@ -1,42 +1,93 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { pipCount } from './strike.js';
+import { ease } from '../ease.js';
 import { playerOverlayZ } from '../entities/player.js';
 
 // ============================================================================
-// THE CHARGE METER — TWO ARCS around the ship, Sektori-style, instead of a
-// number in the corner.
+// THE CHARGE METER — a RING and a DROP around the ship, Sektori-style, instead
+// of a number in the corner.
 //
 //   OUTER, in PIPS: the FUEL. One pip is exactly one chum (see pipCount in
 //     systems/strike.js), so the bar is countable rather than continuous, and
 //     a link adding a pip is the cost escalation made visible.
-//   INNER: the BANKED POWER — what letting go right now would actually buy.
+//   THE CORE: the BANKED POWER — what letting go right now would actually buy.
+//     A blob of goo at the seal's centre that grows outward as power banks.
 //
 // WHY TWO. The two quantities move in OPPOSITE directions while you hold, and
 // the ring used to draw only the first: fuel visibly drained while the strike
 // being wound up got stronger, and the only sign of the second was an alpha
 // step on the first. One arc could not stop contradicting itself.
 //
-// WHY THE INNER ARC SITS AT 0.58 AND NOT THE OBVIOUS 0.78.
+// WHY THE SECOND ONE IS NOT AN ARC. It was, and it swept round in the same
+// direction as the fuel ring it sat inside — two concentric arcs filling the
+// same way, which is one instrument saying two different things in the same
+// words. Whichever is read first is the one that gets believed. Making the
+// core a RADIAL fill puts the two quantities on different axes: fuel goes
+// round, power comes out. Neither can be mistaken for the other, and the whole
+// state is legible from the corner of an eye that is busy aiming.
+//
+// WHY IT IS GOO. Banked power is something being gathered and held, and a
+// liquid pulled together by its own surface tension is the only shape that
+// says both at once. It is also the substance the rest of the game already
+// speaks in (CONFIG.fx.goo), so the meter reads as part of the same world
+// rather than as a HUD element that wandered onto the animal. The field here
+// is built from the identical cubic splat kernel entities/particles.js uses
+// and cut at an isoline exactly like the goo pass, with the same wet rim and
+// gradient-lit highlight — but analytically, in this one small quad, because
+// the screen-space pass needs live particles and a fullscreen draw and this is
+// a 90px instrument stuck to a moving animal.
+//
+// AND IT POPS. The frame the wind-up is fully banked (CONFIG.strike.charge
+// .perfectAt) the drop swells past its own full size, blows past the bloom
+// threshold, flings its lobes outward and throws a shock ring through the fuel
+// ring. That moment is a thing the player will be asked to hit deliberately —
+// the tell ships before the mechanic, so the timing is already familiar when
+// it starts paying. See the note on `perfect` in systems/strike.js.
+//
+// WHY THE CORE STOPS AT 0.58 AND NOT THE OBVIOUS 0.78.
 //
 // Bloom, and the numbers are tighter than they look. The ring is
 // `radius` 1.9 world units against a 44-unit view (arena.viewHeight 52 at the
 // cinematic rig's base zoom 1.18), which is 24.5 px per world unit — so the
 // whole meter is 93 px across on a 1080p screen and a band is under 4 px. The
 // bright pass is built at CONFIG.bloom.divisor 4 with radius 3, spreading
-// roughly 14 px at full res. Two bands 10 px apart (which is what 0.78 gives)
-// fuse into one fat smear, and the fix is radial separation, not a thinner
-// band. 0.58 buys 20 px.
+// roughly 14 px at full res. Two features 10 px apart (which is what 0.78
+// gives) fuse into one fat smear, and the fix is radial separation, not a
+// thinner band. 0.58 buys 20 px.
 //
-// The inner arc is also kept deliberately DIMMER than the outer one for the
-// same reason: what does not pass CONFIG.bloom.threshold does not get a halo,
-// and a banked-power arc that never blooms cannot bleed into the fuel it sits
-// inside. See `innerGlowMul`.
+// The core is also kept deliberately DIMMER than the ring for the same reason:
+// what does not pass CONFIG.bloom.threshold does not get a halo, and a core
+// that never blooms cannot bleed into the fuel around it. See `innerGlowMul` —
+// and note that the perfect pop breaks that rule on purpose, for a fifth of a
+// second, which is exactly why it reads as an event.
 //
 // The whole thing hangs off `scale` and `offset` (CONFIG.strike.ring), so the
 // meter can be sized and pushed off the seal without touching `radius` — which
 // is the number the pip geometry is derived from and wants to stay put.
 // ============================================================================
+
+// HOW MUCH QUAD THERE IS OUTSIDE THE FUEL RING.
+//
+// Everything in the shader is drawn in a space where the fuel ring sits at
+// r = 1, and the quad used to stop there — a plane of exactly 2x2. Anything
+// further out was CLIPPED TO THE CORNERS, which is not a subtle failure: a
+// band at r = 1.14 exists only where the square reaches past the circle, so
+// the chain-window arc has been drawing as four corner smears rather than as
+// an arc, and the perfect charge's shock ring would leave the instrument as
+// four blobs in a square frame.
+//
+// The quad is grown instead of the radii being capped, because the radii are
+// the design and the quad is a detail. The extra area is transparent and
+// discarded on the first branch of the shader; what it costs is the rasterised
+// area of a 90px sprite, twice.
+//
+// It is a #define rather than a uniform so the two cannot disagree: the same
+// constant sizes the geometry and scales the coordinates, in one place.
+const OVERSCAN = 1.45;
+
+/** The furthest out, in fuel-ring radii, anything drawn here can reach. */
+export const RING_OVERSCAN = OVERSCAN;
 
 const vertexShader = /* glsl */ `
   varying vec2 vUv;
@@ -51,15 +102,55 @@ const vertexShader = /* glsl */ `
 // moves the whole instrument and nothing here has to know about world units.
 const fragmentShader = /* glsl */ `
   #define MAX_PIPS 16
+  #define OVERSCAN ${OVERSCAN.toFixed(4)}
   uniform float uPips;         // how many segments the fuel ring is cut into
   uniform float uPending;      // 0..1 banked power, spring-smoothed
   uniform float uArmed;        // 1 once enough power is banked to fire
   uniform float uFlash;        // 0..1 — the bar being spent, fades out
   uniform float uThickness;
   uniform float uGap;          // radians of blank between pips
-  uniform float uInnerR;       // inner arc radius, as a fraction of the outer
-  uniform float uInnerT;       // ...and its thickness, as a fraction
+  uniform float uInnerR;       // what a FULL core reaches, as a fraction of
+                               // the outer ring
   uniform float uInnerGlow;    // held under the bloom threshold on purpose
+
+  // --- THE CORE, as goo ---------------------------------------------------
+  uniform float uCore;         // 1 = draw it at all
+  uniform float uCoreK;        // kernel radius / isoline radius, computed on
+                               // the CPU from uIso so the surface lands where
+                               // the fill says it does
+  uniform float uLobes;        // satellites orbiting the core, 0..CORE_LOBES
+  uniform float uWobble;       // how far out they ride, x the fill radius
+  uniform float uLobeSize;     // ...and how big each is, x the core kernel
+  uniform float uChurn;        // radians the lobe ring has rolled
+  uniform float uBreathe;      // per-lobe size pulse, and its phase
+  uniform float uBreathePhase;
+  uniform float uIso;          // the surface, in accumulated density
+  uniform float uSoft;         // half-width of the transition
+  uniform float uBody;         // how bright the BODY of the drop is, so the
+                               // rim has room to read as a wet edge above it
+  uniform float uRim;
+  uniform float uRimWidth;
+  uniform float uSpec;
+  uniform float uSpecPower;
+  uniform float uNormal;       // how far the gradient bends the fake normal
+  uniform vec2  uLight;
+  uniform float uCorePop;      // 0..1, the perfect charge ringing out
+  uniform float uCorePopGlow;  // NOT uPopGlow — that one is the PIP pop, up in
+                               // the fuel ring's block
+  // The release, blowing the drop apart. uCoreMul empties the middle,
+  // uSpread is the radial impulse carrying the lobes out (in the same
+  // normalised units as everything else, so 1 is the fuel ring), uLobeMul
+  // shrinks each droplet as it flies and uCoreFade takes what is left off
+  // the screen.
+  uniform float uCoreMul;
+  uniform float uLobeMul;
+  uniform float uSpread;
+  uniform float uCoreFade;
+  uniform float uShockR;       // the shock ring's radius this frame...
+  uniform float uShockW;       // ...its half-width...
+  uniform float uShockGlow;    // ...and how hard it burns. 0 = not running.
+  uniform float uShockWheel;   // 1 = it wears the fuel wheel's colours, 0 = the
+                               // core's own single hue
   uniform float uChainR;       // the chain-window arc, outside the fuel ring
   uniform float uChainLeft;    // 0..1 of the window still to run, 0 = no chain
   uniform vec3  uColor;
@@ -79,6 +170,10 @@ const fragmentShader = /* glsl */ `
   varying vec2 vUv;
 
   #define TAU 6.28318530718
+  // A GLSL ES 1.00 loop needs a constant bound, so the lobe count is a
+  // ceiling here and uLobes masks the ones past it out. Seven is already
+  // more than the silhouette can show at 90px.
+  #define CORE_LOBES 7
 
   // Distance-to-band, returned as a soft mask. One helper for all three rings
   // so they antialias identically instead of each rolling their own smoothstep.
@@ -86,8 +181,44 @@ const fragmentShader = /* glsl */ `
     return 1.0 - smoothstep(halfWidth * 0.55, halfWidth * 1.45, abs(r - centre));
   }
 
+  // THE COLOUR THE FUEL WHEEL CARRIES at a given fraction round it, and the
+  // one place that ramp is written down. The pips quote it per SEGMENT and the
+  // shock ring quotes it CONTINUOUSLY, and the two must not be able to drift
+  // apart — a ring leaving the instrument in colours the instrument is not
+  // wearing reads as a second effect that happens to be circular.
+  //
+  // lastPip blends in the colour the final segment is pinned to, so "one
+  // mouthful from a strike" keeps its own hue wherever it is quoted.
+  vec3 wheelColor(float t, float lastPip) {
+    return mix(mix(uColor, uReadyColor, clamp(t, 0.0, 1.0) * 0.75), uPipColor, lastPip);
+  }
+
+  // ONE SPLAT OF THE DENSITY FIELD, and deliberately the same kernel as
+  // entities/particles.js: cubic, so it is smooth in value AND in slope at the
+  // rim, which is what stops a lobe's own edge showing up as a crease in the
+  // silhouette once the field is thresholded.
+  //
+  // The gradient is accumulated alongside the value rather than taken from
+  // extra taps: it is analytic here (this field is a handful of circles, not a
+  // texture), and dFdx/dFdy is an extension in GLSL ES 1.00 that this shader
+  // has no business depending on.
+  //
+  //   f  = (1 - q)^3,  q = |p - c|^2 / rad^2
+  //   df = -6 (1 - q)^2 (p - c) / rad^2
+  float splat(vec2 p, vec2 c, float rad, inout vec2 grad) {
+    vec2 d = p - c;
+    float r2 = max(rad * rad, 1e-6);
+    float q = dot(d, d) / r2;
+    if (q >= 1.0) return 0.0;
+    float k = 1.0 - q;
+    grad += -6.0 * k * k * d / r2;
+    return k * k * k;
+  }
+
   void main() {
-    vec2 p = (vUv - 0.5) * 2.0;
+    // The quad reaches OVERSCAN ring-radii out (see the note by the constant),
+    // and this is the line that keeps r = 1 meaning the fuel ring regardless.
+    vec2 p = (vUv - 0.5) * 2.0 * OVERSCAN;
     float r = length(p);
 
     // Angle measured clockwise from straight up, so pip 0 starts at 12
@@ -131,9 +262,7 @@ const fragmentShader = /* glsl */ `
       // pinned to uPipColor. Approaching full is then legible from the
       // hue alone, before the ring is anywhere near closed.
       float t = uPips > 1.0 ? idxF / (uPips - 1.0) : 1.0;
-      vec3 ramp = mix(uColor, uReadyColor, t * 0.75);
-      bool lastPip = idxF >= uPips - 1.0;
-      vec3 pipCol = lastPip ? uPipColor : ramp;
+      vec3 pipCol = wheelColor(t, idxF >= uPips - 1.0 ? 1.0 : 0.0);
 
       // Overdriven on the pop, deliberately past 1: the bright pass is a
       // HalfFloat target, so this blooms outward for a moment instead of
@@ -144,16 +273,104 @@ const fragmentShader = /* glsl */ `
       alpha = max(alpha, mOuter * mix(0.14, 1.0, lit));
     }
 
-    // ---- THE BANKED-POWER ARC, inside ------------------------------------
+    // ---- THE SPEND FLASH, on the RING only --------------------------------
+    // The fuel blowing out white as it becomes a strike. Applied here rather
+    // than at the end of the shader, which is where it used to be: from the
+    // end it also painted the core, and the core on that exact frame is a drop
+    // of goo being torn apart by the release. Whitening it hid the one event
+    // the flash is supposed to be announcing, and turned a spray of liquid
+    // into a handful of white beads.
+    if (uFlash > 0.0) {
+      col = mix(col, vec3(1.0), uFlash);
+      alpha = max(alpha, uFlash * mOuter);
+    }
+
+    // ---- THE CORE: banked power, as a drop of goo -------------------------
     // Continuous, not pipped: power is not bought in mouthfuls and drawing it
-    // in segments would say it was.
-    float innerHalf = uThickness * uInnerT * 0.5;
-    float mInner = bandMask(r, uInnerR, innerHalf);
-    if (mInner > 0.001) {
-      float lit = step(ang / TAU, uPending);
-      vec3 pc = mix(uColor, uReadyColor, uArmed);
-      col = mix(col, pc * uInnerGlow, lit * mInner);
-      alpha = max(alpha, mInner * mix(0.10, mix(0.55, 1.0, uArmed), lit));
+    // in segments would say it was. RADIAL, not angular — see the note at the
+    // top of this file for why it must not sweep the way the fuel ring does.
+    if (uCore > 0.5 && uPending > 0.0) {
+      // The isoline reaches uInnerR at a full bank, swelling past it while a
+      // perfect charge rings out. uCoreK converts that requested surface
+      // radius into the KERNEL radius that puts the surface there — without
+      // it, every knob below would quietly resize the drop.
+      float fillR = uInnerR * uPending;
+      float coreK = fillR * uCoreK;
+
+      vec2 grad = vec2(0.0);
+      // THE MIDDLE GOES FIRST ON A RELEASE. uCoreMul collapses the central
+      // blob while uSpread below carries the lobes outward, which is what
+      // makes the drop TEAR rather than fade: the welds between the lobes and
+      // the core are the first density to fall under the isoline, so the body
+      // comes apart into separate droplets before any of it disappears. That
+      // is the one thing a metaball field does that a sprite cannot fake.
+      float dens = splat(p, vec2(0.0), coreK * uCoreMul, grad);
+
+      // THE LOBES ARE WHAT MAKE IT LIQUID. A circle grown from the middle is a
+      // dial; a circle with things moving under its skin is a substance. Each
+      // rides its own slot on a slowly rolling ring and breathes on a rate
+      // that shares no factor with the roll, so the outline never settles into
+      // a repeating shape.
+      float thrown = coreK * uWobble + uSpread;
+      for (int i = 0; i < CORE_LOBES; i++) {
+        if (float(i) >= uLobes) break;
+        // The even slot, plus a fixed per-lobe offset. Without it the lobes sit
+        // on a perfect polygon, which survives being rolled and being flung —
+        // a release came apart into six beads at six even compass points, and
+        // an even spray is the one arrangement a liquid never makes. Hashed off
+        // the index rather than random, so the drop is the same drop every
+        // frame and every run.
+        float a = uChurn + TAU * float(i) / max(uLobes, 1.0)
+                + sin(float(i) * 12.9898) * 0.4;
+        float b = 1.0 + uBreathe * sin(uBreathePhase + float(i) * 2.399);
+        dens += splat(p, vec2(sin(a), cos(a)) * (thrown * b), coreK * uLobeSize * uLobeMul * b, grad);
+      }
+
+      float ca = smoothstep(uIso - uSoft, uIso + uSoft, dens);
+      if (ca > 0.002) {
+        // Exactly the surface CONFIG.fx.goo builds: a fake normal off the
+        // density gradient (the field falls fastest at the surface, so its
+        // gradient points out of the goo), a specular off that, and a rim
+        // band just inside the edge where a thick liquid gathers the light it
+        // is carrying.
+        vec3 n = normalize(vec3(-grad * uNormal, 1.0));
+        vec3 l = normalize(vec3(uLight, 0.8));
+        float spec = pow(max(dot(n, l), 0.0), uSpecPower) * uSpec;
+        float rim = (1.0 - smoothstep(uIso, uIso + uRimWidth, dens)) * uRim;
+
+        // Same colour rule the arc had: the charging hue until enough is
+        // banked to fire, the ready hue after. The POP is a brightness event
+        // rather than a colour one — the hue is what says "loaded", and
+        // changing it in the same moment would spend the same word twice.
+        vec3 cc = mix(uColor, uReadyColor, uArmed);
+        vec3 lit = cc * (uBody + rim) + spec * mix(vec3(1.0), cc, 0.35);
+        ca *= uCoreFade;
+        col = mix(col, lit * uInnerGlow * (1.0 + uCorePop * uCorePopGlow), ca);
+        alpha = max(alpha, ca * mix(0.55, 1.0, uArmed));
+      }
+    }
+
+    // ---- THE SHOCK RING off a perfect charge -------------------------------
+    // The one thing in the instrument allowed to cross the fuel ring: it is
+    // the surface letting go, so it has to leave.
+    if (uShockGlow > 0.0) {
+      float mShock = bandMask(r, uShockR, uShockW);
+      if (mShock > 0.001) {
+        // IT WEARS THE WHOLE WHEEL. The ring leaves through the fuel ring, so
+        // it carries the fuel ring's colours out with it — every hue the pips
+        // are wearing, at the angle each of them is wearing it, read
+        // CONTINUOUSLY rather than in segments because this is one moving band
+        // and not a bar with a count. Quoting the ramp is what makes the pop
+        // look like it came off THIS instrument.
+        //
+        // The last pip's own colour is blended in over the width of that last
+        // segment, so the ring carries that hue where the wheel does.
+        float tc = ang / TAU;
+        float lastMix = smoothstep(1.0 - 1.0 / max(uPips, 1.0), 1.0, tc);
+        vec3 shockCol = mix(mix(uColor, uReadyColor, uArmed), wheelColor(tc, lastMix), uShockWheel);
+        col += shockCol * uShockGlow * mShock;
+        alpha = max(alpha, mShock * min(1.0, uShockGlow));
+      }
     }
 
     // ---- THE CHAIN WINDOW, outside ---------------------------------------
@@ -168,13 +385,6 @@ const fragmentShader = /* glsl */ `
     }
 
     if (alpha <= 0.002) discard;
-
-    // The spend flash: the whole instrument blows out white and fades, so the
-    // release reads as the moment the fuel turned into a strike.
-    if (uFlash > 0.0) {
-      col = mix(col, vec3(1.0), uFlash);
-      alpha = max(alpha, uFlash * mOuter);
-    }
 
     gl_FragColor = vec4(col * uGlow * alpha, alpha);
   }
@@ -219,6 +429,25 @@ function trackSpring(s, target, dt, stiffness, damping) {
 const powerSpring = makeSpring();
 
 // ---------------------------------------------------------------------------
+// THE CORE'S OWN CLOCK AND ITS TWO EVENTS.
+//
+// The drop churns on `coreClock`, which is REAL time — the ring is handed
+// realDt by main.js, and a liquid that stops moving because the game hit-stops
+// for 60ms reads as the meter having frozen rather than as the world having.
+//
+// `burstFill` is the one piece of state the shader cannot derive. A release
+// sets `pending` to 0 on the frame it fires, so by the time the drop is being
+// blown apart there is nothing left in the model saying how big it was — the
+// size is latched here, off the rising edge of the spend flash, and held for
+// as long as the burst runs.
+// ---------------------------------------------------------------------------
+let coreClock = 0;
+let coreChurn = 0;   // integrated, not clock * rate: the rate itself moves
+let coreFill = 0;    // the fill DRAWN last frame — see burstFill
+let burstFill = 0;
+let lastFlash = 0;
+
+// ---------------------------------------------------------------------------
 // THE STAGGER — why five chum on one frame is five plops, not one jump.
 //
 // A magnet sweep or a release gulp swallows a whole bar's worth inside a single
@@ -254,6 +483,11 @@ let lastPips = 0;      // pip count last frame, to detect a re-segmentation
 /** Put the springs back where a fresh run starts them. */
 export function resetStrikeRing() {
   powerSpring.x = 0; powerSpring.v = 0; powerSpring.over = 0;
+  coreClock = 0;
+  coreChurn = 0;
+  coreFill = 0;
+  burstFill = 0;
+  lastFlash = 0;
   pipFill.fill(0);
   pipVel.fill(0);
   pipPop.fill(0);
@@ -330,8 +564,189 @@ function updatePips(fuel, n, dt, ring) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE CORE — the drop of goo, its perfect-charge pop, and the release that
+// blows it apart. Everything here is written into uniforms; nothing in this
+// function touches the model, and none of it can change what a strike is
+// worth. See the top of the file for what the drop is and why.
+// ---------------------------------------------------------------------------
+function updateCore(dt, strikeState, u, ring) {
+  const g = ring.core ?? {};
+  const on = g.enabled !== false;
+  u.uCore.value = on ? 1 : 0;
+  if (!on) {
+    // The shock ring is the drop's own event and is drawn outside the block
+    // `uCore` gates, so switching the core off has to silence it here or a
+    // perfect charge would throw a ring off nothing.
+    u.uShockGlow.value = 0;
+    return;
+  }
+
+  // HOW MUCH POWER IS WORTH DRAWING, and how small the smallest drop is.
+  // Below `minFill` there is nothing: a couple of pixels of green under the
+  // seal is not a readout, it is dirt. Above it the fill is mapped onto the
+  // band between `floor` and 1 rather than onto 0..1, because the meter is
+  // drawn BEHIND the animal and an honest mapping spends its first third
+  // hidden inside the silhouette. See the note by `floor` in CONFIG.
+  const minFill = Math.max(0, g.minFill ?? 0.05);
+  const floor = Math.max(0, Math.min(0.95, g.floor ?? 0.35));
+  // Skipped while a release is being drawn: the burst below owns the size for
+  // the whole of it, and it is drawing a value that was already mapped.
+  if ((strikeState.flash ?? 0) <= 0) {
+    u.uPending.value = u.uPending.value < minFill
+      ? 0
+      : floor + (1 - floor) * u.uPending.value;
+  }
+
+  const iso = g.iso ?? 0.42;
+  const lobes = Math.max(0, Math.min(7, Math.round(g.lobes ?? 6)));
+  const wobble = g.wobble ?? 0.3;
+  const lobeSize = g.lobeSize ?? 0.62;
+  const breathe = g.breathe ?? 0.18;
+
+  // WHERE THE SURFACE ACTUALLY IS. A splat peaks at 1 at its centre and falls
+  // off cubically, so the isoline sits well inside the kernel: solving
+  // (1 - q)^3 = iso gives surface = kernel * sqrt(1 - cbrt(iso)), which at the
+  // shipped 0.42 is barely half of it. Left uncorrected, a full bank would
+  // draw a drop half the size it asked for and every knob above would resize
+  // it as a side effect — the exact failure CONFIG.fx.goo's `gore` group
+  // documents from the other direction.
+  //
+  // The LOBES are in the reach too, because they are what the eye measures the
+  // drop by: at the shipped numbers they stick out past the core's own surface
+  // and it is their bulges that touch `innerRadiusMul`, not the ball behind
+  // them. Where a lobe overlaps the core the two densities sum and the weld
+  // pushes a few percent further still; that is the goo doing its job and is
+  // not worth a correction term.
+  const isoScale = Math.sqrt(Math.max(1e-4, 1 - Math.cbrt(Math.max(1e-4, iso))));
+  const reach = Math.max(isoScale, (wobble + lobeSize * isoScale) * (1 + breathe));
+  u.uCoreK.value = 1 / Math.max(1e-3, reach);
+
+  u.uLobes.value = lobes;
+  u.uWobble.value = wobble;
+  u.uLobeSize.value = lobeSize;
+  u.uBreathe.value = breathe;
+  u.uIso.value = iso;
+  u.uSoft.value = g.soft ?? 0.12;
+  u.uBody.value = g.body ?? 0.5;
+  u.uRim.value = g.rim ?? 0.9;
+  u.uRimWidth.value = g.rimWidth ?? 0.5;
+  u.uSpec.value = g.spec ?? 0.3;
+  u.uSpecPower.value = g.specPower ?? 14;
+  u.uNormal.value = g.normal ?? 0.5;
+  u.uLight.value.set(g.lightX ?? -0.5, g.lightY ?? 0.85);
+
+  // --- THE PERFECT CHARGE, ringing out ------------------------------------
+  // `perfectFlash` counts DOWN from perfectFlashTime, so the envelope is built
+  // off elapsed time rather than off the remainder: a pop is an attack and a
+  // settle, and the attack is the part that has to be visible. Ninety
+  // milliseconds of swell and the rest easing back is what separates it from
+  // the instantaneous step a bare decay would draw — the same finding as the
+  // pip pops above, where brightness alone read as a twinkle.
+  const flashTime = Math.max(0.01, CONFIG.strike.charge.perfectFlashTime ?? 0.5);
+  const left = Math.max(0, Math.min(flashTime, strikeState.perfectFlash ?? 0));
+  const gone = 1 - left / flashTime;          // 0 at the landing, 1 when spent
+  const attack = 0.18;
+  const pop = left <= 0 ? 0
+    : gone < attack
+      ? ease('outQuad', gone / attack)
+      : 1 - ease('outCubic', (gone - attack) / (1 - attack));
+
+  // --- THE RELEASE, blowing it apart --------------------------------------
+  // Driven off the SPEND FLASH, which is set on the frame the dash launches
+  // and only then, so the ring's white blowout and the drop coming apart are
+  // one event on one clock. The rising edge is what latches the size: `pending`
+  // is already 0 by the time this runs.
+  const spendTime = Math.max(0.01, CONFIG.strike.charge.flashTime ?? 0.28);
+  const flash = Math.max(0, strikeState.flash ?? 0);
+  // LAST FRAME'S fill, not this frame's. tryStrike sets `pending` to 0 and the
+  // flash on the SAME frame, and the spring above has already snapped to the
+  // new zero by the time this runs — so reading the live value latches a burst
+  // of size nothing, and the drop vanishes instead of coming apart. The value
+  // being latched is the one the player was last shown.
+  if (flash > lastFlash + 1e-6) burstFill = coreFill;
+  lastFlash = flash;
+  const bursting = flash > 0 && burstFill > 0;
+  // 0 on the frame it fires, 1 when the spray is gone.
+  const burst = bursting ? ease(g.burstEase ?? 'outCubic', 1 - flash / spendTime) : 0;
+
+  if (bursting) {
+    // The drop is drawn at the size it was RELEASED at for the whole burst.
+    // Springing it down to zero as well would be the meter emptying and the
+    // meter bursting at the same time, and the two read as one weak event.
+    u.uPending.value = burstFill;
+    u.uCoreMul.value = 1 + (Math.max(0, g.burstCore ?? 0.1) - 1) * burst;
+    u.uLobeMul.value = 1 + (Math.max(0, g.burstShrink ?? 0.45) - 1) * burst;
+    // The impulse itself: outward, from the centre, in the units the rest of
+    // the instrument is drawn in.
+    u.uSpread.value = (g.burstSpread ?? 0.62) * burst;
+    // Held at full while the spray is still a spray, then taken off. Fading
+    // from the first frame would hide the tearing, which is the part worth
+    // watching.
+    const fadeFrom = Math.min(0.99, Math.max(0, g.burstFade ?? 0.35));
+    u.uCoreFade.value = burst <= fadeFrom ? 1 : 1 - (burst - fadeFrom) / (1 - fadeFrom);
+    // Brightest on the frame it tears and falling with the spray. `pop` is
+    // still in there because a strike released the instant a perfect charge
+    // landed is both events at once, and the louder of the two should win.
+    u.uCorePop.value = Math.max(pop, 1 - burst);
+    // A burst only ever follows a release that FIRED, which by definition had
+    // enough banked to fire — so the spray keeps the ready hue even though
+    // `pending` is already back to zero and `uArmed` would otherwise drop it
+    // back to the charging colour halfway through.
+    u.uArmed.value = 1;
+  } else {
+    burstFill = 0;
+    u.uCoreMul.value = 1;
+    u.uLobeMul.value = 1;
+    u.uSpread.value = 0;
+    u.uCoreFade.value = 1;
+    u.uCorePop.value = pop;
+    // The perfect pop swells the drop past its own full radius. On uPending
+    // rather than on a scale uniform of its own, so it travels through the
+    // same isoline correction as every other size in here and cannot drift
+    // away from what `innerRadiusMul` promises.
+    if (pop > 0) u.uPending.value = Math.min(1.6, u.uPending.value * (1 + ((g.popScale ?? 1.5) - 1) * pop));
+  }
+  u.uCorePopGlow.value = bursting ? (g.burstGlow ?? 1.8) : (g.popGlow ?? 4.5);
+  // What the drop was drawn at this frame, for the release above to latch. Not
+  // updated during a burst, which is already drawing the latched value.
+  if (!bursting) coreFill = u.uPending.value;
+
+  // --- THE CHURN ----------------------------------------------------------
+  // Integrated rather than clock x rate: the rate itself jumps on a pop and on
+  // a release, and multiplying a running clock by a changed rate teleports the
+  // lobes to a new arrangement instead of accelerating them from where they
+  // were.
+  coreClock += dt;
+  const churnRate = (g.churn ?? 0.55)
+    * (1 + ((g.popChurn ?? 5) - 1) * pop)
+    * (bursting ? 1 + ((g.burstChurn ?? 2.5) - 1) * (1 - burst) : 1);
+  coreChurn += churnRate * dt * Math.PI * 2;
+  u.uChurn.value = coreChurn;
+  u.uBreathePhase.value = coreClock * (g.breatheHz ?? 0.9) * Math.PI * 2;
+  // The lobes fling outward as the surface tension lets go, on top of whatever
+  // the release is doing — a perfect charge that is spent immediately gets
+  // both, which is exactly what happens.
+  u.uWobble.value = wobble * (1 + ((g.popWobble ?? 2.2) - 1) * pop);
+
+  // --- THE SHOCK RING off a perfect charge --------------------------------
+  // Not part of the drop and deliberately not shaped like it: a thin, clean
+  // band leaving at speed says the surface snapped, where a second blob would
+  // just be more goo. It is the one thing in the instrument allowed to cross
+  // the fuel ring.
+  if (pop > 0 && left > 0) {
+    const t = ease('outCubic', gone);
+    u.uShockR.value = (g.ringFrom ?? 0.6) + ((g.ringTo ?? 1.4) - (g.ringFrom ?? 0.6)) * t;
+    u.uShockW.value = Math.max(0.01, g.ringWidth ?? 0.1);
+    u.uShockWheel.value = Math.max(0, Math.min(1, g.ringWheel ?? 1));
+    u.uShockGlow.value = (g.ringGlow ?? 3.2) * (1 - gone) * (1 - gone);
+  } else {
+    u.uShockGlow.value = 0;
+  }
+}
+
 export function createStrikeRing() {
-  const geometry = new THREE.PlaneGeometry(2, 2);
+  const geometry = new THREE.PlaneGeometry(2 * OVERSCAN, 2 * OVERSCAN);
   const ring = CONFIG.strike.ring;
   const material = new THREE.ShaderMaterial({
     vertexShader,
@@ -351,8 +766,34 @@ export function createStrikeRing() {
       uThickness: { value: ring.thickness },
       uGap: { value: ring.segmentGap },
       uInnerR: { value: ring.innerRadiusMul ?? 0.58 },
-      uInnerT: { value: ring.innerThicknessMul ?? 0.7 },
       uInnerGlow: { value: ring.innerGlowMul ?? 0.55 },
+      uCore: { value: 1 },
+      uCoreK: { value: 2 },
+      uLobes: { value: 6 },
+      uWobble: { value: 0.3 },
+      uLobeSize: { value: 0.62 },
+      uChurn: { value: 0 },
+      uBreathe: { value: 0.18 },
+      uBreathePhase: { value: 0 },
+      uIso: { value: 0.42 },
+      uSoft: { value: 0.12 },
+      uBody: { value: 0.5 },
+      uRim: { value: 0.9 },
+      uRimWidth: { value: 0.5 },
+      uSpec: { value: 0.3 },
+      uSpecPower: { value: 14 },
+      uNormal: { value: 0.5 },
+      uLight: { value: new THREE.Vector2(-0.5, 0.85) },
+      uCorePop: { value: 0 },
+      uCorePopGlow: { value: 4.5 },
+      uCoreMul: { value: 1 },
+      uLobeMul: { value: 1 },
+      uSpread: { value: 0 },
+      uCoreFade: { value: 1 },
+      uShockR: { value: 0 },
+      uShockW: { value: 0 },
+      uShockGlow: { value: 0 },
+      uShockWheel: { value: 1 },
       uChainR: { value: ring.chainRadiusMul ?? 1.14 },
       uChainLeft: { value: 0 },
       uColor: { value: new THREE.Color(ring.color) },
@@ -418,10 +859,11 @@ export function updateStrikeRing(dt, playerPos, strikeState, running, stats = nu
     ? Math.min(1, strikeState.chainTimer / Math.max(0.05, CONFIG.strike.chainWindow))
     : 0;
 
+  updateCore(dt, strikeState, u, ring);
+
   u.uThickness.value = ring.thickness;
   u.uGap.value = ring.segmentGap;
   u.uInnerR.value = ring.innerRadiusMul ?? 0.58;
-  u.uInnerT.value = ring.innerThicknessMul ?? 0.7;
   u.uInnerGlow.value = ring.innerGlowMul ?? 0.55;
   u.uChainR.value = ring.chainRadiusMul ?? 1.14;
   u.uColor.value.set(ring.color);

@@ -224,6 +224,67 @@ export const CONFIG = {
   },
 
   // ---------------------------------------------------------------------------
+  // THE TITLE SHOT — the seal held up against the lens while the Rive card is
+  // on screen, turning to follow the cursor. See systems/titleSeal.js.
+  //
+  // Every part of the animal that moves during this shot is already a shipping
+  // system pointed at the cursor: the neck and flipper IK (CONFIG.head and
+  // CONFIG.fins), the mixer's idle clip, the breath and the tail spring. So
+  // there are no rig values in here — turning `fins.idleWeight` up to make the
+  // title screen read better would change how the seal looks all game. What
+  // lives here is only what is specific to the title screen: how far in the
+  // camera pushes, where in that frame the seal sits, how lazily it turns, and
+  // how much of the water the card is allowed to hide.
+  //
+  // ZOOM, NOT DISTANCE. The game camera is orthographic, so there is no
+  // perspective to move the seal into — "up close" is `camera.zoom` and
+  // nothing else. Nothing in here touches the seal's position; a run would
+  // only put it back (see resetPlayer).
+  titleSeal: {
+    enabled: true,
+    // How far in the frame pushes while the card is up, as a zoom multiplier on
+    // the run's framing. The arena is 52 world units tall, so 4.5 frames about
+    // 11.5 of them against a seal roughly 6 units nose to tail — the animal
+    // filling about half the height, which is what "up close" turned out to
+    // mean when it was looked at. 2.8 (the first guess) leaves it at a fifth of
+    // the frame and reads as the ordinary game camera with a nudge.
+    zoom: 4.5,
+    // Where the seal sits in that frame, in world units from the centre. NOT
+    // where the camera goes: the focus point is the seal minus this, because
+    // the thing being tuned is "leave room above the animal for the title".
+    // Negative y sits it low, which is where the room for a wordmark is.
+    offset: { x: 0, y: -2 },
+    // The push-in, on the wall clock, starting the moment the card is mounted —
+    // so most of it happens while the 1.7MB .riv is still parsing and the first
+    // thing the player sees is already moving.
+    inTime: 1.4,
+    inEase: 'outCubic',
+    // ...and the release, which runs OVER the first second of the run rather
+    // than before it. A cut from a 2.8x push-in to the run's framing on the
+    // exact frame the player presses Start is the one moment of this game where
+    // they are certainly looking at the screen.
+    outTime: 0.7,
+    outEase: 'inOutCubic',
+    // How fast the body chases the cursor, per second. Deliberately slower than
+    // the run's `player.turnLerp`: in a run the seal turns because you told it
+    // to go somewhere and lag reads as sludge, here it turns because it noticed
+    // you and the lag IS the performance.
+    turnLerp: 2.6,
+    // ...and the half-roll it does when the cursor crosses behind it, in
+    // seconds. Longer than either of the run's two for the same reason.
+    turnAround: 0.6,
+    // How much of the ocean the card hides, 0..1. 1 is the solid panel the
+    // splash always had; 0 is the bare water with only the artboard over it.
+    // Read once, when the card is mounted — see splashBackground in ui/ui.js.
+    //
+    // THIS IS THE ONE VALUE THAT CAN MAKE THE WHOLE FEATURE INVISIBLE, and not
+    // always from here: if the splash ARTBOARD carries a full-bleed background
+    // rectangle of its own, no scrim setting reveals what is behind it. That is
+    // a change in seal_survivor.riv.
+    scrim: 0.35,
+  },
+
+  // ---------------------------------------------------------------------------
   // CINEMATIC CAMERA — the opt-in second camera brain (systems/cineCamera.js).
   // `enabled: false` is the shipped default and it is a real off switch: the
   // rig never ticks, the lens uniforms stay at zero, the extra blur chain is
@@ -2168,6 +2229,25 @@ export const CONFIG = {
         minFire: 0.35,   // power that must be banked before a release will fire
         chumRefill: 0.2, // bar returned per chum swallowed — i.e. 5 chum a link
 
+        // --- THE PERFECT CHARGE -----------------------------------------------
+        // The fraction of banked power that counts as a wind-up fully loaded.
+        // The meter's core pops on the frame it lands and the seal is told
+        // about it (systems/strikeRing.js, the `strikePerfect` feedback event);
+        // see the note on `perfect` in systems/strike.js for what does and does
+        // not read it yet.
+        //
+        // weapons.csv owns `perfectAt` because it is the boundary of a
+        // mechanic, not a look. `perfectFlashTime` stays here and stays on a
+        // slider: it is only how long the pop takes to ring out.
+        //
+        // BELOW 1 IS A REAL SETTING, not a rounding allowance. `pending` clamps
+        // at 1 and cannot overshoot, so at 1.0 a perfect charge is simply "held
+        // it to the top" and holding longer costs nothing. Lower it and the top
+        // of the bar becomes a window a player can hit early — which is the
+        // shape this wants the day the strike actually pays for it.
+        perfectAt: 1,
+        perfectFlashTime: 0.5,
+
         // --- PIPS -------------------------------------------------------------
         // The bar is CUT INTO PIPS and one chum is always exactly one pip. The
         // count is not configured here — it is round(1 / chumRefill), so the
@@ -2456,6 +2536,86 @@ export const CONFIG = {
         decay: 12,
         spin: 5,         // tumble imparted to bodies that roll (crabs)
         boneImpulse: 2.6, // the flinch through the skeleton, as bone spring units
+
+        // --- WHAT A RAM DOES TO SOMETHING THAT SURVIVES IT ---------------------
+        //
+        // The rule above is written for the little ones: divide by size so a
+        // megalodon isn't thrown around like a minnow. Applied to a shark it
+        // was very nearly nothing — a couple of units of shove, decaying in a
+        // fifth of a second, laid on top of an animal swimming 7 units/sec
+        // straight back at you. The physics was there and it was invisible,
+        // and a strike on the one thing in the water that can kill you read as
+        // swimming through it.
+        //
+        // So a big body that is still alive after the hit gets the shove
+        // properly: harder, carrying further, and — this is the part that
+        // makes it visible at all — with its own propulsion cut while it
+        // travels. A shark shoved at 40 units/sec that goes on swimming at 7
+        // has been shoved by 33; one that has been knocked off its stroke has
+        // been shoved by 40, which is the difference between a nudge and
+        // getting hit by a seal.
+        //
+        // Nothing here can kill, chip or stun-lock: it is displacement and a
+        // stagger it recovers from, and it deliberately does not apply to a
+        // BOSS, which has its own rules about being held (see the daze in
+        // CONFIG.boss.control).
+        heavy: {
+          enabled: true,
+          // Authored radius (× this individual's size roll) above which a body
+          // counts as large. Set to the PREY CULL's line on purpose (see
+          // `preyCull.maxRadius` above): the dash EATS everything under it, so
+          // "big enough for the heavy knock" and "too big to swallow" are the
+          // same boundary, and together with the `hp > 0` test above that
+          // makes the rule one sentence — everything the ram cannot eat gets
+          // shoved properly. Above it: stingray and lanternRay 0.7, dolphin
+          // 0.85, shark 1.2, hammerhead 1.3, megalodon 2.2.
+          minRadius: 0.65,
+          // What the shove is multiplied by for one of them. Applied AFTER the
+          // size divisor, so a megalodon still moves less than a shark — this
+          // restores the scale of the hit, it doesn't flatten the weights.
+          //
+          // BIG, and measured rather than guessed. The seal is dashing at
+          // `dashSpeed` (46) when it connects and the camera rides the seal,
+          // so a shove slower than the dash is a shark the seal simply
+          // outruns — the displacement is real and nobody can see it. At 3.5
+          // a full-charge ram launches a shark at ~79 u/s, comfortably away
+          // from the seal at the moment of contact, and a normal one at ~45,
+          // which keeps pace with the dash and then falls behind. Measured
+          // against an identical unhit shark, a normal strike now gains it
+          // most of a body length in the half second after the hit; at 1.7 it
+          // gained a quarter of one and read as nothing happening.
+          speedMul: 3.5,
+          // And it carries: half the falloff of an ordinary knock, so the
+          // throw is still moving when the dash ENDS rather than being spent
+          // inside it. That timing is half of why the old one was invisible —
+          // a dash lasts 0.26s at a normal charge, and a shove three quarters
+          // gone by then happens entirely while the screen is full of dash.
+          // Distance is speed/decay, so this and `speedMul` together are how
+          // far it goes: about 13 units for a shark at full charge, 7 at a
+          // normal one.
+          //
+          // The falloff is what turns a speed into a DISTANCE, which is worth
+          // remembering when tuning: two bodies with different decays cannot
+          // be compared by how fast they leave. Everything that gets this
+          // knock shares one decay precisely so that size — and only size —
+          // decides which of them goes furthest.
+          decay: 6,
+          // Seconds its own swimming is taken away for, at full charge.
+          // Ramping back in over that time rather than switching off and on,
+          // so it recovers into its stroke instead of snapping back onto its
+          // line.
+          stagger: 0.45,
+          // How much of its propulsion goes at the start of that. Not all of
+          // it: a shark that stopped dead would read as paused rather than as
+          // knocked, and the tail keeps beating throughout either way.
+          staggerSlow: 0.85,
+          // Radians its heading is shoved toward the dash, capped. A hunter
+          // re-derives its velocity from `heading` every frame (see steerTo),
+          // so this is the only way a shove is allowed to cost it its AIM as
+          // well as its position — it has to turn back before it can come at
+          // you again.
+          headingKick: 0.7,
+        },
       },
 
       // THE MARK. A strike that lands on something too big to throw around —
@@ -2773,17 +2933,180 @@ export const CONFIG = {
         pulseSpeed: 9, // flashes per second while a combo is live
         segmentGap: 0.12, // radians of gap between pips
 
-        // --- the banked-power arc ---------------------------------------------
-        // 0.58 rather than the obvious 0.78, and it is a BLOOM number, not a
-        // taste one: the bright pass runs at CONFIG.bloom.divisor 4 / radius 3,
-        // which spreads about 14px at 1080p. Two bands closer than that fuse
-        // into one. At the shipped radius 0.78 leaves 10px and 0.58 leaves 20.
+        // --- THE CORE: banked power, as a drop of goo -------------------------
+        // It was a second ARC, sweeping round exactly like the fuel ring it
+        // sits inside, and that was the problem: two concentric arcs filling
+        // in the same direction are one instrument saying two different things
+        // in the same words, and the inner one was routinely read as part of
+        // the outer. It is now a RADIAL fill — a blob at the seal's centre
+        // that grows outward as power banks — so the two axes are different
+        // and neither can be mistaken for the other.
+        //
+        // 0.58 is what the blob reaches at a full bank, and it is still a
+        // BLOOM number rather than a taste one: the bright pass runs at
+        // CONFIG.bloom.divisor 4 / radius 3, which spreads about 14px at
+        // 1080p, so anything nearer than about 0.7 to the fuel ring fuses with
+        // it into one smear. The old comment argued this for two bands; it is
+        // the same argument for a disc and its container.
         innerRadiusMul: 0.58,
-        innerThicknessMul: 0.7,
+        // NOTE: `innerThicknessMul` used to sit here and is gone — a drop has
+        // no band to be a fraction of. A stale value in a saved
+        // imported-tuning.json is dropped from the snapshot on the next load.
         // Held DIM on purpose. What doesn't pass CONFIG.bloom.threshold gets no
-        // halo, and an inner arc that never blooms can't bleed outward into the
-        // fuel ring it sits inside — belt and braces with the radius above.
+        // halo, and a core that never blooms can't bleed outward into the fuel
+        // ring around it — belt and braces with the radius above. The perfect
+        // pop deliberately breaks this for a moment; that is the whole point of
+        // it (see `core.popGlow`).
         innerGlowMul: 0.55,
+
+        // GOO, and the same goo as everywhere else: the field is built from
+        // the identical cubic splat kernel entities/particles.js uses and cut
+        // at an isoline exactly like CONFIG.fx.goo, with the wet rim and the
+        // gradient-lit highlight that pass has. What it does NOT do is go
+        // through that pass — the screen-space one needs live particles and a
+        // fullscreen draw, and this is a 90px instrument stuck to an animal.
+        // The lobes are analytic instead, which costs one small quad and makes
+        // the silhouette exactly reproducible frame to frame.
+        //
+        // It reads as a substance with SURFACE TENSION, which is the read
+        // being bought: banked power is a thing being gathered and held, and a
+        // liquid held together is the only shape that says both. It also means
+        // the release has something to break.
+        core: {
+          enabled: true,
+          // Satellite lobes orbiting the core, which is what makes the edge
+          // bulge and roll instead of being a circle. Capped at 7 by the
+          // shader's loop (a GLSL ES 1.00 loop needs a constant bound).
+          lobes: 6,
+          // How far out they ride, as a fraction of the fill radius, and how
+          // big each one is against the core. Past about 0.5 they stop
+          // overlapping the core enough to fuse and the drop becomes a ring of
+          // separate beads — the same failure the `aura` goo group documents.
+          wobble: 0.3,
+          lobeSize: 0.62,
+          churn: 0.55,     // turns/sec the lobe ring rolls
+          breathe: 0.18,   // how much each lobe's own size pulses...
+          breatheHz: 0.9,  // ...and how fast. Incommensurate with churn on
+                           // purpose, so the silhouette never repeats.
+
+          // THE SURFACE. Same three numbers CONFIG.fx.goo's groups are built
+          // out of, and they mean exactly what they mean there. The kernel is
+          // rescaled on the CPU so the ISOLINE lands on the requested fill
+          // radius rather than the kernel's own edge — otherwise a full bank
+          // would draw a blob half the size it asked for, and every one of
+          // these knobs would silently resize it.
+          iso: 0.42,
+          soft: 0.12,
+          // HOW BRIGHT THE BODY IS, and it is well under 1 for a reason the
+          // arc never had to face: a filled disc at the brightness a 4px band
+          // was tuned at clips the whole way across and every bit of shading
+          // in here is thrown away. Held at half, the drop reads as a
+          // translucent body of liquid with the water visible through it and
+          // the rim below arriving as a genuinely wet edge on top.
+          body: 0.5,
+          rim: 0.9,        // the wet edge, brightened just inside the surface
+          rimWidth: 0.5,
+          // A highlight lit off the density gradient. Low, and low because the
+          // whole ring composites ADDITIVELY: on additive the goo groups that
+          // shipped (`aura`, `hit`) carry no specular at all, since a
+          // highlight on a layer that only ever adds light reads as a hot spot
+          // rather than as a wet one. Kept as a knob because a little of it
+          // does sell the curvature.
+          spec: 0.3,
+          specPower: 14,
+          normal: 0.5,     // how far the density gradient bends the fake normal
+          lightX: -0.5,
+          lightY: 0.85,
+          // Under this much banked power there is no drop at all. A couple of
+          // pixels of green under the seal is not a readout, it is dirt.
+          minFill: 0.05,
+          // ...AND THE SMALLEST ONE THAT IS DRAWN IS ALREADY THIS BIG, as a
+          // fraction of a full drop. Not a fudge — the meter is drawn BEHIND
+          // the animal (playerOverlayZ), and the seal is about 0.9 units thick
+          // against a full drop of ~1.5, so a fill mapped honestly from zero
+          // spends its first third completely hidden inside the silhouette. A
+          // readout that shows nothing for the first third of what it is
+          // reading is worse than one that starts at a size you can see.
+          // Above the floor it is linear in banked power, so the growth still
+          // reads as the quantity it is.
+          floor: 0.35,
+
+          // --- THE PERFECT CHARGE POPPING ---------------------------------
+          // The moment the wind-up is fully banked (CONFIG.strike.charge
+          // .perfectAt). Everything here rings out over
+          // `charge.perfectFlashTime` and returns to the loaded look, which is
+          // the full drop sitting there churning.
+          //
+          // FOUR CHANNELS, because a pop that is only brightness is a twinkle
+          // at this size — the same finding as the pip pops above. It swells
+          // past its own full radius, it drives the colour past 1 so the
+          // bright pass throws a halo, the lobes fling outward as if the
+          // surface tension let go, and a thin shock ring leaves the drop and
+          // crosses the fuel ring.
+          // THE SWELL AND THE FLING COMPOUND, which is why neither is large.
+          // `popScale` grows the whole drop and `popWobble` throws the lobes
+          // further out of it, so the reach at the peak is roughly the product:
+          // at 1.5 and 2.2 (the first pass) the drop swallowed the fuel ring
+          // whole and the flung lobes read as the corners of a heptagon rather
+          // than as liquid. npm run looks:core measures the peak reach.
+          popScale: 1.22,  // peak radius, x the full-bank radius
+          popGlow: 3.2,    // peak brightness, x — deliberately past the bloom
+                           // threshold the steady core is held under
+          popWobble: 1.35, // x the lobe throw, at the peak
+          popChurn: 5,     // x the roll rate, at the peak
+          // The shock ring, in the same normalised space as everything else
+          // here: 1 IS THE FUEL RING. So it leaves from about the surface of a
+          // full drop and ends outside the instrument — the pop is the one
+          // event allowed to cross it, because it is the surface letting go.
+          ringFrom: 0.6,
+          ringTo: 1.4,
+          ringWidth: 0.1,
+          ringGlow: 3.2,
+          // IT WEARS THE WHOLE PIP WHEEL. The ring leaves THROUGH the fuel
+          // ring, so it carries that ring's colours out with it: every hue the
+          // pips are wearing, at the angle each of them wears it, read as a
+          // continuous sweep rather than in segments — it is one moving band,
+          // not a bar with a count. That is what makes the pop look like it
+          // came off this instrument rather than like a second effect that
+          // happens to be a circle. At 0 it falls back to the core's own hue.
+          ringWheel: 1,
+
+          // --- THE RELEASE, BLOWING IT APART ------------------------------
+          // Letting go turns the banked power into a dash, and the drop has to
+          // go somewhere. A RADIAL IMPULSE FROM THE CENTRE: the middle
+          // collapses, every lobe is carried outward, and the welds holding
+          // them to the core are the first density to fall under the isoline —
+          // so the body TEARS into separate droplets before any of it fades.
+          // That tearing is the one thing a metaball field does that a sprite
+          // cannot fake, and it is the reason the meter is goo in the first
+          // place: a drop that is gathered and held has to have something to
+          // break.
+          //
+          // It runs on CONFIG.strike.charge.flashTime rather than a duration of
+          // its own, so the ring's white spend-flash and the drop coming apart
+          // are one event with one clock. There is nothing to tune here that
+          // says WHEN — only how far and how hard.
+          burstSpread: 0.62, // how far the impulse carries the droplets, in the
+                             // same units as `ringFrom` above: 1 is the fuel
+                             // ring.
+          burstCore: 0.1,    // what the central blob collapses to, x
+          burstShrink: 0.55, // ...and what each flying droplet shrinks to, x
+          burstChurn: 2.5,   // extra roll on the way out, x — the spray turns
+                             // as it goes rather than opening like an umbrella
+          burstGlow: 1.8,    // droplets brighten as they tear, x
+          burstFade: 0.6,    // the fraction of the flash spent at full opacity
+                             // before what is left is taken off the screen. The
+                             // spray has to still be a spray while it travels;
+                             // fading it from the first frame leaves the tear
+                             // happening in something already half gone.
+          // outQuad rather than the harder out curves, and this is the one
+          // number here worth arguing about. The tear is the thing being drawn,
+          // and a curve that delivers most of the travel in the first two
+          // frames skips it: the drop is whole, and then it is six separate
+          // beads, with nothing in between. Quad keeps the necks on screen long
+          // enough to see them go.
+          burstEase: 'outQuad',
+        },
 
         // The chain window, as a thin arc outside the fuel ring. It was never
         // drawn before: the ring pulsed at a fixed rate whether the combo had
@@ -9233,6 +9556,21 @@ export const CONFIG = {
       // whine belongs here if one gets authored.
       strikeCharging: { emit: null, shake: 0, hitstop: 0, glow: 0.05, sfx: null,
                         haptic: [{ duration: 55, magnitude: 0.3 }] },
+      // THE WIND-UP FULLY LOADED — the perfect charge landing (see
+      // CONFIG.strike.charge.perfectAt). One event, once, at the top of a hold
+      // that has been rumbling flat-out for a second, so what it needs is a
+      // CHANGE of texture rather than more of the same: a single hard tap
+      // against the buzz, and a small glow lift.
+      //
+      // No emitter and no shake. The meter's core is already popping, blowing
+      // past the bloom threshold and throwing a ring through the instrument on
+      // this exact frame, and the seal itself is at peak rim throb — a spray
+      // and a camera punch on top of that is the smear, not the moment. It
+      // borrows `strikePip`'s tick a fifth lower rather than staying silent,
+      // because the tell has to survive a player who is looking at the thing
+      // they are about to hit instead of at their own animal.
+      strikePerfect: { emit: null, shake: 0, hitstop: 0, glow: 0.35, sfx: 'strikePerfect',
+                       haptic: [{ duration: 70, magnitude: 1 }] },
       // The mouthful that topped the charge meter back off, fired at the ORB
       // rather than at the seal so it reads as "THAT is what refilled you".
       // Deliberately silent and rumble-free: it lands on the same frame as
@@ -11342,6 +11680,14 @@ export const CONFIG = {
       // pitch IS the reading — how close the bar is to full — and randomness
       // would blur the one thing it says.
       strikePip: { src: null, type: 'blip', wave: 'triangle', freq: [660, 900], decay: 0.09, gain: 0.13, pitchVary: 0 },
+      // THE WIND-UP FULLY LOADED — the note the pips have been climbing toward.
+      // The same triangle, an octave above where a pip run ends and rung twice
+      // as long: it has to arrive as the ARRIVAL rather than as one more tick,
+      // and the way to say that with the instrument the player already knows is
+      // pitch and length, not a new timbre. `pitchVary` 0 for the reason the
+      // pip has it — this is a reading, and a wobble on it says the top of the
+      // bar moved.
+      strikePerfect: { src: null, type: 'blip', wave: 'triangle', freq: [1320, 1760], decay: 0.2, gain: 0.2, pitchVary: 0 },
       // THE REFUSAL. Deliberately the strikePip's sweep run backwards and an
       // octave down — the same instrument saying the opposite thing, so a
       // player who has learned what a pip filling sounds like already knows
@@ -13746,6 +14092,39 @@ export const CONFIG = {
       // Per point of damage, and the ceiling on it — the shot recoil.
       damageImpulse: 1.1,
       maxDamageImpulse: 26,
+
+      // --- THE HEEL: a hull ROCKS, it does not only nod -----------------------
+      //
+      // `righting`/`spin` above are the roll about the screen normal, which on
+      // a hull modelled along X is the bow going up and down. That is a fine
+      // reaction and it is the ONLY one a hull had, so every hit — a shell, a
+      // ram from underneath, a turtle in the stern — produced the same nose-up
+      // nose-down bob at different sizes.
+      //
+      // This is the second axis: the heel about the hull's own length, the
+      // deck tipping toward and away from the camera. It comes off the
+      // VERTICAL part of whatever hit it (see `banks` in systems/rigidBody.js
+      // for the lever arm), which is why the seal coming up under a boat is
+      // the thing that rocks it hardest and a shell arriving flat barely does.
+      banks: true,
+      // Radians/sec of heel per unit of vertical velocity change. At 0.12 a
+      // full-charge ram from directly below puts a rowboat on its ear (the
+      // clamp catches it) and leans a trawler about 12 degrees, because the
+      // hull's mass is already in the number this multiplies.
+      bankSpin: 0.12,
+      // The share of ANY hit that heels it regardless of direction — no
+      // contact is truly on the centreline. Signed at random, so a run of
+      // level hits doesn't rock it the same way every time.
+      bankSlap: 0.02,
+      // Slack on purpose: about a 1.2-second rock that visibly comes back
+      // through level two or three times before it settles. Stiffen `righting`
+      // for a smaller boat that snaps back, raise `damping` to kill the
+      // overshoot entirely (and lose the rocking with it).
+      bankRighting: 26,
+      bankDamping: 2.4,
+      bankDrag: 0.3,
+      // The rail goes under; the mast does not. Same argument as `maxRoll`.
+      maxBank: 0.5,
     },
 
     // --- a turtle arriving at a hull -----------------------------------------
@@ -14484,6 +14863,123 @@ export const CONFIG = {
   // itself, and it is deliberately shared: two lasers that glowed differently
   // would read as two unrelated effects rather than as the same technology
   // pointed both ways.
+  // EYE LIGHTS — two wet black beads socketed into the seal's own eyeballs, on
+  // real bones (eye_L_09 / eye_R_010) that ride the head IK. Always on: this
+  // is a READOUT, not an upgrade — the head already tracks the cursor and the
+  // point of the eyes is that you can finally see it do so. systems/eyeLights.js.
+  //
+  // AT REST THEY ARE BLACK AND ONLY SHINY, and that is the whole design. An
+  // eye that glows all the time has spent its only channel; black is the floor
+  // that the wind-up, the release, the laser and the damage flash rise from.
+  //
+  // Read the header of that file before touching `farEye` or the radii: the
+  // camera is side-on and the two sockets land on the same screen pixel, so
+  // exactly one of these is visible at a time by design.
+  eyeLights: {
+    enabled: true,
+
+    // --- the resting bead -----------------------------------------------------
+    // A LIT material — the only one in this system — because the catchlight is
+    // a real specular off the scene's own key light rather than a painted
+    // glint, so it slides across the eye as the head turns. `roughness` is the
+    // whole look: at 0 the highlight is a hard pinpoint that flickers in and
+    // out as the head moves, and past ~0.35 it smears into a grey sheen and
+    // the eye stops reading as wet.
+    //
+    // NOT PURE BLACK. 0x05070a is a very dark blue-grey: a true 0x000000 takes
+    // no diffuse at all, so the eye becomes a hole in the head at every angle
+    // where the specular lobe is not pointing at the camera.
+    color: 0x05070a,
+    roughness: 0.12,
+    metalness: 0.1,
+    // World units. The eyeball geometry it sits in is 0.14 across, so this
+    // covers the seal's own dark eye rather than floating inside it.
+    radius: 0.08,
+
+    // --- the glow -------------------------------------------------------------
+    // The halo is the part that BLOOMS. CONFIG.bloom.divisor is 6, so the
+    // bright pass runs at a sixth of the screen; at roughly 20 px per world
+    // unit the bead at 0.16 across is about 3 screen pixels and half a pixel
+    // there, contributing nothing, while the halo at 0.84 lands at about 2.8.
+    // Shrinking `haloRadius` below ~0.3 puts the whole effect under the bright
+    // pass and it stops glowing at all.
+    haloRadius: 0.42,
+    haloOpacity: 0.7,
+    haloOverdrive: 1.2,
+    // The glow level at which the halo is at full opacity, and how much it
+    // SWELLS on the way. A halo that only ever changed opacity reads as the
+    // same lamp behind a thinner filter; one that grows reads as more light
+    // coming out of the same hole.
+    haloFullAt: 3,
+    haloSwell: 0.35,
+    haloSwellAt: 5,
+
+    // --- the wind-up ----------------------------------------------------------
+    // THE CHARGE RING'S OWN TWO COLOURS, deliberately — blue while the bank
+    // fills, mint at a full one (see strike.ring.color / readyColor). The eye
+    // and the meter must never disagree about what "loaded" looks like, and
+    // the whole reason the ring is drawn around the seal is so the bank can be
+    // read without looking away from what you are about to hit. This puts the
+    // same reading on the animal's face.
+    chargeColor: 0x7ad7ff,
+    chargeReadyColor: 0x9dffd0,
+    chargeGlow: 3.2,   // emissive strength, peak channel, at a full bank
+    chargeLerp: 7,     // how fast it eases ON as the bank fills
+    // ...and OFF, which is faster but still not instant. Letting go drops the
+    // button to 0 on one frame, and an eye that cut with it would strobe on
+    // every flick — the release spike below is what that moment is for.
+    chargeFall: 12,
+
+    // --- the release ----------------------------------------------------------
+    // A one-shot spike far past anything the wind-up reaches, eased out and
+    // scaled by the power actually spent, so a fizzle pops and a full
+    // commitment detonates. Same shape as the rim's flare
+    // (CONFIG.strike.charge.outline.flareGlow / flareTime) and fired from the
+    // same frame — the release, not the end of the dash.
+    flareGlow: 7,
+    flareTime: 0.3,
+
+    // --- the laser muzzle -----------------------------------------------------
+    // Its own channel rather than folded into the release: the two fire on
+    // completely different clocks (a cooldown and a button) and one shared
+    // decay would let whichever fired second silently re-light the first.
+    laserColor: 0x64f0ff,
+    laserGlow: 4,
+    laserTime: 0.22,
+
+    // --- being hit ------------------------------------------------------------
+    // RED WINS OUTRIGHT while it burns — it does not mix with the charge glow
+    // underneath. The rim can afford to show both (playerOutline.hit is ADDED
+    // to the wind-up throb) because it is a long thin shape; this is four
+    // pixels, where two colours are mud.
+    //
+    // The same red as the rim, and pushed toward orange for the same reason: a
+    // pure 0xff0000 clips to a flat unreadable slab in the bloom pass while a
+    // warmer hue keeps its shape.
+    hitColor: 0xff2a18,
+    hitGlow: 4.5,
+    // Seconds a FULL-strength flash lasts, and the floor a graze gets. Both
+    // scaled by the fraction of the health bar the hit cost — see
+    // systems/playerDamageFx.js, which owns that reading for every channel.
+    hitTime: 0.45,
+    hitMinTime: 0.18,
+
+    // --- which eye you are looking at -----------------------------------------
+    // The z of the socket's own normal. 1 is straight at the lens, -1 straight
+    // away. The seal is drawn side-on, so side-on these read +0.76 and -0.76:
+    // the near eye is well past `faceFull` and the far one well under
+    // `faceStart`. They only really bite while the body cranes toward camera.
+    faceStart: -0.05,
+    faceFull: 0.25,
+    // What the AWAY-facing eye keeps. 0 — a seal's far eye is behind its
+    // skull. Because the two sockets share a screen pixel, raising it only
+    // makes the single visible eye brighter; it is a taste knob and not a way
+    // to see the pair.
+    farEye: 0,
+    fadeIn: 9,
+    fadeOut: 5,
+  },
+
   // LASER EYES — the seal's own pair. systems/laserEyes.js fires them; what a
   // beam LOOKS like is CONFIG.beams, shared with the boss's, because they are
   // the same technology pointed in opposite directions.
@@ -17119,6 +17615,64 @@ export const CONFIG = {
     // underneath it.
     restoreTime: 0.55,
 
+    // -------------------------------------------------------------------
+    // THE SALUTE — what the half second before the cards is FOR.
+    //
+    // The beat above was a pause with nothing in it: the ocean leaned into
+    // slow motion and then the menu arrived, and the animal the whole run is
+    // about had no reaction to the thing that just happened to it. So the beat
+    // is lengthened, the frame snaps in on the seal, and the seal throws both
+    // flippers up.
+    //
+    // WHY THIS IS A NEW BLOCK RATHER THAN A BIGGER `menuDelay`: every value in
+    // the ramp above is already in the saved tuning snapshot, which wins over
+    // config.js for any key it holds (see the note by deepMerge). Raising
+    // menuDelay from 0.12 to 0.62 in this file would reach nobody who has ever
+    // opened the tuner — the feature would ship half-applied, with a camera
+    // punch and a pose crammed into a beat that never got longer. `beat` is a
+    // name the snapshot has never heard of, so it lands. It ADDS to menuDelay
+    // rather than replacing it; cardsArriveAt() in systems/levelUpTime.js is
+    // where the sum lives, and the pose and the camera below are both timed
+    // against that one function rather than against copies of these numbers.
+    //
+    // Wall-clock seconds throughout, like the rest of this block. The snap is
+    // the point of it — a zoom that eases in is a slow push, which is what a
+    // death already does and the opposite of what this is for.
+    salute: {
+      enabled: true,
+      // The extra beat, on top of dilateTime + menuDelay. This is the half
+      // second the seal is given to react in.
+      beat: 0.5,
+
+      // --- the frame ---
+      // Well past the cinematic rig's resting 1.18, because at full weight
+      // this REPLACES the rig's zoom rather than multiplying it (see the
+      // handover in world.js updateCamera) — anything near 1.2 here reads as
+      // the camera doing nothing at all.
+      zoom: 1.85,
+      weight: 1,      // how much of the framing the push owns, 0..1
+      punchIn: 0.06,  // seconds to land it. Three or four frames: a cut with travel in it
+      release: 0.4,   // seconds opening back out, starting ON the cards
+
+      // --- the pose ---
+      // Rolled per level from systems/celebrate.js's roster, so the reaction
+      // is not the same clip forty times in a run. Deliberately NOT the boss
+      // kill's weights: `flip` is a whole somersault and `tailWag` reads as
+      // swimming, and neither is what a level is worth. Zero one out to retire
+      // it; a name with no pose behind it is dropped rather than picked.
+      poses: {
+        finsUp: 1.4,   // both flippers over the head — the plainest read, and the one asked for
+        clap: 1.1,     // the sea lion clap
+        headToss: 0.5, // barking at the sky
+      },
+      // How far AHEAD of the cards full extension lands. Short on purpose: the
+      // pose should still be at full height as the cards dither in over it,
+      // not finished and letting go.
+      poseLead: 0.12,
+      poseHold: 0.22,    // seconds held at full extension
+      poseRelease: 0.4,  // seconds easing back into the swim cycle
+    },
+
     // The mix sags with the picture. Gentler than the death dive by default:
     // this sits on top of the filter duck the upgrade screen already applies
     // (music.js duckForUpgrade), and a full-follow drop on top of that buries
@@ -17255,7 +17809,7 @@ export const CONFIG = {
   // while a species still gets to disagree. An asset opts in with
   // `toonShade: '<preset name>'` in ASSETS.
   //
-  // Tuned in the skin lab: npm run looks:skinlab
+  // Tuned in the shader lab: npm run looks:shaderlab
   toonShade: {
     enabled: true,
     base: {
@@ -17296,6 +17850,43 @@ export const CONFIG = {
     gap: 2,
     perRow: 5,           // `rows` only
     bow: 0.55,           // `arc` only — how far the middle of the run bulges
+
+    // THE PICK FLYING TO ITS TILE. A chosen card shrinks into the corner and is
+    // swapped for its hex on arrival — see flyCardToHive in ui/ui.js.
+    //
+    // Short on purpose. This lands on top of a run that is already moving again
+    // (the choice is filed before the flight starts), so anything long enough to
+    // notice as an animation is long enough to be in the way of the fight. A
+    // third of a second reads as the card being filed rather than as a cutscene.
+    fly: {
+      enabled: true,
+      seconds: 0.34,
+      ease: 'outCubic',   // a name from ease.js, turned into a CSS curve
+      landOpacity: 0.85,  // fades only at the very end, so the swap is hidden
+    },
+
+    // THE CORNER MAKING ROOM. One more hexagon changes the packing, so half the
+    // hive moves a few pixels on most picks — rebuilt cold that is a jump cut.
+    // These tiles slide to their new places instead, starting nearest the
+    // newcomer and working outward, which reads as the new tile pushing in
+    // rather than as the panel resizing.
+    shift: {
+      enabled: true,
+      seconds: 0.42,
+      stagger: 0.022,     // seconds between each tile starting, by distance
+      // An OVERSHOOT curve, and one of the few places that asks for one — see
+      // OVERSHOOT_TABLE in ease.js and why it is kept out of the picker lists.
+      ease: 'outBack',
+    },
+
+    // THE ARRIVAL. The new tile slams in and the rest of the hive registers it
+    // as a wave. Once per pick, so it is allowed to be the loudest thing the
+    // corner does — see the keyframes in ui/ui.js.
+    ripple: {
+      enabled: true,
+      delay: 90,          // ms after the slam starts before the wave sets off
+      msPerPx: 0.9,       // how fast the wave crosses the corner
+    },
   },
 };
 
@@ -18147,6 +18738,31 @@ function textPanelGroups() {
 
   return groups;
 }
+// >>> shader lab presets — generated by tools/apply-shaders.mjs, do not hand-edit
+//
+// Written by the shader lab's `record` button. ADD-ONLY: `??=` below means a
+// preset already declared above wins and the copy here is ignored, so nothing
+// hand-authored is ever overwritten. Move any of these up into the block it
+// belongs to whenever you want to give it a comment of its own.
+for (const [root, presets] of Object.entries({
+  toonShade: {
+    "mightyMeg": { strength: 1, gamma: 0.5, soft: 0 },
+    "greatWhite": { high: 0.71, gamma: 2.1, steps: 4 },
+  },
+  sealShader: {
+    "mightyMeg": { strength: 0 },
+    "greatWhite": { strength: 1.3 },
+  },
+  biolumSkin: {
+    "clubIce": { shellColor: 0x000000, colorC: 0x000000, colorB: 0xade6e5, flow: 1.16, pattern: "flow", scale: 0.07 },
+    "hide": { pattern: "flow", scale: 0.21, pigment: 1, contrast: 3.15, colorB: 0x000000, shellColor: 0x000000, flow: 1.52, colorA: 0x60cbe6, colorC: 0x969696, strength: 3, coverage: 0.56 },
+    "octoGrabber": { flow: 1.2, pattern: "marble", scale: 0.13, shellColor: 0xff5e24, colorA: 0xff9500, colorC: 0x00f048 },
+  },
+})) {
+  const bag = ((CONFIG[root] ??= {}).presets ??= {});
+  for (const [name, fields] of Object.entries(presets)) bag[name] ??= fields;
+}
+// <<< end shader lab presets
 
 export const TUNER_SCHEMA = [
   {
@@ -18862,7 +19478,9 @@ export const TUNER_SCHEMA = [
       { path: 'strike.charge.gulp.tell.spinMul', min: 1, max: 10, step: 0.5, label: 'gulp: waiting chum spin-up' },
       { path: 'strike.charge.shake', min: 0, max: 0.3, step: 0.005, label: 'charge: wind-up shake' },
       { path: 'strike.charge.hapticInterval', min: 0.02, max: 0.4, step: 0.01, label: 'charge: rumble interval' },
-      { path: 'strike.charge.flashTime', min: 0, max: 1, step: 0.02, label: 'charge: spend flash' },
+      // Times the drop coming apart as well as the white blowout — one event,
+      // one clock. See CONFIG.strike.ring.core's release block.
+      { path: 'strike.charge.flashTime', min: 0, max: 1, step: 0.02, label: 'charge: spend flash / core burst' },
       { path: 'strike.charge.tailLift', min: 0, max: 40, step: 0.5, label: 'wind-up: tail lift' },
       // The four channels of the wind-up tremble. `head` and `body` ran to 0.3
       // when the block was called `vibrate` and both sat near the bottom of it;
@@ -18912,6 +19530,16 @@ export const TUNER_SCHEMA = [
       { path: 'strike.knockback.decay', min: 0.5, max: 20, step: 0.25, label: 'ram: knockback falloff' },
       { path: 'strike.knockback.spin', min: 0, max: 20, step: 0.5, label: 'ram: tumble imparted' },
       { path: 'strike.knockback.boneImpulse', min: 0, max: 10, step: 0.1, label: 'ram: skeleton flinch' },
+      // What a ram does to something too big to eat and still alive after it.
+      // See CONFIG.strike.knockback.heavy — the shove above is written for the
+      // schools and was very nearly invisible on a shark.
+      { path: 'strike.knockback.heavy.enabled', type: 'bool', label: 'ram: big survivors get knocked back' },
+      { path: 'strike.knockback.heavy.minRadius', min: 0.2, max: 3, step: 0.05, label: 'ram: body size that counts as big' },
+      { path: 'strike.knockback.heavy.speedMul', min: 1, max: 4, step: 0.1, label: 'ram: extra shove for a survivor' },
+      { path: 'strike.knockback.heavy.decay', min: 1, max: 20, step: 0.5, label: 'ram: how far that one carries (lower = further)' },
+      { path: 'strike.knockback.heavy.stagger', min: 0, max: 2, step: 0.05, label: 'ram: seconds it is off its stroke' },
+      { path: 'strike.knockback.heavy.staggerSlow', min: 0, max: 1, step: 0.05, label: 'ram: how much of its swimming that takes' },
+      { path: 'strike.knockback.heavy.headingKick', min: 0, max: 2, step: 0.05, label: 'ram: how far it is turned off its line' },
       { path: 'strike.mark.enabled', type: 'bool', label: 'mark: strike paints big targets' },
       { path: 'strike.mark.duration', min: 0.5, max: 20, step: 0.5, label: 'mark: seconds it lasts' },
       { path: 'strike.mark.minRadius', min: 0, max: 3, step: 0.05, label: 'mark: smallest body worth painting' },
@@ -19029,6 +19657,31 @@ export const TUNER_SCHEMA = [
       { path: 'camera.punch.enabled', type: 'bool', label: 'camera punch-in' },
       { path: 'camera.punch.max', min: 0, max: 0.4, step: 0.01, label: 'camera punch: max zoom' },
       { path: 'camera.punch.decay', min: 1, max: 20, step: 0.5, label: 'camera punch: release speed' },
+    ],
+  },
+  {
+    // The title screen's hero shot. In the Camera section rather than under the
+    // seal's rigging because nothing here is a rig value: the head and flippers
+    // are aimed by CONFIG.head and CONFIG.fins exactly as they are in a run, and
+    // every row below is about the FRAME the animal is being held up in.
+    //
+    // `scrim` is the one to reach for first if the seal cannot be seen at all —
+    // and if turning it to 0 still shows nothing, the splash artboard has a
+    // background of its own and the fix is in Rive.
+    group: 'Title screen: the seal',
+    section: 'Camera',
+    items: [
+      { path: 'titleSeal.enabled', type: 'bool', label: 'hold the seal up on the title card' },
+      { path: 'titleSeal.scrim', min: 0, max: 1, step: 0.01, label: 'card backdrop (1 = solid, 0 = bare water)' },
+      { path: 'titleSeal.zoom', min: 1, max: 12, step: 0.05, label: 'push-in (x)' },
+      { path: 'titleSeal.offset.x', min: -20, max: 20, step: 0.25, label: 'seal sits off centre: horizontal (world units)' },
+      { path: 'titleSeal.offset.y', min: -20, max: 20, step: 0.25, label: 'seal sits off centre: vertical (world units)' },
+      { path: 'titleSeal.inTime', min: 0.05, max: 5, step: 0.05, label: 'push-in time (s)' },
+      { path: 'titleSeal.inEase', type: 'choice', options: EASINGS, label: 'push-in curve' },
+      { path: 'titleSeal.outTime', min: 0.05, max: 3, step: 0.05, label: 'release time (s)' },
+      { path: 'titleSeal.outEase', type: 'choice', options: EASINGS, label: 'release curve' },
+      { path: 'titleSeal.turnLerp', min: 0.2, max: 12, step: 0.1, label: 'body follows cursor (per second)' },
+      { path: 'titleSeal.turnAround', min: 0.05, max: 2, step: 0.05, label: 'turnaround roll (s)' },
     ],
   },
   {
@@ -19894,6 +20547,53 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
+    group: 'Eye lights',
+    section: 'Creature rigging',
+    items: [
+      { path: 'eyeLights.enabled', type: 'bool', label: 'lit eyes' },
+      // The resting bead. `roughness` IS the look — at 0 the catchlight is a
+      // hard pinpoint that flickers as the head turns, past ~0.35 it smears
+      // into a grey sheen and the eye stops reading as wet.
+      { path: 'eyeLights.color', type: 'color', label: 'eye colour (resting)' },
+      { path: 'eyeLights.roughness', min: 0, max: 0.6, step: 0.01, label: 'wetness (lower = sharper glint)' },
+      { path: 'eyeLights.metalness', min: 0, max: 1, step: 0.02, label: 'metallic' },
+      { path: 'eyeLights.radius', min: 0.02, max: 0.3, step: 0.005, label: 'eye size' },
+      // Floor deliberately above the point where the halo stops blooming — at
+      // a sixth-scale bright pass anything under about 0.3 is sub-pixel there
+      // and the glow simply vanishes. See the note on CONFIG.eyeLights.
+      { path: 'eyeLights.haloRadius', min: 0.1, max: 1.4, step: 0.02, label: 'glow size' },
+      { path: 'eyeLights.haloOpacity', min: 0, max: 1, step: 0.02, label: 'glow opacity' },
+      { path: 'eyeLights.haloOverdrive', min: 0.2, max: 6, step: 0.1, label: 'glow brightness' },
+      { path: 'eyeLights.haloFullAt', min: 0.5, max: 8, step: 0.1, label: 'glow full at' },
+      { path: 'eyeLights.haloSwell', min: 0, max: 1.5, step: 0.05, label: 'glow swells by' },
+      // The wind-up. Same two colours the charge ring uses, on purpose.
+      { path: 'eyeLights.chargeColor', type: 'color', label: 'charging colour' },
+      { path: 'eyeLights.chargeReadyColor', type: 'color', label: 'full-bank colour' },
+      { path: 'eyeLights.chargeGlow', min: 0, max: 10, step: 0.1, label: 'charge brightness' },
+      { path: 'eyeLights.chargeLerp', min: 1, max: 25, step: 0.5, label: 'charge ease on' },
+      { path: 'eyeLights.chargeFall', min: 1, max: 30, step: 0.5, label: 'charge ease off' },
+      // The release.
+      { path: 'eyeLights.flareGlow', min: 0, max: 16, step: 0.2, label: 'release flare' },
+      { path: 'eyeLights.flareTime', min: 0.05, max: 1.2, step: 0.02, label: 'release flare time' },
+      // The laser muzzle.
+      { path: 'eyeLights.laserColor', type: 'color', label: 'laser muzzle colour' },
+      { path: 'eyeLights.laserGlow', min: 0, max: 12, step: 0.2, label: 'laser muzzle flare' },
+      { path: 'eyeLights.laserTime', min: 0.05, max: 1, step: 0.02, label: 'laser muzzle time' },
+      // Being hit. Red takes the eye outright while it burns.
+      { path: 'eyeLights.hitColor', type: 'color', label: 'damage colour' },
+      { path: 'eyeLights.hitGlow', min: 0, max: 12, step: 0.2, label: 'damage flash' },
+      { path: 'eyeLights.hitTime', min: 0.05, max: 1.5, step: 0.02, label: 'damage flash time (full hit)' },
+      { path: 'eyeLights.hitMinTime', min: 0.05, max: 0.8, step: 0.02, label: '...and for a graze' },
+      // The near/far split. Side-on the two sockets read +0.76 and -0.76, so
+      // these only bite while the body is craning toward the camera.
+      { path: 'eyeLights.faceStart', min: -1, max: 1, step: 0.05, label: 'far eye starts lighting at' },
+      { path: 'eyeLights.faceFull', min: -1, max: 1, step: 0.05, label: 'fully lit past' },
+      { path: 'eyeLights.farEye', min: 0, max: 1, step: 0.02, label: 'away-facing eye keeps' },
+      { path: 'eyeLights.fadeIn', min: 1, max: 20, step: 0.5, label: 'light-up speed' },
+      { path: 'eyeLights.fadeOut', min: 1, max: 20, step: 0.5, label: 'go-out speed (death)' },
+    ],
+  },
+  {
     group: 'Glow source',
     section: 'Look & FX',
     items: [
@@ -20091,12 +20791,52 @@ export const TUNER_SCHEMA = [
       { path: 'strike.ring.comboColor', type: 'color', label: 'combo colour' },
       { path: 'strike.ring.glow', min: 0, max: 8, step: 0.1 },
       { path: 'strike.ring.pulseSpeed', min: 0, max: 30, step: 0.5, label: 'combo pulse speed' },
-      // --- the banked-power arc, inside. innerRadiusMul is a BLOOM number:
-      // below about 0.7 the two bands fuse into one at the shipped bloom
-      // settings. See systems/strikeRing.js.
-      { path: 'strike.ring.innerRadiusMul', min: 0.2, max: 0.95, step: 0.01, label: 'banked arc: radius (x outer)' },
-      { path: 'strike.ring.innerThicknessMul', min: 0.2, max: 2, step: 0.05, label: 'banked arc: thickness (x)' },
-      { path: 'strike.ring.innerGlowMul', min: 0, max: 2, step: 0.05, label: 'banked arc: brightness (x)' },
+      // --- THE CORE: banked power, as a drop of goo. innerRadiusMul is a
+      // BLOOM number: past about 0.7 the drop and the fuel ring fuse into one
+      // smear at the shipped bloom settings. See systems/strikeRing.js.
+      { path: 'strike.ring.innerRadiusMul', min: 0.2, max: 0.95, step: 0.01, label: 'core: full size (x ring)' },
+      { path: 'strike.ring.innerGlowMul', min: 0, max: 2, step: 0.05, label: 'core: brightness (x)' },
+      { path: 'strike.ring.core.enabled', type: 'bool', label: 'core: draw the drop' },
+      // The shape of the liquid. `wobble` past about 0.5 stops the lobes
+      // overlapping the core enough to fuse and the drop becomes a ring of
+      // separate beads — the same edge CONFIG.fx.goo's `aura` group documents.
+      { path: 'strike.ring.core.lobes', min: 0, max: 7, step: 1, label: 'core: lobes under the skin' },
+      { path: 'strike.ring.core.wobble', min: 0, max: 0.8, step: 0.01, label: 'core: how far the lobes ride out' },
+      { path: 'strike.ring.core.lobeSize', min: 0.1, max: 1.2, step: 0.02, label: 'core: lobe size (x)' },
+      { path: 'strike.ring.core.churn', min: 0, max: 3, step: 0.05, label: 'core: roll (turns/sec)' },
+      { path: 'strike.ring.core.breathe', min: 0, max: 0.6, step: 0.01, label: 'core: lobe breath depth' },
+      { path: 'strike.ring.core.breatheHz', min: 0, max: 4, step: 0.05, label: 'core: lobe breath rate' },
+      // The surface, in the vocabulary CONFIG.fx.goo's groups are written in.
+      { path: 'strike.ring.core.iso', min: 0.05, max: 0.95, step: 0.01, label: 'core: isoline (surface density)' },
+      { path: 'strike.ring.core.soft', min: 0.01, max: 0.5, step: 0.01, label: 'core: edge softness' },
+      { path: 'strike.ring.core.body', min: 0, max: 1.5, step: 0.05, label: 'core: body brightness' },
+      { path: 'strike.ring.core.rim', min: 0, max: 2, step: 0.05, label: 'core: wet rim' },
+      { path: 'strike.ring.core.rimWidth', min: 0.05, max: 1.5, step: 0.05, label: 'core: rim width' },
+      { path: 'strike.ring.core.spec', min: 0, max: 1.5, step: 0.05, label: 'core: highlight' },
+      { path: 'strike.ring.core.specPower', min: 2, max: 60, step: 1, label: 'core: highlight tightness' },
+      { path: 'strike.ring.core.normal', min: 0, max: 3, step: 0.05, label: 'core: surface curvature' },
+      { path: 'strike.ring.core.minFill', min: 0, max: 0.3, step: 0.01, label: 'core: hidden below this much power' },
+      { path: 'strike.ring.core.floor', min: 0, max: 0.8, step: 0.01, label: 'core: smallest drop drawn (x full)' },
+      // --- the perfect charge landing ---
+      { path: 'strike.charge.perfectFlashTime', min: 0.1, max: 2, step: 0.05, label: 'perfect charge: pop length (s)' },
+      { path: 'strike.ring.core.popScale', min: 1, max: 3, step: 0.05, label: 'perfect charge: swell (x)' },
+      { path: 'strike.ring.core.popGlow', min: 0, max: 12, step: 0.1, label: 'perfect charge: flare' },
+      { path: 'strike.ring.core.popWobble', min: 1, max: 5, step: 0.1, label: 'perfect charge: lobes fling out (x)' },
+      { path: 'strike.ring.core.popChurn', min: 1, max: 12, step: 0.1, label: 'perfect charge: roll (x)' },
+      { path: 'strike.ring.core.ringFrom', min: 0.1, max: 1.5, step: 0.01, label: 'perfect charge: shock ring from' },
+      { path: 'strike.ring.core.ringTo', min: 0.2, max: 2.5, step: 0.01, label: 'perfect charge: shock ring to' },
+      { path: 'strike.ring.core.ringWidth', min: 0.01, max: 0.5, step: 0.01, label: 'perfect charge: shock ring width' },
+      { path: 'strike.ring.core.ringGlow', min: 0, max: 10, step: 0.1, label: 'perfect charge: shock ring flare' },
+      { path: 'strike.ring.core.ringWheel', min: 0, max: 1, step: 0.05, label: 'perfect charge: shock ring wears the pip colours' },
+      // --- the release blowing the drop apart. It runs on the spend flash
+      // (strike.charge.flashTime), so there is no duration of its own here.
+      { path: 'strike.ring.core.burstSpread', min: 0, max: 2, step: 0.02, label: 'release: how far the drops are thrown' },
+      { path: 'strike.ring.core.burstCore', min: 0, max: 1, step: 0.02, label: 'release: what the middle collapses to (x)' },
+      { path: 'strike.ring.core.burstShrink', min: 0, max: 1.5, step: 0.02, label: 'release: what each drop shrinks to (x)' },
+      { path: 'strike.ring.core.burstChurn', min: 1, max: 8, step: 0.1, label: 'release: roll on the way out (x)' },
+      { path: 'strike.ring.core.burstGlow', min: 0, max: 8, step: 0.1, label: 'release: flare as it tears' },
+      { path: 'strike.ring.core.burstFade', min: 0, max: 0.95, step: 0.05, label: 'release: held before it fades' },
+      { path: 'strike.ring.core.burstEase', type: 'choice', options: EASINGS, label: 'release: impulse curve' },
       { path: 'strike.ring.chainRadiusMul', min: 1, max: 1.6, step: 0.01, label: 'chain-window arc: radius (x)' },
       // --- how the needle moves ---
       { path: 'strike.ring.springStiffness', min: 20, max: 600, step: 5, label: 'needle: spring stiffness' },
@@ -20433,7 +21173,13 @@ export const TUNER_SCHEMA = [
       { path: 'physics.boat.buoyancy', min: 1, max: 90, step: 1, label: 'hull: buoyancy spring' },
       { path: 'physics.boat.buoyancyDamping', min: 0, max: 20, step: 0.2, label: 'hull: buoyancy damping' },
       { path: 'physics.boat.righting', min: 1, max: 90, step: 1, label: 'hull: righting spring' },
-      { path: 'physics.boat.spin', min: 0, max: 10, step: 0.1, label: 'hull: roll per hit' },
+      { path: 'physics.boat.spin', min: 0, max: 10, step: 0.1, label: 'hull: nod per hit (bow up/down)' },
+      { path: 'physics.boat.banks', type: 'bool', label: 'hull: rocks side to side' },
+      { path: 'physics.boat.bankSpin', min: 0, max: 0.6, step: 0.01, label: 'hull: heel per hit from below' },
+      { path: 'physics.boat.bankSlap', min: 0, max: 0.2, step: 0.005, label: 'hull: heel from a flat hit' },
+      { path: 'physics.boat.bankRighting', min: 1, max: 90, step: 1, label: 'hull: heel spring (how fast it rocks)' },
+      { path: 'physics.boat.bankDamping', min: 0, max: 20, step: 0.2, label: 'hull: heel damping (0 = rocks forever)' },
+      { path: 'physics.boat.maxBank', min: 0, max: 1.2, step: 0.05, label: 'hull: furthest it may heel' },
       { path: 'physics.boat.strikeImpulse', min: 0, max: 400, step: 5, label: 'ram: hull shove' },
       { path: 'physics.boat.damageImpulse', min: 0, max: 6, step: 0.05, label: 'hull: recoil per damage' },
       { path: 'physics.impact.damagePerImpulse', min: 0, max: 3, step: 0.05, label: 'turtle→hull: damage per impulse' },
@@ -20895,6 +21641,18 @@ export const TUNER_SCHEMA = [
       { path: 'levelUp.hold', min: 0.05, max: 1, step: 0.01, label: 'held time scale' },
       { path: 'levelUp.dilateTime', min: 0.05, max: 2, step: 0.05, label: 'time to reach it (s)' },
       { path: 'levelUp.menuDelay', min: 0, max: 2, step: 0.02, label: 'beat before the cards (s)' },
+      { path: 'levelUp.salute.enabled', type: 'bool', label: 'the seal salutes its level' },
+      { path: 'levelUp.salute.beat', min: 0, max: 2, step: 0.02, label: 'salute: extra beat (s)' },
+      { path: 'levelUp.salute.zoom', min: 1, max: 3, step: 0.05, label: 'salute: snap zoom (x)' },
+      { path: 'levelUp.salute.weight', min: 0, max: 1, step: 0.05, label: 'salute: how much frame it owns' },
+      { path: 'levelUp.salute.punchIn', min: 0.01, max: 0.5, step: 0.01, label: 'salute: snap time (s)' },
+      { path: 'levelUp.salute.release', min: 0.05, max: 1.5, step: 0.05, label: 'salute: zoom back out over (s)' },
+      { path: 'levelUp.salute.poseLead', min: 0, max: 0.8, step: 0.02, label: 'salute: pose peaks this early (s)' },
+      { path: 'levelUp.salute.poseHold', min: 0, max: 1.5, step: 0.02, label: 'salute: pose held (s)' },
+      { path: 'levelUp.salute.poseRelease', min: 0.05, max: 1.5, step: 0.05, label: 'salute: pose eases out over (s)' },
+      { path: 'levelUp.salute.poses.finsUp', min: 0, max: 3, step: 0.1, label: 'salute odds: both fins up' },
+      { path: 'levelUp.salute.poses.clap', min: 0, max: 3, step: 0.1, label: 'salute odds: clap' },
+      { path: 'levelUp.salute.poses.headToss', min: 0, max: 3, step: 0.1, label: 'salute odds: bark at the sky' },
       { path: 'levelUp.restoreTime', min: 0.05, max: 3, step: 0.05, label: 'speed back up over (s)' },
       { path: 'levelUp.audio.enabled', type: 'bool', label: 'slow the sound too' },
       { path: 'levelUp.audio.follow', min: 0, max: 1, step: 0.05, label: 'how far sound follows' },

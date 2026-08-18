@@ -221,8 +221,23 @@ clearAll();
   const shark = spawnAt('shark', 0, -24);
   const startX = turtle.mesh.position.x;
 
+  // A NOMINAL turtle, pinned. Its size is rolled per individual and its mass
+  // goes as the square of that (see SIZES above), so an unpinned one is a punt
+  // anywhere between a cannonball and a boulder — which is exactly right in
+  // the game and useless in a distance threshold. Same move the runt/boulder
+  // pair above makes, for the opposite reason.
+  turtle.body.setMass(CONFIG.physics.turtle.mass);
+
   applyKnockback(turtle, 1, 0, 1);
-  applyKnockback(shark, 1, 0, 1);
+  const sharkPush = applyKnockback(shark, 1, 0, 1);
+  // HOW FAR THAT SHOVE IS WORTH, in units: the knock is a velocity decaying
+  // exponentially, so it integrates to speed/decay. Measured this way rather
+  // than by watching the shark's position, because a shark swims 7 units/sec
+  // under its own power in whatever direction it rolled at spawn — its actual
+  // travel over a second and a half is mostly steering, and a threshold
+  // written against it is a coin flip. See the same argument, at length, in
+  // tools/strike-impact-test.mjs.
+  const sharkReach = sharkPush / (shark.knockDecay || CONFIG.strike.knockback.decay);
 
   check('the shove lands as body velocity', turtle.body.vx > 1,
     `${turtle.body.vx.toFixed(1)} u/s`);
@@ -231,16 +246,27 @@ clearAll();
   check('...and it spins the shell', Math.abs(turtle.body.angVel) > 0.1,
     `${turtle.body.angVel.toFixed(2)} rad/s`);
 
-  const sharkStart = shark.mesh.position.x;
   for (let i = 0; i < 90; i++) frame(); // a second and a half
   const turtleTravel = turtle.mesh.position.x - startX;
-  const sharkTravel = Math.abs(shark.mesh.position.x - sharkStart);
 
   check('a punted turtle crosses real distance', turtleTravel > 25,
     `${turtleTravel.toFixed(1)} units in 1.5s, arena is ${bounds.width.toFixed(0)} wide`);
-  check('...much further than the same shove moves a body without one',
-    turtleTravel > sharkTravel * 2,
-    `turtle ${turtleTravel.toFixed(1)} vs shark ${sharkTravel.toFixed(1)}`);
+  // Still further than a shark, but the margin is no longer the whole story:
+  // a big creature that SURVIVES a ram is genuinely knocked back now (see
+  // CONFIG.strike.knockback.heavy), so the shark below is not the "barely
+  // moves" control it once was. What still separates them is what happens
+  // AFTER the shove — checked immediately below.
+  check('...still much further than the same shove is worth to a body without one',
+    turtleTravel > sharkReach * 2,
+    `turtle ${turtleTravel.toFixed(1)} units vs a shove worth ${sharkReach.toFixed(1)}`);
+  // THE ACTUAL DIFFERENCE between ammunition and a shoved animal: the turtle
+  // is still travelling a second and a half later because the velocity is
+  // ITS OWN, while the shark's shove is an offset that has bled off and left
+  // it swimming again. Lose this and the turtle has quietly gone back to
+  // being a creature with a knock on it.
+  check('...and it is still going, while the shark is swimming again',
+    Math.abs(turtle.body.vx) > 5 && Math.abs(shark.knockX ?? 0) < 1,
+    `turtle ${turtle.body.vx.toFixed(1)} u/s, shark residual ${(shark.knockX ?? 0).toFixed(2)}`);
   check('...and it is still finite', Number.isFinite(turtle.mesh.position.x));
 }
 
@@ -416,6 +442,92 @@ clearAll();
   check('...and the limit is well short of capsizing', limit < Math.PI / 4, `${limit} rad`);
 }
 
+// THE HEEL — the second axis, and the one a player reads as "the boat rocked".
+//
+// Everything here is about ROLL ABOUT THE HULL'S OWN LENGTH (mesh.rotation.x),
+// which is not the nod the checks above measure (body.angle, mesh.rotation.z).
+// The two are easy to confuse in a side-on game and they are different
+// gestures: the nod is the bow dipping, the heel is the deck tipping toward
+// and away from the camera. A hull that only nodded answered every hit it ever
+// took with the same motion at different sizes.
+clearAll();
+{
+  const boat = spawnBoatNow();
+  boat.body.place(0, bounds.surfaceY);
+  check('a hull banks and a turtle does not', boat.body.banks === true);
+
+  // Up from underneath, which is where the seal comes from. The heel is taken
+  // off the VERTICAL part of the impulse (see `banks` in rigidBody.js), so
+  // this is the case that should roll it hardest.
+  jostleBoat(boat, 0, 1, 1, { x: boat.body.x, y: boat.body.y });
+  check('a ram from below heels it', Math.abs(boat.body.bankVel) > 0.5,
+    `${boat.body.bankVel.toFixed(2)} rad/s`);
+  check('...away from the camera, not into it', boat.body.bankVel < 0,
+    'the near side is the one being lifted');
+
+  // ...and then it ROCKS: back through level and out the other side, more than
+  // once, before it settles. A spring damped hard enough to kill the overshoot
+  // would leave a hull that leans and returns, which is a flinch again.
+  // Counted as sign changes of the heel with a deadzone, NOT as "the value is
+  // big and has flipped": a crossing happens AT zero, so any threshold read on
+  // the crossing frame itself is really asking how fast it was going through —
+  // which is true of the first swing and false of every later one, and the
+  // count silently stops rising as the rock dies down.
+  let crossings = 0;
+  let peak = 0;
+  let side = 0;
+  for (let i = 0; i < 60 * 4; i++) {
+    updateBoats(dt, scene, 0, playerPos, {});
+    stepBodies(dt);
+    boat.body.x = 0; // keep it off the despawn margin — see above
+    peak = Math.max(peak, Math.abs(boat.body.bank));
+    if (Math.abs(boat.body.bank) > 1e-3) {
+      const now = Math.sign(boat.body.bank);
+      if (side !== 0 && now !== side) crossings++;
+      side = now;
+    }
+  }
+  check('...and it rocks rather than leaning and returning', crossings >= 3,
+    `${crossings} passes through level`);
+  check('...the rail may go under, the mast may not',
+    peak <= (CONFIG.physics.boat.maxBank ?? 0.5) + 1e-6,
+    `worst ${peak.toFixed(3)} rad, limit ${CONFIG.physics.boat.maxBank}`);
+  check('...and it is level again a few seconds later', Math.abs(boat.body.bank) < 0.02,
+    `${boat.body.bank.toFixed(3)} rad after 4s`);
+  check('the heel is written onto the hull, not just held in the body',
+    Math.abs(boat.mesh.rotation.x - (boat.body.restBank + boat.body.bank)) < 1e-9);
+}
+
+// Ten full-charge rams, the worst case for winding the heel spring up.
+clearAll();
+{
+  const boat = spawnBoatNow();
+  const limit = CONFIG.physics.boat.maxBank ?? 0.5;
+  let worst = 0;
+  for (let hit = 0; hit < 10; hit++) {
+    jostleBoat(boat, 0, 1, 1, { x: boat.body.x, y: boat.body.y });
+    for (let i = 0; i < 12; i++) {
+      updateBoats(dt, scene, 0, playerPos, {});
+      stepBodies(dt);
+      worst = Math.max(worst, Math.abs(boat.body.bank));
+    }
+  }
+  check('a hull rammed ten times never rolls its mast into the water',
+    worst <= limit + 1e-6, `worst ${worst.toFixed(3)} rad, limit ${limit}`);
+}
+
+// Nothing else in the water has an opinion about that axis, and writing it on
+// a body that never asked would put a permanent cant on a shell.
+clearAll();
+{
+  const turtle = spawnAt('seaTurtle', 0, -14);
+  applyKnockback(turtle, 0, 1, 1);
+  for (let i = 0; i < 60; i++) frame();
+  check('a punted turtle is never heeled', turtle.body.banks === false
+    && turtle.body.bank === 0 && Math.abs(turtle.mesh.rotation.x) < 1e-9,
+    `rotation.x ${turtle.mesh.rotation.x.toFixed(4)}`);
+}
+
 // A trawler is heavier — the same ram moves it less.
 clearAll();
 {
@@ -446,7 +558,18 @@ clearAll();
   boat.body.place(0, bounds.surfaceY);
   boat.hp = 1e6; // survives the hit, so the bounce is measurable afterwards
 
+  // A NOMINAL turtle, by taking its size roll away for this one block. Its
+  // radius decides how deep its own clamp holds it under the surface, and that
+  // is what decides which FACE of the hull it arrives at: a nominal one comes
+  // in under the bow and is deflected down, a boulder rides low enough to meet
+  // the side and is simply reversed. Both are correct behaviour and only one
+  // of them is what the check below is about, so the roll cannot be left in —
+  // it failed roughly one run in four before it was pinned. Same argument as
+  // CONFIG.boats.trawlerChance at the top of this file.
+  const rolled = CONFIG.enemies.seaTurtle.scaleVariance;
+  CONFIG.enemies.seaTurtle.scaleVariance = 0;
   const turtle = spawnAt('seaTurtle', -boat.halfLength - 3, bounds.surfaceY - 0.5);
+  CONFIG.enemies.seaTurtle.scaleVariance = rolled;
   turtle.body.place(turtle.mesh.position.x, turtle.mesh.position.y);
   turtle.body.vx = 45;
 

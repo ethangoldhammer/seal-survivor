@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { emit } from '../entities/particles.js';
-import { makeOutlineMaterial } from '../assets.js';
+import { makeOutlineMaterial, ensureOutlineNormal } from '../assets.js';
 import { attachDissolve, dissolveUniforms, roundedNormalBox } from './dissolve.js';
 import { spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb } from '../entities/pickups.js';
 
@@ -256,6 +256,10 @@ function makeChunk(kit, size, jitter, cap = Infinity) {
   const group = new THREE.Group();
   group.add(new THREE.Mesh(geometry, kit.body));
   if (kit.shell) {
+    // See the same call in systems/crew.js: the rim shader reads
+    // `aOutlineNormal`, and a geometry that never gets one loses its rim without
+    // reporting anything. Built by hand here, so asked for by hand here.
+    ensureOutlineNormal(geometry);
     const rim = new THREE.Mesh(geometry, kit.shell);
     rim.renderOrder = -1;
     group.add(rim);

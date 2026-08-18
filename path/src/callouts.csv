@@ -9,12 +9,12 @@ swim,coach,,First touch swims,Left stick to swim,touch pad,TRUE,band,65,5,,
 aim,coach,,Second touch aims,Right stick to aim,touch pad,TRUE,band,60,5,,
 strike,coach,Hold {strike} or click to charge — let go to strike,Third touch charges a strike,{bumper} to charge a strike,,TRUE,band,50,6,,
 chum,coach,Eat chum to refill your boost.,,,,TRUE,band,45,6,,chum
-foodChain,coach,Strike then hoover the chum to keep a FOOD CHAIN going. ,,,,TRUE,band,42,5,,chum
-bubbleOrb,coach,Air bubbles. These fill your oxygen without having to breach.,,,,TRUE,band,38,6,,pickup
+foodChain,coach,Strike through the chum to keep a FOOD CHAIN going. ,,,,TRUE,band,42,5,,chum
+bubbleOrb,coach,"Pop an air bubble. Free refill, no breach required..",,,,TRUE,band,38,6,,pickup
 strikeOrb,coach,This krill bucket gives you quick boost pips.,,,,TRUE,band,36,6,,pickup
 rapidFireOrb,coach,This tasty morsel doubles your shot rate for a hot sec...,,,,TRUE,band,34,6,,pickup
-chumChunk,coach,That big catch is worth real health,,,,TRUE,band,32,6,,pickup
-attractorOrb,coach,That attractor is dragging every scrap of chum to you,,,,TRUE,band,30,6,,
-crab,coach,Chum sinks. Crabs come for what lands,,,,TRUE,band,28,6,,seabed
-invincible,coach,Some creatures should not be attacked. Steer clear...,,,,TRUE,band,24,6,,
+chumChunk,coach,This one's a real deal seal meal.,,,,TRUE,band,32,6,,pickup
+attractorOrb,coach,Grab the clamagnet to pull the chum towards you.,,,,TRUE,band,30,6,,
+crab,coach,Loose chum sinks to the bottom. Out come the crabs...,,,,TRUE,band,28,6,,seabed
+invincible,coach,Some creatures should not be attacked.,,,,TRUE,band,24,6,,
 breach,coach,Go ahead now... breach!!!,,,,TRUE,band,20,7,,surface

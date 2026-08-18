@@ -3,20 +3,21 @@ import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { drawUpgrades } from '../upgradeTable.js';
-import { expandDesc, measure, phraseAll } from '../upgradeText.js';
+import { expandDesc, measure, phraseAll, sentenceCase } from '../upgradeText.js';
 import { rollElementFor, elementCardName, elementCardDesc } from '../systems/elements.js';
 import { rollRarity, rarityById, rarityRank } from '../systems/rarity.js';
 import quipsCsv from '../quips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
-import { menuInput, resetMenuInput } from '../input.js';
+import { feedMouse, menuInput, resetMenuInput } from '../input.js';
 import { touchPrimary } from '../devices.js';
 import { mountRiveSplash } from './riveSplash.js';
+import { titlePreviewRequested } from '../systems/titleSeal.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
 import { buildPrintPaper, initSnapshotPrints } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
-import { initUpgradeHive } from './upgradeHive.js';
+import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform } from './upgradeHive.js';
 import {
   fetchGlobalBoard,
   highScore,
@@ -32,7 +33,7 @@ import { feedback } from '../systems/feedback.js';
 import { playSfx, unlockAudio } from '../systems/audio.js';
 // The popups' arrival and departure curves, by name — the same shared table the
 // boss bar's fill and the camera moves read from (path/src/ease.js).
-import { ease } from '../ease.js';
+import { ease, cssEase } from '../ease.js';
 
 let callbacks = {};
 const el = {};
@@ -86,7 +87,7 @@ const STYLES = `
   .sv-ui * { box-sizing: border-box; }
   .sv-ui { position: fixed; inset: 0; pointer-events: none; z-index: 10;
     font-family: var(--sv-font, 'Inter', system-ui, sans-serif); }
-  .sv-hud { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: flex-start; color: #e8ecf3; }
+  .sv-hud { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: flex-start; color: #e8ecf3; z-index: 2; }
   /* NO BOX. This was a 72%-opaque slab with a border, a 10px radius and a 6px
      backdrop blur behind the score and the clock. The numbers are read off the
      water directly now — over an ocean that is mostly dark, a panel is a hole
@@ -140,7 +141,19 @@ const STYLES = `
      BOTTOM LEFT by default. The score and clock take the bottom right on a
      phone, the boss bar owns the top band, and the hp/air bars float on the
      seal — the lower left is the one corner of this HUD with nothing in it. */
-  .sv-hive { pointer-events: none; position: fixed; z-index: 3; }
+  /* UNDER EVERY MENU, and this is a layer number rather than a DOM-order
+     accident. .sv-hive, .sv-center, .sv-toast-layer and the boss bar are all
+     children of the same root, so they share one stacking context — and the
+     hive is appended LAST (initUpgradeHive runs after the markup), so without
+     an explicit ladder it paints over the level-up cards and the score card
+     whatever order the source is in. It carried z-index 3 against menus with no
+     z-index at all, which is exactly that bug: a corner of hexes sitting on top
+     of the run's own menus.
+
+     The ladder, lowest first: hive, HUD, boss bar, menus, toasts, transitions.
+     A menu is a thing you are being asked to act on; the hive is a readout of
+     what you already hold, and it has no business over the top of one. */
+  .sv-hive { pointer-events: none; position: fixed; z-index: 1; }
   .sv-hive[data-corner="bl"] { left: 14px; bottom: 14px; }
   .sv-hive[data-corner="br"] { right: 14px; bottom: 14px; }
   .sv-hive[data-corner="tl"] { left: 14px; top: 34px; }
@@ -220,6 +233,29 @@ const STYLES = `
   .sv-hive[data-style="art"] .sv-hive-face::after {
     content: ''; position: absolute; inset: 0; background: rgba(6,18,26,0.45); }
 
+  /* --- THE CHOSEN CARD, ON ITS WAY TO THE CORNER --------------------------
+     A clone of the card that was picked, flown from where it sat to where its
+     tile will be and then swapped for that tile. See flyCardToHive.
+
+     TRANSFORM AND OPACITY ONLY. Both are compositor properties, so the flight
+     costs no layout on any frame — which matters because the run has already
+     come back to life underneath it and is spawning, shooting and shaking at
+     the same time. Animating left/top instead would put a full layout on every
+     frame of it, on the exact frames the fight is busiest.
+
+     transform-origin is the top-left because the flight is written as "put this
+     corner there and shrink by this much" — with a centred origin the scale
+     pulls the card away from the point being translated to and the landing
+     misses by half the difference in size. */
+  .sv-hive-flier { position: fixed; pointer-events: none; z-index: 7;
+    transform-origin: 0 0; will-change: transform, opacity; }
+  /* The words do not survive the trip: the tile has no room for them, and text
+     scaled to 28% is a grey smear. Gone well before the landing so what arrives
+     is already just the picture. */
+  .sv-hive-flier .sv-card-content { opacity: 0; }
+  /* The tooltip that follows a hovered card is not part of the flight. */
+  .sv-hive-flier .sv-card-fx { display: none; }
+
   /* --- FIRING -------------------------------------------------------------
      One class, four animations, picked by the tile's family (data-pulse). They
      are all under 400ms on purpose: this fires as often as the ability does,
@@ -266,6 +302,35 @@ const STYLES = `
     100% { filter: brightness(1); }
   }
 
+  /* --- ARRIVING, AND THE CORNER FEELING IT -------------------------------
+     Two beats with different jobs. The SLAM is the new tile landing under its
+     own weight — it comes in oversized and squashes into place, which is what
+     makes it read as having mass rather than as having faded in. The RIPPLE is
+     every other tile registering the impact, fired in order of distance so it
+     crosses the hive as a wave.
+
+     Both are heavier than the firing pulses on purpose: a pulse happens many
+     times a minute and has to stay quiet, while this happens once per pick and
+     is allowed to be the loudest thing the corner ever does. */
+  .sv-hive-tile.sv-hive-arriving { animation: sv-hive-slam 420ms cubic-bezier(0.2, 1.4, 0.35, 1); }
+  .sv-hive-tile.sv-hive-rippling { animation: sv-hive-ripple 300ms ease-out; }
+
+  @keyframes sv-hive-slam {
+    0%   { transform: scale(1.55); filter: brightness(2.4); }
+    /* The squash. A landing that only ever shrinks reads as a zoom-out; the
+       overshoot below the target and the settle back are the impact. */
+    55%  { transform: scale(0.9); filter: brightness(1.3); }
+    78%  { transform: scale(1.04); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+  /* Small on purpose — twenty of these going off in sequence is a lot of
+     movement, and each one only has to be visible, not dramatic. */
+  @keyframes sv-hive-ripple {
+    0%   { transform: scale(1); }
+    40%  { transform: scale(1.11); filter: brightness(1.5); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+
   /* A player who asked for less motion gets the state without the movement:
      the tile still says WHICH ability fired, it just says it by brightening. */
   @media (prefers-reduced-motion: reduce) {
@@ -274,18 +339,46 @@ const STYLES = `
 
   /* XP spans the full width at the very top — it's the run-long progress
      bar, so it reads as a frame around the screen rather than a widget. */
-  .sv-xptop { position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  /* THE LEVEL NUMBER RIDES INSIDE THE TRACK, centred. It used to sit under the
+     bar as its own line of text in the top-left corner, which is the corner the
+     HUD is already using and a second thing to look at for a number that
+     changes once a minute. Inside the bar it is attached to the thing it
+     describes and costs no space of its own.
+     THE BAR IS AS THICK AS THE TYPE IT CARRIES, min 14px, rather than a fixed
+     6px with text laid over it: the Level role's size is tunable (Text panel),
+     and a fixed track would clip it the moment anyone dragged that slider. */
+  .sv-xptop { position: absolute; top: 0; left: 0; right: 0; min-height: 14px;
+    display: flex; align-items: center; justify-content: center;
     background: rgba(255,255,255,0.07); overflow: hidden; }
   /* SCALED, not sized. The fill is always the full track and is squashed along
      one axis by --sv-xp (written by updateHUD as a 0..1 fraction), which is what
      lets the responsive block below turn the same element on its side without
-     the JS knowing. transform-origin is the end it grows FROM. */
-  .sv-xptop-fill { height: 100%; width: 100%; background: #7ad7ff;
+     the JS knowing. transform-origin is the end it grows FROM.
+     Absolute now that the track is a flex box around the label — in flow it
+     would be a sibling the label had to share the width with. */
+  .sv-xptop-fill { position: absolute; inset: 0; background: #7ad7ff;
     transform: scaleX(var(--sv-xp, 0)); transform-origin: 0 50%;
     box-shadow: 0 0 10px rgba(122,215,255,0.75); transition: transform 0.15s ease; }
-  .sv-xptop-level { position: absolute; top: 9px; left: 14px; font-size: 10px;
-    letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;
-    color: rgba(232,236,243,0.5); text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+  /* Everything positional here is scoped under .sv-xptop, not hung on the role's
+     own class: .sv-xptop-level is also rendered on its own in the Text panel's
+     specimen strip (ui/textPanel.js), where it has to stay a plain run of text
+     with no box around it.
+     The two words are both in the markup and one is hidden per breakpoint —
+     "Level" across the top of a desktop, "Lv" stacked over the number on a
+     phone, where the strip is only as wide as its widest line. */
+  /* THE DARK PLATE IS NOT DECORATION. The fill sweeps left to right under this
+     label every level, and pale type at half alpha over #7ad7ff is not there —
+     the first letters vanished as the bar passed them, which is exactly when a
+     player is looking at it. A plate dark enough to keep the text on one
+     background whichever side of the fill edge it is on. */
+  .sv-xptop .sv-xptop-level { position: relative; z-index: 1; display: flex;
+    align-items: center; justify-content: center; gap: 0.5em; line-height: 1;
+    padding: 3px 8px; pointer-events: none;
+    background: rgba(4,6,12,0.78); border-radius: 999px; }
+  .sv-xptop-abbr { display: none; }
+  /* Font, colour and shadow come from the Level role (textRoles.js); this is
+     only what the label looks like in the frames before that sheet exists. */
+  .sv-xptop-level { font-size: 8px; color: rgba(232,236,243,0.5); }
 
   /* Health and oxygen ride just above the seal, so the two things you have
      to react to fastest are where your eyes already are. Positioned in
@@ -313,7 +406,7 @@ const STYLES = `
      value here is only what a bar that has not been updated yet falls back to. The
      max-width is the guard that keeps a hand-edited hp number from producing a
      bar wider than the window. */
-  .sv-bossbar { position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
+  .sv-bossbar { z-index: 3; position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
     width: min(560px, 62vw); max-width: 92vw; pointer-events: none; text-align: center;
     transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
   .sv-boss-name { font-size: 13px; font-weight: 700; letter-spacing: 0.14em;
@@ -420,7 +513,7 @@ const STYLES = `
     font-variant-numeric: tabular-nums; }
   .sv-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(232,236,243,0.55); font-weight: 500; }
   .sv-value { font-size: 15px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
-  .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; }
+  .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; z-index: 4; }
   .sv-menu { background: rgba(12,14,22,0.88); border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 28px 32px; text-align: center; color: #e8ecf3; max-width: 90vw; }
   .sv-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
   .sv-sub { font-size: 13px; color: rgba(232,236,243,0.6); margin-bottom: 18px; line-height: 1.6; }
@@ -609,7 +702,7 @@ const STYLES = `
   .sv-btn:disabled { opacity: 0.5; cursor: default; }
   .sv-status { font-size: 11px; color: rgba(232,236,243,0.5); min-height: 15px; margin-bottom: 8px; letter-spacing: 0.03em; }
   .sv-status-err { color: #ffab6f; }
-  .sv-toast-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .sv-toast-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 6; }
   .sv-hidden { display: none !important; }
 
   /* The score card doesn't appear, it arrives — see showGameOver. Duration
@@ -673,13 +766,18 @@ const STYLES = `
      viewport, which is the frame this bar is actually about. */
   @media (max-width: 700px) {
     .sv-xptop { position: fixed; top: 0; bottom: 0; left: 0; right: auto;
-      width: 6px; height: auto; }
-    .sv-xptop-fill { width: 100%; height: 100%;
-      transform: scaleY(var(--sv-xp, 0)); transform-origin: 50% 100%; }
-    /* At the foot of the bar it belongs to, clear of its 6px and clear of the
-       home indicator. Horizontal — a rotated label is a thing to decode, and
-       this one is read at a glance mid-fight or not at all. */
-    .sv-xptop-level { top: auto; bottom: 14px; left: 14px; position: fixed; }
+      width: auto; min-width: 8px; height: auto; min-height: 0; }
+    .sv-xptop-fill { transform: scaleY(var(--sv-xp, 0)); transform-origin: 50% 100%; }
+    /* A vertical bar takes a vertical label: "Lv" over the number, stacked, so
+       the strip stays as narrow as one short word instead of as long as a line
+       of text. The letters stay UPRIGHT — a rotated label is a thing to decode,
+       and this one is read at a glance mid-fight or not at all.
+       Centred on the long axis by the same flex rules as the desktop track, so
+       it sits at the middle of the screen edge rather than at either end,
+       clear of both the notch and the home indicator. */
+    .sv-xptop .sv-xptop-level { flex-direction: column; gap: 0.3em; padding: 8px 2px; }
+    .sv-xptop-word { display: none; }
+    .sv-xptop-abbr { display: block; }
   }
 
   /* --- THE TOP BAND BELONGS TO THE BOSS ----------------------------------
@@ -763,8 +861,8 @@ const STYLES = `
   .sv-touch .sv-trophy-row, .sv-touch .sv-name-row { gap: 12px; }
 `;
 
-export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart }) {
-  callbacks = { onStart, onRestart, onLevelChoice };
+export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart, onSplash }) {
+  callbacks = { onStart, onRestart, onLevelChoice, onSplash };
 
   const style = document.createElement('style');
   style.textContent = STYLES;
@@ -777,8 +875,10 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     <div class="sv-toast-layer" id="svToastLayer"></div>
 
     <div class="sv-hud sv-hidden" id="svHud">
-      <div class="sv-xptop"><div class="sv-xptop-fill" id="svXpBar"></div></div>
-      <div class="sv-xptop-level">Level <span id="svLevel">1</span></div>
+      <div class="sv-xptop">
+        <div class="sv-xptop-fill" id="svXpBar"></div>
+        <div class="sv-xptop-level"><span class="sv-xptop-word">Level</span><span class="sv-xptop-abbr">Lv</span><span id="svLevel">1</span></div>
+      </div>
       <div class="sv-playerbars" id="svPlayerBars">
         <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" id="svHpBar"></div></div>
         <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2" id="svO2Bar"></div></div>
@@ -1003,6 +1103,17 @@ export function setHighScore(score) {
   el.svHighScore.textContent = Math.floor(score).toLocaleString();
 }
 
+// The card's backdrop, as a CSS colour. `scrim` is 0..1 — 1 is the solid panel
+// this always had, 0 is the bare ocean with only the artboard over it.
+//
+// Built here rather than stored as a colour string in CONFIG so it stays one
+// number on one slider: the tint is the game's own background colour, and the
+// only question worth a control is how much of the water it hides.
+function splashBackground() {
+  const scrim = CONFIG.titleSeal?.enabled ? (CONFIG.titleSeal.scrim ?? 1) : 1;
+  return `rgba(5, 7, 13, ${Math.max(0, Math.min(1, scrim))})`;
+}
+
 // Boot entry point. The Rive title card is now the ONLY thing between load and
 // play: dismissing it drops you straight into a run rather than into the old
 // DOM start menu, which is being replaced by Rive artboards. The menu markup is
@@ -1014,6 +1125,32 @@ export function showStartMenu() {
   el.svGameOverMenu.classList.add('sv-hidden');
   el.svStartMenu.classList.add('sv-hidden');
 
+  // `?title` — THE TITLE SHOT WITH NO CARD OVER IT, dev builds only.
+  //
+  // The splash artboard paints its own opaque background (see the probe page,
+  // `npm run looks:splash`), so with the card up there is nothing to look at
+  // underneath it. This is how the shot gets tuned in the meantime: the seal,
+  // the ocean and the cursor, and the first press starts the run.
+  //
+  // Deliberately not a general "skip the splash" switch — it begins the shot,
+  // which is the whole point of it. The dev gate lives inside
+  // titlePreviewRequested; `?title` on the live site does nothing.
+  if (titlePreviewRequested()) {
+    splashPlayed = true;
+    callbacks.onSplash?.();
+    // pointerUP, not down, for the reason the splash itself gives: tearing
+    // down on the press leaves the rest of the click to land on the run.
+    const go = () => {
+      window.removeEventListener('pointerup', go);
+      window.removeEventListener('keydown', go);
+      unlockAudio();
+      beginRun();
+    };
+    window.addEventListener('pointerup', go);
+    window.addEventListener('keydown', go);
+    return;
+  }
+
   // Restarting a run goes straight through startGame, so this only ever fires
   // on boot, but the flag keeps that explicit rather than relying on nobody
   // calling showStartMenu() twice.
@@ -1023,8 +1160,22 @@ export function showStartMenu() {
     // for a pointer and a key itself, but the Gamepad API has no events at all
     // — a pad is a thing you POLL. So updateMenuNav dismisses it from the game
     // loop, and this is what it dismisses.
+    // The title shot begins BEFORE the card is mounted, so the push-in is
+    // already a frame or two in by the time the artboard has parsed. See
+    // systems/titleSeal.js — it is the seal being framed, and the card is what
+    // goes on top of it.
+    callbacks.onSplash?.();
+
     splash = mountRiveSplash({
       parent: root,
+      // How much of the ocean behind the card the player can see. Solid is what
+      // this shipped with; anything with alpha reveals the seal being held up
+      // to the lens underneath. See CONFIG.titleSeal.scrim.
+      background: splashBackground(),
+      // The wrapper covers the canvas, so the game's own mouse listener is
+      // getting nothing while the card is up. This is what keeps the seal
+      // watching the cursor. See feedMouse in input.js.
+      onPointer: feedMouse,
       // The title screen breaking up into cells and clearing, over a run that
       // has already started. See revealSplashOut.
       exit: revealSplashOut,
@@ -1567,7 +1718,11 @@ function cardEffect(choice, desc) {
   // "Bullets pierce +1 enemy" contains "+1 enemy" and needs no tooltip.
   const flat = (s) => String(s).toLowerCase().replace(/[^a-z0-9%+.-]+/g, ' ').trim();
   if (flat(desc).includes(flat(text))) return '';
-  return text;
+  // The box is a sentence of its own, so it opens like one — the same rule
+  // expandDesc applies to a desc, applied here because the tooltip is measured
+  // straight from phraseAll and never passes through it. The comparison above
+  // is case-insensitive, so capitalising after it changes nothing it decided.
+  return sentenceCase(text);
 }
 
 // The one tooltip node, moved between cards. Created on the first hover of the
@@ -1737,6 +1892,96 @@ function igniteCards() {
   });
 }
 
+// THE CHOSEN CARD FLIES TO ITS TILE.
+//
+// The card and the hive tile are the same shape at different sizes — both are a
+// square box clipped on the hex art's own vertices (see .sv-card and
+// .sv-hive-tile, which share the polygon) — so a straight scale from one to the
+// other lands exactly, with no morph and no crossfade needed on the silhouette.
+// That is the whole reason this reads as one object moving rather than as a card
+// vanishing and a tile appearing.
+//
+// THE DESTINATION IS MEASURED, NOT PREDICTED. The pick is filed first, so the
+// tile already exists and can be asked where it is; it is held invisible for the
+// duration and revealed on arrival. Computing the lattice a second time here
+// would be a second implementation of the packing that has to agree with the
+// first forever, and when it drifted the card would land beside its tile.
+//
+// Nothing waits on this. The run resumed the moment the choice was filed, and
+// the flight is a fixed-position clone on the compositor — if it is interrupted,
+// cut short, or never finishes because the tab was hidden, the tile is revealed
+// anyway by the timeout below and the only thing lost is the animation.
+function flyCardToHive(id, card, from) {
+  const fly = CONFIG.upgradeHive?.fly ?? {};
+  const to = hiveTileRect(id);
+
+  // No hive, no tile, no box to fly from, or a player who asked for less
+  // motion: the tile is simply there. Every one of these is a normal state, not
+  // a failure — the hive can be switched off entirely.
+  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+  if (!from || !to || !from.width || fly.enabled === false || reduced) return;
+
+  const flier = card;                  // already a detached clone — see pick()
+  flier.classList.add('sv-hive-flier');
+  flier.classList.remove('sv-card');   // drop the menu's own hover/focus rules
+  flier.style.width = `${from.width}px`;
+  flier.style.height = `${from.height}px`;
+  flier.style.left = `${from.left}px`;
+  flier.style.top = `${from.top}px`;
+  flier.style.transform = 'translate(0px, 0px) scale(1)';
+  // uiRoot() is a FUNCTION that returns the element, not the element — see its
+  // definition. Calling `uiRoot.appendChild` throws, and it throws AFTER the
+  // pick has already been filed, so the upgrade still arrived and the menu still
+  // closed: the only symptom was no animation, with the error buried in the
+  // click handler.
+  uiRoot().appendChild(flier);
+
+  // Hidden rather than un-built, so the corner keeps its size and every other
+  // tile stays where it was measured. A tile that vanished would reflow the
+  // hive mid-flight and the destination would be stale on arrival.
+  setTileVisible(id, false);
+
+  const secs = fly.seconds ?? 0.34;
+  const curve = cssEase(fly.ease ?? 'outCubic');
+  const move = flyTransform(from, to);
+
+  let done = false;
+  const land = () => {
+    if (done) return;
+    done = true;
+    flier.remove();
+    setTileVisible(id, true);
+    // The arrival beat: the tile slams in and the rest of the corner ripples
+    // outward from it. Fired here rather than when the pick was filed, because
+    // the impact belongs to the moment the card BECOMES the tile — the hive has
+    // already quietly shuffled to make room while the card was in the air.
+    slamAndRipple(id);
+  };
+
+  // Two frames before the transition is armed. One is not enough: the element
+  // was appended this frame, and setting the start and end transforms inside a
+  // single frame lets the browser coalesce them into one style resolution — the
+  // card then teleports to the corner with no animation at all, intermittently,
+  // depending on what else happened that frame.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (done) return;
+    flier.style.transition = `transform ${secs}s ${curve}, opacity ${secs}s ${curve}`;
+    flier.style.transform = move.css;
+    // Fades only at the very end, so the swap happens under a card that is still
+    // solid — a flier that faded across the whole trip would read as the pick
+    // dissolving rather than as it being filed.
+    flier.style.opacity = String(fly.landOpacity ?? 0.85);
+  }));
+
+  flier.addEventListener('transitionend', (e) => {
+    if (e.propertyName === 'transform') land();
+  });
+  // The backstop. transitionend does not fire for a tab that was hidden mid
+  // -flight, and a tile left invisible forever is an upgrade the player holds
+  // and cannot see.
+  setTimeout(land, Math.round(secs * 1000) + 220);
+}
+
 export function showLevelUp() {
   const pool = availableUpgrades();
   const picks = drawUpgrades(pool, CONFIG.upgradeChoices);
@@ -1850,11 +2095,28 @@ export function showLevelUp() {
       // stuck element. Goes on the frame the card is chosen.
       hideCardEffect();
       levelUpCards = [];
+      // WHERE THE CARD IS, read before anything is allowed to move it. The
+      // dissolve below starts taking it off the screen and the next deal may
+      // replace the whole row within the same frame, so this box has to be
+      // taken now or the flight starts from a card that is already gone.
+      const fromCard = card.cloneNode(true);
+      const fromRect = card.getBoundingClientRect();
+      fromCard.style.width = `${fromRect.width}px`;
+
+      // The picked card does NOT dissolve — it flies. Hidden on this frame so
+      // the clone is the only copy on screen; the other two still dither out,
+      // which is what makes the chosen one read as chosen.
+      card.style.visibility = 'hidden';
+
       // Dissolves out rather than vanishing, and the choice is filed on this
       // frame regardless: the run comes back to life behind the cards while
       // they're still on their way off, not after them.
       revealUpgradesOut();
+      // FILED FIRST, FLOWN SECOND, and that order is the whole mechanism: the
+      // pick has to be in player.upgrades before the hive can have a tile for
+      // it, and the flight needs that tile to have somewhere to land.
       callbacks.onLevelChoice(choice);
+      flyCardToHive(choice.id, fromCard, fromRect);
     };
     // Bound before `pick`, so the click is heard on the frame the card is
     // chosen rather than after the dissolve has already started taking it away.

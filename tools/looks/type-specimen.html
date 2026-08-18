@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Type specimen — the Text panel, without the game under it</title>
+    <style>
+      html, body { margin: 0; background: #05070d; color: #cfe6ff;
+        font: 13px/1.45 'Inter', ui-sans-serif, system-ui, sans-serif; }
+      /* The panel pins itself to the right of the viewport. The page is sized
+         so the whole strip is in frame at once, which is the entire reason this
+         page exists rather than a screenshot of the running game: in the game
+         the specimen is a 38vh scroll box with a fight behind it. */
+      #note { padding: 14px 18px; max-width: 640px; }
+      #note h1 { font-size: 14px; letter-spacing: .12em; text-transform: uppercase;
+        color: #7ad7ff; font-weight: 600; margin: 0 0 8px; }
+      #note p { color: #7f9dc4; margin: 0 0 8px; }
+      #note b { color: #cfe6ff; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="note">
+      <h1>Type specimen</h1>
+      <p>The real Text panel (<b>Y</b> in game), mounted on its own so the whole
+         specimen strip is visible at once. Every line is drawn by the same
+         stylesheet <code>ui/typography.js</code> writes for the game.</p>
+      <p>The three callout roles set the <b>longest line actually in
+         callouts.csv</b>, across every device wording — not a hand-typed
+         sample. Reword a tip and this changes with it.</p>
+    </div>
+    <script type="module" src="./type-specimen.js"></script>
+  </body>
+</html>

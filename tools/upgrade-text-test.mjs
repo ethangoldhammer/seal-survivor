@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG, LEVELUP_IMAGE_KEYS } from '../path/src/config.js';
 import { baseStats } from '../path/src/stats.js';
 import { parseUpgradeCsv, applyUpgradeTable } from '../path/src/upgradeTable.js';
-import { STAT_TEXT, TOKENS, measure, measureTotal, phraseAll, expandDesc } from '../path/src/upgradeText.js';
+import { STAT_TEXT, TOKENS, measure, measureTotal, phraseAll, expandDesc, sentenceCase } from '../path/src/upgradeText.js';
 import { savePlayerName, clearPlayerName, expandPlayer, DEFAULT_PLAYER_NAME } from '../path/src/systems/playerName.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -69,12 +69,12 @@ const total4 = measureTotal(by('rapidFire'), 4).find((c) => c.stat === 'fireRate
 ok(Math.abs(total4.ratio - 0.75 ** 4) < 1e-9,
   `four Rapid Fires compound to 0.75^4 (got ${total4.ratio.toFixed(6)})`);
 
-// An ability level also starts at 0, so the "unlocks X" phrasing has to be
-// reserved for a single level rather than for any climb that began at zero —
-// a maxed Sea Garlic totals nine levels, and calling that "unlocks" loses them.
+// An ability level also starts at 0, so naming the ability has to be reserved
+// for a single level rather than for any climb that began at zero — a maxed
+// Sea Garlic totals nine levels, and naming the aura would lose them.
 const garlic1 = phraseAll(measureTotal(by('seaGarlic'), 1));
 const garlic9 = phraseAll(measureTotal(by('seaGarlic'), 9));
-ok(garlic1.startsWith('unlocks'), `one Sea Garlic totals to an unlock ("${garlic1}")`);
+ok(garlic1 === STAT_TEXT.garlicLevel.unlock, `one Sea Garlic totals to the ability itself ("${garlic1}")`);
 ok(garlic9 === '+9 sea garlic levels', `nine total to nine levels, not to an unlock ("${garlic9}")`);
 
 // ===========================================================================
@@ -112,27 +112,31 @@ if (silent.length) console.log(`        (silent: ${silent.map((u) => u.id).join(
 console.log('\n3. tokens — each resolves, and a bad one stays on the card');
 // ===========================================================================
 
+// Expected values are sentence-cased, because expandDesc is the last thing a
+// card's text goes through and it opens the string with a capital. "+25% fire
+// rate" is untouched — the rule only reaches a letter, so a measured number
+// still leads with the number it measured.
 const r = by('rapidFire');
 const cases = [
   ['{effect}', '+25% fire rate'],
   ['{name}', r.name],
   ['{level}', '1'],
   ['{owned}', '0'],
-  ['{stacks}', r.maxStacks == null ? 'unlimited' : String(r.maxStacks)],
+  ['{stacks}', r.maxStacks == null ? 'Unlimited' : String(r.maxStacks)],
   ['{cfg:weapon.damage}', String(CONFIG.weapon.damage)],
-  ['no braces here', 'no braces here'],
+  ['no braces here', 'No braces here'],
 ];
 for (const [input, want] of cases) {
   const got = expandDesc(input, r, { owned: 0 });
   ok(got === want, `${input} -> "${got}"${got === want ? '' : ` (expected "${want}")`}`);
 }
 
-ok(expandDesc('a {effect:3} b', r, { owned: 0 }) === 'a +25% fire rate b', '{effect:3} resolves a specific stack');
+ok(expandDesc('a {effect:3} b', r, { owned: 0 }) === 'A +25% fire rate b', '{effect:3} resolves a specific stack');
 ok(expandDesc('{level}', r, { owned: 4 }) === '5', '{level} follows how many are already owned');
 
 const warned = [];
 const bad = expandDesc('x {nope} y {cfg:not.a.path} z', r, { owned: 0, warn: (m) => warned.push(m) });
-ok(bad === 'x {nope} y {cfg:not.a.path} z', 'unknown tokens are left visible rather than blanked');
+ok(bad === 'X {nope} y {cfg:not.a.path} z', 'unknown tokens are left visible rather than blanked');
 ok(warned.length === 2, `and both warn (${warned.length} warnings)`);
 
 // A broken apply() must not take the level-up screen down with it.
@@ -178,6 +182,31 @@ for (const [id, row] of rows) {
 ok(templated === clean, templated
   ? `${clean}/${templated} templated descriptions resolve cleanly`
   : 'no descriptions use placeholders yet — nothing to check');
+
+// HOUSE STYLE, checked against every card rather than against the handful
+// above: a desc opens like a sentence, and the measured half never puts a verb
+// in front of an ability it is handing over. Both are one-line rules that a
+// new STAT_TEXT entry or a new CSV row can break silently — the card still
+// renders, it just reads wrong, and nobody diffs forty-nine strings by eye.
+{
+  const lowerOpen = [], verbed = [];
+  for (const u of CONFIG.upgrades) {
+    for (const level of [1, 2]) {
+      const out = expandDesc(u.levelDescs?.[level] ?? u.desc ?? '', u, { owned: level - 1 });
+      if (/^[a-z]/.test(out)) lowerOpen.push(`${u.id}: "${out}"`);
+      if (/\bunlocks\b/.test(out)) verbed.push(`${u.id}: "${out}"`);
+    }
+  }
+  ok(!lowerOpen.length, `every card opens on a capital or a number (${lowerOpen[0] ?? 'all 49'})`);
+  ok(!verbed.length, `and none of them says "unlocks" (${verbed[0] ?? 'none do'})`);
+}
+
+// The rule reaches a sentence boundary too, and stops at anything that is not
+// a letter — bounceShot's "{effect}" sits after a full stop, and rapidFire's
+// opens on a "+" that must survive untouched.
+ok(sentenceCase('all balls, no pit. a chaining ricochet shot')
+   === 'All balls, no pit. A chaining ricochet shot', 'sentence case reaches past the first word');
+ok(sentenceCase('+25% fire rate') === '+25% fire rate', '...and leaves a measured number alone');
 
 // ===========================================================================
 console.log('\n5. the sfx column');

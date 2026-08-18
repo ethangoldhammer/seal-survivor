@@ -1,9 +1,9 @@
-// Builds tools/looks/skin-lab.html into a scratch directory so it can be served
+// Builds tools/looks/eye-lights.html into a scratch directory so it can be served
 // as static files by tools/looks/serve.mjs. A BUILD, not a dev server: the
 // game's dev server is the sole writer of imported-tuning.json, and a second one
 // on another port will flatten whatever tuning is live. See SERVERS.md.
 //
-//   npm run looks:skinlab
+//   npx vite build --config tools/looks/vite.eyes.config.mjs --outDir <dir>
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -17,10 +17,8 @@ export default defineConfig({
   build: {
     // The page awaits preloadAssets at the top level.
     target: 'esnext',
-    outDir: resolve(PROJECT, 'dist-skinlab'),
+    outDir: resolve(PROJECT, 'dist-eye-look'),
     emptyOutDir: true,
-    rollupOptions: {
-      input: resolve(HERE, 'skin-lab.html'),
-    },
+    rollupOptions: { input: resolve(HERE, 'eye-lights.html') },
   },
 });

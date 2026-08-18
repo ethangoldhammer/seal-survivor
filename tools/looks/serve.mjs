@@ -15,6 +15,7 @@ import http from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyRecorded } from '../apply-shaders.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECT = resolve(HERE, '../..');
@@ -72,11 +73,21 @@ function resolveSafe(urlPath) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
-  // A look page saving the numbers it just chose. Same drop box as the shots:
-  // this server never imports config.js, so a saved preset is a file for a human
-  // to paste, not a write into the game's tuning. See SERVERS.md.
-  if (req.method === 'POST' && url.pathname.startsWith('/skin/')) {
-    const name = url.pathname.slice('/skin/'.length).replace(/[^\w.-]/g, '');
+  // A look page saving the numbers it just chose. This server never imports
+  // config.js, so a saved preset is a file for a human to move across, not a
+  // write into the game's tuning. See SERVERS.md.
+  //
+  // NOT THE SHOTS DIR, and that is the whole reason "apply" never reached the
+  // game. The drop box lives inside the vite outDir, and every look script runs
+  // `vite build` with emptyOutDir before starting this server — so
+  // `npm run looks:shaderlab` DELETED the choices the last session had applied,
+  // before anyone could run the tool that reads them. The file was gone by the
+  // time you went looking for it, and nothing said so.
+  //
+  // Saved beside the page instead, where it is tracked in git, survives a
+  // rebuild, and shows up in a diff when it changes.
+  if (req.method === 'POST' && url.pathname.startsWith('/shader/')) {
+    const name = url.pathname.slice('/shader/'.length).replace(/[^\w.-]/g, '');
     if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -84,9 +95,54 @@ const server = http.createServer(async (req, res) => {
     try { JSON.parse(body.toString()); } catch (err) {
       res.writeHead(400).end('not valid json: ' + err.message); return;
     }
-    await drop(name, body);
-    res.writeHead(200).end('ok');
-    console.log(`  wrote ${name} (${body.length} bytes)`);
+    await mkdir(HERE, { recursive: true });
+    await writeFile(join(HERE, name), body);
+    console.log(`  wrote tools/looks/${name} (${body.length} bytes)`);
+
+    // ...and straight on into the game, which is the whole point of the button.
+    //
+    // Recording used to stop at this file and rely on someone remembering to run
+    // `npm run shaders:apply`. Nothing said so, so a choice made in the lab
+    // simply never appeared in the game and the button looked broken.
+    //
+    // This is the SAME code the CLI runs (tools/apply-shaders.mjs), imported
+    // rather than shelled out to, so there is one implementation of what
+    // "apply" means. It reads config.js as TEXT and never imports it, so this
+    // server still cannot reach imported-tuning.json — see the header.
+    let report = null;
+    try {
+      report = await applyRecorded(JSON.parse(body.toString()), { dry: false });
+      if (report.rows.length) console.log(`  assets.csv: ${report.rows.join('; ')}`);
+      if (report.presets.length) console.log(`  config.js: +${report.presets.join(', ')}`);
+      for (const n of report.notes) console.log(`  ${n}`);
+    } catch (err) {
+      console.log(`  apply failed: ${err.message}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+        .end(JSON.stringify({ saved: true, error: err.message }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ saved: true, ...report }));
+    return;
+  }
+
+  // ...and reading it back, which is what stops the page clobbering its own
+  // history. `applied` lives in the page's memory and starts empty, so a save
+  // wrote a file containing ONLY the creatures recorded since the last reload —
+  // recording an orca on Tuesday silently dropped Monday's shark. The page seeds
+  // itself from this on boot instead. Served from beside the page rather than
+  // through the static mounts, because the file deliberately lives outside the
+  // built directory those serve.
+  if (req.method === 'GET' && url.pathname.startsWith('/shader/')) {
+    const name = url.pathname.slice('/shader/'.length).replace(/[^\w.-]/g, '');
+    if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }
+    try {
+      const body = await readFile(join(HERE, name));
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(body);
+    } catch {
+      // Nothing recorded yet is the normal first run, not an error.
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end('{}');
+    }
     return;
   }
 

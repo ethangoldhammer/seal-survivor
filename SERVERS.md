@@ -1,8 +1,28 @@
 # Servers, tabs, and how not to stomp your own work
 
-Run `npm run servers` any time you're not sure what's up. It reads the live
+## Start here: the workbench
+
+```bash
+npm run hub
+```
+
+**<http://localhost:5178>** — one page listing every tool in the repo: the
+servers, the browser pages, and all ~135 npm scripts, each described by the
+header comment of the file it runs. Run a check and its output streams into the
+page. Leave the tab open; it is the only address here that never moves.
+
+That last part is the point. **The game's port changes every restart**, so the
+hub re-resolves every link to it against the live socket table on each poll —
+which is a job the dev server cannot do for itself. See `tools/hub.mjs` for
+why it is a separate process and not a route on the dev server.
+
+It will not deploy, publish, or ship. Those have a copyable command and no
+button, and `npm run test:hub` fails if a new script that reaches the outside
+world ever gets one.
+
+Run `npm run servers` for the same picture in the terminal — it reads the live
 socket table, works out what each process is, and says which ones are safe to
-kill. Everything below is the reasoning behind that panel.
+kill. Everything below is the reasoning behind both.
 
 ```bash
 npm run servers
@@ -18,14 +38,16 @@ Two servers, both in **Chrome**, both left running:
 |---|---|---|
 | `npm run dev` | the game (vite) | **one** — exactly one |
 | `npm run csv` | the CSV editor for enemies / upgrades / quips | one |
+| `npm run hub` | the workbench — index of every tool | one, always |
 
 Everything else on the list — extra dev servers, `vite preview`, agent
 scratchpad servers — is leftovers. `npm run servers -- clean` clears them.
 
 The ports move. Vite takes whatever it can get (`3000`, `54865`, `63641` have
 all been the game at different times today), so never bookmark a port for the
-game — check the panel. The CSV editor is fixed at **5177** and is safe to
-bookmark.
+game — open the hub and click through, or check the panel. The CSV editor is
+fixed at **5177** and the hub at **5178**; those two are safe to bookmark, and
+the hub is the better bookmark because it links to everything else.
 
 ---
 

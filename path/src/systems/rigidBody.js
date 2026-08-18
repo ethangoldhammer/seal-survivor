@@ -18,9 +18,15 @@ import { CONFIG } from '../config.js';
 //   * linear velocity, integrated on top of whatever the owner's own
 //     locomotion already did — the body is the shove, never the swimming or
 //     the sailing, so nothing has to give up its steering to have one.
-//   * ONE angular degree of freedom, the roll about the screen normal. This
-//     is a side-on 2D game; a body that pitched or yawed would be rotating
-//     into the camera where the motion cannot be read anyway.
+//   * ONE angular degree of freedom for everything that tumbles, the roll
+//     about the screen normal. This is a side-on 2D game; a body that YAWED
+//     would be rotating into the camera where the motion cannot be read.
+//   * ...and, for anything that opts in (`banks`), a SECOND one: the heel
+//     about the body's own long axis. That axis does point into the camera,
+//     and it is the one exception, because a hull heeling is the whole read
+//     of a boat being hit — the deck tips, the mast swings across, and it
+//     rocks back. Without it a rammed hull could only nod bow-up and
+//     bow-down, which is one gesture for every hit it ever takes.
 //   * a RIGHTING SPRING on that roll. Every body here floats, and a floating
 //     thing has a right way up it returns to. That is the whole reason this
 //     is one class: the crab has a version of it (CONFIG.crabPhysics), the
@@ -88,6 +94,37 @@ export class RigidBody {
     // Radians of roll per unit of torque — the dial between "shoves and stays
     // level" and "cartwheels".
     this.spin = opts.spin ?? 0;
+
+    // --- THE HEEL: rolling about the body's own long axis --------------------
+    //
+    // Off unless the owner asks for it (`banks`), because it is the one axis
+    // that turns a body INTO the camera and only a shape with a length and a
+    // deck reads as anything there. A hull does; a turtle would just get
+    // thinner.
+    //
+    // Where the torque comes from is worth spelling out, because it is real
+    // rather than decorative. The hull's length runs along world X and its
+    // BEAM runs along Z, so the seal, the shells and the blast all arrive on
+    // the flank facing the camera — at z = +beam, with a force in the XY
+    // plane. The lever arm r = (0, 0, b) against a force F = (0, f, 0) gives
+    // a torque about X of -b·f: a hit from BELOW lifts the near side and
+    // heels the deck AWAY from the viewer, one from above tips it toward.
+    // Which is why only the vertical component of an impulse is spent here —
+    // a shove along the hull's own length genuinely cannot roll it, and the
+    // seal ramming a boat from underneath is exactly the case that should.
+    this.banks = opts.banks ?? false;
+    this.bankSpin = opts.bankSpin ?? 0;
+    // A hit that lands flat still shudders the hull: no contact is truly on
+    // the centreline, and this is that slap, signed at random so a run of
+    // level rams doesn't heel the same way every time.
+    this.bankSlap = opts.bankSlap ?? 0;
+    // The heel's own spring. Deliberately SLACKER than the righting on the
+    // roll axis: a boat rocking is a thing that happens over a second or two,
+    // and a hull that snapped back level would read as a flinch again.
+    this.bankRighting = opts.bankRighting ?? 0;
+    this.bankDamping = opts.bankDamping ?? 0;
+    this.bankDrag = opts.bankDrag ?? 0;
+    this.maxBank = opts.maxBank ?? 0.5;
     this.restitution = opts.restitution ?? null; // null = the shared default
     // Arena walls. A hull sails THROUGH them to despawn; a turtle bounces.
     this.walls = opts.walls ?? false;
@@ -118,6 +155,14 @@ export class RigidBody {
     this.angle = 0;
     this.angVel = 0;
     this.restAngle = 0;
+
+    // The heel and its rest pose, in the same two halves and for the same
+    // reason: `restBank` is whatever cant the model was built with, read off
+    // the object once so writing this axis can never quietly straighten a
+    // hull that was authored leaning.
+    this.bank = 0;
+    this.bankVel = 0;
+    this.restBank = opts.restBank ?? (this.object ? this.object.rotation.x : 0);
 
     // Seconds left of "something hit this recently". Only used to decide
     // whether two hulls are allowed to touch — see canCollide.
@@ -175,11 +220,34 @@ export class RigidBody {
       this.angVel += push * this.spin * (Math.random() < 0.5 ? -1 : 1);
     }
 
+    this.heelFrom(ix, iy);
+
     const p = CONFIG.physics ?? {};
     this.disturbed = p.disturbedFor ?? 1.5;
     const mag = Math.hypot(ix, iy) * dv;
     if (mag > this.lastImpulse) this.lastImpulse = mag;
     return mag;
+  }
+
+  /**
+   * The heel an impulse leaves behind — see `banks` in the constructor for the
+   * lever arm this comes off. Taken in the same units applyImpulse works in
+   * (mass-units per second), so the hull's own weight is already in it and a
+   * trawler leans where a rowboat nearly ships water.
+   *
+   * A no-op for every body that has not asked to bank, which is all of them
+   * but the hulls.
+   */
+  heelFrom(ix, iy) {
+    if (!this.banks || this.invMass === 0) return;
+    const dvy = iy * this.invMass;
+    // AWAY from the camera for a hit from below: the near side is the one
+    // being lifted.
+    this.bankVel -= dvy * this.bankSpin;
+    if (this.bankSlap > 0) {
+      const slap = Math.hypot(ix, iy) * this.invMass * this.bankSlap;
+      this.bankVel += slap * (Math.random() < 0.5 ? -1 : 1);
+    }
   }
 
   speed() {
@@ -188,7 +256,8 @@ export class RigidBody {
 
   /** Is anything about this body still moving? */
   get awake() {
-    return this.speed() > 0.02 || Math.abs(this.angVel) > 0.02 || Math.abs(this.angle) > 1e-3;
+    return this.speed() > 0.02 || Math.abs(this.angVel) > 0.02 || Math.abs(this.angle) > 1e-3
+      || Math.abs(this.bankVel) > 0.02 || Math.abs(this.bank) > 1e-3;
   }
 
   integrate(dt) {
@@ -246,6 +315,32 @@ export class RigidBody {
       this.angVel = 0;
     }
 
+    // THE HEEL, on its own spring, its own damping and its own stop. Same
+    // shape as the roll above and deliberately not folded into it: the two
+    // axes are different gestures at different speeds — the roll is a nod that
+    // is over in a moment, the heel is a rock that carries. The `banks` guard
+    // is what keeps every other body in the game paying nothing for it.
+    if (this.banks) {
+      if (this.bankRighting > 0) {
+        this.bankVel += (-this.bankRighting * this.bank - this.bankDamping * this.bankVel) * dt;
+      }
+      if (this.bankDrag > 0) this.bankVel *= Math.exp(-this.bankDrag * dt);
+      this.bank += this.bankVel * dt;
+      // Same reason the roll is clamped: a hull goes over by SINKING. The rail
+      // may go under, the mast may not.
+      if (this.bank > this.maxBank) {
+        this.bank = this.maxBank;
+        if (this.bankVel > 0) this.bankVel = 0;
+      } else if (this.bank < -this.maxBank) {
+        this.bank = -this.maxBank;
+        if (this.bankVel < 0) this.bankVel = 0;
+      }
+      if (Math.abs(this.bank) < 1e-4 && Math.abs(this.bankVel) < 1e-3) {
+        this.bank = 0;
+        this.bankVel = 0;
+      }
+    }
+
     if (this.walls) this.hitWalls();
   }
 
@@ -292,6 +387,7 @@ export class RigidBody {
     this.object.position.x = this.x;
     this.object.position.y = this.y;
     this.object.rotation.z = this.restAngle + this.angle;
+    if (this.banks) this.object.rotation.x = this.restBank + this.bank;
   }
 }
 
@@ -472,6 +568,9 @@ function resolve(a, b, hit, hooks) {
 }
 
 function spinFromContact(body, ix, iy, atX, atY) {
+  // A turtle arriving at a hull rocks it the same way the seal does — the heel
+  // belongs to the impulse, not to who sent it.
+  body.heelFrom(ix, iy);
   if (body.invMass === 0 || body.spin === 0) return;
   const arm = Math.max(body.shape === 'box' ? body.halfLength : body.radius, 1e-3);
   const rx = atX - (body.x + body.offsetX);

@@ -547,19 +547,103 @@ export function updatePlayer(dt, input) {
     }
   }
 
-  // --- facing -------------------------------------------------------------
+  // --- facing, mirror, roll, crane and the body transform -------------------
+  // The whole block moved into poseBody below, so the title screen can pose the
+  // seal with exactly this code (systems/titleSeal.js). What the run passes here
+  // is what the block used to work out for itself, and nothing else changed.
+  //
   // The seal points where it's MOVING by default, not where it's aiming — a
   // swimming animal turns its body to travel, and following the cursor made
   // it twitch on every mouse jiggle while drifting the other way. Aim-facing
   // is still selectable via CONFIG.player.faceMode.
   const useVelocity = CONFIG.player.faceMode !== 'aim';
-  const dirX = useVelocity ? player.velocity.x : input.aim.x;
-  const dirY = useVelocity ? player.velocity.y : input.aim.y;
+  poseBody(
+    dt,
+    useVelocity ? player.velocity.x : input.aim.x,
+    useVelocity ? player.velocity.y : input.aim.y,
+    {
+      // Velocity spends most of a drift near zero, so it needs a floor or the
+      // seal spins on rounding noise. An aim vector is always a unit direction
+      // and needs none.
+      minTurn: useVelocity ? CONFIG.player.minSpeedToTurn : 0.0001,
+      // Dashing swaps in its own, much faster facing rate, and a combo scales
+      // the normal one — at combo speeds the default smoothing reads as the
+      // model lagging behind where you're actually going.
+      lerpRate: dashing ? CONFIG.strike.dashFaceLerp : CONFIG.player.turnLerp * combo,
+      // A dash redirect still turns over much faster — waiting out a lazy
+      // swim turnaround for the model to agree with where you are already
+      // going is the "animation has to finish before the input counts" feel.
+      // It is a shorter roll now, not an instant flip: the snap this whole
+      // mechanism exists to avoid was just as ugly during a dash.
+      turnDuration: (!dashing && CONFIG.player.turnAroundEnabled)
+        ? CONFIG.player.turnAroundDuration
+        : (CONFIG.player.turnAroundDashDuration ?? 0.12),
+    },
+  );
+
+  if (player.invuln > 0) player.invuln -= dt;
+
+  if (player.hp < s.maxHp) {
+    player.hp = Math.min(s.maxHp, player.hp + s.regenPerSec * dt);
+  }
+
+  if (CONFIG.animation.enabled && player.anim) {
+    // aboveSurface picks the land clips (idle/walk) over the water ones —
+    // a seal that's breached shouldn't be swim-cycling through the air.
+    const state = stateForSpeed(player.velocity.length(), player.aboveSurface, player.surfaceRest);
+    player.anim.update(dt, state, player.hitThisFrame);
+    // Straight after the controller, so the breath lands on top of the pose the
+    // mixer just wrote rather than under it. Both bones it drives are keyed by
+    // every locomotion clip, so this needs no restore of its own — see
+    // systems/breathe.js.
+    player.breathe?.update(dt, player.surfaceRest);
+  }
+
+  // Fin and head IK run AFTER the mixer, deliberately: they overwrite the
+  // flipper and neck bones the clip just posed, and nothing else. Outside the
+  // CONFIG.animation.enabled gate above, so turning creature animation off
+  // leaves the seal still aiming — these are control surfaces, not a
+  // performance. This is also the last thing to touch the skeleton before the
+  // frame renders, which is what makes the muzzles and bubble anchors it
+  // publishes current rather than one frame stale.
+  updateAimRig(dt, input.aim, CONFIG.weapon.autofire, player.chargePose);
+
+  player.hitThisFrame = false;
+}
+
+/**
+ * FACING, MIRROR, ROLL, CRANE AND THE ONE TRANSFORM THEY COMPOSE INTO.
+ *
+ * Lifted out of updatePlayer unchanged so the title screen can pose the seal
+ * with the same code the run does — see systems/titleSeal.js, which turns the
+ * animal toward the cursor while the Rive card is up and there is no velocity
+ * for the run's own rule to read. Every number the run used to compute inline
+ * is now passed in by the run at the single call site above; nothing about the
+ * behaviour moved with it.
+ *
+ * ONE WRITER OF player.body.quaternion, which is the reason this is a whole
+ * function rather than two helpers. The mirror, the barrel roll, the crane, the
+ * charge tremble and the victory somersault are five axes of the same
+ * transform, and any caller that posed a subset of them would be silently
+ * throwing the rest away on every frame it ran.
+ *
+ * @param {number} dt seconds
+ * @param {number} dirX where the seal should be pointing, x — need not be unit
+ * @param {number} dirY ...and y
+ * @param {object} opts
+ * @param {number} opts.minTurn below this the direction is treated as absent
+ *   and the current facing is held, rather than spinning on rounding noise
+ * @param {number} opts.lerpRate how fast the heading chases the target, per second
+ * @param {number} opts.turnDuration seconds the half-roll takes when the seal
+ *   crosses from facing one way to the other
+ */
+export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnDuration = 0.35 } = {}) {
+  // --- facing -------------------------------------------------------------
   const dirLen = Math.hypot(dirX, dirY);
 
   // Below the threshold there's no meaningful direction, so hold the current
   // facing instead of spinning on near-zero noise.
-  if (dirLen > (useVelocity ? CONFIG.player.minSpeedToTurn : 0.0001)) {
+  if (dirLen > minTurn) {
     // The art's forward is +Y, so subtract a quarter turn.
     const target = Math.atan2(dirY, dirX) - Math.PI / 2;
     // Smooth toward the target the SHORT way around, so crossing the
@@ -568,10 +652,6 @@ export function updatePlayer(dt, input) {
     let delta = target - player.mesh.rotation.z;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
-    // Dashing swaps in its own, much faster facing rate, and a combo scales
-    // the normal one — at combo speeds the default smoothing reads as the
-    // model lagging behind where you're actually going.
-    const lerpRate = dashing ? CONFIG.strike.dashFaceLerp : CONFIG.player.turnLerp * combo;
     const t = 1 - Math.exp(-lerpRate * dt);
     player.mesh.rotation.z += delta * t;
 
@@ -602,14 +682,7 @@ export function updatePlayer(dt, input) {
         player.mirrorFrom = player.mirrorAngle;
         player.mirrorTo = player.mirrorAngle + Math.PI;
         player.mirrorT = 0;
-        // A dash redirect still turns over much faster — waiting out a lazy
-        // swim turnaround for the model to agree with where you are already
-        // going is the "animation has to finish before the input counts" feel.
-        // It is a shorter roll now, not an instant flip: the snap this whole
-        // mechanism exists to avoid was just as ugly during a dash.
-        player.mirrorDuration = (!dashing && CONFIG.player.turnAroundEnabled)
-          ? CONFIG.player.turnAroundDuration
-          : (CONFIG.player.turnAroundDashDuration ?? 0.12);
+        player.mirrorDuration = turnDuration;
       }
     }
   }
@@ -724,35 +797,6 @@ export function updatePlayer(dt, input) {
   _craneQ.setFromAxisAngle(_xAxis, player.craneAngle + shudder);
   _spinQ.setFromAxisAngle(_zAxis, celebrationSpin());
   player.body.quaternion.copy(_craneQ).multiply(_rollQ).multiply(_spinQ);
-
-  if (player.invuln > 0) player.invuln -= dt;
-
-  if (player.hp < s.maxHp) {
-    player.hp = Math.min(s.maxHp, player.hp + s.regenPerSec * dt);
-  }
-
-  if (CONFIG.animation.enabled && player.anim) {
-    // aboveSurface picks the land clips (idle/walk) over the water ones —
-    // a seal that's breached shouldn't be swim-cycling through the air.
-    const state = stateForSpeed(player.velocity.length(), player.aboveSurface, player.surfaceRest);
-    player.anim.update(dt, state, player.hitThisFrame);
-    // Straight after the controller, so the breath lands on top of the pose the
-    // mixer just wrote rather than under it. Both bones it drives are keyed by
-    // every locomotion clip, so this needs no restore of its own — see
-    // systems/breathe.js.
-    player.breathe?.update(dt, player.surfaceRest);
-  }
-
-  // Fin and head IK run AFTER the mixer, deliberately: they overwrite the
-  // flipper and neck bones the clip just posed, and nothing else. Outside the
-  // CONFIG.animation.enabled gate above, so turning creature animation off
-  // leaves the seal still aiming — these are control surfaces, not a
-  // performance. This is also the last thing to touch the skeleton before the
-  // frame renders, which is what makes the muzzles and bubble anchors it
-  // publishes current rather than one frame stale.
-  updateAimRig(dt, input.aim, CONFIG.weapon.autofire, player.chargePose);
-
-  player.hitThisFrame = false;
 }
 
 /**

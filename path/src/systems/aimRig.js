@@ -66,6 +66,14 @@ export function createAimRig(instance) {
 
   // Anchors are read-only bone points — no IK, just a world position
   // published every frame for particle emitters to fire from.
+  //
+  // An anchor may also declare a `normal`: a direction in the SAME bone-local
+  // frame as its offset, published in world space next to the point. Optional
+  // because most anchors are emitters and an emitter only needs a place to
+  // come out of — the aim it fires along is the player's, not the bone's. What
+  // needs one is a point that has a FACE: the eye sockets (systems/eyeLights.js)
+  // are on opposite sides of a head this camera only ever sees side-on, and the
+  // only thing separating the near eye from the far one is which way it looks.
   const anchorDefs = [];
   for (const [name, a] of Object.entries(def.anchors ?? {})) {
     const bone = instance.getObjectByName(a.bone);
@@ -73,7 +81,12 @@ export function createAimRig(instance) {
       console.warn(`[aimRig] anchor "${name}" wants bone "${a.bone}", which this model doesn't have.`);
       continue;
     }
-    anchorDefs.push({ name, bone, offset: new THREE.Vector3().fromArray(a.offset ?? [0, 0, 0]) });
+    anchorDefs.push({
+      name,
+      bone,
+      offset: new THREE.Vector3().fromArray(a.offset ?? [0, 0, 0]),
+      normal: a.normal ? new THREE.Vector3().fromArray(a.normal) : null,
+    });
   }
 
   if (fins.length === 0 && !head && !tail && anchorDefs.length === 0) return null;
@@ -89,7 +102,14 @@ export function createAimRig(instance) {
   // hanging in open water off the end of the flipper.
   const muzzles = fins.map(() => new THREE.Vector3());
   const anchors = {};
-  for (const a of anchorDefs) anchors[a.name] = new THREE.Vector3();
+  // Parallel to `anchors`, and only holds the ones that declared a normal —
+  // a caller reading a name that has none gets undefined rather than a silent
+  // (0,0,0) that normalises to NaN.
+  const anchorNormals = {};
+  for (const a of anchorDefs) {
+    anchors[a.name] = new THREE.Vector3();
+    if (a.normal) anchorNormals[a.name] = new THREE.Vector3();
+  }
 
   let finWeight = 0;
   let headWeight = 0;
@@ -119,6 +139,7 @@ export function createAimRig(instance) {
     tail,
     muzzles,
     anchors,
+    anchorNormals,
 
     // `aim` is the 2D world-space aim direction (input.aim). `engaged` is true
     // while the player is shooting. `suppressed` hands every chain back to the
@@ -234,6 +255,11 @@ export function createAimRig(instance) {
         a.bone.updateWorldMatrix(true, false);
         anchors[a.name].copy(a.offset);
         a.bone.localToWorld(anchors[a.name]);
+        // transformDirection, NOT localToWorld: a direction must not pick up
+        // the bone's translation, and it re-normalises afterwards so the
+        // model's own fit scale (2.36 on the seal) cannot leak into a unit
+        // vector callers compare against thresholds.
+        if (a.normal) anchorNormals[a.name].copy(a.normal).transformDirection(a.bone.matrixWorld);
       }
     },
 

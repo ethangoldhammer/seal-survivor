@@ -67,10 +67,35 @@ export const EASE_TABLE = [
   { name: 'smootherstep', fn: (t) => t * t * t * (t * (t * 6 - 15) + 10) },
 ];
 
+// --- OVERSHOOT, kept deliberately apart -------------------------------------
+//
+// The note at the top of this file explains why these are not in EASE_TABLE: a
+// picker whose options are not interchangeable is a trap, and a progress bar
+// that sails past 100% and settles back reads as a bug. Nothing that offers the
+// player or the tuner a LIST of curves should be offering these.
+//
+// But they are still real curves that real motion wants, and the alternative to
+// naming them here is a hand-written cubic-bezier at the call site — which is
+// precisely the fourteen-unnameable-curves problem this file exists to prevent.
+// So they are resolvable BY NAME through ease() and cssEase(), and absent from
+// EASINGS. Anything reaching for one is asking for overshoot on purpose.
+export const OVERSHOOT_TABLE = [
+  // Pulls back a little, then overshoots and settles. `s` is how far past the
+  // target it goes — 1.70158 is the classic value, which lands about 10% over.
+  { name: 'outBack', fn: (t) => { const s = 1.70158; const u = t - 1; return 1 + u * u * ((s + 1) * u + s); } },
+  // Softer: the same idea at half the overshoot, for something that should feel
+  // weighted rather than springy.
+  { name: 'outBackSoft', fn: (t) => { const s = 0.9; const u = t - 1; return 1 + u * u * ((s + 1) * u + s); } },
+];
+
 /** Just the names, in table order — what a tuner `choice` row wants. */
 export const EASINGS = EASE_TABLE.map((e) => e.name);
 
-const BY_NAME = new Map(EASE_TABLE.map((e) => [e.name, e.fn]));
+/** The overshoot names, for the few callers that deliberately want one. */
+export const OVERSHOOTS = OVERSHOOT_TABLE.map((e) => e.name);
+
+// Both tables resolve by name. EASINGS is the menu; this is the vocabulary.
+const BY_NAME = new Map([...EASE_TABLE, ...OVERSHOOT_TABLE].map((e) => [e.name, e.fn]));
 
 // Declared above `ease` rather than below it: a `const` referenced before its
 // initialiser has run throws, and while nothing calls ease() during module

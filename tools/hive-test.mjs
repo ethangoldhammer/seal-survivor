@@ -114,8 +114,15 @@ const hive = await import('../path/src/ui/upgradeHive.js');
 const { UPGRADE_ICONS } = await import('../path/src/ui/upgradeIcons.js');
 const ui = await import('../path/src/ui/ui.js');
 
-ui.initUI({ onStart() {}, onRestart() {}, onLevelChoice() {}, onResume() {}, onPauseRestart() {} });
+// Swappable so a later section can be the real main.js for one pick — filing the
+// choice and feeding the hive, which is what gives the flight somewhere to land.
+let onChoice = () => {};
+ui.initUI({
+  onStart() {}, onRestart() {}, onResume() {}, onPauseRestart() {},
+  onLevelChoice: (c) => onChoice(c),
+});
 
+const css = [...document.querySelectorAll('style')].map((n) => n.textContent).join('\n');
 const host = () => document.querySelector('.sv-hive-host');
 const tiles = () => [...document.querySelectorAll('.sv-hive-tile')];
 const tileFor = (id) => document.querySelector(`.sv-hive-tile[data-upgrade="${id}"]`);
@@ -132,6 +139,25 @@ check('hive is NOT inside the HUD corner',
   'a filter there would capture its fixed positioning');
 
 // ---------------------------------------------------------------------------
+section('sits under the menus');
+// A LAYER NUMBER, NOT DOM ORDER. The hive, the menus, the HUD and the toasts are
+// all children of one root, so they share a stacking context — and the hive is
+// appended LAST, which means without an explicit ladder it paints over the
+// level-up cards and the score card. It shipped at z-index 3 against menus with
+// none, which is that bug.
+const zOf = (sel) => {
+  const rule = css.slice(css.indexOf(sel + ' {'));
+  const m = rule.slice(0, rule.indexOf('}')).match(/z-index:\s*(-?\d+)/);
+  return m ? Number(m[1]) : null;
+};
+const zHive = zOf('.sv-hive');
+const zCenter = zOf('.sv-center');
+const zToast = zOf('.sv-toast-layer');
+check('the hive declares a layer', zHive !== null, String(zHive));
+check('menus declare one too', zCenter !== null, String(zCenter));
+check('the hive is UNDER every menu', zHive < zCenter, `hive ${zHive} vs menus ${zCenter}`);
+check('and under the toasts', zHive < zToast, `hive ${zHive} vs toasts ${zToast}`);
+
 section('folds picks into tiles');
 const picks = [
   { id: 'shrimpRing', rarity: 'common' },
@@ -239,7 +265,6 @@ check('the tile box is square', px(one.style.width) === px(one.style.height),
   `${one.style.width} x ${one.style.height}`);
 // The card's polygon is the reference: it was measured against this same art.
 const cardClip = /polygon\(5\.7% 51%, 27\.1% 12\.7%, 72\.3% 12\.7%, 93\.9% 51%, 72\.3% 89\.6%, 27\.1% 89\.6%\)/;
-const css = [...document.querySelectorAll('style')].map((s) => s.textContent).join('\n');
 const tileRule = css.slice(css.indexOf('.sv-hive-tile {'), css.indexOf('.sv-hive-face'));
 check('the tile is clipped on the art\'s own vertices, like .sv-card',
   cardClip.test(tileRule), 'a full-bleed hexagon here cuts the border');
@@ -248,6 +273,222 @@ check('the packing geometry matches that clip',
   Math.abs(G.w - (0.939 - 0.057)) < 1e-9 && Math.abs(G.h - (0.896 - 0.127)) < 1e-9);
 check('the drawn hexagon is near-regular', Math.abs(G.h / G.w - 0.866) < 0.01,
   `ratio ${(G.h / G.w).toFixed(3)}`);
+
+section('the chosen card flies to its tile');
+// The flight is a clone of the card, flown to a MEASURED tile box and swapped
+// for the tile on landing. What has to hold, and each of these fails silently:
+//
+//   the destination is real       hiveTileRect returns null for a hive that is
+//                                 off or a tile that isn't there, and the caller
+//                                 must treat that as "no flight" rather than
+//                                 flying to 0,0.
+//   the tile keeps its box        it is hidden with `visibility`, not `display`
+//                                 — hiding the box reflows the corner mid-flight
+//                                 and the destination goes stale.
+//   the tile comes BACK           a flight that never lands leaves an upgrade
+//                                 you hold and cannot see.
+hive.setHiveUpgrades([{ id: 'club', rarity: 'common' }, { id: 'harp', rarity: 'rare' }]);
+check('a held upgrade reports a destination',
+  // jsdom gives every element a zero box, so the null here is the ZERO guard
+  // firing, not a missing tile — which is exactly the branch that must not fly.
+  hive.hiveTileRect('club') === null, 'zero-sized boxes must not be flown to');
+check('an upgrade that is not held reports none', hive.hiveTileRect('nosuchUpgrade') === null);
+
+const clubTile = tileFor('club');
+hive.setTileVisible('club', false);
+check('hiding a tile uses visibility, not display',
+  clubTile.style.visibility === 'hidden' && clubTile.style.display !== 'none',
+  `visibility "${clubTile.style.visibility}", display "${clubTile.style.display}"`);
+hive.setTileVisible('club', true);
+check('and it comes back', !clubTile.style.visibility);
+check('setTileVisible on an absent id is a no-op', (() => {
+  try { hive.setTileVisible('nosuchUpgrade', false); return true; } catch { return false; }
+})());
+
+// The flier's CSS has to animate compositor properties only: the run is live
+// underneath it, and a left/top animation puts a layout on every frame of the
+// busiest moment in the game.
+const flierRule = css.slice(css.indexOf('.sv-hive-flier {'), css.indexOf('}', css.indexOf('.sv-hive-flier {')));
+check('the flier is position: fixed', /position:\s*fixed/.test(flierRule));
+check('and scales from its top-left corner', /transform-origin:\s*0 0/.test(flierRule),
+  'a centred origin makes the landing miss by half the size difference');
+check('the flight is above the menus it leaves',
+  Number((flierRule.match(/z-index:\s*(\d+)/) || [])[1]) > zCenter,
+  'it starts life as a card sitting on the menu');
+// The curve is a NAME from ease.js, not a hand-written bezier — see cssEase.
+const flyCfg = CONFIG.upgradeHive?.fly ?? {};
+const { EASINGS } = await import('../path/src/ease.js');
+check('the fly curve is a known easing name', EASINGS.includes(flyCfg.ease ?? 'outCubic'),
+  String(flyCfg.ease));
+check('the flight is short enough to not be in the way', (flyCfg.seconds ?? 0.34) <= 0.5,
+  `${flyCfg.seconds}s`);
+
+section('the landing is exact');
+// Real geometry, which the DOM cannot give us here: a 210px card sitting in the
+// middle of a 1280x800 screen, and a 59px tile down in the bottom-left corner.
+// The transform has to map the card's box ONTO the tile's box — every corner,
+// not just the one it is anchored by.
+{
+  const card = { left: 421, top: 260, width: 210, height: 210 };
+  const tile = { left: 14, top: 706, width: 58.96, height: 58.96 };
+  const m = hive.flyTransform(card, tile);
+  // Where each corner of the card ends up, under transform-origin 0 0.
+  const map = (x, y) => ({
+    x: card.left + m.dx + (x - card.left) * m.scale,
+    y: card.top + m.dy + (y - card.top) * m.scale,
+  });
+  const tl = map(card.left, card.top);
+  const br = map(card.left + card.width, card.top + card.height);
+  const near = (a, b) => Math.abs(a - b) < 0.01;
+  check('the top-left corner lands on the tile\'s',
+    near(tl.x, tile.left) && near(tl.y, tile.top),
+    `(${tl.x.toFixed(2)}, ${tl.y.toFixed(2)}) vs (${tile.left}, ${tile.top})`);
+  check('and so does the bottom-right',
+    near(br.x, tile.left + tile.width) && near(br.y, tile.top + tile.height),
+    `(${br.x.toFixed(2)}, ${br.y.toFixed(2)}) vs (${(tile.left + tile.width).toFixed(2)}, ${(tile.top + tile.height).toFixed(2)})`);
+  check('which means the hexagons coincide, not just the boxes',
+    near(m.scale, tile.width / card.width),
+    'both are square and share the clip polygon, so one scale does both');
+  // The failure this guards against, spelled out: a centred origin.
+  const centred = {
+    x: card.left + m.dx + (card.left - (card.left + card.width / 2)) * m.scale + card.width / 2,
+  };
+  check('a centred origin would MISS — this is why the CSS says 0 0',
+    Math.abs(centred.x - tile.left) > 1, `off by ${Math.abs(centred.x - tile.left).toFixed(0)}px`);
+}
+
+section('the flight actually runs');
+// THE TEST THAT WOULD HAVE CAUGHT THE REAL BUG, and the reason it did not:
+// every element in jsdom measures zero, so hiveTileRect() returned null and
+// flyCardToHive bailed at its first guard — one line before the call that threw.
+// A guard short-circuiting the code under test is a green suite over a feature
+// that does nothing, so the boxes are stubbed here and the whole path runs.
+{
+  const CARD = { left: 421, top: 260, width: 210, height: 210, right: 631, bottom: 470 };
+  const TILE = { left: 14, top: 706, width: 59, height: 59, right: 73, bottom: 765 };
+  const real = dom.window.Element.prototype.getBoundingClientRect;
+  dom.window.Element.prototype.getBoundingClientRect = function () {
+    if (this.classList?.contains('sv-hive-tile')) return { ...TILE, x: TILE.left, y: TILE.top };
+    if (this.classList?.contains('sv-card')) return { ...CARD, x: CARD.left, y: CARD.top };
+    return real.call(this);
+  };
+
+  const picks = [];
+  onChoice = (choice) => { picks.push({ id: choice.id, rarity: choice.rarity }); hive.setHiveUpgrades(picks); };
+
+  hive.setHiveUpgrades([]);
+  ui.showLevelUp();
+  // The deal locks the menu until the cards have finished arriving; a click
+  // before then is ignored on purpose (see setMenuLocked), so let it settle.
+  await new Promise((r) => setTimeout(r, 400));
+  const cards = [...document.querySelectorAll('.sv-card')];
+  check('a hand was dealt', cards.length > 0, `${cards.length} cards`);
+
+  const chosen = cards[0];
+  const chosenId = chosen?.dataset?.upgrade ?? null;
+  chosen?.click();
+  await new Promise((r) => setTimeout(r, 30));
+
+  const flier = document.querySelector('.sv-hive-flier');
+  check('a flier was appended', !!flier, 'this is the call that used to throw');
+  check('the pick was filed', picks.length === 1, JSON.stringify(picks));
+  if (flier) {
+    check('it starts at the card, in fixed position',
+      flier.style.position === '' && flier.style.left === `${CARD.left}px`
+        && flier.style.top === `${CARD.top}px`,
+      `left ${flier.style.left}, top ${flier.style.top}`);
+    check('it is sized to the card', flier.style.width === `${CARD.width}px`);
+    check('and it is not a live card any more',
+      !flier.classList.contains('sv-card') && flier.classList.contains('sv-hive-flier'));
+  }
+  const id = picks[0]?.id;
+  const tileNow = id ? tileFor(id) : null;
+  check('the destination tile is hidden for the trip',
+    !!tileNow && tileNow.style.visibility === 'hidden',
+    tileNow ? `visibility "${tileNow.style.visibility}"` : 'no tile');
+
+  // jsdom runs no CSS transitions, so transitionend never fires — which is
+  // exactly the case the timeout backstop exists for. If it did not land, an
+  // upgrade you hold would stay invisible for the rest of the run.
+  await new Promise((r) => setTimeout(r, 700));
+  check('the flier is gone after the flight', !document.querySelector('.sv-hive-flier'));
+  check('and the tile is visible again — the backstop landed it',
+    !!tileNow && !tileNow.style.visibility,
+    tileNow ? `visibility "${tileNow.style.visibility}"` : 'no tile');
+
+  dom.window.Element.prototype.getBoundingClientRect = real;
+  onChoice = () => {};
+  hive.setHiveUpgrades([]);
+}
+
+section('the corner makes room, then feels the impact');
+// Driven through the real setHiveUpgrades, with the boxes stubbed so the tiles
+// have positions to move BETWEEN — the lesson from the flight test, where a
+// guard short-circuited the whole feature and the suite stayed green.
+{
+  const real = dom.window.Element.prototype.getBoundingClientRect;
+  dom.window.Element.prototype.getBoundingClientRect = function () {
+    if (this.classList?.contains('sv-hive-tile')) {
+      return { left: 14, top: 706, width: 59, height: 59, right: 73, bottom: 765, x: 14, y: 706 };
+    }
+    return real.call(this);
+  };
+
+  // A cluster big enough that adding one more re-rings it and most tiles move.
+  const start = ['shrimpRing', 'club', 'seaGarlic', 'harp', 'dumbo', 'beluga', 'octoGrab']
+    .map((id) => ({ id, rarity: 'common' }));
+  hive.setHiveUpgrades([]);
+  hive.setHiveUpgrades(start);
+  const posBefore = new Map([...tiles()].map((t) => [t.dataset.upgrade, t.style.left + ',' + t.style.top]));
+
+  hive.setHiveUpgrades([...start, { id: 'bakalar', rarity: 'rare' }]);
+  const after = [...tiles()];
+  const posAfter = new Map(after.map((t) => [t.dataset.upgrade, t.style.left + ',' + t.style.top]));
+
+  let relaid = 0;
+  for (const [id, p] of posBefore) if (posAfter.get(id) && posAfter.get(id) !== p) relaid++;
+  check('adding a tile really does move the others', relaid > 0, `${relaid} tiles re-placed`);
+
+  // The FLIP leaves its evidence in the TRANSITION, not the transform. The
+  // offset is written and cleared inside the same tick — that IS the mechanism:
+  // set the old position, force one reflow, release to the new one and let the
+  // browser interpolate. Asserting on `transform` here reads the end state and
+  // concludes nothing happened, which is how a working FLIP looks broken.
+  const animated = after.filter((t) => /transform/.test(t.style.transition || ''));
+  check('every tile that moved is animating there',
+    animated.length === relaid, `${animated.length} animating vs ${relaid} moved`);
+  check('the newcomer is not — it has no old place to come from',
+    !/transform/.test(tileFor('bakalar')?.style.transition || ''));
+  check('the transition drives transform, never left/top',
+    animated.length > 0 && animated.every((t) => /^transform /.test(t.style.transition)),
+    'animating left/top would lay the corner out on every frame of it');
+
+  // Staggered, and ordered by distance from the newcomer rather than by index.
+  const delays = animated.map((t) =>
+    parseFloat((t.style.transition.match(/\s([\d.]+)s\s*$/) || [])[1] || '0'));
+  check('they start a few milliseconds apart, not together',
+    new Set(delays).size > 1, `delays ${delays.map((d) => d.toFixed(3)).join(' ')}`);
+  check('the furthest tile starts last',
+    Math.max(...delays) > Math.min(...delays),
+    `${Math.min(...delays).toFixed(3)}s .. ${Math.max(...delays).toFixed(3)}s`);
+
+  // The arrival. Slam on the newcomer, ripple outward on the rest.
+  hive.slamAndRipple('bakalar');
+  check('the newcomer slams', tileFor('bakalar').classList.contains('sv-hive-arriving'));
+  check('and nothing else has slammed', after.filter((t) =>
+    t.classList.contains('sv-hive-arriving')).length === 1);
+  check('the wave has not started yet — it follows the slam',
+    after.every((t) => !t.classList.contains('sv-hive-rippling')),
+    'firing together reads as the whole panel flashing');
+
+  await new Promise((r) => setTimeout(r, 500));
+  const rippled = after.filter((t) => t.classList.contains('sv-hive-rippling')
+    || t.dataset.rippled === '1').length;
+  check('then the rest of the hive ripples', rippled > 0, `${rippled} tiles`);
+
+  dom.window.Element.prototype.getBoundingClientRect = real;
+  hive.setHiveUpgrades([]);
+}
 
 section('layouts pack without overlapping');
 // Twenty-two picks is a full late run, and the number at which a packing bug

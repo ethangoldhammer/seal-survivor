@@ -87,9 +87,11 @@ export const TEXT_ROLES = [
   { key: 'value', label: 'HUD number', selector: '.sv-value', section: 'HUD',
     sample: '184,200',
     style: { font: FONT_GLOBAL, size: 20, weight: 600, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0 } },
-  { key: 'level', label: 'Level strip', selector: '.sv-xptop-level', section: 'HUD',
+  // Inside the xp track now, not beside it, and the track grows to fit this —
+  // so this size is what makes the bar thick. Small on purpose.
+  { key: 'level', label: 'Level in xp bar', selector: '.sv-xptop-level', section: 'HUD',
     sample: 'Level 7',
-    style: { font: FONT_GLOBAL, size: 10, weight: 600, tracking: 0.1, case: 'UPPER', useInk: true, color: 0xe8ecf3, alpha: 0.5, shadow: 4, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 8, weight: 600, tracking: 0.1, case: 'UPPER', useInk: true, color: 0xe8ecf3, alpha: 0.5, shadow: 4, glow: 0 } },
   { key: 'bossName', label: 'Boss name', selector: '.sv-boss-name', section: 'HUD',
     sample: 'THE OLD MAN OF THE REEF',
     style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.14, case: 'UPPER', useInk: false, color: 0xffd7d7, alpha: 1, shadow: 4, glow: 12 } },

@@ -97,7 +97,7 @@ console.warn = (...a) => warnings.push(a.map(String).join(' '));
 
 const { CONFIG } = await import('../path/src/config.js');
 const { initFeedback } = await import('../path/src/systems/feedback.js');
-const { measure, phraseAll } = await import('../path/src/upgradeText.js');
+const { measure, phraseAll, sentenceCase } = await import('../path/src/upgradeText.js');
 const { player } = await import('../path/src/entities/player.js');
 const { menuInput } = await import('../path/src/input.js');
 initFeedback(null);
@@ -139,15 +139,18 @@ const effectOf = (id, stack = 1) => phraseAll(measure(byId.get(id), stack), stac
 section('A card that only has flavour text gets the measurement');
 {
   // bounceShot's desc is "All balls, no pit." — it does not say anywhere that
-  // it unlocks a ricochet, and this box is the only place a player can find
+  // it hands over a ricochet, and this box is the only place a player can find
   // that out before spending the pick.
   const [card] = deal('bounceShot');
   pointerEnter(card);
   const text = shown();
   check('hovering bounceShot shows a tooltip', !!text, text ?? 'nothing shown');
-  check('...and it is the measured effect', text === effectOf('bounceShot'),
-    `got "${text}" want "${effectOf('bounceShot')}"`);
-  check('...naming the unlock first', !!text?.startsWith('unlocks'), text ?? '');
+  // The tooltip is the measurement sentence-cased: it is a box of its own, so
+  // it opens with a capital where the raw fragment does not.
+  check('...and it is the measured effect', text === sentenceCase(effectOf('bounceShot')),
+    `got "${text}" want "${sentenceCase(effectOf('bounceShot'))}"`);
+  check('...naming the ability first, with no "unlocks" verb in front of it',
+    text?.startsWith('A chaining ricochet shot') === true, text ?? '');
   pointerLeave(card);
   check('leaving the card takes it away', shown() === null, shown() ?? '');
 }
@@ -201,9 +204,9 @@ section('The measurement disagreeing with the desc is the point');
 section('The tooltip answers for the stack being offered');
 {
   // Every repeatable card is a different card the second time, and bounceShot
-  // is the clearest case: the first one unlocks the ricochet and the second
-  // only widens it, so a tooltip stuck on stack 1 would go on offering to
-  // unlock something the player already owns.
+  // is the clearest case: the first one hands over the ricochet and the second
+  // only widens it, so a tooltip stuck on stack 1 would go on offering
+  // something the player already owns.
   //
   // Asserted as a DIFFERENCE and not just against the measured string. Both
   // stacks matching `effectOf(id, stack)` is also true when the tooltip is
@@ -219,14 +222,15 @@ section('The tooltip answers for the stack being offered');
   const atTwo = shown();
   player.upgrades.length = 0;
 
-  check('the first stack quotes stack 1', atOne === effectOf('bounceShot', 1),
+  check('the first stack quotes stack 1', atOne === sentenceCase(effectOf('bounceShot', 1)),
     `got "${atOne}"`);
-  check('the second stack quotes stack 2', atTwo === effectOf('bounceShot', 2),
+  check('the second stack quotes stack 2', atTwo === sentenceCase(effectOf('bounceShot', 2)),
     `got "${atTwo}"`);
   check('...and the two really are different text', !!atOne && !!atTwo && atOne !== atTwo,
     `"${atOne}" vs "${atTwo}"`);
-  check('...with only the first one offering the unlock',
-    atOne?.includes('unlocks') === true && atTwo?.includes('unlocks') === false,
+  check('...with only the first one naming the ability',
+    atOne?.includes('chaining ricochet shot') === true
+    && atTwo?.includes('chaining ricochet shot') === false,
     `stack 2 says "${atTwo}"`);
 }
 
