@@ -88,11 +88,19 @@ const stats = baseStats();
 const playerPos = new THREE.Vector3(0, -20, 0);
 
 // A dash, declared directly. tryStrike() is the real entry point and is tested
-// by test:strike; what matters here is the state the hit loop reads.
-function armDash(power = 1, dir = { x: 1, y: 0 }) {
+// by test:strike and test:meter; what matters here is the state the hit loop
+// reads.
+//
+// `sweet` is part of that state and not an optional extra: a strike released
+// outside the sweet spot does no damage at all, so a dash armed without the
+// stamp measures the timing gate rather than the impact this file is about.
+// Exposed as an argument so the gate itself can be checked here too — see the
+// off-beat section at the end.
+function armDash(power = 1, dir = { x: 1, y: 0 }, sweet = true) {
   resetStrike();
   strikeState.active = true;
   strikeState.power = power;
+  strikeState.sweetStrike = sweet;
   strikeState.dashTimeLeft = 1;
   strikeState.dashDuration = 1;
   strikeState.dashDir = { x: dir.x, y: dir.y };
@@ -723,6 +731,56 @@ updateStrike(dt, scene, playerPos, stats, enemies, { onChainHit: () => { chained
 check('flipping chainOn.strikeHit brings the old behaviour back', chained === 1);
 CONFIG.strike.chainOn.strikeHit = false;
 void victim2;
+
+// ------------------------------------------------------------------ off beat
+
+section('OFF THE BEAT — the dash is a shove and nothing else');
+
+// A dash released outside the sweet spot still HAPPENS: it travels, it
+// connects, it throws bodies off their line and it paints the big ones for the
+// homing weapons. What it does not do is take anything off them. Checked here
+// rather than only in test:meter because the burst is easy to gate and the
+// CONTACT path is the one with two separate ways through it — the ram's own
+// share, and the prey cull that ignores hp entirely.
+
+resetEnemies(scene);
+resetMarks();
+const wasShare = CONFIG.strike.contactShare;
+CONFIG.strike.contactShare = 1;                 // so the ram has damage to lose
+const spared = spawnAt('shark', 0.2, -20);
+const sparedHp = spared.hp;
+armDash(1, { x: 1, y: 0 }, false);
+playerPos.set(0, -20, 0);
+let damaged = 0;
+updateStrike(dt, scene, playerPos, stats, enemies, { onEnemyDamaged: () => { damaged++; } });
+check('a mistimed ram takes nothing off the shark', spared.hp === sparedHp,
+  `${spared.hp.toFixed(1)} of ${sparedHp.toFixed(1)}`);
+check('...and files no damage against the strike', damaged === 0);
+check('...but still shoves it', Math.abs(spared.knockX) > 0, `${spared.knockX.toFixed(1)} u/s`);
+check('...and still paints it — a ram is a ram', isMarked(spared));
+CONFIG.strike.contactShare = wasShare;
+
+// The cull is the other half, and it is the one that would survive a
+// damage-only gate: it kills outright rather than by hp, precisely so the
+// difficulty ramp cannot scale a minnow out of reach.
+resetEnemies(scene);
+resetStrike();
+const school = [];
+for (let i = 0; i < 4; i++) school.push(spawnAt('fish', 0.2 + i * 0.05, -20));
+armDash(1, { x: 1, y: 0 }, false);
+let killed = 0;
+updateStrike(dt, scene, playerPos, stats, enemies, { onEnemyKilled: () => { killed++; } });
+check('a mistimed dash swims straight through a school', killed === 0,
+  `${killed} of ${school.length} eaten`);
+// ...and on the beat the same dash empties it, or the check above is passing
+// because sardines are out of reach rather than because the gate works.
+resetEnemies(scene);
+resetStrike();
+for (let i = 0; i < 4; i++) spawnAt('fish', 0.2 + i * 0.05, -20);
+armDash(1, { x: 1, y: 0 }, true);
+killed = 0;
+updateStrike(dt, scene, playerPos, stats, enemies, { onEnemyKilled: () => { killed++; } });
+check('...where an on-beat one eats it', killed > 0, `${killed} eaten`);
 
 // ---------------------------------------------------------------------------
 console.log(failures === 0 ? '\nAll strike-impact checks passed.' : `\n${failures} check(s) FAILED.`);

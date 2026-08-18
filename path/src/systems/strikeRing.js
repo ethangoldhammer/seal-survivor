@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { pipCount } from './strike.js';
+import { chainHex } from './chainColor.js';
+import { pipCount, liveChain } from './strike.js';
 import { ease } from '../ease.js';
 import { playerOverlayZ } from '../entities/player.js';
 
@@ -868,7 +869,21 @@ export function updateStrikeRing(dt, playerPos, strikeState, running, stats = nu
   u.uChainR.value = ring.chainRadiusMul ?? 1.14;
   u.uColor.value.set(ring.color);
   u.uReadyColor.value.set(ring.readyColor);
-  u.uComboColor.value.set(ring.comboColor);
+  // THE CHAIN ARC WEARS THE CHAIN'S OWN COLOUR, off the same hue wheel as the
+  // FOOD CHAIN! banner and the STRIKE NOW! prompt (systems/chainColor.js), so
+  // the three surfaces reporting one run of links cannot say three different
+  // things. `ring.comboColor` is what it falls back to with no chain running,
+  // which is also what liveChain() reading 0 lands on, so the swatch in the
+  // tuner is still the colour of a chain's first link.
+  //
+  // Set from a HEX for the same reason every other colour on this ring is:
+  // .set() runs the sRGB -> working-space conversion and setRGB would skip it,
+  // which would put the arc at a different brightness from the ring it rides
+  // outside. And a caution rather than a bug — the wheel cannot equalise
+  // BLOOM: the bright pass thresholds LUMINANCE, which is 7% blue, so the cold
+  // third of the wheel haloes visibly less than the warm third at the same
+  // saturation. See npm run glow.
+  u.uComboColor.value.set(liveChain() > 0 ? chainHex(liveChain()) : ring.comboColor);
   u.uPipColor.value.set(ring.lastPipColor ?? ring.readyColor);
   // The spring's leftover energy comes out here rather than as fill, so a pip
   // landing BLOOMS instead of overshooting the bar it is landing in.

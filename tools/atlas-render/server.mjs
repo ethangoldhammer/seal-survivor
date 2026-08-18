@@ -8,12 +8,24 @@
 // doing the work because these need real WebGL; Node has none.
 //
 // Deliberately NOT the project's dev server: it serves three.js, public/models
-// and public/textures read-only and never imports config.js, so nothing here
-// can touch imported-tuning.json. Writes go only into this scratchpad.
+// and public/textures read-only, and it never runs the game — so nothing here
+// can touch imported-tuning.json.
+//
+// It does write three things, all of them generated and all of them named:
+// the shot PNGs (into --out), the spec list next to this file, and — on /bake —
+// path/src/ui/upgradeIcons.js, by shelling out to tools/upgrade-icons.mjs. That
+// last one is what puts an icon in the game, and it runs the SAME bake the
+// terminal does rather than a second copy of it; a button that embedded its own
+// version of the round trip is a button that produces a different module from
+// the one `npm run icons -- --bake` produces.
 import http from 'node:http';
+import { execFile } from 'node:child_process';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+
+const run = promisify(execFile);
 
 // Resolved from this file rather than hardcoded, so it keeps working outside
 // the session that wrote it. `--out` puts the PNGs somewhere else (a scratch
@@ -147,6 +159,54 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // APPLY: bake every shot in this server's output directory into the game's
+  // icon module. `?strict=1` refuses to write when anything named by icons.json
+  // is missing from disk — see the note on --strict in tools/upgrade-icons.mjs.
+  // The picker sends strict by default and only clears it when the person has
+  // read the list of what is absent and said to go anyway.
+  // config.js announces every stale key in the saved tuning on startup, and the
+  // bake imports it. That is a dozen lines of unrelated chatter ahead of the one
+  // line you clicked the button to read — and on a refusal it pushed the list of
+  // what is MISSING off the bottom of the notes pane. Dropped here rather than
+  // in the picker so the server's own log is readable too.
+  const trimConfigChatter = (text) => text.split('\n')
+    .filter((line, i, all) => {
+      if (line.startsWith('[config]')) return false;
+      // The indented continuation lines under a `[config]` heading. Only those:
+      // the bake's own output is indented the same way, so this walks back to
+      // find which kind of block a line belongs to rather than matching on shape.
+      if (!/^\s/.test(line)) return true;
+      for (let j = i - 1; j >= 0; j--) {
+        if (!/^\s/.test(all[j])) return !all[j].startsWith('[config]');
+      }
+      return true;
+    })
+    .join('\n').trim();
+
+  if (req.method === 'POST' && url.pathname === '/bake') {
+    const args = ['--import', './tools/vite-loader.mjs', 'tools/upgrade-icons.mjs', '--bake', SHOTS];
+    if (url.searchParams.get('strict') !== '0') args.push('--strict');
+    try {
+      // cwd is the PROJECT, because the loader path above is relative to it and
+      // because upgrade-icons.mjs resolves its own outputs from its own location.
+      const { stdout } = await run(process.execPath, args, { cwd: PROJECT, maxBuffer: 1 << 22 });
+      const log = trimConfigChatter(stdout);
+      res.writeHead(200, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ ok: true, log }));
+      console.log(`  baked into the game:\n${log.split('\n').map((l) => '    ' + l).join('\n')}`);
+    } catch (err) {
+      // Exit 2 is the strict refusal and carries the list of what is missing on
+      // stderr; anything else is a real failure. Both come back as the same
+      // shape so the picker can just show what the tool said.
+      const out = trimConfigChatter(`${err.stderr ?? ''}${err.stdout ?? ''}`)
+        || String(err.message ?? err);
+      res.writeHead(200, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ ok: false, refused: err.code === 2, log: out }));
+      console.log(`  bake ${err.code === 2 ? 'refused' : 'failed'}: ${out.split('\n')[0]}`);
+    }
+    return;
+  }
+
   const file = resolveSafe(decodeURIComponent(url.pathname));
   if (!file) { res.writeHead(404).end('no'); return; }
   try {
@@ -169,4 +229,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(4599, () => {
   console.log('atlas renderer on http://localhost:4599/render.html');
   console.log(`writing shots to ${SHOTS}`);
+  console.log('  picker.html can bake straight into path/src/ui/upgradeIcons.js');
 });

@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tip dissolve — four ways a coach line leaves</title>
+    <style>
+      html, body { margin: 0; background: #04121e; color: #cfe6ff;
+        font: 13px/1.45 'Inter', ui-sans-serif, system-ui, sans-serif; }
+      /* The water the tips are read over. Not decoration: every one of these
+         styles is a mask or an alpha ramp, so what is BEHIND the type is half
+         of what the choice is about — a dissolve that reads beautifully on flat
+         black can be invisible over a lit seabed. */
+      body { background:
+        radial-gradient(120% 80% at 50% -10%, #0d3b57 0%, #07203a 45%, #04121e 100%); }
+      header { padding: 16px 20px 4px; }
+      h1 { font-size: 14px; letter-spacing: .12em; text-transform: uppercase;
+        color: #7ad7ff; font-weight: 600; margin: 0 0 6px; }
+      header p { color: #8fb3d8; margin: 0 0 4px; max-width: 900px; }
+      header b { color: #cfe6ff; font-weight: 600; }
+
+      .sheet { padding: 8px 20px 28px; }
+      .row { margin: 0 0 6px; }
+      .rowhead { display: flex; align-items: baseline; gap: 10px; padding: 10px 0 2px; }
+      .rowhead h2 { font-size: 13px; letter-spacing: .1em; text-transform: uppercase;
+        color: #9fe3ff; margin: 0; font-weight: 700; }
+      .rowhead span { color: #7f9dc4; }
+      .cells { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+      .cell { position: relative; height: 92px; border: 1px solid #143246; border-radius: 6px;
+        background: rgba(3, 22, 38, 0.55); overflow: hidden;
+        display: flex; align-items: center; justify-content: center; }
+      .cell .t { position: absolute; top: 4px; left: 6px; font-size: 10px;
+        letter-spacing: .08em; color: #4d7ea3; }
+
+      /* THE TIP, styled exactly as ui/callout.js styles a coach line — the same
+         size, weight, tracking, colour and shadow. Copied rather than imported
+         because that stylesheet is written by ui/typography.js from the role
+         sheet at runtime and this page has no game to load it from; if the
+         coach role moves, this block has to move with it. */
+      .tip { position: relative; text-align: center; width: max-content;
+        max-width: 88%; line-height: 1.25; text-wrap: balance;
+        font-size: 20px; font-weight: 700; letter-spacing: 0.04em; color: #9fe3ff;
+        text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 18px currentColor; }
+      /* The inner node — the one tipDissolve.js owns. See the header there. */
+      .tip-ink { display: block; }
+
+      .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+        padding: 10px 20px; border-top: 1px solid #143246; margin-top: 10px; }
+      .controls label { display: flex; gap: 6px; align-items: center; color: #8fb3d8; }
+      .controls input[type=range] { width: 120px; }
+      .controls button { background: #0d3b57; color: #cfe6ff; border: 1px solid #1d5c7f;
+        border-radius: 4px; padding: 5px 10px; font: inherit; cursor: pointer; }
+      .controls output { color: #cfe6ff; min-width: 30px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Tip dissolve</h1>
+      <p>Four ways a first-run tip can leave once the thing it was pointing at is
+         gone. Every cell is the <b>real</b> <code>ui/tipDissolve.js</code> at a
+         fixed progress — left is whole, right is nearly gone. The bottom row
+         plays all four on a loop.</p>
+    </header>
+    <div class="sheet" id="sheet"></div>
+    <div class="controls" id="controls"></div>
+    <script type="module" src="./tip-dissolve.js"></script>
+  </body>
+</html>

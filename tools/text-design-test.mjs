@@ -107,6 +107,7 @@ const { ease } = await import('../path/src/ease.js');
 const { PREVIEW_SCREENS } = await import('../path/src/ui/ui.js');
 const typography = await import('../path/src/ui/typography.js');
 const ui = await import('../path/src/ui/ui.js');
+const { chainCss, liveChainCss } = await import('../path/src/systems/chainColor.js');
 
 ui.initUI({ onStart() {}, onRestart() {}, onLevelChoice() {}, onResume() {}, onPauseRestart() {} });
 typography.initTypography();
@@ -385,27 +386,39 @@ section('Popup motion: the curves are the shared ones');
 }
 
 // ---------------------------------------------------------------------------
-section('The chain banner ramp');
+section('The chain banner wheel');
 {
-  // Cold at the shallow end, hot at depth, and BOTH ends come from the config
-  // rather than from the numbers that used to be baked into the rgb() string.
-  CONFIG.textStyles.chain.color = 0x00ff00;
-  CONFIG.textMotion.chain.colorHot = 0xff0000;
-  CONFIG.textMotion.chain.hotAt = 8;
+  // THE BANNER WEARS ITS LINK'S PLACE ON THE HUE WHEEL, and the wheel is
+  // shared: the STRIKE NOW! prompt and the ring's combo arc read the same four
+  // numbers, so what is really pinned here is that the banner asks
+  // systems/chainColor.js rather than mixing a ramp of its own. It replaced a
+  // two-stop gold-to-orange ramp that was fully spent by link eight — the
+  // depth at which a chain most deserves to look like something.
+  CONFIG.strike.chainColor.hue = 0;
+  CONFIG.strike.chainColor.huePerLink = 0.1;
+  CONFIG.strike.chainColor.sat = 1;
+  CONFIG.strike.chainColor.light = 0.5;
   CONFIG.textMotion.chain.life = 2;
 
-  // previewToasts fires the banner at six links, which on an 8-link ramp is
-  // exactly two thirds of the way along it: (6-2)/(8-2). Green to red at 2/3
-  // is rgb(170, 85, 0) — a number that can only come out right if BOTH ends
-  // are being read from the config. The old code had the gold and the orange
-  // baked into an rgb() string and would answer the same thing here whatever
-  // these two swatches said.
+  // previewToasts fires the banner at six links, which at 0.1 a link from a
+  // start of 0 is hue 0.6 — pure blue-violet at full saturation and half
+  // lightness, rgb(0, 102, 255). A number that can only come out right if all
+  // four are being read: a baked ramp, or a wheel that ignored `huePerLink`,
+  // would answer something else here whatever these say.
   ui.clearToasts();
   ui.previewToasts();
   const banner = document.getElementById('svToastLayer').querySelector('.sv-chain');
   check('the banner is on screen', !!banner);
-  check('the ramp mixes both configured ends',
-    banner.style.color.replace(/\s/g, '') === 'rgb(170,85,0)', `got ${banner.style.color}`);
+  check('the banner wears its link\'s place on the wheel',
+    banner.style.color.replace(/\s/g, '') === 'rgb(0,102,255)', `got ${banner.style.color}`);
+
+  // THE WHEEL COMES ROUND rather than running out, which is the whole reason
+  // it replaced the ramp: ten links at 0.1 apiece is a full revolution, so a
+  // very deep chain is back where it started instead of stuck on the hot end.
+  check('ten links is one full turn, back to the start',
+    chainCss(10) === chainCss(0), `${chainCss(10)} vs ${chainCss(0)}`);
+  check('...and a chain that has lapsed reads as no chain at all',
+    liveChainCss() === chainCss(0), liveChainCss());
 
   // Deeper into the chain is further along the ramp. Re-firing re-uses the live
   // node rather than stacking a second banner — the extension path.

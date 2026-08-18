@@ -362,6 +362,7 @@ const DOCS = {
     count: 'How many per activation: shots in a volley, or turtles kept up.',
     mul: 'A plain multiplier, and what it multiplies is the perk\'s own business — giant scales SIZE, swift scales SPEED (and turn rate with it).',
     damage: 'Lunge: a multiplier on contact damage while dashing. Electric: damage per second inside the aura. The shooters: damage per projectile.',
+    attack: 'What KIND of harm this is — kinetic, electric, blast, beam, void, venom, chill or infection. It decides what the telegraph ring looks like: the colour and the crackling/roiling/sagging edge both come from the shared threat palette, so an electric boss draws in the exact cyan of the player\'s Voltaic element. Look only — nothing about damage reads it. Blank keeps the colour the perk had before the palette existed.',
     notes: 'Free text — nothing reads it.',
   },
 };
@@ -384,7 +385,7 @@ const BLANK_MEANS = {
   'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
   'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', notes: '—' },
-  'bossPerks.csv': { enabled: 'enabled', weight: '1', notes: '—', cooldown: 'unused', windup: 'unused', duration: 'unused', speed: 'unused', radius: 'unused', range: 'any range', count: '1', mul: '1', damage: 'unused' },
+  'bossPerks.csv': { enabled: 'enabled', weight: '1', notes: '—', cooldown: 'unused', windup: 'unused', duration: 'unused', speed: 'unused', radius: 'unused', range: 'any range', count: '1', mul: '1', damage: 'unused', attack: 'the old colour' },
   // A blank spawn value means "leave the built-in alone", NOT zero — zero
   // would switch a system off, which is the opposite of leaving it alone.
   'spawning.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },

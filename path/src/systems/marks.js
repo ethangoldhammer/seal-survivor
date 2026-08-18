@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import {
+  makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing,
+  setRingThreat, __organicRingShader,
+} from './organicRing.js';
 
 // THE MARK — what a strike does to something too big to throw around.
 //
@@ -32,83 +36,65 @@ import { CONFIG } from '../config.js';
 const marks = new Map();
 
 let group = null;
-const ringGeometry = new THREE.PlaneGeometry(2, 2);
 
-const vertexShader = /* glsl */ `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+// THE RETICLE IS THE SHARED ORGANIC RING (systems/organicRing.js), which owns
+// the shader, the noise field and the sweep. What stays here is the two things
+// that are genuinely the mark's own.
+//
+// THE GAPS. `arcs: 4` cuts the ring into four bracket arms with the openings
+// on the diagonals, and that is not decoration — it is the only thing keeping
+// this apart from the other circles drawn round a body. The beluga's trap and
+// the charge meter are closed rings; a closed mark would read as one of them.
+// The organic edge breaks the arms up and tears their ends, but the four gaps
+// survive it.
+//
+// THE COLOUR IS THE TARGET'S STATUS. A mark says "every homing weapon prefers
+// this" and, now, "and this is what is already happening to it" — the ring
+// tints to whatever element is on the body through the same threat palette the
+// boss tells read (CONFIG.fx.attackTypes), so a poisoned shark's reticle is
+// venom green and a frozen one's is chill blue, each with that element's own
+// edge dialect. One glance answers both questions instead of one.
+const makeRing = () => makeOrganicRing({
+  arcs: 4,
+  type: 'kinetic',
+  color: CONFIG.strike?.mark?.ring?.color ?? 0xffc65a,
+  thickness: CONFIG.strike?.mark?.ring?.thickness ?? 0.16,
+  glow: CONFIG.strike?.mark?.ring?.glow ?? 2.4,
+  renderOrder: 9,
+});
+
+// WHICH STATUS THE RING SHOWS when a body is carrying more than one. Ordered by
+// how much the status changes what the player should do about that target, not
+// by how much damage it represents: a frozen shark is not coming at you and
+// that outranks everything, an infected one is about to hand its status to the
+// school around it, and a poisoned one is merely dying on its own schedule.
+//
+// `shock` is deliberately absent — it resolves inside a single frame and has no
+// timer to read, so there is never a moment where a reticle could show it.
+const STATUS_ORDER = [
+  ['chillTimer', 'chill'],
+  ['infectTimer', 'infection'],
+  ['venomTimer', 'venom'],
+];
+
+function statusType(target) {
+  for (const [field, type] of STATUS_ORDER) {
+    if ((target?.[field] ?? 0) > 0) return type;
   }
-`;
-
-// A broken ring — four arcs with gaps at the diagonals, so it reads as a
-// TARGETING bracket rather than as a bubble or an aura. Everything else that
-// draws a circle around a body in this game (the beluga's trap, the charge
-// meter) is a solid ring; the gaps are what keep those three apart at a
-// glance.
-const fragmentShader = /* glsl */ `
-  uniform vec3 uColor;
-  uniform float uGlow;
-  uniform float uFade;      // 0..1 — the pulse, and the ramp-out at the end
-  uniform float uThickness;
-  varying vec2 vUv;
-
-  #define TAU 6.28318530718
-
-  void main() {
-    vec2 p = (vUv - 0.5) * 2.0;
-    float r = length(p);
-
-    // The band itself. Smoothstepped on both sides so the arc has soft edges
-    // at any distance instead of aliasing into a dashed line when the camera
-    // pulls back.
-    float band = 1.0 - smoothstep(0.0, uThickness, abs(r - (1.0 - uThickness)));
-    if (band <= 0.001) discard;
-
-    // Four arcs. seg runs 0..1 across each quarter turn; the gap is cut out
-    // of the middle of each one, which puts the four openings on the
-    // diagonals and the four bracket corners on the axes.
-    float ang = atan(p.y, p.x);
-    float seg = fract((ang / TAU) * 4.0 + 0.125);
-    float arc = smoothstep(0.0, 0.06, seg) * (1.0 - smoothstep(0.72, 0.78, seg));
-    if (arc <= 0.001) discard;
-
-    float a = band * arc * uFade;
-    gl_FragColor = vec4(uColor * uGlow * a, a);
-  }
-`;
-
-function makeRing() {
-  const material = new THREE.ShaderMaterial({
-    vertexShader,
-    fragmentShader,
-    transparent: true,
-    depthWrite: false,
-    // Same reasoning as the impact flash: this is a readout, not geometry. A
-    // reticle clipped by the shark it is painted on would vanish exactly when
-    // the shark turns side-on, which is the moment it matters most.
-    depthTest: false,
-    blending: THREE.AdditiveBlending,
-    uniforms: {
-      uColor: { value: new THREE.Color(0xffc65a) },
-      uGlow: { value: 2.4 },
-      uFade: { value: 0 },
-      uThickness: { value: 0.16 },
-    },
-  });
-  const mesh = new THREE.Mesh(ringGeometry, material);
-  mesh.frustumCulled = false;
-  mesh.renderOrder = 9;
-  return mesh;
+  return null;
 }
 
 // For the harness only. Nothing in Node compiles GLSL and the browser preview
 // never renders a frame to compile one in, so the realistic failure — a uniform
 // renamed on one side of the pair and not the other — is otherwise completely
 // uncovered, and its symptom is a reticle that is silently invisible. Same
-// escape hatch, and the same reasoning, as bakalar's __beamShader.
-export const __ringShader = { vertexShader, fragmentShader, makeRing };
+// escape hatch, and the same reasoning, as bakalar's __beamShader. Now a
+// re-export, because the shader it is checking is shared.
+export const __ringShader = {
+  vertexShader: __organicRingShader.vertexShader,
+  fragmentShader: __organicRingShader.fragmentShader,
+  makeRing,
+};
 
 /** Attach the reticle layer. Safe to call again — the old one is torn down. */
 export function initMarks(scene) {
@@ -120,7 +106,7 @@ export function initMarks(scene) {
 
 export function disposeMarks(scene) {
   if (!group) return;
-  for (const m of marks.values()) m.ring?.material.dispose();
+  for (const m of marks.values()) disposeOrganicRing(m.ring);
   marks.clear();
   scene.remove(group);
   group = null;
@@ -128,10 +114,7 @@ export function disposeMarks(scene) {
 
 /** Drop every mark. Called on a fresh run — nothing survives a death. */
 export function resetMarks() {
-  for (const m of marks.values()) {
-    m.ring?.material.dispose();
-    if (m.ring) group?.remove(m.ring);
-  }
+  for (const m of marks.values()) disposeOrganicRing(m.ring);
   marks.clear();
 }
 
@@ -179,6 +162,12 @@ export function markTarget(target, opts = {}) {
     // number that can be hand-typed here.
     size: opts.radius ?? target.radius ?? 1,
     phase: Math.random(),
+    // The sweep-on, 0..1. Starts closed so a new lock is DRAWN rather than
+    // popped into existence at full strength.
+    onT: 0,
+    // Which element the ring is currently wearing, so the tint is only rewritten
+    // when it actually changes rather than every frame.
+    status: null,
   });
   return true;
 }
@@ -230,10 +219,7 @@ export function updateMarks(dt) {
       || !target.mesh.parent
       || (target.hp != null && target.hp <= 0);
     if (gone) {
-      if (m.ring) {
-        group?.remove(m.ring);
-        m.ring.material.dispose();
-      }
+      if (m.ring) disposeOrganicRing(m.ring);
       marks.delete(target);
       continue;
     }
@@ -241,22 +227,49 @@ export function updateMarks(dt) {
     if (!m.ring) continue;
 
     target.mesh.getWorldPosition(_pos);
-    m.ring.position.set(_pos.x, _pos.y, _pos.z);
     const size = m.size * (ring.radiusMul ?? 1.55);
-    m.ring.scale.setScalar(size);
+    // Position, scale and the shader's own idea of the radius move together —
+    // the world-unit wobble is divided by that radius, so setting the scale by
+    // hand would leave the edge amplitude computed against last frame's size.
+    placeOrganicRing(m.ring, _pos.x, _pos.y, size, _pos.z);
     m.ring.rotation.z += (ring.spin ?? 0.7) * dt;
 
-    // The pulse, plus a ramp-out over the last `fade` seconds — a reticle that
-    // vanished on a frame boundary would read as the lock having been lost
-    // rather than having expired.
+    // The pulse. The ramp-out is no longer part of it: leaving is a sweep now,
+    // below, so this is purely the breathing of a live lock.
     m.phase = (m.phase + dt * (ring.hz ?? 2.6)) % 1;
     const depth = Math.min(1, Math.max(0, ring.pulseDepth ?? 0.55));
     const wave = 0.5 - 0.5 * Math.cos(m.phase * TAU);
-    const out = Math.min(1, m.timer / fade);
-    const u = m.ring.material.uniforms;
-    u.uFade.value = (1 - depth + depth * wave) * out;
-    u.uThickness.value = ring.thickness ?? 0.16;
-    u.uGlow.value = ring.glow ?? 2.4;
-    u.uColor.value.set(ring.color ?? 0xffc65a);
+
+    // THE TWO SWEEPS. Painting a mark runs the hand round once to draw it; the
+    // last `fade` seconds run a second hand round behind the first to eat it
+    // away. Both travel the same direction, so a lock expires by being wiped
+    // off in the order it was written rather than by dimming — which is the
+    // difference between "that ran out" and "I lost it".
+    m.onT = Math.min(1, (m.onT ?? 0) + dt / Math.max(0.01, ring.sweepIn ?? 0.28));
+    const out = 1 - Math.min(1, m.timer / fade);
+
+    // The status, re-read every frame: a shark that gets poisoned while marked
+    // has to change under the reticle, and the element systems write these
+    // fields without knowing marks.js exists.
+    const status = statusType(target);
+    if (status !== m.status) {
+      m.status = status;
+      if (status) {
+        setRingThreat(m.ring, status);
+      } else {
+        // Back to the plain lock — colour AND dialect, or a shark that thaws
+        // keeps its crystalline facets for the rest of the mark.
+        setRingThreat(m.ring, 'kinetic');
+        updateOrganicRing(m.ring, 0, { color: ring.color ?? 0xffc65a });
+      }
+    }
+
+    updateOrganicRing(m.ring, dt, {
+      opacity: 1 - depth + depth * wave,
+      sweepIn: m.onT,
+      sweepOut: out,
+      thickness: ring.thickness ?? 0.16,
+      glow: ring.glow ?? 2.4,
+    });
   }
 }

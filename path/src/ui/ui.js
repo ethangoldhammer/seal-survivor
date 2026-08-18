@@ -17,6 +17,7 @@ import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
 import { buildPrintPaper, initSnapshotPrints } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
+import { chainCss } from '../systems/chainColor.js';
 import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform } from './upgradeHive.js';
 import {
   fetchGlobalBoard,
@@ -2646,28 +2647,19 @@ export function spawnChainToast(camera, worldX, worldY, chain) {
   chainToastAt(screenPt.x, screenPt.y, chain);
 }
 
-// Gold at the bottom, running to a hot orange as the chain deepens — the same
-// "this is getting out of hand" ramp the combo speed and grid warp are already
-// on, so all three read as one escalation. Both ends are tuned: the cold end is
-// the Chain banner role's own colour, the hot end and the depth it is reached
-// at are CONFIG.textMotion.chain.
+// THE COLOUR WALKS THE HUE WHEEL, one step per link, and comes back to the
+// start when the chain breaks — the same wheel the "STRIKE NOW!" prompt and
+// the ring's combo arc are on, so the three cannot drift apart. See
+// systems/chainColor.js; the ramp it replaced (gold to a hot orange by link
+// eight) had nothing left to say past eight, which is exactly where a chain is
+// most worth shouting about.
 //
 // Written inline, per frame it changes, which is why textRoles.js marks this
 // role `inlineColor` and typography.js emits no `color` for it — two writers
 // on one property, where one of them silently never wins, is the bug that
 // costs an afternoon.
-function chainColor(chain) {
-  const m = motionFor('chain');
-  const cold = CONFIG.textStyles?.chain?.color ?? 0xffe066;
-  const hot = m.colorHot ?? 0xff803a;
-  const hotAt = Math.max(3, m.hotAt ?? 8);
-  const t = Math.min(1, Math.max(0, (chain - 2) / (hotAt - 2)));
-  const mix = (shift) => Math.round(lerp((cold >>> shift) & 255, (hot >>> shift) & 255, t));
-  return `rgb(${mix(16)}, ${mix(8)}, ${mix(0)})`;
-}
-
 function chainToastAt(x, y, chain) {
-  const color = chainColor(chain);
+  const color = chainCss(chain);
 
   if (chainToast && toasts.includes(chainToast)) {
     chainToast.age = 0;

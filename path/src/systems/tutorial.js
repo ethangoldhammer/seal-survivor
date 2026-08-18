@@ -1,5 +1,7 @@
 import { CONFIG } from '../config.js';
-import { CALLOUTS, pushCallout, clearCallout, bandState, holdFor } from './callouts.js';
+import {
+  CALLOUTS, pushCallout, clearCallout, pinCallout, calloutAge, bandStates, holdFor,
+} from './callouts.js';
 import { calloutOnDevice, calloutText } from '../calloutTable.js';
 
 // ---------------------------------------------------------------------------
@@ -37,12 +39,31 @@ import { calloutOnDevice, calloutText } from '../calloutTable.js';
 // so a short first run teaches what it had time for and the next one picks up
 // the rest. Once the set is done nothing here ever speaks again.
 //
-// WHAT MARKS A STEP DONE IS THE ACTION, OR THE CLOCK. Doing the thing clears
-// the tip — the tip's job is finished the moment it is obeyed, and a line still
-// sitting there after you have obeyed it reads as the game not noticing. Not
-// doing it clears it too, on the row's `hold` seconds: a tip that waits forever
-// for an action is a tip you have started playing around, and it only had one
-// useful moment anyway. Either way it is done and does not return.
+// A TIP ABOUT A THING STANDS NEXT TO THAT THING. Not in a band across the
+// middle of the screen with an arrow pointing away from it — beside the bubble,
+// riding it, so that reading the sentence and finding the object it describes
+// are one look instead of two. The rows that name a `subject` (callouts.csv)
+// are the ones this is about; the three control tips name nothing, because a
+// stick is not somewhere in the water, and they stay on the band.
+//
+// AND IT STAYS THERE UNTIL THAT THING IS GONE. This is the half that replaced a
+// clock. A tip riding an orb cannot expire six seconds in: the orb is still
+// there, still unexplained, and the label that named it has vanished — which
+// reads as the game changing its mind. So a world tip is PINNED (see
+// pinCallout) and ends on exactly one of three things: the player did what it
+// asked, the subject left the water, or the moment it described lapsed. The
+// air-bubble tip goes when the bubble is popped, and not one frame before.
+//
+// WHAT MARKS A STEP DONE IS THE ACTION, OR THE MOMENT PASSING. Doing the thing
+// clears the tip — the tip's job is finished the moment it is obeyed, and a
+// line still sitting there after you have obeyed it reads as the game not
+// noticing. The moment ending clears it too: the orb expired unswallowed, the
+// pile got cleared, the turtle swam off. Either way it is done and does not
+// return.
+//
+// THE ROW'S `hold` STILL RUNS THE BAND TIPS, and only those. For a world tip it
+// is not a life any more — it is the cap on the legibility floor below, which
+// is the only thing left that reads it.
 //
 // BUT NEVER BEFORE IT CAN BE READ. Obeying is allowed to end a tip, not to make
 // it unreadable, so clearing waits out CONFIG.tutorial.minShow. Handing the
@@ -51,9 +72,17 @@ import { calloutOnDevice, calloutText } from '../calloutTable.js';
 // tutorial into three flickers.
 //
 // IT NEVER STOPS THE GAME. There is no acknowledge, no keypress, no pause; the
-// fight runs underneath the whole time. What a tip gets instead is the band
-// (which outranks every warning — see the note in callouts.js) and, for the two
-// steps that are about a PLACE rather than a button, an arrow.
+// fight runs underneath the whole time. What a tip gets instead is its own
+// surface — the band, which outranks every warning (see the note in
+// callouts.js), or the water beside its subject, which competes with nothing at
+// all because it is not where anything else is drawn.
+//
+// AND WHILE IT TALKS, THE SUBJECT IS LIT. Whatever the line is about pulses in
+// its own colour for as long as the line is up — see systems/telegraph.js. A
+// sentence and a glowing object are the same message twice, which is the whole
+// business of a first run: nobody should be reading "this one's a real deal
+// seal meal" while trying to work out which of four things in the water it
+// means.
 //
 // THIS FILE DECIDES WHICH STEP AND WHEN. The words are callouts.csv, the band
 // is systems/callouts.js, the arrow is ui/callout.js, and everything the steps
@@ -203,9 +232,18 @@ const STEPS = {
   // on a clock is the whole engine of the game.
   //
   // Offered while a combo window is actually open, which is the only moment the
-  // instruction is performable. It outlives the window — the hold is longer
-  // than CONFIG.strike.chainWindow — and that is fine and deliberate: the line
-  // is a rule to carry, not a prompt to obey inside two seconds.
+  // instruction is performable. It outlives the window, and that is fine and
+  // deliberate: the line is a rule to carry, not a prompt to obey inside two
+  // seconds.
+  //
+  // WHAT KEEPS IT UP IS NOW THE LEGIBILITY FLOOR rather than the row's hold. A
+  // world tip ends when its moment lapses, and this step's moment is the combo
+  // window — a couple of seconds against a hundred-character sentence. The
+  // floor is derived from that sentence's own length (see legibleFor) and is
+  // several times longer than the window, so the line still gets its full
+  // reading time. That is not a coincidence to rely on quietly: shorten this
+  // line and it will leave sooner, which is the correct behaviour and worth
+  // knowing before wondering where it went.
   foodChain: {
     ready: (ctx, events, done) => done.has('chum') && ctx.feeding && ctx.chumInWater,
     // A link actually scored. The one tip whose answer is the thing it
@@ -279,7 +317,37 @@ export const tutorialState = {
   // The step talking right now, or null. Held as the id rather than the row so
   // it survives a re-parsed table.
   active: null,
+  // WHERE THE LIVE TIP IS SPOKEN, in world units, or null for a band tip. Read
+  // by the drawing (ui/callout.js) and by nothing else.
+  //
+  // A POSITION AND NOT THE OBJECT, on purpose: it is the last place the subject
+  // was, so a tip whose bubble is popped mid-sentence stays exactly where the
+  // bubble was rather than snapping to the middle of the screen for the half
+  // second it takes to dissolve. The object itself is `subjectMesh`, and that
+  // one DOES go null the moment it is gone — the light on it has to.
+  anchor: null,
+  // The thing being talked about, for whatever wants to light it up. Null for
+  // a band tip and for a tip about a PLACE, neither of which has an object.
+  subjectMesh: null,
+  // How far through leaving the live tip is: 0 whole, 1 gone. Drives the
+  // dissolve in ui/tipDissolve.js. The row stays on its surface for the whole
+  // of this — a tip that vanished the frame it was answered would take its own
+  // exit away.
+  fade: 0,
 };
+
+// The subject handle the frame loop gave us when this step started, and whether
+// it has since gone. Held here rather than on tutorialState because nothing
+// outside this file has any business dereferencing it: it is whatever
+// ctx.takeSubject chose to hand over, and only ctx.subjectAt can read it.
+let subject = null;
+let subjectGone = false;
+// Seconds left of the dissolve, and the row it belongs to. The row is held
+// separately from tutorialState.active because the step is DONE while this
+// runs — it has been marked, the ledger is saved, and the only thing left is
+// the picture of it leaving.
+let fadeRow = null;
+let fadeLeft = 0;
 
 // Has the live tip been obeyed yet? Latched, and cleared with the step — see
 // the legibility floor in updateTutorial.
@@ -289,10 +357,10 @@ let answered = false;
  * The shortest this row may be on screen before the player's own input is
  * allowed to take it down.
  *
- * Never longer than the row's own `hold`: a floor above the hold would be a tip
- * whose timer could not end it, which would leave the "or the clock" half of
- * the contract unreachable and the step stuck talking until something louder
- * took the band.
+ * Never longer than the row's own `hold`: on a band tip a floor above the hold
+ * would be a tip whose timer could not end it, and on a world tip the hold is
+ * now nothing BUT this cap — the number that says how long a sentence this long
+ * is allowed to demand before the thing it describes is gone.
  */
 // Exported for the harness, which asserts the timing directly rather than by
 // counting frames: "a long tip is held longer than a short one" is a claim
@@ -378,13 +446,15 @@ export function tutorialDone() {
 export function resetTutorial() {
   doneIds.clear();
   saveDone();
-  endStep(false);
+  endStep(false, false);
+  dropFade();
 }
 
 /** Start of a run. The step ledger SURVIVES this; only the live tip doesn't. */
 export function resetTutorialRun() {
   events.clear();
-  endStep(false);
+  endStep(false, false);
+  dropFade();
   // ...and the silence endStep just armed goes with it. A run opens on a camera
   // move over empty water and the first tip already waits out `openDelay`; a
   // gap left over from the last run would be a second delay stacked on that
@@ -427,9 +497,25 @@ export function noteTutorialEvent(name) {
 let quiet = 0;
 let spokePriority = -Infinity;
 
-function endStep(markDone) {
+/**
+ * Take the live tip off the screen.
+ *
+ * `dissolve` false takes it off NOW — a dead seal, a run ending, a step
+ * preempted by something louder. Those are not the tip finishing; they are the
+ * screen being taken away from it, and a sentence eroding gently through the
+ * game-over card would be the wrong thing happening at the wrong moment.
+ *
+ * `dissolve` true hands the row to the fade, which keeps it on its surface for
+ * a further `CONFIG.tutorial.dissipate.seconds` while it is eaten away. The
+ * step is already done by then: the ledger is written here, so a player who
+ * dies mid-dissolve has still been taught the thing they answered.
+ */
+function endStep(markDone, dissolve = true) {
   const id = tutorialState.active;
   answered = false;
+  subject = null;
+  subjectGone = false;
+  tutorialState.subjectMesh = null;
   if (!id) return;
   if (markDone) {
     doneIds.add(id);
@@ -437,12 +523,58 @@ function endStep(markDone) {
   }
   const row = CALLOUTS.get(id);
   // Armed on the way out whether or not the step was spent. A tip cut off by
-  // dying still occupied the band a moment ago, and the next line should not
+  // dying still occupied the screen a moment ago, and the next line should not
   // land on the frame the last one vanished either way.
+  //
+  // COUNTED FROM HERE AND NOT FROM THE END OF THE DISSOLVE, deliberately: the
+  // gap is about how quickly the coach speaks again, and the dissolve is the
+  // last line still going. Stacking them would be a second and a half of empty
+  // water between every pair of tips.
   quiet = Math.max(0, CONFIG.tutorial?.gap ?? 1.2);
   spokePriority = row?.priority ?? 0;
-  clearCallout(row);
   tutorialState.active = null;
+
+  const seconds = dissolve ? Math.max(0, CONFIG.tutorial?.dissipate?.seconds ?? 0.7) : 0;
+  if (!row || seconds <= 0) {
+    dropFade();
+    clearCallout(row);
+    return;
+  }
+  // Straight from one fade into another, if a tip somehow ends while the last
+  // one is still leaving: the older row goes immediately rather than being
+  // left pinned to a surface nothing is driving any more.
+  if (fadeRow && fadeRow !== row) clearCallout(fadeRow);
+  fadeRow = row;
+  fadeLeft = seconds;
+  tutorialState.fade = 0;
+  // Still pinned, and this is the load-bearing half of the fade. The row is
+  // sitting on its surface past whatever `hold` it has, and without the pin the
+  // ager would take it away mid-dissolve — the text would simply cut out a
+  // third of the way through being eaten, which reads as a dropped frame.
+  pinCallout(row, true);
+}
+
+/** The dissolve, abandoned. The row goes now, wherever it had got to. */
+function dropFade() {
+  if (fadeRow) clearCallout(fadeRow);
+  fadeRow = null;
+  fadeLeft = 0;
+  tutorialState.fade = 0;
+  tutorialState.anchor = null;
+}
+
+// One frame of a tip leaving. Real time, like the drawing: a dissolve is not
+// gameplay and should not slow down inside a hit-stop.
+function advanceFade(dt) {
+  if (!fadeRow) return;
+  const seconds = Math.max(0.001, CONFIG.tutorial?.dissipate?.seconds ?? 0.7);
+  fadeLeft -= dt;
+  tutorialState.fade = Math.min(1, Math.max(0, 1 - fadeLeft / seconds));
+  // Pinned every frame rather than once: a warning cannot take this surface
+  // (nothing else draws on it) but a re-parsed table in dev hands out new row
+  // objects, and re-asserting is cheaper than reasoning about that.
+  pinCallout(fadeRow, true);
+  if (fadeLeft <= 0) dropFade();
 }
 
 /**
@@ -456,18 +588,31 @@ function endStep(markDone) {
 export function updateTutorial(dt, ctx = {}, live = true) {
   if (CONFIG.tutorial?.enabled === false || tutorialComplete(ctx.device)) {
     events.clear();
-    if (tutorialState.active) endStep(false);
+    if (tutorialState.active) endStep(false, false);
+    dropFade();
     return;
   }
   if (!live) {
     events.clear();
-    if (tutorialState.active) endStep(false);
+    if (tutorialState.active) endStep(false, false);
+    dropFade();
     return;
   }
+
+  advanceFade(dt);
 
   const activeId = tutorialState.active;
   if (activeId) {
     const step = STEPS[activeId];
+    const row = CALLOUTS.get(activeId);
+    const slot = bandStates[row?.anchor ?? 'band'];
+    // WHERE IT IS BEING SAID, re-asked every frame. A bubble rises, a chunk
+    // sinks, a turtle swims — a tip that latched a position when it started
+    // would drift off its own subject within a second, which is worse than the
+    // band it replaced: at least the band never claimed to be pointing at
+    // anything in particular.
+    if (subject) followSubject(ctx);
+
     // ANSWERED IS LATCHED, CLEARING IS NOT. The two are separate because a
     // player can answer a tip on the frame it appears — the control tips are
     // handed out one per input, and a confident player has the next thumb down
@@ -475,12 +620,31 @@ export function updateTutorial(dt, ctx = {}, live = true) {
     // moment it has been read, without needing the player to hold the stick
     // there until the floor is up.
     if (!answered && step.done(ctx, events, doneIds)) answered = true;
-    if (answered && bandState.age >= legibleFor(CALLOUTS.get(activeId), ctx.device)) {
+
+    const readable = calloutAge(row) >= legibleFor(row, ctx.device);
+    if (row?.subject) {
+      // A WORLD TIP HAS NO CLOCK — see the header. It is pinned for as long as
+      // it is up, and what ends it is the subject: answered, gone, or the
+      // moment it described no longer being true.
+      pinCallout(row, true);
+      // `ready` is re-asked as the LAPSE test rather than a second condition
+      // written out here. The two would say the same thing today and would not
+      // stay saying it: `ready` is where each step already decides whether its
+      // moment exists, and a duplicate of that in the clearing path is how a
+      // reworked step ends up with a tip that can never leave.
+      const lapsed = subjectGone || !step.ready(ctx, events, doneIds);
+      // ...BUT NEVER BEFORE IT CAN BE READ, and that is why the anchor above is
+      // the LAST position rather than the live one. A bubble popped on the
+      // frame the tip appeared leaves the sentence hanging in the water where
+      // the bubble was, for exactly as long as it takes to read, and then it
+      // dissolves.
+      if ((answered || lapsed) && readable) endStep(true);
+    } else if (answered && readable) {
       // Read, and answered. Off the band now rather than at the end of its
       // hold — the tip has been obeyed, and holding it there would be the game
       // arguing with something the player has already done.
       endStep(true);
-    } else if (bandState.row !== CALLOUTS.get(activeId)) {
+    } else if (slot.row !== row) {
       // Timed out, or something louder took the band. Either way it had its
       // moment: this is the "or the clock" half of the contract, and the timer
       // that ran it is the band's own hold (see holdFor) rather than a second
@@ -499,8 +663,13 @@ export function updateTutorial(dt, ctx = {}, live = true) {
   // reason: a step only gets one chance, so it must not lose it to something
   // that was never about it.
   if (tutorialState.active) {
-    const live = CALLOUTS.get(tutorialState.active);
-    if (bestReady(ctx, live?.priority ?? 0)) endStep(false);
+    const current = CALLOUTS.get(tutorialState.active);
+    // Preemption is between lines that share a surface. A world tip and a band
+    // tip do not, so the louder one simply takes its own place and both are up
+    // — which is the right answer for the case this rule exists for: "swim up
+    // for air" is spoken at the surface, and it should not have to knock a
+    // label off a bubble to be read.
+    if (bestReady(ctx, current?.priority ?? 0, current?.anchor)) endStep(false, false);
   }
 
   if (!tutorialState.active) {
@@ -523,20 +692,92 @@ export function updateTutorial(dt, ctx = {}, live = true) {
     // `pushCallout` has the final say, and its answer is respected: a step that
     // could not be shown is not started, so it stays available for the next
     // frame rather than being spent on a line nobody saw.
-    if (next && pushCallout(next.row)) tutorialState.active = next.id;
+    if (next && startStep(next, ctx)) tutorialState.active = next.id;
   }
   events.clear();
+}
+
+// ---------------------------------------------------------------------------
+// THE SUBJECT — the one object a tip is about
+//
+// ONE SPECIFIC THING, CHOSEN ONCE, and that is the whole difference between a
+// label and a search. "The nearest bubble" re-asked every frame is not one
+// bubble: two rise past each other, the answer swaps, and the sentence jumps
+// across the screen to a different orb without anything having happened. The
+// player reads that as the tip being about whatever is nearest, which is not a
+// thing the game is trying to teach.
+//
+// SO THE FRAME LOOP HANDS OVER A REFERENCE, not a position. It is opaque here —
+// whatever main.js chose, an orb, a chunk, a creature, or the little standing
+// object a PLACE gets — and it is only ever read back through ctx.subjectAt,
+// which answers null once it is gone. That null is what ends the tip.
+//
+// A PLACE HAS A SUBJECT TOO, and it is not a special case anywhere in this
+// file: "the waterline above the seal" is a position that answers every frame
+// and never dies. The alternative — a branch here for `surface` and `seabed` —
+// would be this file knowing about the arena, which is the one thing it has
+// never had to.
+// ---------------------------------------------------------------------------
+
+/**
+ * Begin a step: take the surface, and lock onto what the line is about.
+ *
+ * Returns false if it could not start, which leaves the step AVAILABLE rather
+ * than spent — the same contract pushCallout's refusal has always had. Both
+ * refusals happen: the surface can be busy, and a subject can be swallowed
+ * between the frame `ready` saw it and this one.
+ */
+function startStep(next, ctx) {
+  const { row, id } = next;
+  let handle = null;
+  if (row.subject) {
+    handle = ctx.takeSubject?.(row.subject, id) ?? null;
+    // Nothing to stand beside. NOT a fallback to the band: a line about an orb,
+    // read in the middle of the screen, with no orb anywhere, is the exact
+    // confusion this change was made to remove — and the step is offered again
+    // on the next frame anyway, by which time there usually is one.
+    if (!handle) return false;
+  }
+  if (!pushCallout(row)) return false;
+  subject = handle;
+  subjectGone = false;
+  tutorialState.anchor = null;
+  tutorialState.subjectMesh = null;
+  if (subject) followSubject(ctx);
+  return true;
+}
+
+// Where the subject is this frame, or the last place it was. See tutorialState
+// .anchor for why those are the same field.
+function followSubject(ctx) {
+  const at = ctx.subjectAt?.(subject) ?? null;
+  if (!at) {
+    // GONE. The anchor is left exactly where it was — the words stay in the
+    // water the bubble was in — but the object reference is dropped on the same
+    // frame, because something is lighting it up and a light left burning on a
+    // collected pickup would be a glow with nothing under it.
+    subjectGone = true;
+    tutorialState.subjectMesh = null;
+    return;
+  }
+  tutorialState.anchor = { x: at.x, y: at.y };
+  tutorialState.subjectMesh = at.mesh ?? null;
 }
 
 // The best step that is ready, not yet done, and louder than `minPriority`.
 // One function for both "what should be talking" and "is anything allowed to
 // interrupt", because they are the same question with a different floor.
-function bestReady(ctx, minPriority) {
+//
+// `anchor`, when given, narrows it to one surface — which is only ever asked
+// by the preemption test, because taking a line down to make room for another
+// only makes sense between two lines wanting the same room.
+function bestReady(ctx, minPriority, anchor = null) {
   let best = null;
   for (const id of COACH_IDS) {
     if (doneIds.has(id)) continue;
     const row = CALLOUTS.get(id);
     if (!row || row.kind !== 'coach') continue;
+    if (anchor && row.anchor !== anchor) continue;
     // Wrong device — the row does not exist for this player at all. Not the
     // same as a reworded line, which needs nothing from here: that is picked
     // when the words are drawn.

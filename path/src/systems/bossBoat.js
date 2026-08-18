@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import {
+  makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing,
+  isOrganicRing,
+} from './organicRing.js';
 import { bounds } from '../arena.js';
 import { player } from '../entities/player.js';
 import { fireBossShot, bossGun } from './bossPerks.js';
@@ -101,6 +105,9 @@ export function isBoatBoss(e) {
  */
 export function resetBossBoat(scene, exploded = false) {
   for (const o of owned) {
+    // The tell rides a quad shared with every other ring in the game, so it
+    // cannot go through the generic geometry dispose below.
+    if (isOrganicRing(o)) { disposeOrganicRing(o); continue; }
     o.parent?.remove(o);
     o.geometry?.dispose?.();
     o.material?.dispose?.();
@@ -356,14 +363,24 @@ function ride(dt, e, playerPos) {
 // The tell. A ring on the water where the next thing is going to happen, or a
 // line along the wall the barrels are about to fall from — drawn for
 // `telegraph` seconds before a volley and taken down as it fires.
-function showTell(scene, x, y, radius, color) {
-  const geo = new THREE.RingGeometry(0.82, 1, 40);
-  const mat = new THREE.MeshBasicMaterial({
-    color, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide,
+// `type` names an entry in the shared threat palette (CONFIG.fx.attackTypes),
+// which is what gives the ring its edge dialect as well as its colour. An
+// explicit `color` still wins — the rain gap needs it, see below.
+//
+// THE RING STARTS CLOSED. sweepIn is driven from the telegraph clock in
+// updateBossBoat, so the hand goes round once over exactly the announcement and
+// the circle is whole on the frame the first barrel leaves. A tell that popped
+// on at full strength and sat there would say a volley is coming without saying
+// when, which on a 0.7-second warning is most of the information.
+function showTell(scene, x, y, radius, color, type = 'blast') {
+  const ring = makeOrganicRing({
+    type,
+    color,
+    thickness: 0.09, // the 0.82..1 band this used to be, as a half-width
+    renderOrder: 5,
   });
-  const ring = new THREE.Mesh(geo, mat);
-  ring.position.set(x, y, 0);
-  ring.scale.setScalar(radius);
+  placeOrganicRing(ring, x, y, radius);
+  updateOrganicRing(ring, 0, { opacity: 0.85, sweepIn: 0 });
   scene.add(ring);
   owned.push(ring);
   return ring;
@@ -372,9 +389,9 @@ function showTell(scene, x, y, radius, color) {
 function clearTell() {
   if (!boatState.tell) return;
   const t = boatState.tell;
-  t.parent?.remove(t);
-  t.geometry?.dispose?.();
-  t.material?.dispose?.();
+  // disposeOrganicRing, not a geometry dispose: the quad is shared with every
+  // other ring in the game.
+  disposeOrganicRing(t);
   const i = owned.indexOf(t);
   if (i >= 0) owned.splice(i, 1);
   boatState.tell = null;
@@ -450,6 +467,16 @@ export function updateBossBoat(dt, scene, playerPos, hooks = {}) {
   if (e.invuln > 0) { clearTell(); return; }
 
   boatState.timer -= dt;
+
+  // The hand rides the telegraph. Ticked BEFORE the timer gate, because every
+  // stage below returns while the clock is still running and the tell would
+  // otherwise be a static ring that only ever updated on the frame it died.
+  if (boatState.tell) {
+    const span = Math.max(0.01, boatState.tellSpan ?? 0.7);
+    const t = 1 - Math.max(0, boatState.timer) / span;
+    updateOrganicRing(boatState.tell, dt, { sweepIn: t, charge: t });
+  }
+
   if (boatState.timer > 0) return;
 
   const p = patternCfg(boatState.pattern);
@@ -464,15 +491,27 @@ export function updateBossBoat(dt, scene, playerPos, hooks = {}) {
     const q = patternCfg(boatState.pattern);
     boatState.stage = 'telegraph';
     boatState.timer = q.telegraph ?? 0.7;
+    // Kept alongside the timer so the sweep knows what fraction of the warning
+    // has gone. Reading `patternCfg(...).telegraph` again at tick time would
+    // work until a pattern changed mid-announcement.
+    boatState.tellSpan = boatState.timer;
     clearTell();
     const fx = cfg().tellColor ?? 0xff9a4a;
     if (boatState.pattern === 'rain') {
       // The gap, marked. The one place on the wall that will not be a barrel.
-      boatState.tell = showTell(scene, boatState.gapX, bounds.surfaceY - 3, q.gapWidth ?? 6, 0x6ad4ff);
+      // THE ONE RING HERE THAT IS NOT A THREAT. This marks the gap — the one
+      // stretch of wall that will NOT drop a barrel — so it deliberately keeps
+      // its own cold colour and the plain edge instead of taking the blast
+      // palette. Everything else on screen that is orange and lumpy is about to
+      // hurt, and the safe spot must not join that family.
+      boatState.tell = showTell(scene, boatState.gapX, bounds.surfaceY - 3,
+        q.gapWidth ?? 6, 0x6ad4ff, 'kinetic');
     } else if (boatState.pattern === 'salvo') {
-      boatState.tell = showTell(scene, e.mesh.position.x, e.mesh.position.y - 2, 2.4, fx);
+      boatState.tell = showTell(scene, e.mesh.position.x, e.mesh.position.y - 2, 2.4,
+        cfg().tellColor ? fx : null, 'blast');
     } else {
-      boatState.tell = showTell(scene, e.mesh.position.x, e.mesh.position.y - 3, 3.2, fx);
+      boatState.tell = showTell(scene, e.mesh.position.x, e.mesh.position.y - 3, 3.2,
+        cfg().tellColor ? fx : null, 'blast');
     }
     return;
   }

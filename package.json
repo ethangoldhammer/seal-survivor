@@ -20,6 +20,7 @@
     "looks:notes": "vite build --config tools/looks/vite.notes.config.mjs --outDir dist-note-look && node tools/looks/serve.mjs dist-note-look --out dist-note-look/shots",
     "looks:core": "vite build --config tools/looks/vite.core.config.mjs --outDir dist-core-look && node tools/looks/serve.mjs dist-core-look --out dist-core-look/shots",
     "looks:goo": "vite build --config tools/looks/vite.goo.config.mjs --outDir dist-goo-look && node tools/looks/serve.mjs dist-goo-look --out dist-goo-look/shots",
+    "looks:ring": "vite build --config tools/looks/vite.ring.config.mjs --outDir dist-ring-look && node tools/looks/serve.mjs dist-ring-look --out dist-ring-look/shots --port 4624",
     "looks:gore": "vite build --config tools/looks/vite.gore.config.mjs --outDir dist-gore-look && node tools/looks/serve.mjs dist-gore-look --out dist-gore-look/shots",
     "looks:eyes": "vite build --config tools/looks/vite.eyes.config.mjs --outDir dist-eye-look && node tools/looks/serve.mjs dist-eye-look --out dist-eye-look/shots --port 4640",
     "looks:crab": "vite build --config tools/looks/vite.crab.config.mjs --outDir dist-crab-look && node tools/looks/serve.mjs dist-crab-look --out dist-crab-look/shots",
@@ -33,6 +34,9 @@
     "test:csv": "node tools/csv-editor-test.mjs",
     "test:hub": "node tools/hub-test.mjs",
     "placeholder": "node tools/make-placeholder-ship.mjs",
+    "icons": "node --import ./tools/vite-loader.mjs tools/upgrade-icons.mjs",
+    "icons:sheet": "node tools/icon-sheet.mjs",
+    "look:hive": "node tools/hive-look.mjs",
     "playtest": "node tools/playtest-report.mjs",
     "playtest:pull": "node tools/playtest-pull.mjs",
     "playtest:atlas": "node tools/playtest-atlas.mjs",
@@ -146,7 +150,8 @@
     "looks:splash": "vite build --config tools/looks/vite.splash.config.mjs && node tools/looks/serve.mjs dist-splash-probe --port 4655",
     "looks:shaderlab": "vite build --config tools/looks/vite.shaderlab.config.mjs --outDir dist-shaderlab && node tools/looks/serve.mjs dist-shaderlab --out dist-shaderlab/shots",
     "shaders:apply": "node tools/apply-shaders.mjs",
-    "looks:type": "vite build --config tools/looks/vite.type.config.mjs --outDir dist-type-look && node tools/looks/serve.mjs dist-type-look --out dist-type-look/shots --port 4620"
+    "looks:type": "vite build --config tools/looks/vite.type.config.mjs --outDir dist-type-look && node tools/looks/serve.mjs dist-type-look --out dist-type-look/shots --port 4620",
+    "looks:tip": "vite build --config tools/looks/vite.tip.config.mjs --outDir dist-tip-look && node tools/looks/serve.mjs dist-tip-look --out dist-tip-look/shots --port 4622"
   },
   "dependencies": {
     "@rive-app/canvas": "^2.39.2",

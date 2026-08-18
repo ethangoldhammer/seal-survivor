@@ -71,6 +71,21 @@
   .swatches button { width: 20px; height: 20px; border: 1px solid #2b4b5c; border-radius: 2px;
     cursor: pointer; padding: 0; }
   .chk { display: flex; align-items: center; gap: 6px; color: #82a9bc; font-size: 11px; }
+  /* The name on its own line and the five numbers under it. Side by side they
+     came to 343px in a 240px panel and the spin field was simply off the edge —
+     an overflow with no scrollbar, so the control did not appear to exist. */
+  .part { margin: 0 0 4px; padding: 5px 6px; background: #0d222e;
+    border: 1px solid #17394b; border-radius: 3px; }
+  .part .pname { color: #cfe4ee; font-size: 10px; margin-bottom: 4px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .part .fields { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+  .part .pf { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .part .pf span { color: #7fa8bb; font-size: 9px; text-align: center; }
+  .part .pf input { width: 100%; box-sizing: border-box; background: #071119;
+    color: #dff0f8; border: 1px solid #1f4b60; border-radius: 2px;
+    font: 10px ui-monospace, monospace; padding: 2px 3px; }
+  #partsCap { color: #6f97aa; font-size: 10px; line-height: 1.4; margin: 8px 0 6px; }
+  .act.go { background: #1d5c3a; border-color: #2f8f5c; }
   .kinds { display: grid; gap: 3px; margin: 2px 0 6px; }
   .kinds label { display: flex; align-items: center; gap: 6px; color: #a8c8d8; font-size: 11px; cursor: pointer; }
   .kinds input:disabled + * , .kinds label:has(input:disabled) { color: #4e6b7a; cursor: not-allowed; }
@@ -180,14 +195,20 @@ function buildPanel() {
 
   // WHAT THIS ICON IS, before anything about how to render it.
   //
-  // Three kinds, and the third one is not a placeholder. Most of the roster
-  // fires a primitive or grants no object at all, so `none` — show the card's
-  // monogram — is the RIGHT answer for it, and the spec has to be able to say
+  // Four kinds, and the last one is not a placeholder. Most of the roster fires
+  // a primitive or grants no object at all, so `none` — show the card's
+  // monogram — is a REAL answer for those, and the spec has to be able to say
   // that rather than leaving a row that merely looks unfinished.
+  //
+  // `scene` is the answer for most of them instead: a composed moment rather
+  // than a photograph of an object. Its parts are generated (see
+  // tools/icon-scenes.mjs), so what is choosable HERE is the same thing that is
+  // choosable for a render — the camera, the toon ramp and the ink line.
   const kindBox = document.createElement('div');
   kindBox.innerHTML = `
     <div class="kinds">
       <label><input type="radio" name="kind" value="render"> render from model</label>
+      <label><input type="radio" name="kind" value="scene"> gameplay moment</label>
       <label><input type="radio" name="kind" value="image"> drawn file</label>
       <label><input type="radio" name="kind" value="none"> no icon (monogram)</label>
     </div>
@@ -267,11 +288,32 @@ function buildPanel() {
     $('fcSwatches').appendChild(b);
   }
 
+  // --- the composition, for a scene -------------------------------------
+  //
+  // WHERE EACH PART SITS IS FRAMING, and framing belongs in the picker. The
+  // camera above decides where you stand; this decides what you are standing in
+  // front of, and on a composed moment the second one carries more of the icon
+  // than the first — a stone half a radius further out is a different picture,
+  // and no yaw recovers it.
+  //
+  // Numbers rather than sliders. A placement is read against the OTHER parts
+  // ("the fish is two radii right of the stone"), so being able to type 2 and
+  // see it is worth more than being able to sweep through it, and four parts
+  // times five sliders is a panel nobody can find anything in.
+  //
+  // Every field here is structural: a move changes the scene the camera then
+  // frames, so the whole thing is rebuilt and re-measured. See buildSceneIcon.
+  const partsBox = document.createElement('div');
+  partsBox.id = 'partsBox';
+  partsBox.innerHTML = '<div class="cap" id="partsCap"></div><div id="partsRows"></div>';
+  p.appendChild(partsBox);
+
   const btns = document.createElement('div');
   btns.className = 'btns';
   btns.innerHTML = `
     <button class="act" id="bSave">save icons.json</button>
     <button class="act" id="bShoot">render this PNG</button>
+    <button class="act go" id="bApply">apply to the game</button>
     <button class="act warn" id="bReset">reset this icon</button>`;
   p.appendChild(btns);
   const st = document.createElement('div');
@@ -280,11 +322,92 @@ function buildPanel() {
 
   $('bSave').addEventListener('click', () => save());
   $('bShoot').addEventListener('click', shoot);
+  $('bApply').addEventListener('click', () => apply());
   $('bReset').addEventListener('click', () => {
     for (const c of CONTROLS) cur[c.key] = c.def;
     delete cur.flatColor;
+    // A scene's PLACEMENTS are not reset here, and that is deliberate: the seed
+    // for them lives in tools/icon-scenes.mjs, not in this page, so the honest
+    // way back is to delete the `parts` from icons.json and re-run `npm run
+    // icons`. A button that reset them to the CONTROLS defaults would put every
+    // part at the origin, which is not a composition anyone seeded.
     markDirty(); syncPanel(); rebuild();
   });
+}
+
+// One row per part: what it is, then x / y / z / scale / spin.
+//
+// `spin` is the Z rotation only. The full three are in the spec and the scene
+// table can set them, but in a frame whose camera is fixed it is the roll that
+// changes what you SEE — the other two mostly turn a fish into a shorter fish.
+// Exposing all three here was three times the panel for one useful control.
+const PART_FIELDS = [
+  { key: 'x', label: 'x', get: (pt) => (pt.at ?? [0, 0, 0])[0], set: (pt, v) => setAt(pt, 0, v) },
+  { key: 'y', label: 'y', get: (pt) => (pt.at ?? [0, 0, 0])[1], set: (pt, v) => setAt(pt, 1, v) },
+  { key: 'z', label: 'z', get: (pt) => (pt.at ?? [0, 0, 0])[2], set: (pt, v) => setAt(pt, 2, v) },
+  { key: 'scale', label: 'size', get: (pt) => pt.scale ?? 1, set: (pt, v) => { pt.scale = v; } },
+  { key: 'spin', label: 'spin', get: (pt) => (pt.rot ?? [0, 0, 0])[2], set: (pt, v) => setRotZ(pt, v) },
+];
+
+// Written back as a whole triple, because that is the shape the spec and the
+// renderer both use — a part with `at: [1, 0]` would place at z of undefined and
+// NaN its way to an empty render with nothing thrown.
+function setAt(pt, i, v) {
+  const at = [...(pt.at ?? [0, 0, 0])];
+  at[i] = v; while (at.length < 3) at.push(0);
+  pt.at = at;
+}
+function setRotZ(pt, v) {
+  const rot = [...(pt.rot ?? [0, 0, 0])];
+  rot[2] = v; while (rot.length < 3) rot.push(0);
+  pt.rot = rot;
+}
+
+// Which spec the rows currently on screen belong to. Rebuilding them on every
+// syncPanel would be correct and unusable: a change on a number input triggers a
+// rebuild, syncPanel runs at the end of it, and the field the caret is in is
+// replaced mid-edit — so the second digit of a two-digit number goes nowhere.
+// The rows are torn down when the SELECTED ICON changes and not otherwise; the
+// values in them are already whatever was typed.
+let partsFor = null;
+
+function buildParts() {
+  const box = $('partsBox');
+  const isScene = (cur?.kind ?? 'render') === 'scene' && cur.parts?.length;
+  box.style.display = isScene ? '' : 'none';
+  if (!isScene) { partsFor = null; return; }
+  if (partsFor === cur.key) return;
+  partsFor = cur.key;
+  $('partsCap').textContent =
+    `${cur.parts.length} parts — ${cur.sceneNote ?? 'the moment'}. `
+    + 'Units are radii: every part is normalised to a bounding sphere of 1, then '
+    + 'multiplied by its size. The camera frames all of them, so pushing one out '
+    + 'shrinks the rest.';
+  const rows = $('partsRows');
+  rows.innerHTML = '';
+  cur.parts.forEach((pt, i) => {
+    const row = document.createElement('div');
+    row.className = 'part';
+    // The asset key, or the primitive's shape for a mark that has no asset.
+    const what = pt.asset ?? pt.prim ?? '?';
+    row.innerHTML = `<div class="pname">${what}${pt.clip ? ` · ${pt.clip}` : ''}</div>`
+      + '<div class="fields">'
+      + PART_FIELDS.map((f) => `<label class="pf"><span>${f.label}</span>`
+        + `<input type="number" step="${f.key === 'spin' ? 5 : 0.05}" `
+        + `data-part="${i}" data-field="${f.key}" value="${f.get(pt)}"></label>`).join('')
+      + '</div>';
+    rows.appendChild(row);
+  });
+  for (const input of rows.querySelectorAll('input')) {
+    input.addEventListener('change', (e) => {
+      const pt = cur.parts[+e.target.dataset.part];
+      const f = PART_FIELDS.find((x) => x.key === e.target.dataset.field);
+      const v = parseFloat(e.target.value);
+      if (!Number.isFinite(v)) return;      // a half-typed "-" is not a move
+      f.set(pt, v);
+      markDirty(); rebuild();
+    });
+  }
 }
 
 // The same two letters ui/upgradeHive.js derives, off the CARD name — so what
@@ -306,18 +429,28 @@ function syncPanel() {
   // produce a row that fails every batch run forever.
   const renderable = !!cur.file;
   document.querySelector('input[name=kind][value=render]').disabled = !renderable;
+  // Same rule, the other way round: an upgrade with no scene written for it
+  // cannot be one, and the option would produce a row that fails every run.
+  document.querySelector('input[name=kind][value=scene]').disabled = !cur.parts?.length;
 
+  // Everything below is about HOW a WebGL shot is taken, so both of the kinds
+  // that take one get it. Flat colour is the exception and it is deliberate: on
+  // a scene the tone is per PART (a pale club, a green eel) and lives in the
+  // scene table, because one colour across a whole composition would paint the
+  // fish the same shade as the stone hitting it.
+  const shoots = kind === 'render' || kind === 'scene';
   for (const c of CONTROLS) {
     const val = cur[c.key] ?? c.def;
     $('c_' + c.key).value = val;
     $('o_' + c.key).textContent = c.step >= 1 ? val : (+val).toFixed(c.step < 0.01 ? 3 : 2);
-    $('c_' + c.key).closest('.row').style.display = kind === 'render' ? '' : 'none';
+    $('c_' + c.key).closest('.row').style.display = shoots ? '' : 'none';
   }
   $('fcOn').closest('.chk').style.display = kind === 'render' ? '' : 'none';
   $('fcVal').closest('.row').style.display = kind === 'render' ? '' : 'none';
   $('fcSwatches').style.display = kind === 'render' ? '' : 'none';
   $('imgBox').style.display = kind === 'image' ? '' : 'none';
-  $('bShoot').disabled = kind !== 'render';
+  $('bShoot').disabled = !shoots;
+  buildParts();
 
   const on = cur.flatColor != null;
   $('fcOn').checked = on;
@@ -339,7 +472,7 @@ function markDirty() {
 
 // Sorted so the work sorts itself: everything still on `none` floats to the top,
 // because with forty-eight rows the useful question is "what have I not done".
-const KIND_ORDER = { none: 0, render: 1, image: 2 };
+const KIND_ORDER = { none: 0, scene: 1, render: 2, image: 3 };
 
 function buildList() {
   const l = $('list');
@@ -353,7 +486,7 @@ function buildList() {
     if (kind !== lastKind) {
       const h = document.createElement('div');
       h.className = 'group';
-      h.textContent = { none: 'no icon', render: 'rendered', image: 'drawn' }[kind] ?? kind;
+      h.textContent = { none: 'no icon', scene: 'moments', render: 'rendered', image: 'drawn' }[kind] ?? kind;
       l.appendChild(h);
       lastKind = kind;
     }
@@ -398,7 +531,7 @@ async function rebuild() {
   // Neither of these two touches WebGL. `none` shows what the hive will actually
   // show — the monogram — rather than an empty box, because "no icon" is a
   // decision with a look and you should be able to see it.
-  if (kind !== 'render') {
+  if (kind !== 'render' && kind !== 'scene') {
     built = null;
     const url = kind === 'image' ? (cur.image ? '/' + cur.image.replace(/^\//, '') : '') : '';
     for (const id of ['pv96', 'pv56', 'pv38']) {
@@ -423,7 +556,11 @@ async function rebuild() {
   try {
     built = await buildIcon(cur);
     $('notes').textContent =
-      `${cur.key} — ${cur.file} (${cur.fmt}), ${built.posed}` +
+      // A scene has no single file to name; what it has is the moment it is of,
+      // which is the thing you need to read while you are choosing an angle.
+      (cur.kind === 'scene'
+        ? `${cur.key} — ${cur.sceneNote ?? 'scene'}\n${built.posed}`
+        : `${cur.key} — ${cur.file} (${cur.fmt}), ${built.posed}`) +
       (built.clipDuration ? `  clip ${built.clipDuration.toFixed(2)}s` : '') +
       (built.dropped ? `\ndropped ${built.dropped} mesh(es) matching "${cur.dropMeshes}"` : '') +
       (built.strays.length ? `\nSTRAY GEOMETRY DROPPED: ${built.strays.join('; ')}` : '') +
@@ -551,6 +688,67 @@ async function shoot() {
     status(`wrote ${cur.key}.png (${(blob.size / 1024).toFixed(0)}KB)`);
   } catch (err) {
     status('render failed: ' + err.message, true);
+  }
+}
+
+// ALL THREE STEPS, because separately they are a trap.
+//
+// The round trip is: save the spec, shoot the PNG, bake the module. Three
+// buttons means three chances to do two of them — and the two failures are
+// silent in opposite directions. Save-then-bake bakes the PNG from BEFORE the
+// change, so the game shows the old icon and the spec on disk says otherwise.
+// Shoot-then-bake puts the new picture in the game with no record of the angles
+// that made it, so the next regeneration quietly reverts it.
+//
+// So this does all three in order, and stops at the first one that fails.
+async function apply() {
+  status('saving…');
+  await save();
+  if ($('status').className === 'err') return;
+  // The shoot is SKIPPED for a row that has no WebGL shot to take. A drawn file
+  // and a deliberate monogram are both real decisions the bake reads straight
+  // out of icons.json, so "apply" has to work on them too — it just has one
+  // fewer step. Guarding on `built` alone would leave the button dead on
+  // exactly the rows where saving the decision is the whole point.
+  const kind = cur?.kind ?? 'render';
+  if (kind === 'render' || kind === 'scene') {
+    if (!built) { status('nothing built to shoot — fix the error above first', true); return; }
+    await shoot();
+    if ($('status').className === 'err') return;
+  }
+  await bake();
+}
+
+// The bake, as the server runs it — see /bake in server.mjs. Strict by default:
+// the shots directory is scratch, so the ordinary mistake is baking a directory
+// holding one PNG and deleting forty-six icons from the game with no error.
+async function bake(force = false) {
+  status('baking into the game…');
+  try {
+    const res = await fetch(`/bake${force ? '?strict=0' : ''}`, { method: 'POST' });
+    const out = await res.json();
+    $('notes').textContent = out.log;
+    if (out.ok) {
+      status('applied — path/src/ui/upgradeIcons.js written; a running dev server picks it up');
+      return;
+    }
+    if (out.refused) {
+      // Named rather than counted, and offered rather than done. The refusal is
+      // usually correct — you have shot one icon into an empty folder — and the
+      // one case where it is not (deliberately dropping an icon) is worth a
+      // second click.
+      status('refused — some icons have no PNG yet; see the notes. Click again to apply anyway.', true);
+      $('bApply').textContent = 'apply anyway (drops the missing)';
+      $('bApply').onclick = () => {
+        $('bApply').textContent = 'apply to the game';
+        $('bApply').onclick = () => apply();
+        bake(true);
+      };
+      return;
+    }
+    status('bake failed — see the notes', true);
+  } catch (err) {
+    status('bake failed: ' + err.message, true);
   }
 }
 

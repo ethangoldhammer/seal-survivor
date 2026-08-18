@@ -56,11 +56,11 @@ export const BALANCE = {
 // possible. Sources absent here (deathBlast, boat wreckage) are environment,
 // not build, and sit out of the efficiency ranking.
 //
-// `gun` gets a phantom baseline stack: the pea-shooter exists at level 1
-// without any pick, and dividing by zero investment would rank it infinitely
-// efficient forever.
+// `gun` gets a phantom baseline stack: Fin Pebbles exists at level 1 without
+// any pick, and dividing by zero investment would rank it infinitely efficient
+// forever.
 export const SOURCE_UPGRADES = {
-  gun: { upgrades: ['rapidFire', 'heavyRounds', 'multishot', 'pierce', 'velocity'], baseStacks: 1, label: 'Peashooter' },
+  gun: { upgrades: ['rapidFire', 'heavyRounds', 'multishot', 'pierce', 'velocity'], baseStacks: 1, label: 'Fin Pebbles' },
   missile: { upgrades: ['homingMissile'], label: 'Homing Missile' },
   ricochet: { upgrades: ['bounceShot'], label: 'Ricochet Rounds' },
   starfish: { upgrades: ['starfish'], label: 'Starfish Shuriken' },
@@ -478,7 +478,7 @@ export function analyzeRun(run) {
 function chainSummary(run) {
   const out = {
     strikes: 0, links: 0, maxChain: 0,
-    missNoFood: 0, missNoWindow: 0, missBoth: 0, chumEaten: 0,
+    missOffBeat: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0, chumEaten: 0,
     buckets: [],
   };
   for (const b of run.buckets ?? []) {
@@ -488,6 +488,7 @@ function chainSummary(run) {
       strikes: b.strikes ?? 0,
       links: b.links ?? 0,
       maxChain: b.maxChain ?? 0,
+      missOffBeat: b.missOffBeat ?? 0,
       missNoFood: b.missNoFood ?? 0,
       missNoWindow: b.missNoWindow ?? 0,
       missBoth: b.missBoth ?? 0,
@@ -496,6 +497,7 @@ function chainSummary(run) {
     };
     out.strikes += row.strikes;
     out.links += row.links;
+    out.missOffBeat += row.missOffBeat;
     out.missNoFood += row.missNoFood;
     out.missNoWindow += row.missNoWindow;
     out.missBoth += row.missBoth;
@@ -655,7 +657,7 @@ export function formatRunReport(a) {
     L.push('');
     L.push(`  FOOD CHAIN — ${ch.links} links from ${ch.strikes} strikes `
       + `(${Math.round(100 * ch.links / ch.strikes)}%), deepest x${ch.maxChain}`);
-    L.push('  time   strikes  links   hit%  deepest   miss: no food  no window   both  chum/min');
+    L.push('  time   strikes  links   hit%  deepest   miss: off beat  no food  no window   both  chum/min');
     for (const b of ch.buckets) {
       if (!b.strikes && !b.chumEaten) continue;
       L.push([
@@ -664,7 +666,8 @@ export function formatRunReport(a) {
         String(b.links).padStart(7),
         `${b.strikes ? Math.round(100 * b.links / b.strikes) : 0}%`.padStart(7),
         `x${b.maxChain}`.padStart(9),
-        String(b.missNoFood).padStart(15),
+        String(b.missOffBeat).padStart(16),
+        String(b.missNoFood).padStart(9),
         String(b.missNoWindow).padStart(10),
         String(b.missBoth).padStart(7),
         String(Math.round(b.chumPerMin)).padStart(10),
@@ -672,8 +675,16 @@ export function formatRunReport(a) {
     }
     // The one-line reading, because the table above is the evidence and this is
     // the conclusion — and the conclusion is what gets acted on.
+    //
+    // OFF BEAT IS TESTED BEFORE THE OTHER THREE, matching the order the gate
+    // itself asks in (recordStrike): a player who cannot hit the sweet spot
+    // produces no food and no window either, so the setup buckets fill up
+    // behind a timing problem and every one of their fixes is the wrong fix.
     const worst = Math.max(ch.missNoFood, ch.missNoWindow, ch.missBoth);
-    if (ch.links === 0 && ch.strikes > 2) {
+    if (ch.missOffBeat > 0 && ch.missOffBeat >= worst) {
+      L.push('  -> misses are mostly OFF BEAT: the release is missing the sweet spot. '
+        + 'Widen strike.charge.sweetFraction, or check the STRIKE NOW! prompt is readable.');
+    } else if (ch.links === 0 && ch.strikes > 2) {
       L.push('  -> no links at all. ' + (ch.missNoFood >= ch.missNoWindow
         ? 'Not enough chum reaching the seal between strikes.'
         : 'The window is shutting before the second strike lands.'));

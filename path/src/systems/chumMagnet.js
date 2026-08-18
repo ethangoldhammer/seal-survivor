@@ -1,5 +1,5 @@
 import { CONFIG } from '../config.js';
-import { strikeState } from './strike.js';
+import { strikeState, isFeeding } from './strike.js';
 import { airPickupMul } from './airborne.js';
 
 // ============================================================================
@@ -38,7 +38,41 @@ import { airPickupMul } from './airborne.js';
 //
 // The mouth still seals during a WIND-UP — that gate lives in pickups.js and
 // is untouched here. This is only about what an open mouth can reach.
+//
+// AND THE WHOLE THING IS OFF UNTIL A FOOD CHAIN IS RUNNING. See chumHoming().
 // ============================================================================
+
+/**
+ * IS THE SEAL REACHING FOR FOOD AT ALL?
+ *
+ * The magnet is a FOOD CHAIN privilege now, not a permanent sense: outside a
+ * live chain, chum has to be swum into, and everything above about corridors
+ * and pull speeds describes what happens once one is running.
+ *
+ * WHY IT IS GATED. A magnet that is always on collects the ocean for you, and
+ * once it does the chain stops being something you keep alive and becomes
+ * something that happens while you swim about. Turning it off outside the
+ * window puts the cost back where the mechanic wants it — the chain is
+ * self-sustaining, and getting the first link is work.
+ *
+ * GATED ON THE WINDOW (isFeeding), not on the link COUNT, and the difference
+ * decides whether the loop can start at all. `liveChain()` is zero until a
+ * link is actually scored, and a link is paid for in mouthfuls — so gating on
+ * it would mean no magnet until you have eaten, and no easy eating until you
+ * have the magnet. The window opens on the first strike released in the sweet
+ * spot (see tryStrike), which makes the entry condition a thing the player
+ * DOES rather than a thing they already have.
+ *
+ * CHUM AND CHUNKS ONLY. The blue charge orb, the air bubble and the rapid-fire
+ * morsel keep their magnet always: those are rewards for reaching a place
+ * rather than the resource the chain is made of, and a bubble the player has
+ * to nudge with their nose while drowning is a punishment for something that
+ * is not this mechanic. See entities/pickups.js for the split.
+ */
+export function chumHoming() {
+  if (CONFIG.pickups.magnet?.chainGated === false) return true;
+  return isFeeding();
+}
 
 /** Which magnet state the seal is in, by what it is doing. */
 export function magnetState(speed) {

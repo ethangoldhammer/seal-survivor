@@ -177,11 +177,37 @@ check('a single pick has no count badge', !tileFor('club')?.querySelector('.sv-h
 // ---------------------------------------------------------------------------
 section('marks');
 check('an upgrade with a render shows it', !!tileFor('shrimpRing')?.querySelector('.sv-hive-icon'));
+
+// THE MONOGRAM IS TESTED BY TAKING AN ICON AWAY, not by naming an upgrade that
+// happens not to have one.
+//
+// It used to name Sea Garlic, on the reasoning that an aura grants no model and
+// so can never be photographed. That stopped being true the day the renderer
+// learned to compose a MOMENT out of several assets — Sea Garlic is now the
+// seal with the ring drawn round it — and the test failed as though something
+// had broken, when what had actually happened is that a gap got filled. Any
+// hardcoded example here has that same fuse in it. So the fallback is provoked
+// instead: pull the entry, rebuild, put it back.
+const hidden = UPGRADE_ICONS.seaGarlic;
+delete UPGRADE_ICONS.seaGarlic;
+// Cleared FIRST, because setHiveUpgrades reuses a tile whose entry has not
+// changed — and the entry has not changed, only the icon table behind it.
+// Without this the assertion below reads the tile built at the top of the
+// section and the whole provocation is a no-op that passes or fails for a
+// reason unrelated to the fallback.
+hive.setHiveUpgrades([]);
+hive.setHiveUpgrades(picks);
 check('an upgrade without one falls back to a monogram',
   !!tileFor('seaGarlic')?.querySelector('.sv-hive-mono'),
-  'Sea Garlic is an aura — it can never have a render');
+  'with no baked icon the tile has to show something');
 check('the monogram comes off the CARD name, not the id',
   tileFor('seaGarlic')?.querySelector('.sv-hive-mono')?.textContent === 'SG');
+if (hidden) UPGRADE_ICONS.seaGarlic = hidden;
+hive.setHiveUpgrades([]);
+hive.setHiveUpgrades(picks);
+check('and the icon comes back when it is there again',
+  !!tileFor('seaGarlic')?.querySelector('.sv-hive-icon'),
+  'the composed moment for the garlic aura');
 // The icon module is generated from whatever was rendered; the thing that must
 // hold is that every key in it is a real upgrade, or the tile is never found.
 const ids = new Set(CONFIG.upgrades.map((u) => u.id));

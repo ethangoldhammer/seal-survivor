@@ -143,7 +143,7 @@ npm run playtest
 
   ability            damage   share  return  per stack-min  runs
   Sea Garlic          19608    49%   1.64x           1956     5
-  Peashooter          13518    34%   0.75x            891     6
+  Fin Pebbles         13518    34%   0.75x            891     6
 
 !! [4/6 runs] Enemy hp arrives faster than you can clear it from 10:00 on.
 ```

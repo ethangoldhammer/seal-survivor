@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { emit } from '../entities/particles.js';
+import { elementColor, elementTrailMix } from './elements.js';
 
 // Ribbon trails behind projectiles. Same reason as the lightning arcs: WebGL
 // ignores line width, so a trail has to be real geometry to be visible at
@@ -139,6 +140,28 @@ function presetFor(p) {
   return CONFIG.trails[p.mesh?.name] ?? null;
 }
 
+// Scratch colours for trailColour below — one ribbon rewrites its whole colour
+// buffer every frame, so nothing here may allocate.
+const _trailCol = new THREE.Color();
+const _elemCol = new THREE.Color();
+
+// The ribbon's colour, which is the preset's except on the basic shot.
+//
+// The bullet's pellet takes the run's element (systems/elements.js), and a
+// green pellet dragging a yellow streak reads as two objects rather than one.
+// Pulled from elements.js per frame rather than pushed, because it rides
+// elementPower() and therefore changes with the sky all through dusk.
+//
+// Keyed on the asset name for the same reason the preset is: 'bullet' is the
+// gun's ammunition and nothing else's.
+function trailColour(p, cfg) {
+  _trailCol.set(cfg.color);
+  if (p.mesh?.name !== 'bullet') return _trailCol;
+  const mix = elementTrailMix();
+  if (mix > 0) _trailCol.lerp(_elemCol.set(elementColor()), mix);
+  return _trailCol;
+}
+
 export function updateProjectileTrails(dt, scene, projectiles) {
   if (!CONFIG.trails.enabled) {
     if (trails.size) clearProjectileTrails(scene);
@@ -175,7 +198,7 @@ export function updateProjectileTrails(dt, scene, projectiles) {
 
     const pos = t.geo.attributes.position;
     const col = t.geo.attributes.color;
-    const colour = new THREE.Color(cfg.color);
+    const colour = trailColour(p, cfg);
     const up = new THREE.Vector3(0, 0, 1);
     const dir = new THREE.Vector3();
     const side = new THREE.Vector3();

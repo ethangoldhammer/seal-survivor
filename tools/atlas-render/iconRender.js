@@ -351,7 +351,24 @@ function accumulatedScale(obj) {
 // invisible rim on one model and a blob on the next.
 function addOutline(root, width) {
   const targets = [];
-  root.traverse((o) => { if ((o.isMesh || o.isSkinnedMesh) && !o.userData.__isOutline) targets.push(o); });
+  root.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    if (o.userData.__isOutline) return;
+    // A CLOSED TRANSPARENT VOLUME CANNOT HAVE ONE, and the failure is total.
+    //
+    // The rim is a back-facing hull, so on a sphere it is the sphere's own far
+    // side — an opaque black disc filling the whole silhouette, drawn behind
+    // whatever is inside. On the bubble around the seal that is not a subtle
+    // artefact: the seal disappears and the icon is a grey circle. Lowering the
+    // opacity does nothing, because the thing you are seeing through the glass
+    // is the glass's own outline.
+    //
+    // A flat translucent mark — the aura rings, the beams — is fine and keeps
+    // its line, so this is opted out of per part (`ink: false`) rather than
+    // inferred from transparency.
+    if (o.userData.__noInk) return;
+    targets.push(o);
+  });
 
   for (const mesh of targets) {
     // The welded normal, cached on the geometry so a second shell on the same
@@ -487,7 +504,86 @@ export function pad(canvas) {
 // model, re-posing a rig or rebuilding an outline. Only the fields that change
 // the SCENE (clipAt, flatColor, bands, outline, dropMeshes) need this called
 // again.
-export async function buildIcon(spec) {
+// One primitive, built the way assets.js builds the same `shape`.
+//
+// Half the roster's icons are of abilities whose object IS a primitive — the
+// stone is a rock, the mussel an elongated oval, the shrapnel an octahedron —
+// and the other half need marks that exist only as shader passes in the game
+// (the garlic aura, the calamari ring, a laser beam). Both come through here so
+// a scene never has to name a mesh file that does not exist.
+//
+// GEOMETRY ONLY, at unit-ish size: the caller normalises every part to a
+// bounding sphere of 1 before placing it, so the numbers here decide the SHAPE
+// and nothing else. `elongate` is the one exception and it has to be a shape
+// property rather than a scale, because normalising happens after it.
+function makePrimitive(part) {
+  const seg = part.segments ?? 32;
+  let geo;
+  switch (part.prim) {
+    // A stone. The game displaces an icosphere with Perlin noise (systems/
+    // rocks.js); a detail-1 icosahedron with its faces left flat reads as the
+    // same lumpy pebble at icon size and needs no noise field.
+    case 'rock': geo = new THREE.IcosahedronGeometry(1, 1); break;
+    case 'icosahedron': geo = new THREE.IcosahedronGeometry(1, 0); break;
+    case 'octahedron': geo = new THREE.OctahedronGeometry(1, 0); break;
+    case 'sphere': geo = new THREE.SphereGeometry(1, seg, seg / 2); break;
+    case 'oval':
+      geo = new THREE.SphereGeometry(1, seg, seg / 2);
+      geo.scale(part.elongate ?? 1.8, 1, 1);   // long axis on +X, the icon's forward
+      break;
+    case 'cone':
+      geo = new THREE.ConeGeometry(1, part.height ?? 2.4, seg);
+      geo.rotateZ(-Math.PI / 2);               // a cone points +Y; the icon's forward is +X
+      break;
+    case 'box':
+      geo = new THREE.BoxGeometry(part.width ?? 2, part.height ?? 1, part.depth ?? 1);
+      break;
+    // The flat annulus every aura in this game is: garlic, calamari, the strike
+    // ring, a splash. Laid in the XZ plane — the water's plane — so the shared
+    // three-quarter camera sees it as an ellipse rather than as a line.
+    case 'ring':
+      geo = new THREE.RingGeometry(part.inner ?? 0.8, part.outer ?? 1, seg);
+      geo.rotateX(-Math.PI / 2);
+      break;
+    case 'torus':
+      geo = new THREE.TorusGeometry(1, part.tube ?? 0.12, 12, seg);
+      geo.rotateX(-Math.PI / 2);
+      break;
+    // A motion streak or a beam: a capsule along +X, which is where every
+    // oriented part's forward already points.
+    case 'streak':
+      geo = new THREE.CapsuleGeometry(part.tube ?? 0.16, part.length ?? 2.4, 4, 12);
+      geo.rotateZ(-Math.PI / 2);
+      break;
+    default:
+      throw new Error(`unknown prim "${part.prim}"`);
+  }
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(part.color ?? 0xffffff),
+    side: THREE.DoubleSide,
+    transparent: (part.opacity ?? 1) < 1,
+    opacity: part.opacity ?? 1,
+    // Flat-shaded on purpose for the faceted shapes: smooth normals on a
+    // 20-face icosahedron give a soft blob, and the whole point of the rock is
+    // that the bands break across its facets.
+    flatShading: part.prim === 'rock' || part.prim === 'icosahedron' || part.prim === 'octahedron',
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  mesh.name = part.prim;
+  return mesh;
+}
+
+// Everything buildIcon used to do between loading a file and the toon pass.
+//
+// Lifted out unchanged so a SCENE can run it per part: the whole value of a
+// composed icon is that the stone in it is the game's stone and the seal in it
+// is the game's seal, posed by the game's clip — which means every part has to
+// go through the same preparation a single-model icon does. A second copy of
+// this would be a second set of answers to "which clip, at what time, with
+// which materials fixed", and the drift would show up as one icon's seal not
+// matching another's.
+async function prepareModel(spec) {
   const { root, clips } = await loadModel(spec);
   if (spec.meshIndex != null) isolateMesh(root, spec.meshIndex);
   // Before anything measures the model, so the scenery cannot reach the frame.
@@ -500,7 +596,10 @@ export async function buildIcon(spec) {
   let posed = 'bind pose';
   let clipName = null, clipDuration = 0;
   if (clips.length) {
-    const wanted = spec.wantClips?.swim ?? spec.wantClips?.idle;
+    // `clip` names one outright — a scene part wants the strike pose or the
+    // bark, not whatever `swim` happens to be. Falling back to the swim/idle
+    // pair keeps every existing spec framing exactly the pose it framed before.
+    const wanted = spec.clip ?? spec.wantClips?.swim ?? spec.wantClips?.idle;
     const clip = (wanted && clips.find((c) => c.name === wanted)) || clips[0];
     if (clip && clip.duration > 0) {
       const at = spec.clipAt ?? 0.33;
@@ -540,6 +639,14 @@ export async function buildIcon(spec) {
     }
   });
 
+  return { root, posed, clipName, clipDuration, dropped };
+}
+
+export async function buildIcon(spec) {
+  if ((spec.kind ?? 'render') === 'scene') return buildSceneIcon(spec);
+
+  const { root, posed, clipName, clipDuration, dropped } = await prepareModel(spec);
+
   // Toon BEFORE the shells are built, or the pass would swap the rim's own
   // black MeshBasicMaterial for a lit toon one and the outline would light up.
   if (spec.toon) toonify(root, spec, spec.flatColor);
@@ -573,6 +680,120 @@ export async function buildIcon(spec) {
   if (spec.outline) addOutline(root, radius * spec.outline);
 
   return { scene, radius, posed, strays, dropped, clipName, clipDuration };
+}
+
+// ---------------------------------------------------------------------------
+// SCENES — an icon of a MOMENT rather than of an object.
+//
+// Thirty of the forty-eight upgrades grant no model: a stat, an aura, a rate.
+// There is nothing to photograph, and the fallback for all thirty was the same
+// two-letter monogram — which tells the player nothing about what the card
+// does and makes the hive a wall of type. A scene is the answer: the stone the
+// gun fires, the fish it goes through, the ring the aura draws. Every piece is
+// the game's own asset, prepared through prepareModel() exactly as a single
+// -model icon is, so a moment is composed of real objects rather than drawn.
+//
+// PARTS ARE NORMALISED, NOT PLACED IN WORLD UNITS. The sources run from a
+// 0.18-unit pebble to a 14-unit whale, so a hand-typed offset would mean six
+// different things across six scenes and every one of them would have to be
+// re-found by eye. Instead each part is scaled to a bounding sphere of radius
+// 1 and THEN multiplied by its own `scale`, so `scale: 0.3` always means "a
+// third the size of the thing next to it" and `at: [2, 0, 0]` always means
+// "two of those radii to the right". Same reason VFX in this project are never
+// authored in world units.
+//
+// The axes after orient() are the icon's, not the model's: +X is the direction
+// the subject faces, +Y is up, +Z is toward the viewer's side of the frame.
+// ---------------------------------------------------------------------------
+
+// Build one part, normalised to unit radius and placed. Returns the group plus
+// the box it occupies, so the scene can frame on the union without re-walking
+// every skinned vertex a second time.
+async function buildPart(part, spec, strays) {
+  const inner = new THREE.Group();
+  let posed = part.prim ? part.prim : null;
+
+  if (part.prim) {
+    inner.add(makePrimitive(part));
+  } else {
+    const built = await prepareModel(part);
+    inner.add(built.root);
+    posed = built.posed;
+    // Orientation is a fact about the FILE, so it comes off the asset table via
+    // the generator — the same `forward`/`up` the game turns the model by.
+    orient(inner, part.forward, part.up);
+  }
+
+  // Toon per part rather than once over the finished scene: `color` is the
+  // per-part flat tone, and a single pass over the holder could only apply one.
+  if (spec.toon) toonify(inner, spec, part.prim ? undefined : part.color);
+
+  // Marked before the parts are merged, because addOutline runs once over the
+  // finished scene and has no idea which part a mesh came from by then.
+  if (part.ink === false) inner.traverse((o) => { o.userData.__noInk = true; });
+
+  // Normalise: measure where the posed vertices actually are, put that box's
+  // centre on the part's own origin, and scale the bounding sphere to 1.
+  const box = posedBox(inner, strays);
+  const centre = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
+  inner.position.sub(centre);
+  const sphere = new THREE.Sphere();
+  if (!box.isEmpty()) box.clone().translate(centre.clone().negate()).getBoundingSphere(sphere);
+  const r = sphere.radius || 0.5;
+
+  // The placement, outermost so the normalise above is not disturbed by it.
+  const outer = new THREE.Group();
+  outer.add(inner);
+  outer.scale.setScalar((part.scale ?? 1) / r);
+  const [rx, ry, rz] = part.rot ?? [0, 0, 0];
+  outer.rotation.set(rx * Math.PI / 180, ry * Math.PI / 180, rz * Math.PI / 180);
+  const [px, py, pz] = part.at ?? [0, 0, 0];
+  outer.position.set(px, py, pz);
+  return { outer, posed };
+}
+
+async function buildSceneIcon(spec) {
+  const parts = spec.parts ?? [];
+  if (!parts.length) throw new Error('scene with no parts');
+
+  const scene = makeScene(!!spec.toon);
+  const holder = new THREE.Group();
+  const strays = [];
+  const notes = [];
+  for (const part of parts) {
+    const { outer, posed } = await buildPart(part, spec, strays);
+    holder.add(outer);
+    notes.push(`${part.prim ?? part.asset ?? '?'}${posed && !part.prim ? ` (${posed})` : ''}`);
+  }
+
+  if (spec.roll) holder.rotateZ(spec.roll * Math.PI / 180);
+  scene.add(holder);
+
+  // FRAMED ON THE UNION OF THE PLACED PARTS, and deliberately not through
+  // frame()'s stray guard.
+  //
+  // That guard drops any mesh sitting more than twenty body radii from the
+  // biggest one, which is exactly right for a single animal with a corrupt eye
+  // bone and exactly wrong here: a scene's parts are far apart ON PURPOSE, and
+  // the guard would read the composition as the fault and photograph one piece
+  // of it. Each part has already been through the guard on its own, inside
+  // buildPart, so a broken file is still caught — just against its own body
+  // rather than against the stone flying past it.
+  holder.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(holder);
+  const centre = box.getCenter(new THREE.Vector3());
+  holder.position.sub(centre);
+  const sphere = new THREE.Sphere();
+  box.translate(centre.clone().negate()).getBoundingSphere(sphere);
+  const radius = sphere.radius || 1;
+
+  // After framing, same ordering and same reason as the single-model path.
+  if (spec.outline) addOutline(holder, radius * spec.outline);
+
+  return {
+    scene, radius, strays, dropped: 0, clipName: null, clipDuration: 0,
+    posed: `${parts.length} parts — ${notes.join(', ')}`,
+  };
 }
 
 // The camera, from two angles in degrees.

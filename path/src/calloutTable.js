@@ -64,11 +64,19 @@
 //   enabled   FALSE takes the callout out of the game. Blank means enabled.
 //   anchor    WHERE it appears, and it is a separate one-at-a-time slot rather
 //             than a position: `band` is the line across the middle, `player`
-//             rides just above the boost ring on the seal. Two anchors means
-//             two callouts CAN be up together — which is the point, since they
-//             are different sizes in different places and are not competing
-//             for the same eye. Within an anchor it is still strictly one.
+//             rides just above the boost ring on the seal, and `world` is
+//             beside the thing the line is about. Several anchors means several
+//             callouts CAN be up together — which is the point, since they are
+//             different sizes in different places and are not competing for the
+//             same eye. Within an anchor it is still strictly one.
 //             Blank = band.
+//
+//             A COACH ROW WITH A `subject` IS ALWAYS `world`, whatever this
+//             column says, and that is derived here rather than typed into both
+//             cells. Two columns that have to agree are two columns that can
+//             disagree, and the failure mode of that one — a tip pinned to a
+//             bubble while its words sit in the middle of the screen — is a
+//             sentence about something the player cannot find.
 //   priority  who gets the band when two want it at once — higher wins. For a
 //             coach step it doubles as the order steps are offered in, which is
 //             the same question asked twice: if air and chum are both worth
@@ -79,17 +87,24 @@
 //             quiet until the condition clears and comes back — which is what
 //             you want for the boss, and NOT what you want for oxygen.
 //             Ignored for coach rows: those fire once and are done.
-//   arrow     what the arrow points at while the line is up. Two of them name
-//             a THING and can come up empty — the tip is up because something
-//             is in the water, and it can be eaten or expire mid-sentence:
-//               chum     the nearest bite
-//               pickup   the nearest power-up orb
-//             The other two name a DIRECTION and are always answerable, which
-//             is why they are separate targets rather than "the nearest bubble"
-//             and "the nearest seabed orb": what they mean is up and down.
-//               surface  straight up, out of the water
-//               seabed   straight down, at the floor
-//             Blank = no arrow, which is most rows.
+//   subject   WHAT THE LINE IS ABOUT — the thing it is spoken beside, and the
+//             thing the arrow points at when it is too far off to read the two
+//             together. This was `arrow`, and the rename is the feature: a tip
+//             used to be a line in the middle of the screen with a glyph
+//             pointing away from it, and it is now a label that rides the
+//             object and stays until that object is gone.
+//
+//             Three name a THING, and can come up empty — the tip is up because
+//             something is in the water, and it can be eaten or expire
+//             mid-sentence:
+//               chum      the nearest bite
+//               pickup    the nearest power-up of this row's own kind
+//               creature  the nearest animal the tip is about
+//             Two name a PLACE, and are always answerable:
+//               surface   the waterline straight above the seal
+//               seabed    the floor straight below it
+//             Blank = a line about no object at all, which is the three control
+//             tips and every warning. Those stay on the band.
 // ============================================================================
 
 import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
@@ -105,9 +120,10 @@ const FILE = 'callouts.csv';
 const DEVICE_TEXT_COLUMN = { touch: 'textTouch', pad: 'textPad' };
 
 export const CALLOUT_KINDS = ['warn', 'coach'];
-export const ARROW_TARGETS = ['chum', 'pickup', 'surface', 'seabed'];
+/** What a line can be ABOUT. See the `subject` column above. */
+export const SUBJECTS = ['chum', 'pickup', 'creature', 'surface', 'seabed'];
 /** The surfaces a callout can appear on. First entry is the default. */
-export const CALLOUT_ANCHORS = ['band', 'player'];
+export const CALLOUT_ANCHORS = ['band', 'player', 'world'];
 
 /**
  * callouts.csv -> Map(id -> row). Rows keep the order of the file for the
@@ -175,19 +191,26 @@ export function parseCalloutCsv(text, warn = console.warn) {
     // that silently does not exist is the failure this whole file is built to
     // avoid. Loudly, though — a typo here moves a line somewhere it was never
     // designed to be read.
+    const subjectRaw = String(row.subject ?? '').trim().toLowerCase();
+    let subject = null;
+    if (subjectRaw) {
+      if (SUBJECTS.includes(subjectRaw)) subject = subjectRaw;
+      else warn(`[${LABEL}] "${id}" is about "${row.subject}", which is not ${SUBJECTS.join(', ')} — the line will be shown on the band with nothing to ride.`);
+    }
+
     const anchorRaw = String(row.anchor ?? '').trim().toLowerCase();
     let anchor = CALLOUT_ANCHORS[0];
     if (anchorRaw) {
       if (CALLOUT_ANCHORS.includes(anchorRaw)) anchor = anchorRaw;
       else warn(`[${LABEL}] "${id}" is anchored to "${row.anchor}", which is not ${CALLOUT_ANCHORS.join(' or ')} — putting it on the band.`);
     }
-
-    const arrowRaw = String(row.arrow ?? '').trim().toLowerCase();
-    let arrow = null;
-    if (arrowRaw) {
-      if (ARROW_TARGETS.includes(arrowRaw)) arrow = arrowRaw;
-      else warn(`[${LABEL}] "${id}" points its arrow at "${row.arrow}", which is not ${ARROW_TARGETS.join(' or ')} — no arrow will be drawn.`);
-    }
+    // DERIVED, and it overrules the column. A coach line about an object goes
+    // beside that object; there is no reading of "about the bubble" that also
+    // means "across the middle of the screen", so this is not a preference to
+    // be expressed per row. Warnings are left alone whatever they say they are
+    // about — an emergency is a band, and a warning that crept off to ride a
+    // pickup would be an emergency nobody could find.
+    if (subject && kind === 'coach') anchor = 'world';
 
     const priority = parseNumber(row.priority, LABEL, id, 'priority', warn);
     const hold = parseNumber(row.hold, LABEL, id, 'hold', warn, { min: 0 });
@@ -217,7 +240,7 @@ export function parseCalloutCsv(text, warn = console.warn) {
       // blank distinguishable; a typo collapses onto it, which is the safe way
       // round — a mis-typed repeat goes quiet rather than machine-gunning.
       repeat: repeat ?? null,
-      arrow,
+      subject,
     });
   }
 

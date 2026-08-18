@@ -86,6 +86,7 @@ function newBucket(t) {
     links: 0,             // ...of which scored a FOOD CHAIN link
     linkDepthSum: 0,      // sum of chain depth at each link, for a mean
     maxChain: 0,          // deepest chain reached in this bucket
+    missOffBeat: 0,       // fired outside the sweet spot — nothing else asked
     missNoFood: 0,        // fired, window open, but not enough eaten
     missNoWindow: 0,      // fired with enough eaten, but the window had shut
     missBoth: 0,          // fired having done neither
@@ -268,11 +269,22 @@ export function recordControl(source, n = 1) {
  * strikes" from "the player strikes constantly and never links", and those
  * want opposite fixes.
  *
+ * TIMING IS ASKED FIRST, and the order is the point. A release outside the
+ * sweet spot never had a chance to link whatever else was true, so booking one
+ * against "the window had shut" would send a reader after `chainWindow` — a
+ * number that is fine — while the actual answer is that the player is letting
+ * go early. The three old buckets describe a chain the player set UP wrong;
+ * this one describes a chain they THREW wrong, and the fixes have nothing in
+ * common.
+ *
  * @param chain   the chain depth after this release, or 0 if it scored nothing
  * @param hadFood whether enough had been eaten since the last strike
  * @param hadWindow whether the combo window was still open
+ * @param sweet   whether the release landed inside the sweet spot. Defaults
+ *                true so a caller written before the gate existed reads as it
+ *                always did rather than filing every strike as mistimed.
  */
-export function recordStrike(chain, hadFood, hadWindow) {
+export function recordStrike(chain, hadFood, hadWindow, sweet = true) {
   if (!run) return;
   bucket.strikes += 1;
   if (chain > 0) {
@@ -281,6 +293,7 @@ export function recordStrike(chain, hadFood, hadWindow) {
     if (chain > bucket.maxChain) bucket.maxChain = chain;
     return;
   }
+  if (!sweet) { bucket.missOffBeat += 1; return; }
   if (!hadFood && !hadWindow) bucket.missBoth += 1;
   else if (!hadFood) bucket.missNoFood += 1;
   else bucket.missNoWindow += 1;

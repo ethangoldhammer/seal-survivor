@@ -8,6 +8,7 @@ import { attachNoiseShader, applyNoiseSettings } from './systems/noiseShader.js'
 import { attachToonShade, applyToonSettings } from './systems/toonShade.js';
 import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin, splitForEdges } from './systems/biolumSkin.js';
 import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
+import { makeOrganicRing } from './systems/organicRing.js';
 import { createRockGeometry, startTumble } from './systems/rocks.js';
 
 // ============================================================================
@@ -96,6 +97,14 @@ import { createRockGeometry, startTumble } from './systems/rocks.js';
 //
 //   shape    'cone'|'icosahedron'|'octahedron'|'sphere'|'ring'|'box'|'torus'
 //            |'rock'
+//
+//   'ring' is special: it is built by systems/organicRing.js rather than from
+//   a RingGeometry, so it wears the same broken, gooey edge and the same
+//   noise sweep every circle drawn around a threat does. It reads three extra
+//   keys — `attack` (an entry in CONFIG.fx.attackTypes, which supplies both
+//   colour and edge dialect), `arcs` (0 for a closed ring, 4 for a targeting
+//   bracket) and the usual `inner`/`outer` — and it is the ONE primitive with
+//   a per-instance material. See the note at the build site.
 //   unlit    true = MeshBasicMaterial (flat neon, ignores scene lights),
 //            false = MeshStandardMaterial (lit — responds to CONFIG.lighting)
 //
@@ -4272,6 +4281,39 @@ export function createVisual(key) {
     return inst;
   }
 
+  // A RING IS THE ONE PRIMITIVE THAT CANNOT SHARE ITS MATERIAL. Every other
+  // shape here goes through getMaterial's per-key cache, which is right: one
+  // bubble material serves every bubble, and a look control reaches all of them
+  // at once. The organic ring (systems/organicRing.js) carries its sweep, its
+  // charge and its threat colour in UNIFORMS, so a cached material would give
+  // every ring on screen one shared hand and one shared colour — the same trap
+  // as fading one bubble and fading them all. It gets its own material per
+  // instance and its own build path, and it is deliberately the only exception.
+  if (def.shape === 'ring') {
+    const ring = makeOrganicRing({
+      type: def.attack ?? 'kinetic',
+      // A ring asset that names its own colour keeps it; one that names only a
+      // threat type takes the palette's.
+      color: def.attack && def.color == null ? null : (def.color ?? 0xffffff),
+      // Same conversion the boss tells use: a band spanning inner..outer has a
+      // half-width of (outer - inner) / 2.
+      thickness: ((def.outer ?? 1) - (def.inner ?? 0.8)) / 2,
+      arcs: def.arcs ?? 0,
+    });
+    ring.name = key;
+    ring.visible = true;
+    // NOTHING HERE TICKS IT. The dialects that animate — electric's stepped
+    // jags, blast's churn, venom's crawl — read uTime, and assets.js has no
+    // per-frame pass to advance it. Whoever spawns a ring asset owns that:
+    // call updateOrganicRing(mesh, dt) from the system that holds it, the way
+    // systems/bossPerks.js and systems/bossBoat.js do. Left un-ticked it draws
+    // a perfectly good still frame, which is why this is a note rather than a
+    // throw — and also why it would be easy to miss.
+    if (sizeMul) ring.scale.multiplyScalar(sizeMul);
+    spawnDecorator?.(ring, key);
+    return ring;
+  }
+
   const mesh = new THREE.Mesh(getGeometry(key, def), getMaterial(key, def));
   mesh.name = key;
   if (sizeMul) mesh.scale.multiplyScalar(sizeMul);
@@ -5416,13 +5458,34 @@ export function setAssetTexture(key, texture) {
 // colour), so they're resolved together rather than fighting each other:
 // the last one set would otherwise clobber the other. Tracked per asset and
 // re-applied as a pair.
-const tintState = new Map(); // key -> { tint, glow }
+const tintState = new Map(); // key -> { tint, glow, blend }
+
+// Scratch for the blend below. Module-level so a per-frame caller (the
+// element's shot colour is one) doesn't allocate a Color every frame.
+const _blendCol = new THREE.Color();
+const _blendScratch = new THREE.Color();
+
+// The base colour an asset's material resolves to before glow: the Look
+// panel's tint if somebody set one, otherwise the def's own colour, with a
+// RUN-TIME blend on top of it.
+//
+// The blend is a third layer rather than a second writer of `tint` on purpose.
+// `tint` is the user's — the texture workbench writes it and saves it with the
+// look — and a system that recoloured an asset mid-run by writing there would
+// overwrite that tint and then "restore" it to the def's colour when it let
+// go, quietly eating somebody's work. Blending on top leaves the tint intact
+// underneath, so it comes back the moment the run-time layer is cleared.
+function resolveColor(m, st) {
+  _blendCol.set(st.tint ?? m.userData.__originalColor ?? 0xffffff);
+  if (st.blend) _blendCol.lerp(_blendScratch.set(st.blend.hex), st.blend.mix);
+  return _blendCol;
+}
 
 function applyColorAndGlow(key) {
   const st = tintState.get(key) ?? {};
   for (const m of getAssetMaterials(key)) {
     if (!m.color) continue;
-    const base = st.tint ?? m.userData.__originalColor ?? 0xffffff;
+    const base = resolveColor(m, st);
 
     if ('emissiveIntensity' in m) {
       // Lit material: glow belongs on emissiveIntensity, colour stays colour.
@@ -5449,6 +5512,28 @@ function applyColorAndGlow(key) {
 export function setAssetTint(key, hex) {
   const st = tintState.get(key) ?? {};
   st.tint = hex ?? null;
+  tintState.set(key, st);
+  applyColorAndGlow(key);
+}
+
+/**
+ * A RUN-TIME colour on top of the Look panel's tint — the layer a system owns
+ * rather than the user.
+ *
+ * `mix` is how far toward `hex` the asset's own colour travels, 0..1, so a
+ * caller can fade the recolour in and out instead of switching it. Pass a null
+ * hex or a mix of 0 to hand the colour back to the tint underneath.
+ *
+ * Cheap to call every frame: it early-outs when nothing moved, which is what
+ * lets systems/elements.js drive it off a value that changes with the sky.
+ */
+export function setAssetBlendTint(key, hex, mix = 1) {
+  const st = tintState.get(key) ?? {};
+  const m = Math.max(0, Math.min(1, mix));
+  const next = hex == null || m <= 0 ? null : { hex, mix: m };
+  const prev = st.blend ?? null;
+  if (prev?.hex === next?.hex && prev?.mix === next?.mix) return;
+  st.blend = next;
   tintState.set(key, st);
   applyColorAndGlow(key);
 }
@@ -5793,6 +5878,10 @@ function getGeometry(key, def) {
       geo = new THREE.SphereGeometry(def.radius ?? 0.2, def.segments ?? 14, def.segments ?? 14);
       geo.scale(1, def.elongate ?? 1.7, 1);
       break;
+    // Unreachable from createVisual — `shape: 'ring'` is intercepted above and
+    // built as an organic ring with its own material. Kept because getGeometry
+    // is also called by tooling that only wants a shape, and a ring asset
+    // falling through to the 0.3 sphere default would be a silent blob.
     case 'ring':
       geo = new THREE.RingGeometry(def.inner ?? 0.8, def.outer ?? 1, def.segments ?? 24);
       break;

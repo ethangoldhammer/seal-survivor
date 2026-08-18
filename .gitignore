@@ -8,10 +8,13 @@ dist-cash-look
 dist-yacht-look
 dist-note-look
 dist-goo-look
+dist-ring-look
 dist-core-look
 dist-crab-look
 dist-eye-look
 dist-whale-look
+dist-type-look
+dist-tip-look
 
 # The layout audit's build and its report (npm run layout). Same deal as the
 # look pages: the page and the runner are tracked, what they generate is not.

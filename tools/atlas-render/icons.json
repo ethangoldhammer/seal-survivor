@@ -4,7 +4,7 @@
     "name": "Supa Dupa Seal",
     "family": "gun",
     "enabled": true,
-    "kind": "image",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -14,17 +14,53 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -58.032812500000716,
+    "pitch": 1.1542968749999942,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "three stones already in the air, one behind the next",
+    "parts": [
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          1.25,
+          0.3,
+          -0.2
+        ],
+        "scale": 0.78
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          0.1,
+          0,
+          0.2
+        ],
+        "scale": 0.62
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          -1,
+          -0.3,
+          0.5
+        ],
+        "scale": 0.48
+      }
+    ]
   },
   {
     "key": "heavyRounds",
     "name": "André the Giant",
     "family": "gun",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -37,7 +73,32 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the stone that got bigger, with the old one for scale",
+    "parts": [
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          0.35,
+          0.15,
+          0
+        ],
+        "scale": 1.35
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          -1.5,
+          -0.6,
+          0.4
+        ],
+        "scale": 0.38
+      }
+    ]
   },
   {
     "key": "overboost",
@@ -64,7 +125,7 @@
     "name": "Speedy Seal",
     "family": "utility",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -74,17 +135,72 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
-    "roll": 0,
-    "clipAt": 0.33
+    "yaw": 5.876562500000318,
+    "pitch": -5.996484374999994,
+    "roll": 30,
+    "clipAt": 0.33,
+    "sceneNote": "the seal, and how fast it is going",
+    "parts": [
+      {
+        "asset": "ship",
+        "file": "furseal.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "wantClips": {
+          "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+          "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+          "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+          "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+          "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+          "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+          "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+          "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+          "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+        },
+        "clip": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+        "clipAt": 0.4,
+        "at": [
+          0.55,
+          0,
+          0
+        ],
+        "scale": 1.4
+      },
+      {
+        "prim": "streak",
+        "length": 3.6,
+        "tube": 0.2,
+        "color": 12577279,
+        "opacity": 0.8,
+        "scale": 0.4,
+        "at": [
+          -1.15,
+          0.4,
+          0.2
+        ]
+      },
+      {
+        "prim": "streak",
+        "length": 3,
+        "tube": 0.16,
+        "color": 12577279,
+        "opacity": 0.6,
+        "scale": 0.4,
+        "at": [
+          -1.2,
+          -0.45,
+          0.45
+        ]
+      }
+    ]
   },
   {
     "key": "multishot",
     "name": "Pocket Full of Stones",
     "family": "gun",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -97,7 +213,43 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "three stones leaving in a fan",
+    "parts": [
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          0.55,
+          0.15,
+          -1.05
+        ],
+        "scale": 0.7
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          0.95,
+          0,
+          0
+        ],
+        "scale": 0.7
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          0.55,
+          -0.15,
+          1.05
+        ],
+        "scale": 0.7
+      }
+    ]
   },
   {
     "key": "pierce",
@@ -125,7 +277,7 @@
     "name": "Healthy Pup!",
     "family": "utility",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -138,14 +290,56 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "a whole seal inside a whole bubble",
+    "parts": [
+      {
+        "asset": "ship",
+        "file": "furseal.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "wantClips": {
+          "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+          "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+          "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+          "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+          "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+          "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+          "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+          "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+          "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+        },
+        "clip": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+        "clipAt": 0.3,
+        "at": [
+          0,
+          0,
+          0
+        ],
+        "scale": 1.05
+      },
+      {
+        "asset": "trapBubble",
+        "prim": "sphere",
+        "color": 14677759,
+        "at": [
+          0,
+          0,
+          0
+        ],
+        "scale": 1.4,
+        "opacity": 0.34,
+        "ink": false
+      }
+    ]
   },
   {
     "key": "magnet",
     "name": "C.H.U.M.",
     "family": "utility",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -155,17 +349,53 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -159.81250000000023,
+    "pitch": -10.06640625,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "chum coming to you",
+    "parts": [
+      {
+        "asset": "attractorOrb",
+        "prim": "sphere",
+        "color": 16764736,
+        "at": [
+          0,
+          0,
+          0
+        ],
+        "scale": 0.8
+      },
+      {
+        "asset": "chumChunk",
+        "prim": "rock",
+        "color": 16738890,
+        "at": [
+          1.35,
+          0.5,
+          -0.4
+        ],
+        "scale": 0.45
+      },
+      {
+        "asset": "chumChunk",
+        "prim": "rock",
+        "color": 16738890,
+        "at": [
+          -1.2,
+          -0.6,
+          0.55
+        ],
+        "scale": 0.38
+      }
+    ]
   },
   {
     "key": "regen",
     "name": "Seal all Wounds",
     "family": "utility",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -178,14 +408,65 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the wound closing — bubbles going up off the body",
+    "parts": [
+      {
+        "asset": "ship",
+        "file": "furseal.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "wantClips": {
+          "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+          "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+          "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+          "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+          "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+          "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+          "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+          "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+          "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+        },
+        "clip": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+        "clipAt": 0.3,
+        "at": [
+          0,
+          -0.3,
+          0
+        ],
+        "scale": 1.35
+      },
+      {
+        "asset": "bubbleOrb",
+        "prim": "sphere",
+        "color": 14677759,
+        "at": [
+          0.5,
+          0.85,
+          -0.15
+        ],
+        "scale": 0.34
+      },
+      {
+        "asset": "bubbleOrb",
+        "prim": "sphere",
+        "color": 14677759,
+        "at": [
+          -0.25,
+          1.2,
+          0.25
+        ],
+        "scale": 0.24
+      }
+    ]
   },
   {
     "key": "velocity",
     "name": "Seal the Deal",
     "family": "gun",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -198,14 +479,41 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "a stone outrunning its own streak",
+    "parts": [
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          1.35,
+          0,
+          0
+        ],
+        "scale": 0.8
+      },
+      {
+        "prim": "streak",
+        "length": 4.2,
+        "tube": 0.42,
+        "color": 12577279,
+        "opacity": 0.9,
+        "scale": 1.2,
+        "at": [
+          -0.5,
+          0,
+          0
+        ]
+      }
+    ]
   },
   {
     "key": "homingMissile",
     "name": "Homing Mussels",
     "family": "projectile",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -218,27 +526,103 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the mussel bending onto a fish",
+    "parts": [
+      {
+        "asset": "enemyFish",
+        "file": "fish.glb",
+        "fmt": "glb",
+        "forward": "-X",
+        "up": "+Y",
+        "clipAt": 0.45,
+        "at": [
+          0.8,
+          0.2,
+          -0.25
+        ],
+        "scale": 1.2
+      },
+      {
+        "asset": "missile",
+        "prim": "oval",
+        "color": 6978462,
+        "elongate": 1.8,
+        "at": [
+          -1.05,
+          -0.35,
+          0.45
+        ],
+        "rot": [
+          0,
+          0,
+          24
+        ],
+        "scale": 0.5
+      }
+    ]
   },
   {
     "key": "seaGarlic",
     "name": "Sea Garlic",
     "family": "aoe",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
-    "bands": 3,
+    "bands": 5,
     "bandLow": 70,
     "bandHigh": 255,
     "bandGamma": 1,
-    "bandSoft": 0,
+    "bandSoft": 0.56,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -9.006249999999,
+    "pitch": 89,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the ring you drag around with you",
+    "parts": [
+      {
+        "asset": "ship",
+        "file": "furseal.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "wantClips": {
+          "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+          "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+          "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+          "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+          "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+          "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+          "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+          "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+          "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+        },
+        "clip": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+        "clipAt": 0.35,
+        "at": [
+          0,
+          0.3,
+          0
+        ],
+        "scale": 0.7
+      },
+      {
+        "prim": "ring",
+        "inner": 1.55,
+        "outer": 2.1,
+        "color": 10217584,
+        "opacity": 0.85,
+        "scale": 1.7,
+        "at": [
+          0,
+          -0.7,
+          0
+        ]
+      }
+    ]
   },
   {
     "key": "shrimpRing",
@@ -269,27 +653,66 @@
     "name": "Mussel Barrage",
     "family": "projectile",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
     "bands": 3,
-    "bandLow": 70,
+    "bandLow": 15,
     "bandHigh": 255,
     "bandGamma": 1,
     "bandSoft": 0,
-    "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "outline": 0.042,
+    "yaw": -48.671874999999204,
+    "pitch": 65.21445312500003,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "a volley of three, staggered",
+    "parts": [
+      {
+        "asset": "missile",
+        "prim": "oval",
+        "color": 6978462,
+        "elongate": 1.8,
+        "at": [
+          1.15,
+          0.4,
+          -0.6
+        ],
+        "scale": 0.55
+      },
+      {
+        "asset": "missile",
+        "prim": "oval",
+        "color": 6978462,
+        "elongate": 1.8,
+        "at": [
+          0.15,
+          0,
+          0.1
+        ],
+        "scale": 0.55
+      },
+      {
+        "asset": "missile",
+        "prim": "oval",
+        "color": 6978462,
+        "elongate": 1.8,
+        "at": [
+          -0.9,
+          -0.4,
+          0.8
+        ],
+        "scale": 0.55
+      }
+    ]
   },
   {
     "key": "bounceShot",
     "name": "Bouncing Baby Guppies",
     "family": "projectile",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -302,14 +725,50 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "one guppy caught mid-bounce, its arc behind it",
+    "parts": [
+      {
+        "asset": "bounceShot",
+        "prim": "octahedron",
+        "color": 6741503,
+        "at": [
+          1.2,
+          0.5,
+          0
+        ],
+        "scale": 0.8
+      },
+      {
+        "asset": "bounceShot",
+        "prim": "octahedron",
+        "color": 6741503,
+        "at": [
+          0,
+          -0.6,
+          0.25
+        ],
+        "scale": 0.55
+      },
+      {
+        "asset": "bounceShot",
+        "prim": "octahedron",
+        "color": 6741503,
+        "at": [
+          -1.15,
+          0.35,
+          0.5
+        ],
+        "scale": 0.4
+      }
+    ]
   },
   {
     "key": "laserEyes",
     "name": "Laser Eyes",
     "family": "aoe",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -322,7 +781,62 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "two beams, still leaving the head",
+    "parts": [
+      {
+        "asset": "ship",
+        "file": "furseal.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "wantClips": {
+          "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+          "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+          "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+          "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+          "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+          "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+          "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+          "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+          "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+        },
+        "clip": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+        "clipAt": 0.3,
+        "at": [
+          -0.55,
+          0,
+          0
+        ],
+        "scale": 1.3
+      },
+      {
+        "prim": "streak",
+        "length": 4.6,
+        "tube": 0.15,
+        "color": 16734780,
+        "opacity": 0.95,
+        "scale": 1.1,
+        "at": [
+          1.35,
+          0.3,
+          -0.22
+        ]
+      },
+      {
+        "prim": "streak",
+        "length": 4.6,
+        "tube": 0.15,
+        "color": 16734780,
+        "opacity": 0.95,
+        "scale": 1.1,
+        "at": [
+          1.35,
+          0.3,
+          0.22
+        ]
+      }
+    ]
   },
   {
     "key": "electricEel",
@@ -375,9 +889,9 @@
     "outline": 0.006,
     "yaw": -32,
     "pitch": 89,
+    "roll": 69,
     "clipAt": 0.33,
     "flatColor": 13080410,
-    "roll": 69,
     "zoom": 0.97
   },
   {
@@ -385,7 +899,7 @@
     "name": "Throwin' Clubs",
     "family": "projectile",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -398,14 +912,53 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the club end over end",
+    "parts": [
+      {
+        "asset": "club",
+        "file": "club.glb",
+        "fmt": "glb",
+        "forward": "-Z",
+        "up": "+Y",
+        "at": [
+          0.35,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          38
+        ],
+        "scale": 1.3
+      },
+      {
+        "prim": "streak",
+        "length": 3.4,
+        "tube": 0.14,
+        "color": 12577279,
+        "opacity": 0.65,
+        "scale": 1,
+        "at": [
+          -1.4,
+          -0.45,
+          0.45
+        ],
+        "rot": [
+          0,
+          0,
+          18
+        ]
+      }
+    ]
   },
   {
     "key": "clubBoom",
     "name": "Boom Boom Club",
     "family": "aoe",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -418,14 +971,59 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the club at the centre of its own blast",
+    "parts": [
+      {
+        "asset": "club",
+        "file": "club.glb",
+        "fmt": "glb",
+        "forward": "-Z",
+        "up": "+Y",
+        "at": [
+          0,
+          0.2,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          24
+        ],
+        "scale": 1.2
+      },
+      {
+        "prim": "ring",
+        "inner": 1.4,
+        "outer": 2.1,
+        "color": 16747082,
+        "opacity": 0.9,
+        "scale": 1.7,
+        "at": [
+          0,
+          -0.5,
+          0
+        ]
+      },
+      {
+        "asset": "shrapnel",
+        "prim": "octahedron",
+        "color": 16774368,
+        "at": [
+          1.2,
+          0.9,
+          -0.4
+        ],
+        "scale": 0.28
+      }
+    ]
   },
   {
     "key": "clubIce",
     "name": "Iced Out in the Club",
     "family": "aoe",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -438,7 +1036,51 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the club frozen in, shards off it",
+    "parts": [
+      {
+        "asset": "club",
+        "file": "club.glb",
+        "fmt": "glb",
+        "forward": "-Z",
+        "up": "+Y",
+        "at": [
+          0,
+          0.1,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          24
+        ],
+        "scale": 1.25,
+        "color": 11069183
+      },
+      {
+        "asset": "shrapnel",
+        "prim": "octahedron",
+        "color": 11069183,
+        "at": [
+          1.15,
+          0.75,
+          -0.35
+        ],
+        "scale": 0.38
+      },
+      {
+        "asset": "shrapnel",
+        "prim": "octahedron",
+        "color": 11069183,
+        "at": [
+          -1.1,
+          -0.6,
+          0.45
+        ],
+        "scale": 0.3
+      }
+    ]
   },
   {
     "key": "starfish",
@@ -560,7 +1202,7 @@
     "name": "Chain Gang",
     "family": "strike",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -573,14 +1215,50 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "one strike orb pulling the next two along",
+    "parts": [
+      {
+        "asset": "strikeOrb",
+        "prim": "rock",
+        "color": 5093631,
+        "at": [
+          1.1,
+          0.25,
+          -0.2
+        ],
+        "scale": 0.95
+      },
+      {
+        "asset": "strikeOrb",
+        "prim": "rock",
+        "color": 5093631,
+        "at": [
+          -0.25,
+          -0.1,
+          0.3
+        ],
+        "scale": 0.65
+      },
+      {
+        "asset": "strikeOrb",
+        "prim": "rock",
+        "color": 5093631,
+        "at": [
+          -1.3,
+          -0.4,
+          0.7
+        ],
+        "scale": 0.45
+      }
+    ]
   },
   {
     "key": "strikeDash",
     "name": "Your Dasher is On The Way!",
     "family": "strike",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -593,34 +1271,120 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the seal in the strike itself",
+    "parts": [
+      {
+        "asset": "ship",
+        "file": "furseal.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "wantClips": {
+          "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+          "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+          "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+          "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+          "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+          "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+          "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+          "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+          "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+        },
+        "clip": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+        "clipAt": 0.45,
+        "at": [
+          0.45,
+          0,
+          0
+        ],
+        "scale": 1.35
+      },
+      {
+        "prim": "streak",
+        "length": 4,
+        "tube": 0.5,
+        "color": 5093631,
+        "opacity": 0.7,
+        "scale": 1.15,
+        "at": [
+          -1.3,
+          -0.05,
+          0.3
+        ]
+      }
+    ]
   },
   {
     "key": "strikeShrapnel",
     "name": "The Bone Zone",
     "family": "strike",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
     "bands": 3,
     "bandLow": 70,
     "bandHigh": 255,
-    "bandGamma": 1,
-    "bandSoft": 0,
+    "bandGamma": 2.2,
+    "bandSoft": 0.5,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -75.78750000000008,
+    "pitch": 11.592968749999997,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "bone leaving the impact",
+    "parts": [
+      {
+        "asset": "gorebone",
+        "file": "bone.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "at": [
+          0.1,
+          0.15,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          34
+        ],
+        "scale": 1.2
+      },
+      {
+        "asset": "shrapnel",
+        "prim": "octahedron",
+        "color": 16774368,
+        "at": [
+          1.25,
+          0.7,
+          -0.45
+        ],
+        "scale": 0.34
+      },
+      {
+        "asset": "shrapnel",
+        "prim": "octahedron",
+        "color": 16774368,
+        "at": [
+          -1.1,
+          -0.7,
+          0.55
+        ],
+        "scale": 0.27
+      }
+    ],
+    "zoom": 0.71
   },
   {
     "key": "strikeCharge",
     "name": "Epic Seal Time",
     "family": "strike",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -633,34 +1397,129 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the orb wound all the way up",
+    "parts": [
+      {
+        "asset": "strikeOrb",
+        "prim": "rock",
+        "color": 5093631,
+        "at": [
+          0,
+          0,
+          0
+        ],
+        "scale": 1.15
+      },
+      {
+        "prim": "torus",
+        "tube": 0.11,
+        "color": 5093631,
+        "opacity": 0.85,
+        "scale": 1.8,
+        "at": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          66,
+          0,
+          12
+        ]
+      },
+      {
+        "prim": "torus",
+        "tube": 0.08,
+        "color": 5093631,
+        "opacity": 0.55,
+        "scale": 2.1,
+        "at": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          66,
+          0,
+          -34
+        ]
+      }
+    ]
   },
   {
     "key": "breachChain",
     "name": "Big Willy Style",
     "family": "strike",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
-    "bands": 3,
-    "bandLow": 70,
+    "bands": 5,
+    "bandLow": 47,
     "bandHigh": 255,
-    "bandGamma": 1,
+    "bandGamma": 2.75,
     "bandSoft": 0,
-    "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "outline": 0.006,
+    "yaw": 14.373437500000023,
+    "pitch": -11.287500000000042,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "clear of the water, going up",
+    "parts": [
+      {
+        "asset": "ship",
+        "file": "furseal.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "wantClips": {
+          "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+          "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+          "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+          "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+          "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+          "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+          "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+          "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+          "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+        },
+        "clip": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+        "clipAt": 0.4,
+        "at": [
+          0.2,
+          0.65,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          34
+        ],
+        "scale": 1.3
+      },
+      {
+        "prim": "ring",
+        "inner": 1.3,
+        "outer": 2,
+        "color": 8377599,
+        "opacity": 0.85,
+        "scale": 0,
+        "at": [
+          -0.1,
+          -0.95,
+          0
+        ]
+      }
+    ]
   },
   {
     "key": "oxygenMax",
     "name": "Yoga",
     "family": "utility",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -673,14 +1532,50 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "one big breath held",
+    "parts": [
+      {
+        "asset": "bubbleOrb",
+        "prim": "sphere",
+        "color": 14677759,
+        "at": [
+          0.25,
+          0,
+          0
+        ],
+        "scale": 1.15
+      },
+      {
+        "asset": "bubbleOrb",
+        "prim": "sphere",
+        "color": 14677759,
+        "at": [
+          -1.25,
+          0.75,
+          0.25
+        ],
+        "scale": 0.34
+      },
+      {
+        "asset": "bubbleOrb",
+        "prim": "sphere",
+        "color": 14677759,
+        "at": [
+          -1.55,
+          -0.45,
+          0.5
+        ],
+        "scale": 0.22
+      }
+    ]
   },
   {
     "key": "oxygenRefill",
     "name": "Breathwork",
     "family": "utility",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -690,10 +1585,49 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": 49.40781249999975,
+    "pitch": -88.81015624999999,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "bubbles reaching the surface",
+    "parts": [
+      {
+        "prim": "ring",
+        "inner": 1.6,
+        "outer": 2.1,
+        "color": 8377599,
+        "opacity": 0.8,
+        "scale": 0,
+        "at": [
+          0,
+          0.75,
+          0
+        ]
+      },
+      {
+        "asset": "bubbleOrb",
+        "prim": "sphere",
+        "color": 14677759,
+        "at": [
+          0.1,
+          -0.1,
+          0
+        ],
+        "scale": 0.55
+      },
+      {
+        "asset": "bubbleOrb",
+        "prim": "sphere",
+        "color": 14677759,
+        "at": [
+          -0.6,
+          -0.95,
+          0.35
+        ],
+        "scale": 0.34
+      }
+    ],
+    "zoom": 0.76
   },
   {
     "key": "ironLung",
@@ -750,7 +1684,7 @@
     "name": "Calamari Ring",
     "family": "aoe",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -763,7 +1697,37 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the ink ring, and what makes it",
+    "parts": [
+      {
+        "asset": "enemySquid",
+        "file": "squid.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "clipAt": 0.4,
+        "at": [
+          0,
+          0.35,
+          0
+        ],
+        "scale": 1.15
+      },
+      {
+        "prim": "ring",
+        "inner": 1.5,
+        "outer": 2.1,
+        "color": 11565776,
+        "opacity": 0.85,
+        "scale": 1.7,
+        "at": [
+          0,
+          -0.7,
+          0
+        ]
+      }
+    ]
   },
   {
     "key": "dumbo",
@@ -849,7 +1813,7 @@
     "name": "Oyster Blaster",
     "family": "projectile",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -859,10 +1823,48 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": 26.932812500000182,
+    "pitch": 2.5933593750000083,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the shell open, the pearl already gone",
+    "parts": [
+      {
+        "asset": "scallopShell",
+        "file": "oyster.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "at": [
+          -0.45,
+          0,
+          0
+        ],
+        "scale": 1.3
+      },
+      {
+        "asset": "pearl",
+        "prim": "sphere",
+        "color": 16774102,
+        "at": [
+          1.2,
+          0.3,
+          -0.15
+        ],
+        "scale": 0.4
+      },
+      {
+        "asset": "pearl",
+        "prim": "sphere",
+        "color": 16774102,
+        "at": [
+          1.85,
+          0.55,
+          0.3
+        ],
+        "scale": 0.24
+      }
+    ]
   },
   {
     "key": "octoGrab",
@@ -947,7 +1949,7 @@
     "name": "Sonar Teeth",
     "family": "gun",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -960,7 +1962,35 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the stone has picked its fish",
+    "parts": [
+      {
+        "asset": "enemyFish",
+        "file": "fish.glb",
+        "fmt": "glb",
+        "forward": "-X",
+        "up": "+Y",
+        "clipAt": 0.4,
+        "at": [
+          0.75,
+          0.2,
+          -0.2
+        ],
+        "scale": 1.25
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          -1.1,
+          -0.45,
+          0.45
+        ],
+        "scale": 0.55
+      }
+    ]
   },
   {
     "key": "maneater",
@@ -997,7 +2027,7 @@
     "name": "Clone Warz",
     "family": "projectile",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -1009,15 +2039,62 @@
     "outline": 0.02,
     "yaw": -26,
     "pitch": 17.4,
-    "roll": 0,
-    "clipAt": 0.33
+    "roll": 71,
+    "clipAt": 0.33,
+    "sceneNote": "the fan is now a wall",
+    "parts": [
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          0.3,
+          0.55,
+          -1.35
+        ],
+        "scale": 0.46
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          0.95,
+          0.2,
+          -0.45
+        ],
+        "scale": 0.46
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          1,
+          -0.15,
+          0.5
+        ],
+        "scale": 0.46
+      },
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 16769126,
+        "at": [
+          0.45,
+          -0.5,
+          1.35
+        ],
+        "scale": 0.46
+      }
+    ]
   },
   {
     "key": "areaOfEffect",
     "name": "Splash Zone",
     "family": "aoe",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -1030,14 +2107,43 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the same blast, twice as wide",
+    "parts": [
+      {
+        "prim": "ring",
+        "inner": 0.55,
+        "outer": 0.95,
+        "color": 16747082,
+        "opacity": 0.95,
+        "scale": 0.85,
+        "at": [
+          0,
+          0.1,
+          0
+        ]
+      },
+      {
+        "prim": "ring",
+        "inner": 1.72,
+        "outer": 2.1,
+        "color": 16747082,
+        "opacity": 0.6,
+        "scale": 1.8,
+        "at": [
+          0,
+          -0.2,
+          0
+        ]
+      }
+    ]
   },
   {
     "key": "companionSize",
     "name": "Big Rigz",
     "family": "companion",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -1050,14 +2156,43 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "the escort you had, next to the escort you have",
+    "parts": [
+      {
+        "asset": "shrimp",
+        "file": "shrimp.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "at": [
+          0.3,
+          0.25,
+          0
+        ],
+        "scale": 1.3
+      },
+      {
+        "asset": "shrimp",
+        "file": "shrimp.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+Y",
+        "at": [
+          -1.25,
+          -0.7,
+          0.5
+        ],
+        "scale": 0.45
+      }
+    ]
   },
   {
     "key": "bioluminescence",
     "name": "Glow Up!",
     "family": "gun",
     "enabled": true,
-    "kind": "none",
+    "kind": "scene",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -1070,6 +2205,37 @@
     "yaw": -26,
     "pitch": 17.4,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "sceneNote": "a shot lit from inside",
+    "parts": [
+      {
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 8388592,
+        "at": [
+          0,
+          0,
+          0
+        ],
+        "scale": 0.95
+      },
+      {
+        "prim": "torus",
+        "tube": 0.1,
+        "color": 8388592,
+        "opacity": 0.75,
+        "scale": 1.6,
+        "at": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          72,
+          0,
+          0
+        ]
+      }
+    ]
   }
 ]

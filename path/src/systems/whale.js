@@ -89,6 +89,31 @@ export function whaleDistance(x, y) {
   return best;
 }
 
+/**
+ * The nearest whale to (x, y) as the whale itself, for something that wants to
+ * hold onto it across frames — the first-run "some creatures should not be
+ * attacked" tip stands beside one until it leaves.
+ *
+ * A REFERENCE AND NOT A POSITION, unlike whaleDistance above: a whale is a
+ * hundred units long and takes the best part of a minute to cross the arena, so
+ * a tip re-asking "the nearest one" every frame would hop between two of them
+ * mid-sentence. Hollow while none is up, which is most of a run.
+ */
+export function nearestWhale(x, y) {
+  let best = null;
+  let bestD = Infinity;
+  for (const w of whales) {
+    const d = Math.hypot(w.container.position.x - x, w.container.position.y - y);
+    if (d < bestD) { bestD = d; best = w; }
+  }
+  return best;
+}
+
+/** Is that exact whale still in the water? */
+export function whaleAlive(w) {
+  return !!w && whales.indexOf(w) !== -1;
+}
+
 // ---------------------------------------------------------------------------
 // THE CLOCK
 // ---------------------------------------------------------------------------

@@ -57,7 +57,9 @@ document.getElementById('log').textContent = `rendering ${specs.length} models`;
 let skipped = 0;
 for (const spec of specs) {
   const kind = spec.kind ?? 'render';
-  if (kind !== 'render') { skipped++; window.__done++; continue; }
+  // `scene` renders exactly like `render` — it is still a WebGL shot POSTed
+  // under the spec's key, it just has several models in it instead of one.
+  if (kind !== 'render' && kind !== 'scene') { skipped++; window.__done++; continue; }
   try {
     const { blob, log: line } = await shootToBlob(renderer, spec);
     await fetch('/shot/' + spec.key + '.png', { method: 'POST', body: blob });

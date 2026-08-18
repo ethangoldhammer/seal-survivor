@@ -243,8 +243,8 @@ function updateEvolvedFire(t, dt, cfg, enemies, scene, hooks) {
     pierce: 0,
     asset: 'bullet',
     // Squad fire is the seal team's damage, not the player's gun — without
-    // this tag the playtest report credits every escort's shot to the
-    // peashooter and the evolution looks like it does nothing.
+    // this tag the playtest report credits every escort's shot to Fin Pebbles
+    // and the evolution looks like it does nothing.
     source: 'sealTeam',
   });
   // Aimed along the shot, so the muzzle flash throws forward off the seal

@@ -25,9 +25,10 @@ import {
   strikeState, resetStrike, feedChum, updateStrike, restoreCharge,
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
   chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips, cancelDash,
-  updateCharge, perfectCrossed,
+  updateCharge, perfectCrossed, strikeLoaded, inSweetSpot, sweetOffset, sweetHalfWidth,
+  strikeBurst, riderDamage,
 } from '../path/src/systems/strike.js';
-import { magnetRadius, magnetSpeed, magnetDistance, magnetState } from '../path/src/systems/chumMagnet.js';
+import { magnetRadius, magnetSpeed, magnetDistance, magnetState, chumHoming } from '../path/src/systems/chumMagnet.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
 import { updatePickups, resetPickups, spawnXpOrb } from '../path/src/entities/pickups.js';
 
@@ -66,6 +67,10 @@ const stats = (refill = CONFIG.strike.charge.chumRefill) => ({
   strikeDashDuration: CONFIG.strike.dashDuration,
   strikeDashSpeed: CONFIG.strike.dashSpeed,
   strikeChainMul: CONFIG.strike.chainDamageMul,
+  // The release burst reads this, and the sweet spot section below asks it for
+  // a damage number. Left out, an on-beat burst and an off-beat one both come
+  // back as zero and the gate passes on nothing.
+  strikeDamage: CONFIG.strike.damage,
 });
 
 // updateStrike wants a scene, a position and an enemy list; none are touched
@@ -380,11 +385,37 @@ check('not dashing, it is a plain circle again',
 
 const dir = { x: 1, y: 0 };
 
+// A REAL WIND-UP, THROUGH updateCharge, ENDING IN A RELEASE.
+//
+// This file used to poke `strikeState.pending = 1` and call tryStrike, and
+// that cannot work any more: a strike only bites if it is released inside the
+// sweet spot, and the window is timed off the frames the hold actually took.
+// A poked-in bank arrives with no timing behind it at all, so every strike
+// reads as mistimed and every link check fails for a reason that has nothing
+// to do with what it was testing. See the sweet spot note in systems/strike.js.
+//
+// `late` is how many seconds past the STRIKE NOW! moment to sit before letting
+// go — 0 is dead on it, and anything past sweetHalfWidth() is a miss.
+//
+// The step is deliberately finer than a frame: the window is a tenth of a
+// second wide and a 1/60 step is a sixth of it, which is enough slop to make
+// a check about the EDGE of the window pass or fail on rounding.
+const STEP = 1 / 480;
+function strike({ late = 0, st = stats() } = {}) {
+  let guard = 0;
+  while (!strikeLoaded() && guard++ < 20000) updateCharge(STEP, true, st);
+  for (let t = 0; t < late - 1e-9; t += STEP) updateCharge(STEP, true, st);
+  return tryStrike(dir, st);
+}
+// Fill the tank without feeding. The bar is FUEL and `pipsSinceStrike` is
+// FOOD; a test about one has to be able to move it without moving the other,
+// which is exactly what eating five chum would not do.
+const fillTank = () => { strikeState.charge = 1; };
+
 console.log('\nA LINK NEEDS BOTH HALVES: FOOD EATEN, AND A WINDOW STILL OPEN');
 resetStrike();
 // Strike one. Nothing eaten yet, so it scores nothing — it opens the window.
-strikeState.pending = 1;
-check('the opening strike fires', tryStrike(dir, stats()) === true);
+check('the opening strike fires', strike() === true);
 check('  ...but scores no link — nothing was eaten for it', consumeStrikeLink().chain === 0);
 check('  ...and it opens the window so eating starts counting',
   strikeState.chainTimer > 0);
@@ -394,8 +425,7 @@ strikeState.charge = 0;
 for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
 check(`${linkPips(stats())} mouthfuls arm the next release (a ${pipCount(stats())}-pip bar)`,
   strikeState.pipsSinceStrike >= linkPips(stats()));
-strikeState.pending = 1;
-check('the second strike fires', tryStrike(dir, stats()) === true);
+check('the second strike fires', strike() === true);
 const link1 = consumeStrikeLink().chain;
 check('  ...and THIS one scores the link', link1 === 1);
 check('  ...clearing the counter behind it', strikeState.pipsSinceStrike === 0);
@@ -403,16 +433,16 @@ check('  ...and the link only reads once', consumeStrikeLink().chain === 0);
 
 console.log('\nSTRIKING WITHOUT EATING SCORES NOTHING');
 resetStrike();
-strikeState.pending = 1; tryStrike(dir, stats()); consumeStrikeLink();
-strikeState.pending = 1;
-tryStrike(dir, stats());
+strike(); consumeStrikeLink();
+fillTank();
+strike();
 check('a second strike on an unfed bar is not a link', consumeStrikeLink().chain === 0);
 
 console.log('\nEATING WITHOUT STRIKING SCORES NOTHING EITHER');
 // This is the whole change: the bar reaching full used to BE the link. Now it
 // only arms one, and the strike is what cashes it.
 resetStrike();
-strikeState.pending = 1; tryStrike(dir, stats()); consumeStrikeLink();
+strike(); consumeStrikeLink();
 strikeState.charge = 0;
 for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
 check('eating alone scores no link', strikeState.chainCount === 0);
@@ -420,14 +450,13 @@ check('  ...it only arms one', strikeState.pipsSinceStrike >= linkPips(stats()))
 
 console.log('\nTHE WINDOW STILL HAS TO BE OPEN');
 resetStrike();
-strikeState.pending = 1; tryStrike(dir, stats()); consumeStrikeLink();
+strike(); consumeStrikeLink();
 strikeState.charge = 0;
 for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
 strikeState.active = false;
 tick(CONFIG.strike.chainWindow + 0.05);          // let it lapse
 check('the window lapsed', strikeState.chainTimer <= 0);
-strikeState.pending = 1;
-tryStrike(dir, stats());
+strike();
 check('a fed strike after the window shut scores nothing', consumeStrikeLink().chain === 0);
 check('  ...but it opens a fresh window', strikeState.chainTimer > 0);
 
@@ -438,12 +467,12 @@ console.log('\nONE TURN OF THE CYCLE IS EXACTLY ONE LINK');
 resetStrike();
 const wasChumFull = CONFIG.strike.chainOn.chumFull;
 CONFIG.strike.chainOn.chumFull = true;           // as a stale snapshot would
-strikeState.pending = 1; tryStrike(dir, stats()); consumeStrikeLink();
+strike(); consumeStrikeLink();
 strikeState.charge = 0;
 for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
 check('chumFull is suppressed while strikeRelease is on',
   chainStrike('chumFull') === 0);
-strikeState.pending = 1; tryStrike(dir, stats());
+strike();
 check('  ...so one refill-and-spend is one link, not two',
   consumeStrikeLink().chain === 1 && strikeState.chainCount === 1);
 CONFIG.strike.chainOn.chumFull = wasChumFull;
@@ -529,6 +558,116 @@ check('a perfect charge is always enough to fire',
 resetStrike();
 check('a reset clears the latch, the stamp and the pop',
   strikeState.perfect === false && strikeState.perfectStrike === false && strikeState.perfectFlash === 0);
+
+// ============================================================================
+// THE SWEET SPOT — the strike only bites if it is released on the beat.
+//
+// EVERYTHING THE STRIKE KILLS OR FEEDS HANGS OFF ONE BOOLEAN, so what matters
+// here is not that the boolean exists but that it is anchored to the moment
+// the player is actually SHOWN. "STRIKE NOW!" goes up on strikeLoaded() and
+// tryStrike times the release against the same function, and if those two ever
+// came apart the game would be asking for an input a tenth of a second away
+// from the one it rewards — a mechanic that reads as broken and measures as
+// working, since every number involved would still be internally consistent.
+//
+// The other half is the SHAPE of the window: it has a late side. A wind-up
+// stops moving the instant it loads (`pending` clamps, `charge` bottoms out),
+// so anything derived from the meter alone would let a player hold the button
+// down forever and still hit the beat.
+// ============================================================================
+
+console.log('\nTHE WINDOW OPENS ON THE MOMENT THE PLAYER IS SHOWN');
+resetStrike();
+const half = sweetHalfWidth(stats());
+check(`the window is ${(half * 2 * 1000).toFixed(0)}ms wide`, half > 0);
+check('  ...which is sweetFraction of the wind-up, both sides',
+  near(half, CONFIG.strike.charge.time * CONFIG.strike.charge.sweetFraction, 1e-9));
+
+// Hold from a full bar, sampling every frame, and record where the window is
+// against where the prompt is.
+let promptAt = -1;
+let firstSweet = -1;
+let lastSweet = -1;
+let held2 = 0;
+for (let i = 0; i < 4000; i++) {
+  updateCharge(STEP, true, stats());
+  held2 += STEP;
+  if (inSweetSpot(stats())) {
+    if (firstSweet < 0) firstSweet = held2;
+    lastSweet = held2;
+  }
+  if (promptAt < 0 && strikeLoaded()) promptAt = held2;
+}
+check('the prompt fires about a bar into the hold', Math.abs(promptAt - CONFIG.strike.charge.time) < 0.02,
+  `${promptAt.toFixed(3)}s of ${CONFIG.strike.charge.time}s`);
+check('  ...and the window is centred on it, not started by it',
+  firstSweet < promptAt && lastSweet > promptAt,
+  `${firstSweet.toFixed(3)} .. ${promptAt.toFixed(3)} .. ${lastSweet.toFixed(3)}`);
+check('  ...reaching back one half-width before it',
+  near(promptAt - firstSweet, half, 0.01), `${(promptAt - firstSweet).toFixed(3)}s vs ${half.toFixed(3)}s`);
+check('  ...and running one half-width past it',
+  near(lastSweet - promptAt, half, 0.01), `${(lastSweet - promptAt).toFixed(3)}s vs ${half.toFixed(3)}s`);
+// THE LATE SIDE EXISTS AT ALL. Sitting on a loaded wind-up has to expire, and
+// nothing in the meter changes while it does — which is why this is timed.
+check('  ...so holding on past it is a miss', inSweetSpot(stats()) === false);
+check('  ...with the wind-up still perfectly fireable', strikeState.pending >= CONFIG.strike.charge.minFire);
+// The sign says WHICH mistake it was, which is what a tell would need.
+check('being late reads as a positive offset', sweetOffset() > 0, sweetOffset().toFixed(3));
+resetStrike();
+updateCharge(STEP, true, stats());
+check('  ...and being early as a negative one', sweetOffset() < 0, sweetOffset().toFixed(3));
+
+console.log('\nON THE BEAT THE STRIKE BITES; OFF IT, IT ONLY MOVES');
+resetStrike();
+check('a release on the beat is stamped sweet', strike() === true && strikeState.sweetStrike === true);
+const onBeatBurst = strikeBurst(stats());
+check('  ...and the release burst has damage in it', onBeatBurst.damage > 0, onBeatBurst.damage.toFixed(1));
+check('  ...and a radius to put it in', onBeatBurst.radius > 0);
+const onBeatDash = strikeState.dashDuration;
+cancelDash();
+
+resetStrike();
+// Two full half-widths late: comfortably out, and still holding a full bank.
+check('a release well past the window fires anyway', strike({ late: half * 3 }) === true);
+check('  ...but is stamped as no strike at all', strikeState.sweetStrike === false);
+const offBeatBurst = strikeBurst(stats());
+check('  ...so the burst is nothing, damage AND radius',
+  offBeatBurst.damage === 0 && offBeatBurst.radius === 0);
+check('  ...and the riders it would have fed get nothing either',
+  riderDamage(999, stats()) === 0);
+// THE POINT OF THE WHOLE SPLIT: the movement is untouched. A mistimed strike
+// is a full-power dash, which is what keeps repositioning free.
+check('  ...while the dash is exactly as long as the one that bit',
+  near(strikeState.dashDuration, onBeatDash, 1e-9),
+  `${strikeState.dashDuration.toFixed(3)}s vs ${onBeatDash.toFixed(3)}s`);
+check('  ...and the i-frames it paid for are still running', strikeState.invulnTimer > 0);
+cancelDash();
+
+console.log('\nAND OFF THE BEAT IT NEITHER STARTS NOR EXTENDS A CHAIN');
+resetStrike();
+check('a mistimed opening strike fires', strike({ late: half * 3 }) === true);
+check('  ...and opens NO window, so eating counts for nothing',
+  strikeState.chainTimer === 0);
+// ...not even at the end of the dash, which is the other place a window opens.
+let d = 0;
+while (strikeState.active && d < 600) { tick(1 / 60); d++; }
+check('  ...and the dash ending does not open one either',
+  strikeState.chainTimer === 0);
+
+resetStrike();
+// A properly set-up link — food eaten, window open — thrown away on the timing.
+strike(); consumeStrikeLink(); cancelDash();
+strikeState.charge = 0;
+for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
+check('the next link is fully paid for',
+  strikeState.pipsSinceStrike >= linkPips(stats()) && strikeState.chainTimer > 0);
+const missed = (strike({ late: half * 3 }), consumeStrikeLink());
+check('  ...and a mistimed release scores nothing regardless',
+  missed.chain === 0);
+check('  ...booked as OFF BEAT and not as a missing half',
+  missed.sweet === false && missed.hadFood === true && missed.hadWindow === true);
+cancelDash();
+resetStrike();
 
 // ============================================================================
 // THE PIPS PLOP UP ONE AT A TIME — even when a whole bar lands on one frame.
@@ -675,15 +814,23 @@ check('  ...and a full bar is still fully lit, with no slide',
 
 console.log('\nA PLAIN PASS HOOVERS CHUM IN — no dash required');
 const scene = new THREE.Scene();
+// ...INSIDE A CHAIN. The magnet is a FOOD CHAIN privilege now (chumHoming in
+// systems/chumMagnet.js), so every reach check below has to run with a window
+// open or it is measuring the gate rather than the radius. Its own section is
+// further down.
 const seal = (x, y, vx, vy, sealed = false) => ({
   mesh: { position: new THREE.Vector3(x, y, 0) },
   velocity: new THREE.Vector2(vx, vy),
   chumSealed: sealed,
   stats: { pickupRadius: CONFIG.player.pickupRadius, chumGulpRadius: 5 },
 });
-function collects(orbX, player, maxFrames = 400) {
+function collects(orbX, player, maxFrames = 400, chaining = true) {
   resetPickups(scene);
   resetStrike();
+  // The window, set directly rather than struck for: what is under test here
+  // is the pickup system, and winding up a real strike would seal the mouth
+  // and dash the seal away from the orb it is supposed to be reaching for.
+  if (chaining) strikeState.chainTimer = CONFIG.strike.chainWindow;
   spawnXpOrb(scene, new THREE.Vector3(orbX, 0, 0), 2, 0.4);
   let got = 0, f = 0;
   while (got === 0 && f < maxFrames) {
@@ -707,6 +854,41 @@ check('an orb well outside the radius is left alone',
 // release gulps the lot instead (CONFIG.strike.charge.gulp).
 check('a wind-up still seals the mouth',
   !collects(baseR * 0.7, seal(0, 0, 0, 0, true)));
+
+// ============================================================================
+// ...BUT ONLY INSIDE A FOOD CHAIN.
+//
+// The magnet is the chain's own privilege now. Outside one the seal does not
+// REACH for chum at all — food has to be swum into — which is what puts the
+// cost of the first link back on the player instead of on an ocean that
+// collects itself. The failure this pins is the quiet one: gate it wrong and
+// the mechanic still looks fine, because the seal picks food up either way and
+// only the RANGE it does it at has changed.
+// ============================================================================
+
+console.log('\nOUTSIDE A CHAIN THE SEAL DOES NOT REACH');
+resetStrike();
+check('no chain, no homing', chumHoming() === false);
+strikeState.chainTimer = CONFIG.strike.chainWindow;
+check('a live window turns it on', chumHoming() === true);
+// The dash counts too — that is the same window seen from inside it, and the
+// corridor is the reach a dash is FOR.
+resetStrike();
+strikeState.active = true;
+check('and so does the dash itself', chumHoming() === true);
+strikeState.active = false;
+
+// An orb comfortably inside the magnet's reach and comfortably outside the
+// mouth. Inside a chain it is drawn in; outside one it is simply left there.
+const pullOnly = (CONFIG.pickups.collectRadius + baseR) / 2;
+check('inside a chain, an orb in reach is drawn in',
+  collects(pullOnly, seal(0, 0, 0, 0), 400, true));
+check('outside one, the same orb is left alone',
+  !collects(pullOnly, seal(0, 0, 0, 0), 400, false));
+// ...and the mouth still works. This is the half that keeps the gate from
+// being a starvation bug: chum can always be EATEN, it just has to be reached.
+check('  ...but swimming into it still eats it',
+  collects(0.3, seal(0, 0, 10, 0), 400, false));
 
 console.log('\nTHE CORRIDOR ONLY EVER ADDS REACH, NEVER TAKES IT');
 // magnetDistance swaps to a capsule while dashing. If that could ever return
@@ -765,8 +947,7 @@ console.log('\nTHE WINDOW STARTS WHEN THE DASH ENDS, NOT AT THE RELEASE');
 // a 1.1s window on the stretch the seal is committed and cannot act — and
 // punished the biggest strikes hardest, since they dash longest.
 resetStrike();
-strikeState.pending = 1;
-tryStrike(dir, stats());
+strike();
 consumeStrikeLink();
 const dashLen = strikeState.dashDuration;
 check('the dash has real length', dashLen > 0.1);
@@ -785,8 +966,7 @@ console.log('\nEATING SINCE THE LAST STRIKE IS WHAT COUNTS — and it resets');
 resetStrike();
 for (let i = 0; i < 20; i++) feedChum(stats());   // graze with no window open
 check('grazing banks progress', strikeState.pipsSinceStrike === 20);
-strikeState.pending = 1;
-tryStrike(dir, stats());
+strike();
 check('  ...but the release spends it all', strikeState.pipsSinceStrike === 0);
 check('  ...so a hoard cannot buy two links', consumeStrikeLink().chain === 0);
 
@@ -796,8 +976,7 @@ console.log('\nBREAKING OUT OF A DASH STILL PAYS THE WINDOW');
 // strike paid for — invisible until chains quietly stop being reachable after
 // any manual break-out. Both endings go through finishDash for that reason.
 resetStrike();
-strikeState.pending = 1;
-tryStrike(dir, stats());
+strike();
 consumeStrikeLink();
 strikeState.chainTimer = 0;               // as if the window had lapsed
 check('mid-dash with no window', strikeState.active && strikeState.chainTimer === 0);
@@ -810,8 +989,7 @@ check('  ...and leaves the i-frames alone — they were paid for',
 
 // Running it out has to land in exactly the same place.
 resetStrike();
-strikeState.pending = 1;
-tryStrike(dir, stats());
+strike();
 consumeStrikeLink();
 strikeState.chainTimer = 0;
 let g = 0;

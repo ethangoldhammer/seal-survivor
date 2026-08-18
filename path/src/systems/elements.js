@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
+import { setAssetBlendTint } from '../assets.js';
 import { player } from '../entities/player.js';
 import { skyLight } from './daylight.js';
 import { setNoiseGlow, setNoiseGlowPulse, clearNoiseGlow } from './noiseShader.js';
@@ -524,6 +525,10 @@ export function updateElements(dt, scene, enemiesList, hooks = {}) {
   // config switched off mid-run would never run down, and would still be there
   // multiplying the element the moment it came back on.
   fadeSurge(dt);
+  // Also before them, and for the third version of that reason: this one has
+  // to be able to take the colour OFF the shot, which is exactly what it is
+  // asked to do when the element is gone or the ability is switched off.
+  updateShotTint();
 
   if (!cfg().enabled) return;
 
@@ -878,6 +883,59 @@ export function updateElementSkin(body, rawDt = 0) {
   });
 }
 
+// ===========================================================================
+// THE SHOT'S COLOUR
+//
+// The card promises the shots carry an element, and the shots were the one
+// place that never said so: the seal lit up, the impact flashed in the
+// element's colour, and the pellet flying between them stayed the stone yellow
+// it is at level 1.
+//
+// IT RIDES elementPower(), the same number the seal's glow does, so this is a
+// readout and not decoration — at noon with `dayPower` at 0 the gun really is
+// firing plain pellets (applyElementalHit returns before it applies anything),
+// and the colour goes back to say so. Both halves reading one function is the
+// same guarantee the skin note above describes: they cannot drift into a seal
+// that glows while its shots are inert.
+//
+// A BLEND, NOT A TINT. setAssetBlendTint layers over the Look panel's tint
+// instead of writing it, so this can never eat a bullet colour set in the
+// texture workbench — see the note on resolveColor in assets.js.
+//
+// ONE MATERIAL, EVERY PELLET. Primitive assets share a material (the bullet is
+// a 'rock'), so this necessarily recolours the escorts' fire too — Seal Team's
+// evolved volley spawns the same 'bullet' asset. That reads correctly: the
+// squad is firing the player's gun, scaled (see systems/sealTeam.js). Per-shot
+// colour would need a material clone per pellet, which is the wrong trade for
+// a projectile that lives 1.6 seconds.
+// ===========================================================================
+
+// Bucketed for the same reason the skin's stamp is: elementPower moves
+// continuously all through dusk, and every distinct value here is a material
+// rewrite. 32 steps is under a second apart through the fade and free at noon
+// or midnight, where the value is pinned.
+function shotMix() {
+  const s = cfg().shot;
+  if (!element || s?.enabled === false || !cfg().enabled || level() <= 0) return 0;
+  const amount = Math.max(0, Math.min(1, s?.amount ?? 1));
+  return Math.round(elementPower() * amount * 32) / 32;
+}
+
+/**
+ * How far the ribbon behind the basic shot has travelled toward the element's
+ * colour, 0..1. For systems/projectileTrails.js, which owns the trail colour
+ * and reads this per frame rather than being pushed to.
+ */
+export function elementTrailMix() {
+  const s = cfg().shot;
+  return shotMix() * Math.max(0, Math.min(1, s?.trailAmount ?? 1));
+}
+
+function updateShotTint() {
+  const mix = shotMix();
+  setAssetBlendTint('bullet', mix > 0 ? elementColor() : null, mix);
+}
+
 /**
  * Force the next updateElementSkin to restamp.
  *
@@ -904,6 +962,11 @@ export function resetElements(scene) {
   // updateElementSkin is the point — that function returns immediately while
   // `element` is null, so it is exactly the path that cannot fix this.
   clearNoiseGlow();
+  // ...and off the SHOT, for exactly the same reason: nothing rebuilds the
+  // bullet's material between runs either, so a run that ended venom-green
+  // would open firing green pellets with no element behind them. `element` is
+  // already null above, so this resolves to "hand the colour back".
+  updateShotTint();
   skinnedBody = null;
   skinKey = '';
   glowCycle = 0;

@@ -119,7 +119,10 @@ export const TEXT_ROLES = [
     style: { font: FONT_GLOBAL, size: 15, weight: 700, tracking: 0.02, case: 'as typed', useInk: false, color: 0xffe066, alpha: 1, shadow: 8, glow: 0 } },
   { key: 'chain', label: 'Chain banner', selector: '.sv-chain', section: 'Popups',
     sample: 'FOOD CHAIN! ×6', inlineColor: true, motion: 'chain',
-    style: { font: FONT_GLOBAL, size: 21, weight: 800, tracking: 0.1, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 10, glow: 16 } },
+    // 900 with the Strike prompt, and heavier than the warning band's 800 on
+    // purpose: the food chain is its own voice, and it should be recognisable
+    // as one before a word of it has been read.
+    style: { font: FONT_GLOBAL, size: 21, weight: 900, tracking: 0.1, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 10, glow: 16 } },
   // AN UPGRADE PAYING OUT — "MANEATER +12%", fired by a `toast` channel on a
   // feedback event (systems/feedback.js). Cool where the chain banner is gold,
   // and well under half its size: both ride the same layer, and a proc reading
@@ -156,6 +159,21 @@ export const TEXT_ROLES = [
   { key: 'boostWarn', label: 'Boost warning', selector: '.sv-callout-boost', section: 'Popups',
     sample: 'Boost Empty!', motion: 'boostWarn',
     style: { font: FONT_GLOBAL, size: 12, weight: 700, tracking: 0.08, case: 'as typed', useInk: false, color: 0xffc65a, alpha: 1, shadow: 6, glow: 8 } },
+  // Rendered on top of the boost warning — the node carries BOTH classes — so
+  // this must stay after it in the list, exactly as the coach tip does over the
+  // band. It is the SAME SLOT on the ring and a completely different message,
+  // and the two used to be indistinguishable: "Boost Empty!" is the gauge
+  // reporting a fact, and "STRIKE NOW!" is the FOOD CHAIN asking for an input
+  // inside a tenth of a second.
+  //
+  // SO IT IS DRESSED AS FOOD CHAIN, not as boost. Heaviest weight in the game
+  // and UPPER, matched to the FOOD CHAIN! banner, and `inlineColor` because it
+  // wears the live chain's own hue — ui/callout.js writes it per frame off the
+  // same wheel the banner and the ring's arc are on (systems/chainColor.js).
+  // The colour here is only what the role falls back to before a run starts.
+  { key: 'strikeNow', label: 'Strike prompt', selector: '.sv-callout-strike', section: 'Popups',
+    sample: 'STRIKE NOW!', inlineColor: true, motion: 'strikeNow',
+    style: { font: FONT_GLOBAL, size: 14, weight: 900, tracking: 0.14, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 6, glow: 14 } },
 ];
 
 export const TEXT_ROLE_KEYS = TEXT_ROLES.map((r) => r.key);

@@ -84,6 +84,32 @@ export const strikeState = {
   perfect: false,  // the wind-up reached a full bank, and hasn't been spent
   perfectFlash: 0, // seconds left of the pop that announced it
   perfectStrike: false, // ...and whether the dash IN FLIGHT was bought with one
+  // ---- THE SWEET SPOT ----------------------------------------------------
+  //
+  // A STRIKE ONLY BITES IF IT IS RELEASED ON THE BEAT. Outside the window the
+  // dash still launches, at the full reach and speed the wind-up paid for — it
+  // is simply a SPEED BOOST. No release burst, no contact damage, no prey
+  // cull, no riders, and no FOOD CHAIN. That split is the mechanic:
+  // repositioning is always available and never has to be earned, and
+  // everything that kills or feeds is bought with timing.
+  //
+  // THE WINDOW IS ANCHORED ON THE "STRIKE NOW!" MOMENT, which is `loaded`
+  // below: the frame the wind-up has nothing left to bank and enough banked to
+  // fire. That is the same instant the callout goes up on the ring (main.js
+  // reads strikeLoaded() for it) and the same instant the meter's core pops,
+  // so what the player is TOLD and what the game is MEASURING cannot drift
+  // apart — which they would the moment either end owned its own copy of the
+  // test.
+  //
+  // MEASURED IN SECONDS EITHER SIDE OF IT, not as a fraction of the bar, and
+  // it has to be. `pending` clamps at 1 and `charge` bottoms at 0, so past the
+  // loaded moment NOTHING in the meter moves: a bar-fraction window would have
+  // an early edge and no late one at all — no way to be too slow — which is
+  // half of what a timing window is for. Two numbers carry it, one per side.
+  loaded: false,       // the wind-up is fully loaded: the STRIKE NOW! moment
+  sinceLoaded: 0,      // seconds since that moment (0 until it happens)
+  toLoaded: Infinity,  // seconds still to run before it
+  sweetStrike: false,  // ...and whether the dash IN FLIGHT was released inside it
   active: false,
   dashTimeLeft: 0,
   dashDuration: 0, // what this dash's length was set to, for the i-frames
@@ -161,6 +187,13 @@ export function powerDamageMul() {
  *               per-run rider scale has somewhere obvious to land)
  */
 export function riderDamage(dealt, stats = null) {
+  // A RIDER RIDES A STRIKE THAT BIT. The max() below is measured against the
+  // NOMINAL strike rather than against what the dash dealt, so without this a
+  // release outside the sweet spot — which deals nothing at all — would still
+  // hand Bone Shrapnel and Glow Up! a full-size number to scale off, and the
+  // two cards would quietly be doing the damage the mistimed strike was
+  // denied. See the sweet spot note on strikeState.
+  if (!strikeState.sweetStrike) return 0;
   const nominal = (CONFIG.strike.damage ?? 0) * powerDamageMul() * chainDamageMul(stats);
   return Math.max(dealt, nominal);
 }
@@ -187,6 +220,12 @@ export function riderDamage(dealt, stats = null) {
 export function strikeBurst(stats) {
   const b = CONFIG.strike.burst ?? {};
   if (b.enabled === false) return { damage: 0, radius: 0 };
+  // OFF THE BEAT THERE IS NO BLAST, rather than a weaker one — and the RADIUS
+  // goes with the damage, not just the number. The caller knocks bodies
+  // outward across whatever radius comes back (see the release in main.js), so
+  // a zero-damage circle would still throw a crowd apart and read as a hit
+  // that happened to do nothing.
+  if (!strikeState.sweetStrike) return { damage: 0, radius: 0 };
   const damage = (stats?.strikeDamage ?? 0) * powerDamageMul() * chainDamageMul(stats);
   const reach = (b.radius ?? 3)
     * lerp(1, b.radiusPowerMul ?? 1.5, strikeState.power)
@@ -315,6 +354,7 @@ export function resetStrike() {
   clearPending();
   strikeState.perfectFlash = 0;
   strikeState.perfectStrike = false;
+  strikeState.sweetStrike = false;
   strikeState.charging = false;
   strikeState.power = 0;
   strikeState.flash = 0;
@@ -326,6 +366,7 @@ export function resetStrike() {
   strikeState.chainTimer = 0;
   strikeState.pipsSinceStrike = 0;
   lastRelease.chain = 0;
+  lastRelease.sweet = false;
   lastRelease.hadFood = false;
   lastRelease.hadWindow = false;
   strikeState.invulnTimer = 0;
@@ -367,6 +408,38 @@ export function updateCharge(dt, held, stats) {
     strikeState.pending = Math.min(1, strikeState.pending + burn);
   }
 
+  // ---- WHERE THIS WIND-UP IS AGAINST ITS SWEET SPOT ----------------------
+  //
+  // WHAT IS LEFT TO BANK is whichever runs out first: the fuel in the tank, or
+  // the headroom in the bank. They reach zero on the same frame in the
+  // ordinary case (a burn takes from one and gives to the other), and they do
+  // not when something else fills the meter mid-hold — the sun's trickle, see
+  // CONFIG.dayNight.pass.sun.charge — which tops the BANK out with fuel still
+  // in the tank. Both are "there is nothing more to hold for", so both load.
+  //
+  // RUN EVERY FRAME, HELD OR NOT, and deliberately not cleared when the button
+  // comes up. The release frame arrives with `strikeHeld` ALREADY FALSE —
+  // input.js raises `strikeRelease` on the same frame it drops the level — so
+  // clearing on `!held` here would wipe the timing a few lines before
+  // tryStrike asks for it, and the sweet spot could never be hit at all. What
+  // ends a wind-up is clearPending(), and that ends this with it.
+  const left = Math.max(0, Math.min(strikeState.charge, 1 - strikeState.pending));
+  if (left <= 1e-6 && strikeState.pending >= (CONFIG.strike.charge.minFire ?? 0.35)) {
+    // += on the frames after, 0 on the frame itself, so `sinceLoaded` is the
+    // age of the moment rather than the age plus one frame.
+    strikeState.sinceLoaded = strikeState.loaded ? strikeState.sinceLoaded + dt : 0;
+    strikeState.loaded = true;
+    strikeState.toLoaded = 0;
+  } else {
+    strikeState.loaded = false;
+    strikeState.sinceLoaded = 0;
+    // The bar drains a whole bar in `strikeChargeTime`, so what is left of it
+    // IS the time still to run. A wind-up paused by letting go without firing
+    // keeps its distance, which is right: no fuel is burning, so the moment is
+    // no closer than it was.
+    strikeState.toLoaded = left * Math.max(0.05, stats.strikeChargeTime);
+  }
+
   // THE PERFECT CHARGE LANDING. An EDGE, latched — `pending` clamps at 1 and
   // then sits there for as long as the button is held, so a test of the level
   // ("is it full?") would fire this every frame of a long hold. The latch is
@@ -374,7 +447,13 @@ export function updateCharge(dt, held, stats) {
   // is also what makes it readable as a mechanic later: perfect describes the
   // strike that is loaded, not the frame it loaded on.
   const perfectAt = Math.min(1, CONFIG.strike.charge.perfectAt ?? 1);
-  if (!strikeState.perfect && strikeState.pending >= perfectAt - 1e-6) {
+  // ...OR THE WIND-UP SIMPLY RAN OUT OF THINGS TO BANK. A hold begun on a
+  // half-full bar tops out at `pending` 0.5 and can never reach `perfectAt`,
+  // so on the threshold test alone it opened its sweet spot with no pop, no
+  // sound and nothing on the ring — a timing window the player was never told
+  // about, on exactly the strikes a player mid-combo is actually throwing.
+  // `loaded` is the window opening by construction, so the tell rides it.
+  if (!strikeState.perfect && (strikeState.loaded || strikeState.pending >= perfectAt - 1e-6)) {
     strikeState.perfect = true;
     strikeState.perfectFlash = CONFIG.strike.charge.perfectFlashTime ?? 0.5;
     perfectEdge = true;
@@ -400,6 +479,71 @@ function clearPending() {
   strikeState.pending = 0;
   strikeState.perfect = false;
   perfectEdge = false;
+  // The sweet spot belongs to the wind-up, not to the seal: a spent or
+  // abandoned bank leaves no window standing for the next hold to inherit.
+  // `sweetStrike` is deliberately NOT cleared here — it is the stamp on the
+  // dash tryStrike is in the middle of launching, and clearing it on the next
+  // line would disarm the strike being fired.
+  strikeState.loaded = false;
+  strikeState.sinceLoaded = 0;
+  strikeState.toLoaded = Infinity;
+}
+
+/**
+ * THE "STRIKE NOW!" MOMENT — the wind-up has nothing left to bank and enough
+ * banked to fire.
+ *
+ * One function, so the callout on the ring, the meter's pop and the sweet spot
+ * are the same instant by construction. main.js used to spell this out for the
+ * callout as "the tank is empty and minFire is banked", which is right for a
+ * hold begun on a full bar and wrong for the other case it has to cover — see
+ * the note in updateCharge.
+ */
+export function strikeLoaded() {
+  return strikeState.loaded;
+}
+
+/**
+ * HALF THE SWEET SPOT, in seconds: the error a release is allowed on either
+ * side of the loaded moment.
+ *
+ * A FRACTION OF THE WIND-UP rather than a flat number of seconds, so the
+ * difficulty of the timing is the same whatever the hold is worth. Coiled
+ * Spring cuts `strikeChargeTime` to 0.78 of its length, and a flat window
+ * would be quietly widening in bar terms every time that card was taken —
+ * a skill gate getting easier as a reward for a card about refills.
+ *
+ * weapons.csv owns `sweetFraction`: the size of a skill gate is balance, not a
+ * look, and it is the one number in this whole feature worth arguing about.
+ */
+export function sweetHalfWidth(stats = null) {
+  const time = Math.max(0.05, stats?.strikeChargeTime ?? CONFIG.strike.charge.time ?? 1);
+  return time * Math.max(0, CONFIG.strike.charge.sweetFraction ?? 0.05);
+}
+
+/**
+ * WHERE THE WIND-UP IS, in seconds relative to the loaded moment. Negative
+ * before it, positive after it, -Infinity when there is no fireable wind-up in
+ * hand at all.
+ *
+ * Signed rather than an absolute distance because the two sides are different
+ * mistakes and anything that wants to say so needs to know which: early is
+ * "you let go with fuel still in the bar", late is "you sat on it".
+ */
+export function sweetOffset() {
+  if (strikeState.pending < (CONFIG.strike.charge.minFire ?? 0.35)) return -Infinity;
+  return strikeState.loaded ? strikeState.sinceLoaded : -strikeState.toLoaded;
+}
+
+/**
+ * Would a release RIGHT NOW land in the sweet spot?
+ *
+ * The whole gate, in one place, asked by tryStrike on the release frame and by
+ * anything that wants to draw the window. -Infinity fails the comparison on
+ * its own, so "nothing banked" needs no branch of its own here.
+ */
+export function inSweetSpot(stats = null) {
+  return Math.abs(sweetOffset()) <= sweetHalfWidth(stats);
 }
 
 /**
@@ -419,6 +563,15 @@ export function tryStrike(aimDir, stats) {
   // Not enough banked. `pending` is kept, not cleared: the fuel is already
   // spent, and confiscating the progress as well would punish a fumble twice.
   if (strikeState.pending < c.minFire) return false;
+
+  // ON THE BEAT? Asked FIRST, before anything is spent: clearPending() below
+  // throws the wind-up's timing away along with its power, and every payoff
+  // downstream reads this snapshot rather than the live window for the same
+  // reason `power` is snapshotted — a dash already in flight must not be able
+  // to lose what it was released with. See the sweet spot note on strikeState
+  // for what riding on it.
+  const sweet = inSweetSpot(stats);
+  strikeState.sweetStrike = sweet;
 
   // Snapshot what this dash was bought with. Damage and reach both read it for
   // the whole dash, so clearing `pending` on the next line can't retroactively
@@ -467,20 +620,35 @@ export function tryStrike(aimDir, stats) {
   // and is a trap: a dash lasts 0.13-0.48s, reaching minFire takes 0.35s of
   // holding, and holding SEALS THE MOUTH. There is no room in a dash to both
   // eat a bar and wind up a strike. The window the dash opens is the container.
+  //
+  // AND THE RELEASE HAS TO BE ON THE BEAT. A third condition, ahead of the
+  // other two in the reporting below because it is ahead of them in the
+  // player's hands: food and a window are things you set up over seconds, and
+  // this is the one you get wrong in the moment.
   const hadFood = strikeState.pipsSinceStrike >= linkPips(stats);
   const hadWindow = strikeState.chainTimer > 0;
   strikeState.pipsSinceStrike = 0;
-  lastRelease.chain = (hadFood && hadWindow) ? chainStrike('strikeRelease') : 0;
+  lastRelease.chain = (sweet && hadFood && hadWindow) ? chainStrike('strikeRelease') : 0;
   // Kept alongside the result so the telemetry can say WHICH condition failed.
   // A count of links alone cannot tell "never strikes" from "strikes constantly
-  // and never links", and those want opposite fixes.
+  // and never links", and those want opposite fixes — and with the timing gate
+  // in front of both, a mistimed release booked as "no window" would send a
+  // reader after the chain window when nothing is wrong with it.
+  lastRelease.sweet = sweet;
   lastRelease.hadFood = hadFood;
   lastRelease.hadWindow = hadWindow;
 
-  // Every release opens or refreshes the window, link or not. Without this the
-  // FIRST strike of a chain would leave no window behind, eating would not
-  // count as feeding, and a chain could never start at all.
-  if (strikeState.chainTimer <= 0) strikeState.chainTimer = CONFIG.strike.chainWindow;
+  // Every release ON THE BEAT opens or refreshes the window, link or not.
+  // Without this the FIRST strike of a chain would leave no window behind,
+  // eating would not count as feeding, and a chain could never start at all.
+  //
+  // A MISTIMED RELEASE OPENS NOTHING, and that is the whole of "a strike only
+  // extends the food chain in the sweet spot" in code. The window IS the chain
+  // being alive: everything downstream of it — the link, the multipliers, the
+  // magnet reaching for food at all (chumHoming in systems/chumMagnet.js) —
+  // reads the window rather than re-deriving the rule, so gating it here is
+  // the single edit that gates all of them.
+  if (sweet && strikeState.chainTimer <= 0) strikeState.chainTimer = CONFIG.strike.chainWindow;
 
   return true;
 }
@@ -489,7 +657,7 @@ export function tryStrike(aimDir, stats) {
 // rather than returned because tryStrike's boolean is "did a dash launch",
 // which the caller branches on for the impulse — widening it to an object
 // would touch every call site to say something only one of them cares about.
-const lastRelease = { chain: 0, hadFood: false, hadWindow: false };
+const lastRelease = { chain: 0, sweet: false, hadFood: false, hadWindow: false };
 
 /**
  * What the last release did: the FOOD CHAIN link it scored (0 for none) and,
@@ -890,7 +1058,12 @@ export function addCharge(amount, stats = null) {
 function finishDash() {
   strikeState.active = false;
   strikeState.dashTimeLeft = 0;
-  if (CONFIG.strike.windowFromDashEnd !== false) {
+  //
+  // ...FOR A DASH THAT WAS RELEASED ON THE BEAT. This is the same window
+  // tryStrike opens, moved to where the player can use it, so it answers to
+  // the same gate — without the check a mistimed strike would open its combo
+  // window a fifth of a second late instead of not at all.
+  if (strikeState.sweetStrike && CONFIG.strike.windowFromDashEnd !== false) {
     strikeState.chainTimer = Math.max(strikeState.chainTimer, CONFIG.strike.chainWindow);
   }
 }
@@ -981,7 +1154,14 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // speed, and a body that visibly gets knocked across the screen without
       // so much as flinching reads as a missed collision rather than as a
       // shove.
-      let dmg = stats.strikeDamage * powerDamageMul() * mul * (CONFIG.strike.contactShare ?? 0);
+      //
+      // GATED ON THE RELEASE'S TIMING, like every other bite the strike has.
+      // What is NOT gated is the two lines below it — the shove and the mark:
+      // a seal travelling at dash speed physically hit this animal, and a body
+      // that passes clean through a shark reads as a missed collision rather
+      // than as a strike that was thrown early.
+      const sweet = strikeState.sweetStrike;
+      let dmg = sweet ? stats.strikeDamage * powerDamageMul() * mul * (CONFIG.strike.contactShare ?? 0) : 0;
 
       // THE PREY CULL — the seal eats the little ones by swimming through them.
       //
@@ -997,8 +1177,13 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // gets shoved and marked, so "a strike is not a weapon" holds for
       // everything that actually threatens you — this only formalises that a
       // seal the size of a seal eats minnows.
+      //
+      // AND IT IS A BITE, so it answers to the beat as well. A dash thrown off
+      // the beat swims THROUGH a school and takes nothing out of it, which is
+      // the loop's own way of saying what went wrong: no bodies, no chum, no
+      // refill, no next strike.
       const cull = CONFIG.strike.preyCull ?? {};
-      if (cull.enabled !== false && e.def.radius < (cull.maxRadius ?? CONFIG.strike.mark?.minRadius ?? 0.65)) {
+      if (sweet && cull.enabled !== false && e.def.radius < (cull.maxRadius ?? CONFIG.strike.mark?.minRadius ?? 0.65)) {
         // Outright, not a damage number: a fish this size dies to any strike at
         // any charge, and routing it through hp would make the cull depend on
         // the difficulty ramp scaling that hp up out of reach mid-run.
@@ -1045,7 +1230,11 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // Up! do nothing on a seal that hadn't also bought the strike line. Both
       // riders (this and the shrapnel main.js spawns) answer to
       // CONFIG.strike.damage, which is what that field is now for.
-      applyElementalHit(scene, e, riderDamage(dmg, stats), enemiesList, hooks, CONFIG.biolum?.strikeFraction ?? 0.5);
+      // riderDamage() returns 0 off the beat, so the status would land carrying
+      // nothing — skipped outright rather than applied empty, or a mistimed
+      // dash through a school would still paint six creatures with a burn that
+      // ticks for zero.
+      if (sweet) applyElementalHit(scene, e, riderDamage(dmg, stats), enemiesList, hooks, CONFIG.biolum?.strikeFraction ?? 0.5);
 
       if (e.hp <= 0) {
         hooks.onEnemyKilled?.(e);

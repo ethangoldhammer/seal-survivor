@@ -59,7 +59,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { player, initPlayer, resetPlayer, updatePlayer } from '../path/src/entities/player.js';
 import {
-  strikeState, resetStrike, updateCharge, tryStrike, updateStrike,
+  strikeState, resetStrike, updateCharge, tryStrike, updateStrike, strikeLoaded,
   feedChum, consumeStrikeLink, linkPips, pipCount, liveChain,
 } from '../path/src/systems/strike.js';
 import {
@@ -108,7 +108,7 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
   const input = { move: new THREE.Vector2(0, 0), aim: new THREE.Vector2(1, 0) };
   const stat = {
     strikes: 0, links: 0, maxChain: 0,
-    missNoFood: 0, missNoWindow: 0, missBoth: 0,
+    missOffBeat: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0,
     eaten: 0, spawned: 0, holdFrames: 0, frames: 0,
     // Windows that ran out, split by what the player was doing when they did.
     // `lapsedHeld` is a chain lost while the mouth was shut by a wind-up — the
@@ -179,9 +179,13 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
     // 'full' holds until the tank is dry or the bank is capped — the bar
     // running dry is what ends a wind-up in play, and without that clause a
     // 'full' brain on a part-full bar would hold the button forever.
-    const ready = hold === 'full'
-      ? canFire && (strikeState.charge <= 0 || strikeState.pending >= 1)
-      : canFire;
+    // strikeLoaded() IS "the tank is dry or the bank is capped, with enough to
+    // fire" — the same test main.js puts the STRIKE NOW! prompt on and the same
+    // one tryStrike times the sweet spot against. It used to be spelled out
+    // here, which made this brain a fourth copy of a rule that now has to be
+    // one: a sim that releases a frame away from where the game rewards it
+    // measures the wrong mechanic and reports a link rate nobody can reproduce.
+    const ready = hold === 'full' ? strikeLoaded() : canFire;
     if (holding && ready) {
       const dir = { x: input.move.x || 1, y: input.move.y };
       const L = Math.hypot(dir.x, dir.y) || 1;
@@ -192,7 +196,8 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
         if (rel.chain > 0) {
           stat.links++;
           if (rel.chain > stat.maxChain) stat.maxChain = rel.chain;
-        } else if (!rel.hadFood && !rel.hadWindow) stat.missBoth++;
+        } else if (!rel.sweet) stat.missOffBeat++;
+        else if (!rel.hadFood && !rel.hadWindow) stat.missBoth++;
         else if (!rel.hadFood) stat.missNoFood++;
         else stat.missNoWindow++;
 
@@ -250,11 +255,13 @@ export const HOLDS = ['min', 'full'];
  * effect, which made "try it at a different chainWindow" a copy of the file.
  */
 export function measure(rate, hold, seconds = 60, cadence = 0) {
-  const agg = { strikes: 0, links: 0, maxChain: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0,
+  const agg = { strikes: 0, links: 0, maxChain: 0,
+    missOffBeat: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0,
     eaten: 0, lapsedHeld: 0, lapsedFree: 0 };
   for (const seed of SEEDS) {
     const r = simulate(rate, seed, seconds, hold, cadence);
     agg.strikes += r.strikes; agg.links += r.links;
+    agg.missOffBeat += r.missOffBeat;
     agg.missNoFood += r.missNoFood; agg.missNoWindow += r.missNoWindow; agg.missBoth += r.missBoth;
     agg.eaten += r.eaten; agg.lapsedHeld += r.lapsedHeld; agg.lapsedFree += r.lapsedFree;
     if (r.maxChain > agg.maxChain) agg.maxChain = r.maxChain;
@@ -275,7 +282,7 @@ for (const hold of HOLDS) {
   console.log(hold === 'min'
     ? '  RELEASING THE INSTANT IT FIRES — the cheapest link, the kindest case for the window'
     : '\n  CHARGING FULLY — what the reach and damage multipliers are selling, mouth shut for up to a second');
-  console.log('  water                     strikes/min  links/min   hit%   deepest   miss: food  window   lapsed in hand');
+  console.log('  water                     strikes/min  links/min   hit%   deepest   miss: beat  food  window   lapsed in hand');
   for (const [label, rate] of SCENARIOS) {
     const agg = measure(rate, hold);
     const lapses = agg.lapsedHeld + agg.lapsedFree;
@@ -285,7 +292,8 @@ for (const hold of HOLDS) {
       (agg.links / agg.minutes).toFixed(1).padStart(11),
       `${Math.round(agg.hit * 100)}%`.padStart(7),
       `x${agg.maxChain}`.padStart(10),
-      String(agg.missNoFood + agg.missBoth).padStart(13),
+      String(agg.missOffBeat).padStart(13),
+      String(agg.missNoFood + agg.missBoth).padStart(6),
       String(agg.missNoWindow).padStart(8),
       `${agg.lapsedHeld}/${lapses}`.padStart(17),
     ].join(''));

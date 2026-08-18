@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import {
+  makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing,
+  isOrganicRing,
+} from './organicRing.js';
 import { spawnBeam } from './beams.js';
 import { spawnProjectile, projectiles } from '../entities/projectiles.js';
 import { enemies, spawnNamed } from '../entities/enemies.js';
@@ -92,30 +96,61 @@ function track(scene, obj) {
   return obj;
 }
 
-// An additive ring that owns its own material. `inner` and `outer` are
-// fractions of 1, scaled to world units by the caller — every effect here is
-// sized off the boss's radius, which changes with sizeMul and with the size
-// roll, so nothing is measured in hand-typed world units.
-function makeRing(color, inner = 0.82, outer = 1, segments = 64) {
-  const geo = new THREE.RingGeometry(inner, outer, segments);
-  const mat = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 1,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide,
+// A tell. `inner` and `outer` are fractions of 1, scaled to world units by the
+// caller — every effect here is sized off the boss's radius, which changes with
+// sizeMul and with the size roll, so nothing is measured in hand-typed world
+// units.
+//
+// These are the shared organic ring (systems/organicRing.js) now, not
+// RingGeometry: same sizes, same placement, but the edge is broken up by the
+// world noise field and the ring arrives and leaves through a sweep rather than
+// an opacity ramp. `type` names an entry in CONFIG.fx.attackTypes and decides
+// both the colour and the edge dialect — which is why `color` is still taken
+// separately, for the two callers that hold a colour from a pattern row rather
+// than a threat type.
+//
+// The half-width conversion is exact rather than approximate: a RingGeometry
+// spanning inner..1 has its centre at (1+inner)/2, and the shader centres its
+// band at 1 - thickness, so thickness = (1 - inner)/2 puts the band in the same
+// place. `outer` is 1 at every call site here — the outer edge of a tell IS the
+// reach it is telling you about — and is asserted rather than handled, because
+// an outer under 1 would silently move the boundary the player is reading.
+function makeRing(color, inner = 0.82, outer = 1, segments = 64, type = null) {
+  const thickness = (outer - inner) / 2;
+  const mesh = makeOrganicRing({
+    type: type ?? 'kinetic',
+    // A named type carries its own colour from the shared palette; an explicit
+    // one wins, for the boat patterns that pick their own.
+    color: type && color == null ? null : color,
+    thickness,
+    renderOrder: 5,
   });
-  const mesh = new THREE.Mesh(geo, mat);
   mesh.visible = false;
-  // Ahead of the bodies it rings rather than inside them. Additive blending
-  // with depthWrite off means it never occludes anything, so this is purely
-  // about not being z-fought by the creature it is drawn on.
-  mesh.renderOrder = 5;
   return mesh;
 }
 
+// WHICH THREAT THIS TELL IS ANNOUNCING. The perk row's `attack` column decides
+// it, and when the cell is filled the shared palette (CONFIG.fx.attackTypes)
+// owns both the colour and the edge dialect — an electric boss's ring is the
+// same cyan as the player's Voltaic shots because both read one number, and it
+// crackles because the palette says electric edges crackle.
+//
+// An EMPTY cell falls back to the colour that perk has always had in
+// CONFIG.boss.perkFx, with the plain dialect. That is the escape hatch rather
+// than an oversight: a tell whose colour was deliberately tuned away from its
+// type can keep it by clearing the column, and the fallback is what every perk
+// looked like before the palette existed.
+function tellRing(scene, perk, legacyColor, inner, outer, segments, fallbackType) {
+  const atk = perk?.attack;
+  return track(scene, makeRing(atk ? null : legacyColor, inner, outer, segments,
+    atk || fallbackType));
+}
+
 function disposeObj(obj) {
+  // The organic rings share one quad between every ring in the game, so the
+  // generic path below would free it out from under the others. See the note on
+  // `userData.organicRing`.
+  if (isOrganicRing(obj)) { disposeOrganicRing(obj); return; }
   obj.parent?.remove(obj);
   obj.geometry?.dispose();
   const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
@@ -241,9 +276,9 @@ export function attachBossPerk(scene, enemy, perk) {
     // creature of the species and must never be written.
     if (enemy.turnRate) enemy.turnRate *= mul;
   } else if (perk.id === 'lunge') {
-    active.flare = track(scene, makeRing(fx.lunge?.flareColor ?? 0xffe07a, 0.7, 1));
+    active.flare = tellRing(scene, perk, fx.lunge?.flareColor ?? 0xffe07a, 0.7, 1, 64, 'kinetic');
   } else if (perk.id === 'electric') {
-    active.ring = track(scene, makeRing(fx.electric?.color ?? 0x8fe6ff, 0.9, 1, 96));
+    active.ring = tellRing(scene, perk, fx.electric?.color ?? 0x8fe6ff, 0.9, 1, 96, 'electric');
     active.ring.visible = true;
     // The arcs: one LineSegments whose vertices are rewritten every frame.
     // A pool of meshes would be the obvious shape and is strictly worse —
@@ -265,12 +300,12 @@ export function attachBossPerk(scene, enemy, perk) {
     active.arcs.renderOrder = 6;
     active.arcs.frustumCulled = false; // the vertices move every frame
   } else if (perk.id === 'teleport') {
-    active.flashOut = track(scene, makeRing(fx.teleport?.color ?? 0xc9a2ff, 0.6, 1));
-    active.flashIn = track(scene, makeRing(fx.teleport?.color ?? 0xc9a2ff, 0.6, 1));
+    active.flashOut = tellRing(scene, perk, fx.teleport?.color ?? 0xc9a2ff, 0.6, 1, 64, 'void');
+    active.flashIn = tellRing(scene, perk, fx.teleport?.color ?? 0xc9a2ff, 0.6, 1, 64, 'void');
     active.flashOutLife = 0;
     active.flashInLife = 0;
   } else if (perk.id === 'phase') {
-    active.marker = track(scene, makeRing(fx.phase?.markerColor ?? 0x9fd8ff, 0.72, 1));
+    active.marker = tellRing(scene, perk, fx.phase?.markerColor ?? 0x9fd8ff, 0.72, 1, 64, 'void');
   } else if (GUNS[perk.id]) {
     // THE TELL IS A RING AT THE MUZZLE, not on the body. Where the shot is
     // coming FROM is the information the player needs — eyes and fins are at
@@ -280,7 +315,7 @@ export function attachBossPerk(scene, enemy, perk) {
     active.charges = [];
     const color = fx[perk.id]?.chargeColor ?? GUNS[perk.id].color;
     for (let i = 0; i < GUNS[perk.id].origins; i++) {
-      active.charges.push(track(scene, makeRing(color, 0.2, 1, 24)));
+      active.charges.push(tellRing(scene, perk, color, 0.2, 1, 24, GUNS[perk.id].attack ?? 'kinetic'));
     }
   }
 
@@ -296,8 +331,40 @@ export function activeBossPerk() {
 // exactly what the aura's reach should be measured from — see the note in
 // CONFIG.boss.perkFx.electric about art that is smaller than reach.
 function place(obj, e, worldRadius) {
-  obj.position.copy(e.mesh.position);
-  obj.scale.setScalar(worldRadius);
+  // placeOrganicRing rather than a scale write: the shader's edge amplitude is
+  // a WORLD distance divided by the ring's radius, so the scale and `uRadius`
+  // are a pair. Setting one without the other leaves the wobble computed
+  // against whatever size the ring was last frame, which on a growing tell is
+  // an edge that visibly settles a frame late.
+  placeOrganicRing(obj, e.mesh.position.x, e.mesh.position.y, worldRadius,
+    e.mesh.position.z);
+}
+
+// The rings all run one clock, ticked once per frame from updateBossPerks. Held
+// here rather than each effect advancing its own uTime, because the effects
+// switch on and off through their state machines and a ring whose clock only
+// runs while it is visible restarts its crackle every time it reappears.
+function tickRings(dt) {
+  for (const obj of owned) {
+    if (isOrganicRing(obj)) obj.material.uniforms.uTime.value += dt;
+  }
+}
+
+// Opacity is a uniform now, not a material property. A bare
+// `mesh.material.opacity = x` still ASSIGNS on a ShaderMaterial and is silently
+// ignored by the program, so every one of those writes goes through here.
+function ringAlpha(obj, v) {
+  obj.material.uniforms.uOpacity.value = v;
+}
+
+// Where the hand is, and how hard the edge is crackling. `inT` draws the ring
+// on, `outT` chases it round eating it away, and `charge` escalates the
+// dialects that have somewhere to escalate to.
+function ringSweep(obj, inT, outT = 0, charge = null) {
+  const u = obj.material.uniforms;
+  u.uSweepIn.value = Math.min(1, Math.max(0, inT));
+  u.uSweepOut.value = Math.min(1, Math.max(0, outT));
+  if (charge != null) u.uCharge.value = Math.min(1, Math.max(0, charge));
 }
 
 // HOW FAR PAST ITS OWN CENTRE AN AURA LOBE CAN REACH, in world units: half the
@@ -388,6 +455,7 @@ export function updateBossPerks(dt, scene, playerPos, hooks = {}) {
   field.playerPos = playerPos;
   updateOrdnance(dt, scene);
   updateBlasts(dt);
+  tickRings(dt);
 
   if (!active) return;
   const e = active.enemy;
@@ -541,7 +609,14 @@ function updateLunge(dt, e, r, dirX, dirY) {
     const t = 1 - Math.max(0, active.timer) / Math.max(0.01, p.windup ?? 0.7);
     active.flare.visible = true;
     place(active.flare, e, r * (fx.flareScale ?? 1.35) * (0.85 + t * 0.5));
-    active.flare.material.opacity = 0.15 + t * 0.75;
+    ringAlpha(active.flare, 0.15 + t * 0.75);
+    // THE HAND IS THE WIND-UP. The flare is not revealed by a fade; the sweep
+    // draws it round the circle over exactly the wind-up, so it closes on the
+    // frame the dash launches. That is the whole reason the transition is
+    // angular — the player is not being told "soon", they are being shown how
+    // much time is left, and there is no second number to keep in step with
+    // because it is the same `t` the size and opacity already ride.
+    ringSweep(active.flare, t, 0, t);
 
     if (active.timer <= 0) {
       active.stage = 'dash';
@@ -566,7 +641,11 @@ function updateLunge(dt, e, r, dirX, dirY) {
   const left = Math.max(0, active.timer) / Math.max(0.01, p.duration ?? 0.9);
   active.flare.visible = true;
   place(active.flare, e, r * 1.15);
-  active.flare.material.opacity = 0.55 * left;
+  ringAlpha(active.flare, 0.55 * left);
+  // Whole while the dash is live, then eaten away by the trailing edge as it
+  // runs out — the same hand continuing round rather than the afterimage
+  // dimming in place.
+  ringSweep(active.flare, 1, 1 - left, 1);
 
   if (active.timer <= 0) {
     e.perkDrive = false;
@@ -599,7 +678,13 @@ function updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks) {
   // the player will (correctly) not trust.
   const pulse = 1 - (fx.pulse ?? 0.22) * 0.5 * (1 + Math.sin(active.clock * Math.PI * 2 * (fx.pulseHz ?? 3.5)));
   place(active.ring, e, reach);
-  active.ring.material.opacity = 0.28 + 0.3 * pulse;
+  ringAlpha(active.ring, 0.28 + 0.3 * pulse);
+  // Always whole — this perk has no wind-up and the ring IS the hitbox, so
+  // there is never a moment where part of the boundary is not drawn. What rides
+  // the breath instead is the CHARGE, which drives how hard and how fast the
+  // jagged splines re-roll: the field visibly tightens on the beat rather than
+  // crackling at one flat rate.
+  ringSweep(active.ring, 1, 0, 0.45 + 0.55 * pulse);
 
   // Arcs. Each is a short chord struck across the rim, alive for a fraction of
   // a second — the buffer is written in place and the whole set is one draw.
@@ -709,8 +794,13 @@ function updateTeleport(dt, e, r, playerPos) {
     active[key] -= dt;
     const t = 1 - Math.max(0, active[key]) / Math.max(0.01, fx.flashSeconds ?? 0.22);
     mesh.visible = true;
-    mesh.scale.setScalar(r * (fx.flashScale ?? 1.6) * (0.4 + t * 1.1));
-    mesh.material.opacity = 1 - t;
+    // A flash arrives WHOLE — there is nothing to count down to, the boss has
+    // already gone — and is then eaten away as it expands. So the leading edge
+    // is pinned at 1 and only the trailing one runs.
+    placeOrganicRing(mesh, mesh.position.x, mesh.position.y,
+      r * (fx.flashScale ?? 1.6) * (0.4 + t * 1.1), mesh.position.z);
+    ringAlpha(mesh, 1 - t);
+    ringSweep(mesh, 1, t);
   }
 
   if (active.stage === 'ready') {
@@ -822,8 +912,11 @@ function updatePhase(dt, e, r) {
     place(active.marker, e, r * (fx.markerScale ?? 0.55));
     // Breathes slowly, so it is legible as a live tracker rather than as a
     // decal someone forgot to remove.
-    active.marker.material.opacity = (fx.markerOpacity ?? 0.4)
-      * (0.7 + 0.3 * Math.sin(active.clock * 4));
+    ringAlpha(active.marker, (fx.markerOpacity ?? 0.4)
+      * (0.7 + 0.3 * Math.sin(active.clock * 4)));
+    // A tracker, not a countdown: it says where the boss IS, and nothing about
+    // when it comes back. Whole for as long as it is up.
+    ringSweep(active.marker, 1, 0);
     if (active.timer <= 0) {
       active.stage = 'fadeIn';
       active.timer = p.windup ?? 0.5;
@@ -884,10 +977,16 @@ const blasts = [];     // expanding rings, with the damage already dealt
 // either from the stack that threw it.
 const field = { hooks: null, playerPos: null };
 
+// `attack` is the DEFAULT threat type for this gun's charge ring — the colour
+// and edge dialect the muzzle tell wears when the perk's row leaves the
+// `attack` column blank. A filled cell always wins; this is here so a gun added
+// without touching the CSV still announces itself as the right kind of harm
+// rather than as generic amber.
 const GUNS = {
   eyebeam: {
     origins: 2, // one per eye
     color: 0xff6a4a,
+    attack: 'beam',
     asset: 'bossBeam',
     // NOT A SHOT. This one lights a line and holds it — see systems/beams.js.
     // It was a pair of fast projectiles, which is a different attack wearing
@@ -916,6 +1015,7 @@ const GUNS = {
   barrels: {
     origins: 1,
     color: 0xffb347,
+    attack: 'blast',
     asset: 'bossBarrel',
     forward: 0.8,
     side: 0,
@@ -934,6 +1034,7 @@ const GUNS = {
   missiles: {
     origins: 2, // launchers to either side
     color: 0xffd27a,
+    attack: 'blast',
     asset: 'bossMissile',
     forward: 0.35,
     side: 0.55,
@@ -945,6 +1046,7 @@ const GUNS = {
     homing: true,
   },
   spitfish: {
+    attack: 'kinetic',
     origins: 1, // the mouth
     color: 0x9fe8a0,
     asset: 'enemyFish',
@@ -957,6 +1059,7 @@ const GUNS = {
     spread: 0.14,
   },
   finfish: {
+    attack: 'kinetic',
     origins: 2, // one per flank
     color: 0x9fe8a0,
     asset: 'enemyFish',
@@ -1274,8 +1377,14 @@ function updateGun(dt, scene, e, r, dist, dirX, dirY) {
       ring.position.copy(_muzzle);
       // Tightens as it charges rather than swelling: a shrinking ring reads as
       // something gathering, a growing one as something already released.
-      ring.scale.setScalar(r * (0.5 - 0.3 * t) * (CONFIG.boss?.perkFx?.[active.id]?.chargeScale ?? 1));
-      ring.material.opacity = 0.35 + 0.65 * t;
+      placeOrganicRing(ring, _muzzle.x, _muzzle.y,
+        r * (0.5 - 0.3 * t) * (CONFIG.boss?.perkFx?.[active.id]?.chargeScale ?? 1),
+        _muzzle.z);
+      ringAlpha(ring, 0.35 + 0.65 * t);
+      // The hand closes exactly as the volley fires. Two tells in one ring: how
+      // long you have (the sweep) and how hard it is winding up (the charge,
+      // which on an electric muzzle is what makes the jags escalate).
+      ringSweep(ring, t, 0, t);
     }
     if (active.timer > 0) return;
     // COMMITTED. The volley is fired even if the player has since swum out of
@@ -1326,8 +1435,15 @@ function updateOrdnance(dt, scene) {
 // respects i-frames, shakes the screen and is filed in the playtest log like
 // every other hit — see updateBossPerks.
 function boom(scene, x, y, radius, fx, damage = 20, source = 'boss:barrels', shot = null) {
-  const ring = track(scene, makeRing(shot?.blastColor ?? fx.blastColor ?? 0xffa64a, 0.55, 1, 48));
-  ring.position.set(x, y, 0);
+  // A pattern row may name its own blast colour (CONFIG.bossBoat.patterns), and
+  // that wins over the palette — it is a deliberate per-shot choice rather than
+  // a threat category. Without one, `blast` is what this is.
+  const ring = track(scene, makeRing(shot?.blastColor ?? fx.blastColor ?? null,
+    0.55, 1, 48, 'blast'));
+  // Sized here as well as in updateBlasts: the tick that grows it may not run
+  // until the next frame, and a ring left at its birth radius of 1 is a
+  // one-frame speck where an explosion should be.
+  placeOrganicRing(ring, x, y, radius * 0.35);
   ring.visible = true;
   blasts.push({ ring, life: fx.blastSeconds ?? 0.35, max: fx.blastSeconds ?? 0.35, radius });
 
@@ -1364,8 +1480,14 @@ function updateBlasts(dt) {
     const b = list[i];
     b.life -= dt;
     const t = 1 - Math.max(0, b.life) / Math.max(0.01, b.max);
-    b.ring.scale.setScalar(b.radius * (0.35 + 0.65 * t));
-    b.ring.material.opacity = 1 - t;
+    placeOrganicRing(b.ring, b.ring.position.x, b.ring.position.y,
+      b.radius * (0.35 + 0.65 * t), b.ring.position.z);
+    ringAlpha(b.ring, 1 - t);
+    // Already gone off, so it arrives whole and is eaten as it opens. The
+    // world-fixed noise field is doing the real work here: the ring sweeps
+    // OUTWARD through stationary noise, so it churns as it grows instead of
+    // scaling up one frozen pattern.
+    ringSweep(b.ring, 1, t);
     if (b.life > 0) continue;
     disposeObj(b.ring);
     const at = owned.indexOf(b.ring);

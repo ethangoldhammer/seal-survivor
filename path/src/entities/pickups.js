@@ -4,7 +4,8 @@ import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { updateTumble } from '../systems/rocks.js';
 import { createInstancedPool } from '../systems/instancedPool.js';
-import { magnetRadius, magnetSpeed, magnetDistance } from '../systems/chumMagnet.js';
+import { magnetRadius, magnetSpeed, magnetDistance, chumHoming } from '../systems/chumMagnet.js';
+import { telegraphMul } from '../systems/telegraph.js';
 
 // Chum is drawn as instances, not as 140 separate meshes — see
 // systems/instancedPool.js. The orb objects themselves are unchanged: the pool
@@ -370,7 +371,11 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     player.mesh.position.x, player.mesh.position.y,
     chunk.mesh.position.x, chunk.mesh.position.y, speed,
   );
-  const magnetised = reach < magnetRadius(player.stats, speed);
+  // A CHUNK IS FOOD, so it answers to the chain gate exactly as chum does —
+  // and it is the piece most worth gating, because a chunk is a whole meal.
+  // Outside a chain the seal still EATS it on contact (the collect test below
+  // is untouched); what it stops doing is reaching.
+  const magnetised = chumHoming() && reach < magnetRadius(player.stats, speed);
 
   if (magnetised) {
     // Same precedence chum uses: the magnet outranks a throw still in flight,
@@ -412,8 +417,13 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
   }
 
   if (chunk.mesh.material?.color) {
+    // The coach's highlight rides the same multiply, for the same reason the
+    // orbs' does: this is the chunk's one colour writer, and the tip about a
+    // chunk is spoken while it is doing its own arrival flash and its own
+    // resting pulse. Multiplying keeps all three legible — a chunk that rolled
+    // dark red still goes bright RED rather than being repainted.
     chunk.mesh.material.color.copy(chunk.base)
-      .multiplyScalar(chunkBrightness(chunk.flash, orbClock, chunk.phase));
+      .multiplyScalar(chunkBrightness(chunk.flash, orbClock, chunk.phase) * telegraphMul(chunk.mesh));
   }
 
   // The seal's own reach PLUS the chunk's body — a big chunk is taken from
@@ -501,6 +511,10 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
   // resolving it per orb would ask the same question 140 times a frame.
   const sealSpeed = player.velocity?.length?.() ?? 0;
   const reachNow = magnetRadius(player.stats, sealSpeed);
+  // Hoisted for the same reason, and it is the same question for every orb in
+  // the water: is a FOOD CHAIN running at all? Outside one the seal reaches for
+  // no chum and has to swim into it. See chumHoming in systems/chumMagnet.js.
+  const homing = chumHoming();
   orbClock += dt;
 
   for (let i = pickups.length - 1; i >= 0; i--) {
@@ -535,7 +549,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // seconds long drops a mid-water pile clean out of the radius it was
       // telegraphing. Anything already resting on the seabed was going nowhere
       // anyway, so this only ever holds the ones in open water.
-    } else if (!sealed && magnetDistance(
+    } else if (!sealed && homing && magnetDistance(
       player.mesh.position.x, player.mesh.position.y,
       p.mesh.position.x, p.mesh.position.y, sealSpeed,
     ) < reachNow) {
@@ -641,10 +655,17 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
     // reach", so it has to widen with the reach. A halo pinned to the base
     // while a dash reaches twice as far would light up a fraction of the food
     // the dash is actually about to take.
+    //
+    // ...TIMES WHATEVER THE FIRST-RUN COACH IS DOING TO IT. Folded in here
+    // rather than written by systems/telegraph.js, because this line is the
+    // orb's one writer: a second one would win on some frames and lose on
+    // others depending on which system ran first, and the symptom would be a
+    // highlight that flickers only while the seal is close enough for the halo
+    // to be doing anything.
     orbPool?.setGlow(p.mesh, chumGlowAt(
       dist, reachNow, orbClock,
       (p.glowPhase ??= Math.random() * Math.PI * 2),
-    ));
+    ) * telegraphMul(p.mesh));
 
     // Consumed, not latched: whatever is eating this orb re-raises the flag
     // every frame it is still eating (updateEnemies runs first), so an animal
@@ -927,6 +948,72 @@ export function nearestPickup(x, y, kind, maxDist = Infinity) {
     }
   }
   return best;
+}
+
+// ---------------------------------------------------------------------------
+// ONE SPECIFIC ORB, HELD ACROSS FRAMES
+//
+// The first-run coach now stands its tip BESIDE the thing it is about and keeps
+// it there until that thing is gone, which is a different question from the two
+// above: not "where is the nearest bubble" but "is THIS bubble still here".
+// nearestPickup deliberately returns a copy of a position, and a copy cannot
+// answer that — the tip would silently re-target to the next bubble along and
+// then to the one after, and would never end.
+//
+// So these two hand out the entry itself and take it back. Both are keyed by
+// the same `kind` string as everything else on this path (see listFor), and
+// both answer harmlessly for a kind this module has never owned — the attractor
+// belongs to systems/boats.js, and main.js is the one place that has both.
+// ---------------------------------------------------------------------------
+
+/** The nearest pickup of `kind` as the LIVE entry, for something that will hold it. */
+export function pickupEntry(kind, x, y, maxDist = Infinity) {
+  const list = listFor(kind);
+  if (!list) return null;
+  let best = null;
+  let bestD2 = maxDist * maxDist;
+  for (const o of list) {
+    const dx = o.mesh.position.x - x;
+    const dy = o.mesh.position.y - y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) { bestD2 = d2; best = o; }
+  }
+  return best;
+}
+
+/** Is that exact entry still in the water? */
+export function pickupEntryAlive(kind, entry) {
+  const list = listFor(kind);
+  return !!entry && !!list && list.indexOf(entry) !== -1;
+}
+
+/**
+ * The nearest bite as the live entry — a chum orb or a chunk, whichever is
+ * nearer under the same bias nearestChum uses.
+ *
+ * Returns which array it came from as well, because the two are separate lists
+ * and "is it still there" has to ask the right one.
+ */
+export function chumEntry(x, y) {
+  let best = null;
+  let bestD2 = Infinity;
+  const consider = (entry, list, bias) => {
+    const dx = entry.mesh.position.x - x;
+    const dy = entry.mesh.position.y - y;
+    const d2 = (dx * dx + dy * dy) * bias;
+    if (d2 < bestD2) { bestD2 = d2; best = { entry, list }; }
+  };
+  for (const p of pickups) consider(p, pickups, 1);
+  // 0.25 = a chunk wins from twice as far away as an orb, exactly as in
+  // nearestChum. The same number twice is on purpose and would be worth
+  // sharing if a third caller ever wanted it; two is not yet a rule.
+  for (const c of chumChunks) consider(c, chumChunks, 0.25);
+  return best;
+}
+
+/** Still in play? For a handle from chumEntry, which carries its own list. */
+export function chumEntryAlive(handle) {
+  return !!handle?.list && handle.list.indexOf(handle.entry) !== -1;
 }
 
 // Still in play? A crab holds a reference across frames, and the player may

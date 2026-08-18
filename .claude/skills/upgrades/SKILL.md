@@ -113,6 +113,51 @@ Both columns are pickers in `npm run csv` — card art as a gallery of the thirt
 real hex images, `sfx` as the sound bank with a play button on every sampled
 voice — which is faster than typing a key and checking it against a list.
 
+**The hive icon is not `cardArt`.** `cardArt` is the biome hex a card was dealt
+on and a dozen upgrades share one, so it cannot identify anything. The mark on
+the hex tile is a rendered PNG, baked into `path/src/ui/upgradeIcons.js` and
+keyed by upgrade id. A NEW UPGRADE HAS NO ICON UNTIL ONE IS MADE, and the hive
+falls back to a two-letter monogram until then. Three ways to give it one, set
+per row in `tools/atlas-render/icons.json`:
+
+| `kind` | what it is | where it is authored |
+|---|---|---|
+| `render` | a photograph of the asset the ability spawns | `ICON_ASSETS` in `tools/upgrade-icons.mjs` |
+| `scene` | a composed GAMEPLAY MOMENT — the stone, the fish it is bending onto, the ring the aura draws | `tools/icon-scenes.mjs` |
+| `image` | a drawn file | the picker, or `/sprites/` |
+| `none` | deliberately a monogram | the picker |
+
+Most upgrades grant no object at all, so `scene` is the usual answer. The whole
+round trip:
+
+```
+npm run icons                                          # regenerate the spec list
+node tools/atlas-render/server.mjs --out <scratch-dir>
+open http://localhost:4599/picker.html                 # frame each icon by eye
+open http://localhost:4599/render.html?list=icons.json # shoot them all
+npm run icons:sheet -- <scratch-dir>                   # LOOK at the set, at tile size
+npm run icons -- --bake <scratch-dir>                  # embed into upgradeIcons.js
+```
+
+**In the picker, `apply to the game` does the last step for one icon** — it
+saves the spec, shoots the PNG and runs the same bake, so a framing change is in
+a running dev server without going back to a terminal. It is strict: a bake is a
+full overwrite of `upgradeIcons.js` and the shots directory is scratch, so if
+anything named by `icons.json` has no PNG on disk it refuses, names what is
+missing and writes nothing. Shoot the whole list once via `render.html` and
+apply is a one-click loop after that.
+
+The picker owns **framing, not content**: camera, pose, toon ramp, ink line, and
+for a scene the per-part x / y / z / size / spin. Which parts a scene HAS is
+`tools/icon-scenes.mjs`. Placements are authored — they survive `npm run icons`
+— but reorder or swap a part in the seed file and that part's placement resets,
+with a line saying so.
+
+The sheet step is not optional. An icon is only right next to the other
+forty-six, and at 56px — a third of the roster is the same thrown stone in a
+different arrangement. `npm run look:hive` puts all 45 in one hive, plus a
+labelled sheet of every upgrade with its card name.
+
 **Juice** is one `feedback('event', { x, y, scale })` call per event, with
 everything it does described in `CONFIG.feedback` (~line 1883). Adding a new
 one means both halves — a key in the table and a call site. Channels:

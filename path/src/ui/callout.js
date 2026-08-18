@@ -1,6 +1,8 @@
 import { CONFIG } from '../config.js';
 import { activeCallout } from '../systems/callouts.js';
+import { liveChainCss } from '../systems/chainColor.js';
 import { popupPose, worldToScreen } from './ui.js';
+import { applyTipDissolve, clearTipDissolve, initTipDissolve, warmTipDissolve } from './tipDissolve.js';
 
 // ---------------------------------------------------------------------------
 // DRAWING THE CALLOUTS: two lines, in two places, and the arrow under them.
@@ -10,8 +12,8 @@ import { popupPose, worldToScreen } from './ui.js';
 // there is never more than one line per surface (systems/callouts.js is the
 // reason) and building a node per callout would be churn for nothing.
 //
-// THE TWO SURFACES ARE DIFFERENT KINDS OF MESSAGE, which is why they are drawn
-// differently rather than being one function with a position argument:
+// THE THREE SURFACES ARE DIFFERENT KINDS OF MESSAGE, which is why they are
+// drawn differently rather than being one function with a position argument:
 //
 //   BAND    fixed to the screen, big, red or blue. An emergency, or the one
 //           thing a first-run player needs to be told. Read instead of the
@@ -22,6 +24,25 @@ import { popupPose, worldToScreen } from './ui.js';
 //           twelve pixels over a lit instrument, a halo swelling and dying is
 //           the only thing that catches the eye without becoming another
 //           object on screen to parse.
+//   WORLD   a first-run tip, standing in the water beside the thing it is
+//           about and following it. A LABEL: the sentence and its subject are
+//           one look, so nothing has to be matched up. It holds its place for
+//           as long as the thing is there and then dissolves (ui/tipDissolve
+//           .js) — the departure is the player having collected the thing,
+//           which is why it is an event and not a fade on a timer.
+//
+// A WORLD TIP IS TWO NODES, and the split is a rule about writers. The outer
+// box carries the position and the arrival curve; the inner one is owned
+// outright by the dissolve. Both writing `transform` — the pose scale and the
+// drift of the water — is the bug where one of the two silently never lands.
+//
+// THE ARROW ONLY EXISTS WHEN THE LABEL CANNOT BE SEEN. It used to be up
+// whenever a tip with a target was, which was right when the words lived in the
+// middle of the screen — the arrow was the only thing joining the sentence to
+// the thing. Now the sentence is ON the thing, so an arrow pointing at a label
+// the player is already reading is one glyph too many. What is left is the case
+// the label cannot answer: a subject off the edge of the frame, where the tip
+// is clamped to the border and the arrow says which way to go.
 //
 // THE ARROW IS AIMED IN SCREEN SPACE, from the seal's projected position toward
 // the target's. Doing it in world space and rotating the result is the obvious
@@ -98,6 +119,30 @@ const STYLES = `
     font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: #ffc65a;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 8px currentColor;
     pointer-events: none; will-change: transform, opacity, filter; }
+  /* "STRIKE NOW!" — the same node, wearing the FOOD CHAIN's type instead of the
+     gauge's. No colour here: it is written inline off the live chain's place on
+     the hue wheel, which is why the Strike prompt role is marked inlineColor
+     and ui/typography.js emits no colour for it. No backticks in this block —
+     the whole thing is a template literal and one would end it. */
+  .sv-callout-strike { font-size: 14px; font-weight: 900; letter-spacing: 0.14em;
+    text-transform: uppercase; }
+
+  /* THE WORLD TIP. Narrower than the band on purpose: it stands beside an
+     object rather than across the screen, so it wraps into a short block that
+     can sit in a gap in the water instead of a wide line that will always be
+     over something. The type is the coach role either way — same voice, same
+     size; only the place changed. */
+  .sv-callout-world { position: absolute; left: 0; top: 0; text-align: center;
+    white-space: normal; width: max-content; max-width: min(340px, 62vw); line-height: 1.25;
+    text-wrap: balance; overflow-wrap: break-word;
+    font-size: 20px; font-weight: 700; letter-spacing: 0.04em; color: #9fe3ff;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 18px currentColor;
+    pointer-events: none; will-change: transform, opacity, filter; }
+  /* The node the dissolve owns. It is display:block because a filter and a mask
+     on an inline box are applied per LINE BOX — a two-line tip would dissolve
+     as two independent strips with a seam between them. (No backticks in this
+     comment: the whole block is a template literal and one would end it.) */
+  .sv-callout-ink { display: block; }
 
   /* The arrow is drawn as one SVG path so it scales cleanly and takes a glow in
      its own colour the same way the type does. left/top are written per frame;
@@ -109,7 +154,14 @@ const STYLES = `
 let layer = null;
 let bandEl = null;
 let boostEl = null;
+let worldEl = null;
+let worldInkEl = null;
 let arrowEl = null;
+// Real seconds since the layer was built, and the only clock the dissolve has.
+// Its own rather than the game's: the noise has to keep flowing through a
+// hit-stop, and a field that froze on the frame something dramatic happened
+// would be the one moment anybody looks closely at it.
+let flowClock = 0;
 
 // The arrow's live bearing, eased toward the one it is asked for. Kept across
 // frames — that easing is the whole reason a re-target reads as this arrow
@@ -139,6 +191,21 @@ export function initCallouts(root) {
   boostEl.className = 'sv-callout-boost sv-hidden';
   layer.appendChild(boostEl);
 
+  worldEl = document.createElement('div');
+  worldEl.className = 'sv-callout-world sv-hidden';
+  worldInkEl = document.createElement('span');
+  worldInkEl.className = 'sv-callout-ink';
+  worldEl.appendChild(worldInkEl);
+  layer.appendChild(worldEl);
+
+  // The filter definitions now, the mask tiles at idle. Splitting them is the
+  // same reasoning warmReveals carries: the <defs> are a few elements and the
+  // tiles are tens of milliseconds of canvas work, and the second one must not
+  // land on the frame a tip appears.
+  initTipDissolve(root);
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(warmTipDissolve, { timeout: 4000 });
+  else setTimeout(warmTipDissolve, 400);
+
   arrowEl = document.createElement('div');
   arrowEl.className = 'sv-callout-arrow sv-hidden';
   // viewBox rather than a fixed size: the width and height are written per
@@ -157,6 +224,11 @@ export function clearCalloutUi() {
   if (!bandEl) return;
   bandEl.classList.add('sv-hidden');
   boostEl.classList.add('sv-hidden');
+  worldEl.classList.add('sv-hidden');
+  // The dissolve is cleared as well as hidden. A hidden node keeps whatever
+  // filter and mask it had, and the next tip would arrive already half eaten
+  // for one frame before the first update wrote over it.
+  clearTipDissolve(worldInkEl);
   arrowEl.classList.add('sv-hidden');
   arrowHasAim = false;
 }
@@ -191,18 +263,20 @@ export function clearCalloutUi() {
 export function updateCalloutUi(dt, ctx = {}) {
   if (!bandEl) return;
   bobClock += dt;
+  flowClock += dt;
 
   const band = activeCallout('band', ctx.device, ctx.tokens);
   const onSeal = activeCallout('player', ctx.device, ctx.tokens);
+  const world = activeCallout('world', ctx.device, ctx.tokens);
 
-  const bandPose = drawBand(band);
+  drawBand(band);
   drawOnSeal(onSeal, ctx);
+  const worldPose = drawWorld(world, ctx);
 
-  // The arrow belongs to whichever line asked for one, the band first. Only one
-  // exists because only one is ever wanted: two arrows off the same seal
-  // pointing two ways is not guidance, it is a decision to make under fire.
-  const owner = band?.arrow ? band : (onSeal?.arrow ? onSeal : null);
-  drawArrow(dt, owner, owner === band ? bandPose : null, ctx);
+  // The arrow belongs to the world tip and to nothing else now — see the note
+  // in the header. It is drawn only when the label it would duplicate is off
+  // the edge of the frame.
+  drawArrow(dt, world, worldPose, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +373,82 @@ function keepOffChrome(top, height, width, centreX, rects, gap) {
   return Math.max(gap, Math.min(y, H - height - gap));
 }
 
-// Returns the pose it drew with, so the arrow can ride the same fade.
+// ---------------------------------------------------------------------------
+// THE WORLD TIP
+// ---------------------------------------------------------------------------
+
+/**
+ * The label beside the thing. Returns the pose it drew with, or null, so the
+ * arrow can ride the same arrival curve.
+ *
+ * `ctx.tipAnchor` is a WORLD position handed in by the frame loop — the live
+ * position of whatever systems/tutorial.js locked onto, or the last place it
+ * was if it has since been collected. There is deliberately no fallback: a tip
+ * on this surface with no anchor is a bug in the coach, and drawing it in the
+ * middle of the screen would hide that bug behind something that looks fine.
+ */
+function drawWorld(callout, ctx) {
+  if (!callout || !ctx.camera || !ctx.tipAnchor) {
+    if (worldEl && !worldEl.classList.contains('sv-hidden')) {
+      worldEl.classList.add('sv-hidden');
+      clearTipDissolve(worldInkEl);
+    }
+    return null;
+  }
+  if (worldInkEl.textContent !== callout.text) worldInkEl.textContent = callout.text;
+
+  worldToScreen(ctx.camera, ctx.tipAnchor.x, ctx.tipAnchor.y, anchorPt);
+
+  const w = CONFIG.callouts?.world ?? {};
+  const gap = w.gap ?? 46;
+  const box = worldEl.offsetWidth;
+  const h = worldEl.offsetHeight;
+  const uiGap = CONFIG.callouts?.uiGap ?? 10;
+
+  // ABOVE THE THING BY DEFAULT, BELOW IT NEAR THE TOP OF THE SCREEN. Not a
+  // preference — a subject in the top eighth of the frame has no room above it,
+  // and a label clamped to the ceiling sits ON its own subject, which is the
+  // one place it must never be. Bubbles rise, so this flip is the common case
+  // rather than an edge one.
+  const wantAbove = anchorPt.y - gap - h > uiGap;
+  const top = wantAbove ? anchorPt.y - gap - h : anchorPt.y + gap;
+
+  // CLAMPED TO THE FRAME, which is what lets the tip survive its subject
+  // drifting off the edge: the words stay at the border in the direction of the
+  // thing, and the arrow (drawn only in this case) says which way. Sliding it
+  // is strictly better than hiding it — the sentence is the content, and half
+  // of it against an edge is readable where none of it is not.
+  const left = clamp(anchorPt.x - box / 2, uiGap, Math.max(uiGap, window.innerWidth - box - uiGap));
+  const clamped = clamp(top, uiGap, Math.max(uiGap, window.innerHeight - h - uiGap));
+  const y = keepOffChrome(clamped, h, box, left + box / 2, chromeRects(worldEl), uiGap);
+
+  const pose = popupPose(callout.motion, callout.age, callout.hold);
+  worldEl.style.left = `${left}px`;
+  worldEl.style.top = `${y + pose.lift}px`;
+  // No -50% here, unlike the band: the left edge is already the clamped one,
+  // and centring on top of a clamp would push the box back off the screen the
+  // clamp just rescued it from.
+  worldEl.style.transform = `scale(${pose.scale})`;
+  worldEl.style.transformOrigin = wantAbove ? 'center bottom' : 'center top';
+  worldEl.style.opacity = `${pose.alpha}`;
+  applyBloom(worldEl, pose.bloom);
+  worldEl.classList.remove('sv-hidden');
+
+  // AND THE DISSOLVE, on the inner node. `tipFade` is 0 for the whole time the
+  // tip is simply standing there, and applyTipDissolve short-circuits on that —
+  // so the ordinary case costs one comparison and leaves plain text behind.
+  const d = CONFIG.tutorial?.dissipate ?? {};
+  applyTipDissolve(worldInkEl, d.style ?? 'current', ctx.tipFade ?? 0, flowClock, d);
+  return pose;
+}
+
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+// Returns the pose it drew with. Nothing rides it any more — the arrow belongs
+// to the world tip now — but the value is what makes the function testable
+// without a screen, and it is how the band's own curve is asserted.
 function drawBand(callout) {
   if (!callout) {
     bandEl.classList.add('sv-hidden');
@@ -343,6 +492,21 @@ function drawOnSeal(callout, ctx) {
     boostEl.classList.add('sv-hidden');
     return;
   }
+  // WHICH OF THE RING'S TWO LINES THIS IS. They share the node — one slot, one
+  // element, the same reason the band's coach tip does — and the strike prompt
+  // stacks a second class on top, exactly as `sv-callout-coach` does over
+  // `sv-callout`. `motion` and not the id: systems/callouts.js already decided
+  // which voice the row speaks in, and asking again here is how the type and
+  // the timing curve end up disagreeing about what kind of line this is.
+  const chainVoice = callout.motion === 'strikeNow';
+  const cls = chainVoice ? 'sv-callout-boost sv-callout-strike' : 'sv-callout-boost';
+  if (boostEl.className !== cls) boostEl.className = cls;
+  // THE LIVE CHAIN'S OWN COLOUR, per frame, off the same wheel as the FOOD
+  // CHAIN! banner and the ring's combo arc — so the prompt tells you which
+  // link you are about to add before it has told you anything else. Cleared
+  // again on the gauge's line, or "Boost Empty!" would inherit whatever hue
+  // the last chain died on and the role's own gold would never be seen.
+  boostEl.style.color = chainVoice ? liveChainCss() : '';
   if (boostEl.textContent !== callout.text) boostEl.textContent = callout.text;
 
   const ring = CONFIG.strike?.ring ?? {};
@@ -387,9 +551,9 @@ function applyBloom(node, px) {
   node.style.filter = px > 0.05 ? `drop-shadow(0 0 ${px.toFixed(1)}px currentColor)` : 'none';
 }
 
-function drawArrow(dt, callout, bandPose, ctx) {
-  const target = callout ? arrowTarget(callout.arrow, ctx, callout.id) : null;
-  if (!target || !ctx.camera) {
+function drawArrow(dt, callout, worldPose, ctx) {
+  const target = callout && ctx.tipAnchor ? ctx.tipAnchor : null;
+  if (!target || !ctx.camera || !onScreenNeedsArrow(ctx, target)) {
     arrowEl.classList.add('sv-hidden');
     arrowHasAim = false;
     return;
@@ -419,7 +583,7 @@ function drawArrow(dt, callout, bandPose, ctx) {
     }
   }
 
-  const pose = bandPose ?? popupPose(callout.motion, callout.age, callout.hold);
+  const pose = worldPose ?? popupPose(callout.motion, callout.age, callout.hold);
   const bob = Math.sin(bobClock * (a.bobSpeed ?? 2.4) * Math.PI * 2) * (a.bobDistance ?? 9) * 0.5;
   const dist = orbitRadiusPx(ctx) + bob;
   const size = a.size ?? 28;
@@ -473,37 +637,23 @@ function orbitRadiusPx(ctx) {
   return Math.max(a.size ?? 28, Math.hypot(dx, dy));
 }
 
-// Where the row said to point, as a world position — or null, which is both
-// "this row has no arrow" and "it has one but there is nothing to aim it at".
-// The second case is real: the chum arrow's target can be eaten by a crab
-// mid-tip, and an arrow left pointing at where it used to be is worse than no
-// arrow at all.
-function arrowTarget(kind, ctx, id) {
-  if (kind === 'chum') return ctx.nearestChum?.(ctx.playerX ?? 0, ctx.playerY ?? 0) ?? null;
-  // THE ONLY ARROW THAT ASKS WHICH ROW IS ASKING, and it has to. There is one
-  // tip per pickup type and they all point with `arrow: pickup`, so the target
-  // is decided by the ROW'S OWN ID — the id, the step, the callouts row and the
-  // orb's name in assets.js are deliberately one string end to end. The
-  // alternative, a `pickup:bubbleOrb` arrow value or five arrow targets, would
-  // be the same name written twice per row with nothing stopping them
-  // disagreeing.
-  if (kind === 'pickup') return ctx.nearestPickup?.(ctx.playerX ?? 0, ctx.playerY ?? 0, id) ?? null;
-  if (kind === 'surface') {
-    // Straight up, at the waterline. Not at the seal's own x offset by
-    // anything: "up" is the entire content of this arrow, and aiming it at a
-    // point on the surface some distance away would read as pointing at a
-    // place rather than in a direction.
-    if (ctx.surfaceY == null) return null;
-    return { x: ctx.playerX ?? 0, y: ctx.surfaceY };
-  }
-  if (kind === 'seabed') {
-    // Straight down, for the same reason and in the same way. Deliberately NOT
-    // the nearest orb on the floor: the tip it serves is about where chum ENDS
-    // UP, which is a place the player has to learn is down there at all, and an
-    // arrow that swung sideways to whichever piece happened to have landed
-    // would be teaching a pickup instead of a direction.
-    if (ctx.seabedY == null) return null;
-    return { x: ctx.playerX ?? 0, y: ctx.seabedY };
-  }
-  return null;
+/**
+ * Does the subject need an arrow — is it OUTSIDE the frame?
+ *
+ * The margin is generous (a tenth of the smaller side) rather than the literal
+ * edge, because a subject a few pixels inside the border has its label clamped
+ * hard against that border and reads exactly like one that is outside it. The
+ * arrow is for "the thing I am describing is not where you are looking", and
+ * the honest boundary for that is a bit inside the glass.
+ *
+ * A DEGENERATE PROJECTION answers "no arrow" by falling out of the comparison
+ * naturally: an anchor that projects to the middle of the screen is on screen,
+ * which is the safe way to be wrong — a spurious arrow spinning under a tip
+ * that is plainly visible is worse than a missing one.
+ */
+function onScreenNeedsArrow(ctx, target) {
+  worldToScreen(ctx.camera, target.x, target.y, targetPt);
+  const margin = Math.min(window.innerWidth, window.innerHeight) * 0.1;
+  return targetPt.x < margin || targetPt.x > window.innerWidth - margin
+    || targetPt.y < margin || targetPt.y > window.innerHeight - margin;
 }

@@ -89,6 +89,19 @@ const BUILDS = {
     ['beluga', 'uncommon'], ['maneater', 'legendary'], ['strikeShrapnel', 'rare'],
     ['oysterBlaster', 'common'], ['homingMissile', 'common'], ['laserEyes', 'uncommon'],
   ],
+  // EVERY UPGRADE AT ONCE, generated rather than typed.
+  //
+  // The three builds above are the arrangements a player will actually be
+  // looking at, and they are what the LAYOUTS are judged on. This one is a
+  // different question: does the ART hold up as a set — can you tell forty
+  // -seven marks apart, is any one of them the same shape as its neighbour, is
+  // there a family that all reads as one blob. That question cannot be asked of
+  // a twelve-pick sample, and it changes every time an icon is re-rendered, so
+  // the list has to come off CONFIG rather than being a list someone maintains.
+  //
+  // Rarities are cycled so every tier's rim is on the page at once; they carry
+  // no meaning here beyond that.
+  'the whole roster — every upgrade': null,   // filled in below, needs CONFIG
   'late — 22 picks': [
     ['shrimpRing', 'legendary'], ['shrimpRing', 'common'], ['shrimpRing', 'common'],
     ['club', 'epic'], ['clubBoom', 'rare'], ['clubIce', 'common'], ['clubThrow', 'uncommon'],
@@ -99,6 +112,11 @@ const BUILDS = {
     ['calamari', 'uncommon'], ['oysterBlaster', 'common'],
   ],
 };
+
+const TIERS = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
+BUILDS['the whole roster — every upgrade'] = CONFIG.upgrades
+  .filter((u) => u.enabled !== false)
+  .map((u, i) => [u.id, TIERS[i % TIERS.length]]);
 
 // THE LAYERING SHOT. A hive at a late-run size with the level-up menu over the
 // top of it — the one arrangement that shows whether the z-order is right, and
@@ -116,6 +134,33 @@ let layerShot = '';
       <div class="sv-sub">the menu has to win — the hive is a readout, not a prompt</div></div>
     </div>`;
   menu.classList.add('sv-hidden');
+}
+
+// THE REFERENCE SHEET: every tile with the card's name under it.
+//
+// The roster hive answers "do these read as a set". It cannot answer "which one
+// is Big Willy Style", because a hive is deliberately just marks — and that is
+// the question you have while you are deciding whether a mark is the right one.
+// So the same tiles are also laid out flat and labelled, built by the real
+// buildTile through setHiveUpgrades so what is captioned is exactly what the
+// hive shows, not a second rendering of the same data.
+const roster = [];
+{
+  hive.setHiveLayout('rows');
+  hive.setHiveStyle('ink');
+  hive.setHiveUpgrades(BUILDS['the whole roster — every upgrade']
+    .map(([id, rarity]) => ({ id, rarity })));
+  for (const tile of document.querySelectorAll('.sv-hive-tile')) {
+    const def = CONFIG.upgrades.find((u) => u.id === tile.dataset.upgrade);
+    roster.push({
+      html: tile.outerHTML,
+      id: tile.dataset.upgrade,
+      name: def?.name ?? tile.dataset.upgrade,
+      // Named so a monogram on this sheet reads as "nothing was made for this
+      // one" rather than as a render that came out looking like two letters.
+      mark: tile.querySelector('.sv-hive-icon') ? 'icon' : 'monogram',
+    });
+  }
 }
 
 const shots = [];
@@ -159,13 +204,27 @@ ${css}
     top: auto !important; bottom: auto !important; }
   button { background: #17455c; color: #dff0f8; border: 1px solid #2b6d8d;
     font: 600 11px system-ui; padding: 6px 12px; border-radius: 3px; cursor: pointer; }
+  /* the labelled reference sheet */
+  .ref { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px 4px; }
+  .ref .r { text-align: center; }
+  .ref .r .sv-hive-tile { position: relative !important; left: auto !important; top: auto !important;
+    margin: 0 auto; }
+  .ref .n { font-size: 9px; color: #86adbf; line-height: 1.25; margin-top: 3px;
+    overflow-wrap: anywhere; }
+  .ref .r[data-mark="monogram"] .n { color: #d8a05a; }
 </style>
 <h1>Hex hive &mdash; every layout against every style</h1>
 <h2>the layer order</h2>
 <div class="cap">A 22-pick hive with a menu over it. The hive is z-index 1, menus are 4, toasts 6 &mdash; it used to be 3 against menus with no z-index at all, so it painted on top of the level-up cards.</div>
 <div class="grid"><div class="cell" style="position:relative;width:520px;height:330px;overflow:hidden">${layerShot}</div></div>
-<div class="cap">Built by the real ui.js and upgradeHive.js. Icons are the atlas renders; letters are the fallback monogram for the two thirds of the roster that fires a primitive or nothing at all.</div>
+<div class="cap">Built by the real ui.js and upgradeHive.js. Every mark is a baked PNG from the icon pipeline &mdash; a photograph of the asset the ability spawns, or a composed gameplay moment for the ones that spawn nothing. Letters are the fallback for an upgrade with no icon yet.</div>
 <p><button onclick="fireAll()">fire everything &mdash; watch the four pulses</button></p>
+<h2>every upgrade, named</h2>
+<div class="cap">All ${roster.length} enabled upgrades, built by the real buildTile. ${roster.filter((r) => r.mark === 'icon').length} carry a rendered mark; ${roster.filter((r) => r.mark === 'monogram').length} fall back to a monogram &mdash; those are shown in amber, and each one is an icon nobody has made yet.</div>
+<div class="ref">
+${roster.map((r) => `  <div class="r" data-mark="${r.mark}">${r.html}<div class="n">${r.name}</div></div>`).join('\n')}
+</div>
+
 ${Object.keys(BUILDS).map((b) => `
 <h2>${b}</h2>
 <div class="grid">

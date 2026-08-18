@@ -1,4 +1,4 @@
-id,kind,text,textTouch,textPad,devices,enabled,anchor,priority,hold,repeat,arrow
+id,kind,text,textTouch,textPad,devices,enabled,anchor,priority,hold,repeat,subject
 boss,warn,Warning!,,,,TRUE,band,50,1.8,,
 health,warn,Health low!,,,,TRUE,band,40,1.6,5,
 oxygen,warn,Oxygen low!,,,,TRUE,band,30,1.6,4,
@@ -14,7 +14,7 @@ bubbleOrb,coach,"Pop an air bubble. Free refill, no breach required..",,,,TRUE,b
 strikeOrb,coach,This krill bucket gives you quick boost pips.,,,,TRUE,band,36,6,,pickup
 rapidFireOrb,coach,This tasty morsel doubles your shot rate for a hot sec...,,,,TRUE,band,34,6,,pickup
 chumChunk,coach,This one's a real deal seal meal.,,,,TRUE,band,32,6,,pickup
-attractorOrb,coach,Grab the clamagnet to pull the chum towards you.,,,,TRUE,band,30,6,,
+attractorOrb,coach,Grab the clamagnet to pull the chum towards you.,,,,TRUE,band,30,6,,pickup
 crab,coach,Loose chum sinks to the bottom. Out come the crabs...,,,,TRUE,band,28,6,,seabed
-invincible,coach,Some creatures should not be attacked.,,,,TRUE,band,24,6,,
+invincible,coach,Some creatures should not be attacked.,,,,TRUE,band,24,6,,creature
 breach,coach,Go ahead now... breach!!!,,,,TRUE,band,20,7,,surface

@@ -51,12 +51,42 @@
 //             electric: damage per second inside the aura.
 //             the shooters: damage per projectile.
 //
+// And one column that is not a number:
+//   attack    WHAT KIND OF HARM this is — see ATTACK_IDS below. It decides what
+//             the perk's telegraph ring LOOKS like: its colour and its edge
+//             dialect both come from the shared threat palette
+//             (CONFIG.fx.attackTypes), so an `electric` row gets a ring the
+//             exact cyan of the player's Voltaic element with jagged spline
+//             displacement crackling round it, and a `blast` row gets a hot
+//             roiling one.
+//
+//             It is a LOOK column in a gameplay table, and that is deliberate.
+//             The alternative — deriving the type from the perk id in code —
+//             was what the game did before, and it meant a boss's colour was
+//             not a thing anyone could see or change without reading
+//             systems/bossPerks.js. What it must never do is affect damage:
+//             nothing downstream reads `attack` except the ring.
+//
+//             A BLANK CELL is legal and means "keep the colour this perk has
+//             always had in CONFIG.boss.perkFx, with the plain edge". That is
+//             the escape hatch for a tell whose colour was tuned away from its
+//             type on purpose.
+//
 // These are GAMEPLAY numbers, so they live here and not on a slider. Nothing
 // about a boss's threat should be adjustable from a panel that ships with the
 // game — the same rule weapons.csv follows.
 // ============================================================================
 
 import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
+
+// The threat types the palette knows. DUPLICATED from CONFIG.fx.attackTypes on
+// purpose: this module is imported by Node harnesses that parse the table
+// without a config, and pulling CONFIG in here would drag three.js and the
+// tuning JSON behind it. tools/boss-perk-test.mjs asserts the two lists agree,
+// so the duplication cannot rot silently.
+export const ATTACK_IDS = [
+  'kinetic', 'electric', 'blast', 'beam', 'void', 'venom', 'chill', 'infection',
+];
 
 const LABEL = 'bossPerks';
 const FILE = 'bossPerks.csv';
@@ -112,6 +142,19 @@ export function parseBossPerkCsv(text, warn = console.warn) {
 
     const w = parseNumber(row.weight, LABEL, id, 'weight', warn, { min: 0 });
     const perk = { id, weight: w == null ? 1 : w };
+
+    // A typo here is a boss whose tell is quietly the wrong colour — the ring
+    // still draws, it just lies about what is coming — so it is warned about
+    // and dropped rather than passed through to be silently unmatched by the
+    // palette lookup.
+    const attack = (row.attack ?? '').trim().toLowerCase();
+    if (attack) {
+      if (ATTACK_IDS.includes(attack)) perk.attack = attack;
+      else {
+        warn(`[${LABEL}] "${id}" names attack type "${attack}", which is not one of `
+          + `${ATTACK_IDS.join(', ')} — the tell will keep its old colour instead.`);
+      }
+    }
     for (const [field, opts] of Object.entries(NUMBERS)) {
       const v = parseNumber(row[field], LABEL, id, field, warn, opts);
       // Left as undefined rather than defaulted to 0 — a blank cell means

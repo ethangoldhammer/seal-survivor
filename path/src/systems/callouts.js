@@ -176,11 +176,28 @@ export const WARN_ROWS = calloutsOfKind(CALLOUTS, 'warn');
  * last popped — the UI needs both, and nothing outside this file writes either.
  */
 export const bandStates = Object.fromEntries(
-  CALLOUT_ANCHORS.map((a) => [a, { row: null, age: 0 }]),
+  // `pinned` is the one flag that is not about arbitration: a pinned line has
+  // no clock at all and stays until the thing that pinned it lets go. Only the
+  // world anchor's tips ever use it — see pinCallout.
+  CALLOUT_ANCHORS.map((a) => [a, { row: null, age: 0, pinned: false }]),
 );
 
 /** The middle-of-the-screen surface, which is what most callers mean. */
 export const bandState = bandStates.band;
+
+/**
+ * How long the row showing on `row`'s own surface has been up.
+ *
+ * The coach used to read `bandState.age` directly, which was correct while
+ * every tip was on the band and silently wrong the moment they were not: a
+ * world-anchored tip would have been timed against whatever warning happened to
+ * be in the middle of the screen, so its legibility floor would be satisfied by
+ * an unrelated line having been up long enough.
+ */
+export function calloutAge(row) {
+  const slot = slotFor(row);
+  return slot.row === row ? slot.age : 0;
+}
 
 function slotFor(row) {
   return bandStates[row?.anchor] ?? bandStates.band;
@@ -205,8 +222,34 @@ export function resetCallouts() {
   for (const slot of Object.values(bandStates)) {
     slot.row = null;
     slot.age = 0;
+    slot.pinned = false;
   }
   warnMemory.clear();
+}
+
+/**
+ * HOLD THIS LINE UNTIL I SAY OTHERWISE — or stop holding it.
+ *
+ * A tip that rides an object cannot be on a timer. Its subject is the clock:
+ * the bubble is there until it is popped, the pile is on the seabed until it
+ * has been cleared, and a sentence that expired six seconds in would leave the
+ * player looking at a thing that no longer has a label while the condition it
+ * described is still exactly as true as it was.
+ *
+ * So `hold` stops meaning "how long this is up" for these rows and goes back to
+ * meaning what it means everywhere else — the most a line may take of somebody
+ * — only once the pin is released and the tip is on its way out.
+ *
+ * DELIBERATELY NOT A ROW COLUMN. Whether a line can be pinned is a property of
+ * the row (does it have a subject), but whether it IS pinned right now is a
+ * property of the world (is that subject still in the water), and only the
+ * coach knows the second one. A `pinned` cell in the CSV would be a tip that
+ * could hang on screen forever because the orb it named had already been eaten.
+ */
+export function pinCallout(row, on = true) {
+  const slot = slotFor(row);
+  if (slot.row !== row) return;
+  slot.pinned = !!on;
 }
 
 /** Seconds this row stays up: its own `hold`, or the shared default. */
@@ -236,6 +279,11 @@ export function pushCallout(row) {
   if (live && !outranks(row, live)) return false;
   slot.row = row;
   slot.age = 0;
+  // A new line arrives unpinned however the last one left. Otherwise a tip
+  // whose subject vanished on the same frame as the next tip started would hand
+  // its pin to a line that never asked for one — which is a callout with no
+  // clock and nothing holding it, i.e. one that never leaves.
+  slot.pinned = false;
   return true;
 }
 
@@ -253,6 +301,7 @@ export function clearCallout(row) {
   if (slot.row !== row) return;
   slot.row = null;
   slot.age = 0;
+  slot.pinned = false;
 }
 
 /**
@@ -307,6 +356,12 @@ export function updateCallouts(dt, conditions = {}, live = true) {
   for (const slot of Object.values(bandStates)) {
     if (!slot.row) continue;
     slot.age += dt;
+    // AGE STILL RUNS ON A PINNED LINE, only the expiry is skipped. The age is
+    // what the legibility floor is measured against (see legibleFor in
+    // tutorial.js), and a pinned tip that froze its own clock at zero could
+    // never satisfy that floor — so the moment it was unpinned it would be
+    // required to stay for its full reading time all over again.
+    if (slot.pinned) continue;
     if (slot.age >= holdFor(slot.row)) {
       slot.row = null;
       slot.age = 0;
@@ -342,7 +397,9 @@ export function activeCallout(anchor = 'band', device = undefined, tokens = unde
     // first tip appears seconds into a run, which is often BEFORE the player
     // has touched anything at all.
     text: fillBindings(calloutText(row, device), tokens),
-    arrow: row.arrow,
+    // What this line is ABOUT: where it parks itself, and what the arrow points
+    // at when the two are too far apart to read together. See calloutTable.js.
+    subject: row.subject,
     age: slot.age,
     hold: holdFor(row),
     // Which motion block and which text role this line wears. Decided here,
@@ -355,8 +412,27 @@ export function activeCallout(anchor = 'band', device = undefined, tokens = unde
 
 // A row's motion block, which is also its text role. The lines on the ring have
 // their own because they are their own size in their own place; everything else
-// on the band is either a warning or a tip.
+// is either a warning or a tip.
+//
+// The world anchor deliberately shares the `coach` role rather than taking one
+// of its own. It is the same voice saying the same kind of thing and it should
+// be the same type — what changed is where the sentence stands, and a tip that
+// also changed size and colour on its way to the bubble would read as a
+// different system talking.
+// ONE ROW SPEAKS IN A VOICE ITS ANCHOR DOES NOT IMPLY. "STRIKE NOW!" shares
+// the ring's slot with "Boost Empty!" and is not the same kind of message at
+// all: the gauge is reporting a fact you can act on whenever, and this is the
+// FOOD CHAIN asking for an input inside a tenth of a second. It wears the
+// chain's own type and the chain's own live colour (ui/callout.js), so it
+// belongs to that family rather than to the instrument it is standing on.
+//
+// Written as a table rather than as an `id ===` in the branch below so the
+// exception is visible next to the rule it breaks, and so a second one is a
+// line rather than a nested ternary.
+const VOICE_BY_ID = { strikeNow: 'strikeNow' };
+
 function motionKeyFor(row) {
+  if (VOICE_BY_ID[row.id]) return VOICE_BY_ID[row.id];
   if (row.anchor === 'player') return 'boostWarn';
   return row.kind === 'coach' ? 'coach' : 'warn';
 }

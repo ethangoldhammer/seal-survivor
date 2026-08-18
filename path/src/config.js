@@ -16,6 +16,13 @@ import { EASINGS } from './ease.js';
 // text roles. Both are read from here (to declare CONFIG.textStyles and to
 // build the picker rows) and from ui/typography.js (to render them), so neither
 // can live in the UI layer without config.js importing the UI.
+// The four ways a first-run tip can dissolve, from the module that implements
+// them. Imported rather than written out again here for the reason the note
+// above gives about fonts and roles: the picker and the code that reads the
+// choice must not be able to disagree about what the choices are. Safe from the
+// UI-import rule because ui/tipDissolve.js is a leaf — it deliberately knows
+// nothing about CONFIG, which is what lets the look page run it bare.
+import { TIP_DISSOLVES } from './ui/tipDissolve.js';
 import { FONT_STACKS, FONT_LABELS } from './fonts.js';
 import { TEXT_ROLES, TEXT_CASES, FONT_GLOBAL, defaultTextStyles } from './textRoles.js';
 // A leaf, like beatDivisions above it: the star field's placement rule, with
@@ -2248,6 +2255,28 @@ export const CONFIG = {
         perfectAt: 1,
         perfectFlashTime: 0.5,
 
+        // --- THE SWEET SPOT ---------------------------------------------------
+        // HOW MUCH ERROR A RELEASE IS ALLOWED, as a fraction of the wind-up,
+        // on EACH side of the moment the meter says "STRIKE NOW!". At 0.05 and
+        // a one-second bar that is 50ms early to 50ms late — a tenth of a
+        // second of window.
+        //
+        // THIS IS THE GATE ON EVERYTHING THE STRIKE KILLS OR FEEDS. Inside it
+        // the strike is the strike; outside it the dash still launches at full
+        // reach and does nothing but move the seal. See the sweet spot note on
+        // strikeState in systems/strike.js.
+        //
+        // A FRACTION AND NOT SECONDS, so the timing is equally hard whatever
+        // the hold is worth — Coiled Spring shortens `strikeChargeTime`, and a
+        // flat window would widen in bar terms every time that card was taken.
+        //
+        // weapons.csv owns it. It is the size of a skill gate, which is a
+        // balance number, and it is the one value in the feature that will
+        // actually be argued about: too tight and the strike stops being a
+        // weapon for anyone not counting frames, too loose and the beat stops
+        // being a beat.
+        sweetFraction: 0.05,
+
         // --- PIPS -------------------------------------------------------------
         // The bar is CUT INTO PIPS and one chum is always exactly one pip. The
         // count is not configured here — it is round(1 / chumRefill), so the
@@ -2649,7 +2678,15 @@ export const CONFIG = {
           hz: 2.6,       // pulses per second
           pulseDepth: 0.55,
           spin: 0.7,     // rad/sec, so it reads as live rather than painted on
-          fade: 0.6,     // seconds of ramp-out at the end of the mark
+          // Seconds for the hand to draw the bracket on. Short: this fires on
+          // contact and the player is already moving, so a slow reveal is a
+          // lock they never see arrive.
+          sweepIn: 0.28,
+          // Seconds of sweep-OUT at the end of the mark. A second hand chasing
+          // the first around the same circle, wiping the bracket off in the
+          // order it was drawn — which reads as the lock expiring rather than
+          // as it being lost.
+          fade: 0.6,
         },
       },
 
@@ -2726,6 +2763,30 @@ export const CONFIG = {
       // off for ten seconds still costs you most of it; 3.0 keeps a chain alive
       // through near-idling, which is the mechanic paying out for nothing.
       chainWindow: 2.2, // seconds without food before the chain lapses
+
+      // --- WHAT A FOOD CHAIN LOOKS LIKE -------------------------------------
+      // ONE HUE FOR THE WHOLE MECHANIC, stepping round the wheel once per
+      // link. The FOOD CHAIN! banner, the "STRIKE NOW!" prompt on the boost
+      // ring and the ring's own combo arc all read it, so the three cannot
+      // drift apart — see systems/chainColor.js for why that is a file rather
+      // than three ramps.
+      //
+      // It replaced a gold-to-orange two-stop ramp that was fully spent by
+      // link eight. A wheel never runs out: it comes round, which reads as
+      // "this has been going for a while" instead of as "this has stopped".
+      //
+      // `sat` and `light` are held constant across the wheel on purpose —
+      // they are what keeps every link equally legible over the water. What
+      // they cannot do is equalise BLOOM: luminance is 21% green and 7% blue,
+      // so the cold third of the wheel glows visibly less than the warm third
+      // whatever these say. That is a property of the bright pass, not a bug
+      // to tune out here (see npm run glow).
+      chainColor: {
+        hue: 0.13,        // where a fresh chain starts — the gold it always was
+        huePerLink: 0.12, // how far round the wheel one link moves it
+        sat: 0.9,
+        light: 0.62,
+      },
       // WHAT A LINK COSTS, as a fraction of the bar.
       //
       // 1.0 is "refill the whole bar between strikes", which is what this
@@ -4749,6 +4810,35 @@ export const CONFIG = {
         pulseSpeed: 1.6,
         // ...and brighter after dark, which is the whole conceit.
         nightStrengthMul: 1.6,
+      },
+
+      // How the BASIC SHOT is coloured to match the element.
+      //
+      // The card says "your shots carry an element" and until this existed the
+      // shots were the one part of the ability that never showed it: the seal
+      // lit up, the impact flashed in the element's colour, and the pellet in
+      // between stayed the same stone yellow it is at level 1.
+      //
+      // IT RIDES elementPower(), exactly like the seal's glow — so the colour
+      // is not decoration, it is the readout for whether the element is awake.
+      // At noon with `dayPower` at 0 the shot is applying nothing elemental at
+      // all, and it goes back to being an ordinary pebble to say so; it takes
+      // the element's colour across the same dusk the seal does.
+      //
+      // The tint is a BLEND on top of the asset's own colour (setAssetBlendTint
+      // in assets.js), not a write to the Look panel's tint, so recolouring the
+      // shot can never eat a tint set in the texture workbench.
+      shot: {
+        enabled: true,
+        // How far toward the element's colour the pellet travels when the
+        // element is fully awake. 1 is the element's colour outright; below
+        // that keeps some of the stone in it.
+        amount: 1,
+        // The ribbon behind it (CONFIG.trails.bullet), on its own knob because
+        // the trail is a much bigger area of colour than the pellet — a full
+        // green streak reads as a different weapon, where a green pellet with
+        // a warmer wake reads as the same gun carrying something.
+        trailAmount: 0.85,
       },
 
       // -------------------------------------------------------------------------
@@ -9898,6 +9988,113 @@ export const CONFIG = {
     fx: {
       maxParticles: 8000, // ring buffer; oldest bursts are overwritten
 
+      // --- EVERY CIRCLE DRAWN AROUND A THREAT (systems/organicRing.js) -------
+      //
+      // The strike mark's bracket, every boss perk tell, the boss boat's volley
+      // ring and the `ring` primitive in assets.js all draw through one shader
+      // now. These are the LOOK numbers; what each ring MEANS — an attack
+      // radius, a wind-up length — stays in bossPerks.csv and in the systems
+      // that own the timing, because a slider that could shrink a boss's reach
+      // is a slider that can un-lose a fight.
+      //
+      // THE ONE NUMBER THAT IS NOT PURELY COSMETIC is `wobble`. The edge is
+      // displaced both ways, so a bulge is the ring claiming very slightly more
+      // reach than it has and a dip is it claiming less. Held in WORLD units
+      // for exactly that reason: the honesty of the boundary is a distance in
+      // the water, and it should not scale up just because the boss's aura is
+      // big. Set it to 0 for geometrically exact rings.
+      organicRing: {
+        // World units the drawn edge may wander from the true radius.
+        wobble: 0.5,
+        // And never more than this share of the radius, whatever `wobble` says.
+        // The floor under a small ring: a 1.2-unit mark with a half-unit
+        // excursion would be a blob rather than a circle.
+        wobbleMax: 0.18,
+        // Noise cells per WORLD unit. Grain size, and it is the same on every
+        // ring in the game — a mark and a blast ring are lumpy at the same
+        // scale rather than one being a magnified copy of the other.
+        noiseScale: 0.55,
+        // How much the band's own thickness varies, 0..1. Most of what sells
+        // the goo: a boundary that wobbles at constant width reads as a wavy
+        // line, one that also fattens and thins reads as a mass.
+        massVar: 0.35,
+        // Band half-width as a fraction of the radius. The band's OUTER edge is
+        // the true radius, so this grows inward.
+        thickness: 0.16,
+        glow: 2.2,
+        // Edge softness in local units. Not fwidth — see the shader note.
+        aa: 0.014,
+        // How much of the band's half-width stays at FULL alpha before it falls
+        // away, 0..1. At 1 the band is flat-topped, which drawn additively at
+        // this glow saturates to white across its whole width and turns the
+        // ring from a boundary into a blob. Low, so the eye reads a line at the
+        // centre with mass hanging off it.
+        core: 0.22,
+
+        // World units per second the noise field crawls. ZERO is the shipped
+        // value and the deliberate one: the field is nailed to the water, so a
+        // growing ring churns as it sweeps through it and a spinning one has
+        // its lumps crawl around it. Raise this only if a stationary tell on a
+        // stationary boss reads as a frozen frame.
+        drift: 0,
+
+        // --- THE SWEEP -------------------------------------------------------
+        // How ragged the leading edge is, 0..1. At 0 the ring wipes on like a
+        // clock hand with a clean radius; at 1 the reveal is pure noise and the
+        // angular order — the part that makes it a COUNTDOWN — is gone.
+        sweepNoise: 0.28,
+        // How wide that edge is, as a share of the full turn.
+        sweepSoft: 0.22,
+        // The hot fringe just behind the hand, and how far back it reaches.
+        // This is what turns a reveal into something a player reads as time
+        // remaining rather than as a ring that happens to be growing.
+        leadGlow: 3.4,
+        leadFall: 0.12,
+
+        // --- THE DIALECTS ----------------------------------------------------
+        // Electric: spline nodes around the circle, and how many times a second
+        // they re-roll. The rate is a STEP, not a smooth animation — held jags
+        // read as discrete arcs where per-frame jitter reads as a fuzzy band —
+        // and it scales with the wind-up's charge, so the ring gets more
+        // violent as the shot gets closer.
+        elecNodes: 18,
+        elecRate: 13,
+        // Chill: how many flat chords the ring is cut into. The true radius is
+        // the polygon's INCIRCLE, so the flats sit inside the promise.
+        facets: 9,
+
+        // The strike bracket's gaps: how much of each quarter survives, and how
+        // much the field jitters where each arm stops. See systems/marks.js for
+        // why the gaps exist at all.
+        arcGap: 0.75,
+        arcJitter: 0.16,
+      },
+
+      // WHAT KIND OF HARM THIS IS. One table serving two questions that are
+      // the same question from opposite ends: what a boss is about to do to you
+      // (the `attack` column in bossPerks.csv) and what is currently happening
+      // to something you have marked (the element on it).
+      //
+      // An entry naming an `element` READS ITS COLOUR from CONFIG.biolum.
+      // elements at draw time rather than copying it. That is the whole reason
+      // the table is shaped this way: the boss's electric ring and the player's
+      // Voltaic shots are one number, and a later retune of the element palette
+      // cannot leave a lightning boss the wrong colour.
+      //
+      // `edge` names a dialect in EDGE_KINDS (systems/organicRing.js). Adding a
+      // type here is enough to give a new boss ability its own read; adding a
+      // new DIALECT means a new arm in the shader.
+      attackTypes: {
+        kinetic: { color: 0xffc65a, edge: 'smooth' },
+        electric: { element: 'shock', edge: 'electric' },
+        blast: { color: 0xffa64a, edge: 'roil' },
+        beam: { color: 0xff6a4a, edge: 'roil' },
+        void: { color: 0xc9a2ff, edge: 'smooth' },
+        venom: { element: 'venom', edge: 'drip' },
+        chill: { element: 'chill', edge: 'facet' },
+        infection: { element: 'infection', edge: 'drip' },
+      },
+
       // HOW MANY SPRITE PARTICLES THE WHOLE GAME THROWS, as a multiplier on
       // every emitter's own `count`. 1 is the counts exactly as authored in
       // CONFIG.emitters; below that the screen thins out uniformly.
@@ -14477,8 +14674,12 @@ export const CONFIG = {
       // The banner runs hotter the deeper the chain goes. The bottom of that
       // ramp is the chain role's own colour in textStyles; this is the top of
       // it, reached at CONFIG.strike.chain-ish depth (see spawnChainToast).
-      colorHot: 0xff803a,
-      hotAt: 8, // link count at which colorHot is fully reached
+      // The chain banner's colour is NOT here any more. It walks the hue wheel
+      // with the chain (CONFIG.strike.chainColor), shared with the ring's arc
+      // and the STRIKE NOW! prompt, and the two-stop `colorHot`/`hotAt` ramp
+      // this block used to own could not be part of that without becoming a
+      // second answer to the same question. What stays here is the MOTION —
+      // this block's actual job.
     },
     // AN UPGRADE PAYING OUT — "MANEATER +12%". Held longer than any of the
     // three above (1.6s) and moved less, because this one is READ rather than
@@ -14539,6 +14740,20 @@ export const CONFIG = {
     boostWarn: {
       in: { time: 0.14, ease: 'outCubic', scale: 1.12, fade: 0, lift: 4, bloom: 16 },
       out: { time: 0.34, ease: 'inQuad', scale: 1, fade: 0, lift: -6, bloom: 16 },
+    },
+    // "STRIKE NOW!" — the same slot on the ring, its own motion, because it is
+    // not a gauge reading. It is the FOOD CHAIN asking for an input inside a
+    // tenth of a second (CONFIG.strike.charge.sweetFraction), so it SNAPS in
+    // where its neighbour eases, on the shortest arrival in the game.
+    //
+    // AND IT HOLDS ITS BLOOM ALL THE WAY OUT rather than dying back. The line
+    // outlives the window it is about — 0.8s of text over a 0.1s opportunity —
+    // and a halo that faded would read as the moment expiring, which is a lie
+    // told at a hundred milliseconds' resolution. Steady is honest: the words
+    // are a rhythm to learn, not a bar to watch.
+    strikeNow: {
+      in: { time: 0.07, ease: 'outExpo', scale: 1.35, fade: 0, lift: 5, bloom: 22 },
+      out: { time: 0.3, ease: 'inQuad', scale: 1, fade: 0, lift: -8, bloom: 22 },
     },
   },
 
@@ -14628,6 +14843,16 @@ export const CONFIG = {
       // read as a second arrow rather than as this one changing its mind.
       turnRate: 9,
     },
+    // THE WORLD TIP — a first-run line standing beside the thing it is about.
+    // Only its clearance lives here; the type is the coach role like every
+    // other tip (see ui/typography.js), because it is the same voice.
+    world: {
+      // How far off the subject the line sits, in pixels. Screen-space rather
+      // than world units so it clears the object by the same readable margin
+      // at any zoom — the gap is about the TYPE not being on top of the thing,
+      // and type is measured in pixels.
+      gap: 46,
+    },
   },
 
   // ---------------------------------------------------------------------------
@@ -14695,6 +14920,47 @@ export const CONFIG = {
     // comfortably inside the shot at any zoom — the whole point is that they
     // are looking at the animal while they read the line.
     showRange: 22,
+    // HOW A TIP LEAVES, once the thing it was about is gone. See
+    // ui/tipDissolve.js for what each style actually does — they are four
+    // genuinely different reads and the choice is meant to be made by looking
+    // (`npm run looks:tip`), not by reasoning about the names.
+    //
+    // `current` is the default because it is the only one with a DIRECTION in
+    // it: the water climbs the line and takes it, which is a thing happening to
+    // the sentence rather than the sentence being switched off. The others stay
+    // because they are right for a different feel of game and cost nothing to
+    // keep — the whole set is one small module.
+    dissipate: {
+      style: 'current',
+      // The whole departure. Long enough to be a dissolve and not a cut; short
+      // enough that the tip is not still leaving when the player has swum
+      // somewhere else. The row's own `hold` has nothing to do with this — that
+      // is the reading time, and this starts after it.
+      seconds: 0.7,
+      // The rest of these are the look, and they are the same numbers the look
+      // page's sliders write. See TIP_DISSOLVE_DEFAULTS.
+      warp: 14,
+      flow: 26,
+      drift: 18,
+      spread: 5,
+      cell: 3,
+      boilHz: 11,
+    },
+    // WHATEVER THE TIP IS ABOUT, PULSING — see systems/telegraph.js. On a first
+    // run there are four kinds of glowing thing in the water at once and a
+    // sentence cannot say which one it means; this is the other half of the
+    // message.
+    telegraph: {
+      enabled: true,
+      // A multiplier on the colour the object already wears, so a chunk goes
+      // bright RED and a bubble bright white. High on purpose: this has to be
+      // plainly brighter than the resting glow every pickup already has, and
+      // the pickups are already the brightest things in the water.
+      boost: 2.6,
+      // Slow enough to read as breathing rather than as an alarm. A first-run
+      // tip is up for seconds, so this is two or three swells per tip.
+      hz: 1.6,
+    },
   },
 
   // ---------------------------------------------------------------------------
@@ -17060,6 +17326,16 @@ export const CONFIG = {
     // straight ahead falls behind at 32 u/s and never arrives — so widening
     // the striking radius WITHOUT raising the pull collects nothing extra.
     magnet: {
+      // THE MAGNET IS A FOOD CHAIN PRIVILEGE. With a chain window open the seal
+      // reaches for chum exactly as described above; outside one it reaches
+      // for nothing and food has to be swum into. An always-on magnet collects
+      // the ocean for you, and the chain stops being something you keep alive.
+      //
+      // Set false to put the old always-on magnet back — it is one flag rather
+      // than a rewrite because this is the kind of change that wants trying
+      // both ways in a session. Chum and chunks only; the blue orb, the bubble
+      // and the morsel are never gated. See chumHoming in systems/chumMagnet.js.
+      chainGated: true,
       idle:     { radiusMul: 1,    speedMul: 1 },
       // Moving with intent reaches further than drifting, so the wide magnet
       // reads as a reward for swimming rather than for parking on a pile.
@@ -18676,10 +18952,15 @@ function textPanelGroups() {
     panel: 'text',
     items: [
       ...popupMotionItems('chain'),
-      // The ramp the banner runs along as the chain deepens. Its cold end is
-      // the chain role's own colour, two groups up.
-      { path: 'textMotion.chain.colorHot', type: 'color', label: 'colour at a deep chain' },
-      { path: 'textMotion.chain.hotAt', min: 3, max: 20, step: 1, label: '...reached at this many links' },
+      // THE HUE WHEEL THE WHOLE MECHANIC RIDES, and it is not only this
+      // banner's: the STRIKE NOW! prompt and the ring's combo arc read the
+      // same four numbers (systems/chainColor.js). Here because this is the
+      // surface you judge them on — the banner is the biggest thing wearing
+      // the colour and the only one with the link count printed beside it.
+      { path: 'strike.chainColor.hue', min: 0, max: 1, step: 0.01, label: 'food chain: hue a fresh chain starts on' },
+      { path: 'strike.chainColor.huePerLink', min: 0, max: 0.5, step: 0.005, label: '...how far round the wheel per link' },
+      { path: 'strike.chainColor.sat', min: 0, max: 1, step: 0.02, label: '...saturation, held across the wheel' },
+      { path: 'strike.chainColor.light', min: 0.2, max: 0.9, step: 0.02, label: '...lightness, held across the wheel' },
     ],
   }, {
     group: 'Upgrade proc — motion',
@@ -18701,6 +18982,14 @@ function textPanelGroups() {
     section: 'Popups',
     panel: 'text',
     items: bandMotionItems('boostWarn'),
+  }, {
+    // The OTHER line on the ring, and a different kind of message — see the
+    // Strike prompt role above and CONFIG.textMotion.strikeNow. Its colour is
+    // not here: it wears the live chain's, four groups up.
+    group: 'Strike prompt — motion',
+    section: 'Popups',
+    panel: 'text',
+    items: bandMotionItems('strikeNow'),
   }, {
     // WHERE THE CALLOUTS SIT, in the Text panel rather than the main tuner,
     // because every row here is answering "can I read that, there" — which is
@@ -18733,6 +19022,28 @@ function textPanelGroups() {
       { path: 'callouts.arrow.bobDistance', min: 0, max: 40, step: 1, label: 'bob along its aim (px)' },
       { path: 'callouts.arrow.bobSpeed', min: 0, max: 8, step: 0.1, label: 'bob speed' },
       { path: 'callouts.arrow.turnRate', min: 1, max: 30, step: 0.5, label: 'how fast it swings to a new target' },
+    ],
+  }, {
+    // THE FIRST-RUN TIP BESIDE ITS SUBJECT — where it stands, and how it goes.
+    // In the Text panel with the rest of the callouts rather than in Gameplay:
+    // everything here is legibility and look, and the numbers that decide WHEN
+    // a tip fires are a different panel on purpose.
+    group: 'First-run tip',
+    section: 'Popups',
+    panel: 'text',
+    items: [
+      { path: 'callouts.world.gap', min: 0, max: 160, step: 2, label: 'gap between the line and the thing (px)' },
+      { path: 'tutorial.dissipate.style', type: 'choice', options: TIP_DISSOLVES, label: 'how it leaves' },
+      { path: 'tutorial.dissipate.seconds', min: 0.1, max: 3, step: 0.05, label: 'how long it takes to leave (s)' },
+      { path: 'tutorial.dissipate.warp', min: 0, max: 40, step: 1, label: 'water push (px)' },
+      { path: 'tutorial.dissipate.flow', min: 0, max: 80, step: 1, label: 'flow speed (px/s)' },
+      { path: 'tutorial.dissipate.drift', min: 0, max: 60, step: 1, label: 'drift as it goes — current only (px)' },
+      { path: 'tutorial.dissipate.spread', min: 0, max: 16, step: 0.5, label: 'diffusion — ink only (px)' },
+      { path: 'tutorial.dissipate.cell', min: 1, max: 8, step: 0.25, label: 'grain — boil only (x line height)' },
+      { path: 'tutorial.dissipate.boilHz', min: 1, max: 24, step: 1, label: 'boil rate — boil only (Hz)' },
+      { path: 'tutorial.telegraph.enabled', type: 'bool', label: 'light up whatever the tip is about' },
+      { path: 'tutorial.telegraph.boost', min: 1, max: 6, step: 0.1, label: 'how much brighter at the top of the pulse' },
+      { path: 'tutorial.telegraph.hz', min: 0.2, max: 6, step: 0.1, label: 'pulse rate (Hz)' },
     ],
   });
 
@@ -19313,6 +19624,11 @@ export const TUNER_SCHEMA = [
       { path: 'biolum.skin.pulseAmp', min: 0, max: 1, step: 0.05, label: 'seal glow breath' },
       { path: 'biolum.skin.pulseSync', type: 'choice', options: BEAT_DIVISIONS, label: 'breath — one per' },
       { path: 'biolum.skin.pulseSpeed', min: 0.1, max: 8, step: 0.1, label: '...rate when free (rad/s)' },
+      // The basic shot in the element's colour. Both ride elementPower(), so
+      // at noon with 'power kept in daylight' at 0 these do nothing however
+      // far they are dragged — which is correct, and is the readout.
+      { path: 'biolum.shot.amount', min: 0, max: 1, step: 0.05, label: 'shot takes element colour' },
+      { path: 'biolum.shot.trailAmount', min: 0, max: 1, step: 0.05, label: '...and its trail' },
     ],
   },
   {

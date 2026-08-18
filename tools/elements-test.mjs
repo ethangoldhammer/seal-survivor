@@ -38,6 +38,8 @@ import {
   updateElementSkin,
 } from '../path/src/systems/elements.js';
 import { attachNoiseShader } from '../path/src/systems/noiseShader.js';
+import { getAssetMaterials, setAssetTint } from '../path/src/assets.js';
+import { elementColor, elementTrailMix } from '../path/src/systems/elements.js';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -578,6 +580,75 @@ function dealtAtNight() {
   setup({ element: 'venom', level: 3, night: 1 });
   const e = fakeEnemy(0, 0);
   return applyElementalHit(scene, e, 100, [e], noHooks);
+}
+
+// ===========================================================================
+section('THE SHOT WEARS THE ELEMENT');
+// ===========================================================================
+// The card says the shots carry an element, and the pellet was the one place
+// that never showed it. It rides elementPower() like the seal's glow does, so
+// these checks are as much about the day gate as about the colour: a shot that
+// stayed green at noon would be advertising an ability that applies nothing.
+{
+  const bulletHex = () => getAssetMaterials('bullet')[0].color.getHex();
+  const asColor = (hex) => new THREE.Color(hex).getHex();
+  // The pellet's own colour, read before anything has tinted it, so this
+  // survives somebody retuning the bullet in assets.js.
+  resetElements(scene);
+  const stone = bulletHex();
+
+  setup({ element: 'venom', level: 2, night: 1 });
+  updateElements(dt, scene, [], noHooks);
+  check('a venom run turns the pellet venom-green',
+    bulletHex() === asColor(elementColor('venom')), `#${bulletHex().toString(16)}`);
+  check('...which is not the stone it fires by default', bulletHex() !== stone);
+  check('...and the ribbon behind it follows', elementTrailMix() > 0,
+    `mix ${elementTrailMix().toFixed(2)}`);
+
+  setup({ element: 'chill', level: 2, night: 1 });
+  updateElements(dt, scene, [], noHooks);
+  check('a chill run is a different colour again',
+    bulletHex() === asColor(elementColor('chill')), `#${bulletHex().toString(16)}`);
+
+  // THE DAY GATE, on the colour. Held open by the line at the end of the day
+  // gate section above, so it has to be closed again here.
+  b.night.dayPower = SHIPPED_DAY_POWER;
+  setup({ element: 'venom', level: 2, night: 0 });
+  updateElements(dt, scene, [], noHooks);
+  check('at noon the shot goes back to being a pebble', bulletHex() === stone,
+    `#${bulletHex().toString(16)} at power ${elementPower()}`);
+  check('...and so does its ribbon', elementTrailMix() === 0);
+
+  setup({ element: 'venom', level: 2, night: 0.5 });
+  updateElements(dt, scene, [], noHooks);
+  check('dusk is partway between, not a switch',
+    bulletHex() !== stone && bulletHex() !== asColor(elementColor('venom')),
+    `#${bulletHex().toString(16)}`);
+  b.night.dayPower = 1;
+
+  // A LOOK-PANEL TINT UNDERNEATH SURVIVES IT. The element writes a blend layer
+  // rather than the tint itself precisely so a bullet colour set in the
+  // texture workbench comes back when the element lets go — writing `tint`
+  // would have "restored" it to the asset default and eaten the user's work.
+  // Cleared first: the dusk blend above is still on the material, and a
+  // half-faded magenta is not what "the user's tint" means.
+  resetElements(scene);
+  setAssetTint('bullet', 0xff00ff);
+  const custom = bulletHex();
+  setup({ element: 'venom', level: 2, night: 1 });
+  updateElements(dt, scene, [], noHooks);
+  check('a custom bullet tint is overridden while the element is awake',
+    bulletHex() === asColor(elementColor('venom')));
+  resetElements(scene);
+  check('...and comes back when the run ends', bulletHex() === custom,
+    `#${bulletHex().toString(16)} vs #${custom.toString(16)}`);
+  setAssetTint('bullet', null);
+
+  setup({ element: 'shock', level: 2, night: 1 });
+  updateElements(dt, scene, [], noHooks);
+  resetElements(scene);
+  check('a run that ended lit up does not open lit up', bulletHex() === stone,
+    `#${bulletHex().toString(16)}`);
 }
 
 // ===========================================================================

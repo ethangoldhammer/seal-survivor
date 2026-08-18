@@ -98,8 +98,23 @@ const store = localStorage;
 const { CONFIG } = await import('../path/src/config.js');
 const {
   CALLOUTS, WARN_IDS, bandState, bandStates, resetCallouts, updateCallouts, activeCallout,
+  pinCallout, calloutAge,
   pushCallout, clearCallout, holdFor, checkCalloutBindings,
 } = await import('../path/src/systems/callouts.js');
+const {
+  telegraphPulse, telegraphMul, setTelegraph, updateTelegraph,
+} = await import('../path/src/systems/telegraph.js');
+// A three.js Color is not needed to test the paint path and importing one would
+// drag the renderer into a state-machine test. What the path actually uses is
+// copy/clone/multiplyScalar, so that is what this has.
+function makeColor(r, g, b) {
+  return {
+    r, g, b,
+    clone() { return makeColor(this.r, this.g, this.b); },
+    copy(o) { this.r = o.r; this.g = o.g; this.b = o.b; return this; },
+    multiplyScalar(k) { this.r *= k; this.g *= k; this.b *= k; return this; },
+  };
+}
 const { settings, bindKey } = await import('../path/src/systems/settings.js');
 const {
   playerName, loadPlayerName, savePlayerName, clearPlayerName, expandPlayer,
@@ -116,6 +131,8 @@ const {
 const { initCallouts, updateCalloutUi, clearCalloutUi } = await import('../path/src/ui/callout.js');
 const { popupPose } = await import('../path/src/ui/ui.js');
 const { TEXT_ROLES } = await import('../path/src/textRoles.js');
+const { chainCss } = await import('../path/src/systems/chainColor.js');
+const { strikeState, resetStrike, liveChain } = await import('../path/src/systems/strike.js');
 const THREE = await import('three');
 
 let failures = 0;
@@ -181,23 +198,39 @@ section('the parser');
   const warns = [];
   const table = parseCalloutCsv(
     [
-      'id,kind,text,enabled,priority,hold,repeat,arrow',
+      'id,kind,text,enabled,priority,hold,repeat,subject',
       'good,warn,Fine,TRUE,10,2,3,surface',
       'off,warn,Hidden,FALSE,10,2,,',
       'nokind,sideways,Words,TRUE,10,2,,',
       'notext,warn,,TRUE,10,2,,',
-      'badarrow,warn,Words,TRUE,10,2,,sideways',
+      'badsubject,warn,Words,TRUE,10,2,,sideways',
       'blank,warn,Words,TRUE,,,,',
+      // A coach row about a thing. Its anchor is DERIVED and must ignore the
+      // column, which is the only way the two can never disagree.
+      'lived,coach,Words,TRUE,10,2,,pickup',
+      'banded,coach,Words,TRUE,10,2,,',
     ].join('\n'),
     (m) => warns.push(m),
   );
   check('an enabled row parses', table.get('good')?.text === 'Fine');
-  check('...with its arrow', table.get('good')?.arrow === 'surface');
+  check('...with its subject', table.get('good')?.subject === 'surface');
   check('enabled=FALSE drops the row', !table.has('off'));
   check('an unknown kind drops the row', !table.has('nokind'));
   check('a row with no text drops', !table.has('notext'));
-  check('an unknown arrow keeps the row, loses the arrow',
-    table.has('badarrow') && table.get('badarrow').arrow === null);
+  check('an unknown subject keeps the row, loses the subject',
+    table.has('badsubject') && table.get('badsubject').subject === null);
+  // THE DERIVED ANCHOR. A coach line about an object stands beside it, whatever
+  // the anchor column says — the two cells cannot be allowed to disagree,
+  // because the disagreement is a tip pinned to a bubble with its words in the
+  // middle of the screen.
+  check('a coach row with a subject is anchored to the world',
+    table.get('lived')?.anchor === 'world', table.get('lived')?.anchor);
+  check('...and one without a subject stays on the band',
+    table.get('banded')?.anchor === 'band', table.get('banded')?.anchor);
+  // ...and a WARNING is never moved off the band by a subject, or an emergency
+  // could end up riding an orb somewhere off screen.
+  check('a warning with a subject stays on the band',
+    table.get('good')?.anchor === 'band', table.get('good')?.anchor);
   check('a blank priority is 0, not missing', table.get('blank')?.priority === 0);
   // The distinction the whole `repeat` column rests on.
   check('a blank repeat is null (never repeats)', table.get('blank')?.repeat === null);
@@ -205,7 +238,7 @@ section('the parser');
     holdFor(table.get('blank')) === CONFIG.callouts.hold, String(holdFor(table.get('blank'))));
   // Each REJECTION says which row it dropped. `enabled=FALSE` is deliberately
   // not in this list: taking a row out on purpose is not a mistake to report.
-  for (const id of ['nokind', 'notext', 'badarrow']) {
+  for (const id of ['nokind', 'notext', 'badsubject']) {
     check(`"${id}" was warned about by name`, warns.some((m) => m.includes(`"${id}"`)),
       warns.join(' | '));
   }
@@ -216,7 +249,7 @@ section('the parser');
   // The join check itself has to catch both directions, or it is decorative.
   const warns = [];
   const table = parseCalloutCsv(
-    ['id,kind,text,enabled,priority,hold,repeat,arrow', 'ghost,warn,Boo,TRUE,10,2,,'].join('\n'),
+    ['id,kind,text,enabled,priority,hold,repeat,subject', 'ghost,warn,Boo,TRUE,10,2,,'].join('\n'),
     () => {},
   );
   checkCalloutIds(table, ['real'], [], (m) => warns.push(m));
@@ -245,13 +278,24 @@ section('one band, and who gets it');
 {
   resetCallouts();
   const boss = CALLOUTS.get('boss');
-  const surface = CALLOUTS.get('surface');
+  // A CONTROL TIP, because those are the only coach rows left on the band —
+  // everything the ocean teaches now stands beside its own subject and cannot
+  // collide with a warning at all. `strike` is the one every device gets.
+  const tip = CALLOUTS.get('strike');
   pushCallout(boss);
-  pushCallout(surface);
-  check('a coach tip outranks the LOUDEST warning', bandState.row === surface,
-    `boss priority ${boss.priority} vs tip ${surface.priority}`);
+  pushCallout(tip);
+  check('a coach tip outranks the LOUDEST warning', bandState.row === tip,
+    `boss priority ${boss.priority} vs tip ${tip.priority}`);
   pushCallout(boss);
-  check('...and the warning cannot take it back', bandState.row === surface);
+  check('...and the warning cannot take it back', bandState.row === tip);
+  // AND A WORLD TIP DOES NOT COMPETE AT ALL. It is not politeness — the two are
+  // drawn in different places, so a tip about a bubble taking the band off
+  // "Warning!" would be silencing an emergency to explain a power-up.
+  resetCallouts();
+  pushCallout(boss);
+  pushCallout(CALLOUTS.get('bubbleOrb'));
+  check('a world tip leaves the band alone', bandState.row === boss);
+  check('...and is up at the same time', bandStates.world.row === CALLOUTS.get('bubbleOrb'));
 }
 {
   resetCallouts();
@@ -353,8 +397,18 @@ section('two surfaces: the band, and the line on the seal');
   check('...and so is the line telling you to spend what you banked',
     CALLOUTS.get('strikeNow').anchor === 'player');
   const sealRows = [...CALLOUTS.values()].filter((r) => r.anchor === 'player');
-  check('...and they are the only two off the band', sealRows.length === 2,
+  check('...and they are the only two on the seal', sealRows.length === 2,
     sealRows.map((r) => r.id).join(','));
+  // THE THIRD SURFACE. Every tip about something in the water stands beside it;
+  // what is left on the band is the three control tips, which are about a stick
+  // and a button and have nowhere in the ocean to be.
+  const banded = [...CALLOUTS.values()].filter((r) => r.kind === 'coach' && r.anchor === 'band');
+  check('the only tips left on the band are the control ones',
+    banded.every((r) => ['swim', 'aim', 'strike'].includes(r.id)),
+    banded.map((r) => r.id).join(','));
+  const world = [...CALLOUTS.values()].filter((r) => r.anchor === 'world');
+  check('...and everything the ocean teaches is anchored to what it teaches',
+    world.length >= 10 && world.every((r) => !!r.subject), world.map((r) => r.id).join(','));
 }
 {
   // THE TWO THINGS AN EMPTY METER MEANS. They share the seal's one slot, and
@@ -409,19 +463,24 @@ section('two surfaces: the band, and the line on the seal');
   // never be able to silence the boost meter, which is on the seal.
   resetCallouts();
   pushCallout(CALLOUTS.get('boost'));
-  pushCallout(CALLOUTS.get('surface'));
+  pushCallout(CALLOUTS.get('strike'));
   check('a band tip does not clear the line on the seal',
-    bandStates.player.row?.id === 'boost' && bandStates.band.row?.id === 'surface');
+    bandStates.player.row?.id === 'boost' && bandStates.band.row?.id === 'strike');
 }
 {
   // The role and motion block a line wears comes from the system, not the UI.
   resetCallouts();
   pushCallout(CALLOUTS.get('boost'));
   pushCallout(CALLOUTS.get('oxygen'));
+  pushCallout(CALLOUTS.get('strike'));
   pushCallout(CALLOUTS.get('surface'));
   check('the seal line is on its own motion block',
     activeCallout('player').motion === 'boostWarn');
   check('a band tip is on the tip block', activeCallout('band').motion === 'coach');
+  // The world tip shares the tip's role deliberately: same voice, same size,
+  // different place. A surface of its own would have been a second look for the
+  // same speaker.
+  check('...and so is the one out in the water', activeCallout('world').motion === 'coach');
   resetCallouts();
   pushCallout(CALLOUTS.get('oxygen'));
   check('a band warning is on the warning block', activeCallout('band').motion === 'warn');
@@ -429,6 +488,38 @@ section('two surfaces: the band, and the line on the seal');
     check(`${key} has a motion block to be on`, !!CONFIG.textMotion[key]);
     check(`...and a text role wearing it`, TEXT_ROLES.some((r) => r.motion === key));
   }
+}
+
+{
+  // THE PIN. A world tip has no clock: it is up until the thing it is about is
+  // gone. Without this a tip riding a bubble would expire at its `hold` while
+  // the bubble was still there, unexplained, with the label that named it
+  // simply missing.
+  resetCallouts();
+  const row = CALLOUTS.get('bubbleOrb');
+  pushCallout(row);
+  pinCallout(row, true);
+  updateCallouts(holdFor(row) * 3, {}, true);
+  check('a pinned line outlives its own hold',
+    bandStates.world.row === row, `after ${(holdFor(row) * 3).toFixed(1)}s`);
+  check('...and its age still ran', calloutAge(row) > holdFor(row));
+  pinCallout(row, false);
+  updateCallouts(0.05, {}, true);
+  check('...and it leaves the moment it is unpinned', bandStates.world.row === null);
+}
+{
+  // The pin belongs to the LINE, not to the surface. A pin left behind would be
+  // a callout that can never expire, which is the one failure mode worse than
+  // any of the timing ones above.
+  resetCallouts();
+  const row = CALLOUTS.get('bubbleOrb');
+  pushCallout(row);
+  pinCallout(row, true);
+  clearCallout(row);
+  pushCallout(CALLOUTS.get('chumChunk'));
+  updateCallouts(holdFor(CALLOUTS.get('chumChunk')) + 0.1, {}, true);
+  check('the next line does not inherit the last one\'s pin',
+    bandStates.world.row === null);
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +561,77 @@ function setWater(ctx, kind, on) {
 // `device` defaults to the keyboard because that is the run with the fewest
 // steps in it — a touch run has the movement tip as well, and starting from the
 // smaller set means a test that means to cover it has to say so.
+// ---------------------------------------------------------------------------
+// A WORLD FOR THE TIPS TO STAND IN
+//
+// Every tip about a thing now takes hold of that thing when it starts and lets
+// go when it is gone (see takeSubject/subjectAt in main.js). The harness has to
+// supply both, and it supplies them FROM THE SAME BOOLEANS the steps read —
+// which is what main.js does too, one level down: a bubble is in the water for
+// exactly as long as ctx.inWater says it is.
+//
+// The objects are real (an identity to compare, a position to move, a stand-in
+// mesh to light up) because the things worth testing are all about identity:
+// that the tip keeps hold of ONE bubble, that it lets go of that one when it is
+// taken, and that it never quietly re-targets to the next.
+function makeSubjects(ctx) {
+  // One standing object per kind, created on demand and thrown away when its
+  // kind leaves the water. A fresh object each time it comes back, so a test
+  // can tell "the same bubble" from "another bubble".
+  const livingn = new Map();
+  const thing = (key, x, y) => {
+    let o = livingn.get(key);
+    if (!o) {
+      o = { mesh: { name: key, position: { x, y } } };
+      livingn.set(key, o);
+    }
+    return o;
+  };
+  const alive = (kind, id) => {
+    if (kind === 'pickup') return ctx.inWater.has(id);
+    if (kind === 'chum') return ctx.chumInWater;
+    if (kind === 'creature') return ctx.unkillableNear;
+    return true;
+  };
+  return {
+    take(kind, id) {
+      if (kind === 'surface' || kind === 'seabed') return { kind };
+      if (!alive(kind, id)) return null;
+      return { kind, id, entry: thing(`${kind}:${id ?? ''}`, ctx.subjectX ?? 4, ctx.subjectY ?? 3) };
+    },
+    at(handle) {
+      if (!handle) return null;
+      // The two places answer every frame and never die, exactly as the arena's
+      // do — "straight up from the seal" cannot be collected.
+      if (handle.kind === 'surface') return { x: ctx.playerX ?? 0, y: 20 };
+      if (handle.kind === 'seabed') return { x: ctx.playerX ?? 0, y: -20 };
+      if (!alive(handle.kind, handle.id)) {
+        livingn.delete(`${handle.kind}:${handle.id ?? ''}`);
+        return null;
+      }
+      const m = handle.entry.mesh;
+      // The thing drifts, so a test can prove the tip is FOLLOWING rather than
+      // having latched a position when it started.
+      m.position.x = ctx.subjectX ?? m.position.x;
+      m.position.y = ctx.subjectY ?? m.position.y;
+      return { x: m.position.x, y: m.position.y, mesh: m };
+    },
+  };
+}
+
+// The same world, bolted onto a hand-rolled ctx. Several blocks below drive
+// updateTutorial directly with three or four fields rather than through
+// coachRun, and every one of them is about a tip that now has to have something
+// to stand beside.
+function withSubjects(ctx) {
+  ctx.inWater ??= new Set();
+  ctx.pickupInWater ??= (kind) => ctx.inWater.has(kind);
+  const world = makeSubjects(ctx);
+  ctx.takeSubject = (kind, id) => world.take(kind, id);
+  ctx.subjectAt = (handle) => world.at(handle);
+  return ctx;
+}
+
 function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
   const seen = [];
   const ctx = {
@@ -492,7 +654,15 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
     feeding: false,
     chumOnSeabed: false,
     unkillableNear: false,
+    // Where whatever the tip is about happens to be. Written by a script that
+    // wants to watch the label follow it.
+    subjectX: 4,
+    subjectY: 3,
+    playerX: 0,
   };
+  const world = makeSubjects(ctx);
+  ctx.takeSubject = (kind, id) => world.take(kind, id);
+  ctx.subjectAt = (handle) => world.at(handle);
   for (let t = 0; t < seconds; t += DT) {
     ctx.runTime = t;
     script(ctx, t);
@@ -584,14 +754,18 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
   resetTutorial();
   resetCallouts();
   resetTutorialRun();
+  // TAKEN ONE AT A TIME, and that is not scene-setting — it is the new
+  // contract. A tip stands beside its orb until that orb is gone, so four orbs
+  // left floating for the whole run is one tip up for the whole run and three
+  // that correctly never get a turn. What this block is about is which EVENT
+  // spends which tip, so each orb is swum into in its own window.
   const seen = coachRun((ctx, t) => {
     if (t > 3 && t < 3.05) noteTutorialEvent('strike');
-    // All four collectable kinds in the water at once, and ONE of them taken.
-    setWater(ctx, 'bubbleOrb', true);
-    setWater(ctx, 'strikeOrb', true);
-    setWater(ctx, 'rapidFireOrb', true);
-    setWater(ctx, 'chumChunk', true);
-    if (t > 8 && t < 8.05) noteTutorialEvent('bubbleOrb');
+    setWater(ctx, 'bubbleOrb', t < 8);
+    setWater(ctx, 'strikeOrb', t >= 8 && t < 20);
+    setWater(ctx, 'rapidFireOrb', t >= 20 && t < 32);
+    setWater(ctx, 'chumChunk', t >= 32 && t < 44);
+    if (t > 7.9 && t < 7.95) noteTutorialEvent('bubbleOrb');
   }, { seconds: 60 });
   const done = tutorialDone();
   check('taking a bubble spends the bubble tip', done.has('bubbleOrb'), [...done].join(','));
@@ -606,19 +780,28 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
 
 {
   // THE ATTRACTOR IS NOT SWUM INTO. It is a field a trawler drops — it rises
-  // and drags the seabed to you — so its tip is the second in the file with no
-  // answer, and the only thing that can end it is its own hold. A `done` copied
-  // from the four orbs beside it would leave this line on the band until
-  // something louder took it, every run, forever.
+  // and drags the seabed to you — so there is no event that can answer its tip,
+  // and what ends it is the field itself going.
+  //
+  // THIS USED TO BE THE ROW'S `hold`, and the change is the point of the whole
+  // feature: the label stands on the thing for as long as the thing is there.
+  // A tip that expired first would leave a glowing object in the water with the
+  // sentence that explained it already gone.
   store.clear();
   resetTutorial();
   resetCallouts();
   resetTutorialRun();
+  let upWhileThere = false;
   coachRun((ctx, t) => {
     if (t > 3 && t < 3.05) noteTutorialEvent('strike');
-    setWater(ctx, 'attractorOrb', t > 6);
+    setWater(ctx, 'attractorOrb', t > 6 && t < 30);
+    // Sampled well past the row's own hold, which is what makes this a test of
+    // the pin rather than of the clock.
+    if (t > 20 && t < 20.05 && tutorialState.active === 'attractorOrb') upWhileThere = true;
   }, { seconds: 40 });
-  check('the attractor tip ends on its own clock with nothing to collect',
+  check('the attractor tip is still up long past its hold',
+    upWhileThere, `hold ${holdFor(CALLOUTS.get('attractorOrb'))}s`);
+  check('...and is spent when the field goes',
     tutorialDone().has('attractorOrb'), [...tutorialDone()].join(','));
 }
 
@@ -632,13 +815,24 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
   resetTutorial();
   resetCallouts();
   resetTutorialRun();
-  const ctx = { runTime: 10, device: 'kbm', charging: true, unkillableNear: true };
+  const ctx = withSubjects({ runTime: 10, device: 'kbm', charging: true, unkillableNear: true });
+  let stillTalking = false;
   for (let t = 0; t < 20; t += DT) {
     updateCallouts(DT, {}, true);
     updateTutorial(DT, ctx, true);
+    if (t > 12) stillTalking = tutorialState.active === 'invincible';
   }
-  check('a tip with nothing to obey comes off the band on its own clock',
-    tutorialState.active !== 'invincible', `active: ${tutorialState.active}`);
+  // The clock no longer ends it — the animal leaving does. Twelve seconds is
+  // twice the row's hold, so a tip still up here is a pinned one.
+  check('a tip with nothing to obey stays while the animal is there', stillTalking,
+    `active: ${tutorialState.active}`);
+  ctx.unkillableNear = false;
+  for (let t = 0; t < 3; t += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+  }
+  check('...comes off when it swims away', tutorialState.active !== 'invincible',
+    `active: ${tutorialState.active}`);
   check('...and is marked done, so it never returns', tutorialDone().has('invincible'));
 }
 
@@ -654,7 +848,7 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
   // The strike tip outranks this one and is ready on any run past the opening
   // delay, so it is answered and waited out first — otherwise what this block
   // measures is the control half of the coach, not the seabed tip.
-  const ctx = { runTime: 10, device: 'kbm', charging: true, chumOnSeabed: true };
+  const ctx = withSubjects({ runTime: 10, device: 'kbm', charging: true, chumOnSeabed: true });
   while (!tutorialDone().has('strike')) {
     updateCallouts(DT, {}, true);
     updateTutorial(DT, ctx, true);
@@ -1046,7 +1240,10 @@ section('{player} — one name, every text table');
       at += 9;
     }
     ctx.chumOnSeabed = t > 74 && t < 82;
-    ctx.unkillableNear = t > 84;
+    // ...and the turtle SWIMS AWAY again. It has to: nothing can answer this
+    // tip, so the animal leaving is now the only thing that ends it, and a run
+    // that fades out with one still on screen leaves the last step unspent.
+    ctx.unkillableNear = t > 84 && t < 90;
   }, { device: 'kbm', seconds: 95 });
   check('a keyboard player finishes without the two stick steps',
     tutorialComplete('kbm'), [...tutorialDone()].join(','));
@@ -1066,17 +1263,28 @@ section('{player} — one name, every text table');
   resetTutorial();
   resetCallouts();
   resetTutorialRun();
+  // The air tip has to arrive while the chum tip is genuinely up, so the strike
+  // is answered early and given time to be read and to clear — the two are on
+  // DIFFERENT surfaces now (the band and the water), and a strike tip still
+  // being read would not be preempted by the air tip at all. It would simply be
+  // beside it, which is correct and is not what this block is measuring.
   const seen = coachRun((ctx, t) => {
     ctx.chumInWater = true;
-    if (t > 4 && t < 4.05) noteTutorialEvent('strike');
-    ctx.oxygenLow = t > 6 && t < 8;
-    ctx.aboveSurface = t >= 7.5 && t < 8;
-  }, { seconds: 12 });
+    if (t > 3 && t < 3.05) noteTutorialEvent('strike');
+    ctx.oxygenLow = t > 12 && t < 15;
+    ctx.aboveSurface = t >= 14 && t < 15;
+  }, { seconds: 18 });
   const order = seen.map((s) => s.id);
-  check('running out of air takes the band off whatever was talking',
+  check('the chum tip is up first', order.indexOf('chum') >= 0
+    && order.indexOf('chum') < order.indexOf('surface'), order.join(' → '));
+  check('running out of air takes the surface off whatever was talking',
     order.includes('surface'), order.join(' → '));
   check('...and does it as the air runs out',
-    seen.find((s) => s.id === 'surface')?.t < 6.2, order.join(' → '));
+    seen.find((s) => s.id === 'surface')?.t < 12.3,
+    `${seen.find((s) => s.id === 'surface')?.t}s — ${order.join(' → ')}`);
+  check('...and the tip it interrupted is NOT spent',
+    !tutorialDone().has('chum') || order.lastIndexOf('chum') > order.indexOf('surface'),
+    [...tutorialDone()].join(','));
 }
 {
   // The ledger. A step done in one run must not be offered in the next; a step
@@ -1142,7 +1350,7 @@ section('the pace — how long a tip stays, and the quiet after it');
   resetTutorial();
   resetCallouts();
   resetTutorialRun();
-  const ctx = { runTime: 99, device: 'kbm', charging: true };
+  const ctx = withSubjects({ runTime: 99, device: 'kbm', charging: true });
   let shown = 0;
   for (let t = 0; t < 12 && !tutorialDone().has('strike'); t += DT) {
     updateCallouts(DT, {}, true);
@@ -1164,9 +1372,18 @@ section('the pace — how long a tip stays, and the quiet after it');
   resetTutorial();
   resetCallouts();
   resetTutorialRun();
+  // Each orb has its own window and is swum into inside it — a tip holds its
+  // place until its own subject is gone, so four orbs left floating would be
+  // one tip up for the whole run rather than four spaced out. The spacing this
+  // block measures is the QUIET AFTER a tip ends, which is unchanged.
   const seen = coachRun((ctx, t) => {
     if (t > 3 && t < 3.05) noteTutorialEvent('strike');
-    for (const k of ['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'chumChunk']) setWater(ctx, k, true);
+    let at = 12;
+    for (const k of ['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'chumChunk']) {
+      setWater(ctx, k, t > at && t < at + 8);
+      if (t > at + 6 && t < at + 6.05) noteTutorialEvent(k);
+      at += 9;
+    }
   }, { seconds: 90 });
   const gaps = [];
   for (let i = 1; i < seen.length; i++) gaps.push(seen[i].t - seen[i - 1].t);
@@ -1191,19 +1408,22 @@ section('the pace — how long a tip stays, and the quiet after it');
   // left the band, so that the quiet it armed is the only thing in the way.
   // Scripted on the clock instead, the air went low while the STRIKE tip was
   // still up, preempted it, and the check passed without ever reaching the gap.
-  const ctx = {
+  const ctx = withSubjects({
     runTime: 99, device: 'kbm', charging: true,
     inWater: new Set(['bubbleOrb']),
-    pickupInWater: (k) => ctx.inWater.has(k),
     oxygenLow: false, aboveSurface: false,
-  };
+  });
   const step = () => { updateCallouts(DT, {}, true); updateTutorial(DT, ctx, true); };
 
   // Past the strike tip, then the bubble tip, answered.
   for (let t = 0; t < 30 && !tutorialDone().has('strike'); t += DT) step();
   for (let t = 0; t < 30 && tutorialState.active !== 'bubbleOrb'; t += DT) step();
   check('the bubble tip is up', tutorialState.active === 'bubbleOrb', `${tutorialState.active}`);
+  // Swum into, AND out of the water — the two halves of collecting one, and
+  // the tip needs both: the event answers it, and the orb being gone is what
+  // releases the pin holding it beside the place the orb used to be.
   noteTutorialEvent('bubbleOrb');
+  ctx.inWater.delete('bubbleOrb');
   for (let t = 0; t < 30 && tutorialState.active === 'bubbleOrb'; t += DT) step();
   check('...and ends', tutorialDone().has('bubbleOrb'));
 
@@ -1222,7 +1442,7 @@ section('the pace — how long a tip stays, and the quiet after it');
   resetTutorial();
   resetCallouts();
   resetTutorialRun();
-  const ctx = { runTime: 99, device: 'kbm', chumInWater: true, oxygenLow: false, aboveSurface: false, airTime: 0, nearSurface: false };
+  const ctx = withSubjects({ runTime: 99, device: 'kbm', chumInWater: true, oxygenLow: false, aboveSurface: false, airTime: 0, nearSurface: false });
   updateCallouts(DT, {}, true);
   updateTutorial(DT, ctx, true);
   check('a tip is talking', tutorialState.active === 'strike');
@@ -1264,7 +1484,7 @@ section('the pace — how long a tip stays, and the quiet after it');
     resetCallouts();
     resetTutorialRun();
     const done = tutorialDone();
-    const ctx = {
+    const ctx = withSubjects({
       runTime: 99, device: 'touch',
       moving: false, aiming: false, charging: false,
       chumInWater: true, oxygenLow: !done.has('surface'),
@@ -1272,9 +1492,9 @@ section('the pace — how long a tip stays, and the quiet after it');
       // The water half. Like the air pair above, these follow the ledger: the
       // seabed tip is READY on a floor with chum on it and DONE on one without,
       // so a fixed value would either never offer it or never let it finish.
-      pickupInWater: () => true, feeding: true,
+      inWater: new Set(COACH_IDS), feeding: true,
       chumOnSeabed: !done.has('crab'), unkillableNear: true,
-    };
+    });
     updateCallouts(DT, {}, true);
     updateTutorial(DT, ctx, true);
     if (!tutorialState.active) continue;
@@ -1298,6 +1518,14 @@ section('the pace — how long a tip stays, and the quiet after it');
     ctx.oxygenLow = false;
     ctx.airTime = 1;
     ctx.chumOnSeabed = false;
+    // ...AND THE WATER EMPTIES. Answering is no longer enough for every step:
+    // two of them (the attractor field, the turtle) have nothing to answer at
+    // all, and what ends those is the thing itself leaving. A loop that only
+    // fired events would spin here forever against a tip that is behaving
+    // exactly as designed.
+    ctx.inWater.clear();
+    ctx.chumInWater = false;
+    ctx.unkillableNear = false;
     for (let f = 0; f < 600 && tutorialState.active; f++) {
       updateCallouts(DT, {}, true);
       updateTutorial(DT, ctx, true);
@@ -1328,19 +1556,227 @@ section('the pace — how long a tip stays, and the quiet after it');
 }
 
 // ---------------------------------------------------------------------------
+section('a tip that stands beside its subject');
+// ---------------------------------------------------------------------------
+{
+  // ONE BUBBLE, HELD. The failure this is about is silent and would look
+  // perfectly reasonable on screen: a tip that re-asked "the nearest bubble"
+  // every frame would slide from orb to orb as the seal swam, and would never
+  // end, because there is always a nearest one.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const ctx = withSubjects({
+    runTime: 99, device: 'kbm', charging: true,
+    inWater: new Set(['bubbleOrb']), subjectX: 4, subjectY: 3,
+  });
+  const step = () => { updateCallouts(DT, {}, true); updateTutorial(DT, ctx, true); };
+  for (let t = 0; t < 30 && !tutorialDone().has('strike'); t += DT) step();
+  for (let t = 0; t < 30 && tutorialState.active !== 'bubbleOrb'; t += DT) step();
+  check('the bubble tip is up', tutorialState.active === 'bubbleOrb', `${tutorialState.active}`);
+
+  const first = tutorialState.subjectMesh;
+  check('...holding an actual object, not a copy of a position', !!first);
+  check('...and standing where it is',
+    tutorialState.anchor?.x === 4 && tutorialState.anchor?.y === 3,
+    JSON.stringify(tutorialState.anchor));
+
+  // THE THING MOVES — a bubble rises — and the words go with it.
+  ctx.subjectX = 9;
+  ctx.subjectY = 11;
+  step();
+  check('...and follows it as it drifts',
+    tutorialState.anchor?.x === 9 && tutorialState.anchor?.y === 11,
+    JSON.stringify(tutorialState.anchor));
+  check('...still the same object', tutorialState.subjectMesh === first);
+
+  // WELL PAST THE ROW'S OWN HOLD. This is the pin doing its job, and it is the
+  // whole feature: the sentence is still there because the bubble is.
+  const hold = holdFor(CALLOUTS.get('bubbleOrb'));
+  for (let t = 0; t < hold * 2; t += DT) step();
+  check('a tip outlives its hold while its subject is there',
+    tutorialState.active === 'bubbleOrb', `after ${(hold * 2).toFixed(1)}s of a ${hold}s hold`);
+
+  // AND THE BUBBLE IS POPPED. The words hold the place it was in — they have to
+  // be readable — and the object is dropped on the same frame, because
+  // something is lighting it up.
+  const where = { ...tutorialState.anchor };
+  noteTutorialEvent('bubbleOrb');
+  ctx.inWater.delete('bubbleOrb');
+  step();
+  check('...the light goes out the moment the thing is taken',
+    tutorialState.subjectMesh === null);
+  check('...but the words stay exactly where it was',
+    tutorialState.anchor?.x === where.x && tutorialState.anchor?.y === where.y,
+    JSON.stringify(tutorialState.anchor));
+  for (let t = 0; t < 12 && tutorialState.active === 'bubbleOrb'; t += DT) step();
+  check('...and then the tip is done', tutorialDone().has('bubbleOrb'));
+}
+{
+  // THE DISSOLVE IS PART OF THE LINE, not something that happens after it. The
+  // row stays on its surface for the whole of it — a tip that vanished on the
+  // frame it was answered would have no exit at all, and the mask would be
+  // drawn over an empty element.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const ctx = withSubjects({
+    runTime: 99, device: 'kbm', charging: true, inWater: new Set(['bubbleOrb']),
+  });
+  const step = () => { updateCallouts(DT, {}, true); updateTutorial(DT, ctx, true); };
+  for (let t = 0; t < 60 && tutorialState.active !== 'bubbleOrb'; t += DT) step();
+  check('the bubble tip is up again', tutorialState.active === 'bubbleOrb');
+  check('...and is not dissolving while it stands there', tutorialState.fade === 0);
+
+  noteTutorialEvent('bubbleOrb');
+  ctx.inWater.delete('bubbleOrb');
+  for (let t = 0; t < 12 && tutorialState.active; t += DT) step();
+  const row = CALLOUTS.get('bubbleOrb');
+  check('the step ends before the picture of it does', tutorialState.active === null);
+  check('...with the words still on their surface', bandStates.world.row === row);
+  check('...and the dissolve just started', tutorialState.fade < 0.2,
+    String(tutorialState.fade.toFixed(2)));
+
+  const seconds = CONFIG.tutorial.dissipate.seconds;
+  for (let t = 0; t < seconds * 0.5; t += DT) step();
+  check('...running while the line is still there',
+    tutorialState.fade > 0.2 && bandStates.world.row === row,
+    `${tutorialState.fade.toFixed(2)} / ${bandStates.world.row?.id}`);
+  for (let t = 0; t < seconds; t += DT) step();
+  check('...and the line goes when it finishes', bandStates.world.row === null);
+  check('...leaving nothing behind to draw', tutorialState.fade === 0);
+}
+{
+  // DYING CUTS IT OFF RATHER THAN DISSOLVING IT. A sentence eroding gently
+  // through the game-over card is the wrong thing happening at the wrong
+  // moment — and the step must not be spent either, which is the older rule
+  // this one has to keep.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const ctx = withSubjects({
+    runTime: 99, device: 'kbm', charging: true, inWater: new Set(['bubbleOrb']),
+  });
+  for (let t = 0; t < 60 && tutorialState.active !== 'bubbleOrb'; t += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+  }
+  check('a tip is up before the seal dies', tutorialState.active === 'bubbleOrb');
+  updateTutorial(DT, ctx, false);
+  check('death takes it down at once', tutorialState.active === null
+    && bandStates.world.row === null);
+  check('...with no dissolve left running', tutorialState.fade === 0);
+  check('...and without spending it', !tutorialDone().has('bubbleOrb'));
+}
+
+// ---------------------------------------------------------------------------
+section('lighting up what the tip is about');
+// ---------------------------------------------------------------------------
+{
+  // The pulse. It starts and ends at the object's OWN brightness rather than at
+  // the peak: a highlight that flashed on the frame it appeared would be
+  // speaking the language the game already uses for damage.
+  const rest = telegraphPulse(0);
+  check('the pulse starts at the colour the thing already has', Math.abs(rest - 1) < 1e-9,
+    String(rest));
+  const hz = CONFIG.tutorial.telegraph.hz;
+  const peak = telegraphPulse(0.5 / hz);
+  check('...and swells to the boost', Math.abs(peak - CONFIG.tutorial.telegraph.boost) < 1e-6,
+    `${peak.toFixed(2)} vs ${CONFIG.tutorial.telegraph.boost}`);
+  check('...and comes back down', Math.abs(telegraphPulse(1 / hz) - 1) < 1e-6);
+  let below = false;
+  for (let i = 0; i <= 64; i++) if (telegraphPulse(i / 32 / hz) < 1 - 1e-9) below = true;
+  check('...never dimmer than it was', !below);
+}
+{
+  // ONE THING AT A TIME, and everything else untouched. The multiplier is read
+  // from inside the pickup loops, so a version that answered for the wrong mesh
+  // would light the whole arena.
+  const orb = { name: 'orb', position: { x: 0, y: 0 } };
+  const other = { name: 'other', position: { x: 0, y: 0 } };
+  setTelegraph(orb, 'ask');
+  updateTelegraph(0.5 / CONFIG.tutorial.telegraph.hz);
+  check('the subject is pushed', telegraphMul(orb) > 1.5, String(telegraphMul(orb)));
+  check('...and nothing else is', telegraphMul(other) === 1 && telegraphMul(null) === 1);
+  setTelegraph(null);
+  check('...and nothing at all once the tip is done', telegraphMul(orb) === 1);
+}
+{
+  // THE PAINT PATH, which is the one that can do damage: the three floating
+  // orbs share one material with every other orb of their kind, so the pulse
+  // has to be written to a CLONE and the shared one put back afterwards.
+  // Getting this wrong lights every bubble in the arena and then leaves them
+  // all lit.
+  const shared = { color: makeColor(0.2, 0.4, 0.6), userData: {}, clone() {
+    return { color: this.color.clone(), userData: {}, disposed: false,
+      dispose() { this.disposed = true; } };
+  } };
+  const mesh = { material: shared, userData: {} };
+  setTelegraph(mesh, 'paint');
+  const clone = mesh.material;
+  check('a shared material is not written to', clone !== shared);
+  updateTelegraph(0.5 / CONFIG.tutorial.telegraph.hz);
+  check('...the clone is', mesh.material.color.r > 0.2 * 1.5,
+    String(mesh.material.color.r));
+  check('...and the shared one is exactly as it was',
+    Math.abs(shared.color.r - 0.2) < 1e-9, String(shared.color.r));
+  setTelegraph(null);
+  check('the object gets its own material back', mesh.material === shared);
+  // ...and the copy is actually let go of. A clone per tip is four materials a
+  // run and would never be noticed; the reason to check is that the same line
+  // is what proves `release` ran at all rather than merely dropping the
+  // reference.
+  check('...and the clone is disposed of', clone.disposed === true);
+}
+{
+  // A MATERIAL WITH AN INJECTED SHADER IS LEFT ALONE. A clone drops
+  // onBeforeCompile outright, so a bubble's fresnel shell would render as a
+  // flat blob for exactly as long as the tip explaining it was up — which is
+  // the worst possible moment for it.
+  const shell = { color: makeColor(1, 1, 1), userData: {}, clone() { return this; } };
+  shell.onBeforeCompile = () => {};
+  const mesh = { material: shell, userData: {} };
+  setTelegraph(mesh, 'paint');
+  updateTelegraph(0.5 / CONFIG.tutorial.telegraph.hz);
+  check('a material with an injected shader is not cloned or painted',
+    mesh.material === shell && Math.abs(shell.color.r - 1) < 1e-9, String(shell.color.r));
+  setTelegraph(null);
+}
+{
+  // The switch. It is in the Text panel with everything else about how a tip
+  // looks, and it has to actually reach the pulse.
+  const was = CONFIG.tutorial.telegraph.enabled;
+  CONFIG.tutorial.telegraph.enabled = false;
+  const orb = { name: 'orb' };
+  setTelegraph(orb, 'ask');
+  updateTelegraph(0.5 / CONFIG.tutorial.telegraph.hz);
+  check('the highlight can be switched off', telegraphMul(orb) === 1);
+  CONFIG.tutorial.telegraph.enabled = was;
+  setTelegraph(null);
+}
+
+// ---------------------------------------------------------------------------
 section('what the UI is handed');
 // ---------------------------------------------------------------------------
 {
   resetCallouts();
   check('nothing to draw when the band is empty', activeCallout() === null);
+  // Read off the WORLD surface, which is where a tip about a place or a thing
+  // now lives. Asking the band for it is how this block failed the first time
+  // the anchors moved, and that is the failure being kept: activeCallout is
+  // per surface, and a caller looking at the wrong one gets a confident null.
   pushCallout(CALLOUTS.get('surface'));
   updateCallouts(0.2, {}, false);
-  const c = activeCallout();
+  const c = activeCallout('world');
   check('a live callout reports its words', c?.text === CALLOUTS.get('surface').text);
   check('...its kind, so the tip can be coloured apart from an alarm', c.kind === 'coach');
-  check('...its arrow', c.arrow === 'surface');
+  check('...what it is about', c.subject === 'surface');
   check('...its age and the hold that age is measured against',
     c.age > 0.15 && c.hold === holdFor(CALLOUTS.get('surface')));
+  check('...and the band is untouched by any of it', activeCallout('band') === null);
 }
 
 // ---------------------------------------------------------------------------
@@ -1354,9 +1790,11 @@ section('drawing it, and where the arrow points');
 
   const band = root.querySelector('.sv-callout');
   const boost = root.querySelector('.sv-callout-boost');
+  const world = root.querySelector('.sv-callout-world');
+  const worldInk = root.querySelector('.sv-callout-ink');
   const arrow = root.querySelector('.sv-callout-arrow');
-  check('the band, the seal line and the arrow are built once',
-    !!band && !!boost && !!arrow);
+  check('the band, the seal line, the world tip and the arrow are built once',
+    !!band && !!boost && !!world && !!worldInk && !!arrow);
   check('...and sit above the menus in the layer order',
     root.lastChild.className === 'sv-callout-layer');
 
@@ -1407,146 +1845,161 @@ section('drawing it, and where the arrow points');
       .replace('{strike}', 'Space');
   })(), band.textContent);
 
-  // --- a tip: the second class, and an arrow that means UP ---
-  resetCallouts();
-  clearCalloutUi();
-  pushCallout(CALLOUTS.get('surface'));
-  // The seal at the origin and the waterline above it, so the seal projects to
-  // the middle of the screen and "up" is unambiguous. (In the game the surface
-  // is the fixed one and the seal is below it; the arrow only ever sees the
-  // difference between the two, so this is the same geometry with less
-  // arithmetic in the assertions.)
-  updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, surfaceY: 10 });
-  check('a tip wears both classes, so its own rule can win',
-    band.className.includes('sv-callout') && band.className.includes('sv-callout-coach'),
-    band.className);
-  check('the surface arrow is drawn', !arrow.className.includes('sv-hidden'));
-  {
-    // The whole point of that arrow. The seal projects to the middle of the
-    // screen; "up" in the world is a SMALLER screen y, so the arrow has to sit
-    // above the seal's own screen position — and be roughly on its vertical.
-    const sealY = window.innerHeight / 2;
-    const sealX = window.innerWidth / 2;
-    const size = CONFIG.callouts.arrow.size;
-    const ax = at(arrow, 'left') + size / 2;
-    const ay = at(arrow, 'top') + size / 2;
-    check('...above the seal, not below it', ay < sealY - 20, `arrow y ${ay.toFixed(0)} vs seal ${sealY}`);
-    check('...and straight up, not off to one side', Math.abs(ax - sealX) < 6,
-      `arrow x ${ax.toFixed(0)} vs seal ${sealX}`);
-    // CLEAR OF THE SEAL'S FURNITURE, derived the way the code derives it rather
-    // than compared to a pixel literal — the whole point of the change is that
-    // moving the bars or the ring moves the arrow with them, and a hardcoded
-    // number here would pass while the arrow sat on top of the bars.
-    {
-      const ring = CONFIG.strike.ring;
-      const furniture = Math.max(CONFIG.hud.playerBarOffset, ring.radius * (ring.scale ?? 1));
-      const perWorldUnit = window.innerHeight / 40; // the camera above spans 40 units
-      const wantPx = (furniture + CONFIG.callouts.arrow.gap) * perWorldUnit;
-      check('...clear of the bars AND the ring, whatever they are set to',
-        Math.abs((sealY - ay) - wantPx) < CONFIG.callouts.arrow.bobDistance,
-        `${(sealY - ay).toFixed(0)}px vs ${wantPx.toFixed(0)}px (furniture ${furniture})`);
-      check('...which is genuinely past the further of the two',
-        (sealY - ay) > furniture * perWorldUnit,
-        `${(sealY - ay).toFixed(0)}px vs bars/ring at ${(furniture * perWorldUnit).toFixed(0)}px`);
-    }
-  }
-
-  // --- the chum arrow follows the chum ---
-  resetCallouts();
-  clearCalloutUi();
-  pushCallout(CALLOUTS.get('chum'));
-  const sealX = window.innerWidth / 2;
-  updateCalloutUi(0.016, {
-    camera, playerX: 0, playerY: 0, nearestChum: () => ({ x: 10, y: 0 }),
-  });
-  const chumArrowX = at(arrow, 'left') + CONFIG.callouts.arrow.size / 2;
-  check('the chum arrow points at the chum', chumArrowX > sealX + 40, `x ${chumArrowX.toFixed(0)}`);
-  {
-    // Re-targeting has to be a SWING, not a jump: one frame of a 180° change
-    // must not land the arrow on the far side.
-    const before = at(arrow, 'left');
-    updateCalloutUi(0.016, {
-      camera, playerX: 0, playerY: 0, nearestChum: () => ({ x: -10, y: 0 }),
-    });
-    const after = at(arrow, 'left');
-    check('a new target is swung toward, not snapped to',
-      after < before && after > sealX, `${before.toFixed(0)} -> ${after.toFixed(0)}`);
-  }
-  {
-    // The orb was eaten mid-tip. The arrow must go, and the sentence must stay.
-    updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, nearestChum: () => null });
-    check('the arrow goes when its target does', arrow.className.includes('sv-hidden'));
-    check('...and the line explaining it stays', !band.className.includes('sv-hidden'));
-  }
-
-  // --- the power-up arrow reads its OWN target, not the chum one ---
-  // The failure this catches is a one-word slip in arrowTarget: with a hundred
-  // chum orbs in the water to one power-up, an arrow that fell through to
-  // nearestChum would look right in almost every screenshot and point at the
-  // wrong thing under a line about power-ups nearly every time it mattered.
+  // --- A TIP BESIDE THE THING IT IS ABOUT ---
+  // The feature, drawn: the words are not on the band at all any more, they are
+  // in the water next to their subject. `tipAnchor` is the world position the
+  // coach is holding — see tutorialState.anchor.
   resetCallouts();
   clearCalloutUi();
   pushCallout(CALLOUTS.get('bubbleOrb'));
+  const sealX = window.innerWidth / 2;
+  const sealY = window.innerHeight / 2;
+  // The camera above spans 40 world units, so this is the scale every position
+  // check below is written against rather than in pixels.
+  const perUnitX = window.innerWidth / 40;
+  const perUnitY = window.innerHeight / 40;
   updateCalloutUi(0.016, {
-    camera, playerX: 0, playerY: 0,
-    nearestChum: () => ({ x: -10, y: 0 }),
-    nearestPickup: () => ({ x: 10, y: 0 }),
+    camera, playerX: 0, playerY: 0, tipAnchor: { x: 6, y: 0 }, tipFade: 0,
   });
+  check('a world tip is drawn out in the water',
+    !world.className.includes('sv-hidden') && worldInk.textContent === CALLOUTS.get('bubbleOrb').text,
+    worldInk.textContent);
+  check('...and the band is left empty for the warnings',
+    band.className.includes('sv-hidden'), band.className);
   {
+    // ON the thing horizontally, ABOVE it vertically. The horizontal check is
+    // the one that matters most: a label a hundred pixels to the side of four
+    // similar orbs is a label about none of them.
+    const boxW = world.offsetWidth || 0;
+    const cx = at(world, 'left') + boxW / 2;
+    const wantX = sealX + 6 * perUnitX;
+    check('...centred on its subject', Math.abs(cx - wantX) < 8,
+      `${cx.toFixed(0)}px vs ${wantX.toFixed(0)}px`);
+    check('...and above it, not on top of it', at(world, 'top') < sealY - 10,
+      `top ${at(world, 'top').toFixed(0)} vs subject ${sealY}`);
+  }
+  {
+    // A SUBJECT NEAR THE TOP OF THE SCREEN. Bubbles rise, so this is the common
+    // case rather than an edge one: there is no room above, and a label clamped
+    // to the ceiling would be sitting on the very thing it is pointing out.
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 0, y: 19 }, tipFade: 0,
+    });
+    const subjectY = sealY - 19 * perUnitY;
+    check('a tip whose subject is at the top of the frame flips below it',
+      at(world, 'top') > subjectY, `top ${at(world, 'top').toFixed(0)} vs subject ${subjectY.toFixed(0)}`);
+  }
+  {
+    // OFF THE EDGE. The words stay, clamped to the frame — half a sentence
+    // against a border is readable and no sentence at all is not — and the
+    // arrow appears, which is the only case it exists for now.
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 60, y: 0 }, tipFade: 0,
+    });
+    const boxW = world.offsetWidth || 0;
+    check('a subject off the edge keeps its words on screen',
+      at(world, 'left') + boxW <= window.innerWidth + 1 && at(world, 'left') >= 0,
+      `left ${at(world, 'left').toFixed(0)} of ${window.innerWidth}`);
+    check('...and grows an arrow', !arrow.className.includes('sv-hidden'));
     const ax = at(arrow, 'left') + CONFIG.callouts.arrow.size / 2;
-    check('the power-up arrow points at the orb, not at the chum', ax > sealX + 40,
-      `x ${ax.toFixed(0)} vs seal ${sealX}`);
-  }
-  updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, nearestPickup: () => null });
-  check('...and goes when the orb expires mid-tip', arrow.className.includes('sv-hidden'));
-
-  // --- ...AND IT ASKS FOR THE RIGHT KIND OF ORB ---
-  // Five rows share `arrow: pickup`, and which orb each means is the ROW'S OWN
-  // ID. Nothing else in this file would notice if that argument were dropped:
-  // every check above passes with an arrow that points at whichever pickup
-  // happens to be nearest, and the bug on screen is a line about doubling your
-  // fire rate with an arrow on a bubble.
-  for (const id of ['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'chumChunk']) {
-    resetCallouts();
-    clearCalloutUi();
-    pushCallout(CALLOUTS.get(id));
-    let asked = null;
-    updateCalloutUi(0.016, {
-      camera, playerX: 0, playerY: 0,
-      nearestPickup: (x, y, kind) => { asked = kind; return { x: 10, y: 0 }; },
-    });
-    check(`the ${id} arrow asks for ${id}`, asked === id, `asked for ${asked}`);
+    check('...pointing the way the thing is', ax > sealX + 20, `x ${ax.toFixed(0)}`);
   }
   {
-    // And the attractor deliberately has none: it drags the chum to you, so
-    // there is nowhere to send the player.
+    // ...AND NOT OTHERWISE. An arrow pointing at a label the player is already
+    // reading is one glyph too many, and it was the whole of the old design.
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 4, y: 2 }, tipFade: 0,
+    });
+    check('a subject in plain sight needs no arrow', arrow.className.includes('sv-hidden'),
+      arrow.className);
+  }
+  {
+    // THE ARROW STILL MEANS UP for a tip about the surface — the case the whole
+    // aiming path was written for, now reached through the anchor. The seal is
+    // at the origin; a waterline far above it is off the top of the frame.
     resetCallouts();
     clearCalloutUi();
-    pushCallout(CALLOUTS.get('attractorOrb'));
+    pushCallout(CALLOUTS.get('surface'));
     updateCalloutUi(0.016, {
-      camera, playerX: 0, playerY: 0, nearestPickup: () => ({ x: 10, y: 0 }),
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 0, y: 60 }, tipFade: 0,
     });
-    check('the attractor tip draws no arrow', arrow.className.includes('sv-hidden'));
+    const size = CONFIG.callouts.arrow.size;
+    const ax = at(arrow, 'left') + size / 2;
+    const ay = at(arrow, 'top') + size / 2;
+    check('the surface arrow is drawn', !arrow.className.includes('sv-hidden'));
+    check('...above the seal, not below it', ay < sealY - 20,
+      `arrow y ${ay.toFixed(0)} vs seal ${sealY}`);
+    check('...and straight up, not off to one side', Math.abs(ax - sealX) < 6,
+      `arrow x ${ax.toFixed(0)} vs seal ${sealX}`);
+    // CLEAR OF THE SEAL'S FURNITURE, derived the way the code derives it rather
+    // than compared to a pixel literal — moving the bars or the ring moves the
+    // arrow with them, and a hardcoded number here would pass while the arrow
+    // sat on top of the bars.
+    const ring = CONFIG.strike.ring;
+    const furniture = Math.max(CONFIG.hud.playerBarOffset, ring.radius * (ring.scale ?? 1));
+    const wantPx = (furniture + CONFIG.callouts.arrow.gap) * perUnitY;
+    check('...clear of the bars AND the ring, whatever they are set to',
+      Math.abs((sealY - ay) - wantPx) < CONFIG.callouts.arrow.bobDistance,
+      `${(sealY - ay).toFixed(0)}px vs ${wantPx.toFixed(0)}px (furniture ${furniture})`);
   }
-
-  // --- the seabed arrow means DOWN ---
-  resetCallouts();
-  clearCalloutUi();
-  pushCallout(CALLOUTS.get('crab'));
-  updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, seabedY: -10 });
   {
-    // The mirror of the surface check above, and worth its own: the two are one
-    // line apart in arrowTarget, and a seabed arrow pointing at the sky is the
-    // exact bug that would survive every other check in this file.
-    const sealScreenY = window.innerHeight / 2;
+    // ...and DOWN for the seabed, which is one line away from it in the code
+    // and is the exact bug that would survive every other check in this file.
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get('crab'));
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 0, y: -60 }, tipFade: 0,
+    });
     const size = CONFIG.callouts.arrow.size;
     const ax = at(arrow, 'left') + size / 2;
     const ay = at(arrow, 'top') + size / 2;
     check('the seabed arrow is drawn', !arrow.className.includes('sv-hidden'));
-    check('...below the seal, not above it', ay > sealScreenY + 20,
-      `arrow y ${ay.toFixed(0)} vs seal ${sealScreenY}`);
+    check('...below the seal, not above it', ay > sealY + 20,
+      `arrow y ${ay.toFixed(0)} vs seal ${sealY}`);
     check('...and straight down, not off to one side', Math.abs(ax - sealX) < 6,
       `arrow x ${ax.toFixed(0)} vs seal ${sealX}`);
+  }
+  {
+    // A TIP WITH NOWHERE TO STAND DRAWS NOTHING. The anchor going null means the
+    // coach has no subject for a world row, which is a bug in the coach — and
+    // falling back to the middle of the screen would hide it behind something
+    // that looks deliberate.
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get('bubbleOrb'));
+    updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, tipAnchor: null });
+    check('a world tip with no anchor is not drawn', world.className.includes('sv-hidden'));
+    check('...and does not fall back onto the band', band.className.includes('sv-hidden'));
+  }
+  {
+    // THE DISSOLVE. What is asserted is the WIRING — that progress reaches the
+    // inner node and that zero leaves plain text behind — not what the water
+    // looks like, which is what `npm run looks:tip` is for.
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get('bubbleOrb'));
+    const draw = (fade) => updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 4, y: 0 }, tipFade: fade,
+    });
+    draw(0);
+    check('a tip standing there is plain text',
+      !worldInk.style.filter && !worldInk.style.maskImage,
+      `${worldInk.style.filter} / ${worldInk.style.maskImage}`);
+    draw(0.5);
+    check('...and half way out it is being eaten',
+      !!worldInk.style.filter || !!worldInk.style.maskImage,
+      `${worldInk.style.filter} / ${worldInk.style.maskImage}`);
+    // THE INNER NODE, NOT THE OUTER ONE. They are separate so that the arrival
+    // curve and the dissolve are not two writers on one transform — and the
+    // symptom of getting that wrong is a tip that snaps to full size on the
+    // frame it starts to leave.
+    check('...on the inner node, leaving the pose alone',
+      world.style.transform.includes('scale'), world.style.transform);
+    draw(0);
+    check('...and it goes back to plain text when it is not leaving',
+      !worldInk.style.filter && !worldInk.style.maskImage,
+      `${worldInk.style.filter} / ${worldInk.style.maskImage}`);
   }
 
   // --- the line on the seal ---
@@ -1587,6 +2040,47 @@ section('drawing it, and where the arrow points');
     check('...and sheds it once it has been noticed', boost.style.filter === 'none',
       boost.style.filter);
   }
+
+  // --- the OTHER line on the ring, which is not the same kind of line ---
+  //
+  // "STRIKE NOW!" shares this slot with "Boost Empty!" and is a completely
+  // different message: the gauge is reporting a fact you can act on whenever,
+  // and this is the FOOD CHAIN asking for an input inside a tenth of a second
+  // (CONFIG.strike.charge.sweetFraction). Dressed as the chain, therefore —
+  // and the thing worth pinning is that it is dressed DIFFERENTLY, because
+  // the failure is silent: two urgent lines in one place in one typeface, and
+  // the player learns neither.
+  resetCallouts();
+  clearCalloutUi();
+  pushCallout(CALLOUTS.get('strikeNow'));
+  updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0 });
+  check('the strike prompt takes the ring slot',
+    boost.textContent === CALLOUTS.get('strikeNow').text, boost.textContent);
+  check('...wearing both classes, so its own rule can win',
+    boost.className.includes('sv-callout-boost') && boost.className.includes('sv-callout-strike'),
+    boost.className);
+  check('...and a colour written inline, off the live chain',
+    boost.style.color === chainCss(liveChain()), `${boost.style.color} vs ${chainCss(liveChain())}`);
+  // The wheel really is live: three links in, the prompt has moved with it.
+  strikeState.chainCount = 3;
+  strikeState.chainTimer = CONFIG.strike.chainWindow;
+  updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0 });
+  check('...which moves as the chain deepens',
+    boost.style.color === chainCss(3) && chainCss(3) !== chainCss(0),
+    `${boost.style.color} vs ${chainCss(3)}`);
+  resetStrike();
+
+  // ...and the gauge's line does NOT inherit it, or "Boost Empty!" would come
+  // up wearing whatever hue the last chain happened to die on and the role's
+  // own gold would never be seen.
+  resetCallouts();
+  clearCalloutUi();
+  pushCallout(CALLOUTS.get('boost'));
+  updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0 });
+  check('the gauge line is not dressed as the chain',
+    !boost.className.includes('sv-callout-strike'), boost.className);
+  check('...and carries no inline colour of its own', boost.style.color === '',
+    boost.style.color || '(empty)');
 
   // --- both surfaces at once ---
   resetCallouts();

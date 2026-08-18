@@ -22,7 +22,7 @@ import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossState, capBossDamage } from './systems/boss.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickups, chumChunks } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, pickups, chumChunks } from './entities/pickups.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
@@ -39,7 +39,7 @@ import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable, perfectCrossed } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable, perfectCrossed, strikeLoaded } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -67,7 +67,7 @@ import { startAmbient, stopAmbient, preloadAmbient } from './systems/ambient.js'
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls } from './systems/seagull.js';
-import { spawnWhale, updateWhales, resetWhales, resetWhaleClock, updateWhaleClock, whaleDistance } from './systems/whale.js';
+import { spawnWhale, updateWhales, resetWhales, resetWhaleClock, updateWhaleClock, whaleDistance, nearestWhale, whaleAlive } from './systems/whale.js';
 import { updateBoats, resetBoats, boats, attractorOrbs, hitsBoat, damageBoat, jostleBoat, impactBoat } from './systems/boats.js';
 import { setWakeGrid } from './systems/boatWake.js';
 import { stepBodies } from './systems/rigidBody.js';
@@ -103,7 +103,8 @@ import { highScore } from './systems/leaderboard.js';
 import { initUI, showStartMenu, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, toggleHive } from './ui/upgradeHive.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
-import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS } from './systems/tutorial.js';
+import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
+import { setTelegraph, updateTelegraph, clearTelegraph } from './systems/telegraph.js';
 import { initCallouts, updateCalloutUi, clearCalloutUi } from './ui/callout.js';
 import { hidePauseMenu, isPauseOpen, showPauseMenu, updatePauseNav } from './ui/pauseMenu.js';
 import { actionForKey, onSettingsChanged, shakeScale } from './systems/settings.js';
@@ -1110,6 +1111,11 @@ function startGame() {
   resetCallouts();
   resetTutorialRun();
   clearCalloutUi();
+  // ...and nothing left lit from the last run's tip. The subject is usually
+  // gone with the arena anyway; what this is really for is the material a
+  // 'paint' highlight swapped in, which belongs back on its object before
+  // anything else can be spawned wearing it.
+  clearTelegraph();
 
   // Records the knobs this run was played under alongside the run itself: a
   // balance verdict only means anything next to the numbers that produced it,
@@ -1965,6 +1971,123 @@ function onChainHit(chain, source) {
 function pickupInWater(kind) {
   if (kind === 'attractorOrb') return attractorOrbs.length > 0;
   return pickupTypeInWater(kind);
+}
+
+// ---------------------------------------------------------------------------
+// WHAT A FIRST-RUN TIP IS STANDING NEXT TO
+//
+// The coach asks for a subject when a tip starts and then asks where it is on
+// every frame until it is gone (see systems/tutorial.js). Both halves live here
+// because this is the only file that has all five places a subject can come
+// from — the pickup arrays, the boats' attractor, the enemy list, the whale,
+// and the arena's own surface and floor.
+//
+// THE HANDLE IS OPAQUE TO THE COACH and is read back only through subjectAt.
+// That is what lets "the bubble the tip is about" be a different question from
+// "the nearest bubble": the tip holds THIS one, and when this one is swallowed
+// the tip ends, even if three more are drifting past.
+//
+// A PLACE IS A SUBJECT TOO. `surface` and `seabed` are answered fresh from the
+// arena every frame rather than being frozen at a point, because both of them
+// mean "straight up/down from the seal" — a tip about air that stayed pinned to
+// the patch of waterline the seal happened to be under when it fired would
+// drift a screen's width away while the player swam to it.
+// ---------------------------------------------------------------------------
+
+function takeSubject(kind, id) {
+  const x = player.mesh.position.x;
+  const y = player.mesh.position.y;
+  if (kind === 'surface' || kind === 'seabed') return { kind };
+  if (kind === 'chum') {
+    const handle = chumEntry(x, y);
+    return handle ? { kind, handle } : null;
+  }
+  if (kind === 'pickup') {
+    // The row's own id names the type — one string end to end, see the note on
+    // PICKUP_TIPS. The attractor is the one that lives somewhere else.
+    if (id === 'attractorOrb') {
+      const orb = attractorOrbs[0] ?? null;
+      return orb ? { kind, id, entry: orb, list: attractorOrbs } : null;
+    }
+    const entry = pickupEntry(id, x, y);
+    return entry ? { kind, id, entry } : null;
+  }
+  if (kind === 'creature') {
+    // Whichever unkillable thing is nearest, and the two are not the same kind
+    // of object at all — one is an enemy with a flag, the other was never an
+    // enemy. The tip says the same sentence about both, which is the whole
+    // reason there is one step and not two.
+    const range = CONFIG.tutorial?.showRange ?? 22;
+    let best = null;
+    let bestD = range;
+    for (const e of enemies) {
+      if (!e.invincible && !e.def?.invincible) continue;
+      const d = Math.hypot(e.mesh.position.x - x, e.mesh.position.y - y) - (e.radius ?? 0);
+      if (d < bestD) { bestD = d; best = { kind, enemy: e }; }
+    }
+    if (best) return best;
+    const w = whaleDistance(x, y) <= range ? nearestWhale(x, y) : null;
+    return w ? { kind, whale: w } : null;
+  }
+  return null;
+}
+
+// Where the subject is now, plus the mesh to light up — or null, which is the
+// coach's cue that the thing it was talking about is gone.
+// WHICH KIND OF HIGHLIGHT this step's subject can take. Keyed on the step id
+// because that is what says which array the object came from, and the two modes
+// are about who already writes the object's colour — see systems/telegraph.js.
+//
+// Everything not named here is 'ask', which is the harmless one: it multiplies
+// nothing unless the object's own owner asks for the multiplier.
+const PAINTED_SUBJECTS = new Set(['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'attractorOrb']);
+function telegraphModeFor(stepId) {
+  return PAINTED_SUBJECTS.has(stepId) ? 'paint' : 'ask';
+}
+
+function subjectAt(handle) {
+  if (!handle) return null;
+  const x = player.mesh.position.x;
+  const y = player.mesh.position.y;
+  if (handle.kind === 'surface') return { x, y: bounds.surfaceY };
+  if (handle.kind === 'seabed') {
+    // The pile, if there is one on the floor, and otherwise the floor itself
+    // under the seal. Both are right for the tip this serves ("loose chum sinks
+    // — out come the crabs"): while there is chum down there the sentence
+    // belongs beside it, and the step ends the moment the floor is clear
+    // anyway, so the fallback is only ever the frame in between.
+    const pile = nearestFloorPickup(x, y, Infinity);
+    if (pile) return { x: pile.mesh.position.x, y: pile.mesh.position.y, mesh: pile.mesh };
+    return { x, y: seabedTopY() };
+  }
+  if (handle.kind === 'chum') {
+    if (!chumEntryAlive(handle.handle)) return null;
+    const m = handle.handle.entry.mesh;
+    return { x: m.position.x, y: m.position.y, mesh: m };
+  }
+  if (handle.kind === 'pickup') {
+    const alive = handle.list
+      ? handle.list.indexOf(handle.entry) !== -1
+      : pickupEntryAlive(handle.id, handle.entry);
+    if (!alive) return null;
+    const m = handle.entry.mesh;
+    return { x: m.position.x, y: m.position.y, mesh: m };
+  }
+  if (handle.kind === 'creature') {
+    if (handle.enemy) {
+      if (enemies.indexOf(handle.enemy) === -1) return null;
+      const m = handle.enemy.mesh;
+      // NO MESH HANDED BACK for a creature, deliberately: an animal wears a
+      // skin, an outline and often an injected shader, and the highlight system
+      // would either refuse it or break it (see paintable in
+      // systems/telegraph.js). The label beside it is the whole tell.
+      return { x: m.position.x, y: m.position.y };
+    }
+    if (!whaleAlive(handle.whale)) return null;
+    const c = handle.whale.container;
+    return { x: c.position.x, y: c.position.y };
+  }
+  return null;
 }
 
 function chainFrom(source, links = 1) {
@@ -3302,7 +3425,7 @@ function animate(now) {
         // links alone cannot tell "never strikes" from "strikes constantly and
         // never links", and the first time this was asked about there was no
         // chain data in the run log at all.
-        playtest.recordStrike(rel.chain, rel.hadFood, rel.hadWindow);
+        playtest.recordStrike(rel.chain, rel.hadFood, rel.hadWindow, rel.sweet);
         // Combo-scaled, same multiplier the speed ceiling in updatePlayer
         // uses — a dash fired deep in a chain launches harder, and the ceiling
         // is already raised to let it.
@@ -4308,13 +4431,14 @@ function animate(now) {
   const o2Frac = player.oxygen / Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max);
   const hpFrac = player.hp / Math.max(1, player.stats.maxHp);
   const oxygenLow = !!CONFIG.oxygen.enabled && o2Frac < (calloutCfg.oxygenLow ?? 0.25);
-  // The charge meter, read once and used by both of the seal's own lines below.
+  // The charge meter, read once, for the DENIED press below. Its sibling —
+  // "STRIKE NOW!" — reads strikeLoaded() instead and no longer re-derives the
+  // same reading here; see the note by it.
   //
   // `strikeBanked` is minFire and not "anything at all", because a release
   // under that threshold fires nothing (tryStrike) and KEEPS the pending power
   // — so a fumbled release leaves the seal holding a sliver it cannot spend,
-  // and telling that player to STRIKE NOW! would be advice that does nothing
-  // when taken. Below the threshold the honest reading is the empty one.
+  // and calling that a denied press would be scolding a player mid-wind-up.
   const chargeEmpty = strikeState.charge <= (calloutCfg.boostEmpty ?? 0.02);
   const strikeBanked = strikeState.pending >= (CONFIG.strike.charge.minFire ?? 0.2);
   // A press against a dead meter. One frame by construction, so it cannot hold
@@ -4338,19 +4462,26 @@ function animate(now) {
     // sentences. Both live on the seal (callouts.csv, `anchor`), so neither is
     // competing with the band above for the eye.
     //
-    //   STRIKE NOW!  the wind-up burned the tank dry with a fireable strike
-    //                already banked. Nothing is wrong: the meter is empty
-    //                because it has all become power, and every extra frame of
-    //                holding is doing nothing at all. What the player needs is
-    //                not "you are out of boost" — which reads as a scolding for
-    //                playing correctly — it is LET GO.
+    //   STRIKE NOW!  the wind-up has nothing left to bank and a fireable
+    //                strike already in hand. Nothing is wrong: the meter is
+    //                empty because it has all become power, and every extra
+    //                frame of holding is doing nothing at all. What the player
+    //                needs is not "you are out of boost" — which reads as a
+    //                scolding for playing correctly — it is LET GO.
+    //
+    //                AND IT IS THE SWEET SPOT'S OWN MOMENT. strikeLoaded() is
+    //                what tryStrike times the release against, so this is not
+    //                advice about the mechanic, it IS the mechanic's clock
+    //                drawn on the ring. Spelling the test out here instead —
+    //                which is what this line used to do — left the two free to
+    //                disagree, and the window is a tenth of a second wide.
     //   Boost Empty! there is nothing banked and nothing to bank. Fires on the
     //                PRESS (`input.strike`, one frame) rather than on the hold,
     //                because that is the moment the fact is news: they asked
     //                for a strike and the game gave them nothing. Held down, it
     //                would nag for as long as a finger stayed on a button that
     //                was never going to answer.
-    strikeNow: chargeEmpty && input.strikeHeld && strikeBanked,
+    strikeNow: strikeLoaded() && input.strikeHeld,
     boost: boostDenied,
   }, bandLive && !gameState.paused);
 
@@ -4426,7 +4557,22 @@ function animate(now) {
       }
       return false;
     },
+    // How a tip finds the thing it is about, and how it keeps hold of it. Both
+    // by reference — see takeSubject above.
+    takeSubject,
+    subjectAt,
   }, bandLive);
+
+  // WHATEVER THE TIP IS ABOUT, LIT. Driven from the coach's own subject every
+  // frame rather than from the five places a tip can start, so there is exactly
+  // one answer to "what is being explained right now" and nothing can be left
+  // glowing after the sentence that lit it has gone.
+  //
+  // 'paint' is the mode for the floating power-ups, which have no brightness
+  // writer of their own; the chum orbs and the chunks are on 'ask' and multiply
+  // it into the glow they already write. See systems/telegraph.js.
+  setTelegraph(tutorialState.subjectMesh, telegraphModeFor(tutorialState.active));
+  updateTelegraph(realDt);
 
   updateCalloutUi(realDt, {
     camera: world.camera,
@@ -4454,6 +4600,13 @@ function animate(now) {
     device: inputDevice(),
     // And what to call the buttons on it, for a line that names one.
     tokens: inputTokens(),
+    // WHERE A WORLD-ANCHORED TIP IS SPOKEN, and how far through leaving it is.
+    // Both are the coach's, read straight off its state rather than recomputed
+    // here: the drawing must be looking at the same subject the coach is
+    // holding, or a tip could dissolve beside one bubble while ending because a
+    // different one was collected.
+    tipAnchor: tutorialState.anchor,
+    tipFade: tutorialState.fade,
   });
 
   // Suffocation — the beep, the surface gasps, and the pixelate/band-pass
