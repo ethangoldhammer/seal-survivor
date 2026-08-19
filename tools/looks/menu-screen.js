@@ -28,9 +28,11 @@ import { initPlayer, player, resetPlayer, updateAimRig } from '../../path/src/en
 import { stateForSpeed } from '../../path/src/systems/animation.js';
 import { createEyeLights, updateEyeLights } from '../../path/src/systems/eyeLights.js';
 import {
-  mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged,
+  mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuWake,
 } from '../../path/src/systems/mainMenu.js';
 import { initParticles, updateParticles, updateParticleScale } from '../../path/src/entities/particles.js';
+import { updateBubbles } from '../../path/src/systems/bubbles.js';
+import { bounds } from '../../path/src/arena.js';
 import { initTypography } from '../../path/src/ui/typography.js';
 import { input } from '../../path/src/input.js';
 
@@ -95,12 +97,25 @@ function tick(now) {
     player.anim?.update(dt, stateForSpeed(0, player.aboveSurface), false);
   }
   updateAimRig(dt, mainMenuAim() ?? input.aim, mainMenuEngaged(), 0, false);
+  // The seal's own breath, exactly as main.js fires it on this screen — the
+  // menu is the arena punched in, and the emitters are the run's. Measured off
+  // the position rather than `player.aboveSurface` for the reason main.js
+  // gives: nothing here runs updatePlayer, so that flag is never written.
+  if (mainMenuActive()) {
+    updateBubbles(dt, player.aimRig, player.velocity, player.mesh.position.y > bounds.surfaceY);
+  }
   updateEyeLights(dt, player.aimRig, { lit: 1, charge: 0 });
 
   if (mainMenuActive()) mainMenu()?.update(dt);
 
   world.updateSurface(dt);
-  world.grid.update(dt, player.mesh.position, player.velocity, { camera: world.camera });
+  // `wake` exactly as main.js hands it in: the ARENA's lattice is underneath
+  // the menu's own, and at this zoom the seal's run-tuned wake radius is wider
+  // than the frame — left alone it drags the whole backdrop into a web.
+  world.grid.update(dt, player.mesh.position, player.velocity, {
+    camera: world.camera,
+    wake: mainMenuWake(),
+  });
   world.updateCamera(player.mesh.position, dt, {});
   updateParticles(dt);
   updateParticleScale(world.camera, world.renderer);

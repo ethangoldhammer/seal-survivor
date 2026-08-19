@@ -48,12 +48,24 @@
 //                      and mixed by the weight, so at weight 0 the seal is
 //                      wearing exactly the rim the run authored — the one part
 //                      of this that cannot be got right by simply stopping.
-//   CONFIG.grid        the menu's lattice is denser and paler than the arena's.
+//   CONFIG.grid        the menu's lattice is denser and paler than the arena's,
+//                      the cursor's glow on it is smaller and brighter, a press
+//                      shoves it a fraction as hard, and the seal does not dent
+//                      it at all — one composition, at a sixth of the cell size
+//                      and a fifteenth of the view (CONFIG.splashBust.menu).
 //                      grid.js re-reads CONFIG every frame, so the overrides
 //                      are pushed and popped AROUND each call rather than
 //                      written and left: the tuner can snapshot CONFIG at any
 //                      moment, and a menu that had edited it would ship its own
 //                      numbers to the arena and to whatever got saved next.
+//                      The seal's wake is the exception and goes in by hand
+//                      (see wakeFor), because the ARENA's lattice needs it too
+//                      and main.js ticks that one before this file is called.
+//   the water's light  the caustics are the arena's, at this crop: `punched in`
+//                      magnifies the veins into blobs and the depth fade eats
+//                      what is left, so both the intensity and the density are
+//                      multiplied while the menu holds the frame and eased back
+//                      as the shot opens out. See setCausticsPunch in water.js.
 //
 // The particle system is NOT borrowed any more, and that is the dividend of
 // living in the world: the goo a button lets go of is emitted into the same
@@ -68,6 +80,7 @@ import { bustAim, bustPlumb, createBustPin, measureBust } from './splashBust.js'
 import { cineEnabled, cineMenu } from './cineCamera.js';
 import { createHexMenu } from './hexMenu.js';
 import { createGrid } from './grid.js';
+import { setCausticsPunch } from './water.js';
 import { stateForSpeed } from './animation.js';
 import { menuInput } from '../input.js';
 import { feedback } from './feedback.js';
@@ -107,6 +120,23 @@ export function mainMenuAim() {
 /** The live menu's handle, or null. */
 export function mainMenu() {
   return live?.handle ?? null;
+}
+
+/**
+ * HOW HARD THE SEAL SHOULD DENT THE ARENA'S LATTICE, or null for "whatever
+ * CONFIG says" — which is every frame there is no menu.
+ *
+ * The menu draws a fine lattice of its own but the arena's coarse one is still
+ * there underneath, and at fifteen times the run's zoom the seal's wake radius
+ * is wider than the frame: left alone, that one grid pulls every node on screen
+ * toward the animal and the backdrop reads as a web with the seal in the middle
+ * of it. Handed to world.grid.update by main.js, the same way the camera and
+ * the strike meter are, rather than pushed through CONFIG — the arena's grid is
+ * ticked well before this file gets the frame, so there is nothing to push it
+ * around.
+ */
+export function mainMenuWake() {
+  return live ? live.gridWake() : null;
 }
 
 /**
@@ -226,6 +256,72 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     opacity: menuCfg.latticeOpacity ?? CONFIG.grid.opacity,
   };
 
+  // --- and the rest of what the density change drags with it ----------------
+  //
+  // THE GRID IS MORE THAN THREE NUMBERS. Everything else CONFIG.grid holds —
+  // how hard the seal dents the field, how wide the cursor's glow is, how much
+  // a knock shoves — is authored against a fifty-unit view and a two-unit cell.
+  // This screen is a six-unit view and a one-unit cell, so the same numbers
+  // arrive between six and fifteen times too big and the lattice stops reading
+  // as a lattice: the hover glow lights the whole frame at once, a press tears
+  // the grid apart, and the seal's own wake drags every node on screen toward
+  // one point.
+  //
+  // The screen's own figures were chosen on the tuning page (`npm run
+  // looks:bust`, tools/looks/splash-bust.js, which applies exactly this set)
+  // and they SHIP in CONFIG.splashBust.menu. This is where they get applied to
+  // the game, which for a while they were not: only the three above crossed
+  // over, and the menu was drawing the composed lattice with the arena's
+  // physics on top of it.
+  //
+  // SCALINGS, NOT REPLACEMENTS, wherever the arena has an opinion worth
+  // keeping — `touchPunch` and `touchWarpScale` are fractions of the game's own
+  // numbers, so retuning the game still moves the menu.
+  //
+  // Derived on every call rather than captured at mount, for that same reason:
+  // a tuner edit to CONFIG.grid.touchGlow has to reach this screen while it is
+  // up, or the panel is lying about what it is editing.
+  const menuTouch = {};
+  const menuTouchRipple = {};
+  const menuTouchCharge = {};
+  function touchGlowForMenu() {
+    const t = CONFIG.grid.touchGlow ?? {};
+    const punch = menuCfg.touchPunch ?? 1;
+    const warp = menuCfg.touchWarpScale ?? 1;
+    // `wave` and `spin` are deliberately left alone: they are shape and time,
+    // not amount, and neither has a scale to be wrong about.
+    return Object.assign(menuTouch, t, {
+      radius: menuCfg.touchRadius ?? t.radius,
+      gain: menuCfg.touchGain ?? t.gain,
+      alpha: menuCfg.touchAlpha ?? t.alpha,
+      push: (t.push ?? 0) * warp,
+      swirl: (t.swirl ?? 0) * warp,
+      ripple: Object.assign(menuTouchRipple, t.ripple, {
+        strength: (t.ripple?.strength ?? 0) * punch,
+      }),
+      charge: Object.assign(menuTouchCharge, t.charge, {
+        pulseStrength: (t.charge?.pulseStrength ?? 0) * punch,
+      }),
+    });
+  }
+
+  /**
+   * HOW HARD THE SEAL DENTS THE LATTICE, this frame.
+   *
+   * Handed to grid.update as `view.wake` rather than pushed through CONFIG,
+   * because the ARENA's grid needs it too and that one is ticked by main.js,
+   * outside anything this file can push and pop around (see mainMenuWake).
+   *
+   * Blended by the weight, so the dent is not switched back on: it grows from
+   * the screen's `sealWake` to the run's own strength over the same second the
+   * camera pulls out, which is the moment it starts being a gameplay read
+   * again.
+   */
+  function wakeFor(w) {
+    const held = menuCfg.sealWake ?? 0;
+    return CONFIG.grid.wakeStrength + (held - CONFIG.grid.wakeStrength) * w;
+  }
+
   /** Run `fn` with the menu's grid settings in place, then put CONFIG back. */
   function withMenuGrid(fn, fade = 1) {
     const stash = {};
@@ -233,15 +329,42 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       stash[k] = CONFIG.grid[k];
       CONFIG.grid[k] = k === 'opacity' ? gridOverrides[k] * fade : gridOverrides[k];
     }
+    const stashTouch = CONFIG.grid.touchGlow;
+    CONFIG.grid.touchGlow = touchGlowForMenu();
     try {
       return fn();
     } finally {
       for (const k of Object.keys(stash)) CONFIG.grid[k] = stash[k];
+      CONFIG.grid.touchGlow = stashTouch;
     }
   }
 
   const grid = createGrid(scene);
   withMenuGrid(() => grid.build());
+
+  // --- the cells the buttons live in ----------------------------------------
+  // THREE CELLS OF THIS LATTICE ARE FURNITURE. Everything else ripples; these
+  // do not move at all, because a button whose cell drifts out from under it
+  // stops being part of the grid and starts being a tile lying on top of one —
+  // which is the entire difference this screen is built on.
+  //
+  // Pinned by the cell's HOME position, and by wherever the tile currently IS
+  // once it has been dragged off it: a pulled button travels over cells that
+  // are rippling under the cursor doing the pulling, and a tile sliding across
+  // a warped lattice reads as the lattice being made of something softer than
+  // the button. Published every frame, so the quiet patch travels with it.
+  const _pins = [];
+  function menuPins() {
+    _pins.length = 0;
+    const R = menu.metrics.R;
+    const feather = R * (menuCfg.pinFeather ?? 2.2);
+    for (const item of menu.items) {
+      _pins.push({ x: item.home.x, y: item.home.y, radius: R, feather });
+      const moved = Math.hypot(item.world.x - item.home.x, item.world.y - item.home.y);
+      if (moved > 1e-3) _pins.push({ x: item.world.x, y: item.world.y, radius: R, feather });
+    }
+    return _pins;
+  }
 
   // --- the scrim ------------------------------------------------------------
   // THE ONE THING THE ARENA COSTS THIS SCREEN. At fifteen times the run's zoom
@@ -678,6 +801,9 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     releaseFrom: 0,
     aim,
     handle: null,
+    // What the ARENA's lattice should be dented by while this screen is up —
+    // see mainMenuWake, and wakeFor for why it is a blend rather than a switch.
+    gridWake: () => wakeFor(state.weight),
   };
 
   function tidy() {
@@ -699,6 +825,11 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     scrim.geometry.dispose();
     scrim.material.dispose();
     grid.dispose();
+    // ...and the water back to the arena's own light. The eased value has
+    // already reached 1 by the time the weight runs out; this is the belt to
+    // that brace, and without it a menu torn down early (a resize mid-glide)
+    // would leave the run's ocean lit for a screen that is gone.
+    setCausticsPunch(1, 1);
     // The rim back to exactly what CONFIG says, rather than to whatever the
     // last mixed frame left on the shells. fitRim(0) has already put it there;
     // this is the belt to that brace, and it costs one pass over six materials
@@ -847,10 +978,21 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       menu.mesh.visible = w > 0.01;
       if (heldButton >= 0) menu.hold(heldButton, (performance.now() - heldAt) / 1000);
       menu.update(dt, mainMenuEngaged() ? hovered : -1);
-      // The lattice is ticked with the seal as its wake source, exactly the way
-      // the arena's own is — so the water dents around the animal on the menu
-      // for the same reason it does in a run.
-      withMenuGrid(() => grid.update(dt, at, _still, { camera }), w);
+      // The lattice, ticked at the menu's own numbers — and with the seal's
+      // wake handed in rather than read from CONFIG, because at this zoom the
+      // run's dent is the whole picture (see wakeFor).
+      withMenuGrid(() => {
+        grid.pin(menuPins());
+        grid.update(dt, at, _still, { camera, wake: wakeFor(w) });
+      }, w);
+      // THE LIGHT IN THE WATER, at this crop. Set here and read by the water
+      // material on the NEXT frame's colour pass — one frame of lag on an eased
+      // value, which is invisible, and the alternative is threading a menu's
+      // number through world.updateSurface. See setCausticsPunch.
+      setCausticsPunch(
+        1 + ((menuCfg.causticsGain ?? 1) - 1) * w,
+        1 + ((menuCfg.causticsScale ?? 1) - 1) * w,
+      );
       fitScrim(w);
       placeLabels(w);
       // The rim, mixed against the frame as it stands this frame — the pull-out

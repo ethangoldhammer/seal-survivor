@@ -622,10 +622,23 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       if (p.mesh.position.y < floor) p.mesh.position.y = floor;
     }
 
+    // HAS THIS ORB EVER BEEN ON THE SEABED? Latched on the orb, and the latch
+    // is the whole point: the first-run tip about loose chum ("out come the
+    // crabs") is answered by going down and RETRIEVING a piece, and by the time
+    // the seal's mouth closes on one the magnet has usually dragged it half way
+    // up the arena. Asking where the orb was when it was swallowed answers "mid
+    // water" for exactly the mouthful the tip asked for.
+    //
+    // The same line countFloorPickups draws, so "on the floor" means one thing
+    // to the tip, to the crab spawner and to the orb itself. Never cleared: an
+    // orb that sank and was then magnetised back up is still one the player had
+    // to go down for.
+    if (!p.sank && p.mesh.position.y <= bounds.bottom + CONFIG.crabSpawn.floorHeight) p.sank = true;
+
     // Nothing goes down while the mouth is sealed; the release gulps the lot
     // instead (see gulpPickups and CONFIG.strike.charge.gulp).
     if (!sealed && dist < CONFIG.pickups.collectRadius) {
-      onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul);
+      onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul, p.sank);
       orbPool?.release(p.mesh);
       pickups.splice(i, 1);
       continue;
@@ -733,7 +746,10 @@ export function gulpPickups(scene, x, y, radius, onCollect) {
     const dx = p.mesh.position.x - x;
     const dy = p.mesh.position.y - y;
     if (dx * dx + dy * dy > r2) continue;
-    onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul);
+    // `p.sank` rides along here too — a release gulp that hoovers a settled
+    // pile off the seabed is one of the three ways of answering the loose-chum
+    // tip, and the most likely one. See the latch in updatePickups.
+    onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul, p.sank);
     orbPool?.release(p.mesh);
     pickups.splice(i, 1);
     n++;

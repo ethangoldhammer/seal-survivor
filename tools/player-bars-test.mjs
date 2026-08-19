@@ -118,6 +118,16 @@ ui.initUI({
 });
 ui.showHud();
 
+// THE SHIPPED DEFAULT IS THE CORNER. Everything from here down to the corner
+// section is about the OTHER placement — the one that rides the animal — so it
+// is pinned explicitly rather than inherited. Asserting the default here as
+// well means a flip of that default fails on this one line, with the reason
+// written next to it, instead of as a scatter of confusing geometry failures
+// three sections later.
+const S = await import('../path/src/systems/settings.js');
+check('the shipped default is the corner', S.barPlacement() === 'corner', S.barPlacement());
+S.setSetting('hud.barPlacement', 'seal');
+
 const $ = (sel) => document.querySelector(sel);
 const fillOf = (el) => Number(el.style.getPropertyValue('--sv-fill'));
 const hpFill = () => fillOf($('#svHpBar'));
@@ -318,6 +328,108 @@ section('A backgrounded tab does not resume with a snap');
 player.hp = 20;
 ui.updateHUD(gameState, player, null, 0, camera, 45);  // 45 seconds in one frame
 check('one enormous frame is still a step, not a jump', hpFill() > 0.4, `${hpFill().toFixed(3)}`);
+
+// ---------------------------------------------------------------------------
+section('The other placement: pinned to the corner');
+
+// settings.hud.barPlacement. Driven through setSetting rather than by poking
+// the object, so this exercises the coercion the menu's own button goes
+// through — a placement that survived a nudge but not a reload would pass a
+// test written the other way.
+
+player.hp = MAX_HP;
+player.oxygen = MAX_O2;
+ui.showHud();
+
+S.setSetting('hud.barPlacement', 'corner');
+check('the setting takes the corner', S.barPlacement() === 'corner', S.barPlacement());
+// A value localStorage should never hold, to prove the fallback is the DEFAULT
+// and not null — a choice that coerced to null used to reach the DOM as the
+// class name "null", which matches no rule and silently draws nothing.
+S.setSetting('hud.barPlacement', 'somewhere-else');
+check('rubbish falls back to the default, not to null', S.barPlacement() === 'corner', String(S.settings.hud.barPlacement));
+// ...and a reset lands on the corner too, which is the path a player takes out
+// of the opt-out and the one place a wrong default is silent.
+S.setSetting('hud.barPlacement', 'seal');
+S.resetSettings('hud');
+check('resetting the section restores the corner', S.barPlacement() === 'corner', S.barPlacement());
+
+const bars = $('.sv-playerbars');
+run(0.5);
+check('the stack wears the corner class', bars.classList.contains('sv-playerbars-corner'));
+check('the HUD is told, so the score can step aside',
+  $('#svHud').classList.contains('sv-hud-barcorner'));
+
+// THE INLINE ANCHOR. The seal placement writes left/top in pixels every frame,
+// and an inline style beats every rule in the sheet — left behind, it would
+// pin the corner stack to wherever the animal last was and no amount of
+// `position: fixed; right: 14px` could move it.
+check('the per-frame anchor is cleared', !bars.style.left && !bars.style.top,
+  `left="${bars.style.left}" top="${bars.style.top}"`);
+
+const cornerStyle = getComputedStyle(bars);
+check('it is fixed to the viewport, not to the HUD', cornerStyle.position === 'fixed', cornerStyle.position);
+check('...at the bottom right', /bottom/.test(cornerStyle.cssText || '') || cornerStyle.right !== 'auto',
+  `right=${cornerStyle.right} bottom=${cornerStyle.bottom}`);
+
+// ---------------------------------------------------------------------------
+section('A bigger seal gets a longer column');
+
+const growOf = (name) => Number(bars.style.getPropertyValue(name));
+check('an untouched run is at its own baseline', Math.abs(growOf('--sv-hp-grow') - 1) < 0.02,
+  growOf('--sv-hp-grow').toFixed(3));
+
+// Deep Lungs and every +max-health card. The FRACTION does not move — a full
+// seal is full at either maximum — so growth is the only thing on screen that
+// can say the upgrade landed.
+const beforeFill = hpFill();
+player.stats.maxHp = MAX_HP * 2;
+player.hp = player.stats.maxHp;
+player.stats.maxOxygen = MAX_O2 * 1.5;
+player.oxygen = player.stats.maxOxygen;
+run(1.5);
+check('the health column has doubled', Math.abs(growOf('--sv-hp-grow') - 2) < 0.05, growOf('--sv-hp-grow').toFixed(3));
+check('the air column follows its own maximum', Math.abs(growOf('--sv-o2-grow') - 1.5) < 0.05, growOf('--sv-o2-grow').toFixed(3));
+check('...while the fill is unchanged, because the seal is still full',
+  Math.abs(hpFill() - beforeFill) < 0.02, `${beforeFill.toFixed(3)} → ${hpFill().toFixed(3)}`);
+
+// Growth is a moment worth watching, so it is chased at the fill's own rise
+// rate rather than stamped. One frame must not cover the whole distance.
+player.stats.maxHp = MAX_HP * 3;
+ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+const oneFrame = growOf('--sv-hp-grow');
+check('the track lengthens over frames, it does not jump', oneFrame > 2 && oneFrame < 2.6, oneFrame.toFixed(3));
+
+// ---------------------------------------------------------------------------
+section('Death and the next run');
+
+// hidePlayerBars writes opacity:0 inline. The seal placement scrubs that out
+// on its next frame (it rewrites opacity from the idle test every frame); the
+// corner placement never fades, so nothing else would put it back and the
+// instrument would be missing for the rest of the session.
+ui.hidePlayerBars();
+check('death fades the gauges', bars.style.opacity === '0', bars.style.opacity);
+ui.showHud();
+check('the next run brings them back', bars.style.opacity === '1', bars.style.opacity);
+
+// And the baseline is per RUN: a seal that ended the last run at triple health
+// must not open the next one claiming to be three times as long.
+player.stats.maxHp = MAX_HP;
+player.hp = MAX_HP;
+player.stats.maxOxygen = MAX_O2;
+player.oxygen = MAX_O2;
+run(1.5);
+check('a new run re-measures its own baseline', Math.abs(growOf('--sv-hp-grow') - 1) < 0.05, growOf('--sv-hp-grow').toFixed(3));
+
+// ---------------------------------------------------------------------------
+section('...and back to the seal, which is now the opt-out');
+
+S.setSetting('hud.barPlacement', 'seal');
+run(0.5);
+check('the corner class is gone', !bars.classList.contains('sv-playerbars-corner'));
+check('the HUD flag is gone with it', !$('#svHud').classList.contains('sv-hud-barcorner'));
+check('the per-frame anchor is writing again', !!bars.style.left && !!bars.style.top,
+  `left="${bars.style.left}" top="${bars.style.top}"`);
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

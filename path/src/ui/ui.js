@@ -17,6 +17,10 @@ import { feedMouse, menuInput, resetMenuInput } from '../input.js';
 // rule at the bottom of STYLES only disables transitions, which would not touch
 // a canvas animation or a rAF loop.
 import { touchPrimary, prefersReducedMotion } from '../devices.js';
+// One setting, read live rather than pushed in: where the health and air
+// gauges are drawn. settings.js imports nothing from here, so this is a leaf
+// dependency and not half of a cycle.
+import { barPlacement } from '../systems/settings.js';
 import { mountRiveSplash } from './riveSplash.js';
 import { tipJarLink } from './tipJar.js';
 import { titlePreviewRequested } from '../systems/titleSeal.js';
@@ -532,6 +536,87 @@ const STYLES = `
   .sv-pbar-o2.sv-o2-low { background: linear-gradient(180deg, #ffd166, #ff8a00);
     box-shadow: 0 0 12px rgba(255,160,40,0.9); }
 
+  /* --- THE OTHER PLACEMENT: PINNED TO THE CORNER -------------------------
+     settings.hud.barPlacement === 'corner'. The same two columns, the same
+     fills and the same trail — only the anchor changes, which is the whole
+     reason this is a modifier class and not a second widget. Two widgets
+     drawing one quantity is how they end up disagreeing.
+
+     FIXED, not absolute. .sv-hud is anchored at the top of the screen and is
+     14px in from each edge, so an absolute child could never reach the bottom
+     of the viewport. This works only because nothing above it in the tree
+     carries a CSS filter or a transform — either would make that ancestor the
+     containing block and quietly re-anchor these to it. .sv-hud-corner has
+     exactly such a filter, which is why these bars are its SIBLING and not
+     something tucked inside it.
+
+     env() on both axes: on a phone held sideways the home indicator and the
+     rounded corner both eat into precisely this corner, and 14px from the
+     glass edge is behind them. The fallback in each calc is what a browser
+     with no safe-area support (and every desktop) gets. */
+  .sv-playerbars-corner { position: fixed; left: auto; top: auto;
+    right: calc(14px + env(safe-area-inset-right, 0px));
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    transform: none; align-items: flex-end; gap: 7px; }
+  /* THE COLUMN ORDER IS INHERITED, not restated. row-reverse puts health
+     against the screen's right edge here and against the seal there, which is
+     the same rule read twice — health is the one nearest whatever the gauges
+     are attached to. A player who switches placements mid-session finds the
+     two columns in the order they already learned.
+     align-items: flex-end aligns their BOTTOMS, which matters as soon as the
+     two have different lengths: they grow from one shared floor rather than
+     floating at different heights. */
+
+  /* HOW LONG THE COLUMNS ARE, and the one thing this placement does that the
+     seal-side one cannot: the track GROWS.
+     --sv-track is the base length, a quarter of the viewport's height. --sv-hp-
+     grow and --sv-o2-grow are that gauge's maximum as a multiple of the
+     maximum a run STARTS with, written per frame by updateHUD — so a seal that
+     has doubled its health has a column twice as tall, climbing the side of
+     the screen, and the upgrade is legible without a number anywhere.
+     min() is the ceiling, in CSS rather than in JS on purpose: the limit is
+     "how much screen is there", which is a question the stylesheet is already
+     holding the answer to and JS would have to re-measure on every resize.
+     72vh leaves the top of the screen to the boss bar even at full growth. */
+  .sv-playerbars-corner { --sv-track: 25vh; --sv-track-max: 72vh; }
+  /* THE EMPTY TRACK HAS TO BE VISIBLE HERE, which it does not beside the seal.
+     Growing the column is only legible if the CEILING can be seen: a track
+     that disappears into the water leaves a longer bar and a shorter one
+     looking identical at the same fraction, and the upgrade this placement
+     exists to show goes back to being invisible. A pale rim and a slightly
+     lifted ground, both weak enough to stay out of the way of the fill. */
+  .sv-playerbars-corner .sv-pbar-wrap { width: 13px; border-radius: 7px;
+    background: rgba(8,13,24,0.5);
+    box-shadow: 0 0 0 1px rgba(210,226,245,0.22), inset 0 0 8px rgba(0,0,0,0.6); }
+  .sv-playerbars-corner #svHpWrap {
+    height: min(calc(var(--sv-track) * var(--sv-hp-grow, 1)), var(--sv-track-max)); }
+  .sv-playerbars-corner #svO2Wrap {
+    height: min(calc(var(--sv-track) * var(--sv-o2-grow, 1)), var(--sv-track-max)); }
+  .sv-playerbars-corner .sv-pbar,
+  .sv-playerbars-corner .sv-pbar-ghost { border-radius: 7px; }
+
+  /* A SHORT SCREEN IS THE CASE THAT BREAKS THIS. A phone on its side is 393px
+     tall, where a quarter of the viewport is 98px and a doubled health bar is
+     already most of the way up the glass. The base shrinks and the ceiling
+     comes down with it, so growth still reads as growth and still stops short
+     of the boss bar. */
+  @media (max-height: 560px) {
+    .sv-playerbars-corner { --sv-track: 22vh; --sv-track-max: 58vh; }
+  }
+
+  /* THE COLLISION, and it is a real one. On a phone the score and the clock
+     move to fixed bottom-right (see the responsive block below) — the exact
+     corner these bars are asking for. Rather than moving the gauges somewhere
+     they were not asked to be, the numbers step inboard by the width of the
+     stack: two 13px columns and a 7px gap, plus the same 14px breathing room
+     the corner already keeps from the edge. Applied to .sv-hud rather than to
+     the bars, because the thing that moves is the other block. */
+  .sv-hud-barcorner .sv-hud-corner { --sv-bars-w: 47px; }
+  @media (max-width: 700px) {
+    .sv-hud-barcorner .sv-hud-corner {
+      right: calc(14px + var(--sv-bars-w, 0px) + env(safe-area-inset-right, 0px)); }
+  }
+
   /* THE BOSS BAR (systems/boss.js). Top centre, clear of the xp strip and of
      both HUD corners. It is deliberately NOT a bar over the creature's head:
      a boss this size spends half the fight partly off screen, and a floating
@@ -597,13 +682,36 @@ const STYLES = `
     border: 1px solid rgba(122,215,255,0.35); }
   .sv-btn-ghost:hover { background: rgba(122,215,255,0.22); }
 
-  /* THE SCORECARD. Five figures in a row rather than a sentence — the same
-     five the shared image carries. */
-  .sv-stat { display: inline-flex; flex-direction: column; align-items: center;
-    min-width: 62px; padding: 0 6px; font-size: 10px; letter-spacing: 0.12em;
+  /* THE SCORECARD. The same five figures the shared image carries (see
+     drawScorecard in systems/bossShot.js), but not as five equal chips any
+     more.
+
+     SCORE IS THE HEADLINE and the other four are the supporting read. Laid out
+     flat, the five wrapped 3 + 2 on the card's own width — score, time and
+     level on one line, kills and bosses orphaned under them — which reads as a
+     row that broke rather than as a hierarchy. It also gave the number a player
+     actually cares about exactly as much room as "Bosses: 0".
+     So score gets its own line at display size, and the remaining four sit
+     under it as ONE four-column grid: an explicit grid rather than a flex row,
+     because equal columns are the whole point and four items sharing a line by
+     luck is the layout that just broke.
+     tabular-nums on every figure — these are numbers in columns, and a run
+     that scores 111,111 must not be narrower than one that scores 100,000. */
+  .sv-scorecard { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .sv-score-hero { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .sv-score-hero b { font-size: 40px; line-height: 1; font-weight: 700;
+    letter-spacing: 0.01em; color: #e8ecf3; font-variant-numeric: tabular-nums; }
+  .sv-score-hero span { font-size: 10px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: rgba(232,236,243,0.45); }
+  /* Full width so the four columns are quarters of the card rather than
+     quarters of whatever the four labels happened to measure. */
+  .sv-stat-row { display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 4px; width: 100%; }
+  .sv-stat { display: flex; flex-direction: column; align-items: center;
+    min-width: 0; padding: 0 4px; font-size: 10px; letter-spacing: 0.12em;
     text-transform: uppercase; color: rgba(232,236,243,0.45); }
   .sv-stat b { font-size: 19px; font-weight: 700; letter-spacing: 0.01em;
-    color: #e8ecf3; text-transform: none; }
+    color: #e8ecf3; text-transform: none; font-variant-numeric: tabular-nums; }
 
   /* TYPE IN THIS FILE IS THE FALLBACK LAYER, not the design. Every font-size,
      weight, colour and text-shadow from here down is re-stated by
@@ -832,7 +940,7 @@ const STYLES = `
   .sv-flip-card {
     position: relative; transform-style: preserve-3d; will-change: transform;
     transform: rotateY(var(--sv-flip, 0deg));
-    max-height: 92vh; max-width: 90vw; width: 460px;
+    max-height: 92vh; max-width: 90vw; width: 580px;
   }
   /* The container box. .sv-menu's own look moved out here, because the thing
      that is a panel now is the FACE and not the card. */
@@ -893,7 +1001,7 @@ const STYLES = `
      unrelated tables rather than as a ledger with two sides.
 
      THE SHARE IS THE ROW'S OWN BACKGROUND rather than a column of its own. The
-     card is 460px at most and every column added to this grid comes out of the
+     card is 580px at most and every column added to this grid comes out of the
      name, which is the part a player is actually reading — so the bar is drawn
      behind the row, width set inline from the share, and it costs nothing.
      The children need position: relative or the bar paints over them. */
@@ -935,9 +1043,37 @@ const STYLES = `
   .sv-brk-empty { font-size: 12px; color: rgba(232,236,243,0.4); padding: 10px 8px; }
 
   .sv-leaderboard { margin: 14px 0; max-height: 220px; overflow-y: auto; text-align: left; }
-  .sv-lb-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
-  .sv-lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+  /* ONE GRID FOR THE HEADER AND THE ROWS, so the columns are the same columns
+     on both. A flex row plus a flex header is two independent layouts that
+     agree only while nobody touches either of them. */
+  .sv-lb-row, .sv-lb-head {
+    display: grid; grid-template-columns: 3ch minmax(0, 1fr) auto 3ch 4ch;
+    align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+  /* Striped from inside the rows' own wrapper rather than off .sv-leaderboard,
+     which also holds the caption and the header — a positional stripe counted
+     from there flips every row the moment a line is added above them. */
+  .sv-lb-rows .sv-lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
   .sv-lb-row.sv-lb-mine { background: rgba(122,215,255,0.14); border: 1px solid rgba(122,215,255,0.4); }
+  /* THE COLUMNS ARE NAMED ONCE, at the top, instead of on every row. "Lv15"
+     was a label repeated a hundred times to explain a number that is the same
+     number in every row — and on a card this wide it was two of the characters
+     the name column could not spare. Sticky, so the fifteenth row is still
+     reading against its own headings.
+     Its background is the face's, not a translucent tint: rows scroll UNDER
+     it, and anything less than opaque shows them through it. */
+  .sv-lb-head { position: sticky; top: 0; z-index: 1;
+    padding-top: 2px; padding-bottom: 4px; font-size: 9.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: rgba(232,236,243,0.35);
+    background: var(--sv-lb-head-bg, #07090d); }
+  /* Score, Lv and Time head right-aligned columns, so their headings are too.
+     By position rather than by re-using the cells' own classes: those carry a
+     weight, a colour and a size of their own, and a header wearing them would
+     be five different treatments in one line. */
+  .sv-lb-head span:nth-child(n+3) { text-align: right; }
+  /* The same board on the main menu's own surface, whose panel is not the
+     card's black emulsion — the sticky heading has to be opaque against
+     whatever it is actually sitting on, and .sv-menu is its own colour. */
+  #svBoardList { --sv-lb-head-bg: #0d1018; }
   /* THREE DIGITS, IN CH AND NOT PIXELS. The board goes to 100 now, and 18px
      held "100" in Inter and in nothing else — the font picker can put 'Press
      Start 2P' in this column, a full em per glyph, where three digits want
@@ -953,9 +1089,15 @@ const STYLES = `
      refuses to shrink below its content — so without it a long name pushes the
      score and time out of the row instead of ellipsing, which is exactly what
      a 24-character name does. */
-  .sv-lb-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sv-lb-score { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .sv-lb-meta { color: rgba(232,236,243,0.5); font-size: 11px; min-width: 78px; text-align: right; }
+  .sv-lb-name { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sv-lb-score { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+  /* Level and time as two columns of their own rather than one "Lv15 · 4:15"
+     string right-aligned as a block: as one string the level's digits push the
+     clock about, and the middle dot was doing the job the header now does. In
+     ch, for the reason the rank is — the font picker decides how wide a digit
+     is here (see the .sv-lb-rank note). */
+  .sv-lb-lv, .sv-lb-time { color: rgba(232,236,243,0.5); font-size: 11px;
+    font-variant-numeric: tabular-nums; text-align: right; }
   .sv-lb-empty { font-size: 12px; color: rgba(232,236,243,0.4); padding: 6px 8px; }
 
   /* Name entry. The row is a single control: text field plus its submit
@@ -3029,6 +3171,99 @@ function stepBar(key, frac, dt, fillEl, ghostEl, wrapEl) {
 export function resetPlayerBars() {
   pbar.hp = 1; pbar.hpGhost = 1; pbar.o2 = 1; pbar.o2Ghost = 1;
   pbar.clock = 0;
+  // THE RUN'S OWN BASELINE, cleared so the next run takes its own. The corner
+  // placement draws a column whose LENGTH is the seal's maximum measured
+  // against what it started with, and "what it started with" is a fact about
+  // one run — adopted on the first frame that has a player to read it off,
+  // rather than assumed here from CONFIG. A future mode that opens with bonus
+  // health would otherwise spend the whole run claiming to be over-length.
+  pbar.baseHp = 0; pbar.baseO2 = 0;
+  pbar.hpGrow = 1; pbar.o2Grow = 1;
+  // UNDOING hidePlayerBars, which the last run's death left inline at zero.
+  // The seal placement gets away without this because updateHUD rewrites the
+  // opacity every frame from the idle test; the corner placement deliberately
+  // does not fade at all, so nothing else would ever put it back and the whole
+  // instrument would simply be missing for the rest of the session.
+  if (el.svPlayerBars) el.svPlayerBars.style.opacity = '1';
+}
+
+/**
+ * HOW LONG THE CORNER COLUMNS ARE — the placement's one extra idea.
+ *
+ * A gauge beside the seal is a fixed sliver: Deep Lungs and every +max-health
+ * card in the game move the FRACTION inside it and nothing else, so a run that
+ * has tripled its health looks identical to one that has not. Pinned to the
+ * screen there is somewhere for that to go, so the track itself grows — the
+ * column climbs the side of the screen as the maximum climbs, and the upgrade
+ * is visible without a number on the HUD.
+ *
+ * What is written is a RATIO, not a length. The stylesheet turns it into
+ * pixels against a quarter of the viewport and clamps it against the height of
+ * the screen (see .sv-playerbars-corner), because the ceiling is a question
+ * about the display and CSS is already holding the answer — computing it here
+ * would mean re-measuring on every resize and every rotate.
+ *
+ * Chased rather than stamped, at the FILL's own rise rate: a max-health card
+ * is a moment worth seeing, and a track that jumps to its new length between
+ * two frames is the same silent step this whole file exists to get rid of.
+ */
+function stepTrackLength(player, dt) {
+  const maxHp = Math.max(1, player.stats?.maxHp ?? 1);
+  const maxO2 = Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max);
+  // Adopted on the first frame of the run rather than at reset, which has no
+  // player to ask. Both are taken together so a mode that starts with one of
+  // them boosted cannot make the pair disagree about which run they are in.
+  if (!pbar.baseHp) { pbar.baseHp = maxHp; pbar.baseO2 = maxO2; }
+
+  const s = PBAR_SMOOTH;
+  pbar.hpGrow = chase(pbar.hpGrow, maxHp / pbar.baseHp, s.rise, dt);
+  pbar.o2Grow = chase(pbar.o2Grow, maxO2 / pbar.baseO2, s.rise, dt);
+  const bars = el.svPlayerBars;
+  if (!bars) return;
+  bars.style.setProperty('--sv-hp-grow', pbar.hpGrow.toFixed(4));
+  bars.style.setProperty('--sv-o2-grow', pbar.o2Grow.toFixed(4));
+}
+
+// Which placement the DOM is currently wearing, so the class work below runs
+// on the frames it changes and not on all the others.
+let barPlacementApplied = null;
+
+/**
+ * Put the two gauges where the player has asked for them.
+ *
+ * Called per frame from updateHUD (cheap — it early-outs) AND from main.js's
+ * settings handler, and it needs both: the frame call is what makes the
+ * placement correct without anything having to remember to wire it up, and the
+ * settings call is what makes the switch visible IMMEDIATELY, from inside the
+ * pause menu, on a frame where updateHUD is not running at all.
+ */
+export function applyBarPlacement(mode = barPlacement()) {
+  const bars = el.svPlayerBars;
+  // THE ELEMENT CHECK COMES FIRST, and the order is the whole point. This can
+  // be reached from the settings handler before initUI has built anything, and
+  // latching the mode above this line would make the first real frame agree
+  // that there was nothing to do — the class would never be applied at all,
+  // for the rest of the session, from a setting that was correctly saved.
+  if (!bars) return;
+  if (mode === barPlacementApplied) return;
+  barPlacementApplied = mode;
+  const corner = mode === 'corner';
+  bars.classList.toggle('sv-playerbars-corner', corner);
+  // The HUD carries the flag rather than the bars, because what it moves is
+  // the OTHER block — the score and clock that share this corner on a phone.
+  el.svHud?.classList.toggle('sv-hud-barcorner', corner);
+  if (corner) {
+    // INLINE STYLES BEAT THE STYLESHEET, so the per-frame anchor the seal
+    // placement writes has to be taken back off rather than merely stopped.
+    // Left in place, `left`/`top` in pixels would pin the corner stack to
+    // wherever the seal last was and no rule in the sheet could move it —
+    // the same trap the xp meter's `--sv-xp` fraction exists to avoid.
+    bars.style.left = '';
+    bars.style.top = '';
+    // ...and it does not fade at full, either. A pinned instrument that dims
+    // when nothing is wrong is one you have to look at twice to trust.
+    bars.style.opacity = '1';
+  }
 }
 
 /**
@@ -3066,7 +3301,11 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
   stepBar('hp', hpFrac, step, el.svHpBar, el.svHpGhost, el.svHpWrap);
   stepBar('o2', o2Frac, step, el.svO2Bar, el.svO2Ghost, el.svO2Wrap);
 
-  if (camera && el.svPlayerBars) {
+  const placement = barPlacement();
+  applyBarPlacement(placement);
+  if (placement === 'corner') stepTrackLength(player, step);
+
+  if (camera && el.svPlayerBars && placement !== 'corner') {
     // Offset in WORLD units, not pixels — a pixel gap would drift as the
     // arena rescales, where this keeps a constant distance from the seal.
     // On X now that the gauges stand BESIDE the animal rather than over it;
@@ -4027,14 +4266,31 @@ function sizeCard() {
   // A null mask means the bake failed; the card then shows with a clean edge,
   // which is the look this replaced — never an empty mask, which would hide the
   // whole card and with it the way back into the game.
-  const box = card.getBoundingClientRect();
+  //
+  // MEASURED OFF THE LAYOUT BOX, NOT getBoundingClientRect. That method returns
+  // the card's PROJECTION, and this card spends a second at a time rotated:
+  // mid-turn its client rect is a few pixels wide and at 90 degrees it is zero.
+  // Any content arriving during a turn — the trophy fan's prints, or the global
+  // board replacing the local one, both of which land seconds after the card
+  // opens and are exactly what watchCardSize exists to catch — re-baked the wear
+  // at that width and stretched it back over the full face, which shreds the
+  // card into vertical strands and takes the leaderboard with it. offsetWidth
+  // and offsetHeight are the border box and ignore transforms entirely.
+  //
+  // NO ZERO-WIDTH GUARD HERE, deliberately: wornEdgeMask already returns null
+  // below nine pixels, which lands on the clean-edge path above. A guard that
+  // returned early instead would take the whole bake out of reach of the jsdom
+  // harness, where every box is zero — and that harness is the only thing
+  // testing the failed-bake path at all.
+  const boxW = card.offsetWidth;
+  const boxH = card.offsetHeight;
   const wear = CONFIG.death?.flip?.wear ?? {};
   const style = wear.style ?? 'houseField';
   for (const [i, face] of [el.svFaceFront, el.svFaceBack].entries()) {
     if (!face) continue;
     const mask = style === 'clean' ? null : wornEdgeMask({
-      w: box.width,
-      h: box.height || tallest,
+      w: boxW,
+      h: boxH || tallest,
       radius: wear.radius ?? 14,
       depth: wear.depth ?? 9,
       style,
@@ -4135,13 +4391,19 @@ export function showGameOver(gameState, extra = {}) {
   // drawScorecard in systems/bossShot.js), so a player looking at the picture
   // they posted and a player looking at this screen are reading the same run.
   const bosses = extra.bosses ?? bossShots().length;
-  el.svGameOverStats.innerHTML = [
-    ['Score', score.toLocaleString()],
+  // Score on its own line at display size, the other four as one even row under
+  // it — see .sv-scorecard for why the flat row of five had to go.
+  const rest = [
     ['Time', formatTime(gameState.time)],
     ['Level', gameState.level],
     ['Kills', gameState.kills],
     ['Bosses', bosses],
   ].map(([k, v]) => `<span class="sv-stat"><b>${v}</b>${k}</span>`).join('');
+  el.svGameOverStats.innerHTML =
+    `<div class="sv-scorecard">` +
+    `<div class="sv-score-hero"><b>${score.toLocaleString()}</b><span>Score</span></div>` +
+    `<div class="sv-stat-row">${rest}</div>` +
+    `</div>`;
 
   // ALWAYS FRONT SIDE UP. Which way the card was left is not a preference — a
   // player who read the weapons after one death is not asking to skip the
@@ -4385,13 +4647,22 @@ function renderBoard(list, { global, result = null } = {}, into = el.svLeaderboa
         <span class="sv-lb-rank">${i + 1}</span>
         <span class="sv-lb-name">${escapeHtml(e.name ?? 'ANON')}</span>
         <span class="sv-lb-score">${Number(e.score ?? 0).toLocaleString()}</span>
-        <span class="sv-lb-meta">Lv${e.level} · ${formatTime(e.time)}</span>
+        <span class="sv-lb-lv">${e.level ?? ''}</span>
+        <span class="sv-lb-time">${formatTime(e.time)}</span>
       </div>`;
     })
     .join('');
 
+  // The rows in a wrapper of their own so the zebra counts from the first ROW
+  // rather than from the caption above it, and so the header can sit outside
+  // the stripe. Unpositioned on purpose — the scroll below measures offsets
+  // against the list, and a positioned wrapper would become the offset parent.
   into.innerHTML =
-    `<div class="sv-label" style="margin-bottom:6px;">${heading}</div>${rows}`;
+    `<div class="sv-label" style="margin-bottom:6px;">${heading}</div>` +
+    `<div class="sv-lb-head">` +
+      `<span>#</span><span>Name</span><span>Score</span><span>Lv</span><span>Time</span>` +
+    `</div>` +
+    `<div class="sv-lb-rows">${rows}</div>`;
 
   // THE BOARD IS A HUNDRED DEEP AND THE BOX SHOWS EIGHT OF THEM. Being 61st is
   // making the leaderboard, and a panel that opens at rank 1 tells a player who

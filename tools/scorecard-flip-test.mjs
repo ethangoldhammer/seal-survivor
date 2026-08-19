@@ -445,6 +445,55 @@ section('THE TURN ITSELF');
   check('the configured wear style is one that exists',
     STYLE_NAMES.includes(CONFIG.death.flip.wear.style) || CONFIG.death.flip.wear.style === 'clean',
     CONFIG.death.flip.wear.style);
+
+  // THE WEAR IS BAKED OFF THE LAYOUT BOX, NOT THE ROTATED ONE.
+  //
+  // sizeCard re-bakes the border mask whenever a face's content changes, and
+  // the two things that change it — the trophy fan's prints and the global
+  // board replacing the local one — both land SECONDS after the card opens,
+  // which is exactly when a player is turning it over. Read through
+  // getBoundingClientRect the card's width at that moment is its projection: a
+  // few pixels at 88 degrees, nothing at 90. The mask baked into that width and
+  // stretched back over the full face shredded the card into vertical strands
+  // and took the leaderboard with it, and then STAYED that way, because nothing
+  // re-bakes it once the turn has landed.
+  //
+  // COUNTED IN BAKES rather than compared as mask strings: this harness's
+  // toDataURL is a constant, so a mask baked at the wrong width is the same
+  // string as one baked at the right width. What separates them is that the
+  // right width is a cache hit and the wrong one is not.
+  {
+    const cardEl = $('svCard');
+    // jsdom has no layout, so the layout box has to be supplied. That is the
+    // point of the check: these are the numbers the fix reads, and they are the
+    // ones a transform cannot move.
+    Object.defineProperty(cardEl, 'offsetWidth', { value: 460, configurable: true });
+    Object.defineProperty(cardEl, 'offsetHeight', { value: 700, configurable: true });
+
+    let bakes = 0;
+    const realToDataURL = dom.window.HTMLCanvasElement.prototype.toDataURL;
+    dom.window.HTMLCanvasElement.prototype.toDataURL = function counted() {
+      bakes++;
+      return realToDataURL.call(this);
+    };
+
+    // A window resize is what watchCardSize listens for, and it runs sizeCard
+    // synchronously — the same function the mutation observer reaches.
+    dom.window.dispatchEvent(new dom.window.Event('resize'));
+    check('a card with a layout box bakes its wear at all', bakes > 0, `${bakes} bake(s)`);
+
+    // Mid-turn: the projection is narrow, the layout box is not.
+    cardEl.getBoundingClientRect = () => ({
+      width: 16, height: 700, top: 0, left: 0, right: 16, bottom: 700, x: 0, y: 0,
+    });
+    bakes = 0;
+    dom.window.dispatchEvent(new dom.window.Event('resize'));
+    check('...and bakes nothing new while the card is turned edge-on',
+      bakes === 0, `${bakes} bake(s) at a projected width of 16px`);
+
+    dom.window.HTMLCanvasElement.prototype.toDataURL = realToDataURL;
+    delete cardEl.getBoundingClientRect;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -64,6 +64,14 @@ import { applyTipDissolve, clearTipDissolve, initTipDissolve, warmTipDissolve } 
 // can cover would finish behind it. Safe because nothing here takes
 // pointer events — the band cannot swallow a click on a card underneath it.
 //
+// THAT IS ABOUT THE WARNINGS, AND ONLY THEM. "Warning!" over the upgrade cards
+// is the point; a first-run tip over them is a sentence the player has to read
+// past to make a choice. The coach does not reach this file while a menu is
+// open at all — systems/tutorial.js is handed `live` false whenever the game is
+// paused, so the row is cleared upstream and there is nothing here to draw. No
+// branch below tests for a menu, deliberately: whether a tip exists is the
+// coach's question, and answering it twice is how the two end up disagreeing.
+//
 // ...AND THEREFORE IT MUST NOT LAND ON THE HUD. Being on top of everything is
 // what makes a callout readable and it is also what makes it dangerous: the
 // band is a fixed fraction down the screen (CONFIG.callouts.y), which was
@@ -290,19 +298,26 @@ export function updateCalloutUi(dt, ctx = {}) {
 /**
  * The furniture a callout may not cover, as selectors.
  *
- * FIXED CHROME ONLY, and the omissions are the design. `.sv-playerbars` is not
- * here and must not be: the health and oxygen bars ride the SEAL, so a band
- * that avoided them would slide up and down the screen as the animal swam,
- * which is a worse read than a moment of overlap and is the kind of motion
- * nobody can trace back to a rule. Same for the on-seal callout itself. The
- * toast layer is out for a related reason — toasts come and go in under a
- * second, and a band that flinched every time one arrived would never be still.
+ * FIXED CHROME ONLY, and the omissions are the design.
+ *
+ * THE HEALTH AND AIR GAUGES ARE HERE IN ONE PLACEMENT AND NOT THE OTHER, which
+ * is the whole rule in one line. Beside the seal (settings.hud.barPlacement
+ * 'seal') they RIDE THE ANIMAL, so a band that avoided them would slide up and
+ * down the screen as it swam — a worse read than a moment of overlap, and the
+ * kind of motion nobody can trace back to a rule. In the corner placement, which
+ * is the default, the same element is a fixed column up the right-hand side of
+ * the glass and is exactly what this list is for. Hence the class, not the
+ * container: `.sv-playerbars-corner` names the mode that holds still.
+ * Same reasoning keeps the on-seal callout itself out. The toast layer is out
+ * for a related reason — toasts come and go in under a second, and a band that
+ * flinched every time one arrived would never be still.
  *
  * `.sv-print` is each individual polaroid rather than `.sv-print-layer` or
  * `.sv-print-pile`, both of which are `inset: 0` and would report the whole
  * screen as occupied.
  */
-const CHROME = ['.sv-bossbar', '.sv-xptop', '.sv-xptop-level', '.sv-hud-corner', '.sv-print'];
+const CHROME = ['.sv-bossbar', '.sv-xptop', '.sv-xptop-level', '.sv-hud-corner',
+  '.sv-playerbars-corner', '.sv-print'];
 
 // Rects, gathered fresh. Deliberately not cached: this runs only on the frames
 // a callout is actually on screen — a few seconds per run — and everything it

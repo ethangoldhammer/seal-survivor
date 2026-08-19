@@ -89,7 +89,7 @@ import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginResta
 import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime, cardsArriveAt, saluteEnabled } from './systems/levelUpTime.js';
 import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossKillFraming } from './systems/bossKill.js';
 import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } from './systems/bossCorpse.js';
-import { fireBossBoom, updateBossBooms, resetBossBooms } from './systems/bossBoom.js';
+import { fireBossBoom, updateBossBooms, resetBossBooms, initBossBooms } from './systems/bossBoom.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
@@ -103,12 +103,12 @@ import { beginTitleSeal, endTitleSeal, resetTitleSeal, titleSealEngaged, updateT
 // is mounted from here rather than from ui.js because it lives IN THE ARENA:
 // it poses the run's own seal and claims the run's own camera, neither of which
 // the UI layer has ever known about.
-import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged } from './systems/mainMenu.js';
+import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuWake } from './systems/mainMenu.js';
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { highScore } from './systems/leaderboard.js';
-import { initUI, showStartMenu, showHowToPlay, hideHowToPlay, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
+import { initUI, showStartMenu, showHowToPlay, hideHowToPlay, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive } from './ui/upgradeHive.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
@@ -163,6 +163,9 @@ initParticles(world.scene);
 initImpactFlashes(world.scene);
 initBossImpacts(world.scene);
 initBossGibs(world.scene);
+// The shockwave is a scene object (systems/organicRing.js); the smoke is not.
+// Without this the cloud still fires and the front silently never appears.
+initBossBooms(world.scene);
 // The shape pool itself is built lazily on the first meal, not here: the bone
 // models it draws from may still be loading, and one of them may be an upload
 // that has not happened yet. See ensurePool in systems/gore.js.
@@ -645,6 +648,12 @@ function handleSettingsChange(path) {
   // frame, and the shake scale is read at the point the camera is offset, so
   // neither needs anything here.
   if (DEV_UI && (all || path.startsWith('video.'))) refreshTuner();
+  // The gauges move the INSTANT the row is nudged, from inside the pause menu.
+  // updateHUD applies the placement too, and on its own that would be enough —
+  // but only on a frame it runs, and it does not run while the game is paused.
+  // Without this the player toggles the setting and the menu appears to have
+  // done nothing until they resume.
+  if (all || path === 'hud.barPlacement') applyBarPlacement();
 }
 
 function bindGlobalKeys() {
@@ -2428,13 +2437,21 @@ function onChumSwallowed(x, y) {
 // be because the gulp has to take exactly this path — the gate stops the meter
 // refilling for the length of a wind-up, and anything the gulp did differently
 // would be a resource that gate had quietly deleted.
-function collectChum(value, x, y, healMul = 1) {
+function collectChum(value, x, y, healMul = 1, fromFloor = false) {
   // The first-run "eat chum" tip is answered here rather than at any of the
   // three call sites above it, because this is the one funnel every route into
   // eating goes through — swum over, hoovered by a gulp, or handed over by the
   // attractor orb. A tip cleared by only one of those would stay on screen
   // through a player doing exactly what it asked.
   noteTutorialEvent('chum');
+  // ...AND THE SEABED TIP IS ANSWERED BY THE SAME MOUTHFUL, when the orb is one
+  // that had settled on the floor. `fromFloor` is the orb's own latch rather
+  // than a test on `y` here: the magnet lifts a settled orb most of the way up
+  // the arena before the mouth reaches it, so where it was when it was
+  // swallowed is not where the player had to go to get it. See the latch in
+  // entities/pickups.js. A crew body eaten mid-water calls this with four
+  // arguments and so is never one.
+  if (fromFloor) noteTutorialEvent('floorChum');
   // A LIVE FOOD CHAIN IS WORTH LEVELS, not just points. Read BEFORE
   // onChumSwallowed below feeds this same mouthful into the meter: the
   // multiplier a swallow earns is the depth the chain was at when the seal
@@ -4808,7 +4825,21 @@ function animate(now) {
     // by reference — see takeSubject above.
     takeSubject,
     subjectAt,
-  }, bandLive);
+    // A TIP IS NOT SHOWN OVER A MENU. The callout layer sits above everything
+    // on purpose — a warning that a card could cover would finish behind it —
+    // and that is exactly wrong for the coach: `gameState.paused` is the
+    // level-up cards and the pause menu both, and a first-run sentence lying
+    // across the three upgrade cards is a line the player has to read past to
+    // make a choice, printed on top of the thing they are choosing between.
+    //
+    // The same gate the warnings band already runs under, one call up.
+    //
+    // Passed as `live` false rather than as a step condition, which takes the
+    // tip off NOW and without the dissolve — a sentence eroding gently over the
+    // cards is the thing being avoided — and crucially does NOT mark it done.
+    // A tip interrupted by a level-up was never given its chance, so it comes
+    // back and is taught properly once the water is on screen again.
+  }, bandLive && !gameState.paused);
 
   // WHATEVER THE TIP IS ABOUT, LIT. Driven from the coach's own subject every
   // frame rather than from the five places a tip can start, so there is exactly
@@ -4907,6 +4938,28 @@ function animate(now) {
       0,
       deathState.active,
     );
+
+    // THE SEAL BREATHES ON THE MENU. Same emitters, same anchors, same buffer
+    // the run pours into — this screen is the arena at fifteen times the zoom
+    // (see systems/mainMenu.js), and an animal held in the water that is not
+    // exhaling is the one thing on it that reads as a still.
+    //
+    // Only the breath actually fires: the wake is gated on `wake.minSpeed` and
+    // a menu seal is not swimming, which is the right answer rather than a
+    // limitation. The mouth anchor comes from the aim rig immediately above,
+    // and it is the BUST'S pose the puff leaves from, so the bubbles come off
+    // the mouth of an animal standing upright.
+    //
+    // `aboveSurface` is measured off the POSITION rather than read off the
+    // flag: the flag is written by updatePlayer, which does not run on a menu,
+    // so the last run's value is what would be sitting in it. Same rule, for
+    // the same reason, as systems/breachTrail.js.
+    if (mainMenuActive()) {
+      updateBubbles(
+        realDt, player.aimRig, player.velocity,
+        player.mesh.position.y > bounds.surfaceY,
+      );
+    }
   }
 
   // THE VICTORY LAP, and it goes here for two reasons.
@@ -5136,6 +5189,13 @@ function animate(now) {
     camera: world.camera,
     charging: strikeState.charging,
     charge: strikeState.pending,
+    // HOW HARD THE SEAL DENTS IT, when something other than a run owns the
+    // frame. Null every frame there is no menu, which is CONFIG's own number.
+    // The menu punches in to fifteen times this framing, where the wake's
+    // radius is wider than the picture and this grid — the arena's, not the
+    // menu's own — drags every node on screen toward the animal. Handed in
+    // rather than read over there, like the camera and the meter above it.
+    wake: mainMenuWake(),
   });
   // The death shot: the frame closes in on the body and rides it down. Claimed
   // per frame, immediately before the camera update that consumes it — the

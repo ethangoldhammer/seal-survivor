@@ -32,7 +32,7 @@ import { createPost } from '../../path/src/systems/post.js';
 import {
   initParticles, updateParticles, resetParticles, updateParticleScale,
 } from '../../path/src/entities/particles.js';
-import { fireBossBoom, updateBossBooms, resetBossBooms, bossBoomCount, measureBossBody } from '../../path/src/systems/bossBoom.js';
+import { fireBossBoom, updateBossBooms, resetBossBooms, bossBoomCount, measureBossBody, initBossBooms } from '../../path/src/systems/bossBoom.js';
 import { spawnNamed, resetEnemies } from '../../path/src/entities/enemies.js';
 import { refreshHitShape, hitShapeSpheres } from '../../path/src/systems/hitShape.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from '../../path/src/systems/bossGibs.js';
@@ -92,9 +92,10 @@ scene.add(new THREE.HemisphereLight(0xbfd8e0, 0x2a3438, 2.0));
 const key = new THREE.DirectionalLight(0xfff2e0, 2.4); key.position.set(-3, 4, 5); scene.add(key);
 const fill = new THREE.DirectionalLight(0xcfe4ff, 1.0); fill.position.set(4, 1, 3); scene.add(fill);
 
-// Water to put the cloud in. The `boom` group is ALPHA — it hides what is
-// behind it — so a panel over empty black would prove nothing about the one
-// property the whole effect depends on.
+// Water to put the cloud in. The `boom` group is ADDITIVE — it adds light to
+// whatever is behind it rather than hiding it — so a panel over empty black
+// would be the one background on which that reads as a solid cloud, and would
+// prove the opposite of what this page is for.
 //
 // Authored much brighter than it looks, on purpose: the game's composite writes
 // linear straight to the default framebuffer, so every colour lands about a
@@ -110,6 +111,10 @@ scene.add(water);
 await preloadAssets();
 initParticles(scene);
 initBossGibs(scene);
+// The shockwave is a scene object. Without this the cloud fires exactly as it
+// does in the game and the front is silently missing from every panel — which
+// is the same failure the game would have, and the reason it is one call.
+initBossBooms(scene);
 const post = createPost(gl);
 
 const ortho = (h, y = 0) => {
@@ -389,7 +394,7 @@ detonate({
     ],
   },
 });
-present('Shockwave', 'a hot core and a hollow ring racing away from it · reads bigger, leaves the body visible '
+present('Hollow ring (a wave table)', 'a hot core and a ring of GOO racing away from it — not the real front, which is its own row below · reads bigger, leaves the body visible '
   + 'in the hole');
 detonate({
   wall: 0.34,
@@ -409,16 +414,52 @@ present('Column', 'the same rings, each centred higher than the last · a mushro
 section('Options — the surface <span>— one wave table, five thresholds of the same field</span>', 5);
 detonate({ wall: 0.34, goo: { rim: 0, soft: 0.05 } });
 present('Flat cel', 'threshold only · a drawn silhouette with no line round it');
-detonate({ wall: 0.34 });
-present('Dark outline', 'rim -0.55 · the same band every other group BRIGHTENS, darkened instead — '
-  + 'a cel outline for no extra pass', true);
-detonate({ wall: 0.34, goo: { rim: 0.7 } });
+detonate({ wall: 0.34, goo: { iso: 0.36, soft: 0.05, opacity: 0.97, additive: false, rim: -0.55, rimWidth: 0.5 } });
+present('Dark outline (was)', 'rim -0.55 · the same band every other group BRIGHTENS, darkened '
+  + 'instead — a cel outline for no extra pass, and an opaque cloud to draw it on');
+detonate({ wall: 0.34, goo: { additive: false, opacity: 0.97, rim: 0.7 } });
 present('Wet rim', 'rim +0.7 · the blood group\'s highlight. Reads as liquid, which is the one thing '
   + 'smoke is not');
-detonate({ wall: 0.34, goo: { soft: 0.42, rim: 0, opacity: 0.75 } });
+detonate({ wall: 0.34, goo: { additive: false, opacity: 0.75, soft: 0.42, rim: 0 } });
 present('Misty', 'a soft wide edge · the burning-hull smoke at explosion scale. Photographic, not drawn');
-detonate({ wall: 0.34, goo: { additive: true, rim: 0.4, opacity: 0.85 } });
-present('Additive', 'adds light to the water instead of hiding it · the body stays visible through it');
+detonate({ wall: 0.34 });
+present('Additive (ships)', 'adds light to the water instead of hiding it · the body stays '
+  + 'visible through it', true);
+
+// --- THE EDGE, ONCE IT IS LIGHT ---------------------------------------------
+// The rim band is a share of DENSITY, not a distance: it brightens everything
+// between the isoline and `iso + rimWidth`. On the old alpha surface that band
+// was mostly hidden under an opaque interior. On an additive one it is not, and
+// a wide band lights the dip between every pair of lobes — so the cloud comes
+// back as fifty overlapping CIRCLES instead of one mass with an edge. This row
+// is where that number gets settled.
+section('The edge, now that it is light <span>— rimWidth, over the animal, at the shutter</span>', 4);
+{
+  const shark = () => spawnBoss('bossShark', { x: 4, y: -14 });
+  const over = (goo, boom, title, note, picked = false) => {
+    resetParticles(); resetBossBooms(); resetBossGibs(); restore(); reseed();
+    resetEnemies(scene);
+    const boss = shark();
+    updateParticleScale(fightCam, gl);
+    Object.assign(GROUP, goo);
+    Object.assign(BOOM, boom);
+    fireBossBoom(boss);
+    run(0.34, HOLD, fightCam);
+    present(title, note, picked);
+  };
+
+  over({ rimWidth: 0.34 }, {}, 'rimWidth 0.34',
+    'the band reaches a third of the way down the density · every lobe draws its own ring '
+    + 'and the mass reads as a raft of bubbles');
+  over({ rimWidth: 0.14 }, {}, 'rimWidth 0.14',
+    'only the true outer edge is lit · the interior goes back to being one body');
+  over({ rimWidth: 0.14, iso: 0.38 }, {}, '...and a higher isoline',
+    'iso 0.38 · pulls the surface in, so the lobes are rounder and the silhouette is tighter');
+  over({ rimWidth: 0.14 }, { glow: 0.42 }, '...and a dimmer core',
+    'glow 0.42 · additive light is already a lift, so the emitter\'s own brightness comes '
+    + 'down and the core stops blowing out to flat white', true);
+  resetEnemies(scene);
+}
 
 // --- SIZE -------------------------------------------------------------------
 section('Size comes off the measured body <span>— the same table, three animals</span>', 4);
@@ -445,7 +486,9 @@ section('How much cloud <span>— the one master that means “bigger” without
 for (const size of [0.65, 1, 1.4, 1.9]) {
   detonate({ wall: 0.34, boom: { size } });
   present(`Size x${size}`, size < 0.8 ? 'a puff — reads as damage, not as an ending'
-    : size > 1.6 ? 'swallows the frame; at fight scale the seal goes with it' : 'the body, and half again',
+    : size > 1.6 ? 'swallows the frame; at fight scale the seal goes with it'
+      : size > 1.2 ? 'half again on top of that — the cloud outgrows the animal it came out of'
+        : 'the body, and half again',
   size === 1);
 }
 
@@ -461,6 +504,141 @@ for (const [after, note] of [
   if (after > 0) run(after, 1, camera);
   present(`+${after}s real`, note, after === 0);
 }
+
+// --- THE FRONT --------------------------------------------------------------
+// Everything above is the cloud. This is the thing that leaves before it.
+//
+// CAUGHT MID-EXPANSION, not at the shutter, and that is the whole point of the
+// element: both rings are deliberately GONE by the time the picture is taken
+// (asserted in tools/boss-boom-test.mjs). The front is what the player sees in
+// the tenth of a second after the kill; the smoke is what the trophy keeps.
+section('Options — the front <span>— the shockwave, caught 0.10s in · the shipped cloud under all five</span>', 5);
+{
+  const RINGS = CONFIG.boss.boom.shock.rings;
+  const WALL = 0.10;
+
+  detonate({ r: 7, wall: WALL, boom: { shock: { enabled: false } } });
+  present('No front', 'the cloud alone — it reads as something that GREW, which is the '
+    + 'thing a bang is meant to have caused');
+
+  detonate({ r: 7, wall: WALL, boom: { shock: { ...CONFIG.boss.boom.shock, rings: [RINGS[0]] } } });
+  present('One ring', 'the hero front on its own · white-hot, thinning as it opens, eaten from behind');
+
+  detonate({
+    r: 7, wall: WALL,
+    boom: {
+      shock: {
+        ...CONFIG.boss.boom.shock,
+        glow: 3.2,
+        wobble: 0.17,
+        rings: [
+          { ...RINGS[0], to: 2.25, thick: [0.24, 0.05], fade: 1.6 },
+          { ...RINGS[1], glow: 0.55 },
+        ],
+      },
+    },
+  });
+  present('Two rings, restrained', 'a clean hoop leaving a cloud · correct, and a diagram of a '
+    + 'shockwave rather than one');
+
+  detonate({ r: 7, wall: WALL });
+  present('Two rings, loud', 'the same pair pushed until the front TEARS — brighter, reaching 2.7 '
+    + 'bodies, a rougher edge. The second one, slower and in the boss’s own colour, is what says '
+    + 'which animal it was', true);
+
+  detonate({
+    r: 7, wall: WALL,
+    boom: {
+      shock: {
+        ...CONFIG.boss.boom.shock,
+        ease: 1.4,
+        rings: [{ at: 0, from: 0.3, to: 3.0, seconds: 0.3, thick: [0.3, 0.04], glow: 1, white: 1, fade: 1.4, eat: 0.4 }],
+      },
+    },
+  });
+  present('One wide, slow one', 'reaches three bodies out and takes its time · at fight scale this is '
+    + 'most of the arena, and it stops reading as coming off the animal');
+
+  detonate({
+    r: 7, wall: WALL,
+    boom: {
+      shock: {
+        ...CONFIG.boss.boom.shock,
+        glow: 7.5,
+        wobble: 0.34,
+        rings: [
+          { ...RINGS[0], to: 3.1, thick: [0.34, 0.07], fade: 1.0 },
+          { ...RINGS[1], glow: 1.1 },
+        ],
+      },
+    },
+  });
+  present('Louder still', 'past the shipped setting · the front starts washing the cloud out, and at '
+    + 'fight scale it reaches far enough to stop reading as coming off the animal');
+}
+
+section('The front, frame by frame <span>— the shipped pair, on the wall clock, with the water held at a tenth speed</span>', 5);
+for (const [wall, note] of [
+  [0.02, 'the bang · the ring is already a third of the way out'],
+  [0.06, 'the second ring is born as the first thins'],
+  [0.12, 'the leading edge is nearly at its full reach'],
+  [0.20, 'eaten from behind — it is rubbed out, not faded'],
+  [0.34, 'the shutter · the front is gone and the smoke is what is left'],
+]) {
+  detonate({ r: 7, wall });
+  present(`${wall}s`, note, wall === 0.34);
+}
+
+// --- WHAT THE CLOUD IS MADE OF NOW ------------------------------------------
+// THE CHANGE THIS PAGE EXISTS TO JUDGE. The cloud used to be an opaque cel puff
+// with a dark outline, which is the right reference for a Wind Waker explosion
+// and the wrong thing to put on the one frame of the run the player keeps: it
+// is centred on the body and fires a third of a second before the shutter, so
+// the trophy came back with a hole in it where the animal was.
+section('The surface — alpha or additive <span>— a real megalodon under a real cloud, at the shutter</span>', 3);
+{
+  const shark = () => spawnBoss('bossShark', { x: 4, y: -14 });
+  const ALPHA = { iso: 0.36, soft: 0.05, opacity: 0.97, additive: false, rim: -0.55, rimWidth: 0.5 };
+
+  const shot = (goo, title, note, picked = false) => {
+    resetParticles(); resetBossBooms(); resetBossGibs(); restore(); reseed();
+    resetEnemies(scene);
+    const boss = shark();
+    updateParticleScale(fightCam, gl);
+    Object.assign(GROUP, goo);
+    fireBossBoom(boss);
+    run(0.34, HOLD, fightCam);
+    present(title, note, picked);
+  };
+
+  shot(ALPHA, 'Alpha, opaque (was)', 'the cel outline is real and so is the hole: '
+    + 'the animal the picture is of is behind the cloud');
+  shot({ ...GROUP_BASE, opacity: 0.85 }, 'Additive, most of the way up',
+    'the body is back, but the core is a flat white blowout with no shape in it');
+  shot({}, 'Additive at 0.52 (ships)', 'light rather than substance · the silhouette reads '
+    + 'through the brightest part of the blast, and the hard isoline keeps it a drawn shape', true);
+  resetEnemies(scene);
+}
+
+// --- THE ROSTER, AT FIGHT SCALE ---------------------------------------------
+// The colour row above is close-up and on a synthetic body. This is the shipped
+// effect on the four real animals, in the frustum the player is given, at the
+// frame the picture is taken — which is the only view that answers the question
+// the change was made for: can you still see what died.
+section('The four bosses, at the shutter <span>— the arena frustum, the shipped surface, each animal under its own cloud</span>', 4);
+for (const b of ROSTER) {
+  resetParticles(); resetBossBooms(); resetBossGibs(); restore(); reseed();
+  resetEnemies(scene);
+  const key = BOSSES.find(([, n]) => n === b.name)?.[0];
+  const boss = key ? spawnBoss(key, { x: 3, y: -14 }) : null;
+  if (!boss) { continue; }
+  updateParticleScale(fightCam, gl);
+  fireBossBoom(boss);
+  run(0.34, HOLD, fightCam);
+  present(b.name, `#${b.color != null ? new THREE.Color(b.color).getHexString() : '—'} · body ${b.r.toFixed(1)}`,
+    b.name === 'megalodon');
+}
+resetEnemies(scene);
 
 // --- IN THE FRAME THE PLAYER GETS -------------------------------------------
 section('At fight scale, over the animal <span>— the arena frustum, a real megalodon, its own wreckage under it</span>', 3);
@@ -479,8 +657,8 @@ section('At fight scale, over the animal <span>— the arena frustum, a real meg
   updateParticleScale(fightCam, gl);
   fireBossBoom(boss);
   run(0.34, HOLD, fightCam);
-  present('The shutter', 'the cloud is over the animal and hides most of it — which is the point: '
-    + 'the boss is never seen being deleted', true);
+  present('The shutter', 'the cloud is ON the animal and the animal is still in the picture · '
+    + 'that is the whole change: a trophy of a kill has to show what was killed', true);
 
   // ...and 0.18s of wall clock later the body bursts, behind the cloud.
   resetParticles(); resetBossBooms(); resetBossGibs(); reseed();
@@ -490,8 +668,8 @@ section('At fight scale, over the animal <span>— the arena frustum, a real meg
   run(0.34, HOLD, fightCam);
   spawnBossGibs(boss);
   run(0.4, HOLD, fightCam);
-  present('...and the body bursts under it', 'afterShot later · the gibs arrive inside the smoke, so the '
-    + 'switch from animal to wreckage happens where nobody can see it');
+  present('...and the body bursts under it', 'afterShot later · the gibs arrive inside the cloud, and the '
+    + 'light of it is what covers the swap from animal to wreckage now that the cloud does not');
   resetEnemies(scene);
 }
 

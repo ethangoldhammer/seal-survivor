@@ -1,4 +1,4 @@
-<!-- @dsCard group="Screens" name="Level-up cards" subtitle="Hex-clipped upgrade picker, art + overlay tint" viewport="920x620" -->
+<!-- @dsCard group="Screens" name="Level-up cards" subtitle="Hex picker, rarity ring and bloom, effect tooltip" viewport="980x680" -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -9,49 +9,94 @@
 <style>
 /* Preview scaffolding only — none of this ships. */
 html, body { margin: 0; height: 100%; }
-.stage { position: relative; width: 100%; height: 100vh; overflow: hidden;
+.stage { position: relative; width: 100%; min-height: 100vh; overflow: hidden;
   background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
 .stage .sv-ui { position: absolute; }
+/* THE DEAL IS FROZEN. In game igniteCards() adds .sv-lit to one slot at a time,
+   lowest tier first, and each slot runs a keyframe that snaps --sv-lit to
+   --sv-peak and falls back to --sv-idle. A static preview has no clock, so the
+   animation is switched off and every slot is shown at its resting bloom. */
+.stage .sv-card-slot { animation: none !important; }
 </style>
 </head>
 <body>
 <div class="stage">
   <div class="sv-ui">
     <div class="sv-center" id="svLevelUpMenu">
-      <div class="sv-menu">
+      <div class="sv-menu" id="svLevelUpBox">
         <div class="sv-title">Level up</div>
         <div class="sv-sub">Pick one</div>
-        <div class="sv-cards" id="svCards">
-          <!-- background-size: 100% 100% is deliberate — art and card are both
+        <!-- The shape of the deal is handed to the CSS once, on the container,
+             rather than per card: the ignition keyframe and the white "this
+             one" bloom both read these. Values are CONFIG.rarityCard.ignite and
+             CONFIG.rarityCard.selectGlow, both live on the ` tuner. -->
+        <div class="sv-cards" id="svCards"
+             style="--sv-ignite-time:0.9s; --sv-peak:2.3; --sv-idle:0.42; --sv-hov-amt:0.8;
+                    --sv-sel-tight:7px; --sv-sel-halo:22px; --sv-sel-tight-a:0.95; --sv-sel-halo-a:0.6;">
+
+          <!-- Every card is a .sv-card-slot wrapping a .sv-card. The slot is the
+               unclipped box the bloom hangs off; the card is the hexagon, and a
+               filter on a clipped element has nothing outside the clip to blur.
+               applyRarityStyle() writes --sv-ring and --sv-ring-w onto BOTH (a
+               custom property cannot be read upwards from a child) and the two
+               blur sizes onto the slot only. Colours and glow multipliers come
+               from rarities.csv; the px are glowTight 5 / glowRadius 16 scaled
+               by that tier's `glow` column.
+
+               background-size: 100% 100% is deliberate — art and card are both
                square, so this lines the drawn hex up with the clip-path exactly.
-               Overlay is CONFIG.levelUpCards.overlayColor/overlayOpacity
+               Overlay is CONFIG.levelUpCards.overlayColor / overlayOpacity
                (0x000000 at 0.55), tunable in-game via the ` tuner. -->
-          <div class="sv-card" tabindex="0"
-               style="background-image:url(../assets/OpeanOcean_001.webp); background-size:100% 100%; background-position:center;">
-            <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
-            <div class="sv-card-content">
-              <div class="sv-card-name">Sharper Teeth</div>
-              <div class="sv-card-desc">+25% damage on every bite.</div>
+
+          <!-- COMMON. glow 0: a ring and no bloom at all. -->
+          <div class="sv-card-slot sv-lit" data-rarity="common"
+               style="--sv-ring:#b8c2cc; --sv-ring-w:3px; --sv-glow-tight:0px; --sv-glow-halo:0px;">
+            <div class="sv-card" tabindex="0" data-rarity="common" data-rarity-rank="0"
+                 style="--sv-ring:#b8c2cc; --sv-ring-w:3px;
+                        background-image:url(../assets/OpeanOcean_001.webp); background-size:100% 100%; background-position:center;">
+              <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
+              <div class="sv-card-content">
+                <div class="sv-card-name">Sharper Teeth</div>
+                <div class="sv-card-desc">+25% damage on every bite.</div>
+              </div>
             </div>
           </div>
 
-          <div class="sv-card" tabindex="0"
-               style="background-image:url(../assets/Beach_002.webp); background-size:100% 100%; background-position:center;">
-            <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
-            <div class="sv-card-content">
-              <div class="sv-card-name">Bigger Lungs</div>
-              <div class="sv-card-desc">Oxygen drains 20% slower while you are under.</div>
+          <!-- RARE, and the one the pad is on: .sv-card-sel switches the ring
+               white and adds the white pair to the slot's filter, on top of the
+               tier's colour rather than instead of it. -->
+          <div class="sv-card-slot sv-lit" data-rarity="rare"
+               style="--sv-ring:#4aa8ff; --sv-ring-w:3px; --sv-glow-tight:3.5px; --sv-glow-halo:11.2px;">
+            <div class="sv-card sv-card-sel" tabindex="0" data-rarity="rare" data-rarity-rank="2"
+                 style="--sv-ring:#4aa8ff; --sv-ring-w:3px;
+                        background-image:url(../assets/Beach_002.webp); background-size:100% 100%; background-position:center;">
+              <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
+              <div class="sv-card-content">
+                <div class="sv-card-name">Bigger Lungs</div>
+                <div class="sv-card-desc">Oxygen drains 20% slower while you are under.</div>
+              </div>
             </div>
           </div>
 
-          <div class="sv-card" tabindex="0"
-               style="background-image:url(../assets/OpeanOcean_003.webp); background-size:100% 100%; background-position:center;">
-            <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
-            <div class="sv-card-content">
-              <div class="sv-card-name">Chum Magnet</div>
-              <div class="sv-card-desc">Pickups drift toward you from twice as far.</div>
+          <!-- LEGENDARY. glow 1.6, the top of the ladder. -->
+          <div class="sv-card-slot sv-lit" data-rarity="legendary"
+               style="--sv-ring:#ffb020; --sv-ring-w:3px; --sv-glow-tight:8px; --sv-glow-halo:25.6px;">
+            <div class="sv-card" tabindex="0" data-rarity="legendary" data-rarity-rank="4"
+                 style="--sv-ring:#ffb020; --sv-ring-w:3px;
+                        background-image:url(../assets/OpeanOcean_003.webp); background-size:100% 100%; background-position:center;">
+              <div class="sv-card-overlay" style="background:rgba(0,0,0,0.55);"></div>
+              <div class="sv-card-content">
+                <div class="sv-card-name">Chum Magnet</div>
+                <div class="sv-card-desc">Pickups drift toward you from twice as far.</div>
+              </div>
             </div>
           </div>
+
+          <!-- The measured effect, built on hover by showCardEffect() and
+               anchored to the hexagon's DRAWN bottom point (89.6% of the box),
+               not the element's. One per menu, reused; positioned in JS, so the
+               left/top here stand in for that. -->
+          <div class="sv-card-fx sv-fx-on" style="left:50%; top:calc(100% - 10px); transform:translateX(-50%);">Oxygen 100 → 120</div>
         </div>
       </div>
     </div>

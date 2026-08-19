@@ -3,20 +3,374 @@
    This is the round-trip surface: edits here get folded back into ui.js.
    Preview-only scaffolding lives in each components/*.html <style> block. */
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-  .sv-ui * { box-sizing: border-box; font-family: 'Inter', system-ui, sans-serif; }
-  .sv-ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
-  .sv-hud { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: flex-start; color: #e8ecf3; }
-  .sv-panel { background: rgba(12,14,22,0.72); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 10px 14px; backdrop-filter: blur(6px); }
+  /* THE FONT IS NOT SET HERE. It used to be — 'Inter' on this very selector —
+     and because a rule that matches an element directly beats anything it
+     would have inherited, that one declaration overrode the family the tuner
+     was writing onto .sv-ui for every element underneath it. The picker moved
+     nothing. ui/typography.js owns family now, in a sheet appended after this
+     one; the fallback lives on the variable (--sv-font) so there is still a
+     font before that module has run. */
+  .sv-ui * { box-sizing: border-box; }
+  .sv-ui { position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    font-family: var(--sv-font, 'Inter', system-ui, sans-serif); }
+  .sv-hud { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: flex-start; color: #e8ecf3; z-index: 2; }
+  /* NO BOX. This was a 72%-opaque slab with a border, a 10px radius and a 6px
+     backdrop blur behind the score and the clock. The numbers are read off the
+     water directly now — over an ocean that is mostly dark, a panel is a hole
+     cut in the picture to hold two figures that were already legible. */
+  .sv-panel { padding: 0; }
+  /* The gap the "Time" caption used to provide. Without it the score and the
+     clock stack into one four-line block of digits. */
+  .sv-hud-time { margin-top: 4px; opacity: 0.7; }
+  /* The read-outs, as one movable block. margin-left:auto is what pushes the
+     group to the right-hand end of the HUD row, and it is the same declaration
+     the score panel carried before this wrapper existed — so on a desktop it
+     sits exactly where it always has.
+
+     Right-aligned because without the box there is no edge but the screen's:
+     left-aligned text pinned to a right corner leaves a ragged edge facing in.
+
+     THE LEGIBILITY IS A drop-shadow AND NOT A text-shadow, deliberately. The
+     panel background was doing that job, and the two roles underneath it
+     (.sv-label and .sv-value) are set to shadow: 0 — in the saved tuning as
+     well as in the defaults, so raising it in textRoles.js would be a silent
+     no-op. ui/typography.js owns text-shadow on those selectors outright and
+     rewrites it whenever the Text panel moves, so a second writer here would be
+     the bug where one of them never wins. drop-shadow is a different property
+     nothing else touches, applied to the group: it shadows the glyphs as
+     rendered, and the Text panel keeps full control of the type. */
+  .sv-hud-corner { margin-left: auto; display: flex; align-items: flex-start;
+    gap: 0; text-align: right;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9)) drop-shadow(0 0 7px rgba(0,0,0,0.6)); }
+
+  /* --- THE HEX HIVE ------------------------------------------------------
+     One tile per upgrade held, packed into the corner. See ui/upgradeHive.js
+     for the layouts and what each pulse means; this is only how a tile looks.
+
+     OUTSIDE the corner's drop-shadow filter, and that is not cosmetic: a
+     a 'filter' on an ancestor makes it the containing block for anything
+     positioned 'fixed' inside it, and the corner already moves to fixed on a
+     phone. The hive is its own block for the same reason the boss bar is.
+
+     TILES ARE ABSOLUTE inside .sv-hive-host, whose size upgradeHive.js stamps
+     from the layout it just computed — nothing here reads a layout property, so
+     a fight that fires nine abilities a second costs nine class writes.
+
+     A SIBLING of .sv-hud rather than a child, and fixed rather than in its flex
+     row. Three reasons, all of which bit: that row is space-between and a fifth
+     child re-proportions the other four; the corner group inside it goes
+     'position: fixed' on a phone and would drag the hive with it into the score
+     panel; and .sv-hud-corner carries a drop-shadow filter, which makes it the
+     containing block for any fixed descendant and would pin the hive to the
+     corner box instead of to the screen.
+
+     BOTTOM LEFT by default. The score and clock take the bottom right on a
+     phone, the boss bar owns the top band, and the hp/air bars float on the
+     seal — the lower left is the one corner of this HUD with nothing in it. */
+  /* UNDER EVERY MENU, and this is a layer number rather than a DOM-order
+     accident. .sv-hive, .sv-center, .sv-toast-layer and the boss bar are all
+     children of the same root, so they share one stacking context — and the
+     hive is appended LAST (initUpgradeHive runs after the markup), so without
+     an explicit ladder it paints over the level-up cards and the score card
+     whatever order the source is in. It carried z-index 3 against menus with no
+     z-index at all, which is exactly that bug: a corner of hexes sitting on top
+     of the run's own menus.
+
+     The ladder, lowest first: hive, HUD, boss bar, menus, toasts, transitions.
+     A menu is a thing you are being asked to act on; the hive is a readout of
+     what you already hold, and it has no business over the top of one. */
+  .sv-hive { pointer-events: none; position: fixed; z-index: 1; }
+  .sv-hive[data-corner="bl"] { left: 14px; bottom: 14px; }
+  .sv-hive[data-corner="br"] { right: 14px; bottom: 14px; }
+  .sv-hive[data-corner="tl"] { left: 14px; top: 34px; }
+  .sv-hive[data-corner="tr"] { right: 14px; top: 34px; }
+  .sv-hive-host { position: relative; }
+  /* A SQUARE BOX, CLIPPED ON THE ART'S OWN VERTICES — the same polygon .sv-card
+     uses, for the same reason. The hex art is drawn with a margin inside a
+     square image (measured: 5.5%-94.1% across, 12.7%-89.8% down, including the
+     dark border), so the box has to be square or background-size:100% 100%
+     squashes the drawing, and the clip has to be on THOSE vertices or it cuts
+     through the border instead of following it.
+     upgradeHive.js packs on the visible hexagon, so neighbouring boxes overlap
+     — which is why nothing here may paint outside the clip. */
+  .sv-hive-tile { position: absolute;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    display: grid; place-items: center;
+    /* The pulse animates this, and only this. Transform and opacity are the two
+       properties that never cost a layout, which is the whole reason a tile can
+       flash on the same frame the hit lands. */
+    transform-origin: 50% 50%; }
+  /* THE RIM IS A LAYER, NOT A BOX-SHADOW.
+     An inset box-shadow paints the element's BORDER BOX — a rectangle — and a
+     clip-path then keeps only the parts of that rectangle that fall inside the
+     hexagon. What you get is rim along the flat top and bottom and a stub at
+     each side vertex, with the four diagonal edges bare: a border that looks
+     cut off, because it is. Nothing warns; the shadow is perfectly valid.
+     So the rim is the TILE's own background, and the face is the same hexagon
+     inset on top of it. Both are clipped, so the rim follows all six edges. */
+  .sv-hive-face { position: absolute; inset: 2px;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%); }
+  /* 55% of the BOX, which is as large as a square can be inside this hexagon:
+     the widest centred square in a flat-top hexagon is 0.634 of its width, and
+     the hexagon is 0.882 of the box. Sized off the box because that is what the
+     percentage resolves against — the number already has the hexagon in it. */
+  .sv-hive-icon { position: relative; width: 55%; height: 55%; object-fit: contain;
+    /* Every render is lit by the same neutral studio, so the only separation
+       between a white beluga and the water behind it is this. */
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.75)); }
+  .sv-hive-mono { position: relative; font: 700 15px/1 system-ui, sans-serif;
+    color: rgba(255,255,255,0.92); letter-spacing: 0.02em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  /* Inside the hexagon, not the box. The box's bottom-right corner is empty
+     space the clip throws away, so a badge placed there is simply not drawn —
+     this sits above the flat bottom edge, where the shape is solid. */
+  .sv-hive-pip { position: absolute; right: 26%; bottom: 14%;
+    font: 700 11px/1 ui-monospace, monospace; color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.95), 0 0 4px rgba(0,0,0,0.8); }
+
+  /* --- THE PILE UNDER A STACKED TILE --------------------------------------
+     Extra picks of the same upgrade are drawn as layers BEHIND the tile, offset
+     down, so the hexagon appears to grow in height out of its cell. See
+     buildShims in upgradeHive.js for why they are siblings and not children:
+     the tile is clipped to its own hexagon, so anything drawn below its flat
+     bottom edge from inside it is not dimmed, it is not painted at all.
+     Z-INDEX, NOT DOM ORDER. Piles overlap their NEIGHBOURS as well as their own
+     tile, and a layer belonging to a tile late in the tree would otherwise
+     paint over the face of a tile early in it. Every layer is under every tile;
+     which tile wins against which is then the paint order rebuild() sets. */
+  /* NO z-index ON ANY OF THESE. A tile, its pile and the shade it casts are one
+     object standing in one place, and rebuild() appends the whole hive in
+     painter's order — furthest cell first, nearest last. Layering them by
+     z-index instead lifts every pile in the hive above every shade in it, which
+     is how a tower ends up casting its own shadow onto its own pile. */
+  .sv-hive-shim { position: absolute; pointer-events: none;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    /* THE STROKE STACKS TOO. A layer is built exactly like the tile above it —
+       the tier colour IS the element's background and the dark fill is a
+       smaller hexagon inset on top, so the rim follows all six edges. Drawn as
+       flat silhouettes instead, a deep pile is one dark wedge: you can see that
+       the tile got taller and not how many picks made it so. Only a few px of
+       each layer ever show, and this is what makes those px an EDGE. */
+    background: color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) var(--sv-shim-mix, 40%), #05121a); }
+  .sv-hive-shim-face { position: absolute; inset: 2px;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    /* Darker than the tile's own face, and by more the deeper it sits: the pile
+       is in the tile's shadow, and a layer painted at the face's brightness
+       reads as a second tile slipping out from under the first. */
+    background: linear-gradient(160deg, rgba(16,46,63,0.92), rgba(6,18,26,0.96)); }
+  /* 'riser' is ONE body with an inline px polygon — the hexagon's own vertices
+     with the bottom half dropped by the depth. It carries no clip of its own
+     here: a percentage clip on a box that is taller than it is wide would
+     squash the top face out of register with the tile sitting on it. Its face
+     is a second prism, one rim narrower, so the tower has an outline down its
+     whole height rather than only around the hexagon on top. */
+  /* THE STROKE IS SOLID DOWN THE WHOLE BODY, and the shading lives on the fill
+     inside it. It was the other way round — the tier colour ramping off toward
+     the base — and on a prism that is the same mistake as a pile whose deepest
+     plate has no outline: the tower's silhouette dissolves into the water at
+     exactly the end that is standing on it, so a tall riser reads as a short
+     one that has been smudged. Rim first, light second. */
+  .sv-hive-shim[data-mode="riser"] {
+    background: color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) var(--sv-shim-mix, 100%), #05121a); }
+  .sv-hive-shim[data-mode="riser"] .sv-hive-shim-face {
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) var(--sv-shim-top, 58%), #071a26),
+      color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) var(--sv-shim-base, 20%), #04101a)); }
+
+  /* THE CONTACT SHADOW UNDER A TOWER — see buildShade.
+     A RADIAL GRADIENT, NOT A BLURRED BOX. 'filter' is applied before
+     'clip-path', so a blurred element that is also clipped comes back with a
+     hard hexagonal edge: a soft shadow cut into a sharp shape. This needs
+     neither, composites for free, and cannot be clipped by anything.
+     IT FALLS ON WHAT IS BEHIND IT AND ON NOTHING OF ITS OWN. Appended first of
+     the three, so the pile and the tile it belongs to are painted over the top
+     of it — a tower that shades its own stack looks like the pile is made of
+     something dirtier than the tile, which is the exact opposite of the read. */
+  .sv-hive-shade { position: absolute; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 52%,
+      rgba(2,8,13,var(--sv-shade-alpha, 0.4)) 0 38%,
+      rgba(2,8,13,calc(var(--sv-shade-alpha, 0.4) * 0.55)) 62%,
+      rgba(2,8,13,0) 78%); }
+
+  /* ink — a dark face with the rarity as a rim. The default: it is the only one
+     of the three that leaves the icon as the brightest thing on the tile. */
+  .sv-hive[data-style="ink"] .sv-hive-tile { background: var(--sv-hive-rarity, #b8c2cc); }
+  .sv-hive[data-style="ink"] .sv-hive-face {
+    background: linear-gradient(160deg, rgba(28,74,99,0.92), rgba(9,26,36,0.94)); }
+  /* rarity — the tier floods the face. Loudest, and the one that answers "what
+     did this run actually roll" from across the room.
+     THE RIM IS NOT DECORATION. Without it this style has no edge at its dark
+     end: the gradient lands on the same near-black the water is, so a Common
+     tile stops having a silhouette and its icon reads as floating loose in the
+     corner. */
+  .sv-hive[data-style="rarity"] .sv-hive-tile {
+    background: color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) 55%, #0b1a24); }
+  .sv-hive[data-style="rarity"] .sv-hive-face {
+    background: linear-gradient(160deg, var(--sv-hive-rarity, #b8c2cc), rgba(9,26,36,0.96) 78%); }
+  /* art — the biome hex the card was dealt on. It cannot identify an upgrade
+     (a dozen cards share Beach_001), so it is texture, dimmed so the mark on
+     top stays the subject.
+     NO RIM AND NO INSET: this art is DRAWN with a dark outline, and that
+     outline is the whole reason the tiles read as tiles. Insetting the face to
+     make room for a synthetic rim crops the drawn one — and then the tile has
+     two borders, one of them sliced. The art gets the full hexagon. */
+  .sv-hive[data-style="art"] .sv-hive-face {
+    inset: 0;
+    background-image: var(--sv-hive-art, none);
+    background-size: 100% 100%; background-position: center; }
+  .sv-hive[data-style="art"] .sv-hive-face::after {
+    content: ''; position: absolute; inset: 0; background: rgba(6,18,26,0.45); }
+
+  /* --- THE CHOSEN CARD, ON ITS WAY TO THE CORNER --------------------------
+     A clone of the card that was picked, flown from where it sat to where its
+     tile will be and then swapped for that tile. See flyCardToHive.
+
+     TRANSFORM AND OPACITY ONLY. Both are compositor properties, so the flight
+     costs no layout on any frame — which matters because the run has already
+     come back to life underneath it and is spawning, shooting and shaking at
+     the same time. Animating left/top instead would put a full layout on every
+     frame of it, on the exact frames the fight is busiest.
+
+     transform-origin is the top-left because the flight is written as "put this
+     corner there and shrink by this much" — with a centred origin the scale
+     pulls the card away from the point being translated to and the landing
+     misses by half the difference in size. */
+  .sv-hive-flier { position: fixed; pointer-events: none; z-index: 7;
+    transform-origin: 0 0; will-change: transform, opacity; }
+  /* The words do not survive the trip: the tile has no room for them, and text
+     scaled to 28% is a grey smear. Gone well before the landing so what arrives
+     is already just the picture. */
+  .sv-hive-flier .sv-card-content { opacity: 0; }
+  /* The tooltip that follows a hovered card is not part of the flight. */
+  .sv-hive-flier .sv-card-fx { display: none; }
+
+  /* --- FIRING -------------------------------------------------------------
+     One class, four animations, picked by the tile's family (data-pulse). They
+     are all under 400ms on purpose: this fires as often as the ability does,
+     and anything with a tail long enough to overlap its own next firing turns
+     into a tile that is simply always lit. */
+  .sv-hive-tile[data-pulse="pop"].sv-hive-firing { animation: sv-hive-pop 220ms ease-out; }
+  .sv-hive-tile[data-pulse="flash"].sv-hive-firing { animation: sv-hive-flash 260ms ease-out; }
+  .sv-hive-tile[data-pulse="swell"].sv-hive-firing { animation: sv-hive-swell 380ms ease-in-out; }
+  .sv-hive-tile[data-pulse="lean"].sv-hive-firing { animation: sv-hive-lean 340ms ease-out; }
+  .sv-hive-tile[data-pulse="glow"].sv-hive-firing { animation: sv-hive-glow 300ms ease-out; }
+
+  /* The Balatro punch: overshoot, undershoot, settle. The undershoot is what
+     makes it read as a POP rather than as a grow — a curve that only ever gets
+     bigger reads as the tile inflating. */
+  @keyframes sv-hive-pop {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.28); filter: brightness(1.9); }
+    65%  { transform: scale(0.94); }
+    100% { transform: scale(1); }
+  }
+  @keyframes sv-hive-flash {
+    0%   { transform: scale(1) rotate(0deg); filter: brightness(1); }
+    18%  { transform: scale(1.34) rotate(-3deg); filter: brightness(3.2) saturate(0.4); }
+    100% { transform: scale(1) rotate(0deg); filter: brightness(1); }
+  }
+  /* An aura has no moment of release, so this has no spike: it breathes out and
+     back, which is what a field doing continuous work looks like. */
+  @keyframes sv-hive-swell {
+    0%   { transform: scale(1); filter: brightness(1); }
+    50%  { transform: scale(1.12); filter: brightness(1.45); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+  /* A companion acts on its own schedule, so its tile leans the way an animal
+     turns rather than pulsing on your beat. */
+  @keyframes sv-hive-lean {
+    0%   { transform: rotate(0deg) scale(1); }
+    30%  { transform: rotate(-7deg) scale(1.1); }
+    60%  { transform: rotate(5deg) scale(1.04); }
+    100% { transform: rotate(0deg) scale(1); }
+  }
+  @keyframes sv-hive-glow {
+    0%   { filter: brightness(1); }
+    40%  { filter: brightness(1.7); }
+    100% { filter: brightness(1); }
+  }
+
+  /* --- ARRIVING, AND THE CORNER FEELING IT -------------------------------
+     Two beats with different jobs. The SLAM is the new tile landing under its
+     own weight — it comes in oversized and squashes into place, which is what
+     makes it read as having mass rather than as having faded in. The RIPPLE is
+     every other tile registering the impact, fired in order of distance so it
+     crosses the hive as a wave.
+
+     Both are heavier than the firing pulses on purpose: a pulse happens many
+     times a minute and has to stay quiet, while this happens once per pick and
+     is allowed to be the loudest thing the corner ever does. */
+  .sv-hive-tile.sv-hive-arriving { animation: sv-hive-slam 420ms cubic-bezier(0.2, 1.4, 0.35, 1); }
+  .sv-hive-tile.sv-hive-rippling { animation: sv-hive-ripple 300ms ease-out; }
+
+  @keyframes sv-hive-slam {
+    0%   { transform: scale(1.55); filter: brightness(2.4); }
+    /* The squash. A landing that only ever shrinks reads as a zoom-out; the
+       overshoot below the target and the settle back are the impact. */
+    55%  { transform: scale(0.9); filter: brightness(1.3); }
+    78%  { transform: scale(1.04); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+  /* Small on purpose — twenty of these going off in sequence is a lot of
+     movement, and each one only has to be visible, not dramatic. */
+  @keyframes sv-hive-ripple {
+    0%   { transform: scale(1); }
+    40%  { transform: scale(1.11); filter: brightness(1.5); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+
+  /* A player who asked for less motion gets the state without the movement:
+     the tile still says WHICH ability fired, it just says it by brightening. */
+  @media (prefers-reduced-motion: reduce) {
+    .sv-hive-tile.sv-hive-firing { animation: sv-hive-glow 300ms ease-out !important; }
+  }
 
   /* XP spans the full width at the very top — it's the run-long progress
      bar, so it reads as a frame around the screen rather than a widget. */
-  .sv-xptop { position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  /* THE LEVEL NUMBER RIDES INSIDE THE TRACK, centred. It used to sit under the
+     bar as its own line of text in the top-left corner, which is the corner the
+     HUD is already using and a second thing to look at for a number that
+     changes once a minute. Inside the bar it is attached to the thing it
+     describes and costs no space of its own.
+     THE BAR IS AS THICK AS THE TYPE IT CARRIES, min 14px, rather than a fixed
+     6px with text laid over it: the Level role's size is tunable (Text panel),
+     and a fixed track would clip it the moment anyone dragged that slider. */
+  .sv-xptop { position: absolute; top: 0; left: 0; right: 0; min-height: 14px;
+    display: flex; align-items: center; justify-content: center;
     background: rgba(255,255,255,0.07); overflow: hidden; }
-  .sv-xptop-fill { height: 100%; width: 0%; background: #7ad7ff;
-    box-shadow: 0 0 10px rgba(122,215,255,0.75); transition: width 0.15s ease; }
-  .sv-xptop-level { position: absolute; top: 9px; left: 14px; font-size: 10px;
-    letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;
-    color: rgba(232,236,243,0.5); text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+  /* SCALED, not sized. The fill is always the full track and is squashed along
+     one axis by --sv-xp (written by updateHUD as a 0..1 fraction), which is what
+     lets the responsive block below turn the same element on its side without
+     the JS knowing. transform-origin is the end it grows FROM.
+     Absolute now that the track is a flex box around the label — in flow it
+     would be a sibling the label had to share the width with. */
+  .sv-xptop-fill { position: absolute; inset: 0; background: #7ad7ff;
+    transform: scaleX(var(--sv-xp, 0)); transform-origin: 0 50%;
+    box-shadow: 0 0 10px rgba(122,215,255,0.75); transition: transform 0.15s ease; }
+  /* Everything positional here is scoped under .sv-xptop, not hung on the role's
+     own class: .sv-xptop-level is also rendered on its own in the Text panel's
+     specimen strip (ui/textPanel.js), where it has to stay a plain run of text
+     with no box around it.
+     The two words are both in the markup and one is hidden per breakpoint —
+     "Level" across the top of a desktop, "Lv" stacked over the number on a
+     phone, where the strip is only as wide as its widest line. */
+  /* THE DARK PLATE IS NOT DECORATION. The fill sweeps left to right under this
+     label every level, and pale type at half alpha over #7ad7ff is not there —
+     the first letters vanished as the bar passed them, which is exactly when a
+     player is looking at it. A plate dark enough to keep the text on one
+     background whichever side of the fill edge it is on. */
+  .sv-xptop .sv-xptop-level { position: relative; z-index: 1; display: flex;
+    align-items: center; justify-content: center; gap: 0.5em; line-height: 1;
+    padding: 3px 8px; pointer-events: none;
+    background: rgba(4,6,12,0.78); border-radius: 999px; }
+  .sv-xptop-abbr { display: none; }
+  /* Font, colour and shadow come from the Level role (textRoles.js); this is
+     only what the label looks like in the frames before that sheet exists. */
+  .sv-xptop-level { font-size: 8px; color: rgba(232,236,243,0.5); }
 
   /* Health and oxygen ride BESIDE the seal, so the two things you have to
      react to fastest are where your eyes already are. Positioned in screen
@@ -83,23 +437,243 @@
   .sv-pbar-o2.sv-o2-low { background: linear-gradient(180deg, #ffd166, #ff8a00);
     box-shadow: 0 0 12px rgba(255,160,40,0.9); }
 
+  /* --- THE OTHER PLACEMENT: PINNED TO THE CORNER -------------------------
+     settings.hud.barPlacement === 'corner'. The same two columns, the same
+     fills and the same trail — only the anchor changes, which is the whole
+     reason this is a modifier class and not a second widget. Two widgets
+     drawing one quantity is how they end up disagreeing.
+
+     FIXED, not absolute. .sv-hud is anchored at the top of the screen and is
+     14px in from each edge, so an absolute child could never reach the bottom
+     of the viewport. This works only because nothing above it in the tree
+     carries a CSS filter or a transform — either would make that ancestor the
+     containing block and quietly re-anchor these to it. .sv-hud-corner has
+     exactly such a filter, which is why these bars are its SIBLING and not
+     something tucked inside it.
+
+     env() on both axes: on a phone held sideways the home indicator and the
+     rounded corner both eat into precisely this corner, and 14px from the
+     glass edge is behind them. The fallback in each calc is what a browser
+     with no safe-area support (and every desktop) gets. */
+  .sv-playerbars-corner { position: fixed; left: auto; top: auto;
+    right: calc(14px + env(safe-area-inset-right, 0px));
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    transform: none; align-items: flex-end; gap: 7px; }
+  /* THE COLUMN ORDER IS INHERITED, not restated. row-reverse puts health
+     against the screen's right edge here and against the seal there, which is
+     the same rule read twice — health is the one nearest whatever the gauges
+     are attached to. A player who switches placements mid-session finds the
+     two columns in the order they already learned.
+     align-items: flex-end aligns their BOTTOMS, which matters as soon as the
+     two have different lengths: they grow from one shared floor rather than
+     floating at different heights. */
+
+  /* HOW LONG THE COLUMNS ARE, and the one thing this placement does that the
+     seal-side one cannot: the track GROWS.
+     --sv-track is the base length, a quarter of the viewport's height. --sv-hp-
+     grow and --sv-o2-grow are that gauge's maximum as a multiple of the
+     maximum a run STARTS with, written per frame by updateHUD — so a seal that
+     has doubled its health has a column twice as tall, climbing the side of
+     the screen, and the upgrade is legible without a number anywhere.
+     min() is the ceiling, in CSS rather than in JS on purpose: the limit is
+     "how much screen is there", which is a question the stylesheet is already
+     holding the answer to and JS would have to re-measure on every resize.
+     72vh leaves the top of the screen to the boss bar even at full growth. */
+  .sv-playerbars-corner { --sv-track: 25vh; --sv-track-max: 72vh; }
+  /* THE EMPTY TRACK HAS TO BE VISIBLE HERE, which it does not beside the seal.
+     Growing the column is only legible if the CEILING can be seen: a track
+     that disappears into the water leaves a longer bar and a shorter one
+     looking identical at the same fraction, and the upgrade this placement
+     exists to show goes back to being invisible. A pale rim and a slightly
+     lifted ground, both weak enough to stay out of the way of the fill. */
+  .sv-playerbars-corner .sv-pbar-wrap { width: 13px; border-radius: 7px;
+    background: rgba(8,13,24,0.5);
+    box-shadow: 0 0 0 1px rgba(210,226,245,0.22), inset 0 0 8px rgba(0,0,0,0.6); }
+  .sv-playerbars-corner #svHpWrap {
+    height: min(calc(var(--sv-track) * var(--sv-hp-grow, 1)), var(--sv-track-max)); }
+  .sv-playerbars-corner #svO2Wrap {
+    height: min(calc(var(--sv-track) * var(--sv-o2-grow, 1)), var(--sv-track-max)); }
+  .sv-playerbars-corner .sv-pbar,
+  .sv-playerbars-corner .sv-pbar-ghost { border-radius: 7px; }
+
+  /* A SHORT SCREEN IS THE CASE THAT BREAKS THIS. A phone on its side is 393px
+     tall, where a quarter of the viewport is 98px and a doubled health bar is
+     already most of the way up the glass. The base shrinks and the ceiling
+     comes down with it, so growth still reads as growth and still stops short
+     of the boss bar. */
+  @media (max-height: 560px) {
+    .sv-playerbars-corner { --sv-track: 22vh; --sv-track-max: 58vh; }
+  }
+
+  /* THE COLLISION, and it is a real one. On a phone the score and the clock
+     move to fixed bottom-right (see the responsive block below) — the exact
+     corner these bars are asking for. Rather than moving the gauges somewhere
+     they were not asked to be, the numbers step inboard by the width of the
+     stack: two 13px columns and a 7px gap, plus the same 14px breathing room
+     the corner already keeps from the edge. Applied to .sv-hud rather than to
+     the bars, because the thing that moves is the other block. */
+  .sv-hud-barcorner .sv-hud-corner { --sv-bars-w: 47px; }
+  @media (max-width: 700px) {
+    .sv-hud-barcorner .sv-hud-corner {
+      right: calc(14px + var(--sv-bars-w, 0px) + env(safe-area-inset-right, 0px)); }
+  }
+
+  /* THE BOSS BAR (systems/boss.js). Top centre, clear of the xp strip and of
+     both HUD corners. It is deliberately NOT a bar over the creature's head:
+     a boss this size spends half the fight partly off screen, and a floating
+     bar would vanish exactly when you most want to know how the fight is
+     going. Red and only red — nothing else in the HUD is, so the bar reads as
+     "the thing trying to kill you" without needing a label saying so. */
+  /* Width is written per boss from its max health (see bossBarWidth) — the
+     value here is only what a bar that has not been updated yet falls back to. The
+     max-width is the guard that keeps a hand-edited hp number from producing a
+     bar wider than the window. */
+  .sv-bossbar { z-index: 3; position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
+    width: min(560px, 62vw); max-width: 92vw; pointer-events: none; text-align: center;
+    transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+  .sv-boss-name { font-size: 13px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: #ffd7d7; margin-bottom: 5px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 12px rgba(255,60,60,0.55); }
+  .sv-boss-track { height: 9px; background: rgba(4,6,12,0.62); border-radius: 5px;
+    overflow: hidden; box-shadow: 0 0 0 1px rgba(255,86,102,0.45), 0 0 18px rgba(255,40,60,0.22); }
+  /* Width is set per frame from the boss's hp, so the transition is a smoothing
+     pass over a value that is already correct — short enough that a burst of
+     damage still reads as a hit. */
+  .sv-boss-fill { height: 100%; width: 100%; border-radius: 5px;
+    background: linear-gradient(90deg, #ff2f45, #ff6a5a);
+    box-shadow: 0 0 12px rgba(255,60,70,0.8); transition: width 0.12s linear; }
+  /* THE ARRIVAL. The bar is driven 0→1 across CONFIG.boss.arrival.seconds while
+     the boss swims in, and the shape of that fill is decided in JS — see
+     CONFIG.boss.arrival.ease and path/src/ease.js.
+     NO TRANSITION HERE, deliberately. This used to carry a 0.4s eased one, and
+     a transition that restarts every frame chasing a value that is itself
+     moving never arrives: it lagged a fixed 0.4s behind for the whole ceremony
+     and then covered the remainder in a snap. Two curves fighting over one
+     number, and the visible result was the opposite of both. The width written
+     each frame is already the eased answer, so the bar's job here is to draw it
+     and nothing else. Colour only. */
+  .sv-boss-fill-arriving { transition: none;
+    background: linear-gradient(90deg, #ff5a3c, #ffb066);
+    box-shadow: 0 0 22px rgba(255,140,80,0.95); }
+
+  /* THE ROLL — every kill shot from the run, fanned out on the score screen
+     (systems/bossShot.js keeps them, ui/snapshotPrint.js builds the paper).
+     The prints overlap by a third, so eight of them still fit the card on a
+     phone; picking one lifts it square out of the fan. */
+  .sv-trophy { margin: 4px 0 12px; display: flex; flex-direction: column; gap: 9px; align-items: center; }
+  .sv-fan { display: flex; justify-content: center; align-items: center; flex-wrap: nowrap;
+    padding: 14px 0 10px; max-width: 100%; }
+  .sv-fan-slot { position: relative; background: none; border: 0; padding: 0; margin: 0;
+    cursor: pointer; pointer-events: all; transform-origin: 50% 60%;
+    transform: rotate(var(--rot, 0deg));
+    filter: drop-shadow(0 8px 20px rgba(0,0,0,0.5));
+    transition: transform 0.18s cubic-bezier(0.2,0.9,0.3,1), filter 0.18s ease; }
+  /* Lifted SQUARE to the frame, not merely raised: the fan's job is to show
+     that there are several, and the pick's job is to show one properly. */
+  .sv-fan-slot:hover, .sv-fan-slot:focus-visible {
+    transform: rotate(0deg) translateY(-8px) scale(1.04); outline: none; }
+  .sv-fan-sel, .sv-fan-sel:hover {
+    transform: rotate(0deg) translateY(-11px) scale(1.08);
+    filter: drop-shadow(0 12px 26px rgba(0,0,0,0.6)); }
+  .sv-fan-sel .sv-print-paper { outline: 2px solid #7ad7ff; outline-offset: 0; }
+  .sv-trophy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  /* The two whole-run buttons read as secondary to the two that act on the
+     print the player just picked. */
+  .sv-btn-ghost { background: rgba(122,215,255,0.12); color: #cfeeff;
+    border: 1px solid rgba(122,215,255,0.35); }
+  .sv-btn-ghost:hover { background: rgba(122,215,255,0.22); }
+
+  /* THE SCORECARD. The same five figures the shared image carries (see
+     drawScorecard in systems/bossShot.js), but not as five equal chips any
+     more.
+
+     SCORE IS THE HEADLINE and the other four are the supporting read. Laid out
+     flat, the five wrapped 3 + 2 on the card's own width — score, time and
+     level on one line, kills and bosses orphaned under them — which reads as a
+     row that broke rather than as a hierarchy. It also gave the number a player
+     actually cares about exactly as much room as "Bosses: 0".
+     So score gets its own line at display size, and the remaining four sit
+     under it as ONE four-column grid: an explicit grid rather than a flex row,
+     because equal columns are the whole point and four items sharing a line by
+     luck is the layout that just broke.
+     tabular-nums on every figure — these are numbers in columns, and a run
+     that scores 111,111 must not be narrower than one that scores 100,000. */
+  .sv-scorecard { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .sv-score-hero { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .sv-score-hero b { font-size: 40px; line-height: 1; font-weight: 700;
+    letter-spacing: 0.01em; color: #e8ecf3; font-variant-numeric: tabular-nums; }
+  .sv-score-hero span { font-size: 10px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: rgba(232,236,243,0.45); }
+  /* Full width so the four columns are quarters of the card rather than
+     quarters of whatever the four labels happened to measure. */
+  .sv-stat-row { display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 4px; width: 100%; }
+  .sv-stat { display: flex; flex-direction: column; align-items: center;
+    min-width: 0; padding: 0 4px; font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: rgba(232,236,243,0.45); }
+  .sv-stat b { font-size: 19px; font-weight: 700; letter-spacing: 0.01em;
+    color: #e8ecf3; text-transform: none; font-variant-numeric: tabular-nums; }
+
+  /* TYPE IN THIS FILE IS THE FALLBACK LAYER, not the design. Every font-size,
+     weight, colour and text-shadow from here down is re-stated by
+     ui/typography.js from CONFIG.textStyles, in a sheet appended after this
+     one — so these values are what the game looks like for the few frames
+     before that module runs, and what it falls back to if it ever doesn't.
+     The live numbers are in path/src/textRoles.js and the Text panel (Y).
+     Everything else here — position, layout, the will-change hints — is real
+     and is not duplicated anywhere. */
+
   /* Score toasts: one per kill, floating up from where the fish died. */
   .sv-toast { position: absolute; font-size: 13px; font-weight: 700;
     color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7);
     font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap;
     transform: translate(-50%, -50%); will-change: transform, opacity; }
   .sv-toast-combo { color: #ffe066; font-size: 15px; }
-  .sv-toast-mult { font-size: 10px; opacity: 0.8; font-weight: 600; }
+  /* FOOD CHAIN! — the chain-extension banner. Reuses the toast layer and the
+     toast update loop, but it is an announcement rather than a number: it
+     rises from the seal, only one is ever on screen (an extension re-uses the
+     live node), and it runs hotter the deeper the chain goes — the colour is
+     set inline from the link count, so it is not a fixed palette here. */
+  .sv-chain { position: absolute; font-size: 21px; font-weight: 800;
+    letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 16px currentColor;
+    pointer-events: none; transform: translate(-50%, -50%);
+    will-change: transform, opacity; }
+  /* em, not px: the ×N is a part of the banner rather than a thing with its
+     own size, so it tracks whatever the Chain banner role is set to. */
+  .sv-chain-x { font-size: 0.76em; margin-left: 7px; font-weight: 700;
+    font-variant-numeric: tabular-nums; opacity: 0.9; }
+  /* AN UPGRADE PAYING OUT — "MANEATER +12%". Same layer and same loop as the
+     numbers, and deliberately smaller and cooler than the chain banner: this
+     is a receipt, not an announcement. One line per upgrade at a time; a
+     second proc of the same card updates the one that is up (spawnProcToast). */
+  .sv-proc { position: absolute; font-size: 13px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap;
+    text-shadow: 0 2px 5px rgba(0,0,0,0.95), 0 0 10px currentColor;
+    pointer-events: none; transform: translate(-50%, -50%);
+    will-change: transform, opacity; }
+  /* em, like the chain's count, and for the same reason — the value is part of
+     the line rather than a thing with a size of its own. */
+  .sv-proc-val { font-size: 1.08em; margin-left: 6px; font-weight: 800;
+    font-variant-numeric: tabular-nums; }
   .sv-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(232,236,243,0.55); font-weight: 500; }
   .sv-value { font-size: 15px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
-  .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; }
+  .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; z-index: 4; }
   .sv-menu { background: rgba(12,14,22,0.88); border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 28px 32px; text-align: center; color: #e8ecf3; max-width: 90vw; }
   .sv-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
   .sv-sub { font-size: 13px; color: rgba(232,236,243,0.6); margin-bottom: 18px; line-height: 1.6; }
   .sv-btn { pointer-events: all; background: #7ad7ff; color: #0a0c12; border: none; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 600; cursor: pointer; letter-spacing: 0.02em; }
   .sv-btn:hover { background: #9fe3ff; }
   .sv-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-  .sv-cards { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: min(760px, 92vw); }
+  /* The pad's cursor on the score card. Same look as the focus ring, but as a
+     class for the same reason the cards' selection is one: :focus-visible is
+     the browser's guess about whether a focus deserves a ring, and it guesses
+     "no" for the programmatic focus a stick push produces. */
+  .sv-btn.sv-nav-sel { outline: 2px solid #fff; outline-offset: 2px; }
+  /* position:relative so the effect tooltip has a coordinate frame that is the
+     card row itself. It is absolutely positioned, so it takes no part in the
+     flex layout and cannot push a card onto a second line. */
+  .sv-cards { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: min(760px, 92vw); position: relative; }
   /* Cards are hexagons matching the background art exactly. The vertex
      percentages below were measured off the art itself (flat-top hex: points
      at 5.7%/93.9% horizontally, flat top/bottom edges spanning 27.1%-72.3%,
@@ -109,34 +683,378 @@
     background-color: rgba(255,255,255,0.04);
     -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
     clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
-    cursor: pointer; transition: filter 0.15s ease, transform 0.15s ease; text-align: center; }
-  .sv-card:hover { filter: brightness(1.25) saturate(1.15); transform: scale(1.04); }
-  /* clip-path cuts off any outline, so focus is shown with an inner glow. */
-  .sv-card:focus-visible { filter: brightness(1.3); box-shadow: inset 0 0 0 3px #7ad7ff; }
+    cursor: pointer; transition: transform 0.15s ease; text-align: center;
+    /* The face brightens on the same curve the bloom does, which is what gives
+       the FLOOR tier an arrival at all: its glow column is 0, so it has no bloom to
+       flare and this is the whole of its snap. */
+    filter: brightness(calc(1 + 0.18 * var(--sv-k, 0))) saturate(calc(1 + 0.10 * var(--sv-k, 0)));
+    transform: scale(calc(1 + 0.04 * var(--sv-hov, 0))); }
+  /* THE RARITY SLOT. A card's rarity has to be drawn as a stroke and a bloom,
+     and the card itself is a clip-path hexagon — which eats both. A clip-path
+     removes an outer border outright, and CSS applies filter BEFORE clipping,
+     so a drop-shadow on the card is clipped away with it.
+     So the bloom lives out here, on an unclipped wrapper: the filter renders
+     the clipped card first and then blooms the hex silhouette it produced.
+     The stroke goes the other way and is drawn INSIDE the card as an inset
+     shadow — the same trick the focus ring below has always used, for the same
+     reason. Set inline per card from the tier's colour, because the ladder
+     comes out of rarities.csv and a fixed class per tier could not survive a
+     row being renamed or added. */
+  /* THE IGNITION — see CONFIG.rarityCard.ignite and igniteCards().
+     Two animated inputs, kept separate and ADDED rather than one variable both
+     things write: a hover that starts while a card is still cooling has to
+     compose with the flare, not replace it halfway down.
+     Registered, because an unregistered custom property is a token stream to
+     the animation system — it would jump between keyframes instead of
+     interpolating, and the whole effect is the interpolation. */
+  @property --sv-lit { syntax: '<number>'; inherits: true; initial-value: 0; }
+  @property --sv-hov { syntax: '<number>'; inherits: true; initial-value: 0; }
+  /* What everything downstream reads: the bloom on the slot and the face
+     brightness on the card are the same number, so they can't drift apart. */
+  .sv-card-slot { display: block; line-height: 0;
+    --sv-k: calc(var(--sv-lit) + var(--sv-hov) * var(--sv-hov-amt, 0.8));
+    transition: --sv-hov 0.15s ease-out;
+    /* FOUR passes, and the last two are the important ones for legibility.
+       The first pair is the tier's own colour, sized per card from
+       rarities.csv (0px on the floor tier, which is why the second pair
+       exists). The second pair is the SELECTION: white, the same size on every
+       card, and driven by --sv-hov alone rather than by --sv-k, so pointing at
+       a common card lights it exactly as hard as pointing at a legendary.
+       Written here rather than inline per card because a filter set on the
+       element would replace this whole list — see applyRarityStyle, which now
+       hands in sizes instead of a finished filter. */
+    filter:
+      drop-shadow(0 0 calc(var(--sv-glow-tight, 0px) * var(--sv-k)) var(--sv-ring, transparent))
+      drop-shadow(0 0 calc(var(--sv-glow-halo, 0px) * var(--sv-k)) var(--sv-ring, transparent))
+      drop-shadow(0 0 calc(var(--sv-sel-tight, 0px) * var(--sv-hov)) rgba(255,255,255,var(--sv-sel-tight-a, 0.95)))
+      drop-shadow(0 0 calc(var(--sv-sel-halo, 0px) * var(--sv-hov)) rgba(255,255,255,var(--sv-sel-halo-a, 0.6))); }
+  /* Cards do NOT arrive lit. --sv-lit sits at 0 until this card's turn comes
+     round, and the class both runs the flare and holds the resting value it
+     falls to — so with animations off (reduced motion, below) the card still
+     ends up at its idle glow instead of dark. */
+  .sv-card-slot.sv-lit { --sv-lit: var(--sv-idle, 0.42);
+    animation: sv-ignite var(--sv-ignite-time, 0.9s) both; }
+  @keyframes sv-ignite {
+    0%   { --sv-lit: 0; animation-timing-function: cubic-bezier(.2,.9,.3,1); }
+    7%   { --sv-lit: var(--sv-peak, 2.3); animation-timing-function: cubic-bezier(.15,.6,.25,1); }
+    100% { --sv-lit: var(--sv-idle, 0.42); }
+  }
+  /* Hover lands on the SLOT, not the card: the bloom is drawn out here (see
+     below), and a custom property set on the card cannot reach its parent.
+     :has is what makes that possible — without it the card would brighten and
+     the halo around it would not. */
+  .sv-card-slot:has(.sv-card:hover) { --sv-hov: 1; }
+  /* Keyboard focus and pad selection get the same lift as the mouse. Neither
+     can happen before the player has done something — the menu opens with
+     nothing selected and nothing focused (see showLevelUp) — so this cannot
+     light a card during the deal on its own. */
+  .sv-card-slot:has(.sv-card:focus-visible),
+  .sv-card-slot:has(.sv-card-sel) { --sv-hov: 1; }
+  /* ...and the ring goes WHITE with them. The tier colour is what the card is
+     worth and it owns the ring the rest of the time; while a card is the one
+     you are pointing at, "which one" matters more than "how good", and white
+     is the only colour on this menu that no tier can claim. Set on the slot so
+     both the ring (inherited by the card) and the white bloom passes above are
+     switched by one rule. */
+  .sv-card-slot:has(.sv-card:hover),
+  .sv-card-slot:has(.sv-card:focus-visible),
+  .sv-card-slot:has(.sv-card-sel) { --sv-ring-now: #ffffff; }
+  /* clip-path cuts off any outline, so the ring is drawn INSIDE the card as an
+     inset shadow. ONE rule for every state now, driven by --sv-ring-now: the
+     old pair (a tier ring, plus a cyan ring 4px further in for focus and pad
+     selection) meant three different looks for the same idea, and the cyan one
+     was the weakest of them on exactly the cards that needed help — a floor
+     tier has no bloom to go with it.
+     The second, wider shadow is the soft inner edge of the white state: it is
+     transparent at rest and costs nothing then. */
+  .sv-card {
+    box-shadow: inset 0 0 0 var(--sv-ring-w, 0px) var(--sv-ring-now, var(--sv-ring, transparent)),
+                inset 0 0 0 var(--sv-sel-w, 0px) var(--sv-sel-inner, transparent);
+    transition: box-shadow 0.15s ease; }
+  .sv-card-slot:has(.sv-card:hover),
+  .sv-card-slot:has(.sv-card:focus-visible),
+  .sv-card-slot:has(.sv-card-sel) {
+    --sv-sel-w: calc(var(--sv-ring-w, 0px) + 4px);
+    --sv-sel-inner: rgba(255,255,255,0.35); }
+  /* The pad's selection is a CLASS, not focus: a pad press is not a focus event
+     and :focus-visible is the browser's guess about whether a ring is wanted.
+     It needs no rule of its own any more — .sv-card-sel is one of the three
+     selectors in both blocks above, so the pad, the keyboard and the mouse all
+     produce the identical white ring and white bloom. */
   .sv-card-overlay { position: absolute; inset: 0; pointer-events: none; }
   /* Text is confined to the hex's inscribed box and centred both ways, so a
      long upgrade name can't spill past the angled edges. The inset matches
-     the widest rectangle that fits inside the clip above, with a margin. */
-  .sv-card-content { position: absolute; left: 30%; right: 30%; top: 24%; bottom: 24%;
+     the widest rectangle that fits inside the clip above (at 24%/76% height
+     the hex spans 20.8%-79.2%), with a margin.
+     Nothing here breaks words: --sv-fit shrinks the type until whole words
+     fit instead (see fitCardText). */
+  .sv-card-content { position: absolute; left: 23%; right: 23%; top: 24%; bottom: 24%;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 6px; overflow: hidden; }
-  .sv-card-name { font-size: 14px; font-weight: 700; line-height: 1.15; text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
-    overflow-wrap: anywhere; hyphens: auto; }
-  .sv-card-desc { font-size: 11px; color: rgba(232,236,243,0.92); line-height: 1.3;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
-    overflow-wrap: anywhere;
-    /* Hard cap so an over-long description can't push out of the hex. */
-    display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+    gap: calc(6px * var(--sv-fit, 1)); overflow: hidden; }
+  .sv-card-name { font-size: calc(14px * var(--sv-fit, 1)); font-weight: 700; line-height: 1.15;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6); }
+  .sv-card-desc { font-size: calc(11px * var(--sv-fit, 1)); color: rgba(232,236,243,0.92); line-height: 1.3;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6); }
+  /* THE EFFECT TOOLTIP — see showCardEffect(). What the card actually does to
+     the stat block, measured from its own apply(), for the stack it is
+     offering right now.
+     ONE node for the whole hand, parked on the menu box and moved to whichever
+     card is pointed at, rather than one per slot. The slot carries a four-pass
+     drop-shadow filter, and a filter applies to descendants — a tooltip living
+     inside it would be bloomed white along with the card the moment it was
+     selected, which is illegible at 11px. Out here it inherits nothing.
+     Positioned in script because the cards wrap: there is no static offset
+     that is "under this card" for both rows. */
+  .sv-card-fx { position: absolute; z-index: 5; pointer-events: none;
+    max-width: 190px; padding: 6px 9px; border-radius: 7px;
+    background: rgba(9,14,22,0.94); border: 1px solid rgba(122,215,255,0.35);
+    color: #cfeaff; font-size: 11px; line-height: 1.35; text-align: center;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    opacity: 0; transition: opacity 0.12s ease-out; }
+  .sv-card-fx.sv-fx-on { opacity: 1; }
   .sv-hint { font-size: 11px; color: rgba(232,236,243,0.35); margin-top: 14px; letter-spacing: 0.04em; }
+
+  /* --- THE TURN ------------------------------------------------------------
+     The card is a slab of glossy black emulsion with a face on each side: the
+     run in front, what the recorder saw behind. See ui/cardFlip.js, which owns
+     the angle and writes --sv-flip, --sv-grazing and --sv-sheen while it moves.
+
+     A TAB WOULD HAVE BEEN CHEAPER and this is not that. The score screen is
+     already a set of photographs dropped on a table; turning one over to read
+     the numbers on the back is the same object rather than a second interface
+     bolted to it.
+
+     BOTH FACES ARE ABSOLUTE, so the card has no height of its own — showGameOver
+     measures the taller of the two and writes it inline. Without that the card
+     takes the front's height and overflow:hidden silently clips the last
+     control off the bottom of the back, with no other symptom.
+
+     No backticks anywhere in this stylesheet: it is a template literal, and one
+     in a comment ends the string a hundred lines early. */
+  .sv-flip-stage { perspective: 1500px; position: relative; }
+  /* NOT .sv-card — that is the upgrade menu's hexagon, three hundred lines up,
+     and a second rule under the same name set every one of them 460px wide and
+     handed them a rotateY that beat their own hover scale. npm run layout found
+     it as three pixels of overflow on one viewport, which is the whole argument
+     for running it: a cascade collision does not announce itself, it just makes
+     an unrelated screen slightly wrong. */
+  .sv-flip-card {
+    position: relative; transform-style: preserve-3d; will-change: transform;
+    transform: rotateY(var(--sv-flip, 0deg));
+    max-height: 92vh; max-width: 90vw; width: 580px;
+  }
+  /* The container box. .sv-menu's own look moved out here, because the thing
+     that is a panel now is the FACE and not the card. */
+  .sv-face {
+    position: absolute; inset: 0; overflow: hidden;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    background: var(--sv-emulsion, #07090d);
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 14px;
+    color: #e8ecf3; text-align: center;
+    box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset;
+  }
+  .sv-face-back { transform: rotateY(180deg); }
+  /* The scroll lives INSIDE the face, not on the card: a phone on its side
+     cannot show either face whole, and a scroll on the card would move the
+     rotation's own transform origin. */
+  .sv-face-inner { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 28px 32px; }
+  /* THE EMULSION. One broad specular sweep, positioned from the flip angle and
+     strongest when the card is tipped — a slab of gloss catches the light when
+     it is edge-on and goes flat when it is square to you. Both custom
+     properties come from ui/cardFlip.js; the fallbacks are the resting pose, so
+     a card that never flips is still lit. */
+  .sv-face::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 3;
+    background: linear-gradient(105deg,
+      transparent calc(var(--sv-sheen, 94%) - 34%),
+      rgba(255,255,255,0.015) calc(var(--sv-sheen, 94%) - 16%),
+      rgba(190,230,255,0.16) var(--sv-sheen, 94%),
+      rgba(255,255,255,0.02) calc(var(--sv-sheen, 94%) + 16%),
+      transparent calc(var(--sv-sheen, 94%) + 34%));
+    opacity: calc(0.45 + 0.55 * var(--sv-grazing, 0));
+  }
+  /* The bubbles off the leading edge, on ui/cardFlip.js's own canvas. Above the
+     card rather than behind it: they are coming off the edge nearest the
+     viewer. Alive only during a turn — the element is removed after it lands. */
+  .sv-flip-bubbles { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+
+  /* The control that turns it. Deliberately not a .sv-btn: it is a label on the
+     card, in the way a caption is, rather than a fifth button competing with
+     Try again. */
+  .sv-turn {
+    pointer-events: all; background: none; border: 0; cursor: pointer; font: inherit;
+    color: #7ad7ff; font-size: 11px; font-weight: 600; letter-spacing: 0.13em;
+    text-transform: uppercase; padding: 10px 6px;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .sv-turn:hover { color: #cfeeff; }
+  .sv-turn:focus-visible, .sv-turn.sv-nav-sel { outline: 2px solid #fff; outline-offset: 1px; border-radius: 4px; }
+  .sv-turn svg { flex: none; }
+
+  .sv-back-title {
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: rgba(232,236,243,0.45); margin-bottom: 12px;
+  }
+
+  /* --- THE BREAKDOWN ROWS ---------------------------------------------------
+     Weapons and threats are the same grid deliberately: they are the same
+     question asked in both directions, and two layouts would read as two
+     unrelated tables rather than as a ledger with two sides.
+
+     THE SHARE IS THE ROW'S OWN BACKGROUND rather than a column of its own. The
+     card is 580px at most and every column added to this grid comes out of the
+     name, which is the part a player is actually reading — so the bar is drawn
+     behind the row, width set inline from the share, and it costs nothing.
+     The children need position: relative or the bar paints over them. */
+  .sv-brk { display: flex; flex-direction: column; gap: 1px; }
+  .sv-brk-head { display: grid; grid-template-columns: 1fr 58px 34px; gap: 8px;
+    padding: 0 8px 6px; font-size: 9.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: rgba(232,236,243,0.35); }
+  .sv-brk-head span + span { text-align: right; }
+  .sv-brk-row { position: relative; display: grid; grid-template-columns: 1fr 58px 34px;
+    gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+  .sv-brk-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+  .sv-brk-row::before { content: ""; position: absolute; inset: 0; border-radius: 6px;
+    width: var(--sv-share, 0%);
+    background: linear-gradient(90deg, rgba(122,215,255,0.30), rgba(122,215,255,0.06)); }
+  /* The incoming side runs in the kicker's red — the same red the polaroid
+     says "defeated" in, which is the colour this game uses for damage that
+     was done TO something. */
+  .sv-brk-row.sv-brk-in::before {
+    background: linear-gradient(90deg, rgba(255,120,120,0.28), rgba(255,120,120,0.05)); }
+  .sv-brk-row > * { position: relative; }
+  /* min-width:0 is load-bearing here for the same reason it is on a
+     leaderboard row: without it a long name refuses to shrink and pushes the
+     two number columns off the end instead of ellipsing. */
+  .sv-brk-name { min-width: 0; font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .sv-brk-picks { font-size: 10px; font-weight: 500; margin-left: 6px;
+    color: rgba(232,236,243,0.40); }
+  .sv-brk-a { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sv-brk-b { text-align: right; font-size: 11px; font-variant-numeric: tabular-nums;
+    color: rgba(232,236,243,0.45); }
+  .sv-brk-tag { display: inline-block; margin-left: 6px; padding: 0 4px;
+    border: 1px solid rgba(255,120,120,0.4); border-radius: 3px;
+    color: #ff7878; font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; vertical-align: 1px; }
+  .sv-brk-foot { margin-top: 10px; padding-top: 9px; display: flex; gap: 12px;
+    justify-content: space-between; font-size: 11px;
+    border-top: 1px solid rgba(255,255,255,0.08); color: rgba(232,236,243,0.45); }
+  .sv-brk-foot b { color: #e8ecf3; font-variant-numeric: tabular-nums; }
+  .sv-brk-empty { font-size: 12px; color: rgba(232,236,243,0.4); padding: 10px 8px; }
+
   .sv-leaderboard { margin: 14px 0; max-height: 220px; overflow-y: auto; text-align: left; }
-  .sv-lb-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
-  .sv-lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+  /* ONE GRID FOR THE HEADER AND THE ROWS, so the columns are the same columns
+     on both. A flex row plus a flex header is two independent layouts that
+     agree only while nobody touches either of them. */
+  .sv-lb-row, .sv-lb-head {
+    display: grid; grid-template-columns: 3ch minmax(0, 1fr) auto 3ch 4ch;
+    align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+  /* Striped from inside the rows' own wrapper rather than off .sv-leaderboard,
+     which also holds the caption and the header — a positional stripe counted
+     from there flips every row the moment a line is added above them. */
+  .sv-lb-rows .sv-lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
   .sv-lb-row.sv-lb-mine { background: rgba(122,215,255,0.14); border: 1px solid rgba(122,215,255,0.4); }
-  .sv-lb-rank { width: 18px; color: rgba(232,236,243,0.5); font-weight: 600; }
-  .sv-lb-score { flex: 1; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .sv-lb-meta { color: rgba(232,236,243,0.5); font-size: 11px; }
-  .sv-toast-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  /* THE COLUMNS ARE NAMED ONCE, at the top, instead of on every row. "Lv15"
+     was a label repeated a hundred times to explain a number that is the same
+     number in every row — and on a card this wide it was two of the characters
+     the name column could not spare. Sticky, so the fifteenth row is still
+     reading against its own headings.
+     Its background is the face's, not a translucent tint: rows scroll UNDER
+     it, and anything less than opaque shows them through it. */
+  .sv-lb-head { position: sticky; top: 0; z-index: 1;
+    padding-top: 2px; padding-bottom: 4px; font-size: 9.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: rgba(232,236,243,0.35);
+    background: var(--sv-lb-head-bg, #07090d); }
+  /* Score, Lv and Time head right-aligned columns, so their headings are too.
+     By position rather than by re-using the cells' own classes: those carry a
+     weight, a colour and a size of their own, and a header wearing them would
+     be five different treatments in one line. */
+  .sv-lb-head span:nth-child(n+3) { text-align: right; }
+  /* The same board on the main menu's own surface, whose panel is not the
+     card's black emulsion — the sticky heading has to be opaque against
+     whatever it is actually sitting on, and .sv-menu is its own colour. */
+  #svBoardList { --sv-lb-head-bg: #0d1018; }
+  /* THREE DIGITS, IN CH AND NOT PIXELS. The board goes to 100 now, and 18px
+     held "100" in Inter and in nothing else — the font picker can put 'Press
+     Start 2P' in this column, a full em per glyph, where three digits want
+     36px and the rank would have been clipped into a two-digit one. The ch
+     unit is the width of a zero in whatever family is live, and it is the only
+     one that means "three digits" rather than "however wide three digits
+     happen to be in the font I had open". tabular-nums so 100 and 111 measure
+     the same. (No backtick around the unit: this block is a template literal,
+     and one would end the stylesheet mid-sentence.) */
+  .sv-lb-rank { width: 3ch; color: rgba(232,236,243,0.5); font-weight: 600;
+    font-variant-numeric: tabular-nums; }
+  /* min-width:0 is load-bearing: a flex item defaults to min-width:auto, which
+     refuses to shrink below its content — so without it a long name pushes the
+     score and time out of the row instead of ellipsing, which is exactly what
+     a 24-character name does. */
+  .sv-lb-name { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sv-lb-score { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+  /* Level and time as two columns of their own rather than one "Lv15 · 4:15"
+     string right-aligned as a block: as one string the level's digits push the
+     clock about, and the middle dot was doing the job the header now does. In
+     ch, for the reason the rank is — the font picker decides how wide a digit
+     is here (see the .sv-lb-rank note). */
+  .sv-lb-lv, .sv-lb-time { color: rgba(232,236,243,0.5); font-size: 11px;
+    font-variant-numeric: tabular-nums; text-align: right; }
+  .sv-lb-empty { font-size: 12px; color: rgba(232,236,243,0.4); padding: 6px 8px; }
+
+  /* Name entry. The row is a single control: text field plus its submit
+     button, sized so the two read as one unit rather than a form. */
+  .sv-name-row { display: flex; gap: 8px; justify-content: center; margin: 14px 0 4px; }
+  /* THE FIELD TAKES THE WHOLE LINE when what is in it cannot be shown beside
+     the button at a size worth reading — fitNameField puts this class on, and
+     only then. The row is a field plus its Submit, and they read as one
+     control while they fit on one line; a full-length name in a pixel font
+     does not, and the choice at that point is between a name in 7px type and
+     a button on its own line. The button is fine on its own line.
+     Not a media query: this is a question about the LENGTH of what has been
+     typed in whatever family is live, which no viewport knows the answer to. */
+  .sv-name-row.sv-name-stacked { flex-direction: column; align-items: stretch; }
+  .sv-name-row.sv-name-stacked .sv-name-input { max-width: none; }
+  /* THE WIDTH IS NOT WHAT MAKES A FULL NAME VISIBLE — fitNameField is. This
+     was sized in pixels against 24 characters of Inter, which held right up
+     until the font picker existed: 'Press Start 2P' is a full em per glyph and
+     ran out of room around character 20, with the tail of your own name
+     scrolled out of the box while you typed it. There is no px width that is
+     correct for every family the picker can land on, so the field measures
+     what is in it and steps its type size down until the whole name fits (see
+     fitNameField). This rule is the RESTING look: the size a short name is
+     shown at.
+     max-width caps it at the card's own content width — the row is the field
+     plus its Submit button, and past this the button is what gets pushed. */
+  .sv-name-input { pointer-events: all; flex: 1; min-width: 0; max-width: 300px;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px; padding: 9px 12px; color: #e8ecf3; font-size: 14px;
+    font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    text-align: center; -webkit-user-select: text; user-select: text; }
+  .sv-name-input::placeholder { color: rgba(232,236,243,0.3); letter-spacing: 0.06em; font-weight: 500; }
+  .sv-name-input:focus { outline: none; border-color: #7ad7ff; background: rgba(122,215,255,0.08); }
+  .sv-btn-sm { padding: 9px 16px; font-size: 13px; }
+  .sv-btn:disabled { opacity: 0.5; cursor: default; }
+  .sv-status { font-size: 11px; color: rgba(232,236,243,0.5); min-height: 15px; margin-bottom: 8px; letter-spacing: 0.03em; }
+  .sv-status-err { color: #ffab6f; }
+  .sv-toast-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 6; }
   .sv-hidden { display: none !important; }
+
+  /* The score card doesn't appear, it arrives — see showGameOver. Duration
+     comes from CONFIG.death.fadeIn through the custom property, so it stays
+     tunable with the rest of the sequence. An animation rather than a
+     transition because the element goes display:none between runs, and
+     there's nothing to transition FROM on the frame it comes back. */
+  @keyframes sv-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  .sv-fade-in { animation: sv-rise var(--sv-fade, 0.9s) ease-out both; }
+
+  /* Covers the seam between "Try again" and the next run, while the clock,
+     the mix and the lens glide back to normal (systems/deathDive.js). It is a
+     plain wash of the background colour for now: THIS is the element the
+     transition graphic goes in — give it a child and the timing around it
+     doesn't need to change. Above the menus, below nothing. */
+  .sv-transition { position: absolute; inset: 0; pointer-events: none; z-index: 5;
+    background: #05060a; opacity: 0; transition: opacity var(--sv-trans, 0.9s) ease; }
+  .sv-transition.sv-trans-in { opacity: 1; }
 
   /* While the upgrade cards are dithering in or out they're half-drawn, and a
      half-drawn card is not something you can be asked to have chosen. The
@@ -144,4 +1062,160 @@
      pointer-events themselves, so switching it off on the container alone
      would leave the cards live under a mask full of holes. */
   .sv-menu-locked, .sv-menu-locked * { pointer-events: none !important; }
-  @media (prefers-reduced-motion: reduce) { .sv-ui * { transition: none !important; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sv-ui * { transition: none !important; animation: none !important; }
+  }
+
+  /* =========================================================================
+     THE SMALL SCREEN.
+     Everything above this line was written at desktop size, and a phone is not
+     a small desktop — it is a different shape, held in a hand, with a thumb
+     over part of it. What is here is the set of changes that shape needs, and
+     nothing else: the desktop layout is not touched by any of it.
+
+     KEYED ON THE VIEWPORT, deliberately, with one exception. A width and a
+     height are facts about the screen the game is being drawn on, and they can
+     be reproduced exactly — which is what lets "npm run layout" build every one
+     of these surfaces at every size and measure whether it fits. The exception
+     is tap-target size, which is a fact about the player's HAND and rides the
+     .sv-touch class instead (see markTouch).
+
+     Every rule below was written against a finding from that audit. The numbers
+     in the comments are what it measured before the rule existed.
+     ========================================================================= */
+
+  /* --- THE LEVEL METER, UP THE LEFT EDGE ---------------------------------
+     A run-long progress bar wants the longest edge it can have, and on a phone
+     held upright that is the side, not the top: 667px of travel instead of
+     375px, in the margin beside the thumb rather than across the water.
+     It fills UPWARD (transform-origin at the bottom) because levelling is a
+     climb, and because a meter that fills toward the sky next to a seal
+     swimming down reads without a label.
+
+     "position: fixed" is what gets it out of .sv-hud — that box is inset 14px
+     and only as tall as the corner panels it holds, so a "bottom: 0" inside it
+     would end an inch below the top of the screen. Neither .sv-ui nor .sv-hud
+     carries a transform or a filter, so fixed here resolves against the
+     viewport, which is the frame this bar is actually about. */
+  @media (max-width: 700px) {
+    .sv-xptop { position: fixed; top: 0; bottom: 0; left: 0; right: auto;
+      width: auto; min-width: 8px; height: auto; min-height: 0; }
+    .sv-xptop-fill { transform: scaleY(var(--sv-xp, 0)); transform-origin: 50% 100%; }
+    /* A vertical bar takes a vertical label: "Lv" over the number, stacked, so
+       the strip stays as narrow as one short word instead of as long as a line
+       of text. The letters stay UPRIGHT — a rotated label is a thing to decode,
+       and this one is read at a glance mid-fight or not at all.
+       Centred on the long axis by the same flex rules as the desktop track, so
+       it sits at the middle of the screen edge rather than at either end,
+       clear of both the notch and the home indicator. */
+    .sv-xptop .sv-xptop-level { flex-direction: column; gap: 0.3em; padding: 8px 2px; }
+    .sv-xptop-word { display: none; }
+    .sv-xptop-abbr { display: block; }
+  }
+
+  /* --- THE TOP BAND BELONGS TO THE BOSS ----------------------------------
+     Score and time move to the BOTTOM right on a phone, and the boss bar takes
+     the width they were using.
+     The reason is that the top of a phone screen is the one place two things
+     genuinely cannot share. The boss bar is centred and its name runs to forty
+     characters ("Wicked Grimgullet the Chumbucket Rumbler"), so at 62vw it was
+     wrapping to three lines under a bar squeezed into two thirds of a screen
+     that is already only 375px — while a Score/Time panel sat in the corner
+     showing two numbers that do not change fast enough to need the best real
+     estate on the display. Downstairs they cost nothing, and the fight gets the
+     whole band.
+     fixed, not absolute: .sv-hud is anchored at the TOP (and its floating
+     hp/air bars are positioned inside it per frame from the seal's projected
+     position), so moving the row itself would drag those bars off the animal.
+     Only this group moves. */
+  @media (max-width: 700px) {
+    /* Column rather than row: anything that joins the score and the clock later
+       grows the block UPWARD into empty water, rather than sideways across a
+       screen that has none to spare. */
+    .sv-hud-corner { position: fixed; right: 14px; bottom: 14px; margin-left: 0;
+      flex-direction: column; align-items: flex-end; gap: 8px; }
+
+    /* Up to where the Rive bar already sits (bossBarRive mounts at top: 14px),
+       so the coded fallback and the real one arrive in the same place. The
+       WIDTH is not set here on purpose — updateBossBar writes it inline per
+       boss, which beats any rule, so the phone widening lives in
+       bossBarWidth() instead. */
+    .sv-bossbar { top: 14px; }
+  }
+
+  /* --- THE UPGRADE CARDS, STACKED ----------------------------------------
+     Three 210px hexes side by side need 630px and a phone has 375. They
+     already wrapped, into a column three cards tall — 630px of cards in a
+     667px screen with a title above them, which put 53px of the menu off the
+     top AND the bottom at once, so the first card and the last were both
+     unreachable.
+     Sized off the HEIGHT instead, which is the axis that ran out: whatever is
+     left after the menu's own chrome, split three ways. The card art is square
+     and the text inside auto-fits (see fitCardText), so a smaller card is a
+     smaller card rather than a broken one.
+     Portrait only. A phone on its side has 852px of width and the row fits
+     there already — the audit confirms it, and stacking would break it. */
+  @media (max-width: 700px) and (orientation: portrait) {
+    .sv-cards { flex-direction: column; flex-wrap: nowrap; align-items: center; gap: 6px; }
+    .sv-card { width: min(210px, calc((100vh - 160px) / 3));
+      height: min(210px, calc((100vh - 160px) / 3)); }
+    .sv-menu { padding: 20px 18px; max-width: 94vw; }
+  }
+
+  /* --- MENUS ON A SHORT SCREEN -------------------------------------------
+     A phone on its side is 393px tall. The score card — quip, stats, the roll
+     of kill shots, the name row, the leaderboard and a button — ran 17px past
+     the bottom of it, and the thing off the bottom was "Try again", which is
+     the one control on that screen that has to work.
+     A scroll rather than a squeeze: there is genuinely more here than fits, and
+     the alternative to scrolling it is deciding which of those the player is
+     not allowed to see. overscroll-behavior stops a flick at the end of the
+     list turning into a pull on the page behind it. */
+  @media (max-height: 560px) {
+    .sv-menu { max-height: 92vh; overflow-y: auto; overscroll-behavior: contain;
+      padding: 16px 20px; }
+    .sv-leaderboard { max-height: 120px; }
+  }
+
+  /* THE SCORE CARD SCROLLS SOONER THAN THE REST, because it is taller than the
+     rest and it keeps growing. The block above is 560px — a phone held
+     sideways — and at 667px (an iPhone SE, upright) every other menu in the
+     game has room to spare while this one does not: title, three tabs, a
+     panel, a rack of prints with four buttons under it, a name row, a status
+     line, a leaderboard and "Try again". Adding the tip jar under that button
+     put it 9px past the bottom of that screen, measured by npm run layout.
+
+     Scoped to this surface and to overflow only — no padding change, so the
+     card looks the same as it always did on the screens where it already fit.
+     A scroll rather than a squeeze, for the reason the block above gives: the
+     alternative is deciding which part of their own run the player on the
+     smallest phone is not allowed to see. */
+  /* The scroll lives on .sv-face-inner at every size now, because the card is
+     two absolutely-positioned faces and the taller of them decides the height —
+     see the .sv-card block. What is left here is the CAP: below this the card
+     is allowed to be shorter than its content and let the face scroll. */
+  @media (max-height: 720px) {
+    #svGameOverMenu .sv-flip-card { max-height: 92vh; }
+  }
+
+  /* --- TAP TARGETS -------------------------------------------------------
+     Apple's own minimum is 44px and every button in this game was 34-36px
+     tall: the four share buttons, the name submit, and "Try again". A thumb is
+     about 10mm across and lands on a 36px control most of the time, which is
+     the worst way for this to be wrong — it feels like the button is broken
+     rather than like it was missed.
+     Only where there is a thumb: a 44px button on a desktop is a different
+     design, and this is not the place to make that choice for a mouse. */
+  .sv-touch .sv-btn, .sv-touch .sv-name-input {
+    min-height: 44px; padding-top: 11px; padding-bottom: 11px; }
+  .sv-touch .sv-btn-sm { min-width: 44px; padding-left: 18px; padding-right: 18px; }
+  /* The turn control is not a .sv-btn — it is a label on the card rather than a
+     fifth button — so it inherits none of the rule above and came out under the
+     minimum, which npm run layout reports. Worth stating because it is the one
+     control on this card that a player has to find twice. */
+  .sv-touch .sv-turn { min-height: 44px; padding-top: 14px; padding-bottom: 14px; }
+  /* A row of buttons that wraps needs the gap a thumb needs, not the gap an
+     eye needs — two 44px targets 8px apart are one 96px target as far as a
+     mis-tap is concerned. */
+  .sv-touch .sv-trophy-row, .sv-touch .sv-name-row { gap: 12px; }

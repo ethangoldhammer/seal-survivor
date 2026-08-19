@@ -173,6 +173,7 @@
     "looks:gauges": "vite build --config tools/looks/vite.gauges.config.mjs --outDir dist-gauge-look && node tools/looks/serve.mjs dist-gauge-look --out dist-gauge-look/shots --port 4626",
     "looks:tip": "vite build --config tools/looks/vite.tip.config.mjs --outDir dist-tip-look && node tools/looks/serve.mjs dist-tip-look --out dist-tip-look/shots --port 4622",
     "looks:bust": "vite build --config tools/looks/vite.bust.config.mjs --outDir dist-bust-look && node tools/looks/serve.mjs dist-bust-look --out dist-bust-look/shots --port 4660",
+    "looks:score": "vite build --config tools/looks/vite.score.config.mjs --outDir dist-score-look && node tools/looks/serve.mjs dist-score-look --out dist-score-look/shots --port 4664",
     "looks:menu": "vite build --config tools/looks/vite.menu.config.mjs --outDir dist-menu-look && node tools/looks/serve.mjs dist-menu-look --out dist-menu-look/shots --port 4662",
     "chain:trace": "node --import ./tools/vite-loader.mjs tools/chain-trace.mjs"
   },

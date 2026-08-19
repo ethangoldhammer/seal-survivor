@@ -1,0 +1,124 @@
+<!-- @dsCard group="Screens" name="Game over — back" subtitle="The run's ledger: weapons and threats, turned over" viewport="720x700" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Seal Survivor — The run</title>
+<link rel="stylesheet" href="../styles.css" />
+<style>
+/* Preview scaffolding only — none of this ships. */
+html, body { margin: 0; height: 100%; }
+.stage { position: relative; width: 100%; min-height: 100vh; overflow: hidden;
+  background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+.stage .sv-ui { position: absolute; }
+/* Same reason as the front preview: both faces are absolute, so the card is
+   sized by sizeCard() in game and by hand here. */
+.stage .sv-flip-card { height: 434px; max-height: none; }
+.stage .sv-face-inner { overflow: visible; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="sv-ui">
+    <!-- THE CARD AT REST ON ITS BACK. --sv-flip is the same property
+         ui/cardFlip.js writes while it turns; parked at 180deg it is the pose
+         the flip lands on, and .sv-face-back's own rotateY(180deg) cancels
+         against it so the text reads the right way round. The off-face carries
+         .sv-hidden, which is what cardFlip does with it — backface-visibility
+         hides a face from the eye and from nothing else. -->
+    <div class="sv-center" id="svGameOverMenu">
+      <div class="sv-flip-stage" id="svFlipStage">
+        <div class="sv-flip-card" id="svCard" style="--sv-flip:180deg;">
+
+          <div class="sv-face sv-face-front sv-hidden" id="svFaceFront"></div>
+
+          <!-- THE BACK. What the playtest recorder saw, filled per death by
+               renderRunDetail(). -->
+          <div class="sv-face sv-face-back" id="svFaceBack">
+            <div class="sv-face-inner">
+              <!-- What the back is the back OF — the front carries the quip and
+                   the figures, so this face says whose run it is. -->
+              <div class="sv-back-title" id="svBackTitle">3:24 · Level 7</div>
+
+              <!-- WEAPONS. Sorted by damage. The bar behind each row is
+                   --sv-share, a percentage of the TOP row rather than of the
+                   total, so the bars use the card's full width at every scale
+                   of run. -->
+              <div id="svPanelWeapons">
+                <div class="sv-brk-head"><span>Weapon</span><span>Damage</span><span>Kills</span></div>
+                <div class="sv-brk">
+                  <div class="sv-brk-row" style="--sv-share:100%;">
+                    <span class="sv-brk-name">Fin Pebbles<span class="sv-brk-picks">×4</span><span class="sv-brk-tag">Final blow</span></span>
+                    <span class="sv-brk-a">48.2k</span>
+                    <span class="sv-brk-b">71</span>
+                  </div>
+                  <div class="sv-brk-row" style="--sv-share:62%;">
+                    <span class="sv-brk-name">Breach Strike<span class="sv-brk-picks">×2</span></span>
+                    <span class="sv-brk-a">29.9k</span>
+                    <span class="sv-brk-b">38</span>
+                  </div>
+                  <div class="sv-brk-row" style="--sv-share:41%;">
+                    <span class="sv-brk-name">Bubble Net<span class="sv-brk-picks">×3</span></span>
+                    <span class="sv-brk-a">19.7k</span>
+                    <span class="sv-brk-b">26</span>
+                  </div>
+                  <div class="sv-brk-row" style="--sv-share:14%;">
+                    <span class="sv-brk-name">Chum Slick</span>
+                    <span class="sv-brk-a">6.8k</span>
+                    <span class="sv-brk-b">13</span>
+                  </div>
+                </div>
+                <!-- The abilities that deal nothing by design are counted here
+                     rather than given a row of zeroes in a Damage column. With
+                     none in the build this line reads "Kills" instead. -->
+                <div class="sv-brk-foot">
+                  <span>Total dealt <b>104.6k</b></span>
+                  <span>Caught, held or frozen <b>34</b></span>
+                </div>
+              </div>
+
+              <!-- THREATS. The same grid in the other direction, grouped by
+                   primaryCause so a run spent being eaten by sharks is one row
+                   and not three. -->
+              <div id="svPanelThreats" style="padding-top:14px">
+                <div class="sv-brk-head"><span>What hurt you</span><span>Damage</span><span>Share</span></div>
+                <div class="sv-brk">
+                  <div class="sv-brk-row sv-brk-in" style="--sv-share:100%;">
+                    <span class="sv-brk-name">Sharks</span>
+                    <span class="sv-brk-a">412</span>
+                    <span class="sv-brk-b">54%</span>
+                  </div>
+                  <div class="sv-brk-row sv-brk-in" style="--sv-share:46%;">
+                    <span class="sv-brk-name">Crabs</span>
+                    <span class="sv-brk-a">190</span>
+                    <span class="sv-brk-b">25%</span>
+                  </div>
+                  <div class="sv-brk-row sv-brk-in" style="--sv-share:38%;">
+                    <span class="sv-brk-name">Drowning</span>
+                    <span class="sv-brk-a">157</span>
+                    <span class="sv-brk-b">21%</span>
+                  </div>
+                </div>
+                <!-- Killed by comes from the source killPlayer resolved at the
+                     moment of death, not from the top of this table. -->
+                <div class="sv-brk-foot">
+                  <span>Total taken <b>759</b></span>
+                  <span>Killed by <b>a great white</b></span>
+                </div>
+              </div>
+
+              <button class="sv-turn" id="svTurnBack">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M9 5H1M4 2L1 5l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Turn back
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

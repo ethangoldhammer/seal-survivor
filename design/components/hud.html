@@ -1,4 +1,4 @@
-<!-- @dsCard group="Screens" name="In-run HUD" subtitle="XP frame, score/time panel, player bars, score toasts" viewport="920x580" -->
+<!-- @dsCard group="Screens" name="In-run HUD" subtitle="Level meter, score/time corner, player bars, score toasts" viewport="920x580" -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -24,38 +24,67 @@ html, body { margin: 0; height: 100%; }
 <body>
 <div class="stage">
   <div class="sv-ui">
+    <!-- THE PRODUCT, AND ONLY THE PRODUCT. `points` arrives already multiplied,
+         so a combo toast is the same number in a different colour — the "×2.4"
+         tag that used to ride along was arithmetic homework at the moment there
+         is least time to do it. .sv-toast-combo is the whole difference. -->
     <div class="sv-toast-layer" id="svToastLayer">
       <div class="sv-toast" style="left:300px; top:190px;">+120</div>
-      <div class="sv-toast sv-toast-combo" style="left:430px; top:150px;">+540<span class="sv-toast-mult"> ×2.5</span></div>
+      <div class="sv-toast sv-toast-combo" style="left:430px; top:150px;">+540</div>
       <div class="sv-toast" style="left:520px; top:235px; opacity:0.45;">+80</div>
     </div>
 
     <div class="sv-hud" id="svHud">
-      <div class="sv-xptop"><div class="sv-xptop-fill" id="svXpBar" style="width:62%;"></div></div>
-      <div class="sv-xptop-level">Level <span id="svLevel">7</span></div>
+      <!-- The label lives INSIDE the track, on its own dark plate, so the fill
+           can sweep under it without eating the type. Both words are in the
+           markup and one is hidden per breakpoint — "Level" on a desktop, "Lv"
+           stacked over the number once the meter is up the left edge.
+           The fill is SCALED, not sized: --sv-xp is the 0..1 fraction updateHUD
+           writes, which is what lets the responsive block stand the same
+           element on end without the JS knowing. -->
+      <div class="sv-xptop">
+        <div class="sv-xptop-fill" id="svXpBar" style="--sv-xp:0.62;"></div>
+        <div class="sv-xptop-level"><span class="sv-xptop-word">Level</span><span class="sv-xptop-abbr">Lv</span><span id="svLevel">7</span></div>
+      </div>
 
-      <div class="sv-panel" style="margin-left:auto;">
-        <div class="sv-label">Score</div>
-        <div class="sv-value" id="svScore">12,480</div>
-        <div class="sv-label" style="margin-top:8px;">Time</div>
-        <div class="sv-value" id="svTime">3:24</div>
+      <!-- #svPlayerBars belongs here in initUI's markup. It is hand-placed
+           below instead: it is absolute and anchored per frame from the seal's
+           projected position, so left in flow with no anchor it would sit on
+           top of the level meter. -->
+
+      <!-- THE CORNER. Score and clock as ONE block rather than as loose panels
+           in the HUD's flex row, because on a phone the whole group moves to
+           the opposite corner of the screen.
+           NO LABELS: a running total counts up and a clock is punctuated like a
+           clock, so "Score" and "Time" were captions on two things that already
+           said what they were. Both are .sv-value so the Text panel owns them
+           as one role; the clock is set back with opacity, which typography.js
+           does not write. -->
+      <div class="sv-hud-corner" id="svCorner">
+        <div class="sv-panel">
+          <div class="sv-value" id="svScore">12,480</div>
+          <div class="sv-value sv-hud-time" id="svTime">3:24</div>
+        </div>
       </div>
-      <div class="sv-panel" id="svRapidFirePanel">
-        <div class="sv-label">Rapid Fire</div>
-        <div class="sv-value" id="svRapidFireTime">4.2s</div>
-      </div>
+      <!-- No rapid-fire read-out. It was a second panel here counting a timer
+           down, and it said nothing the fight was not already saying. -->
+      <!-- Strike charges are drawn as a ring around the seal by
+           systems/strikeRing.js, not as HUD markup. -->
     </div>
+
+    <!-- The three bar states, placed by hand where the seal would be. In game
+         there is one stack and it follows the player. -->
 
     <!-- Healthy + idle: both bars full, so the stack fades back to 0.3. -->
     <div class="seal-mark" style="left:250px; top:390px;"></div>
-    <div class="sv-playerbars" style="left:210px; top:390px; opacity:0.3;">
-      <div class="sv-pbar-wrap" style="--sv-alarm:0.0;">
-        <div class="sv-pbar-ghost" style="--sv-fill:1;"></div>
-        <div class="sv-pbar sv-pbar-hp" style="--sv-fill:1;"></div>
+    <div class="sv-playerbars" id="svPlayerBars" style="left:210px; top:390px; opacity:0.3;">
+      <div class="sv-pbar-wrap" id="svHpWrap" style="--sv-alarm:0.0;">
+        <div class="sv-pbar-ghost" id="svHpGhost" style="--sv-fill:1;"></div>
+        <div class="sv-pbar sv-pbar-hp" id="svHpBar" style="--sv-fill:1;"></div>
       </div>
-      <div class="sv-pbar-wrap" style="--sv-alarm:0.0;">
-        <div class="sv-pbar-ghost" style="--sv-fill:1;"></div>
-        <div class="sv-pbar sv-pbar-o2" style="--sv-fill:1;"></div>
+      <div class="sv-pbar-wrap" id="svO2Wrap" style="--sv-alarm:0.0;">
+        <div class="sv-pbar-ghost" id="svO2Ghost" style="--sv-fill:1;"></div>
+        <div class="sv-pbar sv-pbar-o2" id="svO2Bar" style="--sv-fill:1;"></div>
       </div>
     </div>
     <div class="state-note" style="left:250px; top:440px;">Idle · faded</div>

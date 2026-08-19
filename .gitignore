@@ -20,6 +20,7 @@ dist-gauge-look
 dist-arcs-look
 dist-bust-look
 dist-menu-look
+dist-score-look
 
 # The layout audit's build and its report (npm run layout). Same deal as the
 # look pages: the page and the runner are tracked, what they generate is not.

@@ -519,11 +519,25 @@ export function createGrid(scene) {
     material.uniforms.uClip.value = CONFIG.grid.clipAtSurface ? 1 : 0;
 
     const speed = shipVel ? Math.hypot(shipVel.x, shipVel.y) : 0;
+    // THE SEAL'S OWN DENT, and `view.wake` is an absolute override of
+    // CONFIG.grid.wakeStrength for whoever is holding the frame.
+    //
+    // It exists for the main menu. In a run the wake is a gameplay read — the
+    // lattice bulges around the player so you can find yourself in a crowded
+    // frame — and it is tuned against a fifty-unit view, where a 7-unit radius
+    // is a local dimple. The menu holds the same water at fifteen times that
+    // zoom (systems/mainMenu.js): the radius is then wider than the whole
+    // picture, every node on screen is pulled toward one point, and the lattice
+    // reads as a cobweb rather than as a grid. See CONFIG.splashBust.menu
+    // .sealWake, which is the value handed in here.
+    //
+    // `??`, so a handed-in 0 is honoured — that is the shipped menu value.
+    const wakeStrength = view.wake ?? CONFIG.grid.wakeStrength;
     wakes[0].set(
       shipPos.x,
       shipPos.y,
       CONFIG.grid.wakeRadius,
-      CONFIG.grid.wakeStrength * (1 + speed * CONFIG.grid.wakeSpeedGain)
+      wakeStrength * (1 + speed * CONFIG.grid.wakeSpeedGain)
     );
     // THE HULLS. Re-published every frame by whoever owns them rather than
     // registered once: a boat is destroyed mid-frame more often than not, and a

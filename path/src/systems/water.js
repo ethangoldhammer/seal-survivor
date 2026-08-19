@@ -218,6 +218,41 @@ export function setWaterWaveTime(material, t) {
   material.uniforms.uWaveT.value = t;
 }
 
+// --- THE PUNCH-IN COMPENSATION ---------------------------------------------
+//
+// WHAT THIS IS FOR. CONFIG.caustics is authored for the framing a run is played
+// at — some fifty world units across — where `intensity` 0.28 at a `scale` of
+// half a cycle per unit is a fine dapple over the whole ocean. The main menu
+// holds the same water at fifteen times that zoom (systems/mainMenu.js), and
+// both numbers fail there for opposite reasons: the veins are magnified into
+// two or three soft blobs the size of the seal, and what is left of them at the
+// depth a run starts at (`pow(1 - depth, falloff)` — half, at the surface-to-
+// floor midpoint) is too faint to see at all. The light in the water simply
+// stops existing on the one screen that is nothing but water.
+//
+// So the menu multiplies both while it owns the frame, and eases the multiplier
+// back to 1 as the shot pulls out — the veins tighten into the arena's own
+// dapple over the same second the camera opens up.
+//
+// A SETTER RATHER THAN AN ARGUMENT, like setWaterWaveTime above: the caller is
+// four layers up (mainMenu -> main -> world.updateSurface -> updateColors) and
+// nothing in between has any business carrying it. Both default to 1, so the
+// game with no menu in front of it is exactly what it was.
+let causticsGain = 1;
+let causticsScaleMul = 1;
+
+/**
+ * Scale the caustics for a frame that is not the run's.
+ *
+ * @param gain  multiplies CONFIG.caustics.intensity, 1 = the arena's own
+ * @param scale multiplies CONFIG.caustics.scale — bigger is MORE veins across
+ *              the same water, which is what a punched-in frame needs
+ */
+export function setCausticsPunch(gain = 1, scale = 1) {
+  causticsGain = Math.max(0, gain);
+  causticsScaleMul = Math.max(0.0001, scale);
+}
+
 // Called every frame — cheap uniform sets, so tuner sliders apply live with no
 // rebuild. Geometry-affecting values (position/size) are handled separately by
 // whoever positions the mesh.
@@ -257,8 +292,8 @@ export function updateWaterMaterial(material, clock) {
     ? cc.nightFloor + (1 - cc.nightFloor) * skyLight.intensity
     : 1;
   u.uCausticsOn.value = cc.enabled ? 1 : 0;
-  u.uCausticsIntensity.value = cc.intensity * causticsLight;
-  u.uCausticsScale.value = cc.scale;
+  u.uCausticsIntensity.value = cc.intensity * causticsLight * causticsGain;
+  u.uCausticsScale.value = cc.scale * causticsScaleMul;
   u.uCausticsSpeed.value = cc.speed;
   u.uCausticsFalloff.value = cc.falloff;
   u.uCausticsColor.value.set(cc.color);

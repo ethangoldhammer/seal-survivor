@@ -54,7 +54,12 @@ const VIEWPORTS = [
 // The surfaces, by the name previewScreen() already knows, plus the two it has
 // no word for. `coach` is the first-run tutorial band — the longest line in
 // callouts.csv, which is the one that has to fit.
-const SURFACES = ['start', 'HUD', 'coach', 'boss', 'cards', 'score card'];
+// 'HUD' is now the SHIPPED placement — the corner gauges at the maximum a run
+// opens with. 'HUD grown' is the same screen several health upgrades later,
+// which is the frame that can run off the top and the only one the CSS ceiling
+// has to catch. Both are needed: the growth is the feature, so the short
+// version cannot stand in for the long one or the other way round.
+const SURFACES = ['start', 'HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card'];
 
 // THE FURNITURE A CALLOUT MAY NOT COVER. The same list ui/callout.js clears
 // itself of, restated here ON PURPOSE rather than imported: this is the check,
@@ -63,7 +68,10 @@ const SURFACES = ['start', 'HUD', 'coach', 'boss', 'cards', 'score card'];
 // starts landing on that element — which is exactly the regression this exists
 // to catch, and importing the list would hide it.
 const CALLOUT_CHROME = [
-  '.sv-bossbar', '.sv-xptop', '.sv-xptop-level', '.sv-hud-corner', '.sv-print',
+  '.sv-bossbar', '.sv-xptop', '.sv-xptop-level', '.sv-hud-corner',
+  // The gauges, in the placement that holds still. Restated here with the same
+  // deliberate duplication as the rest of this list — see the note above.
+  '.sv-playerbars-corner', '.sv-print',
 ];
 // ...and the callouts themselves, which is what must stay off it.
 const CALLOUT_LINES = ['.sv-callout', '.sv-callout-boost'];
@@ -74,7 +82,15 @@ const TAP_MIN = 44;
 
 // Positioned per frame from a world position; see the header.
 const PER_FRAME = [
-  '.sv-playerbars', '.sv-toast', '.sv-chain',
+  // ...but ONLY in the placement that is positioned per frame. With
+  // settings.hud.barPlacement on 'corner' the same element is ordinary fixed
+  // chrome pinned to the bottom right, and it is then exactly the kind of
+  // thing this tool exists to measure: it has a length that GROWS with the
+  // seal's maximum health, and the corner it is pinned to is the one the score
+  // and the clock move into on a phone. Excluding it by bare class name would
+  // have made the one placement that can genuinely collide the one placement
+  // nothing checked.
+  '.sv-playerbars:not(.sv-playerbars-corner)', '.sv-toast', '.sv-chain',
   '.sv-callout-boost', '.sv-callout-arrow', '.sv-card-fx',
 ];
 
@@ -310,6 +326,33 @@ async function buildSurface(surface, ui, callout, callouts) {
   }
   if (surface === 'start') {
     ui.previewScreen('start');
+    return;
+  }
+
+  if (surface === 'HUD grown') {
+    ui.previewScreen('HUD');
+    // Pinned explicitly even though it is the default, so this tile keeps
+    // measuring what its name says if the default is ever flipped back.
+    //
+    // Written onto the live settings object rather than through setSetting,
+    // which would persist it: this harness measures, it does not have opinions
+    // to save, and the key it would write is the one holding the real player's
+    // choices on any origin it happens to share.
+    const settings = await import('../../path/src/systems/settings.js');
+    settings.settings.hud.barPlacement = 'corner';
+
+    // THE WORST CASE, which is a seal that has been buying health all run. The
+    // corner columns are as long as the maximum they draw, so the frame that
+    // can run off the top of the screen is not the opening one — it is this
+    // one, three doublings later, and the CSS ceiling is what has to catch it.
+    // The baseline is taken from the FIRST frame, so the order matters: one
+    // call at the run's own maximum, then the upgrades.
+    ui.updateHUD(gameState, player, null, 8.4, null, 1 / 60);
+    player.stats.maxHp = 300;
+    player.stats.maxOxygen = 260;
+    // Long enough for the chase to arrive; dt is clamped to 0.1 inside updateHUD
+    // however big a number is handed to it, so this is 8 seconds of settling.
+    for (let i = 0; i < 80; i++) ui.updateHUD(gameState, player, null, 8.4, null, 0.1);
     return;
   }
 

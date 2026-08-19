@@ -1,4 +1,4 @@
-<!-- @dsCard group="Screens" name="Game over / leaderboard" subtitle="Run stats, leaderboard rows, your-run highlight" viewport="640x600" -->
+<!-- @dsCard group="Screens" name="Game over — front" subtitle="Quip, score hero, kill-shot rack, name entry, leaderboard" viewport="720x760" -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -9,50 +9,152 @@
 <style>
 /* Preview scaffolding only — none of this ships. */
 html, body { margin: 0; height: 100%; }
-.stage { position: relative; width: 100%; height: 100vh; overflow: hidden;
+.stage { position: relative; width: 100%; min-height: 100vh; overflow: hidden;
   background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
 .stage .sv-ui { position: absolute; }
+/* THE CARD HAS NO HEIGHT OF ITS OWN. Both faces are position:absolute inset:0,
+   so in game sizeCard() measures the taller face and writes the height onto
+   .sv-flip-card every time the screen opens. Nothing measures anything in a
+   static preview, so the card is given a height here instead — without it both
+   faces collapse to zero and the whole screen renders as nothing.
+   Same for .sv-face-inner's scroll: max-height rather than the card's 92vh, so
+   the whole front is visible in the design pane instead of being clipped. */
+.stage .sv-flip-card { height: 700px; max-height: none; }
+.stage .sv-face-inner { overflow: visible; }
 </style>
 </head>
 <body>
 <div class="stage">
   <div class="sv-ui">
+    <!-- The game-over subtree exactly as initUI builds it, with the front face
+         filled the way showGameOver() and renderBoard() fill it. -->
     <div class="sv-center" id="svGameOverMenu">
-      <div class="sv-menu">
-        <div class="sv-title">Run ended</div>
-        <div class="sv-sub" id="svGameOverStats">
-          Score: 12,480<br/>Survived 3:24 — Kills: 148 — Level 7
+      <div class="sv-flip-stage" id="svFlipStage">
+        <div class="sv-flip-card" id="svCard">
+
+          <!-- THE FRONT. The screen the game has always ended on. -->
+          <div class="sv-face sv-face-front" id="svFaceFront">
+            <div class="sv-face-inner">
+              <!-- One quip from quips.csv, rolled per death against the causes
+                   killPlayer resolved. -->
+              <div class="sv-title" id="svGameOverTitle">You're the Chum Now, Dog</div>
+
+              <!-- THE SCORECARD, as showGameOver builds it: score on its own
+                   line at display size, the other four as one even grid under
+                   it. Not five flat chips — see .sv-scorecard for why. -->
+              <div class="sv-sub" id="svGameOverStats">
+                <div class="sv-scorecard">
+                  <div class="sv-score-hero"><b>12,480</b><span>Score</span></div>
+                  <div class="sv-stat-row">
+                    <span class="sv-stat"><b>3:24</b>Time</span>
+                    <span class="sv-stat"><b>7</b>Level</span>
+                    <span class="sv-stat"><b>148</b>Kills</span>
+                    <span class="sv-stat"><b>2</b>Bosses</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- THE ROLL. Carries .sv-hidden in game until a boss actually
+                   goes down; shown here so the row is designable. The prints
+                   themselves are canvases built by ui/snapshotPrint.js, which
+                   has its own stylesheet — .sv-fan is left empty on purpose. -->
+              <div class="sv-trophy" id="svTrophy">
+                <div class="sv-fan" id="svFan"></div>
+                <div class="sv-trophy-row">
+                  <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share this one</button>
+                  <button class="sv-btn sv-btn-sm" id="svTrophySave">Save this one</button>
+                  <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetShare">Share all</button>
+                  <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetSave">Save all</button>
+                </div>
+                <div class="sv-status" id="svTrophyStatus"></div>
+              </div>
+
+              <button class="sv-turn" id="svTurnOver">
+                Turn it over
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M1 5h8M6 2l3 3-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+
+              <div class="sv-name-row" id="svNameRow">
+                <input class="sv-name-input" id="svNameInput" type="text" maxlength="32"
+                       placeholder="Your name" autocomplete="off" autocapitalize="characters"
+                       spellcheck="false" aria-label="Name for the leaderboard" value="SEAL" />
+                <button class="sv-btn sv-btn-sm" id="svNameSubmit">Submit</button>
+              </div>
+              <div class="sv-status" id="svLbStatus">Enter a name to post your score</div>
+
+              <!-- renderBoard(): caption, a sticky five-column header, then the
+                   rows in a wrapper of their own so the zebra counts from the
+                   first ROW rather than from the caption above it. -->
+              <div class="sv-leaderboard" id="svLeaderboard">
+                <div class="sv-label" style="margin-bottom:6px;">Global leaderboard</div>
+                <div class="sv-lb-head">
+                  <span>#</span><span>Name</span><span>Score</span><span>Lv</span><span>Time</span>
+                </div>
+                <div class="sv-lb-rows">
+                  <div class="sv-lb-row">
+                    <span class="sv-lb-rank">1</span>
+                    <span class="sv-lb-name">PODMOTHER</span>
+                    <span class="sv-lb-score">18,420</span>
+                    <span class="sv-lb-lv">9</span>
+                    <span class="sv-lb-time">4:41</span>
+                  </div>
+                  <!-- sv-lb-mine marks the row for the run that just ended. Only
+                       ever set after a submit, when the rank comes back with the
+                       write. -->
+                  <div class="sv-lb-row sv-lb-mine">
+                    <span class="sv-lb-rank">2</span>
+                    <span class="sv-lb-name">SEAL</span>
+                    <span class="sv-lb-score">12,480</span>
+                    <span class="sv-lb-lv">7</span>
+                    <span class="sv-lb-time">3:24</span>
+                  </div>
+                  <div class="sv-lb-row">
+                    <span class="sv-lb-rank">3</span>
+                    <span class="sv-lb-name">HAULOUT HANK</span>
+                    <span class="sv-lb-score">11,905</span>
+                    <span class="sv-lb-lv">7</span>
+                    <span class="sv-lb-time">3:02</span>
+                  </div>
+                  <!-- 24 characters and no spare room: what .sv-lb-name's
+                       min-width:0 and ellipsis exist for. -->
+                  <div class="sv-lb-row">
+                    <span class="sv-lb-rank">4</span>
+                    <span class="sv-lb-name">A VERY LONG NAME INDEED</span>
+                    <span class="sv-lb-score">9,340</span>
+                    <span class="sv-lb-lv">6</span>
+                    <span class="sv-lb-time">2:48</span>
+                  </div>
+                  <div class="sv-lb-row">
+                    <span class="sv-lb-rank">5</span>
+                    <span class="sv-lb-name">ANON</span>
+                    <span class="sv-lb-score">7,110</span>
+                    <span class="sv-lb-lv">5</span>
+                    <span class="sv-lb-time">2:15</span>
+                  </div>
+                  <!-- Three digits: the board goes to 100, which is what the
+                       rank column's 3ch is sized for. -->
+                  <div class="sv-lb-row">
+                    <span class="sv-lb-rank">100</span>
+                    <span class="sv-lb-name">PUPPY</span>
+                    <span class="sv-lb-score">1,020</span>
+                    <span class="sv-lb-lv">2</span>
+                    <span class="sv-lb-time">0:48</span>
+                  </div>
+                </div>
+              </div>
+
+              <button class="sv-btn" id="svRestartBtn">Try again</button>
+              <!-- The link inside is built by ui/tipJar.js, which carries its
+                   own stylesheet — empty here, as it is in initUI's markup. -->
+              <div class="sv-tip-row" id="svTipRow"></div>
+            </div>
+          </div>
+
+          <!-- THE BACK. Hidden here as it is in game; components/gameover-back.html
+               is the same card turned over. -->
+          <div class="sv-face sv-face-back sv-hidden" id="svFaceBack"></div>
+
         </div>
-        <div class="sv-leaderboard" id="svLeaderboard">
-          <div class="sv-label" style="margin-bottom:6px;">Leaderboard</div>
-          <div class="sv-lb-row">
-            <span class="sv-lb-rank">1</span>
-            <span class="sv-lb-score">18,420</span>
-            <span class="sv-lb-meta">Lv9 · 4:41</span>
-          </div>
-          <!-- sv-lb-mine marks the row for the run that just ended. -->
-          <div class="sv-lb-row sv-lb-mine">
-            <span class="sv-lb-rank">2</span>
-            <span class="sv-lb-score">12,480</span>
-            <span class="sv-lb-meta">Lv7 · 3:24</span>
-          </div>
-          <div class="sv-lb-row">
-            <span class="sv-lb-rank">3</span>
-            <span class="sv-lb-score">11,905</span>
-            <span class="sv-lb-meta">Lv7 · 3:02</span>
-          </div>
-          <div class="sv-lb-row">
-            <span class="sv-lb-rank">4</span>
-            <span class="sv-lb-score">9,340</span>
-            <span class="sv-lb-meta">Lv6 · 2:48</span>
-          </div>
-          <div class="sv-lb-row">
-            <span class="sv-lb-rank">5</span>
-            <span class="sv-lb-score">7,110</span>
-            <span class="sv-lb-meta">Lv5 · 2:15</span>
-          </div>
-        </div>
-        <button class="sv-btn" id="svRestartBtn">Try again</button>
       </div>
     </div>
   </div>

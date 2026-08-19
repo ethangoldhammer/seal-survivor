@@ -91,6 +91,33 @@ export const SCHEMA = {
       },
     ],
   },
+  hud: {
+    label: 'HUD',
+    items: [
+      // WHERE THE TWO GAUGES LIVE, and the only setting in this file that is a
+      // taste question rather than an accessibility or a performance one.
+      //
+      //   corner  THE DEFAULT. Pinned to the bottom right of the screen: always
+      //           in the same place, never behind a creature, never moving, and
+      //           the only placement with room to show a rising MAXIMUM — the
+      //           column grows up the side of the screen as the seal's health
+      //           and lungs do, which beside the animal there is nowhere to put.
+      //   seal    They ride beside the animal, which is where your eyes already
+      //           are during a fight — nothing to look away at, at the cost of a
+      //           read that moves and a fixed size.
+      //
+      // Neither is the "advanced" option, which is why this is a setting and
+      // not a decision. The default is the corner because it is the one that
+      // stays legible in the worst moment — a crowded screen, a boss on top of
+      // the animal — and because the growth it shows is otherwise invisible.
+      {
+        key: 'barPlacement', label: 'Health & air bars', type: 'choice',
+        options: ['corner', 'seal'], def: 'corner',
+        labels: { seal: 'Beside the seal', corner: 'Bottom right' },
+        hint: 'Where the two gauges are drawn',
+      },
+    ],
+  },
   controls: {
     label: 'Controls',
     items: [
@@ -135,7 +162,13 @@ function coerce(item, value) {
   if (value == null) {
     // Only the tri-state entries are allowed to BE null — for the rest, null
     // is a missing key from an older snapshot.
-    return item.type === 'choice' || item.type === 'boolOrNull' ? null : item.def;
+    //
+    // A `choice` falls through to its own default, which for `filter` IS null
+    // ("whatever the build ships") and for an ordinary enum like barPlacement
+    // is a real value. Returning null for every choice, as this used to, meant
+    // a setting added later could never state a default it would actually get
+    // back after a reload.
+    return item.type === 'boolOrNull' ? null : item.def;
   }
   switch (item.type) {
     case 'range': {
@@ -148,7 +181,7 @@ function coerce(item, value) {
     case 'boolOrNull':
       return typeof value === 'boolean' ? value : null;
     case 'choice':
-      return item.options.includes(value) ? value : null;
+      return item.options.includes(value) ? value : item.def;
     case 'keys': {
       if (typeof value !== 'object') return { ...item.def };
       const out = { ...item.def };
@@ -352,6 +385,20 @@ export function rumbleScale() {
 /** Stick deadzone, replacing the built-in constant. */
 export function stickDeadzone() {
   return settings.controls.deadzone;
+}
+
+/**
+ * Where the health and air gauges are drawn: 'seal' or 'corner'.
+ *
+ * Resolved through a function rather than read off `settings` directly so the
+ * null a corrupted localStorage snapshot can still produce lands on the
+ * default here, once, instead of reaching the DOM as a class name of "null".
+ */
+export function barPlacement() {
+  // Written as "anything that is not the opt-out is the default", so the null a
+  // corrupted snapshot can still hold lands on the shipped placement rather
+  // than on whichever branch happens to be first.
+  return settings.hud.barPlacement === 'seal' ? 'seal' : 'corner';
 }
 
 /**

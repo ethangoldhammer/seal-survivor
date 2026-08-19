@@ -458,10 +458,20 @@ function optionsFor(item) {
       { value: false, label: 'Off' },
     ];
   }
-  return [
-    { value: null, label: `Default (${authoredLabel(item)})` },
-    ...item.options.map((o) => ({ value: o, label: o === 'off' ? 'Off' : o.toUpperCase() })),
-  ];
+  // THE "DEFAULT" ROW BELONGS TO A NULL DEFAULT and to nothing else. It exists
+  // because `filter`'s default is null, meaning "whatever the build ships" —
+  // a real third state that the two named options cannot express. An enum with
+  // an actual default (barPlacement) has no such state, and offering one would
+  // put a row on the menu that resolves to a value already listed beside it.
+  const rows = item.def == null
+    ? [{ value: null, label: `Default (${authoredLabel(item)})` }]
+    : [];
+  // `labels` where the setting brought its own prose. Upper-casing is right for
+  // the filter names (CRT, VHS, VGA) and wrong for anything that is a phrase.
+  for (const o of item.options) {
+    rows.push({ value: o, label: item.labels?.[o] ?? (o === 'off' ? 'Off' : o.toUpperCase()) });
+  }
+  return rows;
 }
 
 // What the BUILD ships, so "Default" says what it actually resolves to rather

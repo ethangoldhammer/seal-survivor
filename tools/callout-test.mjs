@@ -797,14 +797,59 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
   let upWhileThere = false;
   coachRun((ctx, t) => {
     if (t > 3 && t < 3.05) noteTutorialEvent('strike');
-    setWater(ctx, 'attractorOrb', t > 6 && t < 30);
-    // Sampled well past the row's own hold, which is what makes this a test of
-    // the pin rather than of the clock.
-    if (t > 20 && t < 20.05 && tutorialState.active === 'attractorOrb') upWhileThere = true;
-  }, { seconds: 40 });
+    setWater(ctx, 'attractorOrb', t > 6 && t < 12);
+    // Sampled well past the row's own hold — which is what makes this a test of
+    // the pin rather than of the clock — and inside CONFIG.tutorial.maxShow,
+    // which is the other end of the same window. The field goes at 12s, before
+    // the ceiling can be what ends the tip; the block below is where the
+    // ceiling itself is measured.
+    if (t > 10 && t < 10.05 && tutorialState.active === 'attractorOrb') upWhileThere = true;
+  }, { seconds: 20 });
   check('the attractor tip is still up long past its hold',
     upWhileThere, `hold ${holdFor(CALLOUTS.get('attractorOrb'))}s`);
   check('...and is spent when the field goes',
+    tutorialDone().has('attractorOrb'), [...tutorialDone()].join(','));
+}
+
+{
+  // THE CEILING — CONFIG.tutorial.maxShow.
+  //
+  // A world tip has no clock: it stands beside its subject until the subject is
+  // gone. That is exactly right for a bubble and it has no answer at all for a
+  // field that runs for half a minute, a turtle that parks next to the seal, or
+  // a pile of chum nobody dives for — and those tips simply sat there, long
+  // past being read, until the water changed its mind.
+  //
+  // MEASURED ON A SUBJECT THAT NEVER LEAVES, because that is the only case the
+  // ceiling exists for: every other ending has already fired by then.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const ceiling = CONFIG.tutorial.maxShow;
+  let upAt = null;
+  let goneAt = null;
+  coachRun((ctx, t) => {
+    if (t > 3 && t < 3.05) noteTutorialEvent('strike');
+    // In the water for the whole run, and never taken.
+    setWater(ctx, 'attractorOrb', t > 6);
+    if (tutorialState.active === 'attractorOrb') {
+      if (upAt === null) upAt = t;
+      goneAt = null;
+    } else if (upAt !== null && goneAt === null) {
+      goneAt = t;
+    }
+  }, { seconds: ceiling * 3 });
+  check('a tip nothing can answer still comes off', goneAt !== null,
+    `up at ${upAt?.toFixed(1)}s, still up at ${(ceiling * 3).toFixed(1)}s`);
+  // The ceiling is time ON SCREEN, so it is measured from when the line
+  // appeared and not from the top of the run. A frame of slack each way: the
+  // step runs at DT and the row ages by DT.
+  const shown = goneAt === null ? Infinity : goneAt - upAt;
+  check('...at the ceiling, not at its own hold',
+    shown > holdFor(CALLOUTS.get('attractorOrb')) && shown <= ceiling + DT * 3,
+    `${shown.toFixed(2)}s on screen, ceiling ${ceiling}s`);
+  check('...and is marked done, so it does not come back next run',
     tutorialDone().has('attractorOrb'), [...tutorialDone()].join(','));
 }
 
@@ -820,13 +865,15 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
   resetTutorialRun();
   const ctx = withSubjects({ runTime: 10, device: 'kbm', charging: true, unkillableNear: true });
   let stillTalking = false;
-  for (let t = 0; t < 20; t += DT) {
+  // Sampled at twice the row's own hold — a tip still up there is a pinned one
+  // — and short of CONFIG.tutorial.maxShow, which is measured on its own a few
+  // blocks up. Both edges matter and they are different claims.
+  const window = holdFor(CALLOUTS.get('invincible')) * 2;
+  for (let t = 0; t < window; t += DT) {
     updateCallouts(DT, {}, true);
     updateTutorial(DT, ctx, true);
-    if (t > 12) stillTalking = tutorialState.active === 'invincible';
+    if (t > window - DT * 2) stillTalking = tutorialState.active === 'invincible';
   }
-  // The clock no longer ends it — the animal leaving does. Twelve seconds is
-  // twice the row's hold, so a tip still up here is a pinned one.
   check('a tip with nothing to obey stays while the animal is there', stillTalking,
     `active: ${tutorialState.active}`);
   ctx.unkillableNear = false;
@@ -871,6 +918,39 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
   }
   check('...and clears once the floor is', tutorialState.active !== 'crab' && tutorialDone().has('crab'),
     `active: ${tutorialState.active}`);
+}
+
+{
+  // ...AND ONE MOUTHFUL OFF THE FLOOR IS ENOUGH.
+  //
+  // This used to wait for the pile to be EMPTY, which is a fair description of
+  // the lesson and the wrong test for the tip: a trawler dumps thirty orbs down
+  // there, clearing them takes most of a minute, and for that whole minute the
+  // player who read the sentence, dived immediately and started eating was
+  // still being told to. The tip is spent the first time it is acted on.
+  //
+  // THE PILE IS STILL THERE THROUGHOUT, which is the whole point of the check —
+  // under the old `done` this passes for the wrong reason the moment the floor
+  // happens to clear, so `chumOnSeabed` is never allowed to go false.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const ctx = withSubjects({ runTime: 10, device: 'kbm', charging: true, chumOnSeabed: true });
+  const step = () => { updateCallouts(DT, {}, true); updateTutorial(DT, ctx, true); };
+  while (!tutorialDone().has('strike')) step();
+  for (let t = 0; t < 3 && tutorialState.active !== 'crab'; t += DT) step();
+  check('the seabed tip is up with a pile on the floor', tutorialState.active === 'crab',
+    `active: ${tutorialState.active}`);
+  // Long enough to have been read — the legibility floor still applies, and a
+  // tip taken away on the frame it was obeyed would be a flicker.
+  for (let t = 0; t < legibleFor(CALLOUTS.get('crab'), 'kbm') + DT; t += DT) step();
+  noteTutorialEvent('floorChum');
+  step();
+  check('...and one mouthful off the seabed answers it',
+    tutorialState.active !== 'crab' && tutorialDone().has('crab'),
+    `active: ${tutorialState.active}`);
+  check('...with the pile still down there', ctx.chumOnSeabed);
 }
 // ---------------------------------------------------------------------------
 section('the words follow the device');
@@ -1462,6 +1542,23 @@ section('the pace — how long a tip stays, and the quiet after it');
   updateTutorial(DT, ctx, false); // the seal died
   check('death takes the tip down', tutorialState.active === null);
   check('...without spending it', !tutorialDone().has('strike'));
+
+  // THE SAME PATH THE MENUS USE. main.js hands the coach `live` false whenever
+  // the game is paused — the level-up cards and the pause menu are one flag —
+  // because the callout layer draws ABOVE the menus by design, and a first-run
+  // sentence lying across the three upgrade cards is a line the player has to
+  // read past to make a choice.
+  //
+  // What makes that safe is the half checked below rather than the half above:
+  // a tip yanked off by a level-up has to COME BACK, or a player whose first
+  // orb arrives one kill before a card is never taught about it at all.
+  let back = 0;
+  for (; back < 10 && tutorialState.active !== 'strike'; back += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+  }
+  check('...and is offered again once the menu closes', tutorialState.active === 'strike',
+    `after ${back.toFixed(2)}s — ${tutorialState.active}`);
 }
 {
   // The clock half of the contract: a tip nobody obeys still ends, and ends
@@ -1604,12 +1701,22 @@ section('a tip that stands beside its subject');
     JSON.stringify(tutorialState.anchor));
   check('...still the same object', tutorialState.subjectMesh === first);
 
-  // WELL PAST THE ROW'S OWN HOLD. This is the pin doing its job, and it is the
-  // whole feature: the sentence is still there because the bubble is.
+  // WELL PAST THE ROW'S OWN HOLD, and short of the ceiling. This is the pin
+  // doing its job, and it is the whole feature: the sentence is still there
+  // because the bubble is.
+  //
+  // THE WINDOW HAS TWO EDGES NOW. CONFIG.tutorial.maxShow ends any tip whose
+  // subject never goes, so "long past its hold" has to be measured somewhere
+  // between the two rather than at an arbitrary multiple — and it is measured
+  // off the row's real age rather than off a frame count, because the tip was
+  // already a few frames old when this block took hold of it.
   const hold = holdFor(CALLOUTS.get('bubbleOrb'));
-  for (let t = 0; t < hold * 2; t += DT) step();
+  const ceiling = CONFIG.tutorial.maxShow;
+  const row = CALLOUTS.get('bubbleOrb');
+  const past = (hold + ceiling) / 2;
+  for (let guard = 0; calloutAge(row) < past && guard < 4000; guard++) step();
   check('a tip outlives its hold while its subject is there',
-    tutorialState.active === 'bubbleOrb', `after ${(hold * 2).toFixed(1)}s of a ${hold}s hold`);
+    tutorialState.active === 'bubbleOrb', `after ${past.toFixed(1)}s of a ${hold}s hold`);
 
   // AND THE BUBBLE IS POPPED. The words hold the place it was in — they have to
   // be readable — and the object is dropped on the same frame, because

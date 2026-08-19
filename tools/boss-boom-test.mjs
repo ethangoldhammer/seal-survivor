@@ -138,6 +138,19 @@ check('the last ring is born before the shutter',
   Math.max(...WAVES.map((w) => w.at ?? 0)) < bossBoomLead(),
   `last wave at ${Math.max(...WAVES.map((w) => w.at ?? 0))}s, lead ${bossBoomLead()}s`);
 
+check('...and so is the last puff of it', (() => {
+  const last = Math.max(...WAVES.map((w) => w.at ?? 0)) + (BOOM.organic?.stagger ?? 0);
+  return last < bossBoomLead();
+})(), `last wave ${Math.max(...WAVES.map((w) => w.at ?? 0))}s + stagger `
+  + `${BOOM.organic?.stagger ?? 0}s vs lead ${bossBoomLead()}s — a ring is spread over a `
+  + 'few frames now, and the tail of it still has to be in the photograph');
+
+check('the front is out before the shutter too', (() => {
+  const rings = BOOM.shock?.rings ?? [];
+  if (BOOM.shock?.enabled === false || !rings.length) return true;
+  return rings.every((r) => (r.at ?? 0) + (r.seconds ?? 0.26) <= bossBoomLead() + 0.001);
+})(), 'a shockwave still expanding when the picture is taken is a photograph of a hoop');
+
 {
   const all = detonate(10);
   const expected = WAVES.reduce((n, w) => n + Math.round(w.puffs ?? 8) * (CONFIG.emitters.bossBoom.count ?? 3), 0);
@@ -225,6 +238,25 @@ console.log('\nfusion — every ring must still overlap itself');
       `lobes ${dia.toFixed(3)} across, spaced ${spacing.toFixed(3)} apart — `
       + `raise puffs or lobe until the first number is the larger`);
   }
+  // ...AND THE SAME RING AT ITS UNLUCKIEST. Every lobe is rolled a size of its
+  // own now (CONFIG.boss.boom.organic.lobeVary), so the bar above describes a
+  // ring nothing in the game ever draws: two neighbours can both come out at
+  // the bottom of that roll. This is the check that actually bounds how far the
+  // variation is allowed to go, and the two outer rings carry the puff counts
+  // they do because of it.
+  //
+  // `lumps` is deliberately absent from the arithmetic, and that is a fact
+  // about the code rather than an omission: a bulge scales the lobes by the
+  // same factor it scales the spacing (see buildPuffs), so the harmonics cannot
+  // bead a ring at any depth. `jitter` is absent for the reason it always was —
+  // it displaces radially, where fusion is held by the neighbouring RING.
+  const worstLobe = 1 - (BOOM.organic?.lobeVary ?? 0) / 2;
+  for (const [i, w] of WAVES.entries()) {
+    const spacing = (2 * Math.PI * (w.ring ?? 1)) / Math.max(1, Math.round(w.puffs ?? 8));
+    const dia = lobeDiameter(w) * worstLobe;
+    check(`ring ${i} at the bottom of the size roll`, dia > spacing,
+      `lobes ${dia.toFixed(3)} across at ${worstLobe.toFixed(2)}x, spaced ${spacing.toFixed(3)} apart`);
+  }
   // ...and consecutive rings have to reach each other, or the cloud is a set of
   // concentric shells rather than one body.
   for (let i = 1; i < WAVES.length; i++) {
@@ -241,11 +273,24 @@ console.log('\nthe surface');
 check('the isoline is below 1', (GROUP.iso ?? 1) < 1,
   `iso ${GROUP.iso} — a splat peaks at exactly 1.0 by construction, so at or above `
   + 'it a lone lobe renders NOTHING and only overlaps show');
-check('the outline is a DARK band', (GROUP.rim ?? 0) < 0,
-  `rim ${GROUP.rim} — the threshold shader does col * (1 + rim), so a positive value `
-  + 'is the wet highlight the liquid groups want and this one is a cel outline');
-check('it hides what is behind it', GROUP.additive !== true,
-  'alpha, not additive — the body bursts into gibs under this cloud and must not be seen doing it');
+// THE BODY HAS TO BE VISIBLE THROUGH IT. This is the whole reason the group is
+// additive: the explosion is centred on the boss and fires a third of a second
+// before the photograph, so an opaque cloud big enough to read as an explosion
+// photographs the animal as a hole. Both halves are asserted because either one
+// alone brings it back — additive at opacity 1 is still a wall of light.
+check('the cloud is LIGHT, not substance', GROUP.additive === true,
+  'additive — it adds to the animal instead of standing in front of it');
+check('...and it is not opaque', (GROUP.opacity ?? 1) <= 0.7,
+  `opacity ${GROUP.opacity} — the silhouette reads through the brightest part of the blast`);
+// The dark cel outline is gone with the alpha, and cannot come back: additive
+// light has no way to be darker than the water it lands on. A negative rim here
+// is therefore not a look, it is a value that does nothing.
+check('the rim is a light edge', (GROUP.rim ?? 0) > 0,
+  `rim ${GROUP.rim} — the threshold shader does col * (1 + rim), and on an additive `
+  + 'surface only a positive value draws anything at all');
+check('the edge is still hard', (GROUP.soft ?? 1) <= 0.16,
+  `soft ${GROUP.soft} — the cel read moved from the outline to the edge hardness, `
+  + 'and a wide transition here is what turns the cloud into fog');
 check('no specular', (GROUP.spec ?? 0) === 0, 'a highlight off the density gradient is wetness');
 
 // --- THE COLOUR -------------------------------------------------------------

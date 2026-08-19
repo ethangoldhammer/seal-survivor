@@ -543,6 +543,22 @@ export const CONFIG = {
       // frame, and on a title card the animal is the whole picture — a dent
       // travelling with it reads as the grid being broken behind it.
       sealWake: 0,
+      // --- THE LIGHT IN THE WATER, at this crop ----------------------------
+      // The menu is held in the arena, so the caustics and the god rays are
+      // already running behind it — and at this zoom neither can be seen. Both
+      // numbers in CONFIG.caustics are authored for a fifty-unit view: at six
+      // units the veins are magnified into two or three soft blobs the size of
+      // the animal, and what survives the depth fade where a run starts (half,
+      // at the midpoint between surface and floor) is too faint to find at all.
+      // The one screen that is nothing but water ends up with no light in it.
+      //
+      // MULTIPLIERS ON THE ARENA'S OWN, not replacements, and both eased back
+      // to 1 as the shot pulls out — so the dapple tightens into the game's
+      // over the same second the camera opens up, and retuning the ocean still
+      // moves this. `causticsScale` is the important one: bigger is MORE veins
+      // across the same water, which is what turns a blob back into light.
+      causticsGain: 3.2,
+      causticsScale: 4,
       // The hover glow that follows the cursor across the lattice — the game's
       // own (CONFIG.grid.touchGlow), at this screen's scale. Its radius is in
       // WORLD units and the shipped 4.5 is a fingertip against an eighty-unit
@@ -7360,7 +7376,12 @@ export const CONFIG = {
         // from core to edge, no hue. The core is meant to blow out and nothing
         // else is, so the master sits low and the waves' own `tone` is what
         // lifts the middle back up.
-        glow: 0.6,
+        //
+        // Lowered again with the move to additive: additive light IS a lift, so
+        // the emitter's own brightness on top of it took the core past the
+        // bright pass as flat white with the bloom welded across it — no ramp
+        // from core to edge and no hue left in the middle.
+        glow: 0.45,
 
         // THE WAVES, in order. Each is one ring of lobes born at once:
         //
@@ -7390,8 +7411,14 @@ export const CONFIG = {
         //
         // The shape of the table is the shape of the explosion: a small white
         // -hot core, then three rings opening and DARKENING outward, so the
-        // cloud has a lit centre and a heavy edge rather than being one flat
+        // cloud has a lit centre and a faint edge rather than being one flat
         // colour with an outline drawn round it.
+        //
+        // THE RAMP CARRIES MORE THAN IT USED TO, and that is the additive
+        // surface's doing. On an opaque cloud the silhouette was the shape and
+        // `tone` was shading inside it; on a translucent one the ramp IS the
+        // shape — the outer ring at 0.4 is what gives the mass an edge that
+        // falls off instead of stopping.
         // THE PUFF COUNTS ARE NOT TASTE. A ring of lobes only fuses into an
         // edge if neighbours still overlap at that radius: the spacing is
         // 2*PI*ring/puffs and a lobe is `lobe` x the body x the group's own
@@ -7400,11 +7427,143 @@ export const CONFIG = {
         // did not — the outer two rings came out as a scatter of separate round
         // dots orbiting a solid core, which reads as bubbles.
         waves: [
-          { at: 0.00, ring: 0.14, puffs: 4,  lobe: 0.34, throw: 0.4, tone: 1.25, white: 0.4,  jitter: 0.45 },
-          { at: 0.05, ring: 0.46, puffs: 8,  lobe: 0.30, throw: 0.8, tone: 1.15, white: 0.15, jitter: 0.30 },
-          { at: 0.12, ring: 0.80, puffs: 13, lobe: 0.27, throw: 1.2, tone: 0.85, white: 0,    jitter: 0.26 },
-          { at: 0.21, ring: 1.15, puffs: 19, lobe: 0.24, throw: 1.6, tone: 0.62, white: 0,    jitter: 0.22 },
+          { at: 0.00, ring: 0.14, puffs: 4,  lobe: 0.34, throw: 0.4, tone: 1.45, white: 0.5,  jitter: 0.45 },
+          { at: 0.05, ring: 0.46, puffs: 8,  lobe: 0.30, throw: 0.8, tone: 1.10, white: 0.2,  jitter: 0.30 },
+          { at: 0.12, ring: 0.80, puffs: 15, lobe: 0.27, throw: 1.2, tone: 0.70, white: 0,    jitter: 0.26 },
+          { at: 0.21, ring: 1.15, puffs: 23, lobe: 0.24, throw: 1.6, tone: 0.40, white: 0,    jitter: 0.22 },
         ],
+
+        // WHAT MAKES IT LOOK DRAWN RATHER THAN GENERATED.
+        //
+        // The wave table above is a machine: four rings, evenly spaced lobes,
+        // every ring born on one frame, every explosion in the run identical
+        // apart from the dice inside emit(). At a glance it reads right and on
+        // the second boss it reads as a preset — four concentric rings of
+        // circles, popping in four steps, the same four steps every time.
+        //
+        // Everything here is rolled ONCE PER EXPLOSION (the harmonics, the
+        // lean) or ONCE PER PUFF (the rest), in systems/bossBoom.js, and it is
+        // deliberately all shape and no count: the number of puffs in a ring is
+        // what guarantees neighbours still overlap enough to FUSE, so varying
+        // it would randomly break the silhouette into beads. Vary where they
+        // are, how big they are, how bright, and when — never how many.
+        organic: {
+          // The ring is not a circle. Two sine harmonics at random phases push
+          // its radius in and out — a low one (2-3 lobes) that makes the whole
+          // cloud asymmetric, and a higher one (5-7) that roughens it. As a
+          // share of the ring's radius.
+          //
+          // This is the difference between a wheel of circles and a
+          // cauliflower, and it is a different control from the per-puff
+          // `jitter` in the wave table: jitter is noise per lobe, this is a
+          // SHAPE the whole ring shares, so the outer rings bulge where the
+          // inner ones bulged and the cloud has one silhouette instead of four
+          // independent rough circles.
+          lumps: 0.34,
+          // How far the rings walk off the body's centre as they open, x the
+          // ring's own radius, in one direction rolled per explosion. A real
+          // blast is never centred on the thing it came out of.
+          lean: 0.16,
+          // Seconds each ring's puffs are spread over. THE OTHER HALF of "not a
+          // machine": at 0 a ring appears on one frame, which is what made the
+          // bloom read as four steps. Kept short — this is a stagger, not a
+          // second wave table — and the last puff of the last ring still has to
+          // be born before the shutter (see boss-boom-test.mjs, which asserts
+          // exactly that against `lead`).
+          stagger: 0.045,
+          // Per-puff variation, as a +/- share: how big a lobe is, and how
+          // bright. Both are what stops a ring reading as one shape repeated
+          // around a circle.
+          // The two outer rings carry more puffs than they did to pay for
+          // this — see the worst-roll check in tools/boss-boom-test.mjs, which
+          // is what decides how deep it is allowed to go.
+          lobeVary: 0.34,
+          toneVary: 0.3,
+        },
+
+        // THE SHOCKWAVE — the front, ahead of the smoke.
+        //
+        // A cel explosion has two things in it: the cloud, and the ring that
+        // leaves before it. Without the ring the cloud is something that
+        // GREW; with it the cloud is what a bang left behind, and the bang is
+        // the part that reads as force. It is also the part that arrives fast
+        // enough to be seen inside a held beat.
+        //
+        // NOT GOO. It is the game's shared organic ring (systems/organicRing.js
+        // — the same shader every telegraph and blast in the game draws), for
+        // two reasons that are both about this being a FRONT rather than a
+        // substance: a ring made of goo would fuse with the smoke it is
+        // outrunning, and the ring shader's noise field is nailed to the water,
+        // so a growing ring churns as it sweeps outward instead of inflating
+        // like a balloon. That churn is most of what makes it feel drawn.
+        //
+        // It is additive and lives for a quarter of a second. Nothing here
+        // damages anything: the fight is already over.
+        shock: {
+          enabled: true,
+
+          // How far toward white the boss's colour is pulled. HIGH — a
+          // shockwave is the hottest thing in the frame and the cloud behind it
+          // is what carries the hue. At 0 the ring is the boss's own colour,
+          // which reads as a coloured hoop rather than as a front.
+          white: 0.72,
+          // LOUD. The restrained version of this — glow 3.2, reaching 2.25
+          // bodies — read as a clean hoop leaving a cloud, which is a diagram of
+          // a shockwave rather than one. Pushed until the front TEARS: the
+          // roil dialect's two counter-moving samples stop reading as a wobble
+          // on a circle and start reading as a ragged sheet coming apart, which
+          // is what a drawn one has always been.
+          glow: 5.2,
+
+          // THE EDGE, as a share of the ring's own radius so a megalodon's
+          // front is as ragged as a crab's rather than smoother. `roil` is the
+          // blast dialect: two counter-moving noise samples, so the mass turns
+          // over instead of sitting still.
+          // NOTE THE CEILING BITES EARLY, and that is deliberate rather than a
+          // value to raise. The shader caps the amplitude at `wobbleMax` as a
+          // fraction of the ring's CURRENT radius, and the ring opens from a
+          // third of the body to nearly three times it — so while the front is
+          // small the cap holds it to a fifth of its radius (a small ring eaten
+          // by its own edge is just a blob) and it only spends the full 0.26
+          // once the ring is wide enough for that to read as tearing.
+          wobble: 0.26,
+          wobbleMax: 0.2,
+          massVar: 0.7,
+          noiseScale: 0.5,
+          edge: 'roil',
+
+          // How hard the expansion decelerates. 1 is linear; above it the ring
+          // is nearly at its full width in the first few frames and then
+          // crawls, which is what a real front does and what a drawn one has
+          // always been drawn doing.
+          ease: 2.6,
+
+          // THE RINGS. Radii are x the measured body, `seconds` and `at` are
+          // WALL seconds — this runs on the same clock the waves do, and for
+          // the same reason: on the water's clock the front would still be at
+          // the boss's nose when the shutter goes.
+          //
+          //   thick   band half-width as a share of the radius, from birth to
+          //           death. It falls, so the band THINS as it opens — a
+          //           constant share would grow with the ring and the front
+          //           would read as a swelling doughnut.
+          //   fade    how fast it goes: opacity is (1 - t) ** fade.
+          //           BOTH RINGS ARE GONE BY THE SHUTTER, and that is a rule
+          //           rather than a coincidence — `at + seconds` under
+          //           `lead`, asserted in tools/boss-boom-test.mjs. The front
+          //           is what the player SEES; the smoke is what the
+          //           photograph keeps, and a half-faded hoop frozen in a
+          //           trophy reads as a ring the artist forgot to remove.
+          //   eat     when the trailing edge starts chasing the leading one
+          //           round the circle, 0..1 of the ring's life. This is the
+          //           organic ring's own sweep, and it is what stops the ring
+          //           simply fading out — it gets EATEN, from a random point,
+          //           the way a drawn one is rubbed out.
+          rings: [
+            { at: 0.00, from: 0.30, to: 2.70, seconds: 0.26, thick: [0.30, 0.06], glow: 1,   white: 1,   fade: 1.2, eat: 0.45 },
+            { at: 0.06, from: 0.22, to: 1.30, seconds: 0.26, thick: [0.20, 0.07], glow: 0.8, white: 0.3, fade: 1.2, eat: 0.55 },
+          ],
+        },
       },
 
       // ---------------------------------------------------------------------
@@ -11549,14 +11708,54 @@ export const CONFIG = {
           // a ring of lobes a whole body-length across only sums above the
           // line if the line is low enough for a single lobe to clear it. See
           // the note on `aura`, which learned this the expensive way.
+          // A BOSS GOING UP. The one goo group that is LIGHT rather than
+          // substance, and every value below follows from that.
+          //
+          // It was an opaque cloud with a dark outline — a cel-drawn puff of
+          // smoke, which is the right reference and the wrong thing to put on
+          // top of the one frame of the run the player keeps. The explosion
+          // fires a third of a second before the shutter and is centred on the
+          // body, so an alpha cloud big enough to read as an explosion is a
+          // cloud that photographs the boss as a hole. The trophy has to show
+          // what died in it.
+          //
+          // ADDITIVE, therefore, and well under full opacity: the smoke adds
+          // light to the animal instead of standing in front of it, and the
+          // silhouette reads THROUGH the brightest part of the blast.
+          //
+          // WHAT THAT COSTS is the outline, and it cannot be bought back here:
+          // `rim` at -0.55 drew the dark line that made this cel smoke, and
+          // additive light has no way to be darker than the water it lands on.
+          // So the rim is positive now and the cel read moves to the EDGE
+          // HARDNESS instead — `soft` stays low, which is what keeps the cloud
+          // a shape with a definite boundary rather than a fog. A bright rim on
+          // a translucent body also happens to be what lit smoke does.
+          //
+          // `iso` a touch lower than the alpha version's: additive lobes at
+          // half opacity need to hold together harder to read as one mass.
           boom: {
             radius: 3.2,
-            iso: 0.36,
-            soft: 0.05,
-            opacity: 0.97,
-            additive: false,
-            rim: -0.55,
-            rimWidth: 0.5,
+            iso: 0.32,
+            // As hard as the alpha version's was. `soft` is the transition
+            // half-width in DENSITY, and it is the only thing left holding the
+            // cel read now that the outline has gone: at 0.1 the cloud came out
+            // of the pass as a haze with a bright edge, which is a photograph
+            // of smoke rather than a drawing of it.
+            soft: 0.06,
+            // The body shows through. This is the number the whole change is
+            // about, and it is the first one to move if the cloud ever hides
+            // an animal again.
+            opacity: 0.52,
+            additive: true,
+            // The cel edge, as LIGHT. Bright and NARROW, and the width is the
+            // number that matters: the band is a share of DENSITY, not a
+            // distance, so it brightens everything between the isoline and
+            // `iso + rimWidth`. Under an opaque interior that was invisible;
+            // under an additive one it lights the dip between every pair of
+            // lobes, and the cloud comes back as fifty overlapping CIRCLES
+            // instead of one mass with an edge. 0.34 did exactly that.
+            rim: 0.85,
+            rimWidth: 0.14,
             spec: 0,
             specPower: 16,
             normal: 1.2,
@@ -16192,6 +16391,27 @@ export const CONFIG = {
     // this; none of it is read while a shark is arriving, and a tip that is
     // gone before it is understood may as well not have fired.
     readCharsPerSec: 12,
+    // THE CEILING. However a tip ends, it ends by here — seconds on screen,
+    // counted while the band is actually running (a paused game is not reading
+    // time).
+    //
+    // Every tip already had an ending, and for the world tips that ending is
+    // the SUBJECT: the label stands on the thing until the thing is gone. That
+    // is right for a bubble, which is popped in a couple of seconds, and it is
+    // a trap for the ones whose subject can simply stay — a turtle that parks
+    // beside you, a pile of chum nobody goes for, an attractor field running
+    // its whole life. Those tips sat in the water for twenty and thirty
+    // seconds, long past being read, and a sentence nobody is reading any more
+    // is furniture.
+    //
+    // So this is a MAXIMUM and not a hold: nothing waits for it, and a tip that
+    // is answered or whose subject leaves is gone long before. It only ever
+    // decides how long the ones with no ending are allowed to sit there.
+    //
+    // Comfortably above the longest `hold` in callouts.csv (7s) and above the
+    // longest reading time legibleFor can ask for, which is what keeps it from
+    // ever cutting a line off mid-read — see the cap in legibleFor.
+    maxShow: 12,
     // SILENCE AFTER A TIP, before the next may speak. The whole reason the coach
     // stopped feeling like a wall of text: five pickup tips in a row, each
     // landing on the frame the last one left, is one long unskippable message
@@ -22059,6 +22279,23 @@ export const TUNER_SCHEMA = [
       { path: 'fx.goo.groups.boom.rimWidth', min: 0.05, max: 2, step: 0.05, label: '...how far in it reaches' },
       { path: 'fx.goo.groups.boom.opacity', min: 0, max: 1, step: 0.02, label: 'cloud opacity' },
       { path: 'fx.goo.groups.boom.radius', min: 1, max: 8, step: 0.1, label: 'cloud lobe size (x each puff)' },
+      { path: 'fx.goo.groups.boom.additive', type: 'bool', label: 'cloud is light, not substance' },
+      // --- how random it is (systems/bossBoom.js, buildPuffs) ---
+      { path: 'boss.boom.organic.lumps', min: 0, max: 0.8, step: 0.02, label: 'cloud lumpiness (0 = a wheel of circles)' },
+      { path: 'boss.boom.organic.lean', min: 0, max: 0.5, step: 0.02, label: '...how far it walks off centre' },
+      { path: 'boss.boom.organic.stagger', min: 0, max: 0.09, step: 0.005, label: '...a ring is spread over (s)' },
+      { path: 'boss.boom.organic.lobeVary', min: 0, max: 0.6, step: 0.02, label: '...lobe size scatter' },
+      { path: 'boss.boom.organic.toneVary', min: 0, max: 0.8, step: 0.02, label: '...lobe brightness scatter' },
+      // --- the shockwave off the front of it ---
+      { path: 'boss.boom.shock.enabled', type: 'bool', label: 'shockwave' },
+      { path: 'boss.boom.shock.glow', min: 0, max: 8, step: 0.1, label: 'front brightness' },
+      { path: 'boss.boom.shock.white', min: 0, max: 1, step: 0.02, label: '...how white-hot (0 = the boss\u2019s colour)' },
+      { path: 'boss.boom.shock.wobble', min: 0, max: 0.4, step: 0.01, label: '...how ragged its edge is (x the body)' },
+      { path: 'boss.boom.shock.massVar', min: 0, max: 1.2, step: 0.05, label: '...and how much its thickness varies' },
+      { path: 'boss.boom.shock.ease', min: 0.5, max: 5, step: 0.1, label: '...how hard it decelerates' },
+      { path: 'boss.boom.shock.rings.0.to', min: 0.6, max: 4, step: 0.05, label: 'front reach (x the body)' },
+      { path: 'boss.boom.shock.rings.0.seconds', min: 0.08, max: 0.34, step: 0.01, label: '...over this long (s)' },
+      { path: 'boss.boom.shock.rings.0.eat', min: 0, max: 0.95, step: 0.05, label: '...when it starts being rubbed out' },
       // --- the riser under it (systems/bossRiser.js) ---
       { path: 'boss.arrival.riser.enabled', type: 'bool', label: 'filter riser' },
       { path: 'boss.arrival.riser.hz', min: 20, max: 220, step: 1, label: 'riser pitch (Hz)' },
@@ -22776,6 +23013,10 @@ export const TUNER_SCHEMA = [
       { path: 'tutorial.openDelay', min: 0, max: 10, step: 0.5, label: 'tips: wait this long into a run (s)' },
       { path: 'tutorial.minShow', min: 0.2, max: 8, step: 0.1, label: 'tips: shortest time on screen (s)' },
       { path: 'tutorial.readCharsPerSec', min: 4, max: 40, step: 1, label: 'tips: reading speed, sets the min for a long line (chars/s)' },
+      // The other end of the same pair. Not a hold — no tip waits for it —
+      // it is what ends the ones whose subject can simply stay put: a parked
+      // turtle, an attractor field, a pile of chum on the floor.
+      { path: 'tutorial.maxShow', min: 3, max: 30, step: 0.5, label: 'tips: longest time on screen, whatever else (s)' },
       { path: 'tutorial.gap', min: 0, max: 6, step: 0.1, label: 'tips: silence between one tip and the next (s)' },
       { path: 'tutorial.nearSurface', min: 2, max: 40, step: 1, label: 'tips: "near the surface" is within (units)' },
       { path: 'tutorial.breachAir', min: 0.05, max: 2, step: 0.05, label: 'tips: air time that counts as a breach (s)' },

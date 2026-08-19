@@ -54,6 +54,21 @@ import { calloutOnDevice, calloutText } from '../calloutTable.js';
 // asked, the subject left the water, or the moment it described lapsed. The
 // air-bubble tip goes when the bubble is popped, and not one frame before.
 //
+// ...BUT NOT FOREVER. There is one ceiling over all of it —
+// CONFIG.tutorial.maxShow, twelve seconds — and it exists because "until the
+// thing is gone" has no answer for the subjects that simply stay: a turtle that
+// parks beside the seal, an attractor field running its whole life, a pile of
+// chum on the floor that nobody swims down for. Those lines sat in the water
+// for half a minute, and a sentence long past being read is furniture. Nothing
+// waits for the ceiling — every tip above still ends the moment it is answered
+// — it only ends the ones that otherwise would not.
+//
+// AND IT IS NEVER SPOKEN OVER A MENU. The coach is handed `live` false while
+// the game is paused (the level-up cards and the pause menu are the same flag),
+// which takes the line off immediately and without marking it done. The callout
+// layer draws above the menus by design, for the warnings; a first-run sentence
+// lying across the three upgrade cards is the case that design gets wrong.
+//
 // WHAT MARKS A STEP DONE IS THE ACTION, OR THE MOMENT PASSING. Doing the thing
 // clears the tip — the tip's job is finished the moment it is obeyed, and a
 // line still sitting there after you have obeyed it reads as the game not
@@ -256,11 +271,25 @@ const STEPS = {
   // arrives with the consequence teaches nothing that the consequence didn't.
   crab: {
     ready: (ctx) => ctx.chumOnSeabed,
-    // Clearing the floor is the action, and it is a real one — this is the only
-    // tip down here that can be obeyed. Polled rather than evented because what
-    // matters is the PILE being gone, not one orb of it going down: a player
-    // who eats one and swims off has not done the thing.
-    done: (ctx) => !ctx.chumOnSeabed,
+    // GOING DOWN FOR ONE PIECE IS THE ANSWER. This used to wait for the whole
+    // pile to be gone, on the reasoning that "a player who eats one and swims
+    // off has not done the thing" — which is a fair description of the LESSON
+    // and the wrong test for the TIP. A trawler dumps thirty orbs on the floor;
+    // clearing all of them takes most of a minute, and for that whole minute a
+    // player who understood the sentence immediately, dived, and ate off the
+    // seabed was still being told about it. The tip is spent the moment it has
+    // been acted on once.
+    //
+    // Evented rather than polled, which is the other half of the change: the
+    // pile is still down there after a mouthful, so there is no state here that
+    // says "they went and got some". `floorChum` fires for any orb that had
+    // settled, whichever way it was eaten — swum over, hoovered by a release
+    // gulp, or dragged up by an attractor. See collectChum in main.js.
+    //
+    // The floor emptying still counts, and still has to: it is what ends the
+    // tip for a player who never goes down at all, because the crabs cleared
+    // the pile for them and the moment the line described is over.
+    done: (ctx, events) => events.has('floorChum') || !ctx.chumOnSeabed,
   },
   // A turtle, or the whale. One step and one line for both, because what a
   // player has to learn is the same fact in both cases and it is a fact about
@@ -388,7 +417,24 @@ export function legibleFor(row, device) {
   // NEVER LONGER THAN THE ROW'S OWN HOLD, which is unchanged and is the MAX.
   // A floor above the hold would be a tip whose timer could not end it — see
   // the note this function has always carried.
-  return Math.min(want, holdFor(row));
+  //
+  // ...NOR THAN THE CEILING, for the same reason one step down: the ceiling can
+  // end a tip on its own, and a floor above it would be a line the ceiling was
+  // forbidden to take away. Both holds are well under it today, so this clamp
+  // only ever matters to somebody dragging maxShow down in the Text panel.
+  return Math.min(want, holdFor(row), maxShowFor());
+}
+
+/**
+ * The longest any tip may sit on screen, however it would otherwise end.
+ *
+ * ONE NUMBER FOR EVERY ROW, not a per-row column. This is not reading time —
+ * that is legibleFor, and it is derived from the sentence — it is the point at
+ * which a line has stopped being read no matter what it says, and there is no
+ * tip in the table for which that answer is different.
+ */
+function maxShowFor() {
+  return Math.max(0.1, CONFIG.tutorial?.maxShow ?? 12);
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +678,23 @@ export function updateTutorial(dt, ctx = {}, live = true) {
     // What differs between the two is only what ENDS them: a world tip's
     // subject, a band tip's clock.
     pinCallout(row, true);
-    if (row?.subject) {
+    // THE CEILING, READ BEFORE ANYTHING ELSE — see CONFIG.tutorial.maxShow.
+    //
+    // Ahead of the three endings below rather than folded into them because it
+    // is a different KIND of ending: those are the tip's own contract (it was
+    // obeyed, its subject went, its clock ran out) and this one is the coach
+    // admitting that a line nobody has answered in twelve seconds is not going
+    // to be. It has to outrank all three, and in particular it has to outrank
+    // the world tip's "no clock at all" — a turtle parked beside the seal, an
+    // attractor running its whole life and a pile of chum nobody swims down for
+    // are the exact cases where the subject cannot end anything.
+    //
+    // Marked DONE, like every other way a tip ends on time. It had its full
+    // reading time and then some; bringing it back next run would be the coach
+    // repeating a sentence the player has already sat through.
+    if (calloutAge(row) >= maxShowFor()) {
+      endStep(true);
+    } else if (row?.subject) {
       // A WORLD TIP HAS NO CLOCK — see the header. It is pinned for as long as
       // it is up, and what ends it is the subject: answered, gone, or the
       // moment it described no longer being true.

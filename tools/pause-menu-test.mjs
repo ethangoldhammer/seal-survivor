@@ -394,6 +394,28 @@ check('cycling all the way round returns to Default', S.settings.video.filter ==
   String(S.settings.video.filter));
 S.resetSettings('video');
 
+// AN ORDINARY ENUM, which is the other half of that control and behaves
+// differently on purpose. The "Default" row exists because the filter's
+// default IS null — a real third state meaning "whatever the build ships".
+// barPlacement has an actual default, so a Default row there would offer a
+// value already sitting beside it in the same cycle, and reaching it would
+// take a nudge that appears to change nothing.
+pause.showPauseMenu();
+document.querySelector('.sv-pm-tab[data-tab="hud"]').click();
+const placeBtn = document.querySelector('#svPauseBody .sv-pm-choice');
+check('the placement opens on the shipped default',
+  S.settings.hud.barPlacement === 'corner', String(S.settings.hud.barPlacement));
+check('...which reads as prose, not as a shouted enum',
+  placeBtn.textContent === 'Bottom right', placeBtn.textContent);
+placeBtn.click();
+check('one nudge is the opt-out, back beside the seal',
+  S.settings.hud.barPlacement === 'seal', String(S.settings.hud.barPlacement));
+check('...and says so', placeBtn.textContent === 'Beside the seal', placeBtn.textContent);
+placeBtn.click();
+check('two options cycle in two clicks, with no Default in between',
+  S.settings.hud.barPlacement === 'corner', String(S.settings.hud.barPlacement));
+S.resetSettings('hud');
+
 // Rebinding, and the thing it must not do.
 pause.showPauseMenu();
 document.querySelector('.sv-pm-tab[data-tab="controls"]').click();
