@@ -118,6 +118,25 @@ let bounds = null;
 // How many of the subject's materials actually took the banding. 0 on an unlit
 // model, which is a real limit rather than a bug — see the count in build().
 let toonable = 0;
+// THE RIM, OFF BY DEFAULT, and a VIEW switch rather than a setting.
+//
+// Two different systems put a shell on a body here — CONFIG.creatureOutline
+// (#ff7a3d, ten sharks and orcas) and CONFIG.companionOutline (#ffd27a, the
+// seal team and the six allies) — and the panel below only drives the first.
+// So on any companion the sliders are inert and a yellow rim sits over the
+// surface with nothing in the tool able to switch it off, which is exactly the
+// wrong way round for a page whose job is authoring what is UNDER it.
+//
+// Hidden by making the shell meshes invisible, not by touching either config:
+// the rim is per-species roster data, and a view preference that wrote to
+// CONFIG could be picked up by `record` and shipped as a roster change nobody
+// asked for.
+let showRim = false;
+function applyRimVisibility() {
+  subject?.traverse((o) => {
+    if (o.userData.__isOutline) o.visible = showRim;
+  });
+}
 const view = { yaw: 0.5, pitch: 0.35, zoom: 1 };
 
 // The preset each layer is editing for the current subject. Defaults to a name
@@ -203,7 +222,7 @@ function enforceSurface() {
 // what their key happens to contain.
 function defaultPresetFor(assetKey, kind) {
   // A biolum surface starts from whatever the asset already declares, so opening
-  // enemyOrcaCow edits `wireframeGlow` rather than forking a second preset that
+  // enemyOrcaCow edits `orcaHide` rather than forking a second preset that
   // silently competes with the one the game is already using.
   if (kind === 'biolum') {
     const existing = ASSETS[assetKey]?.biolumSkin;
@@ -576,6 +595,7 @@ function build(assetKey) {
       shellMats: mats(shells).length,
     };
   };
+  applyRimVisibility();
   $('notes').textContent =
     `${assetKey} — ${ASSETS[assetKey].model}\n`
     + `${count} material(s) painted · long axis ${axis} · `
@@ -748,6 +768,34 @@ function buildPanels() {
   }));
 
   p.appendChild(section('outline', 'creatureOutline', null, OUTLINE, (body) => {
+    // The view switch first, because it is the one that decides whether any of
+    // the rest of this section is visible on the model at all.
+    const see = document.createElement('div');
+    see.className = 'row';
+    see.innerHTML = `<label>show rim</label>
+      <input type="checkbox" ${showRim ? 'checked' : ''}>
+      <output>${showRim ? '' : 'hidden'}</output>`;
+    see.querySelector('input').addEventListener('change', (e) => {
+      showRim = e.target.checked;
+      see.querySelector('output').textContent = showRim ? '' : 'hidden';
+      applyRimVisibility();
+      draw();
+    });
+    body.appendChild(see);
+
+    // WHOSE RIM IS THIS. A companion wears one from a different config root
+    // that this section cannot reach, and without saying so the sliders read as
+    // broken — they move, the readouts change, the model does not.
+    if (CONFIG.companionOutline?.on?.[subjectKey]) {
+      const warn = document.createElement('div');
+      warn.className = 'row warnrow';
+      warn.innerHTML = '<label>companion</label><output>'
+        + 'this one wears the COMPANION rim (CONFIG.companionOutline, the yellow one), '
+        + 'which the sliders below do not control — they are creatureOutline. '
+        + 'Use "show rim" above to get it out of the way.'
+        + '</output>';
+      body.appendChild(warn);
+    }
     colorRow(body, 'creatureOutline', null, 'color', 'colour', 0xff7a3d);
     // The per-species switch, which IS per species even though the look is not.
     const row = document.createElement('div');
@@ -840,7 +888,13 @@ async function apply() {
   try {
     const res = await fetch('/shader/shader-lab.json', {
       method: 'POST',
-      body: JSON.stringify({ applied, config: editedBlock() }, null, 2) + '\n',
+      // `recorded` NAMES THE SUBJECT, and the write is scoped to it. This file
+      // keeps every creature ever recorded, each with its own copy of the
+      // presets it wore AT THE TIME — so applying the whole document would let
+      // a snapshot from this morning overwrite the preset edited a moment ago.
+      // The entry written on the line above is the only one known to be current.
+      // Without this key the server saves the file and writes nothing.
+      body: JSON.stringify({ applied, config: editedBlock(), recorded: subjectKey }, null, 2) + '\n',
     });
     if (!res.ok) throw new Error(await res.text());
     // The server writes assets.csv and config.js as part of the same request and
@@ -851,9 +905,11 @@ async function apply() {
     const bits = [];
     if (r.rows?.length) bits.push(`assets.csv ${r.rows.length} row(s)`);
     if (r.presets?.length) bits.push(`config.js +${r.presets.join(', ')}`);
-    // A note is the interesting case — an asset with no CSV row, or a preset
-    // config.js already declares by hand and this must not overwrite.
-    const warn = (r.notes ?? []).filter((n) => n.startsWith('!') || n.startsWith('='));
+    // A note is the interesting case — an asset with no CSV row, a comment left
+    // arguing for a number that just moved, or a dev server up whose saved
+    // tuning still shadows what was written. `~` lines are the per-field diff
+    // and belong in the terminal rather than in a one-line status.
+    const warn = (r.notes ?? []).filter((n) => n.startsWith('!') || n.startsWith('?'));
     status(warn.length
       ? `${subjectKey} → ${kind}. ${bits.join(', ') || 'no change'} — ${warn.join(' · ')}`
       : `${subjectKey} → ${kind} — ${bits.join(', ') || 'already up to date'}. Reload the game to see it.`,

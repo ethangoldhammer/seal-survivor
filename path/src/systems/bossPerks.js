@@ -9,6 +9,7 @@ import { spawnProjectile, projectiles } from '../entities/projectiles.js';
 import { enemies, spawnNamed } from '../entities/enemies.js';
 import { emit } from '../entities/particles.js';
 import { isDazed } from './control.js';
+import { applyBossLook, clearBossLook, bossSparkColor } from './bossLook.js';
 
 // ===========================================================================
 // BOSS PERKS — the one special thing a boss can do.
@@ -191,6 +192,12 @@ function releaseBoss() {
   }
   if (active?.escorts) active.escorts.length = 0;
 
+  // The paint comes off FIRST, and unconditionally — before the `!e` bail
+  // below, because a boss that died mid-fight has already had `active.enemy`
+  // nulled and its body is on its way back to the pool still wearing the look.
+  // See the note at the top of systems/bossLook.js: nothing else takes it off.
+  clearBossLook();
+
   const e = active?.enemy;
   if (!e) return;
   e.perkDrive = false;
@@ -257,6 +264,14 @@ export function attachBossPerk(scene, enemy, perk) {
   };
 
   const fx = CONFIG.boss?.perkFx ?? {};
+
+  // THE BODY WEARS THE PERK. Stamped before anything is drawn, so the animal
+  // that finishes rising out of the dark is already the colour of what it
+  // does — the arrival is the one moment the player looks at the boss and
+  // nothing else, and it is wasted on a grey shark whose name says otherwise.
+  // A no-op for a perk with no row in bossLooks.csv. See systems/bossLook.js.
+  applyBossLook(enemy, perk);
+
   // THE BODY PERKS ARE APPLIED HERE AND NEVER TICK AGAIN. There is no state
   // machine, no cooldown and nothing to draw: the boss is simply bigger, or
   // simply faster, from the frame it arrives. attachBossPerk runs after
@@ -282,15 +297,30 @@ export function attachBossPerk(scene, enemy, perk) {
     active.ring.visible = true;
     // The arcs: one LineSegments whose vertices are rewritten every frame.
     // A pool of meshes would be the obvious shape and is strictly worse —
-    // every arc is two points that live for a twelfth of a second, and a
-    // single buffer draws all of them in one call with no allocation.
+    // every arc lives for a twelfth of a second, and a single buffer draws all
+    // of them in one call with no allocation.
+    //
+    // EACH ARC IS A JAGGED SPLINE, not a chord. A straight segment struck
+    // across the rim reads as a laser or as a dropped polygon; electricity is
+    // recognisable almost entirely by the KINK, and by the kink being
+    // different every time it re-strikes. See jagArc for the displacement.
+    // The buffer is sized for the segments rather than the arcs, which is the
+    // only cost of it: `arcSegments` at 5 is five times the vertices for the
+    // same twelve strikes, and still one draw call and still no allocation.
     const arcGeo = new THREE.BufferGeometry();
     active.arcCount = 12;
-    active.arcPositions = new Float32Array(active.arcCount * 6);
+    active.arcSegs = Math.max(1, Math.round(fx.electric?.arcSegments ?? 5));
+    active.arcPositions = new Float32Array(active.arcCount * active.arcSegs * 6);
     active.arcLife = new Float32Array(active.arcCount);
     arcGeo.setAttribute('position', new THREE.BufferAttribute(active.arcPositions, 3));
     const arcMat = new THREE.LineBasicMaterial({
-      color: fx.electric?.coreColor ?? 0xffffff,
+      // THE SPARKS ARE THE RING'S COLOUR. Not a slider of their own and not a
+      // constant: bossSparkColor resolves the perk's `attack` type through the
+      // same palette the aura ring above was built from, so the boundary and
+      // the thing crossing it are one number. bossLooks.csv can override it
+      // per perk; nothing else may. (This retires
+      // CONFIG.boss.perkFx.electric.coreColor, which was that constant.)
+      color: bossSparkColor(perk),
       transparent: true,
       opacity: 0.9,
       blending: THREE.AdditiveBlending,
@@ -322,9 +352,18 @@ export function attachBossPerk(scene, enemy, perk) {
   return active;
 }
 
-/** Which perk is live, for the HUD and the harness. Null when none. */
+/**
+ * Which perk is live, for the HUD and the harness. Null when none.
+ *
+ * `enemy` is the body it belongs to. Exported because systems/bossEyes.js has
+ * to light the eyes of the boss that is winding up and NOT of any other boss
+ * on screen — without it, a second body would telegraph an attack it is not
+ * making, which is worse than no tell at all.
+ */
 export function activeBossPerk() {
-  return active ? { id: active.id, stage: active.stage, timer: active.timer } : null;
+  return active
+    ? { id: active.id, stage: active.stage, timer: active.timer, enemy: active.enemy }
+    : null;
 }
 
 // The size everything here is drawn against. `e.radius` is the hitbox and is
@@ -657,6 +696,46 @@ function updateLunge(dt, e, r, dirX, dirY) {
 }
 
 // ---------------------------------------------------------------------------
+// A jagged spline from (x0,y0) to (x1,y1), written into `out` as `segs`
+// LineSegments pairs starting at `o`.
+//
+// The displacement is PERPENDICULAR to the chord and HALVES toward both ends,
+// which is the whole recipe — the same one systems/eel.js uses for a chain
+// lightning hop, deliberately reimplemented in six lines rather than shared:
+// that one branches, carries the eel's own config and returns an allocated
+// point list, and none of those are things a rim spark wants.
+//
+// TAPERED TO ZERO AT BOTH ENDS on purpose. The endpoints are the contract —
+// one of them sits exactly on the aura boundary, which is the hitbox — and a
+// displaced end would be a spark that visibly starts outside the circle the
+// player is being asked to trust.
+function jagArc(out, o, segs, x0, y0, x1, y1, z, jag) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len = Math.hypot(dx, dy) || 1;
+  // The unit normal. Scaled by the chord length so the kink is a fraction of
+  // the strike rather than a world constant — a short spark and a long one
+  // read as the same phenomenon at different sizes.
+  const nx = -dy / len;
+  const ny = dx / len;
+  const amp = len * jag;
+
+  let px = x0;
+  let py = y0;
+  for (let s = 1; s <= segs; s++) {
+    const t = s / segs;
+    // sin(pi*t) is the taper: zero at both ends, widest in the middle.
+    const d = s === segs ? 0 : (Math.random() - 0.5) * 2 * amp * Math.sin(Math.PI * t);
+    const cx = x0 + dx * t + nx * d;
+    const cy = y0 + dy * t + ny * d;
+    const i = o + (s - 1) * 6;
+    out[i + 0] = px; out[i + 1] = py; out[i + 2] = z;
+    out[i + 3] = cx; out[i + 4] = cy; out[i + 5] = z;
+    px = cx;
+    py = cy;
+  }
+}
+
 // ELECTRIC AURA
 // ---------------------------------------------------------------------------
 // The only perk with no state machine: it is simply always on, and that is the
@@ -686,10 +765,18 @@ function updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks) {
   // crackling at one flat rate.
   ringSweep(active.ring, 1, 0, 0.45 + 0.55 * pulse);
 
-  // Arcs. Each is a short chord struck across the rim, alive for a fraction of
-  // a second — the buffer is written in place and the whole set is one draw.
+  // Arcs. Each is a jagged spline struck across the rim, alive for a fraction
+  // of a second — the buffer is written in place and the whole set is one draw.
+  //
+  // The strike is re-rolled from scratch every time it comes back rather than
+  // being animated: a bolt that moved would be a rope, and what electricity
+  // does is EXIST somewhere else. `pulse` rides the amplitude so the jags bite
+  // harder on the beat the ring tightens on, which is the field visibly
+  // charging rather than crackling at one flat rate.
   const rate = fx.arcRate ?? 14;
   const life = fx.arcSeconds ?? 0.09;
+  const jag = (fx.arcJag ?? 0.22) * pulse;
+  const stride = active.arcSegs * 6;
   for (let i = 0; i < active.arcCount; i++) {
     active.arcLife[i] -= dt;
     if (active.arcLife[i] > 0) continue;
@@ -699,21 +786,23 @@ function updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks) {
     active.arcLife[i] = life * (0.5 + Math.random());
     const a0 = Math.random() * Math.PI * 2;
     const a1 = a0 + (Math.random() - 0.5) * 1.2;
-    const o = i * 6;
-    active.arcPositions[o + 0] = e.mesh.position.x + Math.cos(a0) * reach;
-    active.arcPositions[o + 1] = e.mesh.position.y + Math.sin(a0) * reach;
-    active.arcPositions[o + 2] = e.mesh.position.z;
-    active.arcPositions[o + 3] = e.mesh.position.x + Math.cos(a1) * reach * (0.55 + Math.random() * 0.4);
-    active.arcPositions[o + 4] = e.mesh.position.y + Math.sin(a1) * reach * (0.55 + Math.random() * 0.4);
-    active.arcPositions[o + 5] = e.mesh.position.z;
+    const r1 = reach * (0.55 + Math.random() * 0.4);
+    jagArc(
+      active.arcPositions, i * stride, active.arcSegs,
+      e.mesh.position.x + Math.cos(a0) * reach,
+      e.mesh.position.y + Math.sin(a0) * reach,
+      e.mesh.position.x + Math.cos(a1) * r1,
+      e.mesh.position.y + Math.sin(a1) * r1,
+      e.mesh.position.z, jag,
+    );
   }
   // Dead arcs are collapsed to a point rather than removed — a zero-length
   // segment draws nothing, and rebuilding the buffer to omit them would cost
   // more than the pixels it saves.
   for (let i = 0; i < active.arcCount; i++) {
     if (active.arcLife[i] > 0) continue;
-    const o = i * 6;
-    for (let k = 0; k < 6; k++) active.arcPositions[o + k] = 0;
+    const o = i * stride;
+    for (let k = 0; k < stride; k++) active.arcPositions[o + k] = 0;
   }
   active.arcs.geometry.attributes.position.needsUpdate = true;
 
@@ -1136,7 +1225,7 @@ const _beamAt = new THREE.Vector3();
 //   orca        `eye_L_014` / `eye_R_00`   real joints, one per side
 //   giantsquid  `eyes.R.001_56` ...        a chain of them
 //
-// ...which is exactly why the name is config (CONFIG.boss.perkFx.eyeNodes) and
+// ...which is exactly why the name is config (CONFIG.boss.perkFx.eyeSockets) and
 // not a rule: there is no naming convention across three files from three
 // sources, and any pattern-match clever enough to catch all three would catch
 // the wrong thing on the fourth. Run `npm run bones -- <model.glb> eye` to see
@@ -1147,7 +1236,7 @@ const _beamAt = new THREE.Vector3();
 // model with no such node costs one traversal per boss rather than one per shot.
 function eyeNodeFor(e, index) {
   if (e.__eyeNodes === undefined) {
-    const names = CONFIG.boss?.perkFx?.eyeNodes?.[e.type];
+    const names = CONFIG.boss?.perkFx?.eyeSockets?.[e.type];
     e.__eyeNodes = null;
     if (names?.length && e.visual) {
       const found = names

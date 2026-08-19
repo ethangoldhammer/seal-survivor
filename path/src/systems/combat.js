@@ -3,7 +3,7 @@ import { isInvulnerable } from './strike.js';
 import { boats, damageBoat, hitsBoat } from './boats.js';
 import { damageDebris } from './boatDebris.js';
 import { damageCrew } from './crew.js';
-import { enemies, removeEnemy } from '../entities/enemies.js';
+import { enemies, removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 import { applyElementalHit, chillEnemy } from './elements.js';
@@ -96,6 +96,14 @@ export function resolveCombat(dt, scene, hooks) {
         chillEnemy(e, b.chill.slow, b.chill.duration, b.chill.freezeFor, hooks,
           e.mesh.position.x, e.mesh.position.y);
       }
+
+      // A shot that SHOVES (the thrown club). Same payload arrangement as the
+      // chill above and for the same reason — the shot describes what it is
+      // carrying and entities/enemies.js owns what a knockback is. Along the
+      // bullet's own heading, so a body leaves the way the thing that hit it
+      // was travelling, and before the death check so a shot that finishes a
+      // fish still throws the corpse rather than dropping it on the spot.
+      if (b.knockback > 0) applyKnockback(e, b.dir.x, b.dir.y, b.knockback);
 
       // A note from the harp. Also before the death check, and for a reason
       // that is not cosmetic here: a note that KILLS what it charmed has to

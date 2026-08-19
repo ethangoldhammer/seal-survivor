@@ -259,9 +259,23 @@ function setMask(style, image, size, position) {
  * @param style  one of TIP_DISSOLVES. An unknown name plain-fades, which is the
  *               honest answer for a value typed into the tuner by hand.
  * @param t      0 whole, 1 gone.
- * @param clock  seconds, for the pan. REAL time and shared with nothing — the
- *               flow has to keep moving while the game is hit-stopped, or the
- *               water freezes at the exact moment something dramatic happened.
+ * @param clock  seconds SINCE THIS DISSOLVE STARTED, for the pan.
+ *
+ *               NOT A FREE-RUNNING CLOCK, and that distinction cost an hour.
+ *               The flow is `feOffset` sliding the turbulence result, and that
+ *               result only exists inside the filter region — so an offset
+ *               bigger than the region's padding drags EMPTY space over the
+ *               type, the alpha stencil comes out transparent everywhere, and
+ *               `feComposite operator="in"` renders precisely nothing. A tip
+ *               drawn with a clock that had been running since the page loaded
+ *               was invisible the moment it started to leave, while every
+ *               number on the element — opacity 1, a live filter, a sensible
+ *               mask — said it was fine.
+ *
+ *               A dissolve lasts under a second, so its own elapsed time keeps
+ *               the pan to a few pixels and is the only clock it needs. See
+ *               also the clamp in panFor: no tuning of `flow` and `seconds`
+ *               together can push it past the region either.
  */
 export function applyTipDissolve(node, style, t, clock = 0, opts = {}) {
   if (!node) return;
@@ -321,6 +335,29 @@ function applyBoil(node, p, clock, o) {
   setMask(node.style, boil.masks[phase][level], `${cell}px ${cell}px`, `${dx}px ${dy}px`);
 }
 
+// How far the field may be slid, given the box it is being slid over.
+//
+// The filter region is padded by a fraction of the ELEMENT (see buildFlowFilter:
+// 100% of its height above and below, 60% of its width each side), so the pan
+// has to be measured against that element and not against a constant. The clamp
+// is generous — at the shipped numbers it never engages — and exists so that a
+// `flow` slider wound to the top cannot blank the tip out. Slowing to a stop at
+// the edge is a look; rendering nothing is a bug.
+function panFor(node, seconds, o) {
+  const h = node.offsetHeight || 24;
+  const w = node.offsetWidth || 200;
+  const dy = -Math.min(clock01(seconds) * o.flow, h * 0.8);
+  const dx = -Math.min(clock01(seconds) * o.flow * 0.35, w * 0.4);
+  return { dx, dy };
+}
+
+// Guards the one input this module cannot check: a caller handing it a clock
+// from somewhere else entirely. Negative or wild values would take the pan the
+// wrong way rather than merely too far.
+function clock01(seconds) {
+  return Math.max(0, seconds);
+}
+
 function applyFlow(node, id, p, clock, o, { wash }) {
   initTipDissolve();
   const offset = nodes[`${id}:offset`];
@@ -336,8 +373,9 @@ function applyFlow(node, id, p, clock, o, { wash }) {
   // visibly moved the type by the time the alpha has dropped enough to excuse
   // it, and the line reads as sliding.
   disp.setAttribute('scale', String(o.warp * p * p));
-  offset.setAttribute('dy', String(-clock * o.flow));
-  offset.setAttribute('dx', String(-clock * o.flow * 0.35));
+  const pan = panFor(node, clock, o);
+  offset.setAttribute('dy', String(pan.dy));
+  offset.setAttribute('dx', String(pan.dx));
 
   // THE CUT. The stencil is noise in 0..1; slope stretches it around the
   // threshold and intercept slides the threshold itself. Both move with
@@ -398,7 +436,11 @@ function applyInk(node, p, clock, o) {
     return;
   }
   disp.setAttribute('scale', String(o.warp * 1.4 * p));
-  offset.setAttribute('dy', String(-clock * o.flow * 0.7));
+  // Ink has no cut, so an over-panned field cannot blank it the way it blanks
+  // the other two — but it is clamped through the same helper anyway, because
+  // "this one is safe for a different reason" is how the next person reading it
+  // ends up removing the clamp from both.
+  offset.setAttribute('dy', String(panFor(node, clock * 0.7, o).dy));
   // p^1.3, not p^2. Squared, the blur was still under a pixel at the half way
   // point and the line was simply sitting there sharp — the spread has to be
   // visibly under way while there is still ink to spread.

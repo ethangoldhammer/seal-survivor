@@ -45,7 +45,15 @@ const MAX_SUBSTEPS = 8;
 // while stiffness and lead read better as "this state is twice as tight as
 // normal" — pinning those to absolute numbers means every base change has to
 // be re-typed into all eight states.
-const ABSOLUTE_KEYS = ['zoom', 'defocus', 'focusRadius', 'focusFeather', 'flare', 'vignette', 'path'];
+//
+// `offsetX`/`offsetY` are the newest of these and the only ones that move the
+// frame off its SUBJECT. Every other state here is a way of looking at the
+// seal; the main menu is a way of looking at the seal AND the row of buttons
+// over its crown, which means the point being centred is not the animal. Held
+// as a blended absolute rather than applied by the caller so it comes and goes
+// on the same curve as everything else — a frame that slid back onto the seal
+// on its own timer while the zoom was still opening would be two moves.
+const ABSOLUTE_KEYS = ['zoom', 'offsetX', 'offsetY', 'defocus', 'focusRadius', 'focusFeather', 'flare', 'vignette', 'path'];
 const MULTIPLIER_KEYS = {
   stiffMul: 'stiffness',
   dampMul: 'damping',
@@ -70,7 +78,8 @@ const MULTIPLIER_KEYS = {
 // top of the per-axis base, so a state can tighten the whole rig with one
 // number without losing the X/Y split.
 const BLEND_KEYS = [
-  'zoom', 'stiffness', 'damping', 'zoomStiffness', 'zoomDamping', 'lookAhead', 'aimBias', 'deadZone',
+  'zoom', 'offsetX', 'offsetY', 'stiffness', 'damping', 'zoomStiffness', 'zoomDamping',
+  'lookAhead', 'aimBias', 'deadZone',
   'defocus', 'focusRadius', 'focusFeather', 'flare', 'vignette', 'path',
 ];
 
@@ -124,7 +133,7 @@ const machine = {
 // Highest priority first. A death outranks everything, and inside a death the
 // later beat outranks the earlier one so the machine can only ever move
 // forward through hit -> fall -> floor.
-const PRIORITY = ['deathFloor', 'deathFall', 'deathHit', 'foodChain', 'boosting', 'charging', 'roundStart'];
+const PRIORITY = ['mainMenu', 'deathFloor', 'deathFall', 'deathHit', 'foodChain', 'boosting', 'charging', 'roundStart'];
 
 function cfg() {
   return CONFIG.cinecam ?? {};
@@ -151,6 +160,47 @@ function ease(t) {
   return x * x * x * (x * (x * 6 - 15) + 10);
 }
 
+// ---------------------------------------------------------------------------
+// THE MAIN MENU'S FRAMING, which is the one state the config cannot hold.
+//
+// Every other state is a set of numbers somebody typed: "the charge sits at
+// 1.62". The menu's framing is MEASURED at runtime — it is whatever zoom makes
+// the seal's own measured bust fill the frame on this window, and whatever
+// offset puts the row of buttons above its crown (see systems/mainMenu.js).
+// So the state's shape lives in config.js like all the others, and these three
+// numbers are written over the top of it while the screen is up.
+//
+// A LATCH, not a pulse. The menu is a mode — it is up until somebody presses
+// something — where roundStart and foodChain are moments that expire on their
+// own clock. That is also why it is first in PRIORITY: nothing else in the list
+// can be happening while the game has not started.
+const menuState = { held: false, zoom: 0, offsetX: 0, offsetY: 0 };
+
+/**
+ * Hold (or drop) the menu's framing, and tell the rig what it is.
+ *
+ * Dropping it is what makes the transition into a run one movement: the frame
+ * does not cut, it blends to whatever the priority list turns up next — which
+ * on Play is `roundStart`, the run's own opening shot, and then `base`. Menu →
+ * starting camera → gameplay, all on the rig's own curves.
+ *
+ * @param framing { zoom, offsetX, offsetY } — offsets are WORLD units from the
+ *                seal, because that is what the goal below is built from.
+ */
+export function cineMenu(held, framing = null) {
+  menuState.held = !!held;
+  if (framing) {
+    menuState.zoom = framing.zoom ?? menuState.zoom;
+    menuState.offsetX = framing.offsetX ?? menuState.offsetX;
+    menuState.offsetY = framing.offsetY ?? menuState.offsetY;
+  }
+}
+
+/** Is the rig currently holding the menu's framing? */
+export function cineMenuHeld() {
+  return menuState.held;
+}
+
 /** Resolve a state name to a full parameter bag over the base values. */
 function resolve(name) {
   const c = cfg();
@@ -160,6 +210,15 @@ function resolve(name) {
   for (const key of ABSOLUTE_KEYS) out[key] = s[key] ?? base[key] ?? 0;
   for (const [mulKey, outKey] of Object.entries(MULTIPLIER_KEYS)) {
     out[outKey] = s[mulKey] ?? 1;
+  }
+  // The measured half of the menu's framing, over the authored half. Applied
+  // here rather than by mutating the config block, because CONFIG is what the
+  // tuner snapshots and saves — a screen that wrote its own runtime numbers
+  // into it would ship one window's zoom to every player.
+  if (name === 'mainMenu' && menuState.zoom > 0) {
+    out.zoom = menuState.zoom;
+    out.offsetX = menuState.offsetX;
+    out.offsetY = menuState.offsetY;
   }
   return out;
 }
@@ -247,6 +306,11 @@ export function resetCineCamera() {
   machine.blendDur = 0.0001;
   machine.hold = 0;
   pulse = { name: null, left: 0 };
+  // NOT the menu latch. A reset is "this run is starting from nothing", and the
+  // one route that resets the rig while a menu is up is the menu's own Play —
+  // where dropping the latch here would cut the frame to the opening shot on
+  // the press. main.js skips the reset entirely in that case; this is the
+  // second lock on the same door.
   cineLens.droplets = 0;
   cineLens.dropAge = 0;
   cineLens.active = false;
@@ -263,6 +327,8 @@ function pick(signals) {
     deathFloor: signals.deathPhase === 'settle' || signals.deathPhase === 'done',
     deathFall: signals.deathPhase === 'sink' && signals.deathElapsed >= (c.states?.deathHit?.hold ?? 0.5),
     deathHit: signals.deathPhase === 'sink',
+    // The latch, not a pulse — the menu is a mode. See cineMenu.
+    mainMenu: menuState.held,
     foodChain: pulse.name === 'foodChain' && pulse.left > 0,
     boosting: !!signals.boosting,
     // The BUTTON, not strikeState.charging. Those come apart the moment the
@@ -337,8 +403,14 @@ export function updateCineCamera(dt, ctx) {
   // collapses to a single point. Spring the zoom up from 1 instead and the
   // opening half-second of every run is pinned to the middle of the ocean
   // however far away the seal is, then slides over to find it.
+  // The ceiling, and why it is not simply `zoomMax`. That number is a guard on
+  // the SPRING — it stops a stiff chase from running away — and the main menu
+  // asks for about fifteen, which is a composition rather than an overshoot.
+  // A state that names a zoom is allowed to have it; anything the spring adds
+  // on top of that is still capped.
+  const zoomCeil = Math.max(base.zoomMax ?? 3, p.zoom, machine.from?.zoom ?? 0);
   if (!rig.primed) {
-    rig.zoom = clamp(p.zoom, 1.001, base.zoomMax ?? 3);
+    rig.zoom = clamp(p.zoom, 1.001, zoomCeil);
     rig.zoomVel = 0;
   }
 
@@ -361,7 +433,7 @@ export function updateCineCamera(dt, ctx) {
     // Kill the velocity into the stop as well as the value, exactly as the
     // positional clamp does — a spring left integrating against a limit it
     // cannot see arrives holding hidden energy and fires on the way back.
-    const zc = clamp(rig.zoom, 1.001, base.zoomMax ?? 3);
+    const zc = clamp(rig.zoom, 1.001, zoomCeil);
     if (zc !== rig.zoom) { rig.zoom = zc; rig.zoomVel = 0; }
   }
   const zoom = rig.zoom;
@@ -382,8 +454,13 @@ export function updateCineCamera(dt, ctx) {
 
   const aimLen = Math.hypot(ctx.aim.x, ctx.aim.y);
   const aimBias = base.aimBias * p.aimBias;
-  const goalX = ctx.target.x + rig.leadX + (aimLen > 0.001 ? (ctx.aim.x / aimLen) * aimBias : 0);
-  const goalY = ctx.target.y + rig.leadY + (aimLen > 0.001 ? (ctx.aim.y / aimLen) * aimBias : 0);
+  // `offset` is the only term here that is not about the seal — see the note on
+  // ABSOLUTE_KEYS. It blends like every other parameter, so it arrives and
+  // leaves on the state's own curve rather than on a timer of its own.
+  const goalX = ctx.target.x + rig.leadX + p.offsetX
+    + (aimLen > 0.001 ? (ctx.aim.x / aimLen) * aimBias : 0);
+  const goalY = ctx.target.y + rig.leadY + p.offsetY
+    + (aimLen > 0.001 ? (ctx.aim.y / aimLen) * aimBias : 0);
 
   if (!rig.primed) {
     // First frame of a run: place the rig, don't spring to it from wherever

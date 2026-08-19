@@ -42,6 +42,11 @@ export const SNAPSHOT_ARTBOARD = 'Polaroid';
  *   start  a TRIGGER the artboard fires and the GAME listens to. Rive's own
  *          Start button decides when a run begins, rather than the splash
  *          being torn down by any stray input the way it used to be.
+ *   random a second TRIGGER, fired by the dice button beside the name field.
+ *          The game rolls a name out of sealNames.csv, puts it in the hidden
+ *          <input> and mirrors it back through `name` — so the artboard needs
+ *          to know nothing about the vocabulary, and the player can edit what
+ *          lands or press it again.
  *
  * The listen direction is worth stating because it is the less obvious half of
  * the runtime: Rive.advance() calls handleCallbacks() straight after the
@@ -49,8 +54,33 @@ export const SNAPSHOT_ARTBOARD = 'Polaroid';
  * `.on()` callback on that same frame. See ui/riveSplash.js.
  */
 export const SPLASH_BINDINGS = {
-  name: 'strPlayerName',  // what the player is typing, mirrored in live
-  start: 'tStart',        // Rive -> game: begin the run
+  name: 'strPlayerName',           // what the player is typing, mirrored in live
+  start: 'tStart',                 // Rive -> game: begin the run
+  random: 'tRandomizeName',        // Rive -> game: roll me a name
+};
+
+/**
+ * The splash's STATE MACHINE INPUTS — the dice button's hover and press.
+ *
+ * These are what the game sets, and the artboard's own state machine decides
+ * what they look like: `Random_Hover` and `Random_Click` are its states, not
+ * ours, so retiming or redrawing either is an editor change with nothing to do
+ * on this side.
+ *
+ * WHY THE GAME SETS THEM AT ALL. The artboard has hover and click listeners of
+ * its own and they never fire — `npm run looks:splash` sweeps all 1920x1080
+ * and no listener responds — so the pointer has to be read on our side and
+ * handed over. See the note on DICE_HIT in ui/riveSplash.js, which is also the
+ * thing to delete the day the listeners work.
+ *
+ * INPUTS RATHER THAN VIEW-MODEL PROPERTIES, deliberately. The file still has a
+ * `bRandomHover` boolean wired to the same animation, and this runtime cannot
+ * act on a view-model property from inside a state machine — setting it changes
+ * nothing, measured. An input drives the machine today.
+ */
+export const SPLASH_INPUTS = {
+  hover: 'randomHover',  // boolean: the pointer is over the dice
+  click: 'randomClick',  // trigger: it was just pressed
 };
 
 /**
@@ -81,7 +111,7 @@ export const BOSS_BAR_BINDINGS = {
 export const SNAPSHOT_BINDINGS = {
   shot: 'imgShot',          // the kill shot itself, square, 620x620 in the zone
   name: 'strBossName',      // who was beaten; shrinks to fit, 43 chars verified
-  kicker: 'strKicker',      // "defeated " — SEE THE TRAILING SPACE BELOW
+  kicker: 'strKicker',      // "cause of death: " — SEE THE TRAILING SPACE BELOW
   level: 'strLevel',        // "LVL 17" — the prefix belongs to the string
   time: 'strTime',          // "4:12" — the game's own m:ss, unpadded minutes
   score: 'strScore',        // STUB — declared, not placed on the card yet
@@ -99,17 +129,67 @@ export const SNAPSHOT_BINDINGS = {
   // the same photographs a second time, and a card that writes itself on again
   // every time it is laid out is an animation about nothing.
   writeOn: 'tWriteOn',
+  // THE STAMP — what killed the boss, as the weapon's own name ('Homing
+  // Missile', 'Belly Flop'). Written by the game on every card; see
+  // systems/boss.js for where the answer is banked, one line before the body
+  // is dropped.
+  //
+  // PENDING (below): it is written before the artboard has anywhere to put it,
+  // which is the safe direction. `vmi.string()` returns null for a property the
+  // file does not have and the writer skips it, so the game sending this to an
+  // older export costs nothing at all — whereas an artboard with the property
+  // and no game writing to it shows a stamp reading whatever the editor's
+  // default value happens to be, on every print.
+  cause: 'strCauseOfDeath',
+  // WHOSE RUN IT WAS. The same name the splash's own strPlayerName is bound to
+  // — one property per view model, two view models, one answer. It is written
+  // ONCE PER PRINT here rather than on every keystroke the way the splash's is:
+  // this card is a photograph of a moment, and the name is banked onto the shot
+  // when the frame is grabbed (see systems/bossShot.js). A player who renames
+  // themselves on the score screen does not retitle the prints they already
+  // took.
+  player: 'strPlayerName',
 };
 
 /**
- * THE KICKER CARRIES A TRAILING SPACE, and it is load-bearing. The kicker and
- * the time are separate runs set side by side on the chin, so the gap between
- * "defeated" and "04:12" is not padding in the artboard — it is the last
- * character of this string. Write it trimmed and the card reads "defeated@
- * 04:12". The artboard's own default value has the space in it; anything the
- * game sends has to keep it.
+ * Names the GAME already writes and the FILE is not required to have yet.
+ *
+ * The rest of this contract is a hard requirement: `npm run test:bossbar`
+ * scans the shipped .riv for every name and fails the build on a miss, which
+ * is exactly right for a binding that used to work and stopped. It is exactly
+ * wrong for one being added, because the two halves land in different commits
+ * — the code here, the property in an export from the Rive editor — and
+ * whichever arrives first would otherwise redden `npm test` and block a deploy
+ * over a feature that is deliberately half-finished and harmless.
+ *
+ * So a pending name is REPORTED and not failed. The test prints it as pending
+ * while it is absent and, the moment an export contains it, tells you to move
+ * it out of this list — which is the only thing stopping "pending" from
+ * becoming a permanent hole in the check.
  */
-export const SNAPSHOT_KICKER = 'defeated ';
+export const PENDING_BINDINGS = [];
+// EMPTY IS THE NORMAL STATE, and not a sign this can be deleted: a name lives
+// here only for as long as it takes an export to catch up with the code, which
+// is usually hours. `strCauseOfDeath` was the first and came out on 2026-08-18,
+// when the artboard that draws the stamp shipped.
+
+/**
+ * THE KICKER CARRIES A TRAILING SPACE, and it is load-bearing. The kicker and
+ * the value beside it are separate runs set side by side on the chin, so the
+ * gap between them is not padding in the artboard — it is the last character of
+ * this string. Write it trimmed and the card reads "cause of death:Homing
+ * Missile". The artboard's own default value has the space in it; anything the
+ * game sends has to keep it.
+ *
+ * WHAT IT LABELS CHANGED, and this constant is now only the FALLBACK. It used
+ * to read "defeated " and sit beside the run clock; it now introduces the cause
+ * of death, and the live value is rolled per print from kickers.csv — "cause of
+ * death: ", "kill'd by: ", "taken down by way of: ". This is what a card falls
+ * back to when nothing supplied one, which in practice means a preview rather
+ * than a kill. See path/src/kickerTable.js, which owns the rotation AND owns
+ * adding that trailing space, because a spreadsheet cannot hold one reliably.
+ */
+export const SNAPSHOT_KICKER = 'cause of death: ';
 
 // WHAT IS DECLARED BUT NOT YET DRAWN. `strScore` and `strWordmark` are bound
 // and writable, and land nowhere — the card has no slot for either yet. They
@@ -130,11 +210,12 @@ export const SNAPSHOT_KICKER = 'defeated ';
  * lookup — but they are the only unambiguous thing to check an export against.
  *
  * WHY THAT MATTERS: the validator below is a scan for name strings in a binary,
- * and `strBossName` now exists TWICE, once on each view model. Rename the
- * polaroid's copy in the editor and a scan for it still finds the health bar's,
- * and the check passes on an export that has quietly lost the card's name. The
- * view model names are unique, so they are the part of this contract that can
- * actually fail when something is renamed.
+ * and TWO of these names now exist twice, once on each view model —
+ * `strBossName` and `strPlayerName`. Rename the polaroid's copy of either in
+ * the editor and a scan for it still finds the other one, and the check passes
+ * on an export that has quietly lost the card's name. The view model names are
+ * unique, so they are the part of this contract that can actually fail when
+ * something is renamed.
  */
 export const VIEW_MODELS = {
   bar: 'ViewModel1',      // shared by the splash and the boss bar
@@ -145,13 +226,16 @@ export const VIEW_MODELS = {
 export function riveRequirements(bossArtboard = BOSS_BAR_ARTBOARD) {
   return {
     artboards: [SPLASH_ARTBOARD, bossArtboard, SNAPSHOT_ARTBOARD],
-    // Deduped: `strBossName` is on both view models, and a validator that
-    // listed it twice would report the same name passing (or failing) twice.
+    // Deduped: `strBossName` and `strPlayerName` are each on BOTH view models,
+    // and a validator that listed one twice would report the same name passing
+    // (or failing) twice.
     bindings: [...new Set([
       ...Object.values(SPLASH_BINDINGS),
       ...Object.values(BOSS_BAR_BINDINGS),
       ...Object.values(SNAPSHOT_BINDINGS),
-    ])],
+    ])].filter((n) => !PENDING_BINDINGS.includes(n)),
+    // Checked, reported, not required — see PENDING_BINDINGS.
+    pending: [...PENDING_BINDINGS],
     viewModels: Object.values(VIEW_MODELS),
   };
 }

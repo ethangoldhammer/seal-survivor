@@ -139,7 +139,7 @@ export class Rive {
     const vmi = {
       _p: { numBossHealth: prop('numBossHealth'), numHealthBarSize: prop('numHealthBarSize') },
       _s: { strBossName: prop('strBossName'), strPlayerName: prop('strPlayerName') },
-      _t: { tStart: trig('tStart') },
+      _t: { tStart: trig('tStart'), tRandomizeName: trig('tRandomizeName') },
       number(n) { return C.mode === 'missing-prop' && n === 'numHealthBarSize' ? null : (this._p[n] ?? null); },
       string(n) { return this._s[n] ?? null; },
       // 'no-trigger' is an export whose Start button was renamed or lost. The
@@ -466,6 +466,56 @@ section('THE SPLASH — a name goes in, a trigger starts the run');
   }
 
   {
+    // THE DICE BUTTON. Same handshake as tStart, pointed the other way round
+    // the field: the artboard fires, the game rolls, and the answer comes back
+    // through the SAME string property the typing does — so the artboard needs
+    // nothing about the vocabulary, and a rolled name is edited, banked and
+    // sanitised by exactly the code a typed one is.
+    //
+    // It lands IN THE FIELD rather than beside it, which is the claim worth
+    // asserting: a roll that only reached the artboard would look right and
+    // then be thrown away by the next keystroke, and banked as whatever was
+    // in the box before.
+    NAME.clearPlayerName();
+    const { handle, vmi, input } = mount();
+    check('the splash subscribed to the randomise trigger',
+      vmi?._t?.tRandomizeName?.listeners === 1, String(vmi?._t?.tRandomizeName?.listeners));
+
+    vmi._t.tRandomizeName.fire();
+    const rolled = input.value;
+    check('firing it puts a name in the field', rolled.length > 0, `"${rolled}"`);
+    check('...one the field can actually hold', rolled.length <= NAME.MAX_NAME_LEN,
+      `${rolled.length} chars`);
+    check('...unchanged by the sanitiser, so it cannot vanish on the next keystroke',
+      NAME.sanitizeName(rolled) === rolled, rolled);
+    check('...and mirrored to the artboard, like typing',
+      vmi?._s[SPLASH.name]?.value === rolled, vmi?._s[SPLASH.name]?.value);
+
+    // PRESSED AGAIN. A button that hands back the name already on screen reads
+    // as a button that did nothing, so the roll is told what to avoid.
+    let same = 0;
+    for (let i = 0; i < 40; i++) {
+      const was = input.value;
+      vmi._t.tRandomizeName.fire();
+      if (input.value === was) same++;
+    }
+    check('...and pressing it again changes the name', same === 0, `${same}/40 repeats`);
+
+    // NOT BANKED PER PRESS — banked on the way out, like a typed name. Forty
+    // rolls are forty writes to localStorage otherwise, for a name the player
+    // has not agreed to yet.
+    check('rolling does not write to storage on its own', NAME.loadPlayerName() === '',
+      NAME.loadPlayerName());
+    const last = input.value;
+    handle.destroy('test');
+    check('...it is banked when the splash goes, like anything else typed',
+      NAME.loadPlayerName() === last, `${NAME.loadPlayerName()} vs ${last}`);
+    check('...unsubscribing on the way out, so a dead splash cannot be typed into',
+      vmi?._t?.tRandomizeName?.listeners === 0, String(vmi?._t?.tRandomizeName?.listeners));
+    NAME.clearPlayerName();
+  }
+
+  {
     // A RETURNING PLAYER. Both the field and the artboard start from the name
     // already on file — read after load, not at mount, or the state machine's
     // own defaults land on top of it.
@@ -555,6 +605,23 @@ section('THE SHIPPED FILE — what is actually in path/src/ui/seal_survivor.riv'
   }
   for (const name of want.bindings) {
     check(`...and the "${name}" binding`, riv.includes(name));
+  }
+  // THE PENDING NAMES — written by the game, not yet required of the file.
+  // Reported rather than checked, because the code half of a new binding and
+  // the export half land in different commits and the code half is the
+  // harmless one: an absent property makes vmi.string() return null and the
+  // write is skipped. See PENDING_BINDINGS in riveContract.js.
+  //
+  // The louder line is the one for a name that HAS arrived. A pending list
+  // nobody empties is a permanent hole in the check above, so an export that
+  // contains the property is reported as work to do here rather than quietly
+  // passing.
+  for (const name of want.pending ?? []) {
+    if (riv.includes(name)) {
+      console.log(`  TODO  "${name}" is in the shipped file now — move it out of PENDING_BINDINGS so it is required`);
+    } else {
+      console.log(`  PEND  "${name}" is written by the game and not yet in the file (harmless; the write is skipped)`);
+    }
   }
   // The name the code asks for and the name in the file have to be the SAME
   // string — a config override pointing at an artboard nobody exported is the

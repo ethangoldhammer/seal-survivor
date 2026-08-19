@@ -550,9 +550,17 @@ function seed(list) {
     // Freeze the whale in place for this one, so the ONLY thing that can move
     // the fish is the suction. Otherwise a whale swimming onto a stationary
     // fish closes the gap by itself and the test passes without any pull.
-    const holdX = w.container.position.x;
+    //
+    // THE LINE IS WHAT HAS TO BE HELD, not the drawn position. `lineX` is the
+    // crossing and `container.position.x` is that plus whatever nudge the body
+    // is carrying (see CONFIG.whale.ram), rewritten from the line every frame —
+    // so pinning the drawn position alone is undone on the next update and the
+    // whale swims onto the fish anyway, which is exactly the false pass this
+    // freeze exists to prevent.
+    const holdX = w.lineX;
     updateWhales(1 / 60, scene, enemies, {});
-    w.container.position.x = holdX;
+    w.lineX = holdX;
+    w.container.position.x = holdX + w.nudgeX;
     if (enemies.length < had) { swallowed = true; break; }
     travelled += fish.mesh.position.distanceTo(prev);
     prev = fish.mesh.position.clone();
@@ -572,9 +580,10 @@ function seed(list) {
   seed([far]);
   const farStart = far.mesh.position.clone();
   for (let i = 0; i < 30; i++) {
-    const holdX = w2.container.position.x;
+    const holdX = w2.lineX;
     updateWhales(1 / 60, scene, enemies, {});
-    w2.container.position.x = holdX;
+    w2.lineX = holdX;
+    w2.container.position.x = holdX + w2.nudgeX;
   }
   check('...but nothing outside the field is touched',
     far.mesh.position.distanceTo(farStart) < 1e-6,
@@ -593,9 +602,10 @@ function seed(list) {
   near.radius = 99; // ineligible: too big to be prey, so no gape and no pull
   const nearStart = near.mesh.position.clone();
   for (let i = 0; i < 60; i++) {
-    const holdX = w3.container.position.x;
+    const holdX = w3.lineX;
     updateWhales(1 / 60, scene, enemies, {});
-    w3.container.position.x = holdX;
+    w3.lineX = holdX;
+    w3.container.position.x = holdX + w3.nudgeX;
   }
   check('...and a closed jaw pulls nothing', near.mesh.position.distanceTo(nearStart) < 1e-6,
     `gape ${w3.gape.toFixed(2)}, moved ${near.mesh.position.distanceTo(nearStart).toFixed(3)}`);
@@ -682,6 +692,95 @@ function seed(list) {
   const clear = at(0, centre.w.bodyRadius + 8);
   check('...but not from clear water beside it', !clear.shoved,
     `${(centre.w.bodyRadius + 8).toFixed(1)} units off the axis`);
+}
+
+section('THE NUDGE — a ram moves it, and the crossing does not care');
+
+// The other half of that same contact: the seal is shoved aside, and a seal
+// that arrived at ramming speed moves the whale a little in return. Every
+// claim here is about the difference between NUDGED and KNOCKED, which is the
+// whole design — see CONFIG.whale.ram.
+{
+  // A seal parked on the whale's line, so the animal swims onto it. `dashing`
+  // is the state the strike is in when it connects; power 1 is a full charge.
+  const rammedRun = ({ dashing = true, power = 1, frames = 60 * 60 } = {}) => {
+    resetWhales(scene);
+    seed([]);
+    const w = spawnWhale(scene, mulberry32(3));
+    const p = { position: new THREE.Vector3(0, w.baseY, 0), radius: 0.5 };
+    // Along the whale's own heading, which is the worst case for the line: a
+    // nudge that survived would show up as the animal arriving early.
+    const ram = { dashing, dirX: w.dir, dirY: 0, power };
+    let peak = 0;
+    let hits = 0;
+    let peakAt = 0;
+    const lineAtStart = w.lineX;
+    let touched = 0;
+    for (let i = 0; i < frames && whaleCount() > 0; i++) {
+      updateWhales(1 / 60, scene, enemies, { player: p, ram, onNudge: () => { hits++; } });
+      const off = Math.hypot(w.nudgeX, w.nudgeY);
+      if (off > peak) { peak = off; peakAt = i; }
+      if (off > 1e-6) touched = i;
+    }
+    return { w, peak, hits, peakAt, touched, lineAtStart };
+  };
+
+  const full = rammedRun({});
+  check('a ram moves the whale off its line', full.peak > 0.05,
+    `${full.peak.toFixed(2)} units of give on a ${full.w.bodyRadius.toFixed(1)}-radius body`);
+  // ...and NOT far. The cap is the promise, and the give should sit well
+  // inside it at the shipped impulse — a peak pinned to the ceiling means the
+  // spring is not what is holding the animal in, the clamp is.
+  check('...but nowhere near far', full.peak <= (C.ram.maxOffset ?? 1.5) + 1e-6
+    && full.peak < C.ram.maxOffset * 0.9,
+    `peak ${full.peak.toFixed(2)} against a ${C.ram.maxOffset} cap`);
+  check('...and it settles back onto its line',
+    Math.hypot(full.w.nudgeX, full.w.nudgeY) < 1e-6 || full.touched < full.peakAt + 60 * 3,
+    `off the line for ${((full.touched - full.peakAt) / 60).toFixed(2)}s after the peak`);
+
+  // ONE NUDGE PER DASH. The contact test runs every frame and a dash lasts a
+  // quarter of a second, so an un-edged impulse is fifteen rams for the price
+  // of one — and it would read as the seal steering a whale.
+  check('one dash is one nudge', full.hits === 1, `${full.hits} impulse(s) from one dash`);
+
+  // Not dashing is not a ram. Swimming into a whale is the shove, and the
+  // shove alone.
+  const idle = rammedRun({ dashing: false });
+  check('swimming into it does nothing to it', idle.hits === 0 && idle.peak === 0,
+    `${idle.hits} impulse(s), peak ${idle.peak.toFixed(3)}`);
+
+  // Charge scales it, like everything else the strike does.
+  const flick = rammedRun({ power: 0 });
+  check('a flick moves it less than a full charge', flick.peak < full.peak * 0.9,
+    `${flick.peak.toFixed(2)} vs ${full.peak.toFixed(2)} units`);
+
+  // THE SWEEP IS NOT MOVED. This is the claim that separates a nudge from a
+  // knock: the body gives, and the line it is travelling along is untouched,
+  // so no amount of ramming can hold a whale up, hurry it along or push it out
+  // of the arena. Measured as the crossing TIME against an untouched sweep.
+  const crossing = ({ ram }) => {
+    resetWhales(scene);
+    seed([]);
+    const w = spawnWhale(scene, mulberry32(3));
+    const p = { position: new THREE.Vector3(0, w.baseY, 0), radius: 0.5 };
+    let frames = 0;
+    while (whaleCount() > 0 && frames < 60 * 240) {
+      // A fresh dash every 20 frames, so the seal is ramming it continuously
+      // for as long as the body is on top of it — the worst case there is.
+      const on = ram && frames % 20 < 10;
+      updateWhales(1 / 60, scene, enemies, {
+        player: ram ? p : null,
+        ram: { dashing: on, dirX: w.dir, dirY: 0, power: 1 },
+      });
+      frames++;
+    }
+    return frames;
+  };
+  const clean = crossing({ ram: false });
+  const harried = crossing({ ram: true });
+  check('a whale rammed the whole way across still crosses on time',
+    Math.abs(harried - clean) <= 1,
+    `${(harried / 60).toFixed(2)}s against ${(clean / 60).toFixed(2)}s untouched`);
 }
 
 // ===========================================================================

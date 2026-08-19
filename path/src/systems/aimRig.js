@@ -106,9 +106,23 @@ export function createAimRig(instance) {
   // a caller reading a name that has none gets undefined rather than a silent
   // (0,0,0) that normalises to NaN.
   const anchorNormals = {};
+  // THE BONE AND THE OFFSET, for callers that want to PARENT something to a
+  // socket rather than read where it was. The world-space `anchors` above are
+  // a snapshot taken when this rig last solved, which is correct for anything
+  // spawned at a point — a bullet, a bubble, a beam origin — because those
+  // leave and stop caring. It is not enough for something that has to STAY on
+  // the socket: any system running later in the frame that moves the animal
+  // (or a frame where this rig does not solve at all) leaves that snapshot a
+  // frame behind, and the thing drifts off the skin by an amount that grows
+  // with the frame time. A child of the bone cannot have that bug, because the
+  // renderer composes its matrix from the same one it skins the head with.
+  //
+  // See systems/eyeLights.js, which is exactly that case.
+  const anchorSockets = {};
   for (const a of anchorDefs) {
     anchors[a.name] = new THREE.Vector3();
     if (a.normal) anchorNormals[a.name] = new THREE.Vector3();
+    anchorSockets[a.name] = { bone: a.bone, offset: a.offset, normal: a.normal ?? null };
   }
 
   let finWeight = 0;
@@ -140,6 +154,7 @@ export function createAimRig(instance) {
     muzzles,
     anchors,
     anchorNormals,
+    anchorSockets,
 
     // `aim` is the 2D world-space aim direction (input.aim). `engaged` is true
     // while the player is shooting. `suppressed` hands every chain back to the
@@ -271,8 +286,8 @@ export function createAimRig(instance) {
       tailWeight = 0;
       glanceOut = 0;
       chargeClock = 0;
-      for (const chain of fins) chain.primed = false;
-      if (head) head.primed = false;
+      for (const chain of fins) { chain.primed = false; chain.hasWritten = false; }
+      if (head) { head.primed = false; head.hasWritten = false; }
       tailSpring?.reset();
     },
 

@@ -16,10 +16,16 @@
 // which is that canvas — a look page framed on the head would make anything
 // look legible and would have been worthless.
 //
-// WHAT THIS PAGE IS NOT SHOWING. There is no bloom pass: post.js needs the
-// whole world. The halo carries the glow in game and it will be brighter and
-// softer than it is here, so read this for POSITION and SIZE and not for how
-// hot the orbs look. There is no toon shade or outline pass either.
+// IT RENDERS THROUGH THE REAL BLOOM. post.js, the same pass the game composites
+// with, at the live tuned settings (threshold 0.58, intensity 0.25, divisor 6).
+// That is not decoration: the halo is the ONLY part of an eye that blooms — the
+// bead is ~3 screen pixels and sub-pixel in a sixth-scale bright pass — and the
+// bright pass gates on Rec.709 LUMINANCE, where green is worth 72% and red 21%.
+// So "make it glow more" is a question about hue as much as about strength, and
+// judging it without the pass would be judging the wrong image entirely.
+//
+// There is no toon shade or outline pass here, so the seal's own edge is
+// missing. Read this page for the EYES.
 //
 // IT WRITES NOTHING — a vite build with no dev server behind it and no save
 // path. See SERVERS.md.
@@ -35,6 +41,7 @@ import {
 } from '../../path/src/systems/eyeLights.js';
 import { beams, updateBeams, resetBeams } from '../../path/src/systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from '../../path/src/systems/laserEyes.js';
+import { createPost } from '../../path/src/systems/post.js';
 
 const logEl = document.getElementById('log');
 const sheetEl = document.getElementById('sheet');
@@ -65,6 +72,12 @@ const gl = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawi
 gl.setPixelRatio(2);
 gl.setSize(W, H);
 gl.outputColorSpace = THREE.SRGBColorSpace;
+// The game's own composite. Built off this renderer, so it sizes itself to the
+// canvas above; `render` below goes through it instead of gl.render.
+const post = createPost(gl);
+post.resize();
+/** One composited frame, exactly as the game draws it. */
+const draw = () => post.render(scene, camera, DT);
 
 const scene = new THREE.Scene();
 // Converted, not just assigned. three treats a background Color as being in
@@ -112,10 +125,10 @@ log('');
 // the art's forward) and its length is the y span, not the x.
 log(`seal ${span.y.toFixed(2)} long x ${span.x.toFixed(2)} thick, world units`
   + `  ·  ${(span.y * PX_PER_UNIT).toFixed(0)} px long at the arena's own zoom`);
-log(`bead ${(CONFIG.eyeLights.radius * 2).toFixed(2)} units = `
-  + `${(CONFIG.eyeLights.radius * 2 * PX_PER_UNIT).toFixed(1)} px`
-  + `  ·  halo ${(CONFIG.eyeLights.haloRadius * 2).toFixed(2)} units = `
-  + `${(CONFIG.eyeLights.haloRadius * 2 * PX_PER_UNIT).toFixed(1)} px`);
+log(`bead ${(CONFIG.eyes.radius * 2).toFixed(2)} units = `
+  + `${(CONFIG.eyes.radius * 2 * PX_PER_UNIT).toFixed(1)} px`
+  + `  ·  halo ${(CONFIG.eyes.haloRadius * 2).toFixed(2)} units = `
+  + `${(CONFIG.eyes.haloRadius * 2 * PX_PER_UNIT).toFixed(1)} px`);
 log('');
 
 const camera = new THREE.OrthographicCamera();
@@ -212,7 +225,7 @@ function litSocket() {
   for (const [name, aim, facing] of poses) {
     settle(aim, { facing });
     frame(TRUE_UNITS, 0, 0);
-    gl.render(scene, camera);
+    draw();
     const p = litSocket();
     r.appendChild(cell(`true-${name}`, `<b>${name}</b> — socket at ${p.x.toFixed(2)}, ${p.y.toFixed(2)}`));
   }
@@ -237,7 +250,7 @@ function litSocket() {
     settle(aim, { facing, mirror });
     const p = litSocket();
     frame(TRUE_UNITS / 5, p.x, p.y);
-    gl.render(scene, camera);
+    draw();
     r.appendChild(cell(`rest-${name}`, `<b>${name}</b> — lit eye at z ${p.z.toFixed(2)}`));
   }
   const st = eyeLightState();
@@ -273,13 +286,18 @@ function litSocket() {
     }
     const p = litSocket();
     frame(TRUE_UNITS / 5, p.x, p.y);
-    gl.render(scene, camera);
+    draw();
     r.appendChild(cell(`charge-${at}`,
       `<b>holding ${at.toFixed(2)}s</b> — bank ${bank.toFixed(2)}, glow ${st.charge.toFixed(2)}`));
   }
   check('a full hold reaches the ready colour', st.charge > 0.95, `${st.charge.toFixed(2)}`);
-  const haloMesh = eyeGroup.children.find((o) => o.geometry?.type === 'PlaneGeometry');
-  const chargeHalo = haloMesh.scale.x;
+  // Walked, not read off eyeGroup: the eyes are re-parented onto the eye bones
+  // on their first update, so the group is empty by now. Its scale is in the
+  // BONE's space, so multiply the fit scale back in to talk in world units.
+  let haloMesh = null;
+  scene.traverse((o) => { if (!haloMesh && o.isSprite) haloMesh = o; });
+  const haloWorld = () => haloMesh.scale.x * haloMesh.parent.matrixWorld.getMaxScaleOnAxis();
+  const chargeHalo = haloWorld();
 
   // Release: the spike, then the ramp down. Same call main.js makes.
   let flareHalo = 0;
@@ -292,15 +310,15 @@ function litSocket() {
   // nothing" rather than as a stale frame.
   step(aim, { charge: 0 });
   let t2 = DT;
-  for (const at of [DT, 0.08, 0.2, CONFIG.eyeLights.flareTime + 0.05]) {
+  for (const at of [DT, 0.08, 0.2, CONFIG.eyes.flareTime + 0.05]) {
     while (t2 < at - 1e-6) { step(aim, { charge: 0 }); t2 += DT; }
     const p = litSocket();
     frame(TRUE_UNITS / 5, p.x, p.y);
-    gl.render(scene, camera);
-    if (at === DT) flareHalo = haloMesh.scale.x;
+    draw();
+    if (at === DT) flareHalo = haloWorld();
     r2.appendChild(cell(`flare-${at.toFixed(2)}`,
       `<b>${at.toFixed(2)}s</b> after release — flare ${st.flare.toFixed(2)}, `
-      + `halo ${haloMesh.scale.x.toFixed(2)} (a full charge was ${chargeHalo.toFixed(2)})`));
+      + `halo ${haloWorld().toFixed(2)} (a full charge was ${chargeHalo.toFixed(2)})`));
   }
   check('the release flare is over by flareTime', st.flare === 0);
   // The halo SIZE is the only channel left that can say "louder" — the bead's
@@ -335,7 +353,7 @@ function litSocket() {
     while (t < at - 1e-6) { step(aim, {}); t += DT; }
     const p = litSocket();
     frame(TRUE_UNITS / 5, p.x, p.y);
-    gl.render(scene, camera);
+    draw();
     r.appendChild(cell(`hurt-${at}`, `<b>${at.toFixed(2)}s</b> after a full hit — hurt ${st.hurt.toFixed(2)}`));
   }
 
@@ -345,14 +363,14 @@ function litSocket() {
   for (let i = 0; i < 90; i++) step(aim, { charge: 1 });
   const p0 = litSocket();
   frame(TRUE_UNITS / 5, p0.x, p0.y);
-  gl.render(scene, camera);
+  draw();
   r.appendChild(cell('hurt-precharge', `<b>a full bank</b>, unbitten — glow ${st.charge.toFixed(2)}`));
 
   flashEyeLightsDamage(1);
   step(aim, { charge: 1 });
   const p1 = litSocket();
   frame(TRUE_UNITS / 5, p1.x, p1.y);
-  gl.render(scene, camera);
+  draw();
   r.appendChild(cell('hurt-midcharge', `<b>bitten at a full bank</b> — hurt ${st.hurt.toFixed(2)}, charge held at ${st.charge.toFixed(2)}`));
   check('a hit at a full bank still reads as a hit', st.hurt > 0 && st.charge > 0.9,
     `hurt ${st.hurt.toFixed(2)} over a charge of ${st.charge.toFixed(2)}`);
@@ -401,7 +419,7 @@ function litSocket() {
       return Math.hypot(b.x - s.x, b.y - s.y);
     }));
     frame(TRUE_UNITS / 2.5, socket.x + TRUE_UNITS / 9, socket.y);
-    gl.render(scene, camera);
+    draw();
     r.appendChild(cell(`beams-l${level}`,
       `<b>level ${level}</b> — ${beams.length} beam${beams.length === 1 ? '' : 's'}, `
       + `furthest origin ${gap.toFixed(2)} from the socket`));
@@ -425,7 +443,7 @@ function litSocket() {
     while (t < at - 1e-6) { step(new THREE.Vector2(1, 0), { lit: 0 }); t += DT; }
     const p = litSocket();
     frame(TRUE_UNITS / 5, p.x, p.y);
-    gl.render(scene, camera);
+    draw();
     r.appendChild(cell(`death-${at}`, `<b>${at.toFixed(2)}s</b> after the seal dies`));
   }
   resetEyeLights();

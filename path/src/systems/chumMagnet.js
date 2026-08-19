@@ -39,37 +39,46 @@ import { airPickupMul } from './airborne.js';
 // The mouth still seals during a WIND-UP — that gate lives in pickups.js and
 // is untouched here. This is only about what an open mouth can reach.
 //
-// AND THE WHOLE THING IS OFF UNTIL A FOOD CHAIN IS RUNNING. See chumHoming().
+// AND EVERYTHING ABOVE IS THE FOOD CHAIN'S. See chumSweep().
 // ============================================================================
 
 /**
- * IS THE SEAL REACHING FOR FOOD AT ALL?
+ * IS THE SEAL SWEEPING FOR FOOD — the wide, fast, corridor-shaped magnet?
  *
- * The magnet is a FOOD CHAIN privilege now, not a permanent sense: outside a
- * live chain, chum has to be swum into, and everything above about corridors
- * and pull speeds describes what happens once one is running.
+ * THIS IS NOT A GATE ON EATING, and getting that backwards is a starvation
+ * bug. There is always a magnet: chum always drifts to the mouth at the base
+ * `magnetSpeed` inside the base `pickupRadius`, chain or no chain, and a seal
+ * never has to earn the right to feed. Everything described above this — the
+ * per-state radius multipliers, the pull that can outrun a dash, the capsule
+ * swept down the lane — is the LOUD version, and that is what a live chain
+ * turns on.
  *
- * WHY IT IS GATED. A magnet that is always on collects the ocean for you, and
- * once it does the chain stops being something you keep alive and becomes
- * something that happens while you swim about. Turning it off outside the
- * window puts the cost back where the mechanic wants it — the chain is
- * self-sustaining, and getting the first link is work.
+ * So a cruising seal picks food up; a seal mid-chain HOOVERS it, out of a
+ * region twice as wide, faster than it is travelling, including the pile it
+ * has already shot past. Same mechanism at two strengths, which is why this is
+ * one boolean and not a second magnet.
  *
- * GATED ON THE WINDOW (isFeeding), not on the link COUNT, and the difference
- * decides whether the loop can start at all. `liveChain()` is zero until a
- * link is actually scored, and a link is paid for in mouthfuls — so gating on
- * it would mean no magnet until you have eaten, and no easy eating until you
- * have the magnet. The window opens on the first strike released in the sweet
- * spot (see tryStrike), which makes the entry condition a thing the player
- * DOES rather than a thing they already have.
+ * WHY THE CHAIN OWNS THE LOUD ONE. The sweep is the most powerful collection
+ * tool in the game, and left always on it collects the ocean for you — the
+ * chain stops being something you keep alive and becomes something that
+ * happens while you swim about. On the chain it is a reward that pays for the
+ * next link, which is the loop the whole system is named after.
+ *
+ * READS THE WINDOW (isFeeding), not the link COUNT. `liveChain()` is zero
+ * until a link is actually scored, so it would hold the sweep back through the
+ * whole first link of every chain — the stretch where the player most needs it.
+ * isFeeding() also covers the DASH itself, which is deliberate: the corridor is
+ * the reach a dash is FOR, and a dash that flew down a lane should collect that
+ * lane whether or not the release was on the beat. A mistimed strike is a
+ * speed boost, and this is what a speed boost is for.
  *
  * CHUM AND CHUNKS ONLY. The blue charge orb, the air bubble and the rapid-fire
- * morsel keep their magnet always: those are rewards for reaching a place
- * rather than the resource the chain is made of, and a bubble the player has
- * to nudge with their nose while drowning is a punishment for something that
- * is not this mechanic. See entities/pickups.js for the split.
+ * morsel keep the full magnet always: they are not what the chain is made of,
+ * and a bubble the player has to nudge with their nose while drowning is a
+ * punishment for something that is not this mechanic. See foodReach() below —
+ * the split is which function a call site reaches for.
  */
-export function chumHoming() {
+export function chumSweep() {
   if (CONFIG.pickups.magnet?.chainGated === false) return true;
   return isFeeding();
 }
@@ -113,6 +122,49 @@ export function magnetRadius(stats, speed) {
 export function magnetSpeed(speed) {
   const base = CONFIG.pickups.magnetSpeed ?? 14;
   return base * (tuning(magnetState(speed)).speedMul ?? 1);
+}
+
+// ---------------------------------------------------------------------------
+// ...AND THE SAME THREE QUESTIONS FOR FOOD, WHICH IS THE ONLY THING THE CHAIN
+// HAS AN OPINION ABOUT.
+//
+// Three wrappers rather than a flag threaded through the three above, because
+// the three above are asked by every pickup in the game and only two callers —
+// chum and chunks — are part of the food chain. A flag would put the chain's
+// rule in front of the air bubble, where it has no business being, and the
+// failure mode of that is a drowning player nosing a bubble around.
+//
+// Each one falls back to the BASE, not to nothing: base radius, base pull,
+// plain radial distance. That is the always-on magnet, and it is what makes
+// this safe — the worst a bug here can do is collect at one strength when it
+// meant the other, never fail to collect.
+// ---------------------------------------------------------------------------
+
+/** How far the seal reaches for CHUM right now. */
+export function foodReach(stats, speed) {
+  if (chumSweep()) return magnetRadius(stats, speed);
+  const base = stats?.pickupRadius ?? CONFIG.player.pickupRadius ?? 3;
+  return base * airPickupMul();
+}
+
+/** How hard it pulls it. */
+export function foodPull(speed) {
+  return chumSweep() ? magnetSpeed(speed) : (CONFIG.pickups.magnetSpeed ?? 14);
+}
+
+/**
+ * And how far away it is — the corridor while sweeping mid-dash, the plain
+ * radial distance otherwise.
+ *
+ * magnetDistance() only builds the capsule while `strikeState.active`, and a
+ * live dash is always feeding, so the corridor is already the sweep's alone.
+ * Routed through chumSweep() anyway so the three wrappers answer to one rule:
+ * a future reading of "sweeping" that is not simply isFeeding() must not leave
+ * the corridor behind on a technicality nobody remembers.
+ */
+export function foodDistance(px, py, ox, oy, speed) {
+  if (chumSweep()) return magnetDistance(px, py, ox, oy, speed);
+  return Math.hypot(ox - px, oy - py);
 }
 
 /**

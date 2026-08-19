@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { hdrInto, glowSprite } from './beams.js';
+import { hdrInto, lumInto, glowSprite } from './beams.js';
 
 // EYE LIGHTS — two wet black beads socketed into the seal's own eyeballs, and
 // everything they are allowed to say.
@@ -74,23 +74,76 @@ import { hdrInto, glowSprite } from './beams.js';
 // (CONFIG.head.craneAngle, up to 0.7 rad) the far eye's normal swings back
 // toward the lens and it comes up on its own — which is the real behaviour,
 // arrived at with a dot product instead of a depth buffer.
+//
+// ---------------------------------------------------------------------------
+// THE EYES ARE CHILDREN OF THE EYE BONES. NOT POSITIONED IN WORLD SPACE.
+// ---------------------------------------------------------------------------
+// They were, and they drifted. `rig.anchors` is a world-space SNAPSHOT taken
+// when the aim rig last solved, and copying it once a frame is correct for
+// anything that is spawned at a point and then leaves — a bullet, a bubble,
+// the origin a beam is lit from. It is not enough for something that has to
+// STAY on the skin, because it silently depends on nothing moving the animal
+// between the solve and the draw. Anything that does — a system running later
+// in main.js, a frame where the rig does not solve, a clock that ticks the
+// eyes and the rig at different rates — leaves the bead a frame behind, and a
+// frame behind is a whole eye-width: measured on a 3 rad/s turn, 0.12 world
+// units at 60fps and 0.25 at 30, against a bead of radius 0.08. It gets worse
+// the longer the frame, which is why it was ugliest under time dilation.
+//
+// No amount of care about call order fixes that class of bug, it only moves
+// it: the next system added after this one in the frame brings it straight
+// back, and nothing fails loudly when it does. So the beads are ATTACHED to
+// `eye_L_09` / `eye_R_010` and their positions are the anchor offset in the
+// bone's own local space. The renderer then composes their world matrices from
+// exactly the matrix it skins the head with, in the same pass, at the same
+// instant. Drift is not reduced; it is unrepresentable.
+//
+// Two things that costs, both handled in `attach` below:
+//
+//   SCALE     a bone carries the model's fit scale (2.36 on this seal), and a
+//             child inherits it. The radii here are world units, so each frame
+//             divides them by whatever the bone is carrying.
+//   FACING    the halo has to face the camera, and its parent now rotates with
+//             the head and flips with the mirror. So the halo is a Sprite,
+//             which the renderer billboards at draw time out of the same
+//             matrix — the one thing in three.js that is immune to its
+//             parent's rotation by construction. The bead is a sphere and does
+//             not care.
+//
+// The group this returns stays in the scene and holds the pair only while
+// there is no rig to hang them on.
 
 // Which anchors this reads, and in which order the meshes are built. Names
 // match ASSETS.ship.aimRig.anchors.
 const SOCKETS = ['eyeL', 'eyeR'];
 
-const state = {
-  group: null,
-  eyes: [],       // { bead, halo, name }
-  lit: 0,         // eased master fade, so the eyes go out rather than pop out
-  charge: 0,      // eased wind-up power, 0..1
-  flare: 0,       // the release spike, 1 -> 0 over flareTime
-  flarePower: 0,  // ...scaled by the power actually spent
-  laser: 0,       // the beam muzzle flare, 1 -> 0 over laserTime
-  hurt: 0,        // the damage flash, 1 -> 0 over its own scaled time
-  hurtPower: 0,   // ...how bad the hit was, 0..1
-  hurtTime: 0.45, // ...and how long THIS flash was given
-};
+// ONE PAIR OF EYES. There is a set of these per animal that has them — the
+// seal, and every boss whose rig offers sockets (systems/bossEyes.js) — so
+// nothing here may be module-level state. It was, while the player was the
+// only owner; the fight that put four glowing eyes on a boss is what turned
+// it into a factory, and the singleton below is now just the player's
+// instance rather than the only one that can exist.
+function newPair() {
+  return {
+    group: null,
+    eyes: [],       // { bead, halo, name }
+    cfgKey: 'eyes', // which CONFIG block tunes this pair — see pairCfg()
+    lit: 0,         // eased master fade, so the eyes go out rather than pop out
+    charge: 0,      // eased wind-up power, 0..1
+    flare: 0,       // the release spike, 1 -> 0 over flareTime
+    flarePower: 0,  // ...scaled by the power actually spent
+    laser: 0,       // the beam muzzle flare, 1 -> 0 over laserTime
+    hurt: 0,        // the damage flash, 1 -> 0 over its own scaled time
+    hurtPower: 0,   // ...how bad the hit was, 0..1
+    hurtTime: 0.45, // ...and how long THIS flash was given
+  };
+}
+
+// THE PLAYER'S PAIR. Kept as a module-level instance and wrapped by the
+// exported functions below, so entities/player.js and main.js carry on calling
+// updateEyeLights/flareEyeLights/... exactly as they did — one owner does not
+// have to learn the plural just because a second owner arrived.
+const state = newPair();
 
 // Scratch. Resolving a colour every frame must not allocate — this runs on the
 // render path and two Colors a frame is two Colors a frame forever, which is
@@ -101,9 +154,28 @@ const _b = new THREE.Color();
 const _emissive = new THREE.Color();
 const _halo = new THREE.Color();
 const BLACK = new THREE.Color(0, 0, 0);
+const _p = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+
+/**
+ * The tuning block for one pair.
+ *
+ * A boss's eyes are the SAME MECHANISM as the seal's and a different look —
+ * the seal reads its own boost in green, a boss telegraphs an attack in the
+ * gold its lunge flare already uses — so the pair carries which block tunes
+ * it. Boss values fall back to the player's for anything they do not name,
+ * which keeps CONFIG.boss.eyes down to what actually differs instead of a
+ * second copy of thirty numbers that would drift.
+ */
+function pairCfg(pair = state) {
+  const base = CONFIG.eyes ?? {};
+  if (!pair || pair.cfgKey === 'eyes') return base;
+  const own = CONFIG.boss?.eyes;
+  return own ? { ...base, ...own } : base;
+}
 
 function cfg() {
-  return CONFIG.eyeLights ?? {};
+  return CONFIG.eyes ?? {};
 }
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
@@ -117,9 +189,9 @@ const clamp01 = (v) => Math.min(1, Math.max(0, v));
  * scale is 2.36. The aim rig already publishes these sockets in world space
  * every frame, so there is nothing to gain by parenting and a scale to lose.
  */
-export function createEyeLights() {
+export function createEyeLights(pair = state) {
   const group = new THREE.Group();
-  const c = cfg();
+  const c = pairCfg(pair);
   const eyes = [];
   for (const name of SOCKETS) {
     // A MATERIAL PER ORB, not one shared between the two. They fade
@@ -153,21 +225,24 @@ export function createEyeLights() {
       // reaches the bright pass; tone mapping would pull it back under.
       toneMapped: false,
     });
-    const haloMat = new THREE.MeshBasicMaterial({
+    // A SPRITE, not a quad. Its parent is now a bone that turns with the head
+    // and flips 180 with the side-view mirror, and a PlaneGeometry hung off
+    // that would tip out of the camera plane and foreshorten to a line. The
+    // renderer billboards a Sprite from its own world matrix at draw time, so
+    // it faces the lens whatever its parent is doing — the only construction
+    // in three.js that is immune to a parent's rotation.
+    const haloMat = new THREE.SpriteMaterial({
       color: 0xffffff,
       map: glowSprite(),
       transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
       depthWrite: false, depthTest: false, toneMapped: false,
     });
-    // A SPHERE for the bead, a quad for the halo. The sphere is what carries
-    // the specular (see above); the halo is flat because it is glow laid over
-    // the scene and this camera is axis aligned, so a quad in the XY plane
-    // already faces it and needs no billboarding.
-    //
-    // Unit radius, scaled per frame — the radius is tunable and rebuilding
-    // geometry for a slider would allocate on every input event.
+    // A SPHERE for the bead: it is what carries the specular (see above), and
+    // it is also why the bead can be parented to a spinning bone without
+    // caring. Unit radius, scaled per frame — the radius is tunable, and
+    // rebuilding geometry for a slider would allocate on every input event.
     const bead = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), beadMat);
-    const halo = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), haloMat);
+    const halo = new THREE.Sprite(haloMat);
     bead.frustumCulled = false;
     halo.frustumCulled = false;
     // The bead draws AFTER its halo. Both have depthTest off and sit at the
@@ -187,10 +262,52 @@ export function createEyeLights() {
   // reads as the group order every descendant is sorted within — the per-mesh
   // renderOrder above then orders the pair inside that.
   group.renderOrder = 6;
-  state.group = group;
-  state.eyes = eyes;
-  resetEyeLights();
+  pair.group = group;
+  pair.eyes = eyes;
+  resetEyeLights(pair);
   return group;
+}
+
+// Scratch for reading a bone's inherited scale without allocating.
+const _boneScale = new THREE.Vector3();
+
+/**
+ * Hang one eye on its bone, if it is not already there.
+ *
+ * Checked every frame rather than wired once, and that is not defensive
+ * padding: `rebuildShipBody` throws the whole seal away and builds a new one
+ * whenever a model is swapped in through the workbench, so the bone these were
+ * attached to stops being in the scene at all. A pair wired once would quietly
+ * vanish with the old skeleton — visible as nothing, which is the worst way
+ * for it to fail. Object3D.add already detaches from the previous parent, and
+ * the comparison is one reference test on a frame where nothing changed.
+ */
+function attach(eye, bone) {
+  if (eye.bead.parent !== bone) bone.add(eye.bead);
+  if (eye.halo.parent !== bone) bone.add(eye.halo);
+}
+
+/** Put the pair back in the holding pen — see createEyeLights. */
+function detach(eye, pair = state) {
+  if (pair.group) {
+    if (eye.bead.parent !== pair.group) pair.group.add(eye.bead);
+    if (eye.halo.parent !== pair.group) pair.group.add(eye.halo);
+  }
+}
+
+/**
+ * The uniform scale `bone` imposes on its children. The seal's fit scale is
+ * 2.36 and lives on a grandchild of the instance root, so this cannot be read
+ * off the instance — it has to come from the bone's own world matrix.
+ *
+ * Guarded against zero: a model mid-rebuild can present a degenerate matrix
+ * for a frame, and dividing a radius by it would send the beads to infinity
+ * and take the whole draw call with them.
+ */
+function boneScale(bone) {
+  bone.matrixWorld.decompose(_p, _q, _boneScale);
+  const s = (Math.abs(_boneScale.x) + Math.abs(_boneScale.y) + Math.abs(_boneScale.z)) / 3;
+  return s > 1e-6 ? s : 1;
 }
 
 /**
@@ -204,7 +321,7 @@ export function createEyeLights() {
  *
  * Exported so the harness can check the near/far split without a renderer.
  */
-export function eyeFacing(nz, c = cfg()) {
+export function eyeFacing(nz, c = pairCfg()) {
   const start = c.faceStart ?? -0.05;
   const full = c.faceFull ?? 0.25;
   const span = Math.max(1e-4, full - start);
@@ -234,13 +351,13 @@ export function eyeFacing(nz, c = cfg()) {
  * @param power the banked power actually spent, 0..1. A fizzle pops, a full
  *              commitment detonates.
  */
-export function flareEyeLights(power = 1) {
+export function flareEyeLights(power = 1, pair = state) {
   const p = clamp01(power);
   // `flarePower * flare` is the spike still burning: a small release fired
   // while a big one is still fading must not DOWNGRADE it. Same rule as the
   // rim's damage flash, and for the same reason.
-  state.flarePower = Math.max(state.flarePower * state.flare, p);
-  state.flare = 1;
+  pair.flarePower = Math.max(pair.flarePower * pair.flare, p);
+  pair.flare = 1;
 }
 
 /**
@@ -251,8 +368,8 @@ export function flareEyeLights(power = 1) {
  * cooldown, the strike is on a button) and giving them one decay would make
  * whichever fired second silently re-light the first.
  */
-export function flashEyeLightsLaser(strength = 1) {
-  state.laser = Math.max(state.laser, clamp01(strength));
+export function flashEyeLightsLaser(strength = 1, pair = state) {
+  pair.laser = Math.max(pair.laser, clamp01(strength));
 }
 
 /**
@@ -266,20 +383,17 @@ export function flashEyeLightsLaser(strength = 1) {
  * @param strength 0..1, how much of the health bar the hit cost. Drives both
  *                 how bright the flash is and how long it lasts.
  */
-export function flashEyeLightsDamage(strength = 1) {
+export function flashEyeLightsDamage(strength = 1, pair = state) {
   const s = clamp01(strength);
   if (!(s > 0)) return;
-  const c = cfg();
+  const c = pairCfg(pair);
   // A hit landing inside a flash re-lights it from full, and must not
   // downgrade one: a scratch taken a moment after a maiming re-lights at the
   // maiming's brightness rather than cutting it short at the scratch's. Same
   // rule as flashPlayerOutlineDamage.
-  state.hurtPower = Math.max(state.hurtPower * state.hurt, s);
-  state.hurtTime = Math.max(
-    c.hitMinTime ?? 0.18,
-    (c.hitTime ?? 0.45) * state.hurtPower,
-  );
-  state.hurt = 1;
+  pair.hurtPower = Math.max(pair.hurtPower * pair.hurt, s);
+  pair.hurtTime = Math.max(c.hitMinTime ?? 0.18, (c.hitTime ?? 0.45) * pair.hurtPower);
+  pair.hurt = 1;
 }
 
 /**
@@ -294,7 +408,7 @@ export function flashEyeLightsDamage(strength = 1) {
  *          strength on its peak channel (so it is directly comparable to
  *          CONFIG.beams.overdrive).
  */
-export function resolveEyeLook(s = state, c = cfg(), out = _col) {
+export function resolveEyeLook(s = state, c = pairCfg(s), out = _col) {
   // 1. HURT — outright, no mixing. Squared so it peaks instantly and lingers,
   // the same curve the rim's flash uses.
   if (s.hurt > 0) {
@@ -305,7 +419,7 @@ export function resolveEyeLook(s = state, c = cfg(), out = _col) {
   // 2..4 — the brightest of the three, taking its own colour with it.
   const flare = (c.flareGlow ?? 7) * s.flarePower * s.flare * s.flare;
   const laser = (c.laserGlow ?? 4) * s.laser * s.laser;
-  const charge = (c.chargeGlow ?? 3.2) * s.charge;
+  const charge = (c.boostGlow ?? 3.2) * s.charge;
 
   if (flare >= laser && flare >= charge) {
     // The release keeps the colour the bank had reached, so the spike reads as
@@ -327,9 +441,9 @@ export function resolveEyeLook(s = state, c = cfg(), out = _col) {
  * eye and the meter never disagree about what "loaded" looks like. Blue while
  * it fills, mint at a full bank.
  */
-function chargeColour(t, c = cfg(), out = _col) {
-  _a.set(c.chargeColor ?? 0x7ad7ff);
-  _b.set(c.chargeReadyColor ?? 0x9dffd0);
+function chargeColour(t, c = pairCfg(), out = _col) {
+  _a.set(c.boostColor ?? 0x18e04a);
+  _b.set(c.boostReadyColor ?? 0x86ff9c);
   return out.copy(_a).lerp(_b, clamp01(t));
 }
 
@@ -349,46 +463,57 @@ function chargeColour(t, c = cfg(), out = _col) {
  *                    tell must not cut out halfway through a hold the player
  *                    is still committing to; it plateaus at what was banked.
  */
-export function updateEyeLights(dt, rig, { lit = 1, charge = 0 } = {}) {
-  const group = state.group;
+export function updateEyeLights(dt, rig, { lit = 1, charge = 0, pair = state } = {}) {
+  const group = pair.group;
   if (!group) return;
-  const c = cfg();
+  const c = pairCfg(pair);
 
-  const sockets = rig?.anchors;
-  const normals = rig?.anchorNormals;
+  // TWO SHAPES OF SOURCE, one loop. The seal arrives as an aim rig, which
+  // publishes named sockets and their normals; a boss arrives as a plain list
+  // of `{ bone, offset, normal }` read straight off its model
+  // (systems/bossEyes.js), because a boss has no aim rig and never will — its
+  // eyes are nodes on a skeleton an animation is posing, with nothing being
+  // solved onto them. Normalising to the same shape here is what lets every
+  // rule below — the near/far fade, the attach, the scale compensation — be
+  // written once for both.
+  const sockets = rig?.anchorSockets ?? rig?.sockets;
+  const normals = rig?.anchorNormals ?? rig?.normals;
   const has = !!(c.enabled !== false && sockets && normals
-    && SOCKETS.every((n) => sockets[n] && normals[n]));
+    && SOCKETS.every((n) => sockets[n]?.bone && normals[n]));
 
   // --- run the clocks down, ALWAYS -------------------------------------------
   // Before the visibility gate below, deliberately: a flash left mid-decay
   // while the eyes were hidden would still be burning when they came back, and
   // the seal would blink red on the first frame of the next run.
-  if (state.flare > 0) state.flare = Math.max(0, state.flare - dt / Math.max(0.01, c.flareTime ?? 0.3));
-  if (state.laser > 0) state.laser = Math.max(0, state.laser - dt / Math.max(0.01, c.laserTime ?? 0.22));
-  if (state.hurt > 0) state.hurt = Math.max(0, state.hurt - dt / Math.max(0.01, state.hurtTime));
+  if (pair.flare > 0) pair.flare = Math.max(0, pair.flare - dt / Math.max(0.01, c.flareTime ?? 0.3));
+  if (pair.laser > 0) pair.laser = Math.max(0, pair.laser - dt / Math.max(0.01, c.laserTime ?? 0.22));
+  if (pair.hurt > 0) pair.hurt = Math.max(0, pair.hurt - dt / Math.max(0.01, pair.hurtTime));
   // The wind-up EASES rather than tracking `pending` directly. Letting go
   // drops the button to 0 on one frame, and an eye that cut with it would
   // strobe on every flick — the release spike is what that moment is for.
   const wantCharge = clamp01(charge);
-  const chargeRate = wantCharge > state.charge ? (c.chargeLerp ?? 7) : (c.chargeFall ?? 12);
-  state.charge += (wantCharge - state.charge) * (1 - Math.exp(-chargeRate * dt));
-  if (state.charge < 0.002) state.charge = 0;
+  const chargeRate = wantCharge > pair.charge ? (c.boostLerp ?? 7) : (c.boostFall ?? 12);
+  pair.charge += (wantCharge - pair.charge) * (1 - Math.exp(-chargeRate * dt));
+  if (pair.charge < 0.002) pair.charge = 0;
 
   // Ease toward the gate. Driven to 0 outright when there is nothing to sit
   // in — a rig that vanished mid-run (a model swap) must not leave two beads
   // easing down at the coordinates the old seal's head used to be.
   const want = has ? clamp01(lit) : 0;
   const rate = has ? (c.fadeIn ?? 9) : (c.fadeOut ?? 5);
-  state.lit += (want - state.lit) * (1 - Math.exp(-rate * dt));
-  if (state.lit < 0.002) state.lit = 0;
+  pair.lit += (want - pair.lit) * (1 - Math.exp(-rate * dt));
+  if (pair.lit < 0.002) pair.lit = 0;
+  // Off a rig entirely: come home, so a bone that has been thrown away is not
+  // still holding two meshes. Only once they are actually dark — detaching
+  // mid-fade would teleport them to the origin in full view.
+  if (!has && pair.lit === 0) for (const eye of pair.eyes) detach(eye, pair);
 
-  if (state.lit === 0) {
-    if (group.visible) group.visible = false;
+  if (pair.lit === 0) {
+    for (const eye of pair.eyes) { eye.bead.visible = false; eye.halo.visible = false; }
     return;
   }
-  group.visible = true;
 
-  const glow = resolveEyeLook(state, c, _col);
+  const glow = resolveEyeLook(pair, c, _col);
   // Derived ONCE, not per eye: both eyes belong to one animal and say the same
   // thing at the same moment. PEAK-CHANNEL, not luminance — the bright pass
   // weights blue at 7% and green at 72%, so a cyan authored at a sane 1.0
@@ -399,36 +524,61 @@ export function updateEyeLights(dt, rig, { lit = 1, charge = 0 } = {}) {
   // At glow 0 the emissive is BLACK, which is the resting eye: nothing added,
   // so the bead is exactly as the scene shades it.
   if (glow > 0) hdrInto(_emissive, _col, glow); else _emissive.copy(BLACK);
-  hdrInto(_halo, _col, c.haloOverdrive ?? 1.2);
+  // THE HALO CARRIES THE BLOOM, and it is normalised on Rec.709 LUMINANCE
+  // rather than on the peak channel — which is the whole reason a green boost
+  // and a red damage flash can both be asked for a big bloom and both get one.
+  // The bright pass gates on luminance, where green is worth 72% and red 21%,
+  // so one peak-channel overdrive would make the green blaze and leave the red
+  // flat. See the note by lumInto in systems/beams.js, and CONFIG.eyes.bloomLum.
+  //
+  // The RAMP lives here rather than in the opacity below, so exactly one thing
+  // decides how bright the halo is. At glow 0 the target is 0, which is black,
+  // which is additively invisible — the resting eye.
+  const ramp = clamp01(glow / Math.max(0.001, c.haloFullAt ?? 3));
+  lumInto(_halo, _col, (c.bloomLum ?? 2.2) * ramp);
   const beadR = Math.max(0.001, c.radius ?? 0.08);
-  const haloR = Math.max(0.001, c.haloRadius ?? 0.42);
+  const haloR = Math.max(0.001, c.haloRadius ?? 0.52);
   // The halo grows a little with the glow as well as brightening. A halo that
   // only ever changed opacity reads as the same lamp behind a thinner filter;
   // one that swells reads as more light coming out of the same hole.
-  const haloScale = haloR * 2 * (1 + (c.haloSwell ?? 0.35) * clamp01(glow / Math.max(0.001, c.haloSwellAt ?? 5)));
+  const haloScale = haloR * 2 * (1 + (c.flareSwell ?? 0.9) * clamp01(glow / Math.max(0.001, c.flareSwellAt ?? 7)));
 
-  for (const eye of state.eyes) {
-    const p = sockets?.[eye.name];
+  for (const eye of pair.eyes) {
+    const socket = sockets?.[eye.name];
     const n = normals?.[eye.name];
     // `has` already proved these exist; this is the frame where a rig went
     // away between the check and here (it cannot, but a null deref in a
     // render loop is a black screen and the guard is one comparison).
-    if (!p || !n) continue;
+    if (!socket?.bone || !n) continue;
+
+    // ON THE BONE, in the bone's own space. Nothing here is a world position,
+    // which is the whole point — see the note at the top of this file.
+    attach(eye, socket.bone);
+    eye.bead.position.copy(socket.offset);
+    eye.halo.position.copy(socket.offset);
+
+    // The radii are WORLD units and the parent carries the model's fit scale,
+    // so divide it out. Read off the bone's live matrix rather than cached: a
+    // model swapped in through the workbench has its own fit, and a size
+    // slider moves it mid-run.
+    const inherited = boneScale(socket.bone);
+    eye.bead.scale.setScalar(beadR / inherited);
+    eye.halo.scale.setScalar(haloScale / inherited);
 
     const face = eyeFacing(n.z, c);
-    const a = state.lit * face;
-
-    eye.bead.position.copy(p);
-    eye.halo.position.copy(p);
-    eye.bead.scale.setScalar(beadR);
-    eye.halo.scale.setScalar(haloScale);
+    const a = pair.lit * face;
+    eye.bead.visible = a > 0.002;
+    eye.halo.visible = a > 0.002;
 
     eye.bead.material.opacity = a;
     eye.bead.material.emissive.copy(_emissive);
     // The halo is the part that actually blooms — the bead at 0.16 world units
     // is about 3 screen pixels and sub-pixel in a sixth-scale bright pass.
     eye.halo.material.color.copy(_halo);
-    eye.halo.material.opacity = a * (c.haloOpacity ?? 0.7) * clamp01(glow / Math.max(0.001, c.haloFullAt ?? 3));
+    // Opacity is the FADE and nothing else — the master gate and the near/far
+    // split. Additive blending multiplies colour by alpha, so the rendered
+    // luminance is `bloomLum * ramp * a` and the two knobs never fight.
+    eye.halo.material.opacity = a;
   }
 }
 
@@ -448,17 +598,18 @@ export function eyeSocket(rig, side, fallback) {
 }
 
 /** A new run starts with the eyes dark, cold and unhurt. */
-export function resetEyeLights() {
-  state.lit = 0;
-  state.charge = 0;
-  state.flare = 0;
-  state.flarePower = 0;
-  state.laser = 0;
-  state.hurt = 0;
-  state.hurtPower = 0;
-  state.hurtTime = cfg().hitTime ?? 0.45;
-  if (state.group) state.group.visible = false;
-  for (const eye of state.eyes) {
+export function resetEyeLights(pair = state) {
+  pair.lit = 0;
+  pair.charge = 0;
+  pair.flare = 0;
+  pair.flarePower = 0;
+  pair.laser = 0;
+  pair.hurt = 0;
+  pair.hurtPower = 0;
+  pair.hurtTime = pairCfg(pair).hitTime ?? 0.45;
+  for (const eye of pair.eyes) {
+    eye.bead.visible = false;
+    eye.halo.visible = false;
     eye.bead.material.opacity = 0;
     eye.bead.material.emissive.copy(BLACK);
     eye.halo.material.opacity = 0;
@@ -471,9 +622,9 @@ export function resetEyeLights() {
  * until this re-stamps them. The emissive, the halo colour and every size are
  * written every frame and need nothing.
  */
-export function applyEyeLightColours() {
-  const c = cfg();
-  for (const eye of state.eyes) {
+export function applyEyeLightColours(pair = state) {
+  const c = pairCfg(pair);
+  for (const eye of pair.eyes) {
     eye.bead.material.color.set(c.color ?? 0x05070a);
     eye.bead.material.roughness = c.roughness ?? 0.12;
     eye.bead.material.metalness = c.metalness ?? 0.1;
@@ -482,6 +633,13 @@ export function applyEyeLightColours() {
 }
 
 /** The live look, for the debug panel and the harness. Read-only. */
-export function eyeLightState() {
-  return state;
+export function eyeLightState(pair = state) {
+  return pair;
+}
+
+/** A fresh, independent pair — one boss's eyes. See newPair(). */
+export function createEyePair(cfgKey = 'boss') {
+  const pair = newPair();
+  pair.cfgKey = cfgKey;
+  return pair;
 }

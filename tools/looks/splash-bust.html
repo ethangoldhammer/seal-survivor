@@ -1,0 +1,73 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>The bust — an alternate splash, waist up, tracking the cursor</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #24506b;
+        color: #dff0ff; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      /* The canvas is the page. Everything else floats over it and is here to
+         be read, not to be part of the composition — a panel with a background
+         would be one more colour sitting next to a backdrop being judged. */
+      /* THE STACK, and it is stated rather than left to source order because a
+         Spline layer goes UNDER the seal: 0 is whatever ?spline mounted, 1 is
+         the seal's canvas, 3 is the readout. */
+      #spline { position: fixed; inset: 0; z-index: 0; border: 0; width: 100%; height: 100%; }
+      #stage { position: fixed; inset: 0; display: block; z-index: 1; }
+      #hud, #keys { z-index: 3; }
+      /* The blob labels. Positioned from the projected centre of each metaball
+         every frame, so they are placed by the 3D scene and not by the page —
+         `left`/`top` are the centre and the transform does the centring. */
+      /* POSITION ONLY. Everything about the type — family, size, weight,
+         tracking, case, colour, shadow — comes from the `blobButton` role in
+         textRoles.js via ui/typography.js, exactly as it does in the game. */
+      /* `pre-line` so a newline in the label is a line break and nothing else
+         wraps on width — see the note by the Leaderboards item. Centred both
+         ways, because the anchor is the middle of a hexagon. */
+      .blob-label { position: fixed; z-index: 2; pointer-events: none;
+        transform: translate(-50%, -50%); white-space: pre-line;
+        text-align: center; line-height: 1.15; }
+      #hud { position: fixed; left: 12px; top: 10px; pointer-events: none;
+        text-shadow: 0 1px 3px rgba(0,0,0,.55); max-width: 46ch; }
+      #hud h1 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+        margin: 0 0 6px; color: #9fdcff; font-weight: 600; }
+      #hud p { margin: 0 0 6px; color: #b9d6ee; }
+      #keys { position: fixed; left: 12px; bottom: 10px; pointer-events: none;
+        color: #b9d6ee; text-shadow: 0 1px 3px rgba(0,0,0,.55); }
+      #keys b, #hud b { color: #fff; font-weight: 600; }
+      #vals { white-space: pre; color: #ffe08a; }
+    </style>
+    <!-- THE PANE SUSPENDS rAF. `document.hidden` is true in the agent's browser
+         pane even while it is on screen, so Chrome throttles requestAnimationFrame
+         to about a frame a second and then stops it — the page paints once and
+         looks broken. setTimeout is not throttled the same way, and three
+         resolves rAF off `window` at call time, so swapping it here (BEFORE the
+         module loads) is enough. `?raf=native` opts a real browser back out. -->
+    <script>
+      if (!/[?&]raf=native/.test(location.search)) {
+        window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
+        window.cancelAnimationFrame = (id) => clearTimeout(id);
+      }
+    </script>
+  </head>
+  <body>
+    <div id="spline"></div>
+    <canvas id="stage"></canvas>
+    <div id="hud">
+      <h1>The bust — alternate splash</h1>
+      <p id="splineNote"></p>
+      <p id="lock"></p>
+      <p>The real seal, the real neck and flipper IK, the real idle clip. Everything
+         from the waist down is pinned to the authored pose; the head and the front
+         flippers are the only things that move, and they point at your cursor.</p>
+      <p id="state"></p>
+      <div id="vals"></div>
+    </div>
+    <div id="keys">
+      <b>[</b>/<b>]</b> size &nbsp; <b>-</b>/<b>=</b> headroom &nbsp;
+      <b>&larr;</b>/<b>&rarr;</b> across &nbsp; <b>,</b>/<b>.</b> lean &nbsp; <b>;</b>/<b>'</b> rim &nbsp; <b>9</b>/<b>0</b> head range &nbsp; <b>g</b>/<b>h</b> grid punch &nbsp;
+      <b>p</b> pin on/off &nbsp; <b>a</b> autopilot &nbsp; <b>s</b> save a frame &nbsp; <b>shift+W</b> write preset &nbsp; <b>l</b> lock &nbsp; <b>click a blob</b> to press it
+    </div>
+    <script type="module" src="./splash-bust.js"></script>
+  </body>
+</html>

@@ -38,7 +38,13 @@ const NAME_KEY = 'seal-survivor-player-name';
 // Must match MAX_NAME_LEN in server/leaderboard-worker.js — the server is the
 // authority and truncates anything longer, so raising it here alone would let
 // players type a name the board then silently cuts.
-export const MAX_NAME_LEN = 24;
+//
+// 32, up from 24. The number is the FIELD's limit as much as the board's: it
+// is only worth what the input can show at once, because a name whose tail
+// scrolls out of the box while you type it reads as the field being broken.
+// See .sv-name-input in ui/ui.js, which is sized against this — raising this
+// alone would give players room they cannot see themselves using.
+export const MAX_NAME_LEN = 32;
 
 /**
  * What to call a player who has not told us. Deliberately not "ANON" or
@@ -147,18 +153,32 @@ export function clearPlayerName() {
 }
 
 /**
- * Mirrors cleanName in server/leaderboard-worker.js. See the note at the top.
+ * The CHARACTER half of the rule, with no length limit applied.
+ *
+ * Split out of sanitizeName because the two halves fail differently and one
+ * caller has to tell them apart. sealNameTable.js loads a table of names the
+ * game might roll into this field, and a row that is merely too long is a file
+ * error worth refusing loudly — while sanitizeName, which is right for a field
+ * somebody is typing into, would silently hand back the first 24 characters of
+ * it and leave the table looking fine.
  *
  * `trimStart` only, not `trim`: a trailing space is how somebody is mid-word,
  * and eating it while they type would make the field fight the typist. The
  * server trims both ends when the score is posted.
  */
-export function sanitizeName(raw) {
+export function stripName(raw) {
   return String(raw ?? '')
     .replace(/[<>&"'\\]/g, '')
     .replace(/\s+/g, ' ')
-    .trimStart()
-    .slice(0, MAX_NAME_LEN);
+    .trimStart();
+}
+
+/**
+ * Mirrors cleanName in server/leaderboard-worker.js. See the note at the top.
+ * The character rules above, plus the length the board will accept.
+ */
+export function sanitizeName(raw) {
+  return stripName(raw).slice(0, MAX_NAME_LEN);
 }
 
 // ---------------------------------------------------------------------------

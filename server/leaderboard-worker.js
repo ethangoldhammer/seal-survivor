@@ -4,7 +4,7 @@
 // can move hosts without the board moving with it.
 //
 // The whole board is a SINGLE KV value rather than a key per score. KV is
-// eventually consistent and has no queries, so "top 10 by score" out of
+// eventually consistent and has no queries, so "top 100 by score" out of
 // scattered keys would mean listing and reading every entry on every page
 // load. One value that's already sorted makes a read exactly one KV get, and
 // the board is capped at 100 entries so it stays small.
@@ -16,11 +16,20 @@
 
 const BOARD_KEY = 'board:v1';
 const MAX_ENTRIES = 100;
-const RETURNED_ENTRIES = 10;
+// THE WHOLE BOARD IS SENT NOW. These were 100 and 10: the board kept a hundred
+// runs and showed the top ten, so ninety of them existed only to be waited on.
+// A player who is 40th is on the leaderboard, and the only way for them to
+// find that out is to be sent the row. At ~90 bytes an entry the full board is
+// under 10KB, which is smaller than one of this game's textures.
+//
+// Still two constants rather than one, because they answer different
+// questions — how much is KEPT and how much is SHOWN — and the day the board
+// is worth 1000 entries deep is the day they diverge again.
+const RETURNED_ENTRIES = MAX_ENTRIES;
 // Must match MAX_NAME_LEN in path/src/systems/playerName.js. This one is the
 // authority — the client's copy only keeps the field from showing a name that
 // would be cut here.
-const MAX_NAME_LEN = 24;
+const MAX_NAME_LEN = 32;
 
 // Per-IP submit budget. Reads are unmetered — it's writes that cost and that a
 // script would hammer.

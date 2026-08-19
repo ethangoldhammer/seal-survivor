@@ -67,11 +67,12 @@ for (const style of TIP_DISSOLVES) {
     const { tip, ink } = tipNode();
     cell.append(label, tip);
     grid.appendChild(cell);
-    // A DIFFERENT CLOCK PER CELL, tied to progress. The flow is what makes
-    // these liquid, and five stills all sampled at clock 0 would show five
-    // frames of the same static field — which is the one thing this page must
-    // not misrepresent.
-    cells.push({ ink, style, t, clock: 0.35 + t * 1.6, live: false });
+    // Each still is sampled at ITS OWN point in the flow, because the pan is
+    // what makes these liquid — five cells all at clock 0 would be five frames
+    // of the same static field, which is the one thing this page must not
+    // misrepresent. Progress times the fall time is exactly what the game
+    // hands in at that progress.
+    cells.push({ ink, style, t, live: false });
   }
   row.appendChild(grid);
   sheet.appendChild(row);
@@ -138,8 +139,13 @@ function paint() {
   const phase = clock % LOOP;
   const t = phase < FALL ? phase / FALL : 0;
   for (const c of cells) {
-    if (c.live) applyTipDissolve(c.ink, c.style, t, clock, opts);
-    else applyTipDissolve(c.ink, c.style, c.t, c.clock, opts);
+    // THE CLOCK IS TIME SINCE THIS DISSOLVE STARTED, in both rows — see the
+    // note on applyTipDissolve. Handing it the page's own ever-growing clock is
+    // what made a tip that had been on screen a minute vanish outright instead
+    // of dissolving: the noise field slides out of the filter region and the
+    // cut then composites against nothing.
+    if (c.live) applyTipDissolve(c.ink, c.style, t, t * FALL, opts);
+    else applyTipDissolve(c.ink, c.style, c.t, c.t * FALL, opts);
   }
 }
 

@@ -112,43 +112,13 @@ export function createHeadLook(instance) {
   const dir = new THREE.Vector3(1, 0, 0);
   let dirPrimed = false;
 
-  // Anti-ratchet. The bend cap in applyChain is measured against whatever is
-  // in the bone when it starts — which is meant to be "the pose the animation
-  // wrote this frame". That holds for the seal, whose mixer overwrites its
-  // neck bones every single frame, so the cap reads as an absolute limit.
-  //
-  // It does NOT hold here. shark.glb ships no clips at all, and even the
-  // rigged creatures only have tracks for the bones their animator happened
-  // to key. A bone nothing else writes still holds LAST frame's IK output, so
-  // the "limit" becomes a per-frame budget measured from our own previous
-  // answer, and the head walks a further maxBend round every frame until it
-  // is looking clean through its own body. Measured before this guard: the
-  // shark's head reached 31 degrees against a 10 degree cap, and climbing.
-  //
-  // Same failure the bone springs hit — see the note in systems/animation.js
-  // about the spring chasing its own output — and the same shape of fix:
-  // give the solver a stable reference instead of its own last answer. Here
-  // that means putting back the pose we were handed, but only for bones that
-  // still hold exactly what we wrote, since anything else means a clip (or
-  // the procedural wag) has since overwritten it and that new value is the
-  // honest reference.
-  const n = head.bones.length;
-  const givenQ = Array.from({ length: n }, () => new THREE.Quaternion());
-  const wroteQ = Array.from({ length: n }, () => new THREE.Quaternion());
-  let hasWritten = false;
-
-  function restoreReference() {
-    if (!hasWritten) return;
-    for (let i = 0; i < n; i++) {
-      // Exact equality is the right test, not a tolerance: a mixer writing
-      // this bone produces its own value, and an untouched bone still holds
-      // the exact float we stored. (A clip that happened to key a bone to
-      // precisely our last output would be restored one frame stale — which
-      // is the same value it already held, so nothing moves.)
-      if (head.bones[i].quaternion.equals(wroteQ[i])) head.bones[i].quaternion.copy(givenQ[i]);
-    }
-  }
-
+  // The anti-ratchet guard this system used to carry lives in
+  // systems/ikChain.js now — see restoreReference there, which is the same
+  // measurement and the same fix, applied to every chain that goes through
+  // applyChain. It moved because the seal needed it too: `water_idle` holds
+  // head_07's keys for runs of up to 13, so the mixer stops writing the skull
+  // on 86% of idle frames and the player's neck ratcheted exactly as a
+  // clipless shark's did.
   return {
     head,
 
@@ -170,11 +140,6 @@ export function createHeadLook(instance) {
       // keep reading the config object itself and allocate nothing.
       const cfg = boss && base.boss ? { ...base, ...base.boss } : base;
       let gate = 0;
-
-      // Before anything reads these bones: put back the pre-IK pose wherever
-      // nothing else has written since, then record what we were handed.
-      restoreReference();
-      for (let i = 0; i < n; i++) givenQ[i].copy(head.bones[i].quaternion);
 
       if (cfg.enabled && target && !suppressed) {
         // Aim from the chain's own root, matching how the seal's chains each
@@ -242,9 +207,6 @@ export function createHeadLook(instance) {
       // leave the chain primed with a stale pose to ease out of next time
       // this creature found a target.
       applyChain(head, dt, cfg, weight, 1, _aim);
-
-      for (let i = 0; i < n; i++) wroteQ[i].copy(head.bones[i].quaternion);
-      hasWritten = true;
     },
 
     // New run / recycled instance: forget the pose entirely rather than
@@ -255,7 +217,7 @@ export function createHeadLook(instance) {
     reset() {
       weight = 0;
       head.primed = false;
-      hasWritten = false;
+      head.hasWritten = false;
       dirPrimed = false;
     },
 

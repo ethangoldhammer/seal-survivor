@@ -68,6 +68,44 @@ export function hdrInto(out, color, overdrive) {
   return out.multiplyScalar(overdrive / peak);
 }
 
+// THE OTHER NORMALISATION, and the two are not interchangeable — they answer
+// different questions and each is useless for the other's.
+//
+//   hdrInto   NOT CLIPPING at the composite. Peak channel, because clipping is
+//             per channel: whichever is largest is the one that truncates.
+//   lumInto   BLOOMING AT ALL. Rec.709 luminance, because that is literally
+//             what brightFragmentShader thresholds — and peak-normalisation
+//             does nothing for it. Every fully saturated hue has a peak of 1,
+//             so dividing by the peak divides every hue by the same number
+//             while their luminances still span 10x: green is worth 72% and
+//             blue 7%. That is why a cyan beam authored at a sane 0.9 can
+//             simply refuse to glow.
+//
+// The cost of asking for a luminance is that a dark hue needs a big
+// multiplier — a saturated red reaching luminance 2.2 lands with a peak
+// channel near 9.5, and the composite knee turns its core white while the
+// halo stays red. That is the correct trade when the ask is "this colour must
+// bloom as hard as that one": see CONFIG.eyes.bloomLum, where a green boost
+// and a red damage flash are both required to be big.
+//
+// Weights are duplicated from brightFragmentShader deliberately — they are the
+// same constant seen from the two sides of the same pass, and a shader uniform
+// cannot be read back from JS.
+const LUM = { r: 0.2126, g: 0.7152, b: 0.0722 };
+export function lumInto(out, color, target) {
+  out.set(color);
+  const lum = out.r * LUM.r + out.g * LUM.g + out.b * LUM.b;
+  if (!(lum > 1e-6)) return out.setRGB(0, 0, 0);
+  return out.multiplyScalar(target / lum);
+}
+
+/** Rec.709 luminance of a colour, for readouts and assertions. */
+export function luminance(color) {
+  const c = _lumScratch.set(color);
+  return c.r * LUM.r + c.g * LUM.g + c.b * LUM.b;
+}
+const _lumScratch = new THREE.Color();
+
 // THE PROFILE — a taper along the beam and a soft falloff across it, drawn
 // once into a texture and reused by every beam in the game.
 //

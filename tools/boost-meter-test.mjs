@@ -26,9 +26,10 @@ import {
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
   chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips, cancelDash,
   updateCharge, perfectCrossed, strikeLoaded, inSweetSpot, sweetOffset, sweetHalfWidth,
+  consumeChainLink,
   strikeBurst, riderDamage,
 } from '../path/src/systems/strike.js';
-import { magnetRadius, magnetSpeed, magnetDistance, magnetState, chumHoming } from '../path/src/systems/chumMagnet.js';
+import { magnetRadius, magnetSpeed, magnetDistance, magnetState, chumSweep, foodReach, foodPull } from '../path/src/systems/chumMagnet.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
 import { updatePickups, resetPickups, spawnXpOrb } from '../path/src/entities/pickups.js';
 
@@ -79,8 +80,18 @@ function tick(dt, hooks = {}) {
   updateStrike(dt, null, { x: 0, y: 0 }, stats(), [], hooks);
 }
 
+// A RUN OPENS ON A DEAD METER — CONFIG.strike.charge.startPips is 0, so the
+// first thing a run has to do is eat. Almost every claim below is about what
+// the bar does once there IS fuel in it, so they reset and then fill, and the
+// fill is written out rather than assumed. See the opening-balance section at
+// the bottom of the pip block for the claim about the 0 itself.
+function fuelled() {
+  resetStrike();
+  strikeState.charge = 1;
+}
+
 console.log('\nPIP COUNT IS DERIVED FROM THE REFILL');
-resetStrike();
+fuelled();
 check('the default 0.2 refill is a five-pip bar', pipCount(stats(0.2)) === 5);
 check('one pip is exactly one fifth', near(pipValue(stats(0.2)), 1 / 5));
 // Coiled Spring: +0.04 per stack, four stacks. The card's own text promises
@@ -89,28 +100,29 @@ check('one pip is exactly one fifth', near(pipValue(stats(0.2)), 1 / 5));
 check('one stack of Coiled Spring -> 4 pips', pipCount(stats(0.24)) === 4);
 check('four stacks -> 3 pips, exactly as the card says', pipCount(stats(0.36)) === 3);
 
-console.log('\nA CHAIN ADDS A PIP PER LINK — the cost escalation, made countable');
-resetStrike();
-check('no chain -> base pips', pipCount(stats(0.2)) === 5);
-chainStrike('strikeRelease');
-check('one live link -> 6 pips', liveChain() === 1 && pipCount(stats(0.2)) === 6);
-chainStrike('strikeRelease');
-check('two live links -> 7 pips', pipCount(stats(0.2)) === 7);
-// The ceiling that replaced chainRefillFloor: without one a deep chain reaches
-// a bar that cannot practically be filled and dies to arithmetic.
-for (let i = 0; i < 30; i++) chainStrike('strikeRelease');
-check('capped at maxPips however deep the chain goes',
-  pipCount(stats(0.2)) === CONFIG.strike.charge.maxPips);
-
-console.log('\nAN EXPIRED CHAIN IS BACK TO BASE PRICE');
-resetStrike();
-chainStrike('strikeRelease');
-chainStrike('strikeRelease');
-check('the chain is live and the bar is dearer', pipCount(stats(0.2)) === 7);
-// chainCount is left standing until the window expires, so this is the case
-// that used to have every caller spelling out its own liveChain() check.
-tick(CONFIG.strike.chainWindow + 0.01);
-check('window expired -> back to 5 pips', pipCount(stats(0.2)) === 5);
+console.log('\nTHE BAR IS A FIXED LENGTH — nothing in a run can move it');
+// IT USED TO GROW A PIP PER LINK, as the escalation that made each link dearer
+// than the last. Both the job and the field are gone: a link is one mouthful
+// now and is not bought with the bar at all — and the escalation could not
+// have survived per-pip links anyway, because the count would have been a
+// function of how much had been eaten while eating was the thing filling it.
+// A six-pip bar took seven chum, which is exactly the unpredictability the
+// pips were introduced to remove, arriving by a third route.
+//
+// So this sweeps every state that used to move it and insists none of them do.
+fuelled();
+const BAR = 5;   // a 0.2 refill is a five-pip bar
+check('no chain -> base pips', pipCount(stats(0.2)) === BAR);
+strikeState.chainTimer = CONFIG.strike.chainWindow;
+for (const [links, pips] of [[1, BAR], [2, BAR * 2], [30, BAR * 30], [200, 1]]) {
+  strikeState.chainCount = links;
+  strikeState.chainPips = pips;
+  check(`  x${links} off ${pips} mouthfuls is still ${BAR} pips`,
+    pipCount(stats(0.2)) === BAR, `${pipCount(stats(0.2))} pips`);
+}
+fuelled();
+check('and the ceiling still binds a derived count',
+  pipCount(stats(0.001)) === CONFIG.strike.charge.maxPips);
 check('chumRefillMul reports 1 with no chain', near(chumRefillMul(stats(0.2)), 1));
 
 console.log('\nEXACTLY N MOUTHFULS FILL THE BAR — the whole point');
@@ -123,11 +135,15 @@ console.log('\nEXACTLY N MOUTHFULS FILL THE BAR — the whole point');
 // 3 pips — exactly the three the narrow test happened to cover — summed
 // cleanly. See snapToPip in systems/strike.js.
 function orbsToFill(depth, refill = 0.2) {
-  resetStrike();
+  fuelled();
   strikeState.charge = 0;
   // Written directly rather than earned through chainStrike: the sources are
   // individually rate-limited, so building six real links here would be
-  // testing the throttles instead of the price.
+  // testing the throttles instead of the fill. `depth` no longer changes the
+  // pip count at all — it is swept anyway, because "the chain cannot move the
+  // bar" is the property, and a sweep that only ever ran at depth 0 could not
+  // see it break.
+  strikeState.chainPips = depth * 5;
   strikeState.chainCount = depth;
   strikeState.chainTimer = depth > 0 ? CONFIG.strike.chainWindow : 0;
   let eaten = 0;
@@ -136,7 +152,8 @@ function orbsToFill(depth, refill = 0.2) {
 }
 let sweepBad = [];
 for (let depth = 0; depth <= 14; depth++) {
-  resetStrike();
+  fuelled();
+  strikeState.chainPips = depth * 5;
   strikeState.chainCount = depth;
   strikeState.chainTimer = depth > 0 ? CONFIG.strike.chainWindow : 0;
   const n = pipCount(stats(0.2));
@@ -148,7 +165,7 @@ check('every chain depth 0-14 fills in exactly its pip count',
 if (sweepBad.length) sweepBad.forEach((s) => console.log(`          ${s}`));
 
 for (const refill of [0.2, 0.24, 0.36]) {
-  resetStrike();
+  fuelled();
   const n = pipCount(stats(refill));
   strikeState.charge = 0;
   let eaten = 0;
@@ -161,17 +178,17 @@ console.log('\nA PART-PIP IS NEVER ROUNDED UP TO A WHOLE ONE');
 // The snap must only ever repair a rounding error, never award free fuel. A
 // bar burnt to an arbitrary level and then fed one chum has to land one pip
 // higher than it was, not on the boundary above.
-resetStrike();
+fuelled();
 strikeState.charge = 0.5;   // deliberately off a 5-pip boundary
 feedChum(stats(0.2));
 check('half a bar plus one pip is exactly 0.7', near(strikeState.charge, 0.7, 1e-9));
-resetStrike();
+fuelled();
 strikeState.charge = 0.79;  // a hair under full at 5 pips (0.8 is pip 4)
 feedChum(stats(0.2));
 check('0.79 + one pip does not snap to full', strikeState.charge < 1);
 
 console.log('\nEVERY PIP BOUNDARY IS BOOKED, AND DRAINS ON A FLOOR');
-resetStrike();
+fuelled();
 strikeState.charge = 0;
 const n = pipCount(stats());
 for (let i = 0; i < n; i++) feedChum(stats());
@@ -200,20 +217,20 @@ check(`  ...spread over ~${expected} frames at a ${gap}s floor`,
   frames >= expected - 2 && frames <= expected + 3);
 
 console.log('\nA BLUE ORB IS A WHOLE BAR OF PIPS');
-resetStrike();
+fuelled();
 strikeState.charge = 0;
 restoreCharge(stats());
 check('fills the bar outright', near(strikeState.charge, 1));
 check('and books every pip it crossed', pendingPips() === pipCount(stats()));
 
 console.log('\nTOPPING UP A FULL BAR BOOKS NOTHING');
-resetStrike();
+fuelled();
 strikeState.charge = 1;
 feedChum(stats());
 check('no pips queued against a bar already full', pendingPips() === 0);
 
 console.log('\nTHE QUEUE IS BOUNDED');
-resetStrike();
+fuelled();
 strikeState.charge = 0;
 // Far more crossings than a bar can hold, as a stand-in for a pathological
 // frame. The backlog is trimmed from the FRONT so the run always ENDS on the
@@ -222,17 +239,32 @@ for (let i = 0; i < 200; i++) { strikeState.charge = 0; feedChum(stats()); }
 check('backlog never exceeds maxPips',
   pendingPips() <= (CONFIG.strike.charge.maxPips ?? 12));
 
-console.log('\nRESET CLEARS THE TICK QUEUE');
+console.log('\nRESET CLEARS THE TICK QUEUE, AND OPENS ON THE STARTING BALANCE');
 resetStrike();
 check('a new run starts silent', pendingPips() === 0);
-check('and with a full bar', near(strikeState.charge, 1));
+// THE OPENING BALANCE, in pips, and it is 0 — the run begins with a dead meter
+// and the food chain is the only thing that can fuel it. Read through
+// pipCount so the claim is "N pips" and not "a fraction", which is the same
+// reason resetStrike divides rather than storing a fraction: a card that
+// changes what a mouthful is worth changes the bar's length, and the promise
+// has to survive that.
+const startPips = CONFIG.strike.charge.startPips ?? 0;
+check(`a run opens with ${startPips} of its ${pipCount(stats())} pips`,
+  near(strikeState.charge, startPips / pipCount(stats())));
+check('  ...so nothing can be fired until something is eaten',
+  startPips > 0 || strikeState.charge < (CONFIG.strike.charge.minFire ?? 0.35));
+// And the meter has NO passive regeneration, which is what makes the 0 bite:
+// a run left alone for ten seconds is still on empty.
+for (let i = 0; i < 600; i++) tick(1 / 60);
+check('  ...and ten seconds of doing nothing adds none',
+  near(strikeState.charge, startPips / pipCount(stats())));
 
 // ============================================================================
 // THE TWO-COUNTER CHAIN — pips drive the MULTIPLIER, bars drive the PRICE.
 // ============================================================================
 
 console.log('\nEVERY MOUTHFUL FEEDS THE MULTIPLIER, NOT JUST A FULL BAR');
-resetStrike();
+fuelled();
 strikeState.charge = 0;
 strikeState.active = true;          // a live combo, which is what opens the window
 const per = pipCount(stats());      // 5 pips = one link's worth of multiplier
@@ -248,7 +280,7 @@ console.log('\nTHE OLD CONSTANTS STILL MEAN WHAT THEY MEANT');
 // The whole reason the level is FRACTIONAL: a bar's worth of food has to land
 // on exactly the multiplier the per-link constants were tuned against, or every
 // one of them would have needed rescaling by hand.
-resetStrike();
+fuelled();
 strikeState.active = true;
 strikeState.charge = 0;
 for (let i = 0; i < per * 2; i++) feedChum(stats());   // two links' worth
@@ -266,7 +298,7 @@ console.log('\nONE ORB KEEPS THE CHAIN ALIVE — the reachability fix');
 // The old rule was "empty AND refill the whole bar inside the window", i.e. a
 // strike plus six mouthfuls in 1.1s. This is the check that it is now a single
 // mouthful, which is the difference between a mechanic and a trick.
-resetStrike();
+fuelled();
 strikeState.active = true;
 strikeState.charge = 0;
 feedChum(stats());
@@ -285,33 +317,31 @@ check('  ...taking BOTH counters with it',
 console.log('\nA CHAIN STILL HAS TO BE OPENED BY A DASH');
 // The entry condition is deliberately untouched: cruising over a stray orb
 // must not silently start a chain, or the multiplier is simply always on.
-resetStrike();
+fuelled();
 strikeState.charge = 0;
 strikeState.active = false;
 feedChum(stats());
 check('eating outside a combo starts nothing', strikeState.chainPips === 0);
 check('  ...but still refills the bar', strikeState.charge > 0);
 
-console.log('\nBARS STILL DRIVE THE PRICE, INDEPENDENTLY OF THE MULTIPLIER');
-resetStrike();
+console.log('\nA BAR OF FOOD IS A WHOLE LINK OF MULTIPLIER, AND COSTS NOTHING');
+fuelled();
 strikeState.active = true;
 strikeState.charge = 0;
 check('base price is the base pip count', pipCount(stats()) === per);
 for (let i = 0; i < per; i++) feedChum(stats());   // fills the bar exactly once
 check('a full bar is worth a whole link of multiplier',
   near(chainLevel(stats()), 1, 1e-9));
-// The link itself is scored by the caller (chainFrom -> chainStrike), which is
-// what moves the bar counter. The price only moves with THAT.
-chainStrike('strikeRelease');
-check('and scoring the link is what raises the price', pipCount(stats()) === per + 1);
-check('  ...while the multiplier is unchanged by the price rising',
-  near(chainLevel(stats()), 1, 1e-9));
+// ...and the bar it was eaten out of is the same length it started. This is
+// the pairing that used to be a trade — eat a bar, pay a pip — and is now
+// simply a reward, because the price it was paying for no longer exists.
+check('  ...and the bar it filled is unchanged', pipCount(stats()) === per);
 
 console.log('\nTHE MULTIPLIER DOES NOT FALL BACKWARDS WHEN A LINK LANDS');
 // chainLevel divides by the BASE pip count, never the live one. Dividing by a
 // count that grows with each link would make earning a link visibly slow the
 // seal down — the exact opposite of what a link is for.
-resetStrike();
+fuelled();
 strikeState.active = true;
 strikeState.charge = 0;
 for (let i = 0; i < per; i++) feedChum(stats());
@@ -325,7 +355,7 @@ check('four links later the multiplier is exactly where it was',
 // ============================================================================
 
 console.log('\nTHE MAGNET KNOWS WHAT THE SEAL IS DOING');
-resetStrike();
+fuelled();
 const mStats = { pickupRadius: CONFIG.player.pickupRadius };
 const A = CONFIG.animation ?? {};
 check('drifting is the base reach',
@@ -349,7 +379,7 @@ console.log('\nTHE PULL CAN ACTUALLY CATCH A DASHING SEAL');
 // The failure this guards is silent and total: at the base 14 u/s against a
 // 46 u/s dash an orb off to the side falls behind at 32 u/s and never arrives,
 // so a wider striking radius would collect nothing whatsoever.
-resetStrike();
+fuelled();
 strikeState.active = true;
 const pull = magnetSpeed(0);
 check(`striking pull (${pull.toFixed(1)} u/s) beats dashSpeed (${CONFIG.strike.dashSpeed})`,
@@ -357,7 +387,7 @@ check(`striking pull (${pull.toFixed(1)} u/s) beats dashSpeed (${CONFIG.strike.d
 strikeState.active = false;
 
 console.log('\nWHILE DASHING THE REACH IS A CORRIDOR, NOT A CIRCLE');
-resetStrike();
+fuelled();
 strikeState.active = true;
 strikeState.dashDir = { x: 1, y: 0 };
 const cfgC = CONFIG.pickups.magnet.striking;
@@ -411,71 +441,122 @@ function strike({ late = 0, st = stats() } = {}) {
 // FOOD; a test about one has to be able to move it without moving the other,
 // which is exactly what eating five chum would not do.
 const fillTank = () => { strikeState.charge = 1; };
+const feed = (n) => { for (let i = 0; i < n; i++) feedChum(stats()); };
+// ENOUGH FOOD TO BOTH ARM A LINK AND AFFORD A STRIKE, which are two different
+// thresholds and the difference is easy to walk into. A link costs
+// `linkPips` mouthfuls — one — but a release cannot fire at all until
+// `minFire` of the bar is banked, so on an empty tank the real floor is
+// whichever is higher: two pips of a five-pip bar. Feeding exactly one and
+// wondering why nothing fires is the mistake this exists to name.
+const pipsToFire = () => Math.max(linkPips(stats()),
+  Math.ceil((CONFIG.strike.charge.minFire ?? 0.35) * pipCount(stats())));
 
-console.log('\nA LINK NEEDS BOTH HALVES: FOOD EATEN, AND A WINDOW STILL OPEN');
-resetStrike();
-// Strike one. Nothing eaten yet, so it scores nothing — it opens the window.
+console.log('\nA RELEASE OPENS THE WINDOW AND SCORES NOTHING ITSELF');
+fuelled();
 check('the opening strike fires', strike() === true);
-check('  ...but scores no link — nothing was eaten for it', consumeStrikeLink().chain === 0);
-check('  ...and it opens the window so eating starts counting',
-  strikeState.chainTimer > 0);
-
-// Eat a bar's worth, then strike again inside the window.
+check('  ...and scores no link — a release arms, it does not link',
+  consumeStrikeLink().depth === 0 && liveChain() === 0);
+check('  ...but it opens the window, so eating starts counting',
+  strikeState.chainTimer > 0 && strikeState.armed === true);
+// ...and a second release inside the window still scores nothing on its own,
+// however well fed it was. This was the whole mechanic one model ago.
 strikeState.charge = 0;
-for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
-check(`${linkPips(stats())} mouthfuls arm the next release (a ${pipCount(stats())}-pip bar)`,
-  strikeState.pipsSinceStrike >= linkPips(stats()));
+feed(pipsToFire());
+check(`${linkPips(stats())} mouthful is the gate (a ${pipCount(stats())}-pip bar)`,
+  linkPips(stats()) === 1);
+check(`  ...though ${pipsToFire()} are needed before a strike can fire at all`,
+  strikeState.charge >= CONFIG.strike.charge.minFire);
+const depthBefore = liveChain();
 check('the second strike fires', strike() === true);
-const link1 = consumeStrikeLink().chain;
-check('  ...and THIS one scores the link', link1 === 1);
+check('  ...and it too adds nothing — the FOOD did all of it',
+  liveChain() === depthBefore, `x${depthBefore} -> x${liveChain()}`);
 check('  ...clearing the counter behind it', strikeState.pipsSinceStrike === 0);
-check('  ...and the link only reads once', consumeStrikeLink().chain === 0);
-
-console.log('\nSTRIKING WITHOUT EATING SCORES NOTHING');
-resetStrike();
-strike(); consumeStrikeLink();
-fillTank();
-strike();
-check('a second strike on an unfed bar is not a link', consumeStrikeLink().chain === 0);
-
-console.log('\nEATING WITHOUT STRIKING SCORES NOTHING EITHER');
-// This is the whole change: the bar reaching full used to BE the link. Now it
-// only arms one, and the strike is what cashes it.
-resetStrike();
-strike(); consumeStrikeLink();
-strikeState.charge = 0;
-for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
-check('eating alone scores no link', strikeState.chainCount === 0);
-check('  ...it only arms one', strikeState.pipsSinceStrike >= linkPips(stats()));
+cancelDash();
 
 console.log('\nTHE WINDOW STILL HAS TO BE OPEN');
-resetStrike();
-strike(); consumeStrikeLink();
-strikeState.charge = 0;
-for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
+fuelled();
+strike(); cancelDash();
 strikeState.active = false;
 tick(CONFIG.strike.chainWindow + 0.05);          // let it lapse
 check('the window lapsed', strikeState.chainTimer <= 0);
+feedChum(stats());
+check('a mouthful after it shut scores nothing', consumeChainLink() === 0);
+fillTank();
 strike();
-check('a fed strike after the window shut scores nothing', consumeStrikeLink().chain === 0);
-check('  ...but it opens a fresh window', strikeState.chainTimer > 0);
+check('  ...but a fresh strike opens a fresh window',
+  strikeState.chainTimer > 0 && strikeState.armed === true);
+check('  ...and the next mouthful links again', (feedChum(stats()), consumeChainLink()) === 1);
+cancelDash();
 
-console.log('\nONE TURN OF THE CYCLE IS EXACTLY ONE LINK');
-// chumFull and strikeRelease are the same event seen twice. A tuning snapshot
-// can pin chumFull on, so the rule that stops them double-scoring is
-// structural rather than a config default — this is the check that it holds.
-resetStrike();
+console.log('\nONE MOUTHFUL IS EXACTLY ONE LINK');
+// `chumFull` and `chumEaten` are the same food at two grains — every mouthful,
+// and the one that tops the bar off. A tuning snapshot can pin chumFull on, so
+// the rule that stops them double-scoring is structural rather than a config
+// default; this is the check that it holds.
+fuelled();
 const wasChumFull = CONFIG.strike.chainOn.chumFull;
 CONFIG.strike.chainOn.chumFull = true;           // as a stale snapshot would
-strike(); consumeStrikeLink();
+strike(); cancelDash();
 strikeState.charge = 0;
-for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
-check('chumFull is suppressed while strikeRelease is on',
+check('chumFull is suppressed while chumEaten is on',
   chainStrike('chumFull') === 0);
-strike();
-check('  ...so one refill-and-spend is one link, not two',
-  consumeStrikeLink().chain === 1 && strikeState.chainCount === 1);
+for (let i = 0; i < pipCount(stats()); i++) feedChum(stats());
+check('  ...so a whole bar eaten is exactly its pip count in links',
+  liveChain() === pipCount(stats()), `x${liveChain()} off ${pipCount(stats())} chum`);
 CONFIG.strike.chainOn.chumFull = wasChumFull;
+fuelled();
+
+console.log('\nTHE STRIKE ARMS, THE FOOD SCORES');
+// THE SHORTEST PATH TO A FOOD CHAIN, which is the thing that kept not
+// happening. One release on the beat, one chum — that is the whole entry
+// price, and it has to be reachable in that order because that is the order a
+// player does it in.
+fuelled();
+check('a sweet release arms a chain', strike() === true && strikeState.armed === true);
+check('  ...and scores nothing on its own', consumeChainLink() === 0);
+check('  ...with no chain running yet', liveChain() === 0);
+check('ONE mouthful makes it a chain', (feedChum(stats()), consumeChainLink()) === 1);
+check('  ...and the chain is live at x1', liveChain() === 1);
+// ...and the number climbs per pip from there, which is the other half.
+feedChum(stats());
+check('  ...the next mouthful ticks it to x2', consumeChainLink() === 2);
+feedChum(stats());
+feedChum(stats());
+check('  ...one per pip, so four mouthfuls is x4', liveChain() === 4, `x${liveChain()}`);
+cancelDash();
+fuelled();
+
+console.log('\nAND EATING WITHOUT A SWEET STRIKE BEHIND IT SCORES NOTHING');
+// The arming is what a link is bought with. Without it a seal parked on a pile
+// would chain forever having never struck, which is the whole mechanic gone.
+fuelled();
+strikeState.chainTimer = CONFIG.strike.chainWindow;   // a window, but unearned
+feedChum(stats());
+check('an unarmed window scores no link', consumeChainLink() === 0);
+check('  ...and leaves the chain at zero', liveChain() === 0);
+// A mistimed release does not arm one either.
+fuelled();
+const halfW = sweetHalfWidth(stats());
+strike({ late: halfW * 3 });
+check('a mistimed release arms nothing', strikeState.armed === false);
+feedChum(stats());
+check('  ...so eating after it scores nothing', consumeChainLink() === 0);
+cancelDash();
+fuelled();
+
+console.log('\nAND THE ARMING DIES WITH THE CHAIN');
+// Otherwise one good strike licenses every mouthful for the rest of the run.
+fuelled();
+strike(); cancelDash();
+feedChum(stats());
+check('the chain is running', liveChain() === 1 && (consumeChainLink(), true));
+tick(CONFIG.strike.chainWindow + 0.05);
+check('  ...the window lapsed', strikeState.chainTimer <= 0);
+check('  ...and the arming went with it', strikeState.armed === false);
+strikeState.chainTimer = CONFIG.strike.chainWindow;
+feedChum(stats());
+check('  ...so eating no longer links', consumeChainLink() === 0);
+fuelled();
 
 console.log('\nTHE DASH EATS SMALL PREY, AND ONLY SMALL PREY');
 const cull = CONFIG.strike.preyCull;
@@ -503,7 +584,7 @@ check('the cull line matches the mark line',
 // ============================================================================
 
 console.log('\nTHE PERFECT CHARGE LATCHES ONCE, AND CLEARS WHEN IT IS SPENT');
-resetStrike();
+fuelled();
 const perfectAt = CONFIG.strike.charge.perfectAt ?? 1;
 check('a fresh run has no perfect charge banked', strikeState.perfect === false);
 check('...and no edge waiting to be consumed', perfectCrossed() === false);
@@ -555,7 +636,7 @@ check('a perfect charge is always enough to fire',
   perfectAt >= CONFIG.strike.charge.minFire,
   `perfectAt ${perfectAt} vs minFire ${CONFIG.strike.charge.minFire}`);
 
-resetStrike();
+fuelled();
 check('a reset clears the latch, the stamp and the pop',
   strikeState.perfect === false && strikeState.perfectStrike === false && strikeState.perfectFlash === 0);
 
@@ -577,7 +658,7 @@ check('a reset clears the latch, the stamp and the pop',
 // ============================================================================
 
 console.log('\nTHE WINDOW OPENS ON THE MOMENT THE PLAYER IS SHOWN');
-resetStrike();
+fuelled();
 const half = sweetHalfWidth(stats());
 check(`the window is ${(half * 2 * 1000).toFixed(0)}ms wide`, half > 0);
 check('  ...which is sweetFraction of the wind-up, both sides',
@@ -613,12 +694,12 @@ check('  ...so holding on past it is a miss', inSweetSpot(stats()) === false);
 check('  ...with the wind-up still perfectly fireable', strikeState.pending >= CONFIG.strike.charge.minFire);
 // The sign says WHICH mistake it was, which is what a tell would need.
 check('being late reads as a positive offset', sweetOffset() > 0, sweetOffset().toFixed(3));
-resetStrike();
+fuelled();
 updateCharge(STEP, true, stats());
 check('  ...and being early as a negative one', sweetOffset() < 0, sweetOffset().toFixed(3));
 
 console.log('\nON THE BEAT THE STRIKE BITES; OFF IT, IT ONLY MOVES');
-resetStrike();
+fuelled();
 check('a release on the beat is stamped sweet', strike() === true && strikeState.sweetStrike === true);
 const onBeatBurst = strikeBurst(stats());
 check('  ...and the release burst has damage in it', onBeatBurst.damage > 0, onBeatBurst.damage.toFixed(1));
@@ -626,7 +707,7 @@ check('  ...and a radius to put it in', onBeatBurst.radius > 0);
 const onBeatDash = strikeState.dashDuration;
 cancelDash();
 
-resetStrike();
+fuelled();
 // Two full half-widths late: comfortably out, and still holding a full bank.
 check('a release well past the window fires anyway', strike({ late: half * 3 }) === true);
 check('  ...but is stamped as no strike at all', strikeState.sweetStrike === false);
@@ -644,7 +725,7 @@ check('  ...and the i-frames it paid for are still running', strikeState.invulnT
 cancelDash();
 
 console.log('\nAND OFF THE BEAT IT NEITHER STARTS NOR EXTENDS A CHAIN');
-resetStrike();
+fuelled();
 check('a mistimed opening strike fires', strike({ late: half * 3 }) === true);
 check('  ...and opens NO window, so eating counts for nothing',
   strikeState.chainTimer === 0);
@@ -654,20 +735,24 @@ while (strikeState.active && d < 600) { tick(1 / 60); d++; }
 check('  ...and the dash ending does not open one either',
   strikeState.chainTimer === 0);
 
-resetStrike();
-// A properly set-up link — food eaten, window open — thrown away on the timing.
-strike(); consumeStrikeLink(); cancelDash();
-strikeState.charge = 0;
-for (let i = 0; i < linkPips(stats()); i++) feedChum(stats());
-check('the next link is fully paid for',
-  strikeState.pipsSinceStrike >= linkPips(stats()) && strikeState.chainTimer > 0);
+fuelled();
+// AND IT CANNOT RE-ARM A CHAIN THAT HAS LAPSED, which is the case that decides
+// whether a mistimed strike costs anything. Let one run down, throw a bad one,
+// and the food that follows has nothing to score against.
+strike(); cancelDash();
+feedChum(stats());
+check('a chain is running', liveChain() === 1 && (consumeChainLink(), true));
+strikeState.active = false;
+tick(CONFIG.strike.chainWindow + 0.05);
+check('  ...and then lapses', strikeState.chainTimer <= 0 && strikeState.armed === false);
+fillTank();
 const missed = (strike({ late: half * 3 }), consumeStrikeLink());
-check('  ...and a mistimed release scores nothing regardless',
-  missed.chain === 0);
-check('  ...booked as OFF BEAT and not as a missing half',
-  missed.sweet === false && missed.hadFood === true && missed.hadWindow === true);
+check('  ...a mistimed release arms nothing', strikeState.armed === false);
+check('  ...booked as OFF BEAT', missed.sweet === false);
+feedChum(stats());
+check('  ...so the food after it links nothing', consumeChainLink() === 0);
 cancelDash();
-resetStrike();
+fuelled();
 
 // ============================================================================
 // THE PIPS PLOP UP ONE AT A TIME — even when a whole bar lands on one frame.
@@ -688,7 +773,7 @@ const litPips = () => {
 };
 
 resetStrikeRing();
-resetStrike();
+fuelled();
 strikeState.charge = 0;
 updateStrikeRing(1 / 60, pos, strikeState, true, stats());   // settle at empty
 const pips = pipCount(stats());
@@ -789,7 +874,7 @@ console.log('\nA LINK RE-SEGMENTS THE RING WITHOUT ANIMATING');
 // The pip count changed, so the pips on screen are no longer the pips in the
 // model; tweening between two different segmentations is a meaningless slide.
 resetStrikeRing();
-resetStrike();
+fuelled();
 strikeState.charge = 1;
 for (let f = 0; f < 200; f++) updateStrikeRing(1 / 60, pos, strikeState, true, stats());
 const before6 = litPips();
@@ -814,19 +899,15 @@ check('  ...and a full bar is still fully lit, with no slide',
 
 console.log('\nA PLAIN PASS HOOVERS CHUM IN — no dash required');
 const scene = new THREE.Scene();
-// ...INSIDE A CHAIN. The magnet is a FOOD CHAIN privilege now (chumHoming in
-// systems/chumMagnet.js), so every reach check below has to run with a window
-// open or it is measuring the gate rather than the radius. Its own section is
-// further down.
 const seal = (x, y, vx, vy, sealed = false) => ({
   mesh: { position: new THREE.Vector3(x, y, 0) },
   velocity: new THREE.Vector2(vx, vy),
   chumSealed: sealed,
   stats: { pickupRadius: CONFIG.player.pickupRadius, chumGulpRadius: 5 },
 });
-function collects(orbX, player, maxFrames = 400, chaining = true) {
+function collects(orbX, player, maxFrames = 400, chaining = false) {
   resetPickups(scene);
-  resetStrike();
+  fuelled();
   // The window, set directly rather than struck for: what is under test here
   // is the pickup system, and winding up a real strike would seal the mouth
   // and dash the seal away from the orb it is supposed to be reaching for.
@@ -856,45 +937,73 @@ check('a wind-up still seals the mouth',
   !collects(baseR * 0.7, seal(0, 0, 0, 0, true)));
 
 // ============================================================================
-// ...BUT ONLY INSIDE A FOOD CHAIN.
+// THE SWEEP IS THE CHAIN'S. THE MAGNET IS EVERYONE'S.
 //
-// The magnet is the chain's own privilege now. Outside one the seal does not
-// REACH for chum at all — food has to be swum into — which is what puts the
-// cost of the first link back on the player instead of on an ocean that
-// collects itself. The failure this pins is the quiet one: gate it wrong and
-// the mechanic still looks fine, because the seal picks food up either way and
-// only the RANGE it does it at has changed.
+// There is always a magnet — base radius, base pull — so no seal ever has to
+// earn the right to eat. What a live chain turns on is the LOUD version: the
+// per-state multipliers and the corridor above. Both collect; one hoovers.
+//
+// The failure this pins is silent in the worst possible way. Gate the magnet
+// itself rather than its strength and you have gated EATING, because the pull
+// is what carries an orb the last few units into `collectRadius` — the seal's
+// real reach collapses to the width of its mouth and nothing on screen says
+// so. A tier can only ever be wrong about how fast food arrives.
 // ============================================================================
 
-console.log('\nOUTSIDE A CHAIN THE SEAL DOES NOT REACH');
-resetStrike();
-check('no chain, no homing', chumHoming() === false);
+console.log('\nTHE SWEEP IS THE CHAIN\'S; THE MAGNET IS EVERYONE\'S');
+fuelled();
+check('no chain, no sweep', chumSweep() === false);
 strikeState.chainTimer = CONFIG.strike.chainWindow;
-check('a live window turns it on', chumHoming() === true);
+check('a live window turns it on', chumSweep() === true);
 // The dash counts too — that is the same window seen from inside it, and the
-// corridor is the reach a dash is FOR.
-resetStrike();
+// corridor is the reach a dash is FOR, on the beat or off it.
+fuelled();
 strikeState.active = true;
-check('and so does the dash itself', chumHoming() === true);
+check('and so does the dash itself', chumSweep() === true);
 strikeState.active = false;
 
-// An orb comfortably inside the magnet's reach and comfortably outside the
-// mouth. Inside a chain it is drawn in; outside one it is simply left there.
+// THE TIER, MEASURED. Both ends are real reaches at real speeds; neither is
+// zero, which is the whole safety property.
+fuelled();
+const cruiseR = foodReach(mStats, (A.boostThreshold ?? 14) + 5);
+const cruiseP = foodPull((A.boostThreshold ?? 14) + 5);
+strikeState.chainTimer = CONFIG.strike.chainWindow;
+const chainR = foodReach(mStats, (A.boostThreshold ?? 14) + 5);
+const chainP = foodPull((A.boostThreshold ?? 14) + 5);
+fuelled();
+check(`a chain reaches further — ${cruiseR.toFixed(1)} -> ${chainR.toFixed(1)} units`,
+  chainR > cruiseR);
+check(`  ...and pulls harder — ${cruiseP.toFixed(1)} -> ${chainP.toFixed(1)} u/s`,
+  chainP > cruiseP);
+check('  ...but cruising is the BASE magnet, not nothing',
+  cruiseR >= CONFIG.player.pickupRadius && cruiseP >= CONFIG.pickups.magnetSpeed,
+  `${cruiseR.toFixed(1)} units at ${cruiseP.toFixed(1)} u/s`);
+// The state multipliers really are what moved — a cruising seal ignores them.
+check('  ...i.e. the state multipliers are the chain\'s',
+  near(cruiseR, magnetRadius(mStats, 0), 1e-9),
+  `${cruiseR.toFixed(2)} vs drifting ${magnetRadius(mStats, 0).toFixed(2)}`);
+
+// An orb only the magnet could ever have delivered — outside the mouth, inside
+// the base radius. It has to go down BOTH ways, or the tier has become a gate.
 const pullOnly = (CONFIG.pickups.collectRadius + baseR) / 2;
-check('inside a chain, an orb in reach is drawn in',
+check('an orb in reach is eaten inside a chain',
   collects(pullOnly, seal(0, 0, 0, 0), 400, true));
-check('outside one, the same orb is left alone',
-  !collects(pullOnly, seal(0, 0, 0, 0), 400, false));
-// ...and the mouth still works. This is the half that keeps the gate from
-// being a starvation bug: chum can always be EATEN, it just has to be reached.
-check('  ...but swimming into it still eats it',
-  collects(0.3, seal(0, 0, 10, 0), 400, false));
+check('  ...and outside one, at the same radius',
+  collects(pullOnly, seal(0, 0, 0, 0), 400, false));
+// The radius still has to MEAN something without the sweep, or "always eats"
+// has become "eats everything".
+check('  ...but not one well outside it, when nothing is sweeping',
+  !collects(baseR * 2.5, seal(0, 0, 0, 0), 400, false));
+// And the sealed mouth still outranks both: a wind-up takes nothing at all.
+check('  ...and a wind-up still takes nothing, chain or no chain',
+  !collects(pullOnly, seal(0, 0, 0, 0, true), 400, true)
+  && !collects(pullOnly, seal(0, 0, 0, 0, true), 400, false));
 
 console.log('\nTHE CORRIDOR ONLY EVER ADDS REACH, NEVER TAKES IT');
 // magnetDistance swaps to a capsule while dashing. If that could ever return
 // MORE than the radial distance, dashing would collect less than drifting —
 // the exact regression this section exists to rule out.
-resetStrike();
+fuelled();
 let corridorShrank = 0;
 for (let ang = 0; ang < 32; ang++) {
   for (const d of [1, 3, 6, 12]) {
@@ -915,38 +1024,66 @@ check('and not dashing is exactly the plain radial distance',
   near(magnetDistance(0, 0, 3, 4, 0), 5, 1e-9));
 
 // ============================================================================
-// THE LOOSENING — a link costs a FRACTION of the bar, and the window is time
-// the player can actually use.
+// STAYING ALIVE IS CHEAP; GETTING DEEP IS NOT.
+//
+// One number used to do both jobs (`linkBarFraction`, three mouthfuls of five,
+// climbing with the chain) and they pull in opposite directions: as a GATE it
+// decides whether the chain survives and wants to be low, as a PRICE it is the
+// only thing stopping a chain being free and wants to be high. Split, the gate
+// went to the floor and the escalation moved onto the REWARD — which is what
+// this section pins, because a regression would put them back together without
+// anything looking wrong.
 // ============================================================================
 
-console.log('\nA LINK COSTS LESS THAN A WHOLE BAR');
-resetStrike();
-const frac = CONFIG.strike.linkBarFraction;
-check('the fraction is a real discount', frac < 1);
-check(`a ${pipCount(stats())}-pip bar links for ${linkPips(stats())} mouthfuls`,
+console.log('\nTHE GATE IS ONE MOUTHFUL, AND IT STAYS ONE');
+fuelled();
+check(`a ${pipCount(stats())}-pip bar links for ${linkPips(stats())} mouthful(s)`,
   linkPips(stats()) < pipCount(stats()));
 check('but never for free', linkPips(stats()) >= 1);
+check('  ...and it does not climb with the chain',
+  [0, 3, 9].every((link) => {
+    strikeState.chainCount = link;
+    strikeState.chainTimer = link > 0 ? CONFIG.strike.chainWindow : 0;
+    return linkPips(stats()) === linkPips(null);
+  }));
+fuelled();
 
-// The escalation has to survive the discount — a link still has to cost more
-// than the one before it, or the chain has no ceiling at all.
-const ladder = [];
-resetStrike();
-for (let link = 0; link <= 5; link++) {
-  strikeState.chainCount = link;
-  strikeState.chainTimer = link > 0 ? CONFIG.strike.chainWindow : 0;
-  ladder.push(linkPips(stats()));
+// ============================================================================
+// ONE CHUM IS ONE PIP AT EVERY DEPTH, AND NOW ABSOLUTELY.
+//
+// A `chainPipsPerLink` used to lengthen the bar as the chain deepened. It is
+// gone, and the reason is worth keeping: links tick per PIP now, so the bar's
+// length would have been a function of how much had been eaten — while eating
+// is the thing filling it. The bar grew as you filled it, and a six-pip bar
+// silently took seven chum. Nothing on screen could explain that, because the
+// number causing it is the number celebrating.
+//
+// The sweep above already covers the fill at fourteen depths. This is the
+// blunt statement of the same thing: no reachable chain state moves it.
+// ============================================================================
+
+console.log('\nNO CHAIN STATE ANYWHERE MOVES THE BAR');
+fuelled();
+const barPips = Math.round(1 / CONFIG.strike.charge.chumRefill);
+const lengths = new Set();
+for (const pips of [0, 1, 4, 5, 12, 60, 400]) {
+  for (const links of [0, 1, 7, 120]) {
+    strikeState.chainPips = pips;
+    strikeState.chainCount = links;
+    strikeState.chainTimer = (pips || links) ? CONFIG.strike.chainWindow : 0;
+    lengths.add(pipCount(stats()));
+  }
 }
-resetStrike();
-console.log(`          cost ladder: [${ladder}]  (was [5,6,7,8,9,10])`);
-check('the ladder never goes backwards',
-  ladder.every((v, i) => i === 0 || v >= ladder[i - 1]));
-check('  ...and still climbs overall', ladder[5] > ladder[0]);
+fuelled();
+console.log(`          bar lengths seen across 28 chain states: [${[...lengths]}]`);
+check('every one of them is the same bar', lengths.size === 1 && lengths.has(barPips),
+  `${lengths.size} distinct length(s)`);
 
 console.log('\nTHE WINDOW STARTS WHEN THE DASH ENDS, NOT AT THE RELEASE');
 // A dash runs up to 0.48s. Starting the clock at the release spent nearly half
 // a 1.1s window on the stretch the seal is committed and cannot act — and
 // punished the biggest strikes hardest, since they dash longest.
-resetStrike();
+fuelled();
 strike();
 consumeStrikeLink();
 const dashLen = strikeState.dashDuration;
@@ -962,20 +1099,25 @@ check(`  ...where the old behaviour would have left ~${(CONFIG.strike.chainWindo
 
 console.log('\nEATING SINCE THE LAST STRIKE IS WHAT COUNTS — and it resets');
 // The counter is ungated so the rule stays "food eaten since your last
-// strike". The reset on release is what stops that being a hoarding exploit.
-resetStrike();
+// strike". The reset on release is what stops that being a hoarding exploit —
+// and with the gate at one mouthful it is a small exploit to close, but the
+// rule has to be the same one at every setting of `linkMinPips`.
+fuelled();
 for (let i = 0; i < 20; i++) feedChum(stats());   // graze with no window open
 check('grazing banks progress', strikeState.pipsSinceStrike === 20);
+check('  ...but scores nothing, with no strike behind it', liveChain() === 0);
 strike();
-check('  ...but the release spends it all', strikeState.pipsSinceStrike === 0);
-check('  ...so a hoard cannot buy two links', consumeStrikeLink().chain === 0);
+check('  ...and the release spends the hoard', strikeState.pipsSinceStrike === 0);
+check('  ...so the chain still starts from the next mouthful',
+  (feedChum(stats()), consumeChainLink()) === 1);
+cancelDash();
 
 console.log('\nBREAKING OUT OF A DASH STILL PAYS THE WINDOW');
 // The subtle one. The dash's end is where the combo window starts, so a cancel
 // that only cleared `active` would silently cost the player the window their
 // strike paid for — invisible until chains quietly stop being reachable after
 // any manual break-out. Both endings go through finishDash for that reason.
-resetStrike();
+fuelled();
 strike();
 consumeStrikeLink();
 strikeState.chainTimer = 0;               // as if the window had lapsed
@@ -988,7 +1130,7 @@ check('  ...and leaves the i-frames alone — they were paid for',
   strikeState.invulnTimer > 0);
 
 // Running it out has to land in exactly the same place.
-resetStrike();
+fuelled();
 strike();
 consumeStrikeLink();
 strikeState.chainTimer = 0;

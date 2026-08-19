@@ -1,0 +1,12 @@
+id,enabled,pattern,colorA,colorB,colorC,shellColor,shellGlow,strength,pigment,coverage,scale,sparkColor,notes
+electric,,veins,#ffd83a,#fff2b0,#ffffff,#1b2230,0.15,2.6,0.55,0.34,0.34,,"The charged boss. Yellow into white along branching filaments - the one look authored so far, and the shape the rest of the file should copy. sparkColor is BLANK on purpose: blank takes the aura ring's own colour, which is what keeps the body and the boundary the same fight. strength 2.6 over a pigment preset is what lifts a painted hide into something lit; pigment 0.55 keeps half the animal's own paint underneath so it still reads as a shark."
+lunge,FALSE,,,,,,,,,,,,"Unwritten. A charging body wants heat in the leading edge rather than an all-over glow - probably `flow` with a warm ramp, low coverage."
+teleport,FALSE,,,,,,,,,,,,"Unwritten. void-purple, and the interesting version is a look that is mostly ABSENT - low coverage, high strength, so the body reads as holes."
+phase,FALSE,,,,,,,,,,,,"Unwritten. Same palette as teleport and it must not look the same; phase is about the whole silhouette thinning, so shellGlow is the lever, not coverage."
+giant,FALSE,,,,,,,,,,,,"Unwritten, and possibly should stay that way - `giant` already says what it is with scale alone, and a look on top would be two announcements of one fact."
+swift,FALSE,,,,,,,,,,,,"Unwritten. Same argument as giant."
+eyebeam,FALSE,,,,,,,,,,,,"Unwritten. The eyes are already the tell (CONFIG.biolumSkin eyeStrength) - a look here should raise THAT and leave the body alone."
+barrels,FALSE,,,,,,,,,,,,"Unwritten. blast-orange."
+spitfish,FALSE,,,,,,,,,,,,"Unwritten."
+finfish,FALSE,,,,,,,,,,,,"Unwritten."
+turtles,FALSE,,,,,,,,,,,,"Unwritten."

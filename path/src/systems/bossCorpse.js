@@ -5,6 +5,7 @@ import { releaseVisual } from '../assets.js';
 import { stateForSpeed } from './animation.js';
 import { snapshotMoment } from './bossKill.js';
 import { startBossRagdoll, updateBossRagdoll, ragdollDelta, endBossRagdoll } from './bossRagdoll.js';
+import { fireBossBoom, bossBoomLead } from './bossBoom.js';
 
 // ---------------------------------------------------------------------------
 // THE BODY, BRIEFLY
@@ -115,6 +116,11 @@ export function holdBossCorpse(e, scene) {
     left: corpseHoldSeconds(),
     r: framingRadius(e),
     roll: 0,
+    // Whether this body has already gone up. A latch rather than a second
+    // countdown: the threshold below is crossed on every frame after the
+    // first one, and without it a boss would fire a fresh explosion every
+    // frame for a third of a second.
+    boomed: false,
     // Cut loose HERE, on the killing frame, for the same reason the burst used
     // to be: the blow that killed it is only knowable while the creature object
     // is still whole, and one frame later systems/boss.js will have noticed the
@@ -209,6 +215,25 @@ export function updateBossCorpses(rawDt, dilatedDt) {
     // they describe the pose the animal was in when it died, and the chunks
     // would come off a shape the folded body has since left.
     if (e.hitShape) refreshHitShape(e.hitShape);
+
+    // AND THEN IT GOES UP. Fired from this countdown rather than from a clock
+    // of its own, because this is the only clock in the game already racing
+    // the shutter on the wall — `left` reaches `afterShot` on the frame the
+    // picture is taken, so anything that has to be IN the picture is a lead
+    // ahead of that. A second countdown would be a second description of the
+    // same moment and would drift the first time the beat was retuned.
+    //
+    // Deliberately AFTER the hitbox has been refreshed above: the cloud is
+    // sized and centred on the spheres, and one frame of a folding ragdoll is
+    // the difference between a cloud on the body and a cloud beside it.
+    //
+    // The body is still whole under it and stays whole for `afterShot` longer.
+    // That is the trick the effect is built on: the boss is never seen being
+    // deleted, because the smoke is already over it when it bursts.
+    if (!rec.boomed && rec.left <= (c.afterShot ?? 0.18) + bossBoomLead()) {
+      rec.boomed = true;
+      fireBossBoom(e);
+    }
 
     if (rec.left <= 0) burst(rec, i);
   }

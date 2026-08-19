@@ -65,6 +65,15 @@ const check = (name, cond, detail = '') => {
 // should fail the "it actually pushes in" check below rather than being
 // measured against numbers this file made up.
 const CFG = CONFIG.titleSeal;
+// THE FEATURE IS OFF BY DEFAULT NOW — the splash owns the pointer, so the seal
+// is no longer held up behind the title card (see CONFIG.titleSeal.enabled).
+// Everything below is about the MECHANISM, which is still all here and still
+// worth keeping honest, so the harness turns it on for itself rather than
+// riding on whatever the shipped default happens to be. That is the right
+// shape either way: a test of the push-in that silently stopped testing it the
+// day somebody flipped a default is a test that was never really asserting
+// anything.
+CFG.enabled = true;
 
 // --- a camera that only remembers what was asked of it -----------------------
 // world.focusCamera is a per-frame CLAIM (see world.js): nothing releases it,

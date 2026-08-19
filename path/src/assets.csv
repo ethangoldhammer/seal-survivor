@@ -1,6 +1,7 @@
 id,size,skin,surface,notes
 attractorOrb,2.06,,,
 belugaDrone,3.1,,,
+bossYacht,1,,biolum:bossYacht,"The boss yacht. SIZE 1 IS NOT A CHOICE - it is what this asset already had. An id with no row resolves to 1 (sizeMultiplierFor returns ?? 1, and setting 1 deletes the entry), so the row exists to carry the surface cell and leaves the scale exactly where it was. The hull is sized by fit: 13 in assets.js, measured against the trawler, and that is the number to move."
 bounceShot,1.58,,,
 bubbleOrb,2.84,,,
 bullet,1.2,,,
@@ -11,21 +12,23 @@ clubIce,1,,biolum:clubIce,Cold Snap club - same model as club - keep equal
 clubThrow,1,,biolum:hide,Hurler thrown club - same model as club - keep equal
 dumboOcto,1.9,,,
 eelCompanion,1.5,,,
-enemyAbyssShark,2.62,,,night variant of enemyGreatWhite - keep these two equal
+enemyAbyssShark,2.62,,biolum:abyssHunter,night variant of enemyGreatWhite - keep these two equal
+enemyAnglerfish,2.5,,,"3.4 fit x this = 8.5 on screen, between the dolphin (7.2) and the shark (10.1) - a chunky ambusher, not an apex body. Registered only: no enemies.csv row and no spawning.csv entry, so nothing places it in a wave yet."
 enemyBarracuda,1.78,,,
-enemyBossCrab,2.3,,,the king crab boss - same animal as enemyWalkingCrab so it takes the same size; the boss step is bosses.csv sizeMul on top
-enemyBossHammerhead,3.6,,,"The hammerhead boss. 4.0 fit x this = 14.4 here, and bossHammerhead's 1.6 takes it to 23.0 - the smallest boss body in the game, which is the point of it. Out of family with the other numbers in this column for exactly that reason; measured by tools/boss-scale-check.mjs. A DIFFERENT ASSET from enemyHammerhead below, which is why this one is 3.6 against that one's 2.62 - the boss carries its whole step here, the wave animal is in family with the other sharks."
+enemyBossAnglerfish,2.5,,,"The boss body. Equal to enemyAnglerfish on purpose - same model file, same size; what separates them is the clip mapping (see assets.js). bosses.csv sizeMul is where the boss step goes, as it does for every other archetype."
+enemyBossCrab,2.3,,biolum:kingCrab,the king crab boss - same animal as enemyWalkingCrab so it takes the same size; the boss step is bosses.csv sizeMul on top
+enemyBossHammerhead,3.6,,biolum:hide,"The hammerhead boss. 4.0 fit x this = 14.4 here, and bossHammerhead's 1.6 takes it to 23.0 - the smallest boss body in the game, which is the point of it. Out of family with the other numbers in this column for exactly that reason; measured by tools/boss-scale-check.mjs. A DIFFERENT ASSET from enemyHammerhead below, which is why this one is 3.6 against that one's 2.62 - the boss carries its whole step here, the wave animal is in family with the other sharks."
 enemyDolphin,2.4,,,"3 fit x this = 7.2 on screen, between the otter's 4.8 and the shark's 10.1 - which is where its authored radius (0.85, against the shark's 1.2) always said it belonged. It had NO ROW until now, so it spawned at 1: a 3.0-unit dolphin, smaller on screen than a barracuda (4.27) while carrying four times its hp. The hitbox follows the visual, so its collision radius goes 0.85 -> 2.04 - still just inside the octopus's grab (CONFIG.octoGrab.maxTargetRadius 2.2) and now above the orca pod's fallbackMinRadius, which is where an animal this size belongs on both counts."
 enemyEmberCrab,2.3,,,same animal as enemyWalkingCrab - keep these two equal
-enemyGiantSquid,2,,,The kraken. 7.4 fit x this = 14.8 long - the family the other apex bodies are in. Measured by tools/boss-scale-check.mjs
+enemyGiantSquid,2,,biolum:hide,The kraken. 7.4 fit x this = 14.8 long - the family the other apex bodies are in. Measured by tools/boss-scale-check.mjs
 enemyGreatWhite,2.62,,noise:greatWhite,
-enemyHammerhead,2.62,,,"The wave hammerhead - NOT enemyBossHammerhead, which is its own asset at 3.6. Equal to enemyGreatWhite on purpose: the two fits (4.0 and 4.2) are what separate them, as they are in life. It had NO ROW until now, so it spawned at 1 - a 4.0-unit shark swimming beside the shark's 10.1 and the great white's 11.0, a third the length of the animals it shares a family, a hp bracket and a spawn cap with. The hitbox follows the visual, so this also takes its collision radius from 1.3 to 3.4, into the 3.19-3.67 band its authored radius of 1.3 always implied - and out of reach of the octopus's grab (maxTargetRadius 2.2), like every other shark."
+enemyHammerhead,2.62,,biolum:hammerhead,"The wave hammerhead - NOT enemyBossHammerhead, which is its own asset at 3.6. Equal to enemyGreatWhite on purpose: the two fits (4.0 and 4.2) are what separate them, as they are in life. It had NO ROW until now, so it spawned at 1 - a 4.0-unit shark swimming beside the shark's 10.1 and the great white's 11.0, a third the length of the animals it shares a family, a hp bracket and a spawn cap with. The hitbox follows the visual, so this also takes its collision radius from 1.3 to 3.4, into the 3.19-3.67 band its authored radius of 1.3 always implied - and out of reach of the octopus's grab (maxTargetRadius 2.2), like every other shark."
 enemyLanternRay,3.1,,,night variant of enemyStingray - keep these two equal
-enemyMegalodon,2.3,,,
+enemyMegalodon,2.3,,biolum:hide,
 enemyMightyMeg,2,,noise:mightyMeg,
-enemyMosasaur,2.3,,,"The mosasaur boss. Same multiplier as the megalodon on purpose - the two fit values (7.4 and 7.0) are what separate them, so this column stays comparable between the two biggest bodies. 7.4 x 2.3 = 17.0 on screen, and bossMosasaur's 1.6 takes it to 27.2. Measured by tools/boss-scale-check.mjs"
-enemyOrcaBull,2.8,,,The boss orca bull. Cut from the family file by tools/orca-split.mjs.
-enemyOrcaCow,2.8,,,The boss orca cow. bossOrca rolls between this and the bull per arrival.
+enemyMosasaur,2.3,,biolum:hide,"The mosasaur boss. Same multiplier as the megalodon on purpose - the two fit values (7.4 and 7.0) are what separate them, so this column stays comparable between the two biggest bodies. 7.4 x 2.3 = 17.0 on screen, and bossMosasaur's 1.6 takes it to 27.2. Measured by tools/boss-scale-check.mjs"
+enemyOrcaBull,2.8,,biolum:orcaHide,The boss orca bull. Cut from the family file by tools/orca-split.mjs.
+enemyOrcaCow,2.8,,biolum:orcaHide,The boss orca cow. bossOrca rolls between this and the bull per arrival.
 enemyOyster,2.9,,,
 enemySeaTurtle,3.08,,,
 enemyShark,2.66,,biolum:hide,

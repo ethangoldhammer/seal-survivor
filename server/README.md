@@ -58,13 +58,13 @@ same board serves every copy of the game.
 
 ## API
 
-`GET /scores` → `{ list: [...] }` — top 10, highest first.
+`GET /scores` → `{ list: [...] }` — the top 100, highest first.
 
 `POST /scores` with `{ name, score, kills, level, time }` →
 `{ list, rank, madeList }`.
 
 Entries are `{ name, score, kills, level, time, date }`. The board keeps the
-top 100 and returns the top 10; `date` is set from the server's clock, not the
+top 100 and returns all of them; `date` is set from the server's clock, not the
 client's.
 
 ## What the checks do and don't do

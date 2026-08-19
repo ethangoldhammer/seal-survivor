@@ -22,7 +22,16 @@
 import { writeFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 
-const OUT = process.argv[2] ?? 'hive-look.html';
+const args = process.argv.slice(2);
+// The whole sheet is ~26MB of inlined icon PNGs, which is fine to open and too
+// heavy to screenshot — the Browser pane comes back blank on it. `--stacks`
+// emits only the stack sweep, which is one icon repeated and a few hundred KB.
+const STACKS_ONLY = args.includes('--stacks') || args.includes('--closeups');
+// Only the 150px close-ups. The Browser pane comes back BLANK on a page with a
+// few hundred inlined icons in it — not an error, not a timeout, a black frame
+// — so the sheet that gets screenshotted has to be the small one.
+const CLOSEUPS_ONLY = args.includes('--closeups');
+const OUT = args.find((a) => !a.startsWith('--')) ?? 'hive-look.html';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/', pretendToBeVisual: true,
@@ -163,8 +172,93 @@ const roster = [];
   }
 }
 
+// THE STACK SHEET — the same tile at every depth, under every treatment.
+//
+// A stack used to be a digit in the corner of one hexagon, which is the least
+// readable thing in the readout and also the fact a build is mostly made OF.
+// These are the four answers, and they are on one sheet because the question
+// only has an answer in comparison: each of them looks fine alone.
+//
+// The counts run past what the layers draw on purpose. `maxLayers` caps the
+// pile so a nine-stack does not become a bar chart, and the last two columns
+// are where that cap has to still read as "deeper than the one before it".
+const STACK_VARIANTS = [
+  ['pip', 'pip — no pile, the number alone (what this replaced)', { mode: 'pip' }],
+  ['slab', 'slab — hexagons behind, straight down, base pinned to the cell', { mode: 'slab', rise: true }],
+  ['deck', 'deck — the same pile drifting sideways as it deepens', { mode: 'deck', rise: true }],
+  ['riser', 'riser — one extruded body; the height IS the count', { mode: 'riser', rise: true }],
+  ['sink', 'slab, rise off — the pile builds DOWN from the cell instead', { mode: 'slab', rise: false }],
+];
+const STACK_COUNTS = [1, 2, 3, 4, 6, 9];
+
+const applyStack = (over) => {
+  CONFIG.upgradeHive.stack = { ...CONFIG.upgradeHive.stack, ...over };
+  hive.setHiveStack(CONFIG.upgradeHive.stack.mode);
+};
+
+const stackSweep = [];
+const stackBuilds = [];
+const stackCloseups = [];
+{
+  hive.setHiveLayout('cluster');
+  hive.setHiveStyle('ink');
+  // A build whose stacks are the point: three abilities carried deep, the rest
+  // singles, which is what a real late run looks like and what the piles have
+  // to stay legible inside.
+  const stacked = [
+    ...Array(6).fill(['shrimpRing', 'legendary']),
+    ...Array(4).fill(['club', 'epic']),
+    ...Array(3).fill(['seaGarlic', 'rare']),
+    ['harp', 'epic'], ['dumbo', 'common'], ['beluga', 'uncommon'],
+    ['octoGrab', 'rare'], ['orcaFamily', 'legendary'], ['maneater', 'epic'],
+    ['laserEyes', 'uncommon'], ['electricEel', 'common'], ['ironLung', 'rare'],
+  ].map(([id, rarity]) => ({ id, rarity }));
+
+  for (const [key, label, over] of STACK_VARIANTS) {
+    applyStack(over);
+    const row = [];
+    for (const count of STACK_COUNTS) {
+      hive.setHiveUpgrades(Array(count).fill({ id: 'shrimpRing', rarity: 'epic' }));
+      const node = document.querySelector('.sv-hive');
+      row.push({ count, html: node.outerHTML });
+    }
+    stackSweep.push({ key, label, row });
+
+    hive.setHiveUpgrades(stacked);
+    const node = document.querySelector('.sv-hive');
+    stackBuilds.push({
+      key,
+      html: node.outerHTML,
+      size: `${Math.round(parseFloat(node.querySelector('.sv-hive-host').style.width))}`
+          + `x${Math.round(parseFloat(node.querySelector('.sv-hive-host').style.height))}`,
+    });
+  }
+  // THE CLOSE-UP — A MAGNIFICATION, NOT A BIGGER TILE.
+  //
+  // Every judgement about the STROKE is a judgement about two or three pixels,
+  // and a 52px tile on a screen cannot answer whether a plate is outlined all
+  // the way round or only along its bottom flat. Turning `size` up does not
+  // answer it either: `step` is in px, so a 400px hexagon with a 7px pile under
+  // it is a DIFFERENT PICTURE — the plates go from a third of the tile to a
+  // sliver, and the thing being judged is not the thing that ships.
+  //
+  // So the shipped tile is rendered at its shipped size and the whole subtree
+  // is scaled with a transform. Backgrounds and clip paths re-rasterise at the
+  // new scale, so what this shows is the real geometry, magnified.
+  for (const [key, , over] of STACK_VARIANTS) {
+    applyStack(over);
+    for (const count of [2, 3, 5]) {
+      hive.setHiveUpgrades(Array(count).fill({ id: 'shrimpRing', rarity: 'epic' }));
+      stackCloseups.push({ key, count, html: document.querySelector('.sv-hive').outerHTML });
+    }
+  }
+
+  // Back to the shipped values, so every other sample on this page is the game.
+  applyStack({ mode: 'slab', rise: true });
+}
+
 const shots = [];
-for (const [buildName, picks] of Object.entries(BUILDS)) {
+for (const [buildName, picks] of (STACKS_ONLY ? [] : Object.entries(BUILDS))) {
   const list = picks.map(([id, rarity]) => ({ id, rarity }));
   for (const layout of ['cluster', 'rows', 'arc']) {
     for (const style of ['ink', 'rarity', 'art']) {
@@ -212,18 +306,42 @@ ${css}
   .ref .n { font-size: 9px; color: #86adbf; line-height: 1.25; margin-top: 3px;
     overflow-wrap: anywhere; }
   .ref .r[data-mark="monogram"] .n { color: #d8a05a; }
+  /* the stack sweep: every cell the same box, so height differences are the
+     only thing moving between them */
+  .stackcell { width: 96px; height: 118px; display: flex; flex-direction: column; }
+  .stackcell .sv-hive { align-self: center; margin-top: auto; }
+  /* the close-up: the shipped tile, magnified — see the note in the generator */
+  .zoomcell { width: 250px; height: 270px; overflow: hidden; }
+  .zoom { transform: scale(3.6); transform-origin: 0 0; width: 70px; }
 </style>
-<h1>Hex hive &mdash; every layout against every style</h1>
-<h2>the layer order</h2>
+<h1>Hex hive &mdash; ${STACKS_ONLY ? 'how a stack grows' : 'every layout against every style'}</h1>
+${STACKS_ONLY ? '' : `<h2>the layer order</h2>
 <div class="cap">A 22-pick hive with a menu over it. The hive is z-index 1, menus are 4, toasts 6 &mdash; it used to be 3 against menus with no z-index at all, so it painted on top of the level-up cards.</div>
 <div class="grid"><div class="cell" style="position:relative;width:520px;height:330px;overflow:hidden">${layerShot}</div></div>
 <div class="cap">Built by the real ui.js and upgradeHive.js. Every mark is a baked PNG from the icon pipeline &mdash; a photograph of the asset the ability spawns, or a composed gameplay moment for the ones that spawn nothing. Letters are the fallback for an upgrade with no icon yet.</div>
-<p><button onclick="fireAll()">fire everything &mdash; watch the four pulses</button></p>
-<h2>every upgrade, named</h2>
+<p><button onclick="fireAll()">fire everything &mdash; watch the four pulses</button></p>`}
+<h2>stacks &mdash; a second pick of the same card</h2>
+${CLOSEUPS_ONLY ? '' : `<div class="cap">One Shrimp Ring tile at 1, 2, 3, 4, 6 and 9 picks, under each treatment. The pile is capped at ${CONFIG.upgradeHive.stack.maxLayers} layers and each layer adds ${CONFIG.upgradeHive.stack.falloff} of the one under it &mdash; so the last two columns are where a cap has to still read as deeper.</div>
+${stackSweep.map((v) => `
+<div class="cap" style="margin-top:14px;color:#9fd0e4">${v.label}</div>
+<div class="grid">
+${v.row.map((c) => `  <div class="cell stackcell"><div class="cap">&times;${c.count}</div>${c.html}</div>`).join('')}
+</div>`).join('')}
+`}
+<div class="cap" style="margin-top:22px">Close-up &mdash; the SHIPPED 52px tile magnified 3.6&times;, not a bigger tile: <code>step</code> is in px, so a 400px hexagon with a 7px pile under it is a different picture from the one that ships. Whether a plate is outlined all the way round or only along its bottom flat is a question about two pixels.</div>
+<div class="grid">
+${stackCloseups.map((c) => `  <div class="cell zoomcell"><div class="cap">${c.key} &middot; &times;${c.count}</div><div class="zoom">${c.html}</div></div>`).join('')}
+</div>
+${CLOSEUPS_ONLY ? '' : `<div class="cap" style="margin-top:20px">The same treatments under a real late build &mdash; 6 Shrimp Rings, 4 Clubs, 3 Garlic and nine singles, cluster/ink. This is the one that decides it: a pile that reads beautifully alone can turn a packed corner to mush.</div>
+<div class="grid">
+${stackBuilds.map((b) => `  <div class="cell"><div class="cap">${b.key} &middot; ${b.size}px</div>${b.html}</div>`).join('')}
+</div>`}
+
+${STACKS_ONLY ? '' : `<h2>every upgrade, named</h2>
 <div class="cap">All ${roster.length} enabled upgrades, built by the real buildTile. ${roster.filter((r) => r.mark === 'icon').length} carry a rendered mark; ${roster.filter((r) => r.mark === 'monogram').length} fall back to a monogram &mdash; those are shown in amber, and each one is an icon nobody has made yet.</div>
 <div class="ref">
 ${roster.map((r) => `  <div class="r" data-mark="${r.mark}">${r.html}<div class="n">${r.name}</div></div>`).join('\n')}
-</div>
+</div>`}
 
 ${Object.keys(BUILDS).map((b) => `
 <h2>${b}</h2>

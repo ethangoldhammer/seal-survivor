@@ -35,6 +35,7 @@
 // before any test runs. The runtime, the WASM url and the 1.7MB file are all
 // pulled in by initSnapshotCards() instead, which a harness simply never calls.
 import { SNAPSHOT_ARTBOARD, SNAPSHOT_BINDINGS, SNAPSHOT_KICKER } from './riveContract.js';
+import { playerName } from '../systems/playerName.js';
 import { CONFIG } from '../config.js';
 
 // The artboard's own shape. Anything that sizes a card derives its height from
@@ -154,13 +155,33 @@ async function toBytes(photo) {
  * player comparing the picture they posted against the screen they posted it
  * from has to be reading one set of figures.
  *
- * @param meta { name, level, time, score } — time in SECONDS, score raw.
+ * @param meta { name, cause, player, level, time, score } — time in SECONDS,
+ *             score raw. `player` is optional; see the fallback below.
  */
 export function cardTextFor(meta = {}) {
   const s = Math.max(0, Math.floor(meta.time ?? 0));
   const snap = CONFIG.boss?.kill?.snapshot ?? {};
   return {
     name: meta.name ?? '',
+    // Passed through rather than formatted: it arrives as a weapon's display
+    // name from systems/boss.js, and there is nothing left to do to it. Empty
+    // when the run has no record of what landed the last hit, which the
+    // artboard has to be able to draw — a stamp is the one element on this
+    // card that is allowed to be missing.
+    cause: meta.cause ?? '',
+    // FALLS BACK TO A LIVE READ rather than to a blank. A shot always carries
+    // its own name (systems/bossShot.js banks it on capture), so the fallback
+    // is for the metas that are not shots: the demo card behind the Text panel,
+    // a look page, anything that hands this function four numbers. Those should
+    // show a name, and the one this player is called is the right one — a card
+    // with an empty title reads as a broken write rather than as a preview.
+    player: meta.player ?? playerName(),
+    // Passed through, already carrying its trailing space — see kickerTable.js
+    // for why the space is added there and not in the file. A meta with no
+    // kicker is a preview or a demo card, and those get the straight reading
+    // rather than a roll: a page being looked at should not change its own
+    // caption between two glances at it.
+    kicker: meta.kicker ?? SNAPSHOT_KICKER,
     level: `LVL ${meta.level ?? 0}`,
     time: `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`,
     score: Math.floor(meta.score ?? 0).toLocaleString(),
@@ -175,17 +196,46 @@ export function cardTextFor(meta = {}) {
 // needs its thousands separators and a time needs to be m:ss, and both have to
 // arrive already written. The formatters live with the run, not here.
 function writeMeta(vmi, meta = {}) {
+  // A NAME THE ARTBOARD DOES NOT HAVE IS A NO-OP, and that is the safe
+  // direction — it is what lets the game write a property before the export
+  // that draws it exists (see PENDING_BINDINGS in riveContract.js). It is also
+  // completely silent, which is the wrong direction the day a property is
+  // RENAMED in the editor: the card keeps drawing, with one field stuck on
+  // whatever default value the artboard was saved with, and nothing anywhere
+  // says so. `npm run test:bossbar` scans the shipped file for exactly this,
+  // but only for the names in the contract, and only when somebody runs it.
+  // So the miss is collected and reported once per session as well.
+  const missing = [];
   const set = (key, value) => {
     const prop = vmi.string(SNAPSHOT_BINDINGS[key]);
-    if (prop) prop.value = value;
+    if (!prop) { missing.push(SNAPSHOT_BINDINGS[key]); return; }
+    prop.value = value;
   };
   set('name', meta.name ?? '');
-  // The trailing space is load-bearing — see SNAPSHOT_KICKER.
+  set('cause', meta.cause ?? '');
+  set('player', meta.player ?? '');
+  // The trailing space is load-bearing — see SNAPSHOT_KICKER. What arrives here
+  // has one already: kickerTable.js adds it on the way out of the table, which
+  // is the only place it is ever added.
   set('kicker', meta.kicker ?? SNAPSHOT_KICKER);
   set('level', meta.level ?? '');
   set('time', meta.time ?? '');
   set('score', meta.score ?? '');
   set('wordmark', meta.wordmark ?? '');
+  if (missing.length) warnNoStrings(missing);
+}
+
+// Once per session, like the write-on's. A run that beats eight bosses would
+// otherwise print the same list eight times, and it is the same export every
+// time.
+let warnedNoStrings = false;
+function warnNoStrings(missing) {
+  if (warnedNoStrings) return;
+  warnedNoStrings = true;
+  console.warn(
+    `[snapshotCard] the Polaroid view model has no ${missing.map((n) => `"${n}"`).join(', ')} `
+    + 'property — those fields will show whatever the artboard was exported with.',
+  );
 }
 
 /**
@@ -200,7 +250,8 @@ function writeMeta(vmi, meta = {}) {
  * @param photo  a canvas, blob, PNG bytes or data URL. The SQUARE crop of the
  *               frame — the artboard's zone is 620x620 and a 16:9 picture
  *               would be cropped by the fill rather than by the game.
- * @param meta   { name, kicker, level, time, score, wordmark }, already formatted.
+ * @param meta   { name, kicker, cause, player, level, time, score, wordmark },
+ *               already formatted.
  * @param width  CSS pixels. Height follows from CARD_ASPECT.
  * @returns { canvas, ready } — ready resolves once the photo is on it.
  */

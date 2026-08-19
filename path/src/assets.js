@@ -461,8 +461,33 @@ export const ASSETS = {
         // eyes: the rig is mirrored, so the same local axis points OUT of the
         // face on each side. It is what tells the near eye from the far one in
         // a camera that only ever sees this animal side-on.
-        eyeL: { bone: 'eye_L_09', offset: [0, 0.0245, 0.006], normal: [0, 0, 1] },
-        eyeR: { bone: 'eye_R_010', offset: [0, 0.0245, 0.006], normal: [0, 0, 1] },
+        // ON head_07, NOT ON eye_L_09 / eye_R_010, and that is the whole point
+        // of these two lines.
+        //
+        // The seal's eye bones carry a BLINK, and they carry it on all three
+        // channels: across the clips their scale runs 0.200 to 1.300, their
+        // position over a 0.23 range and their quaternion the full sweep.
+        // Anything parented to them is squashed six-fold and shoved about
+        // several times a second — which is right for the eyeball geometry
+        // they are there to drive, and ruinous for a bead socketed into it.
+        // The blink is the animation working; borrowing its bone is the bug.
+        //
+        // `head_07` is rigid by comparison: position and rotation only, its
+        // scale track a flat 1.0 in every clip, and it is already the last
+        // bone of the aim rig's head chain — so the eyes still track the
+        // cursor, which is the entire feature.
+        //
+        // MEASURED, not converted by hand: `npm run headsocket` skins the
+        // eyeball discs, takes their centroids and re-expresses them in
+        // head_07's own space. The result is checked against the old eye-bone
+        // anchor at rest and lands 0.0001 (left) and 0.0019 (right) away, with
+        // the facings exactly parallel — same socket, different parent.
+        //
+        // `normal` is the disc's own facing, carried into the same frame. It
+        // is what tells the near eye from the far one in a camera that only
+        // ever sees this animal side-on.
+        eyeL: { bone: 'head_07', offset: [0.0849, 0.1465, -0.0334], normal: [0.7606, 0.6490, -0.0153] },
+        eyeR: { bone: 'head_07', offset: [-0.0836, 0.1479, -0.0335], normal: [-0.7606, 0.6490, -0.0153] },
         // Still the tail tip, and still what CONFIG.emitPoints 'tail' fires
         // from. The bubbles no longer use it on this model — see finL/finR
         // above — but it stays the sane fallback for one that has no fin
@@ -2833,14 +2858,18 @@ export const ASSETS = {
     fit: 5.2,
     pivot: 0.15,
     forward: '+Z', up: '+Y',
-    // THE WIREFRAME SKIN, available to this body. `biolumEdges` splits the
-    // geometry at load so barycentric coordinates exist (see splitForEdges);
-    // `biolumSkin` names the preset it wears. The orca is the right animal to
-    // carry it: 11,238 triangles of smooth hull means an edge flow that reads
-    // as a drawn cage rather than as noise, which is not true of the
-    // roster's low-poly fish.
-    biolumEdges: true,
-    biolumSkin: 'wireframeGlow',
+    // THE PAINTED HIDE. `biolumSkin` names the preset it wears, which replaces
+    // the model's baked map outright — see the note on the preset itself in
+    // config.js, which it used to share with the lattice under the old name.
+    //
+    // NO `biolumEdges` HERE ANY MORE. This body used to wear the lattice, and
+    // that pattern needs barycentric coordinates, which need one vertex per
+    // triangle corner — a `toNonIndexed` at load that took the orca from 6,994
+    // vertices to 33,714. The preset is a `spots` pigment now and samples no
+    // edges, so the split is deleted rather than left paying for a pattern
+    // nothing selects. Putting the lattice back means restoring the flag here
+    // AND the pattern there; splitForEdges is still in systems/biolumSkin.js.
+    biolumSkin: 'orcaHide',
     // One clip, reused across every state at a different rate — see the note
     // on orcaFriendBull for why there is no mapping here.
     rig: ORCA_RIG,
@@ -2853,14 +2882,18 @@ export const ASSETS = {
     fit: 5.0, // fractionally the smaller animal, as she is
     pivot: 0.15,
     forward: '+Z', up: '+Y',
-    // THE WIREFRAME SKIN, available to this body. `biolumEdges` splits the
-    // geometry at load so barycentric coordinates exist (see splitForEdges);
-    // `biolumSkin` names the preset it wears. The orca is the right animal to
-    // carry it: 11,238 triangles of smooth hull means an edge flow that reads
-    // as a drawn cage rather than as noise, which is not true of the
-    // roster's low-poly fish.
-    biolumEdges: true,
-    biolumSkin: 'wireframeGlow',
+    // THE PAINTED HIDE. `biolumSkin` names the preset it wears, which replaces
+    // the model's baked map outright — see the note on the preset itself in
+    // config.js, which it used to share with the lattice under the old name.
+    //
+    // NO `biolumEdges` HERE ANY MORE. This body used to wear the lattice, and
+    // that pattern needs barycentric coordinates, which need one vertex per
+    // triangle corner — a `toNonIndexed` at load that took the orca from 6,994
+    // vertices to 33,714. The preset is a `spots` pigment now and samples no
+    // edges, so the split is deleted rather than left paying for a pattern
+    // nothing selects. Putting the lattice back means restoring the flag here
+    // AND the pattern there; splitForEdges is still in systems/biolumSkin.js.
+    biolumSkin: 'orcaHide',
     rig: ORCA_RIG,
     lookRig: orcaLook(75.5),
     biteRig: ORCA_BITE,
@@ -2981,6 +3014,133 @@ export const ASSETS = {
       boost: 'TurtleChocolate_Rig|TurtleChocolate_Rig|TurtleChocolate_Rig|Turtle_run',
     },
     shape: 'icosahedron', radius: 0.7, color: 0x5d7a4f, unlit: true,
+  },
+
+  // ATLANTIC FOOTBALLFISH — the deep-sea anglerfish, built by
+  // tools/build-anglerfish.mjs out of an 8-file, 50MB FBX pack. It is the only
+  // creature in the roster that arrives with SEVEN authored clips on one rig,
+  // which is why the state mapping below is a real mapping rather than the
+  // usual one-clip-named-three-times.
+  //
+  // ORIENTATION IS MEASURED THROUGH THE SKINNING, not read off the geometry —
+  // the mosasaur's lesson, and the reason every axis here is stated with the
+  // number that settled it. Software-skinned in the rest pose the animal is
+  // 62.07 units along Z, and the two landmarks that cannot be argued with sit
+  // where they should: the TEETH centroid at z +16.1 against the whole body's
+  // +1.7 (so the head is +Z), and the EYES at y +7.4 against the teeth's +0.4
+  // (so up is +Y). Same basis as every shark here.
+  //
+  // FIT 3.4. Against the assets.csv size of 2.5 that measures 8.5 units on
+  // screen — deliberately between the dolphin's 7.2 and the shark's 10.1. It is
+  // a chunky ambusher rather than an apex body, and the roster already has four
+  // animals past 20 units. Note the fit divides the LONGEST axis, which on this
+  // animal is nose-to-tail: the illicium sticks up rather than forward, so it
+  // inflates the height (37.67) and not the number this scales by.
+  //
+  // THE CLIPS, measured by mean vertex travel per second on a fixed subset, and
+  // by the vertical gape of the teeth mesh for what the mouth is doing:
+  //
+  //   idle        8.33s   0.74/s   gape 10.9-11.5   a quiet hold
+  //   swim1       4.00s   3.22/s   gape 10.2-11.7   the cruise
+  //   swim2       4.40s   7.79/s   gape 10.4-12.3   2.4x the cruise — a real gear
+  //   bite        4.67s   4.36/s   gape  7.8-11.9   the only clip that SHUTS the
+  //                                                 mouth; rest gape is ~11, so
+  //                                                 this is a snap, not a gape
+  //   trap        8.00s   1.84/s   gape 10.9-13.2   the ambush: near-still, mouth
+  //                                                 opening WIDER than rest
+  //   swim_start  8.33s   3.50/s                    transitions in and out of the
+  //   swim_end    8.33s   2.36/s                    cruise
+  //
+  // EVERY CLIP LOOPS. The seam — how far the last frame sits from the first —
+  // measures 0.00 units on all seven, so any of them can be a locomotion state
+  // without a pop, and the one-shots blend back cleanly. That is unusual enough
+  // in this roster to be worth writing down.
+  //
+  // THREE CLIPS ARE MAPPED TO NOTHING, on purpose rather than by omission.
+  // `swim_start` and `swim_end` are transitions and there is no state for a
+  // transition — createAnimationController blends between locomotion states
+  // itself. `trap` is the interesting one: it is this animal's whole character,
+  // an ambush hold with the jaw opening past its rest gape, and it has no home
+  // until the creature has a behaviour that can sit still and wait. Mapping it
+  // to `idle` was tempting and would be wrong — idle is the loop a creature
+  // plays while ALIVE and drifting, and a permanently gaping anglerfish would
+  // never close its mouth.
+  //
+  // NO biteRig. entities/enemies.js skips building a procedural jaw driver for
+  // anything whose controller already covers `bite`, and this file ships a real
+  // one — the mosasaur's arrangement.
+  //
+  // This asset is REGISTERED, not spawned. It has no enemies.csv row and no
+  // spawning.csv entry, so nothing places it in a wave yet.
+  enemyAnglerfish: {
+    model: '/models/anglerfish.glb',
+    fit: 3.4,
+    pivot: 0.15, // turn about the head, as every swimmer here does
+    forward: '+Z', up: '+Y',
+    animations: {
+      idle: 'idle',
+      swim: 'swim1',
+      boost: 'swim2',
+      bite: 'bite',
+    },
+    // The fallback primitive, for the playtest build and for any path that
+    // draws before the model resolves. An ellipsoid is the honest stand-in for
+    // a body this round — the cone every other fish uses would read as a
+    // barracuda.
+    shape: 'icosahedron', radius: 0.55, color: 0x2b3a44, unlit: true,
+  },
+
+  // THE ANGLERFISH BOSS — the same file as enemyAnglerfish above, mapped to a
+  // different set of states.
+  //
+  // A SECOND ASSET RATHER THAN A FLAG, which is the arrangement
+  // enemyBossHammerhead already uses against enemyHammerhead. The reason here
+  // is the clip mapping rather than the size: this boss's RESTING state is the
+  // ambush, so `idle` has to resolve to `trap` — and a wave anglerfish idling
+  // with its jaw cranked past rest, forever, would look broken. One asset
+  // cannot answer both, and the alternative (a system reaching in to re-map a
+  // shared template at spawn) writes the template every other instance is
+  // sharing, which is the same class of bug as flashing the emissive on all of
+  // them. Two keys, one model file, no runtime mutation.
+  //
+  // WHAT EACH STATE IS FOR — the fight is systems/bossAngler.js, and this is
+  // the half of it that is data:
+  //
+  //   idle   -> trap        the lurk. Near-still, jaw opening past its rest
+  //                         gape. The boss holds this for most of the fight.
+  //   bark   -> swim_start  THE TELL. `swim_start` is the file's transition
+  //                         INTO the cruise — an animal gathering itself to
+  //                         move — which is exactly what a wind-up is, and it
+  //                         is why this clip was worth keeping. `bark` is the
+  //                         one-shot slot because that is what the kraken
+  //                         already uses for its telegraph (`eyeballing`); a
+  //                         player is learning one grammar, not two.
+  //   boost  -> swim2       the lunge. 7.79u/s against the cruise's 3.22.
+  //   bite   -> bite        the snap at the end of it.
+  //   swim   -> swim1       repositioning between ambushes.
+  //
+  // `hit` IS DELIBERATELY UNMAPPED. The file's `swim_end` is the obvious
+  // candidate and it is wrong: a hit reaction has to read in the frame it
+  // lands, and swim_end is a 8.3s glide. Left unmapped, systems/animation.js
+  // falls through to the spring impulse — which is the reaction every other
+  // boss here uses and is authored for exactly this.
+  //
+  // NO `rig`. The file's own clips cover every state this boss enters, so the
+  // procedural wag would only ever fight them. Spring secondary motion still
+  // applies through `springChains` — that is what carries the hit.
+  enemyBossAnglerfish: {
+    model: '/models/anglerfish.glb',
+    fit: 3.4,
+    pivot: 0.15,
+    forward: '+Z', up: '+Y',
+    animations: {
+      idle: 'trap',
+      swim: 'swim1',
+      boost: 'swim2',
+      bark: 'swim_start',
+      bite: 'bite',
+    },
+    shape: 'icosahedron', radius: 0.55, color: 0x2b3a44, unlit: true,
   },
 
   enemyBarracuda: {

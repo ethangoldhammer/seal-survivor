@@ -46,29 +46,53 @@ html, body { margin: 0; height: 100%; }
       </div>
     </div>
 
-    <!-- Healthy + idle: both bars full, so the stack fades back to 0.25. -->
+    <!-- Healthy + idle: both bars full, so the stack fades back to 0.3. -->
     <div class="seal-mark" style="left:250px; top:390px;"></div>
-    <div class="sv-playerbars" style="left:250px; top:360px; opacity:0.25;">
-      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" style="width:100%;"></div></div>
-      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2" style="width:100%;"></div></div>
+    <div class="sv-playerbars" style="left:210px; top:390px; opacity:0.3;">
+      <div class="sv-pbar-wrap" style="--sv-alarm:0.0;">
+        <div class="sv-pbar-ghost" style="--sv-fill:1;"></div>
+        <div class="sv-pbar sv-pbar-hp" style="--sv-fill:1;"></div>
+      </div>
+      <div class="sv-pbar-wrap" style="--sv-alarm:0.0;">
+        <div class="sv-pbar-ghost" style="--sv-fill:1;"></div>
+        <div class="sv-pbar sv-pbar-o2" style="--sv-fill:1;"></div>
+      </div>
     </div>
-    <div class="state-note" style="left:250px; top:406px;">Idle · faded</div>
+    <div class="state-note" style="left:250px; top:440px;">Idle · faded</div>
 
-    <!-- Hurt: health down, oxygen mid. Full opacity. -->
+    <!-- Just bitten: the pale band above the red fill is the damage still on
+         its way down. In game the fill chases the real value and the trail
+         chases the fill (PBAR_SMOOTH in ui.js); here one frame of that is
+         frozen by hand, since a static specimen has no clock. -->
     <div class="seal-mark" style="left:460px; top:390px;"></div>
-    <div class="sv-playerbars" style="left:460px; top:360px;">
-      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" style="width:38%;"></div></div>
-      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2" style="width:64%;"></div></div>
+    <div class="sv-playerbars" style="left:420px; top:390px;">
+      <div class="sv-pbar-wrap" style="--sv-alarm:0.0;">
+        <div class="sv-pbar-ghost" style="--sv-fill:0.62;"></div>
+        <div class="sv-pbar sv-pbar-hp" style="--sv-fill:0.38;"></div>
+      </div>
+      <div class="sv-pbar-wrap" style="--sv-alarm:0.0;">
+        <div class="sv-pbar-ghost" style="--sv-fill:0.64;"></div>
+        <div class="sv-pbar sv-pbar-o2" style="--sv-fill:0.64;"></div>
+      </div>
     </div>
-    <div class="state-note" style="left:460px; top:406px;">Hurt</div>
+    <div class="state-note" style="left:460px; top:440px;">Just bitten · trail</div>
 
-    <!-- Drowning: oxygen under 25% flips the bar to the alarm colour. -->
+    <!-- Drowning: air under 25% flips the bar to AMBER — not red, which is
+         health's colour and would leave two identical columns — and --sv-alarm
+         brightens the whole track. That property is written per frame already
+         oscillating, so this is the top of its wave. -->
     <div class="seal-mark" style="left:670px; top:390px;"></div>
-    <div class="sv-playerbars" style="left:670px; top:360px;">
-      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" style="width:72%;"></div></div>
-      <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2 sv-o2-low" style="width:14%;"></div></div>
+    <div class="sv-playerbars" style="left:630px; top:390px;">
+      <div class="sv-pbar-wrap" style="--sv-alarm:0.0;">
+        <div class="sv-pbar-ghost" style="--sv-fill:0.72;"></div>
+        <div class="sv-pbar sv-pbar-hp" style="--sv-fill:0.72;"></div>
+      </div>
+      <div class="sv-pbar-wrap" style="--sv-alarm:0.85;">
+        <div class="sv-pbar-ghost" style="--sv-fill:0.14;"></div>
+        <div class="sv-pbar sv-pbar-o2 sv-o2-low" style="--sv-fill:0.14;"></div>
+      </div>
     </div>
-    <div class="state-note" style="left:670px; top:406px;">Low oxygen</div>
+    <div class="state-note" style="left:670px; top:440px;">Low air · alarm</div>
   </div>
 </div>
 </body>

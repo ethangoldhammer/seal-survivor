@@ -86,6 +86,7 @@ function newBucket(t) {
     links: 0,             // ...of which scored a FOOD CHAIN link
     linkDepthSum: 0,      // sum of chain depth at each link, for a mean
     maxChain: 0,          // deepest chain reached in this bucket
+    armed: 0,             // ...fired ON the beat, so a chain was opened
     missOffBeat: 0,       // fired outside the sweet spot — nothing else asked
     missNoFood: 0,        // fired, window open, but not enough eaten
     missNoWindow: 0,      // fired with enough eaten, but the window had shut
@@ -212,6 +213,26 @@ export function recordDamage(source, amount, target) {
 }
 
 /**
+ * What last damaged `target`, or null. The same credit recordKill would give
+ * it, exposed because ONE death in the game needs the answer while the body is
+ * still warm rather than as a bucket total afterwards: the boss's, which the
+ * kill shot stamps onto the polaroid (systems/boss.js -> systems/bossShot.js).
+ *
+ * Reads the same WeakMap every kill is credited from rather than a second
+ * ledger, so the name on the print and the ability the balance report gives
+ * the kill to are the same answer by construction — they cannot disagree the
+ * way two parallel trackers eventually would.
+ *
+ * Null while no run is recording, which never happens in practice (main.js
+ * calls beginRun on every start) and is still not something a caller may
+ * assume: the polaroid falls back to saying nothing rather than to a guess.
+ */
+export function damageCreditFor(target) {
+  if (!target || typeof target !== 'object') return null;
+  return lastDamager.get(target) ?? null;
+}
+
+/**
  * A creature died. Credit goes to whatever last damaged it, which is right
  * often enough to rank abilities and wrong only for the last tick of an aura
  * finishing something a bullet had already broken. `source` overrides that for
@@ -277,26 +298,41 @@ export function recordControl(source, n = 1) {
  * this one describes a chain they THREW wrong, and the fixes have nothing in
  * common.
  *
- * @param chain   the chain depth after this release, or 0 if it scored nothing
+ * @param depth   how deep the chain already was when this release happened
  * @param hadFood whether enough had been eaten since the last strike
  * @param hadWindow whether the combo window was still open
  * @param sweet   whether the release landed inside the sweet spot. Defaults
  *                true so a caller written before the gate existed reads as it
  *                always did rather than filing every strike as mistimed.
  */
-export function recordStrike(chain, hadFood, hadWindow, sweet = true) {
+export function recordStrike(depth, hadFood, hadWindow, sweet = true) {
   if (!run) return;
   bucket.strikes += 1;
-  if (chain > 0) {
-    bucket.links += 1;
-    bucket.linkDepthSum += chain;
-    if (chain > bucket.maxChain) bucket.maxChain = chain;
-    return;
-  }
+  // OFF THE BEAT IS THE ONLY WAY A RELEASE CAN FAIL NOW. It neither bites nor
+  // arms, so it is the whole of what went wrong; the other three buckets are
+  // kept because a hundred runs of backlog are full of them and the report
+  // still has to read those.
   if (!sweet) { bucket.missOffBeat += 1; return; }
-  if (!hadFood && !hadWindow) bucket.missBoth += 1;
-  else if (!hadFood) bucket.missNoFood += 1;
-  else bucket.missNoWindow += 1;
+  bucket.armed += 1;
+  // Kept off the `links` counter on purpose: a release ARMS a chain and the
+  // FOOD scores it (see recordChainLink), so booking a link here would count
+  // every link twice and report a hit rate above 100%.
+  void depth; void hadFood; void hadWindow;
+}
+
+/**
+ * ONE LINK OF THE FOOD CHAIN, scored by a mouthful eaten inside an armed
+ * window. The other half of recordStrike above, and the split matters: links
+ * per strike is the ratio the report is built on, and with the two halves in
+ * different events the numerator and the denominator now come from different
+ * places. A run full of strikes and no links is a player who cannot find food;
+ * one with neither is a player who cannot find the beat.
+ */
+export function recordChainLink(chain) {
+  if (!run) return;
+  bucket.links += 1;
+  bucket.linkDepthSum += chain;
+  if (chain > bucket.maxChain) bucket.maxChain = chain;
 }
 
 /** One mouthful swallowed — the denominator for the chain's rate. */

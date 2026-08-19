@@ -104,6 +104,9 @@ const {
 const {
   telegraphPulse, telegraphMul, setTelegraph, updateTelegraph,
 } = await import('../path/src/systems/telegraph.js');
+const {
+  applyTipDissolve, initTipDissolve, TIP_DISSOLVE_DEFAULTS,
+} = await import('../path/src/ui/tipDissolve.js');
 // A three.js Color is not needed to test the paint path and importing one would
 // drag the renderer into a state-machine test. What the path actually uses is
 // copy/clone/multiplyScalar, so that is what this has.
@@ -1179,19 +1182,29 @@ section('{player} — one name, every text table');
   resetCallouts();
   resetTutorialRun();
   const hold = holdFor(CALLOUTS.get('swim'));
-  let onScreen = 0;
-  const ctx = {
+  const fade = CONFIG.tutorial.dissipate.seconds;
+  let reading = 0;   // up and whole
+  let leaving = 0;   // up and dissolving
+  const ctx = withSubjects({
     runTime: 0, device: 'touch', moving: false, aiming: false, charging: false,
     oxygenLow: false, aboveSurface: false, airTime: 0, nearSurface: false, chumInWater: false,
-  };
-  for (let t = 0; t < CONFIG.tutorial.openDelay + hold + 1; t += DT) {
+  });
+  for (let t = 0; t < CONFIG.tutorial.openDelay + hold + fade + 1; t += DT) {
     ctx.runTime = t;
     updateCallouts(DT, {}, true);
     updateTutorial(DT, ctx, true);
-    if (bandState.row?.id === 'swim') onScreen += DT;
+    if (bandState.row?.id !== 'swim') continue;
+    if (tutorialState.active === 'swim') reading += DT;
+    else leaving += DT;
   }
   check('an unanswered tip still runs its full hold',
-    Math.abs(onScreen - hold) < 0.1, `${onScreen.toFixed(2)}s of ${hold}s`);
+    Math.abs(reading - hold) < 0.1, `${reading.toFixed(2)}s of ${hold}s`);
+  // ...AND IS STILL THERE WHILE IT DISSOLVES. The row has to outlive the step
+  // by the length of the fade, or there is nothing on the surface for the
+  // dissolve to erode — which on screen is a tip that does not dissipate, it
+  // just vanishes. That was the first version of this feature.
+  check('...and stays on the band for the dissolve after it',
+    Math.abs(leaving - fade) < 0.1, `${leaving.toFixed(2)}s of ${fade}s`);
 }
 {
   // A keyboard gets neither of the two stick tips, and is not left waiting for
@@ -1672,6 +1685,41 @@ section('a tip that stands beside its subject');
   check('...and without spending it', !tutorialDone().has('bubbleOrb'));
 }
 
+{
+  // THE PAN CANNOT SLIDE THE FIELD OUT OF THE FILTER.
+  //
+  // This is the bug that made the whole feature look like it was hiding the
+  // text rather than dissolving it. The flow is an feOffset applied to a
+  // turbulence result, and that result only exists inside the filter's region —
+  // so an offset past the region's padding drags empty space over the type, the
+  // alpha stencil comes out transparent everywhere, and `feComposite in`
+  // renders NOTHING. Every number on the element still says it is fine:
+  // opacity 1, a live filter, a sensible mask.
+  //
+  // Two things stop it: the caller hands in the dissolve's OWN elapsed time
+  // (a second at most), and the clamp below survives a `flow` slider wound to
+  // the top on top of that.
+  initTipDissolve(document.body);
+  const node = document.createElement('span');
+  document.body.appendChild(node);
+  const dyOf = (id) => parseFloat(document.querySelector(`#${id} feOffset`).getAttribute('dy'));
+  applyTipDissolve(node, 'warp', 0.5, 1000, { ...TIP_DISSOLVE_DEFAULTS, flow: 80 });
+  // jsdom gives every element a zero box, so panFor falls back to its own floor
+  // of 24px of line height — which is what the bound is measured against here.
+  check('an absurd clock cannot pan the field out of the filter',
+    dyOf('sv-tip-warp') >= -24 * 0.8 - 1e-6, `dy ${dyOf('sv-tip-warp')}`);
+  applyTipDissolve(node, 'ink', 0.5, 1000, { ...TIP_DISSOLVE_DEFAULTS, flow: 80 });
+  check('...on the style that does not cut, either', dyOf('sv-tip-ink') >= -24 * 0.8 - 1e-6,
+    `dy ${dyOf('sv-tip-ink')}`);
+  // ...and it still MOVES at ordinary settings, or the clamp has quietly turned
+  // the flow off and the noise is a static texture being faded.
+  applyTipDissolve(node, 'warp', 0.5, 0.35, TIP_DISSOLVE_DEFAULTS);
+  const moved = dyOf('sv-tip-warp');
+  check('...but it does still flow at the shipped numbers', moved < -1 && moved > -19,
+    `dy ${moved}`);
+  node.remove();
+}
+
 // ---------------------------------------------------------------------------
 section('lighting up what the tip is about');
 // ---------------------------------------------------------------------------
@@ -1791,7 +1839,11 @@ section('drawing it, and where the arrow points');
   const band = root.querySelector('.sv-callout');
   const boost = root.querySelector('.sv-callout-boost');
   const world = root.querySelector('.sv-callout-world');
-  const worldInk = root.querySelector('.sv-callout-ink');
+  // SCOPED TO THE WORLD TIP. Both surfaces have an ink node now — the band's
+  // control tips dissolve too — so a bare '.sv-callout-ink' finds the band's,
+  // and every check below would be reading the wrong line's words.
+  const worldInk = root.querySelector('.sv-callout-world .sv-callout-ink');
+  const bandInk = root.querySelector('.sv-callout > .sv-callout-ink');
   const arrow = root.querySelector('.sv-callout-arrow');
   check('the band, the seal line, the world tip and the arrow are built once',
     !!band && !!boost && !!world && !!worldInk && !!arrow);
@@ -1971,6 +2023,58 @@ section('drawing it, and where the arrow points');
     updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, tipAnchor: null });
     check('a world tip with no anchor is not drawn', world.className.includes('sv-hidden'));
     check('...and does not fall back onto the band', band.className.includes('sv-hidden'));
+  }
+  {
+    // THE TIP IS VISIBLE WHILE IT DISSOLVES, and this is the check that pays
+    // for itself. Every coach line is pinned, so its age runs past its own
+    // hold — and the motion block's departure window is measured BACKWARDS
+    // FROM THE END OF LIFE, so with the row's hold passed as that life the out
+    // curve opened while the tip was still meant to be read and took the alpha
+    // to zero. The tip went invisible at its hold and the dissolve then played
+    // out, correctly and completely, on something nobody could see: on screen
+    // the text did not dissipate at all, it was simply hidden.
+    //
+    // Sampled well past the hold, which is where the old code returned 0.
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get('bubbleOrb'));
+    pinCallout(CALLOUTS.get('bubbleOrb'), true);
+    const hold = holdFor(CALLOUTS.get('bubbleOrb'));
+    for (let t = 0; t < hold * 2; t += DT) updateCallouts(DT, {}, true);
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 4, y: 0 }, tipFade: 0,
+    });
+    check('a pinned tip is still visible long past its hold',
+      parseFloat(world.style.opacity) > 0.9,
+      `opacity ${world.style.opacity} after ${(hold * 2).toFixed(1)}s of a ${hold}s hold`);
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 4, y: 0 }, tipFade: 0.4,
+    });
+    check('...and while it is being eaten', parseFloat(world.style.opacity) > 0.9,
+      `opacity ${world.style.opacity}`);
+    // The same trap on the band, where the control tips live.
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get('strike'));
+    pinCallout(CALLOUTS.get('strike'), true);
+    for (let t = 0; t < holdFor(CALLOUTS.get('strike')) * 2; t += DT) updateCallouts(DT, {}, true);
+    updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, tipFade: 0.4 });
+    check('a band tip is visible past its hold too',
+      parseFloat(band.style.opacity) > 0.9, `opacity ${band.style.opacity}`);
+    check('...and dissolves rather than fading', !!bandInk.style.filter || !!bandInk.style.maskImage,
+      `${bandInk.style.filter} / ${bandInk.style.maskImage}`);
+    // A WARNING IS NOT A TIP. It keeps its clock and its departure curve — an
+    // alarm eroding into the water reads the room exactly backwards, and it
+    // must not pick up a dissolve from the shared node either.
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get('boss'));
+    updateCallouts(holdFor(CALLOUTS.get('boss')) * 0.98, {}, true);
+    updateCalloutUi(0.016, { camera, playerX: 0, playerY: 0, tipFade: 0.5 });
+    check('a warning still fades out on its own clock',
+      parseFloat(band.style.opacity) < 0.5, `opacity ${band.style.opacity}`);
+    check('...and is never dissolved', !bandInk.style.filter && !bandInk.style.maskImage,
+      `${bandInk.style.filter} / ${bandInk.style.maskImage}`);
   }
   {
     // THE DISSOLVE. What is asserted is the WIRING — that progress reaches the

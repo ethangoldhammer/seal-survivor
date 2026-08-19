@@ -242,6 +242,149 @@ check('the image is capped at the configured width, not saved at display size',
   `${canvas.width} on screen → ${lastPngWidth} saved`);
 
 // ---------------------------------------------------------------------------
+section('THE STAMP — what killed it, in words');
+// ---------------------------------------------------------------------------
+// The cause of death travels four files to reach the polaroid, and every hop
+// fails silently: the credit is read one line before the boss reference is
+// dropped (systems/boss.js), banked on the SHOT rather than looked up later
+// (the score screen's fan re-draws minutes after the fact, when bossState is
+// about a different boss or none), and written to a Rive property the shipped
+// file may not have yet. Nothing in that chain throws when it breaks — the
+// card just prints with a blank stamp, which is also what a legitimately
+// unattributed kill looks like. So each hop is checked on its own.
+{
+  const PT = await import('../path/src/systems/playtest.js');
+  const { sourceLabel } = await import('../path/src/systems/playtestAnalysis.js');
+  const { cardTextFor } = await import('../path/src/ui/snapshotCard.js');
+
+  // The credit comes out of the ledger's OWN map — the same one recordKill
+  // reads — so the stamp and the ability the kill is credited to in the
+  // balance report cannot drift apart.
+  PT.beginRun({});
+  const bossBody = { hp: 100, maxHp: 100 };
+  PT.recordDamage('gun', 40, bossBody);
+  PT.recordDamage('missile', 60, bossBody);
+  check('the last thing to damage a body is recoverable',
+    PT.damageCreditFor(bossBody) === 'missile', String(PT.damageCreditFor(bossBody)));
+  check('...as a name a player would recognise, not a source key',
+    sourceLabel('missile') === 'Homing Missile', sourceLabel('missile'));
+  // Two upgrades that were dealing damage under a tag no row claimed. They
+  // read as raw keys on any surface that shows a source to a player.
+  check('...including the ones that used to have no row',
+    sourceLabel('harp') === 'Harp Seal' && sourceLabel('laserEyes') === 'Laser Eyes',
+    `${sourceLabel('harp')} / ${sourceLabel('laserEyes')}`);
+  // The arena's own damage is a legitimate killing blow and has to be sayable.
+  check('...and the arena\'s own damage, which no upgrade pays for',
+    sourceLabel('reentry') === 'Belly Flop', sourceLabel('reentry'));
+  // A body nothing has touched is a blank, not a guess: the card would rather
+  // say nothing than say "unknown".
+  check('an untouched body credits nothing rather than guessing',
+    PT.damageCreditFor({}) === null, String(PT.damageCreditFor({})));
+  PT.endRun('test');
+
+  SHOT.resetBossShot();
+  SHOT.captureBossShot(canvas, { ...meta, cause: 'Homing Missile', player: 'ETHAN' });
+  const stamped = SHOT.bossShot();
+  check('the shot keeps what killed the boss', stamped.cause === 'Homing Missile', stamped.cause);
+  check('...and the card is written from it', cardTextFor(stamped).cause === 'Homing Missile',
+    cardTextFor(stamped).cause);
+  // WHOSE PRINT IT IS, banked at capture for the same reason. The failure this
+  // catches is a card that reads the name live when it is drawn: the score
+  // screen's fan redraws these minutes later, and a player who renamed
+  // themselves in the box on that screen would watch every print they took
+  // retitle itself.
+  check('the shot keeps whose run it was', stamped.player === 'ETHAN', stamped.player);
+  check('...and the card is titled from the shot, not from a live read',
+    cardTextFor(stamped).player === 'ETHAN', cardTextFor(stamped).player);
+  // The unattributed kill, which has to reach the artboard as an empty string
+  // rather than as undefined — Rive would render the word.
+  SHOT.resetBossShot();
+  SHOT.captureBossShot(canvas, meta);
+  check('a kill with no credit stamps an empty string, not "undefined"',
+    cardTextFor(SHOT.bossShot()).cause === '', JSON.stringify(cardTextFor(SHOT.bossShot()).cause));
+  // The name is the one field on this card that falls back to a live read
+  // rather than to a blank: the metas that carry no name are previews and demo
+  // cards, and those should still be titled. Never empty, and never the word
+  // 'undefined' — the artboard would render either.
+  const { DEFAULT_PLAYER_NAME } = await import('../path/src/systems/playerName.js');
+  check('a meta with no name falls back to what this player is called',
+    cardTextFor({}).player === DEFAULT_PLAYER_NAME, JSON.stringify(cardTextFor({}).player));
+
+  // --- THE KICKER, which is the label the stamp reads under ----------------
+  const { parseKickerCsv, pickKicker, FALLBACK_KICKER } = await import('../path/src/kickerTable.js');
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, resolve } = await import('node:path');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const kickerWarnings = [];
+  const table = parseKickerCsv(
+    readFileSync(resolve(here, '../path/src/kickers.csv'), 'utf8'),
+    (m) => kickerWarnings.push(m),
+  );
+  check('the shipped kickers.csv parses', table.length >= 2, `${table.length} row(s)`);
+  check('...with nothing to complain about', kickerWarnings.length === 0, kickerWarnings.join(' | '));
+
+  // THE TRAILING SPACE, which is the whole reason this went through a function
+  // instead of straight out of the file. It is the gap between the label and
+  // the weapon name — the artboard sets them as two runs side by side — and it
+  // is invisible in every editor that would open a CSV. Every row has to come
+  // out with exactly one, whatever the file happens to contain.
+  const rolled = new Set();
+  for (let i = 0; i < 400; i++) rolled.add(pickKicker(table, Math.random));
+  check('every kicker ends in exactly one space',
+    [...rolled].every((k) => k.endsWith(' ') && !k.endsWith('  ')), [...rolled].join(' | '));
+  check('...and none of them is blank', [...rolled].every((k) => k.trim().length > 2));
+  check('the rotation actually rotates', rolled.size >= 3, `${rolled.size} distinct in 400 rolls`);
+  check('...including the straight reading', [...rolled].includes(FALLBACK_KICKER),
+    [...rolled].join(' | '));
+
+  // A row written WITH a space is a row somebody will eventually write. It has
+  // to come out identical to one written without.
+  const padded = parseKickerCsv('id,text\npad,beat down by: \n', () => {});
+  check('a row that already has a space is not given a second one',
+    pickKicker(padded, () => 0) === 'beat down by: ',
+    JSON.stringify(pickKicker(padded, () => 0)));
+  // An empty or broken table must not caption a print with nothing.
+  check('an empty table falls back rather than blanking the card',
+    pickKicker([], Math.random) === FALLBACK_KICKER);
+  check('...and so does a table of rows with no text',
+    pickKicker(parseKickerCsv('id,text\nblank,\n', () => {}), Math.random) === FALLBACK_KICKER);
+
+  // BANKED ON THE SHOT, like the cause and the name. The score screen's fan
+  // redraws every print; a kicker rolled where the card is built would change
+  // a print's joke while the player is looking at it.
+  SHOT.resetBossShot();
+  SHOT.captureBossShot(canvas, meta);
+  const withKicker = SHOT.bossShot();
+  check('a shot is captioned when it is taken', withKicker.kicker.endsWith(' ')
+    && withKicker.kicker.trim().length > 2, JSON.stringify(withKicker.kicker));
+  // Drawn twice, which is exactly what the score screen does to every print in
+  // the fan. Both readings have to be the shot's own.
+  const firstDraw = cardTextFor(withKicker).kicker;
+  const secondDraw = cardTextFor(withKicker).kicker;
+  check('...and redrawing the card does not re-roll it',
+    firstDraw === withKicker.kicker && secondDraw === withKicker.kicker,
+    `${JSON.stringify(firstDraw)} then ${JSON.stringify(secondDraw)}`);
+  // Per SHOT and not per session: a run that beats eight bosses should not
+  // caption all eight prints identically, which is what a roll cached at module
+  // load would do. Over twenty kills the odds of one line five times running
+  // are vanishing.
+  const captions = new Set();
+  for (let i = 0; i < 20; i++) {
+    SHOT.resetBossShot();
+    SHOT.captureBossShot(canvas, meta);
+    captions.add(SHOT.bossShot().kicker);
+  }
+  check('...but two kills in a run can read differently', captions.size > 1,
+    `${captions.size} distinct across 20 kills`);
+  // A meta that is not a shot — the demo card, a look page — gets the straight
+  // reading rather than a roll, so a page being looked at cannot change its own
+  // caption between two glances.
+  check('a preview card is not rolled at all', cardTextFor({}).kicker === FALLBACK_KICKER,
+    JSON.stringify(cardTextFor({}).kicker));
+}
+
+// ---------------------------------------------------------------------------
 section('BETWEEN RUNS — a trophy belongs to the run that earned it');
 // ---------------------------------------------------------------------------
 check('there is one now', !!SHOT.bossShot());

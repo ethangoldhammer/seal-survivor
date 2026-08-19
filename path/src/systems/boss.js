@@ -62,9 +62,13 @@ import { startBossMusic, endBossMusic, resetBossMusic } from './music.js';
 import { startBossKill } from './bossKill.js';
 import { attachBossBoat, isBoatBoss, resetBossBoat, updateBossBoat } from './bossBoat.js';
 import { attachKraken, releaseKraken, resetKraken, updateKraken } from './kraken.js';
+import { attachAngler, releaseAngler, resetAngler, updateBossAngler } from './bossAngler.js';
+import { beginBossWarmup, cancelBossWarmup, tickBossWarmup } from './bossWarmup.js';
 import { startCelebration } from './celebrate.js';
 import { bossCycleRelief, setBossCycle } from './waves.js';
 import { playSfx } from './audio.js';
+import { damageCreditFor } from './playtest.js';
+import { sourceLabel } from './playtestAnalysis.js';
 
 // Parsed once — the files can't change without a page reload, since it's the
 // dev server that notices the write. Same deal as the quip table.
@@ -121,6 +125,11 @@ function ownNames(bossId) {
 export const bossState = {
   enemy: null,
   name: '',
+  // What killed the LAST boss, as a player-facing weapon name ('Homing
+  // Missile') or '' — the polaroid's stamp. Written on the frame the boss
+  // leaves the enemy list and read a few frames later by the kill-shot grab in
+  // main.js, which is the whole reason it is state and not an argument.
+  killedBy: '',
   hpFrac: 1,
   // The level the next boss arrives at. Advanced by exactly one gap on every
   // spawn, from the threshold it just answered rather than from the player's
@@ -148,6 +157,18 @@ export const bossState = {
   // where it reads as the sea emptying rather than as a bug in the clear-out.
   hushing: false,
   hushLeft: 0,
+  // WHICH boss the current hush is leading up to, drawn on the frame the hush
+  // began and consumed on the frame it ends. Null at every other moment.
+  //
+  // It is state rather than a local because the draw and the spawn are now
+  // three seconds apart — and they are three seconds apart on purpose, because
+  // the warm-up cannot prepare a boss nobody has picked yet. See
+  // systems/bossWarmup.js.
+  //
+  // A draw held here is NOT lost if the hush is abandoned: the bag has already
+  // moved on, so the next arrival consumes this rather than drawing again.
+  // Only a run reset clears it, which is also when the bag itself is rebuilt.
+  pending: null,
   // How many have been sent this run. Not used for scaling — the creature's
   // own hpPerDifficulty already does that — but it is what a HUD or a score
   // screen would want, and it is one line to keep honest.
@@ -277,8 +298,10 @@ export function resetBoss(scene = null) {
   // one place ink already in the water is not allowed to survive. Every other
   // exit uses releaseKraken, which leaves it drifting.
   if (scene) resetKraken(scene);
+  resetAngler();
   bossState.enemy = null;
   bossState.name = '';
+  bossState.killedBy = '';
   bossState.hpFrac = 1;
   bossState.defeated = 0;
   bossState.sent = 0;
@@ -290,6 +313,12 @@ export function resetBoss(scene = null) {
   bossState.lastLevel = 0;
   bossState.hushing = false;
   bossState.hushLeft = 0;
+  // The one place a held draw IS thrown away, because it is the one place the
+  // bag it came from is thrown away too — see `pending`. Anything the warm-up
+  // had half-built goes back to the visual pool rather than being disposed:
+  // a spare body costs a pool slot, and the next run may well want it.
+  bossState.pending = null;
+  cancelBossWarmup();
   // A FRESH BAG PER RUN. Carrying it across would mean a run whose first boss
   // is the orca purely because the last run had already drawn the shark, which
   // is the previous run reaching into this one — and the whole reason the
@@ -469,11 +498,20 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     if (bossState.hushing) holdSpawns(0);
     bossState.hushing = false;
     bossState.hushLeft = 0;
+    // `pending` is deliberately LEFT SET: the bag has already moved past this
+    // archetype, and a boss switched off and on again should meet the one it
+    // had drawn rather than silently skip it. The queue does stop — there is
+    // no longer an arrival for it to be racing.
+    cancelBossWarmup();
     setBossCycle(1);
     resetBossPerks();
     resetBossBoat(scene);
     // NOT resetKraken: the cadence stops, the cloud does not. See releaseKraken.
     releaseKraken();
+    // The anglerfish has nothing that outlives it, so this is the whole
+    // teardown: the cadence stops, the body gets its contact damage and its
+    // locomotion state back, and the borrowed materials go back to resting.
+    releaseAngler();
     stopBossRiser();
     // The score goes back to the run's own, at the next bar rather than on this
     // frame: unlike a kill there is no hush to hide the switch under, so this
@@ -493,6 +531,27 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
       else bossState.hpFrac = Math.max(0, Math.min(1, e.hp / Math.max(1, e.maxHp)));
       return null;
     }
+    // WHAT FINISHED IT, read while the body is still referenced — one line
+    // before the reference is dropped, and it cannot move any later than this.
+    // The kill shot is grabbed several frames from now (main.js, after the
+    // draw) and by then this file has forgotten which creature the fight was
+    // about, so the answer has to be banked here or not at all.
+    //
+    // The credit comes from the same WeakMap the balance report gives the kill
+    // to (see damageCreditFor), so the stamp on the print and the ability that
+    // gets the kill in the ledger are one answer rather than two that agree
+    // most of the time. It is the LAST thing that damaged the boss, which is
+    // the killing blow for everything except an aura ticking over a body a
+    // bullet had already broken — the same small lie the ledger has always
+    // told, and the right one for a caption.
+    //
+    // Already a display name, not a source key: nothing downstream of here has
+    // any use for 'clubBoom', and resolving it once means the print, the
+    // shared PNG and the score-screen fan cannot caption the same kill three
+    // ways. Empty string, never a guess, when nothing was recorded — a card
+    // that says nothing beats a card that says "unknown".
+    const credit = damageCreditFor(bossState.enemy);
+    bossState.killedBy = credit ? sourceLabel(credit) : '';
     bossState.enemy = null;
     bossState.hpFrac = 0;
     bossState.arriving = false;
@@ -546,6 +605,7 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     // the ink IS — so the fight's clock is dropped here and the cloud is left to
     // finish dissolving on its own. See releaseKraken.
     releaseKraken();
+    releaseAngler();
     // A boss killed DURING its own entrance is not reachable while
     // `arrival.invulnerable` is on, but the toggle is a toggle — and a riser
     // left sounding over an empty ocean would climb to its scheduled end and
@@ -595,7 +655,36 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
       // to pass in — clearForBoss is asked about the CROWD, not about the
       // fight, and the creature it would be handed does not exist yet.
       clearForBoss(null);
+      // WHICH BOSS IS DECIDED HERE, at the START of the hush, and it used to be
+      // decided at the end of it. That one move is what the whole warm-up
+      // hangs off: three seconds of known lead time are worth nothing if the
+      // thing they are leading up to is a secret until the last frame.
+      //
+      // The draw is otherwise unchanged — same bag, same eligibility — and it
+      // reads the level at the moment the threshold was crossed rather than
+      // three seconds later. That is if anything the more correct of the two:
+      // it is the level that ASKED for this boss. A player who gains a level
+      // inside the hush would previously have been able to unlock a higher
+      // `minLevel` archetype during the held breath, which is a door nobody
+      // designed and which nothing depended on.
+      //
+      // `??=`, NOT `=`, and that is not defensiveness. A hush can be abandoned
+      // with its draw still held — the tuner switching the fight off is the
+      // ordinary way — and the draw has already come OUT OF THE BAG by then.
+      // Overwriting it on the next hush would draw a second time for one
+      // arrival, so a run that toggled the boss off and on would burn through
+      // the shuffle bag at twice the rate and start repeating archetypes it
+      // had never actually sent.
+      bossState.pending ??= nextBoss(ROSTER, bossState.bag, gameState.level ?? 1) ?? FALLBACK_BOSS;
+      // ...and now the empty ocean is spent building it. See
+      // systems/bossWarmup.js: the body, its textures and its programs, one
+      // step per frame, so the arrival frame has nothing left to pay for.
+      beginBossWarmup(bossState.pending);
     }
+    // One unit of warm-up work per frame of the hush. Deliberately before the
+    // countdown's early return, so it runs on every frame of the quiet rather
+    // than on none of them.
+    tickBossWarmup();
     bossState.hushLeft -= dt;
     // Exactly what is left and not a frame more. There is no gap to cover at
     // the far end: every spawner in the game runs BEFORE this function in the
@@ -611,8 +700,15 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
 
   // WHICH boss. Drawn from the shuffle bag rather than rolled independently,
   // so a run with two eligible archetypes meets both — see nextBoss.
+  //
+  // ALREADY DRAWN, on the frame the hush began, so that the warm-up had
+  // something to warm — see THE HELD BREATH above. The draw still happens here
+  // for the paths with no hush in front of them: a hush switched off in the
+  // tuner, and forceBoss, which passes `skipHush`. Those arrive cold, which is
+  // the behaviour they had before this existed.
   const level = gameState.level ?? 1;
-  const archetype = nextBoss(ROSTER, bossState.bag, level) ?? FALLBACK_BOSS;
+  const archetype = bossState.pending ?? nextBoss(ROSTER, bossState.bag, level) ?? FALLBACK_BOSS;
+  bossState.pending = null;
   const key = archetype.enemy;
   if (!CONFIG.enemies[key]) {
     // Only reachable through FALLBACK_BOSS, since parseBossCsv already refuses
@@ -671,6 +767,7 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // the same reason the boat's bombardment is: it comes with a body built for
   // it and a standoff it will not leave — see systems/kraken.js.
   attachKraken(scene, e);
+  attachAngler(scene, e);
 
   bossState.enemy = e;
   bossState.archetype = archetype;
@@ -736,6 +833,10 @@ export function updateBossAbilities(dt, scene, playerPos, hooks) {
   // moves nothing, so unlike the boat it does not care whether it runs before or
   // after the perks.
   updateKraken(dt, scene, playerPos, hooks);
+  // The anglerfish's ambush. Like the kraken's cadence this is GAME time and
+  // inside the run gate; unlike it, this one MOVES the animal, so it matters
+  // that it runs after the perks — see the yield in systems/bossAngler.js.
+  updateBossAngler(dt, scene, playerPos, hooks);
 }
 
 // ---------------------------------------------------------------------------
@@ -816,6 +917,16 @@ export function forceBoss(scene, gameState, opts = {}) {
   // someone wonders why the ocean only sometimes empties.
   bossState.hushing = false;
   bossState.hushLeft = 0;
+  // AND THE DRAW THAT HUSH WAS HOLDING. This is load-bearing rather than
+  // tidiness: the spawn below reads `pending` before it reads the bag, so a
+  // leftover draw from an abandoned hush would be spawned INSTEAD of the
+  // archetype the panel asked for — a debug button that shows you a different
+  // boss than the one you clicked, intermittently, only when a hush happened
+  // to be running. Stashed rather than dropped, so the natural schedule that
+  // had already drawn it is not quietly skipped when this returns.
+  const savedPending = bossState.pending;
+  bossState.pending = null;
+  cancelBossWarmup();
 
   // The archetype is forced by putting it at the front of a one-shot roster
   // rather than by bypassing the draw, so the size step, the enemy lookup and
@@ -847,6 +958,7 @@ export function forceBoss(scene, gameState, opts = {}) {
   const e = updateBoss(1 / 60, { ...gameState, level: at, running: true }, scene, { skipHush: true });
 
   bossState.bag = savedBag;
+  bossState.pending = savedPending;
   bossState.sent = savedSent + (e ? 1 : 0);
   // THE NATURAL SCHEDULE IS PUT BACK. updateBoss just rolled a fresh gap off
   // `at`, which for a forced spawn is a level the player has not reached — so

@@ -153,15 +153,11 @@ const STYLES = `
 
 let layer = null;
 let bandEl = null;
+let bandInkEl = null;
 let boostEl = null;
 let worldEl = null;
 let worldInkEl = null;
 let arrowEl = null;
-// Real seconds since the layer was built, and the only clock the dissolve has.
-// Its own rather than the game's: the noise has to keep flowing through a
-// hit-stop, and a field that froze on the frame something dramatic happened
-// would be the one moment anybody looks closely at it.
-let flowClock = 0;
 
 // The arrow's live bearing, eased toward the one it is asked for. Kept across
 // frames — that easing is the whole reason a re-target reads as this arrow
@@ -185,6 +181,14 @@ export function initCallouts(root) {
 
   bandEl = document.createElement('div');
   bandEl.className = 'sv-callout sv-hidden';
+  // The band's words live in an inner node for the same reason the world tip's
+  // do: a COACH line on the band dissolves as well (the control tips are
+  // tutorial text too), and the dissolve must not share `filter` or `transform`
+  // with the arrival curve. A warning uses the same node and simply never has a
+  // dissolve applied to it.
+  bandInkEl = document.createElement('span');
+  bandInkEl.className = 'sv-callout-ink';
+  bandEl.appendChild(bandInkEl);
   layer.appendChild(bandEl);
 
   boostEl = document.createElement('div');
@@ -223,6 +227,7 @@ export function initCallouts(root) {
 export function clearCalloutUi() {
   if (!bandEl) return;
   bandEl.classList.add('sv-hidden');
+  clearTipDissolve(bandInkEl);
   boostEl.classList.add('sv-hidden');
   worldEl.classList.add('sv-hidden');
   // The dissolve is cleared as well as hidden. A hidden node keeps whatever
@@ -263,13 +268,12 @@ export function clearCalloutUi() {
 export function updateCalloutUi(dt, ctx = {}) {
   if (!bandEl) return;
   bobClock += dt;
-  flowClock += dt;
 
   const band = activeCallout('band', ctx.device, ctx.tokens);
   const onSeal = activeCallout('player', ctx.device, ctx.tokens);
   const world = activeCallout('world', ctx.device, ctx.tokens);
 
-  drawBand(band);
+  drawBand(band, ctx.tipFade);
   drawOnSeal(onSeal, ctx);
   const worldPose = drawWorld(world, ctx);
 
@@ -422,7 +426,10 @@ function drawWorld(callout, ctx) {
   const clamped = clamp(top, uiGap, Math.max(uiGap, window.innerHeight - h - uiGap));
   const y = keepOffChrome(clamped, h, box, left + box / 2, chromeRects(worldEl), uiGap);
 
-  const pose = popupPose(callout.motion, callout.age, callout.hold);
+  // Infinity, for the reason spelled out in drawBand: a pinned tip has no life,
+  // so the motion block's departure window must never open. Its exit is the
+  // dissolve below.
+  const pose = popupPose(callout.motion, callout.age, Infinity);
   worldEl.style.left = `${left}px`;
   worldEl.style.top = `${y + pose.lift}px`;
   // No -50% here, unlike the band: the left edge is already the clamped one,
@@ -437,8 +444,7 @@ function drawWorld(callout, ctx) {
   // AND THE DISSOLVE, on the inner node. `tipFade` is 0 for the whole time the
   // tip is simply standing there, and applyTipDissolve short-circuits on that —
   // so the ordinary case costs one comparison and leaves plain text behind.
-  const d = CONFIG.tutorial?.dissipate ?? {};
-  applyTipDissolve(worldInkEl, d.style ?? 'current', ctx.tipFade ?? 0, flowClock, d);
+  dissolve(worldInkEl, ctx.tipFade);
   return pose;
 }
 
@@ -449,19 +455,37 @@ function clamp(v, lo, hi) {
 // Returns the pose it drew with. Nothing rides it any more — the arrow belongs
 // to the world tip now — but the value is what makes the function testable
 // without a screen, and it is how the band's own curve is asserted.
-function drawBand(callout) {
+//
+// `fade` is how far through leaving a COACH line is, and is ignored for a
+// warning. Both surfaces take it from the same place (tutorialState.fade), so
+// the two can never disagree about whether a tip is on its way out.
+function drawBand(callout, fade) {
   if (!callout) {
     bandEl.classList.add('sv-hidden');
+    clearTipDissolve(bandInkEl);
     return null;
   }
   const coach = callout.kind === 'coach';
   const cls = coach ? 'sv-callout sv-callout-coach' : 'sv-callout';
   if (bandEl.className !== cls) bandEl.className = cls;
-  if (bandEl.textContent !== callout.text) bandEl.textContent = callout.text;
+  if (bandInkEl.textContent !== callout.text) bandInkEl.textContent = callout.text;
 
-  // The row's own hold is the life, so the departure curve starts the right
-  // distance from the end however long this particular line was given.
-  const pose = popupPose(callout.motion, callout.age, callout.hold);
+  // A WARNING'S LIFE IS ITS ROW'S HOLD, so the departure curve starts the right
+  // distance from the end however long that line was given.
+  //
+  // A TIP HAS NO LIFE AT ALL, and this is the whole bug that made the first
+  // version of the dissolve look like the text was simply being hidden. Every
+  // coach line is now PINNED until the coach lets go of it (see pinCallout),
+  // so its age runs past its hold — and the motion block's out window,
+  // measured backwards from the end of life, therefore opened while the line
+  // was still meant to be readable and took the alpha to zero. The tip was
+  // then invisible for the rest of its stay, and the dissolve that followed
+  // played out perfectly on an element nobody could see.
+  //
+  // The exit of a tip is the DISSOLVE, and nothing else: Infinity keeps the
+  // out window permanently shut (ease() clamps, so its terms stay identities)
+  // and `tipFade` does all of the leaving.
+  const pose = popupPose(callout.motion, callout.age, coach ? Infinity : callout.hold);
   const y = (CONFIG.callouts?.y ?? 0.26) * window.innerHeight;
 
   // WHERE IT WANTS TO BE, then where it may be. offsetWidth/offsetHeight and
@@ -481,7 +505,32 @@ function drawBand(callout) {
   bandEl.style.opacity = `${pose.alpha}`;
   applyBloom(bandEl, pose.bloom);
   bandEl.classList.remove('sv-hidden');
+  // The control tips dissolve like every other piece of tutorial text. A
+  // warning never does — an alarm that eroded into the water would be reading
+  // the room exactly backwards.
+  dissolve(bandInkEl, coach ? fade : 0);
   return pose;
+}
+
+/**
+ * Put one node `fade` of the way through leaving.
+ *
+ * THE CLOCK IS THE DISSOLVE'S OWN ELAPSED TIME, not a clock this file keeps.
+ * That was the whole of the bug where a dissipating tip was simply invisible:
+ * the flow is an offset applied to a noise field that only exists inside the
+ * filter's region, so a clock running since the page loaded slides the field
+ * clean out of that region within a minute and the tip composites to nothing.
+ * Progress times the tuned length is bounded by construction, and it is also
+ * the honest reading — the water moves while the sentence is leaving, and there
+ * is nothing to animate before that.
+ *
+ * Style and numbers are read per frame rather than latched, so the pill in the
+ * Text panel changes the next tip without a reload.
+ */
+function dissolve(node, fade) {
+  const d = CONFIG.tutorial?.dissipate ?? {};
+  const t = fade ?? 0;
+  applyTipDissolve(node, d.style ?? 'current', t, t * (d.seconds ?? 0.7), d);
 }
 
 // The small line above the boost ring. Positioned from the RING rather than

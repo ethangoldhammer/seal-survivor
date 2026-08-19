@@ -749,12 +749,17 @@ section('VARIANTS — you can tell from the water what you are holding');
     clubAssetsFor({ boom: 1 }).includes('clubBoom'));
   check('Cold Snap puts its own club in a fin',
     clubAssetsFor({ ice: 1 }).includes('clubIce'));
-  // Two variants must both be visible rather than one masking the other —
-  // there are two fins, so there is room, and "which of these am I running"
-  // is the question the whole arrangement exists to answer.
-  const both = clubAssetsFor({ boom: 1, ice: 1 });
-  check('...and owning two shows one of each', both.includes('clubBoom') && both.includes('clubIce'),
-    both.join(' + '));
+  // Two variants must both be visible rather than one masking the other. They
+  // no longer share the fins to manage it — the first type taken is what the
+  // seal HOLDS and the second rides the ring — so the claim is that between
+  // the two mounts, both are on screen.
+  const { clubOrbiters } = await import('../path/src/systems/club.js');
+  const twoFin = clubAssetsFor({ boom: 1, ice: 1 });
+  const twoRing = clubOrbiters({ boom: 1, ice: 1 });
+  const shown = [...twoFin, ...twoRing];
+  check('...and owning two shows one of each',
+    shown.includes('clubBoom') && shown.includes('clubIce'),
+    `fins ${twoFin.join('+')}, ring ${twoRing.join('+') || 'empty'}`);
 
   // EVERY VARIANT IS THE SAME MODEL FOR NOW, and the fields that make a club
   // hang right have to survive being derived — a variant that lost the grip
@@ -793,6 +798,173 @@ section('VARIANTS — you can tell from the water what you are holding');
   check('...and the head starts where the model flares',
     ASSETS.club.headFrom > 0.4 && ASSETS.club.headFrom < 0.8,
     `headFrom ${ASSETS.club.headFrom}`);
+}
+
+// ------------------------------------------------------------------- the ring
+
+section('THE RING — the club types you are not holding orbit you');
+
+{
+  const { clubAssetsFor, clubOrbiters, clubsInHand, clubsOrbiting } = await import('../path/src/systems/club.js');
+
+  // THE FIRST TYPE YOU TOOK IS THE ONE IN YOUR FINS, and it is the run's
+  // history that decides it rather than a priority list. The same two levels
+  // taken in the other order have to put the other club in the flippers, or
+  // the card that just arrived is contradicted by the flipper it lands on.
+  freshRun();
+  const rig = rigWithFins(2);
+  swing(0.2, { level: 1, rig, velocity: { x: 9, y: 0 } });              // base club first
+  swing(0.2, { level: 1, ice: 2, rig, velocity: { x: 9, y: 0 } });      // then Cold Snap
+  check('the club you took first is the one in your fins',
+    clubAssetsFor({ club: 1, ice: 2 }).join() === 'club',
+    clubAssetsFor({ club: 1, ice: 2 }).join());
+  check('...and the second type is on the ring, one club per stack',
+    clubOrbiters({ club: 1, ice: 2 }).join() === 'clubIce,clubIce',
+    clubOrbiters({ club: 1, ice: 2 }).join() || 'empty');
+
+  freshRun();
+  const rig2 = rigWithFins(2);
+  swing(0.2, { level: 0, ice: 1, rig: rig2, velocity: { x: 9, y: 0 } }); // Cold Snap first
+  swing(0.2, { level: 1, ice: 1, rig: rig2, velocity: { x: 9, y: 0 } }); // then the base club
+  check('...and taking them the other way round swaps which one you hold',
+    clubAssetsFor({ club: 1, ice: 1 }).join() === 'clubIce',
+    clubAssetsFor({ club: 1, ice: 1 }).join());
+
+  // ONE TYPE MEANS NO RING AT ALL. A run holding one club card should look
+  // exactly like it always did — the ring is what the SECOND type buys.
+  freshRun();
+  swing(0.3, { level: 3, rig: rigWithFins(2), velocity: { x: 9, y: 0 } });
+  check('one club type still means fins only', clubsOrbiting() === 0 && clubsInHand() === 2,
+    `${clubsInHand()} held, ${clubsOrbiting()} orbiting`);
+
+  // STACKS ADD CLUBS. The whole promise of the second half of the card: a
+  // third pick of Cold Snap is a third club on the ring and you can count it.
+  const built = [];
+  for (const stacks of [1, 2, 4]) {
+    freshRun();
+    swing(0.3, { level: 1, ice: stacks, rig: rigWithFins(2), velocity: { x: 9, y: 0 } });
+    built.push(clubsOrbiting());
+  }
+  check('every extra stack is another club on the ring',
+    built.join() === '1,2,4', `${built.join(' -> ')} orbiting for 1, 2, 4 stacks`);
+
+  // ...AND THEY ACTUALLY GO ROUND. Measured off the meshes over time rather
+  // than trusted from the config: a ring whose clubs are built and then parked
+  // on top of the player passes every count above and is not an orbit.
+  freshRun();
+  const rig3 = rigWithFins(2);
+  const at = [];
+  for (let i = 0; i < 240; i++) {
+    rig3.pose(i * dt * 6);
+    updateClub(dt, scene, playerPos, { club: 1, ice: 1 }, enemies,
+      { rig: rig3, velocity: { x: 0, y: 0 } }, {});
+    // The orbiters are appended after the fin sockets, so the last child is one.
+    const m = clubGroup.children[clubGroup.children.length - 1];
+    at.push({ x: m.position.x - playerPos.x, y: m.position.y - playerPos.y, a: Math.atan2(m.position.y - playerPos.y, m.position.x - playerPos.x) });
+  }
+  const far = at.map((p) => Math.hypot(p.x, p.y));
+  check('an orbiting club stays out at arm\'s length',
+    Math.min(...far) > 0.8 && Math.max(...far) < CONFIG.club.orbit.radius * 2.2,
+    `${Math.min(...far).toFixed(2)}..${Math.max(...far).toFixed(2)}u from the seal`);
+  // A full turn, not a wobble: the angle has to visit all four quadrants.
+  const quadrants = new Set(at.map((p) => Math.floor(((p.a + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 2))));
+  check('...and goes all the way round', quadrants.size === 4,
+    `${quadrants.size} of 4 quadrants visited`);
+
+  // AN ORBITER IS A REAL CLUB. Driven with NO fins at all, so the only thing
+  // in the water that can hit anything is the ring — a decorative orbiter
+  // passes every check above and this is the one it cannot fake.
+  freshRun();
+  const ringOnly = { muzzles: [] };
+  const victim = spawnAt('fish', CONFIG.club.orbit.radius, -20);
+  const vhp = victim.hp;
+  for (let i = 0; i < 300; i++) {
+    updateClub(dt, scene, playerPos, { club: 1, ice: 2 }, enemies,
+      { rig: ringOnly, velocity: { x: 0, y: 0 } }, {});
+  }
+  const killed = !enemies.includes(victim);
+  check('an orbiting club hits what it sweeps through', killed || victim.hp < vhp,
+    killed ? 'killed by the ring' : `fish ${victim.hp.toFixed(1)} of ${vhp.toFixed(1)} hp`);
+
+  // THE HURLER DOES NOT THROW THE RING. The card's cost is the weapon leaving
+  // your HANDS; emptying the ring here would have one pick silently delete
+  // another card's stacks for two seconds.
+  freshRun();
+  const rig4 = rigWithFins(2);
+  swing(0.3, { level: 1, ice: 2, throwLevel: 1, rig: rig4, velocity: { x: 9, y: 0 } });
+  const heldBefore = clubsInHand();
+  const ringBefore = clubsOrbiting();
+  const { fireClubThrow } = await import('../path/src/systems/club.js');
+  fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, () => playerPos.clone(), {}, {});
+  check('a throw empties the fins', clubsInHand() === 0, `${heldBefore} -> ${clubsInHand()} held`);
+  check('...and leaves the ring alone', clubsOrbiting() === ringBefore,
+    `${ringBefore} -> ${clubsOrbiting()} orbiting`);
+}
+
+// ------------------------------------------------------------------ the shove
+
+section('SHOVE — every club hit knocks the body off its line');
+
+{
+  // THE BUG THIS SECTION EXISTS FOR. The launch is refused for everything
+  // canHold() says no to, which is every boss — so the weapon whose whole read
+  // is "things leave when you hit them" was the weapon that bounced off the
+  // animal the run is built around. `isBoss` is the only thing controlImmune
+  // reads, so this is the real refusal and not a stand-in for it.
+  const bossRun = (knock) => {
+    const was = CONFIG.club.knock;
+    CONFIG.club.knock = knock;
+    freshRun();
+    const boss = spawnAt('shark', 1.6, -20);
+    boss.isBoss = true;
+    boss.hp = 1e6;           // it must survive to be measured, not be launched
+    const from = boss.mesh.position.clone();
+    swing(1.2, { level: 3, rig: rigWithFins(2), velocity: { x: 9, y: 0 } });
+    // The shove lands in knockX/knockY, which the club never integrates — that
+    // is entities/enemies.js's job and this harness deliberately does not run
+    // it. So the claim is measured where the club actually writes it.
+    const shove = Math.hypot(boss.knockX ?? 0, boss.knockY ?? 0);
+    CONFIG.club.knock = was;
+    return { shove, moved: boss.mesh.position.distanceTo(from), hurt: boss.hp < 1e6 };
+  };
+
+  const off = bossRun(0);
+  const on = bossRun(CONFIG.club.knock);
+  check('a club connects with a body the launch refuses', on.hurt,
+    on.hurt ? 'took damage' : 'never hit');
+  check('...and shoves it, where it used to do nothing at all',
+    on.shove > 0 && off.shove === 0,
+    `${off.shove.toFixed(2)} with knock off, ${on.shove.toFixed(2)} with it on`);
+
+  // AND THE SHOVE IS THE SWING'S. Everything else in this weapon is scaled by
+  // how hard the club is actually travelling, and a knockback that ignored
+  // that would be the one part of the club a stationary player gets for free.
+  const at = (spin) => {
+    freshRun();
+    const boss = spawnAt('shark', 1.6, -20);
+    boss.isBoss = true;
+    boss.hp = 1e6;
+    swing(1.2, { level: 3, rig: rigWithFins(2), finSpin: spin, velocity: { x: 9, y: 0 } });
+    return Math.hypot(boss.knockX ?? 0, boss.knockY ?? 0);
+  };
+  const lazy = at(1);
+  const hard = at(14);
+  check('a harder swing shoves harder', hard > lazy * 1.15,
+    `${lazy.toFixed(2)} at a drift vs ${hard.toFixed(2)} at a whip`);
+
+  // THE THROWN CLUB CARRIES IT TOO, as a payload on the shot rather than as
+  // anything club.js knows how to do — the same arrangement `chill` uses. This
+  // is the claim that "all clubs" is true and not just the fin swing.
+  freshRun();
+  const { projectiles } = await import('../path/src/entities/projectiles.js');
+  projectiles.length = 0;
+  const { fireClubThrow: hurl } = await import('../path/src/systems/club.js');
+  hurl(scene, 1, 1, 1, { x: 20, y: 0 }, () => playerPos.clone(), {}, {});
+  const carried = projectiles.filter((b) => b.source === 'clubThrow' && b.knockback > 0).length;
+  check('a thrown club carries the shove as a payload',
+    carried > 0 && carried === projectiles.length,
+    `${carried} of ${projectiles.length} thrown clubs shove`);
+  projectiles.length = 0;
 }
 
 // --------------------------------------------------------------- the real file

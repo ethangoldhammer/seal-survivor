@@ -77,6 +77,10 @@ club.ricochetDamage,18,0,60,club carom damage per body hit
 club.ricochetDamagePerLevel,5,0,20,club carom damage per level
 club.maxBounces,3,0,10,club carom bounces
 club.bouncesPerLevel,1,0,4,club carom bounces per level
+club.knock,0.8,0,2,club knockback every hit adds (1 = a full-charge ram)
+club.orbit.radius,3.6,1,10,club ring how far the spare clubs orbit
+club.orbit.speed,1.5,0,8,club ring how fast it turns
+club.orbit.spin,8,0,24,club ring tumble rate — this is an orbiter's damage
 clubThrow.countAtMin,1,0,8,hurler clubs at a flick
 clubThrow.countAtFull,7,1,16,hurler clubs at a full charge
 clubThrow.countPerLevel,2,0,4,hurler clubs per level
@@ -97,6 +101,8 @@ strike.chainDamageMul,1.11,1,1.5,strike food-chain damage mult per link — COMP
 strike.chainWindow,2.2,0.4,4,food chain: seconds without a mouthful before the chain lapses. THE number that decides whether a chain can be kept up — at 1.1 a link needed a strike every 1.5s (npm run sim:chain)
 strike.charge.perfectAt,1,0.5,1,perfect charge: the fraction of a full bank that counts as perfectly loaded. The meter pops here and mechanics will be hung off it — below 1 the top of the bar becomes a window a player can hit early rather than a ceiling they hold against
 strike.charge.sweetFraction,0.05,0.01,0.5,"sweet spot: how much error a release is allowed either side of the STRIKE NOW! moment, as a fraction of the wind-up. Inside it the strike does its damage and extends the food chain; outside it the dash is a pure speed boost. 0.05 on a 1s bar is 50ms early to 50ms late"
+strike.linkMinPips,1,1,12,"food chain: chum a sweet-spot strike must collect before it counts as a FOOD CHAIN. The strike arms it; the food scores it, and the number then ticks up one per pip eaten inside the window. 1 = hit the beat, eat one thing"
+strike.charge.startPips,0,0,12,"boost meter: pips a run OPENS with. 0 = a dead meter until the first mouthful, so the food chain is the only thing that fuels a strike. Set at or above the pip count to start full (the old behaviour)"
 airborne.enabled,1,,,air time: master switch for everything a breach is worth
 airborne.rampTime,1.1,0.2,5,air time: seconds of hang for a full ramp
 airborne.jumpRamp,0.4,0,1.5,air time: ramp added per mid-air jump used
@@ -150,3 +156,4 @@ maneater.damagePerMeal,0.02,0,0.4,maneater: all damage added per human eaten per
 maneater.maxBonus,1.5,0,10,maneater: ceiling on the accumulated bonus
 ironLung.damagePerOxygen,0.002,0,0.05,iron lung: all damage per point of MAX oxygen per stack
 ironLung.maxBonus,3,0,20,iron lung: ceiling on the bonus
+oxygen.max,115,20,300,"the size of one breath, in points. Against a 5/sec deplete rate this is the seconds of dive it buys — 115 = 23s. Base for every Deep Lungs stack and what Iron Lung reads its damage off"

@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Health and air — the gauges beside the seal</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #04121e;
+        color: #cfe6ff; font: 13px/1.45 'Inter', ui-sans-serif, system-ui, sans-serif; }
+      /* Standing in for the arena. What matters for judging a GAUGE is that the
+         water is dark and busy enough to lose a thin bar in — which is exactly
+         what the old pair of 4px slivers did. */
+      #sea { position: fixed; left: 0; right: 0; top: 0; height: 58%;
+        background: linear-gradient(180deg, #12557a 0%, #07253d 50%, #041420 100%);
+        overflow: hidden; }
+      .seal { position: absolute; width: 76px; height: 34px; border-radius: 50%;
+        background: #33485c; box-shadow: 0 0 26px rgba(10,40,64,0.9);
+        transform: translate(-50%, -50%); }
+      #note { position: fixed; left: 16px; top: 12px; z-index: 20; max-width: 520px; }
+      #note h1 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+        color: #7ad7ff; font-weight: 600; margin: 0 0 6px; }
+      #note p { color: #8fb3d8; margin: 0 0 6px; }
+      #note b { color: #cfe6ff; font-weight: 600; }
+      #phase { color: #ffc65a; }
+      #facts { color: #5f88ad; font-size: 11px; }
+
+      /* THE STRIP. Below the water, on a flat ground, because these are
+         specimens rather than things in a scene. */
+      #film { position: fixed; left: 0; right: 0; bottom: 0; height: 42%;
+        background: #061a2a; border-top: 1px solid #0e3550;
+        padding: 14px 16px; box-sizing: border-box; }
+      #film h2 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+        color: #7ad7ff; font-weight: 600; margin: 0 0 2px; }
+      #film p { color: #6f9cc4; margin: 0 0 12px; font-size: 11px; }
+      #strip { display: flex; align-items: flex-end; gap: 14px; }
+      .cell { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+      /* The clone is a flex row of tracks; in the strip it is just a specimen. */
+      .cell .sv-playerbars { position: static !important; }
+      .cap { font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+        color: #6f9cc4; white-space: nowrap; }
+      .gap { width: 22px; border-left: 1px dashed #17415f; align-self: stretch; }
+      #rebuild { position: fixed; right: 16px; top: 12px; z-index: 20;
+        background: #0d3b57; color: #cfe6ff; border: 1px solid #1d5c7f;
+        border-radius: 4px; padding: 5px 10px; font: inherit; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div id="sea"></div>
+    <div id="note">
+      <h1>Health and air, beside the seal</h1>
+      <p>The real <b>ui/ui.js</b>: its stylesheet, its markup and its smoothing,
+         driven at a fixed 60th of a second. Above, the gauges pinned to a moving
+         animal by the same projection the game uses. Below, one 65-point bite
+         sampled through its whole drain — <b>if the bar ever skipped to a value,
+         two cells here would be identical.</b></p>
+      <p id="phase"></p>
+      <p id="facts"></p>
+    </div>
+    <button id="rebuild">Re-shoot the strip</button>
+    <div id="film">
+      <h2>One bite, frame by frame</h2>
+      <p>Left of the divider: health draining, with the pale trail marking where it was.
+         Right: air falling past the amber threshold, where the whole track starts to pulse.</p>
+      <div id="strip"></div>
+    </div>
+    <script type="module" src="./hp-gauges.js"></script>
+  </body>
+</html>

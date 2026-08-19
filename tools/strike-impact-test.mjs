@@ -64,6 +64,7 @@ import {
   markTarget, markable, isMarked, markWeight, updateMarks, resetMarks, __ringShader,
 } from '../path/src/systems/marks.js';
 import { jostleBoat } from '../path/src/systems/boats.js';
+import { bossArchetypes, forceBoss, resetBoss } from '../path/src/systems/boss.js';
 import { RigidBody } from '../path/src/systems/rigidBody.js';
 
 const scene = new THREE.Scene();
@@ -497,6 +498,145 @@ resetEnemies(scene);
     impostor.staggerTimer === 0 && impostor.knockX > 0,
     `knock ${impostor.knockX.toFixed(1)} u/s`);
 }
+
+// ------------------------------------------------------------------ the boss
+
+section('BOSS — a ram moves one, and less the bigger it is');
+
+// EVERY ARCHETYPE, through forceBoss, because the number that decides how far
+// a boss is shoved is assembled from two files: `radius` in enemies.csv and
+// `sizeMul` in bosses.csv (applyBossScale multiplies the second into
+// `sizeMul`, which is exactly what applyKnockback divides by). A test that
+// spawned the creature and set `isBoss` by hand — the impostor above — would
+// measure a boss shark at 1.6x less mass than the fight has, and would keep
+// passing if the size step were dropped from the arrival entirely.
+//
+// Perk-less on purpose: a perk that DRIVES the body (`perkDrive`) is the one
+// state where the boss's own motion is scripted, and rolling one would make
+// which boss got which perk part of the measurement.
+function bossTravel(id, { knocked, seconds = 0.5, seed = 2468 }) {
+  seedRandom(seed);
+  resetEnemies(scene);
+  resetBoss();
+  const e = forceBoss(scene, { difficulty: 0, level: 12, running: true }, { boss: id, perk: null });
+  if (!e) throw new Error(`forceBoss could not spawn ${id}`);
+  e.entering = false;
+  // MOVED INTO OPEN WATER, and this is not tidiness. A boss arrives at the
+  // WALL it swam in from — a boat boss arrives on station and is held against
+  // the horizontal clamp — and a body clamped at the boundary absorbs a shove
+  // aimed at the wall completely: the first version of this section measured
+  // the arena's edge and reported that four archetypes could not be moved at
+  // all. The knock does not read position, so where the body starts is the
+  // one thing here that is free to be chosen.
+  e.mesh.position.set(-12, -20, 0);
+  e.knockX = 0;
+  e.knockY = 0;
+  // Same warm-up as `travel` above, and for the same reason: a body measured
+  // from its spawn frame is really being asked which way it was pointed.
+  for (let i = 0; i < 30; i++) updateEnemies(dt, scene, playerPos, () => {}, () => {});
+  const startX = e.mesh.position.x;
+  const push = knocked ? applyKnockback(e, 1, 0, 1) : 0;
+  const decay = e.knockDecay || CONFIG.strike.knockback.decay;
+  for (let i = 0; i < Math.round(seconds / dt); i++) {
+    updateEnemies(dt, scene, playerPos, () => {}, () => {});
+  }
+  const out = {
+    id,
+    push,
+    decay,
+    reach: knocked ? push / decay : 0,
+    moved: e.mesh.position.x - startX,
+    // What the divisor actually read — authored radius times the boss scale,
+    // NOT the hitbox. Printed with every row because it is the whole ordering.
+    size: (e.def?.radius ?? e.radius) * (e.sizeMul ?? 1),
+    bodyR: e.radius,
+    stagger: e.staggerTimer ?? 0,
+    heading: e.heading,
+  };
+  Math.random = realRandom;
+  return out;
+}
+
+const bossRows = [];
+for (const arch of bossArchetypes()) {
+  const hit = bossTravel(arch.id, { knocked: true });
+  const control = bossTravel(arch.id, { knocked: false });
+  const gained = hit.moved - control.moved;
+  bossRows.push({ ...hit, gained });
+  // A TENTH OF ITS OWN BODY, measured against the same boss unhit. Written
+  // against `radius` rather than as a flat distance because that is the claim
+  // that failed before this existed: the shove was real in the physics and
+  // under a tenth of a body radius for every archetype in the roster, which on
+  // screen is a seal bouncing off a boss that did not react.
+  check(`${arch.id}: a ram moves it`,
+    gained > hit.bodyR * 0.1,
+    `${gained.toFixed(2)} units against a ${hit.bodyR.toFixed(1)}-unit body`);
+}
+
+// INVERSE IN SIZE, across the whole roster at once. Ranking rather than a
+// pair, because a pair can be satisfied by a special case: this is the claim
+// that ONE rule is doing it, and it fails the moment a boss is given a shove
+// of its own that does not answer to the divisor.
+{
+  const bySize = [...bossRows].sort((a, b) => a.size - b.size);
+  let ordered = true;
+  for (let i = 1; i < bySize.length; i++) {
+    if (bySize[i].reach > bySize[i - 1].reach + 1e-6) ordered = false;
+  }
+  check('the bigger the boss, the less it is moved — every one of them',
+    ordered,
+    bySize.map((r) => `${r.id.replace('boss', '')} ${r.size.toFixed(1)}→${r.reach.toFixed(1)}u`).join(', '));
+  // ...and the spread is worth having. Two bosses four times apart in size
+  // that both travel the same distance would pass the ranking above on ties.
+  const small = bySize[0];
+  const big = bySize[bySize.length - 1];
+  check('...and the smallest is moved several times as far as the largest',
+    small.reach > big.reach * 2,
+    `${small.id} ${small.reach.toFixed(2)}u vs ${big.id} ${big.reach.toFixed(2)}u`);
+}
+
+// LEANED ON, NOT THROWN. The heavy knock is sized to clear a shark out of a
+// dash the camera is riding; a boss taking that number would read as
+// weightless, which is the failure mode on the other side of the one this
+// section is about.
+{
+  resetEnemies(scene);
+  const loose = spawnAt('shark', 0, -20);
+  const sharkReach = applyKnockback(loose, 1, 0, 1) / (loose.knockDecay || 1);
+  const bossShark = bossRows.find((r) => r.id === 'bossShark');
+  check('a boss shark is shoved less than a loose one',
+    bossShark && bossShark.reach < sharkReach * 0.5,
+    `${bossShark?.reach.toFixed(2)}u vs ${sharkReach.toFixed(2)}u`);
+}
+
+// AND IT KEEPS ITS TURN. The daze is the only thing in the game allowed to
+// take a boss's propulsion or its aim away, on one budget and behind a
+// cooldown (CONFIG.boss.control.daze) — a ram is charged every few seconds and
+// has neither, so the two dials that would do it ship at zero.
+{
+  const held = bossRows.filter((r) => r.stagger > 0);
+  check('no archetype is staggered by the shove', held.length === 0,
+    held.map((r) => r.id).join(', ') || 'none');
+  check('...and the dials that would do it are off by default',
+    (CONFIG.strike.knockback.boss.stagger ?? 0) === 0
+      && (CONFIG.strike.knockback.boss.headingKick ?? 0) === 0);
+}
+
+{
+  resetEnemies(scene);
+  resetBoss();
+  const e = forceBoss(scene, { difficulty: 0, level: 12, running: true },
+    { boss: 'bossHammerhead', perk: null });
+  e.entering = false;
+  const before = e.heading;
+  // Rammed from BEHIND, the direction with the most heading to steal: a kick
+  // toward the dash would swing a boss facing the seal all the way round.
+  applyKnockback(e, -Math.cos(before), -Math.sin(before), 1);
+  check('a ram does not turn a boss off its aim', e.heading === before,
+    `heading ${before?.toFixed(2)} → ${e.heading?.toFixed(2)}`);
+}
+resetEnemies(scene);
+resetBoss();
 
 // ------------------------------------------------------------------ the mark
 

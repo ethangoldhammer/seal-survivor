@@ -60,7 +60,7 @@
     "name": "André the Giant",
     "family": "gun",
     "enabled": true,
-    "kind": "scene",
+    "kind": "image",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -98,7 +98,8 @@
         ],
         "scale": 0.38
       }
-    ]
+    ],
+    "image": "custom/heavyRounds.webp"
   },
   {
     "key": "overboost",
@@ -282,13 +283,13 @@
     "outSize": 128,
     "toon": true,
     "bands": 3,
-    "bandLow": 70,
-    "bandHigh": 255,
+    "bandLow": 200,
+    "bandHigh": 173,
     "bandGamma": 1,
     "bandSoft": 0,
-    "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "outline": 0.005,
+    "yaw": 33.15468750000082,
+    "pitch": 35.45624999999998,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "a whole seal inside a whole bubble",
@@ -332,7 +333,8 @@
         "opacity": 0.34,
         "ink": false
       }
-    ]
+    ],
+    "zoom": 0.67
   },
   {
     "key": "magnet",
@@ -518,13 +520,13 @@
     "outSize": 128,
     "toon": true,
     "bands": 3,
-    "bandLow": 70,
+    "bandLow": 98,
     "bandHigh": 255,
     "bandGamma": 1,
     "bandSoft": 0,
-    "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "outline": 0.037,
+    "yaw": -62.1749999999995,
+    "pitch": -7.9640625000000185,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "the mussel bending onto a fish",
@@ -541,7 +543,7 @@
           0.2,
           -0.25
         ],
-        "scale": 1.2
+        "scale": 0
       },
       {
         "asset": "missile",
@@ -560,7 +562,8 @@
         ],
         "scale": 0.5
       }
-    ]
+    ],
+    "zoom": 0.6
   },
   {
     "key": "seaGarlic",
@@ -712,7 +715,7 @@
     "name": "Bouncing Baby Guppies",
     "family": "projectile",
     "enabled": true,
-    "kind": "scene",
+    "kind": "image",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -720,11 +723,11 @@
     "bandLow": 70,
     "bandHigh": 255,
     "bandGamma": 1,
-    "bandSoft": 0,
+    "bandSoft": 1,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
-    "roll": 0,
+    "yaw": -30.856250000000045,
+    "pitch": -2.792578124999996,
+    "roll": 37,
     "clipAt": 0.33,
     "sceneNote": "one guppy caught mid-bounce, its arc behind it",
     "parts": [
@@ -761,7 +764,9 @@
         ],
         "scale": 0.4
       }
-    ]
+    ],
+    "zoom": 0.6,
+    "image": "custom/bounceShot.webp"
   },
   {
     "key": "laserEyes",
@@ -1262,15 +1267,15 @@
     "square": true,
     "outSize": 128,
     "toon": true,
-    "bands": 3,
-    "bandLow": 70,
+    "bands": 4,
+    "bandLow": 6,
     "bandHigh": 255,
     "bandGamma": 1,
-    "bandSoft": 0,
-    "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
-    "roll": 0,
+    "bandSoft": 0.56,
+    "outline": 0.005,
+    "yaw": -14.021874999998658,
+    "pitch": 57.54609374999998,
+    "roll": 12,
     "clipAt": 0.33,
     "sceneNote": "the seal in the strike itself",
     "parts": [
@@ -1306,14 +1311,15 @@
         "tube": 0.5,
         "color": 5093631,
         "opacity": 0.7,
-        "scale": 1.15,
+        "scale": 0.5,
         "at": [
           -1.3,
           -0.05,
           0.3
         ]
       }
-    ]
+    ],
+    "zoom": 0.91
   },
   {
     "key": "strikeShrapnel",
@@ -1394,8 +1400,8 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": 28.365624999999568,
+    "pitch": -19.740234375000018,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "the orb wound all the way up",
@@ -2104,8 +2110,8 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -43.08124999999967,
+    "pitch": 35.25703125,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "the same blast, twice as wide",
@@ -2204,7 +2210,7 @@
     "outline": 0.02,
     "yaw": -26,
     "pitch": 17.4,
-    "roll": 0,
+    "roll": 92,
     "clipAt": 0.33,
     "sceneNote": "a shot lit from inside",
     "parts": [

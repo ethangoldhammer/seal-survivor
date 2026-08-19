@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { createVisual } from '../assets.js';
-import { removeEnemy } from '../entities/enemies.js';
+import { removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { spawnProjectile } from '../entities/projectiles.js';
 import { chillEnemy } from './elements.js';
+import { orbitTarget, springFollow } from './orbit.js';
 import { player } from '../entities/player.js';
 import { projectileCount } from '../stats.js';
 import { abilityDamage, aoe, targeting } from './scaling.js';
@@ -62,9 +63,10 @@ const clubContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -
 // and every launch is erased before it can be seen.
 // ---------------------------------------------------------------------------
 
-// One entry per fin tip: { mesh, angle, angVel, head, prevHead, cooldowns }.
-// `head` / `prevHead` are the swung end of the club this frame and last, which
-// together are the swept segment that actually does the hitting.
+// One entry per SOCKET — a fin tip, or a place on the ring. Shaped
+// { mesh, mount, slot, angle, angVel, head, prevHead, cooldowns }. `head` /
+// `prevHead` are the swung end of the club this frame and last, which together
+// are the swept segment that actually does the hitting.
 let clubs = [];
 let group = null;
 // Bodies currently in the air. Held as a list of records rather than as flags
@@ -74,6 +76,31 @@ let flights = [];
 // Free-running only for the assist spin below — NOT the swing. The swing has
 // no clock; it comes off the flippers.
 let assistClock = 0;
+// The ring's own clock, and the only clock in this file that drives a hit. See
+// the note above clubOrbiters for why the orbiting clubs are allowed one when
+// the fin clubs emphatically are not.
+let orbitClock = 0;
+
+// THE FOUR KINDS OF CLUB, in the order they are checked for a run that somehow
+// arrives holding several at once (a debug jump, a harness). The order a run
+// actually TOOK them in beats this — see clubTypesFor.
+const CLUB_TYPES = [
+  { key: 'club', asset: 'club' },
+  { key: 'boom', asset: 'clubBoom' },
+  { key: 'ice', asset: 'clubIce' },
+  { key: 'throw', asset: 'clubThrow' },
+];
+
+// WHICH CLUB THE RUN PICKED UP FIRST, remembered rather than derived. The fin
+// club is "the first one you equipped", which is a fact about the run's
+// history and not about the level table — two runs holding {club 1, ice 1}
+// took them in some order, and a fixed priority list would put the same club
+// in the fins for both and quietly contradict the card that just arrived.
+//
+// Sticky on purpose: once a type is in the fins it stays there for the run.
+// Cleared by resetClub with everything else.
+let typeOrder = [];
+
 
 const _pivot = new THREE.Vector3();
 const _boneAt = new THREE.Vector3();
@@ -100,24 +127,75 @@ export function createClubVisual() {
 }
 
 /**
- * Which club assets the run is actually holding, in fin order.
+ * Every club type the run owns, in the order it took them.
  *
- * THE VARIANTS HAVE TO BE VISIBLE. Powder Keg and Cold Snap are riders — they
- * add no weapon of their own — so a run that took them looked exactly like a
- * run that had not, and there was no way to tell from the water what you were
- * swinging. Each owned variant now puts its own club in a fin, round-robin
- * across however many fins there are, so owning two means seeing one of each
- * rather than the higher-priority one twice.
+ * Types already seen keep the slot they were first given; anything new is
+ * appended in CLUB_TYPES order, which only decides ties inside a single frame
+ * (a debug jump handing over two cards at once).
  *
- * Falls back to the base club when no variant is owned, which is also what a
- * run with the base card alone should look like.
+ * Pure with respect to `levels` — it reads the remembered order but does not
+ * add to it. `noteTypes` is the one thing that writes, and it is called once a
+ * frame from updateClub, so the card text and the tuner readout can ask this
+ * without quietly deciding which club the seal is holding.
+ */
+export function clubTypesFor(levels = {}) {
+  const level = (t) => Math.max(0, Math.floor(levels[t.key] ?? 0));
+  const owned = CLUB_TYPES.filter((t) => level(t) > 0);
+  const seen = owned.filter((t) => typeOrder.includes(t.key))
+    .sort((a, b) => typeOrder.indexOf(a.key) - typeOrder.indexOf(b.key));
+  const fresh = owned.filter((t) => !typeOrder.includes(t.key));
+  return [...seen, ...fresh].map((t) => ({ key: t.key, asset: t.asset, level: level(t) }));
+}
+
+// Remember any type the run has just started owning. Called once a frame, from
+// the one place that is entitled to decide the run's history has moved on.
+function noteTypes(levels) {
+  for (const t of CLUB_TYPES) {
+    if (!(levels[t.key] > 0) || typeOrder.includes(t.key)) continue;
+    typeOrder.push(t.key);
+  }
+}
+
+/**
+ * Which club assets go in the FINS, in fin order.
+ *
+ * THE FIRST TYPE YOU TOOK IS THE ONE YOU HOLD. Every fin gets that same club,
+ * so the weapon in the seal's flippers is one identifiable object rather than
+ * a pair that disagrees — and so the answer to "what am I swinging" does not
+ * change when a rider card lands.
+ *
+ * Falls back to the base club when the run owns nothing yet, which is also
+ * what a run with the base card alone should look like.
  */
 export function clubAssetsFor(levels = {}) {
-  const owned = [];
-  if (levels.boom > 0) owned.push('clubBoom');
-  if (levels.ice > 0) owned.push('clubIce');
-  if (levels.throw > 0) owned.push('clubThrow');
-  return owned.length ? owned : ['club'];
+  const first = clubTypesFor(levels)[0];
+  return [first ? first.asset : 'club'];
+}
+
+/**
+ * Which club assets ride the RING, one entry per club.
+ *
+ * THE SPARE CLUBS ORBIT. The seal has two fins and the run can own four kinds
+ * of club, so everything past the first type used to fight for a socket — and
+ * a card whose only visible effect is a mesh you cannot see is a card that
+ * reads as nothing. Every type after the first floats around the animal
+ * instead, one club per stack, so a third pick of Cold Snap is three clubs on
+ * the ring and you can count them.
+ *
+ * They are real clubs: same swept hit test, same damage, same riders. What
+ * they do not have is the fin's flop — nothing is holding them, so there is no
+ * flipper for the water to drag them against, and they ride the ring and
+ * tumble at a rate CONFIG.club.orbit.spin chooses. That is a deliberate break
+ * from "the animation is the weapon" and the only one in this file: an orbiter
+ * is a companion that happens to be made of wood, and pretending otherwise
+ * would mean a ring that goes limp whenever the seal swims in a straight line.
+ */
+export function clubOrbiters(levels = {}) {
+  const out = [];
+  for (const t of clubTypesFor(levels).slice(1)) {
+    for (let i = 0; i < t.level; i++) out.push(t.asset);
+  }
+  return out;
 }
 
 // Build one club mesh and measure it. Split out from addClub because a socket
@@ -149,11 +227,23 @@ function buildClubMesh(asset = 'club') {
   return mesh;
 }
 
-function addClub(asset = 'club') {
+function addClub(asset = 'club', mount = 'fin') {
   const mesh = buildClubMesh(asset);
   group.add(mesh);
   clubs.push({
     mesh,
+    // 'fin' — socketed in a flipper, swung by the rig. 'orbit' — riding the
+    // ring. The only two things that differ are where the pivot comes from
+    // and what the shaft is chasing; everything downstream (the swept test,
+    // the damage, the launch, the riders) is shared, which is the point.
+    mount,
+    // Which place on the ring this one holds. Meaningless for a fin club.
+    slot: 0,
+    // Where an orbiter actually IS, as opposed to where the ring says it
+    // should be. Springs toward the target so the ring lags on a turn — a
+    // club pinned to its orbit point reads as a decal on the player.
+    pos: new THREE.Vector3(),
+    vel: new THREE.Vector3(),
     // Where the club is pointing and how fast that is changing. The spring
     // state — this is the flail, and it is per club because the two flippers
     // do not move together.
@@ -182,26 +272,55 @@ function removeClub() {
 /**
  * Make the sockets match the fins AND the cards.
  *
+ * Takes the whole arrangement as a list — the fin sockets first, in fin order,
+ * then the ring — because the two are decided together and a call that set one
+ * without the other would leave the ring holding a club the fins have just
+ * been given.
+ *
  * Rebuilds a club whose asset has changed, which is what makes a variant show
  * up the moment its card is taken rather than on the next run — the mesh is
  * built once at spawn and there is no other point where a level-up could reach
  * it. Cheap: the comparison is a string, and the rebuild only fires on the one
  * frame the owned set actually moves.
+ *
+ * @param spec array of { asset, mount }
  */
-function syncCount(desired, assets = ['club']) {
-  while (clubs.length < desired) addClub(assets[clubs.length % assets.length]);
-  while (clubs.length > desired) removeClub();
+function syncSockets(spec) {
+  while (clubs.length < spec.length) {
+    const want = spec[clubs.length];
+    addClub(want.asset, want.mount);
+  }
+  while (clubs.length > spec.length) removeClub();
 
+  let slot = 0;
   for (let i = 0; i < clubs.length; i++) {
-    const want = assets[i % assets.length];
+    const want = spec[i];
     const club = clubs[i];
-    if (club.mesh.userData.clubAsset === want) continue;
+    // A socket that has changed what it IS starts over. The spring state below
+    // is kept across a mesh swap on purpose, but a club that has just moved
+    // between the flipper and the ring is somewhere else entirely, and keeping
+    // its `primed` head would sweep a hit across everything in between.
+    if (club.mount !== want.mount) {
+      club.mount = want.mount;
+      club.primed = false;
+      club.armed = true;
+      club.respawnLeft = 0;
+      club.cooldowns.clear();
+      // Explicitly, and this is not belt-and-braces. A socket that was a fin
+      // MID-THROW is invisible, and the loop below only ever turns a mesh back
+      // on down the `!armed` branch — which re-arming here has just skipped.
+      // Without this line, moving a card while the clubs are in the air leaves
+      // an orbiter that hits, sounds and shoves and cannot be seen.
+      club.mesh.visible = true;
+    }
+    club.slot = want.mount === 'orbit' ? slot++ : 0;
+    if (club.mesh.userData.clubAsset === want.asset) continue;
     // Swap the mesh, keep the socket. The spring state, the respawn timer and
     // the re-hit locks all belong to the FIN, not to the lump of wood in it —
     // rebuilding the whole entry would snap a mid-swing club back to rest and
     // hand a thrown fin its club back early.
     group.remove(club.mesh);
-    const mesh = buildClubMesh(want);
+    const mesh = buildClubMesh(want.asset);
     group.add(mesh);
     mesh.visible = club.armed;
     club.mesh = mesh;
@@ -231,10 +350,17 @@ export function clubBounces(level) {
   return Math.floor(c.maxBounces + c.bouncesPerLevel * Math.max(0, level - 1));
 }
 
-/** How many clubs are actually in the fins right now. */
+/** How many clubs are actually in the FINS right now. */
 export function clubsInHand() {
   let n = 0;
-  for (const club of clubs) if (club.armed) n++;
+  for (const club of clubs) if (club.armed && club.mount === 'fin') n++;
+  return n;
+}
+
+/** How many clubs are riding the ring right now. */
+export function clubsOrbiting() {
+  let n = 0;
+  for (const club of clubs) if (club.mount === 'orbit') n++;
   return n;
 }
 
@@ -245,12 +371,17 @@ export function clubsInHand() {
  * clubs off the flippers rather than conjuring copies, so the cost of the
  * ability is that the melee weapon is gone until they come back: throw, and
  * for `respawnTime` the seal is swimming with empty fins.
+ *
+ * THE RING IS NOT THROWN. The cost of this card is the weapon leaving your
+ * HANDS, and the orbiting clubs are not in them — they are a second thing the
+ * run bought, on their own cards, and emptying them here would mean a Hurler
+ * pick silently deleting somebody else's Cold Snap stacks for two seconds.
  */
 export function disarmClubs() {
   const c = CONFIG.club;
   let taken = 0;
   for (const club of clubs) {
-    if (!club.armed) continue;
+    if (!club.armed || club.mount !== 'fin') continue;
     club.armed = false;
     club.respawnLeft = c.respawnTime;
     club.mesh.visible = false;
@@ -530,7 +661,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
 
   group.visible = active;
   if (!active) {
-    if (clubs.length) syncCount(0);
+    if (clubs.length) syncSockets([]);
     // Anything still in the air when the weapon goes away (a tuner toggle
     // mid-run) is put down rather than frozen in place forever.
     for (const f of flights) land(f);
@@ -551,9 +682,24 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // weapon with nothing to hang off, which is a silent no-op by design — the
   // same degradation every emit point in the game already does.
   const tips = rig?.muzzles ?? [];
-  // Which club each fin is holding — one per owned variant, so the cards are
-  // legible from the water rather than only from the pause screen.
-  syncCount(tips.length, clubAssetsFor({ boom: boomLv, ice: iceLv, throw: throwLv }));
+
+  // THE WHOLE ARRANGEMENT, decided once. The run's first club type goes in
+  // every fin; every other type it owns rides the ring, one club per stack. A
+  // run holding one type has no ring at all, which is what a run with one club
+  // card should look like.
+  //
+  // `noteTypes` is called here and nowhere else — this is the one place in the
+  // game entitled to say that the run has just picked up a kind of club it did
+  // not have, and the fin club is decided by that history rather than by a
+  // priority list. See clubTypesFor.
+  const owned = { club: Math.floor(lv.club ?? 0), boom: boomLv, ice: iceLv, throw: throwLv };
+  noteTypes(owned);
+  const finAsset = clubAssetsFor(owned);
+  const orbiters = clubOrbiters(owned);
+  const spec = [];
+  for (let i = 0; i < tips.length; i++) spec.push({ asset: finAsset[i % finAsset.length], mount: 'fin' });
+  for (const asset of orbiters) spec.push({ asset, mount: 'orbit' });
+  syncSockets(spec);
   if (clubs.length === 0) {
     // Nothing to hang the weapon off this frame — a model being swapped in the
     // T-menu, or a rig that hasn't resolved yet. Anything ALREADY thrown still
@@ -564,12 +710,16 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   }
 
   assistClock += dt;
+  orbitClock += dt;
   const length = clubLength(level);
   const headRadius = c.headRadius;
   const damage = abilityDamage(clubDamage(level));
+  const ring = c.orbit ?? {};
+  const ringCount = clubsOrbiting();
 
   for (let i = 0; i < clubs.length; i++) {
     const club = clubs[i];
+    const orbiting = club.mount === 'orbit';
 
     // THE SOCKET IS EMPTY — thrown, and not back yet. No mesh, no swing, no
     // hitbox. Ticked before anything else so the frame it refills is a frame
@@ -586,23 +736,48 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       club.primed = false;
     }
 
-    _pivot.copy(tips[i]);
-    // Flattened onto the body's plane for the same reason every muzzle is: the
-    // two flippers are separated by pure camera depth in side view, and a club
-    // swung at the fin's own z sorts behind the water plane on one side of the
-    // seal and in front of it on the other.
-    if (CONFIG.fins.flattenZ) _pivot.z = playerPos.z;
+    let target;
+    if (orbiting) {
+      // THE RING. Where this club's place on it currently is (systems/orbit.js
+      // owns the shape — tilted, squashed, one slot per club), sprung rather
+      // than pinned so the ring lags on a turn and swings wide coming out of
+      // one. A club welded to its orbit point reads as a decal painted on the
+      // player; a club that has to catch up reads as a thing being towed.
+      const at = orbitTarget(orbitClock, playerPos, {
+        orbitRadius: ring.radius,
+        orbitSpeed: ring.speed,
+        orbitDepth: ring.depth,
+        bobAmount: ring.bob,
+      }, club.slot, ringCount);
+      if (!club.primed) club.pos.copy(at);
+      springFollow(club.pos, club.vel, at, dt, ring.spring ?? 26, ring.damp ?? 6);
+      _pivot.copy(club.pos);
+      // ITS OWN TUMBLE, and no flop. Nothing is holding an orbiting club, so
+      // there is no flipper for the water to drag it against — feeding it
+      // through flopTarget would have the ring go limp exactly when the seal
+      // is swimming in a straight line, which is most of a run. `spin` is
+      // therefore a chosen rate, and it is what an orbiter hits for: the
+      // power below is measured off the angular velocity this produces.
+      target = orbitClock * (ring.spin ?? 0) + club.slot * 1.7;
+    } else {
+      _pivot.copy(tips[i]);
+      // Flattened onto the body's plane for the same reason every muzzle is: the
+      // two flippers are separated by pure camera depth in side view, and a club
+      // swung at the fin's own z sorts behind the water plane on one side of the
+      // seal and in front of it on the other.
+      if (CONFIG.fins.flattenZ) _pivot.z = playerPos.z;
 
-    // WHERE IT WANTS TO LIE: dragged out behind the seal's travel, eased back
-    // toward the flipper's own direction as the animal slows. See flopTarget.
-    const finAt = finAngle(rig, i, tips[i], playerPos);
-    // `assistSpin` adds a slow turn of its own on top of that. It exists so
-    // the weapon still swings on a rig whose flippers only ever point at the
-    // cursor, on a run where the player is barely moving — set it to 0 once
-    // the fins drive themselves and the flop is purely the water's.
-    // (the sag lives in flopTarget, blended against the drag rather than
-    // applied on top of it — see the comment there)
-    const target = flopTarget(finAt, vx, vy, club.angVel) + assistClock * c.assistSpin;
+      // WHERE IT WANTS TO LIE: dragged out behind the seal's travel, eased back
+      // toward the flipper's own direction as the animal slows. See flopTarget.
+      const finAt = finAngle(rig, i, tips[i], playerPos);
+      // `assistSpin` adds a slow turn of its own on top of that. It exists so
+      // the weapon still swings on a rig whose flippers only ever point at the
+      // cursor, on a run where the player is barely moving — set it to 0 once
+      // the fins drive themselves and the flop is purely the water's.
+      // (the sag lives in flopTarget, blended against the drag rather than
+      // applied on top of it — see the comment there)
+      target = flopTarget(finAt, vx, vy, club.angVel) + assistClock * c.assistSpin;
+    }
 
     if (!club.primed) {
       // First frame: start ON the fin rather than springing to it from zero,
@@ -631,8 +806,15 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     const dirX = Math.cos(angle);
     const dirY = Math.sin(angle);
 
+    // HOW FAR THIS ONE REACHES. An orbiter is a smaller club — it is further
+    // from the animal and a stack of five at fin size is a wall of wood the
+    // player cannot see the water through — and the reach follows the drawing
+    // rather than being set beside it, so the hitbox and the mesh can never
+    // disagree about how long the stick is.
+    const reach = length * (orbiting ? (ring.scale ?? 1) : 1);
+
     club.prevHead.copy(club.primed ? club.head : _pivot);
-    club.head.set(_pivot.x + dirX * length, _pivot.y + dirY * length, _pivot.z);
+    club.head.set(_pivot.x + dirX * reach, _pivot.y + dirY * reach, _pivot.z);
     club.primed = true;
 
     // THE GRIP SITS ON THE FIN TIP, whichever way the art is built: the mesh
@@ -642,7 +824,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     // `reachScale` keeps the drawing honest as the card stacks: reach grows
     // per level, and a club that stayed one size would be swinging two units
     // of wood through four units of hitbox.
-    const reachScale = length / Math.max(1e-3, c.length);
+    const reachScale = reach / Math.max(1e-3, c.length);
     const drawScale = (club.mesh.userData.clubBaseScale ?? 1) * c.scale * reachScale;
     const along = (club.mesh.userData.clubGripLocal ?? 0) * c.scale * reachScale + c.gripOffset;
     club.mesh.position.set(_pivot.x + dirX * along, _pivot.y + dirY * along, _pivot.z + c.depth);
@@ -672,11 +854,28 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
 
     // Tangential travel of the head — the direction a struck body is thrown.
     // Perpendicular to the shaft, signed by which way the swing is going, and
-    // then leaned OUTWARD along the shaft by `outwardShare` so bodies are sent
-    // away from the seal instead of being spun around it into the other fin.
+    // then leaned OUTWARD by `outwardShare` so bodies are sent away from the
+    // seal instead of being spun around it into the other fin.
+    //
+    // WHAT "OUTWARD" MEANS DEPENDS ON WHERE THE CLUB IS. For a fin club the
+    // shaft already points away from the animal — the grip is on the flipper,
+    // an arm's length from the body — so the shaft direction IS outward. An
+    // orbiter's grip is metres out on the ring and its shaft points wherever
+    // the tumble has it this frame, which is as often back INTO the seal as
+    // away from it; using the shaft there would fire half the crowd through
+    // the player. Measured from the animal instead, which is what the number
+    // has always meant.
+    let outX = dirX;
+    let outY = dirY;
+    if (orbiting) {
+      const ox = _pivot.x - playerPos.x;
+      const oy = _pivot.y - playerPos.y;
+      const olen = Math.hypot(ox, oy);
+      if (olen > 1e-4) { outX = ox / olen; outY = oy / olen; }
+    }
     const sign = club.angVel >= 0 ? 1 : -1;
-    let throwX = -dirY * sign * (1 - c.outwardShare) + dirX * c.outwardShare;
-    let throwY = dirX * sign * (1 - c.outwardShare) + dirY * c.outwardShare;
+    let throwX = -dirY * sign * (1 - c.outwardShare) + outX * c.outwardShare;
+    let throwY = dirX * sign * (1 - c.outwardShare) + outY * c.outwardShare;
     const throwLen = Math.hypot(throwX, throwY) || 1;
     throwX /= throwLen;
     throwY /= throwLen;
@@ -731,6 +930,20 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       const died = hurt(scene, e, damage * power, enemiesList, hooks, clubContact);
       if (blastHere) detonate(scene, ex, ey, blastHere, enemiesList, died ? null : e, hooks);
       if (died) continue;
+
+      // THE SHOVE, and it lands on EVERYTHING — before the launch check
+      // below, not after it. That ordering is the whole point: the launch is
+      // refused for half the roster (see canHold), so a boss took a club
+      // across the jaw and did not move, and the one weapon in the game whose
+      // read is "things leave when you hit them" was the weapon that bounced
+      // off the animal the run is built around. Knockback is explicitly what a
+      // boss stays open to — systems/control.js draws that line and this stays
+      // the right side of it.
+      //
+      // Along the same vector the launch would have used, so on a body that
+      // gets both they add rather than fight, and scaled by the swing's power
+      // like everything else in this file.
+      if (c.knock > 0) applyKnockback(e, throwX, throwY, c.knock * power);
 
       // Survived the whack, so it goes flying — unless it is a boss, which
       // takes the damage and keeps swimming. A flight is a HOLD: updateFlights
@@ -838,6 +1051,13 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
       // — which is what makes the two cards worth taking alongside the base
       // club rather than only alongside the thrown one.
       if (ice && chillEnemy(other, ice.slow, ice.duration, ice.freezeFor, hooks, cx, cy)) recordControl('clubIce');
+      // ...AND SO IS THE SHOVE. A carom is a club hit delivered by a shark, so
+      // it knocks what it lands on off its line the way the swing that started
+      // it did. Along the flight's own heading, which is the direction the
+      // mass actually arrived from. Full strength rather than power-scaled:
+      // the flight has no swing of its own to read, and what it has instead is
+      // a whole body's momentum.
+      if (c.knock > 0) applyKnockback(other, f.vx, f.vy, c.knock);
       // Both bodies pay. The one that was standing there takes the collision;
       // the one being thrown takes a smaller share of it, so a long carom
       // eventually kills the projectile too rather than leaving one
@@ -1034,6 +1254,12 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
       splashDamage: blast ? blast.damage : 0,
       splashRadius: blast ? blast.radius : 0,
       chill: ice,
+      // AND THE SHOVE, the third thing every club in the run carries. A payload
+      // description like `chill` and `splashDamage` beside it — combat.js hands
+      // it to applyKnockback along the shot's own heading, and this file never
+      // learns what a knockback IS. Without it the Hurler was the one club that
+      // hit like a bullet, which is the opposite of what the class reads as.
+      knockback: CONFIG.club.knock,
     });
   }
   return count;
@@ -1044,4 +1270,9 @@ export function resetClub() {
   clubs = [];
   flights = [];
   assistClock = 0;
+  orbitClock = 0;
+  // WHICH CLUB IS IN THE FINS IS A FACT ABOUT ONE RUN. Carried across a reset
+  // it would put the last run's first pick in this run's flippers, which is a
+  // wrong answer that looks exactly like a right one.
+  typeOrder = [];
 }

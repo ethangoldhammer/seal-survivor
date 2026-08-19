@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>The main menu — the shipped screen, outside the game</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #24506b;
+        color: #dff0ff; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      /* The canvas is the page; #root is the UI layer the game hands the menu,
+         so the labels are positioned by exactly the code that positions them in
+         a run. pointer-events off, or it would swallow every press before the
+         menu's own listener saw it — the same rule .sv-ui lives by. */
+      /* createWorld appends a canvas of its own; #stage is a placeholder that
+         is removed once it has. Both get the same rules so there is no flash of
+         a differently-sized frame in between. */
+      canvas, #stage { position: fixed; inset: 0; display: block; z-index: 1; }
+      #root { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+      #hud { position: fixed; left: 12px; top: 10px; pointer-events: none;
+        text-shadow: 0 1px 3px rgba(0,0,0,.55); max-width: 46ch; z-index: 3; }
+      #hud h1 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+        margin: 0 0 6px; color: #9fdcff; font-weight: 600; }
+      #hud p { margin: 0 0 6px; color: #b9d6ee; }
+      #pressed { color: #ffe08a; white-space: pre; }
+    </style>
+    <!-- THE PANE SUSPENDS rAF. `document.hidden` is true in the agent's browser
+         pane even while it is on screen, so Chrome throttles requestAnimationFrame
+         to about a frame a second and then stops it — the page paints once and
+         looks broken. setTimeout is not throttled the same way, and three resolves
+         rAF off `window` at call time, so swapping it here (BEFORE the module
+         loads) is enough. `?raf=native` opts a real browser back out. -->
+    <script>
+      if (!/[?&]raf=native/.test(location.search)) {
+        window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
+        window.cancelAnimationFrame = (id) => clearTimeout(id);
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <div id="root"></div>
+    <div id="hud">
+      <h1>Main menu — systems/mainMenu.js</h1>
+      <p>The real arena, the run's own seal, the menu held over it. Point at a
+         button and hold it — and press <b>p</b> (or the Play button) to release
+         the shot and watch it open out into the framing a run is played at.</p>
+      <p id="pressed">nothing pressed yet</p>
+    </div>
+    <script type="module" src="./menu-screen.js"></script>
+  </body>
+</html>

@@ -265,11 +265,14 @@ export function buildChain(instance, def, fallbackTipAxis, label, minBones = 2) 
     // instance is cloned, before any mixer has run. Every joint limit is
     // measured from these — see limitJoint.
     restQ: bones.map((b) => b.quaternion.clone()),
-    // Three parallel poses per bone: what the clip wrote this frame, what the
-    // solver wants, and the smoothed value actually applied.
+    // Four parallel poses per bone: what the animation handed us this frame,
+    // what the solver wants, the smoothed value actually applied, and the
+    // value we wrote last frame (see restoreReference).
     animQ: Array.from({ length: n }, () => new THREE.Quaternion()),
     solvedQ: Array.from({ length: n }, () => new THREE.Quaternion()),
     smoothQ: Array.from({ length: n }, () => new THREE.Quaternion()),
+    wroteQ: Array.from({ length: n }, () => new THREE.Quaternion()),
+    hasWritten: false, // does wroteQ hold a real pose yet?
     primed: false, // does smoothQ hold a real pose yet?
     point: new THREE.Vector3(), // this chain's tip, in world space
   };
@@ -420,6 +423,62 @@ export function coneGate(chain, cfg, aim) {
   return 1 - smoothstep(cfg.frontCone, cfg.backCone, angle);
 }
 
+// ANTI-RATCHET. Put back the pose we were handed last frame, for any bone that
+// still holds exactly what we wrote to it.
+//
+// Everything in applyChainToPoint is measured against "the pose the animation
+// wrote this frame" — maxBend caps travel from it, limitJoint uses it as the
+// floor, and the weight blends back toward it. That is only what is on the
+// bone if the mixer actually wrote the bone. It very often does not:
+//
+//   - A track with ONE keyframe is a constant, and three.js stops writing a
+//     value that has not changed. The seal's `swim` keys neck01_05 exactly
+//     once (systems/breathe.js documents the same trap from the other side).
+//   - So does a track whose keys HOLD. `water_idle` — the clip on the title
+//     card and every moment the player stops — has 81 keys on head_07 of which
+//     74 intervals repeat the previous value, in runs up to 13 keys long. The
+//     mixer skips the write across every one of those runs, so it touches the
+//     skull on 14% of frames.
+//   - And a rig may ship no clips at all (shark.glb), which is the case
+//     systems/headLook.js hit first.
+//
+// A bone nothing else writes still holds LAST frame's solver output, so the
+// reference becomes our own previous answer and the chain walks. Measured on
+// the seal before this guard: the head swung 10.9 degrees peak-to-peak in idle
+// with the cursor dead still, in single-frame snaps of 10.7 degrees — a
+// twitch, on the pose the player looks at while reading the title card.
+//
+// IT IS NOT THE BEND CAP THAT WALKS IT, which is worth knowing because the cap
+// is the first thing anyone reaches for. maxBend and the joint limits are two
+// of three things measured from the reference, and they are the two that
+// barely matter: with the guard off, turning maxBend up to 10 radians AND
+// maxFold/maxTwist off entirely moves the snap from 10.666 to 10.660 degrees,
+// and halving maxBend moves it to 10.166. The joint limits were never even
+// reached.
+//
+// The third consumer is the one that does the walking — the blend at the
+// bottom of applyChainToPoint, `animQ.slerp(smoothQ, weight)`. At the seal's
+// idleWeight of 0.5 HALF the written pose is the reference itself, so a stale
+// reference means the bone moves halfway to the solved pose, that becomes next
+// frame's reference, and it moves halfway again: a geometric creep that needs
+// no clamp at all to exist. (Forcing weight to 1 cuts the snap to 7.8 degrees
+// and no further — removing half the loop is not removing the loop.) So there
+// is no tuning value that fixes this and none that hides it; the reference has
+// to be right.
+//
+// Exact equality is the right test, not a tolerance: a mixer writing this bone
+// produces its own value, and an untouched bone still holds the exact float we
+// stored. A clip that happened to key a bone to precisely our last output
+// would be restored one frame stale, which is the same value it already held,
+// so nothing moves.
+function restoreReference(chain) {
+  if (!chain.hasWritten) return;
+  const bones = chain.bones;
+  for (let i = 0; i < bones.length; i++) {
+    if (bones[i].quaternion.equals(chain.wroteQ[i])) bones[i].quaternion.copy(chain.animQ[i]);
+  }
+}
+
 // Solve one chain and blend the result over the clip. `weight` is already
 // eased by the caller; this only ever writes bones belonging to `chain`.
 export function applyChain(chain, dt, cfg, weight, tipMul, dir) {
@@ -462,11 +521,13 @@ export function applyChainToPoint(chain, dt, cfg, weight, tipMul, target) {
   // leaves the others stale.
   bones[0].updateWorldMatrix(true, true);
 
-  if (weight > 0.001) {
-    // Snapshot the clip's pose BEFORE touching anything — it's both what we
-    // blend back toward and the reference the bend limit is measured against.
-    for (let i = 0; i < n; i++) chain.animQ[i].copy(bones[i].quaternion);
+  // ANTI-RATCHET, then the snapshot. Both before anything reads these bones.
+  restoreReference(chain);
+  // What the animation handed us: what we blend back toward, and the reference
+  // maxBend is measured against.
+  for (let i = 0; i < n; i++) chain.animQ[i].copy(bones[i].quaternion);
 
+  if (weight > 0.001) {
     solveChain(chain, target, cfg, tipMul);
 
     const soft = cfg.softness ?? 1;
@@ -500,9 +561,20 @@ export function applyChainToPoint(chain, dt, cfg, weight, tipMul, target) {
     }
   } else {
     // Fully released: the clip owns these bones again, and the next solve
-    // starts fresh rather than slerping out of a stale pose.
+    // starts fresh rather than slerping out of a stale pose. The restore above
+    // is what actually hands them back on a bone the mixer has stopped
+    // writing — without it a released chain leaves its last solved pose on the
+    // skeleton for good.
     chain.primed = false;
   }
+
+  // What we are leaving on the bones, which is next frame's test for whether
+  // anything else has had a say. Recorded even when released: at zero weight
+  // that is the restored pose, so the comparison stays true and the restore
+  // above keeps holding the bone at the animation's value rather than letting
+  // our last output sit there.
+  for (let i = 0; i < n; i++) chain.wroteQ[i].copy(bones[i].quaternion);
+  chain.hasWritten = true;
 
   // The tip point tracks whatever pose won — with the IK off it simply
   // follows the animation, which is the honest answer to "where is the end of

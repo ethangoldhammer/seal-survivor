@@ -29,9 +29,9 @@ import { liveChain } from './strike.js';
 // the colour is the coarse one.
 //
 // WHY HSL AND NOT A LIST OF STOPS. A list is a rainbow with a length, and the
-// chain has no length — `chainPipsPerLink` and the pip ceiling decide how deep
-// one can go, and any list would either repeat visibly or run out again. The
-// wheel is the honest shape for "keeps going".
+// chain has none: a link is a mouthful, so a good feast runs to three figures.
+// Any list would either repeat visibly or run out again. The wheel is the
+// honest shape for "keeps going".
 // ============================================================================
 
 /** The wheel's settings, with the shipped defaults for a harness that has none. */

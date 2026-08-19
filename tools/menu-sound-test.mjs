@@ -424,8 +424,11 @@ section('The score card on a pad');
     lit().map((c) => c.id).join(', '));
 
   // Whatever is actually reachable, in DOM order — the trophy row only exists
-  // if a boss went down this run, so the first stop is not a fixed button.
-  const reachable = ['svTrophyShare', 'svTrophySave', 'svNameSubmit', 'svRestartBtn']
+  // if a boss went down this run, so the first stop is not a fixed button. The
+  // card turns over now, so this is the FRONT face's list; the back's own
+  // control is inside a .sv-hidden face while the front is up.
+  const reachable = ['svTrophyShare', 'svTrophySave', 'svSheetShare', 'svSheetSave',
+    'svTurnOver', 'svNameSubmit', 'svRestartBtn']
     .map((id) => document.getElementById(id))
     .filter((c) => c && !c.disabled && !c.closest('.sv-hidden'));
   check('the card has controls to reach', reachable.length >= 2,

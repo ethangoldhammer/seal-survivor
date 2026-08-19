@@ -45,7 +45,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
-import { strikeDirection, strikeState, resetStrike, feedChum, chumRefillMul } from '../path/src/systems/strike.js';
+import { strikeDirection, strikeState, resetStrike, feedChum, chumRefillMul, pipCount } from '../path/src/systems/strike.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAIN = path.join(HERE, '../path/src/main.js');
@@ -198,7 +198,7 @@ check('the movement-first fallback is gone',
 
 // ----------------------------------------------------------------- appetite
 
-section('APPETITE — each chain link costs more chum than the last');
+section('APPETITE — one chum is one pip, at every depth, always');
 
 const chumStats = { strikeChumRefill: CONFIG.strike.charge.chumRefill };
 
@@ -218,37 +218,32 @@ function chumToFill(depth) {
   return n;
 }
 
-// The appetite is PIPS now, not a compounding discount — one chum is always
-// exactly one pip, and a link adds a pip rather than shrinking the mouthful.
+// ONE CHUM IS ONE PIP, AT EVERY DEPTH, ALWAYS. The bar used to grow a pip per
+// link as a cost escalation; both the job and the field are gone — a link is a
+// single mouthful now and is not bought with the bar at all. It also could not
+// have survived per-pip links: the count would have been a function of how
+// much had been eaten while eating was the thing filling it, so a six-pip bar
+// silently took seven chum. See pipCount in systems/strike.js.
+//
 // The depth-by-depth arithmetic lives in npm run test:meter; what is checked
-// here is the shape the rest of the game depends on.
+// here is the shape the rest of the game depends on — a fill cost that nothing
+// in a run can move.
+const base = Math.round(1 / CONFIG.strike.charge.chumRefill);
 const costs = [0, 1, 2, 3, 4, 5].map(chumToFill);
-check(`the first link costs the base ${Math.round(1 / CONFIG.strike.charge.chumRefill)} chum`,
-  costs[0] === Math.round(1 / CONFIG.strike.charge.chumRefill), `costs [${costs}]`);
-check('no link is ever cheaper than the one before it',
-  costs.every((c, i) => i === 0 || c >= costs[i - 1]), `costs [${costs}]`);
-// The failure this is really guarding: an escalation so gentle that rounding
-// eats it and the "ramp" is five identical numbers.
-check('and it is a real ramp, not a rounding wobble',
-  costs[3] > costs[0] && costs[5] > costs[3], `costs [${costs}]`);
-// One pip per link, exactly — the ramp is now a straight line by construction,
-// which is the readability the compounding version could not offer.
-check('each link costs exactly one chum more than the last',
-  costs.every((c, i) => i === 0 || c === costs[i - 1] + 1), `costs [${costs}]`);
+check(`a bar costs the base ${base} chum`, costs[0] === base, `costs [${costs}]`);
+check('and every chain depth costs exactly the same',
+  costs.every((c) => c === base), `costs [${costs}]`);
+// The one that would actually have bitten: a chain deep enough to have hit the
+// old ceiling still fills in a base bar.
+check('even a chain sixty deep', chumToFill(60) === base,
+  `${chumToFill(60)} chum at depth 60`);
+// The cap still binds a count DERIVED from an extreme refill, which is the job
+// it has left — a card stack could reach past what the ring can draw legibly.
+check('the pip ceiling still binds a derived count',
+  pipCount({ strikeChumRefill: 0.001 }) === CONFIG.strike.charge.maxPips);
 
-// The cap doing what chainRefillFloor used to: without one a deep chain
-// reaches a bar that cannot practically be filled and the combo dies to
-// arithmetic rather than to anything the player did.
-const cap = CONFIG.strike.charge.maxPips;
-check('the cap stops a deep chain running away',
-  chumToFill(60) === cap, `${chumToFill(60)} chum at depth 60, capped at ${cap}`);
-
-// The counter is left standing until the window expires, so the price has to
-// read the TIMER as well or the next combo opens paying the last one's bill.
 resetStrike();
-strikeState.chainCount = 6;
-strikeState.chainTimer = 0;
-check('an expired chain is back to base price', chumRefillMul() === 1);
+check('and one chum is worth one pip whatever the chain is doing', chumRefillMul() === 1);
 resetStrike();
 
 console.log(failures === 0 ? '\nAll strike checks passed.' : `\n${failures} check(s) failed.`);

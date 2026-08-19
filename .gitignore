@@ -11,10 +11,15 @@ dist-goo-look
 dist-ring-look
 dist-core-look
 dist-crab-look
+dist-angler-look
 dist-eye-look
 dist-whale-look
 dist-type-look
 dist-tip-look
+dist-gauge-look
+dist-arcs-look
+dist-bust-look
+dist-menu-look
 
 # The layout audit's build and its report (npm run layout). Same deal as the
 # look pages: the page and the runner are tracked, what they generate is not.
@@ -67,3 +72,7 @@ dist-skins-look
 dist-shaderlab
 dist-skinlab
 dist-splash-probe
+
+# the hive look sheets are generated (npm run look:hive / look:stacks)
+hive-look.html
+hive-stacks.html

@@ -29,6 +29,7 @@ import { CONFIG } from '../config.js';
 import { feedback } from '../systems/feedback.js';
 import { menuInput, resetMenuInput } from '../input.js';
 import { isTextEntry } from './typing.js';
+import { tipJarLink } from './tipJar.js';
 import { revealPile, releasePile } from './snapshotPrint.js';
 import {
   ACTIONS,
@@ -107,10 +108,16 @@ let revealSeconds = null;
 let callbacks = {};
 
 let wrap = null; // the .sv-center overlay, what gets hidden
-let box = null;  // the .sv-menu panel, what the reveal masks
+let box = null;     // the .sv-menu panel, what the reveal masks
+let headEl = null;  // its heading row — the title and hint change per route
 let tabsEl = null;
 let bodyEl = null;
 let footEl = null;
+// The tip jar's own line, under the buttons. Its own row rather than a fourth
+// button in the footer: those three are flex:1 and a fourth squeezes "Restart
+// run" onto two lines on a phone — and asking for money is not a peer of the
+// button that gets you back into the game.
+let tipEl = null;
 
 let open = false;
 let activeTab = 'audio';
@@ -124,6 +131,16 @@ let cursor = 0;
 // bound — otherwise binding "swim up" to D would also steer the seal right on
 // the frame you bound it.
 let listeningFor = null;
+// OPENED FROM THE MAIN MENU RATHER THAN FROM A PAUSED RUN — see showPauseMenu.
+//
+// The panel itself is the same one either way: these are DEVICE settings
+// (systems/settings.js), and none of them is about the run. What changes is
+// only what the screen can honestly claim — there is nothing paused, and
+// nothing to restart — so this flips the heading and drops the one button
+// whose label would be a lie. It is not a second menu and it must never become
+// one; the moment a setting means different things on the two routes, the
+// difference belongs in the setting, not here.
+let standalone = false;
 
 /**
  * Build the menu into `root` (the .sv-ui layer). Called once, from initUI.
@@ -152,18 +169,22 @@ export function initPauseMenu(opts) {
       <div class="sv-pm-tabs" id="svPauseTabs"></div>
       <div class="sv-pm-body" id="svPauseBody"></div>
       <div class="sv-pm-foot" id="svPauseFoot"></div>
+      <div class="sv-tip-row" id="svPauseTip"></div>
       <div class="sv-pm-note">Settings are saved on this device and are separate from the run.</div>
     </div>
   `;
   (opts.root ?? document.body).appendChild(wrap);
 
   box = wrap.querySelector('#svPauseBox');
+  headEl = wrap.querySelector('.sv-pm-head');
   tabsEl = wrap.querySelector('#svPauseTabs');
   bodyEl = wrap.querySelector('#svPauseBody');
   footEl = wrap.querySelector('#svPauseFoot');
+  tipEl = wrap.querySelector('#svPauseTip');
 
   buildTabs();
   buildFooter();
+  buildTipJar();
   buildBody();
 
   // CAPTURE phase, on window: input.js's own keydown listener is on window in
@@ -179,10 +200,24 @@ export function isPauseOpen() {
   return open;
 }
 
-export function showPauseMenu() {
+/**
+ * @param opts.standalone  opened from the main menu, with no run behind it.
+ *                         See the flag's own note; it changes the heading and
+ *                         the footer, and nothing else.
+ */
+export function showPauseMenu({ standalone: fromMenu = false } = {}) {
   if (open) return;
   open = true;
+  standalone = fromMenu;
   listeningFor = null;
+  headEl.querySelector('.sv-title').textContent = standalone ? 'Settings' : 'Paused';
+  headEl.querySelector('.sv-hint').textContent = standalone
+    ? 'Esc or B to go back \u00a0·\u00a0 pad: LB/RB switch tabs'
+    : 'Esc or Start to resume \u00a0·\u00a0 pad: LB/RB switch tabs, B back';
+  // The footer is built once at boot and its labels depend on the route, so it
+  // is rebuilt here rather than there. buildBody below does the same thing for
+  // the same kind of reason.
+  buildFooter();
   // The run's kill shots come back for as long as the menu is up. A paused
   // player is looking at their run rather than through the corner of the
   // screen at the water, which is the one time the pile is worth the space.
@@ -270,8 +305,14 @@ function setTab(id) {
 
 function buildFooter() {
   footEl.innerHTML = '';
-  footEl.appendChild(button('Resume', 'sv-btn', () => callbacks.onResume?.()));
-  footEl.appendChild(button('Restart run', 'sv-btn sv-btn-ghost', () => callbacks.onRestart?.()));
+  // "Back" from the menu, "Resume" from a run — the same action and the same
+  // callback, named for the thing it actually returns you to.
+  footEl.appendChild(button(standalone ? 'Back' : 'Resume', 'sv-btn', () => callbacks.onResume?.()));
+  // No run to restart when this was opened from the menu, and a button that
+  // said so would either do nothing or silently start one.
+  if (!standalone) {
+    footEl.appendChild(button('Restart run', 'sv-btn sv-btn-ghost', () => callbacks.onRestart?.()));
+  }
   footEl.appendChild(button('Defaults', 'sv-btn sv-btn-ghost', () => {
     // This tab only. A single button that wiped all three would be the one
     // misclick in here that costs someone their whole setup, and "reset the
@@ -279,6 +320,15 @@ function buildFooter() {
     resetSettings(activeTab);
     buildBody();
     selectRow(cursor);
+  }));
+}
+
+function buildTipJar() {
+  tipEl.appendChild(tipJarLink({
+    onHover: () => feedback('uiHover'),
+    // Not preventDefault-ing anything: the sound is the same one every other
+    // control on this panel makes, and the navigation is what was asked for.
+    onClick: () => feedback('uiClick'),
   }));
 }
 
@@ -312,6 +362,13 @@ function buildBody() {
 
   for (const btn of footEl.children) {
     rows.push(row(btn, { activate: () => btn.click(), focus: () => btn }));
+  }
+  // The jar is the last stop, below the footer, and it is a stop at all
+  // because this menu is reachable on a pad — an <a> takes focus() and click()
+  // exactly as the buttons above it do, and .sv-tip carries the same
+  // .sv-nav-sel highlight so the cursor does not vanish when it lands here.
+  for (const link of tipEl.children) {
+    rows.push(row(link, { activate: () => link.click(), focus: () => link }));
   }
   paintCursor();
 }

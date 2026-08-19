@@ -361,7 +361,10 @@ const flukeY = () => (tipBone ? tipBone.getWorldPosition(_tip).y : NaN);
   resetWhales(sub);
   const w = spawnWhale(sub, () => 0.1); // deterministic: left-hand entry, shallow band
   // Parked at the origin so the panel can frame it; the crossing itself is not
-  // what this panel is about.
+  // what this panel is about. `lineX` is the one that has to move: the drawn
+  // position is rewritten from the line every frame (see the nudge in
+  // updateWhales), so parking the container alone lasts exactly one update.
+  w.lineX = 0;
   w.container.position.x = 0;
   w.baseY = 0;
   const field = intakeRadius(C);
@@ -389,7 +392,7 @@ const flukeY = () => (tipBone ? tipBone.getWorldPosition(_tip).y : NaN);
   cam.position.set(w.dir * framed * 0.12, 0, (framed * 1.05) / (2 * halfH * cam.aspect));
   cam.lookAt(w.dir * framed * 0.12, 0, 0);
 
-  const hold = w.container.position.x;
+  const hold = w.lineX;
   let t = 0;
   for (let panel = 0; panel < 6; panel++) {
     // The whale is held in place so the ONLY thing closing the gap is suction —
@@ -397,7 +400,8 @@ const flukeY = () => (tipBone ? tipBone.getWorldPosition(_tip).y : NaN);
     // picture with the pull switched off entirely.
     for (let f = 0; f < (panel === 0 ? 1 : 34); f++) {
       updateWhales(1 / 60, sub, enemies, {});
-      w.container.position.x = hold;
+      w.lineX = hold;
+      w.container.position.x = hold + w.nudgeX;
       t += 1 / 60;
     }
     // Dots whose creature has been swallowed leave the scene with it.

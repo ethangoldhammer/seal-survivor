@@ -67,6 +67,9 @@ export const GROUP_ORDER = [
 const GROUP_BY_PREFIX = [
   [/^test:/, 'Checks'],
   [/^looks:/, 'Look pages'],
+  // `look:` (no s) is the same idea without a server: the page is written to
+  // disk by a jsdom run and opened by hand, so it can never touch the tuning.
+  [/^look:/, 'Look pages'],
   [/^playtest/, 'Playtest'],
   [/^sim:/, 'Audits'],
 ];
@@ -81,6 +84,10 @@ const GROUP_BY_NAME = {
   bones: 'Assets', split: 'Assets', whale: 'Assets', notes: 'Assets', takes: 'Assets',
   placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets',
   test: 'Checks',
+  // The chain trace is a CHECK that prints rather than asserts: it replays the
+  // release path in main.js's own order and shows the log the in-game overlay
+  // shows on C, so a player's screenshot and a harness run can be compared.
+  'chain:trace': 'Checks',
 };
 
 // ---------------------------------------------------------------------------

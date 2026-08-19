@@ -19,8 +19,10 @@
 //
 // NO PER-FRAME WORK. The tiles are rebuilt only when the held set changes, and a
 // pulse is a CSS animation restarted by toggling a class — so a fight that fires
-// nine abilities a second costs nine class writes, not nine layouts. The one
-// thing that would undo that is reading any layout property here; nothing does.
+// nine abilities a second costs at most nine class writes, not nine layouts (and
+// fewer than nine, because PULSE_MIN_GAP drops a tile's repeats inside its own
+// animation). The one thing that would undo that is reading any layout property
+// here; nothing does.
 import { CONFIG } from '../config.js';
 import { UPGRADE_ICONS } from './upgradeIcons.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
@@ -34,13 +36,43 @@ import { cssEase } from '../ease.js';
 // tile: a beluga bubble trapping something and that bubble later popping are
 // both the beluga doing its job.
 //
-// EVENTS NOT LISTED HERE ARE IGNORED, which is most of them. `shoot`, `kill`
-// and `pickup` fire constantly and belong to no card in particular; wiring them
-// to the tiles that scale them (every gun upgrade at once) would leave a third
-// of the hive strobing continuously, which is the exact failure the pulse is
-// meant to avoid — a signal that is always on is not a signal.
+// AN ENTRY IS ONE OF THREE SHAPES, and the shape is the question being asked:
+//
+//   'id'                   this event is that upgrade, always
+//   ['a', 'b']             one event, several cards — the volley below
+//   { source: { ... } }    the event is shared by two weapons and only the
+//                          payload's `source` says which one fired it
+//
+// EVENTS NOT LISTED HERE ARE IGNORED, which is still most of them. `kill` and
+// the hit events fire constantly and belong to no card in particular; wiring
+// them to the tiles that scale them would leave a third of the hive strobing,
+// and a signal that is always on is not a signal. What makes the busy events
+// that ARE wired here safe is PULSE_MIN_GAP below — nothing in this table may
+// out-run its own animation.
 // Exported for the audit in tools/hive-test.mjs, which checks both halves of
 // every entry against the live CONFIG — nothing else reads it.
+
+// THE PEBBLE VOLLEY. Every card here changes what leaves the muzzle, so the
+// shot you are watching IS each of them doing its job — which is the whole
+// claim the pulse makes, and the reason the list stops where it does.
+//
+// Deliberately NOT here: Iron Lung, Clone Warz, Glow Up! and Maneater. They
+// ride the pebble too, but they ride every other weapon as well, so a flash
+// tied to the gun would be telling only a fraction of the truth about them —
+// and the last two already pulse on procs of their own. `overboost` and
+// `pierce` are disabled cards (see upgrades.csv); they are listed so the wiring
+// is already right on the day they are switched back on, and pulseHive is a
+// no-op for a tile that isn't held.
+const PEBBLE_VOLLEY = [
+  'rapidFire',      // the cadence you are hearing
+  'heavyRounds',    // what each pellet carries
+  'multishot',      // how many left the fins
+  'velocity',       // how fast they crossed
+  'homingShot',     // and whether they turned on the way
+  'overboost',
+  'pierce',
+];
+
 export const EVENT_UPGRADE = {
   shrimpHit: 'shrimpRing',
   seagullDive: 'seagullBomb',
@@ -56,7 +88,11 @@ export const EVENT_UPGRADE = {
   clubThrow: 'clubThrow',
   clubBoom: 'clubBoom',
   clubFreeze: 'clubIce',
-  scallopLaunch: 'scallopSquirter', scallopJet: 'scallopSquirter',
+  // THE LAUNCH ONLY. `scallopJet` is every live shell's own bubble pulse, on
+  // `scallop.pulseInterval` each — so a dozen shells in the water fired it
+  // dozens of times a second and the tile never went dark. What the card
+  // promises is shells GOING OUT, and that happens once a flight.
+  scallopLaunch: 'scallopSquirter',
   pearlShot: 'oysterBlaster', pearlBurst: 'oysterBlaster',
   calamariPulse: 'calamari',
   garlicTick: 'seaGarlic',
@@ -65,7 +101,6 @@ export const EVENT_UPGRADE = {
   musselBarrage: 'musselVolley',
   maneaterProc: 'maneater',
   beamCut: 'laserEyes',
-  bounce: 'bounceShot',
   strikeBurst: 'strikeShrapnel',
   strikeChain: 'strikePower',
   strikeRam: 'strikeDash',
@@ -73,7 +108,82 @@ export const EVENT_UPGRADE = {
   elementArc: 'bioluminescence', elementFreeze: 'bioluminescence',
   elementHitShock: 'bioluminescence', elementHitVenom: 'bioluminescence',
   elementHitChill: 'bioluminescence', elementHitInfection: 'bioluminescence',
+
+  // --- shared events, split by who fired them -------------------------------
+  // `shoot` is fired by the main gun AND by Starfish Shuriken, which is why
+  // this cannot be a flat entry: without the split, a starfish would light the
+  // whole pebble volley and the starfish's own tile would stay dark, which is
+  // exactly what it did before. main.js tags both call sites.
+  shoot: { source: { gun: PEBBLE_VOLLEY, starfish: 'starfish' } },
+  // Same shape, same reason, and it was a live bug: the bounce callback in
+  // entities/projectiles.js fires for ANY projectile with bounces left, and
+  // scallops carry `bounce: true` — so Ricochet Rounds used to flash every
+  // time somebody else's shell kissed a wall.
+  bounce: { source: { ricochet: 'bounceShot', scallop: 'scallopSquirter' } },
+
+  // --- the surface ----------------------------------------------------------
+  // Porpoising rides the CHAIN EXTENDING, not the breach. A breach is not
+  // always worth links — chainStrike() refuses inside
+  // CONFIG.strike.chainOn.cooldowns.breach — so a tile popping on `breach`
+  // would advertise a payout the run never got, on exactly the skimming the
+  // cooldown exists to stop paying for. `foodChain` fires from the funnel every
+  // link comes through and carries the source that bought it, so this branch is
+  // the breach's links and nothing else's.
+  foodChain: { source: { breach: 'breachChain' } },
+  // Second Wind is the refill, so it pulses on the gasp, not on the crossing —
+  // one gasp per `oxygen.fx.breathInterval` while the bar is actually going up.
+  breathIn: 'oxygenRefill',
+  // Deep Lungs is pure capacity and has no moment of its own. The warning beep
+  // is the nearest honest one: it is the bar being spent, which is the stat.
+  oxygenWarn: 'oxygenMax',
+  // C.H.U.M. is the reach that got you the orb, and `pickup` is that orb
+  // landing. High-frequency and safe only because of the gap below — a magnet
+  // sweep swallowing six inside a frame is one pulse, not six.
+  pickup: 'magnet',
 };
+
+// THE FLOOR UNDER EVERY TILE, in milliseconds, and the thing that makes the
+// busy events above wirable at all.
+//
+// The pulses are CSS animations 220-380ms long (see .sv-hive-firing in ui.js).
+// The gun at base cadence is a shot every 360ms, which is fine — but Supa Dupa
+// Seal stacks multiply that by 0.75 each and the air-time ramp takes another
+// 45% off, so a real build fires about nine times a second. Restarted every
+// 110ms a 220ms animation never reaches its own back half: the tile stops
+// reading as a beat and just sits lit, which is the failure this whole table
+// was written around.
+//
+// 250 is a shade over the shortest animation on purpose. Every pulse gets to
+// finish, a fast weapon reads as a steady rhythm instead of a smear, and an
+// ability slower than four times a second — which is nearly all of them — is
+// never touched by this at all.
+//
+// PER TILE, not global: two abilities firing in the same frame are two
+// different things happening and both should show. Only a tile out-running
+// itself is throttled.
+const PULSE_MIN_GAP = 250;
+
+/**
+ * The upgrades one feedback event should light, or null for the common case of
+ * an event no card owns.
+ *
+ * @param {string} event  key in CONFIG.feedback
+ * @param {object} at     the feedback payload — read for `source` only
+ * @returns {string[]|null}
+ */
+export function upgradesForEvent(event, at) {
+  const entry = EVENT_UPGRADE[event];
+  if (!entry) return null;
+  if (typeof entry === 'string') return [entry];
+  if (Array.isArray(entry)) return entry;
+  // A source-split event with no `source` on the payload lights NOTHING rather
+  // than guessing at a branch. Silence is the recoverable failure here: the
+  // wrong branch would credit one card for another card's work, and the audit
+  // in tools/hive-test.mjs cannot see a lie, only a blank.
+  const branch = entry.source?.[at?.source];
+  if (!branch) return null;
+  return typeof branch === 'string' ? [branch] : branch;
+}
 
 // How a family announces itself. The families are the ones config.js already
 // sorts the upgrades into, so this needs no table of its own per card.
@@ -95,9 +205,11 @@ const state = {
   root: null,
   host: null,
   tiles: new Map(),   // upgrade id -> tile element
+  shims: new Map(),   // upgrade id -> the layers of its pile, shallowest first
   held: '',           // signature of the last built set, so rebuilds are rare
   lastPicks: null,    // what to re-lay-out from when the LAYOUT changes
   newestId: null,     // the tile the shift wave and the ripple radiate from
+  lastPulse: new Map(), // upgrade id -> performance.now() of its last pulse
   off: null,
 };
 
@@ -136,6 +248,154 @@ ART.cy = (ART.top + ART.bottom) / 2;
 // Exported so tools/hive-test.mjs measures the same hexagons the CSS draws,
 // rather than the square boxes, which legitimately overlap.
 export const HEX_GEOMETRY = ART;
+
+// --- STACKS AS HEIGHT -------------------------------------------------------
+//
+// A second Shrimp Ring is not a second tile — it is the same tile, taller. The
+// hexagon keeps the cell the packing gave it and extra picks extrude it, so the
+// depth of a build is a SHAPE in the corner rather than a 11px number on top of
+// the icon that told you nothing at a glance.
+//
+// THE PILE CANNOT LIVE INSIDE THE TILE. Every tile is clip-path'd to its own
+// hexagon, so a child drawn below the flat bottom edge is not dimmed or partly
+// visible, it is simply not painted — the classic version of this bug ships a
+// stack that renders nothing and throws nothing. Each layer is therefore its
+// own absolutely-positioned box, a sibling of the tile, carrying the same clip.
+//
+// THE LAYERS ARE NOT EVENLY SPACED. `falloff` compresses each one against the
+// one under it: a nine-stack at a flat step is 40px of pile beneath a 52px
+// hexagon, at which point the corner reads as a bar chart rather than a hive.
+// The compression means the first pick is the one you can see (the fact worth
+// showing loudest), and the ninth still fits in the corner.
+function stackCfg() {
+  return cfg().stack ?? {};
+}
+
+/** Distance below the top face of each drawn layer, shallowest first. */
+export function stackOffsets(count, s = stackCfg()) {
+  const mode = s.mode ?? 'slab';
+  if (mode === 'pip') return [];
+  const layers = Math.max(0, Math.min(Math.floor(count) - 1, s.maxLayers ?? 5));
+  const falloff = s.falloff ?? 0.82;
+  const out = [];
+  let y = 0;
+  let step = s.step ?? 5;
+  for (let i = 0; i < layers; i++) { y += step; step *= falloff; out.push(y); }
+  return out;
+}
+
+/** Total added height for a stack of `count`. Zero for a single pick. */
+export function stackDepth(count, s = stackCfg()) {
+  const o = stackOffsets(count, s);
+  return o.length ? o[o.length - 1] : 0;
+}
+
+// The prism silhouette for `riser`, in px, for a box of `box` and a depth of
+// `depth`: the drawn hexagon's own vertices, with the two side vertices and the
+// bottom edge dropped by the depth. Written out rather than done with a scaled
+// copy of the CSS polygon because a percentage clip on a taller box squashes
+// the hexagon — the top face has to stay the exact shape the tile above it is.
+function riserClip(box, depth) {
+  const x = (f) => (f * box).toFixed(2);
+  const y = (f) => (f * box).toFixed(2);
+  const d = (f) => (f * box + depth).toFixed(2);
+  return `polygon(${x(0.057)}px ${y(0.51)}px, ${x(0.271)}px ${y(0.127)}px, `
+       + `${x(0.723)}px ${y(0.127)}px, ${x(0.939)}px ${y(0.51)}px, `
+       + `${x(0.939)}px ${d(0.51)}px, ${x(0.723)}px ${d(0.896)}px, `
+       + `${x(0.271)}px ${d(0.896)}px, ${x(0.057)}px ${d(0.51)}px)`;
+}
+
+// The rim's width, in px. The same 2px the tile's face is inset by (see
+// .sv-hive-face) — the layers have to carry the tile's own stroke, or the pile
+// under a stacked tile is a different object from the tile on top of it.
+const INK = 2;
+
+// The dark fill of one layer, inset inside its stroke. A separate element for
+// the same reason the tile's face is one: an inset box-shadow paints the border
+// BOX and the hexagonal clip then keeps only the parts of that rectangle that
+// fall inside the shape, which leaves the four diagonal edges bare.
+function shimFace(clip) {
+  const face = document.createElement('div');
+  face.className = 'sv-hive-shim-face';
+  if (clip) {
+    // The riser's face is its own prism, one rim narrower. Positioned by the
+    // same inset so the two polygons share a centre.
+    face.style.clipPath = clip;
+    face.style.webkitClipPath = clip;
+  }
+  return face;
+}
+
+// The layers under one tile. Positioned in the host's coordinates, like the
+// tiles themselves, so the FLIP can slide them with the tile they belong to.
+function buildShims(entry, box, tileLeft, tileTop) {
+  const s = stackCfg();
+  const mode = s.mode ?? 'slab';
+  const offsets = stackOffsets(entry.count, s);
+  if (!offsets.length) return [];
+
+  const tint = rarityColor(entry.rarity);
+  const strokeMix = s.strokeMix ?? 100;
+  // `riser` only — the light down the FILL of its extruded body. The stroke
+  // around it is `strokeMix`, the same solid rim every plate gets: a ramp
+  // belongs on the material, never on the outline.
+  const topMix = s.topMix ?? 58;
+  const baseMix = s.baseMix ?? 20;
+  const out = [];
+
+  // One body, not a stack of plates: the height IS the count, and there are no
+  // seams to count. The loudest of the four at depth, and the only one that
+  // still reads at a glance once the corner is full.
+  if (mode === 'riser') {
+    const depth = offsets[offsets.length - 1];
+    const el = document.createElement('div');
+    el.className = 'sv-hive-shim';
+    el.dataset.upgrade = entry.id;
+    el.dataset.mode = 'riser';
+    el.style.left = `${tileLeft}px`;
+    el.style.top = `${tileTop}px`;
+    el.style.width = `${box}px`;
+    el.style.height = `${box + depth}px`;
+    el.style.clipPath = riserClip(box, depth);
+    el.style.webkitClipPath = el.style.clipPath;
+    el.style.setProperty('--sv-hive-rarity', tint);
+    el.style.setProperty('--sv-shim-mix', `${strokeMix}%`);
+    el.style.setProperty('--sv-shim-top', `${topMix}%`);
+    el.style.setProperty('--sv-shim-base', `${baseMix}%`);
+    // The body carries the stroke the same way the tile does — the outline is
+    // the element's own background and the fill is a smaller copy inset on top
+    // of it. A prism drawn as one flat colour has no edge where it meets the
+    // water and the tower stops having a silhouette.
+    el.appendChild(shimFace(riserClip(box - INK * 2, depth)));
+    return [el];
+  }
+
+  // slab / deck: one hexagon per pick, each showing only the sliver of itself
+  // the tile above does not cover. Darkening with depth is the occlusion that
+  // stops the pile reading as a mis-registered copy of the tile.
+  offsets.forEach((dy, i) => {
+    const el = document.createElement('div');
+    el.className = 'sv-hive-shim';
+    el.dataset.upgrade = entry.id;
+    el.dataset.mode = mode;
+    el.style.left = `${tileLeft + (mode === 'deck' ? (s.skew ?? 2.5) * (i + 1) : 0)}px`;
+    el.style.top = `${tileTop + dy}px`;
+    el.style.width = `${box}px`;
+    el.style.height = `${box}px`;
+    el.style.setProperty('--sv-hive-rarity', tint);
+    // EVERY PLATE IS A WHOLE HEXAGON, STROKE AND ALL, AND EVERY STROKE IS THE
+    // SAME. Flat silhouettes give one dark wedge: you can see that the tile is
+    // taller and not how many picks made it so. A stroke that FADES with depth
+    // is that same failure arriving slowly — the bottom of a deep pile loses
+    // its outline exactly where the seams are thickest on the ground. So each
+    // layer is built the way the tile is, at the tile's own rim strength, and
+    // the few px of it that show read as an EDGE.
+    el.style.setProperty('--sv-shim-mix', `${strokeMix}%`);
+    el.appendChild(shimFace());
+    out.push(el);
+  });
+  return out;
+}
 
 // Centres, in the space of the VISIBLE hexagons — `w`/`h` here are the drawn
 // hexagon's size, not the tile box's. rebuild() hangs the boxes around them.
@@ -292,10 +552,13 @@ function buildTile(entry) {
   el.appendChild(face);
   el.appendChild(markFor(entry.id, def));
 
-  // Stacks as a number, not as pips. Pips were the first try and they cost the
-  // face: nine Shrimp Rings is nine marks around a 56px tile, which is more
-  // pixels than the icon they surround.
-  if (entry.count > 1) {
+  // The number, ON TOP OF the pile — the pile is the thing you read across the
+  // room and the digit is what you check when you care about the exact count.
+  // (Pips were the first try and they cost the face: nine Shrimp Rings is nine
+  // marks around a 56px tile, more pixels than the icon they surround.)
+  // `stack.pipFrom` is how deep a stack has to be before the digit is worth the
+  // clutter; at 99 the pile carries it alone.
+  if (entry.count >= Math.max(2, stackCfg().pipFrom ?? 2)) {
     const pip = document.createElement('div');
     pip.className = 'sv-hive-pip';
     pip.textContent = entry.count;
@@ -303,6 +566,57 @@ function buildTile(entry) {
   }
 
   el.title = `${def?.name ?? entry.id}${entry.count > 1 ? ` x${entry.count}` : ''}`;
+  return el;
+}
+
+// THE SHADE A TOWER CASTS ON THE HEXES IT COVERS.
+//
+// A tile that has grown out of its cell stands in front of the one behind it,
+// and with nothing between them the two silhouettes meet as a hard seam of
+// identical ink — the tower reads as CLIPPING its neighbour rather than as
+// standing in front of it. This is the contact shadow that separates them, and
+// it is deliberately almost invisible: the moment you can see it as a shape,
+// the corner has a smudge in it.
+//
+// It is only drawn when the tile actually covers something. A tower on the top
+// row overlaps nothing and gets nothing — a shadow under it would be a shadow
+// cast on the water.
+//
+// NO BLUR FILTER. `filter` is applied BEFORE `clip-path`, so a blurred box that
+// is also clipped comes back with a hard hexagonal edge — a soft shadow with a
+// cut-out shape in it. The softness is a radial gradient instead, which needs
+// no clip and no filter and costs nothing to composite.
+function buildShade(place, i, box, hexW, hexH) {
+  const s = stackCfg();
+  const cfgShade = s.shadow ?? {};
+  const me = place[i];
+  if (cfgShade.enabled === false || !me.depth) return null;
+
+  // Does this tile, as risen, cover any tile behind it? Measured on the drawn
+  // HEXAGONS, not the boxes — neighbouring boxes overlap heavily by design (see
+  // the note on ART), so a box test says yes for every tile in the hive.
+  const hx = (p) => p.left + box * ART.left;
+  const hy = (p) => p.top + box * ART.top;
+  const covers = place.some((other, j) => j !== i
+    && other.top < me.top - 0.5                                  // behind: higher up
+    && hx(me) < hx(other) + hexW && hx(other) < hx(me) + hexW
+    && hy(me) < hy(other) + hexH && hy(other) < hy(me) + hexH);
+  if (!covers) return null;
+
+  const spread = cfgShade.spread ?? 1.34;
+  // Deeper towers cast more, because they cover more. Full strength is reached
+  // at a stack a few picks deep rather than at the cap, or every shadow in a
+  // real build is a fraction of one and none of them do anything.
+  const strength = Math.min(1, me.depth / ((s.step ?? 7) * 2.2));
+  const alpha = (cfgShade.alpha ?? 0.5) * strength;
+
+  const el = document.createElement('div');
+  el.className = 'sv-hive-shade';
+  el.style.width = `${box * spread}px`;
+  el.style.height = `${box * spread}px`;
+  el.style.left = `${me.left - box * (spread - 1) / 2}px`;
+  el.style.top = `${me.top - box * (spread - 1) / 2 - (cfgShade.lift ?? 3)}px`;
+  el.style.setProperty('--sv-shade-alpha', alpha.toFixed(3));
   return el;
 }
 
@@ -324,6 +638,7 @@ function rebuild(held) {
 
   host.textContent = '';
   state.tiles.clear();
+  state.shims.clear();
 
   const c = cfg();
   // `size` is the size of the HEXAGON, which is the thing anyone looking at the
@@ -349,20 +664,65 @@ function rebuild(held) {
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
 
-  held.forEach((entry, i) => {
-    const el = buildTile(entry);
-    el.style.width = `${box}px`;
-    el.style.height = `${box}px`;
+  // THE PILES ARE MEASURED BEFORE ANYTHING IS PLACED, because they change the
+  // size of the corner. With `rise` the tallest stack lifts its tile clear of
+  // the lattice, so the host needs that much more room ABOVE its top row — and
+  // a host measured on the hexagons alone would leave the raised tile hanging
+  // outside the box the HUD lays out against, which on a bottom corner walks it
+  // under the score panel.
+  const stack = stackCfg();
+  const rise = stack.rise !== false && (stack.mode ?? 'slab') !== 'pip';
+  const depths = held.map((e) => stackDepth(e.count, stack));
+  const maxDepth = depths.length ? Math.max(...depths) : 0;
+  const pad = rise ? maxDepth : 0;          // headroom the risen tiles need
+  const skewMax = (stack.mode === 'deck')
+    ? (stack.skew ?? 2.5) * Math.max(0, ...held.map((e) => stackOffsets(e.count, stack).length))
+    : 0;
+
+  // EVERY BOX IS PLACED BEFORE ANY IS BUILT, because a tower has to know what
+  // it is standing in front of — see the shade below, which is a question about
+  // pairs of tiles and cannot be answered one tile at a time.
+  const place = held.map((entry, i) => {
     // The box hung around the hexagon's centre: its own centre sits at
     // (ART.cx, ART.cy) of itself, so that is what has to land on the lattice.
-    el.style.left = `${pos[i].x - minX + hexW / 2 - box * ART.cx}px`;
-    el.style.top = `${pos[i].y - minY + hexH / 2 - box * ART.cy}px`;
-    host.appendChild(el);
-    state.tiles.set(entry.id, el);
+    const left = pos[i].x - minX + hexW / 2 - box * ART.cx;
+    // The cell the packing gave this tile — where the BASE of the pile sits.
+    // With `rise` the tile itself is that much higher and the layers fill the
+    // gap down to it, so growing a stack never moves the footprint.
+    const base = pos[i].y - minY + hexH / 2 - box * ART.cy + pad;
+    return { entry, left, base, top: rise ? base - depths[i] : base, depth: depths[i] };
   });
 
-  host.style.width = `${maxX - minX + hexW}px`;
-  host.style.height = `${maxY - minY + hexH}px`;
+  // BOTTOM ROW LAST. Once a tile can stand taller than its cell it overlaps the
+  // one behind it, and which of the two wins has to be the near one — painting
+  // in map order instead puts a far tile over the top of a near tile's pile at
+  // random, which looks like the piles are interleaved rather than stacked.
+  const order = held.map((_, i) => i).sort((a, b) => pos[a].y - pos[b].y);
+
+  order.forEach((i) => {
+    const p = place[i];
+    const el = buildTile(p.entry);
+    el.style.width = `${box}px`;
+    el.style.height = `${box}px`;
+    el.style.left = `${p.left}px`;
+    el.style.top = `${p.top}px`;
+
+    // ONE OBJECT, IN PAINTER'S ORDER: the shade it casts, then its pile, then
+    // the tile itself. Nothing here carries a z-index — see the note in ui.js.
+    // The shade goes FIRST so it lands only on the cells already painted behind
+    // it; between the pile and the tile it would shade its own stack, which
+    // reads as the pile being made of dirtier material than the hexagon on top.
+    const shade = buildShade(place, i, box, hexW, hexH);
+    if (shade) host.appendChild(shade);
+    const shims = buildShims(p.entry, box, p.left, p.top);
+    for (const shim of shims) host.appendChild(shim);
+    host.appendChild(el);
+    state.tiles.set(p.entry.id, el);
+    if (shims.length) state.shims.set(p.entry.id, shims);
+  });
+
+  host.style.width = `${maxX - minX + hexW + skewMax}px`;
+  host.style.height = `${maxY - minY + hexH + maxDepth}px`;
 
   flipTiles(before);
 }
@@ -409,13 +769,19 @@ function flipTiles(before) {
     const dx = old.left - nx;
     const dy = old.top - ny;
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;   // it did not move
-    moved.push({ el, dx, dy, dist: Math.hypot(nx - ox, ny - oy) });
+    moved.push({ id, el, dx, dy, dist: Math.hypot(nx - ox, ny - oy) });
   }
   if (!moved.length) return;
 
   moved.sort((a, b) => a.dist - b.dist);
-  moved.forEach((m, i) => {
-    m.el.style.transform = `translate(${m.dx}px, ${m.dy}px)`;
+  // A tile and its pile travel as one object. The layers are siblings rather
+  // than children (they have to be — the tile's clip would eat them), so
+  // nothing carries them along on its own: left out of the FLIP they stay put
+  // while the hexagon above them slides off, which reads as the pile shearing.
+  moved.forEach((m) => {
+    for (const el of [m.el, ...(state.shims.get(m.id) ?? [])]) {
+      el.style.transform = `translate(${m.dx}px, ${m.dy}px)`;
+    }
   });
 
   // One forced reflow for the whole batch, not one per tile: the offsets above
@@ -424,12 +790,15 @@ function flipTiles(before) {
   void host().offsetWidth;
 
   moved.forEach((m, i) => {
-    m.el.style.transition = `transform ${secs}s ${curve} ${(i * stagger).toFixed(3)}s`;
-    m.el.style.transform = '';
+    const group = [m.el, ...(state.shims.get(m.id) ?? [])];
+    for (const el of group) {
+      el.style.transition = `transform ${secs}s ${curve} ${(i * stagger).toFixed(3)}s`;
+      el.style.transform = '';
+    }
     // The transition is cleared once it lands, so a pulse firing later is not
     // fighting a leftover transition on the same property — that is the bug
     // where a tile's flash slides instead of snapping.
-    const clear = () => { m.el.style.transition = ''; };
+    const clear = () => { for (const el of group) el.style.transition = ''; };
     m.el.addEventListener('transitionend', clear, { once: true });
     setTimeout(clear, Math.round((secs + i * stagger) * 1000) + 120);
   });
@@ -515,14 +884,32 @@ export function flyTransform(from, to) {
   };
 }
 
-/** Flash the tile for one upgrade. Safe to call for an upgrade not held. */
-export function pulseHive(id) {
+/**
+ * Flash the tile for one upgrade. Safe to call for an upgrade not held.
+ *
+ * Rate-limited per tile to PULSE_MIN_GAP — see the note there for why a gun
+ * firing nine times a second must not write nine class changes. Pass
+ * `force` for a pulse that is not the ability going off and must never be
+ * dropped: the level-up slam is one moment, not a stream, and reduced-motion
+ * routes its arrival through here.
+ */
+export function pulseHive(id, force = false) {
   const el = state.tiles.get(id);
   if (!el) return;
+  if (!force) {
+    // performance.now() rather than a frame counter: this is a duration in
+    // milliseconds against a CSS animation measured in milliseconds, and it
+    // must not stretch with hitstop or the dilated clock a strike runs on.
+    const now = performance.now();
+    if (now - (state.lastPulse.get(id) ?? -Infinity) < PULSE_MIN_GAP) return;
+    state.lastPulse.set(id, now);
+  }
   // Restarting a running CSS animation needs the class OFF, a reflow, and the
   // class back on — without the forced reflow the browser coalesces the two
   // writes and the animation simply continues, so a second shot inside the
   // first flash produces no second flash. Reading offsetWidth is the reflow.
+  // Still needed WITH the gap above: the gap is shorter than the swell and the
+  // lean, so those two legitimately restart mid-animation.
   el.classList.remove('sv-hive-firing');
   void el.offsetWidth;
   el.classList.add('sv-hive-firing');
@@ -545,7 +932,7 @@ export function slamAndRipple(id) {
   if (!el) return;
   const cfg = CONFIG.upgradeHive?.ripple ?? {};
   if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
-    pulseHive(id);
+    pulseHive(id, true);
     return;
   }
 
@@ -616,9 +1003,10 @@ export function initUpgradeHive(mount) {
 
   // One listener for every ability in the game — see onFeedback. An event with
   // no upgrade behind it is the common case and costs a map miss.
-  state.off = onFeedback((event) => {
-    const id = EVENT_UPGRADE[event];
-    if (id) pulseHive(id);
+  state.off = onFeedback((event, at) => {
+    const ids = upgradesForEvent(event, at);
+    if (!ids) return;
+    for (const id of ids) pulseHive(id);
   });
 }
 
@@ -626,6 +1014,20 @@ export function initUpgradeHive(mount) {
 export function clearHive() {
   state.held = '';
   state.lastPicks = null;
+  // Or the first shot of the next run is swallowed by the last run's timestamp.
+  state.lastPulse.clear();
   if (state.host) state.host.textContent = '';
   state.tiles.clear();
+  state.shims.clear();
+}
+
+/**
+ * Cycle the stack treatment. Same shape as setHiveLayout — it changes the
+ * packing (a risen tile needs headroom the host has to be measured for), so the
+ * signature is dropped and the held set is laid out again from scratch.
+ */
+export function setHiveStack(mode) {
+  CONFIG.upgradeHive.stack = { ...(CONFIG.upgradeHive.stack ?? {}), mode };
+  state.held = '';
+  if (state.lastPicks) setHiveUpgrades(state.lastPicks);
 }

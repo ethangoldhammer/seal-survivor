@@ -1240,16 +1240,31 @@ section('THE SKIN COLUMN — assets.csv can put a pattern on any model');
 
   // THE WIREFRAME TRAP. That pattern needs barycentric coordinates, which come
   // from splitForEdges, which runs off `biolumEdges` — a field only ever set by
-  // hand before the column existed. Assign wireframeGlow from a CSV row without
-  // this and the shader's own guard draws the body as NOTHING: not a wrong
-  // colour, not a warning, an animal that fails to appear.
-  setAssetSkin(KEY, 'wireframeGlow');
+  // hand before the column existed. Assign a wireframe preset from a CSV row
+  // without this and the shader's own guard draws the body as NOTHING: not a
+  // wrong colour, not a warning, an animal that fails to appear.
+  //
+  // THE EXAMPLE IS MADE HERE, not borrowed from the roster. These two checks
+  // used `wireframeGlow`, which is a `spots` pigment called `orcaHide` now and
+  // no longer selects the pattern at all, so they would have gone green against
+  // a preset that could not spring the trap.
+  // Nothing in CONFIG ships with `wireframe` today.
+  //
+  // NOT ASSERTED AS EMPTY, though, and that is the point of building one: the
+  // pattern is a live slider, so any saved tuning may put `wireframe` back on
+  // any preset between one boot and the next — an assertion about the roster
+  // would fail on somebody's tuning file rather than on a code change. What is
+  // worth holding is the opt-in itself, which is what runs below and is exactly
+  // the mechanism whoever brings the lattice back will be leaning on.
+  CONFIG.biolumSkin.presets.__testLattice = { pattern: 'wireframe', strength: 1 };
+  setAssetSkin(KEY, '__testLattice');
   check('a wireframe preset opts the geometry split in with it',
     ASSETS[KEY].biolumEdges === true,
     `biolumEdges = ${ASSETS[KEY].biolumEdges}`);
   check('...and a non-wireframe preset does not pay for it',
     (setAssetSkin(KEY, null), setAssetSkin(KEY, 'scales'), ASSETS[KEY].biolumEdges === undefined),
     `biolumEdges = ${ASSETS[KEY].biolumEdges}`);
+  delete CONFIG.biolumSkin.presets.__testLattice;
 
   setAssetSkin(KEY, null);
   check('"none" leaves no trace of either',

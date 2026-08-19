@@ -593,5 +593,71 @@ section('WAKE — where the bursts are actually born');
   }
 }
 
+// --- the ratchet -----------------------------------------------------------
+//
+// THE HEAD MUST NOT MOVE WHEN NOTHING IS MOVING. Every number here is measured
+// with the cursor held dead still, so the only motion the head is entitled to
+// is the motion the clip authored.
+//
+// The failure this catches: an AnimationMixer stops writing a bone whose
+// accumulated value has not changed, so a track with one keyframe (`swim` on
+// neck01_05) or one whose keys HOLD (`water_idle` repeats head_07 across runs
+// of up to 13 of its 81 keys) leaves the bone holding last frame's IK output.
+// applyChain then measures from its own previous answer instead of from the
+// clip, and the weight blend at the bottom of it walks the bone a fraction
+// further every frame until a real keyframe lands and dumps the lot. Not a
+// clamp problem — see the measurements in restoreReference, systems/ikChain.js,
+// which is also why there is no CONFIG.head value this section can be made to
+// pass by tuning.
+//
+// Measured per FRAME rather than as a total sweep, because a ratchet is not a
+// big pose — it is a small one arrived at in one frame. Before the guard the
+// seal's idle p50 was 0.393 deg/frame against the clip's own 0.004, peaking at
+// 10.67 deg in a single frame; the states whose clips key every neck bone
+// every frame (surfaceIdle, boost, surfaceMove) were unaffected either way,
+// which is what says the motion was manufactured rather than authored.
+section('RATCHET — a still cursor leaves the head as still as the clip does');
+{
+  const still = new THREE.Vector2(1, 0);
+  const _tip = new THREE.Vector3();
+  const _prev = new THREE.Vector3();
+
+  // Per-frame swing of the chain's tip direction, in degrees.
+  function swings(state, ik) {
+    const was = CONFIG.head.enabled;
+    CONFIG.head.enabled = ik;
+    const inst = createVisual('ship');
+    scene.add(inst);
+    const a = createAnimationController(inst);
+    const r = createAimRig(inst);
+    const out = [];
+    for (let f = 0; f < 60 * 8; f++) {
+      a.update(dt, state, false);
+      r.update(dt, still, { engaged: false });
+      inst.updateMatrixWorld(true);
+      r.head.tip.getWorldDirection(_tip);
+      if (f > 0) out.push(_tip.angleTo(_prev) * DEG);
+      _prev.copy(_tip);
+    }
+    scene.remove(inst);
+    CONFIG.head.enabled = was;
+    out.sort((x, y) => x - y);
+    return { p50: out[out.length >> 1], max: out[out.length - 1] };
+  }
+
+  for (const state of ['idle', 'swim', 'surfaceIdle', 'boost', 'surfaceMove']) {
+    const clip = swings(state, false);
+    const rigged = swings(state, true);
+    // The bar is the CLIP's own behaviour in the same state, not a constant:
+    // `surfaceMove` genuinely swings the head 2.7 deg a frame and should, and
+    // a threshold flat enough to allow that would let idle ratchet freely.
+    // The IK is allowed to add a little — it is aiming, and the peek and the
+    // cone still move it — but not to become the dominant motion.
+    check(`${state}: the IK does not out-move the clip it layers on`,
+      rigged.max <= Math.max(clip.max * 1.5, 1.0),
+      `clip ${clip.max.toFixed(3)} deg/frame peak, rigged ${rigged.max.toFixed(3)}`);
+  }
+}
+
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

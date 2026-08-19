@@ -146,12 +146,37 @@ function fieldLiteral(key, v) {
   if (typeof v === 'number' && /color/i.test(key)) {
     return `0x${(v >>> 0).toString(16).padStart(6, '0')}`;
   }
-  if (typeof v === 'string') return JSON.stringify(v);
+  // SINGLE QUOTES, because these land in hand-written config.js now and not
+  // only in the generated block. JSON.stringify's double quotes were reported
+  // as a change on every run — `pattern: 'spots' -> "spots"` — which is noise
+  // in a report whose whole job is to say what actually moved.
+  if (typeof v === 'string') return `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
   return String(v);
 }
 
-function renderBlock(presetsByRoot) {
-  const roots = Object.entries(presetsByRoot).filter(([, p]) => Object.keys(p).length);
+// Is the literal already in the file the one being written? Compared with the
+// quotes normalised, so a preset the generated block wrote as "veins" years ago
+// does not read as different from `'veins'`.
+function sameLiteral(a, b) {
+  const norm = (t) => t.trim().replace(/^"(.*)"$/, "'$1'");
+  return norm(a) === norm(b);
+}
+
+// Renders from LINES, not objects, because the block is cumulative: everything
+// it already held has to survive a run that names one creature. `merged` is
+// "root.name" -> the literal after the colon, which is exactly what
+// blockEntries reads back out, so a line this tool wrote last week re-emits
+// byte-identical instead of being re-derived from something that no longer
+// exists in the document.
+function renderBlock(merged) {
+  const byRoot = new Map();
+  for (const [id, line] of merged) {
+    const dot = id.indexOf('.');
+    const root = id.slice(0, dot);
+    if (!byRoot.has(root)) byRoot.set(root, []);
+    byRoot.get(root).push([id.slice(dot + 1), line]);
+  }
+  const roots = [...byRoot];
   if (!roots.length) return '';
   const lines = [
     '',
@@ -163,14 +188,9 @@ function renderBlock(presetsByRoot) {
     '// belongs to whenever you want to give it a comment of its own.',
     'for (const [root, presets] of Object.entries({',
   ];
-  for (const [root, presets] of roots) {
+  for (const [root, entries] of roots) {
     lines.push(`  ${root}: {`);
-    for (const [name, fields] of Object.entries(presets)) {
-      const body = Object.entries(fields)
-        .map(([k, v]) => `${k}: ${fieldLiteral(k, v)}`)
-        .join(', ');
-      lines.push(`    ${JSON.stringify(name)}: { ${body} },`);
-    }
+    for (const [name, line] of entries) lines.push(`    ${JSON.stringify(name)}: ${line}`);
     lines.push('  },');
   }
   lines.push('})) {');
@@ -236,35 +256,249 @@ function blockEntries(text) {
   return out;
 }
 
-async function writePresets(presetsByRoot, { dry }, notes) {
-  const text = await readFile(CONFIG_JS, 'utf8');
-  // What CONFIG holds BEFORE this write, so a name already declared by hand can
-  // be named as deferred-to rather than silently dropped. The generated block is
-  // stripped from the comparison the same way it is stripped from the file, so a
-  // preset this tool wrote last time counts as ours and can be updated.
-  const live = await existingPresets();
-  // A preset is "deferred to" when CONFIG holds it with values that are NOT the
-  // ones the lab is writing — which is exactly what `??=` does to a name
-  // config.js already declares. Comparing only the fields being written, since a
-  // hand-authored preset legitimately carries more.
-  const already = [];
-  if (live) {
-    for (const [root, presets] of Object.entries(presetsByRoot)) {
-      for (const [name, fields] of Object.entries(presets)) {
-        const cur = live[root]?.[name];
-        if (!cur) continue;
-        const wins = Object.entries(fields).every(([k, v]) => cur[k] === v);
-        if (!wins) already.push(`${root}.${name}`);
+// --- writing INTO the hand-authored blocks ----------------------------------
+//
+// The generated block at the end of config.js can only ADD names (see
+// writePresets). This is the other half: when the lab records a preset that
+// config.js already declares by hand, the numbers are written into that block,
+// in place, with its comments left standing.
+//
+// WHY NOT INDENTATION. The obvious locator is "a line with six spaces and the
+// preset's name", and it is wrong on this file: `biolumSkin` and its own
+// `presets` are both written at four spaces, so the container is indented level
+// with its parent. Anything counting columns finds nothing here or, worse,
+// finds a key of the same name under a different root. So the blocks are found
+// by BRACE MATCHING from the root name down — root, then `presets`, then the
+// preset — which is indifferent to how the file is laid out.
+//
+// COMMENTS AND STRINGS ARE MASKED FIRST. config.js argues with itself in prose
+// all the way down, and that prose contains braces (`{ ...base, ...preset }` is
+// in three notes) and apostrophes. Counting braces over the raw text ends up
+// inside a comment within about forty lines. `maskCode` blanks comment bodies
+// and string bodies while preserving every offset, so the search runs over the
+// code and the edits land on the original.
+
+// Same length as its input, with comment and string CONTENTS replaced by
+// spaces. Newlines are kept so line numbers survive for the report.
+//
+// It does not know about regex literals — a `/[{"]/` before the presets would
+// desync it. There are none above the first preset root today and this asserts
+// the depth it lands on, which is what would catch one arriving.
+function maskCode(src) {
+  const out = src.split('');
+  const blank = (i) => { if (src[i] !== '\n') out[i] = ' '; };
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i], d = src[i + 1];
+    if (c === '/' && d === '/') {
+      while (i < src.length && src[i] !== '\n') blank(i++);
+      continue;
+    }
+    if (c === '/' && d === '*') {
+      blank(i); blank(i + 1); i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) blank(i++);
+      if (i < src.length) { blank(i); blank(i + 1); i += 2; }
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      i++;                                   // the opening quote stays
+      while (i < src.length && src[i] !== c) {
+        if (src[i] === '\\') { blank(i); i++; }
+        if (i < src.length) blank(i);
+        i++;
+      }
+      i++;                                   // and the closing one
+      continue;
+    }
+    i++;
+  }
+  return out.join('');
+}
+
+// The `{...}` that `key` opens, as [openBrace, closeBrace], searched in code
+// only and within [from, to). Returns null rather than throwing: a preset the
+// file does not declare by hand is the normal case, not an error.
+function braceBlock(masked, key, from = 0, to = masked.length) {
+  const re = new RegExp(`(^|[\\s,{])(${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|"${key}")\\s*:\\s*\\{`, 'gm');
+  re.lastIndex = from;
+  let m;
+  while ((m = re.exec(masked))) {
+    if (m.index >= to) return null;
+    const open = m.index + m[0].length - 1;
+    let depth = 0;
+    for (let i = open; i < to; i++) {
+      if (masked[i] === '{') depth++;
+      else if (masked[i] === '}') { depth--; if (!depth) return [open, i]; }
+    }
+    return null;                            // unbalanced: leave the file alone
+  }
+  return null;
+}
+
+// root -> presets -> name, each one inside the last.
+function presetBlock(masked, root, name, limit) {
+  const r = braceBlock(masked, root, 0, limit);
+  if (!r) return null;
+  const p = braceBlock(masked, 'presets', r[0], r[1]);
+  if (!p) return null;
+  return braceBlock(masked, name, p[0], p[1]);
+}
+
+// Every `key: value` in one block, as key -> [valueStart, valueEnd). Fields
+// share lines here (`pulseAmp: 0, flickerAmp: 0, flow: 0,` is one line in
+// `hide`), so this is offset work rather than line work.
+function fieldSpans(masked, [open, close]) {
+  const spans = new Map();
+  const re = /(^|[\s,{])([A-Za-z_$][\w$]*)\s*:\s*/g;
+  re.lastIndex = open + 1;
+  let m;
+  while ((m = re.exec(masked)) && m.index < close) {
+    const start = m.index + m[0].length;
+    if (masked[start] === '{' || masked[start] === '[') continue;   // nested: not ours
+    let end = start;
+    while (end < close && masked[end] !== ',' && masked[end] !== '\n' && masked[end] !== '}') end++;
+    spans.set(m[2], [start, end]);
+  }
+  return spans;
+}
+
+// Does a comment sit immediately above this field? That is the prose this tool
+// cannot rewrite and the reason it reports rather than staying quiet — half the
+// numbers in config.js have a paragraph above them arguing for the exact value
+// being replaced.
+function commentAbove(src, at) {
+  const lineStart = src.lastIndexOf('\n', at - 1) + 1;
+  let end = lineStart;
+  for (let n = 0; n < 3 && end > 0; n++) {
+    const prevEnd = end - 1;
+    const prevStart = src.lastIndexOf('\n', prevEnd - 1) + 1;
+    if (prevStart >= prevEnd) break;
+    if (/^\s*\/\//.test(src.slice(prevStart, prevEnd))) return true;
+    end = prevStart;
+  }
+  return false;
+}
+
+/**
+ * Write recorded numbers into the hand-authored preset blocks. Returns the set
+ * of "root.name" it handled, so writePresets can leave those out of the
+ * generated block, plus a per-field report.
+ */
+function spliceHandPresets(text, presetsByRoot, editBuffer = {}) {
+  const generated = text.indexOf(MARK_START);
+  const limit = generated > -1 ? generated : text.length;
+  const masked = maskCode(text);
+  const handled = new Set();
+  const changes = [];
+  const stale = [];
+  const untouched = [];
+  // Edits are collected against the ORIGINAL offsets and applied last, right to
+  // left, so one splice cannot move the next one's target.
+  const edits = [];
+
+  for (const [root, presets] of Object.entries(presetsByRoot)) {
+    for (const [name, fields] of Object.entries(presets)) {
+      const block = presetBlock(masked, root, name, limit);
+      if (!block) continue;                 // not hand-declared: the block adds it
+      handled.add(`${root}.${name}`);
+
+      // ONLY WHAT A SLIDER ACTUALLY MOVED. The lab records the whole panel —
+      // every spec key, resolved — not the handful the user touched, and a
+      // resolved value is not the same thing as a declared one: a key the
+      // preset leaves out on purpose comes back carrying the SLIDER'S OWN
+      // default. Splicing the full record therefore invents fields. `kingCrab`
+      // is not a pigment preset and says nothing about `pigment`; a record of
+      // it wanted to write `pigment: 1` purely because that is where the row
+      // sits, which would have moved it into the pigment family and broken the
+      // three rules tools/biolum-skin-test.mjs holds that family to.
+      //
+      // Same failure as the tuner rows that used to write their midpoint onto
+      // any preset with no value: RENDERING A CONTROL IS NOT AN EDIT. So the
+      // edit buffer is the authority on what to write, and a preset nobody
+      // touched is left exactly as it is.
+      const touched = editBuffer[root]?.[name];
+      if (!touched || !Object.keys(touched).length) {
+        untouched.push(`${root}.${name}`);
+        continue;
+      }
+      const spans = fieldSpans(masked, block);
+      const additions = [];
+      for (const [key, value] of Object.entries(fields)) {
+        if (!(key in touched)) continue;
+        const want = fieldLiteral(key, value);
+        const span = spans.get(key);
+        if (span) {
+          const had = text.slice(span[0], span[1]).trim();
+          if (sameLiteral(had, want)) continue;
+          edits.push([span[0], span[1], want]);
+          changes.push(`${root}.${name}.${key}: ${had} -> ${want}`);
+          if (commentAbove(text, span[0])) stale.push(`${root}.${name}.${key}`);
+        } else {
+          additions.push([key, want]);
+        }
+      }
+      if (additions.length) {
+        // Indent taken from the block's own last field rather than assumed, and
+        // inserted before the closing brace so a trailing comment stays last.
+        const body = text.slice(block[0] + 1, block[1]);
+        const indent = (body.match(/\n(\s+)\S/) || [null, '        '])[1];
+        const lead = /\n\s*$/.test(body) ? '' : '\n';
+        const add = additions.map(([k, v]) => `${indent}${k}: ${v},`).join('\n');
+        edits.push([block[1], block[1], `${lead}${add}\n${indent.slice(0, -2)}`]);
+        for (const [k, v] of additions) changes.push(`${root}.${name}.${k}: (absent) -> ${v}`);
       }
     }
   }
-  for (const one of already) {
-    notes.push(`= ${one}: already declared in config.js by hand — left alone, the lab's numbers were NOT applied`);
+
+  let next = text;
+  for (const [start, end, str] of edits.sort((a, b) => b[0] - a[0])) {
+    next = next.slice(0, start) + str + next.slice(end);
   }
-  const block = renderBlock(presetsByRoot);
+  return { text: next, handled, changes, stale, untouched };
+}
+
+async function writePresets(presetsByRoot, { dry, edits = {} }, notes) {
+  const text = await readFile(CONFIG_JS, 'utf8');
+
+  // THE HAND-AUTHORED BLOCKS FIRST. Anything config.js already declares is
+  // written in place, comments intact; only what is left over — a genuinely new
+  // preset name — goes into the generated block below, where `??=` still means
+  // it can never fight a hand-written value it did not just set itself.
+  //
+  // This is what makes `record` mean "make the game look like the lab". It used
+  // to mean "make the game look like the lab unless somebody already had an
+  // opinion", and the note explaining that was the most common output this tool
+  // produced.
+  const spliced = spliceHandPresets(text, presetsByRoot, edits);
+  const already = [];
+  for (const one of spliced.changes) notes.push(`~ ${one}`);
+  for (const one of spliced.untouched) {
+    notes.push(`. ${one}: already in config.js and no slider moved — left as it is`);
+  }
+  for (const one of new Set(spliced.stale)) {
+    notes.push(`! ${one}: the comment above it argues for the number that was just replaced — reword it`);
+  }
+
+  // CUMULATIVE, and this is the bug that showed up the moment a record started
+  // naming one creature: rendering the block from just that creature's presets
+  // stripped every other name out of it, and the block is the ONLY home for the
+  // ones no hand-written block declares. So it starts from what is already
+  // there, takes this run's additions on top, and drops anything now spliced
+  // into a hand-authored block above — where `??=` would ignore it anyway, and
+  // where leaving it would be a second copy of the same numbers going stale.
+  const merged = blockEntries(text);
+  for (const [root, presets] of Object.entries(presetsByRoot)) {
+    for (const [name, fields] of Object.entries(presets)) {
+      if (spliced.handled.has(`${root}.${name}`)) continue;
+      const body = Object.entries(fields).map(([k, v]) => `${k}: ${fieldLiteral(k, v)}`).join(', ');
+      merged.set(`${root}.${name}`, `{ ${body} },`);
+    }
+  }
+  for (const id of spliced.handled) merged.delete(id);
+  const block = renderBlock(merged);
 
   // Strip any previous copy first, so the block moves rather than multiplying.
-  let body = text;
+  let body = spliced.text;
   const old = body.indexOf(MARK_START);
   if (old > -1) {
     const end = body.indexOf(MARK_END, old);
@@ -292,16 +526,81 @@ async function writePresets(presetsByRoot, { dry }, notes) {
   // preset the block has ever held and the one you just changed was lost in it.
   const before = blockEntries(text);
   const after = blockEntries(next);
-  const names = [];
+  const names = [...spliced.handled].filter((id) => !spliced.untouched.includes(id));
   for (const [id, line] of after) if (before.get(id) !== line) names.push(id);
   if (next !== text && !dry) await writeFile(CONFIG_JS, next);
   return names.filter((n) => !already.includes(n));
 }
 
+// --- the third gate: the saved snapshot -------------------------------------
+//
+// A value in imported-tuning.json BEATS the config.js default it shadows, so a
+// preset written above is still not what the game boots with — the snapshot
+// holds a full copy of every preset the moment the game has saved once. That is
+// why this tool used to appear to work on a brand-new preset name and never
+// again on the same one: the first record landed before the snapshot had an
+// entry, and every record after it was shadowed by the entry the first one
+// caused.
+//
+// So the preset is DELETED from the snapshot rather than written into it. The
+// game rewrites that file wholesale from whatever it booted with, so a tool
+// that wrote values there would lose the race with any open tab; deleting a key
+// hands ownership back to config.js, which is read fresh on every boot.
+//
+// REFUSED WHILE THE GAME IS UP, for the same race. `npm run servers` is the
+// same survey the panel prints.
+const TUNING = join(PROJECT, 'path/src/imported-tuning.json');
+
+async function clearTuning(handled, { dry }, notes) {
+  if (!handled.size) return [];
+  let running = [];
+  try {
+    const { survey } = await import('./servers.mjs');
+    running = survey().filter((p) => p.role === 'dev');
+  } catch {
+    // No survey (not macOS, lsof missing). Say so rather than assume it is safe.
+    notes.push('? could not check for a running dev server — if the game is open, reload it before trusting this');
+  }
+  if (running.length) {
+    notes.push(`! the game is running on port ${running[0].ports.join(', ')} — saved tuning still shadows `
+      + `${[...handled].join(', ')}. Stop it (npm run servers, then stop <port>) and re-run, or the game will boot the old numbers.`);
+    return [];
+  }
+
+  const raw = await readFile(TUNING, 'utf8');
+  const doc = JSON.parse(raw);
+  const dropped = [];
+  for (const id of handled) {
+    const [root, name] = id.split('.');
+    const bag = doc[root]?.presets;
+    if (bag && name in bag) { delete bag[name]; dropped.push(id); }
+  }
+  // Two-space JSON with a trailing newline is byte-for-byte what the game
+  // writes, so a run that drops nothing leaves no diff at all.
+  if (dropped.length && !dry) await writeFile(TUNING, JSON.stringify(doc, null, 2) + '\n');
+  for (const id of dropped) notes.push(`- ${id}: cleared from imported-tuning.json — config.js owns it now`);
+  return dropped;
+}
+
 // Every preset a recorded creature points AT, gathered from what the lab saved.
-function presetsFromDoc(doc) {
+// ONE ENTRY, NOT THE WHOLE FILE, whenever the caller names one — and the lab's
+// record button always does.
+//
+// `applied` accumulates: every creature ever recorded keeps its own copy of the
+// presets it was wearing AT THE TIME. While the generated block could only add
+// names that was harmless, because a stale copy lost to the hand-written block
+// anyway. Now that a record overwrites, replaying the whole file means the
+// oldest snapshot of a SHARED preset silently reverts the newest — recording
+// the boss crab would have rolled `orcaHide` back to a copy from this morning,
+// and the report would have called it a change the user had just asked for.
+function entriesOf(doc, only) {
+  const all = doc.applied ?? {};
+  return only ? (all[only] ? [all[only]] : []) : Object.values(all);
+}
+
+function presetsFromDoc(doc, only) {
   const out = { toonShade: {}, sealShader: {}, biolumSkin: {} };
-  for (const entry of Object.values(doc.applied ?? {})) {
+  for (const entry of entriesOf(doc, only)) {
     for (const [root, byName] of Object.entries(entry.presets ?? {})) {
       if (!out[root]) continue;
       for (const [name, fields] of Object.entries(byName)) {
@@ -317,12 +616,26 @@ function presetsFromDoc(doc) {
  * assets.csv, the numbers into config.js. Returns what changed, for a caller
  * that wants to say so (the lab's status line, or the CLI below).
  */
-export async function applyRecorded(doc, { dry = false } = {}) {
+export async function applyRecorded(doc, { dry = false, only = doc.recorded, batch = false } = {}) {
   const notes = [];
-  const applied = doc.applied ?? {};
-  if (!Object.keys(applied).length) return { rows: [], presets: [], notes: ['nothing recorded yet'] };
+  const every = doc.applied ?? {};
+  // A SUBJECT IS REQUIRED TO WRITE. Both of the lab's buttons POST this file and
+  // the server applies whatever it is handed, so "save presets" — which names no
+  // creature — would otherwise replay every record in the document and let the
+  // oldest copy of a shared preset win. Saving the file is all it should do.
+  if (!only && !batch) {
+    return { rows: [], presets: [], notes: ['saved — no creature named, so nothing was written to config.js or assets.csv'] };
+  }
+  const applied = only ? (every[only] ? { [only]: every[only] } : {}) : every;
+  if (!Object.keys(applied).length) {
+    return { rows: [], presets: [], notes: [only ? `nothing recorded for ${only}` : 'nothing recorded yet'] };
+  }
   const rows = await writeCsv(applied, { dry }, notes);
-  const presets = await writePresets(presetsFromDoc(doc), { dry }, notes);
+  const presets = await writePresets(presetsFromDoc(doc, only), { dry, edits: doc.config ?? {} }, notes);
+  // Ownership last, and only for what actually got written: clearing the
+  // snapshot for a preset this run did not touch would silently revert somebody
+  // else's tuning to a config default.
+  await clearTuning(new Set(presets), { dry }, notes);
   return { rows, presets, notes };
 }
 
@@ -330,7 +643,11 @@ export async function applyRecorded(doc, { dry = false } = {}) {
 // Guarded so tools/looks/serve.mjs can import applyRecorded without this running.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const argv = process.argv.slice(2);
-  const dry = argv.includes('--dry');
+  // `--all` REQUIRED TO WRITE, and it is not ceremony. Without a named subject
+  // this replays every record the file holds, which for a shared preset means
+  // the oldest copy wins — see entriesOf. The default is therefore a report.
+  const all = argv.includes('--all');
+  const dry = argv.includes('--dry') || !all;
   const fromArg = argv.indexOf('--from');
   const SRC = fromArg > -1 ? resolve(argv[fromArg + 1]) : DEFAULT_SRC;
 
@@ -344,8 +661,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(1);
   }
 
-  const { rows, presets, notes } = await applyRecorded(doc, { dry });
+  const { rows, presets, notes } = await applyRecorded(doc, { dry, only: null, batch: true });
   const verb = dry ? 'WOULD change' : 'wrote';
+  if (!all) {
+    console.log('DRY RUN — every record in the file, oldest copy of a shared preset winning.');
+    console.log('Hit record in the lab to apply one creature, or pass --all to write all of this.\n');
+  }
   if (rows.length) {
     console.log(`${verb} ${rows.length} row(s) in path/src/assets.csv:`);
     for (const r of rows) console.log(`  ${r}`);

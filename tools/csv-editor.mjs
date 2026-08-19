@@ -137,6 +137,17 @@ const NAME_SLOTS = (() => {
   const extras = extractStringArray(src, 'NAME_SLOTS');
   return [...composed, ...extras.filter((s) => !composed.includes(s))];
 })();
+// The seal name table's own slots, read the same way and for the same reason.
+// SEAL_NAME_SLOTS is a spread of SEAL_SLOTS, which a literal-array regex can't
+// see through, so the two are read separately and joined — and it degrades to
+// the built halves rather than to an empty dropdown if either goes missing.
+const SEAL_NAME_SLOTS = (() => {
+  const src = readSrc('sealNameTable.js');
+  const built = extractStringArray(src, 'SEAL_SLOTS');
+  if (!built.length) return ['adjective', 'nickname'];
+  const extras = extractStringArray(src, 'SEAL_NAME_SLOTS');
+  return [...built, ...extras.filter((s) => !built.includes(s))];
+})();
 // ...and the boss archetypes, read out of bosses.csv itself, so the `bosses`
 // column offers what is actually in the roster today.
 const idsFromCsv = (rel) => {
@@ -315,6 +326,20 @@ const DOCS = {
     weight: 'Likelihood relative to the other rows. Blank = 1, 0 is never shown.',
     causes: 'What has to have killed you for this line to fire. BLANK MEANS ANY DEATH. A line written for a cause BEATS the general pool rather than competing with it — die to a crab and only the crab lines are drawn from, so tagging one makes it certain, not merely likelier. Tick several and the line covers all of them.',
   },
+  'kickers.csv': {
+    id: 'A short handle for the row. Never shown to the player — it exists so a reworded label keeps its identity in a diff.',
+    text: 'The label the cause of death reads under, on the polaroid: "cause of death: Homing Missile". Write it WITHOUT a trailing space — the gap before the weapon name is added in code, because a trailing space is invisible in this editor and would go missing the first time a row was touched.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    weight: 'Likelihood relative to the other rows. Blank = 1, 0 is never shown. The straight reading ships at 3 against the jokes\u2019 1 — a bit that lands one print in five is a bit; one that lands every print is the format.',
+  },
+  'sealNames.csv': {
+    id: 'A short handle for the row. Never shown to the player — it exists so a reworded part keeps its identity in a diff.',
+    slot: 'Which PART of the name this is: adjective ("Fat") + nickname ("Tony") are drawn separately and set side by side. A full name is a WHOLE name written out ("Sir Flops-A-Lot") — the way to hand-write something the halves could never assemble. Any other value is ignored, loudly.',
+    text: 'The part itself, used with exactly the capitalisation typed here — both halves are capitalised, because either can also end up standing alone. Nothing may contain <>&"\'\\: the name field strips those, so they are removed at load with a warning naming the row.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    weight: 'Likelihood relative to the other rows IN THE SAME SLOT. Blank = 1, 0 is never used.',
+    notes: 'Free text — nothing reads it.',
+  },
   'callouts.csv': {
     id: 'WHICH callout this is, and it joins to code — the condition that fires a warning, or the step that offers a tip. Renaming one takes it out of the game; rewording `text` does not. Adding a row does nothing on its own: something has to fire it.',
     kind: '`warn` for a state you must fix now (fires every run, forever) or `coach` for a first-run tip (fires ONCE EVER per device and then never again). Anything else is ignored, loudly.',
@@ -382,6 +407,8 @@ const BLANK_MEANS = {
   },
   'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up' },
   'quips.csv': { enabled: 'enabled', weight: '1', causes: 'any death' },
+  'kickers.csv': { enabled: 'enabled', weight: '1' },
+  'sealNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },
   'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
   'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', notes: '—' },
@@ -412,6 +439,18 @@ export const TABLES = [
     file: 'path/src/quips.csv',
     label: 'Death quips',
     blurb: 'The game-over headline. The `id` joins to nothing in code, so new lines are just new rows — add away. `causes` is the one column that does join: leave it blank and the line can answer any death, or tick what has to have killed you. A line written for a cause BEATS the general pool rather than competing with it, so tagging one makes it certain for that death, not merely likelier.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/kickers.csv',
+    label: 'Kill-shot kickers',
+    blurb: 'The label above the cause of death on the polaroid — "cause of death: Homing Missile", "kill\u2019d by: Belly Flop". One is rolled per kill shot and kept with it, so a print never re-captions itself. The `id` joins to nothing, so new lines are just new rows; leave the trailing space off the text, it is added in code.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/sealNames.csv',
+    label: 'Seal names',
+    blurb: 'What the dice button on the splash calls the player. PARTS, like the boss names — an adjective and a nickname are drawn separately, so "Fat" and "Tony" is thirty rows and five hundred seals. A `full` row is a whole name written out, for the ones the halves could never build. Whatever is rolled lands in the name field, where the player can edit it or roll again.',
     addRows: true,
   },
   {
@@ -532,6 +571,20 @@ function columnSpec(file, name, rows) {
     return base;
   }
 
+  // Closed for the same reason bossNames.csv's slot is, one block down: an
+  // unknown slot is not a new kind of part, it is a part that never appears.
+  if (file === 'path/src/sealNames.csv' && name === 'slot') {
+    return {
+      ...base,
+      type: 'enum',
+      options: SEAL_NAME_SLOTS,
+      labels: {
+        adjective: 'adjective  (the front half)',
+        nickname: 'nickname  (the back half, and a name on its own)',
+        full: 'full  (a whole name, written out)',
+      },
+    };
+  }
   // A closed list, unlike enemies.csv's spawnGroup combo above: an unknown
   // slot is not a new kind of name part, it is a part that never appears.
   if (file === 'path/src/bossNames.csv' && name === 'slot') {

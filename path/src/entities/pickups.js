@@ -4,7 +4,15 @@ import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { updateTumble } from '../systems/rocks.js';
 import { createInstancedPool } from '../systems/instancedPool.js';
-import { magnetRadius, magnetSpeed, magnetDistance, chumHoming } from '../systems/chumMagnet.js';
+// The general magnet (magnetRadius/Speed/Distance) is what EVERY pickup gets;
+// the food one (foodReach/Pull/Distance) is the same thing tiered by whether a
+// FOOD CHAIN is running, and only chum and chunks answer to it. Both imported
+// on purpose — the blue orb, the bubble and the morsel are not what the chain
+// is made of and must keep the full magnet at all times.
+import {
+  magnetRadius, magnetSpeed, magnetDistance,
+  foodReach, foodPull, foodDistance,
+} from '../systems/chumMagnet.js';
 import { telegraphMul } from '../systems/telegraph.js';
 
 // Chum is drawn as instances, not as 140 separate meshes — see
@@ -367,22 +375,21 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
   const dist = Math.hypot(dx, dy) || 0.0001;
 
   const speed = player.velocity?.length?.() ?? 0;
-  const reach = magnetDistance(
+  // THE FOOD MAGNET, not the general one: a chunk is what the FOOD CHAIN is
+  // made of, so a live chain sweeps for it and a cruising seal merely drifts it
+  // in. Both collect — see foodReach in systems/chumMagnet.js.
+  const reach = foodDistance(
     player.mesh.position.x, player.mesh.position.y,
     chunk.mesh.position.x, chunk.mesh.position.y, speed,
   );
-  // A CHUNK IS FOOD, so it answers to the chain gate exactly as chum does —
-  // and it is the piece most worth gating, because a chunk is a whole meal.
-  // Outside a chain the seal still EATS it on contact (the collect test below
-  // is untouched); what it stops doing is reaching.
-  const magnetised = chumHoming() && reach < magnetRadius(player.stats, speed);
+  const magnetised = reach < foodReach(player.stats, speed);
 
   if (magnetised) {
     // Same precedence chum uses: the magnet outranks a throw still in flight,
     // and cancels it, so a chunk the seal has claimed stops arcing away.
     chunk.vx = 0;
     chunk.vy = 0;
-    const pull = magnetSpeed(speed) * dt;
+    const pull = foodPull(speed) * dt;
     chunk.mesh.position.x += (dx / dist) * pull;
     chunk.mesh.position.y += (dy / dist) * pull;
   } else if (chunk.vx || chunk.vy) {
@@ -510,11 +517,16 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
   // Hoisted: the magnet state is a property of the SEAL, not of each orb, and
   // resolving it per orb would ask the same question 140 times a frame.
   const sealSpeed = player.velocity?.length?.() ?? 0;
-  const reachNow = magnetRadius(player.stats, sealSpeed);
-  // Hoisted for the same reason, and it is the same question for every orb in
-  // the water: is a FOOD CHAIN running at all? Outside one the seal reaches for
-  // no chum and has to swim into it. See chumHoming in systems/chumMagnet.js.
-  const homing = chumHoming();
+  // THE FOOD REACH, not the general magnet's: chum is what the chain is made
+  // of, so a live chain reaches for it twice as far and pulls it faster than
+  // the seal is travelling, and a cruising seal gets the base radius at the
+  // base speed. Both collect — the chain buys the SWEEP, never the right to
+  // eat. See foodReach in systems/chumMagnet.js.
+  //
+  // The halo below rides this same number, which is the point of reading it
+  // once: its whole job is "this is in reach", so it has to widen and narrow
+  // with whatever the reach actually is.
+  const reachNow = foodReach(player.stats, sealSpeed);
   orbClock += dt;
 
   for (let i = pickups.length - 1; i >= 0; i--) {
@@ -534,6 +546,14 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
     const dx = player.mesh.position.x - p.mesh.position.x;
     const dy = player.mesh.position.y - p.mesh.position.y;
     const dist = Math.hypot(dx, dy) || 0.0001;
+    // DISTANCE TO THE MOUTH, which is the corridor while sweeping mid-dash.
+    // Hoisted rather than measured inside the branch below because the halo at
+    // the bottom of the loop is about the same reach, and two answers to "how
+    // far is this orb" is how food ends up occasionally refusing to be taken.
+    const reach = foodDistance(
+      player.mesh.position.x, player.mesh.position.y,
+      p.mesh.position.x, p.mesh.position.y, sealSpeed,
+    );
     // Inside a sealed mouth's reach: about to be swallowed, but not yet.
     const waiting = sealed && dist < tellRadius;
 
@@ -549,10 +569,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // seconds long drops a mid-water pile clean out of the radius it was
       // telegraphing. Anything already resting on the seabed was going nowhere
       // anyway, so this only ever holds the ones in open water.
-    } else if (!sealed && homing && magnetDistance(
-      player.mesh.position.x, player.mesh.position.y,
-      p.mesh.position.x, p.mesh.position.y, sealSpeed,
-    ) < reachNow) {
+    } else if (!sealed && reach < reachNow) {
       // The magnet outranks any throw still in flight, and cancels it — an orb
       // the player swam away from should go back to sinking, not pick its old
       // arc back up.
@@ -562,7 +579,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // FASTER THAN THE DASH: at the flat 14 against a 46 u/s dash an orb not
       // directly ahead falls behind at 32 u/s and can never arrive, so a wider
       // striking radius on its own would have collected nothing extra.
-      const pull = magnetSpeed(sealSpeed) * dt;
+      const pull = foodPull(sealSpeed) * dt;
       p.mesh.position.x += (dx / dist) * pull;
       p.mesh.position.y += (dy / dist) * pull;
     } else if (p.hoover) {

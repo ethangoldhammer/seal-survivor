@@ -382,7 +382,23 @@ function clamp01(v) {
 }
 
 // One phase's field, fractal-summed over `octaves`.
-function buildField(algo, size, scale, octaves, z) {
+/**
+ * The raw field, before any cut. Exported for ui/wornEdge.js, which erodes the
+ * score card's border with it.
+ *
+ * EXPORTED RATHER THAN REIMPLEMENTED, and that is the whole point: this project
+ * has ONE noise vocabulary — the menus reveal through it, the boat wreckage and
+ * the crew dissolve through the 3D version of it, and a card whose edge is worn
+ * by a second, unrelated turbulence would look like it came from another game.
+ * Everything downstream of this call decides how to CUT the field; nobody else
+ * gets to decide what the field is.
+ *
+ * Values land roughly in 0..1 and are NOT evenly spread across it — fractal
+ * noise clusters hard around the middle. Cut by quantile, never by a raw
+ * threshold, or the control does nothing across most of its travel and
+ * everything across a sliver of it. See noiseMaskSet, which does exactly that.
+ */
+export function buildField(algo, size, scale, octaves, z) {
   const px = size * size;
   const field = new Float32Array(px);
   let amp = 1;

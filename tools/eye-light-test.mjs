@@ -63,7 +63,7 @@ import {
   resolveEyeLook, flareEyeLights, flashEyeLightsLaser, flashEyeLightsDamage,
   eyeLightState,
 } from '../path/src/systems/eyeLights.js';
-import { beams, resetBeams } from '../path/src/systems/beams.js';
+import { beams, resetBeams, luminance, lumInto } from '../path/src/systems/beams.js';
 import { updateLaserEyes, resetLaserEyes, setLaserAim } from '../path/src/systems/laserEyes.js';
 import {
   playerDamageFx, updatePlayerDamageFx, resetPlayerDamageFx,
@@ -224,10 +224,19 @@ section('HEAD');
     `moved ${after.distanceTo(before).toFixed(3)} world units`);
   // ...and the normal turns with them, or the near/far test below would be
   // reading a direction frozen at the rest pose.
-  check('the socket normal turns with the head',
-    rig.anchorNormals.eyeL.clone().sub(
-      new THREE.Vector3(0, 0, 1).transformDirection(sk.bones[boneIndex.get('eye_L_09')].matrixWorld),
-    ).length() < 1e-6);
+  // Read from the ANCHOR DEFINITION rather than naming a bone here. These
+  // sockets moved off the eye bones and onto head_07 (the eye bones carry a
+  // blink — see the note in assets.js), and a test that names the bone itself
+  // goes from proving something to proving nothing the moment that happens: it
+  // fails for the right reason once, gets "fixed" by pasting in the new name,
+  // and is then just as brittle again.
+  {
+    const def = body.userData.aimRig.anchors.eyeL;
+    const bone = body.getObjectByName(def.bone);
+    const want = new THREE.Vector3().fromArray(def.normal).transformDirection(bone.matrixWorld);
+    check('the socket normal turns with the head',
+      rig.anchorNormals.eyeL.clone().sub(want).length() < 1e-6);
+  }
   // Back to level for everything that follows.
   for (let i = 0; i < 90; i++) {
     scene.updateMatrixWorld(true);
@@ -257,8 +266,18 @@ section('NEAR / FAR');
 // camera sees one eye.
 const group = createEyeLights();
 scene.add(group);
-const beads = group.children.filter((o) => o.geometry?.type === 'SphereGeometry');
-const haloes = group.children.filter((o) => o.geometry?.type === 'PlaneGeometry');
+// Found by walking the scene rather than read off `group.children`: the eyes
+// are re-parented onto the eye bones the first frame a rig offers them, so
+// after one update the group is empty. That is the fix for the drift — see the
+// LOCKED TO THE BONE section below.
+const beads = [];
+const haloes = [];
+scene.traverse((o) => {
+  if (o.geometry?.type === 'SphereGeometry') beads.push(o);
+  else if (o.isSprite) haloes.push(o);
+});
+const _wp = new THREE.Vector3();
+const worldOf = (o) => o.getWorldPosition(_wp.clone());
 
 /** Settle the eyes at a given gate, with the sockets kept current. */
 function runEyes(frames, opts) {
@@ -274,21 +293,24 @@ function runEyes(frames, opts) {
     beads.length === 2 && haloes.length === 2, `${beads.length} beads, ${haloes.length} haloes`);
   runEyes(120, { lit: 1 });
 
-  const shown = beads.filter((o) => o.material.opacity > 0.01);
+  const shown = beads.filter((o) => o.visible && o.material.opacity > 0.01);
   check('exactly one eye is visible side-on', shown.length === 1, `${shown.length} of 2 beads`);
   // ...and it is the one nearer the camera. The camera looks down -Z from +Z
   // and is never rotated (world.js), so nearer is simply larger z.
   const nearZ = Math.max(rig.anchors.eyeL.z, rig.anchors.eyeR.z);
+  // WORLD position, since the bead's own `position` is now an offset in its
+  // bone's local space.
+  const shownZ = worldOf(shown[0]).z;
   check('the visible eye is the near one',
-    Math.abs(shown[0].position.z - nearZ) < 1e-4,
-    `visible at z ${shown[0]?.position.z.toFixed(3)}, near socket at ${nearZ.toFixed(3)}`);
+    Math.abs(shownZ - nearZ) < 1e-3,
+    `visible at z ${shownZ.toFixed(3)}, near socket at ${nearZ.toFixed(3)}`);
   // Drawn over the face rather than depth-tested into it — the eyeball is
   // flush with the skin and a wide halo would be sliced by the brow.
   const all = [...beads, ...haloes];
   check('the eyes are drawn over the face', all.every((o) => o.material.depthTest === false));
   check('the eyes never write depth', all.every((o) => o.material.depthWrite === false));
-  check('the halo is wide enough to bloom', (CONFIG.eyeLights.haloRadius ?? 0) >= 0.3,
-    `${CONFIG.eyeLights.haloRadius}`);
+  check('the halo is wide enough to bloom', (CONFIG.eyes.haloRadius ?? 0) >= 0.3,
+    `${CONFIG.eyes.haloRadius}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,8 +325,15 @@ section('AT REST');
   check('the resting eye emits nothing',
     lit.material.emissive.r === 0 && lit.material.emissive.g === 0 && lit.material.emissive.b === 0,
     `#${lit.material.emissive.getHexString()}`);
-  check('...and its halo is fully off',
-    haloes.every((h) => h.material.opacity === 0));
+  // The halo contributes NOTHING, which is not the same as opacity 0 any more:
+  // opacity is the fade and the COLOUR carries the brightness, so a resting
+  // halo is a black sprite at whatever alpha the fade is at. Additive blending
+  // is colour x alpha, so black adds nothing however opaque it is — and this
+  // asserts the thing that is actually true on screen.
+  const contribution = (h) => Math.max(h.material.color.r, h.material.color.g, h.material.color.b)
+    * h.material.opacity;
+  check('...and its halo adds nothing', haloes.every((h) => contribution(h) === 0),
+    haloes.map((h) => contribution(h).toFixed(4)).join(', '));
   // It is a LIT material, which is the only reason there is a catchlight at
   // all — a MeshBasicMaterial has no specular and the eye would be a flat
   // black hole however low its roughness was set.
@@ -328,7 +357,7 @@ section('WHAT THE EYE SAYS');
 // budget, and the interesting cases (hurt DURING a full charge) would be
 // awkward enough to arrange that they would quietly not get written.
 {
-  const c = CONFIG.eyeLights;
+  const c = CONFIG.eyes;
   const out = new THREE.Color();
   const S = (o) => ({
     charge: 0, flare: 0, flarePower: 0, laser: 0, hurt: 0, hurtPower: 0, ...o,
@@ -343,12 +372,12 @@ section('WHAT THE EYE SAYS');
   const cFull = out.getHex();
   check('the glow rises with the bank', full > quarter && quarter > 0,
     `${quarter.toFixed(2)} at a quarter, ${full.toFixed(2)} at full`);
-  check('a filling bank is the ring\'s blue',
-    cQuarter !== cFull && new THREE.Color(c.chargeColor).getHex() !== cFull,
+  check('a filling bank is the deeper green',
+    cQuarter !== cFull && new THREE.Color(c.boostColor).getHex() !== cFull,
     `#${cQuarter.toString(16)} -> #${cFull.toString(16)}`);
-  check('a full bank is the ring\'s ready colour',
-    cFull === new THREE.Color(c.chargeReadyColor).getHex(),
-    `#${cFull.toString(16)} against #${new THREE.Color(c.chargeReadyColor).getHex().toString(16)}`);
+  check('a full bank is the pale green',
+    cFull === new THREE.Color(c.boostReadyColor).getHex(),
+    `#${cFull.toString(16)} against #${new THREE.Color(c.boostReadyColor).getHex().toString(16)}`);
 
   // RELEASE — a spike past anything the wind-up reaches.
   const flare = resolveEyeLook(S({ flare: 1, flarePower: 1, charge: 1 }), c, out);
@@ -381,6 +410,78 @@ section('WHAT THE EYE SAYS');
 }
 
 // ---------------------------------------------------------------------------
+section('BIG BLOOM, BOTH COLOURS');
+// ---------------------------------------------------------------------------
+// The boost is green and the damage flash is red, and BOTH are meant to bloom
+// hard. That is not one setting away from being true, because the bright pass
+// gates on Rec.709 luminance — green is worth 72% of it and red 21%. A single
+// peak-channel overdrive makes the green blaze and leaves the red sitting flat
+// and dark, which reads as a rendering bug rather than as a colour choice.
+//
+// So the halo is normalised on LUMINANCE, and this is the section that proves
+// the two hues actually arrive at the same place. It is worth asserting rather
+// than eyeballing: the difference is a factor of 2.3 in the multiplier each
+// colour needs, and nothing on screen names it.
+{
+  const c = CONFIG.eyes;
+  const st = eyeLightState();
+  const T = CONFIG.bloom?.threshold ?? 0.58;
+  // brightFragmentShader: smoothstep(threshold, threshold + 0.25, lum), so
+  // this is where a pixel contributes its FULL brightness to the bloom.
+  const FULL = T + 0.25;
+
+  /** The luminance this eye actually puts into the scene target. */
+  const emitted = () => {
+    const h = haloes.find((x) => x.visible) ?? haloes[0];
+    return luminance(h.material.color) * h.material.opacity;
+  };
+
+  resetEyeLights();
+  runEyes(30, { lit: 1 });
+  check('a resting eye is under the bright pass entirely', emitted() < T,
+    `${emitted().toFixed(3)} against a threshold of ${T}`);
+
+  // GREEN — a full boost bank.
+  runEyes(120, { lit: 1, charge: 1 });
+  const green = emitted();
+  check('a full boost blooms, and hard', green > FULL,
+    `${green.toFixed(2)} luminance against ${FULL} for full bloom — ${(green / FULL).toFixed(1)}x`);
+  check('...and it is green',
+    st.charge > 0.95 && (() => {
+      const h = haloes.find((x) => x.visible) ?? haloes[0];
+      return h.material.color.g > h.material.color.r && h.material.color.g > h.material.color.b;
+    })());
+
+  // RED — a full damage flash, which must land in the same place.
+  resetEyeLights();
+  runEyes(30, { lit: 1 });
+  flashEyeLightsDamage(1);
+  runEyes(1, { lit: 1 });
+  const red = emitted();
+  check('a full hit blooms just as hard', red > FULL,
+    `${red.toFixed(2)} luminance — ${(red / FULL).toFixed(1)}x`);
+  check('...and it is red', (() => {
+    const h = haloes.find((x) => x.visible) ?? haloes[0];
+    return h.material.color.r > h.material.color.g && h.material.color.r > h.material.color.b;
+  })());
+
+  // THE POINT OF THE WHOLE MECHANISM. Within a few percent, not "both are
+  // big" — the failure this guards is one hue quietly sitting at a third of
+  // the other while every number in the tuner says they match.
+  check('green and red bloom the SAME amount',
+    Math.abs(green - red) / Math.max(green, red) < 0.05,
+    `green ${green.toFixed(2)}, red ${red.toFixed(2)}`);
+
+  // And the cost, stated so nobody "fixes" it: red needs a much bigger
+  // multiplier to get there, so its peak channel runs far hotter and the
+  // composite knee whitens its core. That is the trade, not a bug.
+  const gPeak = (() => { const o = new THREE.Color(); lumInto(o, c.boostReadyColor, c.bloomLum); return Math.max(o.r, o.g, o.b); })();
+  const rPeak = (() => { const o = new THREE.Color(); lumInto(o, c.hitColor, c.bloomLum); return Math.max(o.r, o.g, o.b); })();
+  check('red pays for it in peak channel, as expected', rPeak > gPeak * 2,
+    `red peaks at ${rPeak.toFixed(1)}, green at ${gPeak.toFixed(1)}`);
+}
+
+// ---------------------------------------------------------------------------
 section('THE CLOCKS');
 // ---------------------------------------------------------------------------
 // Every flash has to end. A channel that never decays is a stuck colour, and
@@ -393,7 +494,7 @@ section('THE CLOCKS');
   runEyes(30, { lit: 1 });
   flashEyeLightsDamage(1);
   check('a hit lights the eye', st.hurt > 0);
-  runEyes(Math.ceil((CONFIG.eyeLights.hitTime + 0.2) * 60), { lit: 1 });
+  runEyes(Math.ceil((CONFIG.eyes.hitTime + 0.2) * 60), { lit: 1 });
   check('...and burns out on its own', st.hurt === 0);
 
   // A small hit landing inside a big one must not cut it short.
@@ -414,7 +515,7 @@ section('THE CLOCKS');
   const midFlare = st.flarePower * st.flare;
   flareEyeLights(0.1);
   check('a flick does not downgrade a commitment', st.flarePower >= midFlare - 1e-6);
-  runEyes(Math.ceil((CONFIG.eyeLights.flareTime + 0.2) * 60), { lit: 1 });
+  runEyes(Math.ceil((CONFIG.eyes.flareTime + 0.2) * 60), { lit: 1 });
   check('the release flare burns out', st.flare === 0);
 
   // The laser muzzle.
@@ -422,7 +523,7 @@ section('THE CLOCKS');
   runEyes(30, { lit: 1 });
   flashEyeLightsLaser(1);
   check('a volley lights the muzzle', st.laser > 0);
-  runEyes(Math.ceil((CONFIG.eyeLights.laserTime + 0.2) * 60), { lit: 1 });
+  runEyes(Math.ceil((CONFIG.eyes.laserTime + 0.2) * 60), { lit: 1 });
   check('...and it burns out', st.laser === 0);
 
   // THE CLOCKS RUN WHILE THE EYES ARE HIDDEN. A flash left mid-decay behind a
@@ -431,7 +532,7 @@ section('THE CLOCKS');
   resetEyeLights();
   runEyes(30, { lit: 1 });
   flashEyeLightsDamage(1);
-  runEyes(Math.ceil((CONFIG.eyeLights.hitTime + 0.2) * 60), { lit: 0 });
+  runEyes(Math.ceil((CONFIG.eyes.hitTime + 0.2) * 60), { lit: 0 });
   check('a flash decays even with the eyes out', st.hurt === 0);
 
   // The wind-up EASES rather than tracking the button, or every flick strobes.
@@ -455,21 +556,19 @@ section('THE GATE');
   runEyes(120, { lit: 1 });
   // Death puts them out, and reset leaves nothing lit behind.
   for (let i = 0; i < 120; i++) updateEyeLights(1 / 60, rig, { lit: 0 });
-  check('the eyes go out when the seal dies',
-    beads.every((o) => o.material.opacity < 0.01));
+  check('the eyes go out when the seal dies', beads.every((o) => !o.visible));
   resetEyeLights();
-  check('reset leaves nothing lit', beads.every((o) => o.material.opacity === 0)
-    && haloes.every((o) => o.material.opacity === 0));
+  check('reset leaves nothing lit', beads.every((o) => !o.visible && o.material.opacity === 0)
+    && haloes.every((o) => !o.visible && o.material.opacity === 0));
   check('...and no flash still burning',
     st.hurt === 0 && st.flare === 0 && st.laser === 0 && st.charge === 0);
 
   // A model with no eye bones gets no beads rather than two at the origin.
   updateEyeLights(1 / 60, null, { lit: 1 });
-  check('a seal with no eye sockets shows nothing', group.visible === false);
+  check('a seal with no eye sockets shows nothing', beads.every((o) => !o.visible));
   // ...and back on again, so the gate is a gate rather than a one-way switch.
   runEyes(120, { lit: 1 });
-  check('they light again once a rig is back', group.visible === true
-    && beads.some((o) => o.material.opacity > 0.01));
+  check('they light again once a rig is back', beads.some((o) => o.visible && o.material.opacity > 0.01));
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +651,127 @@ section('BEAMS');
     `moved ${Math.hypot(moved.x - startedAt.x, moved.y - startedAt.y).toFixed(3)}`);
   resetBeams(scene);
   resetLaserEyes();
+}
+
+// ---------------------------------------------------------------------------
+section('LOCKED TO THE BONE');
+// ---------------------------------------------------------------------------
+// The eyes must sit exactly on the eyeball AT DRAW TIME, on every frame, under
+// every clock. They used to be positioned from `rig.anchors` — a world-space
+// snapshot taken when the aim rig last solved — and that silently assumed
+// nothing moves the seal between the solve and the render. Anything that does
+// leaves the bead a frame behind, and a frame behind is a whole eye-width.
+//
+// The adversarial case below is the one that matters and the one no amount of
+// reading main.js can rule out for good: SOMETHING TURNS THE SEAL AFTER THE
+// RIG HAS PUBLISHED. It stands in for any system added later in the frame, and
+// for any frame where the rig does not solve at all. Measured against the
+// world-space version this section is 0.12 world units off at 60fps and 0.25
+// at 30, on a bead of radius 0.08 — worse the longer the frame, which is why
+// it was ugliest under time dilation.
+//
+// It is zero now because the beads are CHILDREN of the eye bones, so the
+// renderer builds their matrices from the one it skins the head with. This
+// section is what stops anyone quietly putting them back in world space.
+{
+  const def = body.userData.aimRig.anchors.eyeL;
+  const bone = body.getObjectByName(def.bone);
+  const offset = new THREE.Vector3().fromArray(def.offset);
+  const bead = beads.find((b) => {
+    let p = b.parent;
+    while (p) { if (p === bone) return true; p = p.parent; }
+    return false;
+  }) ?? beads[0];
+
+  /** Where the bone actually is once the renderer has updated everything. */
+  const truth = () => {
+    scene.updateMatrixWorld(true);
+    return bone.localToWorld(offset.clone());
+  };
+
+  check('the beads were re-parented onto a bone',
+    beads.every((b) => b.parent?.isBone === true),
+    beads.map((b) => b.parent?.name ?? 'unparented').join(', '));
+
+  // ---------------------------------------------------------------------
+  // ...AND NOT ONTO ONE THAT IS BEING ANIMATED UNDERNEATH THEM.
+  // ---------------------------------------------------------------------
+  // The obvious bone for an eye socket is the EYE bone, and on this model it
+  // is the wrong one: `eye_L_09` and `eye_R_010` carry the blink, on all
+  // three channels — scale 0.200..1.300 across the clips, position over a
+  // 0.23 range, quaternion the full sweep. A bead parented there is squashed
+  // six-fold and shoved about several times a second. That is the animation
+  // doing its job on the geometry it exists to drive; borrowing its bone is
+  // the bug, and it is a bug you can only see moving.
+  //
+  // SCALE is the one that has to fail here rather than merely be noticed.
+  // Position and rotation are fine on a socket — the head has both and the
+  // eyes are supposed to ride them — but a bead cannot survive its parent
+  // being squashed: `boneScale` divides out the average of the three axes,
+  // so a uniform pulse would be cancelled and a NON-uniform squash comes
+  // through as a distortion that no compensation can undo.
+  for (const [name, clips] of [['furseal', gltf.animations]]) {
+    const socketBones = new Set(
+      Object.values(body.userData.aimRig.anchors)
+        .filter((a) => a.bone && ['eyeL', 'eyeR'].some((k) => body.userData.aimRig.anchors[k] === a))
+        .map((a) => a.bone),
+    );
+    const scaled = [];
+    for (const clip of clips) {
+      for (const t of clip.tracks) {
+        if (!t.name.endsWith('.scale')) continue;
+        const boneName = t.name.slice(0, -'.scale'.length).split('.').pop();
+        if (!socketBones.has(boneName)) continue;
+        const v = Array.from(t.values);
+        const mn = Math.min(...v);
+        const mx = Math.max(...v);
+        if (mx - mn > 1e-4) scaled.push(`${clip.name}:${boneName} ${mn.toFixed(2)}..${mx.toFixed(2)}`);
+      }
+    }
+    check(`${name}: no eye socket sits on a bone whose SCALE is animated`,
+      scaled.length === 0,
+      scaled.length ? scaled.slice(0, 3).join('; ') : [...socketBones].join(', '));
+  }
+  check('...and so were the haloes', haloes.every((h) => h.parent?.isBone === true));
+  // A Sprite, not a quad: its parent turns with the head and flips 180 with
+  // the side-view mirror, and a plane hung off that would foreshorten to a
+  // line. The renderer billboards a Sprite regardless of its parent.
+  check('the halo billboards itself', haloes.every((h) => h.isSprite === true));
+
+  // The radii are authored in WORLD units, so the inherited fit scale (2.36 on
+  // this seal) has to be divided back out or the eyes come out that much too
+  // big — a failure that looks like a tuning mistake rather than a bug.
+  const c = CONFIG.eyes;
+  const worldRadius = bead.scale.x * bead.parent.matrixWorld.getMaxScaleOnAxis();
+  check('the bead is its tuned size in WORLD units, not the bone\'s',
+    Math.abs(worldRadius - c.radius) < 1e-3,
+    `${worldRadius.toFixed(4)} against ${c.radius}`);
+
+  /** One frame in main.js's order, with `after` moving the seal post-solve. */
+  function frame(dt, after = 0, turn = 0) {
+    holder.rotation.z += turn * dt;
+    scene.updateMatrixWorld(true);
+    rig.update(dt, AIM, { engaged: true });
+    updateEyeLights(dt, rig, { lit: 1 });
+    holder.rotation.z += after * dt; // ...anything that runs later in the frame
+  }
+
+  for (const [label, dt, after, turn] of [
+    ['a still seal', 1 / 60, 0, 0],
+    ['turning hard', 1 / 60, 0, 4],
+    ['moved AFTER the rig solved, 60fps', 1 / 60, 3, 0],
+    ['moved AFTER the rig solved, 30fps', 1 / 30, 3, 0],
+    ['moved AFTER the rig solved, 10fps', 1 / 10, 6, 4],
+    ['a frame where the rig never solves', 0, 4, 0],
+  ]) {
+    let worst = 0;
+    for (let i = 0; i < 60; i++) {
+      frame(dt, after, turn);
+      worst = Math.max(worst, worldOf(bead).distanceTo(truth()));
+    }
+    check(`locked to the eyeball — ${label}`, worst < 1e-6,
+      `worst ${worst.toFixed(6)} world units`);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -60,7 +60,7 @@ import { CONFIG } from '../path/src/config.js';
 import { player, initPlayer, resetPlayer, updatePlayer } from '../path/src/entities/player.js';
 import {
   strikeState, resetStrike, updateCharge, tryStrike, updateStrike, strikeLoaded,
-  feedChum, consumeStrikeLink, linkPips, pipCount, liveChain,
+  feedChum, consumeStrikeLink, consumeChainLink, linkPips, pipCount, liveChain,
 } from '../path/src/systems/strike.js';
 import {
   updatePickups, resetPickups, spawnXpOrb, pickups, gulpPickups,
@@ -107,13 +107,27 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
   const stats = player.stats;
   const input = { move: new THREE.Vector2(0, 0), aim: new THREE.Vector2(1, 0) };
   const stat = {
-    strikes: 0, links: 0, maxChain: 0,
+    strikes: 0, armed: 0, links: 0, maxChain: 0,
     missOffBeat: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0,
     eaten: 0, spawned: 0, holdFrames: 0, frames: 0,
     // Windows that ran out, split by what the player was doing when they did.
     // `lapsedHeld` is a chain lost while the mouth was shut by a wind-up — the
     // player was mid-rhythm and could not have eaten to save it.
     lapsedHeld: 0, lapsedFree: 0, windowFrames: 0,
+  };
+
+  // ONE MOUTHFUL, BOOKED THE WAY main.js BOOKS IT: into the meter, then the
+  // FOOD CHAIN link it may have scored. Both call sites route through here so a
+  // gulped orb and a swum-over one cannot be worth different amounts — exactly
+  // the drift a simulation is supposed to be immune to.
+  const eat = () => {
+    feedChum(stats);
+    stat.eaten++;
+    const chain = consumeChainLink();
+    if (chain) {
+      stat.links++;
+      if (chain > stat.maxChain) stat.maxChain = chain;
+    }
   };
 
   let spawnAcc = 0;
@@ -163,8 +177,13 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
     // Gated behind the rhythm the scenario is testing: a brain that strikes the
     // instant it can is measuring the ceiling, not a player.
     sinceStrike += DT;
-    const armed = strikeState.pipsSinceStrike >= linkPips(stats) && sinceStrike >= cadence;
-    if (!holding && armed && strikeState.charge > CONFIG.strike.charge.minFire) holding = true;
+    // WHEN THIS BRAIN DECIDES TO WIND UP. It used to also wait for
+    // `linkPips` mouthfuls, from a model where that was the price of a link;
+    // the price is one chum now, so that clause was trivially true and the
+    // brain struck on every cooldown. What is left is the real constraint —
+    // enough fuel to fire, and whatever rhythm the scenario is testing.
+    if (!holding && sinceStrike >= cadence
+      && strikeState.charge > CONFIG.strike.charge.minFire) holding = true;
     if (holding) stat.holdFrames++;
 
     player.chumSealed = holding && CONFIG.strike.charge.gulp?.blockEating !== false;
@@ -193,19 +212,15 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
         const rel = consumeStrikeLink();
         stat.strikes++;
         sinceStrike = 0;
-        if (rel.chain > 0) {
-          stat.links++;
-          if (rel.chain > stat.maxChain) stat.maxChain = rel.chain;
+        if (false) {
         } else if (!rel.sweet) stat.missOffBeat++;
-        else if (!rel.hadFood && !rel.hadWindow) stat.missBoth++;
-        else if (!rel.hadFood) stat.missNoFood++;
-        else stat.missNoWindow++;
+        else stat.armed++;
 
         player.velocity.set(strikeState.dashDir.x * stats.strikeDashSpeed,
           strikeState.dashDir.y * stats.strikeDashSpeed);
         player.dashTimer = strikeState.dashDuration;
         // The release gulp, exactly as main.js fires it.
-        gulpPickups(scene, player, (v, x, y) => { if (feedChum(stats)) {} stat.eaten++; });
+        gulpPickups(scene, player, () => eat());
       }
       holding = false;
       player.chumSealed = false;
@@ -224,7 +239,7 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
     }
     stat.frames++;
     updatePlayer(DT, input);
-    updatePickups(DT, scene, player, () => { feedChum(stats); stat.eaten++; },
+    updatePickups(DT, scene, player, () => eat(),
       () => {}, () => {}, () => {});
   }
   return stat;
@@ -255,26 +270,26 @@ export const HOLDS = ['min', 'full'];
  * effect, which made "try it at a different chainWindow" a copy of the file.
  */
 export function measure(rate, hold, seconds = 60, cadence = 0) {
-  const agg = { strikes: 0, links: 0, maxChain: 0,
+  const agg = { strikes: 0, armed: 0, links: 0, maxChain: 0,
     missOffBeat: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0,
     eaten: 0, lapsedHeld: 0, lapsedFree: 0 };
   for (const seed of SEEDS) {
     const r = simulate(rate, seed, seconds, hold, cadence);
-    agg.strikes += r.strikes; agg.links += r.links;
+    agg.strikes += r.strikes; agg.armed += r.armed; agg.links += r.links;
     agg.missOffBeat += r.missOffBeat;
     agg.missNoFood += r.missNoFood; agg.missNoWindow += r.missNoWindow; agg.missBoth += r.missBoth;
     agg.eaten += r.eaten; agg.lapsedHeld += r.lapsedHeld; agg.lapsedFree += r.lapsedFree;
     if (r.maxChain > agg.maxChain) agg.maxChain = r.maxChain;
   }
   agg.minutes = SEEDS.length * (seconds / 60);
-  agg.hit = agg.strikes ? agg.links / agg.strikes : 0;
+  agg.hit = agg.strikes ? agg.armed / agg.strikes : 0;
   return agg;
 }
 
 export function report() {
 console.log('\nFOOD CHAIN — simulated against the chum the seal actually SWALLOWS in real runs');
 console.log(`(real player, real strike, real magnet, real pickups; ${SEEDS.length} seeds x 60s each)\n`);
-console.log(`  linkBarFraction ${CONFIG.strike.linkBarFraction}  ->  a link costs ${linkPips(null)} of ${pipCount(null)} pips`);
+console.log(`  a sweet release ARMS a chain; every pip eaten inside it is a link (first at ${linkPips(null)} of ${pipCount(null)} pips)`);
 console.log(`  chainWindow ${CONFIG.strike.chainWindow}s, windowFromDashEnd ${CONFIG.strike.windowFromDashEnd}`);
 console.log(`  magnet reach: idle ${(CONFIG.player.pickupRadius).toFixed(1)}  striking ${(CONFIG.player.pickupRadius * CONFIG.pickups.magnet.striking.radiusMul).toFixed(1)}\n`);
 
@@ -282,7 +297,7 @@ for (const hold of HOLDS) {
   console.log(hold === 'min'
     ? '  RELEASING THE INSTANT IT FIRES — the cheapest link, the kindest case for the window'
     : '\n  CHARGING FULLY — what the reach and damage multipliers are selling, mouth shut for up to a second');
-  console.log('  water                     strikes/min  links/min   hit%   deepest   miss: beat  food  window   lapsed in hand');
+  console.log('  water                     strikes/min  links/min  on beat%  deepest   off beat   lapsed in hand');
   for (const [label, rate] of SCENARIOS) {
     const agg = measure(rate, hold);
     const lapses = agg.lapsedHeld + agg.lapsedFree;
@@ -290,11 +305,9 @@ for (const hold of HOLDS) {
       `  ${label.padEnd(25)}`,
       (agg.strikes / agg.minutes).toFixed(1).padStart(10),
       (agg.links / agg.minutes).toFixed(1).padStart(11),
-      `${Math.round(agg.hit * 100)}%`.padStart(7),
+      `${agg.strikes ? Math.round(100 * agg.armed / agg.strikes) : 0}%`.padStart(9),
       `x${agg.maxChain}`.padStart(10),
-      String(agg.missOffBeat).padStart(13),
-      String(agg.missNoFood + agg.missBoth).padStart(6),
-      String(agg.missNoWindow).padStart(8),
+      String(agg.missOffBeat).padStart(11),
       `${agg.lapsedHeld}/${lapses}`.padStart(17),
     ].join(''));
   }

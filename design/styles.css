@@ -18,21 +18,70 @@
     letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;
     color: rgba(232,236,243,0.5); text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
 
-  /* Health and oxygen ride just above the seal, so the two things you have
-     to react to fastest are where your eyes already are. Positioned in
-     screen space each frame from the player's projected world position. */
-  /* translateY(-100%) puts the whole stack ABOVE its anchor point — without
-     it the bars hang down from the anchor and swallow the gap the world
-     offset is there to create. */
-  .sv-playerbars { position: absolute; width: 64px; margin-left: -32px;
-    display: flex; flex-direction: column; gap: 3px; pointer-events: none;
-    transform: translateY(-100%); transition: opacity 0.2s ease; }
-  .sv-pbar-wrap { height: 4px; background: rgba(4,6,12,0.55); border-radius: 3px;
-    overflow: hidden; box-shadow: 0 0 0 1px rgba(0,0,0,0.35); }
-  .sv-pbar { height: 100%; width: 100%; border-radius: 3px; transition: width 0.12s linear; }
-  .sv-pbar-hp { background: #4dd0a8; }
-  .sv-pbar-o2 { background: #6fd3ff; }
-  .sv-pbar-o2.sv-o2-low { background: #ff5566; }
+  /* Health and oxygen ride BESIDE the seal, so the two things you have to
+     react to fastest are where your eyes already are. Positioned in screen
+     space each frame from the player's projected world position.
+     VERTICAL, and to the LEFT. Two tall columns draining downwards read as
+     gauges emptying — a thing running out — where the old pair of 4px
+     horizontal slivers above the head read as decoration and were routinely
+     missed. Left rather than right because the seal faces right for most of a
+     run and the water it is swimming INTO is the half of the screen that has
+     to stay clear.
+     translate(-100%, -50%) hangs the stack off the LEFT of its anchor and
+     centres it on the seal's own height: the anchor is already pushed
+     CONFIG.hud.playerBarOffset world units to the left, and without the
+     -100% the bars would start there and grow back over the animal. */
+  .sv-playerbars { position: absolute; display: flex; flex-direction: row-reverse;
+    gap: 5px; pointer-events: none;
+    transform: translate(-100%, -50%); transition: opacity 0.2s ease; }
+  /* row-reverse, so health — the one you die from — is the column nearest the
+     seal and oxygen sits outboard of it. DOM order stays health-then-oxygen
+     because that is the order they matter in. */
+  /* THE PULSE lives on the track rather than on the fill: low on health or
+     air, the whole column brightens and dims so the bar keeps MOVING after
+     the value has stopped, which is what pulls an eye that is busy elsewhere.
+     --sv-alarm is written per frame already oscillating (updateHUD owns the
+     wave), so there is no CSS animation to keep in step with anything and the
+     alarm can fade in gradually instead of switching on at a threshold. */
+  .sv-pbar-wrap { position: relative; width: 9px; height: 58px;
+    background: rgba(4,6,12,0.66); border-radius: 5px;
+    overflow: hidden; box-shadow: 0 0 0 1px rgba(0,0,0,0.5), inset 0 0 6px rgba(0,0,0,0.55);
+    filter: brightness(calc(1 + 0.6 * var(--sv-alarm, 0))); }
+  /* SCALED, not sized, and for the same reason as the xp strip above: the fill
+     is always the full track, squashed along Y by --sv-fill (a 0..1 fraction
+     written every frame by updateHUD). transform-origin is the bottom, so the
+     column drains downwards.
+     NO TRANSITION HERE, deliberately. The smoothing is done in JS — see
+     PBAR_SMOOTH in updateHUD — and a CSS transition chasing a value that is
+     itself already moving never arrives: it would lag a fixed interval behind
+     for the whole run and then snap, which is the exact fault this change was
+     asked to fix. One curve, in one place. */
+  .sv-pbar, .sv-pbar-ghost { position: absolute; inset: 0; border-radius: 5px;
+    transform: scaleY(var(--sv-fill, 1)); transform-origin: 50% 100%; }
+  /* THE TRAIL. A second fill behind the real one that snaps up on a gain and
+     falls slowly on a loss, so the pale band left standing above the fill IS
+     the damage you just took, held on screen long enough to read. Without it a
+     smoothed bar is honest but quiet — you see the new level, never the size
+     of the bite. */
+  .sv-pbar-ghost { background: rgba(255,240,245,0.55); }
+  /* RED, not green. Health is the bar you are being asked to panic about, and
+     a green one sat in the same read as the ocean's own biolum greens — the
+     one colour in this HUD that must never be mistaken for scenery.
+     The gradient is SQUASHED with the fill rather than clipped by it — the
+     column is scaled, not cropped — so the bright end stays at the top of
+     whatever is left and even a sliver of health still reads as a lit cap
+     instead of a dark smear at the bottom of the track. */
+  .sv-pbar-hp { background: linear-gradient(180deg, #ff6a5a, #e01023);
+    box-shadow: 0 0 10px rgba(255,45,60,0.75); }
+  .sv-pbar-o2 { background: linear-gradient(180deg, #9fe4ff, #2f9fdd);
+    box-shadow: 0 0 10px rgba(110,210,255,0.6); }
+  /* AMBER, not red — and this is the reason the two gauges can sit side by
+     side at all. Health is red now, so an air bar that also went red left the
+     player with two identical red columns and no way to tell, at a glance in a
+     fight, which of the two things about to kill them was which. Amber is the
+     one warning colour this HUD was not already using. */
+  .sv-pbar-o2.sv-o2-low { background: linear-gradient(180deg, #ffd166, #ff8a00);
+    box-shadow: 0 0 12px rgba(255,160,40,0.9); }
 
   /* Score toasts: one per kill, floating up from where the fish died. */
   .sv-toast { position: absolute; font-size: 13px; font-weight: 700;

@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
+import { wornEdgeMask } from './wornEdge.js';
+import { mountCardFlip, releaseCardFlip, cardFlipMoving } from './cardFlip.js';
 import { drawUpgrades } from '../upgradeTable.js';
 import { expandDesc, measure, phraseAll, sentenceCase } from '../upgradeText.js';
 import { rollElementFor, elementCardName, elementCardDesc } from '../systems/elements.js';
@@ -10,8 +12,13 @@ import quipsCsv from '../quips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { feedMouse, menuInput, resetMenuInput } from '../input.js';
-import { touchPrimary } from '../devices.js';
+// The splash and the score card's turn are pure motion with no way to opt out
+// mid-play, so both honour the system setting by skipping entirely. The CSS
+// rule at the bottom of STYLES only disables transitions, which would not touch
+// a canvas animation or a rAF loop.
+import { touchPrimary, prefersReducedMotion } from '../devices.js';
 import { mountRiveSplash } from './riveSplash.js';
+import { tipJarLink } from './tipJar.js';
 import { titlePreviewRequested } from '../systems/titleSeal.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
@@ -20,6 +27,7 @@ import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import { chainCss } from '../systems/chainColor.js';
 import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform } from './upgradeHive.js';
 import {
+  BOARD_SIZE,
   fetchGlobalBoard,
   highScore,
   isGlobal,
@@ -31,6 +39,18 @@ import {
 // callouts.csv, quips.csv and upgrades.csv is the rest.
 import { MAX_NAME_LEN, loadPlayerName, sanitizeName, savePlayerName, expandPlayer } from '../systems/playerName.js';
 import { feedback } from '../systems/feedback.js';
+// THE RECAP'S NUMBERS. The recorder runs on every run, not only on a dev
+// build, so the Weapons and Threats tabs are reading the same ledger the
+// balance report does rather than a second set of counters kept for the
+// score screen — the two cannot disagree about what a run was.
+import { lastFinishedRun } from '../systems/playtest.js';
+import { analyzeRun, sourceLabel } from '../systems/playtestAnalysis.js';
+// Creatures have no names anywhere in the data — enemies.csv is balance
+// columns keyed by id. The cause table is where a player-facing word for a
+// creature exists, and grouping the incoming damage the way the quips group it
+// is also the reading that makes sense: four species of shark are one thing
+// that killed you. See `threat` in deathCauses.js.
+import { primaryCause, threatLabel } from '../deathCauses.js';
 import { playSfx, unlockAudio } from '../systems/audio.js';
 // The popups' arrival and departure curves, by name — the same shared table the
 // boss bar's fill and the camera moves read from (path/src/ease.js).
@@ -204,6 +224,72 @@ const STYLES = `
   .sv-hive-pip { position: absolute; right: 26%; bottom: 14%;
     font: 700 11px/1 ui-monospace, monospace; color: #fff;
     text-shadow: 0 1px 2px rgba(0,0,0,0.95), 0 0 4px rgba(0,0,0,0.8); }
+
+  /* --- THE PILE UNDER A STACKED TILE --------------------------------------
+     Extra picks of the same upgrade are drawn as layers BEHIND the tile, offset
+     down, so the hexagon appears to grow in height out of its cell. See
+     buildShims in upgradeHive.js for why they are siblings and not children:
+     the tile is clipped to its own hexagon, so anything drawn below its flat
+     bottom edge from inside it is not dimmed, it is not painted at all.
+     Z-INDEX, NOT DOM ORDER. Piles overlap their NEIGHBOURS as well as their own
+     tile, and a layer belonging to a tile late in the tree would otherwise
+     paint over the face of a tile early in it. Every layer is under every tile;
+     which tile wins against which is then the paint order rebuild() sets. */
+  /* NO z-index ON ANY OF THESE. A tile, its pile and the shade it casts are one
+     object standing in one place, and rebuild() appends the whole hive in
+     painter's order — furthest cell first, nearest last. Layering them by
+     z-index instead lifts every pile in the hive above every shade in it, which
+     is how a tower ends up casting its own shadow onto its own pile. */
+  .sv-hive-shim { position: absolute; pointer-events: none;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    /* THE STROKE STACKS TOO. A layer is built exactly like the tile above it —
+       the tier colour IS the element's background and the dark fill is a
+       smaller hexagon inset on top, so the rim follows all six edges. Drawn as
+       flat silhouettes instead, a deep pile is one dark wedge: you can see that
+       the tile got taller and not how many picks made it so. Only a few px of
+       each layer ever show, and this is what makes those px an EDGE. */
+    background: color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) var(--sv-shim-mix, 40%), #05121a); }
+  .sv-hive-shim-face { position: absolute; inset: 2px;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    /* Darker than the tile's own face, and by more the deeper it sits: the pile
+       is in the tile's shadow, and a layer painted at the face's brightness
+       reads as a second tile slipping out from under the first. */
+    background: linear-gradient(160deg, rgba(16,46,63,0.92), rgba(6,18,26,0.96)); }
+  /* 'riser' is ONE body with an inline px polygon — the hexagon's own vertices
+     with the bottom half dropped by the depth. It carries no clip of its own
+     here: a percentage clip on a box that is taller than it is wide would
+     squash the top face out of register with the tile sitting on it. Its face
+     is a second prism, one rim narrower, so the tower has an outline down its
+     whole height rather than only around the hexagon on top. */
+  /* THE STROKE IS SOLID DOWN THE WHOLE BODY, and the shading lives on the fill
+     inside it. It was the other way round — the tier colour ramping off toward
+     the base — and on a prism that is the same mistake as a pile whose deepest
+     plate has no outline: the tower's silhouette dissolves into the water at
+     exactly the end that is standing on it, so a tall riser reads as a short
+     one that has been smudged. Rim first, light second. */
+  .sv-hive-shim[data-mode="riser"] {
+    background: color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) var(--sv-shim-mix, 100%), #05121a); }
+  .sv-hive-shim[data-mode="riser"] .sv-hive-shim-face {
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) var(--sv-shim-top, 58%), #071a26),
+      color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) var(--sv-shim-base, 20%), #04101a)); }
+
+  /* THE CONTACT SHADOW UNDER A TOWER — see buildShade.
+     A RADIAL GRADIENT, NOT A BLURRED BOX. 'filter' is applied before
+     'clip-path', so a blurred element that is also clipped comes back with a
+     hard hexagonal edge: a soft shadow cut into a sharp shape. This needs
+     neither, composites for free, and cannot be clipped by anything.
+     IT FALLS ON WHAT IS BEHIND IT AND ON NOTHING OF ITS OWN. Appended first of
+     the three, so the pile and the tile it belongs to are painted over the top
+     of it — a tower that shades its own stack looks like the pile is made of
+     something dirtier than the tile, which is the exact opposite of the read. */
+  .sv-hive-shade { position: absolute; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 52%,
+      rgba(2,8,13,var(--sv-shade-alpha, 0.4)) 0 38%,
+      rgba(2,8,13,calc(var(--sv-shade-alpha, 0.4) * 0.55)) 62%,
+      rgba(2,8,13,0) 78%); }
 
   /* ink — a dark face with the rarity as a rim. The default: it is the only one
      of the three that leaves the icon as the brightest thing on the tile. */
@@ -381,21 +467,70 @@ const STYLES = `
      only what the label looks like in the frames before that sheet exists. */
   .sv-xptop-level { font-size: 8px; color: rgba(232,236,243,0.5); }
 
-  /* Health and oxygen ride just above the seal, so the two things you have
-     to react to fastest are where your eyes already are. Positioned in
-     screen space each frame from the player's projected world position. */
-  /* translateY(-100%) puts the whole stack ABOVE its anchor point — without
-     it the bars hang down from the anchor and swallow the gap the world
-     offset is there to create. */
-  .sv-playerbars { position: absolute; width: 64px; margin-left: -32px;
-    display: flex; flex-direction: column; gap: 3px; pointer-events: none;
-    transform: translateY(-100%); transition: opacity 0.2s ease; }
-  .sv-pbar-wrap { height: 4px; background: rgba(4,6,12,0.55); border-radius: 3px;
-    overflow: hidden; box-shadow: 0 0 0 1px rgba(0,0,0,0.35); }
-  .sv-pbar { height: 100%; width: 100%; border-radius: 3px; transition: width 0.12s linear; }
-  .sv-pbar-hp { background: #4dd0a8; }
-  .sv-pbar-o2 { background: #6fd3ff; }
-  .sv-pbar-o2.sv-o2-low { background: #ff5566; }
+  /* Health and oxygen ride BESIDE the seal, so the two things you have to
+     react to fastest are where your eyes already are. Positioned in screen
+     space each frame from the player's projected world position.
+     VERTICAL, and to the LEFT. Two tall columns draining downwards read as
+     gauges emptying — a thing running out — where the old pair of 4px
+     horizontal slivers above the head read as decoration and were routinely
+     missed. Left rather than right because the seal faces right for most of a
+     run and the water it is swimming INTO is the half of the screen that has
+     to stay clear.
+     translate(-100%, -50%) hangs the stack off the LEFT of its anchor and
+     centres it on the seal's own height: the anchor is already pushed
+     CONFIG.hud.playerBarOffset world units to the left, and without the
+     -100% the bars would start there and grow back over the animal. */
+  .sv-playerbars { position: absolute; display: flex; flex-direction: row-reverse;
+    gap: 5px; pointer-events: none;
+    transform: translate(-100%, -50%); transition: opacity 0.2s ease; }
+  /* row-reverse, so health — the one you die from — is the column nearest the
+     seal and oxygen sits outboard of it. DOM order stays health-then-oxygen
+     because that is the order they matter in. */
+  /* THE PULSE lives on the track rather than on the fill: low on health or
+     air, the whole column brightens and dims so the bar keeps MOVING after
+     the value has stopped, which is what pulls an eye that is busy elsewhere.
+     --sv-alarm is written per frame already oscillating (updateHUD owns the
+     wave), so there is no CSS animation to keep in step with anything and the
+     alarm can fade in gradually instead of switching on at a threshold. */
+  .sv-pbar-wrap { position: relative; width: 9px; height: 58px;
+    background: rgba(4,6,12,0.66); border-radius: 5px;
+    overflow: hidden; box-shadow: 0 0 0 1px rgba(0,0,0,0.5), inset 0 0 6px rgba(0,0,0,0.55);
+    filter: brightness(calc(1 + 0.6 * var(--sv-alarm, 0))); }
+  /* SCALED, not sized, and for the same reason as the xp strip above: the fill
+     is always the full track, squashed along Y by --sv-fill (a 0..1 fraction
+     written every frame by updateHUD). transform-origin is the bottom, so the
+     column drains downwards.
+     NO TRANSITION HERE, deliberately. The smoothing is done in JS — see
+     PBAR_SMOOTH in updateHUD — and a CSS transition chasing a value that is
+     itself already moving never arrives: it would lag a fixed interval behind
+     for the whole run and then snap, which is the exact fault this change was
+     asked to fix. One curve, in one place. */
+  .sv-pbar, .sv-pbar-ghost { position: absolute; inset: 0; border-radius: 5px;
+    transform: scaleY(var(--sv-fill, 1)); transform-origin: 50% 100%; }
+  /* THE TRAIL. A second fill behind the real one that snaps up on a gain and
+     falls slowly on a loss, so the pale band left standing above the fill IS
+     the damage you just took, held on screen long enough to read. Without it a
+     smoothed bar is honest but quiet — you see the new level, never the size
+     of the bite. */
+  .sv-pbar-ghost { background: rgba(255,240,245,0.55); }
+  /* RED, not green. Health is the bar you are being asked to panic about, and
+     a green one sat in the same read as the ocean's own biolum greens — the
+     one colour in this HUD that must never be mistaken for scenery.
+     The gradient is SQUASHED with the fill rather than clipped by it — the
+     column is scaled, not cropped — so the bright end stays at the top of
+     whatever is left and even a sliver of health still reads as a lit cap
+     instead of a dark smear at the bottom of the track. */
+  .sv-pbar-hp { background: linear-gradient(180deg, #ff6a5a, #e01023);
+    box-shadow: 0 0 10px rgba(255,45,60,0.75); }
+  .sv-pbar-o2 { background: linear-gradient(180deg, #9fe4ff, #2f9fdd);
+    box-shadow: 0 0 10px rgba(110,210,255,0.6); }
+  /* AMBER, not red — and this is the reason the two gauges can sit side by
+     side at all. Health is red now, so an air bar that also went red left the
+     player with two identical red columns and no way to tell, at a glance in a
+     fight, which of the two things about to kill them was which. Amber is the
+     one warning colour this HUD was not already using. */
+  .sv-pbar-o2.sv-o2-low { background: linear-gradient(180deg, #ffd166, #ff8a00);
+    box-shadow: 0 0 12px rgba(255,160,40,0.9); }
 
   /* THE BOSS BAR (systems/boss.js). Top centre, clear of the xp strip and of
      both HUD corners. It is deliberately NOT a bar over the creature's head:
@@ -669,11 +804,151 @@ const STYLES = `
     opacity: 0; transition: opacity 0.12s ease-out; }
   .sv-card-fx.sv-fx-on { opacity: 1; }
   .sv-hint { font-size: 11px; color: rgba(232,236,243,0.35); margin-top: 14px; letter-spacing: 0.04em; }
+
+  /* --- THE TURN ------------------------------------------------------------
+     The card is a slab of glossy black emulsion with a face on each side: the
+     run in front, what the recorder saw behind. See ui/cardFlip.js, which owns
+     the angle and writes --sv-flip, --sv-grazing and --sv-sheen while it moves.
+
+     A TAB WOULD HAVE BEEN CHEAPER and this is not that. The score screen is
+     already a set of photographs dropped on a table; turning one over to read
+     the numbers on the back is the same object rather than a second interface
+     bolted to it.
+
+     BOTH FACES ARE ABSOLUTE, so the card has no height of its own — showGameOver
+     measures the taller of the two and writes it inline. Without that the card
+     takes the front's height and overflow:hidden silently clips the last
+     control off the bottom of the back, with no other symptom.
+
+     No backticks anywhere in this stylesheet: it is a template literal, and one
+     in a comment ends the string a hundred lines early. */
+  .sv-flip-stage { perspective: 1500px; position: relative; }
+  /* NOT .sv-card — that is the upgrade menu's hexagon, three hundred lines up,
+     and a second rule under the same name set every one of them 460px wide and
+     handed them a rotateY that beat their own hover scale. npm run layout found
+     it as three pixels of overflow on one viewport, which is the whole argument
+     for running it: a cascade collision does not announce itself, it just makes
+     an unrelated screen slightly wrong. */
+  .sv-flip-card {
+    position: relative; transform-style: preserve-3d; will-change: transform;
+    transform: rotateY(var(--sv-flip, 0deg));
+    max-height: 92vh; max-width: 90vw; width: 460px;
+  }
+  /* The container box. .sv-menu's own look moved out here, because the thing
+     that is a panel now is the FACE and not the card. */
+  .sv-face {
+    position: absolute; inset: 0; overflow: hidden;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    background: var(--sv-emulsion, #07090d);
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 14px;
+    color: #e8ecf3; text-align: center;
+    box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset;
+  }
+  .sv-face-back { transform: rotateY(180deg); }
+  /* The scroll lives INSIDE the face, not on the card: a phone on its side
+     cannot show either face whole, and a scroll on the card would move the
+     rotation's own transform origin. */
+  .sv-face-inner { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 28px 32px; }
+  /* THE EMULSION. One broad specular sweep, positioned from the flip angle and
+     strongest when the card is tipped — a slab of gloss catches the light when
+     it is edge-on and goes flat when it is square to you. Both custom
+     properties come from ui/cardFlip.js; the fallbacks are the resting pose, so
+     a card that never flips is still lit. */
+  .sv-face::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 3;
+    background: linear-gradient(105deg,
+      transparent calc(var(--sv-sheen, 94%) - 34%),
+      rgba(255,255,255,0.015) calc(var(--sv-sheen, 94%) - 16%),
+      rgba(190,230,255,0.16) var(--sv-sheen, 94%),
+      rgba(255,255,255,0.02) calc(var(--sv-sheen, 94%) + 16%),
+      transparent calc(var(--sv-sheen, 94%) + 34%));
+    opacity: calc(0.45 + 0.55 * var(--sv-grazing, 0));
+  }
+  /* The bubbles off the leading edge, on ui/cardFlip.js's own canvas. Above the
+     card rather than behind it: they are coming off the edge nearest the
+     viewer. Alive only during a turn — the element is removed after it lands. */
+  .sv-flip-bubbles { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+
+  /* The control that turns it. Deliberately not a .sv-btn: it is a label on the
+     card, in the way a caption is, rather than a fifth button competing with
+     Try again. */
+  .sv-turn {
+    pointer-events: all; background: none; border: 0; cursor: pointer; font: inherit;
+    color: #7ad7ff; font-size: 11px; font-weight: 600; letter-spacing: 0.13em;
+    text-transform: uppercase; padding: 10px 6px;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .sv-turn:hover { color: #cfeeff; }
+  .sv-turn:focus-visible, .sv-turn.sv-nav-sel { outline: 2px solid #fff; outline-offset: 1px; border-radius: 4px; }
+  .sv-turn svg { flex: none; }
+
+  .sv-back-title {
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: rgba(232,236,243,0.45); margin-bottom: 12px;
+  }
+
+  /* --- THE BREAKDOWN ROWS ---------------------------------------------------
+     Weapons and threats are the same grid deliberately: they are the same
+     question asked in both directions, and two layouts would read as two
+     unrelated tables rather than as a ledger with two sides.
+
+     THE SHARE IS THE ROW'S OWN BACKGROUND rather than a column of its own. The
+     card is 460px at most and every column added to this grid comes out of the
+     name, which is the part a player is actually reading — so the bar is drawn
+     behind the row, width set inline from the share, and it costs nothing.
+     The children need position: relative or the bar paints over them. */
+  .sv-brk { display: flex; flex-direction: column; gap: 1px; }
+  .sv-brk-head { display: grid; grid-template-columns: 1fr 58px 34px; gap: 8px;
+    padding: 0 8px 6px; font-size: 9.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: rgba(232,236,243,0.35); }
+  .sv-brk-head span + span { text-align: right; }
+  .sv-brk-row { position: relative; display: grid; grid-template-columns: 1fr 58px 34px;
+    gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+  .sv-brk-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+  .sv-brk-row::before { content: ""; position: absolute; inset: 0; border-radius: 6px;
+    width: var(--sv-share, 0%);
+    background: linear-gradient(90deg, rgba(122,215,255,0.30), rgba(122,215,255,0.06)); }
+  /* The incoming side runs in the kicker's red — the same red the polaroid
+     says "defeated" in, which is the colour this game uses for damage that
+     was done TO something. */
+  .sv-brk-row.sv-brk-in::before {
+    background: linear-gradient(90deg, rgba(255,120,120,0.28), rgba(255,120,120,0.05)); }
+  .sv-brk-row > * { position: relative; }
+  /* min-width:0 is load-bearing here for the same reason it is on a
+     leaderboard row: without it a long name refuses to shrink and pushes the
+     two number columns off the end instead of ellipsing. */
+  .sv-brk-name { min-width: 0; font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .sv-brk-picks { font-size: 10px; font-weight: 500; margin-left: 6px;
+    color: rgba(232,236,243,0.40); }
+  .sv-brk-a { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sv-brk-b { text-align: right; font-size: 11px; font-variant-numeric: tabular-nums;
+    color: rgba(232,236,243,0.45); }
+  .sv-brk-tag { display: inline-block; margin-left: 6px; padding: 0 4px;
+    border: 1px solid rgba(255,120,120,0.4); border-radius: 3px;
+    color: #ff7878; font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; vertical-align: 1px; }
+  .sv-brk-foot { margin-top: 10px; padding-top: 9px; display: flex; gap: 12px;
+    justify-content: space-between; font-size: 11px;
+    border-top: 1px solid rgba(255,255,255,0.08); color: rgba(232,236,243,0.45); }
+  .sv-brk-foot b { color: #e8ecf3; font-variant-numeric: tabular-nums; }
+  .sv-brk-empty { font-size: 12px; color: rgba(232,236,243,0.4); padding: 10px 8px; }
+
   .sv-leaderboard { margin: 14px 0; max-height: 220px; overflow-y: auto; text-align: left; }
   .sv-lb-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
   .sv-lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
   .sv-lb-row.sv-lb-mine { background: rgba(122,215,255,0.14); border: 1px solid rgba(122,215,255,0.4); }
-  .sv-lb-rank { width: 18px; color: rgba(232,236,243,0.5); font-weight: 600; }
+  /* THREE DIGITS, IN CH AND NOT PIXELS. The board goes to 100 now, and 18px
+     held "100" in Inter and in nothing else — the font picker can put 'Press
+     Start 2P' in this column, a full em per glyph, where three digits want
+     36px and the rank would have been clipped into a two-digit one. The ch
+     unit is the width of a zero in whatever family is live, and it is the only
+     one that means "three digits" rather than "however wide three digits
+     happen to be in the font I had open". tabular-nums so 100 and 111 measure
+     the same. (No backtick around the unit: this block is a template literal,
+     and one would end the stylesheet mid-sentence.) */
+  .sv-lb-rank { width: 3ch; color: rgba(232,236,243,0.5); font-weight: 600;
+    font-variant-numeric: tabular-nums; }
   /* min-width:0 is load-bearing: a flex item defaults to min-width:auto, which
      refuses to shrink below its content — so without it a long name pushes the
      score and time out of the row instead of ellipsing, which is exactly what
@@ -686,12 +961,27 @@ const STYLES = `
   /* Name entry. The row is a single control: text field plus its submit
      button, sized so the two read as one unit rather than a form. */
   .sv-name-row { display: flex; gap: 8px; justify-content: center; margin: 14px 0 4px; }
-  /* Sized to hold a full-length name without the text scrolling inside the
-     field — at 24 characters the old 200px/0.08em pairing ran out around
-     character 15, so the tail of your own name was hidden while you typed it.
-     The tracking comes down as the field gets longer: letter-spacing is there
-     to make a SHORT arcade-style name look deliberate, and at this width it
-     was only costing room. */
+  /* THE FIELD TAKES THE WHOLE LINE when what is in it cannot be shown beside
+     the button at a size worth reading — fitNameField puts this class on, and
+     only then. The row is a field plus its Submit, and they read as one
+     control while they fit on one line; a full-length name in a pixel font
+     does not, and the choice at that point is between a name in 7px type and
+     a button on its own line. The button is fine on its own line.
+     Not a media query: this is a question about the LENGTH of what has been
+     typed in whatever family is live, which no viewport knows the answer to. */
+  .sv-name-row.sv-name-stacked { flex-direction: column; align-items: stretch; }
+  .sv-name-row.sv-name-stacked .sv-name-input { max-width: none; }
+  /* THE WIDTH IS NOT WHAT MAKES A FULL NAME VISIBLE — fitNameField is. This
+     was sized in pixels against 24 characters of Inter, which held right up
+     until the font picker existed: 'Press Start 2P' is a full em per glyph and
+     ran out of room around character 20, with the tail of your own name
+     scrolled out of the box while you typed it. There is no px width that is
+     correct for every family the picker can land on, so the field measures
+     what is in it and steps its type size down until the whole name fits (see
+     fitNameField). This rule is the RESTING look: the size a short name is
+     shown at.
+     max-width caps it at the card's own content width — the row is the field
+     plus its Submit button, and past this the button is what gets pushed. */
   .sv-name-input { pointer-events: all; flex: 1; min-width: 0; max-width: 300px;
     background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.18);
     border-radius: 8px; padding: 9px 12px; color: #e8ecf3; font-size: 14px;
@@ -845,6 +1135,27 @@ const STYLES = `
     .sv-leaderboard { max-height: 120px; }
   }
 
+  /* THE SCORE CARD SCROLLS SOONER THAN THE REST, because it is taller than the
+     rest and it keeps growing. The block above is 560px — a phone held
+     sideways — and at 667px (an iPhone SE, upright) every other menu in the
+     game has room to spare while this one does not: title, three tabs, a
+     panel, a rack of prints with four buttons under it, a name row, a status
+     line, a leaderboard and "Try again". Adding the tip jar under that button
+     put it 9px past the bottom of that screen, measured by npm run layout.
+
+     Scoped to this surface and to overflow only — no padding change, so the
+     card looks the same as it always did on the screens where it already fit.
+     A scroll rather than a squeeze, for the reason the block above gives: the
+     alternative is deciding which part of their own run the player on the
+     smallest phone is not allowed to see. */
+  /* The scroll lives on .sv-face-inner at every size now, because the card is
+     two absolutely-positioned faces and the taller of them decides the height —
+     see the .sv-card block. What is left here is the CAP: below this the card
+     is allowed to be shorter than its content and let the face scroll. */
+  @media (max-height: 720px) {
+    #svGameOverMenu .sv-flip-card { max-height: 92vh; }
+  }
+
   /* --- TAP TARGETS -------------------------------------------------------
      Apple's own minimum is 44px and every button in this game was 34-36px
      tall: the four share buttons, the name submit, and "Try again". A thumb is
@@ -856,14 +1167,19 @@ const STYLES = `
   .sv-touch .sv-btn, .sv-touch .sv-name-input {
     min-height: 44px; padding-top: 11px; padding-bottom: 11px; }
   .sv-touch .sv-btn-sm { min-width: 44px; padding-left: 18px; padding-right: 18px; }
+  /* The turn control is not a .sv-btn — it is a label on the card rather than a
+     fifth button — so it inherits none of the rule above and came out under the
+     minimum, which npm run layout reports. Worth stating because it is the one
+     control on this card that a player has to find twice. */
+  .sv-touch .sv-turn { min-height: 44px; padding-top: 14px; padding-bottom: 14px; }
   /* A row of buttons that wraps needs the gap a thumb needs, not the gap an
      eye needs — two 44px targets 8px apart are one 96px target as far as a
      mis-tap is concerned. */
   .sv-touch .sv-trophy-row, .sv-touch .sv-name-row { gap: 12px; }
 `;
 
-export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart, onSplash }) {
-  callbacks = { onStart, onRestart, onLevelChoice, onSplash };
+export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart, onSplash, onMenu }) {
+  callbacks = { onStart, onRestart, onLevelChoice, onSplash, onMenu };
 
   const style = document.createElement('style');
   style.textContent = STYLES;
@@ -880,9 +1196,18 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
         <div class="sv-xptop-fill" id="svXpBar"></div>
         <div class="sv-xptop-level"><span class="sv-xptop-word">Level</span><span class="sv-xptop-abbr">Lv</span><span id="svLevel">1</span></div>
       </div>
+      <!-- The ghost comes FIRST in each track and the fill second: both are
+           inset:0 absolute, so paint order is DOM order and the trail has to
+           be behind the value it is trailing. -->
       <div class="sv-playerbars" id="svPlayerBars">
-        <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-hp" id="svHpBar"></div></div>
-        <div class="sv-pbar-wrap"><div class="sv-pbar sv-pbar-o2" id="svO2Bar"></div></div>
+        <div class="sv-pbar-wrap" id="svHpWrap">
+          <div class="sv-pbar-ghost" id="svHpGhost"></div>
+          <div class="sv-pbar sv-pbar-hp" id="svHpBar"></div>
+        </div>
+        <div class="sv-pbar-wrap" id="svO2Wrap">
+          <div class="sv-pbar-ghost" id="svO2Ghost"></div>
+          <div class="sv-pbar sv-pbar-o2" id="svO2Bar"></div>
+        </div>
       </div>
       <!-- THE CORNER. Score, time and whatever else is currently true about the
            run, as ONE block rather than as loose panels in the HUD's flex row —
@@ -948,34 +1273,65 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     </div>
 
     <div class="sv-center sv-hidden" id="svGameOverMenu">
-      <div class="sv-menu">
-        <div class="sv-title" id="svGameOverTitle">You Died!</div>
-        <div class="sv-sub" id="svGameOverStats"></div>
-        <!-- THE ROLL. Every kill shot from the run, fanned out like prints
-             dropped on a table — the same paper the player watched come out of
-             the camera during the fight (ui/snapshotPrint.js builds both).
-             Hidden unless a boss actually went down: an empty rack on the
-             score screen of a run that never met one reads as a broken image.
-             See systems/bossShot.js. -->
-        <div class="sv-trophy sv-hidden" id="svTrophy">
-          <div class="sv-fan" id="svFan"></div>
-          <div class="sv-trophy-row">
-            <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share this one</button>
-            <button class="sv-btn sv-btn-sm" id="svTrophySave">Save this one</button>
-            <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetShare">Share all</button>
-            <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetSave">Save all</button>
+      <div class="sv-flip-stage" id="svFlipStage">
+        <div class="sv-flip-card" id="svCard">
+
+          <!-- THE FRONT. The screen the game has always ended on. -->
+          <div class="sv-face sv-face-front" id="svFaceFront">
+            <div class="sv-face-inner">
+              <div class="sv-title" id="svGameOverTitle">You Died!</div>
+              <div class="sv-sub" id="svGameOverStats"></div>
+              <!-- THE ROLL. Every kill shot from the run, fanned out like prints
+                   dropped on a table — the same paper the player watched come out
+                   of the camera during the fight (ui/snapshotPrint.js builds
+                   both). Hidden unless a boss actually went down: an empty rack
+                   on the score screen of a run that never met one reads as a
+                   broken image. See systems/bossShot.js. -->
+              <div class="sv-trophy sv-hidden" id="svTrophy">
+                <div class="sv-fan" id="svFan"></div>
+                <div class="sv-trophy-row">
+                  <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share this one</button>
+                  <button class="sv-btn sv-btn-sm" id="svTrophySave">Save this one</button>
+                  <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetShare">Share all</button>
+                  <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetSave">Save all</button>
+                </div>
+                <div class="sv-status" id="svTrophyStatus"></div>
+              </div>
+              <button class="sv-turn" id="svTurnOver">
+                Turn it over
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M1 5h8M6 2l3 3-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="sv-name-row" id="svNameRow">
+                <input class="sv-name-input" id="svNameInput" type="text" maxlength="${MAX_NAME_LEN}"
+                       placeholder="Your name" autocomplete="off" autocapitalize="characters"
+                       spellcheck="false" aria-label="Name for the leaderboard" />
+                <button class="sv-btn sv-btn-sm" id="svNameSubmit">Submit</button>
+              </div>
+              <div class="sv-status" id="svLbStatus"></div>
+              <div class="sv-leaderboard" id="svLeaderboard"></div>
+              <button class="sv-btn" id="svRestartBtn">Try again</button>
+              <div class="sv-tip-row" id="svTipRow"></div>
+            </div>
           </div>
-          <div class="sv-status" id="svTrophyStatus"></div>
+
+          <!-- THE BACK. What the playtest recorder saw, filled per death by
+               renderRunDetail. Starts hidden with .sv-hidden and not merely
+               rotated away: backface-visibility hides a face from the eye and
+               from nothing else, and the pad's cursor filters on that class —
+               see ui/cardFlip.js. -->
+          <div class="sv-face sv-face-back sv-hidden" id="svFaceBack">
+            <div class="sv-face-inner">
+              <div class="sv-back-title" id="svBackTitle">The run</div>
+              <div id="svPanelWeapons"></div>
+              <div id="svPanelThreats" style="padding-top:14px"></div>
+              <button class="sv-turn" id="svTurnBack">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M9 5H1M4 2L1 5l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Turn back
+              </button>
+            </div>
+          </div>
+
         </div>
-        <div class="sv-name-row" id="svNameRow">
-          <input class="sv-name-input" id="svNameInput" type="text" maxlength="${MAX_NAME_LEN}"
-                 placeholder="Your name" autocomplete="off" autocapitalize="characters"
-                 spellcheck="false" aria-label="Name for the leaderboard" />
-          <button class="sv-btn sv-btn-sm" id="svNameSubmit">Submit</button>
-        </div>
-        <div class="sv-status" id="svLbStatus"></div>
-        <div class="sv-leaderboard" id="svLeaderboard"></div>
-        <button class="sv-btn" id="svRestartBtn">Try again</button>
       </div>
     </div>
 
@@ -985,20 +1341,36 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
 
   for (const id of [
     'svHud', 'svHpBar', 'svO2Bar', 'svXpBar', 'svLevel', 'svTime', 'svScore',
+    'svHpGhost', 'svO2Ghost', 'svHpWrap', 'svO2Wrap',
     'svStartMenu', 'svLevelUpMenu', 'svLevelUpBox', 'svGameOverMenu', 'svCards', 'svGameOverStats',
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
     'svBossBar', 'svBossName', 'svBossFill',
     'svHighScoreLabel', 'svHighScore', 'svCorner',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
     'svFan', 'svSheetShare', 'svSheetSave',
+    'svFlipStage', 'svCard', 'svFaceFront', 'svFaceBack',
+    'svTurnOver', 'svTurnBack', 'svBackTitle',
+    'svPanelWeapons', 'svPanelThreats',
     // Try again is the one control on the score card that has to work — it is
     // the way back into the game. It was reached only through its click
     // binding until the pad needed to find it by name.
     'svGameOverTitle', 'svRestartBtn',
     'svTrophy', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
+    'svTipRow',
   ]) {
     el[id] = document.getElementById(id);
   }
+
+  // The score card's tip jar, built rather than written into the markup above
+  // so the link, its look and where it points live in one file — see
+  // ui/tipJar.js. Held on `el` because the pad has to be able to reach it:
+  // gameOverAll() is a list of elements, not a query.
+  el.svTipJar = tipJarLink({
+    id: 'svTipJar',
+    onHover: () => feedback('uiHover'),
+    onClick: () => feedback('uiClick'),
+  });
+  el.svTipRow.appendChild(el.svTipJar);
 
   // Built into the same layer as everything else, and handed the reveal so it
   // dissolves like the other surfaces. AFTER the markup above is in the tree —
@@ -1034,6 +1406,10 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     showHud();
     callbacks.onStart();
   });
+  // The two turn controls. Bound here rather than from showGameOver: they are
+  // part of the card's markup and never change, unlike the trophy row, which
+  // only exists on a run that met a boss.
+  bindTurn();
   bindMenuSounds(document.getElementById('svRestartBtn')).addEventListener('click', () => {
     // No showHud() here, unlike the start button: the next run doesn't begin
     // on this click any more, it begins on the far side of the transition (see
@@ -1072,6 +1448,9 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
       // every time a stripped character is typed.
       el.svNameInput.setSelectionRange?.(caret - 1, caret - 1);
     }
+    // After the sanitiser, so the size is measured against what is actually in
+    // the box rather than against a character that is about to be dropped.
+    fitNameField();
   });
 }
 
@@ -1115,11 +1494,16 @@ function splashBackground() {
   return `rgba(5, 7, 13, ${Math.max(0, Math.min(1, scrim))})`;
 }
 
-// Boot entry point. The Rive title card is now the ONLY thing between load and
-// play: dismissing it drops you straight into a run rather than into the old
-// DOM start menu, which is being replaced by Rive artboards. The menu markup is
-// still in the tree but nothing shows it — the remaining menus (level-up, game
-// over) are untouched.
+// Boot entry point, and the ONLY caller of the Rive card.
+//
+// The card is the NAME SCREEN. It used to be the whole front end — dismissing
+// it started a run — and it now hands over to the 3D menu instead (see
+// leaveSplash below, and systems/mainMenu.js). That split is the point: a name
+// is asked for once per page load, and the menu is where you come back to.
+//
+// The DOM start menu is still in the tree and still holds every instruction the
+// game has. It is no longer the boot screen, but it is reachable again from the
+// menu's "How to play" — see showHowToPlay.
 export function showStartMenu() {
   el.svHud.classList.add('sv-hidden');
   el.svLevelUpMenu.classList.add('sv-hidden');
@@ -1181,9 +1565,10 @@ export function showStartMenu() {
       // has already started. See revealSplashOut.
       exit: revealSplashOut,
       // onDismiss also fires on a load failure, so a missing or corrupt .riv
-      // starts the run anyway instead of stranding the player on a blank
-      // screen with no way forward now that there's no menu to fall back to.
-      onDismiss: beginRun,
+      // still moves the player on instead of stranding them on a blank screen
+      // with no way forward. It lands on the MENU now rather than in a run —
+      // see leaveSplash, and the note above showStartMenu.
+      onDismiss: leaveSplash,
       // AUDIO UNLOCKS ON THE PRESS, not on the dismiss, and that split is new.
       // The run now begins when the artboard fires `tStart`, which reaches us
       // from inside Rive's advance — a rAF, not a gesture — and an AudioContext
@@ -1196,9 +1581,142 @@ export function showStartMenu() {
   }
 
   // No splash (reduced motion, or it already played) means no gesture to wait
-  // for — go straight in. Audio comes up on the player's first input; see
-  // unlockAudio.
+  // for — go straight through to the menu. Audio comes up on the player's first
+  // input; see unlockAudio.
+  //
+  // REDUCED MOTION LOSES THE NAME SCREEN, not the name: playerName() answers
+  // "Seal" for anybody who has never typed one, and the field is reachable
+  // again from the score card at the end of a run.
+  leaveSplash();
+}
+
+/**
+ * WHERE THE NAME SCREEN LETS OUT. The Rive card is the name entry and nothing
+ * more now — dismissing it used to begin a run, and it hands over to the 3D
+ * menu instead (systems/mainMenu.js, mounted by main.js because it needs the
+ * renderer).
+ *
+ * `onMenu` is optional and the fall-through is the old behaviour, which is what
+ * keeps every harness that boots this module with four callbacks working, and
+ * what keeps a build with no menu wired startable rather than stranded.
+ *
+ * THE SPLASH IS NOT PART OF THE LOOP. `splashPlayed` latches on the first
+ * mount, so anything that comes back through showStartMenu later in the same
+ * page lands here directly and the player is never asked for their name twice.
+ * Only a reload puts the card back up.
+ */
+function leaveSplash() {
+  if (callbacks.onMenu) {
+    callbacks.onMenu();
+    return;
+  }
   beginRun();
+}
+
+// ---------------------------------------------------------------------------
+// HOW TO PLAY — the old DOM start menu, shown on purpose.
+//
+// Every control, every mechanic and the high score are already written into
+// #svStartMenu, and until the 3D menu arrived nothing could reach any of it:
+// the splash went straight into a run and the panel was markup nobody saw. This
+// is that panel put back on a button rather than rewritten somewhere else.
+//
+// Its own "Start run" still starts a run, which is why there is no coordination
+// to do here — main.js tears the 3D menu down inside startGame, on every route
+// into a run rather than on this one.
+//
+// The Back button is built once, on first use, rather than written into the
+// markup: it means nothing on the boot screen this panel used to be, and the
+// day the panel is shown some third way it would be a button with nowhere to go.
+let howToBack = null;
+
+export function showHowToPlay() {
+  if (!el.svStartMenu) return;
+  if (!howToBack) {
+    howToBack = bindMenuSounds(document.createElement('button'));
+    howToBack.className = 'sv-btn sv-btn-ghost';
+    howToBack.type = 'button';
+    howToBack.textContent = 'Back';
+    howToBack.style.marginLeft = '10px';
+    howToBack.addEventListener('click', hideHowToPlay);
+    // Beside "Start run", inside the same box — the two are one row of choices
+    // and a Back floating anywhere else reads as closing the game.
+    document.getElementById('svStartBtn')?.after(howToBack);
+  }
+  el.svStartMenu.classList.remove('sv-hidden');
+}
+
+export function hideHowToPlay() {
+  el.svStartMenu?.classList.add('sv-hidden');
+}
+
+// ---------------------------------------------------------------------------
+// THE LEADERBOARD, BEFORE A RUN RATHER THAN AFTER ONE.
+//
+// The board has only ever existed as a panel inside the score card, which means
+// it could only be looked at by dying — the one moment a player is least
+// interested in a table. The main menu asks for it as a destination, so this is
+// the same board on its own surface.
+//
+// SAME RENDERER, deliberately: renderBoard paints whichever element it is
+// handed (see its note). A second implementation would drift from the one that
+// actually receives a posted score, and the two would disagree about the
+// spelling of somebody's name or the shape of a row.
+//
+// LOCAL FIRST, THEN GLOBAL. `loadLeaderboard()` is on this device and answers
+// instantly; the global board is a network round trip that may never come back.
+// Painting the local one first means the panel is never blank, and the global
+// one replaces it in place when it lands — the same order showGameOver uses.
+//
+// A TOKEN GUARDS THE LATE ARRIVAL. Closing the panel and re-opening it starts a
+// second fetch, and the first one landing afterwards would paint a board that
+// was already replaced.
+let boardPanel = null;
+let boardList = null;
+let boardToken = 0;
+
+function buildLeaderboardPanel() {
+  const wrap = document.createElement('div');
+  wrap.className = 'sv-center sv-hidden';
+  wrap.id = 'svBoardPanel';
+  wrap.innerHTML = `
+    <div class="sv-menu">
+      <div class="sv-title">Leaderboard</div>
+      <div class="sv-leaderboard" id="svBoardList"></div>
+      <button class="sv-btn" id="svBoardBack" type="button">Back</button>
+    </div>
+  `;
+  root.appendChild(wrap);
+  boardList = wrap.querySelector('#svBoardList');
+  bindMenuSounds(wrap.querySelector('#svBoardBack'))
+    .addEventListener('click', hideLeaderboard);
+  return wrap;
+}
+
+export function showLeaderboard() {
+  if (!root) return;
+  if (!boardPanel) boardPanel = buildLeaderboardPanel();
+  boardPanel.classList.remove('sv-hidden');
+
+  const token = ++boardToken;
+  renderBoard(loadLeaderboard(), { global: false }, boardList);
+  if (isGlobal()) {
+    fetchGlobalBoard()
+      .then((list) => {
+        if (list && token === boardToken) renderBoard(list, { global: true }, boardList);
+      })
+      // Silent on purpose: the local board is already on screen and correct.
+      // An error banner over a working table would describe a failure the
+      // player has no way to act on.
+      .catch(() => {});
+  }
+}
+
+export function hideLeaderboard() {
+  // The token moves on, so a fetch still in flight cannot paint a closed panel
+  // and then have its rows appear on the next open.
+  boardToken++;
+  boardPanel?.classList.add('sv-hidden');
 }
 
 // Called SYNCHRONOUSLY from the splash's dismiss handler, not deferred to the
@@ -1225,6 +1743,10 @@ function beginRun() {
 // transition, and that's where the HUD belongs with it.
 export function showHud() {
   el.svHud.classList.remove('sv-hidden');
+  // The seal's gauges are smoothed now, and smoothing carries state across the
+  // gap between runs — see resetPlayerBars. This is the one place every route
+  // into a run passes through.
+  resetPlayerBars();
 }
 
 // --- the restart transition -------------------------------------------------
@@ -1263,13 +1785,6 @@ export function hideRestartTransition(seconds = 0.5) {
   }, seconds * 1000 + 60);
 }
 
-// The splash is pure motion with no way to opt out mid-play, so honour the
-// system setting by skipping it entirely. The CSS rule at the bottom of STYLES
-// only disables transitions, which wouldn't touch a canvas animation.
-function prefersReducedMotion() {
-  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-}
-
 /**
  * The element every surface in the game is built inside. Handed to
  * ui/callout.js by main.js so the warning band can be appended ON TOP of the
@@ -1286,11 +1801,21 @@ export function hideAllMenus() {
   // this has to take the menu down with everything else — otherwise the new
   // run opens with the settings panel still sitting over it.
   hidePauseMenu();
+  // Same for the board: the main menu's Play button is reachable behind it (it
+  // is a 3D button on the canvas, and this panel is a DOM overlay), so a run
+  // can begin with the table still up.
+  hideLeaderboard();
   cancelReveal('upgrades');
   clearMask(el.svLevelUpMenu, el.svLevelUpBox);
   setMenuLocked(false);
   el.svLevelUpMenu.classList.add('sv-hidden');
   el.svGameOverMenu.classList.add('sv-hidden');
+  // The turn goes with the card. Its loop keeps running while there are
+  // bubbles left, and a run that restarts mid-flip would otherwise leave a
+  // canvas and a rAF alive over the new run — see releaseCardFlip.
+  releaseCardFlip();
+  unwatchCardSize();
+  flip = null;
   levelUpCards = [];
 }
 
@@ -2239,8 +2764,16 @@ let overIndex = -1;
 // button on it is inside a hidden block, so a highlight cleared through the
 // filter would be a highlight never cleared at all.
 function gameOverAll() {
+  // BOTH FACES, in reading order, because the card can be either way up and
+  // the filter below is what decides which half is live. Every control on the
+  // face that is currently away sits inside a .sv-hidden face — applied for
+  // real by ui/cardFlip.js at the halfway point of the turn, and not merely
+  // rotated out of sight, precisely so this filter keeps working.
+  //
+  // gameOverAll() is a list of elements, not a query.
   return [el.svTrophyShare, el.svTrophySave, el.svSheetShare, el.svSheetSave,
-    el.svNameSubmit, el.svRestartBtn].filter(Boolean);
+    el.svTurnOver, el.svNameSubmit, el.svRestartBtn, el.svTipJar,
+    el.svTurnBack].filter(Boolean);
 }
 
 function gameOverControls() {
@@ -2274,6 +2807,14 @@ function updateGameOverNav() {
     }
     return false;
   }
+  // THE CARD OWNS THE PAD WHILE IT IS TURNING. Half of the controls are
+  // rotating out of view and the other half have not arrived, so a cursor step
+  // lands somewhere that is about to be somewhere else and a confirm presses a
+  // button the player can no longer see. It is a quarter of a second, and
+  // returning true keeps the score screen owning the pad through it rather
+  // than handing it to whatever is under this one.
+  if (cardFlipMoving()) return true;
+
   const controls = gameOverControls();
   if (!controls.length) return true;
 
@@ -2401,8 +2942,105 @@ function projectToScreen(camera, worldPos, out) {
 const PROJECT_V = new THREE.Vector3();
 const screenPt = { x: 0, y: 0 };
 
-export function updateHUD(gameState, player, strikeState = null, rapidFireTimer = 0, camera = null) {
-  el.svHpBar.style.width = `${Math.max(0, (player.hp / player.stats.maxHp) * 100)}%`;
+// ---------------------------------------------------------------------------
+// THE SEAL'S TWO GAUGES — how they MOVE.
+//
+// Health and air used to be written straight to the bar every frame, so both
+// jumped: a bite arrived as an instant step down and there was nothing on
+// screen to say how big it had been. Every value the player reads here is now
+// chased rather than assigned, and the chase lives in JS because the target is
+// itself moving every frame — a CSS transition over a moving value never
+// arrives (see the note on .sv-pbar, and the same lesson in the boss bar's
+// arrival). One curve, in one place.
+//
+// Rates are PER SECOND and applied as `1 - exp(-rate * dt)`, not as a fixed
+// fraction per frame: the same lerp written per-frame runs twice as fast on a
+// 120Hz screen as on a 60Hz one, which would make the bar's whole character a
+// property of the player's monitor.
+const PBAR_SMOOTH = {
+  // The fill. Slow enough to be a MOVEMENT rather than a step — a big bite
+  // takes about four tenths of a second to finish draining, and no single
+  // frame of it moves the bar more than a few percent — and fast enough that
+  // the bar is honest again well before the next hit lands.
+  fall: 7,
+  // Gains are chased harder than losses. Picking up a heal should feel like it
+  // landed the moment you touched it; only the LOSS needs time on screen.
+  rise: 16,
+  // The trail: the pale band left standing above the fill, which is the size
+  // of the bite you just took. Slow on purpose — this is the number that
+  // decides how long "you were just hit for THAT much" stays legible.
+  ghostFall: 2.0,
+  // ...but the trail never lags a GAIN, or a heal would show as a pale band
+  // that looks like damage until it caught up.
+  ghostRise: 26,
+  // Where the alarm starts fading in, as a fraction of the bar, and how fast
+  // it breathes once it is there.
+  alarmAt: 0.34,
+  alarmHz: 2.1,
+};
+
+// Displayed values, which are NOT the game's values — see above. Seeded on the
+// first frame of a run by resetPlayerBars so a new seal doesn't have to lerp up
+// from the last one's dying health. `clock` is the wave's own phase, and the
+// only thing here that just accumulates.
+const pbar = { hp: 1, hpGhost: 1, o2: 1, o2Ghost: 1, clock: 0 };
+
+/** Frame-rate-independent chase toward `target`, `rate` in units per second. */
+function chase(current, target, rate, dt) {
+  return current + (target - current) * (1 - Math.exp(-rate * dt));
+}
+
+/**
+ * One gauge: chase the value, chase the trail behind it, then write what each
+ * of the three elements draws from — --sv-fill on the fill and on the trail,
+ * --sv-alarm on the track around them. Returns nothing; everything it decides
+ * is in the DOM.
+ */
+function stepBar(key, frac, dt, fillEl, ghostEl, wrapEl) {
+  const s = PBAR_SMOOTH;
+  const cur = chase(pbar[key], frac, frac > pbar[key] ? s.rise : s.fall, dt);
+  pbar[key] = cur;
+  const gk = `${key}Ghost`;
+  // The trail chases the DISPLAYED value, not the raw one, so it can never be
+  // caught underneath the fill and disappear on a frame where the two cross.
+  pbar[gk] = chase(pbar[gk], cur, cur > pbar[gk] ? s.ghostRise : s.ghostFall, dt);
+
+  if (fillEl) fillEl.style.setProperty('--sv-fill', cur.toFixed(4));
+  // Clamped to the fill's own floor: a trail below the fill is invisible
+  // anyway, and letting it go there makes the pale band flicker on a heal.
+  if (ghostEl) ghostEl.style.setProperty('--sv-fill', Math.max(cur, pbar[gk]).toFixed(4));
+  if (wrapEl) {
+    const alarm = Math.max(0, Math.min(1, (s.alarmAt - cur) / s.alarmAt));
+    // Written already oscillating — CSS owns no clock here, so the pulse can
+    // fade in with the danger instead of switching on at a threshold.
+    const wave = 0.5 + 0.5 * Math.sin(pbar.clock * Math.PI * 2 * s.alarmHz);
+    wrapEl.style.setProperty('--sv-alarm', (alarm * wave).toFixed(4));
+  }
+}
+
+/**
+ * Put both gauges back where the seal actually is, with no trail.
+ *
+ * Called at the top of a run (showHud). Without it the first frames of a new
+ * run animate up from whatever the last run died on — a full bar draining, or
+ * an empty one filling, either of which is a lie about a seal that has not
+ * been touched yet.
+ */
+export function resetPlayerBars() {
+  pbar.hp = 1; pbar.hpGhost = 1; pbar.o2 = 1; pbar.o2Ghost = 1;
+  pbar.clock = 0;
+}
+
+/**
+ * `dt` is REAL seconds — main.js hands it rawDt, not the gameplay dt every
+ * other system gets. The two bars beside the seal are a read-out for a person,
+ * and a hit-stop or a boss-kill shutter dropping the water to a tenth speed
+ * must not also slow down the thing telling them how much health they have
+ * left. It is a parameter rather than a clock read in here so the smoothing
+ * can be driven frame by frame from a harness — see tools/player-bars-test.mjs;
+ * a curve nobody can step is a curve nobody can check.
+ */
+export function updateHUD(gameState, player, strikeState = null, rapidFireTimer = 0, camera = null, dt = 1 / 60) {
   // A FRACTION, not a width. The level meter runs left-to-right across the top
   // of a desktop screen and bottom-to-top up the left edge of a phone (see the
   // responsive block in STYLES), and which axis it fills is a layout question
@@ -2415,21 +3053,35 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
   el.svScore.textContent = Math.floor(gameState.score ?? 0).toLocaleString();
   el.svTime.textContent = formatTime(gameState.time);
 
-  const o2Frac = Math.max(0, player.oxygen / Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max));
-  el.svO2Bar.style.width = `${o2Frac * 100}%`;
+  const o2Frac = Math.max(0, Math.min(1, player.oxygen / Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max)));
+  const hpFrac = Math.max(0, Math.min(1, player.hp / Math.max(1, player.stats.maxHp)));
   el.svO2Bar.classList.toggle('sv-o2-low', o2Frac < 0.25);
+
+  // Clamped rather than trusted: a tab that was in the background for a minute
+  // comes back with one enormous frame, and an unclamped exponential over it
+  // would land exactly on the target — a snap, which is the whole thing this
+  // is here to avoid.
+  const step = Math.min(0.1, Math.max(0, dt));
+  pbar.clock += step;
+  stepBar('hp', hpFrac, step, el.svHpBar, el.svHpGhost, el.svHpWrap);
+  stepBar('o2', o2Frac, step, el.svO2Bar, el.svO2Ghost, el.svO2Wrap);
 
   if (camera && el.svPlayerBars) {
     // Offset in WORLD units, not pixels — a pixel gap would drift as the
     // arena rescales, where this keeps a constant distance from the seal.
-    PROJECT_V.set(player.mesh.position.x, player.mesh.position.y + CONFIG.hud.playerBarOffset, player.mesh.position.z);
+    // On X now that the gauges stand BESIDE the animal rather than over it;
+    // playerBarOffset has always meant "how far off the seal", and the
+    // callout arrow still reads it as exactly that (see orbitRadiusPx).
+    PROJECT_V.set(player.mesh.position.x - CONFIG.hud.playerBarOffset, player.mesh.position.y, player.mesh.position.z);
     projectToScreen(camera, PROJECT_V, screenPt);
     el.svPlayerBars.style.left = `${screenPt.x}px`;
     el.svPlayerBars.style.top = `${screenPt.y}px`;
     // At full health AND full oxygen there's nothing to watch, so the bars
-    // fade back rather than permanently tagging the seal.
-    const idle = player.hp >= player.stats.maxHp && o2Frac > 0.995;
-    el.svPlayerBars.style.opacity = idle ? '0.25' : '1';
+    // fade back rather than permanently tagging the seal. Read off the
+    // DISPLAYED values, not the true ones: a bar that is still visibly
+    // draining must not fade out from under the drain it is showing.
+    const idle = pbar.hp > 0.999 && pbar.hpGhost > 0.999 && pbar.o2 > 0.995;
+    el.svPlayerBars.style.opacity = idle ? '0.3' : '1';
   }
 
   // `rapidFireTimer` is still taken and still true — it is simply not DRAWN any
@@ -3098,6 +3750,373 @@ function wireTrophy() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// THE RUN DETAIL TABS
+// ---------------------------------------------------------------------------
+// Two more readings of the run the player has just finished, built from the
+// playtest ledger at the moment the score card opens.
+//
+// NOTHING HERE IS INSTRUMENTATION. Every figure below was already being
+// recorded on every run — the recorder is not a dev-only feature, it starts in
+// main.js on the same line the run does — and was reachable only from the B
+// overlay on a dev build or from a JSONL file on disk. This is the same data
+// with a player pointed at it.
+//
+// BUILT ON OPEN, NOT PER FRAME. analyzeRun walks a run's buckets, which is
+// twenty-odd objects and free at this cadence; doing it once here also means
+// the tabs cannot change under a player who is looking at them while the water
+// carries on behind the card.
+
+/**
+ * A damage figure at the width the card has for it: 41.2k, not 41,203.
+ *
+ * The precision genuinely is not there to lose — these are sums of thousands
+ * of per-frame slices of a rate, and the last three digits of that are noise
+ * dressed as a measurement. What the player is reading is the ORDER and the
+ * shares, both of which survive this intact.
+ */
+function compactDamage(n) {
+  const v = Math.max(0, Math.round(n ?? 0));
+  if (v < 1000) return String(v);
+  if (v < 100000) return `${(v / 1000).toFixed(1)}k`;
+  if (v < 1e6) return `${Math.round(v / 1000)}k`;
+  return `${(v / 1e6).toFixed(1)}M`;
+}
+
+// textContent, never innerHTML, for anything that came out of the ledger. The
+// labels are ours (upgrade names, cause names) but the FALLBACK is a raw source
+// key, and a source key is a string the game concatenated — the same rule the
+// quip and the leaderboard name follow, for the same reason.
+function brkRow({ name, tag, note, a, b, share, incoming }) {
+  const row = document.createElement('div');
+  row.className = `sv-brk-row${incoming ? ' sv-brk-in' : ''}`;
+  row.style.setProperty('--sv-share', `${Math.max(0, Math.min(100, share ?? 0))}%`);
+
+  const label = document.createElement('span');
+  label.className = 'sv-brk-name';
+  label.textContent = name;
+  if (note) {
+    const n = document.createElement('span');
+    n.className = 'sv-brk-picks';
+    n.textContent = note;
+    label.appendChild(n);
+  }
+  if (tag) {
+    const t = document.createElement('span');
+    t.className = 'sv-brk-tag';
+    t.textContent = tag;
+    label.appendChild(t);
+  }
+
+  const left = document.createElement('span');
+  left.className = 'sv-brk-a';
+  left.textContent = a;
+  const right = document.createElement('span');
+  right.className = 'sv-brk-b';
+  right.textContent = b;
+
+  row.append(label, left, right);
+  return row;
+}
+
+function brkHead(...cols) {
+  const head = document.createElement('div');
+  head.className = 'sv-brk-head';
+  for (const c of cols) {
+    const s = document.createElement('span');
+    s.textContent = c;
+    head.appendChild(s);
+  }
+  return head;
+}
+
+function brkFoot(pairs) {
+  const foot = document.createElement('div');
+  foot.className = 'sv-brk-foot';
+  for (const [text, value] of pairs) {
+    const s = document.createElement('span');
+    s.textContent = `${text} `;
+    const b = document.createElement('b');
+    b.textContent = value;
+    s.appendChild(b);
+    foot.appendChild(s);
+  }
+  return foot;
+}
+
+function brkEmpty(panel, message) {
+  const p = document.createElement('div');
+  p.className = 'sv-brk-empty';
+  p.textContent = message;
+  panel.appendChild(p);
+}
+
+/**
+ * Fill the Weapons and Threats panels for the run that has just ended.
+ *
+ * NEVER THROWS. This runs inside showGameOver, which is the only route back
+ * into the game — a recap that fails has to leave an empty panel and a working
+ * Try again, not a card that never appeared. Everything it reads is a plain
+ * object from the recorder, and it is still wrapped, because the alternative
+ * to being paranoid here is a run that cannot be restarted.
+ */
+function renderRunDetail(gameState) {
+  const weapons = el.svPanelWeapons;
+  const threats = el.svPanelThreats;
+  if (!weapons || !threats) return;
+  weapons.replaceChildren();
+  threats.replaceChildren();
+  if (el.svBackTitle) {
+    // What the back is the back OF. The front carries the quip and the five
+    // figures; a face with two tables and no heading could be anybody's run.
+    el.svBackTitle.textContent =
+      `${formatTime(gameState.time)} \u00B7 Level ${gameState.level ?? 1}`;
+  }
+
+  let a = null;
+  try {
+    const run = lastFinishedRun();
+    if (run) a = analyzeRun(run);
+  } catch (err) {
+    console.warn(`[ui] could not read the run's ledger — ${err}`);
+  }
+  if (!a) {
+    brkEmpty(weapons, 'No breakdown for this run.');
+    brkEmpty(threats, 'No breakdown for this run.');
+    return;
+  }
+
+  // --- WEAPONS ------------------------------------------------------------
+  // Sorted by damage, which is the order the question is asked in. The share
+  // is against the TOP row rather than against the total, so the bars use the
+  // full width of the card at every scale of run — a build where one ability
+  // does 80% and a build where four are level would otherwise be drawn as one
+  // long bar and three slivers, and four bars in a dead heat.
+  const dealt = a.abilities.filter((r) => r.damage > 0).sort((x, y) => y.damage - x.damage);
+  const top = dealt[0]?.damage ?? 0;
+  // The weapon that finished the last boss, tagged in the table. The same
+  // string that is stamped on the polaroid (see systems/boss.js) — one answer,
+  // two places, so the print and the table cannot name different weapons.
+  const finisher = bossShot()?.cause ?? '';
+
+  if (!dealt.length) {
+    brkEmpty(weapons, 'Nothing was damaged this run.');
+  } else {
+    weapons.appendChild(brkHead('Weapon', 'Damage', 'Kills'));
+    const list = document.createElement('div');
+    list.className = 'sv-brk';
+    for (const r of dealt) {
+      list.appendChild(brkRow({
+        name: r.label,
+        // Picks, not stack-minutes: "×4" is what the player recognises from
+        // the cards they took. The baseline pick Fin Pebbles gets for free is
+        // in that count, which is honest — it is a stack you have.
+        note: r.stacks > 0 ? `×${r.stacks}` : '',
+        tag: finisher && r.label === finisher ? 'Final blow' : '',
+        a: compactDamage(r.damage),
+        b: String(r.kills ?? 0),
+        share: top > 0 ? (r.damage / top) * 100 : 0,
+      }));
+    }
+    weapons.appendChild(list);
+
+    const foot = [['Total dealt', compactDamage(a.totalDamage)]];
+    // THE ABILITIES THAT DEAL NOTHING BY DESIGN — Cold Snap, the Grabber,
+    // Baby Beluga. They belong on this tab and they cannot be in the table:
+    // a row of zeroes in a column headed Damage says the upgrade is broken,
+    // which is the exact misreading the ledger's `control` flag exists to
+    // prevent. So they are counted in events, on a line of their own.
+    const control = a.abilities.filter((r) => r.control && r.events > 0);
+    if (control.length) {
+      const held = control.reduce((n, r) => n + r.events, 0);
+      foot.push([`Caught, held or frozen`, String(held)]);
+    } else {
+      foot.push(['Kills', String(gameState.kills ?? 0)]);
+    }
+    weapons.appendChild(brkFoot(foot));
+  }
+
+  // --- THREATS ------------------------------------------------------------
+  // Grouped by cause rather than listed by source. `a.threats` is keyed by the
+  // strings that reach recordPlayerDamage — 'greatWhite', 'abyssShark',
+  // 'megalodon' — and a player who spent a run being eaten by sharks did not
+  // lose it to three things. primaryCause is the single-cause reading written
+  // for exactly this: causesOfDeath returns several per source on purpose, and
+  // adding up a table built from that would total more damage than was taken.
+  const byCause = new Map();
+  let taken = 0;
+  for (const t of a.threats) {
+    const cause = primaryCause(t.source);
+    const key = cause?.id ?? t.source;
+    const row = byCause.get(key) ?? { label: threatLabel(t.source), damage: 0 };
+    row.damage += t.damage;
+    byCause.set(key, row);
+    taken += t.damage;
+  }
+  const rows = [...byCause.values()].sort((x, y) => y.damage - x.damage);
+
+  if (!rows.length) {
+    brkEmpty(threats, 'Nothing laid a finger on you.');
+  } else {
+    threats.appendChild(brkHead('What hurt you', 'Damage', 'Share'));
+    const list = document.createElement('div');
+    list.className = 'sv-brk';
+    const worst = rows[0].damage;
+    for (const r of rows) {
+      list.appendChild(brkRow({
+        incoming: true,
+        name: r.label,
+        a: compactDamage(r.damage),
+        b: taken > 0 ? `${Math.round((r.damage / taken) * 100)}%` : '0%',
+        share: worst > 0 ? (r.damage / worst) * 100 : 0,
+      }));
+    }
+    threats.appendChild(list);
+
+    const foot = [['Total taken', compactDamage(taken)]];
+    // The killing blow, from the source killPlayer resolved at the moment of
+    // death rather than from the top of this table — the thing that took the
+    // most health off you over ten minutes is very often not the thing that
+    // finished you, and saying so would be the card getting a fact wrong about
+    // the run the player just played.
+    const killer = primaryCause(gameState.deathSource);
+    if (killer) foot.push(['Killed by', killer.threat]);
+    threats.appendChild(brkFoot(foot));
+  }
+}
+
+// The live turn, while the card is up. Re-mounted per death rather than kept:
+// the card's height changes with what the run produced (a trophy row or not, a
+// board that arrived or not), and the flip has to be measured against the card
+// it is actually turning.
+let flip = null;
+
+/**
+ * Size the card to the TALLER face and re-bake both worn edges.
+ *
+ * Both faces are absolutely positioned, so the card has no height of its own.
+ * Measuring means briefly putting each face back in flow — the alternative is
+ * trusting the front, and the back carries two tables the front does not, so
+ * the card comes out short and the face's own overflow silently clips the last
+ * control off the bottom of it. Nothing else reports that.
+ */
+function sizeCard() {
+  const card = el.svCard;
+  if (!card) return;
+  let tallest = 0;
+  for (const face of [el.svFaceFront, el.svFaceBack]) {
+    if (!face) continue;
+    // The class has to come off to measure a face that is currently the hidden
+    // one — display:none measures 0, and the back is hidden for the whole of
+    // the frame this runs on.
+    const wasHidden = face.classList.contains('sv-hidden');
+    face.classList.remove('sv-hidden');
+    face.style.position = 'relative';
+    tallest = Math.max(tallest, face.scrollHeight);
+    face.style.position = '';
+    if (wasHidden) face.classList.add('sv-hidden');
+  }
+  // Written only on a change — see watchCardSize for why that matters, and
+  // because a height re-written every observer callback is a style recalc for
+  // nothing on a screen that is sat on for minutes.
+  const want = tallest > 0 ? `${tallest}px` : '';
+  if (want && card.style.height !== want) card.style.height = want;
+
+  // The border, eaten by the same noise field the menus dissolve through. Baked
+  // per size and cached, so a resize costs one bake and a redraw costs nothing.
+  // A null mask means the bake failed; the card then shows with a clean edge,
+  // which is the look this replaced — never an empty mask, which would hide the
+  // whole card and with it the way back into the game.
+  const box = card.getBoundingClientRect();
+  const wear = CONFIG.death?.flip?.wear ?? {};
+  const style = wear.style ?? 'houseField';
+  for (const [i, face] of [el.svFaceFront, el.svFaceBack].entries()) {
+    if (!face) continue;
+    const mask = style === 'clean' ? null : wornEdgeMask({
+      w: box.width,
+      h: box.height || tallest,
+      radius: wear.radius ?? 14,
+      depth: wear.depth ?? 9,
+      style,
+      // Two faces, two seeds: the same card worn identically on both sides
+      // reads as a texture rather than as an object.
+      seed: i,
+    });
+    applyMask(face, mask ?? 'none', '100% 100%', '0 0', 'no-repeat');
+    if (!mask) clearMask(face);
+  }
+}
+
+// The two faces, watched so the card keeps following whichever is taller. Held
+// at module scope so a second death disconnects the first one's watchers rather
+// than stacking another set.
+let cardWatch = null;
+
+/**
+ * Re-size the card whenever a face's CONTENT changes.
+ *
+ * A MUTATION OBSERVER AND NOT A RESIZE ONE, which is the whole point of this
+ * comment. `.sv-face-inner` is `height: 100%` of a face that is `inset: 0` of
+ * the card, so its box is exactly the card's height and CANNOT grow when
+ * content is added to it — a ResizeObserver on it fires on a viewport change
+ * and never once on the thing this exists to catch. It looks completely
+ * correct and does nothing.
+ *
+ * What it has to catch is real and happens on every run: the trophy fan builds
+ * its prints asynchronously, and the global leaderboard replaces the local one
+ * whenever the network answers. Both are DOM insertions, minutes apart from
+ * each other on a slow connection, into a card that was measured once.
+ *
+ * NOT COALESCED THROUGH requestAnimationFrame, and that is a correction rather
+ * than a preference. Batching through a frame looks tidier and introduces a way
+ * to wedge: the "one is already queued" flag latches, and a frame that never
+ * arrives — a backgrounded tab, which is exactly where somebody leaves a score
+ * screen — leaves it latched forever, so every later insertion is dropped and
+ * the card is stuck at whatever height it had when the tab lost focus.
+ *
+ * There is nothing to gain by it either. A MutationObserver callback is already
+ * batched: the fan inserting eight prints in a loop produces ONE call, not
+ * eight. Measuring here forces one synchronous layout per batch, on a menu,
+ * which is free at this cadence.
+ */
+function watchCardSize() {
+  unwatchCardSize();
+  const inners = [el.svFaceFront, el.svFaceBack]
+    .map((f) => f?.querySelector('.sv-face-inner')).filter(Boolean);
+  if (!inners.length) return;
+
+  const soon = () => sizeCard();
+  cardWatch = { mo: null, soon };
+  if (typeof MutationObserver === 'function') {
+    cardWatch.mo = new MutationObserver(soon);
+    for (const inner of inners) cardWatch.mo.observe(inner, { childList: true, subtree: true });
+  }
+  // The viewport's own changes — a rotation, a desktop window dragged narrower.
+  // Not a ResizeObserver for the reason above; the card's width comes from the
+  // stylesheet, so what changes here is how the content wraps inside it.
+  window.addEventListener('resize', soon);
+}
+
+function unwatchCardSize() {
+  if (!cardWatch) return;
+  cardWatch.mo?.disconnect();
+  window.removeEventListener('resize', cardWatch.soon);
+  cardWatch = null;
+}
+
+// Bound once, at build time, like every other control on this card. The faces
+// are re-filled per death; the two turn controls never change.
+function bindTurn() {
+  for (const id of ['svTurnOver', 'svTurnBack']) {
+    const button = el[id];
+    if (!button) continue;
+    // bindMenuSounds already voices the press. A second feedback() call here
+    // would both double the blip and invent an event name nothing declares,
+    // which the event audit reads as a typo.
+    bindMenuSounds(button).addEventListener('click', () => flip?.flip());
+  }
+}
+
 export function showGameOver(gameState, extra = {}) {
   el.svHud.classList.add('sv-hidden');
   // Rolled per death, not once per session — the line is the first thing read
@@ -3124,6 +4143,20 @@ export function showGameOver(gameState, extra = {}) {
     ['Bosses', bosses],
   ].map(([k, v]) => `<span class="sv-stat"><b>${v}</b>${k}</span>`).join('');
 
+  // ALWAYS FRONT SIDE UP. Which way the card was left is not a preference — a
+  // player who read the weapons after one death is not asking to skip the
+  // photographs after the next one, and the roll of prints is what this screen
+  // leads with.
+  renderRunDetail(gameState);
+  flip = mountCardFlip({
+    card: el.svCard,
+    front: el.svFaceFront,
+    back: el.svFaceBack,
+    // The bubbles need somewhere bigger than the card to live, or they are
+    // clipped the moment they leave its edge — which is the only place they
+    // ever are. The centring layer is the whole screen.
+    water: el.svGameOverMenu,
+  });
   const token = ++gameOverToken;
   pendingRun = {
     score,
@@ -3142,6 +4175,9 @@ export function showGameOver(gameState, extra = {}) {
   el.svNameSubmit.disabled = false;
   el.svNameInput.disabled = false;
   el.svNameInput.value = loadPlayerName();
+  // A remembered name arrives whole rather than a character at a time, so it
+  // never passes through the `input` handler that would size it.
+  fitNameField();
   setStatus(isGlobal() ? 'Enter a name to post your score' : 'Enter a name to save your score');
 
   // Show the standing board right away from local data, then upgrade it to the
@@ -3175,6 +4211,20 @@ export function showGameOver(gameState, extra = {}) {
   el.svGameOverMenu.classList.add('sv-fade-in');
   revealScoreCardIn();
 
+  // SIZING HAPPENS HERE, AFTER THE UN-HIDE, and the ordering is the whole
+  // thing. Called any earlier the menu is still display:none, every rectangle
+  // measures 0, the card is given no height and both faces — which are absolute
+  // and inset:0 — collapse into it. The card then renders as nothing, and
+  // because nothing overflows a box of zero height, npm run layout reports a
+  // clean sheet on a score screen that is completely invisible.
+  //
+  // Then WATCHED, because two things arrive after this frame and both change
+  // how tall the front is: the trophy fan builds its prints asynchronously, and
+  // the global leaderboard replaces the local one whenever the network answers.
+  // A card sized once is a card that is the wrong height a second later.
+  sizeCard();
+  watchCardSize();
+
   // Focus lands on the field so a name can be typed without clicking first,
   // but only with a real keyboard — on touch, focusing would throw up the
   // on-screen keyboard over the board before the player has asked for it.
@@ -3182,6 +4232,91 @@ export function showGameOver(gameState, extra = {}) {
     el.svNameInput.focus();
     el.svNameInput.select();
   }
+}
+
+// --- THE NAME FIELD SHOWS THE WHOLE NAME -----------------------------------
+//
+// A cap of MAX_NAME_LEN characters is only worth what the player can see of it
+// while they type. The field used to be sized in pixels against 24 characters
+// of Inter, which was true of Inter and of nothing else: the font picker can
+// put 'Press Start 2P' in this box, a full em per glyph, and the tail of a
+// name scrolled out of the left of the field as it was typed — which reads as
+// the field having eaten it rather than as the name being long.
+//
+// So the type SHRINKS to fit instead. The measurement is a hidden span wearing
+// the field's own computed font, because that is the only thing that knows how
+// wide the text actually is in whatever family is live — and because an
+// <input>'s own scrollWidth is not reliable across browsers for exactly this
+// question.
+//
+// A FLOOR, not an unbounded shrink: past this the name is legible in the sense
+// that the pixels are there and in no other, and a full-length name in a pixel
+// font is simply going to be small. 8px is 'Press Start 2P''s own native grid,
+// which is the smallest this can go and still be that font rather than a smear
+// of it.
+//
+// The RESTING size is read off the field rather than stated here — the
+// stylesheet owns it, and a second copy would be a number that silently stops
+// matching the rule it was written from. Only the floor is a decision.
+const NAME_FONT_MIN_PX = 8;
+let nameRuler = null;
+
+function fitNameField(input = el.svNameInput) {
+  if (!input) return;
+  // Both back to their resting state before anything is measured — a fit
+  // measured against the last fit's own size shrinks a little further on every
+  // keystroke and never comes back when the name gets shorter.
+  input.style.fontSize = '';
+  el.svNameRow?.classList.remove('sv-name-stacked');
+  if (!input.value) return;
+
+  // Built once and left in the DOM — a ruler that is created and removed per
+  // keystroke is a layout thrash on every character, and this one is 1px of
+  // nothing parked off-screen.
+  if (!nameRuler) {
+    nameRuler = document.createElement('span');
+    nameRuler.setAttribute('aria-hidden', 'true');
+    nameRuler.style.cssText =
+      'position:absolute; left:-9999px; top:0; white-space:pre; visibility:hidden;';
+    document.body.appendChild(nameRuler);
+  }
+
+  const cs = getComputedStyle(input);
+  // Read with no inline size on the field (cleared above), so this is the size
+  // the stylesheet asks for and the one a short name is shown at.
+  const base = parseFloat(cs.fontSize) || 14;
+  nameRuler.style.fontFamily = cs.fontFamily;
+  nameRuler.style.fontWeight = cs.fontWeight;
+  nameRuler.style.letterSpacing = cs.letterSpacing;
+  nameRuler.style.textTransform = cs.textTransform;
+  nameRuler.textContent = input.value;
+  // Measured at the resting size once and then scaled — text width is linear
+  // in font-size, so one measurement answers it rather than a loop of reflows.
+  nameRuler.style.fontSize = `${base}px`;
+  const width = nameRuler.getBoundingClientRect().width;
+
+  // The room inside the box: its width less its own padding, which is what the
+  // text has to live in.
+  const room = () => input.clientWidth
+    - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0);
+
+  let avail = room();
+  // Zero in a headless DOM, where nothing has a width — the guard is what keeps
+  // the jsdom harness from walking this all the way down to the floor.
+  if (!(avail > 0) || !(width > avail)) return;
+
+  // THE LINE IS THE FIRST THING SPENT, not the type size. Beside its button the
+  // field is about 270px, and 32 characters of a pixel font do not go into that
+  // at any size a player would thank us for — so the row stacks and the field
+  // gets the card's whole width before the type gives up anything more.
+  if (base * (avail / width) < NAME_FONT_MIN_PX) {
+    el.svNameRow?.classList.add('sv-name-stacked');
+    avail = room();
+    if (!(avail > 0) || !(width > avail)) return;
+  }
+
+  const size = Math.max(NAME_FONT_MIN_PX, Math.floor(base * (avail / width) * 10) / 10);
+  input.style.fontSize = `${size}px`;
 }
 
 async function submitPendingRun() {
@@ -3193,7 +4328,7 @@ async function submitPendingRun() {
   // 'ANON' and NOT DEFAULT_PLAYER_NAME, and the difference is deliberate. The
   // token's fallback is the game's VOICE — "Nice one, Seal" reads fine to
   // somebody who never typed a name. A board is a list of PEOPLE, and a public
-  // top ten with four rows called Seal reads as four players with the same
+  // board with four rows called Seal reads as four players with the same
   // name rather than as four who declined to give one.
   const name = savePlayerName(el.svNameInput.value) || 'ANON';
   el.svNameSubmit.disabled = true;
@@ -3214,7 +4349,7 @@ async function submitPendingRun() {
   } else if (result.madeList) {
     setStatus(`#${result.rank} as ${name}`);
   } else {
-    setStatus(`Saved as ${name} — didn't make the top 10`);
+    setStatus(`Saved as ${name} — didn't make the top ${BOARD_SIZE}`);
   }
 }
 
@@ -3225,11 +4360,19 @@ function setStatus(text, isError = false) {
 
 // `result` is only passed after a submit — that's the one case where a row can
 // be identified as this player's, since rank comes back with the write.
-function renderBoard(list, { global, result = null } = {}) {
+/**
+ * @param into  which element to paint. The score card's own panel by default;
+ *              the standalone board from the main menu passes its own (see
+ *              showLeaderboard). One renderer for both, because two would drift
+ *              the moment a column is added — and the board a player checks
+ *              before a run has to be the same board they are put on after it.
+ */
+function renderBoard(list, { global, result = null } = {}, into = el.svLeaderboard) {
   const heading = global ? 'Global leaderboard' : 'Leaderboard (this device)';
+  if (!into) return;
 
   if (!list?.length) {
-    el.svLeaderboard.innerHTML =
+    into.innerHTML =
       `<div class="sv-label" style="margin-bottom:6px;">${heading}</div>` +
       `<div class="sv-lb-empty">No scores yet — be the first.</div>`;
     return;
@@ -3247,8 +4390,29 @@ function renderBoard(list, { global, result = null } = {}) {
     })
     .join('');
 
-  el.svLeaderboard.innerHTML =
+  into.innerHTML =
     `<div class="sv-label" style="margin-bottom:6px;">${heading}</div>${rows}`;
+
+  // THE BOARD IS A HUNDRED DEEP AND THE BOX SHOWS EIGHT OF THEM. Being 61st is
+  // making the leaderboard, and a panel that opens at rank 1 tells a player who
+  // just got there that they are not on it — they would have to scroll a list
+  // they have no reason to think they are in.
+  //
+  // scrollTop by hand rather than scrollIntoView: that method scrolls every
+  // scrollable ancestor, and this list sits inside a score card that scrolls
+  // too on a short screen — so it would drag the card out from under the
+  // player to bring one row into the middle of the screen. The rows and the
+  // list share an offset parent (nothing between them is positioned), which is
+  // what makes the difference of their offsets the distance down the list.
+  if (result?.madeList) {
+    const mine = into.querySelector('.sv-lb-mine');
+    if (mine) {
+      into.scrollTop = Math.max(
+        0,
+        mine.offsetTop - into.offsetTop - (into.clientHeight - mine.offsetHeight) / 2,
+      );
+    }
+  }
 }
 
 // Names come back from a server anyone can POST to, so they're escaped at the

@@ -4,7 +4,7 @@ import { FILTER_OPTIONS, bloomEnabled, setSetting, screenFilter } from './settin
 import { feedbackState } from './feedback.js';
 import { suffocationPixelSize } from './oxygenFx.js';
 import { cineLens } from './cineCamera.js';
-import { gooLayer, activeGooGroups, setGooDivisor } from '../entities/particles.js';
+import { gooLayer, activeGooGroups, gooGroupInfo, setGooDivisor } from '../entities/particles.js';
 
 // Three passes, no EffectComposer:
 //   1. render the scene at full res
@@ -866,6 +866,16 @@ export function createPost(renderer) {
     renderer.setRenderTarget(gooTarget);
     renderer.clear();
     renderer.render(layer.scene, sceneCamera);
+    // ...and anything else made of this substance, into the same target before
+    // the threshold runs. autoClear off, or each field would wipe the splats it
+    // is supposed to be fusing with.
+    const fieldsHere = [...gooFields].filter((f) => f.group === group.name);
+    if (fieldsHere.length) {
+      const auto = renderer.autoClear;
+      renderer.autoClear = false;
+      for (const f of fieldsHere) renderer.render(f.object, sceneCamera);
+      renderer.autoClear = auto;
+    }
     renderer.setClearColor(gooClearColor, clearAlpha);
 
     // autoClear off for the composite, or this draw wipes the scene it is
@@ -876,6 +886,47 @@ export function createPost(renderer) {
     renderer.setRenderTarget(sceneTarget);
     renderer.render(gooPass.scene, camera);
     renderer.autoClear = autoClear;
+  }
+
+  // --- things that are made of goo without being particles -----------------
+  //
+  // The density field is splatted from dying particles, which is the whole
+  // shape of the feature — but a particle burst is not the only thing that can
+  // be liquid. The splash menu's buttons are hexagons that want to FUSE with
+  // the goo they spit: a droplet leaving one should pull a neck out of its edge
+  // rather than fly off in front of it, and no amount of drawing them near each
+  // other does that. Fusion is a property of a field, so anything that wants it
+  // has to be IN the field.
+  //
+  // A registered field is any Object3D whose material writes premultiplied
+  // density (rgb = tint * density, a = density) additively — exactly what the
+  // particle shader writes. It is rendered into the same target, in the same
+  // pass, after the particles, so the threshold that finds the isoline cannot
+  // tell the two apart. That is the point.
+  //
+  // The registry also FORCES its group to render: `activeGooGroups` reports
+  // only groups with live particles, so a button standing alone would flicker
+  // out the instant its last droplet died.
+  const gooFields = new Set();
+
+  /** @param group  a key of CONFIG.fx.goo.groups — the substance it is made of. */
+  function registerGooField(object, group) {
+    gooFields.add({ object, group });
+  }
+
+  function unregisterGooField(object) {
+    for (const f of gooFields) if (f.object === object) gooFields.delete(f);
+  }
+
+  /** The groups that have a registered field, whether or not particles are alive. */
+  function fieldGroups() {
+    const out = [];
+    for (const f of gooFields) {
+      if (out.some((g) => g.name === f.group)) continue;
+      const info = gooGroupInfo(f.group);
+      if (info) out.push(info);
+    }
+    return out;
   }
 
   // COMPILE THE GOO PROGRAMS BEFORE THE FIRST KILL, not on it.
@@ -932,7 +983,10 @@ export function createPost(renderer) {
     // passthrough while goo is in flight would not "turn the effect off", it
     // would delete the burst. Zero cost with nothing goopy on screen, which is
     // almost every frame.
+    // Live bursts, plus any group a registered field claims — see the registry
+    // above. Merged by name so a group with both does not render twice.
     const goo = activeGooGroups();
+    for (const g of fieldGroups()) if (!goo.some((x) => x.name === g.name)) goo.push(g);
     const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 1 || cine || goo.length > 0;
     if (!postActive) {
       renderer.setRenderTarget(null);
@@ -1010,8 +1064,30 @@ export function createPost(renderer) {
     }
   }
 
+  // Upload one texture to the GPU, off the frame that would otherwise have
+  // done it on its first draw.
+  //
+  // WHY THIS IS HERE AND NOT IN THE WARM-UP. shaderWarmup deliberately does
+  // NOT sweep textures — see the long note there: making all 49 megapixels of
+  // the roster resident from boot pushes past a phone's budget and turns one
+  // stall into a driver that pages for the rest of the session. That reasoning
+  // is about the WHOLE roster at boot. It says nothing against uploading one
+  // creature's textures three seconds before that creature appears, which is
+  // the opposite trade: nothing extra is resident for any longer than it is
+  // about to be needed. See systems/bossWarmup.js, the only caller.
+  //
+  // No render target binding, unlike `warm` — an upload is not keyed on one.
+  function initTexture(texture) {
+    if (!texture) return false;
+    renderer.initTexture(texture);
+    return true;
+  }
+
   applyPreset(activePreset());
   resize();
 
-  return { render, resize, cyclePreset, applyPreset, warm, warmGoo };
+  return {
+    registerGooField,
+    unregisterGooField,
+    render, resize, cyclePreset, applyPreset, warm, warmGoo, initTexture };
 }

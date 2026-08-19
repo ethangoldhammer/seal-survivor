@@ -50,7 +50,7 @@ export function spawnProjectile(scene, {
   // It survives `spin`, which writes rotation.z alone, and is meaningless
   // beside `orient`, which rewrites the whole orientation every frame.
   tilt = 0,
-  gravityScale = 1, chill = null, charm = null,
+  gravityScale = 1, chill = null, charm = null, knockback = 0,
 }) {
   const mesh = createVisual(asset ?? (faction === 'player' ? 'bullet' : 'enemyBullet'));
   mesh.position.copy(origin);
@@ -148,6 +148,12 @@ export function spawnProjectile(scene, {
     // knows what the description MEANS. Applied in combat.js through
     // systems/harp.js.
     charm,
+    // How hard this shot shoves what it hits, in applyKnockback's charge units
+    // — 0 for the overwhelming majority, which shove nothing. Fourth payload of
+    // exactly the same kind as the three above: combat.js hands it to
+    // entities/enemies.js along the shot's own heading, and projectiles.js
+    // never acts on it either.
+    knockback,
   });
 }
 

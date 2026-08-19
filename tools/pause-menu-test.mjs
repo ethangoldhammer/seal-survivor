@@ -575,6 +575,44 @@ for (const [name, def] of Object.entries(S.SCHEMA)) {
 }
 pause.hidePauseMenu();
 
+// THE TIP JAR. It is the last stop on the panel, and "last" is the assertion:
+// the footer holds Resume and Restart, and a cursor that had to walk past a
+// donation link to reach the way back into a paused game would be the rudest
+// thing in the build. It is also the only <a> in a menu made of <button>s, so
+// the checks below are that the nav treats it like any other row.
+section('The tip jar is the last stop, and it is a real link');
+pause.showPauseMenu();
+{
+  const link = document.querySelector('#svPauseTip .sv-tip');
+  check('the jar is on the panel', !!link);
+  // A real href, not a button calling window.open — see ui/tipJar.js. This is
+  // what survives a popup blocker on a phone, which is where this game lives.
+  check('...with an href that actually goes somewhere',
+    link?.tagName === 'A' && /^https:\/\//.test(link.getAttribute('href') ?? ''),
+    link?.getAttribute('href') ?? 'no href');
+  check('...opening away from the run, safely',
+    link?.target === '_blank' && (link?.rel ?? '').includes('noopener'),
+    `${link?.target} / ${link?.rel}`);
+
+  // Walk the cursor all the way round from the strip. It wraps, so one full
+  // lap ends where it started and the step before the strip is the last row.
+  const seen = [];
+  const here = () => selected()[0];
+  for (let i = 0; i < 200; i++) {
+    menuKey('ArrowUp');
+    const at = here();
+    if (at?.id === 'svPauseTabs') break;
+    seen.push(at);
+  }
+  // Up from the strip is the BOTTOM of the list, so the first thing that walk
+  // saw is the last stop on the panel.
+  check('the pad and keyboard can reach it', seen.includes(link),
+    seen.length ? `${seen.length} row(s) walked` : 'the walk never moved');
+  check('...and it is below Resume and Restart, not above them', seen[0] === link,
+    seen[0]?.id || seen[0]?.className || 'nothing');
+}
+pause.hidePauseMenu();
+
 console.warn = realWarn;
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}`);
 process.exit(failures ? 1 : 0);

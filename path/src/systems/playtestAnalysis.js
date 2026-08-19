@@ -94,6 +94,12 @@ export const SOURCE_UPGRADES = {
   // deals damage. One pick pays for both, so they share a row — see
   // SOURCE_ALIAS.
   bakalar: { upgrades: ['bakalar'], label: "Bakalar's Boat" },
+  // Both were dealing real damage under a tag no upgrade claimed — the same
+  // silent zero the two rows above describe, and found the same way: by
+  // needing a NAME for them on the score screen's weapon table and getting the
+  // raw key back.
+  harp: { upgrades: ['harp'], label: 'Harp Seal' },
+  laserEyes: { upgrades: ['laserEyes'], label: 'Laser Eyes' },
   scallop: { upgrades: ['scallopSquirter'], label: 'Scallop Squirter' },
   oyster: { upgrades: ['oysterBlaster'], label: 'Oyster Blaster' },
   orca: { upgrades: ['orcaFamily'], label: 'Orca Family' },
@@ -110,8 +116,32 @@ function resolveSource(source) {
   return SOURCE_ALIAS[source] ?? source;
 }
 
+// The damage the ARENA does, which no pick pays for and no build owns. They sit
+// out of the efficiency ranking on purpose (see the note above SOURCE_UPGRADES)
+// and still need names, because two surfaces show a source to a PLAYER rather
+// than to whoever is reading a balance report: the weapon table on the score
+// screen, and the cause of death stamped on the polaroid. A boss finished off
+// by a re-entry slam has to say so in words.
+//
+// `gun` is not here — it is a real upgrade line with a phantom baseline stack,
+// and it is labelled above.
+const ENVIRONMENT_LABELS = {
+  impact: 'Collision',
+  splash: 'Blast',
+  deathBlast: 'Chain Reaction',
+  sunPass: 'Sun Pass',
+  reentry: 'Belly Flop',
+  lightning: 'Lightning',
+};
+
+/**
+ * A damage source as a player would name it. Falls back to the raw key, which
+ * is a legible-enough last resort ('gun', 'strike') and is also the tell that
+ * a source has been added without a row here.
+ */
 export function sourceLabel(source) {
-  return SOURCE_UPGRADES[source]?.label ?? source;
+  const s = resolveSource(source);
+  return SOURCE_UPGRADES[s]?.label ?? ENVIRONMENT_LABELS[s] ?? s;
 }
 
 function sum(obj) {
@@ -478,7 +508,7 @@ export function analyzeRun(run) {
 function chainSummary(run) {
   const out = {
     strikes: 0, links: 0, maxChain: 0,
-    missOffBeat: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0, chumEaten: 0,
+    armed: 0, missOffBeat: 0, missNoFood: 0, missNoWindow: 0, missBoth: 0, chumEaten: 0,
     buckets: [],
   };
   for (const b of run.buckets ?? []) {
@@ -488,6 +518,7 @@ function chainSummary(run) {
       strikes: b.strikes ?? 0,
       links: b.links ?? 0,
       maxChain: b.maxChain ?? 0,
+      armed: b.armed ?? 0,
       missOffBeat: b.missOffBeat ?? 0,
       missNoFood: b.missNoFood ?? 0,
       missNoWindow: b.missNoWindow ?? 0,
@@ -497,6 +528,7 @@ function chainSummary(run) {
     };
     out.strikes += row.strikes;
     out.links += row.links;
+    out.armed += row.armed;
     out.missOffBeat += row.missOffBeat;
     out.missNoFood += row.missNoFood;
     out.missNoWindow += row.missNoWindow;
@@ -655,8 +687,13 @@ export function formatRunReport(a) {
   const ch = a.chain;
   if (ch && ch.strikes > 0) {
     L.push('');
+    // LINKS PER STRIKE CAN EXCEED 100%, and that is the mechanic rather than
+    // a bug in the arithmetic: one release arms a chain and every mouthful
+    // eaten inside it scores a link, so a single well-timed strike into a fat
+    // pile is worth a dozen. The number to read alongside it is `on beat` —
+    // the releases that armed anything at all.
     L.push(`  FOOD CHAIN — ${ch.links} links from ${ch.strikes} strikes `
-      + `(${Math.round(100 * ch.links / ch.strikes)}%), deepest x${ch.maxChain}`);
+      + `(${Math.round(100 * ch.links / ch.strikes)}%), ${ch.armed} on beat, deepest x${ch.maxChain}`);
     L.push('  time   strikes  links   hit%  deepest   miss: off beat  no food  no window   both  chum/min');
     for (const b of ch.buckets) {
       if (!b.strikes && !b.chumEaten) continue;
@@ -689,7 +726,7 @@ export function formatRunReport(a) {
         ? 'Not enough chum reaching the seal between strikes.'
         : 'The window is shutting before the second strike lands.'));
     } else if (worst > 0 && worst === ch.missNoFood) {
-      L.push('  -> misses are mostly NO FOOD: widen the magnet or lower strike.linkBarFraction.');
+      L.push('  -> misses are mostly NO FOOD: a link costs one mouthful, so this is chum not reaching the seal at all.');
     } else if (worst > 0 && worst === ch.missNoWindow) {
       L.push('  -> misses are mostly NO WINDOW: raise strike.chainWindow.');
     }

@@ -254,6 +254,19 @@ export function spawnWhale(scene, rand = Math.random) {
     bodyRadius: girth * 0.5,
     noseAhead,
     baseY,
+    // The crossing, held apart from where the body is drawn — see the note in
+    // updateWhales. `lineX` is the sweep; `nudge*` is how far off it the last
+    // ram put the animal, and it always comes back to zero.
+    lineX: container.position.x,
+    nudgeX: 0,
+    nudgeY: 0,
+    nudgeVX: 0,
+    nudgeVY: 0,
+    // Whether the seal was inside the body LAST frame with a dash in flight.
+    // The nudge is edge-triggered off this: contact is tested every frame, and
+    // a dash that lasts a quarter of a second would otherwise hand the same
+    // ram over fifteen times.
+    ramTouch: false,
     // Phase the drift per sweep, so two whales in one run do not trace the
     // same line even at the same depth.
     driftPhase: rand() * Math.PI * 2,
@@ -371,11 +384,52 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
     w.clock += dt;
 
     // --- the line it swims -------------------------------------------------
-    w.container.position.x += w.dir * (c.speed ?? 0) * dt;
-    w.prevY = w.container.position.y;
-    w.container.position.y = w.baseY
+    // THE LINE IS KEPT SEPARATELY from where the body is drawn, because the
+    // body can be shoved off it (see the nudge below) and the crossing must
+    // not be. Integrating a ram into `container.position.x` directly would
+    // make every shove permanent — the whale would arrive at the far wall
+    // however many units of seal it had absorbed — and a whale that can be
+    // walked off its own sweep is a pressure valve the player can defeat.
+    w.lineX += w.dir * (c.speed ?? 0) * dt;
+    const lineY = w.baseY
       + Math.sin(w.driftPhase + w.clock * (c.driftSpeed ?? 0) * Math.PI * 2) * (c.driftAmplitude ?? 0);
-    w.vy = dt > 0 ? (w.container.position.y - w.prevY) / dt : 0;
+    // Read off the LINE and not off the drawn position, so the bank answers to
+    // the drift it was written for. Through the nudge, a 0.6-unit give inside
+    // one frame is 36 units/sec of apparent climb against a cruise of 8 — the
+    // clamp would peg the lean at full bank and the animal would roll every
+    // time the seal touched it.
+    w.vy = dt > 0 ? (lineY - w.prevY) / dt : 0;
+    w.prevY = lineY;
+
+    // THE GIVE. A spring back to the line rather than a decaying velocity: a
+    // shove that only decays leaves the body displaced by speed/decay forever,
+    // which is a whale that has been KNOCKED. This one gives, settles and is
+    // back on its line about a second later, which is the whole difference
+    // between nudging thirty tonnes and moving it. Clamped as well, so a seal
+    // that rams the same flank six times gets six nudges and never a tow.
+    const r = c.ram ?? {};
+    if (w.nudgeX || w.nudgeY || w.nudgeVX || w.nudgeVY) {
+      const stiff = r.stiffness ?? 36;
+      const damp = r.damping ?? 8.4;
+      w.nudgeVX += (-stiff * w.nudgeX - damp * w.nudgeVX) * dt;
+      w.nudgeVY += (-stiff * w.nudgeY - damp * w.nudgeVY) * dt;
+      w.nudgeX += w.nudgeVX * dt;
+      w.nudgeY += w.nudgeVY * dt;
+      const cap = r.maxOffset ?? 1.5;
+      const off = Math.hypot(w.nudgeX, w.nudgeY);
+      if (off > cap) {
+        w.nudgeX *= cap / off;
+        w.nudgeY *= cap / off;
+      }
+      // Settled. Zeroed outright rather than left ringing at the fourth
+      // decimal, so the branch above costs nothing for the rest of the sweep.
+      if (off < 0.002 && Math.hypot(w.nudgeVX, w.nudgeVY) < 0.01) {
+        w.nudgeX = 0; w.nudgeY = 0; w.nudgeVX = 0; w.nudgeVY = 0;
+      }
+    }
+
+    w.container.position.x = w.lineX + w.nudgeX;
+    w.container.position.y = lineY + w.nudgeY;
 
     // Lean into the climb. The target is the drift's own slope expressed as an
     // angle, capped at `bank`, and chased rather than snapped — a body this
@@ -558,8 +612,17 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
     // length (radius small) or shoves from half a screen away (radius large);
     // neither is the shape on screen. This is the distance from the seal to the
     // body's axis segment, which is what the silhouette actually is.
+    //
+    // ONE CONTACT TEST, BOTH DIRECTIONS. The whale shoves the seal aside, and a
+    // seal that arrived at ramming speed moves the whale a little in return —
+    // the same touch, read from each end. A second shape for the ram would be
+    // a body you can be pushed by at one size and push at another, which is
+    // the sort of pair that drifts apart the first time either is retuned (see
+    // the crab's claw for how that goes).
     const p = hooks.player;
-    if (p && (c.shoveForce ?? 0) > 0) {
+    const ram = hooks.ram;
+    let ramming = false;
+    if (p && ((c.shoveForce ?? 0) > 0 || ram?.dashing)) {
       const half = w.length * 0.5;
       const ax = w.container.position.x - w.dir * half;
       const bx = w.container.position.x + w.dir * half;
@@ -569,7 +632,33 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
       const dx = p.position.x - cx;
       const dy = p.position.y - cy;
       const hit = w.bodyRadius + (p.radius ?? 0);
-      if (dx * dx + dy * dy <= hit * hit) {
+      const touching = dx * dx + dy * dy <= hit * hit;
+
+      // THE NUDGE, on the frame the ram ARRIVES. Along the dash, like every
+      // other thing the strike shoves (see applyKnockback) — the seal is a
+      // battering ram travelling in one direction, and pushing a whale
+      // radially would have a clip along the flank lift it.
+      //
+      // Deliberately NOT divided by size the way a creature's knock is: at
+      // thirty tonnes that arithmetic rounds to nothing, and the whale is the
+      // one body in the game whose reaction is authored as a flat give rather
+      // than derived from its mass.
+      ramming = touching && !!ram?.dashing;
+      const rc = c.ram ?? {};
+      if (ramming && !w.ramTouch && rc.enabled !== false) {
+        const k = CONFIG.strike?.knockback ?? {};
+        // The same charge ramp the rest of the ram runs on, so a flick and a
+        // full-commitment strike do not move it alike.
+        const pw = Math.min(1, Math.max(0, ram.power ?? 0));
+        const scale = (k.powerMin ?? 0.45) + ((k.powerMax ?? 1.3) - (k.powerMin ?? 0.45)) * pw;
+        const dLen = Math.hypot(ram.dirX ?? 0, ram.dirY ?? 0) || 1;
+        const speed = (rc.speed ?? 5) * scale;
+        w.nudgeVX += ((ram.dirX ?? 0) / dLen) * speed;
+        w.nudgeVY += ((ram.dirY ?? 0) / dLen) * speed;
+        hooks.onNudge?.(p.position.x, p.position.y, speed);
+      }
+
+      if (touching && (c.shoveForce ?? 0) > 0) {
         // OUT OF THE CORRIDOR, NOT ALONG IT.
         //
         // The obvious normal — from the nearest point on the axis to the seal —
@@ -597,6 +686,10 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
         hooks.onShove?.(nx / len, ny / len, c.shoveForce, p.position.x, p.position.y);
       }
     }
+    // Outside the branch above, so a dash that ENDS while the seal is still
+    // against the flank clears the latch and the next one lands — and so a
+    // whale the player never touches settles it to false every frame.
+    w.ramTouch = ramming;
 
     // --- the spout ---------------------------------------------------------
     if (c.spoutEnabled && w.morphs.has('blowhole')) {

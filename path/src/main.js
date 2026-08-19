@@ -33,13 +33,14 @@ import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
 import { loadNoteGlyphs } from './systems/noteStorm.js';
 import { warmShaders, warmPipeline } from './systems/shaderWarmup.js';
+import { installBossWarmup } from './systems/bossWarmup.js';
 import { perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary } from './systems/perfLog.js';
 import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, isInvulnerable, perfectCrossed, strikeLoaded } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -88,24 +89,32 @@ import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginResta
 import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime, cardsArriveAt, saluteEnabled } from './systems/levelUpTime.js';
 import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossKillFraming } from './systems/bossKill.js';
 import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } from './systems/bossCorpse.js';
+import { fireBossBoom, updateBossBooms, resetBossBooms } from './systems/bossBoom.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
+import { updateBossEyes, resetBossEyes } from './systems/bossEyes.js';
 import { updateCelebration, playCelebration } from './systems/celebrate.js';
 import { captureBossShot, resetBossShot, bossShot } from './systems/bossShot.js';
 import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
-import { beginTitleSeal, endTitleSeal, titleSealEngaged, updateTitleSeal } from './systems/titleSeal.js';
+import { beginTitleSeal, endTitleSeal, resetTitleSeal, titleSealEngaged, updateTitleSeal } from './systems/titleSeal.js';
+// The screen between the name card and the run — see systems/mainMenu.js. It
+// is mounted from here rather than from ui.js because it lives IN THE ARENA:
+// it poses the run's own seal and claims the run's own camera, neither of which
+// the UI layer has ever known about.
+import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged } from './systems/mainMenu.js';
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { highScore } from './systems/leaderboard.js';
-import { initUI, showStartMenu, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
-import { setHiveUpgrades, setHiveLayout, setHiveStyle, toggleHive } from './ui/upgradeHive.js';
+import { initUI, showStartMenu, showHowToPlay, hideHowToPlay, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
+import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive } from './ui/upgradeHive.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
 import { setTelegraph, updateTelegraph, clearTelegraph } from './systems/telegraph.js';
 import { initCallouts, updateCalloutUi, clearCalloutUi } from './ui/callout.js';
+import { initChainDebug, updateChainDebug, toggleChainDebug, dumpChainTrace } from './ui/chainDebug.js';
 import { hidePauseMenu, isPauseOpen, showPauseMenu, updatePauseNav } from './ui/pauseMenu.js';
 import { actionForKey, onSettingsChanged, shakeScale } from './systems/settings.js';
 import { isTextEntry, isTypingTarget } from './ui/typing.js';
@@ -119,6 +128,9 @@ import { initUpgradeDebug } from './ui/upgradeDebug.js';
 import { initAnimDebug } from './ui/animDebug.js';
 import * as playtest from './systems/playtest.js';
 import { causesOfDeath } from './deathCauses.js';
+// The caption on the kill-shot polaroid. `playerName` and not the raw stored
+// value — see the note where it is used.
+import { playerName } from './systems/playerName.js';
 import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js';
 
 // Restore any saved tuning BEFORE anything reads CONFIG — world/grid/camera
@@ -375,6 +387,17 @@ async function boot() {
   } catch (err) {
     console.warn('[boot] shader warm-up skipped —', err?.message ?? err);
   }
+  // The SECOND warm-up, and it runs mid-game rather than here: the boot pass
+  // above cannot cover a boss arrival, because the part of an arrival that
+  // costs the most is the texture upload the pass above deliberately refuses
+  // to do for the whole roster (see the note in shaderWarmup.js). This hands
+  // systems/bossWarmup.js the same three things post.warm needs, so it can pay
+  // for ONE boss during the three-second hush in front of it instead.
+  //
+  // Outside the try above on purpose: this only stores three references and
+  // cannot fail, and a warm-up that was skipped because compileAsync threw is
+  // exactly the run that most wants the boss one working.
+  installBossWarmup({ post, scene: world.scene, camera: world.camera });
   loading.setProgress(1);
   loading.remove();
 
@@ -391,6 +414,9 @@ async function boot() {
     // The Rive card is going up. The seal is framed BEFORE it, so the push-in
     // is already under way while the artboard parses — see systems/titleSeal.js.
     onSplash: beginTitleSeal,
+    // ...and where the card lets out. The name screen hands over to the 3D menu
+    // now rather than straight into a run — see leaveSplash in ui/ui.js.
+    onMenu: showMainMenu,
     onStart: startGame,
     onRestart: restartRun,
     onLevelChoice: applyLevelChoice,
@@ -408,6 +434,10 @@ async function boot() {
   // After initUI, which is what builds the root it appends to — and appended
   // last so the band sits over the menus (see ui/callout.js).
   initCallouts(uiRoot());
+  // The food chain's diagnostic. Always built, never shown until C — the
+  // mechanic it describes is four conditions across three files and a tenth of
+  // a second, and every one of its failures looks identical from the seat.
+  if (DEV_UI) initChainDebug(uiRoot());
   // The join between callouts.csv and the code that fires each row, checked
   // once, out loud. A mis-typed id is otherwise a callout that simply never
   // happens, which is indistinguishable from one whose condition never came up.
@@ -623,7 +653,18 @@ function bindGlobalKeys() {
       post.cyclePreset();
       refreshTuner();
     }
-    // H / Shift+H / Alt+H: the upgrade hive — on, layout, style.
+    // C / Shift+C: the FOOD CHAIN readout, and a dump of its log.
+    //
+    // A key rather than a tuner panel for the same reason the hive cycle is
+    // one: the question is "why did THAT strike not chain", and it is only
+    // answerable while the water is moving. Anything you have to pause to read
+    // is a description of a frame, and the thing being diagnosed is a tenth of
+    // a second inside a fight.
+    if (e.key.toLowerCase() === 'c' && !isTypingTarget(e.target) && !e.repeat) {
+      if (e.shiftKey) dumpChainTrace();
+      else toggleChainDebug();
+    }
+    // H / Shift+H / Alt+H / Ctrl+H: the upgrade hive — on, layout, style, stacks.
     //
     // Three keys rather than a tuner panel because the whole point is to judge
     // it WHILE the water is moving: the question "does the cluster read better
@@ -643,6 +684,15 @@ function bindGlobalKeys() {
         const next = styles[(styles.indexOf(hive.style) + 1) % styles.length];
         setHiveStyle(next);
         console.log(`[hive] style ${next}`);
+      } else if (e.ctrlKey || e.metaKey) {
+        // How a stack of the same card is drawn. Judged in a fight for the same
+        // reason the layout is: a pile that reads on an isolated tile can turn
+        // a packed corner to mush, and only a real build shows that.
+        const modes = ['pip', 'slab', 'deck', 'riser'];
+        const cur = hive.stack?.mode ?? 'slab';
+        const next = modes[(modes.indexOf(cur) + 1) % modes.length];
+        setHiveStack(next);
+        console.log(`[hive] stacks ${next}`);
       } else {
         console.log(`[hive] ${toggleHive() ? 'on' : 'off'}`);
       }
@@ -848,6 +898,83 @@ function handleTunerChange(path) {
 // snapped all four back on one frame. So the transition graphic goes up, the
 // dive glides everything back to normal underneath it, and startGame runs on
 // the far side.
+// ---------------------------------------------------------------------------
+// THE MAIN MENU — the screen between the name card and the run.
+//
+// Mounted here rather than in ui.js because it is not a screen in front of the
+// game, it is a shot OF it: the seal it poses is the run's seal, standing where
+// the run will start it, and the framing is a claim on the run's own camera.
+// ui.js only says WHEN — it calls `onMenu` when the Rive card is dismissed, and
+// it never shows that card twice, so this is where every later route back would
+// land.
+//
+// Nothing about the frame loop changes while it is up. The world ticks, the
+// water moves, the light runs; the menu adds a pose, a claim and a row of
+// buttons on top, and Play eases all three to nothing over the first second of
+// the run. See systems/mainMenu.js.
+function showMainMenu() {
+  if (mainMenuActive()) return;
+  // WHERE THE RUN WILL START IT, before anything is measured against it. The
+  // menu composes its crop on where the animal stands, and startGame calls
+  // this again on the way into the run — so the two agree and the glide has
+  // nothing to correct for. Without it the seal sits whereever initPlayer left
+  // it and the camera would slide sideways the moment Play was pressed.
+  resetPlayer();
+  // The title card's own push-in is over: this screen makes its own claim, and
+  // two shots claiming the camera is the last writer winning at random. Dropped
+  // rather than released, because the splash is still dissolving over the top
+  // of it and there is nothing to glide back to.
+  resetTitleSeal();
+  mountMainMenu({
+    world,
+    seal: player,
+    root: uiRoot(),
+    // WHAT THE BUTTONS DO lives here; how they feel lives in the menu. Three,
+    // because three is what the row was composed and tuned for
+    // (CONFIG.splashBust.menu) and a fourth would re-cut the frame.
+    items: [
+      {
+        label: 'Play',
+        // The run starts NOW and the menu gets out of the way over the next
+        // second — see the release. Both, in this order: startGame clears the
+        // pending input edges, so the click that pressed this button cannot
+        // also spend a strike on frame one.
+        onPress: () => {
+          showHud();
+          startGame();
+        },
+      },
+      // The old DOM start menu, which holds every instruction the game has and
+      // which nothing has been able to reach since the splash started going
+      // straight into a run. Its own "Start run" still works — startGame
+      // releases this menu on every route into a run, not just the button above.
+      { label: 'How to play', onPress: showHowToPlay },
+      // The board on its own surface, rather than only as a panel inside the
+      // score card — until now the only way to look at it was to die. See
+      // showLeaderboard.
+      { label: 'Leaderboard', onPress: showLeaderboard },
+    ],
+  });
+}
+
+/**
+ * Hand the frame back to the run. Called from startGame, so it covers every
+ * route in — the Play button, the start panel's own button, a restart,
+ * `?sandbox` — rather than only the one that was thought of.
+ *
+ * A RELEASE, not a teardown: the menu keeps running over the opening second of
+ * the run, easing its camera claim and the seal's pose out. The DOM panels it
+ * may have opened go immediately, because those are the only parts of it that
+ * would be sitting in front of a live game.
+ */
+function closeMainMenu() {
+  if (!mainMenuActive()) return;
+  hideHowToPlay();
+  hideLeaderboard();
+  hidePauseMenu();
+  mainMenu()?.release();
+}
+
 function restartRun() {
   const seconds = CONFIG.death?.restart?.time ?? 0.9;
   showRestartTransition(seconds);
@@ -869,6 +996,12 @@ function restartRun() {
 }
 
 function startGame() {
+  // The menu is gone, and with it the scene it was drawing: the particle system
+  // goes back to the arena here, the seal's rim comes off the bust. FIRST in
+  // this function, because everything below is the run being built and the
+  // resets that follow (resetParticles in particular) have to land on buffers
+  // that already belong to world.scene again.
+  closeMainMenu();
   // The title card is gone. Releases the hero framing rather than dropping it,
   // so the frame glides back to the run's over the first fraction of a second
   // instead of cutting on the exact frame the player pressed Start. A no-op on
@@ -937,6 +1070,7 @@ function startGame() {
   // burst: this is a restart, and a boss exploding over the opening frame of
   // the next run is worse than one that simply isn't there.
   resetBossCorpses();
+  resetBossBooms();
   resetPickups(world.scene);
   resetParticles();
   // Before resetPlayer, which puts the seal back at midwater: this hands the
@@ -955,6 +1089,7 @@ function startGame() {
   resetBeams(world.scene);
   resetLaserEyes();
   resetEyeLights();
+  resetBossEyes();
   // The last run's trophy goes with it, or the death screen would offer this
   // run's player a picture of somebody else's boss.
   resetBossShot();
@@ -974,11 +1109,22 @@ function startGame() {
   // than springing to it on its first frame, so it has to be reset once the
   // seal is back at midwater. Reset before, and a run opens with the frame
   // sailing across the arena from wherever the last body came to rest.
-  resetCineCamera();
+  //
+  // ...AND NOT AT ALL WHEN A MENU IS GLIDING OUT OF THE WAY. The rig is
+  // mid-blend from the menu's framing into this run's opening shot — that IS
+  // the transition — and a reset here would place the camera on `roundStart`
+  // on the frame Play was pressed, which is exactly the cut the menu exists to
+  // remove. Every other route in (a restart, `?sandbox`) still resets.
+  if (!mainMenuActive()) resetCineCamera();
   resetGarlic();
   resetShrimpRing();
   resetClub();
   resetStrike();
+  // The chain fanfare's floor, on the run clock — which restarts at 0, so a
+  // stale stamp from a long previous run would swallow the first link of this
+  // one. -Infinity rather than 0: the very first link of a run has nothing to
+  // be too soon after.
+  lastChainCeremony = -Infinity;
   // Shells the last run's final dash queued but never got to throw. Without
   // this they arrive in the opening seconds of the new run, from a seal that
   // has not struck yet.
@@ -1067,6 +1213,7 @@ function startGame() {
   // dies to something unclassified would be handed the LAST run's punchline.
   lastDamageSource = null;
   gameState.deathCauses = null;
+  gameState.deathSource = null;
   gameState.kills = 0;
   gameState.score = 0;
   gameState.level = 1;
@@ -1134,7 +1281,10 @@ function startGame() {
     xp: { ...CONFIG.xp },
   });
 
-  updateHUD(gameState, player, null, rapidFireTimer, world.camera);
+  // Zero dt: this is the reset, not a frame. The seal's gauges are smoothed
+  // (see resetPlayerBars) and the reset has just seeded them at full — letting
+  // time pass here would start them chasing before the run has begun.
+  updateHUD(gameState, player, null, rapidFireTimer, world.camera, 0);
 }
 
 // Dying stops the RUN, not the frame. The seal goes limp and sinks, time and
@@ -1157,6 +1307,13 @@ function killPlayer() {
   // down the other end of the death dive — by then nothing else has touched
   // `lastDamageSource`, but the run ended HERE and this is a fact about it.
   gameState.deathCauses = causesOfDeath(lastDamageSource);
+  // The raw source alongside the causes, for the score screen's Threats tab.
+  // The Set above is every cause a QUIP may fire on — several, on purpose —
+  // and a recap that has to name one thing cannot pick from it. Banked at the
+  // same moment and for the same reason: nothing else touches
+  // `lastDamageSource` between here and the card, and this is still a fact
+  // about the run that ended HERE.
+  gameState.deathSource = lastDamageSource;
   // updateHUD stops here, and the seal's floating bars are anchored by it —
   // see hidePlayerBars. The rest of the HUD is screen-anchored and can stay.
   hidePlayerBars();
@@ -1826,7 +1983,14 @@ function onEnemyKilledFeedback(e, killEvent = null) {
   // then throws the burst itself off the same pose. It returns false if the
   // hold is switched off, and the old behaviour — burst on the killing frame —
   // is what happens then.
-  if (e.isBoss && !holdBossCorpse(e, world.scene)) spawnBossGibs(e);
+  if (e.isBoss && !holdBossCorpse(e, world.scene)) {
+    spawnBossGibs(e);
+    // The explosion normally rides the corpse's own countdown, a third of a
+    // second before the shutter (see systems/bossCorpse.js). With the hold
+    // switched off there is no countdown and no body to wait for, so it goes
+    // here, on the killing frame, off the pose that is about to be released.
+    fireBossBoom(e);
+  }
 
   const big = e.def.radius >= 1 || schoolWipe;
   // Bigger/tougher creatures drop in pitch and ring out longer, so a
@@ -1884,6 +2048,11 @@ function onEnemyKilledFeedback(e, killEvent = null) {
 // ---------------------------------------------------------------------------
 
 /** @param {string} source one of CONFIG.strike.chainOn — only 'strike' is a dash hit. */
+// When the last full chain ceremony fired, on the RUN clock — which freezes
+// with the game, so a link scored on the frame a level-up lands does not have
+// its fanfare eaten by the seconds spent on the card screen.
+let lastChainCeremony = -Infinity;
+
 function onChainHit(chain, source) {
   const x = player.mesh.position.x;
   const y = player.mesh.position.y;
@@ -1899,21 +2068,49 @@ function onChainHit(chain, source) {
   // rate-limited globally (see feedback.js) and whichever event asks first
   // claims the window. The extension is the bigger of the two things
   // happening, so it gets to be the one that stops the frame.
-  if (chain >= (CONFIG.strike.foodChain?.minChain ?? 2)) {
+  const bannerFrom = CONFIG.strike.foodChain?.bannerFrom ?? 1;
+  if (chain >= bannerFrom) {
     const fc = CONFIG.strike.foodChain ?? {};
+    // THE NUMBER ALWAYS UPDATES; THE FANFARE HAS A FLOOR. A link is one
+    // mouthful, and a magnet sweep swallows six inside a frame — so the banner
+    // below re-pops with the new count and the new colour every time, and the
+    // camera work fires at most every `ceremonyGap`. Re-triggering a 1.1s
+    // cinematic hold ten times a second never lets the lens settle, which
+    // reads as the game struggling rather than as the player doing very well.
+    // Same rule as the proc toast's `toastMinGap`: a repeat is never dropped,
+    // it just does not replay its own arrival.
+    const ceremony = gameState.time - lastChainCeremony >= (fc.ceremonyGap ?? 0);
+    // DEPTH PAST THE FIRST BANNER, which is what the pitch and the punch are
+    // really about: how much deeper this is than the quietest one the player
+    // is shown. Measured off `minChain` rather than off a literal 2, because
+    // that threshold is now 1 and the old subtraction went NEGATIVE on the
+    // first link — a pitch below the base and a punch that pulled the camera
+    // the wrong way, on the one link a new player is most likely to see.
+    const depth = Math.max(0, chain - bannerFrom);
     feedback('foodChain', {
       x, y,
+      // WHAT EXTENDED THE CHAIN. Passed for observers rather than for anything
+      // in the table: chainStrike() refuses inside a source's cooldown (see
+      // CONFIG.strike.chainOn.cooldowns), so this event is the only place that
+      // knows a breach ASKED for links and actually got them — which is what
+      // Porpoising's hive tile flashes on. A seal skimming the water line asks
+      // on every crossing and is paid on few of them, and the tile has to
+      // follow the payout, not the request.
+      source,
       scale: Math.min(1.8, 0.8 + chain * 0.12),
       // Climbs a fixed step per link, like `strikeChain` does — the pitch is
       // how deep the chain is, readable without looking at the banner.
-      sfxOpts: { pitch: 1 + (chain - 2) * 0.07 },
+      sfxOpts: { pitch: 1 + depth * 0.07 },
     });
     spawnChainToast(world.camera, x, y, chain);
-    world.punchCamera((fc.punch ?? 0.045) + (fc.punchPerChain ?? 0.012) * (chain - 2));
-    // The punch above is the fixed camera's version of this and stays exactly
-    // as it was — both fire, and on the cinematic rig the punch rides on top
-    // of the state's push-in the same way it rides on top of a death.
-    cineEvent('foodChain');
+    if (ceremony) {
+      lastChainCeremony = gameState.time;
+      world.punchCamera((fc.punch ?? 0.045) + (fc.punchPerChain ?? 0.012) * depth);
+      // The punch above is the fixed camera's version of this and stays exactly
+      // as it was — both fire, and on the cinematic rig the punch rides on top
+      // of the state's push-in the same way it rides on top of a death.
+      cineEvent('foodChain');
+    }
   }
 
   // The dash's own impact. Only for links that ARE a dash hit — an orb
@@ -2177,7 +2374,13 @@ function onCelestialPass(which, at) {
     gulpPickups(
       world.scene, player.mesh.position.x, player.mesh.position.y,
       body.gulp + (stats.chumGulpRadius ?? 0),
-      (value, x, y, healMul) => { collectChum(value, x, y, healMul); onChumSwallowed(x, y); },
+      // collectChum already ends in onChumSwallowed — that is the whole reason
+      // it exists as a named function (see the note on its last line). Calling
+      // it again here fed every orb the tide hoovered into the meter TWICE,
+      // and now that a mouthful is a FOOD CHAIN link it would score two of
+      // them per orb: a moon pass silently paying double, which is exactly the
+      // sort of thing that makes the chain read as random.
+      collectChum,
     );
   }
 }
@@ -2194,7 +2397,20 @@ function onChumSwallowed(x, y) {
   // The denominator for every chain rate in the report — links per strike means
   // nothing without knowing whether there was any food to be had.
   playtest.recordChum();
-  if (!feedChum(player.stats)) return;
+  const filled = feedChum(player.stats);
+
+  // THE FOOD CHAIN, SCORED HERE. A strike released in the sweet spot ARMS the
+  // chain; this mouthful is what makes it one, and every mouthful after it
+  // ticks the number up. Read before the `filled` branch below and outside it,
+  // because a link no longer has anything to do with the bar reaching full —
+  // that is a separate, rarer event that happens to share this funnel.
+  const chain = consumeChainLink();
+  if (chain) {
+    playtest.recordChainLink(chain);
+    onChainHit(chain, 'chumEaten');
+  }
+
+  if (!filled) return;
   // The bar just crossed to full — the seal flashes head to tail. Fired here
   // rather than inside chargeSkin's own update because "crossed" is an EVENT
   // and the skin only ever sees a level; a per-frame threshold test there
@@ -2434,6 +2650,12 @@ function fire() {
     y: points > 0 ? muzzlePoint.y : py + dir.y,
     dirX: dir.x,
     dirY: dir.y,
+    // WHICH WEAPON FIRED. `shoot` is shared with the starfish below, and
+    // nothing in the payload used to tell the two apart — so an observer had to
+    // treat every shot as the main gun's. The hive routes the whole pebble
+    // volley off this (see EVENT_UPGRADE in ui/upgradeHive.js); the same string
+    // the projectiles carry, so there is one vocabulary for "who fired".
+    source: 'gun',
     // THE SEAL IS MOVING AND SO IS THE WATER IT JUST DISTURBED. `muzzle` has
     // always carried an `inherit` (see CONFIG.emitters) and nothing ever passed
     // it a velocity, so every flash was a burst thrown out of a stationary
@@ -2791,6 +3013,7 @@ function fireStarfish() {
   });
   feedback('shoot', {
     x: origin.x, y: origin.y, dirX: dir.x, dirY: dir.y, scale: 0.7,
+    source: 'starfish',   // not the gun — see the note on the volley's shoot
     vx: player.velocity?.x ?? 0,
     vy: player.velocity?.y ?? 0,
   });
@@ -3271,6 +3494,18 @@ function animate(now) {
       // be shoved by has to be a body you touch at the size you touch
       // everything else at.
       player: { position: player.mesh.position, radius: player.stats?.hitRadius ?? CONFIG.player.hitRadius },
+      // THE DASH, so the same contact that shoves the seal can move the whale
+      // a little the other way — see CONFIG.whale.ram. Injected rather than
+      // imported into whale.js for the reason that file gives about its clock:
+      // state the sweep does not own comes in through the hooks, so the whole
+      // of it stays drivable from a harness with no strike, no player and no
+      // frame.
+      ram: {
+        dashing: strikeState.active,
+        dirX: strikeState.dashDir.x,
+        dirY: strikeState.dashDir.y,
+        power: strikeState.power,
+      },
       // Deliberately NOT onEnemyKilledFeedback. Nothing here is a kill: it
       // does not count toward `gameState.kills`, it earns no combo, it drops no
       // chum and it is not attributed to any ability in the playtest ledger.
@@ -3420,12 +3655,11 @@ function animate(now) {
         // limited globally and the extension is the bigger of the two things
         // happening.
         const rel = consumeStrikeLink();
-        if (rel.chain) onChainHit(rel.chain, 'strikeRelease');
         // Filed whether or not it scored, WITH which condition failed. A log of
         // links alone cannot tell "never strikes" from "strikes constantly and
         // never links", and the first time this was asked about there was no
         // chain data in the run log at all.
-        playtest.recordStrike(rel.chain, rel.hadFood, rel.hadWindow, rel.sweet);
+        playtest.recordStrike(rel.depth, rel.hadFood, rel.hadWindow, rel.sweet);
         // Combo-scaled, same multiplier the speed ceiling in updatePlayer
         // uses — a dash fired deep in a chain launches harder, and the ceiling
         // is already raised to let it.
@@ -3637,7 +3871,10 @@ function animate(now) {
 
     updateProjectiles(
       dt, world.scene, enemies,
-      (x, y, p) => feedback('bounce', { x, y, ...bounceComboFx(p) }),
+      // `source` because this callback fires for ANY projectile with bounces
+      // left, not just Ricochet Rounds — scallop shells carom off walls too.
+      // Without it the hive credited every scallop bounce to Ricochet Rounds.
+      (x, y, p) => feedback('bounce', { x, y, source: p.source, ...bounceComboFx(p) }),
       (p) => feedback('scallopJet', { x: p.mesh.position.x, y: p.mesh.position.y, dirX: -p.dir.x, dirY: -p.dir.y }),
       // A pearl that times out in open water still cracks. Queued rather than
       // burst inline for the same array-mutation reason as everything else in
@@ -4252,6 +4489,14 @@ function animate(now) {
         // chum does — through the meter, which is the only route orbs have.
         const filled = restoreCharge(player.stats);
         feedback('levelUp', { x, y, scale: 0.6 });
+        // One pickup, one mouthful — so it links exactly like a chum orb does
+        // inside an armed chain. Without this the one pickup that hands over a
+        // whole bar would be the one that could not extend the chain.
+        const orbChain = consumeChainLink();
+        if (orbChain) {
+          playtest.recordChainLink(orbChain);
+          onChainHit(orbChain, 'chumEaten');
+        }
         if (filled) chainFrom('chumFull');
         // An orb fills the bar outright, so it crosses to full unless it
         // already was — same flash as the mouthful that tops it off.
@@ -4324,7 +4569,9 @@ function animate(now) {
       alive: enemies.length,
     });
 
-    updateHUD(gameState, player, strikeState, rapidFireTimer, world.camera);
+    // rawDt, not dt: the hp/air gauges are the player's read-out and must not
+    // be dilated along with the water. See the note on updateHUD.
+    updateHUD(gameState, player, strikeState, rapidFireTimer, world.camera, rawDt);
     // Null while there is no boss, which is most of a run — the bar hides
     // itself rather than the loop having to know it exists.
     updateBossBar(bossBanner());
@@ -4574,6 +4821,10 @@ function animate(now) {
   setTelegraph(tutorialState.subjectMesh, telegraphModeFor(tutorialState.active));
   updateTelegraph(realDt);
 
+  // REAL time, like the callouts and for the same reason: a diagnostic that
+  // froze behind the upgrade cards would be blank at exactly the moment you
+  // want to read what just happened.
+  updateChainDebug(player.stats);
   updateCalloutUi(realDt, {
     camera: world.camera,
     playerX: player.mesh.position.x,
@@ -4646,8 +4897,13 @@ function animate(now) {
     // the cursor, which reads as the seal ignoring you. See systems/titleSeal.js.
     updateAimRig(
       realDt,
-      deathState.active ? null : input.aim,
-      titleSealEngaged(),
+      // The MENU'S aim when it has one, which is the cursor remapped through
+      // the bust's own spread — a seal stood upright has its neck cone pointing
+      // at the sky, and handed the raw `input.aim` it tracks a wedge above its
+      // own head and stares blankly through the rest of the screen. See
+      // bustAim in systems/splashBust.js.
+      deathState.active ? null : (mainMenuAim() ?? input.aim),
+      titleSealEngaged() || mainMenuEngaged(),
       0,
       deathState.active,
     );
@@ -4712,6 +4968,12 @@ function animate(now) {
   // through the level-up cards and the pause menu, and go out over a beat when
   // the seal dies rather than switching off on the frame of the bite.
   updateEyeLights(realDt, player.aimRig, { lit: deathState.active ? 0 : 1, charge: windUp });
+  // ...and the same system on whatever is hunting it. Real time and outside
+  // the run gate for the same reasons as the seal's, and fed the live enemy
+  // list rather than a list this file keeps: a boss can die, be removed and
+  // have its visual recycled between two frames, and a tracked list would
+  // hold the corpse. See systems/bossEyes.js.
+  updateBossEyes(realDt, world.scene, enemies.filter((e) => e.isBoss));
   updateProjectileTrails(realDt, world.scene, projectiles);
   // The RGB smear the seal drags through the air. Real time, like the trails
   // above and for the same reason: the cloud is weather, and a hit-stop that
@@ -4798,6 +5060,14 @@ function animate(now) {
   // on the dilated one. Paused, the body holds — it is something the player
   // can look at, like everything else above.
   updateBossCorpses(rawDt, gameState.paused ? 0 : dt);
+  // The cloud a boss goes up in. The WALL clock, and it is the whole design:
+  // the rings are born already at their radius so the bloom can happen across
+  // an ocean the kill shot has frozen at a tenth speed — on the dilated clock
+  // the last ring would arrive several seconds after the photograph it exists
+  // to be in. Not gated on the pause: a menu opened inside the third of a
+  // second this takes would otherwise leave a half-finished explosion parked
+  // over the frame until it closed.
+  updateBossBooms(rawDt);
   updateHitShapeDebug();
   // The lock-on reticles. Real time, like the flashes above: a mark is a
   // countdown the player is reading off the screen, and a hit-stop that froze
@@ -4908,6 +5178,19 @@ function animate(now) {
   // a lag the crane already accepts by design (see poseBody in
   // entities/player.js) and the alternative to posing the body twice.
   updateTitleSeal(realDt, world);
+  // ...and the menu's, which is the same kind of claim and lives at the same
+  // point in the frame for the same reason: it poses the body on top of a rig
+  // that has already solved, and it claims the camera before updateCamera
+  // consumes it.
+  //
+  // THIS RUNS THROUGH THE OPENING SECOND OF A RUN. It is not gated on there
+  // being no run — that IS the transition, and cutting it off at startGame
+  // would put the cut back exactly where it was taken out.
+  //
+  // `pad` is off while the settings panel is in front of the menu: updatePauseNav
+  // is already spending the pad's confirm on that frame, and one press must not
+  // also squash the hexagon behind the row being read.
+  if (mainMenuActive()) mainMenu()?.update(realDt, { pad: !isPauseOpen() });
   // The stage parks the shot on the seal, and records where it is so a staged
   // event fires ON the seal rather than at wherever the world origin happens
   // to be. Unconditional — the position has to be current the moment the panel
@@ -5004,6 +5287,16 @@ function animate(now) {
   if (bossKillShotDue()) {
     const meta = {
       name: bossState.name,
+      // What finished it, already resolved to a weapon's own name — see
+      // bossState.killedBy, which is written on the frame the boss died and is
+      // the only record of it by the time this runs.
+      cause: bossState.killedBy,
+      // Whose run this is, read once here rather than when a card is drawn.
+      // playerName() and not loadPlayerName(): this is a caption, so it wants
+      // the trimmed, never-blank reading — a print titled with an empty string
+      // is a print with a hole in it, and 'Seal' is the game's own voice for a
+      // player who never typed one.
+      player: playerName(),
       level: gameState.level,
       score: gameState.score,
       time: gameState.time,

@@ -1,5 +1,7 @@
 import { CONFIG } from '../config.js';
 import { encodeQr } from '../qr.js';
+import kickersCsv from '../kickers.csv?raw';
+import { parseKickerCsv, pickKicker } from '../kickerTable.js';
 // The polaroid. Safe to import from a Node harness — snapshotCard.js pulls the
 // Rive runtime in dynamically, inside its init, precisely so that this import
 // does not drag a browser-only WASM package into every test that touches a
@@ -25,6 +27,11 @@ import { renderSnapshotCardPng, renderSnapshotCards, snapshotCardsLive, cardText
 // inside the same frame, and this file cannot be driven from anywhere else.
 //
 // Nothing here is on the hot path. capture() runs at most once per boss.
+
+// Parsed once at module load rather than per kill — the file cannot change
+// while the page is up, and parsing a five-row table on the frame a boss dies
+// is work for nothing. Same reasoning as QUIPS in ui/ui.js.
+const KICKERS = parseKickerCsv(kickersCsv);
 
 // THE ROLL. Every boss killed this run, oldest first — not one slot that each
 // kill overwrites, which is what this was until the score screen started
@@ -71,7 +78,9 @@ function formatTime(seconds) {
  * Grab the frame that is on screen RIGHT NOW and keep it.
  *
  * @param canvas the renderer's own canvas, mid-frame — see the note above.
- * @param meta   { name, level, score, time } for the caption.
+ * @param meta   { name, cause, player, level, score, time } for the caption.
+ *               `kicker` may be supplied to pin the label; left out, one is
+ *               rolled from kickers.csv and kept on the shot.
  */
 export function captureBossShot(canvas, meta = {}) {
   if (cfg().enabled === false || !canvas) return false;
@@ -105,6 +114,22 @@ export function captureBossShot(canvas, meta = {}) {
       thumb,
       square,
       name: meta.name ?? '',
+      // Kept ON THE SHOT rather than looked up when a card is built: the score
+      // screen's fan re-draws every print minutes after the fact, by which
+      // time bossState is about the boss AFTER this one — or about nothing.
+      cause: meta.cause ?? '',
+      // WHOSE PRINT IT IS, banked here for the same reason the cause is: the
+      // score screen's fan and the contact sheet redraw these cards long
+      // afterwards, and a player who renamed themselves in the box on the score
+      // screen would otherwise watch the prints they took ten minutes ago
+      // retitle themselves. The photograph and the caption are one moment.
+      player: meta.player ?? '',
+      // THE LABEL ABOVE THE CAUSE, rolled here and kept, for the third time on
+      // this object and the third version of the same reason: the fan and the
+      // contact sheet redraw these cards, and a caption that re-rolls on every
+      // redraw would have a print change its own joke while the player is
+      // looking at it. See pickKicker.
+      kicker: meta.kicker ?? pickKicker(KICKERS),
       level: meta.level ?? 0,
       score: meta.score ?? 0,
       time: meta.time ?? 0,

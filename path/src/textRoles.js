@@ -73,6 +73,18 @@ export const TEXT_ROLES = [
   { key: 'hint', label: 'Hints', selector: '.sv-hint', section: 'Screens',
     sample: 'WASD to swim — space to strike',
     style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.35, shadow: 0, glow: 0 } },
+  // The splash's blob menu (systems/gooMenu.js). Its own role rather than
+  // `button`: those are pale plates with dark text on them, and these are
+  // labels sitting ON a translucent bubble, so they want the opposite treatment
+  // — light, tracked out, and carrying a shadow the flat buttons never need.
+  // `fit: true` — the same per-element shrink the upgrade cards use (see
+  // fitCardText in ui/ui.js): the role's size is multiplied by --sv-fit, which
+  // whatever mounts the labels sets per button. A hexagon is a narrow thing to
+  // put a word in, and "Leader Boards" does not fit one at the size the rest of
+  // the row wants to be.
+  { key: 'blobButton', label: 'Splash blob button', selector: '.sv-blob-label', section: 'Screens',
+    sample: 'LEADER\nBOARDS', fit: true,
+    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.16, case: 'UPPER', useInk: true, color: 0xeaf7ff, alpha: 1, shadow: 6, glow: 0 } },
   { key: 'board', label: 'Leaderboard row', selector: '.sv-lb-row', section: 'Screens',
     sample: '1   SEAL   184,200',
     style: { font: FONT_GLOBAL, size: 12, weight: 400, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0 } },

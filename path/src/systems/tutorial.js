@@ -622,11 +622,20 @@ export function updateTutorial(dt, ctx = {}, live = true) {
     if (!answered && step.done(ctx, events, doneIds)) answered = true;
 
     const readable = calloutAge(row) >= legibleFor(row, ctx.device);
+    // EVERY COACH LINE IS PINNED WHILE IT IS UP, on either surface, and the
+    // reason is the same for both: the row has to still be there for the
+    // dissolve to be drawn on. Left to the band's own ager, a tip nobody
+    // answered would be taken off its surface at `hold` and the dissolve would
+    // have nothing to erode — which on screen is a line that does not
+    // dissipate at all, it just disappears.
+    //
+    // What differs between the two is only what ENDS them: a world tip's
+    // subject, a band tip's clock.
+    pinCallout(row, true);
     if (row?.subject) {
       // A WORLD TIP HAS NO CLOCK — see the header. It is pinned for as long as
       // it is up, and what ends it is the subject: answered, gone, or the
       // moment it described no longer being true.
-      pinCallout(row, true);
       // `ready` is re-asked as the LAPSE test rather than a second condition
       // written out here. The two would say the same thing today and would not
       // stay saying it: `ready` is where each step already decides whether its
@@ -644,11 +653,16 @@ export function updateTutorial(dt, ctx = {}, live = true) {
       // hold — the tip has been obeyed, and holding it there would be the game
       // arguing with something the player has already done.
       endStep(true);
-    } else if (slot.row !== row) {
-      // Timed out, or something louder took the band. Either way it had its
-      // moment: this is the "or the clock" half of the contract, and the timer
-      // that ran it is the band's own hold (see holdFor) rather than a second
-      // clock here that could disagree with it.
+    } else if (calloutAge(row) >= holdFor(row) || slot.row !== row) {
+      // Timed out, or something louder took the surface. Either way it had its
+      // moment: this is the "or the clock" half of the contract for the three
+      // control tips, which are about a button rather than about anything in
+      // the water and so have nothing else that could end them.
+      //
+      // THE CLOCK IS READ HERE rather than being left to the band's ager, and
+      // that is a consequence of the pin above: a pinned row is not aged out,
+      // so nobody else is going to end this. Reading `holdFor` — the same
+      // function the ager uses — is what keeps the two from disagreeing.
       endStep(true);
     }
   }
@@ -738,6 +752,11 @@ function startStep(next, ctx) {
     // on the next frame anyway, by which time there usually is one.
     if (!handle) return false;
   }
+  // Anything still dissolving goes NOW. Two lines cannot share a surface, and a
+  // fade left running would be applied to the new tip's words — the incoming
+  // line would arrive half eaten. Only reachable with the quiet between tips
+  // tuned shorter than the dissolve, which is a thing the Text panel can do.
+  dropFade();
   if (!pushCallout(row)) return false;
   subject = handle;
   subjectGone = false;

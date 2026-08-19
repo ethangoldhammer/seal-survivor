@@ -12,6 +12,7 @@
 import { initUI, uiRoot } from '../../path/src/ui/ui.js';
 import { initTextPanel, setTextPanelOpen, textPanelEl } from '../../path/src/ui/textPanel.js';
 import { initCallouts } from '../../path/src/ui/callout.js';
+import { initTypography } from '../../path/src/ui/typography.js';
 
 const noop = () => {};
 initUI({ onStart: noop, onRestart: noop, onLevelChoice: noop, onResume: noop, onPauseRestart: noop });
@@ -20,6 +21,15 @@ initUI({ onStart: noop, onRestart: noop, onLevelChoice: noop, onResume: noop, on
 // role sheet alone and would differ from the game by whatever ui/callout.js
 // states — which is exactly the drift a specimen is supposed to expose.
 initCallouts(uiRoot());
+// THE ROLE SHEET, which main.js injects at boot and this page did not.
+//
+// Without it the specimen lines are styled by ui/ui.js's own CSS instead of by
+// CONFIG.textStyles — which looks right for every role ui.js happens to carry a
+// rule for, and looks like nothing at all for one it does not. A role added
+// since that CSS was written (`blobButton`, the splash's blob menu) rendered at
+// browser defaults here while rendering correctly in the game, which reads as
+// the new role being broken rather than as the tool missing a line.
+initTypography();
 initTextPanel(noop);
 setTextPanelOpen(true);
 

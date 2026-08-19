@@ -37,10 +37,14 @@ const wakes = Array.from({ length: MAX_WAKES }, () => new THREE.Vector4(0, 0, 1,
 const wakeClaims = new Array(MAX_WAKES).fill(false);
 let wakeCursor = 1; // slot 0 is the seal's and is never handed out
 
+// Cells something else has claimed and this must not move — see `pin` below.
+const MAX_PINS = 8;
+
 const vertexShader = /* glsl */ `
   #define MAX_RIPPLES ${MAX_RIPPLES}
   #define MAX_TOUCH ${MAX_TOUCH}
   #define MAX_WAKES ${MAX_WAKES}
+  #define MAX_PINS ${MAX_PINS}
 
   uniform float uTime;
   uniform vec3 uRipples[MAX_RIPPLES];   // xy = origin, z = start time
@@ -48,6 +52,7 @@ const vertexShader = /* glsl */ `
   uniform vec4 uWake[MAX_WAKES];        // xy = source, z = radius, w = strength
   uniform vec4 uTouch[MAX_TOUCH];       // xy = world pos, z = radius, w = level
   uniform vec4 uTouchWarp;              // x = push, y = swirl, z = wave, w = spin
+  uniform vec4 uPin[MAX_PINS];          // xy = centre, z = held radius, w = free radius
   uniform float uDecay;
   uniform float uFreq;
   uniform float uWavelength;
@@ -102,6 +107,28 @@ const vertexShader = /* glsl */ `
       disp += (dir * pulse * uTouchWarp.x + vec2(-dir.y, dir.x) * uTouchWarp.y)
               * fall * level;
     }
+
+    // PINNED CELLS. Anything else on screen that has claimed a cell of this
+    // lattice — the splash menu's buttons sit in three of them — needs those
+    // cells to stay exactly where the maths put them, or the thing sitting in
+    // the cell and the cell itself drift apart on the first ripple and the
+    // button stops looking like part of the grid.
+    //
+    // Applied to the SUM rather than inside each loop, so one rule covers
+    // ripples, wakes and fingers alike and nothing new can leak past it. The
+    // test is against the REST position (pos.xy is untouched until the line
+    // below), which is what makes the pin a property of the cell rather than of
+    // wherever the wave happened to throw it.
+    //
+    // Two radii, not one: held solid out to z, then eased back to free by w. A
+    // hard edge would tear every line that crosses it, which is a worse artifact
+    // than the wobble it was fixing.
+    float pin = 1.0;
+    for (int i = 0; i < MAX_PINS; i++) {
+      if (uPin[i].w <= 0.0) continue;
+      pin = min(pin, smoothstep(uPin[i].z, uPin[i].w, length(pos.xy - uPin[i].xy)));
+    }
+    disp *= pin;
 
     pos.xy += disp;
     vWarp = length(disp);
@@ -265,6 +292,7 @@ export function createGrid(scene) {
   let cursor = 0;
   let waveT = 0; // pushed in by world.updateSurface; see setWaveTime
 
+  const pins = new Array(MAX_PINS).fill(0).map(() => new THREE.Vector4(0, 0, 0, 0));
   const ripples = new Array(MAX_RIPPLES).fill(0).map(() => new THREE.Vector3());
   const rippleParams = new Array(MAX_RIPPLES).fill(0).map(() => new THREE.Vector2());
 
@@ -308,6 +336,7 @@ export function createGrid(scene) {
         uRipples: { value: ripples },
         uRippleParams: { value: rippleParams },
         uWake: { value: wakes },
+        uPin: { value: pins },
         uTouch: { value: touch },
         uTouchColor: { value: touchColor },
         uTouchWarp: { value: touchWarp },
@@ -347,6 +376,28 @@ export function createGrid(scene) {
   function setWaveTime(t) {
     waveT = t;
     if (material) material.uniforms.uWaveT.value = t;
+  }
+
+  /**
+   * HOLD THESE CELLS STILL. `list` is [{ x, y, radius, feather }] in world
+   * units — everything within `radius` of one of those points does not move at
+   * all, and the lattice eases back to its normal behaviour by `feather`.
+   *
+   * For whatever is sitting IN the lattice rather than on top of it: the splash
+   * menu's buttons are three cells of it (systems/hexMenu.js), and a button
+   * whose cell ripples out from under it stops reading as part of the grid.
+   *
+   * Republished wholesale rather than added to, like the hulls: the caller owns
+   * the list, and a pin that has to be un-registered is a pin that gets left
+   * behind when whatever claimed it is gone.
+   */
+  function pin(list = []) {
+    for (let i = 0; i < MAX_PINS; i++) {
+      const p = list[i];
+      if (!p) { pins[i].set(0, 0, 0, 0); continue; }
+      const r = Math.max(0, p.radius ?? 0);
+      pins[i].set(p.x, p.y, r, Math.max(r + 1e-3, p.feather ?? r * 2));
+    }
   }
 
   // Punch the grid. Called by the feedback system for every juicy event.
@@ -530,5 +581,5 @@ export function createGrid(scene) {
   build();
   reset();
 
-  return { build, dispose, ripple, hullWake, update, reset, setWaveTime };
+  return { build, dispose, ripple, hullWake, pin, update, reset, setWaveTime };
 }

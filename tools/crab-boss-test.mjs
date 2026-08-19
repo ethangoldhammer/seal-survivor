@@ -250,7 +250,11 @@ section('THE EYES');
     `${preset?.eyeStrength} against the ember crab's ${swarmEyes}`);
   // The beams a gun perk fires come out of the eyeball joints, not the sockets
   // — on a stalked animal those are a body-length apart.
-  const nodes = CONFIG.boss?.perkFx?.eyeNodes?.bossCrab ?? [];
+  // RENAMED from `eyeNodes` — the old key was pinned in saved tuning holding
+  // stale names, so correcting config.js alone changed nothing. See the note
+  // there, and tools/boss-eye-test.mjs, which checks every name against the
+  // model rather than only the crab's against the stalk list.
+  const nodes = CONFIG.boss?.perkFx?.eyeSockets?.bossCrab ?? [];
   check('a perk\'s beams fire from the eyeballs', nodes.length === 2
     && nodes.every((n) => asset.eyeStalks.some((s) => s.includes(n))),
     nodes.join(', ') || 'none declared');

@@ -10,7 +10,22 @@
 // See server/leaderboard-worker.js for the other end.
 
 const STORAGE_KEY = 'seal-survivor-leaderboard-v1';
-const MAX_ENTRIES = 10;
+/**
+ * How deep the board goes, on this device and in the UI. Matches MAX_ENTRIES
+ * in server/leaderboard-worker.js, so the local board a player sees with no
+ * backend is the same shape as the global one — a board that is ten deep
+ * offline and a hundred deep online would make "did I make it?" mean two
+ * different things on two builds of the same game.
+ *
+ * EXPORTED, because the game-over card says out loud what a player missed
+ * ("didn't make the top N") and a hand-typed number there goes stale the
+ * moment this one moves.
+ *
+ * Nothing migrates: the stored value is just a sorted array, so an existing
+ * ten-entry board keeps its ten and grows from there.
+ */
+export const BOARD_SIZE = 100;
+const MAX_ENTRIES = BOARD_SIZE;
 
 // Trailing slash trimmed so the URL works whether or not it was pasted with
 // one. Empty/unset means "no backend" — checked via isGlobal() everywhere.
@@ -54,7 +69,7 @@ export function loadLeaderboard() {
   }
 }
 
-// entry: { name, score, kills, level, time, date }. Returns the trimmed top-10
+// entry: { name, score, kills, level, time, date }. Returns the trimmed board
 // plus this run's rank (1-based) if it made the cut.
 export function submitScoreLocal(entry) {
   const list = loadLeaderboard();

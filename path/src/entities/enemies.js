@@ -129,9 +129,19 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
   // uses (see attachRigidBody), and `pivotRadius` is a number in that same
   // authored scale. Both being radii is what kept the mismatch invisible.
   const size = (e.def?.radius ?? e.radius ?? pivot) * (e.sizeMul ?? 1);
+  const bk = k.boss ?? {};
+  const onBoss = e.isBoss === true;
+  // A BOSS MAY RESIST ON ITS OWN CURVE. The roster's authored sizes span 2.08
+  // (a hammerhead) to 8.28 (a yacht), so at the shared exponent the lightest
+  // boss is shoved exactly 4x the heaviest — inverse-linear in size, which is
+  // the rule the whole function already runs on. A steeper exponent here is
+  // how you widen that spread without touching what a ram does to a shark,
+  // and it is the only thing in the boss block that changes the SHAPE of the
+  // size response rather than its scale.
+  const massExp = (onBoss ? bk.massExp : null) ?? k.massExp ?? 1;
   // Below pivot size everything takes the full shove — a minnow is not thrown
   // twice as far as a slightly bigger minnow, it is simply thrown.
-  const mass = Math.max(1, size / pivot) ** (k.massExp ?? 1);
+  const mass = Math.max(1, size / pivot) ** massExp;
   const push = ((k.speed ?? 26) * scale) / mass;
 
   // A body takes it as a REAL impulse instead: it keeps the velocity (rather
@@ -186,23 +196,63 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
   // erasing it. `e.hp` is already down to what the strike left it at by the
   // time this is called, which is what makes "survived" answerable here.
   //
-  // Not a boss: a boss owns what a hold does to it (CONFIG.boss.control.daze)
-  // and a ram is not allowed to open that door round the back.
+  // Not a boss: a boss is shoved on its own terms one branch down, because the
+  // half of this that matters there is the DISPLACEMENT and not the stagger —
+  // a boss owns what a hold does to it (CONFIG.boss.control.daze) and a ram is
+  // not allowed to open that door round the back.
   const hv = k.heavy ?? {};
   const heavy = hv.enabled !== false
     && e.hp > 0
-    && !e.isBoss
+    && !onBoss
     && size >= (hv.minRadius ?? pivot);
 
-  const boost = heavy ? (hv.speedMul ?? 1.7) : 1;
+  // A BOSS IS MOVED BY A RAM. See CONFIG.strike.knockback.boss. The size
+  // divisor alone left every boss with a shove under one part in ten of its
+  // own body radius — a yacht travelled a quarter of a unit at full charge —
+  // which is a rule that technically applied and could not be seen, and it
+  // read in the fight as the one creature in the water the seal bounces off.
+  //
+  // Its own multiplier rather than the heavy one, because the two are aiming
+  // at different pictures: a rammed shark is THROWN off its line, and a
+  // rammed boss is leaned on. It keeps the size divisor above either way, so
+  // this stays inverse in size across the whole roster — the hammerhead gives
+  // ground and the yacht barely notices.
+  //
+  // No stagger and no heading kick by default (see the block below): those are
+  // the parts of the heavy knock that cost a body its TURN, and on a boss that
+  // is the daze's job, on the daze's budget and behind the daze's cooldown.
+  const bossKnock = onBoss && bk.enabled !== false && e.hp > 0;
+
+  const boost = bossKnock ? (bk.speedMul ?? 2.5) : heavy ? (hv.speedMul ?? 1.7) : 1;
   e.knockX = (e.knockX ?? 0) + (dirX / len) * push * boost;
   e.knockY = (e.knockY ?? 0) + (dirY / len) * push * boost;
-  // Per-body, because the two decays are different journeys: an ordinary
-  // knock is over in a fifth of a second and a heavy one is a throw. Read by
-  // the integrator, so the last hit a body took owns its falloff.
-  e.knockDecay = heavy ? (hv.decay ?? 9) : (k.decay ?? 12);
+  // Per-body, because the decays are different journeys: an ordinary knock is
+  // over in a fifth of a second and a heavy one is a throw. Read by the
+  // integrator, so the last hit a body took owns its falloff.
+  e.knockDecay = bossKnock ? (bk.decay ?? 6) : heavy ? (hv.decay ?? 9) : (k.decay ?? 12);
 
-  if (heavy) {
+  if (bossKnock) {
+    // BOTH OFF BY DEFAULT, and kept as dials rather than deleted because
+    // "a ram staggers a boss a little" is a legitimate thing to want to try —
+    // but it must be tried deliberately, at a number someone chose, and never
+    // arrive as a side effect of the shove being turned on.
+    //
+    // The stagger is skipped outright while a perk is DRIVING the body, the
+    // same exemption dazeSpeedMul makes: a scripted charge that can be damped
+    // by ramming it is a wind-up the player can refuse for free, which is the
+    // exact thing the daze's cooldown exists to prevent.
+    const secs = (bk.stagger ?? 0) * scale;
+    if (secs > 0 && !e.perkDrive && secs > (e.staggerTimer ?? 0)) {
+      e.staggerTimer = secs;
+      e.staggerFor = secs;
+    }
+    const kick = (bk.headingKick ?? 0) * scale;
+    if (kick > 0 && e.heading != null) {
+      const want = Math.atan2(dirY / len, dirX / len);
+      const off = wrapAngle(want - e.heading);
+      e.heading += Math.max(-kick, Math.min(kick, off));
+    }
+  } else if (heavy) {
     // Scaled by charge like everything else the strike does, and taken as the
     // LONGER of what it already had rather than added: two dashes through the
     // same shark stagger it twice, they do not hold it still for a second.
@@ -2206,6 +2256,9 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // dispatch below skips a creature carrying it — the perk owns vx/vy that
     // frame — which is the same door `leaving` goes through.
     perkDrive: false,
+    // Set by a system that owns this body's locomotion state — see the
+    // anim.update call below. null means "derive it from my speed".
+    animState: null,
     // --- the daze (systems/control.js) ---------------------------------------
     // What a hold becomes when it lands on something that cannot be held. Only
     // ever non-zero on a boss, and seeded on everything for exactly the reason
@@ -3228,7 +3281,15 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
         e.beatsPerStride = best;
       }
 
-      e.anim.update(dt, stateForSpeed(speed), e.hitThisFrame);
+      // `animState` is the locomotion equivalent of `perkDrive`: a system that
+      // has taken the wheel says which state the body is IN, rather than having
+      // it inferred from how fast the body happens to be moving. An ambushing
+      // anglerfish is the case that needs it — it holds station at zero speed
+      // while very much not idling, and stateForSpeed would put it in `idle`
+      // during the lunge wind-up, which is the one frame the player must be
+      // able to read. Nothing sets it by default, so every other creature
+      // takes the speed-derived state exactly as before.
+      e.anim.update(dt, e.animState ?? stateForSpeed(speed), e.hitThisFrame);
       e.hitThisFrame = false;
     }
 

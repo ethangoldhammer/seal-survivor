@@ -3,6 +3,7 @@ import { removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { applyElementalHit } from './elements.js';
 import { markTarget } from './marks.js';
 import { hitCreature } from './hitShape.js';
+import { noteChain, tickChainTrace } from './chainTrace.js';
 
 // Where the dash last connected on a body. Shared and consumed immediately —
 // see the note on combat.js's own `contact`.
@@ -43,11 +44,10 @@ const strikeContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index:
 // the player could not see, which is the single thing that made it read as
 // unpredictable.
 //
-// EACH LINK STILL COSTS MORE THAN THE LAST — the escalation just moved onto
-// the ring. A link adds a PIP (see pipCount), so link one is five mouthfuls,
-// link two is six, link three seven. Identical intent, except the price is now
-// a countable thing the player can look at rather than an exponent. Capped at
-// `maxPips`, which is what `chainRefillFloor` used to do.
+// AND THE BAR NEVER CHANGES LENGTH. A link used to add a pip, as an escalation
+// making each one dearer than the last; a link is a single mouthful now and is
+// not bought with the bar at all. See pipCount for why that escalation could
+// not have survived per-pip links even if the job had remained.
 //
 // The pip count is DERIVED from the refill rather than configured beside it:
 // pips = round(1 / strikeChumRefill). That keeps Coiled Spring meaningful
@@ -61,7 +61,7 @@ const strikeContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index:
 // that needs the scene and the pickup system.
 
 export const strikeState = {
-  charge: 1,       // 0..1 — the FUEL bar. Burned by holding, refilled by food.
+  charge: 0,       // 0..1 — the FUEL bar. Burned by holding, refilled by food.
   pending: 0,      // power banked so far for the strike being wound up, 0..1
   charging: false, // holding AND there is fuel left to burn
   power: 0,        // the banked power the CURRENT dash was launched with, 0..1
@@ -110,6 +110,21 @@ export const strikeState = {
   sinceLoaded: 0,      // seconds since that moment (0 until it happens)
   toLoaded: Infinity,  // seconds still to run before it
   sweetStrike: false,  // ...and whether the dash IN FLIGHT was released inside it
+  // A SWEET STRIKE HAS BEEN THROWN AND ITS CHAIN HAS NOT LAPSED.
+  //
+  // This is what makes eating count. The release does not score a link — it
+  // ARMS one, and the chum the strike goes on to collect is what scores it, a
+  // mouthful at a time. That is the loop as a player describes it: hit the
+  // beat, eat what you flew through, watch the number climb.
+  //
+  // It used to be scored on the NEXT release, which needed two releases inside
+  // one window with eating in between — two hits of a tenth-of-a-second window
+  // before a single FOOD CHAIN! had ever appeared. Nobody could tell the
+  // mechanic was working, because for most players it never got that far.
+  //
+  // Cleared where the window lapses (updateStrike), so a chain that dies takes
+  // the arming with it and the next one has to be earned with another strike.
+  armed: false,
   active: false,
   dashTimeLeft: 0,
   dashDuration: 0, // what this dash's length was set to, for the i-frames
@@ -347,14 +362,33 @@ function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
 }
 
+/**
+ * The fuel a fresh run starts with, 0..1. Counted in PIPS in the config for
+ * the reason pipValue exists at all — the bar is a whole number of mouthfuls,
+ * and "starts with two" survives a card that changes how much one is worth.
+ * No stats argument: this runs at the top of a run, where the block is base.
+ */
+function startCharge() {
+  const pips = Math.max(0, CONFIG.strike.charge.startPips ?? 0);
+  return Math.max(0, Math.min(1, pips / pipCount()));
+}
+
 export function resetStrike() {
-  // Starts full: the run opens with one strike ready rather than a second of
-  // holding before anything can happen.
-  strikeState.charge = 1;
+  // WHAT THE RUN OPENS WITH, in pips — CONFIG.strike.charge.startPips, and it
+  // is 0. The bar has no passive regeneration of any kind (see updateStrike),
+  // so a dead meter means the FIRST thing a run has to do is eat: the food
+  // chain isn't one way to fuel the strike, it is the only one, and opening
+  // full let the first minute be played without ever learning that.
+  //
+  // Read through pipCount rather than as a raw fraction so the setting means
+  // the same thing whatever the bar's length is — and clamped, because a value
+  // past the pip count would otherwise open above full.
+  strikeState.charge = startCharge();
   clearPending();
   strikeState.perfectFlash = 0;
   strikeState.perfectStrike = false;
   strikeState.sweetStrike = false;
+  strikeState.armed = false;
   strikeState.charging = false;
   strikeState.power = 0;
   strikeState.flash = 0;
@@ -365,7 +399,7 @@ export function resetStrike() {
   strikeState.chainCount = 0;
   strikeState.chainTimer = 0;
   strikeState.pipsSinceStrike = 0;
-  lastRelease.chain = 0;
+  lastRelease.depth = 0;
   lastRelease.sweet = false;
   lastRelease.hadFood = false;
   lastRelease.hadWindow = false;
@@ -374,6 +408,7 @@ export function resetStrike() {
   chainGaps.clear();
   pipQueue.length = 0;
   pipCooldown = 0;
+  lastMouthful.chain = 0;
   orbTimer = randomBetween(CONFIG.strike.orbSpawnMin, CONFIG.strike.orbSpawnMax);
 }
 
@@ -572,6 +607,10 @@ export function tryStrike(aimDir, stats) {
   // for what riding on it.
   const sweet = inSweetSpot(stats);
   strikeState.sweetStrike = sweet;
+  // Recorded with the SIGNED offset, which is the one number a player has no
+  // way of seeing and the one that decides everything downstream: early and
+  // late are different mistakes and look the same from the seat.
+  noteChain('release', { offset: sweetOffset(), sweet, half: sweetHalfWidth(stats) });
 
   // Snapshot what this dash was bought with. Damage and reach both read it for
   // the whole dash, so clearing `pending` on the next line can't retroactively
@@ -621,19 +660,25 @@ export function tryStrike(aimDir, stats) {
   // holding, and holding SEALS THE MOUTH. There is no room in a dash to both
   // eat a bar and wind up a strike. The window the dash opens is the container.
   //
-  // AND THE RELEASE HAS TO BE ON THE BEAT. A third condition, ahead of the
-  // other two in the reporting below because it is ahead of them in the
-  // player's hands: food and a window are things you set up over seconds, and
-  // this is the one you get wrong in the moment.
+  // A RELEASE ON THE BEAT ARMS A CHAIN. It does not score one — the food does,
+  // a mouthful at a time, in noteChainMouthful above. That split is the fix
+  // for a mechanic nobody could see working: scoring on the release meant TWO
+  // releases inside one window, each inside a tenth of a second, before a
+  // single FOOD CHAIN! had ever appeared.
+  //
+  // The counters are still read here for the telemetry, because "was there
+  // food behind this strike, and was a chain already running" is a description
+  // of the moment the player chose to let go, and that is a thing worth
+  // knowing about a release even when it is not what scores.
   const hadFood = strikeState.pipsSinceStrike >= linkPips(stats);
   const hadWindow = strikeState.chainTimer > 0;
   strikeState.pipsSinceStrike = 0;
-  lastRelease.chain = (sweet && hadFood && hadWindow) ? chainStrike('strikeRelease') : 0;
-  // Kept alongside the result so the telemetry can say WHICH condition failed.
-  // A count of links alone cannot tell "never strikes" from "strikes constantly
-  // and never links", and those want opposite fixes — and with the timing gate
-  // in front of both, a mistimed release booked as "no window" would send a
-  // reader after the chain window when nothing is wrong with it.
+  if (sweet) strikeState.armed = true;
+  // HOW DEEP THE CHAIN WAS when this release happened — not what the release
+  // scored, because a release scores nothing. Kept because it is the one thing
+  // about a strike the report cannot reconstruct afterwards: whether the
+  // player was opening a chain or feeding one that was already running.
+  lastRelease.depth = liveChain();
   lastRelease.sweet = sweet;
   lastRelease.hadFood = hadFood;
   lastRelease.hadWindow = hadWindow;
@@ -657,20 +702,24 @@ export function tryStrike(aimDir, stats) {
 // rather than returned because tryStrike's boolean is "did a dash launch",
 // which the caller branches on for the impulse — widening it to an object
 // would touch every call site to say something only one of them cares about.
-const lastRelease = { chain: 0, sweet: false, hadFood: false, hadWindow: false };
+const lastRelease = { depth: 0, sweet: false, hadFood: false, hadWindow: false };
 
 /**
- * What the last release did: the FOOD CHAIN link it scored (0 for none) and,
- * when it scored nothing, which of the two conditions was missing.
+ * WHAT THE LAST RELEASE WAS — whether it landed on the beat, how deep the chain
+ * already was, and what it had behind it.
  *
- * Clears the chain on read, so a caller that forgets to check cannot replay an
- * old link on the next strike. The two flags are left alone — they are a
- * description of an event that already happened, and the telemetry reads them
+ * It used to report the link the release scored. A release scores nothing now
+ * (it ARMS; the food scores — see noteChainMouthful), so what is left is a
+ * description of the moment: the one thing about a strike that cannot be
+ * reconstructed from the link stream afterwards.
+ *
+ * `depth` clears on read so a caller cannot replay a stale one; the flags are
+ * left alone, being a description of an event that already happened and read
  * on the same frame.
  */
 export function consumeStrikeLink() {
   const out = { ...lastRelease };
-  lastRelease.chain = 0;
+  lastRelease.depth = 0;
   return out;
 }
 
@@ -766,26 +815,104 @@ function noteChainMouthful(count = 1) {
   // strike, whether or not a combo is currently running.
   strikeState.pipsSinceStrike += count;
   // The rest is the live chain, which does need a window open.
-  if (!isFeeding()) return;
+  if (!isFeeding()) {
+    noteChain('miss', { why: 'no window open' });
+    return;
+  }
   strikeState.chainPips += count;
   strikeState.chainTimer = CONFIG.strike.chainWindow;
+
+  // ---- AND THE LINK ITSELF, ONE PER MOUTHFUL ----------------------------
+  //
+  // THE STRIKE ARMS, THE FOOD SCORES. A release in the sweet spot opens the
+  // window and sets `armed`; every pip that goes down inside it ticks the
+  // chain up by one. So "release on the beat and eat one chum" IS a food
+  // chain, and the number climbs with the eating rather than waiting on
+  // another perfectly-timed release to cash it in.
+  //
+  // `linkPips` is the mouthfuls it takes to get the FIRST one — the gate, one
+  // by default. Measured against `pipsSinceStrike`, which every release
+  // clears, so the food has to have been collected FOR this strike.
+  //
+  // Routed through chainStrike() like every other source, so the switch table
+  // and the counter stay in one place. `count` really can be more than one (a
+  // gulp hands over a pile), and each mouthful in it is its own link — the
+  // pips are the grain of the whole system and a lump that scored once would
+  // pay less for the same food.
+  if (!strikeState.armed) {
+    // WHY IT DID NOT LINK, recorded at the branch that decided it. Four
+    // different failures look identical from the seat — nothing happens — and
+    // each wants a different fix. See systems/chainTrace.js.
+    noteChain('miss', { why: 'no sweet strike behind it' });
+    return;
+  }
+  if (strikeState.pipsSinceStrike < linkPips()) {
+    noteChain('miss', { why: `${strikeState.pipsSinceStrike} of ${linkPips()} mouthfuls for the first link` });
+    return;
+  }
+  for (let i = 0; i < count; i++) {
+    const chain = chainStrike('chumEaten');
+    if (chain) {
+      lastMouthful.chain = chain;
+      noteChain('link', { chain });
+    } else {
+      // The switch table said no. Only reachable with chainOn.chumEaten off,
+      // which is a thing a stale tuning snapshot can do — and if it ever
+      // happens the log has to say so rather than showing a silent gap.
+      noteChain('miss', { why: 'chainOn.chumEaten is off' });
+    }
+  }
+}
+
+// The link the most recent mouthful scored, waiting to be reported. Held
+// rather than returned for the same reason `lastRelease` is: feedChum's
+// boolean is "did this top the bar off", which its callers branch on, and
+// widening it would touch every call site to say something one of them wants.
+const lastMouthful = { chain: 0 };
+
+/**
+ * The FOOD CHAIN link the last mouthful scored, or 0. Clears on read, so a
+ * caller that forgets to check cannot replay an old link on the next orb.
+ *
+ * The companion to consumeStrikeLink(), and between them they are every link
+ * in the game: one for the sources that fire on an action (a breach, a school
+ * emptied), one for the source that fires on food.
+ */
+export function consumeChainLink() {
+  const out = lastMouthful.chain;
+  lastMouthful.chain = 0;
+  return out;
 }
 
 /**
- * How many mouthfuls a link costs right now.
+ * HOW MANY MOUTHFULS KEEP THE CHAIN ALIVE — the gate, and it is one.
  *
- * A FRACTION of the bar rather than all of it — `linkBarFraction` at 0.6 means
- * three chum on a five-pip bar instead of five. The escalation survives
- * untouched because it is measured against the LIVE pip count, which grows by
- * one per link: 3, 4, 5, 5, 6, 6 against the old 5, 6, 7, 8, 9, 10.
+ * The bar does not have to be full, or anywhere near it. A release inside the
+ * sweet spot with a single chum eaten for it extends the chain; what a fuller
+ * bar buys is DEPTH, not survival — see releaseLinks() below.
+ *
+ * It used to be a fraction of the LIVE pip count (`linkBarFraction`, three of
+ * five, climbing with the chain), and that one number was doing two
+ * incompatible jobs at once: as the gate it decided whether the chain lived,
+ * and as the price it was the only thing stopping a chain being free. Every
+ * move that made the chain reachable made it cheaper, and every move that kept
+ * it honest made it fragile. They are separate now.
  *
  * Floored at 1 — a link has to cost at least one mouthful, or a strike with no
- * eating at all would score one and the chain would be free.
+ * eating at all would score one and the FOOD chain would not be about food.
  */
 export function linkPips(stats = null) {
-  const frac = Math.max(0, Math.min(1, CONFIG.strike.linkBarFraction ?? 1));
-  return Math.max(1, Math.ceil(pipCount(stats) * frac));
+  return Math.max(1, Math.round(CONFIG.strike.linkMinPips ?? 1));
 }
+
+// WHAT A FULLER BAR BUYS IS NOT A BONUS ANY MORE, IT IS THE COUNTING.
+//
+// This is where a `releaseLinks()` ladder used to live — one link at the gate,
+// one more per whole bar banked, cashed on the release. It is gone because the
+// per-mouthful tick in noteChainMouthful is the same idea told properly: five
+// pips is five links whether they arrive as one release off a full bar or as
+// five orbs eaten across a window, and the player sees each one land instead
+// of a number jumping by three at a moment they cannot attribute.
 
 /** How many pip ticks are waiting to be heard. For the tests and the tuner. */
 export function pendingPips() {
@@ -793,20 +920,28 @@ export function pendingPips() {
 }
 
 /**
- * HOW MANY PIPS THE BAR IS DIVIDED INTO RIGHT NOW.
+ * HOW MANY PIPS THE BAR IS DIVIDED INTO — and it does not move during a run.
  *
- * The base count is derived from the refill rather than configured next to it
- * — pips = round(1 / strikeChumRefill) — so one chum is always exactly one
- * pip and the two can never drift apart. Coiled Spring raises the refill and
- * the pip count falls out of it: 0.20 is five pips, four stacks reach 0.36 and
- * three pips, which is the "from 5 to 3" the card's own note promises.
+ * Derived from the refill rather than configured next to it — pips =
+ * round(1 / strikeChumRefill) — so ONE CHUM IS ALWAYS EXACTLY ONE PIP and the
+ * two can never drift apart. Coiled Spring raises the refill and the pip count
+ * falls out of it: 0.20 is five pips, four stacks reach 0.36 and three pips,
+ * which is the "from 5 to 3" the card's own note promises.
  *
- * Every LIVE link adds `chainPipsPerLink` on top. That is the whole cost
- * escalation, and unlike the exponent it replaced it is a number on the ring.
+ * THE CHAIN USED TO LENGTHEN IT, one pip per link, as the cost escalation that
+ * made each link dearer than the last. That job is gone: a link is one
+ * mouthful now and is not bought with the bar at all. And the escalation could
+ * not survive the change even if the job had remained, because links tick per
+ * PIP — so the count would be a function of how much has been eaten, while
+ * eating is the thing filling it. The bar would grow while you filled it, and
+ * a six-pip bar would take seven chum for reasons nothing on screen could
+ * explain. That is precisely the unpredictability the pips were introduced to
+ * remove, arriving by a third route.
  *
- * Reads the LIVE chain: `chainCount` is left standing until the window expires
- * (see updateStrike), so an expired chain has to be discounted here or the
- * first mouthful of the next combo would still be paying the last one's price.
+ * So the bar is a fixed length for a given `strikeChumRefill`, which is the
+ * strongest form of the invariant it has ever had. `maxPips` still binds it,
+ * because a card stack could otherwise derive a count past what the ring can
+ * draw legibly.
  *
  * @param stats the run's stat block; omitted falls back to the CONFIG default,
  *              which is what the tuner and the tests read.
@@ -815,8 +950,7 @@ export function pipCount(stats = null) {
   const c = CONFIG.strike.charge;
   const refill = Math.max(0.02, stats?.strikeChumRefill ?? c.chumRefill ?? 0.2);
   const base = Math.max(1, Math.round(1 / refill));
-  const add = Math.round((c.chainPipsPerLink ?? 1) * liveChain());
-  return Math.max(1, Math.min(c.maxPips ?? 12, base + add));
+  return Math.max(1, Math.min(c.maxPips ?? 12, base));
 }
 
 /** What one chum is worth, as a fraction of the whole bar. Always one pip. */
@@ -970,16 +1104,20 @@ export function chainStrike(source, links = 1) {
   if (!CONFIG.strike.enabled) return 0;
   const on = CONFIG.strike.chainOn;
   if (!on?.[source]) return 0;
-  // `chumFull` and `strikeRelease` are the SAME link seen at two moments — the
-  // bar reaching full, and the strike that spends it. With both live, one turn
-  // of the cycle scores two links: the price jumps by two pips and the banner
-  // double-fires.
+  // `chumFull` and `chumEaten` are the SAME food seen at two grains — every
+  // mouthful, and the one that happens to top the bar off. With both live, the
+  // fifth chum of every bar scores twice and the banner jumps by two for no
+  // reason the player can see.
   //
   // Enforced here rather than left to the config default because a saved tuning
   // snapshot outranks that default (any value in imported-tuning.json wins), so
-  // a `chumFull: true` captured before the release trigger existed would
+  // a `chumFull: true` captured before the per-mouthful trigger existed would
   // silently double-score forever. The structural rule cannot be out-voted.
-  if (source === 'chumFull' && on.strikeRelease) return 0;
+  //
+  // It used to name `strikeRelease`, which was the engine then and is off now;
+  // pointing it at whatever the live engine happens to be is the whole reason
+  // it is a rule here rather than a default over there.
+  if (source === 'chumFull' && on.chumEaten) return 0;
   if (chainGaps.has(source)) return 0;
 
   const gap = on.cooldowns?.[source] ?? 0;
@@ -1082,6 +1220,9 @@ export function cancelDash() {
 // damage and the chain multiplier are per-run values now (see recomputeStats),
 // so the upgrades can scale them.
 export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
+  // The trace's clock, on the same dt the mechanic runs on — so a timestamp in
+  // the log is the run's own time and a paused game leaves no gap mid-chain.
+  tickChainTrace(dt);
   // No recharge tick any more — the meter has no passive regeneration at all.
   // It fills by holding the button or by eating, and nothing else, which is
   // what makes food the resource rather than time.
@@ -1091,10 +1232,14 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // Clamped, not left negative: `chainTimer` is read as a 0..window
       // fraction by the ring's chain arc, and a negative would draw backwards.
       strikeState.chainTimer = 0;
+      noteChain('lapse', { chain: strikeState.chainCount });
       // Both counters die with the window, together. Leaving chainPips
       // standing would carry the last combo's multiplier into the next one.
       strikeState.chainCount = 0;
       strikeState.chainPips = 0;
+      // The arming dies with the chain it armed. Without this a single sweet
+      // strike would license every mouthful for the rest of the run.
+      strikeState.armed = false;
     }
   }
   // Drain one pip tick per `pipGap`, so a magnet sweep comes out as a rising

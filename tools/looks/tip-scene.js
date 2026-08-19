@@ -73,7 +73,12 @@ function toScreen(x, y) {
 // --- the script -------------------------------------------------------------
 // One loop: the tip arrives, rides its bubble, the bubble is taken, the line
 // dissolves where it was, a beat of nothing, and round again.
-const RIDE = 4.5;      // how long the tip stands there before the orb is taken
+// LONGER THAN THE ROW'S OWN HOLD (6s), on purpose. A tip is pinned until its
+// subject is gone, so standing there past the hold is the normal case — and it
+// is exactly the case that was broken: the motion block's departure window took
+// the alpha to zero at the hold, and the dissolve then ran on an invisible
+// element. A page that only ever showed a 4-second tip could not see that.
+const RIDE = 8;        // how long the tip stands there before the orb is taken
 const REST = 1.4;      // empty water between loops
 const row = CALLOUTS.get('bubbleOrb');
 let clock = 0;
@@ -189,6 +194,12 @@ setInterval(() => frame(1 / 30), 33);
 // For a probe that wants a still at a known point in the loop rather than
 // wherever the timer has got to.
 window.__tipScene = {
+  // A REAL RUN, in steps, rather than a jump. `seek` moves this page's own
+  // clock and nothing else — the callout's AGE (which drives the arrival curve)
+  // advances with dt, so a jump lands with the tip still fading in and reports
+  // an opacity that looks like a bug and is not one. Anything measuring the
+  // pose has to use this.
+  run: (seconds, dt = 1 / 60) => { for (let t = 0; t < seconds; t += dt) frame(dt); },
   seek: (t) => { clock = t; frame(0.0001); },
   style: (name) => { CONFIG.tutorial.dissipate.style = name; },
 };

@@ -146,6 +146,47 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // A LOOK PAGE'S CHOSEN NUMBERS, saved and read back. The generic version of
+  // the /shader/ pair above, minus the apply: this writes the file and stops
+  // there, because most look pages tune a CONFIG block that no tool knows how
+  // to splice. The page reads it back on boot, so a saved preset survives a
+  // reload without anything being pasted anywhere; pasting it into config.js is
+  // what makes it the game's default, and that stays a human's decision.
+  //
+  // BESIDE THE PAGE, not in the drop box — same reason as /shader/: the box
+  // lives inside the vite outDir and every `npm run looks:*` empties it, so a
+  // preset saved there is deleted by the next build with nothing to say so.
+  // Here it is tracked in git and shows up in a diff.
+  if (req.method === 'POST' && url.pathname.startsWith('/preset/')) {
+    const name = url.pathname.slice('/preset/'.length).replace(/[^\w.-]/g, '');
+    if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = Buffer.concat(chunks);
+    try { JSON.parse(body.toString()); } catch (err) {
+      res.writeHead(400).end('not valid json: ' + err.message); return;
+    }
+    await writeFile(join(HERE, name), body);
+    console.log(`  wrote tools/looks/${name} (${body.length} bytes)`);
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ saved: true }));
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname.startsWith('/preset/')) {
+    const name = url.pathname.slice('/preset/'.length).replace(/[^\w.-]/g, '');
+    if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }
+    // READ FIRST, THEN WRITE THE HEAD. Awaiting inside the `.end()` argument
+    // sends the headers before the read is even attempted, so the miss — which
+    // is the normal first run, with no preset saved yet — lands in the catch
+    // with headers already gone, throws ERR_HTTP_HEADERS_SENT out of the
+    // request handler, and takes the whole server down. It presents as the look
+    // page dying at random on a reload.
+    let body = '{}';
+    try { body = await readFile(join(HERE, name)); } catch { /* nothing saved yet */ }
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(body);
+    return;
+  }
+
   if (req.method === 'POST' && url.pathname.startsWith('/shot/')) {
     const name = url.pathname.slice('/shot/'.length).replace(/[^\w.-]/g, '');
     const chunks = [];

@@ -83,3 +83,21 @@ export function touchPrimary() {
 export function defaultDevice() {
   return touchPrimary() ? 'touch' : 'kbm';
 }
+
+/**
+ * Whether the player has asked the system for less animation.
+ *
+ * HERE RATHER THAN IN A UI MODULE because it is a fact about the person at the
+ * keyboard, exactly like `touchPrimary` above it, and because three separate
+ * surfaces now have to honour it independently — the menu reveals, the score
+ * card's turn, and anything else that animates a canvas rather than a CSS
+ * property (the stylesheet's own reduced-motion rule only disables
+ * transitions, which cannot reach a rAF loop). A copy per surface is a copy
+ * that gets forgotten in the fourth one.
+ *
+ * Read live rather than cached: the setting can change while a page is open,
+ * and this is called at the start of an animation rather than per frame.
+ */
+export function prefersReducedMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}

@@ -264,6 +264,19 @@ function gooSurface(name) {
  * The groups with something alive in them right now, in composite order.
  * post.js is the only caller; an empty array is the fast path.
  */
+/**
+ * A group's own index and surface, whether or not any PARTICLES are alive in
+ * it. For anything that wants to splat into the same density field without
+ * being a burst — see registerGooField in systems/post.js, which is how the
+ * splash menu's buttons fuse with the goo they throw.
+ */
+export function gooGroupInfo(name) {
+  if (!gooSettings()) return null;
+  const i = gooGroupNames().indexOf(name);
+  if (i < 0) return null;
+  return { name, index: i + 1, def: gooSurface(name) };
+}
+
 export function activeGooGroups() {
   if (!gooRoot || !gooSettings()) return [];
   const out = [];
@@ -507,6 +520,18 @@ export function emit(name, x, y, opts = {}) {
   if (!def || !geometry) return;
 
   const speedMul = Math.max(0, opts.speedMul ?? 1);
+  // The other half of a scale change, and it is never useful on its own. A goo
+  // mass is made bigger by multiplying the lobes AND how far they are thrown by
+  // the same factor: fusion is a question of how far neighbours have separated
+  // RELATIVE TO THEIR OWN RADIUS, so bigger blobs alone weld into one
+  // featureless slab and faster ones alone tear into separate dots. See the
+  // note on CONFIG.fx.goo.groups.gore, which is the same lesson written out.
+  //
+  // Here rather than as a second emitter per size because the caller that needs
+  // it — systems/bossBoom.js — is sizing a burst off a body it measured at
+  // runtime, and there is no set of emitters that covers "however big this
+  // particular megalodon turned out to be".
+  const sizeMul = Math.max(0, opts.sizeMul ?? 1);
   const colors = def.colors ?? [0xffffff];
   const cone = def.cone ?? 0;
   const inherit = def.inherit ?? 0;
@@ -645,7 +670,7 @@ export function emit(name, x, y, opts = {}) {
     // bubble has burst at the surface since. The bug is invisible in a fresh
     // harness, where clock starts at 0 and every early value is exact.
     const start32 = attrs.aStart.array[idx];
-    attrs.aSize.array[idx] = rand(def.size, 0.15);
+    attrs.aSize.array[idx] = rand(def.size, 0.15) * sizeMul;
     attrs.aDrag.array[idx] = drag;
     attrs.aTurb.array[idx] = turb;
     attrs.aClip.array[idx] = clipsAtSurface ? 1 : 0;

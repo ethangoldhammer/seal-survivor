@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>The anglerfish — every take, and what the four maps are doing</title>
+    <style>
+      html, body { margin: 0; background: #05070d; color: #cfe6ff;
+        font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #log { padding: 10px; white-space: pre-wrap; }
+      .ok { color: #7fe6a0; } .bad { color: #ff8b7a; }
+      h2 { margin: 22px 10px 4px; font-size: 13px; letter-spacing: .12em;
+           text-transform: uppercase; color: #6f8fb8; font-weight: 600; }
+      h2 span { text-transform: none; letter-spacing: 0; color: #4d6b8f; }
+      .row { display: grid; gap: 8px; padding: 4px 10px 10px; }
+      .cell { background: #070b14; border: 1px solid #16233a; border-radius: 6px; overflow: hidden; }
+      .cell.hit { border-color: #7a3f3f; box-shadow: 0 0 0 1px #482323 inset; }
+      .cell canvas { display: block; width: 100%; height: auto; }
+      .cap { padding: 6px 8px 8px; color: #7f9dc4; font-size: 12px; }
+      .cap b { color: #cfe6ff; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="log"></div>
+    <div id="sheet"></div>
+    <script type="module" src="./angler-takes.js"></script>
+  </body>
+</html>

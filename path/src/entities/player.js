@@ -16,7 +16,6 @@ import { cancelDash } from '../systems/strike.js';
 // the crane and the wind-up shudder every frame.
 const _rollQ = new THREE.Quaternion();
 const _craneQ = new THREE.Quaternion();
-const TAU = Math.PI * 2;
 const _yAxis = new THREE.Vector3(0, 1, 0); // the art's forward — the roll axis
 const _xAxis = new THREE.Vector3(1, 0, 0); // swings the nose toward the camera
 const _spinQ = new THREE.Quaternion();
@@ -105,7 +104,9 @@ export const player = {
   craneAngle: 0,
   chargeClock: 0,
   shudderAmp: 0, // eased amplitude, so the tremble fades out instead of cutting
-  oxygen: 100,
+  // Placeholder only — resetPlayer fills the tank from `stats.maxOxygen`,
+  // which is where cards reach. Read off CONFIG so the two can't drift.
+  oxygen: CONFIG.oxygen.max,
   level: 1, // mirrors gameState.level so stat scaling can read it
   mirrored: null, // side-view facing flip state (null until first resolved)
   // The mirror turnaround, eased rather than swapped. `mirrorAngle` above is
@@ -677,12 +678,34 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
         // Always rolls the same way rather than unwinding the way it came, so
         // reversing twice reads as one continuous corkscrew instead of a
         // wobble. Started from the CURRENT angle, so a reversal that arrives
-        // mid-turnaround simply extends the roll already happening.
+        // mid-turnaround simply extends the roll already happening — and
+        // ROUNDED OUT to the next half turn that matches the new facing, which
+        // is the same guarantee the barrel roll makes when a strike interrupts
+        // one (main.js).
+        //
+        // That rounding is the whole point. This used to add a flat PI to
+        // wherever the angle had got to, which is only a half turn if the
+        // previous one had FINISHED: reverse after half of a 0.35s turnaround
+        // and the seal settles a quarter turn off, and because every later
+        // reversal adds another flat PI the offset never comes out. A couple
+        // of fast direction changes — a player shimmying left and right, which
+        // is most of a dodge — and the animal is stuck swimming belly-up for
+        // the rest of the run, with `mirrored` insisting it is upright.
+        //
+        // The duration travels with the distance, so a corkscrew of one and a
+        // half turns keeps the same angular speed as a plain turnaround rather
+        // than whipping round in the time budgeted for half of it.
+        const HALF = Math.PI;
+        const wantParity = wantMirror ? 1 : 0;
+        // The next half turn strictly ahead of here, walked on until it is one
+        // that leaves the seal upright the new way round.
+        let half = Math.floor(player.mirrorAngle / HALF) + 1;
+        if (((half % 2) + 2) % 2 !== wantParity) half += 1;
         player.mirrored = wantMirror;
         player.mirrorFrom = player.mirrorAngle;
-        player.mirrorTo = player.mirrorAngle + Math.PI;
+        player.mirrorTo = half * HALF;
         player.mirrorT = 0;
-        player.mirrorDuration = turnDuration;
+        player.mirrorDuration = turnDuration * ((player.mirrorTo - player.mirrorFrom) / HALF);
       }
     }
   }
@@ -694,9 +717,13 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
     const e = player.mirrorT * player.mirrorT * (3 - 2 * player.mirrorT);
     player.mirrorAngle = player.mirrorFrom + (player.mirrorTo - player.mirrorFrom) * e;
     if (player.mirrorT >= 1) {
-      // Wrapped once settled, or a long run of reversals walks the angle up
-      // forever and bleeds float precision into everything added to it.
-      player.mirrorAngle = ((player.mirrorTo % TAU) + TAU) % TAU;
+      // Snapped to the pose it was rolling AT, rather than wrapped off the raw
+      // sum: it keeps a long run of reversals from walking the angle up
+      // forever and bleeding float precision into everything added to it, and
+      // it makes the settled angle exactly one of the two poses — which is
+      // what the rounding above divides by, and what main.js reads to decide
+      // which way a barrel roll spins.
+      player.mirrorAngle = player.mirrored ? Math.PI : 0;
     }
   }
 
