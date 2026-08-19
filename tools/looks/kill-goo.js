@@ -27,6 +27,9 @@ import { createPost } from '../../path/src/systems/post.js';
 import {
   initParticles, updateParticles, resetParticles, updateParticleScale, emit,
 } from '../../path/src/entities/particles.js';
+import {
+  fireReentrySplash, updateReentrySplash, resetReentrySplash,
+} from '../../path/src/systems/reentrySplash.js';
 import { updateHullWake, resetHullWake } from '../../path/src/systems/boatWake.js';
 import { attachBossPerk, updateBossPerks, resetBossPerks } from '../../path/src/systems/bossPerks.js';
 import { parseBossPerkCsv } from '../../path/src/bossPerkTable.js';
@@ -128,6 +131,13 @@ smokeCam.position.y = 3;
 const ORIGIN = new THREE.Vector3();
 // The frame the player is actually given: at zoom 1 the frustum IS the arena.
 const fightCam = ortho(bounds.top - bounds.bottom);
+// And one for the landing, which is neither: the sequence is nine units of
+// crown over five units of cavity, so the detail camera crops both ends of it
+// and the fight camera makes it a thumbnail. Dropped below the line, because
+// half of this effect is under the water and the other half is the point of
+// comparison with everything above.
+const splashCam = ortho(27);
+splashCam.position.y = -2.5;
 
 // A real creature's colour, because a death burst is always the dying thing's
 // own emissive — a hand-picked red would be a picture of a decision nobody made.
@@ -361,6 +371,14 @@ function crossing({ event, frames = 12, foam = {}, at = [0, 0.2], vx = 3, vy = 1
 
 const breachSeal = createVisual('ship');
 breachSeal.rotation.z = -Math.PI / 2;
+// The silhouette the landing's ring of foam is fitted to — measured off the
+// real visual, exactly as main.js measures the player, so the panels below are
+// the shape the game actually uses and not a pair of numbers typed here.
+const _sealBox = new THREE.Box3().setFromObject(breachSeal);
+const _sealSize = _sealBox.getSize(new THREE.Vector3());
+const SEAL_EXTENT = { rx: _sealSize.x / 2, ry: _sealSize.y / 2 };
+check('the seal was measured for the splash ring', SEAL_EXTENT.rx > 0 && SEAL_EXTENT.ry > 0,
+  `${SEAL_EXTENT.rx.toFixed(2)} x ${SEAL_EXTENT.ry.toFixed(2)} world units`);
 breachSeal.position.set(-0.6, 0.7, 0);
 scene.add(breachSeal);
 
@@ -379,6 +397,88 @@ crossing({ event: 'reentry', frames: 16, vy: 26, scale: 1.8 });
 present('Landing 16f', 'strands falling back through the line', true);
 crossing({ event: 'reentry', frames: 16, vy: 26, scale: 1.8, foam: { enabled: false } });
 present('Landing, foam off', '`reentry` alone — today');
+
+// --- THE LANDING AS A SEQUENCE ----------------------------------------------
+// The three panels above are the whole splash the game had: a crown of foam
+// thrown upward on the frame of impact, and nothing else. What a body hitting
+// water actually does is four things in order — punch a hole, throw a crown,
+// close the hole, and stand a column back up out of it — and the half that was
+// missing is the half that goes DOWN.
+//
+// systems/reentrySplash.js is the clock; CONFIG.reentrySplash is the table.
+// This drives the real one, so these panels are the shipped sequence at the
+// shipped times.
+//
+// THE MECHANISM WORTH LOOKING FOR in the strip below: the cavity is not
+// scheduled to come back. It is thrown down into heavy drag carrying POSITIVE
+// (upward) gravity, and the particle solve damps the velocity term but not the
+// gravity one — so it stalls, hangs, and is carried back through the line by
+// its own parabola. Panels 3 and 4 are the same particles as panel 1.
+function splash({ frames = 10, cam = splashCam, scale = 1.8, vx = 4, vy = 26, foam = {}, stages = true } = {}) {
+  resetParticles();
+  resetReentrySplash();
+  reseed();
+  Object.assign(GOO, BASE);
+  Object.assign(FOAM, FOAM_BASE, foam);
+  updateParticleScale(cam, gl);
+  // Exactly what main.js fires on a downward crossing: the feedback event for
+  // the impact frame, and the system for everything with a delay on it.
+  const def = CONFIG.feedback.reentry;
+  const opts = { x: 0, y: 0.2, dirX: 0, dirY: 1, vx, vy, scale };
+  // The spray is all the feedback entry owns now — every drop of goo, crown
+  // included, is emitted from the ring around the animal and so belongs to the
+  // system. `body` is the seal in the panel, measured the way main.js measures
+  // the player.
+  emit(def.emit, 0, 0.2, opts);
+  if (stages) {
+    fireReentrySplash({ x: 0, y: 0.2, vx, vy, scale, body: SEAL_EXTENT });
+  }
+  for (let i = 0; i < frames; i++) {
+    updateReentrySplash(DT);
+    updateParticles(DT);
+    post.resize();
+    post.render(scene, cam, DT);
+  }
+}
+
+// The close camera for the strip below, because the SHAPE is what is being
+// judged here and nine units of water is where a shape is legible. The fight
+// frame gets its own row further down — that is the honesty test, and it is a
+// different question from whether the sequence is built right.
+breachSeal.position.set(-2.4, 1.6, 0);
+section('The landing, in order <span>— the four things a splash does</span>', 4);
+splash({ frames: 6 });
+present('1 · the hole, 0.1s', 'the crown going up and the cavity going DOWN, on the same frame', true);
+splash({ frames: 17 });
+present('2 · deepest, 0.28s', 'the hole at the bottom of its travel · the column has just left', true);
+splash({ frames: 28 });
+present('3 · the column, 0.47s', 'a narrow spike standing up past where the crown ever got', true);
+splash({ frames: 42 });
+present('4 · falling back, 0.7s', 'the cavity water surfacing behind it · droplets on the way down', true);
+
+section('The half that was missing <span>— the same four moments with the stages off</span>', 4);
+for (const [f, t] of [[6, '0.1s'], [17, '0.28s'], [28, '0.47s'], [42, '0.7s']]) {
+  splash({ frames: f, stages: false });
+  present(`Impact frame only, ${t}`, 'the shipped effect before this — up, and then over');
+}
+
+section('What each stage is worth <span>— the sequence taken apart</span>', 3);
+splash({ frames: 24, scale: 0.5 });
+present('A skim, 0.4s', 'scale 0.5 · the same shape, small — there is no gate in the middle');
+splash({ frames: 24, scale: 1.2 });
+present('A jump, 0.4s', 'scale 1.2 · lobes and throw scaled together, so it fuses the same');
+splash({ frames: 24, scale: 2.2 });
+present('A full arc, 0.4s', 'scale 2.2 · the cap · twice the water, dug half again as deep', true);
+
+// THE HONESTY TEST, the same one the blood gets above. A splash that fills a
+// nine-unit panel is not the splash anyone is shown: the arena is seventy-odd
+// units tall and the landing happens at the top of it.
+section(`The landing at fight scale <span>— the arena, ${fightView} units tall</span>`, 4);
+for (const [f, t] of [[6, '0.1s'], [17, '0.28s'], [28, '0.47s'], [42, '0.7s']]) {
+  splash({ frames: f, cam: fightCam });
+  present(`In frame, ${t}`, 'the shipped sequence in the frame the player is given', true);
+}
+breachSeal.position.set(-0.6, 0.7, 0);
 
 section('Foam surface <span>— the four keys that differ from blood</span>', 3);
 crossing({ event: 'reentry', frames: 12, vy: 26, scale: 1.8, foam: { iso: 0.35 } });

@@ -48,8 +48,8 @@ orcaFriendCalf,1,,,"Orca Family, slot 2. Smallest of the three."
 orcaFriendCow,1,,,"Orca Family, slot 1."
 rapidFireOrb,2.4,,,
 seagull,9.54,,,
-sealTeam,2.72,,,
-ship,2.36,,,
+sealTeam,2.72,,noise:sealTeam,
+ship,2.36,,noise:ship,
 shrapnel,2.52,,,
 shrimp,2.36,,,
 starfish,6.2,,,

@@ -86,6 +86,13 @@ export function baseStats() {
     // add to. See projectileCount() below, which is the only way this should
     // ever be read.
     projectileBonus: 0,
+    // Entourage. Flat +N to every count that CIRCLES the seal — the shrimp
+    // ring, the escort seals, the harps, the clubs on the club ring. Same
+    // shape as `projectileBonus` above and applied at the point of use for the
+    // same reason: apply() runs in PICK ORDER, so a run that took this before
+    // Shrimp Ring would have had nothing to add to. See orbiterCount() below,
+    // which is the only way this should ever be read.
+    orbiterBonus: 0,
     // Splash Zone. Multiplies blast/aura/wave radii. `targetingMul` is the
     // gentler half — how far abilities LOOK for something, as opposed to how
     // far they reach once they've found it. Split because a card that widened
@@ -154,6 +161,18 @@ export function baseStats() {
     // and a stub whose first real pick crashes is worse than no stub.
     dolphinPodLevel: 0,
     musselVolleyLevel: 0,
+    // THE BOUNCER. Three multipliers on the whole club class at once — the
+    // swing, the caroms, the blast, the ice, the shockwave, the ring and the
+    // thrown one. Multipliers rather than levels because the card grants no
+    // ability of its own: it is worth exactly as much club as the run already
+    // has, which is what makes it a build card rather than a fifth weapon.
+    //
+    // Read live off here by systems/club.js in the shape systems/scaling.js
+    // established, so a run without the card multiplies by 1 and every call
+    // site can apply them unconditionally.
+    clubDamageMul: 1,
+    clubKnockMul: 1,
+    clubReachMul: 1,
     clubLevel: 0,
     clubThrowLevel: 0,
     clubBoomLevel: 0,
@@ -181,7 +200,7 @@ export function baseStats() {
 // ============================================================================
 export const INTEGER_STATS = new Set([
   'multishot', 'pierce', 'missileCount', 'shrapnelCount', 'shrimpCount',
-  'scallopCount', 'bounceMaxBounces', 'projectileBonus',
+  'scallopCount', 'bounceMaxBounces', 'projectileBonus', 'orbiterBonus',
   'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'starfishLevel',
   'maneaterLevel', 'ironLungLevel', 'homingShotLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
@@ -205,6 +224,25 @@ export const INTEGER_STATS = new Set([
 export function projectileCount(base, s) {
   if (!(base > 0)) return 0;
   return base + (s?.projectileBonus ?? 0);
+}
+
+/**
+ * THE ONE WAY TO READ `orbiterBonus` — Entourage.
+ *
+ * The same gate, and it is the same point: this adds a companion to a ring you
+ * HAVE. An ability you never picked has a base of 0 and stays at 0, or one
+ * card would hand you a shrimp, an escort seal and a harp you never took.
+ *
+ * Kept separate from projectileCount rather than folded into it, even though
+ * the arithmetic is identical, because the two cards answer different
+ * questions and a system asks exactly one of them. "How many do I FIRE" and
+ * "how many circle me" are the same number only for the shrimp ring, which is
+ * both — and that overlap is a fact about the shrimp, not a reason to give the
+ * two cards one field and lose the ability to tune them apart.
+ */
+export function orbiterCount(base, s) {
+  if (!(base > 0)) return 0;
+  return base + (s?.orbiterBonus ?? 0);
 }
 
 // Baseline growth, applied AFTER upgrades so the basic shot keeps pace as you

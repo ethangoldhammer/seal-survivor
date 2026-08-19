@@ -53,13 +53,15 @@ const VIEWPORTS = [
 
 // The surfaces, by the name previewScreen() already knows, plus the two it has
 // no word for. `coach` is the first-run tutorial band — the longest line in
-// callouts.csv, which is the one that has to fit.
+// callouts.csv, which is the one that has to fit. There is no 'start' any more:
+// the DOM start menu was deleted (everything it explained is taught by the
+// coach, in the water), so there is no such screen to measure.
 // 'HUD' is now the SHIPPED placement — the corner gauges at the maximum a run
 // opens with. 'HUD grown' is the same screen several health upgrades later,
 // which is the frame that can run off the top and the only one the CSS ceiling
 // has to catch. Both are needed: the growth is the feature, so the short
 // version cannot stand in for the long one or the other way round.
-const SURFACES = ['start', 'HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card'];
+const SURFACES = ['HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card'];
 
 // THE FURNITURE A CALLOUT MAY NOT COVER. The same list ui/callout.js clears
 // itself of, restated here ON PURPOSE rather than imported: this is the check,
@@ -324,11 +326,6 @@ async function buildSurface(surface, ui, callout, callouts) {
     document.getElementById('svTrophy')?.classList.remove('sv-hidden');
     return;
   }
-  if (surface === 'start') {
-    ui.previewScreen('start');
-    return;
-  }
-
   if (surface === 'HUD grown') {
     ui.previewScreen('HUD');
     // Pinned explicitly even though it is the default, so this tile keeps

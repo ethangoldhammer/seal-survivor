@@ -228,6 +228,18 @@ export const CONFIG = {
       max: 0.14,  // ceiling on total zoom, or a long chain walks the camera in
       decay: 7,   // per second, exponential — instant attack, eased release
     },
+    // How far past a wall the frame is allowed to drift, in world units. The
+    // frame used to stop with its edge exactly on the wall, which pinned the
+    // seal to the very edge of the screen for the last body-length of its swim
+    // — a little give either side keeps it off the bezel right to the rock.
+    //
+    // A CEILING, not the value. What is actually spent is the smaller of this
+    // and the depth of the drawn rock face at its thinnest point, measured off
+    // the built geometry (see measureCover in systems/wallRocks.js) — so the
+    // frame only ever drifts into rock and can never show open water outside
+    // the shore. Raising this past what the wall covers does nothing; growing
+    // the boulders (wallRocks.size / count) is what buys more.
+    edgeDrift: 6,
   },
 
   // ---------------------------------------------------------------------------
@@ -543,6 +555,18 @@ export const CONFIG = {
       // frame, and on a title card the animal is the whole picture — a dent
       // travelling with it reads as the grid being broken behind it.
       sealWake: 0,
+      // HOW MUCH OF THE ARENA'S OWN LATTICE SURVIVES while this screen is held,
+      // 0..1. There are two grids in the frame — this screen's, at a sixth of
+      // the cell size, and the arena's underneath it, whose single cell is
+      // wider than the whole crop. Drawn together they are two hex grids at two
+      // sizes in two colours, which reads as a fault rather than as depth.
+      //
+      // 0 hides the arena's while the menu is up and fades it back in as the
+      // shot pulls out — a crossfade, which is what "the fine grid resolves
+      // into the one the run is played on" has to be to actually read that way.
+      // Raise it if the coarse lines are wanted as a ghost behind the fine
+      // ones; 1 is what shipped before, and is the two-grid look.
+      arenaLattice: 0,
       // --- THE LIGHT IN THE WATER, at this crop ----------------------------
       // The menu is held in the arena, so the caustics and the god rays are
       // already running behind it — and at this zoom neither can be seen. Both
@@ -758,6 +782,24 @@ export const CONFIG = {
         // and blendable like anything else, so it fades in and out on the same
         // curve as the pull-in. Its GEOMETRY lives under lens.path below.
         path: 0,
+
+        // THE SOFT WALL. How much of the half-frame the rig spends easing into
+        // the edge of its pan range, as a fraction — same currency as the dead
+        // zone above, so it means the same thing at every zoom and aspect.
+        //
+        // At 0.3 the last third of a half-frame is a ramp: at the resting zoom
+        // the frame decelerates over roughly a quarter-second of swimming
+        // rather than arriving at the wall at speed. It changes only the
+        // APPROACH — the ramp is asymptotic, so the frame still reaches the
+        // same limit, it just stops arriving at it.
+        //
+        // Zero is not the old dead stop; that was a clamp on the frame's
+        // POSITION with the target still pointing past the wall (see softLimit
+        // in systems/cineCamera.js). At zero the target is held at the limit
+        // and the spring still eases into it — measured, that alone takes the
+        // last step from 0.74 world units to 0.14, and this ramp takes it to
+        // 0.09. So zero is "no ramp", not "back to the lurch".
+        edgeEase: 0.3,
 
         // Fallbacks for a state that names neither.
         blendIn: 0.4,
@@ -2472,11 +2514,64 @@ export const CONFIG = {
       // (10.8), and bodies are thrown furthest.
       velocityFollow: 0.7,
       dragFullSpeed: 12,
-      // A slow turn added on top of all that. THIS IS A CRUTCH, and is meant to
-      // go to 0: it exists so the clubs still swing for a player who is barely
-      // moving on a rig whose flippers only point at the cursor. Once the fins
-      // spin under their own animation, zero this.
-      assistSpin: 3.4,
+      // A slow turn added on top of all that. THIS IS A CRUTCH, AND IT IS OFF.
+      // It existed so the clubs still swung for a player who was barely moving,
+      // and that was the whole trouble with it: a weapon turning on its own
+      // clock pays out for doing nothing, so there was never a reason to spin
+      // the fins or to break a straight line. The two carry-through terms
+      // below are what replaced it — torque the ANIMAL produced, so a swing is
+      // bought with a movement instead of arriving free.
+      //
+      // Kept as a dial rather than deleted: "the clubs turn slowly on their
+      // own" is a legitimate thing to want to try, and it must be tried
+      // deliberately rather than arriving as the default.
+      assistSpin: 0,
+      // --- carry-through ---------------------------------------------------
+      // THE TWO WAYS THE ANIMAL PUTS ENERGY INTO THE WOOD. Both are impulses
+      // on the club's angular VELOCITY rather than nudges to its rest angle,
+      // and that distinction is the whole of carry-through: a target the club
+      // chases is something it settles onto and stops at, and momentum is
+      // something it keeps after the cause has gone. `damping` above is what
+      // eventually eats it, so these two decide how much there is to eat.
+      //
+      // `finCarry` is the FLIPPER'S OWN ROTATION, measured frame to frame and
+      // handed to the club as a share of it. Spin the fins and the clubs come
+      // round with them and keep going when the fins stop — the most direct
+      // reason to spin, and the reason the weapon now has a technique at all.
+      //
+      // IT MUST STAY UNDER `damping`. At steady state the spring needs an
+      // ANGLE ERROR to sustain the club's rotation against damping, and that
+      // error is the trail — the whole flail read. This term pays part of that
+      // bill directly, so the trail is proportional to (damping - finCarry):
+      // at 4.5 the club locks rigid to the flipper, and past it the club
+      // LEADS, which is a stick apparently dragging the animal around. Below
+      // it the trail survives and still grows with how fast the fin is going,
+      // and what this buys is a much sharper answer to the fin starting and
+      // stopping — which is the part a player performs.
+      finCarry: 2.2,
+      // A FLIPPER BEING SWUNG BEATS THE WATER — the fin rate, rad/s, at which
+      // the drag below has no say left. See flopTarget in systems/club.js for
+      // the measurement that made this necessary: with the free spin gone, the
+      // drag target at full swim pinned the clubs flat behind the animal, and
+      // working the fins while sprinting produced a fifth of the swing that
+      // the same fins produced at rest. The card asks the player to work the
+      // fins WHILE swimming, so the water must not be able to veto it.
+      // (weapons.csv owns it)
+      finAuthority: 8,
+      // `bodyCarry` is the SEAL CHANGING DIRECTION. A weight on the end of a
+      // pivot that accelerates sideways swings, the way a pendulum in a
+      // braking car does, so the torque is the shaft crossed against the
+      // pivot's acceleration. Hold a line and it is zero however fast you are
+      // going; carve, and both clubs sweep across the body.
+      //
+      // Fed by ACCELERATION and not by speed, deliberately: speed is a thing
+      // you hold down, acceleration is a thing you perform.
+      bodyCarry: 0.55,
+      // Ceiling on how much of one frame's acceleration may be believed. A
+      // respawn, an arena wrap or a frame hitch produces an acceleration spike
+      // the size of the map, and without this the clubs answer it by winding
+      // to `maxSwing` for no reason the player can see.
+      bodyCarryMax: 260,
       // What counts as a swing at all. Below this the club is being carried,
       // not swung, and it does no damage — see the gate in club.js.
       minSwing: 1.2,
@@ -2499,6 +2594,13 @@ export const CONFIG = {
       // the grip already lands on the fin tip at 0 — this is for art whose
       // handle sits a little off its own origin.
       gripOffset: 0,
+      // HOW MUCH OF BIG RIGZ A CLUB IN A FIN TAKES. The clubs on the ring take
+      // it whole — they are companions in everything but the stat they read —
+      // and a fin club takes this share of it. Not zero, because a bigger seal
+      // holding the same little stick reads wrong; not one, because a fin
+      // club's reach IS the melee range of the weapon, and a companion-size
+      // card must not get to rewrite how close the player has to get.
+      bigRigShare: 0.35,
       depth: -0.05,    // z nudge, so a club passes behind the seal's silhouette
       // How long a fin stays empty after the Hurler throws its club. The whole
       // price of that card: throw, and the melee weapon is gone until this
@@ -2509,6 +2611,13 @@ export const CONFIG = {
       damage: 6,          // the whack itself: deliberately a chip
       damagePerLevel: 2.5,
       launchSpeed: 38,    // how hard a struck body leaves, at pivot size
+      // THE CLUB'S EXTRA KNOCKBACK, for everything the launch will take. Its
+      // partner is `knock` below, which only ever reaches bodies the launch
+      // REFUSES — a body gets one displacement channel or the other, never
+      // both, because the two follow different mass rules on purpose and
+      // running them together lets the ram's rule invert the club's. See the
+      // note at the launch in systems/club.js. (weapons.csv owns it)
+      launchKnockMul: 1.4,
       dashLaunchMul: 1.5, // a dash-swing throws harder as well as faster
       launchPivotRadius: 0.8, // the body size that takes launchSpeed unmodified
       launchMassExp: 1,   // how hard size resists being thrown (1 = linear)
@@ -2549,6 +2658,94 @@ export const CONFIG = {
       // weapons.csv owns it. 0..1 in applyKnockback's charge units, so 1 is
       // what a fully banked ram shoves with.
       knock: 0.8,
+      // --- teed up ----------------------------------------------------------
+      // A CLUB HIT ON A BODY THAT IS ALREADY HELD IS WORTH MORE.
+      //
+      // Six abilities in this game stop a creature moving — the beluga's
+      // bubble, the octopus grab, Bakalar's net, the dumbo's charm, the harp's
+      // note, and the club's own Cold Snap freeze — and every one of them
+      // leaves a stationary rack sitting in open water. Until now nothing
+      // rewarded breaking it: a held fish took exactly the damage a swimming
+      // one did, so the best crowd-control run in the game and the best club
+      // run in the game had nothing to say to each other.
+      //
+      // ONE RULE, not six. systems/control.js already centralises "held" as
+      // `trapTimer` (inert) and `charmTimer` (fighting for you), which is the
+      // whole reason this is a few lines rather than a card per pairing — a
+      // seventh hold added tomorrow inherits it without knowing it exists.
+      //
+      // AND A DAZED BOSS COUNTS. On a boss every one of those six holds is
+      // refused and becomes a daze instead (control.js explains why). Gating
+      // this on `trapTimer` alone would have written a synergy that silently
+      // does nothing in every boss fight — which is the exact failure mode
+      // that file was written to prevent.
+      teed: {
+        enabled: true,
+        // What the whack is worth against a held body. Big, and it should be:
+        // getting one there costs a second ability, a cooldown, and putting
+        // yourself next to it. (weapons.csv owns it)
+        damageMul: 2.4,
+        // ...and how much harder it leaves. A held body is not swimming away
+        // from the blow, so all of it goes into the throw — which is also what
+        // makes the carom off a racked school so much better than off a loose
+        // one. (weapons.csv owns it)
+        launchMul: 1.6,
+        // A FLOOR UNDER THE SWING'S POWER for a teed hit, and it ships at 0.
+        //
+        // "A club drifting into a frozen shark should still connect properly"
+        // is a reasonable thing to want, and it is the wrong mechanism for it:
+        // this floor MULTIPLIES with `damageMul`, so on a lazy swing (power
+        // ~0.18, which is an ordinary cruise) a floor of 0.75 turned a card
+        // claiming 2.4x into a measured 15x. A bonus nobody can predict from
+        // the card is not a bonus, it is a second weapon.
+        //
+        // It is also the wrong SHAPE. The whole point of this pass is that the
+        // swing is something the player performs; a floor is the one part of
+        // the club a stationary player would get for free, which is exactly
+        // what `assistSpin` was and exactly why it is gone. Teed hits are
+        // worth `damageMul`, full stop, and you still have to swing.
+        minPower: 0,
+      },
+      // --- the shockwave ---------------------------------------------------
+      // AT THE TOP OF A REAL SWING, THE HEAD CRACKS THE WATER. Fired on the
+      // PEAK — the frame the club's angular velocity stops climbing and starts
+      // falling — and only when that peak cleared `minSwing` below. Not on a
+      // hit, and not on a timer: it is a readout of the one thing this weapon
+      // has always been about, which is how hard the animal just moved.
+      //
+      // That makes it the payout for the technique. The carry-through terms
+      // above mean a peak is something you PERFORM — a fin spin, a hard carve
+      // — and this is what performing one is worth. A player holding a line
+      // never sees it; a player working the fins sets one off every couple of
+      // seconds, in open water, without needing anything to hit.
+      //
+      // It is also the club's answer to whiffing. The swing's damage needs a
+      // body inside its arc, and a wave does not.
+      shock: {
+        enabled: true,
+        // The peak that earns one, rad/s. Well clear of `minSwing` (1.2): a
+        // club that merely counts as swinging must not also be cracking the
+        // water, or the wave is the weapon and the swing is decoration.
+        minSwing: 11,
+        // ...and the peak that pays in full. Between the two the wave scales,
+        // so a harder crack is a bigger one and the ceiling is worth chasing.
+        fullSwing: 22,
+        radius: 4.2,       // at full, from the club head (weapons.csv owns it)
+        damage: 11,        // (weapons.csv owns it)
+        damagePerLevel: 4, // (weapons.csv owns it)
+        // The shove it hands what it catches, in applyKnockback's units. Big
+        // relative to the swing's own: a wave is pressure, and pressure moves
+        // things it does not hurt much.
+        knock: 0.9,
+        // Per club. Long enough that a club oscillating near the threshold
+        // cannot machine-gun waves out of one flick of the stick.
+        cooldown: 0.55,
+        // Seconds a freshly primed club may not fire one for. See the guard in
+        // systems/club.js — a new, re-armed or swapped club answers its first
+        // real target with one very fast frame, and that is a discontinuity
+        // rather than a swing. (weapons.csv owns it)
+        armTime: 0.3,
+      },
       // --- the ring -------------------------------------------------------
       // CLUBS YOU ARE NOT HOLDING ORBIT YOU. The seal has two fins and the run
       // can own four kinds of club, so everything past the first type used to
@@ -3900,16 +4097,38 @@ export const CONFIG = {
     },
 
     // ---------------------------------------------------------------------------
-    // STARFISH — rapid-fire shuriken-style projectiles, straight line, no
-    // homing or bouncing. Level scales fire rate and projectile size.
+    // STARFISH — shuriken-style projectiles, straight line, no homing or
+    // bouncing. Level scales fire rate, damage, size and how many bodies one
+    // throw cuts through. (weapons.csv owns all of that; only the spin, which
+    // is purely visual, is still a slider.)
+    //
+    // IT PIERCES, and that is the whole weapon. It shipped at pierce 0 —
+    // a shuriken that stopped dead in the first fish it touched — which made
+    // it a worse gun with a longer cooldown, and the ledger said so: 232 damage
+    // per stack-minute across six runs, last of every weapon in the game and a
+    // tenth of the mid-table. A straight line through a shoal is a different
+    // weapon from a straight line into one animal, and it is the one the card
+    // has always described.
+    //
+    // THE STACK ALSO HAD NO DAMAGE ON IT. Eight levels bought cadence and size
+    // and nothing else, so a fully invested starfish still threw the same
+    // 9-damage disc it threw at level 1 while every creature in the water had
+    // grown; `damagePerLevel` is what makes the later picks worth taking.
     // ---------------------------------------------------------------------------
     starfish: {
-      baseFireRate: 0.5,
-      fireRatePerLevel: 0.92, // multiplier per level (compounds)
-      damage: 9,
-      speed: 24,
+      baseFireRate: 0.42,
+      fireRatePerLevel: 0.88, // multiplier per level (compounds)
+      damage: 22,
+      damagePerLevel: 6,
+      // Bodies beyond the first that one throw cuts through. Floored the same
+      // way the laser's beam count is, so an extra body arrives on a stack you
+      // can name rather than a third of one arriving every level.
+      basePierce: 1,
+      piercePerLevel: 0.34,
+      pierceMax: 4,
+      speed: 26,
       life: 1.4,
-      baseRadius: 0.22,
+      baseRadius: 0.23,
       radiusPerLevel: 0.06,
       spinSpeed: 14, // radians/sec, purely visual
     },
@@ -5377,11 +5596,24 @@ export const CONFIG = {
         // The knob is here rather than hardcoded because it is a real design
         // trade: a run that rolls Glow Up! at 9am has bought an ability that
         // does nothing for several minutes, and the card does not currently
-        // say so. Put this at ~0.25 if that reads as broken rather than as
-        // "wait for dark".
+        // say so.
+        //
+        // IT READ AS BROKEN. At 0, across eight logged runs that took the card,
+        // Glow Up! did 39 damage in total — 2 per stack-minute against a median
+        // weapon's 2,500, last in the game by ninety times. The clock is why:
+        // 30 real seconds is one game hour, so a 2:39 run is 5.3 hours, and the
+        // awake window is 17:20 to 07:00. `startFromSystemClock` means a run
+        // begun at any point in the working day is dark for NONE of itself. The
+        // card is offered at every hour and costs a pick at every hour.
+        //
+        // So: a floor, and the night is a multiplier on top of it rather than
+        // the only thing that switches it on. The glow is faint at noon, which
+        // was always the real point — a seal blazing under the sun reads as a
+        // bug in the shader. Being unable to tell the ability from not having
+        // taken it does not.
         //
         // Live statuses are NOT cancelled at sunrise — see applyElementalHit.
-        dayPower: 0,
+        dayPower: 0.35,
         // Shapes the fade between the two. 1 is linear in `nightFactor`;
         // above 1 holds the ability off until it is properly dark, below 1
         // wakes it early in the dusk. The crossfade to the plain noise-shaded
@@ -5458,9 +5690,10 @@ export const CONFIG = {
       //
       // IT RIDES elementPower(), exactly like the seal's glow — so the colour
       // is not decoration, it is the readout for whether the element is awake.
-      // At noon with `dayPower` at 0 the shot is applying nothing elemental at
-      // all, and it goes back to being an ordinary pebble to say so; it takes
-      // the element's colour across the same dusk the seal does.
+      // At noon the shot carries `dayPower`'s share of the element and is tinted
+      // that far toward it — dim rather than absent, which is the readout for an
+      // ability that is awake but faint. It takes the element's full colour
+      // across the same dusk the seal does.
       //
       // The tint is a BLEND on top of the asset's own colour (setAssetBlendTint
       // in assets.js), not a write to the Look panel's tint, so recolouring the
@@ -9848,11 +10081,102 @@ export const CONFIG = {
       // displaces water sideways rather than lifting a column of it. The extra
       // life is the crown of foam sitting on the water after the seal has gone
       // through it.
+      // COUNT AND SIZE ARE BOTH UP FROM WHAT A POINT BURST NEEDED. The crown is
+      // emitted from a ring fitted to the seal rather than from one coordinate
+      // now (CONFIG.reentrySplash.ring), which spreads the same lobes over
+      // eight times the area — and once the surface went to whitewater the gaps
+      // stopped being forgiving, because opaque lobes with daylight between
+      // them read as separate objects where an additive glow blurred them into
+      // one. More lobes is the only lever that fixes it: bigger ones alone weld
+      // the ring into a slab and faster ones alone open the gaps further.
       reentryFoam: {
-        count: 30, speed: [5, 19], size: [0.26, 0.55], life: [0.4, 0.95],
+        count: 46, speed: [5, 19], size: [0.3, 0.6], life: [0.4, 0.95],
         colors: [0xdff4ff, 0xffffff, 0x9fd8ff], cone: 1.7, drag: 2.2,
         gravity: [0, -11], inherit: 0.35, glow: 1.5, goo: 'foam',
         killAtSurface: false, turbulence: 0.4,
+    },
+      // --- THE CAVITY (goo group `foam`, systems/reentrySplash.js) -------------
+      // THE WATER THAT GOES DOWN. Everything else at the water line is thrown
+      // up, which is why the landing has never read as an impact: a body
+      // arriving at speed does not lift water, it PUNCHES A HOLE IN IT. The
+      // hole is this — a mass of aerated water driven under the line, along
+      // the seal's own path, spreading as it goes.
+      //
+      // AND THEN IT COMES BACK, out of the ballistic solve itself rather than
+      // out of a second burst. This is the one thing about the emitter worth
+      // reading twice, because the numbers look wrong until you know it:
+      // `gravity` is POSITIVE, i.e. up. In entities/particles.js the closed
+      // form is `v * (1 - e^-kt) / k + 0.5 * g * t^2` — the velocity term is
+      // damped by drag and the gravity term is NOT. So a blob thrown hard
+      // downwards into heavy drag stalls inside a third of a second, hangs at
+      // the bottom of the cavity while the parabola is still small, and is
+      // then lifted back through the surface by it, accelerating the whole way.
+      // Down, hold, and up: one particle, no simulation, and it is genuinely
+      // what buoyancy does to water full of entrained air.
+      //
+      // DRAG IS WHAT SETS THE DEPTH, and it is the only thing that does — the
+      // buoyancy above decides when the water comes back, not how far down it
+      // got. So these three are one number in three parts: raising the speed
+      // without raising the drag digs a hole the crown never catches up with,
+      // and raising the drag alone leaves a dent instead of a cavity. The
+      // sequence's third stage is timed against where this lands (see
+      // CONFIG.reentrySplash.stages), so moving either of them moves that too.
+      //
+      // THE CONE IS NARROW AND THE LOBES ARE SMALL, and both of those were the
+      // second attempt. A wide cone (1.0, the crown's own figure) with lobes
+      // sized to match spread thirty-five splats sideways instead of down, and
+      // the density pass welded them into a flat LENS lying under the water
+      // line — a picture of a puddle, not of a hole. Narrow it and shrink the
+      // lobes and the same thirty-five become a plume with tearing down its
+      // sides, because fusion is a question of how far neighbours have
+      // separated relative to their own radius and nothing else. This is the
+      // failure mode CONFIG.fx.goo.groups.gore's note describes, arrived at
+      // from the other direction.
+      //
+      // `killAtSurface: false` for the usual reason and one extra: these are
+      // born ON the line, and the whole point of them is to cross it twice.
+      reentryCavity: {
+        count: 40, speed: [2, 27], size: [0.3, 0.58], life: [0.9, 1.35],
+        colors: [0xbfe6ff, 0xdff4ff, 0x8fcdf0], cone: 0.6, drag: 3.1,
+        gravity: [0, 16], inherit: 0.3, glow: 1.1, goo: 'foam',
+        killAtSurface: false, turbulence: 0.3,
+    },
+      // THE COLUMN THE COLLAPSE THROWS. Fired a fifth of a second after the
+      // impact, when the cavity above has closed on itself — the Worthington
+      // jet, the spike of water that stands up out of a splash after the crown
+      // has already fallen. It is the LAST thing the eye sees, and it is the
+      // reason the whole sequence reads as water rather than as a puff.
+      //
+      // Everything here is the opposite of the crown: a narrow cone because a
+      // jet is a column and not a sheet, low drag because it has to actually
+      // climb, low turbulence because a coherent spike is the read, and
+      // gravity DOWN because this one is thrown up and must fall back.
+      //
+      // AND IT HAS TO OUT-CLIMB THE CROWN, which is the assertion in
+      // tools/reentry-splash-test.mjs and was the first thing that was wrong
+      // here: at the speeds it was first authored at, the column peaked a
+      // fraction BELOW `reentryFoam` and simply read as a second, later crown.
+      // A jet is taller and thinner than the sheet it comes out of — that is
+      // what makes it recognisable as one — so it is thrown half again as hard
+      // into a third of the drag. The extra lobes are what that costs: a column
+      // that climbs twice as far spreads its lobes twice as far apart along its
+      // own length, and past about fifteen it stops being a column and becomes
+      // a string of beads.
+      reentryJet: {
+        count: 18, speed: [15, 32], size: [0.24, 0.46], life: [0.55, 0.95],
+        colors: [0xe8faff, 0xffffff, 0xa9dcff], cone: 0.22, drag: 0.8,
+        gravity: [0, -19], inherit: 0.12, glow: 1.7, goo: 'foam',
+        killAtSurface: false, turbulence: 0.15,
+    },
+      // ...and the jet coming apart. SPRITES, not goo, and that is the whole
+      // idea: a column of water breaks into droplets at the top, and droplets
+      // are the one thing the density pass is built to stop happening. Fired
+      // with the jet and outliving it slightly, so the spike tears into specks
+      // on its way over the top instead of melting where it stands.
+      reentryJetSpray: {
+        count: 16, speed: [9, 22], size: [0.07, 0.18], life: [0.55, 1.0],
+        colors: [0xffffff, 0xcfeeff, 0x8fd6ff], cone: 0.4, drag: 1.3,
+        gravity: [0, -20], inherit: 0.12, glow: 1.9,
     },
       // --- THE BLOB MENU (systems/gooMenu.js) ---------------------------------
       // What a title-screen button lets go of when you point at it and when you
@@ -10370,6 +10694,17 @@ export const CONFIG = {
       // brief to be worth a droplet burst each, and at this count that would be
       // a few hundred extra particles for something over before it is seen. But
       // they must still die at the water line rather than sail into the sky.
+      // The pressure ring off a club head. FAST and SHORT with heavy drag, so
+      // it reads as a wavefront that has already passed rather than as debris
+      // hanging in the water — a slow one looks like the club exploded.
+      // `cone: 0` is load-bearing: this has to leave in every direction at
+      // once or it is a spray, and a spray is what the swing itself already
+      // throws.
+      clubShock: {
+        count: 22, speed: [9, 15], size: [0.05, 0.13], life: [0.1, 0.24],
+        colors: [0xdff6ff, 0xffffff, 0xa9dcf5], cone: 0, drag: 9,
+        gravity: [0, 0], inherit: 0.2, glow: 1.2, killAtSurface: true,
+      },
       chargeBurst: {
         count: 26, speed: [3, 9], size: [0.04, 0.11], life: [0.14, 0.34],
         colors: [0xdff6ff, 0xffffff, 0xbfefff], cone: 0, drag: 5.5,
@@ -10826,7 +11161,7 @@ export const CONFIG = {
       // and a slam is also something a good player does every few seconds. 0.05
       // is what survives being repeated. No `sfxMinGap` — you cannot re-enter
       // the water twice inside a window, so there is nothing to collapse.
-      reentry:   { emit: 'reentry',     goo: 'reentryFoam', shake: 0.55, hitstop: 0.05,  glow: 0.9,  ripple: { strength: 5.0, radius: 18 },  sfx: 'reentry',  haptic: [22, 14, 30] },
+      reentry:   { emit: 'reentry',                         shake: 0.55, hitstop: 0.05,  glow: 0.9,  ripple: { strength: 5.0, radius: 18 },  sfx: 'reentry',  haptic: [22, 14, 30] },
       // The mid-air relaunch. No hitstop and almost no shake on purpose: it is
       // a movement verb, and freezing the frame on a jump makes the jump feel
       // like it hit something. Whatever punch it has is in the sound.
@@ -11114,6 +11449,24 @@ export const CONFIG = {
       // main.js rather than fixed here, since the radius grows per stack.
       clubBoom:    { emit: 'explosion', shake: 0.16, hitstop: 0, glow: 0.6, sfx: 'clubBoom',
                      haptic: [{ duration: 22, magnitude: 0.5 }], sfxMinGap: 0.07 },
+      // A CLUB LANDING ON A BODY SOMETHING ELSE HAD ALREADY STOPPED. Accented
+      // rather than loud: it fires on the same frame as `clubWhack` and is
+      // meant to be heard THROUGH it, so this carries the glow and the ripple
+      // and lets the whack keep the thud. A second full-weight impact here
+      // would just make a good hit sound like a bug.
+      clubTeed:    { emit: 'sparks', shake: 0.05, hitstop: 0, glow: 0.55,
+                     ripple: { strength: 1.2, radius: 6 }, sfx: 'clubTeed',
+                     haptic: [{ duration: 14, magnitude: 0.35 }], sfxMinGap: 0.08 },
+      // THE HEAD CRACKING THE WATER at the top of a swing. The one club event
+      // that is not an impact — nothing was necessarily hit — so it is carried
+      // by the RIPPLE rather than by the shake: a pressure wave is a thing the
+      // water does, and the grid is the only channel in the game that can show
+      // a circle travelling outward. `hitstop` is 0 like every other repeating
+      // event, and `sfxMinGap` is set because two clubs can peak on the same
+      // frame and a doubled crack reads as a glitch rather than as two.
+      clubShock:   { emit: 'clubShock', shake: 0.09, hitstop: 0, glow: 0.5,
+                     ripple: { strength: 2.4, radius: 9 }, sfx: 'clubShock',
+                     haptic: [{ duration: 20, magnitude: 0.42 }], sfxMinGap: 0.09 },
       // Cold Snap, at the moment a body locks solid. Fires far less often than
       // the chill itself (only on saturation), so it can afford to be a proper
       // event — this is the payoff the card is bought for.
@@ -11624,6 +11977,90 @@ export const CONFIG = {
             rimWidth: 0.9,
             spec: 0,
             normal: 3,
+
+            // --- WHITEWATER -------------------------------------------------
+            // What the surface above cannot say: this substance is not water,
+            // it is water with AIR IN IT, and how much air decides everything
+            // about how it looks. Packed foam is white and opaque because a
+            // cloud of bubbles scatters every wavelength and hides what is
+            // behind it; a thin veil of bubbles is the colour of the water it
+            // is in and barely there at all. Additive goo can only ever do the
+            // second, which is why a landing used to read as a flash of light
+            // at the water line rather than as the sea being torn open.
+            //
+            // THE AIR FRACTION IS THE DENSITY FIELD. There is no extra
+            // per-particle data anywhere for this and there should not be: the
+            // field already measures how many lobes are piled up at a point,
+            // and a diving animal drags air down in proportion to how much
+            // water it is displacing. So the cavity under a full-arc landing —
+            // 26 lobes into a few units of water — comes out packed and white
+            // on its own, while a hull's wake trickling the same substance
+            // stays a thin blue veil, from the same numbers, with nothing
+            // anywhere deciding which is which. That is the whole design.
+            //
+            // Every user of this group is aerated water and all of them get it:
+            // the landing, the breach, and the white water off a hull.
+            whitewater: {
+              // Master. 0 restores the plain additive surface above exactly.
+              strength: 1,
+              // How much density ABOVE the isoline counts as fully packed. This
+              // is the control that decides how much of a burst is white and
+              // how much is veil, and it is the one to drag first. Low turns
+              // every wisp opaque and the effect becomes a paper cut-out; high
+              // means only the very core ever whitens and the rest stays the
+              // additive glow it was.
+              // WELL ABOVE (1 - iso), and that is not a taste call. A single
+              // splat peaks at density 1.0 by construction, so at 0.75 a lone
+              // isolated lobe came out 60% packed — solid white, opaque, with
+              // an outline — and a burst rendered as a scatter of golf balls.
+              // Air packs where water is CHURNED, which in this field means
+              // where lobes overlap: at 1.6 one lobe is a quarter aerated, two
+              // is two thirds, three is packed. That progression is the effect.
+              packedAt: 1.6,
+              // The bubble texture, and it bites HARDEST WHERE THE FOAM IS
+              // THINNEST — packed foam is solid and featureless, and it is the
+              // ragged aerated edge that reads as bubbles. Modulating the core
+              // as hard as the fringe makes the whole mass look mouldy.
+              bubbles: 0.65,
+              bubbleScale: 1.15, // cells per world unit
+              // The trapped air CLIMBING, in world units a second. The texture
+              // is sampled in world space and scrolled upward through a mass
+              // that is itself moving, which is what air in water does. At 0
+              // the bubbles are painted on and the whole thing goes back to
+              // being a texture rather than a substance.
+              airRise: 1.6,
+              // Authored bright for the usual reason: the composite writes
+              // linear straight to the framebuffer with no sRGB conversion, so
+              // everything lands about a stop and a half darker than its hex.
+              color: 0xf4fdff,
+            },
+
+            // --- AND WHERE IT IS ---------------------------------------------
+            // The goo pass composites over the finished scene, so without this
+            // a cavity lobe five units under the water is drawn at full
+            // strength in front of an ocean it is supposed to be inside. These
+            // put it back under the two media the backdrop already draws — the
+            // water's own depth gradient below the line, the horizon haze above
+            // it — evaluated in the goo shader from the same numbers those two
+            // read. Per group, because blood in the water should recede exactly
+            // like foam and a cel-drawn boss explosion should not.
+            medium: {
+              // How hard the ocean closes over it, against the fill's own
+              // shallow-to-deep ramp. 1 means a lobe on the seabed is the
+              // colour of the seabed's water and nearly gone.
+              murk: 0.85,
+              // World units below the wave that the murk ramps over. NOT the
+              // arena's depth: the fill's ramp runs to the seabed forty units
+              // down, and a cavity lobe six units under would have picked up a
+              // tenth of it. The colour still comes from the fill's own ramp so
+              // the two agree; only the amount is scaled to the event.
+              murkReach: 7,
+              // ...and how much of the horizon haze sits in front of the half
+              // that is in the air. The band only reaches a few units, which is
+              // exactly the scale of this event: the crown is inside the haze
+              // and the column stands up out of it.
+              fog: 0.7,
+            },
           },
 
           // A MAN EMPTYING INTO THE WATER (systems/gore.js). Its own group
@@ -13457,6 +13894,18 @@ export const CONFIG = {
       // this repeats, and anything with a tail on it turns a crowd into a
       // rumble that never stops.
       clubBoom:   { src: null, type: 'boom',  freq: [180, 50],  decay: 0.22, gain: 0.3, noise: 0.65, filter: 900, pitchVary: 0.12, filterVary: 0.22 },
+      // The accent on a set-up hit. A short bright ping ON TOP of the whack,
+      // not instead of it — high and clean so it cuts through the thud without
+      // competing with it, and quiet enough that a run clubbing a netful does
+      // not turn into an alarm.
+      clubTeed:   { src: null, type: 'blip',  wave: 'triangle', freq: [1400, 700], decay: 0.09, gain: 0.13, pitchVary: 0.1 },
+      // The crack of a swing peaking. A WHIP, not a bang: the pitch sweeps
+      // upward where clubBoom's sweeps down, so a shockwave and a Powder Keg
+      // going off in the same second are still two distinguishable events.
+      // Short and bright, with the noise doing most of the work — this fires
+      // every couple of seconds on a player working the fins, and anything
+      // with a tail turns that rhythm into a drone.
+      clubShock:  { src: null, type: 'noise', filter: 3200,  decay: 0.11, gain: 0.19, pitchVary: 0.13, filterVary: 0.3 },
       // Cold Snap locking a body. A falling sine — the opposite shape to the
       // beluga's rising trap, because this one closes on the creature rather
       // than sealing around it.
@@ -13884,6 +14333,97 @@ export const CONFIG = {
       strength: 0.35, // how far the base colour is pulled toward `color`
       contrast: 1.0, // >1 pushes toward hard patches, <1 toward a soft wash
       color: 0x0a2233, // what the dark side of the noise mixes toward
+
+      // -----------------------------------------------------------------------
+      // THE WET FILM — a sheet of water lying on the animal, drawn as a TOON
+      // reflection.
+      //
+      // `wet` is the master and ships at 0, so the seal is exactly the animal it
+      // was until someone moves it. Everything else here is the shape the film
+      // takes once it is up.
+      //
+      // WHY IT IS NOT A SPECULAR SLIDER. MeshStandardMaterial already has
+      // roughness, and dropping the seal's would give a physically correct
+      // highlight that is completely wrong for this game: a smooth Blinn lobe
+      // over a cel-banded body reads as the shading having two opinions. This is
+      // one sheet of light with a countable number of steps in it — the same
+      // language as CONFIG.toonShade, which is what the animals around it wear.
+      //
+      // WHAT IT REACTS TO, which is the point of it existing at all:
+      //   the sun        the highlight rides the key light, so it crawls along
+      //                  the body over a run and goes long at dusk. Free — it is
+      //                  the same vector the diffuse shading used.
+      //   the caustics   the veins in CONFIG.caustics, sampled from the SAME
+      //                  function at the SAME world position and phase as the
+      //                  water plane behind the seal, so the dapple is one field
+      //                  the animal swims through rather than a texture on it.
+      //   the glows      Glow Up! and the strike meter (both above) drive the
+      //                  film hotter wherever it already is, so lighting the
+      //                  seal up also makes it look wetter.
+      //
+      // Flat keys, not a `wet: {}` block, because the per-species preset
+      // fall-through in applyNoiseSettings is a shallow spread — see the note
+      // there. Every one of these is overridable per preset on its own.
+      // -----------------------------------------------------------------------
+      wet: 0.55,            // MASTER. 0 = dry, and the whole layer costs nothing
+                            // there. 0.55 is a seal that has just surfaced
+      wetColor: 0xdff2ff,   // the film's own colour, before `wetTint`
+      wetGloss: 0.7,        // how strong the banded sheet of highlight is. Kept
+                            // under the rim below on purpose — see the note there
+      wetTight: 24,         // specular exponent — bigger is a smaller, harder
+                            // sheet. Low numbers wash the whole lit side
+      wetEdge: 0.15,        // where the sheet's cut sits along that falloff
+      wetSoft: 0.5,         // shoulder on the cut, in TERRACE widths, not in
+                            // units of the falloff — 0.08 is eight per cent of one
+                            // step and still a razor. 0 is the hardest cel edge,
+                            // and on this model it traces the tessellation
+      wetSteps: 2,          // plateaus across the falloff. 1 = one plain sheet
+      wetRim: 0.9,          // grazing-angle rim — water beads to the silhouette,
+                            // and at play scale this carries further than the
+                            // highlight does
+      wetRimPower: 3.4,     // how tight to the edge that rim stays
+      wetPatch: 0.35,       // how much the seal's own markings break the film
+                            // up. 0 is a uniformly lacquered animal
+      wetCaustics: 1.2,     // how much the water's veins land on the film
+      // x CONFIG.caustics.scale, and the one number here that is a compromise
+      // rather than a preference.
+      //
+      // 1 is the honest value: exactly the ocean's own veins, continuous across
+      // the silhouette. It is also nearly invisible, and for a reason that is
+      // arithmetic rather than taste — the water's veins are some nine world
+      // units apart and the seal is 2.6 long, so at 1 the whole animal sits
+      // inside a quarter of one vein and simply brightens and dims as it swims
+      // through the dapple. Correct, and not a thing anyone will ever notice.
+      //
+      // Above about 3 the pattern is small enough to read AS a pattern crawling
+      // over the body, which is the effect people mean by caustics on a
+      // creature — bought by giving up the alignment with the plane behind it.
+      // Same trade, and the same cause, as the punch-in compensation in
+      // systems/water.js.
+      wetCausticScale: 4,
+      wetCausticUp: 0.75,   // how much they favour up-facing surfaces. 0 wraps
+                            // them round the belly and it reads as print
+      wetGlow: 1,           // how much a glowing seal burns its own film
+      wetTint: 0.5,         // 0 keeps `wetColor`, 1 takes the ocean's live
+                            // caustic colour — warm at dawn, cold at night
+
+      // THE TWO SHARKS THAT ALSO WEAR THIS SHADER, and the only reason they are
+      // written out by hand: the wet film above is authored for the SEAL, and
+      // `wet` is a base value, so switching it on shipped a gloss to
+      // enemyGreatWhite and enemyMightyMeg as well (both take a `noise:` surface
+      // in assets.csv). A wet shark is a fine idea and a different decision from
+      // the one that was asked for, so both opt out and can opt back in one
+      // number at a time.
+      //
+      // DECLARED HERE RATHER THAN LEFT TO THE GENERATED BLOCK at the bottom of
+      // this file: that block is `??=`, so a preset named up here wins outright
+      // and its copy down there is ignored — which means these carry the shader
+      // lab's recorded numbers as well, or the promotion would silently drop
+      // them. See the note by that block.
+      presets: {
+        greatWhite: { strength: 1.3, wet: 0 },
+        mightyMeg: { strength: 0, size: 0.04, contrast: 3.55, wet: 0 },
+      },
     },
 
     // ---------------------------------------------------------------------------
@@ -16802,9 +17342,11 @@ export const CONFIG = {
     // Seconds between burns. Long enough that the beam is an event you aim
     // rather than a stream you hold — a laser with no gap is just a damage aura
     // with a shape.
-    fireEvery: 2.6,
-    fireEveryPerLevel: -0.18,
-    fireEveryMin: 1.2,
+    // (weapons.csv owns every number in this block except the three at the
+    // bottom — the sockets and the tint, which are judged on the seal's face.)
+    fireEvery: 2.2,
+    fireEveryPerLevel: -0.2,
+    fireEveryMin: 1,
     // How long each burn lasts. This, not the fire rate, is what makes it feel
     // like a beam: the line is up long enough to be SWEPT across a shoal.
     // SHORT. The uptime is the balance lever: at 0.85s per burn the beam was
@@ -16812,18 +17354,25 @@ export const CONFIG = {
     // which made it the strongest thing in the game by a distance. Halved, so
     // it is a cut rather than a sustained hold — the flare does the work the
     // duration used to.
-    burn: 0.42,
-    burnPerLevel: 0.05,
+    //
+    // WHICH LEVER THE BUFF USED, and why not this one. Uptime is what made the
+    // laser oppressive, so the restoration went into DAMAGE PER TICK and into
+    // cadence instead: a burn is still a cut you aim and commit to, it just
+    // costs the shoal more when it lands. 0.42 to 0.5 only buys the fourth tick
+    // — at 0.12s per tick, 0.42s was three ticks and change, and the change was
+    // being thrown away.
+    burn: 0.5,
+    burnPerLevel: 0.06,
     // Per TICK of contact, not per hit — CONFIG.beams.tickEvery decides how
     // often that is, so the number here is small next to a bullet's.
-    damage: 7,
-    damagePerLevel: 2.4,
+    damage: 13,
+    damagePerLevel: 3.6,
     reach: 26,
     reachPerLevel: 3.2,
     // One beam per eye from the first stack. A third and fourth arrive later,
     // fanned, which is what turns it from a line into a cone you can sweep.
     beams: 2,
-    beamsPerLevel: 0.34, // floored — a new beam every third stack
+    beamsPerLevel: 0.4, // floored — a new beam every third stack, and the fourth by the last
     beamsMax: 4,
     spread: 0.17,        // radians between beams once there are more than two
     // How far apart the eyes are, in world units either side of the aim axis,
@@ -17989,6 +18538,193 @@ export const CONFIG = {
       speedBonus: 0.02,
       speedMax: 1.6,
     },
+  },
+
+  // ---------------------------------------------------------------------------
+  // THE LANDING — systems/reentrySplash.js
+  //
+  // A splash is not an event, it is a SEQUENCE, and the game had only ever
+  // fired the first frame of one. `feedback.reentry` throws a spray and a crown
+  // of foam up and outward at the moment of impact and that is the whole
+  // effect: water goes up, water comes down, done in a third of a second. It
+  // reads as a puff at the water line rather than as a body arriving through it
+  // at speed.
+  //
+  // What actually happens when something heavy hits water, in order:
+  //
+  //   1. IT PUNCHES A HOLE. The displaced water is driven DOWN and outward
+  //      along the body's path — a cavity, dragging air behind it.
+  //   2. THE RIM RISES. The water pushed aside climbs into a crown around the
+  //      hole and falls back as strands. This is the part the game already had.
+  //   3. THE HOLE CLOSES. Pressure pinches the cavity shut behind the body,
+  //      and the walls slap together.
+  //   4. A COLUMN STANDS UP. That slap squeezes a narrow jet of water straight
+  //      back out of the middle — the Worthington jet — which climbs past where
+  //      the crown ever got, breaks into droplets and rains back down.
+  //
+  // So the sequence is down, then up, and the up is LATER and NARROWER and
+  // HIGHER than the crown that came first. That shape is the entire difference
+  // between "a splash" and "some particles at a water line", and none of it
+  // needs a fluid solve — it needs three bursts on a clock.
+  //
+  // WHAT IS WHOSE. `feedback.reentry` keeps the SPRAY (`emit: 'reentry'`) and
+  // everything that is not water — the sound, the shake, the hit-stop, the
+  // ripple, the rumble. Every drop of goo is here, including the two stages
+  // that fire at zero, because all of them are emitted from a ring fitted to
+  // the animal and the feedback table has no idea what shape anything is.
+  //
+  // The crown used to be on that entry (`goo: 'reentryFoam'`) and moving it was
+  // the point of the ring: a sheet of water thrown by a body comes off the
+  // whole body.
+  //
+  // THE CLOCK IS REAL TIME, matching entities/particles.js (main.js drives both
+  // off `realDt`). The landing fires a 0.05s hit-stop, and stages advancing on
+  // the gameplay clock would drift out of step with the particles they are
+  // scheduling — the jet would arrive after the cavity it is supposed to be
+  // squeezed out of had already surfaced.
+  //
+  // Look and feel, so all sliders. What a landing is WORTH is CONFIG.airborne
+  // above, which is all CSV.
+  // ---------------------------------------------------------------------------
+  reentrySplash: {
+    enabled: true,
+
+    // How hard the seal has to arrive before it gets the full sequence. Below
+    // this the stages still fire, they are just scaled down with everything
+    // else — a flipper dipped through the line makes a small splash, not a
+    // different one. See `power` in main.js, which is the same 0..1 figure the
+    // sound is pitched off.
+    //
+    // A gate was tried here first and is wrong: it puts a visible edge in the
+    // middle of the most-repeated verb in the game, where one more unit of
+    // downward speed suddenly grows a jet. Continuous, always.
+    minScale: 0.35,
+
+    // WHAT A HARD LANDING BUYS. `count` is how many more lobes; the other two
+    // are the size of the mass, and they are deliberately a matched pair.
+    //
+    // A goo mass is made bigger by scaling the lobes AND how far they are
+    // thrown by the SAME factor, because fusion depends on how far neighbours
+    // have separated relative to their own radius (the long version is on
+    // CONFIG.fx.goo.groups.gore). Bigger lobes alone weld the cavity into one
+    // featureless slab; faster ones alone tear it into loose dots. So these two
+    // move together or the splash stops being a splash at one end of the range.
+    countGain: 0.9,
+    sizeGain: 0.45,
+    speedGain: 0.45,
+
+    // THE SILHOUETTE THE WATER LEAVES FROM.
+    //
+    // A splash is made by a SHAPE displacing water. Every stage below with an
+    // `arc` is emitted from a ring of points fitted to the seal's own measured
+    // extent — an ellipse, because the animal is three times longer than it is
+    // deep and enters at an angle — with each point throwing along the ellipse's
+    // outward NORMAL there. Not the direction of the point from the centre:
+    // on a body that long the two are most of a right angle apart along the
+    // flanks, and the offset version throws the water off the nose and the tail
+    // instead of off the back and the belly.
+    //
+    // main.js measures the body at the crossing and hands it in; a caller with
+    // nothing to measure gets `minRadius` and a smaller splash rather than a
+    // broken one.
+    ring: {
+      // Emission points around the ring. This is a look control, not a budget:
+      // each point fires its SHARE of the stage's lobes, so the burst is the
+      // same size however many there are. Too few and the ring is a handful of
+      // separate puffs with gaps between them; too many and each one is down to
+      // emit()'s floor of a single lobe and the ring stops growing with `scale`.
+      // TWELVE, NOT SEVEN, and the reason is fusion rather than looks. The
+      // seal measures about 3.1 x 0.7 world units, so the ring is some 8.6
+      // units around; at seven points the clusters landed 1.2 units apart and a
+      // foam lobe is about 0.6 across, so nothing bridged and a landing
+      // rendered as seven separate puffs arranged in a circle. The spacing has
+      // to be inside a lobe's own radius or the ring is a dotted line:
+      // (circumference / points) < size x goo.radius / 2.
+      points: 12,
+      // How far outside the animal the water leaves from. Zero puts the ring on
+      // the skin, which reads as the seal dissolving rather than as water being
+      // pushed aside.
+      pad: 0.35,
+      // For a caller with no measured body. Deliberately small: it is a
+      // fallback, and the failure it exists to prevent is a splash the size of
+      // whatever number happened to be typed here.
+      minRadius: 0.6,
+      // Radians of wobble on each point's place in the ring. Without it the
+      // ring is a clock face and every landing puts the lobes in the same seven
+      // places, which the eye finds within about three jumps.
+      jitter: 0.35,
+    },
+
+    // THE SEQUENCE. `at` is seconds after impact; the rest is what to fire.
+    //
+    //   emit   an emitter in CONFIG.emitters
+    //   y      where it is born, relative to the water line
+    //   dir    +1 thrown up, -1 thrown down (the emitter's own cone opens
+    //          around it)
+    //   count  a multiplier on this stage's share of the burst
+    //   arc    radians of the silhouette ring this stage is emitted from,
+    //          centred on `dir`. 0 is a POINT burst at the middle. Math.PI*2
+    //          is the whole animal.
+    //   radial 0..1, how much of each point's throw is the ring's outward
+    //          normal rather than the stage's `dir`. 0 moves only the origins;
+    //          1 ignores `dir` entirely and the burst is a pure halo.
+    //   lean   how much of the seal's ARRIVAL — its sideways drift and its
+    //          downward speed both — the burst carries, each taken in the
+    //          stage's own direction and then multiplied again by the
+    //          emitter's own `inherit`
+    //
+    // THE TIMING OF THE COLUMN IS NOT A TASTE CALL. It is set by the cavity,
+    // which is a different emitter in a different part of this file — and that
+    // is the trap. `reentryCavity`'s drag against its throw speed puts the
+    // bottom of the hole about 0.4s after impact (measured, not derived: the
+    // buoyancy parabola is pulling back the whole way down). The column has to
+    // leave while the hole is at its deepest and just starting to close, which
+    // is what 0.26 is — a bit past halfway down, so it is still climbing out of
+    // an open hole when the walls come together behind it. Fire it early and it
+    // is a second crown on top of the first; fire it late and the cavity water
+    // has already surfaced and the column has nothing to stand out of.
+    //
+    // So retuning the cavity's speed or drag moves this number too, and neither
+    // file will say so. tools/reentry-splash-test.mjs is what notices: it
+    // solves the cavity's own arc for where the bottom actually is and asserts
+    // the column fires inside a window around it.
+    stages: [
+      // THE CROWN. Moved here from `feedback.reentry` — where it fired from a
+      // single coordinate — for the one reason this whole ring exists: the
+      // sheet of water a landing throws comes off the ANIMAL, all the way
+      // round it, and a crown emitted from a point is a firework. The spray
+      // (`emit: 'reentry'`) stays on the feedback entry: those are drops, they
+      // are sprites, and a point is where drops come from.
+      //
+      // A full 360 of ORIGINS, but only nine parts in twenty of the THROW.
+      // `radial` 1 — a pure halo — was the first attempt and it is wrong for a
+      // reason worth keeping: a burst thrown outward in every direction is a
+      // shell, and a shell's lobes get further apart as it grows, so the crown
+      // fused for about a tenth of a second and then came apart into a ring of
+      // separate dots. A real crown is a SHEET: it opens outward a little and
+      // travels mostly upward, which keeps its lobes neighbours the whole way.
+      // So the ring says where the water leaves the animal, and `dir` says
+      // where it goes.
+      { at: 0,    emit: 'reentryFoam',     y: 0,     dir: 1,  count: 1,    lean: 0.3,  arc: Math.PI * 2, radial: 0.45 },
+      // The hole. The same full ring, but half its throw is the stage's own
+      // downward direction: water leaves the whole body outward, and the sum of
+      // it still goes down. That is what a cavity is — not a jet fired at the
+      // seabed, a shape's worth of water displaced, deeper below than above.
+      { at: 0,    emit: 'reentryCavity',   y: -0.25, dir: -1, count: 1,    lean: 0.55, arc: Math.PI * 2, radial: 0.35 },
+      // The column. Dead centre, dead vertical: `lean` 0 on purpose, because a
+      // jet is thrown by the cavity closing on itself and not by the animal —
+      // it stands straight up out of the water however sideways the landing
+      // was, and a leaning one reads as a second spray.
+      // No `arc`: a POINT, at the middle of the hole. The column is thrown by
+      // the cavity closing on itself and not by the animal, so it has no
+      // business knowing what shape the animal was.
+      { at: 0.26, emit: 'reentryJet',      y: 0.05,  dir: 1,  count: 1,    lean: 0 },
+      { at: 0.26, emit: 'reentryJetSpray', y: 0.05,  dir: 1,  count: 1,    lean: 0 },
+      // The top of the column coming apart, a beat later and wider. Same
+      // emitter as the line above, fired a second time rather than given its
+      // own: it IS the same water, further along.
+      { at: 0.44, emit: 'reentryJetSpray', y: 0.9,   dir: 1,  count: 0.55, lean: 0 },
+    ],
   },
 
   // ---------------------------------------------------------------------------
@@ -19198,6 +19934,38 @@ export const CONFIG = {
         2: 'Another club on the ring around you — unless Powder Keg is what your fins are holding',
       },
       apply: (s) => { s.clubBoomLevel = (s.clubBoomLevel ?? 0) + 1; }, maxStacks: 5 },
+    // THE BOUNCER — the card that buys the whole class at once.
+    //
+    // It grants no weapon. It multiplies every club number the run has: the
+    // swing, the caroms, the blast, the ice, the shockwave, the clubs on the
+    // ring and the thrown ones. That is what makes it a BUILD card — worth
+    // nearly nothing on a run with one club stack and enormous on a run that
+    // took the line, which is the opposite shape to the four cards above and
+    // the reason it is worth having beside them.
+    //
+    // Deliberately NOT gated on owning a club. Same reasoning as the riders
+    // and the Hurler: a card that can be dealt as a dead pick is worse than
+    // one that is merely better in the right build — and this one is honest
+    // about it, because a run with no clubs is offered it as a multiplier on
+    // nothing and can simply take something else.
+    //
+    // Knockback still moves fastest of the three, but not by as much as it
+    // reads: it multiplies `launchKnockMul`, which is already 1.4, and the
+    // launch is the thing that puts bodies through a crowd. At 1.3 a full
+    // stack threw hard enough to cross the arena and spend its whole bounce
+    // budget on the walls, which is the class's own payload wasted on scenery.
+    //
+    // Reach moves least, and on purpose:
+    // reach is the club's HITBOX, and a card that grew it as fast as it grows
+    // damage would quietly turn a melee weapon into an aura.
+    { id: 'clubPower', family: 'projectile', name: 'Bouncer', desc: 'Every club you own hits harder, throws further and reaches further',
+      perLevelName: true,
+      levelDescs: { 1: 'Every club in the run — swung, caromed, thrown or orbiting — hits harder and throws further' },
+      apply: (s) => {
+        s.clubDamageMul = (s.clubDamageMul ?? 1) * 1.22;
+        s.clubKnockMul = (s.clubKnockMul ?? 1) * 1.18;
+        s.clubReachMul = (s.clubReachMul ?? 1) * 1.08;
+      }, maxStacks: 5 },
     { id: 'clubIce', family: 'aoe', name: 'Cold Snap', desc: 'Club hits chill what they touch, and freeze it solid once the chill saturates',
       perLevelName: true,
       levelDescs: {
@@ -19389,6 +20157,26 @@ export const CONFIG = {
     // projectileCount() — see stats.js. Deliberately flat rather than a
     // percentage: +1 shrimp on a ring of three and +1 pellet per fin are both
     // legible from the seat, where "+22% projectiles" is not.
+    // ENTOURAGE. Clone Warz for things that CIRCLE you rather than things you
+    // fire: +1 shrimp on the ring, +1 escort seal, +1 harp, +1 club on the
+    // club ring. Applied at each site through orbiterCount() — see stats.js,
+    // and note the gate, which is the whole card: it adds to rings you HAVE,
+    // so a run that took none of them is offered a multiplier on nothing and
+    // can take something else.
+    //
+    // Flat rather than a percentage for the same reason Clone Warz is: "+1
+    // orbiting companion" is legible from the seat and "+22% companions" is
+    // not. Capped low and weighted rare beside it, because two cards that both
+    // add to the same shrimp ring is already the strongest pair in the deck.
+    //
+    // The single-drone abilities are deliberately NOT in it. A beluga and a
+    // dumbo are one animal each — that is what they ARE, down to the mesh
+    // being a module singleton — and a card that quietly cloned them would be
+    // rewriting two abilities rather than counting them.
+    { id: 'orbiterAmount', family: 'companion', name: 'Entourage', desc: '+1 of everything that circles you',
+      perLevelName: true,
+      levelDescs: { 1: 'One more of every companion on a ring around you — shrimp, escorts, harps, clubs' },
+      apply: (s) => { s.orbiterBonus = (s.orbiterBonus ?? 0) + 1; }, maxStacks: 3 },
     { id: 'projectileAmount', family: 'projectile', name: 'Clone Warz', desc: '+1 of everything you fire',
       perLevelName: true,
       apply: (s) => { s.projectileBonus += 1; }, maxStacks: 3 },
@@ -20774,10 +21562,14 @@ for (const [root, presets] of Object.entries({
   toonShade: {
     "mightyMeg": { strength: 1, steps: 4, gamma: 0.5, low: 0.79, high: 1.31, soft: 0, range: 0.5 },
     "greatWhite": { high: 0.71, gamma: 2.1, steps: 4 },
+    "sealTeam": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "ship": { strength: 1, steps: 2, gamma: 1.05, low: 0.14, high: 1, soft: 0, range: 1.5 },
   },
   sealShader: {
     "mightyMeg": { strength: 0, size: 0.04, contrast: 3.55 },
     "greatWhite": { strength: 1.3 },
+    "sealTeam": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.6, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.6, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1.3, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "ship": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 3, wetSoft: 0.5, wetTight: 21, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 4.4, wetPatch: 0.35, wetCaustics: 0.95, wetCausticScale: 4.9, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
   },
   biolumSkin: {
     "clubIce": { shellColor: 0x000000, colorC: 0x000000, colorB: 0xade6e5, flow: 1.16, pattern: "flow", scale: 0.07 },
@@ -21312,16 +22104,10 @@ export const TUNER_SCHEMA = [
     panel: 'companions',
     section: 'Auras & orbits',
     items: [
-      { path: 'biolum.damageFraction', min: 0, max: 1, step: 0.02, label: 'element damage (of hit)' },
-      { path: 'biolum.damageFractionPerLevel', min: 0, max: 0.5, step: 0.01, label: '...per level' },
-      { path: 'biolum.statusPerLevel', min: 0, max: 1, step: 0.02, label: 'status growth per level' },
-      { path: 'biolum.strikeFraction', min: 0, max: 1, step: 0.05, label: 'share the strike carries' },
-      { path: 'biolum.night.damageMul', min: 1, max: 3, step: 0.05, label: 'night damage' },
-      { path: 'biolum.night.durationMul', min: 1, max: 4, step: 0.05, label: 'night duration' },
-      { path: 'biolum.night.twilightBoost', min: 0, max: 1, step: 0.05, label: 'dusk counts for' },
-      // 0 = the ability is asleep at noon, glow and elemental effects alike.
-      { path: 'biolum.night.dayPower', min: 0, max: 1, step: 0.05, label: 'power kept in daylight' },
-      { path: 'biolum.night.blendGamma', min: 0.25, max: 4, step: 0.05, label: 'day → night fade curve' },
+      // The shared curve and the whole day gate are weapons.csv's — see the
+      // fence on that table. The readout stays: it is the one thing here that
+      // answers "is my element awake right now", which is a question about the
+      // sky rather than about a number.
       { type: 'readout', label: 'day/night', lines: () => elementPowerReadout() },
       { path: 'biolum.skin.strength', min: 0, max: 5, step: 0.1, label: 'seal glow' },
       { path: 'biolum.skin.strengthPerLevel', min: 0, max: 1, step: 0.05, label: '...per level' },
@@ -21450,7 +22236,6 @@ export const TUNER_SCHEMA = [
       { path: 'club.dragFullSpeed', min: 1, max: 40, step: 0.5, label: 'flop: speed at which it wins fully' },
       { path: 'club.droop', min: 0, max: 1, step: 0.02, label: 'flail: sag when idle' },
       { path: 'club.droopCutoff', min: 0.2, max: 12, step: 0.2, label: 'flail: swing that cancels the sag' },
-      { path: 'club.assistSpin', min: 0, max: 12, step: 0.1, label: 'flail: assist spin (0 once fins spin)' },
       { path: 'club.respawnTime', min: 0, max: 10, step: 0.1, label: 'socket: refill after a throw' },
       { path: 'club.minSwing', min: 0, max: 8, step: 0.1, label: 'swing: below this it does no damage' },
       { path: 'club.powerReference', min: 1, max: 30, step: 0.5, label: 'swing: speed that counts as full power' },
@@ -21710,6 +22495,11 @@ export const TUNER_SCHEMA = [
       { path: 'camera.punch.enabled', type: 'bool', label: 'camera punch-in' },
       { path: 'camera.punch.max', min: 0, max: 0.4, step: 0.01, label: 'camera punch: max zoom' },
       { path: 'camera.punch.decay', min: 1, max: 20, step: 0.5, label: 'camera punch: release speed' },
+      // A ceiling on the drift past a wall, not the drift itself — the rock
+      // face's own measured depth caps it, so turning this up past what the
+      // boulders cover does nothing. It is here rather than under the cine rig
+      // because clampFocus is shared: the death dive's framing spends it too.
+      { path: 'camera.edgeDrift', min: 0, max: 12, step: 0.25, label: 'drift past the walls (capped by the rock face)' },
     ],
   },
   {
@@ -21751,6 +22541,8 @@ export const TUNER_SCHEMA = [
       { path: 'cinecam.base.damping', min: 0.4, max: 1.6, step: 0.02, label: 'damping (1 = critical, less = overshoot)' },
       { path: 'cinecam.base.deadZone.x', min: 0, max: 0.45, step: 0.005, label: 'dead zone: horizontal (frac of half-frame)' },
       { path: 'cinecam.base.deadZone.y', min: 0, max: 0.45, step: 0.005, label: 'dead zone: vertical (frac of half-frame)' },
+      // 0 is the hard stop the rig used to have at the edge of its pan range.
+      { path: 'cinecam.base.edgeEase', min: 0, max: 0.5, step: 0.01, label: 'edge easing (frac of half-frame)' },
       { path: 'cinecam.base.lookAhead', min: 0, max: 0.8, step: 0.01, label: 'look-ahead (seconds of velocity)' },
       { path: 'cinecam.base.lookAheadMax', min: 0, max: 30, step: 0.5, label: 'look-ahead cap (world units)' },
       { path: 'cinecam.base.lookAheadLag', min: 0.02, max: 1.5, step: 0.02, label: 'look-ahead smoothing (s)' },
@@ -22253,49 +23045,6 @@ export const TUNER_SCHEMA = [
       { path: 'boss.gibs.flashColor', type: 'color', label: '...what colour' },
       { path: 'boss.gibs.tint', min: 0, max: 1.5, step: 0.05, label: 'chunk-to-chunk variation' },
       { path: 'boss.gibs.splashScale', min: 0, max: 1.5, step: 0.02, label: 'splash on the way in' },
-      // --- the boss going up (systems/bossBoom.js) ---
-      // The wave TABLE is not here on purpose: four rows of seven numbers is
-      // the shape of the explosion, and a panel with twenty-eight sliders in it
-      // is a panel nobody uses. What is here is everything that moves the whole
-      // cloud at once, plus the outermost ring — which is the one the eye
-      // actually reads as "how big was that".
-      { path: 'boss.boom.enabled', type: 'bool', label: 'bosses go up in smoke' },
-      { path: 'boss.boom.lead', min: 0, max: 1.2, step: 0.02, label: '...this long before the photo (s)' },
-      { path: 'boss.boom.size', min: 0.2, max: 3, step: 0.05, label: 'cloud size (x the body)' },
-      { path: 'boss.boom.speed', min: 0, max: 3, step: 0.05, label: 'how hard it keeps opening' },
-      { path: 'boss.boom.glow', min: 0, max: 4, step: 0.05, label: 'cloud brightness (x its colour)' },
-      { path: 'boss.boom.tint.lightness', min: 0.2, max: 1, step: 0.02, label: 'cloud lightness (hue is the boss’s)' },
-      { path: 'boss.boom.tint.saturation', min: 0, max: 3, step: 0.05, label: '...saturation lift' },
-      { path: 'boss.boom.tint.maxSaturation', min: 0, max: 1, step: 0.05, label: '...and its ceiling' },
-      { path: 'boss.boom.minRadius', min: 0.5, max: 8, step: 0.1, label: 'smallest body it is sized off' },
-      { path: 'boss.boom.maxRadius', min: 3, max: 20, step: 0.5, label: '...and the largest' },
-      { path: 'boss.boom.waves.3.ring', min: 0.4, max: 3.5, step: 0.05, label: 'outer ring (x the body)' },
-      { path: 'boss.boom.waves.3.puffs', min: 4, max: 40, step: 1, label: '...lobes around it' },
-      { path: 'boss.boom.waves.3.lobe', min: 0.05, max: 0.6, step: 0.01, label: '...lobe size (x the body)' },
-      { path: 'boss.boom.waves.3.tone', min: 0.2, max: 2.5, step: 0.05, label: '...how dark the edge is' },
-      { path: 'fx.goo.groups.boom.iso', min: 0.15, max: 1.2, step: 0.02, label: 'cloud surface (high = separate lobes)' },
-      { path: 'fx.goo.groups.boom.soft', min: 0.02, max: 0.8, step: 0.01, label: 'cloud edge (low = drawn, high = misty)' },
-      { path: 'fx.goo.groups.boom.rim', min: -1.5, max: 1.5, step: 0.05, label: 'cloud outline (negative = dark)' },
-      { path: 'fx.goo.groups.boom.rimWidth', min: 0.05, max: 2, step: 0.05, label: '...how far in it reaches' },
-      { path: 'fx.goo.groups.boom.opacity', min: 0, max: 1, step: 0.02, label: 'cloud opacity' },
-      { path: 'fx.goo.groups.boom.radius', min: 1, max: 8, step: 0.1, label: 'cloud lobe size (x each puff)' },
-      { path: 'fx.goo.groups.boom.additive', type: 'bool', label: 'cloud is light, not substance' },
-      // --- how random it is (systems/bossBoom.js, buildPuffs) ---
-      { path: 'boss.boom.organic.lumps', min: 0, max: 0.8, step: 0.02, label: 'cloud lumpiness (0 = a wheel of circles)' },
-      { path: 'boss.boom.organic.lean', min: 0, max: 0.5, step: 0.02, label: '...how far it walks off centre' },
-      { path: 'boss.boom.organic.stagger', min: 0, max: 0.09, step: 0.005, label: '...a ring is spread over (s)' },
-      { path: 'boss.boom.organic.lobeVary', min: 0, max: 0.6, step: 0.02, label: '...lobe size scatter' },
-      { path: 'boss.boom.organic.toneVary', min: 0, max: 0.8, step: 0.02, label: '...lobe brightness scatter' },
-      // --- the shockwave off the front of it ---
-      { path: 'boss.boom.shock.enabled', type: 'bool', label: 'shockwave' },
-      { path: 'boss.boom.shock.glow', min: 0, max: 8, step: 0.1, label: 'front brightness' },
-      { path: 'boss.boom.shock.white', min: 0, max: 1, step: 0.02, label: '...how white-hot (0 = the boss\u2019s colour)' },
-      { path: 'boss.boom.shock.wobble', min: 0, max: 0.4, step: 0.01, label: '...how ragged its edge is (x the body)' },
-      { path: 'boss.boom.shock.massVar', min: 0, max: 1.2, step: 0.05, label: '...and how much its thickness varies' },
-      { path: 'boss.boom.shock.ease', min: 0.5, max: 5, step: 0.1, label: '...how hard it decelerates' },
-      { path: 'boss.boom.shock.rings.0.to', min: 0.6, max: 4, step: 0.05, label: 'front reach (x the body)' },
-      { path: 'boss.boom.shock.rings.0.seconds', min: 0.08, max: 0.34, step: 0.01, label: '...over this long (s)' },
-      { path: 'boss.boom.shock.rings.0.eat', min: 0, max: 0.95, step: 0.05, label: '...when it starts being rubbed out' },
       // --- the riser under it (systems/bossRiser.js) ---
       { path: 'boss.arrival.riser.enabled', type: 'bool', label: 'filter riser' },
       { path: 'boss.arrival.riser.hz', min: 20, max: 220, step: 1, label: 'riser pitch (Hz)' },
@@ -22791,6 +23540,40 @@ export const TUNER_SCHEMA = [
       { path: 'sealShader.strength', min: 0, max: 1, step: 0.01, label: 'noise strength' },
       { path: 'sealShader.contrast', min: 0.1, max: 4, step: 0.05, label: 'noise contrast' },
       { path: 'sealShader.color', type: 'color', label: 'noise colour' },
+    ],
+  },
+  {
+    // THE WET FILM. Its own group rather than more rows under the noise above,
+    // because it is a different question: that panel is what the seal's SKIN
+    // looks like, this one is what is lying ON it. They do share one control —
+    // `wetPatch` reaches back into the markings the noise paints — which is the
+    // only reason the two groups sit next to each other.
+    //
+    // Start at the top: at wetness 0 every row below it does nothing, and the
+    // reason is not visible from the panel.
+    group: 'Seal wetness',
+    section: 'Look & FX',
+    items: [
+      { path: 'sealShader.wet', min: 0, max: 2, step: 0.05, label: 'wetness' },
+      { path: 'sealShader.wetColor', type: 'color', label: 'sheen colour' },
+      { path: 'sealShader.wetTint', min: 0, max: 1, step: 0.05, label: 'sheen takes the water\u2019s light colour' },
+      { path: 'sealShader.wetGloss', min: 0, max: 3, step: 0.05, label: 'highlight strength' },
+      // The two that decide whether this reads as toon or as plastic. Steps 1
+      // is a single sheet; past 3 the terraces stop being countable at play
+      // scale and it goes back to looking like a smooth lobe.
+      { path: 'sealShader.wetSteps', min: 1, max: 5, step: 1, label: 'highlight steps' },
+      { path: 'sealShader.wetSoft', min: 0, max: 1, step: 0.02, label: 'step softness, in terrace widths (0 = hard cel edge)' },
+      { path: 'sealShader.wetTight', min: 1, max: 200, step: 1, label: 'highlight tightness' },
+      { path: 'sealShader.wetEdge', min: 0, max: 1, step: 0.01, label: 'highlight cut' },
+      { path: 'sealShader.wetRim', min: 0, max: 2, step: 0.02, label: 'wet rim on the silhouette' },
+      { path: 'sealShader.wetRimPower', min: 0.5, max: 8, step: 0.1, label: 'rim tightness' },
+      { path: 'sealShader.wetPatch', min: 0, max: 1, step: 0.05, label: 'markings break the film up' },
+      // What it picks up. See the config block for why these are sampled from
+      // the water's own field rather than a second one.
+      { path: 'sealShader.wetCaustics', min: 0, max: 3, step: 0.05, label: 'caustic veins on the seal' },
+      { path: 'sealShader.wetCausticScale', min: 0.1, max: 8, step: 0.1, label: 'vein size vs the water\u2019s (1 = same, and invisible)' },
+      { path: 'sealShader.wetCausticUp', min: 0, max: 1, step: 0.05, label: 'veins favour up-facing skin' },
+      { path: 'sealShader.wetGlow', min: 0, max: 4, step: 0.05, label: 'a glowing seal burns its own sheen' },
     ],
   },
   // One group per glowing species, plus the shared base they all fall through
@@ -23347,12 +24130,9 @@ export const TUNER_SCHEMA = [
     panel: 'companions',
     section: 'Thrown & launched',
     items: [
-      { path: 'starfish.baseFireRate', min: 0.05, max: 2, step: 0.05 },
-      { path: 'starfish.fireRatePerLevel', min: 0.5, max: 1, step: 0.01, label: 'fire rate mult per level' },
-      { path: 'starfish.damage', min: 1, max: 50, step: 1 },
-      { path: 'starfish.baseRadius', min: 0.05, max: 1, step: 0.02, label: 'base size' },
-      { path: 'starfish.radiusPerLevel', min: 0, max: 0.3, step: 0.01, label: 'size growth per level' },
-      { path: 'starfish.speed', min: 4, max: 50, step: 1 },
+      // Cadence, damage, pierce, size and speed are weapons.csv's. The spin is
+      // the one number here you judge by watching a disc go past.
+      { path: 'starfish.spinSpeed', min: 0, max: 40, step: 0.5, label: 'spin speed' },
     ],
   },
   {
@@ -24027,6 +24807,41 @@ export const TUNER_SCHEMA = [
       { path: 'fx.goo.groups.foam.opacity', min: 0, max: 1, step: 0.05, label: 'foam opacity' },
       { path: 'emitters.breachFoam.count', min: 0, max: 60, step: 1, label: 'breach foam lobes' },
       { path: 'emitters.reentryFoam.count', min: 0, max: 90, step: 1, label: 'landing foam lobes' },
+      // THE OTHER THREE QUARTERS OF THE LANDING (systems/reentrySplash.js). The
+      // crown above is the impact frame; these are the hole under it and the
+      // column it throws back out. `landing hole depth` is the one to drag
+      // first — it is the emitter's drag, which is what STOPS the descent, so
+      // lower digs deeper and slower.
+      { path: 'reentrySplash.enabled', type: 'bool', label: 'landings punch a hole and rebound' },
+      { path: 'emitters.reentryCavity.count', min: 0, max: 80, step: 1, label: 'landing hole lobes' },
+      { path: 'emitters.reentryCavity.drag', min: 1, max: 8, step: 0.1, label: 'landing hole depth (low = deeper)' },
+      // Positive is UP — this is buoyancy, and it is what brings the hole's
+      // water back through the line. At 0 the cavity sinks and stays sunk.
+      { path: 'emitters.reentryCavity.gravity.1', min: 0, max: 45, step: 0.5, label: 'landing hole rebound' },
+      { path: 'emitters.reentryJet.count', min: 0, max: 40, step: 1, label: 'landing column lobes' },
+      { path: 'emitters.reentryJet.cone', min: 0.05, max: 1.5, step: 0.02, label: 'landing column spread' },
+      { path: 'emitters.reentryJetSpray.count', min: 0, max: 50, step: 1, label: 'landing column droplets' },
+      // WHITEWATER — the foam group as aerated water rather than as glowing
+      // goo. `air packs at` is the one to drag first and the one with a rule:
+      // a single lobe peaks at a density of 1, so anything at or below
+      // (1 - foam surface) makes a lone droplet read as packed opaque foam and
+      // the whole effect comes apart into golf balls.
+      { path: 'fx.goo.groups.foam.whitewater.strength', min: 0, max: 1, step: 0.05, label: 'whitewater (0 = the old glow)' },
+      { path: 'fx.goo.groups.foam.whitewater.packedAt', min: 0.4, max: 3, step: 0.05, label: 'air packs at (low = whiter)' },
+      { path: 'fx.goo.groups.foam.whitewater.bubbles', min: 0, max: 1.5, step: 0.05, label: 'bubble texture' },
+      { path: 'fx.goo.groups.foam.whitewater.bubbleScale', min: 0.2, max: 4, step: 0.05, label: 'bubble size (high = finer)' },
+      { path: 'fx.goo.groups.foam.whitewater.airRise', min: 0, max: 6, step: 0.1, label: 'trapped air rises (units/s)' },
+      // ...and where the foam sits. Without these the goo is composited over
+      // the finished frame at full strength however deep the water it is in.
+      { path: 'fx.goo.groups.foam.medium.murk', min: 0, max: 1, step: 0.05, label: 'the ocean closes over it' },
+      { path: 'fx.goo.groups.foam.medium.murkReach', min: 1, max: 20, step: 0.5, label: '...over how many units down' },
+      { path: 'fx.goo.groups.foam.medium.fog', min: 0, max: 1, step: 0.05, label: 'the horizon haze sits in front' },
+      // THE RING the landing is thrown from. `points` is not a budget — each
+      // one fires its share — it is whether the ring CLOSES: too few and the
+      // splash is separate puffs arranged in a circle.
+      { path: 'reentrySplash.ring.points', min: 3, max: 24, step: 1, label: 'landing ring points' },
+      { path: 'reentrySplash.ring.pad', min: 0, max: 2, step: 0.05, label: 'landing ring, clear of the seal' },
+      { path: 'reentrySplash.ring.jitter', min: 0, max: 1, step: 0.05, label: 'landing ring scatter' },
       { path: 'audio.masterVolume', min: 0, max: 1, step: 0.05 },
       { path: 'audio.enabled', type: 'bool', label: 'sound' },
       { path: 'haptics.enabled', type: 'bool', label: 'haptics' },
@@ -24502,9 +25317,44 @@ const PATH_TABLES = [
     // to a sub-block: every number in all three IS throughput — turn rate,
     // acquisition, and two damage curves read against the rest of the economy
     // — and none of the three has a single value judged by eye.
+    // `starfish` and `laserEyes` are here whole and fenced respectively, and
+    // both arrived the same way: the playtest ledger had the shuriken last of
+    // every weapon in the game at 232 damage per stack-minute — a tenth of the
+    // mid-table — and a snapshot was quietly holding its cadence at nearly
+    // twice the config default, so editing config.js could never have moved it.
+    // The laser had no slider AND no CSV row, which meant the saved snapshot
+    // was its only real home. A number nobody can reach from either instrument
+    // is not tuned, it is frozen.
     roots: ['weapon', 'missile', 'bounce', 'shrimpRing', 'scallop', 'oyster', 'seagullBomb',
       'eel', 'sealTeam', 'beluga', 'club', 'clubThrow', 'clubBoom', 'clubIce', 'strike',
-      'airborne', 'octoGrab', 'harp', 'homingShot', 'maneater', 'ironLung', 'oxygen'],
+      'airborne', 'octoGrab', 'harp', 'homingShot', 'maneater', 'ironLung', 'oxygen',
+      'starfish', 'laserEyes', 'biolum'],
+    forbid: (id) => {
+      // The beams' geometry at the FACE — which socket they leave and what
+      // colour they are — is judged by eye on the seal's head, not against the
+      // damage economy. Everything else about the laser (uptime, cadence,
+      // damage, reach, how many lines) is throughput and is the CSV's.
+      const LASER_LOOK = new Set(['laserEyes.eyeSide', 'laserEyes.eyeForward', 'laserEyes.color']);
+      if (LASER_LOOK.has(id)) {
+        return 'the eye sockets and the beam tint are judged by eye — weapons.csv owns the laser\'s throughput only';
+      }
+      // FENCED TO THE SHARED CURVE AND THE DAY GATE. `biolum` is most of a
+      // hundred settings and the great majority of them — the seal's own glow,
+      // the shot tint, every element's colour, the infection's motes — are
+      // judged by eye on a seal that is on screen. What is here instead is the
+      // handful that decide whether the card is worth a pick at all, and one of
+      // them (`dayPower`) was sitting at 0 in a saved snapshot where no edit to
+      // config.js could reach it.
+      const BIOLUM_OWNED = new Set([
+        'biolum.damageFraction', 'biolum.damageFractionPerLevel', 'biolum.statusPerLevel',
+        'biolum.strikeFraction', 'biolum.night.damageMul', 'biolum.night.durationMul',
+        'biolum.night.twilightBoost', 'biolum.night.dayPower', 'biolum.night.blendGamma',
+      ]);
+      if (id.startsWith('biolum.') && !BIOLUM_OWNED.has(id)) {
+        return 'weapons.csv owns Glow Up!\'s shared curve and its day gate only — the glow, the tints and the per-element look are tuner sliders';
+      }
+      return null;
+    },
   }),
   createPathTable({
     label: 'behaviour', file: 'behaviour.csv', text: behaviourCsv,

@@ -247,13 +247,13 @@ wastespace,epithet,the Waste of Space,0.8,,bossYacht,,
 bravo,epithet,brought to you by Bravo,0.8,,bossYacht,,
 cashpit,epithet,the Cash Pit,0.8,,bossYacht,,
 cashmoney,epithet,the Cash Money Millionaires,0.8,,bossYacht,,
-hunksteel,epithet,the Hunk of Steel,0.8,,bossBoat bossYacht,,
-anglerlure,prefix,Lure,,,bossAnglerfish,,"The anglerfishs own vocabulary — nine parts, the size of the mosasaurs and the krakens. It draws the general pool as well (ownNames is blank in bosses.csv) because this animal genuinely does swim and hunt, so the pools swimming words are not a lie about it. These only add what the pool cannot say: that it carries a LIGHT, and that it is a thing from the bottom. Note there is no word here for speed or for chasing — the pool has plenty and they would all be wrong about a boss whose whole proposition is that it waits."
-anglerlantern,prefix,Lantern,,,bossAnglerfish,,
-anglerabyss,prefix,Abyss,,,bossAnglerfish,,
-anglergulper,prefix,Gulper,0.8,,bossAnglerfish,,
-anglerlight,root,light,,,bossAnglerfish,,
+hunksteel,epithet,the Hunk,0.8,,bossBoat bossYacht,,
+anglerlure,prefix,Bright,,,bossAnglerfish,,"The anglerfishs own vocabulary — nine parts, the size of the mosasaurs and the krakens. It draws the general pool as well (ownNames is blank in bosses.csv) because this animal genuinely does swim and hunt, so the pools swimming words are not a lie about it. These only add what the pool cannot say: that it carries a LIGHT, and that it is a thing from the bottom. Note there is no word here for speed or for chasing — the pool has plenty and they would all be wrong about a boss whose whole proposition is that it waits."
+anglerlantern,prefix,Football,,,bossAnglerfish,,
+anglerabyss,prefix,Abyssal,,,bossAnglerfish,,
+anglergulper,prefix,Gulp,0.8,,bossAnglerfish,,
+anglerlight,root,lighter,,,bossAnglerfish,,
 anglerglow,root,glow,,,bossAnglerfish,,
 anglerangler,root,angler,0.8,,bossAnglerfish,,
-anglerbait,epithet,the Patient,,,bossAnglerfish,,"The one word for this boss that no other archetype could wear."
-anglerdark,epithet,of the Long Dark,,,bossAnglerfish,,
+anglerbait,epithet,the Menace,,,bossAnglerfish,,"The one word for this boss that no other archetype could wear."
+anglerdark,epithet,of the The Deep,,,bossAnglerfish,,

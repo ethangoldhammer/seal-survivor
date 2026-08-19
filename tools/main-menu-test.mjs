@@ -155,20 +155,44 @@ check('the run starts instead', calls.start === 1, `start x${calls.start}`);
 check('the menu was not called', calls.menu === 2, `menu x${calls.menu}`);
 
 // ---------------------------------------------------------------------------
-section('How to play is the old start panel, put back on a button');
-ui.showHowToPlay();
-const panel = document.getElementById('svStartMenu');
-check('the panel is shown', !panel.classList.contains('sv-hidden'));
-const back = [...panel.querySelectorAll('button')].find((b) => b.textContent === 'Back');
-check('it has a way out', !!back);
-back?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-check('Back closes it', panel.classList.contains('sv-hidden'));
-check('...and starts nothing', calls.start === 1, `start x${calls.start}`);
-// Built once: a second visit must not stack a second Back button in the row.
-ui.showHowToPlay();
-check('Back is not duplicated on a second visit',
-  [...panel.querySelectorAll('button')].filter((b) => b.textContent === 'Back').length === 1);
-ui.hideHowToPlay();
+section('The old DOM start menu is gone, not hidden');
+// It was the boot screen, then a wall of instructions behind a button; the
+// tutorial teaches all of it in the water now. Markup left in the tree would
+// come back the first time something called hideAllMenus or a preview screen,
+// and it holds a "Start run" button — so a dead panel here is a route into a
+// run sitting behind the menu.
+check('no #svStartMenu in the document', !document.getElementById('svStartMenu'));
+check('...and no Start run button with it', !document.getElementById('svStartBtn'));
+check('the how-to-play route is gone from the module',
+  ui.showHowToPlay === undefined && ui.hideHowToPlay === undefined);
+check('...and so is the screen it was previewed on',
+  !ui.PREVIEW_SCREENS.includes('start'), ui.PREVIEW_SCREENS.join(', '));
+// hideAllMenus reaches for every surface by name; one left pointing at deleted
+// markup throws, and it is on the path into every run.
+ui.hideAllMenus();
+check('hideAllMenus still runs with it gone', true);
+
+// ---------------------------------------------------------------------------
+section('A panel the menu opens is drawn OVER the menu');
+// The hex buttons' labels are DOM (the type system lives there), so the words
+// "Play" and "Leaderboard" and a panel one of them opens are two siblings of
+// the same .sv-ui layer and z-index is the only thing separating them. It was
+// 6 against 4 for a while, which put the button text over the Settings panel it
+// had just asked for — and it is invisible from either file alone, which is why
+// the rule is checked here rather than in one of them.
+//
+// Read out of the source: mounting the real menu needs a GL context, the loaded
+// seal and a post stack, none of which exist in jsdom.
+const { readFileSync } = await import('node:fs');
+const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+const uiSrc = src('../path/src/ui/ui.js');
+const menuSrc = src('../path/src/systems/mainMenu.js');
+const centreZ = Number(/\.sv-center \{[^}]*z-index:\s*(\d+)/.exec(uiSrc)?.[1]);
+const labelZ = Number(/sv-menu-labels[\s\S]{0,900}?z-index:(\d+)/.exec(menuSrc)?.[1]);
+check('both z-indexes were found', Number.isFinite(centreZ) && Number.isFinite(labelZ),
+  `labels ${labelZ}, .sv-center ${centreZ}`);
+check('the labels sit UNDER every .sv-center panel', labelZ < centreZ,
+  `labels ${labelZ} vs .sv-center ${centreZ}`);
 
 // ---------------------------------------------------------------------------
 section('Options from the menu claims nothing untrue');
@@ -186,6 +210,11 @@ pause.showPauseMenu({ standalone: true });
 check('it is headed Settings, not Paused', head().textContent === 'Settings', head().textContent);
 check('there is no run to restart', !footText().includes('Restart run'), footText().join(' / '));
 check('and the way out says Back', footText().includes('Back'), footText().join(' / '));
+// ...and nothing else. The footer is where "How to play" was bolted on; it went
+// with the panel it opened, and a stray button here would be one that opens
+// markup that no longer exists.
+check('...and offers no route to a deleted panel',
+  !footText().some((t) => /how to play/i.test(t)), footText().join(' / '));
 pause.hidePauseMenu();
 
 // The run's own route must be untouched by all of the above — the flag is

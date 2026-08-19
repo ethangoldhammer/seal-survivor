@@ -44,6 +44,39 @@ eel.radiusPerLevel,1.2,0,5,eel chain radius per level
 eel.baseMaxChain,5,1,15,eel hops at level 1
 eel.chainPerLevel,1,0,5,eel hops per level
 eel.initialRange,30,2,40,eel reach of the first zap
+biolum.damageFraction,0.3,0,1,glow-up element damage as a share of the hit that carried it
+biolum.damageFractionPerLevel,0.16,0,0.5,glow-up element damage per level
+biolum.statusPerLevel,0.22,0,1,glow-up status strength per level
+biolum.strikeFraction,0.5,0,1,glow-up share a dash carries
+biolum.night.damageMul,1.2,1,3,glow-up damage x after dark
+biolum.night.durationMul,1.8,1,4,glow-up status duration x after dark
+biolum.night.twilightBoost,0.35,0,1,glow-up how much of full night dusk counts for
+biolum.night.dayPower,0.35,0,1,glow-up power kept in daylight — 0 makes the card inert for the whole working day (see systems/elements.js)
+biolum.night.blendGamma,1.2,0.25,4,glow-up day to night fade curve
+starfish.baseFireRate,0.42,0.05,2,starfish seconds between throws at level 1
+starfish.fireRatePerLevel,0.88,0.5,1,starfish fire rate mult per level (compounds)
+starfish.damage,22,1,120,starfish damage per hit
+starfish.damagePerLevel,6,0,40,starfish damage per level — the stack used to buy cadence and size ONLY
+starfish.basePierce,1,0,10,starfish bodies one shuriken cuts through beyond the first
+starfish.piercePerLevel,0.34,0,2,starfish extra pierce per level (floored — one more body every third stack)
+starfish.pierceMax,4,0,12,starfish pierce cap
+starfish.speed,26,4,50,starfish throw speed
+starfish.life,1.4,0.2,5,starfish seconds before it sinks
+starfish.baseRadius,0.23,0.05,1,starfish hit radius at level 1
+starfish.radiusPerLevel,0.06,0,0.3,starfish hit radius per level
+laserEyes.fireEvery,2.2,0.4,6,laser seconds between burns at level 1
+laserEyes.fireEveryPerLevel,-0.2,-1,0,laser cadence gain per level
+laserEyes.fireEveryMin,1,0.3,4,laser fastest allowed cadence
+laserEyes.burn,0.5,0.1,2,laser seconds each burn stays lit — the uptime lever (see CONFIG.laserEyes)
+laserEyes.burnPerLevel,0.06,0,0.4,laser burn seconds per level
+laserEyes.damage,13,1,60,laser damage per TICK of contact — CONFIG.beams.tickEvery decides how often
+laserEyes.damagePerLevel,3.6,0,20,laser damage per level
+laserEyes.reach,26,5,60,laser beam length
+laserEyes.reachPerLevel,3.2,0,10,laser beam length per level
+laserEyes.beams,2,1,4,laser beams at level 1
+laserEyes.beamsPerLevel,0.4,0,1,laser beams per level (floored)
+laserEyes.beamsMax,4,1,8,laser beam count cap
+laserEyes.spread,0.17,0,0.8,laser radians between beams once there are more than two
 sealTeam.maxSeals,6,1,12,escort squad size cap
 sealTeam.contactDamage,24,0,80,escort ram damage
 sealTeam.damagePerLevel,8,0,30,escort ram damage per level
@@ -78,6 +111,24 @@ club.ricochetDamagePerLevel,5,0,20,club carom damage per level
 club.maxBounces,3,0,10,club carom bounces
 club.bouncesPerLevel,1,0,4,club carom bounces per level
 club.knock,0.8,0,2,club knockback every hit adds (1 = a full-charge ram)
+club.launchKnockMul,1.4,0.5,4,club extra knockback on a body the swing launches
+club.teed.damageMul,2.4,1,6,club damage x on a body already held or dazed
+club.teed.launchMul,1.6,1,4,club launch x on a body already held or dazed
+club.teed.minPower,0,0,1.6,club floor under swing power for a teed hit — 0 on purpose
+club.bigRigShare,0.35,0,1,club share of Big Rigz a fin club takes (the ring takes it all)
+club.assistSpin,0,0,12,club free spin — a crutch; 0 means swings are performed
+club.finCarry,2.2,0,4.4,club carry-through from the fin turning (must stay under damping)
+club.finAuthority,8,1,30,club fin rate at which a swung flipper beats the water
+club.bodyCarry,0.55,0,3,club carry-through from the seal changing direction
+club.bodyCarryMax,260,20,800,club biggest acceleration spike it will believe
+club.shock.minSwing,11,2,30,club shockwave: the swing peak that earns one
+club.shock.fullSwing,22,4,40,club shockwave: the peak that pays in full
+club.shock.radius,4.2,1,12,club shockwave radius at a full peak
+club.shock.damage,11,0,50,club shockwave damage
+club.shock.damagePerLevel,4,0,20,club shockwave damage per level
+club.shock.knock,0.9,0,2,club shockwave shove
+club.shock.cooldown,0.55,0.05,3,club shockwave minimum gap per club
+club.shock.armTime,0.3,0,2,club shockwave: settle time before a new club may fire one
 club.orbit.radius,3.6,1,10,club ring how far the spare clubs orbit
 club.orbit.speed,1.5,0,8,club ring how fast it turns
 club.orbit.spin,8,0,24,club ring tumble rate — this is an orbiter's damage

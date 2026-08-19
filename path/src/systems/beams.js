@@ -357,7 +357,8 @@ function distanceToBeam(b, px, py) {
  * One frame of every live beam.
  *
  * @param ctx { enemies, playerPos, playerRadius, hooks }
- *        hooks: { onEnemyDamaged(e, dmg), onEnemyKilled(e), onPlayerHit(dmg, dir, source), onCut(x, y) }
+ *        hooks: { onEnemyDamaged(e, dmg, x, y, dir, projectile, at, source),
+ *                 onEnemyKilled(e), onPlayerHit(dmg, dir, source), onCut(x, y) }
  */
 export function updateBeams(dt, scene, ctx = {}) {
   if (!beams.length) return;
@@ -451,7 +452,17 @@ export function updateBeams(dt, scene, ctx = {}) {
         if (distanceToBeam(b, e.mesh.position.x, e.mesh.position.y) > b.width * 0.5 + (e.radius ?? 0.5)) continue;
         b.cooldowns.set(e, b.tickEvery);
         e.hp -= b.damage;
-        hooks.onEnemyDamaged?.(e, b.damage, b.source);
+        // THE SAME SHAPE EVERY OTHER DAMAGE HOOK IN THE GAME HAS —
+        // (enemy, damage, x, y, dir) — with the beam's own source LAST rather
+        // than third. It used to be third, which is the slot main.js reads as
+        // the hit's x coordinate: every laser hit was placing its impact flash
+        // at x = 'laserEyes' and recording that string as the creature's last
+        // blow. Nothing threw, because a string is a perfectly good thing to
+        // put in a Vector3 field nobody validates.
+        hooks.onEnemyDamaged?.(
+          e, b.damage, e.mesh.position.x, e.mesh.position.y,
+          { x: b.dirX, y: b.dirY }, null, null, b.source,
+        );
         cut(e.mesh.position.x, e.mesh.position.y, hooks);
         if (e.hp <= 0) hooks.onEnemyKilled?.(e);
       }

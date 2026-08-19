@@ -330,6 +330,150 @@ ui.updateHUD(gameState, player, null, 0, camera, 45);  // 45 seconds in one fram
 check('one enormous frame is still a step, not a jump', hpFill() > 0.4, `${hpFill().toFixed(3)}`);
 
 // ---------------------------------------------------------------------------
+section('The glow: critical on the way down, a real refill on the way up');
+
+const glow = (id) => Number($(id).style.getPropertyValue('--sv-glow'));
+
+// A STRUCTURAL CHECK, because this one broke in a way no value assertion could
+// see. box-shadow is a single property, so a rule that restates it replaces the
+// whole list — the corner placement's rim deleted the halo, in the placement
+// that SHIPS, and every number in this file still read exactly right because
+// the JS was writing --sv-glow perfectly into a shadow nothing was drawing.
+// The rule is: any rule that puts a box-shadow on a bar track must end in the
+// shared halo.
+const sheetText = [...document.querySelectorAll('style')].map((n) => n.textContent).join('\n');
+const wrapRules = sheetText.match(/[^{}]*\.sv-pbar-wrap[^{]*\{[^}]*\}/g) ?? [];
+const shadowRules = wrapRules.filter((r) => /box-shadow\s*:/.test(r));
+check('more than one rule paints the track', shadowRules.length >= 2, `${shadowRules.length} rule(s)`);
+check('...and every one of them keeps the halo',
+  shadowRules.length >= 2 && shadowRules.every((r) => /var\(--sv-halo\)/.test(r)),
+  shadowRules.filter((r) => !/var\(--sv-halo\)/.test(r)).map((r) => r.slice(0, 60)).join(' | ') || 'all kept');
+
+// Back to a clean, full seal.
+player.stats.maxHp = MAX_HP; player.stats.maxOxygen = MAX_O2;
+player.hp = MAX_HP; player.oxygen = MAX_O2;
+ui.showHud();
+run(1);
+check('a full gauge does not glow', glow('#svHpWrap') < 0.001, glow('#svHpWrap').toFixed(3));
+
+// THE TWO STAGES ARE DIFFERENT WARNINGS. The breathing alarm starts at a third
+// of the bar; the glow starts at a seventh. If one threshold drove both, the
+// loud one would be on for most of any bad fight and would stop meaning
+// anything — so "low" must be able to be true while "critical" is false.
+player.hp = MAX_HP * 0.28;
+run(1.5);
+check('low health breathes...', alarm('#svHpWrap') > 0.01, alarm('#svHpWrap').toFixed(3));
+check('...but does not burn', glow('#svHpWrap') < 0.001, glow('#svHpWrap').toFixed(3));
+
+player.hp = MAX_HP * 0.06;
+run(1.5);
+check('critical health burns', glow('#svHpWrap') > 0.5, glow('#svHpWrap').toFixed(3));
+
+// A HEAL BIG ENOUGH TO CHANGE WHAT YOU DO NEXT. Measured as the gap the bar
+// still has to travel, which on the frame the heal lands IS its size.
+player.hp = MAX_HP;      // full heal from near death
+ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+check('a big heal surges on the frame it lands', glow('#svHpWrap') > 0.99, glow('#svHpWrap').toFixed(3));
+run(2.5);
+check('...and fades once the bar has caught up', glow('#svHpWrap') < 0.05, glow('#svHpWrap').toFixed(3));
+
+// ...AND ONE THAT DOES NOT. 8% of the bar, which is under the 15% the surge
+// asks for: a run holding regeneration must not strobe.
+player.hp = MAX_HP * 0.5;
+run(2);
+player.hp = MAX_HP * 0.58;
+ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+check('a small heal does not', glow('#svHpWrap') < 0.001, glow('#svHpWrap').toFixed(3));
+
+// A TRICKLE IS NOT A HEAL, however far it eventually travels. This is the case
+// a running total of gains gets wrong: 40% of the bar arrives here, in 2% steps
+// the chase keeps up with, and none of it is an event.
+player.hp = MAX_HP * 0.4;
+run(2);
+let peak = 0;
+for (let i = 0; i < 120; i++) {
+  player.hp = Math.min(MAX_HP, player.hp + MAX_HP * 0.004);  // ~24% of the bar per second
+  ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+  peak = Math.max(peak, glow('#svHpWrap'));
+}
+check('a slow trickle never surges, however far it climbs', peak < 0.001, `peak ${peak.toFixed(3)}`);
+
+// ---------------------------------------------------------------------------
+section('Air glows whenever it is coming back');
+
+player.hp = MAX_HP;
+player.oxygen = MAX_O2 * 0.5;
+run(2);
+check('air merely sitting still does not glow', glow('#svO2Wrap') < 0.001, glow('#svO2Wrap').toFixed(3));
+
+// A BUBBLE — one instant jump.
+player.oxygen = MAX_O2 * 0.72;
+ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+check('a popped bubble glows', glow('#svO2Wrap') > 0.99, glow('#svO2Wrap').toFixed(3));
+
+// A BREACH — a climb held for as long as the seal stays up, at the rate
+// entities/player.js refills it. THE POINT OF THIS ONE is that it is nearly
+// slow enough for the chase to keep up with: the gap it opens is about 0.02 of
+// the bar, so any surge written as a threshold would be one retune of
+// oxygenRefillRate away from missing a breach entirely.
+player.oxygen = MAX_O2 * 0.2;
+run(2);
+const perFrame = MAX_O2 * (CONFIG.oxygen.refillRateSurface ?? 35) / MAX_O2 / 60;
+let low = 1;
+for (let i = 0; i < 90; i++) {
+  player.oxygen = Math.min(MAX_O2, player.oxygen + perFrame);
+  ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+  low = Math.min(low, glow('#svO2Wrap'));
+}
+check('a breach glows for the WHOLE refill, not just its first frame',
+  low > 0.99, `dimmest frame ${low.toFixed(3)}`);
+check('...and the tank really did fill', o2Fill() > 0.6, o2Fill().toFixed(3));
+
+run(2.5);
+check('...then fades once the seal is under again', glow('#svO2Wrap') < 0.05, glow('#svO2Wrap').toFixed(3));
+
+// Draining is not filling, however fast it goes.
+// The settle is longer than it looks like it needs to be, and it is load-
+// bearing: TOPPING THE TANK UP TO 90% IS ITSELF A REFILL, so the setup line
+// legitimately lights the gauge and the drain below would be measuring that
+// glow decaying rather than anything the drain did. Three seconds at
+// surgeFall 2.4 leaves about 0.07% of it.
+player.oxygen = MAX_O2 * 0.9;
+run(3);
+peak = 0;
+for (let i = 0; i < 60; i++) {
+  player.oxygen -= MAX_O2 * 0.008;
+  ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+  peak = Math.max(peak, glow('#svO2Wrap'));
+}
+check('air draining never surges', peak < 0.001, `peak ${peak.toFixed(3)}`);
+
+// THE HALO WEARS THE GAUGE'S OWN COLOUR, and follows the amber the fill flips
+// to — a drowning seal rimmed in the blue that means "fine" is worse than no
+// rim at all.
+player.oxygen = MAX_O2 * 0.1;
+run(1);
+check('a drowning tank glows', glow('#svO2Wrap') > 0.3, glow('#svO2Wrap').toFixed(3));
+check('...in amber, not in the blue that means fine',
+  $('#svO2Wrap').classList.contains('sv-o2-low'));
+const o2Halo = getComputedStyle($('#svO2Wrap')).getPropertyValue('--sv-glow-rgb').trim();
+const hpHalo = getComputedStyle($('#svHpWrap')).getPropertyValue('--sv-glow-rgb').trim();
+check('...and the two gauges halo in different hues', o2Halo !== hpHalo, `air ${o2Halo} / health ${hpHalo}`);
+
+// A NEW RUN DOES NOT OPEN BLAZING. The detector remembers last frame's value,
+// and a reseed from a dying run's 5% to a fresh 100% is the biggest "heal" the
+// bar will ever see.
+player.hp = MAX_HP * 0.05;
+player.oxygen = MAX_O2 * 0.05;
+run(2);
+player.hp = MAX_HP;
+player.oxygen = MAX_O2;
+ui.showHud();
+ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+check('a new run does not open glowing', glow('#svHpWrap') < 0.001 && glow('#svO2Wrap') < 0.001,
+  `hp ${glow('#svHpWrap').toFixed(3)} air ${glow('#svO2Wrap').toFixed(3)}`);
+
+// ---------------------------------------------------------------------------
 section('The other placement: pinned to the corner');
 
 // settings.hud.barPlacement. Driven through setSetting rather than by poking

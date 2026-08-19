@@ -52,7 +52,15 @@ import { createNoteField, rollNoteColor } from './noteStorm.js';
 // The harp itself. One group so main.js adds and forgets, exactly like the
 // shrimp ring.
 let group = null;
-let harpMesh = null;
+// EVERY HARP ON THE RING, not one. Entourage adds instruments, so what used to
+// be a singleton is a list of { mesh, fireTimer } sharing one ring — spaced by
+// slot, each plucking on its own clock so two harps are two players rather
+// than one played twice.
+//
+// The TIMER is per harp and the aura state is not, deliberately: a note is a
+// note whoever plucked it, and the rings it starts belong to the bodies
+// wearing them. Only the act of playing is per instrument.
+let harps = [];
 // Every note that is not the harp — the rings around charmed bodies and the
 // storms thrown when a note lands — lives in one instanced field instead of in
 // this group. See systems/noteStorm.js: the notes are eight glyphs sharing one
@@ -62,7 +70,6 @@ let harpMesh = null;
 // Built on the first update rather than in createHarpVisual because the pool
 // needs the scene, and createHarpVisual is handed nothing.
 let notes = null;
-let fireTimer = 0;
 let clock = 0;
 
 // Reused so the per-frame work allocates nothing. Rebuilt each frame rather
@@ -72,9 +79,30 @@ const hosts = [];
 
 export function createHarpVisual() {
   group = new THREE.Group();
-  harpMesh = createVisual('harp');
-  group.add(harpMesh);
+  harps = [];
   return group;
+}
+
+// Grow or shrink the ring to match `count`. Called every frame and cheap when
+// nothing changed, the same shape sealTeam's resize has — an Entourage pick
+// mid-run has to add an instrument on the frame it lands, and there is no
+// other point where a level-up could reach this.
+//
+// A NEW HARP STARTS ON A STAGGERED TIMER rather than at zero. Built at zero,
+// every instrument the card ever adds plucks in unison with the first one from
+// then on, which is one loud note instead of a run of them — and the ability
+// would appear to fire less often than it does.
+function syncHarps(count) {
+  while (harps.length < count) {
+    const mesh = createVisual('harp');
+    group.add(mesh);
+    const c = CONFIG.harp;
+    harps.push({ mesh, fireTimer: (harps.length / Math.max(1, count)) * (c.interval ?? 1) });
+  }
+  while (harps.length > count) {
+    const gone = harps.pop();
+    group.remove(gone.mesh);
+  }
 }
 
 // Same shape as rebuildDumboOcto: the harp is a singleton built once at boot,
@@ -84,13 +112,19 @@ export function createHarpVisual() {
 // nothing the T panel can do to `harp` reaches them.
 export function rebuildHarp() {
   if (!group) return;
-  if (harpMesh) group.remove(harpMesh);
-  harpMesh = createVisual('harp');
-  group.add(harpMesh);
+  // Swap every mesh, keep every timer. The instruments' clocks are the
+  // ability's rhythm and have nothing to do with which model is on the ring —
+  // rebuilding the entries would restart the whole ring in unison.
+  for (const h of harps) {
+    group.remove(h.mesh);
+    h.mesh = createVisual('harp');
+    group.add(h.mesh);
+  }
 }
 
 export function resetHarp() {
-  fireTimer = 0;
+  for (const h of harps) group?.remove(h.mesh);
+  harps = [];
   clock = 0;
   hosts.length = 0;
   notes?.reset();
@@ -261,7 +295,12 @@ function startNotes(e) {
  * charm lands where the NOTE lands, and this system has already moved on by
  * several frames by then.
  */
-export function updateHarp(dt, scene, playerPos, level, enemiesList, hooks = {}) {
+/**
+ * @param count how many instruments are on the ring — Entourage. Defaults to
+ *              one, which is what every caller passed before the card existed
+ *              and what every harness still wants.
+ */
+export function updateHarp(dt, scene, playerPos, level, enemiesList, hooks = {}, count = 1) {
   if (!group) return;
   // The field lives in the scene rather than in `group`, because an
   // InstancedMesh spanning the arena has to be at the origin — its instances
@@ -275,31 +314,46 @@ export function updateHarp(dt, scene, playerPos, level, enemiesList, hooks = {})
     // Anything still carrying a ring when the ability goes away (a tuner reset
     // mid-run) drops it, or the notes would hang in the water.
     notes.reset();
+    if (harps.length) syncHarps(0);
     return;
   }
+  syncHarps(Math.max(1, Math.floor(count)));
 
   const c = CONFIG.harp;
   const s = currentHarpStats(level);
   clock += dt;
 
-  // --- the harp on its ring ------------------------------------------------
+  // --- the harps on their ring ---------------------------------------------
   // Pinned to the orbit point rather than spring-chasing it like a companion
   // does. A harp is an object being carried around you, not an animal swimming
   // alongside; the lag that makes the dumbo read as alive would just make this
   // look loosely attached.
-  harpMesh.position.copy(orbitTarget(clock, playerPos, c));
-  // Turned so its back is to the seal as it comes round, by `faceOut`. At 0 it
-  // stays upright the whole way, which is the readable extreme; at 1 it leans
-  // fully into the ring, which is the pretty one.
-  harpMesh.rotation.z = (clock * (c.orbitSpeed ?? 1) - Math.PI / 2) * c.faceOut;
-  scaleTo(harpMesh, c.harpScale * companionScale());
+  //
+  // Slotted, so a ring of them is spread rather than stacked at one point —
+  // the same argument the club ring and Seal Team both make.
+  for (let i = 0; i < harps.length; i++) {
+    const h = harps[i];
+    h.mesh.position.copy(orbitTarget(clock, playerPos, c, i, harps.length));
+    // Turned so its back is to the seal as it comes round, by `faceOut`. At 0
+    // it stays upright the whole way, which is the readable extreme; at 1 it
+    // leans fully into the ring, which is the pretty one. The slot's phase is
+    // in the angle too, or a ring of harps all face the same way and reads as
+    // one object drawn several times.
+    const phase = harps.length > 1 ? (i / harps.length) * Math.PI * 2 : 0;
+    h.mesh.rotation.z = (clock * (c.orbitSpeed ?? 1) + phase - Math.PI / 2) * c.faceOut;
+    scaleTo(h.mesh, c.harpScale * companionScale());
 
-  // --- pluck a note at the biggest thing near you --------------------------
-  fireTimer -= dt;
-  if (fireTimer <= 0) {
-    fireTimer = s.interval;
-    const target = pickTarget(playerPos, s.range, enemiesList);
-    if (target) pluck(scene, target, s, hooks);
+    // --- pluck a note at the biggest thing near you ------------------------
+    // PER INSTRUMENT, and each one picks its own target. Sharing a target
+    // would waste the whole ring on one shark — and pickTarget already skips
+    // anything wearing a ring, so a second harp naturally goes to the next
+    // body worth playing at rather than doubling up.
+    h.fireTimer -= dt;
+    if (h.fireTimer <= 0) {
+      h.fireTimer = s.interval;
+      const target = pickTarget(playerPos, s.range, enemiesList);
+      if (target) pluck(scene, target, s, hooks, h.mesh.position);
+    }
   }
 
   // --- the note rings ------------------------------------------------------
@@ -354,9 +408,13 @@ function pickTarget(playerPos, range, enemiesList) {
   return best ?? fallback;
 }
 
-function pluck(scene, target, s, hooks) {
+function pluck(scene, target, s, hooks, at) {
   const c = CONFIG.harp;
-  const from = harpMesh.position;
+  // WHICH instrument played it. Passed in rather than read off a module
+  // singleton, which is the whole reason a ring of harps is possible: the note
+  // has to leave the one that plucked it, and every note leaving the same
+  // point would make a ring of five look like scenery around one real harp.
+  const from = at;
   const dx = target.mesh.position.x - from.x;
   const dy = target.mesh.position.y - from.y;
   const len = Math.hypot(dx, dy) || 1;

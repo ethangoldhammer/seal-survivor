@@ -541,17 +541,14 @@ section('The panel');
       panel.querySelectorAll('.sv-txp-screens .sv-t-chip').length === PREVIEW_SCREENS.length,
       PREVIEW_SCREENS.join(', '));
 
-    chip('start').dispatchEvent(new dom.window.Event('click', { bubbles: true }));
-    check('start puts the menu up', shown('svStartMenu'));
-    check('...and nothing else with it', !shown('svHud') && !shown('svGameOverMenu'));
+    chip('HUD').dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+    check('HUD puts the HUD up', shown('svHud'));
+    check('...and nothing else with it', !shown('svGameOverMenu') && !shown('svLevelUpMenu'));
 
     chip('clear').dispatchEvent(new dom.window.Event('click', { bubbles: true }));
-    check('clear takes the start menu down', !shown('svStartMenu'),
-      'this is the only way off it without reloading');
-    check('...and leaves nothing else up', !shown('svHud') && !shown('svLevelUpMenu'));
-
-    chip('HUD').dispatchEvent(new dom.window.Event('click', { bubbles: true }));
-    check('HUD shows the HUD alone', shown('svHud') && !shown('svStartMenu'));
+    check('clear takes the HUD down', !shown('svHud'),
+      'this is the only way off a screen without reloading');
+    check('...and leaves nothing else up', !shown('svGameOverMenu') && !shown('svLevelUpMenu'));
 
     // THE SCORE CARD IS ARMED BY DEFAULT. showGameOver exists to take a real
     // run and offer it to the global board; a fabricated 184k with a live name

@@ -80,6 +80,7 @@ export const STAT_TEXT = {
   // the base is raised off zero.
   recoil:             { label: 'recoil boost', kind: 'percent' },
   projectileBonus:    { label: 'of everything you fire', kind: 'count', bare: true },
+  orbiterBonus:       { label: 'of everything that circles you', kind: 'count', bare: true },
 
   // --- the strike ---
   strikeDamage:       { label: 'strike damage', kind: 'percent' },
@@ -135,6 +136,12 @@ export const STAT_TEXT = {
   clubThrowLevel:     { label: 'thrown club', kind: 'level', unlock: 'hurled homing clubs on a strike' },
   clubBoomLevel:      { label: 'club blast', kind: 'level', unlock: 'every club hit detonates' },
   clubIceLevel:       { label: 'club ice', kind: 'level', unlock: 'every club hit chills, and freezes when it saturates' },
+  // The Bouncer's three. All percentages, because the card is a multiplier on
+  // a class rather than a level of anything — there is no "club power 3" to
+  // name, only the numbers it moved.
+  clubDamageMul:      { label: 'club damage', kind: 'percent' },
+  clubKnockMul:       { label: 'club knockback', kind: 'percent' },
+  clubReachMul:       { label: 'club reach', kind: 'percent' },
   homingShotLevel:    { label: 'sonar teeth', kind: 'level', unlock: 'shots that seek, favouring the biggest body in reach' },
 
   // --- the two cards whose worth is not in their apply() ---

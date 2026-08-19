@@ -118,6 +118,15 @@ export function captureBossShot(canvas, meta = {}) {
       // screen's fan re-draws every print minutes after the fact, by which
       // time bossState is about the boss AFTER this one — or about nothing.
       cause: meta.cause ?? '',
+      // The SOURCE KEY behind that caption, kept alongside it rather than
+      // instead of it. The two answer different questions and both are needed:
+      // `cause` is what this weapon was called at the moment of the kill and
+      // must never be re-derived (the build goes on changing afterwards), while
+      // this is the stable identity the score screen's table matches on to tag
+      // the row that landed the final blow. Matching on the display name broke
+      // the moment a weapon could be renamed mid-run — which is exactly what
+      // weaponName.js does.
+      causeSource: meta.causeSource ?? '',
       // WHOSE PRINT IT IS, banked here for the same reason the cause is: the
       // score screen's fan and the contact sheet redraw these cards long
       // afterwards, and a player who renamed themselves in the box on the score

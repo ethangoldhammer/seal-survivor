@@ -300,7 +300,8 @@ const DOCS = {
     enabled: 'FALSE removes it from the offer pool. Blank means enabled.',
     weight: 'How likely this is, relative to the other rows. Blank = 1. 0 is never dealt but still shows in the Upgrades tab.',
     cardArt: 'Hex background for the card. Blank means the plain card.',
-  },
+      weaponName: 'What the WEAPON this upgrade modifies is called once you hold it \u2014 "Cloned Pebbles" instead of "Fin Pebbles". A whole name, not an adjective, so write anything. It shows on the kill-shot polaroid and in the score screen\u2019s weapon table. Blank on nearly every row, which means "this upgrade does not rename anything". `{element}` becomes whichever element Glow Up! rolled this run (Voltaic, Venom, Chill, Infected). When you hold several renaming upgrades the MOST RECENTLY TAKEN one wins.',
+},
   // The three path-keyed tables share one column contract, so the docs are
   // written once and pointed at rather than copied into places that drift.
   'assets.csv': {
@@ -406,7 +407,7 @@ const BLANK_MEANS = {
     minDifficulty: '0', minPlayerLevel: '0', spawnRateMul: '1',
     spawnGroup: 'no group', bioluminescent: 'no', bossMinion: 'no', invincible: 'no',
   },
-  'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up' },
+  'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up', weaponName: 'renames nothing' },
   'quips.csv': { enabled: 'enabled', weight: '1', causes: 'any death' },
   'kickers.csv': { enabled: 'enabled', weight: '1' },
   'sealNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },

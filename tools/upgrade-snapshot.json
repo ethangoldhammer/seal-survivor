@@ -866,6 +866,36 @@
       }
     ]
   },
+  "clubPower": {
+    "cap": 5,
+    "perStack": [
+      {
+        "clubDamageMul": 122,
+        "clubKnockMul": 118,
+        "clubReachMul": 108
+      },
+      {
+        "clubDamageMul": 148.84,
+        "clubKnockMul": 139.24,
+        "clubReachMul": 116.64
+      },
+      {
+        "clubDamageMul": 181.5848,
+        "clubKnockMul": 164.3032,
+        "clubReachMul": 125.9712
+      },
+      {
+        "clubDamageMul": 221.533456,
+        "clubKnockMul": 193.877776,
+        "clubReachMul": 136.048896
+      },
+      {
+        "clubDamageMul": 270.270816,
+        "clubKnockMul": 228.775776,
+        "clubReachMul": 146.932808
+      }
+    ]
+  },
   "clubIce": {
     "cap": 5,
     "perStack": [
@@ -1480,6 +1510,20 @@
       },
       {
         "maneaterLevel": 105
+      }
+    ]
+  },
+  "orbiterAmount": {
+    "cap": 3,
+    "perStack": [
+      {
+        "orbiterBonus": 101
+      },
+      {
+        "orbiterBonus": 102
+      },
+      {
+        "orbiterBonus": 103
       }
     ]
   },

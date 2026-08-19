@@ -214,7 +214,14 @@ const run = recordRun();
 const shotCanvas = document.createElement('canvas');
 shotCanvas.width = 640; shotCanvas.height = 360;
 shots.resetBossShot();
-const kept = shots.captureBossShot(shotCanvas, { name: 'Grimtide', cause: 'Homing Missile', level: 6, score: 41200, time: 120 });
+// causeSource alongside the caption: the score screen's table tags the final
+// blow by SOURCE KEY, because a weapon can be renamed mid-run and the print
+// keeps whatever it was called at the moment of the kill. A shot carrying only
+// the display name would silently stop tagging anything.
+const kept = shots.captureBossShot(shotCanvas, {
+  name: 'Grimtide', cause: 'Homing Missile', causeSource: 'missile',
+  level: 6, score: 41200, time: 120,
+});
 check('a kill shot was kept, so the trophy row has something to hold', kept === true);
 // Killed by the crab, which is nowhere near the top of the threat table.
 const gameState = {
@@ -297,6 +304,23 @@ check('a damageless ability is not a row in the damage table',
 check('...but its work is still counted',
   footText('svPanelWeapons').some((t) => /Caught, held or frozen\s*24/.test(t)),
   footText('svPanelWeapons').join(' | '));
+// THE BUILD REACHES THE TABLE. The rows are named by weaponName.js and not by
+// the ledger's own label, so a run that cloned its pebbles says so here as well
+// as on the polaroid — one answer in both places. Driven through the real
+// player object, because its `upgrades` array is what the game actually passes.
+{
+  const { player } = await import('../path/src/entities/player.js');
+  check('the table says Fin Pebbles on an unmodified run',
+    names('svPanelWeapons').includes('Fin Pebbles×1'), names('svPanelWeapons').join(' | '));
+  player.upgrades.push({ id: 'multishot', rarity: 'common' });
+  ui.showGameOver(gameState);
+  check('...and renames it once the run has modified it',
+    names('svPanelWeapons').some((n) => n.startsWith('Cloned Pebbles')),
+    names('svPanelWeapons').join(' | '));
+  player.upgrades.length = 0;
+  ui.showGameOver(gameState);
+}
+
 check('...and the total is the run\'s, not the visible rows\'',
   footText('svPanelWeapons').some((t) => /Total dealt\s*14\.6k/.test(t)),
   footText('svPanelWeapons').join(' | '));

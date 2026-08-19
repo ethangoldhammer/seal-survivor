@@ -88,6 +88,7 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
       u.weight = b.weight;
       u.cardArt = b.cardArt;
       u.sfx = b.sfx;
+      u.weaponName = b.weaponName;
     }
 
     const row = rows.get(u.id);
@@ -98,6 +99,13 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
     const desc = (row.desc ?? '').trim();
     if (name) u.name = name;
     if (desc) u.desc = desc;
+    // WHAT THE WEAPON IS CALLED once this upgrade is held — see weaponName.js.
+    // A whole name and not an adjective, so a row can say anything rather than
+    // being stuck with "<word> Pebbles"; blank is the overwhelming majority of
+    // rows and means the upgrade does not rename anything. Not validated
+    // against a weapon here: this table has no idea which weapons exist, and
+    // the join is checked by npm run test:weaponnames instead.
+    if ('weaponName' in row) u.weaponName = String(row.weaponName ?? '').trim() || null;
     if ('maxStacks' in row) u.maxStacks = parseStacks(row.maxStacks, u.id, warn);
     if ('enabled' in row) u.enabled = parseBool(row.enabled, LABEL, u.id, 'enabled', warn);
     if ('weight' in row) u.weight = parseWeight(row.weight, u.id, warn);

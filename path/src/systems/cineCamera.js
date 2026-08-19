@@ -151,6 +151,39 @@ function clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v);
 }
 
+// THE SOFT WALL. Where clamp() is a cliff, this is a ramp: outside the last
+// `ease` units of the legal range the value is folded onto an exponential that
+// approaches the limit and never reaches it.
+//
+// It exists because the rig used to meet the edge of the arena as a clamp on
+// its POSITION, with the target left pointing at a seal thirty units past the
+// wall. The spring therefore drove into the limit at full speed and was
+// truncated there: measured, the frame was still crossing 0.74 world units on
+// the frame before it stopped, and then it stopped. The ocean halting on a
+// frame boundary is most visible on a fast run at a wall, which is exactly
+// when the frame is moving quickest.
+//
+// Two things fix it, and they are different sizes. Softening the spring's
+// TARGET at all is most of it — a spring easing into a stationary target
+// decelerates on its own curve, and that alone takes the last step down to
+// about 0.14. The RAMP is the rest: over the last `ease` units the target
+// itself slows down, so the frame is already crawling when it arrives (0.09).
+// Both are measured in npm run test:width.
+//
+// Continuous in value AND slope at the seam (at v = hi - e the exponent is 0,
+// so the curve passes through hi - e with gradient 1), so there is no tick
+// where the easing starts. `ease` is capped at half the range because the two
+// ramps must not overlap: at exactly half they meet at the midpoint, which is
+// the degenerate-but-legal case of a pan range barely wider than the frame.
+function softLimit(v, lo, hi, ease) {
+  if (!(hi > lo)) return (lo + hi) / 2;
+  const e = Math.min(ease, (hi - lo) / 2);
+  if (!(e > 0)) return clamp(v, lo, hi);
+  if (v > hi - e) return hi - e * Math.exp(-(v - (hi - e)) / e);
+  if (v < lo + e) return lo + e * Math.exp(-((lo + e) - v) / e);
+  return v;
+}
+
 // Smootherstep. One degree gentler than the smoothstep used elsewhere in the
 // codebase, and deliberately so: a camera blend is the one curve the eye
 // tracks for its whole length, and smoothstep's non-zero second derivative at
@@ -368,6 +401,10 @@ function springStep(pos, vel, target, k, ratio, dt) {
  *                  aim:      { x, y }  normalized, may be zero-length
  *                  charging, boosting, deathPhase, deathElapsed
  *                  clampFocus(x, y, zoom, allowFloorOverscan) -> { x, y }
+ *                  focusLimits(zoom, allowFloorOverscan) -> { loX, hiX, loY, hiY }
+ *                    optional; the same box clampFocus enforces, handed over
+ *                    open so the rig can ease into it rather than be cut off
+ *                    at it. Without it the rig falls back to the hard clamp.
  *                  halfExtents(zoom) -> { w, h }  visible half-frame, world units
  *                }
  * @returns { x, y, zoom } the world point to centre and the zoom to do it at.
@@ -462,13 +499,36 @@ export function updateCineCamera(dt, ctx) {
   const goalY = ctx.target.y + rig.leadY + p.offsetY
     + (aimLen > 0.001 ? (ctx.aim.y / aimLen) * aimBias : 0);
 
+  // How far the frame may travel past the arena's walls, and over how much of
+  // its last approach it eases in. `edgeEase` is a fraction of the HALF-frame
+  // — the same currency as the dead zone below, and for the same reason: it
+  // then means the same thing at every zoom and every aspect ratio. A state
+  // that pushes in gets a proportionally shorter ramp, which is right, because
+  // the tighter frame has less travel left to spend on easing.
+  //
+  // `focusLimits` is optional so a caller that predates it (and the tests that
+  // drive this rig with a hand-built ctx) still gets the old hard-clamped
+  // behaviour rather than a crash.
+  const allowFloor = machine.state.startsWith('death');
+  const edge = base.edgeEase ?? 0.3;
+  const easeX = edge * half.w;
+  const easeY = edge * half.h;
+  const limits = ctx.focusLimits ? ctx.focusLimits(zoom, allowFloor) : null;
+
   if (!rig.primed) {
     // First frame of a run: place the rig, don't spring to it from wherever
     // the last run left it. A run that opens with the camera sailing in from
-    // the previous death is the one thing round start must not do. Clamped
-    // here as well as in the spring loop, so frame one is already legal
-    // rather than legal by the end of its first substep.
-    const at = ctx.clampFocus(goalX, goalY, zoom, false);
+    // the previous death is the one thing round start must not do. Placed at
+    // the SOFTENED goal, not the raw one, so frame one is already where the
+    // spring would have settled — priming to the hard limit and easing off it
+    // afterwards is a lurch on the opening frame.
+    const at = limits
+      ? ctx.clampFocus(
+          softLimit(goalX, limits.loX, limits.hiX, easeX),
+          softLimit(goalY, limits.loY, limits.hiY, easeY),
+          zoom, false,
+        )
+      : ctx.clampFocus(goalX, goalY, zoom, false);
     rig.x = at.x; rig.y = at.y; rig.vx = 0; rig.vy = 0;
     rig.primed = true;
   }
@@ -487,8 +547,21 @@ export function updateCineCamera(dt, ctx) {
   if (goalY > rig.y + dzY) targetY = goalY - dzY;
   else if (goalY < rig.y - dzY) targetY = goalY + dzY;
 
+  // Soften the target against the arena BEFORE the spring sees it. This is the
+  // easing: the spring is then chasing something already legal, so it
+  // decelerates on its own curve instead of being cut off by the clamp below,
+  // and it settles rather than arriving with velocity to kill.
+  //
+  // On the TARGET and not on the output, on purpose. Compressing the spring's
+  // position each substep would leave it pulling toward a goal it can never
+  // reach, banking force against a limit it cannot see — which is the same
+  // stored-energy bug the clamp below describes, dressed up as a fix for it.
+  if (limits) {
+    targetX = softLimit(targetX, limits.loX, limits.hiX, easeX);
+    targetY = softLimit(targetY, limits.loY, limits.hiY, easeY);
+  }
+
   // --- spring --------------------------------------------------------------
-  const allowFloor = machine.state.startsWith('death');
   let steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(dt / SUBSTEP)));
   const h = dt / steps;
   const kx = (base.stiffness?.x ?? 55) * p.stiffness;

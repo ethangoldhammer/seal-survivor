@@ -509,7 +509,12 @@ export function createGrid(scene) {
     material.uniforms.uDecay.value = CONFIG.grid.rippleDecay;
     material.uniforms.uFreq.value = CONFIG.grid.rippleFreq;
     material.uniforms.uWavelength.value = CONFIG.grid.rippleWavelength;
-    material.uniforms.uOpacity.value = CONFIG.grid.opacity;
+    // `view.fade` is a multiplier on the authored opacity for whoever is
+    // holding the frame — 1 in a run. The main menu draws a lattice of its own,
+    // six times finer than this one, and two hex grids at two sizes on top of
+    // each other read as a fault; so this one is held down while that screen is
+    // up and brought back as the shot opens out. See mainMenuGrid.
+    material.uniforms.uOpacity.value = CONFIG.grid.opacity * (view.fade ?? 1);
     material.uniforms.uWarpGain.value = CONFIG.grid.warpGain;
     material.uniforms.uSurfaceY.value = bounds.surfaceY;
     // The live sea state — see the same note in water.js. The grid clips to

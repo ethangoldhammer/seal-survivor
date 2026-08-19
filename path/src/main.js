@@ -13,7 +13,7 @@ import {
   initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput,
 } from './input.js';
 import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, applyRecoil, applyPlayerKnockback, rebuildShipBody } from './entities/player.js';
-import { projectileCount, maneaterReadout } from './stats.js';
+import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
 import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement, activeElement, elementColor } from './systems/elements.js';
@@ -51,6 +51,28 @@ import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
 import { playerDamageFx, updatePlayerDamageFx, resetPlayerDamageFx } from './systems/playerDamageFx.js';
 import { updateProjectileTrails, clearProjectileTrails } from './systems/projectileTrails.js';
 import { updateAirborne, resetAirborne, airRamp, airDamageMul, airFireRateMul, canAirJump, spendAirJump, slamFor } from './systems/airborne.js';
+import { fireReentrySplash, updateReentrySplash, resetReentrySplash } from './systems/reentrySplash.js';
+
+// The seal's silhouette, in world units, for the ring of foam a landing throws
+// (see systems/reentrySplash.js). Box3 rather than a hit shape because the
+// player has none — hit shapes are an enemy thing — and rather than the def
+// radius because that is one number for an animal that is three times longer
+// than it is deep.
+//
+// setFromObject on a SKINNED body measures the bind pose, not the current one.
+// That is the right answer here and worth saying so nobody "fixes" it: this
+// wants how much water the animal displaces, which is a property of the
+// animal, and a per-frame figure would make the same jump throw a different
+// amount of water depending on where the swim cycle happened to be.
+const _extentBox = new THREE.Box3();
+const _extentSize = new THREE.Vector3();
+function measurePlayerExtent(p) {
+  if (!p?.mesh) return null;
+  _extentBox.setFromObject(p.mesh);
+  if (_extentBox.isEmpty()) return null;
+  _extentBox.getSize(_extentSize);
+  return { rx: _extentSize.x / 2, ry: _extentSize.y / 2 };
+}
 import { updateBreachTrail, clearBreachTrail } from './systems/breachTrail.js';
 import { updateKrakenInk } from './systems/kraken.js';
 import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from './systems/projectileVoices.js';
@@ -103,12 +125,11 @@ import { beginTitleSeal, endTitleSeal, resetTitleSeal, titleSealEngaged, updateT
 // is mounted from here rather than from ui.js because it lives IN THE ARENA:
 // it poses the run's own seal and claims the run's own camera, neither of which
 // the UI layer has ever known about.
-import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuWake } from './systems/mainMenu.js';
+import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuGrid } from './systems/mainMenu.js';
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
-import { highScore } from './systems/leaderboard.js';
-import { initUI, showStartMenu, showHowToPlay, hideHowToPlay, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, setHighScore, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
+import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive } from './ui/upgradeHive.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
@@ -500,7 +521,6 @@ async function boot() {
   if (DEV_UI) initPlaytestOverlay();
   // Reads the animation state machine out; poses nothing. See ui/animDebug.js.
   if (DEV_UI) initAnimDebug();
-  setHighScore(highScore());
 
   // `?sandbox` boots past the splash straight into a staged run — an ocean
   // with a seal in it and nothing trying to end you. This is the route back
@@ -953,11 +973,19 @@ function showMainMenu() {
           startGame();
         },
       },
-      // The old DOM start menu, which holds every instruction the game has and
-      // which nothing has been able to reach since the splash started going
-      // straight into a run. Its own "Start run" still works — startGame
-      // releases this menu on every route into a run, not just the button above.
-      { label: 'How to play', onPress: showHowToPlay },
+      // THE SETTINGS PANEL, on its own rather than behind a pause. Same surface
+      // the pause menu is — one panel, one set of controls, one place they are
+      // saved — opened `standalone`, which heads it "Settings", drops "Restart
+      // run" and calls the way out "Back". See ui/pauseMenu.js.
+      //
+      // NOT setPaused(true): that route is for a run, it is gated on canPause()
+      // and it would head the panel "Paused" over a menu with nothing to pause.
+      //
+      // This slot used to be "How to play" — the old DOM start panel, a wall of
+      // instructions on a button. It is deleted: the tutorial teaches all of it
+      // in the water, at the moment each thing matters, which is the only place
+      // anybody ever read it.
+      { label: 'Options', onPress: () => showPauseMenu({ standalone: true }) },
       // The board on its own surface, rather than only as a panel inside the
       // score card — until now the only way to look at it was to die. See
       // showLeaderboard.
@@ -978,7 +1006,6 @@ function showMainMenu() {
  */
 function closeMainMenu() {
   if (!mainMenuActive()) return;
-  hideHowToPlay();
   hideLeaderboard();
   hidePauseMenu();
   mainMenu()?.release();
@@ -1081,6 +1108,10 @@ function startGame() {
   resetBossCorpses();
   resetBossBooms();
   resetPickups(world.scene);
+  // ...and any landing still owed a jet, before the buffer it would fire
+  // into is cleared — a column arriving over the menu is the whole reason a
+  // scheduled effect needs a reset at all.
+  resetReentrySplash();
   resetParticles();
   // Before resetPlayer, which puts the seal back at midwater: this hands the
   // clock and the mix back to full speed, so a run started from the score
@@ -3003,9 +3034,19 @@ function bounceComboFx(p) {
 }
 
 function currentStarfishStats(level) {
+  const c = CONFIG.starfish;
+  const n = Math.max(1, level);
   return {
-    fireRate: CONFIG.starfish.baseFireRate * Math.pow(CONFIG.starfish.fireRatePerLevel, level - 1),
-    scale: (CONFIG.starfish.baseRadius + CONFIG.starfish.radiusPerLevel * (level - 1)) / CONFIG.starfish.baseRadius,
+    fireRate: c.baseFireRate * Math.pow(c.fireRatePerLevel, n - 1),
+    scale: (c.baseRadius + c.radiusPerLevel * (n - 1)) / c.baseRadius,
+    damage: c.damage + (c.damagePerLevel ?? 0) * (n - 1),
+    // FLOORED, for the reason laserEyeStats gives about its beam count: a
+    // pierce that crept up by a third would cut two bodies for three levels and
+    // then silently three, with nothing on the card able to say when.
+    pierce: Math.min(
+      c.pierceMax ?? 4,
+      Math.max(0, Math.floor((c.basePierce ?? 0) + (c.piercePerLevel ?? 0) * (n - 1))),
+    ),
   };
 }
 
@@ -3018,11 +3059,11 @@ function fireStarfish() {
     origin,
     dir,
     faction: 'player',
-    damage: abilityDamage(CONFIG.starfish.damage),
+    damage: abilityDamage(stats.damage),
     speed: CONFIG.starfish.speed,
     life: CONFIG.starfish.life,
     radius: CONFIG.starfish.baseRadius * stats.scale,
-    pierce: 0,
+    pierce: stats.pierce,
     asset: 'starfish',
     source: 'starfish',
     spin: CONFIG.starfish.spinSpeed,
@@ -3369,6 +3410,32 @@ function animate(now) {
         vy: Math.abs(player.velocity.y),
         scale: slam ? slam.scale : Math.min(1, 0.3 + impact / 30),
         sfxOpts: { pitch: 1 / (0.85 + power * 0.4), decayMul: 1 + power * 0.5 },
+      });
+
+      // ...AND THE REST OF THE SPLASH. `feedback` above is the impact frame —
+      // the spray and the crown of foam, both thrown upward. This is the hole
+      // punched under them and the column the hole throws back out of itself a
+      // fifth of a second later, which is the half of a splash the game has
+      // never had. Same numbers, deliberately: it is the same event, and the
+      // one thing worse than a landing with no jet is a landing whose jet
+      // disagrees with its own crown about how hard it was.
+      //
+      // Fired here rather than from a `stages` key on the feedback entry
+      // because it is the only effect in the game that is not instantaneous,
+      // and the feedback table has no clock — see systems/reentrySplash.js.
+      fireReentrySplash({
+        x: sx,
+        y: sy,
+        vx: player.velocity.x,
+        vy: Math.abs(player.velocity.y),
+        scale: slam ? slam.scale : Math.min(1, 0.3 + impact / 30),
+        // THE SHAPE THE WATER LEAVES FROM. A world-space box, so the seal's
+        // aim rotation is already in it — a body entering nose-down measures
+        // tall and narrow, one belly-flopping measures wide and flat, and the
+        // ring of foam is the right shape in both without this having to know
+        // which. Measured here rather than inside the system so that module
+        // keeps importing CONFIG and emit and nothing else.
+        body: measurePlayerExtent(player),
       });
     }
 
@@ -3939,7 +4006,16 @@ function animate(now) {
       // a constant would drift out of agreement with every other contact test.
       playerRadius: player.stats.hitRadius,
       hooks: {
-        onEnemyDamaged: damageFrom('beam'),
+        // THE BEAM'S OWN SOURCE, not a name typed here. Two different upgrades
+        // light beams — the seal's Laser Eyes and the boss's eyebeam perk — and
+        // a hardcoded tag filed both under `beam`, which no upgrade in
+        // SOURCE_UPGRADES claims. That means zero stack-minutes, which means a
+        // return of 0.00x that no amount of over- or under-tuning could ever
+        // move: 30k damage across 13 logged runs, invisible to the balance
+        // report the whole time. Same failure the harp's aura had.
+        onEnemyDamaged: (e, dmg, x, y, dir, projectile, at, source) => (
+          damageFrom(source ?? 'beam')(e, dmg, x, y, dir, projectile, at)
+        ),
         onEnemyKilled: onEnemyKilledFeedback,
         // Through the same i-frames every other source of player damage goes
         // through, for the reason the perk hook below says: a beam should not
@@ -4021,10 +4097,16 @@ function animate(now) {
     resolveCombat(dt, world.scene, {
       // Bullets, mussels, ricochets, starfish and shrapnel all land here; the
       // projectile carries the tag that tells them apart.
-      onEnemyDamaged: (e, dmg, x, y, dir, projectile, at) => {
-        playtest.recordDamage(projectile?.source ?? 'gun', dmg, e);
+      // An explicit source beats the projectile's — a Glow Up! shock arc has no
+      // projectile behind it and was landing on `gun` by default. See the note
+      // in elements.js's applyShock.
+      onEnemyDamaged: (e, dmg, x, y, dir, projectile, at, source) => {
+        playtest.recordDamage(source ?? projectile?.source ?? 'gun', dmg, e);
         onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at);
       },
+      // The elemental half of a pellet. RECORDING ONLY — the pellet's own
+      // feedback has already played, and this is the same damage event.
+      onElementDamage: (e, dmg) => playtest.recordDamage('bioluminescence', dmg, e),
       onProjectileChained: (p, x, y) => feedback('bounce', { x, y, ...bounceComboFx(p) }),
       onPlayerHit,
       onEnemyKilled: onEnemyKilledFeedback,
@@ -4112,7 +4194,12 @@ function animate(now) {
       // fight rather than competing with it.
       onTick: (x, y, count) => feedback('garlicTick', { x, y, scale: Math.min(1.4, 0.6 + count * 0.12) }),
     });
-    updateShrimpRing(dt, world.scene, player.mesh.position, projectileCount(player.stats.shrimpCount, player.stats), enemies, {
+    // BOTH CARDS REACH THE SHRIMP, and that is a fact about the shrimp rather
+    // than a mistake: a ring of them is a thing you fire AND a thing that
+    // circles you, so Clone Warz and Entourage both have a claim on it. The
+    // gate inside each is what keeps a run that took neither at its own count.
+    updateShrimpRing(dt, world.scene, player.mesh.position,
+      orbiterCount(projectileCount(player.stats.shrimpCount, player.stats), player.stats), enemies, {
       onEnemyDamaged: damageFrom('shrimp'),
       onEnemyKilled: onEnemyKilledFeedback,
       onContact: (x, y) => feedback('shrimpHit', { x, y }),
@@ -4154,7 +4241,10 @@ function animate(now) {
       onLunge: (x, y) => feedback('sealLunge', { x, y }),
       onRam: (x, y) => feedback('sealRam', { x, y }),
       onSquadFire: (x, y, dirX, dirY) => feedback('sealShot', { x, y, dirX, dirY }),
-    });
+      // Entourage's escorts, passed apart from the level for the reason
+      // updateSealTeam spells out: `level` also buys damage and decides the
+      // EVOLVE, and neither is what this card is selling.
+    }, player.stats.orbiterBonus ?? 0);
     updateCalamari(dt, world.scene, player.mesh.position, player.stats.calamariLevel, enemies, {
       onEnemyDamaged: damageFrom('calamari'),
       onEnemyKilled: onEnemyKilledFeedback,
@@ -4188,7 +4278,9 @@ function animate(now) {
       // should read bigger than one clipping a straggler, but not six times
       // bigger.
       onAuraTick: (x, y, count) => feedback('harpAura', { x, y, scale: Math.min(1.8, 0.7 + count * 0.2) }),
-    });
+      // How many instruments are on the ring. Through orbiterCount, so a run
+      // that never took Harp Seal is not handed one by a card about counts.
+    }, orbiterCount(player.stats.harpLevel > 0 ? 1 : 0, player.stats));
     updateOyster(dt, world.scene, enemies, {
       onEnemyDamaged: damageFrom('oyster'),
       onEnemyKilled: onEnemyKilledFeedback,
@@ -4228,7 +4320,12 @@ function animate(now) {
       velocity: player.velocity,
       dashing: strikeState.active,
     }, {
-      onEnemyDamaged: damageFrom('club'),
+      // The club's own tag unless the hit names one — Powder Keg's blast does.
+      // See the note in club.js's detonate(): three cards deal damage through
+      // one hook here, and a fixed tag credited all of it to the base club.
+      onEnemyDamaged: (e, dmg, x, y, dir, projectile, at, source) => (
+        damageFrom(source ?? 'club')(e, dmg, x, y, dir, projectile, at)
+      ),
       onEnemyKilled: onEnemyKilledFeedback,
       onWhack: (x, y, rate) => feedback('clubWhack', {
         x, y,
@@ -4253,6 +4350,24 @@ function animate(now) {
       onBlast: (x, y, radius, caught) => {
         feedback('clubBoom', { x, y, scale: Math.min(1.6, 0.7 + caught * 0.15) });
         world.grid.ripple(x, y, 2, radius * 2);
+      },
+      // The setup paying off — a club landing on something the run had already
+      // stopped. Scaled by the swing like the whack it rides on.
+      onTeed: (x, y, rate) => feedback('clubTeed', {
+        x, y,
+        scale: Math.min(1.4, 0.8 + rate * 0.04),
+        sfxOpts: { pitch: Math.min(1.3, 0.95 + rate * 0.02) },
+      }),
+      // THE SHOCKWAVE, at the peak of a swing. Scaled by the RADIUS the wave
+      // actually came out at rather than by how many it caught — unlike the
+      // keg below, this one fires whether or not there was anything there,
+      // and a wave in empty water still has to look like the thing the player
+      // just earned. The grid ripple is the effect: it is the only channel in
+      // the game that draws a circle travelling outward, which is what a
+      // pressure wave is.
+      onShock: (x, y, radius, caught) => {
+        feedback('clubShock', { x, y, scale: Math.min(1.5, 0.75 + radius * 0.12) });
+        world.grid.ripple(x, y, 2.6 + Math.min(2, caught * 0.35), radius * 2.4);
       },
       // Cold Snap, but only the moment a body actually LOCKS. The per-hit
       // chill has no event of its own on purpose: it lands on every club hit
@@ -4321,15 +4436,17 @@ function animate(now) {
 
     // Strike system: chain-hit damage, charge recharge, and the orb timer.
     const { spawnOrb } = updateStrike(dt, world.scene, player.mesh.position, player.stats, enemies, {
-      onEnemyDamaged: (e, dmg) => {
-        playtest.recordDamage('strike', dmg, e);
+      onEnemyDamaged: (e, dmg, x, y, dir, projectile, at, source) => {
+        // `source` for the same reason the combat hook takes one: a dash's
+        // sweet spot carries the run's element, and a Glow Up! arc off it has
+        // no strike behind it. Everything else through here is the ram.
+        playtest.recordDamage(source ?? 'strike', dmg, e);
         onEnemyDamagedFeedback(e, dmg);
-        // Shrapnel rides the NOMINAL strike rather than the `dmg` the ram
-        // actually dealt — see riderDamage() in systems/strike.js. A base ram
-        // is a chip, and fragments scaled to a chip would make Bone Shrapnel a
-        // card that does nothing until four other cards have been taken.
-        spawnShrapnel(e.mesh.position, riderDamage(dmg, player.stats));
       },
+      // The elemental share a dash carries (CONFIG.biolum.strikeFraction).
+      // Recording only, same as the combat hook's — the ram's own feedback has
+      // already played and this is the same contact.
+      onElementDamage: (e, dmg) => playtest.recordDamage('bioluminescence', dmg, e),
       // THE SHOVE LANDING. Its own event because the ram is no longer a
       // damage-shaped thing: the hit feedback above is sized by damage, and a
       // five-point chip that visibly throws a shark across the screen needs to
@@ -4345,6 +4462,31 @@ function animate(now) {
           y: at?.y ?? e.mesh.position.y,
           scale: 0.7 + power * 0.7,
         });
+        // BONE SHRAPNEL BURSTS HERE, off the ram — not off the damage hook.
+        //
+        // It used to hang off onEnemyDamaged, which the strike guards with
+        // `if (dmg > 0)`. `CONFIG.strike.contactShare` ships at 0 — the ram
+        // deals no damage by design — so the ONLY contact that ever reached
+        // that hook was one the prey cull had already killed outright: a body
+        // under radius 0.65. Bone Shrapnel burst on minnows the dash was
+        // eating anyway and on nothing else. Not one fragment ever came off a
+        // shark, a tuna, a predator or a boss, which is every creature the
+        // card exists to be used against. The ledger read it at 0.04x return,
+        // last but one in the game.
+        //
+        // Measured: three shark-sized bodies rammed on the beat fired the old
+        // hook 0 times and this one 3.
+        //
+        // onRam is the right home for exactly the reason the note above it
+        // gives: it is the ram announcing itself, "sized by COMMITMENT rather
+        // than by damage precisely because there usually isn't any". The
+        // fragments are the ram's payload, not the chip's.
+        //
+        // Shrapnel rides the NOMINAL strike rather than what the ram dealt —
+        // see riderDamage() in systems/strike.js, which also returns 0 off the
+        // beat, so a mistimed dash still bursts nothing.
+        const rider = riderDamage(0, player.stats);
+        if (rider > 0) spawnShrapnel(at ?? e.mesh.position, rider);
       },
       onMarked: (e) => {
         feedback('strikeMark', { x: e.mesh.position.x, y: e.mesh.position.y, scale: 0.8 });
@@ -5181,6 +5323,11 @@ function animate(now) {
     }
     lightningStrikes.length = 0;
   }
+  // The rest of the landing. On `realDt` and immediately before the particles
+  // it fires, because the two are one clock: the stage table schedules bursts
+  // against how far the cavity's own arc has run, and the cavity is solved on
+  // this one. See systems/reentrySplash.js.
+  updateReentrySplash(realDt);
   updateParticles(realDt);
   // The camera is what turns a finger on the glass into a point in the water,
   // and the strike meter is what makes a charging finger grow — see updateTouch
@@ -5189,13 +5336,13 @@ function animate(now) {
     camera: world.camera,
     charging: strikeState.charging,
     charge: strikeState.pending,
-    // HOW HARD THE SEAL DENTS IT, when something other than a run owns the
-    // frame. Null every frame there is no menu, which is CONFIG's own number.
-    // The menu punches in to fifteen times this framing, where the wake's
-    // radius is wider than the picture and this grid — the arena's, not the
-    // menu's own — drags every node on screen toward the animal. Handed in
-    // rather than read over there, like the camera and the meter above it.
-    wake: mainMenuWake(),
+    // WHAT THE MENU ASKS OF THIS LATTICE — the arena's, not the menu's own —
+    // while it is up: `{ wake, fade }`, and nothing at all on every frame there
+    // is no menu, which leaves CONFIG in charge. The screen punches in to
+    // fifteen times this framing, where one cell of this grid is wider than the
+    // whole picture and the seal's wake radius covers it. Handed in rather than
+    // read over there, like the camera and the meter above it.
+    ...mainMenuGrid(),
   });
   // The death shot: the frame closes in on the body and rides it down. Claimed
   // per frame, immediately before the camera update that consumes it — the
@@ -5351,6 +5498,7 @@ function animate(now) {
       // bossState.killedBy, which is written on the frame the boss died and is
       // the only record of it by the time this runs.
       cause: bossState.killedBy,
+      causeSource: bossState.killedBySource,
       // Whose run this is, read once here rather than when a card is drawn.
       // playerName() and not loadPlayerName(): this is a caption, so it wants
       // the trimmed, never-blank reading — a print titled with an empty string

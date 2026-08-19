@@ -4,7 +4,10 @@ import { resolutionScale } from './systems/settings.js';
 import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT } from './arena.js';
 import { createGrid } from './systems/grid.js';
 import { createConstellations } from './systems/constellations.js';
-import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime } from './systems/water.js';
+import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime, liveCaustics } from './systems/water.js';
+// The seal's wet film is lit by the water's caustics, so it has to be told what
+// they are doing — see setNoiseWetEnv and CONFIG.sealShader.wetCaustics.
+import { setNoiseWetEnv } from './systems/noiseShader.js';
 import { createSkyMaterial, updateSkyMaterial, skyPlaneMetrics } from './systems/sky.js';
 import { createCelestials } from './systems/celestial.js';
 import { createClouds } from './systems/clouds.js';
@@ -342,7 +345,16 @@ export function createWorld(container) {
       const base = hg?.enabled ? (hg.lineOpacity ?? 1) : 1;
       surfaceLine.material.opacity = base * (1 - tw * (hg?.enabled ? (hg.lineTwilightFade ?? 0) : 0));
     }
-    if (waterMesh) updateWaterMaterial(waterMesh.material, waterClock);
+    if (waterMesh) {
+      updateWaterMaterial(waterMesh.material, waterClock);
+      // AFTER, never before: updateWaterMaterial is what resolves `liveCaustics`
+      // for this frame, and reading it first would light every wet animal with
+      // the previous frame's ocean. One frame is invisible on the tint and
+      // obvious on the phase — the veins on the seal would lag the veins in the
+      // water by a frame, which is the one artefact this whole layer cannot
+      // survive.
+      setNoiseWetEnv(liveCaustics);
+    }
   }
 
   function resize() {
@@ -550,10 +562,34 @@ export function createWorld(container) {
     return { x: camAnchor.x + c.x, y: camAnchor.y + c.y, halfW: half.w, halfH: half.h };
   }
 
-  // Where a focus point is allowed to be: at least a half-frame in from each
-  // wall, so the frame never runs past the water plane onto the bare scene
-  // background. The floor is the one exception — FLOOR_OVERSCAN of seabed
-  // hangs below the arena for the frame to spend, because a body at rest ON
+  // SIDEWAYS OVERSCAN — how far past a wall the frame is allowed to drift.
+  // The frame used to stop with its edge exactly on bounds.left / bounds.right,
+  // which meant the seal could still swim a half-body further than the camera
+  // could follow, and the shot pinned it against the edge of the screen to do
+  // it. A little give either side lets the frame keep the seal off the bezel
+  // right up to the wall.
+  //
+  // What it may spend is not a written number: it is the depth of the drawn
+  // rock face at its THINNEST point, measured off the built geometry by
+  // wallRocks (see measureCover there). Drift only into rock and the frame can
+  // never show open water outside the shore, at any height — which is the
+  // whole constraint. It has to be measured because the wall is a lumpy stack
+  // of boulders whose depth falls out of a seed, a size range and a taper: a
+  // number typed here is right until the next time any of the three moves.
+  // `camera.edgeDrift` is the ceiling on it, so the tuner can ask for less
+  // than the rock allows but never for more.
+  //
+  // Zero when the shore is off or hasn't been built: with nothing drawn out
+  // there, there is nothing to hide behind and the frame stops on the wall
+  // exactly as it always did.
+  function sideOverscan() {
+    return Math.max(0, Math.min(CONFIG.camera?.edgeDrift ?? 0, wallRocks.cover ?? 0));
+  }
+
+  // Where a focus point is allowed to be: a half-frame in from each wall, less
+  // whatever overscan that edge has to spend, so the frame never runs past the
+  // scenery onto the bare background. The floor is the largest of them —
+  // FLOOR_OVERSCAN of seabed hangs below the arena, because a body at rest ON
   // the floor would otherwise sit jammed against the bottom edge of the shot.
   //
   // At zoom 1 the frustum is exactly the arena, so both ranges collapse to a
@@ -561,11 +597,26 @@ export function createWorld(container) {
   // why the cinematic rig's zoom floor sits above 1. Below zoom 1 they invert,
   // hence the degenerate branch: with the frame wider than the ocean the only
   // sensible answer is dead centre, not whichever bound `clamp` reached first.
-  function clampFocus(x, y, zoom, allowFloorOverscan = false) {
+  //
+  // Split out from clampFocus so the cinematic rig can EASE into these rather
+  // than be cut off at them: a spring that is hard-clamped arrives at the wall
+  // still travelling, and the frame stops dead. The rig softens its own target
+  // against the same four numbers — see softLimit in cineCamera.js — and the
+  // clamp below stays as the backstop it always was.
+  function focusLimits(zoom, allowFloorOverscan = false) {
     const half = halfExtents(zoom);
     const spend = allowFloorOverscan ? FLOOR_OVERSCAN : 0;
-    const loX = bounds.left + half.w, hiX = bounds.right - half.w;
-    const loY = bounds.bottom + half.h - spend, hiY = bounds.top - half.h;
+    const side = sideOverscan();
+    return {
+      loX: bounds.left + half.w - side,
+      hiX: bounds.right - half.w + side,
+      loY: bounds.bottom + half.h - spend,
+      hiY: bounds.top - half.h,
+    };
+  }
+
+  function clampFocus(x, y, zoom, allowFloorOverscan = false) {
+    const { loX, hiX, loY, hiY } = focusLimits(zoom, allowFloorOverscan);
     return {
       x: loX > hiX ? (bounds.left + bounds.right) / 2 : clamp(x, loX, hiX),
       y: loY > hiY ? (bounds.bottom + bounds.top) / 2 : clamp(y, loY, hiY),
@@ -596,6 +647,7 @@ export function createWorld(container) {
     deathPhase: 'none',
     deathElapsed: 0,
     clampFocus,
+    focusLimits,
     halfExtents,
   };
 

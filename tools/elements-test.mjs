@@ -527,23 +527,39 @@ section('SPLASH ZONE — aoe and targeting');
 }
 
 // ===========================================================================
-section('THE DAY GATE — the element sleeps in daylight');
+section('THE DAY GATE — the element is faint in daylight');
 // ===========================================================================
-// Bioluminescence at noon is a contradiction, so Glow Up! is now a night
-// ability in both halves: it stops glowing AND it stops doing anything. The
-// two share one number (elementPower) precisely so they cannot disagree — a
-// seal that is visibly dark while still poisoning things is the bug this
-// shape exists to prevent.
+// Bioluminescence at noon is a contradiction, so Glow Up! is a night ability
+// in both halves: it dims AND it does less. The two share one number
+// (elementPower) precisely so they cannot disagree — a seal that is visibly
+// dark while still poisoning things is the bug this shape exists to prevent.
+//
+// FAINT, NOT ASLEEP. `dayPower` was 0 and the ledger caught what that meant:
+// 39 damage across eight runs that took the card, last in the game by ninety
+// times. 30 real seconds is a game hour and the awake window is 17:20–07:00,
+// so a median 2:39 run begun during the working day never sees dark at all —
+// the pick was worth literally nothing and the card never said so. These
+// checks are written against the RELATIONSHIP (day is a fraction of night)
+// rather than against a specific floor, so retuning `dayPower` is a one-cell
+// change in weapons.csv and not a test edit.
 {
   b.night.dayPower = SHIPPED_DAY_POWER;
 
+  check('the daylight floor is not zero — the card is never a dead pick',
+    SHIPPED_DAY_POWER > 0, `dayPower ${SHIPPED_DAY_POWER}`);
+  check('...and is still well short of a full night', SHIPPED_DAY_POWER < 0.6,
+    `dayPower ${SHIPPED_DAY_POWER}`);
+
   setup({ element: 'venom', level: 3, night: 0 });
-  check('at noon the element is fully asleep', elementPower() === 0, `power ${elementPower()}`);
+  check('at noon the element runs at exactly the floor',
+    Math.abs(elementPower() - SHIPPED_DAY_POWER) < 1e-9, `power ${elementPower()}`);
   const noon = fakeEnemy(0, 0);
   const dealt = applyElementalHit(scene, noon, 100, [noon], noHooks);
-  check('...so a hit lands no elemental packet', dealt === 0, `${dealt} bonus damage`);
-  check('...and applies no status', !(noon.venomTimer > 0) && !noon.venomStacks,
-    `timer ${noon.venomTimer ?? 0}, stacks ${noon.venomStacks ?? 0}`);
+  check('...so a hit still lands a packet', dealt > 0, `${dealt.toFixed(1)} bonus damage`);
+  check('...and still applies its status', noon.venomTimer > 0 && noon.venomStacks === 1,
+    `timer ${noon.venomTimer?.toFixed?.(2) ?? noon.venomTimer}, stacks ${noon.venomStacks ?? 0}`);
+  check('...but a smaller one than after dark',
+    dealt < dealtAtNight() * 0.75, `${dealt.toFixed(1)} by day vs ${dealtAtNight().toFixed(1)} by night`);
 
   setup({ element: 'venom', level: 3, night: 1 });
   check('at midnight it is fully awake', elementPower() === 1, `power ${elementPower()}`);
@@ -557,7 +573,7 @@ section('THE DAY GATE — the element sleeps in daylight');
   // noise-shaded seal has nothing to ride.
   setup({ element: 'venom', level: 3, night: 0.5 });
   const dusk = elementPower();
-  check('dusk is partway between', dusk > 0 && dusk < 1, dusk.toFixed(3));
+  check('dusk is partway between', dusk > SHIPPED_DAY_POWER && dusk < 1, dusk.toFixed(3));
   const half = fakeEnemy(0, 0);
   const duskDealt = applyElementalHit(scene, half, 100, [half], noHooks);
   check('...and the packet scales with it', duskDealt > 0 && duskDealt < dealtAtNight(),
@@ -615,9 +631,19 @@ section('THE SHOT WEARS THE ELEMENT');
   b.night.dayPower = SHIPPED_DAY_POWER;
   setup({ element: 'venom', level: 2, night: 0 });
   updateElements(dt, scene, [], noHooks);
-  check('at noon the shot goes back to being a pebble', bulletHex() === stone,
-    `#${bulletHex().toString(16)} at power ${elementPower()}`);
-  check('...and so does its ribbon', elementTrailMix() === 0);
+  const noonHex = bulletHex();
+  const noonMix = elementTrailMix();
+  const noonPower = elementPower(); // read HERE — the night setup below moves it
+  setup({ element: 'venom', level: 2, night: 1 });
+  updateElements(dt, scene, [], noHooks);
+  const nightMix = elementTrailMix();
+  // Dim, not absent — the pellet is the readout for how awake the element is,
+  // and the element is faint at noon rather than switched off.
+  check('at noon the shot is only faintly tinted', noonHex !== stone
+    && noonHex !== asColor(elementColor('venom')),
+    `#${noonHex.toString(16)} at power ${noonPower}`);
+  check('...and its ribbon carries less than it does after dark',
+    noonMix > 0 && noonMix < nightMix, `mix ${noonMix.toFixed(2)} vs ${nightMix.toFixed(2)}`);
 
   setup({ element: 'venom', level: 2, night: 0.5 });
   updateElements(dt, scene, [], noHooks);

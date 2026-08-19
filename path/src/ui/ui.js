@@ -33,7 +33,6 @@ import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransf
 import {
   BOARD_SIZE,
   fetchGlobalBoard,
-  highScore,
   isGlobal,
   loadLeaderboard,
   submitScore,
@@ -55,6 +54,7 @@ import { analyzeRun, sourceLabel } from '../systems/playtestAnalysis.js';
 // is also the reading that makes sense: four species of shark are one thing
 // that killed you. See `threat` in deathCauses.js.
 import { primaryCause, threatLabel } from '../deathCauses.js';
+import { weaponName } from '../weaponName.js';
 import { playSfx, unlockAudio } from '../systems/audio.js';
 // The popups' arrival and departure curves, by name — the same shared table the
 // boss bar's fill and the camera moves read from (path/src/ease.js).
@@ -496,10 +496,45 @@ const STYLES = `
      --sv-alarm is written per frame already oscillating (updateHUD owns the
      wave), so there is no CSS animation to keep in step with anything and the
      alarm can fade in gradually instead of switching on at a threshold. */
-  .sv-pbar-wrap { position: relative; width: 9px; height: 58px;
+  /* --- THE GLOW ----------------------------------------------------------
+     --sv-glow (0..1, written per frame) is "look at this gauge NOW": critical
+     on the way down, a real refill on the way up. See PBAR_SMOOTH.
+
+     IT LIVES ON THE TRACK, NOT ON THE FILL, and that is not a preference.
+     The fill is a full-height element squashed by scaleY(--sv-fill), and a
+     transform takes the element's shadow with it — a box-shadow there would
+     be flattened to a seventh of its height at exactly the moment the glow
+     matters most, which is a critical gauge with almost nothing left in it.
+     On the track it is the same halo whatever the bar is reading. A track's
+     own box-shadow is also drawn OUTSIDE its border box, so overflow:hidden
+     (which clips the fill and the trail) does not touch it.
+
+     THIS IS NOT THE RENDERER'S BLOOM and cannot be: the HUD is DOM sitting on
+     top of the canvas, and systems/post.js's bright pass never sees it. What
+     it is instead is the same shape bloom makes — a tight core and a wide soft
+     falloff, two shadows rather than one — plus a brightness lift on the fill
+     so the colour drives up into the halo instead of sitting flat inside it.
+
+     --sv-glow-rgb is the gauge's own colour, set per class below, so red and
+     amber halo in their own hue rather than in one shared white. */
+  /* THE HALO IS A VARIABLE, not two shadows typed into a rule, and that is
+     load-bearing rather than tidy. box-shadow is a single property: any rule
+     that restates it REPLACES the whole list, so the corner placement's own
+     rim (further down) silently deleted the glow the first time this was
+     written inline — in the placement that ships by default, which is the one
+     nobody would have thought to re-check. Both rules now end in
+     var(--sv-halo), so a placement can restate its rim without being able to
+     drop the glow. */
+  .sv-pbar-wrap {
+    --sv-halo:
+      0 0 calc(9px * var(--sv-glow, 0)) rgba(var(--sv-glow-rgb, 255,255,255), calc(0.95 * var(--sv-glow, 0))),
+      0 0 calc(26px * var(--sv-glow, 0)) rgba(var(--sv-glow-rgb, 255,255,255), calc(0.55 * var(--sv-glow, 0)));
+    position: relative; width: 9px; height: 58px;
     background: rgba(4,6,12,0.66); border-radius: 5px;
-    overflow: hidden; box-shadow: 0 0 0 1px rgba(0,0,0,0.5), inset 0 0 6px rgba(0,0,0,0.55);
-    filter: brightness(calc(1 + 0.6 * var(--sv-alarm, 0))); }
+    overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.5), inset 0 0 6px rgba(0,0,0,0.55), var(--sv-halo);
+    filter: brightness(calc(1 + 0.6 * var(--sv-alarm, 0) + 0.5 * var(--sv-glow, 0)))
+      saturate(calc(1 + 0.35 * var(--sv-glow, 0))); }
   /* SCALED, not sized, and for the same reason as the xp strip above: the fill
      is always the full track, squashed along Y by --sv-fill (a 0..1 fraction
      written every frame by updateHUD). transform-origin is the bottom, so the
@@ -526,6 +561,13 @@ const STYLES = `
      instead of a dark smear at the bottom of the track. */
   .sv-pbar-hp { background: linear-gradient(180deg, #ff6a5a, #e01023);
     box-shadow: 0 0 10px rgba(255,45,60,0.75); }
+  /* The halo hue, declared on the TRACK that holds each fill rather than on
+     the fill itself — the shadow reading it is the track's. */
+  #svHpWrap { --sv-glow-rgb: 255,70,80; }
+  #svO2Wrap { --sv-glow-rgb: 120,210,255; }
+  /* Air past the quarter mark is amber, so its halo goes amber with it, or a
+     drowning seal would be rimmed in the blue that means "fine". */
+  #svO2Wrap.sv-o2-low { --sv-glow-rgb: 255,170,60; }
   .sv-pbar-o2 { background: linear-gradient(180deg, #9fe4ff, #2f9fdd);
     box-shadow: 0 0 10px rgba(110,210,255,0.6); }
   /* AMBER, not red — and this is the reason the two gauges can sit side by
@@ -587,7 +629,8 @@ const STYLES = `
      lifted ground, both weak enough to stay out of the way of the fill. */
   .sv-playerbars-corner .sv-pbar-wrap { width: 13px; border-radius: 7px;
     background: rgba(8,13,24,0.5);
-    box-shadow: 0 0 0 1px rgba(210,226,245,0.22), inset 0 0 8px rgba(0,0,0,0.6); }
+    /* ...ending in the halo, or restating the rim here deletes the glow. */
+    box-shadow: 0 0 0 1px rgba(210,226,245,0.22), inset 0 0 8px rgba(0,0,0,0.6), var(--sv-halo); }
   .sv-playerbars-corner #svHpWrap {
     height: min(calc(var(--sv-track) * var(--sv-hp-grow, 1)), var(--sv-track-max)); }
   .sv-playerbars-corner #svO2Wrap {
@@ -1388,24 +1431,6 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
       <div class="sv-boss-track"><div class="sv-boss-fill" id="svBossFill"></div></div>
     </div>
 
-    <div class="sv-center" id="svStartMenu">
-      <div class="sv-menu">
-        <div class="sv-title">Seal Survivor</div>
-        <div class="sv-sub">
-          You are a seal. You want to eat all the fish. Sharks are your competition —
-          take them out before they take your lunch.<br/>
-          Your uneaten chum bits float to the sea floor. Swim down to collect them for XP and health.<br/>
-          Watch out for crabs! They gather in large numbers to scavenge your leftovers, and they will pinch ya.<br/>
-          And don't forget to breathe. Realistic mammal needs are in full effect.<br/><br/>
-          You fire on your own — just point. Desktop: WASD to steer, mouse to aim, hold click or Space to charge a strike.<br/>
-          Mobile: drag to aim, third finger to charge. &nbsp;·&nbsp; Gamepad: sticks to move/aim, any bumper or trigger to boost.
-        </div>
-        <div class="sv-label" id="svHighScoreLabel" style="margin-bottom:10px; display:none;">High score: <span id="svHighScore">0</span></div>
-        <button class="sv-btn" id="svStartBtn">Start run</button>
-        <div class="sv-hint">Esc pause &amp; settings &nbsp;·&nbsp; \` tuning &nbsp;·&nbsp; T textures &nbsp;·&nbsp; P screen filter &nbsp;·&nbsp; M mute &nbsp;·&nbsp; click / Space strike &nbsp;·&nbsp; hold G gamepad info</div>
-      </div>
-    </div>
-
     <div class="sv-center sv-hidden" id="svLevelUpMenu">
       <div class="sv-menu" id="svLevelUpBox">
         <div class="sv-title">Level up</div>
@@ -1484,10 +1509,10 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   for (const id of [
     'svHud', 'svHpBar', 'svO2Bar', 'svXpBar', 'svLevel', 'svTime', 'svScore',
     'svHpGhost', 'svO2Ghost', 'svHpWrap', 'svO2Wrap',
-    'svStartMenu', 'svLevelUpMenu', 'svLevelUpBox', 'svGameOverMenu', 'svCards', 'svGameOverStats',
+    'svLevelUpMenu', 'svLevelUpBox', 'svGameOverMenu', 'svCards', 'svGameOverStats',
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
     'svBossBar', 'svBossName', 'svBossFill',
-    'svHighScoreLabel', 'svHighScore', 'svCorner',
+    'svCorner',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
     'svFan', 'svSheetShare', 'svSheetSave',
     'svFlipStage', 'svCard', 'svFaceFront', 'svFaceBack',
@@ -1541,13 +1566,6 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   // the bake itself.
   warmReveals();
 
-  // The start button is unreachable now that the splash goes straight into a
-  // run, but it stays wired so the markup keeps working if it's ever shown
-  // again while the Rive menus are being built.
-  bindMenuSounds(document.getElementById('svStartBtn')).addEventListener('click', () => {
-    showHud();
-    callbacks.onStart();
-  });
   // The two turn controls. Bound here rather than from showGameOver: they are
   // part of the card's markup and never change, unlike the trophy row, which
   // only exists on a run that met a boss.
@@ -1619,12 +1637,6 @@ function markTouch(node) {
   window.matchMedia?.('(hover: none) and (pointer: coarse)')?.addEventListener?.('change', apply);
 }
 
-export function setHighScore(score) {
-  if (!el.svHighScore) return;
-  el.svHighScoreLabel.style.display = score > 0 ? '' : 'none';
-  el.svHighScore.textContent = Math.floor(score).toLocaleString();
-}
-
 // The card's backdrop, as a CSS colour. `scrim` is 0..1 — 1 is the solid panel
 // this always had, 0 is the bare ocean with only the artboard over it.
 //
@@ -1643,14 +1655,15 @@ function splashBackground() {
 // leaveSplash below, and systems/mainMenu.js). That split is the point: a name
 // is asked for once per page load, and the menu is where you come back to.
 //
-// The DOM start menu is still in the tree and still holds every instruction the
-// game has. It is no longer the boot screen, but it is reachable again from the
-// menu's "How to play" — see showHowToPlay.
+// The DOM start menu that used to live here is GONE. It was the boot screen
+// once, and then a wall of instructions on a button nobody pressed; everything
+// it explained is taught in the water now, at the moment it matters, by
+// systems/tutorial.js. The menu's three hexes are Play, Options and
+// Leaderboard, and there is no fourth screen behind any of them.
 export function showStartMenu() {
   el.svHud.classList.add('sv-hidden');
   el.svLevelUpMenu.classList.add('sv-hidden');
   el.svGameOverMenu.classList.add('sv-hidden');
-  el.svStartMenu.classList.add('sv-hidden');
 
   // `?title` — THE TITLE SHOT WITH NO CARD OVER IT, dev builds only.
   //
@@ -1753,43 +1766,6 @@ function leaveSplash() {
     return;
   }
   beginRun();
-}
-
-// ---------------------------------------------------------------------------
-// HOW TO PLAY — the old DOM start menu, shown on purpose.
-//
-// Every control, every mechanic and the high score are already written into
-// #svStartMenu, and until the 3D menu arrived nothing could reach any of it:
-// the splash went straight into a run and the panel was markup nobody saw. This
-// is that panel put back on a button rather than rewritten somewhere else.
-//
-// Its own "Start run" still starts a run, which is why there is no coordination
-// to do here — main.js tears the 3D menu down inside startGame, on every route
-// into a run rather than on this one.
-//
-// The Back button is built once, on first use, rather than written into the
-// markup: it means nothing on the boot screen this panel used to be, and the
-// day the panel is shown some third way it would be a button with nowhere to go.
-let howToBack = null;
-
-export function showHowToPlay() {
-  if (!el.svStartMenu) return;
-  if (!howToBack) {
-    howToBack = bindMenuSounds(document.createElement('button'));
-    howToBack.className = 'sv-btn sv-btn-ghost';
-    howToBack.type = 'button';
-    howToBack.textContent = 'Back';
-    howToBack.style.marginLeft = '10px';
-    howToBack.addEventListener('click', hideHowToPlay);
-    // Beside "Start run", inside the same box — the two are one row of choices
-    // and a Back floating anywhere else reads as closing the game.
-    document.getElementById('svStartBtn')?.after(howToBack);
-  }
-  el.svStartMenu.classList.remove('sv-hidden');
-}
-
-export function hideHowToPlay() {
-  el.svStartMenu?.classList.add('sv-hidden');
 }
 
 // ---------------------------------------------------------------------------
@@ -1938,7 +1914,6 @@ export function uiRoot() {
 }
 
 export function hideAllMenus() {
-  el.svStartMenu.classList.add('sv-hidden');
   // Restarting from inside the pause menu is a real route (its own button), so
   // this has to take the menu down with everything else — otherwise the new
   // run opens with the settings panel still sitting over it.
@@ -3119,13 +3094,68 @@ const PBAR_SMOOTH = {
   // it breathes once it is there.
   alarmAt: 0.34,
   alarmHz: 2.1,
+
+  // --- THE GLOW, which is a SECOND stage and not a louder first one --------
+  //
+  // `alarmAt` is "getting low": the column breathes, and a player who is busy
+  // is allowed to keep being busy. The glow below is the other end of the same
+  // sentence, and it says two different things depending on which way the
+  // needle is moving:
+  //
+  //   CRITICAL   under `criticalAt` of the bar, the gauge burns. This is
+  //              deliberately well below the breathing alarm — a warning that
+  //              starts at a third of the bar and a warning that starts at a
+  //              seventh cannot be the same warning, and running them at one
+  //              threshold means the loud one is on for most of a bad fight
+  //              and stops meaning anything.
+  //   SURGE      it is FILLING, by enough to be worth looking at. Air coming
+  //              back from a bubble or a breach, or a heal big enough to
+  //              change what you would do next.
+  //
+  // ONE channel out of the two (`--sv-glow` is their max), because they never
+  // want to be told apart: both mean "look at this gauge NOW", and a critical
+  // bar that is being refilled is exactly when the player most wants the glow,
+  // not a moment when two effects should be fighting over the same pixels.
+  criticalAt: 0.15,
+
+  // WHAT COUNTS AS A SURGE, and the two gauges are asked different questions
+  // because they ARE different questions.
+  //
+  //   hp  a chunk of at least `surgeAt` of the bar still on its way. Not a
+  //       running total of gains: health can also trickle back from a passive,
+  //       and any accumulator large enough to catch a real heal eventually
+  //       adds a 2%-a-second drip up to the same number and flashes for it.
+  //       The gap between where the bar IS and where it is HEADED is the
+  //       honest measure of "how big is the heal being lerped right now" —
+  //       a chunk opens the gap wide in one frame, and a drip never opens it
+  //       at all because the chase keeps up with it.
+  //   o2  any rise at all. Air comes back exactly two ways, a bubble and a
+  //       breach, and both are worth showing — so the test is simply whether
+  //       the tank is filling. Phrased as the direction rather than as a small
+  //       threshold on purpose: a breach refills at a rate the chase very
+  //       nearly keeps up with, leaving a gap of about 0.02 of the bar, so any
+  //       threshold low enough to catch a breach today is one retune of
+  //       `oxygenRefillRate` away from silently missing it.
+  surgeAt: { hp: 0.15 },
+  // Once the gain stops. Slow enough that a bubble popped in a scrap is still
+  // glowing when the eye gets there — a surge that lasted only while the value
+  // was literally moving would be a two-frame flicker for an instant pickup.
+  surgeFall: 2.4,
 };
 
 // Displayed values, which are NOT the game's values — see above. Seeded on the
 // first frame of a run by resetPlayerBars so a new seal doesn't have to lerp up
 // from the last one's dying health. `clock` is the wave's own phase, and the
 // only thing here that just accumulates.
-const pbar = { hp: 1, hpGhost: 1, o2: 1, o2Ghost: 1, clock: 0 };
+const pbar = {
+  hp: 1, hpGhost: 1, o2: 1, o2Ghost: 1, clock: 0,
+  // Last frame's displayed value, so a gain can be measured at all; the running
+  // total of the gain in progress; and the glow it earned.
+  // Last frame's TRUE fraction, so a rise can be spotted at all, and the glow
+  // each gauge has earned.
+  hpPrev: 1, o2Prev: 1,
+  hpSurge: 0, o2Surge: 0,
+};
 
 /** Frame-rate-independent chase toward `target`, `rate` in units per second. */
 function chase(current, target, rate, dt) {
@@ -3151,12 +3181,36 @@ function stepBar(key, frac, dt, fillEl, ghostEl, wrapEl) {
   // Clamped to the fill's own floor: a trail below the fill is invisible
   // anyway, and letting it go there makes the pale band flicker on a heal.
   if (ghostEl) ghostEl.style.setProperty('--sv-fill', Math.max(cur, pbar[gk]).toFixed(4));
+  // --- THE SURGE ------------------------------------------------------------
+  // See the note on surgeAt: a gauge with a threshold asks how big the chunk
+  // still arriving is, and one without asks only whether it is filling.
+  const pk = `${key}Prev`;
+  const sk = `${key}Surge`;
+  const climbing = frac > pbar[pk] + 1e-9;
+  pbar[pk] = frac;
+  const threshold = s.surgeAt[key];
+  // `frac - cur` is what the bar has left to travel, which on the frame a heal
+  // lands IS the size of that heal — the chase has not eaten any of it yet.
+  const surging = threshold == null ? climbing : frac - cur >= threshold;
+
+  // HELD AT FULL WHILE THE GAIN IS STILL ARRIVING, rather than fired once and
+  // left to decay from the moment it triggered. A breach is a refill that
+  // lasts as long as the seal stays up, and a glow that began decaying on the
+  // first frame of it would be dimmest at the surface — the one moment the
+  // gauge is reporting something good.
+  pbar[sk] = surging ? 1 : chase(pbar[sk], 0, s.surgeFall, dt);
+
   if (wrapEl) {
     const alarm = Math.max(0, Math.min(1, (s.alarmAt - cur) / s.alarmAt));
     // Written already oscillating — CSS owns no clock here, so the pulse can
     // fade in with the danger instead of switching on at a threshold.
     const wave = 0.5 + 0.5 * Math.sin(pbar.clock * Math.PI * 2 * s.alarmHz);
     wrapEl.style.setProperty('--sv-alarm', (alarm * wave).toFixed(4));
+    // Critical burns steadily; the surge burns on the way up. The larger wins,
+    // so a bubble popped on an empty tank reads as one bright event rather
+    // than two effects interfering.
+    const critical = Math.max(0, Math.min(1, (s.criticalAt - cur) / s.criticalAt));
+    wrapEl.style.setProperty('--sv-glow', Math.max(critical, pbar[sk]).toFixed(4));
   }
 }
 
@@ -3171,6 +3225,11 @@ function stepBar(key, frac, dt, fillEl, ghostEl, wrapEl) {
 export function resetPlayerBars() {
   pbar.hp = 1; pbar.hpGhost = 1; pbar.o2 = 1; pbar.o2Ghost = 1;
   pbar.clock = 0;
+  // The surge detector's memory goes with them. `prev` in particular: left at
+  // a dying run's 0.05 it would read the reseed to full as a 95% heal and open
+  // every run with both gauges blazing.
+  pbar.hpPrev = 1; pbar.o2Prev = 1;
+  pbar.hpSurge = 0; pbar.o2Surge = 0;
   // THE RUN'S OWN BASELINE, cleared so the next run takes its own. The corner
   // placement draws a column whose LENGTH is the seal's maximum measured
   // against what it started with, and "what it started with" is a fact about
@@ -3290,7 +3349,12 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
 
   const o2Frac = Math.max(0, Math.min(1, player.oxygen / Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max)));
   const hpFrac = Math.max(0, Math.min(1, player.hp / Math.max(1, player.stats.maxHp)));
+  // On the FILL (which paints amber) and on the TRACK around it (whose halo
+  // has to go amber with it). Two elements rather than one :has() selector:
+  // the class is already being written here, and a parent-matching selector
+  // would put the same fact somewhere a harness cannot read it back.
   el.svO2Bar.classList.toggle('sv-o2-low', o2Frac < 0.25);
+  el.svO2Wrap?.classList.toggle('sv-o2-low', o2Frac < 0.25);
 
   // Clamped rather than trusted: a tab that was in the background for a minute
   // comes back with one enormous frame, and an unclamped exponential over it
@@ -3730,7 +3794,7 @@ export function popupPose(kind, age, lifeOverride = null) {
 // This lives here rather than in the panel because what "show the score card"
 // safely means is this module's business, not a tuning panel's — see the run
 // that is deliberately made unpostable below.
-export const PREVIEW_SCREENS = ['clear', 'start', 'HUD', 'cards', 'score card'];
+export const PREVIEW_SCREENS = ['clear', 'HUD', 'cards', 'score card'];
 
 export function previewScreen(name) {
   if (!el.svHud) return;
@@ -3739,12 +3803,7 @@ export function previewScreen(name) {
   hideAllMenus();
   el.svHud.classList.add('sv-hidden');
 
-  if (name === 'start') {
-    // The element, not showStartMenu() — that function's job is to run the
-    // Rive splash and then START THE RUN, which is not what "let me look at
-    // the start menu's type" should do.
-    el.svStartMenu.classList.remove('sv-hidden');
-  } else if (name === 'HUD') {
+  if (name === 'HUD') {
     showHud();
   } else if (name === 'cards') {
     // A real deal, the same one Shift+L gives: the tiers are rolled for the
@@ -4133,10 +4192,13 @@ function renderRunDetail(gameState) {
   // long bar and three slivers, and four bars in a dead heat.
   const dealt = a.abilities.filter((r) => r.damage > 0).sort((x, y) => y.damage - x.damage);
   const top = dealt[0]?.damage ?? 0;
-  // The weapon that finished the last boss, tagged in the table. The same
-  // string that is stamped on the polaroid (see systems/boss.js) — one answer,
-  // two places, so the print and the table cannot name different weapons.
-  const finisher = bossShot()?.cause ?? '';
+  // The weapon that finished the last boss, tagged in the table. Matched on the
+  // SOURCE KEY and not on the printed name: a weapon can be renamed mid-run
+  // (see weaponName.js), so the polaroid carries what it was called at the
+  // moment of the kill while this table shows what it ended the run as, and
+  // comparing those two strings would silently stop finding the row the day
+  // somebody picked up Cloned Pebbles.
+  const finisher = bossShot()?.causeSource ?? '';
 
   if (!dealt.length) {
     brkEmpty(weapons, 'Nothing was damaged this run.');
@@ -4146,12 +4208,15 @@ function renderRunDetail(gameState) {
     list.className = 'sv-brk';
     for (const r of dealt) {
       list.appendChild(brkRow({
-        name: r.label,
+        // What the run called it, not what the ledger calls it. analyzeRun is
+        // import-free on purpose and cannot see the player's picks, so the
+        // build-aware name is applied here, at the one place a person reads it.
+        name: weaponName(r.source),
         // Picks, not stack-minutes: "×4" is what the player recognises from
         // the cards they took. The baseline pick Fin Pebbles gets for free is
         // in that count, which is honest — it is a stack you have.
         note: r.stacks > 0 ? `×${r.stacks}` : '',
-        tag: finisher && r.label === finisher ? 'Final blow' : '',
+        tag: finisher && r.source === finisher ? 'Final blow' : '',
         a: compactDamage(r.damage),
         b: String(r.kills ?? 0),
         share: top > 0 ? (r.damage / top) * 100 : 0,
@@ -4598,10 +4663,6 @@ async function submitPendingRun() {
   setStatus(isGlobal() ? 'Posting…' : 'Saving…');
 
   const result = await submitScore({ ...run, name });
-
-  // The local board is what the start menu's high score reads from, and
-  // submitScore always writes there — so this is right either way.
-  setHighScore(highScore());
 
   el.svNameRow.classList.add('sv-hidden');
   renderBoard(result.list, { global: result.global, result });

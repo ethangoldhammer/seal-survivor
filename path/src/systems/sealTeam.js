@@ -262,10 +262,22 @@ function updateEvolvedFire(t, dt, cfg, enemies, scene, hooks) {
 // evolved volley) were all silent. Separate hooks because each wants a
 // different weight: the lunge is a wind-up, the ram is the hit, and the
 // volley repeats forever.
-export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {}) {
+/**
+ * @param extra escorts bought by Entourage rather than by Seal Team. Its own
+ *              argument and NOT added to `level`, which also buys damage and
+ *              decides the evolve threshold — a card that reads "+1 orbiting
+ *              companion" must not quietly hand out contact damage, or trip an
+ *              EVOLVE the player never levelled to.
+ */
+export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {}, extra = 0) {
   clock += dt;
 
-  const want = level > 0 ? Math.min(level, CONFIG.sealTeam.maxSeals) : 0;
+  // The cap moves with the extras. `maxSeals` is the ceiling on what SEAL TEAM
+  // can buy — it is the same 6 as the card's own maxStacks — so leaving it
+  // fixed would make Entourage a dead pick for exactly the run that most wants
+  // it, which is the run that maxed the squad.
+  const bonus = Math.max(0, Math.floor(extra));
+  const want = level > 0 ? Math.min(level + bonus, CONFIG.sealTeam.maxSeals + bonus) : 0;
   resize(scene, want, playerPos);
   if (want === 0) return;
 

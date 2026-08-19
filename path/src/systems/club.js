@@ -7,9 +7,9 @@ import { spawnProjectile } from '../entities/projectiles.js';
 import { chillEnemy } from './elements.js';
 import { orbitTarget, springFollow } from './orbit.js';
 import { player } from '../entities/player.js';
-import { projectileCount } from '../stats.js';
-import { abilityDamage, aoe, targeting } from './scaling.js';
-import { canHold } from './control.js';
+import { projectileCount, orbiterCount } from '../stats.js';
+import { abilityDamage, aoe, targeting, companionScale } from './scaling.js';
+import { canHold, isDazed } from './control.js';
 import { recordControl } from './playtest.js';
 import { hitCreatureSegment } from './hitShape.js';
 
@@ -80,6 +80,14 @@ let assistClock = 0;
 // the note above clubOrbiters for why the orbiting clubs are allowed one when
 // the fin clubs emphatically are not.
 let orbitClock = 0;
+// THE SEAL'S OWN ACCELERATION, measured once a frame and shared by every club.
+// Per FRAME rather than per club because there is one animal: both flippers
+// are carried by the same body, and computing it twice would be two chances to
+// measure it differently. `valid` is false on the first frame of a run and
+// after a reset, where there is no previous velocity to difference against and
+// the honest answer is "no acceleration known" rather than a made-up one.
+const bodyAccel = { x: 0, y: 0, valid: false };
+const _prevVel = { x: 0, y: 0, valid: false };
 
 // THE FOUR KINDS OF CLUB, in the order they are checked for a run that somehow
 // arrives holding several at once (a debug jump, a harness). The order a run
@@ -190,11 +198,39 @@ export function clubAssetsFor(levels = {}) {
  * is a companion that happens to be made of wood, and pretending otherwise
  * would mean a ring that goes limp whenever the seal swims in a straight line.
  */
-export function clubOrbiters(levels = {}) {
+export function clubOrbiters(levels = {}, bonus = 0) {
   const out = [];
   for (const t of clubTypesFor(levels).slice(1)) {
     for (let i = 0; i < t.level; i++) out.push(t.asset);
   }
+  // CLONE WARZ AND ENTOURAGE BOTH SPIN UP MORE OF THEM. The ring is one count
+  // the player owns, so each card adds to it exactly the way it adds a shrimp
+  // or a pellet. Both have a fair claim: these are clubs you swing (Clone
+  // Warz) and they are things that circle you (Entourage), and the same
+  // overlap exists on the shrimp ring for the same reason.
+  //
+  // Summed by the CALLER into one `bonus` rather than read here, so this stays
+  // a function of its arguments and the harness can ask it questions.
+  //
+  // ONCE FOR THE RING, not once per orbiting type. Two types on the ring is
+  // still one thing the player is looking at, and paying the bonus per type
+  // would make a card that reads "+1 of everything you fire" worth +2 or +3
+  // here depending on a detail nothing on screen explains.
+  //
+  // And nothing when the ring is empty, which is projectileCount's own rule
+  // rather than a guard written again here: a run holding one club type has
+  // no ring, and +1 of nothing is nothing.
+  const base = out.length;
+  const want = orbiterCount(base, { orbiterBonus: Math.max(0, Math.floor(bonus)) });
+  // The extras walk the orbiting types in turn, so a run whose ring is a Keg
+  // and a Snap gets one more of each rather than two more of whichever
+  // happened to be first. Indexed off `base` and NOT off `out.length`, which
+  // is growing inside this very loop — the live length would re-read clubs the
+  // bonus had just added and the pattern would double back on itself.
+  //
+  // `base === 0` cannot reach here: orbiterCount returns 0 for a base of 0,
+  // which is the rule that stops a card adding to a count you do not own.
+  for (let i = base; i < want; i++) out.push(out[i % base]);
   return out;
 }
 
@@ -249,6 +285,21 @@ function addClub(asset = 'club', mount = 'fin') {
     // do not move together.
     angle: 0,
     angVel: 0,
+    // CARRY-THROUGH STATE. Where this club's flipper pointed last frame, so
+    // the fin's rotation can be MEASURED rather than asked for — nothing
+    // upstream publishes a rate, and a weapon that took one as an argument
+    // would be a weapon trusting its caller about how hard the animal moved.
+    // (The body's half of the carry is per-FRAME, not per club — see
+    // `bodyAccel`.)
+    prevFinAt: null,
+    // THE PEAK TRACKER, for the shockwave. `prevSwing` is last frame's angular
+    // speed and `rising` says which way it was going — a peak is the frame
+    // those two disagree. Cooldown is per club.
+    prevSwing: 0,
+    rising: false,
+    shockLeft: 0,
+    // Counts down after this socket is (re)primed. See the guard in updateClub.
+    armLeft: 0,
     // THE SOCKET. A club is either in the fin or it isn't: the Hurler throws
     // the actual clubs off the flippers, and until they come back this fin has
     // nothing to swing. `armed` false means no mesh, no hitbox, no swing.
@@ -331,6 +382,58 @@ function syncSockets(spec) {
 //
 // Exported so the tuner readout and the card text can ask the same functions
 // the weapon itself uses, rather than re-deriving the curve and drifting.
+
+// --- THE BOUNCER, the card that buys the whole class at once -----------------
+//
+// Three multipliers read live off the stat block, in the shape systems/
+// scaling.js established and for the same reason: a run without the card
+// multiplies by 1, so every call site below applies them unconditionally
+// instead of branching on whether it was taken.
+//
+// Local to this file rather than in scaling.js because scaling.js is for
+// numbers a DOZEN systems share, and these three belong to one weapon. The
+// point of that file is that a cross-cutting stat name appears exactly once;
+// putting a club-only stat there would make it look cross-cutting.
+//
+// They reach every club in the run on purpose — the swing, the caroms, the
+// blast, the ice, the shockwave, the ring, and the thrown one. "All of them"
+// is what the card says, and a multiplier that quietly skipped the ricochet
+// would be a card that gets weaker the more you lean into the class.
+
+/**
+ * IS THIS BODY ALREADY SET UP FOR THE SWING?
+ *
+ * One question with three fields behind it, and deliberately not six with an
+ * ability name each. systems/control.js owns what "held" means in this game —
+ * `trapTimer` for inert, `charmTimer` for fighting on your side, and a DAZE
+ * for the boss, which is what all six holds turn into when the creature is too
+ * big to be switched off. A seventh hold added tomorrow routes through that
+ * file and lands here without anyone remembering to add it.
+ *
+ * The daze is not an afterthought. Every hold in the game is refused on a boss,
+ * so a rule written against `trapTimer` alone would be a synergy that reads
+ * well on the card and does nothing at all in the one fight the run is built
+ * around.
+ */
+function teedUp(e) {
+  if (!CONFIG.club.teed?.enabled) return false;
+  return (e?.trapTimer ?? 0) > 0 || (e?.charmTimer ?? 0) > 0 || isDazed(e);
+}
+
+/** Damage multiplier on everything a club does. */
+function clubPower() {
+  return player.stats?.clubDamageMul ?? 1;
+}
+
+/** Shove multiplier on everything a club does. */
+function clubKnock() {
+  return player.stats?.clubKnockMul ?? 1;
+}
+
+/** Reach multiplier — the shaft, and with it the drawing. */
+function clubReach() {
+  return player.stats?.clubReachMul ?? 1;
+}
 
 /** What one connecting swing hits for. */
 export function clubDamage(level) {
@@ -425,16 +528,29 @@ export function clubSwingSpeed() {
  * blend so a club still reads as being HELD rather than as hanging off a
  * string. Returns an absolute angle.
  */
-function flopTarget(finAt, vx, vy, angVel) {
+function flopTarget(finAt, vx, vy, angVel, finVel = 0) {
   const c = CONFIG.club;
   const speed = Math.hypot(vx, vy);
   // Where the flipper is pointing, or straight down if there is no rig to ask.
   const held = finAt ?? -Math.PI / 2;
 
+  // A FLIPPER BEING SWUNG BEATS THE WATER. The drag below is what happens to a
+  // club nobody is doing anything with; a fin actively turning is doing work,
+  // and the arm wins that argument. Without this the weapon contradicts
+  // itself at exactly the moment it should pay out: at sprint the drag target
+  // is pinned flat behind the animal and the spring chases it hard enough that
+  // spinning the fins produced almost no swing at all (measured: 4.9 rad/s at
+  // full speed against 23 at rest, for the same fin). A player told to work
+  // the fins while swimming would have been told to do the one thing that
+  // stopped working the faster they went.
+  //
+  // `finAuthority` is the fin rate at which the water's share is fully gone.
+  const authority = Math.min(1, Math.abs(finVel) / Math.max(1e-3, c.finAuthority ?? 8));
+
   // How completely the water wins, 0..1. Ramped rather than switched: a seal
   // easing into a swim should see its clubs ease backward, not snap.
   const pull = speed < 1e-4 ? 0
-    : Math.min(1, speed / Math.max(1e-3, c.dragFullSpeed)) * c.velocityFollow;
+    : Math.min(1, speed / Math.max(1e-3, c.dragFullSpeed)) * c.velocityFollow * (1 - authority);
   // Blended the short way round, or a club whose drag target has just crossed
   // the seam takes the long way and visibly rotates through the animal.
   let target = pull > 0 ? held + wrapAngle(Math.atan2(-vy, -vx) - held) * pull : held;
@@ -500,7 +616,10 @@ export function clubBlast(level) {
   const c = CONFIG.clubBoom;
   if (!c?.enabled || !(level > 0)) return null;
   return {
-    damage: abilityDamage(c.damage + c.damagePerLevel * (level - 1)),
+    // The Bouncer reaches the blast too — see clubPower. The RADIUS is left to
+    // aoe() alone: how far an explosion reaches is Splash Zone's stat, and a
+    // club card quietly widening blasts would be one card doing another's job.
+    damage: abilityDamage((c.damage + c.damagePerLevel * (level - 1)) * clubPower()),
     radius: aoe(c.radius + c.radiusPerLevel * (level - 1)),
   };
 }
@@ -533,8 +652,65 @@ function detonate(scene, x, y, blast, enemiesList, exclude, hooks) {
     if (dx * dx + dy * dy > blast.radius * blast.radius) continue;
     caught.push(other);
   }
-  for (const other of caught) hurt(scene, other, blast.damage, enemiesList, hooks);
+  // TAGGED AS THE BOOM'S OWN, not the club's. Powder Keg is a separate pick
+  // with a separate damage number, and every point of it was being filed under
+  // `club` — which is why the balance report has the Driftwood Club returning
+  // 4.91x, ahead of everything in the game by a distance, and no Powder Keg row
+  // at all across forty runs. One card was wearing two cards' output.
+  for (const other of caught) hurt(scene, other, blast.damage, enemiesList, hooks, null, 'clubBoom');
   hooks.onBlast?.(x, y, blast.radius, caught.length);
+  return caught.length;
+}
+
+/**
+ * THE HEAD CRACKS THE WATER at the top of a swing.
+ *
+ * A pressure wave out of the club head — damage and a hard outward shove in a
+ * circle, with no requirement that the swing connected with anything. That is
+ * the whole point of it: the swing's own damage needs a body inside its arc,
+ * and this is what a swing is worth when the arc was empty.
+ *
+ * Victims are collected before any of them are hurt, for the same reason
+ * detonate() does it — hurt() splices the dead out of `enemiesList` on the
+ * spot, and a wave that killed as it scanned would shift the array under its
+ * own loop.
+ *
+ * Shoves rather than launches. A launch is a HOLD (see the note where the
+ * swing launches a body) and a wave that put half a school into flight would
+ * cancel the caroms the club is actually bought for; a shove is the shared
+ * channel every creature already answers to, and it is what "pressure" means.
+ */
+function shockwave(scene, x, y, radius, damage, knock, enemiesList, hooks) {
+  const caught = [];
+  for (const e of enemiesList) {
+    const dx = e.mesh.position.x - x;
+    const dy = e.mesh.position.y - y;
+    if (dx * dx + dy * dy > radius * radius) continue;
+    caught.push(e);
+  }
+  for (const e of caught) {
+    const dx = e.mesh.position.x - x;
+    const dy = e.mesh.position.y - y;
+    const d = Math.hypot(dx, dy);
+    // Falls off toward the rim, or a body at the edge of the wave leaves as
+    // hard as one standing on the head and the whole thing reads as a circle
+    // of wind rather than as something cracking outward from a point.
+    const falloff = 1 - Math.min(1, d / Math.max(1e-3, radius));
+    // Outward from the head. A body sitting exactly on it has no direction to
+    // be pushed along, so it is left to the damage alone rather than being
+    // shoved along an arbitrary axis.
+    //
+    // NOT ONTO A BODY ALREADY IN THE AIR. Its position is being written by
+    // hand every frame (see updateFlights) and knockX/knockY is integrated on
+    // top of that by enemies.js — two writers on one body, which is the bug
+    // class this file already avoids everywhere else. It also settles the
+    // mass argument: the flight follows the club's own rule, and letting the
+    // shove pile the ram's heavy-survivor boost on top would invert it.
+    const flying = !!flightFor(e);
+    if (knock > 0 && d > 1e-4 && !flying) applyKnockback(e, dx / d, dy / d, knock * (0.4 + 0.6 * falloff));
+    hurt(scene, e, damage * (0.5 + 0.5 * falloff), enemiesList, hooks);
+  }
+  hooks.onShock?.(x, y, radius, caught.length);
   return caught.length;
 }
 
@@ -585,7 +761,7 @@ function land(f) {
  * index captured earlier in the frame may already have been invalidated by an
  * earlier kill in the same frame.
  */
-function hurt(scene, e, dmg, enemiesList, hooks, at = null) {
+function hurt(scene, e, dmg, enemiesList, hooks, at = null, source = null) {
   e.hp -= dmg;
   e.flash = CONFIG.fx.hitFlash;
   e.hitThisFrame = true;
@@ -593,7 +769,11 @@ function hurt(scene, e, dmg, enemiesList, hooks, at = null) {
   // doesn't — a detonation catching a body several metres away has no contact
   // point on it — and passes nothing, which leaves the feedback where it has
   // always been: on the creature.
-  hooks.onEnemyDamaged?.(e, dmg, at?.x, at?.y, null, null, at);
+  // `source` LAST, the same shape systems/beams.js passes and for the same
+  // reason: several cards deal damage through this one function, and a tag
+  // fixed at the hook in main.js files all of them under the base club. Null
+  // means "whatever the caller is bound to", which is the swing and the carom.
+  hooks.onEnemyDamaged?.(e, dmg, at?.x, at?.y, null, null, at, source);
   if (e.hp > 0) return false;
 
   hooks.onEnemyKilled?.(e);
@@ -677,6 +857,25 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   const vy = velocity?.y ?? 0;
   const speed = velocity ? Math.hypot(vx, vy) : (motion.speed ?? 0);
 
+  // HOW HARD THE ANIMAL JUST CHANGED DIRECTION. Differenced from last frame's
+  // velocity, clamped as a VECTOR rather than per axis — a per-axis clamp
+  // turns one impossible acceleration into a plausible one pointing somewhere
+  // else, which is worse than the spike it was catching. See `bodyCarry`.
+  bodyAccel.valid = false;
+  if (_prevVel.valid && dt > 0) {
+    let ax = (vx - _prevVel.x) / dt;
+    let ay = (vy - _prevVel.y) / dt;
+    const mag = Math.hypot(ax, ay);
+    const cap = c.bodyCarryMax ?? 260;
+    if (mag > cap) { ax = ax / mag * cap; ay = ay / mag * cap; }
+    bodyAccel.x = ax;
+    bodyAccel.y = ay;
+    bodyAccel.valid = true;
+  }
+  _prevVel.x = vx;
+  _prevVel.y = vy;
+  _prevVel.valid = true;
+
   // One club per fin tip the model actually publishes. A rig with no fins (a
   // ship model that never had them, or a model still loading) leaves the
   // weapon with nothing to hang off, which is a silent no-op by design — the
@@ -695,7 +894,12 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   const owned = { club: Math.floor(lv.club ?? 0), boom: boomLv, ice: iceLv, throw: throwLv };
   noteTypes(owned);
   const finAsset = clubAssetsFor(owned);
-  const orbiters = clubOrbiters(owned);
+  // Clone Warz AND Entourage reach the ring — see clubOrbiters for why both
+  // have a claim on it. Read live off the stat block for the reason scaling.js
+  // spells out: recomputeStats REPLACES the object on every level-up, so
+  // anything captured earlier is scaling by an old run.
+  const orbiters = clubOrbiters(owned,
+    (player.stats?.projectileBonus ?? 0) + (player.stats?.orbiterBonus ?? 0));
   const spec = [];
   for (let i = 0; i < tips.length; i++) spec.push({ asset: finAsset[i % finAsset.length], mount: 'fin' });
   for (const asset of orbiters) spec.push({ asset, mount: 'orbit' });
@@ -711,9 +915,12 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
 
   assistClock += dt;
   orbitClock += dt;
-  const length = clubLength(level);
-  const headRadius = c.headRadius;
-  const damage = abilityDamage(clubDamage(level));
+  // The Bouncer's three multipliers land here, once, on the numbers the whole
+  // frame is built out of — rather than at each of the eight places a club
+  // number is finally spent, which is eight chances to miss one.
+  const length = clubLength(level) * clubReach();
+  const headRadius = c.headRadius * clubReach();
+  const damage = abilityDamage(clubDamage(level) * clubPower());
   const ring = c.orbit ?? {};
   const ringCount = clubsOrbiting();
 
@@ -769,14 +976,58 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
 
       // WHERE IT WANTS TO LIE: dragged out behind the seal's travel, eased back
       // toward the flipper's own direction as the animal slows. See flopTarget.
-      const finAt = finAngle(rig, i, tips[i], playerPos);
-      // `assistSpin` adds a slow turn of its own on top of that. It exists so
-      // the weapon still swings on a rig whose flippers only ever point at the
-      // cursor, on a run where the player is barely moving — set it to 0 once
-      // the fins drive themselves and the flop is purely the water's.
+      // `assistSpin` is a dial that ships at 0 — see the note on it in
+      // config.js. Everything that actually turns this club now arrives as
+      // momentum below rather than as a target it can settle onto.
       // (the sag lives in flopTarget, blended against the drag rather than
       // applied on top of it — see the comment there)
-      target = flopTarget(finAt, vx, vy, club.angVel) + assistClock * c.assistSpin;
+      const finAt = finAngle(rig, i, tips[i], playerPos);
+      // HOW FAST THE FLIPPER ITSELF IS TURNING, measured frame to frame and
+      // wrapped, or a fin crossing the -PI/+PI seam reports a six-radian jump
+      // and reads as the hardest swing of the run. Used twice below: it is
+      // what overrides the water in flopTarget, and it is the fin's half of
+      // the carry-through.
+      const finVel = (finAt != null && club.prevFinAt != null && dt > 0)
+        ? wrapAngle(finAt - club.prevFinAt) / dt
+        : 0;
+      target = flopTarget(finAt, vx, vy, club.angVel, finVel) + assistClock * c.assistSpin;
+
+      // ------------------------------------------------------------------
+      // CARRY-THROUGH. The two places the animal's own movement becomes
+      // angular momentum in the wood. Added to the VELOCITY, not to the
+      // target: a target is a place the club settles at and stops, and the
+      // whole difference between a weapon and a prop is what happens after
+      // the cause has gone.
+      // ------------------------------------------------------------------
+
+      // 1. THE FLIPPER TURNING, as momentum. Measured above, because the rig
+      //    publishes a tip POSITION and not a rate — nothing upstream knows
+      //    how fast the flipper is going, so the weapon has to find out.
+      club.angVel += finVel * c.finCarry * dt;
+      club.prevFinAt = finAt;
+
+      // 2. THE SEAL CHANGING DIRECTION. A weight on the end of something whose
+      //    anchor accelerates sideways swings — the pendulum in a braking car
+      //    — so the torque is the shaft crossed against that acceleration,
+      //    over the lever arm. Zero on a straight line at any speed, by
+      //    construction: no change of direction, no acceleration, no torque.
+      //    That is the whole point of feeding it acceleration rather than
+      //    speed, and it is what makes carving worth doing.
+      //
+      //    Read off the SEAL'S VELOCITY and not off the grip's, which is the
+      //    obvious implementation and the wrong one. A fin tip orbits the
+      //    body, so a grip is centripetally accelerating whenever the flipper
+      //    turns — the term then double-counts the fin (which `finCarry`
+      //    already has) and, worse, that acceleration points straight down the
+      //    shaft, so a fast spin flings the club outward into line with the
+      //    flipper and the trail DISAPPEARS at exactly the speed it should be
+      //    largest. Measured this way it is purely the animal's own momentum.
+      if (bodyAccel.valid) {
+        const armLen = Math.max(0.2, length);
+        const dx = Math.cos(club.angle);
+        const dy = Math.sin(club.angle);
+        club.angVel += (dx * bodyAccel.y - dy * bodyAccel.x) / armLen * c.bodyCarry * dt;
+      }
     }
 
     if (!club.primed) {
@@ -784,6 +1035,12 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       // or every new club swings once across the whole screen on spawn.
       club.angle = target;
       club.angVel = 0;
+      // ...and it may not crack the water until it has settled — see the
+      // shockwave guard below. Set here rather than at each of the four places
+      // that clear `primed`, so a fifth one cannot forget.
+      club.armLeft = c.shock?.armTime ?? 0;
+      club.prevSwing = 0;
+      club.rising = false;
     }
 
     // THE FLAIL. A loose angular spring chasing the flipper. The error is
@@ -811,7 +1068,20 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     // player cannot see the water through — and the reach follows the drawing
     // rather than being set beside it, so the hitbox and the mesh can never
     // disagree about how long the stick is.
-    const reach = length * (orbiting ? (ring.scale ?? 1) : 1);
+    //
+    // BIG RIGZ REACHES BOTH, and by different amounts. An orbiting club IS a
+    // companion in everything but the stat it was reading — it circles the
+    // seal, it hits what it passes through, and it is exactly the thing that
+    // card is about — so it takes the multiplier whole, mesh and hitbox
+    // together, which is the promise Big Rigz already makes elsewhere.
+    //
+    // A club in a FIN takes a share of it (`bigRigShare`). Some, because a
+    // bigger seal carrying the same little stick reads wrong; only some,
+    // because the fin club's reach is its balance — it is the melee range of
+    // the weapon — and handing a companion-size card full control of it would
+    // let one upgrade quietly rewrite how close you have to get.
+    const bigRig = 1 + (companionScale() - 1) * (orbiting ? 1 : (c.bigRigShare ?? 0));
+    const reach = length * (orbiting ? (ring.scale ?? 1) : 1) * bigRig;
 
     club.prevHead.copy(club.primed ? club.head : _pivot);
     club.head.set(_pivot.x + dirX * reach, _pivot.y + dirY * reach, _pivot.z);
@@ -838,7 +1108,59 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     // a readout of the animation rather than a system with its own tempo.
     const swing = Math.abs(club.angVel);
     const power = Math.min(c.powerMax, swing / Math.max(1e-3, c.powerReference));
-    const launchSpeed = c.launchSpeed * power * (dashing ? c.dashLaunchMul : 1);
+    // `launchKnockMul` is the club's extra knockback for everything the launch
+    // WILL take — the other half of `knock`, which only ever reaches bodies
+    // the launch refuses. Raised here rather than by editing `launchSpeed`
+    // because the two are different claims: launchSpeed is how hard this
+    // weapon throws, and this is how much harder the class throws than it used
+    // to. The Bouncer multiplies it like every other club number.
+    const launchSpeed = c.launchSpeed * power * (dashing ? c.dashLaunchMul : 1)
+      * (c.launchKnockMul ?? 1) * clubKnock();
+
+    // ---------------------------------------------------------------------
+    // THE SHOCKWAVE, at the PEAK of the swing.
+    //
+    // A peak is the frame the club's angular speed stops climbing and starts
+    // falling, which is the moment the head is travelling fastest and the
+    // exact instant a real swing "lands" whether or not there was anything
+    // there to land on. Fired off the peak rather than off a threshold being
+    // crossed, because a threshold fires on the way UP — half a swing early,
+    // with the club still accelerating and nowhere near where it will be.
+    //
+    // FINS ONLY. An orbiter turns at a rate the ring chose and never peaks at
+    // all, so the detector below would only ever answer numerical noise on
+    // one — and more to the point, this is the payout for a movement the
+    // player performed, and an orbiter performs nothing.
+    club.shockLeft = Math.max(0, club.shockLeft - dt);
+    const sh = c.shock;
+    // A CLUB THAT HAS JUST APPEARED CANNOT CRACK THE WATER. A fresh socket, a
+    // club coming back from a throw, and a club swapped by a level-up all
+    // start on their rest target and are then handed the real one, which is a
+    // discontinuity the spring answers with a single very fast frame. That is
+    // not a swing anybody performed, and without this guard every run opens
+    // with two free shockwaves and every Hurler respawn buys another.
+    if (club.armLeft > 0) club.armLeft = Math.max(0, club.armLeft - dt);
+    if (sh?.enabled && !orbiting && club.armLeft <= 0) {
+      const rising = swing > club.prevSwing;
+      if (club.rising && !rising && club.prevSwing >= sh.minSwing && club.shockLeft <= 0) {
+        const peak = club.prevSwing;
+        // How far past the bar this swing got, 0..1. A peak that only just
+        // qualified is a small crack; one at `fullSwing` is the whole thing.
+        const t = Math.min(1, (peak - sh.minSwing)
+          / Math.max(1e-3, sh.fullSwing - sh.minSwing));
+        const grade = 0.6 + 0.4 * t;
+        const radius = aoe(sh.radius * grade);
+        const dmg = abilityDamage((sh.damage + sh.damagePerLevel * Math.max(0, level - 1)) * grade)
+          * clubPower();
+        // From `prevHead` — where the head was ON the peak frame, not where it
+        // has already decelerated to by the time this runs.
+        shockwave(scene, club.prevHead.x, club.prevHead.y, radius,
+          dmg, sh.knock * clubKnock() * grade, enemiesList, hooks);
+        club.shockLeft = sh.cooldown;
+      }
+      club.rising = rising;
+      club.prevSwing = swing;
+    }
 
     for (const [enemy, t] of club.cooldowns) {
       const left = t - dt;
@@ -915,6 +1237,20 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       const ey = clubContact.y;
 
       club.cooldowns.set(e, c.contactCooldown);
+
+      // TEED UP — this body was already held, charmed or dazed when the wood
+      // arrived. See teedUp: it is the payout for every crowd-control ability
+      // in the game, collected by the one weapon that cares where things are
+      // standing. `minPower` puts a floor under the swing so a set-up shot is
+      // not thrown away on a lazy frame — the work was done before the swing.
+      const teed = teedUp(e);
+      const tc = c.teed ?? {};
+      const hitPower = teed ? Math.max(power, tc.minPower ?? 0) : power;
+
+      // Its own event, so the player can SEE that the setup paid. Fired before
+      // the whack rather than after, so the two read as one blow with an
+      // accent on it rather than as two hits.
+      if (teed) hooks.onTeed?.(ex, ey, swing);
       hooks.onWhack?.(ex, ey, swing);
 
       // THE RIDERS, before the damage. Ice first so a body that dies to the
@@ -927,36 +1263,52 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       // Scaled by how hard this club is actually travelling. A clip through a
       // school at full whip hits for the card's number; a lazy drift into one
       // fish does a fraction of it.
-      const died = hurt(scene, e, damage * power, enemiesList, hooks, clubContact);
+      const died = hurt(scene, e, damage * hitPower * (teed ? (tc.damageMul ?? 1) : 1),
+        enemiesList, hooks, clubContact);
       if (blastHere) detonate(scene, ex, ey, blastHere, enemiesList, died ? null : e, hooks);
       if (died) continue;
-
-      // THE SHOVE, and it lands on EVERYTHING — before the launch check
-      // below, not after it. That ordering is the whole point: the launch is
-      // refused for half the roster (see canHold), so a boss took a club
-      // across the jaw and did not move, and the one weapon in the game whose
-      // read is "things leave when you hit them" was the weapon that bounced
-      // off the animal the run is built around. Knockback is explicitly what a
-      // boss stays open to — systems/control.js draws that line and this stays
-      // the right side of it.
-      //
-      // Along the same vector the launch would have used, so on a body that
-      // gets both they add rather than fight, and scaled by the swing's power
-      // like everything else in this file.
-      if (c.knock > 0) applyKnockback(e, throwX, throwY, c.knock * power);
 
       // Survived the whack, so it goes flying — unless it is a boss, which
       // takes the damage and keeps swimming. A flight is a HOLD: updateFlights
       // tops up `trapTimer` for every frame of it, so a clubbed boss would be
       // inert for the whole of CONFIG.club.flightTime however little the mass
       // scaling actually moved it. See systems/control.js.
-      if (!canHold(e)) continue;
+      //
+      // THE SHOVE IS WHAT THAT REFUSAL BECOMES. A club across the jaw used to
+      // move a boss precisely nothing — the one weapon in the game whose read
+      // is "things leave when you hit them" was the weapon that bounced off
+      // the animal the run is built around. Knockback is explicitly what a
+      // boss stays open to; systems/control.js draws that line and this is on
+      // the right side of it.
+      //
+      // ONE DISPLACEMENT CHANNEL PER BODY, and that is why this is an `else`
+      // rather than something applied to everything on the way past. The two
+      // channels disagree about mass ON PURPOSE: the launch follows the club's
+      // own rule (a megalodon leans, a minnow sails), and applyKnockback
+      // follows the RAM's, where a big survivor is deliberately boosted 1.7x
+      // so a ram on a shark still reads. Both are right in their own weapon.
+      // Run them on the same body and the ram's rule wins the argument, which
+      // inverted the club's — a clubbed megalodon travelled further than a
+      // clubbed shark.
+      if (!canHold(e)) {
+        if (c.knock > 0) {
+          applyKnockback(e, throwX, throwY,
+            c.knock * clubKnock() * hitPower * (teed ? (tc.launchMul ?? 1) : 1));
+        }
+        continue;
+      }
 
       // Mass matters here the same way it does for a strike's shove — a
       // megalodon leans, a minnow sails.
       const pivotR = Math.max(0.05, c.launchPivotRadius);
       const mass = Math.max(1, (e.radius ?? pivotR) / pivotR) ** c.launchMassExp;
-      launch(e, throwX, throwY, launchSpeed / mass, level);
+      // A held body is not swimming away from the blow, so all of it goes into
+      // the throw — which is also what makes a carom off a racked school so
+      // much better than off a loose one, and is the whole reason the pairing
+      // is worth building toward rather than just noticing.
+      const teedLaunch = launchSpeed / Math.max(1e-3, power) * hitPower
+        * (teed ? (tc.launchMul ?? 1) : 1);
+      launch(e, throwX, throwY, teedLaunch / mass, level);
     }
   }
 
@@ -1016,7 +1368,7 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
     // THE RICOCHET. Everything the flying body reaches this frame. Walked
     // backwards because a kill splices `enemiesList` at the index being looked
     // at, and only the entries ABOVE it move.
-    const ricochet = abilityDamage(c.ricochetDamage + c.ricochetDamagePerLevel * Math.max(0, level - 1));
+    const ricochet = abilityDamage((c.ricochetDamage + c.ricochetDamagePerLevel * Math.max(0, level - 1)) * clubPower());
     for (let j = enemiesList.length - 1; j >= 0 && f.bounces >= 0; j--) {
       // THE LIST CAN SHRINK BY MORE THAN ONE PER PASS. Walking backwards is
       // enough when the only thing that removes an entry is the hit itself,
@@ -1057,7 +1409,7 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
       // mass actually arrived from. Full strength rather than power-scaled:
       // the flight has no swing of its own to read, and what it has instead is
       // a whole body's momentum.
-      if (c.knock > 0) applyKnockback(other, f.vx, f.vy, c.knock);
+      if (c.knock > 0) applyKnockback(other, f.vx, f.vy, c.knock * clubKnock());
       // Both bodies pay. The one that was standing there takes the collision;
       // the one being thrown takes a smaller share of it, so a long carom
       // eventually kills the projectile too rather than leaving one
@@ -1182,7 +1534,7 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
 
   const c = CONFIG.clubThrow;
   const count = projectileCount(clubThrowCount(power, level), player.stats);
-  const damage = abilityDamage(clubDamage(Math.max(1, clubLevel)) * c.damageMul);
+  const damage = abilityDamage(clubDamage(Math.max(1, clubLevel)) * c.damageMul * clubPower());
   // THE SAME TWO RIDERS THE FIN CLUBS CARRY. The blast rides as splashDamage,
   // which every explosive in the game already goes through (main.js queues it
   // rather than bursting inline); the ice rides as a payload combat.js hands
@@ -1259,7 +1611,7 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
       // it to applyKnockback along the shot's own heading, and this file never
       // learns what a knockback IS. Without it the Hurler was the one club that
       // hit like a bullet, which is the opposite of what the class reads as.
-      knockback: CONFIG.club.knock,
+      knockback: CONFIG.club.knock * clubKnock(),
     });
   }
   return count;
@@ -1271,6 +1623,10 @@ export function resetClub() {
   flights = [];
   assistClock = 0;
   orbitClock = 0;
+  // Or the first frame of the new run differences this run's velocity against
+  // the last one's and hands both clubs a shove nobody performed.
+  _prevVel.valid = false;
+  bodyAccel.valid = false;
   // WHICH CLUB IS IN THE FINS IS A FACT ABOUT ONE RUN. Carried across a reset
   // it would put the last run's first pick in this run's flippers, which is a
   // wrong answer that looks exactly like a right one.

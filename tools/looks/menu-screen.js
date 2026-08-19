@@ -28,7 +28,7 @@ import { initPlayer, player, resetPlayer, updateAimRig } from '../../path/src/en
 import { stateForSpeed } from '../../path/src/systems/animation.js';
 import { createEyeLights, updateEyeLights } from '../../path/src/systems/eyeLights.js';
 import {
-  mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuWake,
+  mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuGrid,
 } from '../../path/src/systems/mainMenu.js';
 import { initParticles, updateParticles, updateParticleScale } from '../../path/src/entities/particles.js';
 import { updateBubbles } from '../../path/src/systems/bubbles.js';
@@ -73,7 +73,10 @@ mountMainMenu({
   root,
   items: [
     { label: 'Play', onPress: () => { say('Play — releasing: watch the pull-out'); mainMenu()?.release(); } },
-    { label: 'How to play', onPress: () => say('How to play — the DOM start panel') },
+    // The shipped row: Play / Options / Leaderboard. The labels are what the
+    // cell has to fit (see the shrink in hexMenu), so a stand-in with a
+    // different word length composes a different screen.
+    { label: 'Options', onPress: () => say('Options — the standalone Settings panel') },
     { label: 'Leaderboard', onPress: () => say('Leaderboard — the board on its own surface') },
   ],
 });
@@ -109,12 +112,13 @@ function tick(now) {
   if (mainMenuActive()) mainMenu()?.update(dt);
 
   world.updateSurface(dt);
-  // `wake` exactly as main.js hands it in: the ARENA's lattice is underneath
-  // the menu's own, and at this zoom the seal's run-tuned wake radius is wider
-  // than the frame — left alone it drags the whole backdrop into a web.
+  // The menu's claim on the ARENA's lattice, exactly as main.js hands it in:
+  // that grid is underneath the menu's own and six times coarser, so it is
+  // faded out while the screen is held, and the seal's run-tuned wake radius —
+  // wider than this whole frame — is held off it.
   world.grid.update(dt, player.mesh.position, player.velocity, {
     camera: world.camera,
-    wake: mainMenuWake(),
+    ...mainMenuGrid(),
   });
   world.updateCamera(player.mesh.position, dt, {});
   updateParticles(dt);

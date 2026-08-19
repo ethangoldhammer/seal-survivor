@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+// The water's own caustic function, shared rather than copied — see that file.
+import { CAUSTICS_GLSL } from './causticsGlsl.js';
 
 // Procedural Perlin noise painted onto a creature's diffuse, injected into
 // three.js's own MeshStandardMaterial rather than replacing it — so the model
@@ -62,7 +64,42 @@ uniform float uChargeWave;
 uniform vec3  uChargeAxis;
 uniform float uChargeAxisMin;
 uniform float uChargeAxisRange;
+// THE WET FILM (CONFIG.sealShader.wet*). Amount 0 — bone dry, not one
+// instruction of difference — on every material that never asks for it, which
+// is every material until someone moves the slider. See the block at the
+// bottom of this file for what the layer is and why it is shaped this way.
+uniform float uWetAmount;
+uniform vec3  uWetColor;
+uniform float uWetGloss;
+uniform float uWetTight;
+uniform float uWetEdge;
+uniform float uWetSoft;
+uniform float uWetSteps;
+uniform float uWetRim;
+uniform float uWetRimPower;
+uniform float uWetPatch;
+uniform float uWetCaustics;
+uniform float uWetCausticScale;
+uniform float uWetCausticUp;
+uniform float uWetGlow;
+uniform float uWetTint;
+// THE OCEAN'S SIDE OF IT — what the film has to reflect, pushed once a frame
+// from the water's own resolved state (setNoiseWetEnv, called from world.js).
+// SHARED uniform objects: every wearer holds the same object, so this is one
+// write per frame however many animals are in the water.
+uniform vec4  uWetSea;      // x scale, y phase, z depth falloff, w day/night
+uniform vec3  uWetSeaColor;
+uniform vec2  uWetSeaSpan;  // still-water line, seabed
 varying vec3  vNoisePos;
+// THE ANIMATED WORLD POSITION, and the exact opposite decision from vNoisePos
+// directly above it — which is deliberately bind-pose so the markings stay
+// painted on. The caustics are not on the animal, they are in the WATER: the
+// veins have to stay put in the world and let the seal swim through them, so
+// this one is sampled after skinning and pushed all the way out to world space.
+// Get these two the wrong way round and the dapple either freezes to the body
+// (bind pose) or the markings swim across the skin (world), and both look like
+// a plausible effect rather than like a bug.
+varying vec3  vNoiseWorld;
 
 const vec3 NOISE_LUMA = vec3(0.2126, 0.7152, 0.0722);
 
@@ -106,11 +143,47 @@ float noiseFbm(vec3 p) {
   }
   return v;
 }
+${CAUSTICS_GLSL}
 `;
 
 // Every material this has been attached to, so a tuner change can push new
 // uniform values without rebuilding anything.
 const attached = new Set();
+
+// THE OCEAN'S SIDE OF THE WET FILM — what the water is doing this frame, which
+// is the same for every animal in it.
+//
+// ONE OBJECT, HANDED TO EVERY MATERIAL BY REFERENCE rather than copied per
+// wearer: three reads `.value` at draw time, so writing these four fields once
+// updates a school of forty. The alternative is a loop over `attached` every
+// frame doing eight assignments each, for values that cannot differ between
+// them.
+const wetSea = {
+  uWetSea: { value: new THREE.Vector4(0.16, 0, 1.6, 1) },
+  uWetSeaColor: { value: new THREE.Color(0xbfefff) },
+  uWetSeaSpan: { value: new THREE.Vector2(0, -1) },
+};
+
+/**
+ * Tell the wet film what the water is doing. Called once a frame from
+ * world.js with systems/water.js's `liveCaustics` — which is the state the
+ * water plane just finished uploading, after the punch-in gain, the day/night
+ * bus and the sun's tint.
+ *
+ * Cheap enough to be unconditional: four writes, no traversal, no allocation.
+ */
+export function setNoiseWetEnv(c) {
+  if (!c) return;
+  // Intensity carries `on`, so switching the caustics off in the tuner takes
+  // them off the animals in the same frame it takes them out of the water —
+  // and the shader's own `uWetSea.w > 0.0` test then skips the sample.
+  // `light`, not `intensity` — see the note in water.js. The film's own
+  // strength is CONFIG.sealShader.wetCaustics; this carries the time of day and
+  // the tuner's off switch, and nothing else.
+  wetSea.uWetSea.value.set(c.scale, c.phase, c.falloff, c.on > 0.5 ? c.light : 0);
+  wetSea.uWetSeaColor.value.copy(c.color);
+  wetSea.uWetSeaSpan.value.set(c.surfaceY, c.bottomY);
+}
 
 /**
  * Inject the noise into one material. Safe to call on a material that has
@@ -158,16 +231,45 @@ export function attachNoiseShader(material, preset = null) {
     uChargeAxis: { value: new THREE.Vector3(1, 0, 0) },
     uChargeAxisMin: { value: -1 },
     uChargeAxisRange: { value: 2 },
+    // THE WET FILM. Amount 0 is dry and is the shipped default, so every
+    // material that has ever worn this shader renders bit for bit what it did
+    // before — the rest of these are the shape the film takes the moment
+    // someone turns it up, not values anything is using yet.
+    uWetAmount: { value: 0 },
+    uWetColor: { value: new THREE.Color(0xdff2ff) },
+    uWetGloss: { value: 0.7 },
+    uWetTight: { value: 24 },
+    uWetEdge: { value: 0.15 },
+    uWetSoft: { value: 0.5 },
+    uWetSteps: { value: 2 },
+    uWetRim: { value: 0.9 },
+    uWetRimPower: { value: 3.4 },
+    uWetPatch: { value: 0.35 },
+    uWetCaustics: { value: 1.2 },
+    uWetCausticScale: { value: 4 },
+    uWetCausticUp: { value: 0.75 },
+    uWetGlow: { value: 1 },
+    uWetTint: { value: 0.5 },
   };
   material.userData.__noiseUniforms = u;
 
   material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, u);
+    // Both bags: `u` is this material's own, `wetSea` is the one every wearer
+    // shares. Assigned rather than merged so the shared objects stay shared —
+    // a spread here would give each material a private copy and setNoiseWetEnv
+    // would silently stop reaching any of them.
+    Object.assign(shader.uniforms, u, wetSea);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vNoisePos;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vNoisePos;\nvarying vec3 vNoiseWorld;')
       // Straight after <begin_vertex>, where `transformed` is still the
       // bind-pose position — see the note at the top of this file.
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvNoisePos = transformed;');
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvNoisePos = transformed;')
+      // ...and straight BEFORE <project_vertex>, which is the last moment
+      // `transformed` is still a position rather than a clip-space vertex — and
+      // by then it has been through the morph, skin and displacement chunks, so
+      // this is where the animal actually IS this frame. modelMatrix takes it
+      // the rest of the way out to the world the caustics live in.
+      .replace('#include <project_vertex>', '\tvNoiseWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\n#include <project_vertex>');
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\n' + GLSL_NOISE)
@@ -201,6 +303,17 @@ export function attachNoiseShader(material, preset = null) {
       // over the top read as a decal, and darkening the body to make it show
       // read as the seal disappearing.
       .replace('#include <dithering_fragment>', `
+  // HOW MUCH LIGHT THIS FRAGMENT IS PUTTING OUT, accumulated by the two glow
+  // layers below as they add it. The wet film reads it at the bottom: a film of
+  // water over something that is glowing reflects the glow as well as letting
+  // it through, so the sheen has to burn hotter exactly where the animal does.
+  //
+  // Accumulated rather than re-derived from gl_FragColor, which by here also
+  // carries the lit body, the fog and the tone map — keying the film off that
+  // would make a seal in bright water permanently shiny and a seal in the deep
+  // permanently dull, which is a depth cue, not a glow reaction.
+  float noiseGlowLum = 0.0;
+
   if (uNoiseGlowStrength > 0.0) {
     // SCALE 1 IS THE POINT: the glow lights the markings the seal already has,
     // sampled at the same size as the skin, so it is the same pattern rather
@@ -227,7 +340,9 @@ export function attachNoiseShader(material, preset = null) {
     // out of something. g*g keeps the white to the crests rather than
     // washing the whole patch out.
     vec3 glowC = mix(uNoiseGlowColor, uNoiseGlowTip, g * g * uNoiseGlowWhite);
-    gl_FragColor.rgb += glowC * (g * uNoiseGlowStrength * uNoiseGlowPulse);
+    vec3 glowAdd = glowC * (g * uNoiseGlowStrength * uNoiseGlowPulse);
+    gl_FragColor.rgb += glowAdd;
+    noiseGlowLum += dot(glowAdd, NOISE_LUMA);
   }
 
   // THE CHARGE GLOW. Same markings, same mask shape, its own everything else —
@@ -251,8 +366,127 @@ export function attachNoiseShader(material, preset = null) {
     }
 
     vec3 cc = mix(uChargeColor, uChargeTip, cg * cg * uChargeWhite);
-    gl_FragColor.rgb += cc * (cg * amount);
+    vec3 chargeAdd = cc * (cg * amount);
+    gl_FragColor.rgb += chargeAdd;
+    noiseGlowLum += dot(chargeAdd, NOISE_LUMA);
   }
+
+  // -------------------------------------------------------------------------
+  // THE WET FILM. A sheet of water lying on the animal, drawn as a TOON
+  // reflection: one hard-edged sheet of light with a countable number of steps
+  // in it, not a smooth Blinn lobe. A seal that has just surfaced is the
+  // shiniest thing in the frame and the surface was the one property this
+  // shader had no opinion about at all.
+  //
+  // TWO HALVES, AND THE SPLIT IS THE WHOLE DESIGN:
+  //
+  //   the MASK   where the film catches anything — the banded specular sheet,
+  //              the grazing rim, and the caustic veins landing on it. Shape
+  //              only; none of it knows how bright the world is.
+  //   the LIGHT  how hot that catch burns — 1 on an ordinary animal, more on
+  //              one that is glowing.
+  //
+  // They multiply, and that is what makes the layer REACT rather than just sit
+  // there: an element glow or a full strike meter drives the film hotter
+  // wherever it already is, so lighting the seal up also makes it look wetter,
+  // and the shape of the sheen is still the shape of the light on the body.
+  // Adding the two instead would paint a flat wash of colour over the animal on
+  // every frame it happened to be glowing.
+  //
+  // NEEDS A LIT MATERIAL — geometryNormal and geometryViewDir are declared by
+  // <lights_fragment_begin>, so this is fenced to STANDARD (which covers
+  // MeshPhysicalMaterial too). The unlit fallback shapes that also wear this
+  // shader would be a COMPILE ERROR without the fence, and a fragment shader
+  // that fails to compile renders nothing at all and reports nothing.
+#ifdef STANDARD
+  if (uWetAmount > 0.0) {
+    vec3 wetN = normalize(geometryNormal);
+    vec3 wetV = geometryViewDir;
+    // THE KEY LIGHT IS THE SUN. daylight.js swings it across the sky over the
+    // run, so the wet highlight crawls along the body as the hours pass and
+    // goes low and long at dusk — for free, and correct by construction,
+    // because it is the same vector the diffuse shading used. Head-on off the
+    // camera if the scene has no directional light, which is only ever a
+    // harness.
+    vec3 wetL = wetV;
+    #if NUM_DIR_LIGHTS > 0
+      wetL = directionalLights[0].direction;
+    #endif
+    float lobe = pow(max(dot(wetN, normalize(wetL + wetV)), 0.0), max(uWetTight, 1.0));
+    // uWetEdge is where the sheet STARTS — everything below it is dry surface,
+    // and what is left is stretched back over the full range so the terraces
+    // below always have the whole sheet to spread across however narrow the cut.
+    float wetT = clamp((lobe - uWetEdge) / max(1.0 - uWetEdge, 1e-4), 0.0, 1.0);
+    // ...and then terraced, which is the toon part. THE SAME IDIOM AS THE BANDS
+    // IN systems/toonShade.js, deliberately down to the arithmetic, because the
+    // two are looked at on the same animal and a highlight that stepped by a
+    // different rule than the shading under it reads as two effects arguing.
+    //
+    // The shoulder is on the LEADING edge of each terrace, which is the part
+    // that matters on this model. A plain floor() is a razor cut, and a razor
+    // cut through a value interpolated across a low-poly body traces the
+    // TESSELLATION: the seal came out wearing hard-edged white quads, which
+    // does not read as a hard cel highlight, it reads as the mesh showing
+    // through. With a shoulder the steps stay countable and their edges stop
+    // being polygons.
+    float wetS = max(uWetSteps, 1.0);
+    float wetScaled = wetT * wetS;
+    float wetIdx = min(floor(wetScaled), wetS - 1.0);
+    float wetFrac = wetScaled - wetIdx;
+    // Never a zero-width smoothstep: edge0 == edge1 is undefined in GLSL, and
+    // "undefined" here means one driver draws the sheet and another draws
+    // nothing. uWetSoft 0 is meant to be the hardest cel edge, not a coin flip.
+    float wetShoulder = uWetSoft > 1e-4 ? smoothstep(0.0, uWetSoft, wetFrac) : 0.0;
+    float wetShape = clamp((wetIdx + wetShoulder) / max(wetS - 1.0, 1.0), 0.0, 1.0);
+    // The rim. Water beads to the edge of a curved body and the silhouette is
+    // where a wet animal gives itself away at a glance — at play scale this
+    // carries the read further than the highlight does.
+    float wetFres = pow(1.0 - clamp(dot(wetN, wetV), 0.0, 1.0), max(uWetRimPower, 0.5));
+
+    // THE CAUSTICS, sampled from the SAME function, at the SAME world
+    // coordinates, on the SAME phase as the water plane behind the animal
+    // (systems/causticsGlsl.js, fed by setNoiseWetEnv). That is the entire
+    // trick: a vein crossing the water is the vein crossing the seal, so the
+    // dapple is one continuous field the animal is swimming through instead of
+    // a texture stuck to it.
+    float wetCau = 0.0;
+    if (uWetCaustics > 0.0 && uWetSea.w > 0.0) {
+      // Depth measured from the still line to the seabed, exactly as the fill
+      // measures it, so the veins run out on the animal at the same depth they
+      // run out in the water it is in.
+      float wetDepth = clamp((uWetSeaSpan.x - vNoiseWorld.y)
+        / max(uWetSeaSpan.x - uWetSeaSpan.y, 0.0001), 0.0, 1.0);
+      float wetFade = pow(1.0 - wetDepth, uWetSea.z);
+      float c = caustics(vNoiseWorld.xy * (uWetSea.x * uWetCausticScale), uWetSea.y);
+      // IT COMES FROM ABOVE. Refracted sunlight arrives pointing down, so a
+      // back catches it and a belly does not — without this the veins wrap all
+      // the way round the animal and read as a pattern printed on it rather
+      // than as light falling on it. World up, taken into view space where the
+      // normal already lives.
+      vec3 wetUp = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+      float up = mix(1.0, clamp(dot(wetN, wetUp) * 0.5 + 0.5, 0.0, 1.0), uWetCausticUp);
+      wetCau = c * uWetSea.w * wetFade * up;
+    }
+
+    // Added to the mask rather than multiplied into it: a vein is light
+    // ARRIVING, and it lands across the whole wet back, not only inside the
+    // key light's sheet. Multiplied, the caustics would be invisible anywhere
+    // the highlight already wasn't — which is most of the animal.
+    float wetMask = wetShape * uWetGloss + wetFres * uWetRim + wetCau * uWetCaustics;
+    // Wet is not even. The markings this whole file exists to paint decide
+    // where the film beads and where the fur has drained — 0 is a uniformly
+    // lacquered animal, 1 is sheen only on the bright patches.
+    wetMask *= mix(1.0, noiseLit, uWetPatch);
+
+    // THE COLOUR IT REFLECTS. uWetTint pulls the film from its own authored
+    // white toward the light the ocean is actually making this minute — which
+    // is already warm at dawn, cold at night and knocked down by the day/night
+    // bus, because it is the caustic colour the water resolved rather than the
+    // one in config.
+    vec3 wetC = mix(uWetColor, uWetSeaColor, uWetTint);
+    gl_FragColor.rgb += wetC * (max(wetMask, 0.0) * (1.0 + uWetGlow * noiseGlowLum) * uWetAmount);
+  }
+#endif
 #include <dithering_fragment>`);
   };
   material.needsUpdate = true;
@@ -287,6 +521,31 @@ export function applyNoiseSettings() {
       ? 0 : (p.strength ?? 0.35);
     u.uNoiseContrast.value = p.contrast ?? 1;
     u.uNoiseColor.value.set(p.color ?? 0x0a2233);
+
+    // THE WET FILM. Flat keys rather than a `wet: {}` block, and that is not a
+    // style choice: the preset fall-through three lines up is a SHALLOW spread,
+    // so a species overriding one nested field would replace the whole object
+    // and silently inherit the shader's own defaults for the other fourteen.
+    // Flat, a preset can disagree about `wetRim` alone.
+    //
+    // `enabled` folds into the amount the same way it does for the noise, so
+    // the master switch fades the film out instead of popping it.
+    u.uWetAmount.value = (cfg.enabled === false || p.enabled === false)
+      ? 0 : Math.max(0, p.wet ?? 0.55);
+    u.uWetColor.value.set(p.wetColor ?? 0xdff2ff);
+    u.uWetGloss.value = p.wetGloss ?? 0.7;
+    u.uWetTight.value = Math.max(1, p.wetTight ?? 24);
+    u.uWetEdge.value = p.wetEdge ?? 0.15;
+    u.uWetSoft.value = p.wetSoft ?? 0.5;
+    u.uWetSteps.value = Math.max(1, p.wetSteps ?? 2);
+    u.uWetRim.value = p.wetRim ?? 0.9;
+    u.uWetRimPower.value = Math.max(0.5, p.wetRimPower ?? 3.4);
+    u.uWetPatch.value = p.wetPatch ?? 0.35;
+    u.uWetCaustics.value = p.wetCaustics ?? 1.2;
+    u.uWetCausticScale.value = Math.max(0.01, p.wetCausticScale ?? 4);
+    u.uWetCausticUp.value = p.wetCausticUp ?? 0.75;
+    u.uWetGlow.value = p.wetGlow ?? 1;
+    u.uWetTint.value = p.wetTint ?? 0.5;
   }
 }
 

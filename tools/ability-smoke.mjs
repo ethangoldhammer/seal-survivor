@@ -969,8 +969,8 @@ const harpHooks = {
   onPluck: () => { plucks++; },
   onAuraTick: (x, y, count) => { auraTicks++; auraCaught += count; },
 };
-const tickHarp = (frames, level = 1) => {
-  for (let i = 0; i < frames; i++) updateHarp(dt, scene, harpPlayer, level, enemies, harpHooks);
+const tickHarp = (frames, level = 1, count = 1) => {
+  for (let i = 0; i < frames; i++) updateHarp(dt, scene, harpPlayer, level, enemies, harpHooks, count);
 };
 
 // A big one FAR out and a small one CLOSE in. Nearest-target and largest-target
@@ -1122,6 +1122,97 @@ check('two charmed bodies leave each other alone', victim.hp === pairHp,
 tickHarp(Math.ceil((payload.auraDuration + 0.5) / dt));
 check('the ring wears off', !(host.harpAura > 0), `${host.harpAura}s left`);
 check('...and its notes go with it', harpNoteCount() === 0, `${harpNoteCount()} live note(s)`);
+
+// --- ENTOURAGE: a ring of harps, not one -----------------------------------
+//
+// The harp used to be a module singleton — one mesh, one timer — so this is
+// the section that has to prove the ring is real rather than one instrument
+// drawn several times.
+{
+  const harpGroup = createHarpVisual();
+  scene.add(harpGroup);
+  resetHarp();
+  enemies.length = 0;
+  projectiles.length = 0;
+
+  const built = (n) => {
+    resetHarp();
+    for (let i = 0; i < 4; i++) updateHarp(dt, scene, harpPlayer, 1, enemies, {}, n);
+    return harpGroup.children.length;
+  };
+  check('Entourage puts more harps on the ring', built(3) === 3, `${built(3)} instrument(s)`);
+  check('...and one is still the default', built(1) === 1, `${built(1)} instrument(s)`);
+
+  // SPREAD, not stacked. A ring of three sitting at one point is the bug this
+  // is here for, and it looks exactly like one harp until you measure.
+  resetHarp();
+  for (let i = 0; i < 4; i++) updateHarp(dt, scene, harpPlayer, 1, enemies, {}, 3);
+  const spots = harpGroup.children.map((m) => m.position.clone());
+  let closest = Infinity;
+  for (let a = 0; a < spots.length; a++) {
+    for (let b = a + 1; b < spots.length; b++) closest = Math.min(closest, spots[a].distanceTo(spots[b]));
+  }
+  check('...spaced around it rather than stacked', closest > 0.5,
+    `closest pair ${closest.toFixed(2)}u apart`);
+
+  // THEY PLAY SEPARATELY. Each instrument owns its timer, so three harps pluck
+  // three notes in the time one plucks one — the whole point of the card. And
+  // the timers are STAGGERED at build: three harps started at zero would fire
+  // in unison forever, which is one loud note rather than a run of them.
+  const notesIn = (n, seconds) => {
+    resetHarp();
+    enemies.length = 0;
+    projectiles.length = 0;
+    const target = fakeEnemy(2.5, 0, 0.6, 999999);
+    target.def.radius = 0.6;
+    target.sizeMul = 1;
+    enemies.push(target);
+    let plucked = 0;
+    for (let i = 0; i < Math.ceil(seconds / dt); i++) {
+      // The aura is cleared each frame so pickTarget keeps finding it — this
+      // measures how often the RING plays, not how long a ring lasts.
+      target.harpAura = 0;
+      target.hp = 999999;
+      updateHarp(dt, scene, harpPlayer, 1, enemies, { onPluck: () => { plucked++; } }, n);
+    }
+    return plucked;
+  };
+  const one = notesIn(1, 4);
+  const three = notesIn(3, 4);
+  check('three harps play about three times as often', three > one * 2,
+    `${one} note(s) from one, ${three} from three`);
+
+  // ...and the notes leave the instrument that played them. Every note leaving
+  // one point is what a ring of decorative harps around one real one looks
+  // like, and it is invisible in a still.
+  resetHarp();
+  enemies.length = 0;
+  projectiles.length = 0;
+  const mark = fakeEnemy(3, 0, 0.6, 999999);
+  mark.def.radius = 0.6;
+  mark.sizeMul = 1;
+  enemies.push(mark);
+  const origins = [];
+  for (let i = 0; i < Math.ceil(3 / dt); i++) {
+    mark.harpAura = 0;
+    mark.hp = 999999;
+    updateHarp(dt, scene, harpPlayer, 1, enemies, { onPluck: (x, y) => origins.push({ x, y }) }, 3);
+  }
+  let spread = 0;
+  for (let a = 0; a < origins.length; a++) {
+    for (let b = a + 1; b < origins.length; b++) {
+      spread = Math.max(spread, Math.hypot(origins[a].x - origins[b].x, origins[a].y - origins[b].y));
+    }
+  }
+  check('...and each note leaves the harp that played it',
+    origins.length > 2 && spread > 0.5,
+    `${origins.length} note(s), ${spread.toFixed(2)}u apart at the widest`);
+
+  resetHarp();
+  scene.remove(harpGroup);
+  enemies.length = 0;
+  projectiles.length = 0;
+}
 
 // Levelling has to buy something on every axis the card promises.
 const h1 = currentHarpStats(1);

@@ -43,7 +43,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../../path/src/config.js';
 import { preloadAssets, createVisual, ASSETS } from '../../path/src/assets.js';
 import { attachBiolumSkin, applyBiolumSkinSettings, updateBiolumSkin, BIOLUM_PATTERNS } from '../../path/src/systems/biolumSkin.js';
-import { attachNoiseShader, applyNoiseSettings } from '../../path/src/systems/noiseShader.js';
+import { attachNoiseShader, applyNoiseSettings, setNoiseWetEnv } from '../../path/src/systems/noiseShader.js';
 import { attachToonShade, applyToonSettings } from '../../path/src/systems/toonShade.js';
 import { initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines } from '../../path/src/systems/outlines.js';
 
@@ -167,16 +167,39 @@ const SURFACES = [
 ];
 const surfaceOf = (k) => surfaces.get(k) ?? 'texture';
 
-// SEEDED FROM WHAT IS ALREADY ON DISK, and without this the file went backwards.
+// SEEDED FROM THE ROSTER FIRST — what the GAME does today.
 //
-// `applied` is page memory and started empty on every load, while `record` POSTs
-// the WHOLE map — so the first record of a session wrote a file containing only
-// that one creature and silently dropped every choice made before it. Four
-// recorded creatures became one, and since the writing step looked like it had
-// worked, the loss showed up much later as "apply isn't really working".
+// ASSETS is the authority on which surface a creature is actually wearing: the
+// `surface` column of assets.csv is applied onto these fields at load, and some
+// assets declare it in code and have no CSV row at all. The seed below is the
+// only thing that can see the second kind.
 //
-// Reading first also means the panel opens showing what each creature already
-// wears, rather than claiming everything is on `texture`.
+// WITHOUT THIS THE SEAL OPENED ON `texture`. `ship` — the player, and the asset
+// this whole shader was written for — carries `noiseShader: true` by hand in
+// assets.js and has never been through `record`, so nothing in shader-lab.json
+// mentions it. Selecting it showed the texture surface, no noise panel and no
+// wet panel, over a model that renders in the run with both. The page was
+// reporting its own record file as if it were the game, and for every
+// hand-authored asset those are different things.
+//
+// EXCLUSIVE, in the same priority the game resolves them: biolum replaces the
+// map outright, so it wins over a noise field if some def ever declares both.
+for (const [key, def] of Object.entries(ASSETS)) {
+  if (!def.model) continue;
+  if (typeof def.biolumSkin === 'string') surfaces.set(key, 'biolum');
+  else if (def.noiseShader) surfaces.set(key, 'noise');
+}
+
+// ...THEN WHAT THIS PAGE RECORDED, which wins because it is the newer intent:
+// a choice recorded but not yet through `npm run shaders:apply` is not in
+// assets.csv and so is not in the seed above. Once applied the two agree.
+//
+// Reading it at all is what stops the file going backwards. `applied` is page
+// memory and started empty on every load, while `record` POSTs the WHOLE map —
+// so the first record of a session wrote a file containing only that one
+// creature and silently dropped every choice made before it. Four recorded
+// creatures became one, and since the writing step looked like it had worked,
+// the loss showed up much later as "apply isn't really working".
 try {
   const saved = await (await fetch('/shader/shader-lab.json')).json();
   for (const [key, entry] of Object.entries(saved.applied ?? {})) {
@@ -197,7 +220,12 @@ try {
 // actually dialled; this only decides which of it reaches the GPU.
 function surfaceMask(kind) {
   return {
-    sealShader: kind === 'noise' ? null : { strength: 0 },
+    // `wet` as well as `strength`, or the preview lies about the choice: the
+    // film is a separate layer on the same root, so zeroing the mottling alone
+    // left a gloss on an animal whose surface column says `texture` — and in
+    // the game a texture surface never attaches this shader at all, so there is
+    // nothing there to be glossy.
+    sealShader: kind === 'noise' ? null : { strength: 0, wet: 0 },
     toonShade: kind === 'noise' ? null : { strength: 0 },
     biolumSkin: kind === 'biolum' ? { pigment: 1 } : { pigment: 0, strength: 0 },
   };
@@ -251,6 +279,36 @@ const NOISE = [
   { key: 'strength', label: 'strength', min: 0, max: 1.5, step: 0.02, def: 0.35 },
   { key: 'size', label: 'size', min: 0.02, max: 2, step: 0.01, def: 0.4 },
   { key: 'contrast', label: 'contrast', min: 0.2, max: 4, step: 0.05, def: 1 },
+];
+
+// THE WET FILM (CONFIG.sealShader.wet*). A list of its own rather than more rows
+// on NOISE, and a section of its own in the panel, because it is a different
+// question: NOISE is what the SKIN is, this is what is lying ON it. They share a
+// preset — both are CONFIG.sealShader — and exactly one control crosses between
+// them, `wetPatch`, which reaches back into the markings the noise paints.
+//
+// Every `def` here mirrors the base in config.js. It should never be reached —
+// valOf falls through to the base first — but a def that disagreed would be
+// invisible until the day someone deleted a base field, and then it would look
+// like a tuning change.
+const WET = [
+  { key: 'wet', label: 'wetness', min: 0, max: 2, step: 0.05, def: 0.55 },
+  { key: 'wetGloss', label: 'highlight', min: 0, max: 3, step: 0.05, def: 0.7 },
+  // The two that decide whether this reads as toon or as plastic. Softness is in
+  // TERRACE widths, not in units of the falloff — 0.08 is eight per cent of one
+  // step and still a razor, which on a low-poly body traces the tessellation.
+  { key: 'wetSteps', label: 'highlight steps', min: 1, max: 5, step: 1, def: 2 },
+  { key: 'wetSoft', label: 'step softness', min: 0, max: 1, step: 0.02, def: 0.5 },
+  { key: 'wetTight', label: 'highlight tightness', min: 1, max: 200, step: 1, def: 24 },
+  { key: 'wetEdge', label: 'highlight cut', min: 0, max: 1, step: 0.01, def: 0.15 },
+  { key: 'wetRim', label: 'wet rim', min: 0, max: 2, step: 0.02, def: 0.9 },
+  { key: 'wetRimPower', label: 'rim tightness', min: 0.5, max: 8, step: 0.1, def: 3.4 },
+  { key: 'wetPatch', label: 'markings break it up', min: 0, max: 1, step: 0.05, def: 0.35 },
+  { key: 'wetCaustics', label: 'caustic veins', min: 0, max: 3, step: 0.05, def: 1.2 },
+  { key: 'wetCausticScale', label: 'vein size vs the water', min: 0.1, max: 8, step: 0.1, def: 4 },
+  { key: 'wetCausticUp', label: 'veins favour up-facing', min: 0, max: 1, step: 0.05, def: 0.75 },
+  { key: 'wetGlow', label: 'glow burns the sheen', min: 0, max: 4, step: 0.05, def: 1 },
+  { key: 'wetTint', label: 'sheen takes the water colour', min: 0, max: 1, step: 0.05, def: 0.5 },
 ];
 
 const BIO = [
@@ -604,12 +662,46 @@ function build(assetKey) {
 }
 
 let frames = 0;
+let wetClock = 0;
+
+// WHAT THE WET FILM THINKS THE OCEAN IS DOING. There is no water plane on this
+// page, and without this the film falls back to the uniforms' own defaults —
+// a vein scale of 0.16 against the game's 0.52, frozen at phase 0. The vein
+// sliders would then preview at a size no run ever shows, which is the one way
+// a look page can be worse than no look page.
+//
+// Read from CONFIG.caustics, so it is the same field the water builds. Two
+// deliberate departures, both because this is a PORTRAIT and not a run:
+//
+//   light 1     noon. The day/night bus is a thing to judge in the game, and a
+//               page that happened to open at 3am would show every vein setting
+//               at a fifth of itself.
+//   falloff 0   pow(1 - depth, 0) is 1 everywhere, so the veins do not fade with
+//               where the subject happens to be floating. The depth ramp is real
+//               and belongs to the arena, not to the pattern being tuned here.
+const causticColor = new THREE.Color();
+function pushWetEnv() {
+  setNoiseWetEnv({
+    on: CONFIG.caustics?.enabled ? 1 : 0,
+    light: 1,
+    scale: CONFIG.caustics?.scale ?? 0.16,
+    phase: wetClock * (CONFIG.caustics?.speed ?? 0.55),
+    falloff: 0,
+    color: causticColor.set(CONFIG.caustics?.color ?? 0xbfefff),
+    surfaceY: 0,
+    bottomY: -1,
+  });
+}
+
 function draw() {
   if (!subject) return;
   frameSubject();
   // The biolum shader animates off a clock; stepped by hand rather than in a rAF
   // loop so the page works in a backgrounded tab, where rAF does not fire.
   updateBiolumSkin?.(1 / 60);
+  // Same reasoning, same step: the caustic veins crawl because this advances.
+  wetClock += 1 / 60;
+  pushWetEnv();
   gl.render(scene, camera);
   frames++;
 }
@@ -744,6 +836,38 @@ function buildPanels() {
   if (kind === 'noise') p.appendChild(section('noise', 'sealShader', target.noise, NOISE, (body, name) => {
     colorRow(body, 'sealShader', name, 'color', 'tint', 0x0a2233);
   }));
+
+  // THE WET FILM, on the same root and the same preset as the noise above, in a
+  // section of its own — see the note on WET.
+  if (kind === 'noise') {
+    const wetSect = section('wet', 'sealShader', target.noise, WET, (body, name) => {
+      colorRow(body, 'sealShader', name, 'wetColor', 'sheen', 0xdff2ff);
+    });
+    // SAY SO WHEN THE NUMBERS HAVE NOWHERE TO GO. These sliders write to
+    // CONFIG.sealShader.presets.<name>, and the game only reads that preset for
+    // an asset whose `surface` cell names it — `noise:<name>` in assets.csv.
+    // An asset that attaches with no preset (noiseShader: true, which is the
+    // player's seal and the escorts) reads the BASE numbers instead, so
+    // everything dialled here would preview perfectly and change nothing in the
+    // run until `record` writes the CSV row.
+    //
+    // Worth a line specifically because wetness is the seal's feature, the seal
+    // is exactly the asset with no preset, and the failure is silent at both
+    // ends: the lab looks right and the game looks untouched.
+    const wearing = ASSETS[subjectKey]?.noiseShader;
+    if (wearing !== target.noise) {
+      const warn = document.createElement('div');
+      warn.className = 'row warnrow';
+      warn.innerHTML = `<label>not live</label><output>`
+        + `the game reads ${wearing === true ? 'the BASE numbers' : `"${wearing ?? 'no noise surface'}"`} `
+        + `for ${subjectKey}, not the preset "${target.noise}" these sliders write. `
+        + `<b>record</b> writes the assets.csv row that points it here. `
+        + `For the player's own seal, the tuner's "Seal wetness" panel edits the base directly.`
+        + `</output>`;
+      wetSect.querySelector('.body').prepend(warn);
+    }
+    p.appendChild(wetSect);
+  }
 
   if (kind === 'biolum') p.appendChild(section('pattern', 'biolumSkin', target.bio, BIO, (body, name) => {
     const row = document.createElement('div');
@@ -943,10 +1067,22 @@ function presetsFor(kind) {
     return { [root]: { [name]: fields } };
   };
   if (kind === 'noise') {
-    return {
-      ...gather('noise', 'sealShader', target.noise, NOISE),
-      ...gather('toon', 'toonShade', target.toon, TOON),
-    };
+    // NOISE AND WET ARE THE SAME PRESET, so the two lists have to be MERGED
+    // rather than spread side by side — `{...a, ...b}` on two objects that both
+    // carry a `sealShader` key keeps only the second, and the recorded preset
+    // would come out holding the film and none of the mottling under it.
+    const noise = gather('noise', 'sealShader', target.noise, NOISE);
+    const wet = gather('wet', 'sealShader', target.noise, WET);
+    if (noise.sealShader && wet.sealShader) {
+      Object.assign(noise.sealShader[target.noise], wet.sealShader[target.noise]);
+      // `color` and `wetColor` are colour pickers rather than sliders, so they
+      // are in neither list — and a recorded look without them is a recorded
+      // look with the wrong colours.
+      for (const [k, d] of [['color', 0x0a2233], ['wetColor', 0xdff2ff]]) {
+        noise.sealShader[target.noise][k] = valOf(k, 'sealShader', target.noise, { key: k, def: d });
+      }
+    }
+    return { ...noise, ...gather('toon', 'toonShade', target.toon, TOON) };
   }
   if (kind === 'biolum') {
     // `pattern` is a select rather than a slider, so it is not in BIO — and it

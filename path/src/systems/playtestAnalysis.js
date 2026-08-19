@@ -110,6 +110,14 @@ export const SOURCE_UPGRADES = {
 // it can never be flagged as over- or under-tuned no matter what it does.
 const SOURCE_ALIAS = {
   bakalarBomb: 'bakalar',
+  // The note ring keeps its own damage tag on purpose — the charm and the aura
+  // are worth knowing apart on the score screen — but ONE pick pays for both,
+  // so the efficiency ranking has to see them as one row. Unaliased it was the
+  // bigger half by a distance: 89k damage under `harpAura` against 14k under
+  // `harp` across the same eight runs, which had the Harp Seal reading as a
+  // 0.11x dead pick while seven eighths of what it did went to a source nobody
+  // ever spent a level on.
+  harpAura: 'harp',
 };
 
 function resolveSource(source) {

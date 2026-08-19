@@ -7,7 +7,8 @@ import {
   busReduction, sampleCount, reloadSample, getAudioContext, isMuted,
 } from '../systems/audio.js';
 import { uploadAsset } from '../systems/assetUpload.js';
-import { stageState, onStageChanged } from '../systems/stage.js';
+import { stageState, onStageChanged, stageAnchor } from '../systems/stage.js';
+import { fireBossBoom, resetBossBooms } from '../systems/bossBoom.js';
 
 // THE FEEL WORKBENCH — F.
 //
@@ -42,7 +43,20 @@ const RAIL_SECTIONS = [
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
   ['Thrown & launched', ['seagullDive', 'scallopLaunch', 'scallopJet', 'pearlShot', 'pearlBurst', 'bakalarHaul', 'bakalarBombDrop', 'bakalarBombBlast']],
   ['Boats', ['debrisBreak', 'boatExplosion', 'crewEaten', 'crewHit']],
+  // The boss's own voices, which had no home here at all until the
+  // explosion needed one. THE EXPLOSION ITSELF IS NOT IN THIS LIST: it is
+  // not a feedback event (see BOOM_ROW), and the rail adds it to the top of
+  // this section by hand.
+  ['Bosses', ['bossDieFlesh', 'bossDieShell', 'bossDieHull',
+    'bossHitFlesh', 'bossHitShell', 'bossHitHull', 'bossDaze']],
 ];
+
+// The one rail row that is not a feedback event. `*` so it can never collide
+// with a real event id, the same way '*global' does.
+const BOOM_ROW = '*boom';
+// What typing in the filter box has to match to find it. The id is a symbol
+// nobody would type, and every other row is found by its own name.
+const BOOM_TERMS = 'boom explosion smoke shockwave boss going up kill';
 
 const STYLES = `
   .sv-wb { position: fixed; inset: 0 0 96px 0; z-index: 31; display: none;
@@ -189,6 +203,11 @@ const FEED_COLOR = {
 let panel = null;
 let visible = false;
 let current = 'kill';
+// How big the body under the test explosion is. Lives here rather than in
+// CONFIG for the reason stageState does: it is where the knob happens to be
+// sitting while you work, not an authored value, and everything in CONFIG
+// travels with the repo. 7 is a middling boss.
+let boomTestRadius = 7;
 let libFilter = 'all';
 let library = [];        // { file, src, kb } straight off disk
 let libraryError = '';
@@ -350,11 +369,23 @@ function renderRail() {
   let shown = 0;
   for (const [title, ids] of groups) {
     const hits = ids.filter((id) => id.toLowerCase().includes(filter));
-    if (!hits.length) continue;
+    // The explosion rides at the top of the Bosses section. It is matched on a
+    // bag of words rather than on its id, which is a symbol nobody would type.
+    const boomHere = title === 'Bosses' && (!filter || BOOM_TERMS.includes(filter));
+    if (!hits.length && !boomHere) continue;
     const h = document.createElement('div');
     h.className = 'sv-wb-sec';
     h.textContent = title;
     list.appendChild(h);
+    if (boomHere) {
+      const b = document.createElement('div');
+      b.className = 'sv-wb-ev' + (current === BOOM_ROW ? ' sv-wb-on-row' : '');
+      b.innerHTML = '<span class="nm" style="font-weight:600">\u2622 The boss going up</span>';
+      b.title = 'The kill explosion — the cloud, its surface, the shockwave and the puff they are all made of.';
+      b.addEventListener('click', () => { current = BOOM_ROW; render(); });
+      list.appendChild(b);
+      shown++;
+    }
     for (const id of hits) { list.appendChild(railRow(id)); shown++; }
   }
 
@@ -377,6 +408,7 @@ function render() {
   // whatever had been showing an hour ago.
   renderLibrary();
   if (current === '*global') return renderGlobal();
+  if (current === BOOM_ROW) return renderBoom();
 
   const event = current;
   const def = CONFIG.feedback[event];
@@ -685,66 +717,250 @@ function render() {
   imp.appendChild(fireRow);
 
   // --- BURST ---------------------------------------------------------------
-  const edef = def.emit ? CONFIG.emitters[def.emit] : null;
-  if (edef) {
-    const par = card(cols, 'sv-wb-imp wide', `Burst · ${def.emit}`,
-      'What the particles do. The six under the divider have no control anywhere else in the game.');
-    const users = Object.keys(CONFIG.feedback).filter((e) => CONFIG.feedback[e].emit === def.emit && e !== event);
-    if (users.length) {
-      const w = document.createElement('div');
-      w.className = 'sv-wb-scope';
-      w.innerHTML = `Shared burst — <b>${users.join(', ')}</b> throw the same particles. Pick another emitter above to give this event its own.`;
-      par.appendChild(w);
-    }
-    const g2 = document.createElement('div');
-    g2.style.cssText = 'display:grid; grid-template-columns:1fr 1fr; gap:0 20px';
-    const A = document.createElement('div');
-    const B = document.createElement('div');
-    g2.append(A, B);
-    slider(A, 'count', { max: 200, step: 1, dp: 0, get: () => edef.count, set: (v) => { edef.count = Math.round(v); } });
-    pairSlider(A, 'size', edef.size, 3, 0.01, 2);
-    pairSlider(A, 'life', edef.life, 3, 0.01, 2);
-    pairSlider(B, 'speed', edef.speed, 40, 0.5, 1);
-    slider(B, 'cone', { max: 6.3, step: 0.05, get: () => edef.cone ?? 0, set: (v) => { edef.cone = v; } });
-    slider(B, 'glow', { max: 4, step: 0.1, dp: 1, get: () => edef.glow ?? 0, set: (v) => { edef.glow = v; } });
-    par.appendChild(g2);
-    const div = document.createElement('div');
-    div.style.cssText = 'border-top:1px solid rgba(255,255,255,0.08); margin:8px 0 2px';
-    par.appendChild(div);
-    const g3 = document.createElement('div');
-    g3.style.cssText = 'display:grid; grid-template-columns:1fr 1fr; gap:0 20px';
-    const C = document.createElement('div');
-    const D = document.createElement('div');
-    g3.append(C, D);
-    slider(C, 'drag', { max: 8, step: 0.1, dp: 1, get: () => edef.drag ?? 0, set: (v) => { edef.drag = v; } });
-    slider(C, 'inherit', { step: 0.05, get: () => edef.inherit ?? 0, set: (v) => { edef.inherit = v; } });
-    slider(D, 'gravity', { min: -6, max: 6, step: 0.1, dp: 1, get: () => (edef.gravity ?? [0, 0])[1], set: (v) => { edef.gravity = [(edef.gravity ?? [0, 0])[0], v]; } });
-    par.appendChild(g3);
+  burstCard(cols, def.emit, event);
+}
 
-    // Reach under linear drag — the same closed form particles.js integrates.
-    // speed x life is the no-drag answer and is wildly wrong for anything that
-    // slows: bigExplosion reads 73 units that way and travels 18.
-    const k = Math.max(0.05, edef.drag ?? 0.05);
-    const reach = edef.speed[1] * (1 - Math.exp(-k * edef.life[1])) / k;
-    const note = document.createElement('div');
-    note.className = 'sv-wb-none';
-    note.textContent = `Reaches about ${reach.toFixed(1)} world units. The seal is 4.2 across.`;
-    par.appendChild(note);
-
-    const colours = document.createElement('div');
-    colours.className = 'sv-wb-f';
-    colours.innerHTML = '<label>colours</label>';
-    (edef.colors ?? []).forEach((c, i) => {
-      const sw = document.createElement('input');
-      sw.type = 'color';
-      sw.autocomplete = 'off';
-      sw.value = `#${c.toString(16).padStart(6, '0')}`;
-      sw.style.cssText = 'width:30px;height:22px;padding:0;border:1px solid rgba(255,255,255,0.2);border-radius:5px;background:none;cursor:pointer';
-      sw.addEventListener('input', () => { edef.colors[i] = parseInt(sw.value.slice(1), 16); changed(); });
-      colours.appendChild(sw);
-    });
-    par.appendChild(colours);
+// ONE BURST CARD, shared by the event view and the boss explosion.
+//
+// Extracted rather than copied because these controls are the only UI the
+// emitter table has anywhere in the game — the six under the divider have no
+// other control at all — and a second copy would be a set of numbers that
+// quietly stopped agreeing with the first.
+//
+// `event` is the feedback event the emitter hangs off, or null for a caller
+// that owns its emitter directly: systems/bossBoom.js fires `bossBoom` itself,
+// dozens of times per explosion, and no event names it. It is used only for
+// the shared-burst warning, which has nothing to say without one.
+function burstCard(cols, name, event = null) {
+  const edef = name ? CONFIG.emitters[name] : null;
+  if (!edef) return;
+  const par = card(cols, 'sv-wb-imp wide', `Burst · ${name}`,
+    'What the particles do. The six under the divider have no control anywhere else in the game.');
+  const users = Object.keys(CONFIG.feedback).filter((e) => CONFIG.feedback[e].emit === name && e !== event);
+  if (users.length) {
+    const w = document.createElement('div');
+    w.className = 'sv-wb-scope';
+    w.innerHTML = `Shared burst — <b>${users.join(', ')}</b> throw the same particles. Pick another emitter above to give this event its own.`;
+    par.appendChild(w);
   }
+  const g2 = document.createElement('div');
+  g2.style.cssText = 'display:grid; grid-template-columns:1fr 1fr; gap:0 20px';
+  const A = document.createElement('div');
+  const B = document.createElement('div');
+  g2.append(A, B);
+  slider(A, 'count', { max: 200, step: 1, dp: 0, get: () => edef.count, set: (v) => { edef.count = Math.round(v); } });
+  pairSlider(A, 'size', edef.size, 3, 0.01, 2);
+  pairSlider(A, 'life', edef.life, 3, 0.01, 2);
+  pairSlider(B, 'speed', edef.speed, 40, 0.5, 1);
+  slider(B, 'cone', { max: 6.3, step: 0.05, get: () => edef.cone ?? 0, set: (v) => { edef.cone = v; } });
+  slider(B, 'glow', { max: 4, step: 0.1, dp: 1, get: () => edef.glow ?? 0, set: (v) => { edef.glow = v; } });
+  par.appendChild(g2);
+  const div = document.createElement('div');
+  div.style.cssText = 'border-top:1px solid rgba(255,255,255,0.08); margin:8px 0 2px';
+  par.appendChild(div);
+  const g3 = document.createElement('div');
+  g3.style.cssText = 'display:grid; grid-template-columns:1fr 1fr; gap:0 20px';
+  const C = document.createElement('div');
+  const D = document.createElement('div');
+  g3.append(C, D);
+  slider(C, 'drag', { max: 8, step: 0.1, dp: 1, get: () => edef.drag ?? 0, set: (v) => { edef.drag = v; } });
+  slider(C, 'inherit', { step: 0.05, get: () => edef.inherit ?? 0, set: (v) => { edef.inherit = v; } });
+  slider(D, 'gravity', { min: -6, max: 6, step: 0.1, dp: 1, get: () => (edef.gravity ?? [0, 0])[1], set: (v) => { edef.gravity = [(edef.gravity ?? [0, 0])[0], v]; } });
+  par.appendChild(g3);
+
+  // Reach under linear drag — the same closed form particles.js integrates.
+  // speed x life is the no-drag answer and is wildly wrong for anything that
+  // slows: bigExplosion reads 73 units that way and travels 18.
+  const k = Math.max(0.05, edef.drag ?? 0.05);
+  const reach = edef.speed[1] * (1 - Math.exp(-k * edef.life[1])) / k;
+  const note = document.createElement('div');
+  note.className = 'sv-wb-none';
+  note.textContent = `Reaches about ${reach.toFixed(1)} world units. The seal is 4.2 across.`;
+  par.appendChild(note);
+
+  const colours = document.createElement('div');
+  colours.className = 'sv-wb-f';
+  colours.innerHTML = '<label>colours</label>';
+  (edef.colors ?? []).forEach((c, i) => {
+    const sw = document.createElement('input');
+    sw.type = 'color';
+    sw.autocomplete = 'off';
+    sw.value = `#${c.toString(16).padStart(6, '0')}`;
+    sw.style.cssText = 'width:30px;height:22px;padding:0;border:1px solid rgba(255,255,255,0.2);border-radius:5px;background:none;cursor:pointer';
+    sw.addEventListener('input', () => { edef.colors[i] = parseInt(sw.value.slice(1), 16); changed(); });
+    colours.appendChild(sw);
+  });
+  par.appendChild(colours);
+}
+
+// ---------------------------------------------------------------------------
+// THE BOSS GOING UP — the one view here that is not an event.
+//
+// systems/bossBoom.js fires `bossBoom` itself, dozens of times per explosion,
+// each call with its own size, speed, colour and glow — so there is no
+// feedback event to hang it off and no `emit` field to pick it from. It gets
+// its own view instead, and the same Burst card everything else gets, because
+// the puff those dozens of calls throw IS an ordinary emitter row.
+//
+// WHY IT IS HERE AND NOT IN THE ` TUNER. It was there first, filed under
+// 'Look & FX', and that is the correct shelf for it and the wrong panel: this
+// is where the particles are, this is the panel with a parked seal and a Fire
+// button in front of it, and an effect you cannot fire while you tune it is an
+// effect you tune by killing bosses.
+// ---------------------------------------------------------------------------
+
+function boomToggle(host, label, get, set, title) {
+  const row = document.createElement('div');
+  row.className = 'sv-wb-f';
+  const lab = document.createElement('label');
+  lab.textContent = label;
+  if (title) lab.title = title;
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.autocomplete = 'off';
+  box.checked = get() !== false;
+  box.addEventListener('change', () => { set(box.checked); changed(); render(); });
+  row.append(lab, box);
+  host.appendChild(row);
+}
+
+function renderBoom() {
+  const b = CONFIG.boss?.boom;
+  const goo = CONFIG.fx?.goo?.groups?.boom;
+  els.name.textContent = 'The boss going up';
+  els.via.textContent = 'CONFIG.boss.boom  \u2192  CONFIG.fx.goo.groups.boom  \u2192  CONFIG.emitters.bossBoom';
+  els.chips.replaceChildren();
+  const cols = els.cols;
+  cols.replaceChildren();
+  if (!b || !goo) {
+    card(cols, 'sv-wb-imp wide', 'Not in this build',
+      'CONFIG.boss.boom or the `boom` goo group is missing, so there is nothing to tune.');
+    return;
+  }
+
+  // --- WHEN, AND FIRING IT ---------------------------------------------------
+  const when = card(cols, 'sv-wb-imp', 'The moment',
+    'It goes off before the trophy photo, not on the killing blow \u2014 the shutter is derived from the kill shot, so retuning the beat moves this with it.');
+  boomToggle(when, 'bosses go up', () => b.enabled, (v) => { b.enabled = v; },
+    'Off, a boss dies the way it did before: wreckage and a hole.');
+  slider(when, 'before the photo', { max: 1.2, step: 0.02, get: () => b.lead ?? 0.34, set: (v) => { b.lead = v; },
+    title: 'Wall seconds. Set a little longer than the waves take to finish, so the cloud is fully open and just beginning to settle in the picture.' });
+
+  const fireRow = document.createElement('div');
+  fireRow.className = 'sv-wb-f';
+  const fireLab = document.createElement('label');
+  fireLab.textContent = 'try it';
+  const fireBtn = document.createElement('button');
+  fireBtn.className = 'sv-wb-btn sv-stage-fire';
+  fireBtn.textContent = '\u25b6 Blow up the seal';
+  fireBtn.title = 'Detonates a real explosion on the parked seal, at the size the slider below says. The world is held still with the panel open, so it blooms across a frozen ocean exactly as it does in the shot.';
+  fireBtn.addEventListener('click', () => {
+    const a = stageAnchor();
+    resetBossBooms();
+    // A BODY WITH NO ANIMAL IN IT. fireBossBoom measures a hitbox, falls back
+    // to a visual, and falls back again to a point and a radius — which is all
+    // three of the things a test body can honestly provide. Same shape the look
+    // sheet's `stand()` builds, and it goes through the real colour path.
+    fireBossBoom({
+      mesh: { position: { x: a.x, y: a.y } },
+      radius: boomTestRadius,
+      assetKey: '__stage__',
+      vx: 0,
+      vy: 0,
+    });
+  });
+  fireRow.append(fireLab, fireBtn);
+  when.appendChild(fireRow);
+  slider(when, 'test body radius', { min: 1, max: 20, step: 0.5, dp: 1,
+    get: () => boomTestRadius, set: (v) => { boomTestRadius = v; },
+    title: 'How big the animal under the test explosion is. The roster measures about 12.5 (kraken) to 16.8 (megalodon). Not saved \u2014 it is a staging knob, not a value.' });
+
+  // --- THE CLOUD -------------------------------------------------------------
+  const cloud = card(cols, 'sv-wb-imp', 'The cloud',
+    'Everything that moves the whole thing at once. Every number in the effect is a multiple of the measured body, so these are the only absolute sizes in it.');
+  slider(cloud, 'size', { min: 0.2, max: 3, step: 0.05, get: () => b.size ?? 1, set: (v) => { b.size = v; },
+    title: 'Rings and lobes together \u2014 the one lever that means bigger without changing the shape.' });
+  slider(cloud, 'keeps opening', { max: 3, step: 0.05, get: () => b.speed ?? 1, set: (v) => { b.speed = v; } });
+  slider(cloud, 'brightness', { max: 4, step: 0.05, get: () => b.glow ?? 1, set: (v) => { b.glow = v; },
+    title: 'The cloud is ADDITIVE, so this is a lift on top of one. Past about 0.6 the core blows to flat white and the bloom welds across it.' });
+  slider(cloud, 'lightness', { min: 0.2, max: 1, step: 0.02, get: () => b.tint?.lightness ?? 0.82, set: (v) => { (b.tint ??= {}).lightness = v; },
+    title: 'The boss keeps its HUE and gets this value. Every boss in the roster is a near-black hide, and smoke tinted with one is a black cloud on dark water.' });
+  slider(cloud, 'saturation lift', { max: 3, step: 0.05, get: () => b.tint?.saturation ?? 1.4, set: (v) => { (b.tint ??= {}).saturation = v; },
+    title: 'Scaled, never floored \u2014 a grey animal has to stay grey, or the megalodon gets a bright red explosion off a meaningless hue.' });
+  slider(cloud, '...its ceiling', { max: 1, step: 0.05, get: () => b.tint?.maxSaturation ?? 0.55, set: (v) => { (b.tint ??= {}).maxSaturation = v; } });
+  slider(cloud, 'smallest body', { min: 0.5, max: 8, step: 0.1, dp: 1, get: () => b.minRadius ?? 3, set: (v) => { b.minRadius = v; } });
+  slider(cloud, '...and largest', { min: 3, max: 20, step: 0.5, dp: 1, get: () => b.maxRadius ?? 17, set: (v) => { b.maxRadius = v; },
+    title: 'The clamp the measured body passes through. Keep the range wide: a ceiling inside the roster band makes every boss go up the same size.' });
+
+  // --- THE SURFACE -----------------------------------------------------------
+  const surf = card(cols, 'sv-wb-imp', 'Its surface',
+    'The shared metaball pass (CONFIG.fx.goo.groups.boom). These are the splats\u2019 relationship to each other, never a size \u2014 for bigger, use the cloud\u2019s own size above.');
+  boomToggle(surf, 'light, not substance', () => goo.additive, (v) => { goo.additive = v; },
+    'Additive. Off, the cloud hides the animal it came out of \u2014 which is what it did until the body stopped reading through its own explosion.');
+  slider(surf, 'opacity', { max: 1, step: 0.02, get: () => goo.opacity ?? 1, set: (v) => { goo.opacity = v; } });
+  slider(surf, 'surface', { min: 0.15, max: 1.2, step: 0.02, get: () => goo.iso ?? 0.9, set: (v) => { goo.iso = v; },
+    title: 'Where the isoline sits. A splat peaks at exactly 1 by construction, so at or above it nothing shows unless two lobes overlap.' });
+  slider(surf, 'edge', { min: 0.02, max: 0.8, step: 0.01, get: () => goo.soft ?? 0.22, set: (v) => { goo.soft = v; },
+    title: 'Low is a drawn cel edge, high is mist. This is where the toon read lives now that additive light cannot draw a dark outline.' });
+  slider(surf, 'rim', { min: -1.5, max: 1.5, step: 0.05, get: () => goo.rim ?? 0, set: (v) => { goo.rim = v; },
+    title: 'On an additive surface a negative rim cannot darken anything \u2014 light has no way to be darker than the water.' });
+  slider(surf, '...how far in', { min: 0.05, max: 2, step: 0.05, get: () => goo.rimWidth ?? 0.6, set: (v) => { goo.rimWidth = v; },
+    title: 'A band of DENSITY, not a distance. Wide, it lights the dip between every pair of lobes and the mass renders as fifty overlapping circles.' });
+  slider(surf, 'lobe size', { min: 1, max: 8, step: 0.1, dp: 1, get: () => goo.radius ?? 3.4, set: (v) => { goo.radius = v; },
+    title: 'Splat diameter as a multiple of each particle\u2019s own size. Below about 2 nothing fuses at all.' });
+
+  // --- RANDOMNESS ------------------------------------------------------------
+  const org = card(cols, 'sv-wb-imp', 'How random it is',
+    'Rolled per explosion, so no two kills give the same cloud. The lumps are shared by every ring \u2014 per-lobe noise averages back into a circle.');
+  slider(org, 'lumpiness', { max: 0.8, step: 0.02, get: () => b.organic?.lumps ?? 0, set: (v) => { (b.organic ??= {}).lumps = v; },
+    title: '0 is a wheel of evenly spaced circles. Where a bulge pushes neighbours apart their lobes grow by the same factor, so fusion survives any depth.' });
+  slider(org, 'walks off centre', { max: 0.5, step: 0.02, get: () => b.organic?.lean ?? 0, set: (v) => { (b.organic ??= {}).lean = v; } });
+  slider(org, 'a ring spread over', { max: 0.09, step: 0.005, dp: 3, get: () => b.organic?.stagger ?? 0, set: (v) => { (b.organic ??= {}).stagger = v; },
+    title: 'Seconds. Without it a ring pops into existence on one frame, which is the tell that this is a schedule and not an explosion.' });
+  slider(org, 'lobe size scatter', { max: 0.6, step: 0.02, get: () => b.organic?.lobeVary ?? 0, set: (v) => { (b.organic ??= {}).lobeVary = v; } });
+  slider(org, 'brightness scatter', { max: 0.8, step: 0.02, get: () => b.organic?.toneVary ?? 0, set: (v) => { (b.organic ??= {}).toneVary = v; } });
+
+  // --- THE OUTERMOST RING ----------------------------------------------------
+  const w3 = b.waves?.[3];
+  if (w3) {
+    const ring = card(cols, 'sv-wb-imp', 'The outermost ring',
+      'The one the eye reads as \u201chow big was that\u201d. The other three rings are a table in the config \u2014 they are the shape, and a panel with forty sliders is a panel nobody opens.');
+    slider(ring, 'reach', { min: 0.4, max: 3.5, step: 0.05, get: () => w3.ring ?? 1, set: (v) => { w3.ring = v; },
+      title: 'x the body.' });
+    slider(ring, 'lobes around it', { min: 4, max: 40, step: 1, dp: 0, get: () => w3.puffs ?? 8, set: (v) => { w3.puffs = Math.round(v); } });
+    slider(ring, 'lobe size', { min: 0.05, max: 0.6, step: 0.01, get: () => w3.lobe ?? 0.3, set: (v) => { w3.lobe = v; } });
+    slider(ring, 'how dark the edge', { min: 0.2, max: 2.5, step: 0.05, get: () => w3.tone ?? 1, set: (v) => { w3.tone = v; },
+      title: 'Rides on the glow rather than the colour: emit() lifts a dark tint clear of the water before it uses it, so a ramp authored into the colour quietly would not exist.' });
+  }
+
+  // --- THE SHOCKWAVE ---------------------------------------------------------
+  const sc = b.shock;
+  if (sc) {
+    const shock = card(cols, 'sv-wb-imp', 'The shockwave',
+      'Not goo \u2014 the shared telegraph ring (systems/organicRing.js), because goo would fuse into the cloud it is outrunning. Both rings are gone before the shutter.');
+    boomToggle(shock, 'shockwave', () => sc.enabled, (v) => { sc.enabled = v; });
+    slider(shock, 'brightness', { max: 8, step: 0.1, dp: 1, get: () => sc.glow ?? 3.2, set: (v) => { sc.glow = v; } });
+    slider(shock, 'how white-hot', { max: 1, step: 0.02, get: () => sc.white ?? 0.72, set: (v) => { sc.white = v; },
+      title: '0 is the boss\u2019s own colour. The front says FORCE and the slow ring behind it says which animal it was.' });
+    slider(shock, 'how ragged', { max: 0.4, step: 0.01, get: () => sc.wobble ?? 0.26, set: (v) => { sc.wobble = v; },
+      title: 'x the body, in world units \u2014 but capped as a fraction of the ring\u2019s CURRENT radius, so it only spends the full amount once the front is wide.' });
+    slider(shock, 'thickness varies', { max: 1.2, step: 0.05, get: () => sc.massVar ?? 0, set: (v) => { sc.massVar = v; } });
+    slider(shock, 'decelerates', { min: 0.5, max: 5, step: 0.1, dp: 1, get: () => sc.ease ?? 2.6, set: (v) => { sc.ease = v; } });
+    const r0 = sc.rings?.[0];
+    if (r0) {
+      slider(shock, 'front reach', { min: 0.6, max: 4, step: 0.05, get: () => r0.to ?? 2.7, set: (v) => { r0.to = v; },
+        title: 'x the body. Past about 3 at fight scale it stops reading as coming off the animal.' });
+      slider(shock, '...over', { min: 0.08, max: 0.34, step: 0.01, get: () => r0.seconds ?? 0.26, set: (v) => { r0.seconds = v; },
+        title: 'Wall seconds, like everything else racing the shutter.' });
+      slider(shock, '...rubbed out from', { max: 0.95, step: 0.05, get: () => r0.eat ?? 0.45, set: (v) => { r0.eat = v; },
+        title: 'When the trailing edge starts eating the front from behind.' });
+    }
+  }
+
+  // --- THE PUFF --------------------------------------------------------------
+  // The ordinary emitter card, on the ordinary emitter. Everything above places
+  // and scales these; this is what is being placed.
+  burstCard(cols, 'bossBoom');
 }
 
 function pairSlider(host, label, pair, max, step, dp) {

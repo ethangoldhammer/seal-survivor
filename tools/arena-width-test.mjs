@@ -52,9 +52,10 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
-import { bounds, updateBounds, clampToArena, seabedTopY } from '../path/src/arena.js';
+import { bounds, updateBounds, clampToArena, seabedTopY, maxWaveExcursion } from '../path/src/arena.js';
 import { skyPlaneMetrics } from '../path/src/systems/sky.js';
 import { createWallRocks } from '../path/src/systems/wallRocks.js';
+import { updateCineCamera, resetCineCamera } from '../path/src/systems/cineCamera.js';
 import { dayState, resetDayCycle, advanceClock, updateDayCycle } from '../path/src/systems/daylight.js';
 import { player, updatePlayer, recomputeStats, resetPlayer } from '../path/src/entities/player.js';
 
@@ -382,6 +383,211 @@ for (let i = 0; i < pos.count; i++) {
 }
 check('no gaps up the underwater face', bands.every((n) => n > 0),
   `${bands.filter((n) => n > 0).length}/${bands.length} bands covered`);
+
+// ---------------------------------------------------------------------------
+section('DRIFT — the frame may pass the wall, but only as far as the rock does');
+
+// `rocks.cover` is the number the camera spends: the depth of the drawn face
+// at its THINNEST point, so a frame that drifts by it is still looking at
+// rock at every height. Re-measured here at a different step and a different
+// phase, because the realistic way for that measurement to be wrong is a
+// bucket boundary — one that lands its samples on the fat part of every
+// boulder reads a face deeper than it is, and the failure is a strip of open
+// water outside the shore at one height, on one window size.
+function silhouette(step, phase = 0) {
+  const pos = rocks.mesh.geometry.attributes.position;
+  // The band that has to stay hidden, and the same one measureCover uses: the
+  // top of the seabed (below it the floor strip is opaque and overscans on its
+  // own) up to the highest the water ever reaches. Above that line, past the
+  // rock, is sky — and it is the same sky on both sides of the shore.
+  const lo = seabedTopY();
+  const hi = bounds.surfaceY
+    + maxWaveExcursion(CONFIG.arena.waveAmplitude * Math.max(1, CONFIG.weather?.sea?.amp ?? 1), 1);
+  const out = [];
+  for (let y = lo + phase; y <= hi; y += step) {
+    let r = -Infinity, l = -Infinity;
+    for (let t = 0; t + 2 < pos.count; t += 3) {
+      let far = -Infinity;
+      let side = 0;
+      for (let k = 0; k < 3; k++) {
+        const j = (k + 1) % 3;
+        const x0 = pos.getX(t + k), y0 = pos.getY(t + k);
+        const x1 = pos.getX(t + j), y1 = pos.getY(t + j);
+        side = x0 > 0 ? 1 : -1;
+        if ((y0 <= y && y1 >= y) || (y1 <= y && y0 >= y)) {
+          const f = y1 === y0 ? 0 : (y - y0) / (y1 - y0);
+          const x = x0 + (x1 - x0) * f;
+          const d = side > 0 ? x - bounds.right : bounds.left - x;
+          if (d > far) far = d;
+        }
+      }
+      if (far > -Infinity) {
+        if (side > 0) r = Math.max(r, far); else l = Math.max(l, far);
+      }
+    }
+    out.push({ y, right: Math.max(0, r === -Infinity ? 0 : r), left: Math.max(0, l === -Infinity ? 0 : l) });
+  }
+  return out;
+}
+
+const sil = silhouette(0.17, 0.09);
+const thinnest = sil.reduce((m, b) => Math.min(m, b.right, b.left), Infinity);
+const deepest = sil.reduce((m, b) => Math.max(m, b.right, b.left), 0);
+check('the shore reports a depth to spend at all', rocks.cover > 0,
+  `${rocks.cover.toFixed(2)} units of face past each wall`);
+check('...and the face really is that deep at every height', thinnest >= rocks.cover - 1e-9,
+  `thinnest scanline ${thinnest.toFixed(2)} vs reported ${rocks.cover.toFixed(2)}`);
+// The thinnest point, not the average one. A mean here would read about three
+// times as deep and would be wrong exactly where it matters — at the notch.
+check('...and it is the thinnest point, not the typical one', rocks.cover < deepest * 0.9,
+  `thinnest ${rocks.cover.toFixed(2)} against a face up to ${deepest.toFixed(2)} deep`);
+
+// What the camera actually spends, which is the smaller of the two. Both
+// directions are a bug you could ship: take the config number alone and the
+// frame shows open water past the shore, take the rock alone and the tuner's
+// ceiling does nothing.
+const spend = (drift) => Math.max(0, Math.min(drift, rocks.cover));
+check('the tuner can ask for less than the rock allows', near(spend(0.5), 0.5),
+  `edgeDrift 0.5 -> ${spend(0.5).toFixed(2)}`);
+check('...but never for more', near(spend(999), rocks.cover),
+  `edgeDrift 999 -> ${spend(999).toFixed(2)}, the face's own depth`);
+check('the shipped ceiling is the rock, not the number',
+  spend(CONFIG.camera.edgeDrift) <= rocks.cover + 1e-9,
+  `edgeDrift ${CONFIG.camera.edgeDrift} -> ${spend(CONFIG.camera.edgeDrift).toFixed(2)} spent`);
+
+// Turned off, there is nothing drawn out there to hide behind, so the frame
+// has to go back to stopping dead on the wall. A cover left at its last
+// measured value would drift the frame into bare water.
+CONFIG.wallRocks.enabled = false;
+rocks.build();
+check('no shore, no drift', rocks.cover === 0, `cover ${rocks.cover}`);
+CONFIG.wallRocks.enabled = true;
+rocks.build();
+
+// The cap follows the ART. This is the whole reason it is measured rather
+// than written: bigger boulders are a bigger frame budget, with nothing to
+// keep in step by hand.
+const baseCover = rocks.cover;
+const savedSize = CONFIG.wallRocks.size.slice();
+CONFIG.wallRocks.size = [savedSize[0] * 1.8, savedSize[1] * 1.8];
+rocks.build();
+check('a deeper wall buys more drift', rocks.cover > baseCover * 1.2,
+  `${baseCover.toFixed(2)} -> ${rocks.cover.toFixed(2)} at 1.8x boulder size`);
+CONFIG.wallRocks.size = savedSize;
+rocks.build();
+
+// ---------------------------------------------------------------------------
+section('EASING — the frame slows into the wall instead of hitting it');
+
+// The real rig, driven against the real limits. No renderer is involved: the
+// cine camera talks to world.js through four callbacks and nothing else, so
+// the arithmetic below is exactly what runs in a game.
+const ZOOM_HALF = (z) => ({ w: (bounds.frameWidth / 2) / z, h: (VH / 2) / z });
+function rigCtx() {
+  const side = spend(CONFIG.camera.edgeDrift);
+  const limitsOf = (zoom) => {
+    const half = ZOOM_HALF(zoom);
+    return {
+      loX: bounds.left + half.w - side,
+      hiX: bounds.right - half.w + side,
+      loY: bounds.bottom + half.h,
+      hiY: bounds.top - half.h,
+    };
+  };
+  return {
+    target: { x: 0, y: -12 },
+    velocity: { x: 0, y: 0 },
+    aim: { x: 0, y: 0 },
+    dashDir: { x: 0, y: 0 },
+    chargePower: 0,
+    strikeHeld: false, charging: false, boosting: false,
+    deathPhase: 'none', deathElapsed: 0,
+    halfExtents: ZOOM_HALF,
+    focusLimits: (zoom) => limitsOf(zoom),
+    clampFocus: (x, y, zoom) => {
+      const l = limitsOf(zoom);
+      return {
+        x: l.loX > l.hiX ? 0 : Math.min(Math.max(x, l.loX), l.hiX),
+        y: l.loY > l.hiY ? (bounds.bottom + bounds.top) / 2 : Math.min(Math.max(y, l.loY), l.hiY),
+      };
+    },
+  };
+}
+
+// A flat-out swim from the middle of the ocean into the right-hand wall, at
+// the real top speed, until the seal is stopped by clampToArena. `legacy`
+// withholds focusLimits, which is how the rig behaved before any of this: the
+// target left pointing at a seal past the wall, and the frame's POSITION
+// truncated at the limit. It is the control the easing is measured against,
+// and it exercises the fallback branch at the same time.
+function swimAtWall(edgeEase, legacy = false) {
+  CONFIG.cinecam.enabled = true;
+  CONFIG.cinecam.base.edgeEase = edgeEase;
+  resetCineCamera();
+  const ctx = rigCtx();
+  if (legacy) delete ctx.focusLimits;
+  const dt = 1 / 60;
+  const speed = 40;
+  const frames = [];
+  for (let i = 0; i < 420; i++) {
+    const nx = Math.min(bounds.right - CONFIG.player.hitRadius, ctx.target.x + speed * dt);
+    ctx.velocity.x = (nx - ctx.target.x) / dt;
+    ctx.target.x = nx;
+    const out = updateCineCamera(dt, ctx);
+    frames.push({ x: out.x, edge: out.x + ZOOM_HALF(out.zoom).w, seal: ctx.target.x });
+  }
+  return frames;
+}
+
+const savedEase = CONFIG.cinecam.base.edgeEase;
+const savedEnabled = CONFIG.cinecam.enabled;
+const eased = swimAtWall(CONFIG.cinecam.base.edgeEase ?? 0.3);
+const noRamp = swimAtWall(0);
+const legacy = swimAtWall(0, true);
+
+const wallLine = bounds.right + spend(CONFIG.camera.edgeDrift);
+check('the eased frame never passes the rock face',
+  eased.every((f) => f.edge <= wallLine + 1e-6),
+  `furthest edge ${Math.max(...eased.map((f) => f.edge)).toFixed(2)} vs rock out to ${wallLine.toFixed(2)}`);
+check('...and does get past the wall itself',
+  Math.max(...eased.map((f) => f.edge)) > bounds.right + 0.5,
+  `${(Math.max(...eased.map((f) => f.edge)) - bounds.right).toFixed(2)} units of drift used`);
+
+// THE POINT OF THE WHOLE THING, and the only honest way to measure it: how
+// fast the frame is still moving on its LAST unit of travel. A stop is a stop
+// whatever precedes it — what reads as a lurch is arriving at one at speed.
+function arrivalSpeed(frames) {
+  const end = frames[frames.length - 1].x;
+  let fastest = 0;
+  for (let i = 1; i < frames.length; i++) {
+    if (frames[i].x > end - 1) fastest = Math.max(fastest, Math.abs(frames[i].x - frames[i - 1].x));
+  }
+  return fastest;
+}
+const vEased = arrivalSpeed(eased);
+const vNoRamp = arrivalSpeed(noRamp);
+const vLegacy = arrivalSpeed(legacy);
+check('the frame no longer arrives at the wall at speed', vEased < vLegacy * 0.25,
+  `last unit of travel: ${vEased.toFixed(3)} u/frame eased vs ${vLegacy.toFixed(3)} hard-clamped`);
+// Which half of the fix did what. Softening the target at all is most of it;
+// the ramp is the rest. Split out because a regression that quietly dropped
+// the ramp would still look like a large win against the old behaviour.
+check('...the softened target is most of that', vNoRamp < vLegacy * 0.35,
+  `${vNoRamp.toFixed(3)} u/frame with the limit but no ramp`);
+check('...and the ramp takes it the rest of the way', vEased < vNoRamp,
+  `${vEased.toFixed(3)} with the ramp vs ${vNoRamp.toFixed(3)} without`);
+
+// A soft wall that overshot and came back would read as a bounce off the
+// scenery, which is worse than the stop it replaces. The spring's own damping
+// is under 1, so a hair of settle is expected — a bounce is not.
+let worstBack = 0;
+for (let i = 1; i < eased.length; i++) worstBack = Math.min(worstBack, eased[i].x - eased[i - 1].x);
+check('the approach never bounces back off the wall', worstBack > -0.02,
+  `worst reversal ${worstBack.toFixed(4)} units in a frame`);
+
+CONFIG.cinecam.base.edgeEase = savedEase;
+CONFIG.cinecam.enabled = savedEnabled;
+resetCineCamera();
 
 // The backdrop is rebuilt on every resize. A shore that reshuffled would read
 // as the scenery glitching rather than as the window moving.

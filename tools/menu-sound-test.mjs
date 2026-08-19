@@ -474,7 +474,7 @@ settle();
 // Every clickable control goes through one helper. If a control ever gets both
 // the helper and a hand-rolled binding, this is where it shows up.
 let doubled = 0;
-for (const node of [restart, submit, document.getElementById('svStartBtn')]) {
+for (const node of [restart, submit]) {
   settle();
   node.click();
   if (only(drain(), 'uiClick') > 1) doubled++;

@@ -123,20 +123,33 @@ export function mainMenu() {
 }
 
 /**
- * HOW HARD THE SEAL SHOULD DENT THE ARENA'S LATTICE, or null for "whatever
- * CONFIG says" — which is every frame there is no menu.
+ * WHAT THE MENU ASKS OF THE ARENA'S OWN LATTICE — `{ wake, fade }`, or null on
+ * every frame there is no menu, which leaves CONFIG in charge.
  *
- * The menu draws a fine lattice of its own but the arena's coarse one is still
- * there underneath, and at fifteen times the run's zoom the seal's wake radius
- * is wider than the frame: left alone, that one grid pulls every node on screen
- * toward the animal and the backdrop reads as a web with the seal in the middle
- * of it. Handed to world.grid.update by main.js, the same way the camera and
- * the strike meter are, rather than pushed through CONFIG — the arena's grid is
- * ticked well before this file gets the frame, so there is nothing to push it
- * around.
+ * Spread into the view object main.js hands world.grid.update, the same way the
+ * camera and the strike meter are handed in, because the arena's grid is ticked
+ * well before this file gets the frame: there is nothing here to push CONFIG
+ * around, the way the menu's own lattice is driven.
+ *
+ * TWO THINGS, and both are about the same fact — the menu draws a lattice of
+ * its own and the arena's is still there underneath it, six units across
+ * against the menu's one.
+ *
+ *   fade  ONE GRID ON SCREEN, NOT TWO. The arena's cell is bigger than the
+ *         whole menu frame at this zoom, so its lines land as a pair of huge
+ *         bright strokes across a screen composed on a fine one — two lattices
+ *         at different sizes and different colours, which reads as a mistake
+ *         because it is one. So the arena's is held down while the menu is up
+ *         and brought back as the shot opens out, and the crossfade is what
+ *         "the fine grid resolves into the one the run is played on" actually
+ *         needs to be. `menu.arenaLattice` is how much of it survives while
+ *         the screen is held — 0 by default, which is a clean crossfade.
+ *   wake  the seal's dent, tuned for a fifty-unit view: the radius is wider
+ *         than this whole frame, so left alone it pulls every node on screen
+ *         toward the animal and the backdrop becomes a web. See wakeFor.
  */
-export function mainMenuWake() {
-  return live ? live.gridWake() : null;
+export function mainMenuGrid() {
+  return live ? live.gridView() : null;
 }
 
 /**
@@ -468,7 +481,14 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   // by the role's class beside it.
   const labelLayer = document.createElement('div');
   labelLayer.className = 'sv-menu-labels';
-  labelLayer.style.cssText = 'position:absolute; inset:0; pointer-events:none; z-index:6;';
+  // UNDER EVERY PANEL THIS SCREEN OPENS. These labels belong to the buttons —
+  // they are the hexagons' own text, drawn in the DOM only because the type
+  // system lives there — so anything the buttons OPEN is in front of them:
+  // Options and the Leaderboard are `.sv-center` surfaces at z-index 4 (see
+  // ui/ui.js), and at 6 the words "Play" and "Leaderboard" floated over the
+  // panel that had just been asked for. Below those, above nothing that is up
+  // while the menu is: the HUD is hidden here and the hive is not built yet.
+  labelLayer.style.cssText = 'position:absolute; inset:0; pointer-events:none; z-index:3;';
   (root ?? document.body).appendChild(labelLayer);
 
   const labels = menu.items.map((item) => {
@@ -801,10 +821,18 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     releaseFrom: 0,
     aim,
     handle: null,
-    // What the ARENA's lattice should be dented by while this screen is up —
-    // see mainMenuWake, and wakeFor for why it is a blend rather than a switch.
-    gridWake: () => wakeFor(state.weight),
+    // What the ARENA's lattice is asked for while this screen is up — see
+    // mainMenuGrid, and wakeFor for why the dent is a blend, not a switch.
+    // Rebuilt into the same object every frame: this is read once per frame on
+    // the hot path and has no business allocating.
+    gridView: () => {
+      const w = state.weight;
+      _gridView.wake = wakeFor(w);
+      _gridView.fade = 1 + ((menuCfg.arenaLattice ?? 0) - 1) * w;
+      return _gridView;
+    },
   };
+  const _gridView = { wake: 0, fade: 1 };
 
   function tidy() {
     // The rig's latch, dropped for good. `release` already dropped it on the

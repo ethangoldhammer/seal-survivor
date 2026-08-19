@@ -192,6 +192,18 @@ export function parkStageCamera(world, pos) {
  * @returns false if the event name no longer exists, so a panel can say so
  *          rather than looking like it did nothing.
  */
+/**
+ * Where the seal is, for anything that wants to stage an effect ON it rather
+ * than through feedback(). Returns the origin before the first frame has run,
+ * which is where the seal starts anyway.
+ *
+ * A copy, not the record: a caller holding this object could park an effect on
+ * a position that keeps moving under it.
+ */
+export function stageAnchor() {
+  return { x: anchor.known ? anchor.x : 0, y: anchor.known ? anchor.y : 0, known: anchor.known };
+}
+
 export function fireStagedEvent() {
   const name = stageState.event;
   if (!CONFIG.feedback[name]) return false;

@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds, WAVE, sea } from '../arena.js';
 import { skyLight } from './daylight.js';
+// The veins are sampled here AND on the seal's wet film — see the note in that
+// file for why there is only one copy of them.
+import { CAUSTICS_GLSL } from './causticsGlsl.js';
 
 // The water fill, replacing a flat rectangle. Everything — the depth gradient,
 // the caustic veins, and the light beams — is one fragment
@@ -88,16 +91,7 @@ const fragmentShader = /* glsl */ `
       + sin(x * ${WAVE.k3.toFixed(4)} + uWaveT * ${WAVE.w3.toFixed(4)}) * uWaveAmp * ${WAVE.amp3.toFixed(4)} * uChop;
   }
 
-  // Three interfering sine waves — a cheap, seamless stand-in for real
-  // caustic ray-tracing. Cubing sharpens the bright veins.
-  float caustics(vec2 p, float t) {
-    float c = 0.0;
-    c += sin(p.x * 1.3 + p.y * 0.7 + t);
-    c += sin(p.x * -0.9 + p.y * 1.4 - t * 1.3);
-    c += sin(p.x * 0.5 - p.y * 1.1 + t * 0.7);
-    c = c / 3.0;
-    return pow(max(c, 0.0), 3.0);
-  }
+${CAUSTICS_GLSL}
 
   void main() {
     // A soft band rather than a hard cut, so the crest edge doesn't crawl with
@@ -253,6 +247,22 @@ export function setCausticsPunch(gain = 1, scale = 1) {
   causticsScaleMul = Math.max(0.0001, scale);
 }
 
+// THE LIVE CAUSTIC STATE, for anything that has to be lit by the same veins the
+// water is drawing. Written once a frame at the bottom of updateWaterMaterial;
+// see the note there. Read-only to everyone else — it is a mirror of what was
+// uploaded, not a second place to set it.
+export const liveCaustics = {
+  on: 1,
+  light: 1,        // the day/night bus alone — see the note where it is written
+  intensity: 0.4,  // ...and the value the water plane actually uploaded
+  scale: 0.16,
+  phase: 0,
+  falloff: 1.6,
+  color: new THREE.Color(0xbfefff),
+  surfaceY: 0,
+  bottomY: -1,
+};
+
 // Called every frame — cheap uniform sets, so tuner sliders apply live with no
 // rebuild. Geometry-affecting values (position/size) are handled separately by
 // whoever positions the mesh.
@@ -298,6 +308,44 @@ export function updateWaterMaterial(material, clock) {
   u.uCausticsFalloff.value = cc.falloff;
   u.uCausticsColor.value.set(cc.color);
   if (day && cc.followSun) u.uCausticsColor.value.lerp(skyLight.color, cc.tintMix ?? 0);
+
+  // PUBLISHED FOR THE SEAL'S WET FILM. The veins that fall on the animal are
+  // the same light as the veins in the water behind it, so everything the film
+  // needs is taken from the values THIS function just finished resolving —
+  // after the punch-in gain, after the day/night bus, after the sun's tint.
+  //
+  // Recomputing any of it on the other side would mean a second copy of the
+  // `nightFloor + (1 - nightFloor) * intensity` curve and the menu's gain, and
+  // the first tuner change to either would leave the seal lit by a time of day
+  // the ocean had already moved on from.
+  liveCaustics.on = u.uCausticsOn.value;
+  // THE DAY BUS ALONE — 1 at noon, `nightFloor` under a full moon — and NOT
+  // `intensity`, which is the other half of what got uploaded above.
+  //
+  // The difference is the whole reason the seal's veins were invisible in the
+  // first cut. CONFIG.caustics.intensity is authored for a fifty-unit fill
+  // where the dapple is a wash you are barely meant to notice; at 0.28 it is
+  // three hundredths of a value once the depth fade has had it, and three
+  // hundredths spread over a two-unit animal is nothing at all. It is the same
+  // mismatch setCausticsPunch exists to fix for the menu.
+  //
+  // So the film gets the TIME OF DAY and owns its own strength
+  // (CONFIG.sealShader.wetCaustics). The veins still die at night, still switch
+  // off with the tuner, and are no longer scaled by a number that describes a
+  // completely different surface.
+  liveCaustics.light = causticsLight;
+  liveCaustics.intensity = u.uCausticsIntensity.value;
+  liveCaustics.scale = u.uCausticsScale.value;
+  // The PHASE, not the speed — sampled exactly as the water samples it, so the
+  // two patterns are the same pattern rather than two at the same rate.
+  liveCaustics.phase = clock * u.uCausticsSpeed.value;
+  liveCaustics.falloff = u.uCausticsFalloff.value;
+  liveCaustics.color.copy(u.uCausticsColor.value);
+  // The depth ramp the falloff is measured against — the still line and the
+  // floor, not the wave above it, for the same reason the fill measures depth
+  // that way.
+  liveCaustics.surfaceY = u.uSurfaceY.value;
+  liveCaustics.bottomY = u.uBottomY.value;
 
   const gr = CONFIG.godrays;
   const rayLight = day && gr.followSun

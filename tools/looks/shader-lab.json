@@ -301,54 +301,119 @@
           }
         }
       }
+    },
+    "sealTeam": {
+      "surface": "noise",
+      "assets": {
+        "noiseShader": "sealTeam",
+        "toonShade": "sealTeam"
+      },
+      "presets": {
+        "sealShader": {
+          "sealTeam": {
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.6,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.6,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1.3,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735
+          }
+        },
+        "toonShade": {
+          "sealTeam": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        }
+      }
+    },
+    "ship": {
+      "surface": "noise",
+      "assets": {
+        "noiseShader": "ship",
+        "toonShade": "ship"
+      },
+      "presets": {
+        "sealShader": {
+          "ship": {
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 3,
+            "wetSoft": 0.5,
+            "wetTight": 21,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 4.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 0.95,
+            "wetCausticScale": 4.9,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735
+          }
+        },
+        "toonShade": {
+          "ship": {
+            "strength": 1,
+            "steps": 2,
+            "gamma": 1.05,
+            "low": 0.14,
+            "high": 1,
+            "soft": 0,
+            "range": 1.5
+          }
+        }
+      }
     }
   },
   "config": {
     "toonShade": {
-      "bossYacht": {
-        "steps": 3,
-        "strength": 1,
-        "gamma": 1.7
+      "ship": {
+        "low": 0.14,
+        "steps": 2,
+        "gamma": 1.05,
+        "soft": 0,
+        "range": 1.5
       }
     },
-    "biolumSkin": {
-      "hammerhead": {
-        "contrast": 3.35,
-        "scale": 0.07,
-        "colorA": 0,
-        "colorB": 3807096,
-        "colorC": 15132390,
-        "shellColor": 1710361,
-        "flow": 0.94
-      },
-      "hide": {
-        "scale": 0.42,
-        "pattern": "veins",
-        "colorA": 0,
-        "colorB": 2171942,
-        "colorC": 1352191,
-        "shellColor": 16510702,
-        "flow": 1.18,
-        "coverage": 0.56
-      },
-      "bossYacht": {
-        "pattern": "veins",
-        "flow": 0.48,
-        "coverage": 0.08,
-        "shellColor": 16777215,
-        "colorC": 3092013,
-        "colorB": 0,
-        "scale": 0.34,
-        "contrast": 1.5
+    "sealShader": {
+      "ship": {
+        "wetSteps": 3,
+        "wetTight": 21,
+        "wetRimPower": 4.4,
+        "wetCaustics": 0.95,
+        "wetCausticScale": 4.9
       }
     },
     "creatureOutline": {
       "__flat": {
-        "glow": 1.3,
-        "color": 16578808,
-        "thickness": 0.325
+        "color": 0,
+        "thickness": 0.09
       }
     }
   },
-  "recorded": "bossYacht"
+  "recorded": "ship"
 }

@@ -357,10 +357,18 @@ section('WHACK — what the swept head touches');
   // The swept test earning its keep: at a dash rate the head crosses several
   // units per frame, so a body sitting on the arc is only ever BETWEEN two
   // sampled positions. A contact test without the sweep misses this.
+  //
+  // DRIVEN WITH A REAL FIN SPIN, and that is not padding. Speed alone used to
+  // produce a fast swing because `assistSpin` turned the clubs on a clock of
+  // its own; with that gone, a seal sprinting in a straight line has both
+  // clubs streaming flat out behind it and the head never crosses this fish at
+  // all — which is the weapon working as intended and a scenario that can no
+  // longer ask the question. The claim here is about the SWEEP, so the setup
+  // has to actually produce one.
   freshRun();
   const onTheArc = spawnAt('fish', clubLength(1) * 0.92, -20);
   const hp = onTheArc.hp;
-  swing(1, { level: 1, speed: CONFIG.player.maxSpeed, dashing: true });
+  swing(1, { level: 1, speed: CONFIG.player.maxSpeed, dashing: true, finSpin: 16 });
   check('a fast swing does not step over a small body', onTheArc.hp < hp,
     `${onTheArc.hp.toFixed(1)} of ${hp.toFixed(1)} hp`);
 }
@@ -800,6 +808,441 @@ section('VARIANTS — you can tell from the water what you are holding');
     `headFrom ${ASSETS.club.headFrom}`);
 }
 
+// ------------------------------------------------------ the swing is performed
+
+section('PERFORMED — nothing turns these clubs but the animal');
+
+{
+  const { clubSwingSpeed } = await import('../path/src/systems/club.js');
+
+  // THE CENTRAL CLAIM OF THE REWRITE. A seal doing NOTHING — no fin motion, no
+  // travel, no direction change — must produce no swing at all, and therefore
+  // no damage. The free spin that used to sit under this weapon meant a player
+  // holding still was still being paid, which is the whole reason there was
+  // never a reason to work the fins.
+  freshRun();
+  const still = rigWithFins(2);
+  const idle = spawnAt('fish', 1.4, -20);
+  const idleHp = idle.hp;
+  for (let i = 0; i < 240; i++) {
+    still.pose(0);   // the fins do not move
+    updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+      { rig: still, velocity: { x: 0, y: 0 } }, {});
+  }
+  check('a seal doing nothing swings nothing', clubSwingSpeed() < CONFIG.club.minSwing,
+    `${clubSwingSpeed().toFixed(2)} rad/s, gate ${CONFIG.club.minSwing}`);
+  check('...and hurts nothing', idle.hp === idleHp,
+    `fish ${idle.hp.toFixed(1)} of ${idleHp.toFixed(1)} hp`);
+
+  // ...AND NEITHER DOES HOLDING A LINE. Full speed, dead straight, fins still.
+  // This is the one that makes the class a technique rather than a toll: the
+  // drag has the clubs streaming flat out behind and nothing is putting energy
+  // into them.
+  freshRun();
+  const cruise = rigWithFins(2);
+  for (let i = 0; i < 240; i++) {
+    cruise.pose(0);
+    updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+      { rig: cruise, velocity: { x: CONFIG.player.maxSpeed, y: 0 } }, {});
+  }
+  check('...and neither does holding a straight line at full speed',
+    clubSwingSpeed() < CONFIG.club.minSwing,
+    `${clubSwingSpeed().toFixed(2)} rad/s`);
+
+  // CARRY-THROUGH FROM THE FIN. Spin the flippers, then STOP them dead: the
+  // clubs must still be turning some frames later. That is the difference
+  // between momentum and a target — a club that merely chased the flipper
+  // stops the same frame the flipper does.
+  freshRun();
+  const spun = rigWithFins(2);
+  for (let i = 0; i < 90; i++) {
+    spun.pose(i * dt * 14);
+    updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+      { rig: spun, velocity: { x: 0, y: 0 } }, {});
+  }
+  const atStop = clubSwingSpeed();
+  const held = spun.muzzles.map((m) => m.clone());
+  let after = 0;
+  for (let i = 0; i < 6; i++) {
+    spun.muzzles.forEach((m, k) => m.copy(held[k]));  // fins frozen
+    updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+      { rig: spun, velocity: { x: 0, y: 0 } }, {});
+    after = clubSwingSpeed();
+  }
+  check('the clubs keep turning after the fins stop', after > CONFIG.club.minSwing,
+    `${atStop.toFixed(2)} -> ${after.toFixed(2)} rad/s, 0.1s after the fins froze`);
+
+  // CARRY-THROUGH FROM THE BODY. Same still fins, same speed — the only
+  // difference is that one of them CHANGES DIRECTION. Acceleration and not
+  // speed is what this term reads, which is exactly why a straight line at any
+  // speed is worth nothing and a carve is worth something.
+  const carve = (turning) => {
+    freshRun();
+    const rig = rigWithFins(2);
+    let peak = 0;
+    for (let i = 0; i < 180; i++) {
+      rig.pose(0);
+      const t = i * dt;
+      const a = turning ? t * 6 : 0;   // one is swinging its heading round
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: Math.cos(a) * 20, y: Math.sin(a) * 20 } }, {});
+      peak = Math.max(peak, clubSwingSpeed());
+    }
+    return peak;
+  };
+  const straight = carve(false);
+  const turned = carve(true);
+  check('changing direction swings them, holding a line does not',
+    turned > CONFIG.club.minSwing && turned > straight * 3,
+    `${straight.toFixed(2)} rad/s straight vs ${turned.toFixed(2)} carving`);
+
+  // A SWUNG FLIPPER BEATS THE WATER. The drag target at full swim used to pin
+  // the clubs flat behind the animal hard enough that spinning the fins bought
+  // almost nothing — which would have made "work the fins while swimming" a
+  // lie the moment the player got up to speed.
+  const spinAt = (speed) => {
+    freshRun();
+    const rig = rigWithFins(2);
+    let peak = 0;
+    for (let i = 0; i < 180; i++) {
+      rig.pose(i * dt * 16);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: speed, y: 0 } }, {});
+      peak = Math.max(peak, clubSwingSpeed());
+    }
+    return peak;
+  };
+  const atRest = spinAt(0);
+  const atSprint = spinAt(CONFIG.player.maxSpeed);
+  check('spinning the fins still works at full swim speed',
+    atSprint > atRest * 0.6,
+    `${atRest.toFixed(1)} rad/s at rest vs ${atSprint.toFixed(1)} sprinting`);
+}
+
+// -------------------------------------------------------------- the shockwave
+
+section('SHOCKWAVE — what the top of a real swing is worth');
+
+{
+  const shockRun = (finSpin, seconds = 2) => {
+    freshRun();
+    const rig = rigWithFins(2);
+    let shocks = 0;
+    let peakRadius = 0;
+    for (let i = 0; i < Math.round(seconds / dt); i++) {
+      rig.pose(i * dt * finSpin);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: 0, y: 0 } },
+        { onShock: (x, y, r) => { shocks++; peakRadius = Math.max(peakRadius, r); } });
+    }
+    return { shocks, peakRadius };
+  };
+
+  // A LAZY CLUB DOES NOT CRACK THE WATER. `shock.minSwing` sits well clear of
+  // the damage gate on purpose — if a club that merely counts as swinging also
+  // set off a wave, the wave would be the weapon and the swing decoration.
+  const lazy = shockRun(2);
+  check('a drifting club sets off nothing', lazy.shocks === 0, `${lazy.shocks} wave(s)`);
+
+  const hard = shockRun(18);
+  check('a hard swing does', hard.shocks > 0, `${hard.shocks} wave(s) in 2s`);
+
+  // ...AND IT DOES NOT MACHINE-GUN. A club oscillating near the threshold peaks
+  // several times a second, and `cooldown` is what stops one flick of the stick
+  // being worth five waves.
+  check('...but no faster than its cooldown allows',
+    hard.shocks <= Math.ceil(2 / CONFIG.club.shock.cooldown) * 2,
+    `${hard.shocks} across 2 clubs, cooldown ${CONFIG.club.shock.cooldown}s`);
+
+  // A FRESH CLUB CANNOT FIRE ONE. A new socket answers its first real target
+  // with a single very fast frame — a discontinuity, not a swing — and without
+  // the arm timer every run opened with free waves.
+  freshRun();
+  {
+    const rig = rigWithFins(2);
+    let early = 0;
+    for (let i = 0; i < Math.round(CONFIG.club.shock.armTime / dt); i++) {
+      rig.pose(0);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: 9, y: 0 } }, { onShock: () => { early++; } });
+    }
+    check('a club that has just appeared cannot crack the water', early === 0,
+      `${early} wave(s) inside ${CONFIG.club.shock.armTime}s of spawning`);
+  }
+
+  // IT DOES NOT NEED TO HIT ANYTHING. The whole reason the wave exists: the
+  // swing's own damage wants a body inside its arc, and this is what a swing is
+  // worth when the arc was empty. Measured on a body OUTSIDE the club's reach.
+  freshRun();
+  {
+    const rig = rigWithFins(2);
+    const outside = spawnAt('fish', clubLength(1) + 2.2, -20);
+    const hp = outside.hp;
+    let whacks = 0;
+    for (let i = 0; i < 180; i++) {
+      rig.pose(i * dt * 18);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: 0, y: 0 } }, { onWhack: () => { whacks++; } });
+    }
+    const died = !enemies.includes(outside);
+    check('a wave reaches a body the swing never touched',
+      whacks === 0 && (died || outside.hp < hp),
+      died ? 'killed by the wave alone' : `${whacks} whack(s), fish ${outside.hp.toFixed(1)} of ${hp.toFixed(1)}`);
+  }
+
+  // AN ORBITER NEVER FIRES ONE. It turns at a rate the ring chose, so it has no
+  // peak to find — and more to the point this is the payout for a movement the
+  // player performed, and an orbiter performs nothing.
+  freshRun();
+  {
+    let shocks = 0;
+    for (let i = 0; i < 600; i++) {
+      updateClub(dt, scene, playerPos, { club: 1, ice: 3 }, enemies,
+        { rig: { muzzles: [] }, velocity: { x: 0, y: 0 } }, { onShock: () => { shocks++; } });
+    }
+    check('the ring never cracks the water', shocks === 0, `${shocks} wave(s) from 3 orbiters`);
+  }
+}
+
+// ------------------------------------------------------------------ teed up
+
+section('TEED UP — the club collects on every hold in the game');
+
+{
+  const { holdEnemy, charmEnemy, isDazed } = await import('../path/src/systems/control.js');
+
+  // Same seal, same swing, same fish — the only difference is whether
+  // something else had already stopped it. Measured as damage dealt, because a
+  // multiplier applied to the wrong variable still multiplies correctly.
+  const clubbed = (setup) => {
+    freshRun();
+    const fish = spawnAt('fish', 1.4, -20);
+    fish.hp = 1e6;
+    const rig = rigWithFins(2);
+    let whacks = 0;
+    for (let i = 0; i < 150; i++) {
+      rig.pose(i * dt * 12);
+      // Re-asserted every frame: enemies.js is not running here, but the club
+      // itself decrements nothing and the hold has to still be true at the
+      // moment the wood lands rather than only when it was applied.
+      setup?.(fish);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: 6, y: 0 } }, { onWhack: () => { whacks++; } });
+    }
+    return { dealt: 1e6 - fish.hp, whacks };
+  };
+
+  const loose = clubbed(null);
+  const netted = clubbed((e) => holdEnemy(e, 5));
+  // Pinned to the CARD'S NUMBER rather than to "more". A loose "> 1.5x" passed
+  // at a measured 15x, which is what a floor multiplying into the multiplier
+  // bought before it was taken out — an assertion that cannot tell 2.4 from 15
+  // cannot tell a bonus from a second weapon.
+  const want = CONFIG.club.teed.damageMul;
+  check('a held body takes exactly the card\'s multiplier from the same swing',
+    netted.whacks > 0 && Math.abs(netted.dealt / loose.dealt - want) < want * 0.15,
+    `${loose.dealt.toFixed(1)} loose vs ${netted.dealt.toFixed(1)} held = x${(netted.dealt / loose.dealt).toFixed(2)}, want x${want}`);
+
+  // CHARM COUNTS TOO. The dumbo's card and the harp's both express themselves
+  // as charmTimer rather than trapTimer, and a rule that only read one of the
+  // two fields would tie in three abilities and silently skip the other three.
+  const charmed = clubbed((e) => charmEnemy(e, 5));
+  check('...and so does a charmed one',
+    Math.abs(charmed.dealt / loose.dealt - want) < want * 0.15,
+    `x${(charmed.dealt / loose.dealt).toFixed(2)} charmed`);
+
+  // AND A DAZED BOSS. This is the one that matters: every hold in the game is
+  // REFUSED on a boss and becomes a daze instead, so a rule written against
+  // trapTimer alone would read well on the card and do nothing whatever in the
+  // one fight the whole run is built around.
+  const bossHit = (daze) => {
+    freshRun();
+    const boss = spawnAt('shark', 1.6, -20);
+    boss.isBoss = true;
+    boss.hp = 1e6;
+    const rig = rigWithFins(2);
+    for (let i = 0; i < 150; i++) {
+      rig.pose(i * dt * 12);
+      // holdEnemy, NOT a daze applied directly — on a boss the hold is refused
+      // and BECOMES a daze, which is the path every one of the six control
+      // abilities actually takes. Reaching past it would test a state nothing
+      // in the game can put a boss into.
+      if (daze) holdEnemy(boss, 5);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies, { rig, velocity: { x: 6, y: 0 } }, {});
+    }
+    return 1e6 - boss.hp;
+  };
+  const awake = bossHit(false);
+  const dazed = bossHit(true);
+  check('...and a dazed boss, which is what a hold on a boss becomes',
+    dazed > awake * 1.5, `${awake.toFixed(1)} awake vs ${dazed.toFixed(1)} dazed`);
+
+  // ...AND IT LEAVES HARDER. A body that is not swimming away from the blow
+  // puts all of it into the throw, which is what makes a carom off a racked
+  // school worth building toward rather than just noticing.
+  const flungFrom = (setup) => {
+    freshRun();
+    const fish = spawnAt('fish', 1.4, -20);
+    fish.hp = 1e6;
+    const start = fish.mesh.position.clone();
+    const rig = rigWithFins(2);
+    let whacks = 0;
+    for (let i = 0; i < 150; i++) {
+      rig.pose(i * dt * 12);
+      // Applied only until the first hit lands: a hold re-asserted forever
+      // would keep `trapTimer` up through the whole flight, and enemies.js
+      // (not running here) is what would normally bleed it off.
+      if (whacks === 0) setup?.(fish);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: 6, y: 0 } }, { onWhack: () => { whacks++; } });
+    }
+    return fish.mesh.position.distanceTo(start);
+  };
+  check('a teed body is thrown further', flungFrom((e) => holdEnemy(e, 1)) > flungFrom(null) * 1.15,
+    `${flungFrom(null).toFixed(2)}u loose vs ${flungFrom((e) => holdEnemy(e, 1)).toFixed(2)}u held`);
+
+  // The switch really is the switch. Turned off, a held body is worth exactly
+  // what a loose one is — which is what makes the numbers above attributable
+  // to this rule rather than to a hold happening to change the geometry.
+  const wasOn = CONFIG.club.teed.enabled;
+  CONFIG.club.teed.enabled = false;
+  const offHeld = clubbed((e) => holdEnemy(e, 5)).dealt;
+  const offLoose = clubbed(null).dealt;
+  CONFIG.club.teed.enabled = wasOn;
+  check('no rule, no bonus', Math.abs(offHeld - offLoose) < offLoose * 0.15,
+    `${offLoose.toFixed(1)} vs ${offHeld.toFixed(1)} with the rule off`);
+}
+
+// ------------------------------------------------------------------ Big Rigz
+
+section('BIG RIGZ — the ring is a companion, the fins are only a little one');
+
+{
+  const { player } = await import('../path/src/entities/player.js');
+  const saved = player.stats.companionScale;
+  const drawn = (scale, levels, pick) => {
+    player.stats.companionScale = scale;
+    try {
+      freshRun();
+      const rig = rigWithFins(2);
+      for (let i = 0; i < 20; i++) {
+        rig.pose(i * dt * 6);
+        updateClub(dt, scene, playerPos, levels, enemies, { rig, velocity: { x: 4, y: 0 } }, {});
+      }
+      const mesh = pick(clubGroup.children);
+      const spin = mesh.rotation.z;
+      mesh.rotation.z = 0;
+      mesh.updateMatrixWorld(true);
+      const size = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
+      mesh.rotation.z = spin;
+      return Math.max(size.x, size.y, size.z);
+    } finally { player.stats.companionScale = saved; }
+  };
+
+  // THE RING TAKES IT WHOLE. An orbiting club is a companion in everything but
+  // the stat it was reading, and Big Rigz already promises the size is REAL —
+  // mesh and hitbox together — so this has to move with the card.
+  const ringSmall = drawn(1, { club: 1, ice: 1 }, (kids) => kids[kids.length - 1]);
+  const ringBig = drawn(1.5, { club: 1, ice: 1 }, (kids) => kids[kids.length - 1]);
+  check('an orbiting club takes Big Rigz whole',
+    Math.abs(ringBig - ringSmall * 1.5) < 0.25,
+    `${ringSmall.toFixed(2)}u -> ${ringBig.toFixed(2)}u at x1.5`);
+
+  // A FIN CLUB TAKES A SHARE. Some, or a bigger seal is holding the same
+  // little stick; only some, because a fin club's reach IS the melee range of
+  // the weapon and a companion-size card must not get to rewrite how close the
+  // player has to be.
+  const finSmall = drawn(1, { club: 1 }, (kids) => kids[0]);
+  const finBig = drawn(1.5, { club: 1 }, (kids) => kids[0]);
+  const share = CONFIG.club.bigRigShare;
+  const wantFin = finSmall * (1 + 0.5 * share);
+  check('...and a fin club only a share of it',
+    finBig > finSmall * 1.02 && Math.abs(finBig - wantFin) < 0.2,
+    `${finSmall.toFixed(2)}u -> ${finBig.toFixed(2)}u, want ${wantFin.toFixed(2)} at share ${share}`);
+  check('...which is less than the ring got',
+    (finBig / finSmall) < (ringBig / ringSmall),
+    `fins x${(finBig / finSmall).toFixed(2)} vs ring x${(ringBig / ringSmall).toFixed(2)}`);
+}
+
+// ---------------------------------------------------------------- the Bouncer
+
+section('BOUNCER — one card, every club in the run');
+
+{
+  const { player } = await import('../path/src/entities/player.js');
+  const saved = { d: player.stats.clubDamageMul, k: player.stats.clubKnockMul, r: player.stats.clubReachMul };
+  const withCard = (mul, fn) => {
+    player.stats.clubDamageMul = mul.d ?? 1;
+    player.stats.clubKnockMul = mul.k ?? 1;
+    player.stats.clubReachMul = mul.r ?? 1;
+    try { return fn(); } finally {
+      player.stats.clubDamageMul = saved.d;
+      player.stats.clubKnockMul = saved.k;
+      player.stats.clubReachMul = saved.r;
+    }
+  };
+
+  // THE SWING. Same seal, same fins, same fish — the only difference is the
+  // card. Measured as damage dealt rather than as a number read back out of
+  // the config, because a multiplier applied to the wrong variable still
+  // multiplies correctly and changes nothing in the water.
+  const swungFor = (mul) => withCard(mul, () => {
+    freshRun();
+    const fish = spawnAt('fish', 1.4, -20);
+    fish.hp = 1e6;
+    const rig = rigWithFins(2);
+    for (let i = 0; i < 120; i++) {
+      rig.pose(i * dt * 12);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies, { rig, velocity: { x: 6, y: 0 } }, {});
+    }
+    return 1e6 - fish.hp;
+  });
+  const plain = swungFor({});
+  const buffed = swungFor({ d: 2 });
+  check('the card doubles what a swing does', buffed > plain * 1.6,
+    `${plain.toFixed(1)} -> ${buffed.toFixed(1)} damage`);
+
+  // THE REACH, and the DRAWING with it — a card that lengthened the hitbox and
+  // not the stick would be a club that hits from where it visibly is not.
+  const reachOf = (mul) => withCard(mul, () => {
+    freshRun();
+    swing(0.05, { level: 1 });
+    const mesh = clubGroup.children[0];
+    const spin = mesh.rotation.z;
+    mesh.rotation.z = 0;
+    mesh.updateMatrixWorld(true);
+    const size = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
+    mesh.rotation.z = spin;
+    return Math.max(size.x, size.y, size.z);
+  });
+  const short = reachOf({});
+  const long = reachOf({ r: 1.5 });
+  check('...and a longer club is drawn longer, not just felt longer',
+    Math.abs(long - short * 1.5) < 0.3, `${short.toFixed(2)}u -> ${long.toFixed(2)}u at x1.5`);
+
+  // THE THROWN ONE. "All club type weapons" is the card's whole claim, and the
+  // Hurler is the one that leaves the file — its damage is baked into the
+  // projectile at spawn, so a multiplier that never reached the bake would be
+  // invisible until someone counted hit points in a real fight.
+  const { projectiles } = await import('../path/src/entities/projectiles.js');
+  const { fireClubThrow: hurl2 } = await import('../path/src/systems/club.js');
+  const thrownFor = (mul) => withCard(mul, () => {
+    freshRun();
+    projectiles.length = 0;
+    hurl2(scene, 1, 1, 1, { x: 20, y: 0 }, () => playerPos.clone(), {}, {});
+    const d = projectiles[0]?.damage ?? 0;
+    const k = projectiles[0]?.knockback ?? 0;
+    projectiles.length = 0;
+    return { d, k };
+  });
+  const bare = thrownFor({});
+  const big = thrownFor({ d: 2, k: 2 });
+  check('a thrown club is bought by the same card', big.d > bare.d * 1.6,
+    `${bare.d.toFixed(1)} -> ${big.d.toFixed(1)} damage`);
+  check('...and so is the shove it carries', big.k > bare.k * 1.6,
+    `${bare.k.toFixed(2)} -> ${big.k.toFixed(2)}`);
+}
+
 // ------------------------------------------------------------------- the ring
 
 section('THE RING — the club types you are not holding orbit you');
@@ -847,6 +1290,32 @@ section('THE RING — the club types you are not holding orbit you');
   }
   check('every extra stack is another club on the ring',
     built.join() === '1,2,4', `${built.join(' -> ')} orbiting for 1, 2, 4 stacks`);
+
+  // CLONE WARZ SPINS UP MORE OF THEM. The card reads "+1 of everything you
+  // fire", and the ring is a count the player owns like any other.
+  check('Clone Warz adds a club to the ring',
+    clubOrbiters({ club: 1, ice: 1 }, 2).length === 3,
+    `${clubOrbiters({ club: 1, ice: 1 }, 2).length} orbiting at +2`);
+  // ONCE FOR THE RING, not once per orbiting type — two types on the ring is
+  // still one thing the player is looking at, and paying per type would make
+  // the same card worth +2 or +3 here for a reason nothing on screen explains.
+  check('...once for the whole ring, not once per type',
+    clubOrbiters({ club: 1, ice: 1, boom: 1 }, 2).length === 4,
+    `${clubOrbiters({ club: 1, ice: 1, boom: 1 }, 2).length} orbiting for 2 ring types at +2`);
+  // ...and the extras WALK the types, so a Keg-and-Snap ring gets one more of
+  // each rather than two more of whichever happened to be first.
+  {
+    const mixed = clubOrbiters({ club: 1, ice: 1, boom: 1 }, 2);
+    const counts = mixed.reduce((m, a) => (m[a] = (m[a] ?? 0) + 1, m), {});
+    check('...and the extras are spread across the types',
+      counts.clubIce === 2 && counts.clubBoom === 2, mixed.join(' + '));
+  }
+  // AND NOTHING WHEN THERE IS NO RING. projectileCount's own rule: a card that
+  // adds to a count you do not own would hand a one-club run a weapon it never
+  // picked.
+  check('...and nothing at all when there is no ring',
+    clubOrbiters({ club: 3 }, 3).length === 0,
+    `${clubOrbiters({ club: 3 }, 3).length} orbiting on a single-type run at +3`);
 
   // ...AND THEY ACTUALLY GO ROUND. Measured off the meshes over time rather
   // than trusted from the config: a ring whose clubs are built and then parked
@@ -939,12 +1408,28 @@ section('SHOVE — every club hit knocks the body off its line');
   // AND THE SHOVE IS THE SWING'S. Everything else in this weapon is scaled by
   // how hard the club is actually travelling, and a knockback that ignored
   // that would be the one part of the club a stationary player gets for free.
+  //
+  // MEASURED ON ONE HIT, and it has to be. knockX/knockY is a VECTOR, and a
+  // club sweeping round at speed lands its shoves pointing in every direction
+  // — so summing a second and a half of them measures how well they CANCEL,
+  // which runs backwards to the claim: a fast swing scored lower than a drift
+  // purely because its shoves opposed each other. Stopped at the first whack,
+  // the number is one swing's shove, which is what the sentence says.
   const at = (spin) => {
     freshRun();
     const boss = spawnAt('shark', 1.6, -20);
     boss.isBoss = true;
     boss.hp = 1e6;
-    swing(1.2, { level: 3, rig: rigWithFins(2), finSpin: spin, velocity: { x: 9, y: 0 } });
+    const rig = rigWithFins(2);
+    let whacks = 0;
+    for (let i = 0; i < Math.round(1.2 / dt); i++) {
+      rig.pose(i * dt * spin);
+      updateClub(dt, scene, playerPos, { club: 3 }, enemies,
+        { rig, velocity: { x: 9, y: 0 } }, { onWhack: () => { whacks++; } });
+      // The shove is applied inside the same call the whack was reported from,
+      // so the frame the counter moves is the frame it has landed on.
+      if (whacks > 0) break;
+    }
     return Math.hypot(boss.knockX ?? 0, boss.knockY ?? 0);
   };
   const lazy = at(1);

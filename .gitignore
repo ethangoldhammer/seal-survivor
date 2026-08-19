@@ -73,6 +73,7 @@ dist-skins-look
 dist-shaderlab
 dist-skinlab
 dist-splash-probe
+dist-wet-look
 
 # the hive look sheets are generated (npm run look:hive / look:stacks)
 hive-look.html

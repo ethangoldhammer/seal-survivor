@@ -68,7 +68,10 @@ import { startCelebration } from './celebrate.js';
 import { bossCycleRelief, setBossCycle } from './waves.js';
 import { playSfx } from './audio.js';
 import { damageCreditFor } from './playtest.js';
-import { sourceLabel } from './playtestAnalysis.js';
+// Not sourceLabel directly: the ledger's name for a weapon is its BASE name,
+// and by the time a boss goes down the pebbles are usually something else. See
+// weaponName.js.
+import { weaponName } from '../weaponName.js';
 
 // Parsed once — the files can't change without a page reload, since it's the
 // dev server that notices the write. Same deal as the quip table.
@@ -130,6 +133,7 @@ export const bossState = {
   // leaves the enemy list and read a few frames later by the kill-shot grab in
   // main.js, which is the whole reason it is state and not an argument.
   killedBy: '',
+  killedBySource: '',
   hpFrac: 1,
   // The level the next boss arrives at. Advanced by exactly one gap on every
   // spawn, from the threshold it just answered rather than from the player's
@@ -302,6 +306,7 @@ export function resetBoss(scene = null) {
   bossState.enemy = null;
   bossState.name = '';
   bossState.killedBy = '';
+  bossState.killedBySource = '';
   bossState.hpFrac = 1;
   bossState.defeated = 0;
   bossState.sent = 0;
@@ -550,8 +555,17 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     // shared PNG and the score-screen fan cannot caption the same kill three
     // ways. Empty string, never a guess, when nothing was recorded — a card
     // that says nothing beats a card that says "unknown".
+    //
+    // RESOLVED AGAINST THE BUILD AS IT STANDS ON THIS FRAME, which is the whole
+    // reason it happens here rather than when a card is drawn: the player goes
+    // on levelling after this kill, and a print that re-derived its own caption
+    // on the score screen would rename a weapon that beat this boss after the
+    // fact — "Cloned Pebbles" on a photograph taken before the pebbles were
+    // ever cloned.
     const credit = damageCreditFor(bossState.enemy);
-    bossState.killedBy = credit ? sourceLabel(credit) : '';
+    bossState.killedBy = credit ? weaponName(credit) : '';
+    // And the key behind it, unresolved — see causeSource in systems/bossShot.js.
+    bossState.killedBySource = credit ?? '';
     bossState.enemy = null;
     bossState.hpFrac = 0;
     bossState.arriving = false;

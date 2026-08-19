@@ -5,6 +5,7 @@ import { feedbackState } from './feedback.js';
 import { suffocationPixelSize } from './oxygenFx.js';
 import { cineLens } from './cineCamera.js';
 import { gooLayer, activeGooGroups, gooGroupInfo, setGooDivisor } from '../entities/particles.js';
+import { bounds, WAVE, sea, waveTimeNow } from '../arena.js';
 
 // Three passes, no EffectComposer:
 //   1. render the scene at full res
@@ -470,7 +471,72 @@ const gooFragmentShader = /* glsl */ `
   uniform float uSpecPower;
   uniform float uNormal;    // how much the density gradient bends the normal
   uniform vec2 uLight;
+
+  // --- putting the goo IN the water rather than on the glass ---------------
+  // Screen pixel -> world point, so this pass can ask the same two questions
+  // the backdrop asks: how deep is this, and how far above the wave is it.
+  uniform mat4 uInvViewProj;
+  uniform float uSurfaceY;
+  uniform float uWaveT;
+  uniform float uWaveAmp;
+  uniform float uChop;
+  uniform float uBottomY;
+  uniform vec3 uShallow;
+  uniform vec3 uMid;
+  uniform vec3 uDeep;
+  uniform float uStop1;
+  uniform float uStop2;
+  uniform float uMurk;      // 0 = the goo ignores the ocean, as it always did
+  uniform float uMurkReach; // world units below the wave that murk ramps over
+  uniform vec3 uFogColor;
+  uniform float uFogUp;
+  uniform float uFogDown;
+  uniform float uFogFalloff;
+  uniform float uFog;       // 0 = the goo ignores the air
+
+  // --- whitewater -----------------------------------------------------------
+  uniform float uWhite;     // 0 = the plain surface above; 1 = aerated water
+  uniform float uAer;       // density above the isoline that counts as PACKED
+  uniform float uBubble;    // how hard the bubble texture bites
+  uniform float uBubbleScale;
+  uniform float uAirRise;   // world units/second the trapped air climbs
+  uniform vec3 uFoam;       // the colour of water that is more air than water
+  uniform float uTime;
+
   varying vec2 vUv;
+
+  float surfaceAt(float x) {
+    return uSurfaceY
+      + sin(x * ${WAVE.k1.toFixed(4)} + uWaveT * ${WAVE.w1.toFixed(4)}) * uWaveAmp
+      + sin(x * ${WAVE.k2.toFixed(4)} + uWaveT * ${WAVE.w2.toFixed(4)}) * uWaveAmp * ${WAVE.amp2.toFixed(4)}
+      + sin(x * ${WAVE.k3.toFixed(4)} + uWaveT * ${WAVE.w3.toFixed(4)}) * uWaveAmp * ${WAVE.amp3.toFixed(4)} * uChop;
+  }
+
+  float hash21(vec2 p) {
+    p = fract(p * vec2(127.1, 311.7));
+    p += dot(p, p + 34.23);
+    return fract(p.x * p.y);
+  }
+
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
+      mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+      u.y
+    );
+  }
+
+  // THE BUBBLES. Two octaves at very different scales, which is what separates
+  // this from ordinary noise: real foam is a few big cells with a fizz of small
+  // ones inside them, and one octave reads as dirt on the lens whatever its
+  // frequency. The second is offset AND rotated in phase so the two never line
+  // up into a visible lattice.
+  float bubbles(vec2 p) {
+    return vnoise(p) * 0.62 + vnoise(p * 3.7 + vec2(19.3, 7.1)) * 0.38;
+  }
 
   void main() {
     vec4 s = texture2D(tDiffuse, vUv);
@@ -485,6 +551,15 @@ const gooFragmentShader = /* glsl */ `
     // is a blend rather than whichever one drew last.
     vec3 col = s.rgb / max(dens, 1e-4);
 
+    // WHERE THIS PIXEL IS IN THE WATER. Through the inverse view-projection
+    // rather than by lerping the camera's frustum edges: the cinematic camera
+    // builds an ASYMMETRIC frustum when it pushes the horizon around, and the
+    // lerp silently disagrees with the scene by a few units exactly when the
+    // camera is doing something interesting. The z fed in is irrelevant under
+    // an orthographic projection and the divide by w costs nothing.
+    vec4 wp = uInvViewProj * vec4(vUv * 2.0 - 1.0, 0.0, 1.0);
+    vec2 worldPos = wp.xy / wp.w;
+
     float dl = texture2D(tDiffuse, vUv - vec2(uTexel.x, 0.0)).a;
     float dr = texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)).a;
     float dd = texture2D(tDiffuse, vUv - vec2(0.0, uTexel.y)).a;
@@ -497,7 +572,108 @@ const gooFragmentShader = /* glsl */ `
     float rim = (1.0 - smoothstep(uIso, uIso + uRimWidth, dens)) * uRim;
 
     vec3 lit = col * (1.0 + rim) + spec * mix(vec3(1.0), col, 0.35);
-    gl_FragColor = vec4(lit, a * uOpacity);
+    float alpha = a * uOpacity;
+
+    // --- WHITEWATER -----------------------------------------------------------
+    // The water a diving animal drags air into. The physical variable is the
+    // AIR FRACTION, and the density field already is one: where many lobes pile
+    // up the water is packed with bubbles, and where the field is thin it is a
+    // few bubbles in clear water. So aeration is read straight off the density
+    // ABOVE the isoline rather than carried as extra per-particle data — the
+    // isoline says "there is foam here", uAer says how much of it is air.
+    //
+    // What that buys, and it is the whole difference between foam and a blob:
+    // packed foam is WHITE and HIDES what is behind it, thin foam is the colour
+    // of the water it is in and barely there at all. One term drives both.
+    float aer = 0.0;
+    if (uWhite > 0.0) {
+      aer = clamp((dens - uIso) / max(uAer, 0.0001), 0.0, 1.0);
+
+      // THE TRAPPED AIR RISING. The bubble field is sampled in WORLD space and
+      // scrolled upward, so the texture climbs through a mass that is itself
+      // moving — which is what air in water does, and the reason this is not
+      // just a static noise multiply. World space rather than screen space is
+      // load-bearing twice over: the pattern sticks to the water instead of
+      // swimming when the camera pans, and two lobes that fuse share one
+      // continuous field of bubbles across the weld instead of each carrying
+      // its own.
+      vec2 bp = vec2(worldPos.x, worldPos.y + uTime * uAirRise) * uBubbleScale;
+      float b = bubbles(bp);
+      // Biting hardest where the foam is THINNEST. Packed foam is solid white
+      // and has no visible cells in it; it is the ragged aerated edge that
+      // reads as bubbles, and modulating the core equally just makes the whole
+      // mass look mouldy.
+      float bite = uBubble * (1.0 - aer * 0.75);
+      aer = clamp(aer * mix(1.0, 0.35 + 1.4 * b, bite), 0.0, 1.0);
+
+      // Aerated water is not the emitter's tint lit a bit brighter — it is
+      // white, because a cloud of bubbles scatters every wavelength. The tint
+      // survives at the thin edges, which is where light still gets through.
+      // The rim folds AWAY as it packs. A wet edge is light gathered inside a
+      // surface holding its shape, and packed foam has no surface — it is a
+      // solid of bubbles. Left at full strength it draws a bright outline
+      // round every lobe, which reads as fifty separate blobs however well the
+      // field underneath them fused. Same failure the additive boom group hit
+      // from the other direction.
+      lit = mix(lit, uFoam * (1.0 + rim * (1.0 - aer) * 0.6), aer * uWhite);
+      // ...and it stops being see-through as it packs. This is the half that
+      // makes it read as WATER rather than as light: an additive group can only
+      // ever add, so however bright it got you could always see the animal
+      // through it. Blended toward opaque with aeration, so the core of a
+      // landing genuinely covers what is behind it and the fringe does not.
+      alpha = mix(alpha, a, aer * uWhite);
+    }
+
+    // --- THE MEDIUM IT IS IN --------------------------------------------------
+    // The goo pass composites over the finished scene, which means it is in
+    // front of the ocean, the horizon fog and everything else however deep the
+    // water it is supposed to be in. Rather than reordering the render graph,
+    // the goo is put UNDER the same two media the backdrop draws: the water's
+    // own depth gradient below the line and the horizon haze above it, both
+    // evaluated here from the same numbers their own shaders use.
+    //
+    // Below the line this is the game's existing language for depth — the fill
+    // goes from waterShallow through waterMid to waterDeep — so a cavity
+    // lobe five units down is tinted and dimmed exactly as much as the water
+    // beside it, and recedes instead of floating over the picture.
+    float above = worldPos.y - surfaceAt(worldPos.x);
+    if (uMurk > 0.0 && above < 0.0) {
+      // TWO DIFFERENT DEPTHS, and conflating them was a silent no-op. The
+      // COLOUR is sampled at the fill's own normalised depth, so a lobe is
+      // tinted exactly like the water beside it and the two agree. The AMOUNT
+      // ramps over uMurkReach WORLD UNITS instead, because the arena is forty
+      // units deep and a splash lives in the top six of it: normalised against
+      // the seabed the strongest murk a cavity lobe could ever reach was about
+      // a tenth, and the control did nothing at any value.
+      float depth = clamp((uSurfaceY - worldPos.y) / max(uSurfaceY - uBottomY, 0.0001), 0.0, 1.0);
+      vec3 water = depth < uStop1
+        ? mix(uShallow, uMid, depth / max(uStop1, 0.0001))
+        : mix(uMid, uDeep, clamp((depth - uStop1) / max(uStop2 - uStop1, 0.0001), 0.0, 1.0));
+      float m = clamp(-above / max(uMurkReach, 0.0001), 0.0, 1.0) * uMurk;
+      lit = mix(lit, water, m);
+      // Dimmed as well as tinted. Tint alone turns a deep lobe into a blue
+      // sticker; it is the alpha that makes it recede.
+      alpha *= 1.0 - m * 0.75;
+    }
+    // ...and the same gaussian band systems/horizon.js draws, BOTH SIDES OF THE
+    // LINE with that band's own two reaches. Above-only was the first version
+    // and it put a hard horizontal cut straight through the middle of every
+    // landing: the haze is DENSEST at the water line, so the goo went from 70%
+    // fog colour a pixel above it to none a pixel below, where the murk was
+    // still ramping up from zero. Fog is a band centred on the seam, not a
+    // ceiling over it, and running it through means the two media hand over
+    // continuously.
+    //
+    // It only reaches a few units either way, which is exactly the scale of
+    // this event: the crown sits inside the haze and the column stands up out
+    // of it.
+    if (uFog > 0.0) {
+      float k = abs(above) / max(above >= 0.0 ? uFogUp : uFogDown, 0.0001);
+      float density = exp(-k * k * uFogFalloff) * (1.0 - smoothstep(0.5, 1.7, k)) * uFog;
+      lit = mix(lit, uFogColor, clamp(density, 0.0, 1.0));
+    }
+
+    gl_FragColor = vec4(lit, alpha);
   }
 `;
 
@@ -614,6 +790,38 @@ export function createPost(renderer) {
     uSpecPower: { value: 18 },
     uNormal: { value: 6 },
     uLight: { value: new THREE.Vector2(-0.5, 0.8) },
+    // The medium. Every one of these is read from the same place its own
+    // shader reads it (arena.js for the wave and the bounds, CONFIG.colors for
+    // the gradient, CONFIG.horizonGlow for the haze) rather than pushed in from
+    // world.js — one more reader of arena.js cannot fall a frame out of step
+    // with the drawn water the way a fourth plumbing route could. Same
+    // reasoning, and the same words, as the block in entities/particles.js.
+    uInvViewProj: { value: new THREE.Matrix4() },
+    uSurfaceY: { value: 0 },
+    uWaveT: { value: 0 },
+    uWaveAmp: { value: 0.35 },
+    uChop: { value: 0 },
+    uBottomY: { value: -1 },
+    uShallow: { value: new THREE.Color() },
+    uMid: { value: new THREE.Color() },
+    uDeep: { value: new THREE.Color() },
+    uStop1: { value: 0.3 },
+    uStop2: { value: 0.7 },
+    uMurk: { value: 0 },
+    uMurkReach: { value: 7 },
+    uFogColor: { value: new THREE.Color() },
+    uFogUp: { value: 3 },
+    uFogDown: { value: 1.8 },
+    uFogFalloff: { value: 3.2 },
+    uFog: { value: 0 },
+    // Whitewater.
+    uWhite: { value: 0 },
+    uAer: { value: 0.6 },
+    uBubble: { value: 0.6 },
+    uBubbleScale: { value: 1.1 },
+    uAirRise: { value: 1.4 },
+    uFoam: { value: new THREE.Color(0xffffff) },
+    uTime: { value: 0 },
   });
   // Composited over the scene, so it needs to blend — and a ShaderMaterial with
   // `transparent: false` has its blending disabled outright by three, whatever
@@ -854,7 +1062,60 @@ export function createPost(renderer) {
     // Additive is the OTHER liquid: alpha reads as a thick opaque body that
     // hides the water behind it, additive as a glowing slick lying in it. Both
     // are one state change, so this is a genuine choice rather than a preset.
-    gooPass.material.blending = g.additive ? THREE.AdditiveBlending : THREE.NormalBlending;
+    //
+    // WHITEWATER FORCES ALPHA, whatever the group says. The whole claim of that
+    // surface is that packed foam HIDES what is behind it — additive light can
+    // only ever add, so an additive whitewater is a mass you can still read the
+    // animal through however white it gets, which is the one thing aerated
+    // water never is. The group keeps `additive` for its unaerated fringe,
+    // which the shader still honours through the tint.
+    const white = g.whitewater ?? {};
+    const whiteOn = (white.strength ?? 0) > 0;
+    gooPass.material.blending = (g.additive && !whiteOn) ? THREE.AdditiveBlending : THREE.NormalBlending;
+
+    u.uWhite.value = whiteOn ? Math.min(1, white.strength) : 0;
+    if (whiteOn) {
+      u.uAer.value = Math.max(0.0001, white.packedAt ?? 0.6);
+      u.uBubble.value = white.bubbles ?? 0.6;
+      u.uBubbleScale.value = white.bubbleScale ?? 1.1;
+      u.uAirRise.value = white.airRise ?? 1.4;
+      u.uFoam.value.set(white.color ?? 0xffffff);
+      u.uTime.value = clock;
+    }
+
+    // --- the medium, so the goo sits IN the ocean and the air rather than on
+    // the finished frame. Both are per GROUP: blood in the water should recede
+    // with depth exactly like foam does, but the boss explosion is a cel-drawn
+    // cloud and hazing it would only make it grey.
+    const med = g.medium ?? {};
+    u.uMurk.value = med.murk ?? 0;
+    u.uMurkReach.value = Math.max(0.0001, med.murkReach ?? 7);
+    u.uFog.value = med.fog ?? 0;
+    if (u.uMurk.value > 0 || u.uFog.value > 0) {
+      // The camera's own transform, inverted, so a pixel can be turned back
+      // into a point in the water. sceneCamera, NOT the pass's own orthographic
+      // stand-in — that one exists only to draw a full-screen triangle and
+      // knows nothing about where the arena is.
+      sceneCamera.updateMatrixWorld();
+      u.uInvViewProj.value
+        .multiplyMatrices(sceneCamera.projectionMatrix, sceneCamera.matrixWorldInverse)
+        .invert();
+      u.uSurfaceY.value = bounds.surfaceY;
+      u.uWaveT.value = waveTimeNow();
+      u.uWaveAmp.value = sea.amp;
+      u.uChop.value = sea.chop;
+      u.uBottomY.value = bounds.bottom;
+      u.uShallow.value.set(CONFIG.colors.waterShallow);
+      u.uMid.value.set(CONFIG.colors.waterMid);
+      u.uDeep.value.set(CONFIG.colors.waterDeep);
+      u.uStop1.value = CONFIG.colors.zoneStops[0];
+      u.uStop2.value = CONFIG.colors.zoneStops[1];
+      const hg = CONFIG.horizonGlow ?? {};
+      u.uFogColor.value.set(hg.color ?? CONFIG.colors.surface);
+      u.uFogUp.value = Math.max(0.0001, hg.up ?? 3);
+      u.uFogDown.value = Math.max(0.0001, hg.down ?? 1.8);
+      u.uFogFalloff.value = hg.falloff ?? 3.2;
+    }
 
     // Cleared explicitly to transparent black rather than trusting the
     // renderer's clear state: this target is a density FIELD, and a clear

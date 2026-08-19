@@ -75,6 +75,18 @@ export function activeElement() {
   return element;
 }
 
+/**
+ * The element's authored word — 'Voltaic', 'Venom', 'Chill', 'Infected'.
+ *
+ * Exported because the polaroid's stamp names the weapon after it (see
+ * weaponName.js) and the level-up card already does the same through
+ * elementCardName. One label, read from CONFIG, so renaming an element renames
+ * every place it is spoken about rather than leaving two spellings in two files.
+ */
+export function elementLabel(id = element) {
+  return elementCfg(id)?.label ?? null;
+}
+
 export function elementColor(id = element) {
   return elementCfg(id)?.color ?? 0xffffff;
 }
@@ -243,7 +255,7 @@ export function commitElement(id) {
 
 /** What the card is called for a given roll — "Glow Up! 2: Venom". */
 export function elementCardName(baseName, id, stack) {
-  const label = elementCfg(id)?.label;
+  const label = elementLabel(id);
   if (!label) return `${baseName} ${stack}`;
   return `${baseName} ${stack}: ${label}`;
 }
@@ -295,6 +307,14 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
   const bonus = baseDamage * frac * share * nightDamageMul();
 
   enemy.hp -= bonus;
+  // RECORDED, but through a channel of its own rather than the generic damage
+  // hook. This bonus rides a bullet that has already fired its impact feedback
+  // one line earlier in combat.js, so calling onEnemyDamaged here would double
+  // the flash and the sound on every shot of a run that took the card. It went
+  // unreported entirely instead: the balance ledger only ever saw the venom and
+  // infection TICKS, which is how an ability could read as 39 damage across
+  // eight runs while quietly adding a third of every pellet's damage.
+  hooks.onElementDamage?.(enemy, bonus);
   const e = elementCfg();
   const x = enemy.mesh.position.x;
   const y = enemy.mesh.position.y;
@@ -347,7 +367,16 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
     best.hp -= damage;
     best.flash = CONFIG.fx.hitFlash;
     best.hitThisFrame = true;
-    hooks.onEnemyDamaged?.(best, damage, best.mesh.position.x, best.mesh.position.y);
+    // TAGGED AS THE ELEMENT'S. An arc is a fresh body that the bullet never
+    // touched, so unlike the bonus above it does want the full hit feedback —
+    // but combat.js binds this hook to `projectile?.source ?? 'gun'`, and with
+    // no projectile behind an arc every point of chain damage was being
+    // credited to Fin Pebbles. The gun is the most overtuned thing in the
+    // report; it should not also be wearing another card's output.
+    hooks.onEnemyDamaged?.(
+      best, damage, best.mesh.position.x, best.mesh.position.y,
+      null, null, null, 'bioluminescence',
+    );
     if (best.hp <= 0) {
       const idx = enemiesList.indexOf(best);
       hooks.onEnemyKilled?.(best);
