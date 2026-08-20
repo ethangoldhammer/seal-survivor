@@ -5,10 +5,11 @@
 //
 // The questions this sheet exists to answer, in the order they were asked:
 //
-//   1. Does a spot READ as a place on the animal? It has to break the
-//      silhouette, be findable at fight scale, and not look like a UI element
-//      stuck to a model. That is why every panel here is a real megalodon with
-//      the game's real post chain behind it and not a quad over black.
+//   1. Does a spot READ as a place ON the animal? It is painted into the
+//      boss's own skin by a shell bound to its skeleton, so it wraps the body,
+//      shears with a turning flank and is occluded by whatever is in front of
+//      it — none of which a quad at the same position can do, and all of which
+//      only exist as questions on a real megalodon under the real post chain.
 //   2. Does the flash win? A hit has to be legible over a spot that is already
 //      warm from earlier damage, which is the one thing a screenshot of a
 //      fresh spot cannot tell you — so the flash is shown at three heats.
@@ -37,7 +38,7 @@ import { stateForSpeed } from '../../path/src/systems/animation.js';
 import { tickHitShapes, hitShapeSpheres } from '../../path/src/systems/hitShape.js';
 import {
   initBossHotSpots, attachHotSpots, updateBossHotSpots, hotSpotDamage,
-  hotSpotsOf, resetBossHotSpots,
+  hotSpotsOf, resetBossHotSpots, releaseHotSpots,
 } from '../../path/src/systems/bossHotSpots.js';
 
 const logEl = document.getElementById('log');
@@ -233,12 +234,23 @@ function focus(cam, spot) {
 }
 
 // ---------------------------------------------------------------------------
-section('The animal <span>— what a boss looks like wearing them</span>', 2);
+section('The animal <span>— what a boss looks like wearing them</span>', 3);
 // ---------------------------------------------------------------------------
 {
+  // THE CONTROL. The same body, same lights, same post chain, with the shells
+  // taken off — so "the glow lands on the animal" is a comparison rather than
+  // an impression, and so a change in how the SHARK looks can never be
+  // mistaken for a change in how the spots look.
+  {
+    const e = newBoss(0);
+    releaseHotSpots(e);
+    run(30, bodyCam);
+    present('No spots (control)', 'The boss as it renders with the shells removed. Everything that differs between this panel and the next one is the weak spots and nothing else.');
+  }
+
   newBoss(0);
   run(30, bodyCam);
-  present('Whole body', 'Every spot on the OUTER EDGE of the silhouette. Half of each glow is over open water, which is what makes a small light findable while the animal turns.', true);
+  present('Whole body', 'Painted into the skin: the glow is clipped to the animal\'s own silhouette, wraps the body and is occluded by whatever is in front of it. The halo past the edge is the bloom.', true);
 
   newBoss(0);
   run(30, fightCam);
@@ -332,8 +344,8 @@ section('Glow <span>— a ladder, because bloom thresholds luminance</span>', 4)
     focus(detailCam, spot);
     run(20, detailCam);
     present(`glow ${g}`, g === 2.6
-      ? 'Crosses the bloom threshold and holds an edge. Green is most of luminance, so this blooms where a cold blue at the same number would not.'
-      : (g < 2.6 ? 'Under the threshold in the water it sits in — a green dot rather than a light.'
+      ? 'Crosses the bloom threshold and holds an edge. Green is most of luminance, so this blooms where a cold blue at the same number would not — and the halo past the silhouette is the BLOOM, which is the honest way to get one: bright skin throws light.'
+      : (g < 2.6 ? 'Under the threshold in the water it sits in — a green patch rather than a light.'
         : 'Saturated to white with the bloom welded across it; the spot stops having a boundary.'),
       g === 2.6);
   }
@@ -341,24 +353,25 @@ section('Glow <span>— a ladder, because bloom thresholds luminance</span>', 4)
 }
 
 // ---------------------------------------------------------------------------
-section('Edge <span>— the number that must NOT be treated as taste</span>', 3);
+section('On the skin <span>— the whole reason this is not a quad</span>', 3);
 // ---------------------------------------------------------------------------
+// The three things a decal cannot do, each in the frame that shows it.
 {
-  for (const ed of [0.3, 0.46, 0.7]) {
-    Object.assign(LOOK, LOOK_BASE, { edge: ed });
-    const e = newBoss();
+  const shots = [
+    ['Wrapping the flank', 0, 'The patch curves over the body and shears with it. A quad at the same position is a flat disc facing the camera whatever the animal is doing.'],
+    ['Turned away', 2.3, 'The same spot with the shark swung round. The lit skin foreshortens, and a spot that has gone round the far side is simply not drawn — nothing here knows which side that is.'],
+    ['Occluded by its own body', 1.1, 'Depth-tested against identical geometry at identical skinning, so the glow never shows through the parts of the animal in front of it.'],
+  ];
+  for (const [title, heading, note] of shots) {
+    const e = newBoss(heading);
     const spot = hotSpotsOf(e).spots[0];
-    focus(detailCam, spot);
-    run(20, detailCam);
-    const drawn = spot.r * 2.2 * ed;
-    present(`edge ${ed}`, `Drawn boundary ${drawn.toFixed(2)} against a crit reach of ${spot.r.toFixed(2)}. `
-      + (Math.abs(drawn - spot.r) / spot.r < 0.02
-        ? 'They agree — the light is telling the truth about where the crit is.'
-        : (drawn < spot.r ? 'The light is SMALLER than the reach: hits that pay out look like misses.'
-          : 'The light is BIGGER than the reach: hits that look clean pay nothing.')),
-      Math.abs(drawn - spot.r) / spot.r < 0.02);
+    focus(bodyCam, spot);
+    run(20, bodyCam);
+    present(title, note, heading === 0);
+    bodyCam.position.x = 0;
+    bodyCam.position.y = 0;
+    bodyCam.updateMatrixWorld(true);
   }
-  Object.assign(LOOK, LOOK_BASE);
 }
 
 // ---------------------------------------------------------------------------

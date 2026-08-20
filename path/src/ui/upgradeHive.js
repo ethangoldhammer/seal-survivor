@@ -131,7 +131,8 @@ export const EVENT_UPGRADE = {
   // the breach's links and nothing else's.
   foodChain: { source: { breach: 'breachChain' } },
   // Second Wind is the refill, so it pulses on the gasp, not on the crossing —
-  // one gasp per `oxygen.fx.breathInterval` while the bar is actually going up.
+  // and the gasp is now one per surfacing rather than one per interval, so this
+  // is a tile pulse per breath taken.
   breathIn: 'oxygenRefill',
   // Deep Lungs is pure capacity and has no moment of its own. The warning beep
   // is the nearest honest one: it is the bar being spent, which is the stat.

@@ -48,7 +48,7 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLISH = new Set(['deploy', 'deploy:preview', 'ship']);
 
 const WRITES = new Set([
-  'build', 'whale', 'notes', 'split', 'placeholder', 'webp', 'shaders:apply',
+  'build', 'whale', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply',
   'anglerfish', 'guest', 'icons', 'icons:sheet',
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
   'upgrades:icons',
@@ -82,7 +82,13 @@ const GROUP_BY_NAME = {
   atlas: 'Servers',
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
-  bones: 'Assets', split: 'Assets', whale: 'Assets', notes: 'Assets', takes: 'Assets',
+  // Reports by default and only rewrites files with --write, so it reads as
+  // an audit until you ask it not to.
+  'sfx:trim': 'Audits',
+  // Writes the sample assignments for one recording session into the tuning
+  // file — an asset job, not a check.
+  'sfx:assign': 'Assets',
+  bones: 'Assets', split: 'Assets', mussels: 'Assets', whale: 'Assets', notes: 'Assets', takes: 'Assets',
   anglerfish: 'Assets', guest: 'Assets', icons: 'Assets', 'icons:sheet': 'Assets',
   emissive: 'Audits', sockets: 'Audits', headsocket: 'Audits', 'chain:window': 'Audits',
   placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets',

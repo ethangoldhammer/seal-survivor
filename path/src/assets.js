@@ -542,13 +542,93 @@ export const ASSETS = {
   // has a form and turns while it flies. Faster tumble than the pickups
   // because it's only on screen for a moment (CONFIG.weapon.life is 1.6s) and
   // needs to show more than one face in that time.
-  bullet: { shape: 'rock', radius: 0.18, color: 0xffe066, unlit: true, rock: { tumble: 7 } },
-  // The homing mussel: a black shell, deliberately almost unlit — what you
-  // track across the screen is the burning trail it leaves (CONFIG.trails.
-  // missile.particles), not the shell itself. Glow can't brighten it, since
-  // the overdrive multiplies colour and black stays black however hard you
-  // multiply it — that's the intent, not an oversight.
-  missile: { shape: 'oval', radius: 0.16, elongate: 1.8, color: 0x07070a, unlit: true },
+  // THE BASIC PEBBLE. Grey stone, and the hex looks far too dark for that
+  // because it is not a display colour — the Look panel carries a glow of
+  // ~4.95 on this asset, and `bullet` is UNLIT, so applyColorAndGlow
+  // multiplies the colour itself by that instead of driving an emissive
+  // channel. This value times the glow is what reaches the screen: measured,
+  // 0.72 0.79 0.91, a cool pale grey that clears the bloom threshold without
+  // clipping any channel.
+  //
+  // WHICH IS WHY THE OLD YELLOW WAS NOT REALLY YELLOW. 0xffe066 times 4.95 is
+  // (4.95, 3.69, 0.66) — red and green both pinned at 1, so the only channel
+  // still carrying any hue was the blue one. It rendered as a warm white, and
+  // any hue picked here at that glow does the same thing. If the glow slider
+  // ever moves, this needs re-picking with it: they are one setting wearing
+  // two names. `npm run glow` is the audit.
+  bullet: { shape: 'rock', radius: 0.18, color: 0x6b7078, unlit: true, rock: { tumble: 7 } },
+  // THE HOMING MUSSEL — a real shell, cut out of the Spline scene in SeaBed by
+  // tools/mussel-split.mjs (npm run mussels). See that file for what the source
+  // is and what the export does not carry.
+  //
+  // IT USED TO BE UNLIT AND ALMOST BLACK, on the reasoning that what you track
+  // across the screen is the burning trail (CONFIG.trails.missile.particles)
+  // and not the shell. That reasoning held while the shell was a rugby ball at
+  // 1.8:1 — there was nothing in the silhouette worth lighting. It has a form
+  // now: a flattened teardrop with a seam down the middle and a pointed umbo,
+  // and `size 2` in assets.csv puts it on screen at about 1.15 units long
+  // against a 2.6-unit seal. So it is LIT, and it wears the `mussel` surface
+  // (`noise:mussel` in assets.csv) — the same Perlin-and-banding pair the
+  // sharks wear. The trail is still the thing you track at speed; the shell is
+  // what you see when one goes past you.
+  //
+  // WHICH IS ALSO WHY `unlit` HAD TO GO rather than merely being turned down.
+  // attachToonShade reads `reflectedLight`, which only the lighting chunks
+  // declare, so it refuses an unlit material outright — silently, since
+  // injecting there would be a compile error and a compile error renders
+  // nothing at all. An unlit mussel would simply never have banded.
+  //
+  // AXES. The model's nose is +Z and its broad face is normal to +Y. In the
+  // side view orientationQuaternion sends model FORWARD to entity +Y (the
+  // direction of travel) and the FLANK — forward x up — to entity +Z, which is
+  // the camera. So `up: '+X'` is not "which way is up on a mussel": it is the
+  // axis that puts f x u on +Y and turns the broad face towards the lens. The
+  // intuitive '+Y' presents the shell edge-on and it flies as a 1.5-unit
+  // splinter. Same class of choice as `grass` and the yacht above.
+  //
+  // `fit` is the LONGEST axis in world units, and 0.58 is exactly what the
+  // oval it replaces measured (radius 0.16 x 2 x elongate 1.8), so the swap
+  // carries no size change with it. The oval stays as the fallback and still
+  // has to be legible if the file ever fails to load.
+  //
+  // NO `tint` HERE, DELIBERATELY, even though the shipped hide (0x2b2f3f) is
+  // not the one in the Spline file (0x07070a — a 2.7% albedo, too dark for the
+  // toon pass to have anything to band). The lift is baked by
+  // tools/mussel-split.mjs instead, and the reason is `musselOpen` below:
+  // `tint` repaints EVERY material on a model, and the open shell's whole point
+  // is the orange body and pale nacre inside it. Tinting only the closed one
+  // shipped for a revision and made the detonation swap a charcoal shell for a
+  // black one mid-flash. See that tool for the full note.
+  missile: {
+    model: '/models/mussel.glb',
+    fit: 0.58,
+    forward: '+Z', up: '+X',
+    shape: 'oval', radius: 0.16, elongate: 1.8, color: 0x07070a, unlit: true,
+  },
+  // The same animal, gaping — what a mussel becomes at the instant it goes off
+  // (systems/musselShell.js). Six meshes and six materials, because the whole
+  // point of it is the inside: an orange body and a tan mantle behind pale
+  // nacre, none of which exists on the closed shell.
+  //
+  // `up: '+Y'` where the closed shell takes '+X', and the difference is the
+  // reason both exist. The gape opens along model +Y; sending that to the
+  // camera would show you the top valve's back, which is the one view of an
+  // open mussel indistinguishable from a shut one. '+Y' keeps the hinge in the
+  // screen plane so the mouth reads as a mouth.
+  //
+  // `fit` is 0.6 against the shell's 0.58 because the open model is 3.40 long
+  // to the closed one's 3.31 — the same ratio, so the two states come out the
+  // same size and the pop is the shell opening rather than the shell growing.
+  // What growth there is belongs to CONFIG.missile.shell.pop.
+  //
+  // No fallback shape: nothing spawns this except the detonation, which checks
+  // that the model loaded. A primitive stand-in for "the inside of a mussel"
+  // would be a coloured blob appearing at every hit.
+  musselOpen: {
+    model: '/models/musselopen.glb',
+    fit: 0.6,
+    forward: '+Z', up: '+Y',
+  },
   bounceShot: { shape: 'octahedron', radius: 0.2, color: 0x66ddff, unlit: true },
   // The harp's music note — a real eighth-note glyph, cut out of the Particle
   // Flow bake by tools/note-glyphs.mjs. 32 triangles and no texture at all.

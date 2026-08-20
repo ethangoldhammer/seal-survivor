@@ -63,6 +63,7 @@ import bossNamesCsv from '../path/src/bossNames.csv?raw';
 import { burstInk, clearInkTrail, inkTrailStats, updateInkTrail } from '../path/src/systems/inkTrail.js';
 import { attachKraken, krakenState, releaseKraken, resetKraken, updateKraken, updateKrakenInk } from '../path/src/systems/kraken.js';
 import { inkEncirclement } from '../path/src/systems/inkTrail.js';
+import { spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
 
 let failures = 0;
 const ok = (cond, label, detail = '') => {
@@ -619,6 +620,121 @@ console.log('\n9. THE GUARDS — the tree yields, latches and gives up');
 
   resetKraken(s3);
 }
+
+// ---------------------------------------------------------------------------
+console.log('\n10. THE GEARS — how fast this animal actually swims');
+// ---------------------------------------------------------------------------
+// THE FIGHT HAS TO HAVE MORE THAN ONE SPEED, and for a long time it had exactly
+// one. Two faults, and they hid each other:
+//
+//   THE WEAVE WAS THE ONLY GEAR. `regroup` was enforced by zeroing the
+//   elapsed-weave clock and nothing else — the branch was never actually
+//   skipped, so the squid re-entered it on the very next frame and could never
+//   accumulate enough weaving to give up again. Measured: 99.9% of a
+//   90-second fight in WEAVE, 0.1% in PROWL.
+//
+//   AND THE WEAVE'S SPEED WAS THE ANIMAL'S SPEED. `weaveSpeed` overwrites
+//   velocity outright, so with the branch running permanently the squid
+//   travelled at 13.00 u/s and never at the 3.5 its roster row calls "the
+//   slowest body in the roster". A number authored as "a little faster than
+//   its cruise for a sprint across the gap" had quietly become the cruise.
+//
+// Driven through the REAL spawner and updateEnemies, because the PROWL gear is
+// the creature's own orbit steering and nothing in kraken.js writes it — a
+// harness that steps the body by hand cannot see it at all.
+// A FIXED STREAM over the whole section. The spawn rolls a size and a heading,
+// and the crush cadence compounds off both — unseeded, the prowl share swung
+// 5.0%..8.6% run to run, which is a threshold sitting inside its own noise
+// rather than a measurement. Not a constant: that pegs every roll to one
+// bucket, which is unrepresentative in a different way.
+function seeded(seed, fn) {
+  const real = Math.random;
+  let st = seed >>> 0;
+  Math.random = () => {
+    st = (st * 1103515245 + 12345) & 0x7fffffff;
+    return st / 0x7fffffff;
+  };
+  try { return fn(); } finally { Math.random = real; }
+}
+seeded(20260820, () => {
+  const s4 = new THREE.Scene();
+  resetEnemies(s4);
+  resetKraken(s4);
+  clearInkTrail(s4);
+  const e = spawnNamed(s4, 'bossSquid', 0, { x: 14, y: 0 }, { ignoreCaps: true, overfill: true });
+  ok(!!e, 'a king squid spawns through the real path');
+  e.isBoss = true;
+  e.entering = false;
+  e.hp = 1e9;
+  e.maxHp = 1e9;
+  attachKraken(s4, e);
+
+  const cruise = e.def.speed;
+  const weave = CONFIG.kraken.trap.weaveSpeed;
+  const lunge = CONFIG.kraken.crush.speed;
+
+  // THE NUMBER, STATED AGAINST THE ONE IT IS SUPPOSED TO BE READ WITH. This is
+  // the check that would have caught it: 13 against a 3.5 cruise is 3.7x, which
+  // is not "a little faster", it is a different animal.
+  ok(weave <= cruise * 2.5, 'the weave is a swim, not a sprint',
+    `${weave} against a ${cruise} cruise (${(weave / cruise).toFixed(1)}x)`);
+  ok(lunge >= weave * 3, 'and the lunge is still the quick thing',
+    `${lunge} against a weave of ${weave} (${(lunge / weave).toFixed(1)}x)`);
+
+  const player = new THREE.Vector3(0, 0, 0);
+  const dt2 = 1 / 60;
+  const share = new Map();
+  const bySpeed = new Map();
+  let frames = 0;
+  let sum = 0;
+  for (let i = 0; i < 60 * 90; i++) {
+    const t = i * dt2;
+    // A player drifting around the middle, so the fight is live for the whole
+    // run rather than the squid prowling at an empty arena.
+    player.set(Math.sin(t * 0.35) * 12, Math.cos(t * 0.27) * 8, 0);
+    updateKraken(dt2, s4, player, {});
+    updateEnemies(dt2, s4, player, () => {}, () => {});
+    updateKrakenInk(dt2, s4, { mesh: { position: { x: player.x, y: player.y } } }, true);
+    // 'kraken/WEAVE:running' -> 'WEAVE'. The status suffix matters here: left
+    // on, every branch splits into two keys and a share reads as 0%.
+    const branch = ((krakenState.branch ?? '?').split('/')[1] ?? '?').split(':')[0];
+    const sp = Math.hypot(e.vx, e.vy);
+    share.set(branch, (share.get(branch) ?? 0) + 1);
+    const b = bySpeed.get(branch) ?? { n: 0, sum: 0 };
+    b.n++; b.sum += sp;
+    bySpeed.set(branch, b);
+    sum += sp;
+    frames++;
+  }
+  const pct = (k) => (share.get(k) ?? 0) / frames;
+  const mean = (k) => { const b = bySpeed.get(k); return b ? b.sum / b.n : 0; };
+  for (const [k, n] of [...share].sort((a, c) => c[1] - a[1])) {
+    console.log(`        ${k.padEnd(8)} ${(100 * n / frames).toFixed(0).padStart(3)}% of the fight`
+      + `   at ${mean(k).toFixed(2)} u/s`);
+  }
+
+  // The rhythm the config claims to buy. `regroup` is 3s against a 9s giveUp,
+  // so a quarter of the fight is the resting gear — asserted well under that so
+  // retuning either number is not a test edit.
+  ok(pct('PROWL') > 0.05, 'the fight has a resting gear, not just the weave',
+    `${(100 * pct('PROWL')).toFixed(1)}% prowling against ${(100 * pct('WEAVE')).toFixed(1)}% weaving`);
+  ok(pct('WEAVE') < 0.9, '...and the weave is not the whole fight',
+    `${(100 * pct('WEAVE')).toFixed(1)}%`);
+  ok(Math.abs(mean('PROWL') - cruise) < 0.5, 'prowling really is the roster row\'s speed',
+    `${mean('PROWL').toFixed(2)} against ${cruise}`);
+  // The headline: what the player watches, averaged over a fight.
+  ok(sum / frames < cruise * 2.5, 'and the animal the player watches is a slow one',
+    `mean body speed ${(sum / frames).toFixed(2)} u/s over 90s (it was 12.99)`);
+
+  // ...and none of that cost the trap anything. The ring is closed by the
+  // CLOUD's lifetime and the player staying inside it, not by how fast the
+  // animal gets round: measured 5 crushes per 60s at a weave of 6 against 6 at
+  // 13, which is inside the run-to-run spread.
+  ok(krakenState.crushes > 0, 'the trap still closes and punishes',
+    `${krakenState.crushes} crushes in 90s`);
+  resetEnemies(s4);
+  resetKraken(s4);
+});
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`);
 process.exit(failures === 0 ? 0 : 1);

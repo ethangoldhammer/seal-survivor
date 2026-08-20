@@ -33,8 +33,11 @@ export const oxygenFxState = {
 const SETTLED = 0.002;
 
 let beepTimer = 0;
-let breathTimer = 0;
 let lastOxygen = 0;
+// Whether the seal has taken a breath it has not yet let back out. The exhale
+// is the close of a pair, so it can only fire after an inhale — without this a
+// run that begins at the surface would blow out air it never took in.
+let breathHeld = false;
 // Skip the per-frame audio scheduling once everything has settled back to
 // zero, so a run spent above the threshold costs nothing.
 let bandSettled = true;
@@ -42,7 +45,7 @@ let bandSettled = true;
 export function resetOxygenFx() {
   oxygenFxState.strain = 0;
   beepTimer = 0;
-  breathTimer = 0;
+  breathHeld = false;
   lastOxygen = CONFIG.oxygen.max; // pre-run: no stat block exists yet
   bandSettled = false; // force one push, so a new run can't start band-passed
 }
@@ -118,29 +121,66 @@ export function updateOxygenFx(dt, player, active) {
     beepTimer = 0;
   }
 
-  // --- surface gasps --------------------------------------------------------
-  // Gated on oxygen actually GOING UP, not just on being above the surface —
-  // a seal sitting at the surface with a full bar isn't breathing hard, and
-  // this is the same test that makes a bubble orb grabbed underwater gasp
-  // once, which is exactly right.
+  // --- the gasp -------------------------------------------------------------
+  // ONE breath per surfacing, taken on the EDGE where oxygen starts coming
+  // back — not one every `breathInterval` for as long as the bar is filling.
+  //
+  // The timer version was wrong about what a breath is. Refilling from empty
+  // takes several seconds, so it gasped four or five times on the way up: a
+  // seal panting, not a seal taking a breath. It also could not survive the
+  // takes getting longer than the interval, which the recorded inhales are —
+  // past 0.5s apiece the repeats simply play over each other.
+  //
+  // The edge covers both ways air arrives without either being special-cased.
+  // Surfacing refills continuously (oxygenRefillRate in entities/player.js);
+  // an oxygen bubble pays its whole refill out in a single frame (main.js).
+  // Both are "the bar started going up", and both are exactly one gasp.
+  //
+  // No `frac < 1` guard any more, and that is deliberate: it existed to stop
+  // the timer firing again on the frame the bar topped up, but it also
+  // swallowed the gasp for a bubble grabbed on an almost-full bar — which is
+  // a pop the player very much did just make happen.
+  //
+  // `breathHeld` is the latch, shared with the exhale below: a breath cannot
+  // be taken twice before it is let out. That is what makes this robust to the
+  // bar wobbling by a float epsilon at the surface, where a bare rising-edge
+  // test would count every wobble as another breath.
   const gaining = player.oxygen > lastOxygen + 1e-4;
-  if (on && fx.breathEnabled !== false && gaining && frac < 1) {
-    breathTimer -= dt;
-    if (breathTimer <= 0) {
-      breathTimer = Math.max(0.1, fx.breathInterval ?? 0.5);
-      // Louder and lower when you surface desperate, tailing off to a light
-      // sip as the bar tops up.
-      feedback('breathIn', {
-        x: player.mesh.position.x,
-        y: player.mesh.position.y,
-        scale: 0.55 + 0.45 * (1 - frac),
-        sfxOpts: { pitch: 0.9 + 0.3 * frac },
-      });
-    }
-  } else {
-    // Zeroed while not refilling, so the NEXT breach gasps on contact rather
-    // than waiting out the remainder of an interval.
-    breathTimer = 0;
+  if (on && fx.breathEnabled !== false && gaining && !breathHeld) {
+    breathHeld = true;
+    // Louder and lower when you surface desperate, tailing off to a light sip
+    // when there was barely anything to top up.
+    feedback('breathIn', {
+      x: player.mesh.position.x,
+      y: player.mesh.position.y,
+      scale: 0.55 + 0.45 * (1 - frac),
+      sfxOpts: { pitch: 0.9 + 0.3 * frac },
+    });
+  }
+
+  // --- the exhale -----------------------------------------------------------
+  // The other half of the gasp, fired once as the seal goes back under.
+  //
+  // NOT gated on the bar topping up, which is the obvious test and the wrong
+  // one: `gaining` also goes false when the bar simply hits full, and a seal
+  // can float at the surface on a full bar for as long as it likes. Blowing
+  // out there would put the exhale a breath early and often nowhere near the
+  // water going over its head.
+  //
+  // Oxygen starting to FALL again is the unambiguous tell for submerged, and
+  // it is the same signal `gaining` is read off, so the pair can never
+  // disagree about which way the bar is moving.
+  const losing = player.oxygen < lastOxygen - 1e-4;
+  if (on && fx.breathEnabled !== false && breathHeld && losing) {
+    breathHeld = false;
+    feedback('breathOut', {
+      x: player.mesh.position.x,
+      y: player.mesh.position.y,
+      // How full the lungs are going down, so a seal that dives on a snatched
+      // half-breath lets out less than one that waited for the whole bar.
+      scale: 0.5 + 0.5 * frac,
+      sfxOpts: { pitch: 1.05 - 0.15 * frac },
+    });
   }
 
   lastOxygen = player.oxygen;

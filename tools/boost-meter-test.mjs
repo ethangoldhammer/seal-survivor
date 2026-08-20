@@ -431,8 +431,18 @@ const dir = { x: 1, y: 0 };
 // second wide and a 1/60 step is a sixth of it, which is enough slop to make
 // a check about the EDGE of the window pass or fail on rounding.
 const STEP = 1 / 480;
-function strike({ late = 0, st = stats() } = {}) {
+function strike({ late = 0, early = false, st = stats() } = {}) {
   let guard = 0;
+  if (early) {
+    // LET GO WITH FUEL STILL IN THE TANK. Banked past minFire so it fires, but
+    // the wind-up never completes — so there is no perfect charge behind it and
+    // nothing arms. This is the release that costs you the chain now; a LATE
+    // one does not, which is the whole of the change (see tryStrike).
+    const floor = CONFIG.strike.charge.minFire ?? 0.35;
+    while (strikeState.pending < floor + 0.02 && guard++ < 20000) updateCharge(STEP, true, st);
+    updateCharge(STEP, false, st);
+    return tryStrike(dir, st);
+  }
   while (!strikeLoaded() && guard++ < 20000) updateCharge(STEP, true, st);
   for (let t = 0; t < late - 1e-9; t += STEP) updateCharge(STEP, true, st);
   return tryStrike(dir, st);
@@ -534,11 +544,11 @@ strikeState.chainTimer = CONFIG.strike.chainWindow;   // a window, but unearned
 feedChum(stats());
 check('an unarmed window scores no link', consumeChainLink() === 0);
 check('  ...and leaves the chain at zero', liveChain() === 0);
-// A mistimed release does not arm one either.
+// A release that never finished its wind-up does not arm one either.
 fuelled();
 const halfW = sweetHalfWidth(stats());
-strike({ late: halfW * 3 });
-check('a mistimed release arms nothing', strikeState.armed === false);
+strike({ early: true });
+check('an unfinished wind-up arms nothing', strikeState.armed === false);
 feedChum(stats());
 check('  ...so eating after it scores nothing', consumeChainLink() === 0);
 cancelDash();
@@ -724,9 +734,21 @@ check('  ...while the dash is exactly as long as the one that bit',
 check('  ...and the i-frames it paid for are still running', strikeState.invulnTimer > 0);
 cancelDash();
 
-console.log('\nAND OFF THE BEAT IT NEITHER STARTS NOR EXTENDS A CHAIN');
+// OFF THE BEAT COSTS THE DAMAGE, NOT THE CHAIN. The two were one condition
+// until a perfect charge started arming on its own — the sweet spot is the
+// DAMAGE gate now, and a late release is a real strike with no bite rather
+// than a strike that never happened.
+console.log('\nBUT OFF THE BEAT IT STILL STARTS A CHAIN — the charge is what arms');
 fuelled();
 check('a mistimed opening strike fires', strike({ late: half * 3 }) === true);
+check('  ...and DOES open a window, because the charge completed',
+  strikeState.chainTimer > 0, `${strikeState.chainTimer.toFixed(2)}s`);
+check('  ...so the food after it links', (feedChum(stats()), consumeChainLink()) === 1);
+cancelDash();
+
+console.log('\nAN UNFINISHED WIND-UP IS WHAT NEITHER STARTS NOR EXTENDS A CHAIN');
+fuelled();
+check('a release let go of early still fires', strike({ early: true }) === true);
 check('  ...and opens NO window, so eating counts for nothing',
   strikeState.chainTimer === 0);
 // ...not even at the end of the dash, which is the other place a window opens.
@@ -746,9 +768,9 @@ strikeState.active = false;
 tick(CONFIG.strike.chainWindow + 0.05);
 check('  ...and then lapses', strikeState.chainTimer <= 0 && strikeState.armed === false);
 fillTank();
-const missed = (strike({ late: half * 3 }), consumeStrikeLink());
-check('  ...a mistimed release arms nothing', strikeState.armed === false);
-check('  ...booked as OFF BEAT', missed.sweet === false);
+const missed = (strike({ early: true }), consumeStrikeLink());
+check('  ...an unfinished wind-up arms nothing', strikeState.armed === false);
+check('  ...booked as arming nothing', missed.arms === false);
 feedChum(stats());
 check('  ...so the food after it links nothing', consumeChainLink() === 0);
 cancelDash();

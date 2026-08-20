@@ -77,6 +77,7 @@ import { updateBreachTrail, clearBreachTrail } from './systems/breachTrail.js';
 import { updateKrakenInk } from './systems/kraken.js';
 import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from './systems/projectileVoices.js';
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
+import { initMusselShells, updateMusselShells, clearMusselShells, spawnMusselShell } from './systems/musselShell.js';
 import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact } from './systems/bossImpact.js';
 import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots } from './systems/bossHotSpots.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
@@ -186,7 +187,10 @@ initInput(world.renderer.domElement);
 initParticles(world.scene);
 initImpactFlashes(world.scene);
 initBossImpacts(world.scene);
-initBossHotSpots(world.scene);
+// No scene objects of its own: a boss's weak spots are painted by a shell bound
+// to that boss's own skeleton (systems/bossHotSpots.js), so this only clears
+// state. Kept as an init for symmetry with everything either side of it.
+initBossHotSpots();
 initBossGibs(world.scene);
 // The shockwave is a scene object (systems/organicRing.js); the smoke is not.
 // Without this the cloud still fires and the front silently never appears.
@@ -361,6 +365,12 @@ async function boot() {
   // rim width in world units) and before the first createVisual call below —
   // it hooks spawns, so anything built earlier would come up with no outline.
   initCreatureOutlines();
+
+  // The open shells a mussel detonation swaps to. HERE and not up beside
+  // initImpactFlashes, for the reason written at the top of this block: the
+  // pool is built out of createVisual, so it has to come after the models are
+  // loaded or every shell in it is a fallback sphere.
+  initMusselShells(world.scene);
 
   garlicMesh = createGarlicVisual();
   world.scene.add(garlicMesh);
@@ -1097,6 +1107,10 @@ function startGame() {
   // — a mussel you can still hear hunting through the whole next run.
   clearProjectileVoices();
   clearImpactFlashes();
+  // ...and the open shells under them, for the same reason: a shell is on its
+  // own quarter-second clock, so one caught mid-pop by a reset would keep
+  // tumbling through the first frames of the next run.
+  clearMusselShells();
   // Every mark riding a body, dropped with the bodies. A wound outlives its
   // animal by design (it fades on its own clock, not the creature's), so a run
   // reset is the one moment they have to be taken off the board by hand.
@@ -1689,6 +1703,14 @@ function missileImpactFeedback(assetKey, x, y, dmg, projectile, targetRadius = 0
       glow: cfg.glow ?? 3.2,
     });
   }
+  // ...and the shell itself, opening inside its own flash. The flash is light
+  // and the emitter is debris; this is the only part of a detonation that is
+  // the object the player was actually tracking. See systems/musselShell.js.
+  //
+  // Handed the heading rather than the projectile: the shell only needs the
+  // direction it arrived on, and passing the whole projectile would tempt the
+  // system into reading a size off it that its own asset row already owns.
+  spawnMusselShell(x, y, { dirX: projectile.dir?.x, dirY: projectile.dir?.y });
   return cfg.replacesBulletHit !== false;
 }
 
@@ -2173,6 +2195,27 @@ function onEnemyKilledFeedback(e, killEvent = null) {
 // its fanfare eaten by the seconds spent on the card screen.
 let lastChainCeremony = -Infinity;
 
+/**
+ * A SOFT CEILING — approaches `cap` and never reaches it.
+ *
+ * `cap * (1 - e^(-v/cap))`, which is the one curve that does both things this
+ * needs at once: its slope at 0 is exactly 1, so small values pass through
+ * essentially unchanged and nothing is quietly taken away from the shallow end
+ * everything was tuned at; and it saturates, so no input however large can put
+ * more than `cap` out the other side.
+ *
+ * WHY NOT Math.min. A clamp keeps the value legal and throws the SIGNAL away:
+ * everything past the threshold maps to the same number, so a chain of 5 and a
+ * chain of 300 shove the grid identically, and the effect stops tracking the
+ * thing it exists to describe at the exact depth that thing gets interesting.
+ * A feathered ceiling keeps every step distinguishable — smaller and smaller,
+ * which is honest, rather than absent.
+ */
+function softCap(v, cap) {
+  if (!(cap > 0)) return 0;
+  return cap * (1 - Math.exp(-Math.max(0, v) / cap));
+}
+
 function onChainHit(chain, source) {
   const x = player.mesh.position.x;
   const y = player.mesh.position.y;
@@ -2264,9 +2307,42 @@ function onChainHit(chain, source) {
       scale: Math.min(1.6, 0.7 + chain * 0.25),
       sfxOpts: { pitch: 1 + (chain - 1) * 0.12 },
     });
-    // And the grid itself gets shoved harder the deeper the chain goes.
-    const warp = Math.min(CONFIG.strike.comboGridWarpMax, chain * CONFIG.strike.comboGridWarp);
-    world.grid.ripple(x, y, warp, 8 + chain * 2);
+    // AND THE GRID ITSELF GETS SHOVED HARDER THE DEEPER THE CHAIN GOES —
+    // FEATHERED TOWARD A CEILING RATHER THAN RUNNING AT ONE.
+    //
+    // Both numbers used to be linear in `chain`, and the RADIUS was not capped
+    // at all: `8 + chain * 2`. That is fine for the chain depths this was
+    // written against and absurd for the ones the game actually reaches — a
+    // 313-link chain asked for a ripple 634 units across, against an arena 80
+    // units wide (arena.js `bounds.width`). Every node in the field was inside
+    // one ripple, so a link stopped being a shove AT THE SEAL and became the
+    // whole backdrop lurching, which reads as the renderer breaking rather than
+    // as the player doing something extraordinary.
+    //
+    // The strength had the opposite failure and it is the same mistake: it was
+    // linear into a hard `Math.min`, so it hit its ceiling at chain 5 and every
+    // link past that was identical. A clamp is not a ceiling you can feel, it
+    // is a wall the effect slams into and then stops saying anything.
+    //
+    // So both are softened toward their cap instead (see softCap): linear while
+    // the chain is shallow, where the growth is the thing being communicated,
+    // and asymptotic afterwards, where it is not. The min() below stays as a
+    // backstop — softCap cannot exceed its cap, and a guard that can never fire
+    // is the right kind of guard on a value that reaches the vertex shader.
+    const g = CONFIG.strike;
+    const warp = softCap(chain * (g.comboGridWarp ?? 1.6), g.comboGridWarpMax ?? 8);
+    // ONLY THE GROWTH IS FEATHERED, NOT THE BASE. Softening the whole
+    // `base + chain * per` pulls the shallow end down with it — a first link
+    // came out at 7.87 where it has always been 10, which is a fifth taken off
+    // the most common link in the game to solve a problem that only exists at
+    // the other end. The base passes through untouched and the cap is what the
+    // TOTAL approaches.
+    const base = g.comboGridRadiusBase ?? 8;
+    const radius = base + softCap(
+      chain * (g.comboGridRadius ?? 2),
+      Math.max(0, (g.comboGridRadiusMax ?? 20) - base),
+    );
+    world.grid.ripple(x, y, warp, radius);
   }
 }
 
@@ -3902,7 +3978,7 @@ function animate(now) {
         // links alone cannot tell "never strikes" from "strikes constantly and
         // never links", and the first time this was asked about there was no
         // chain data in the run log at all.
-        playtest.recordStrike(rel.depth, rel.hadFood, rel.hadWindow, rel.sweet);
+        playtest.recordStrike(rel.depth, rel.hadFood, rel.hadWindow, rel.arms);
         // Combo-scaled, same multiplier the speed ceiling in updatePlayer
         // uses — a dash fired deep in a chain launches harder, and the ceiling
         // is already raised to let it.
@@ -5432,6 +5508,12 @@ function animate(now) {
   // behind it and a lagging listener smears the pan.
   updateProjectileVoices(realDt, projectiles, player.mesh.position, gameState.running && !gameState.paused);
   updateImpactFlashes(realDt);
+  // Real time too, and for a sharper version of the flashes' reason: the shell
+  // is the thing the hit-stop is being taken FOR. A mussel landing sets 45ms of
+  // hitstop (CONFIG.feedback.missileImpact), which is a fifth of this effect's
+  // whole life — on the fight clock the shell would open in slow motion and
+  // then snap, which reads as a dropped frame rather than as impact.
+  updateMusselShells(realDt);
   // Real time, for the same reason as the flashes: an impact effect that
   // freezes during its own hit-stop is the one thing guaranteed to be on
   // screen while everything else is held, and holding it too reads as a stall.

@@ -62,9 +62,11 @@ import { resetEnemies, spawnNamed } from '../path/src/entities/enemies.js';
 import { stateForSpeed } from '../path/src/systems/animation.js';
 import { hitShapeSpheres, tickHitShapes, hitCreature } from '../path/src/systems/hitShape.js';
 import { initParticles, resetParticles } from '../path/src/entities/particles.js';
+import { onFeedback } from '../path/src/systems/feedback.js';
 import {
   initBossHotSpots, attachHotSpots, updateBossHotSpots, hotSpotDamage,
   hotSpotsOf, resetBossHotSpots, perimeterCandidates, liveHotSpotCount,
+  hotSpotShells,
 } from '../path/src/systems/bossHotSpots.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -109,6 +111,12 @@ const scene = new THREE.Scene();
 initParticles(scene);
 initBossHotSpots(scene);
 
+// EVERY EVENT THE GAME FIRES, recorded. onFeedback is the observer hook the
+// hex hive uses, and it is the only way to ask "did this system announce
+// itself" without reaching into the sound, the shake and the burst separately.
+const fired = [];
+onFeedback((event) => fired.push(event));
+
 const contact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 
 // Spawn a boss, parked at the origin, swum for half a second so the shape is
@@ -132,25 +140,78 @@ function spawnBoss(heading = 0, at = [0, 0]) {
   return e;
 }
 
-// The silhouette test, written out here rather than imported, so the harness
-// is not grading the placer against the placer's own idea of "outside".
+// The body's posed vertices, in world space. Every eighth, matching the
+// placer's own sampling — this is the cloud both silhouette tests below are
+// measured against, and using a different density would make the harness
+// disagree with the placer about the shape of the animal rather than about
+// where it put things.
 //
-// `pad` is the same inflation every contact lands on (CONFIG.hitShape.padding)
-// — a spot placed on the raw flesh while hits report points on the padded
-// surface would sit a few percent inside the boundary the player shoots at.
-function onOutline(e, x, y) {
-  const pad = CONFIG.hitShape.padding ?? 1;
-  const spheres = hitShapeSpheres(e.hitShape);
-  let onSome = false;
-  for (const s of spheres) {
-    const r = s.wr * pad;
-    const d = Math.hypot(x - s.wx, y - s.wy);
-    // Inside another sphere by more than the seam tolerance the placer uses:
-    // buried, not on the outline.
-    if (d < r * 0.99) return false;
-    if (Math.abs(d - r) < r * 0.02) onSome = true;
+// FORCED MATRICES FIRST. Without updateMatrixWorld(true) every bone reports its
+// last-uploaded pose and the whole cloud comes back identical, which fails
+// nothing and proves nothing.
+const _sv = new THREE.Vector3();
+function skinCloud(e) {
+  scene.updateMatrixWorld(true);
+  const out = [];
+  e.visual.traverse((o) => {
+    if (!o.isMesh || o.userData.__isOutline || o.userData.__isHotSpotShell) return;
+    const pos = o.geometry?.attributes?.position;
+    if (!pos) return;
+    for (let i = 0; i < pos.count; i += 8) {
+      _sv.fromBufferAttribute(pos, i);
+      if (o.isSkinnedMesh) o.applyBoneTransform(i, _sv);
+      o.localToWorld(_sv);
+      out.push(_sv.x, _sv.y, _sv.z);
+    }
+  });
+  return out;
+}
+
+// IS THIS POINT ON THE OUTER EDGE OF THE ANIMAL?
+//
+// Written out here rather than imported, so the harness is not grading the
+// placer against the placer's own idea of "outside" — and rebuilt twice while
+// the glow moved onto the skin, because the first two rulers were wrong in
+// ways that made correct placements look broken:
+//
+//   ON A SPHERE'S RIM. The original test, and it stopped being the question
+//   the moment placement started resolving onto real vertices: a vertex on the
+//   flesh is by construction INSIDE the sphere fitted around it, so the sphere
+//   test called every correctly-placed spot buried.
+//
+//   FURTHEST ALONG THE LINE FROM THE BODY'S MIDDLE. Wrong on anything long and
+//   thin, which is every boss in this game. On a shark the line to the middle
+//   is nowhere near the surface normal at the flank, so a spot squarely on the
+//   dorsal edge measured as two units inboard of the tail tip and the number
+//   meant nothing.
+//
+// What is actually being asked is whether the point is on the BOUNDARY of the
+// animal's XY outline, and a point is on the boundary of a cloud when SOME
+// direction exists in which nothing nearby reaches further. Forty-eight
+// directions, best one wins: that is the local support test, and it needs no
+// notion of where the middle of the animal is.
+function boundaryDeficit(cloud, x, y, reach) {
+  const near = Math.max(1.2, reach * 1.5);
+  const rel = [];
+  for (let i = 0; i < cloud.length; i += 3) {
+    const dx = cloud[i] - x;
+    const dy = cloud[i + 1] - y;
+    if (dx * dx + dy * dy <= near * near) rel.push(dx, dy);
   }
-  return onSome;
+  if (!rel.length) return Infinity;
+  let best = Infinity;
+  for (let k = 0; k < 48; k++) {
+    const a = (k / 48) * Math.PI * 2;
+    const ux = Math.cos(a);
+    const uy = Math.sin(a);
+    let support = 0;
+    for (let i = 0; i < rel.length; i += 2) {
+      const pr = rel[i] * ux + rel[i + 1] * uy;
+      if (pr > support) support = pr;
+    }
+    if (support < best) best = support;
+  }
+  return best;
 }
 
 function lightUp(e, seed = 4242) {
@@ -175,29 +236,40 @@ section('1. Placed on the outline of the animal');
 
   const cands = perimeterCandidates(e.hitShape, CONFIG.hotSpots.rays);
   check('the outline has candidates', cands.length > 0, `${cands.length} points`);
-  const off = cands.filter((c) => !onOutline(e, c.wx, c.wy)).length;
-  check('every candidate is on the outline and inside no other sphere', off === 0,
-    `${off} of ${cands.length} buried`);
 
   const owner = lightUp(e);
+  const cloud = skinCloud(e);
   const n = owner.spots.length;
   check('rolled a count inside the CSV\'s range',
     n >= CONFIG.hotSpots.countMin && n <= CONFIG.hotSpots.countMax,
     `${n} spots, range ${CONFIG.hotSpots.countMin}-${CONFIG.hotSpots.countMax}`);
 
-  const buried = owner.spots.filter((s) => !onOutline(e, s.wx, s.wy));
-  check('every spot sits on the outline', buried.length === 0,
-    `${buried.length} of ${n} buried in the body`);
+  // MEASURED AGAINST THE INSET, not against a flat number. A spot's centre is
+  // pulled `insetFrac` of a radius inboard on purpose — the glow is painted on
+  // skin, so a centre exactly on the outline wastes half its circle over open
+  // water and the boundary ring is off the body for most of its length. So the
+  // allowance is that inset plus the ruler's own slop (the cloud is sampled
+  // every eighth vertex). Past it the spot has stopped reaching the outline,
+  // which is the thing the whole placement exists for.
+  const allow = (CONFIG.hotSpots.insetFrac ?? 0) + 0.35;
+  const deficits = owner.spots.map((s) => boundaryDeficit(cloud, s.wx, s.wy, s.r) / s.r);
+  const buried = deficits.filter((d) => d >= allow).length;
+  check('every spot sits on the outline of the mesh', buried === 0,
+    `worst ${(Math.max(...deficits) * 100).toFixed(0)}% of a radius inside the edge, allowed ${(allow * 100).toFixed(0)}%`);
 
   // BIG ENOUGH TO AIM AT, on the animal the player actually meets. This is the
   // check that caught the placer sizing spots off a single fitted sphere: a
   // megalodon's biggest is about 1.9 units against a body whose reach is 5, so
   // every spot clamped to minRadius and radiusFrac did nothing. A number
   // pinned at its own clamp is a number that is not being used.
+  // NOT "none is at the floor" — a spot that lands on a small part of the
+  // animal SHOULD be floored, and that check was written while diagnosing the
+  // case where every spot was, which is the real failure: a number pinned at
+  // its own clamp for every spot is a number that is not being used.
   const biggest = Math.max(...spheres.map((s) => s.wr));
   const pinned = owner.spots.filter((s) => s.r <= (CONFIG.hotSpots.minRadius ?? 0.8) * 1.001).length;
-  check('none of them is pinned at the size floor', pinned === 0,
-    `${pinned} at minRadius ${CONFIG.hotSpots.minRadius}; biggest sphere r ${biggest.toFixed(2)}`);
+  check('the size rule does work rather than always clamping', pinned < n || n === 0,
+    `${pinned} of ${n} at minRadius ${CONFIG.hotSpots.minRadius}; biggest sphere r ${biggest.toFixed(2)}`);
   const smallest = Math.min(...owner.spots.map((s) => s.r));
   check('and every spot is a real fraction of the animal',
     smallest > e.radius * 0.12,
@@ -246,10 +318,12 @@ section('2. They ride the flesh');
   check('every spot moved with the body', moved.length === owner.spots.length,
     `${moved.length} of ${owner.spots.length} followed`);
 
-  const stillOut = owner.spots.filter((s) => onOutline(e, s.wx, s.wy));
+  const cloud2 = skinCloud(e);
+  const allow2 = (CONFIG.hotSpots.insetFrac ?? 0) + 0.35;
+  const after = owner.spots.map((s) => boundaryDeficit(cloud2, s.wx, s.wy, s.r) / s.r);
   check('and they are still on the outline after a turn and a tail-beat',
-    stillOut.length === owner.spots.length,
-    `${stillOut.length} of ${owner.spots.length} on the edge`);
+    after.every((d) => d < allow2),
+    `worst ${(Math.max(...after) * 100).toFixed(0)}% of a radius inside the edge`);
 
   // The world position must be derived from the anchor, not merely offset by
   // the body's translation — otherwise a spot on the flank ends up on the same
@@ -270,14 +344,29 @@ section('3. The glow and the crit are the same circle');
   const owner = lightUp(e);
   const s = owner.spots[0];
 
-  // The vertex shader sizes the quad at `r * 2.2` across its half-width, and
-  // the fragment shader puts the boundary at `uEdge` of that. Multiply the two
-  // and the drawn edge has to land on the radius the crit test uses.
-  const quadHalf = 2.2;
-  const drawn = s.r * quadHalf * (CONFIG.hotSpots.look.edge ?? 0.46);
-  const err = Math.abs(drawn - s.r) / s.r;
-  check('the drawn edge lands on the crit radius', err < 0.02,
-    `drawn ${drawn.toFixed(3)} vs reach ${s.r.toFixed(3)} (${(err * 100).toFixed(1)}% apart)`);
+  // THE SHADER MEASURES AGAINST `s.w` DIRECTLY — `distance(vHotWorld, s.xyz) /
+  // s.w` — so the painted boundary and the crit reach are not two numbers that
+  // agree, they are one number. That is a stronger guarantee than the quad
+  // version could make (it had a separate `edge` fraction of a quad half-width
+  // that had to be kept in step by hand) and it is the reason the `edge`
+  // control is gone rather than retuned.
+  //
+  // What is checkable from here is that nothing has reintroduced a second
+  // number: the uniform the shader reads has to BE the spot's radius.
+  const shells = hotSpotShells(e);
+  check('the boss is wearing shells to paint on', shells.length > 0, `${shells.length}`);
+  check('and they are drawn only while something is lit',
+    shells.every((sh) => sh.visible === true), 'visible with spots up');
+  // Off the MATERIAL, not off the owner record — the whole question is whether
+  // what the shader is handed matches what the crit test uses, and reading the
+  // owner's copy would be asking the placer to agree with itself.
+  const u = shells[0].material.userData.__hotUniforms;
+  const painted = u.uHotSpot.value[0];
+  check('the painted radius IS the crit radius',
+    Math.abs(painted.w - s.r) < 1e-9, `${painted.w.toFixed(4)} vs ${s.r.toFixed(4)}`);
+  check('and the painted centre IS the crit centre',
+    Math.abs(painted.x - s.wx) < 1e-9 && Math.abs(painted.y - s.wy) < 1e-9,
+    `(${painted.x.toFixed(2)}, ${painted.y.toFixed(2)})`);
 
   // And the reach is what the CSV says it is, off the sphere it sits on.
   // THE SPHERE THE SPOT IS ANCHORED TO, by the index it carries — not the one
@@ -298,6 +387,72 @@ section('3. The glow and the crit are the same circle');
   } else {
     check('the spot has an identifiable host sphere', false);
   }
+}
+
+// ---------------------------------------------------------------------------
+section('3b. The spot is near actual flesh, not floating off it');
+// ---------------------------------------------------------------------------
+// THE CHECK THE ON-SKIN RENDERER MADE NECESSARY. When the glow was a quad it
+// did not matter whether the spot's centre was on the animal — the quad drew
+// wherever it was put. Now the light is only wherever the SKIN is within
+// reach, so a centre that floats even a little off the body loses the whole
+// bright middle of the patch and the spot renders as a dim smear with the core
+// nowhere. Nothing about that failure is visible in the placement code.
+//
+// The spheres are a statistical fit (mean + 1.6 sigma, then inflated by
+// `padding`), so "on the rim of a sphere" is not the same claim as "on the
+// mesh". Measured against the real posed vertices — three's own
+// applyBoneTransform, which is what the GPU does — rather than argued about.
+{
+  const e = spawnBoss();
+  const owner = lightUp(e);
+
+  // Every skinned vertex of the body, posed and in world space. Forced
+  // matrices first: without updateMatrixWorld(true) every bone reports its
+  // last-uploaded pose and the whole cloud comes back identical, which fails
+  // nothing and proves nothing.
+  scene.updateMatrixWorld(true);
+  const verts = [];
+  const v = new THREE.Vector3();
+  e.visual.traverse((o) => {
+    if (!o.isMesh || o.userData.__isOutline || o.userData.__isHotSpotShell) return;
+    const pos = o.geometry?.attributes?.position;
+    if (!pos) return;
+    // Every eighth vertex. This is looking for the NEAREST piece of flesh to a
+    // point, and at these densities the sample is within a few millimetres of
+    // the full answer for an eighth of the work.
+    for (let i = 0; i < pos.count; i += 8) {
+      v.fromBufferAttribute(pos, i);
+      if (o.isSkinnedMesh) o.applyBoneTransform(i, v);
+      o.localToWorld(v);
+      verts.push(v.x, v.y, v.z);
+    }
+  });
+  check('the body has posed vertices to measure against', verts.length > 0,
+    `${verts.length / 3} sampled`);
+
+  let worst = 0;
+  let worstFrac = 0;
+  for (const sp of owner.spots) {
+    let best = Infinity;
+    for (let i = 0; i < verts.length; i += 3) {
+      const dx = verts[i] - sp.wx;
+      const dy = verts[i + 1] - sp.wy;
+      const dz = verts[i + 2] - sp.wz;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < best) best = d2;
+    }
+    const d = Math.sqrt(best);
+    if (d > worst) { worst = d; worstFrac = d / sp.r; }
+  }
+  // AGAINST THE INSET AGAIN. The centre is deliberately inboard of the
+  // surface, so the nearest SURFACE vertex is about an inset away and that is
+  // correct — what would be wrong is the centre floating in open water, which
+  // is what this catches. The allowance is the inset plus the sampling slop.
+  const flesh = (CONFIG.hotSpots.insetFrac ?? 0) + 0.2;
+  check('no spot centre is floating off the animal',
+    worstFrac < flesh,
+    `worst ${worst.toFixed(3)} away, ${(worstFrac * 100).toFixed(0)}% of its radius, allowed ${(flesh * 100).toFixed(0)}%`);
 }
 
 // ---------------------------------------------------------------------------
@@ -393,11 +548,70 @@ section('5. One bursts, and another opens somewhere else');
     `${live.length} live, ${started} expected`);
   if (live.length === started) {
     const fresh = live[live.length - 1];
-    check('the replacement is on the outline too', onOutline(e, fresh.wx, fresh.wy));
+    check('the replacement is on the outline too',
+      boundaryDeficit(skinCloud(e), fresh.wx, fresh.wy, fresh.r) / fresh.r
+        < (CONFIG.hotSpots.insetFrac ?? 0) + 0.35);
     check('and it is not where the old one was',
       Math.hypot(fresh.wx - where.x, fresh.wy - where.y) > fresh.r,
       `${Math.hypot(fresh.wx - where.x, fresh.wy - where.y).toFixed(2)} away`);
   }
+}
+
+// ---------------------------------------------------------------------------
+section('5b. Both moments announce themselves as events');
+// ---------------------------------------------------------------------------
+// THE CHECK THAT WOULD HAVE CAUGHT THE ORIGINAL WIRING. Both bursts were fired
+// with a bare emit() — which drew the particles correctly and cost the feature
+// everything else the shared hook carries: no sound, no shake, no ripple, no
+// haptics, and no row in the Feel Workbench for anybody to tune them from. It
+// looked completely finished on screen, and a crit was audibly identical to a
+// chip on the tail.
+//
+// So what is asserted is the EVENT, not the emitter: an event carries its
+// emitter with it, and nothing else does.
+{
+  const e = spawnBoss();
+  const owner = lightUp(e);
+  const spot = owner.spots[0];
+
+  fired.length = 0;
+  hotSpotDamage(e, { x: spot.wx, y: spot.wy }, 1);
+  check('a crit fires hotSpotHit', fired.includes('hotSpotHit'), fired.join(', ') || 'nothing');
+
+  fired.length = 0;
+  hotSpotDamage(e, { x: spot.wx, y: spot.wy }, spot.pool);
+  check('a rupture fires hotSpotBurst', fired.includes('hotSpotBurst'), fired.join(', ') || 'nothing');
+
+  fired.length = 0;
+  hotSpotDamage(e, { x: spot.wx + spot.r * 3, y: spot.wy }, 10);
+  check('a miss fires neither', fired.length === 0, fired.join(', ') || 'nothing');
+
+  // The table's own contract. An event with no emitter draws nothing and an
+  // event with no sound is the exact gap this section exists to close, so both
+  // are worth naming rather than trusting.
+  for (const [ev, emitter] of [['hotSpotHit', 'hotSpotBleed'], ['hotSpotBurst', 'hotSpotRupture']]) {
+    const def = CONFIG.feedback[ev];
+    check(`${ev} is in the feedback table`, !!def);
+    check(`…and carries its burst`, def?.emit === emitter, def?.emit ?? 'none');
+    check(`…and has a voice`, !!def?.sfx && !!CONFIG.sfx[def.sfx], def?.sfx ?? 'none');
+  }
+  // A crit lands on top of the material voice rather than replacing it, so the
+  // accent must be SHORTER than the thud it sits over or it stops being an
+  // accent and becomes the sound of the hit.
+  check('the accent is shorter than the material voice it rides on',
+    CONFIG.sfx.hotSpotHit.decay < CONFIG.sfx.bossHitFlesh.decay,
+    `${CONFIG.sfx.hotSpotHit.decay} vs ${CONFIG.sfx.bossHitFlesh.decay}`);
+  // ...and higher, since that thud is a noise band filtered low and two voices
+  // in the same range are one muddier voice.
+  check('and brighter than it', CONFIG.sfx.hotSpotHit.freq[0] > CONFIG.sfx.bossHitFlesh.filter,
+    `${CONFIG.sfx.hotSpotHit.freq[0]} vs ${CONFIG.sfx.bossHitFlesh.filter}`);
+  // The rupture is a PART of the animal going. A voice as low and long as the
+  // death would say the fight was over.
+  check('the rupture sits above the death voice',
+    CONFIG.sfx.hotSpotBurst.freq[0] > CONFIG.sfx.bossDieFlesh.freq[0]
+      && CONFIG.sfx.hotSpotBurst.decay < CONFIG.sfx.bossDieFlesh.decay,
+    `${CONFIG.sfx.hotSpotBurst.freq[0]}Hz/${CONFIG.sfx.hotSpotBurst.decay}s vs `
+      + `${CONFIG.sfx.bossDieFlesh.freq[0]}Hz/${CONFIG.sfx.bossDieFlesh.decay}s`);
 }
 
 // ---------------------------------------------------------------------------

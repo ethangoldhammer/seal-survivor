@@ -2429,6 +2429,68 @@ export const CONFIG = {
         // behaviour back (a mussel landing like any other pellet).
         replacesBulletHit: true,
     },
+
+      // ---------------------------------------------------------------------
+      // THE SHELL ITSELF, at the instant it goes off — systems/musselShell.js.
+      //
+      // The flash above is light and the `missileImpact` emitter is debris.
+      // Neither of them is the MUSSEL, and the mussel is the thing the player
+      // has been watching fly for four seconds. This is the closed shell
+      // swapped for the open one (ASSETS.musselOpen) for a fifth of a second:
+      // the shell opens, tumbles off the hit and is gone.
+      //
+      // WHY A STATE SWAP AND NOT AN ANIMATION. The source art is two static
+      // meshes, a shut mussel and a gaping one, and there is no rig between
+      // them. Under a detonation flash that is not a limitation — the flash is
+      // at its brightest for the first three frames, which is exactly when a
+      // real hinge would be mid-swing, so the cut lands inside the light and
+      // what you read is the after state.
+      //
+      // NOTHING HERE IS SCALED BY, OR SCALES, DAMAGE. It is one shell going
+      // off, the same size every time, however hard it hit — the flash above
+      // already carries "how big a deal was that" through `radiusScale`, and a
+      // second channel saying the same thing louder is how a hit on a school
+      // ends up as a wall of shells.
+      shell: {
+        enabled: true,
+        // Seconds. Shorter than it sounds: the flash is 0.17 and this has to
+        // outlive it or the shell vanishes while the area is still white and
+        // the swap never registers. Past about 0.4 it stops being a detonation
+        // and starts being a piece of litter drifting away from the kill.
+        life: 0.26,
+        // How far past its flight size the shell springs. A multiple of the
+        // size the mussel already was, so it tracks the Look panel.
+        pop: 1.45,
+        // ...and how long it takes to get there, in SECONDS, on its own clock
+        // rather than as a fraction of `life`.
+        //
+        // THE TWO ARE NOT THE SAME KNOB and coupling them was wrong. Eased
+        // across the whole life, a cubic-out is only a third open at 33ms and
+        // does not peak until 130 — which is a shell inflating, and by the time
+        // it is open the flash that was supposed to hide the cut has gone. What
+        // the effect needs is the OPENING to be instant and the LIFE to be
+        // long enough to see the thing that opened. 0.05 is three frames.
+        popTime: 0.05,
+        // What it shrinks to by the end, as a multiple of the popped size. Not
+        // 0: a shell that closes to a point draws the eye to the vanishing
+        // instead of to the kill, and the last frames are under the particle
+        // burst anyway. It fades on scale rather than on alpha because a model
+        // clone SHARES its material with every other clone — see createVisual
+        // — so writing opacity here would fade every mussel on screen at once.
+        endScale: 0.55,
+        // Radians/second of tumble, and the axis is the one the shell is least
+        // symmetric about. Randomised in sign per detonation so a volley
+        // landing on one target does not turn in formation.
+        spin: [7, 13],
+        // How far the shell carries on past the impact point, in world units
+        // per second, along the heading it arrived on. Small: it hit something.
+        // Zero looks like it stopped dead in mid-water, which is worse.
+        drift: 2.6,
+        // Pool size. A full barrage is eight shells and they can land within a
+        // frame of each other on a school; below that the oldest is recycled,
+        // which at a quarter-second life is one already most of the way gone.
+        pool: 10,
+      },
     },
 
     // ---------------------------------------------------------------------------
@@ -3007,7 +3069,7 @@ export const CONFIG = {
         // actually be argued about: too tight and the strike stops being a
         // weapon for anyone not counting frames, too loose and the beat stops
         // being a beat.
-        sweetFraction: 0.05,
+        sweetFraction: 0.04,
 
         // --- PIPS -------------------------------------------------------------
         // The bar is CUT INTO PIPS and one chum is always exactly one pip. The
@@ -4126,8 +4188,23 @@ export const CONFIG = {
     },
       // Higher combos shove the warp grid around harder — the screen itself
       // reacts to a long chain, not just the numbers.
+      // THE GRID SHOVE A FOOD-CHAIN LINK PUTS INTO THE BACKDROP.
+      //
+      // Both pairs are FEATHERED toward their cap rather than clamped at it —
+      // see softCap in main.js. The caps are approached and never reached, so
+      // these read as "how big does this get" rather than as a threshold.
       comboGridWarp: 1.6, // extra ripple strength per chain step
       comboGridWarpMax: 8,
+      // ...AND HOW WIDE. This had no cap at all, which is how a deep chain came
+      // to ask for a ripple 634 units across an 80-unit arena — the whole
+      // backdrop lurching on one swallowed orb. The cap is the largest of the
+      // three ripples a link fires (the others are fixed at 14 and 6, see
+      // CONFIG.feedback.foodChain and .strikeChain), which is right for the one
+      // that is meant to say "this chain is deep", and still a quarter of the
+      // arena rather than all of it.
+      comboGridRadiusBase: 8,
+      comboGridRadius: 2,  // extra ripple radius per chain step
+      comboGridRadiusMax: 20,
       // Bone Shrapnel: fragments burst from every enemy the dash connects with.
       // Damage is a FRACTION of the strike hit that spawned it rather than a
       // fixed number, which is what makes it ride the chain multiplier — the
@@ -11604,6 +11681,36 @@ export const CONFIG = {
       // stagger rather than as a sparkle on a creature that kept moving.
       bossDaze:  { emit: 'trapPop', shake: 0.18, hitstop: 0.05, glow: 0.5, ripple: { strength: 1.4, radius: 8 },
                    sfx: 'bossDaze', haptic: [{ duration: 40, magnitude: 0.5 }], sfxMinGap: 0.2 },
+
+      // A WEAK SPOT TAKING A HIT (systems/bossHotSpots.js). An ACCENT, layered
+      // over the material voice the same hit already fired — a crit still
+      // sounds like a hit on that animal, with this on top saying it landed
+      // somewhere that mattered.
+      //
+      // NO HITSTOP, and it is the one thing here worth arguing about. A crit
+      // is the reward for aiming and freezing the frame on it is the obvious
+      // way to sell that — but multishot puts several on the same spot inside
+      // a fifth of a second, and the hitstop cooldown would then be spent on
+      // these instead of on the events that need it. Its emphasis is the
+      // sound, the flash and the glow.
+      //
+      // `sfxMinGap` is the tightest boss gap in the table on purpose: shorter
+      // than bossHit*'s 0.11, so a run of crits reads as a run rather than as
+      // the material voice with an occasional accent. It still has to be a
+      // throttle at all — at full fire rate this is twenty a second.
+      hotSpotHit:  { emit: 'hotSpotBleed', shake: 0.05, hitstop: 0, glow: 0.45,
+                     ripple: { strength: 0.9, radius: 5 },
+                     sfx: 'hotSpotHit', haptic: [12], sfxMinGap: 0.07 },
+      // ONE BURSTING. The loudest thing the feature does and the rarest — a
+      // spot has to swallow a real share of the bar to get here — so it is
+      // allowed a shake between bossDaze and bigKill, and a real hitstop.
+      //
+      // Unthrottled: two cannot rupture on the same frame (the pool is per
+      // spot and a hit lands on one spot), so there is no pile to collapse,
+      // and a gap here could only ever silence a genuinely separate event.
+      hotSpotBurst: { emit: 'hotSpotRupture', shake: 0.34, hitstop: 0.05, glow: 0.9,
+                      ripple: { strength: 2.6, radius: 12 },
+                      sfx: 'hotSpotBurst', haptic: [22, 18, 40] },
       // Its own sound now rather than the generic `splash`, which is what a body
       // knocked off a boat makes. Coming out of the water and landing in it are
       // opposite events and were sharing one voice.
@@ -11812,7 +11919,7 @@ export const CONFIG = {
       // `foodChain` below, which is already carrying a fanfare and two haptic
       // pulses, and a third sound stacked on those is the smear this table
       // spends most of its comments avoiding. Purely the visual marker.
-      chumFull:    { emit: 'pickup', shake: 0.04, hitstop: 0, glow: 0.5, ripple: { strength: 1.2, radius: 6 }, sfx: null, haptic: null },
+      chumFull:    { emit: 'pickup', shake: 0.04, hitstop: 0, glow: 0.5, ripple: { strength: 1.2, radius: 6 }, sfx: 'chumFull', haptic: null },
       // ONE PIP OF THE BAR FILLING — the tick under the meter.
       //
       // No emitter, no shake, no ripple and no hitstop, and every one of those
@@ -11863,6 +11970,11 @@ export const CONFIG = {
                      haptic: [{ duration: 22, magnitude: 0.25 }] },
       breathIn:    { emit: 'breathBubbles', shake: 0.02, hitstop: 0, glow: 0.12, sfx: 'breathIn',
                      haptic: [{ duration: 40, magnitude: 0.3 }] },
+      // Going back under. Fires ONCE per dive where breathIn fires repeatedly
+      // while topping up, so it gets the bubbles and none of the shake — the
+      // camera should not kick on the way down, only on the gasp.
+      breathOut:   { emit: 'breathBubbles', shake: 0, hitstop: 0, glow: 0.08, sfx: 'breathOut',
+                     haptic: [{ duration: 26, magnitude: 0.18 }] },
 
       // --- electric eel ---------------------------------------------------------
       // The discharge, once per bolt regardless of how far it chains. Two
@@ -14310,6 +14422,31 @@ export const CONFIG = {
       // blast that fires with it. Below `bigKill` on purpose — a boat is the
       // biggest single thing that explodes in this game.
       bossDieHull:  { src: null, type: 'boom', freq: [95, 18],  decay: 1.4,  gain: 0.55, noise: 0.8, filter: 520, pitchVary: 0.08, filterVary: 0.14 },
+
+      // --- the weak spots (systems/bossHotSpots.js) ----------------------
+      // BOTH OF THESE PLAY ON TOP OF THE MATERIAL VOICE ABOVE, never instead
+      // of it. A crit still fires bossHitFlesh/Shell/Hull like any other hit,
+      // and this is the accent that says that one counted — the same
+      // arrangement the club's `teed` uses, where the setup sound lands just
+      // before the whack so the two read as one blow with an emphasis on it.
+      //
+      // That is also why neither of these is per-material. The material
+      // character is already carried by the voice underneath; six more entries
+      // would be six ways to say a thing that has already been said, for a
+      // feature with one substance.
+      //
+      // BRIGHT AND VERY SHORT. It sits over bossHitFlesh, which is a dull
+      // noise thud filtered at 820 — so this has to be somewhere that thud is
+      // not, and up is the only direction available. Falling rather than
+      // rising: a rising blip in this range is the pickup vocabulary
+      // (`pearlBurst` is 1800 -> 2600) and a crit is not a collectable.
+      hotSpotHit:   { src: null, type: 'blip', wave: 'triangle', freq: [2600, 1900], decay: 0.06, gain: 0.15, pitchVary: 0.18 },
+      // THE RUPTURE. Deliberately between `bossDaze` and `bossDieFlesh`:
+      // higher and much shorter than a death, because what just went is a PART
+      // of the animal and a voice down at the death's 130 -> 24 would say the
+      // fight was over. The noise fraction is what makes it wet rather than
+      // percussive.
+      hotSpotBurst: { src: null, type: 'boom', freq: [520, 70], decay: 0.6, gain: 0.42, noise: 0.66, filter: 1900, wave: 'sine', pitchVary: 0.12, filterVary: 0.22 },
       // THE DAZE. A FALLING pitch, which is the whole brief — every other
       // control sound in the bank rises (belugaTrap 170->880, elementFreeze is
       // the exception that proves it) because something closed or seized. This
@@ -14419,6 +14556,10 @@ export const CONFIG = {
       // health event, not a level-up event, and borrowing that reading would
       // have it lying about which bar just moved.
       chumChunkEaten: { src: null, type: 'blip',  wave: 'triangle', freq: [320, 900], decay: 0.34, gain: 0.3,  pitchVary: 0.06 },
+      // The chum meter crossing to full — a payoff that had no sound at all
+      // until now. Long and open where the per-orb `chumEaten` is a swallow:
+      // this is the one moment in the chain worth letting ring.
+      chumFull:   { src: null, type: 'boom', freq: [180, 520], decay: 0.9, gain: 0.42, noise: 0.2, filter: 2600, pitchVary: 0.04, filterVary: 0.1 },
       // The downbeat the boss's arrival lands on — fired the frame the health
       // bar finishes filling and the fight goes live (see systems/boss.js).
       // `pitchVary: 0` and no `srcs` list, unlike almost everything else here:
@@ -14559,6 +14700,10 @@ export const CONFIG = {
       // surface, so refilling sounds like a seal gulping air rather than one
       // sound effect that happens to be long.
       breathIn:   { src: null, type: 'noise', filter: 1700,     decay: 0.42, gain: 0.24, pitchVary: 0.08, filterVary: 0.25 },
+      // The blow out, as the seal goes back under. Darker and longer than the
+      // gasp: an exhale underwater is filtered by the water it goes into, and
+      // it is a release rather than a snatch.
+      breathOut:  { src: null, type: 'noise', filter: 900,      decay: 0.6,  gain: 0.2,  pitchVary: 0.1,  filterVary: 0.25 },
       // Rising sine — a bubble bursting reads as an upward bloop, where the
       // falling sweep the other pickups use reads as something landing.
       bubblePop:  { src: null, type: 'blip',  wave: 'sine',     freq: [260, 1500], decay: 0.09, gain: 0.22, pitchVary: 0.18 },
@@ -15171,6 +15316,33 @@ export const CONFIG = {
       presets: {
         greatWhite: { strength: 1.3, wet: 0 },
         mightyMeg: { strength: 0, size: 0.04, contrast: 3.55, wet: 0 },
+
+        // THE HOMING MUSSEL, closed and open both — see assets.csv, where the
+        // two states deliberately name the same surface.
+        //
+        // `size` is in WORLD UNITS and this is the smallest body in the game to
+        // wear this shader: the shell is 0.58 long where a great white is 11,
+        // so the family's 0.4 (authored against a 2.6-unit seal) puts a single
+        // patch across the whole animal and reads as a flat tint. 0.06 gives
+        // roughly the same patch-per-body-length the seal gets, which is what
+        // the number is actually for. Ocean-scale numbers do not fit a prop;
+        // same trap as the caustics on the seal's wet film.
+        //
+        // `contrast` above the family's 1.0 for hard patches rather than a
+        // wash: a shell is a mineral surface with growth banding on it, not
+        // mottled skin, and at this size a soft gradient is indistinguishable
+        // from no noise at all.
+        //
+        // `color` is WARM where the sharks' dark side goes to a cold 0x0a2233,
+        // because this is mixing into a near-black hide — mixing black toward
+        // a dark blue is a no-op you can spend an afternoon failing to see.
+        // This lifts instead.
+        //
+        // `wet: 0` for the same reason greatWhite and mightyMeg carry it: the
+        // film is a base value authored for the seal, and leaving it on ships
+        // a gloss to everything that takes a `noise:` surface. A wet mussel is
+        // a fine idea and a separate decision.
+        mussel: { size: 0.06, contrast: 2.2, strength: 0.55, color: 0x4a3520, wet: 0 },
       },
     },
 
@@ -16681,7 +16853,7 @@ export const CONFIG = {
     // units at their biggest against a body whose reach is 5, so a fraction of
     // one is a light under a metre across on a thirteen-metre shark. Sized
     // this way a spot stays in proportion to the boss whatever it landed on.
-    radiusFrac: 0.34,
+    radiusFrac: 0.46,
     // ...capped at this multiple of the part it IS on, which is the other half
     // of the rule. Without it a spot that landed on a fin tip is drawn several
     // times the size of the fin, and its crit reach covers open water.
@@ -16690,6 +16862,23 @@ export const CONFIG = {
     // reliably hit, too big stops being a place to aim at and becomes a region.
     minRadius: 0.8,
     maxRadius: 3.2,
+    // How wide a tube around the candidate's own ray counts as "the same piece
+    // of body" when the point is resolved onto the mesh, as a fraction of the
+    // hitbox sphere it came from. The candidate sits on the rim of a FITTED
+    // sphere and a sphere is not the animal — measured on the megalodon that
+    // rim runs up to 1.18 units outside the mesh, and with the glow painted on
+    // the skin a centre off the body loses the whole bright middle of the
+    // patch. Too tight and a thin fin has no flesh inside the tube at all;
+    // too loose and the point drifts sideways onto whatever else is pointing
+    // outward. See supportOnSkin, which widens once before giving up.
+    snapTube: 0.35,
+    // How far inboard of the outline the centre is pulled, in fractions of the
+    // spot's own radius. NOT zero: a centre exactly on the silhouette wastes
+    // half its circle over open water, because the glow is painted on skin and
+    // only the inboard half is ever drawn — so the boundary ring, which is
+    // what makes the spot read as a target, is off the body for most of its
+    // length. Must stay under 1 or the spot stops touching the outline at all.
+    insetFrac: 0.4,
     // How far apart two of them try to stay, in multiples of the boss's own
     // radius. A preference rather than a rule — on a small body there may be
     // no candidate far enough away, and a hard floor there would mean the
@@ -16745,15 +16934,37 @@ export const CONFIG = {
       // The frame it is struck, and the whole time it is bursting.
       flashColor: 0xff3a24,
       glow: 2.6,
-      // Where the spot's own boundary sits inside its quad, as a fraction of
-      // the quad's half-width. The rest is the glow falling off. This is the
-      // one number here that must not be treated as taste: it is what makes
-      // the drawn edge land on the radius the crit test uses.
-      edge: 0.46,
+      // THERE IS NO `edge` ANY MORE, and its absence is the point. The glow
+      // used to be a quad, so a fraction of that quad's half-width decided
+      // where the spot's boundary was drawn — a second number that had to be
+      // kept in step with the crit's reach by hand. Painted on the skin, the
+      // shader divides by the radius uniform directly: the drawn boundary and
+      // the reach are not two numbers that agree, they are one number.
       // How deeply the edge is chewed, and how fast the chewing crawls. A
       // round hot spot reads as a decal stamped on the model.
       jag: 0.34,
       jagRate: 1.4,
+      // --- the shape, and the reason the spot reads as a target ----------
+      // THE RING is the loudest thing here and the one that does the work: a
+      // hard bright band sitting exactly on the crit boundary. Without it the
+      // spot is a soft blob, and a soft blob at fight scale — where a boss is
+      // a couple of hundred pixels — is a green smear with no size and no
+      // edge. `ring` is its brightness against `glow`, `ringWidth` how thick
+      // it is as a fraction of the radius.
+      ring: 1.7,
+      ringWidth: 0.16,
+      // THE FILL, deliberately well under the ring. A solid interior at full
+      // brightness clips flat once the glow lifts it past 1, and then
+      // everything that has to be legible inside the spot — the heat shift,
+      // the hot core, the hit flash — is invisible because all of it is
+      // already over the ceiling.
+      fill: 0.3,
+      // THE SPILL beyond the boundary: how far out it reaches as a fraction of
+      // the radius, and how bright. This is the only part the chewed edge
+      // touches — a jag on the RING would be the boundary lying about the
+      // crit's reach by the jag's own amplitude.
+      spill: 0.5,
+      spillGain: 0.55,
       // Falloff exponent on the hot middle. Higher is a tighter, harder core.
       core: 3.2,
       // How white that core goes. This is what stops the spot being a flat
@@ -16762,21 +16973,22 @@ export const CONFIG = {
       // rather than one saturated disc.
       white: 0.85,
       // The breathing. Rate is radians a second at zero damage and rises with
-      // heat; depth is how much of the size it moves.
+      // heat; depth is how much of the BRIGHTNESS it moves — not the size.
+      // Pulsing the reach would swing the drawn boundary either side of the
+      // number the crit test uses several times a second, which is a small lie
+      // told constantly about the one thing on a boss the player aims at.
       pulse: 3.4,
-      pulseDepth: 0.11,
-      // How much a hit swells the quad. Small — a big swell reads as the spot
-      // moving rather than as it being struck.
-      flashSwell: 0.35,
+      pulseDepth: 0.3,
+      // How much brighter a hit makes it, on top of everything else. This is
+      // the frame the player's eye is caught by, so it is allowed to be loud.
+      flashSwell: 2.4,
       // Seconds. Opening is slow enough to be noticed arriving; closing and
       // the flash are both short enough to be events.
       openSeconds: 0.45,
       closeSeconds: 0.22,
       flashSeconds: 0.16,
-      // Toward the camera, so the light sits on the skin rather than in it.
-      // Bigger than the impact smear's lift because this one is never depth
-      // tested and the lift is what keeps it off the water behind the animal.
-      lift: 0.34,
+      // No `lift` either: the old quad needed nudging toward the camera to sit
+      // off the skin, and this IS the skin.
     },
   },
 
@@ -18386,7 +18598,23 @@ export const CONFIG = {
       // whole behaviour is a race against the player crossing the gap first —
       // but not so fast that the gap is unreachable, which would make the trap
       // unavoidable rather than difficult.
-      weaveSpeed: 13,
+      //
+      // AND THIS IS THE SQUID'S SWIMMING SPEED, whatever the roster row says.
+      // enemies.csv gives it 3.5 and the entry in CONFIG.enemies calls it "the
+      // slowest body in the roster" — a speed it essentially never travelled
+      // at, because the weave is the fight's default state and it overwrites
+      // velocity outright. Measured over a 90-second fight: 99.9% of frames at
+      // exactly 13.00 u/s. The animal that was designed to lumber was sprinting
+      // the entire time, and the one number that said so was three files away
+      // from the one being read.
+      //
+      // 6 is a little under twice its cruise: still visibly a move with intent,
+      // still a race it can win, and it costs the trap nothing — crushes per
+      // 60s against a drifting player measured 5 at this speed against 6 at 13,
+      // because what closes the ring is the CLOUD's lifetime and the player
+      // staying inside it, not how fast the animal gets round. The lunge is
+      // where this boss is allowed to be quick (see crush.speed, 30, untouched).
+      weaveSpeed: 6,
       // The cadence and size of the wall it lays while weaving. Small, frequent
       // bursts rather than a raised emission rate — see weaveInk for why.
       weaveInkEvery: 0.34,
@@ -19306,12 +19534,13 @@ export const CONFIG = {
       beepIntervalNear: 0.22, // ...and at empty
       beepPitchRise: 0.6, // playback rate added by the time you're empty
 
-      // --- surface gasps ----------------------------------------------------
-      // Repeats for as long as you're actually gaining oxygen at the surface,
-      // so a quick dip up for one breath makes one sound and a long top-up
-      // makes several.
+      // --- the breath -------------------------------------------------------
+      // One gasp per surfacing and one per oxygen bubble, on the edge where
+      // the bar starts going up — with the exhale as its close when it starts
+      // coming back down. There is no interval to tune any more: this used to
+      // repeat every `breathInterval` for as long as the bar filled, which
+      // made a long top-up pant. See systems/oxygenFx.js.
       breathEnabled: true,
-      breathInterval: 0.5,
     },
   },
 
@@ -21755,6 +21984,29 @@ export const CONFIG = {
       // least to say and banding has most.
       shark: { steps: 3, low: 0.3, gamma: 1.15, soft: 0.12, range: 1.5 },
       orca: { steps: 2, low: 0.22, high: 1.0, soft: 0.06 },
+
+      // THE HOMING MUSSEL, closed and open both. Two bands and a razor edge
+      // between them: this is the smallest thing in the game wearing this
+      // shader and it is usually moving fast, so three bands on a 0.58-unit
+      // body is a gradient again by the time it reaches a pixel. Two reads as
+      // a decision at any speed.
+      //
+      // `low` well above the family's 0.28 and `range` well below 1, and both
+      // for the same cause — the shell is a near-black hide (0x07070a on the
+      // outer valves, straight out of the source). At the base numbers its
+      // shadow band lands at 0.28 x an already-black albedo, which is not a
+      // shadow, it is a hole; and its lit band never gets near "fully lit", so
+      // the terminator sits off the end of the ramp and the whole shell is one
+      // flat band. Lifting the floor and shortening the ramp spreads the two
+      // steps over the part of it a dark body actually occupies.
+      //
+      // THE RAMP IS HALF THE FIX AND KNOWS IT. The other half is the small lift
+      // in ASSETS.missile's `tint`, because the toon pass divides the albedo out
+      // before it bands and multiplies it back after — so its output is capped
+      // by the albedo however well these numbers are chosen, and the source
+      // file's 2.7% hide caps it at nothing. Neither one works without the
+      // other, and the tint is deliberately the smaller of the two moves.
+      mussel: { steps: 2, low: 0.46, high: 1.0, gamma: 1.1, soft: 0.05, range: 0.55 },
     },
   },
 
@@ -22784,8 +23036,9 @@ for (const [root, presets] of Object.entries({
     "sealTeam": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
     "ship": { strength: 1, steps: 2, gamma: 1.05, low: 0.14, high: 1, soft: 0, range: 1.5 },
     "megalodon": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
-    "bossHammerhead": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "bossHammerhead": { strength: 1, steps: 2, gamma: 3, low: 0, high: 1, soft: 0, range: 2.4 },
     "mosasaur": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "bossAnglerfish": { strength: 1, steps: 4, gamma: 3, low: 0.06, high: 1, soft: 0.38, range: 2.6 },
   },
   sealShader: {
     "mightyMeg": { strength: 0, size: 0.04, contrast: 3.55 },
@@ -22794,14 +23047,20 @@ for (const [root, presets] of Object.entries({
     "ship": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 3, wetSoft: 0.5, wetTight: 21, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 4.4, wetPatch: 0.35, wetCaustics: 0.95, wetCausticScale: 4.9, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
     "shark": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 1.15, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.76, wetTight: 81, wetEdge: 0.15, wetRim: 0.46, wetRimPower: 2.7, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
     "megalodon": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
-    "bossHammerhead": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
-    "mosasaur": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "bossHammerhead": { strength: 1.4, size: 0.72, contrast: 4, wet: 1.6, wetGloss: 1.3, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "mosasaur": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 1.35, wetGloss: 0.5, wetSteps: 4, wetSoft: 0.62, wetTight: 24, wetEdge: 0.59, wetRim: 0.7, wetRimPower: 2.2, wetPatch: 0.7, wetCaustics: 0.5, wetCausticScale: 1.2, wetCausticUp: 0.75, wetGlow: 0.9, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "bossAnglerfish": { strength: 1, size: 0.04, contrast: 3.55, wet: 1.6, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 2, wetTint: 0.55, color: 0x000000, wetColor: 0x7acaff },
   },
   biolumSkin: {
     "clubIce": { shellColor: 0x000000, colorC: 0x000000, colorB: 0xade6e5, flow: 1.16, pattern: "flow", scale: 0.07 },
     "octoGrabber": { flow: 1.2, pattern: "marble", scale: 0.13, shellColor: 0xff5e24, colorA: 0xff9500, colorC: 0x00f048 },
     "hammerhead": { pigment: 1, scale: 0.07, contrast: 3.35, coverage: 0.45, strength: 1.8, flow: 0.94, pattern: 'blotches', colorA: 0x000000, colorB: 0x3a1778, colorC: 0xe6e6e6, shellColor: 0x1a1919 },
     "bossYacht": { pigment: 1, scale: 0.34, contrast: 1.5, coverage: 0.08, strength: 1.8, flow: 0.48, pattern: 'veins', colorA: 0x00e5ff, colorB: 0x000000, colorC: 0x2f2e2d, shellColor: 0xffffff },
+    "orcaFriendCow": { pigment: 1, scale: 0.13, contrast: 1.6, coverage: 0.2, strength: 0.72, flow: 1.22, pattern: 'marble', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x000000 },
+    "orcaFriendCalf": { pigment: 1, scale: 0.04, contrast: 2.9, coverage: 0.45, strength: 1.9, flow: 1.54, pattern: 'net', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x3d3d3d },
+    "bakalarBoat": { pigment: 1, scale: 0.1, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.3, pattern: 'lattice', colorA: 0xff0026, colorB: 0x7b2dff, colorC: 0xffd166, shellColor: 0xff5a1e },
+    "boat": { pigment: 1, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.24, pattern: 'veins', colorA: 0x000000, colorB: 0x8f8f8f, colorC: 0x000000, shellColor: 0xababab },
+    "clownFish": { pigment: 1, scale: 0.23, contrast: 3.45, coverage: 0.42, strength: 1.8, flow: 1.08, pattern: 'speckle', colorA: 0x000000, colorB: 0xffffff, colorC: 0xeb5322, shellColor: 0xffffff },
   },
 })) {
   const bag = ((CONFIG[root] ??= {}).presets ??= {});
@@ -23298,6 +23557,15 @@ export const TUNER_SCHEMA = [
       { path: 'missile.impact.life', min: 0.04, max: 0.6, step: 0.01, label: 'impact flash length' },
       { path: 'missile.impact.glow', min: 0, max: 8, step: 0.1, label: 'impact flash glow' },
       { path: 'missile.impact.replacesBulletHit', type: 'bool', label: 'impact replaces generic hit fx' },
+      // The shell opening inside its own detonation (systems/musselShell.js).
+      // `pool` is not here on purpose: it is read once at boot to size the
+      // pool, so a slider would move a number nothing re-reads until a reload.
+      { path: 'missile.shell.enabled', type: 'bool', label: 'shell pops open on impact' },
+      { path: 'missile.shell.life', min: 0.06, max: 0.8, step: 0.01, label: 'open shell length' },
+      { path: 'missile.shell.pop', min: 0.5, max: 3, step: 0.05, label: 'open shell size (x flight size)' },
+      { path: 'missile.shell.popTime', min: 0.01, max: 0.3, step: 0.005, label: 'how fast it springs open' },
+      { path: 'missile.shell.endScale', min: 0.1, max: 1.2, step: 0.05, label: 'open shell size at the end' },
+      { path: 'missile.shell.drift', min: 0, max: 12, step: 0.2, label: 'open shell carry-through' },
       { path: 'emitters.missileImpact.count', min: 0, max: 120, step: 2, label: 'impact bits' },
       { path: 'emitters.missileImpact.glow', min: 0, max: 10, step: 0.1, label: 'impact bits glow' },
       { path: 'feedback.missileImpact.shake', min: 0, max: 1.5, step: 0.02, label: 'impact shake' },
@@ -24218,8 +24486,7 @@ export const TUNER_SCHEMA = [
       { path: 'oxygen.fx.beepIntervalFar', min: 0.1, max: 3, step: 0.05, label: 'beep gap at threshold' },
       { path: 'oxygen.fx.beepIntervalNear', min: 0.05, max: 2, step: 0.01, label: 'beep gap at empty' },
       { path: 'oxygen.fx.beepPitchRise', min: 0, max: 2, step: 0.05, label: 'beep pitch climb' },
-      { path: 'oxygen.fx.breathEnabled', type: 'bool', label: 'surface gasps' },
-      { path: 'oxygen.fx.breathInterval', min: 0.15, max: 2, step: 0.05, label: 'seconds between gasps' },
+      { path: 'oxygen.fx.breathEnabled', type: 'bool', label: 'breath in / out' },
     ],
   },
   {
@@ -25099,7 +25366,10 @@ export const TUNER_SCHEMA = [
       { path: 'sealCharge.contrast', min: 0.2, max: 6, step: 0.1, label: 'seal glow: contrast' },
       { path: 'sealCharge.white', min: 0, max: 1, step: 0.02, label: 'seal glow: white core' },
       { path: 'strike.comboGridWarp', min: 0, max: 6, step: 0.1, label: 'combo grid warp' },
-      { path: 'strike.comboGridWarpMax', min: 0, max: 20, step: 0.5, label: 'combo grid warp cap' },
+      { path: 'strike.comboGridWarpMax', min: 0, max: 20, step: 0.5, label: 'combo grid warp cap (feathered, never reached)' },
+      { path: 'strike.comboGridRadiusBase', min: 0, max: 30, step: 0.5, label: 'combo grid ripple: radius at chain 0' },
+      { path: 'strike.comboGridRadius', min: 0, max: 8, step: 0.1, label: 'combo grid ripple: radius per chain step' },
+      { path: 'strike.comboGridRadiusMax', min: 2, max: 60, step: 1, label: 'combo grid ripple: radius cap (feathered)' },
     ],
   },
   {
@@ -25983,20 +26253,21 @@ export const TUNER_SCHEMA = [
       { path: 'hotSpots.look.hotColor', type: 'color', label: 'damaged' },
       { path: 'hotSpots.look.flashColor', type: 'color', label: 'struck' },
       { path: 'hotSpots.look.glow', min: 0, max: 8, step: 0.1, label: 'glow' },
-      // Moves the drawn edge relative to the crit's reach. The default is
-      // where the two agree; tools/boss-hotspot-test.mjs asserts that.
-      { path: 'hotSpots.look.edge', min: 0.2, max: 0.9, step: 0.01, label: 'edge sits at (x quad)' },
       { path: 'hotSpots.look.jag', min: 0, max: 1, step: 0.01, label: 'edge chewed by' },
       { path: 'hotSpots.look.jagRate', min: 0, max: 6, step: 0.1, label: '…crawling at' },
+      { path: 'hotSpots.look.ring', min: 0, max: 6, step: 0.05, label: 'boundary ring brightness' },
+      { path: 'hotSpots.look.ringWidth', min: 0.02, max: 0.6, step: 0.01, label: '…ring thickness (x radius)' },
+      { path: 'hotSpots.look.fill', min: 0, max: 2, step: 0.05, label: 'interior fill' },
+      { path: 'hotSpots.look.spill', min: 0, max: 1.5, step: 0.05, label: 'spill past the boundary' },
+      { path: 'hotSpots.look.spillGain', min: 0, max: 2, step: 0.05, label: '…spill brightness' },
       { path: 'hotSpots.look.core', min: 0.5, max: 10, step: 0.1, label: 'hot core tightness' },
       { path: 'hotSpots.look.white', min: 0, max: 1, step: 0.05, label: '…core goes white by' },
       { path: 'hotSpots.look.pulse', min: 0, max: 12, step: 0.1, label: 'breathing rate' },
-      { path: 'hotSpots.look.pulseDepth', min: 0, max: 0.5, step: 0.01, label: '…depth' },
-      { path: 'hotSpots.look.flashSwell', min: 0, max: 1.5, step: 0.05, label: 'hit swells it by' },
+      { path: 'hotSpots.look.pulseDepth', min: 0, max: 1, step: 0.02, label: '…depth (brightness)' },
+      { path: 'hotSpots.look.flashSwell', min: 0, max: 6, step: 0.1, label: 'hit brightens it by' },
       { path: 'hotSpots.look.openSeconds', min: 0.05, max: 2, step: 0.05, label: 'opens over (s)' },
       { path: 'hotSpots.look.closeSeconds', min: 0.05, max: 2, step: 0.02, label: 'closes over (s)' },
       { path: 'hotSpots.look.flashSeconds', min: 0.02, max: 1, step: 0.02, label: 'hit flash lasts (s)' },
-      { path: 'hotSpots.look.lift', min: 0, max: 2, step: 0.02, label: 'lifted off the skin by' },
     ],
   },
   {
@@ -26757,7 +27028,20 @@ const PATH_TABLES = [
     // the colours, the glow, the pulse, the chewed edge — is judged by eye in
     // the second it happens and stays on sliders, fenced below. Same split as
     // `whale` and `biolum` in the two tables above.
-    roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies', 'hotSpots'],
+    //
+    // `kraken` is here for the FIGHT'S PACING — how fast the squid travels and
+    // how much of a fight it spends travelling. Those numbers were in neither
+    // instrument: the block has no tuner group at all, so imported-tuning.json
+    // was its only home and editing config.js could not move it. The weave
+    // speed sat at 13 in a snapshot while the roster row called this "the
+    // slowest body in the roster" at 3.5 — and the weave is 99% of the fight,
+    // so 13 was simply the squid's speed. See the note on `weaveSpeed`.
+    //
+    // The rest of the kraken block — the ink cadence, the ring thresholds, the
+    // flinch — is deliberately left out. Adding a row is what makes a number
+    // authoritative, so the ones here are only the ones being answered
+    // together: how fast, how long, and how quick the lunge is against them.
+    roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies', 'hotSpots', 'kraken'],
     forbid: (id) => {
       if (id.startsWith('hotSpots.look.')) {
         return 'behaviour.csv owns the weak spots\' throughput only — the colours, the glow and the pulse are tuner sliders';

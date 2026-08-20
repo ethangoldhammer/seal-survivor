@@ -15,7 +15,7 @@ eelCompanion,1.5,,,
 enemyAbyssShark,2.62,,biolum:abyssHunter,night variant of enemyGreatWhite - keep these two equal
 enemyAnglerfish,2.5,,,"3.4 fit x this = 8.5 on screen, between the dolphin (7.2) and the shark (10.1) - a chunky ambusher, not an apex body. Registered only: no enemies.csv row and no spawning.csv entry, so nothing places it in a wave yet."
 enemyBarracuda,1.78,,,
-enemyBossAnglerfish,2.5,,,"The boss body. Equal to enemyAnglerfish on purpose - same model file, same size; what separates them is the clip mapping (see assets.js). bosses.csv sizeMul is where the boss step goes, as it does for every other archetype."
+enemyBossAnglerfish,2.5,,noise:bossAnglerfish,"The boss body. Equal to enemyAnglerfish on purpose - same model file, same size; what separates them is the clip mapping (see assets.js). bosses.csv sizeMul is where the boss step goes, as it does for every other archetype."
 enemyBossCrab,2.3,,biolum:kingCrab,the king crab boss - same animal as enemyWalkingCrab so it takes the same size; the boss step is bosses.csv sizeMul on top
 enemyBossHammerhead,3.6,,noise:bossHammerhead,"The hammerhead boss. 4.0 fit x this = 14.4 here, and bossHammerhead's 1.6 takes it to 23.0 - the smallest boss body in the game, which is the point of it. Out of family with the other numbers in this column for exactly that reason; measured by tools/boss-scale-check.mjs. A DIFFERENT ASSET from enemyHammerhead below, which is why this one is 3.6 against that one's 2.62 - the boss carries its whole step here, the wave animal is in family with the other sharks."
 enemyDolphin,2.4,,,"3 fit x this = 7.2 on screen, between the otter's 4.8 and the shark's 10.1 - which is where its authored radius (0.85, against the shark's 1.2) always said it belonged. It had NO ROW until now, so it spawned at 1: a 3.0-unit dolphin, smaller on screen than a barracuda (4.27) while carrying four times its hp. The hitbox follows the visual, so its collision radius goes 0.85 -> 2.04 - still just inside the octopus's grab (CONFIG.octoGrab.maxTargetRadius 2.2) and now above the orca pod's fallbackMinRadius, which is where an animal this size belongs on both counts."
@@ -36,16 +36,17 @@ enemySquid,1,squidGlow,,"Added for the SKIN, not the size. size=1 is what this a
 enemyStingray,3.1,,,
 enemyWalkingCrab,2.3,,,matched to enemyEmberCrab; 2.3 reproduces the old crab's on-screen height on the new rig
 harp,1,,,"the orbiting harp - fit is 1.6 world units against the seal's 2.6, so this column is the multiple of a deliberately under-sized instrument"
-missile,2,,,
+missile,2,,noise:mussel,"The homing mussel. SIZE 2 IS NOT A CHOICE - it is what this asset already had, and assets.js's fit (0.58) is the oval it replaced measured exactly, so the model swap carried no size change. The surface is the new part: the shell is lit now and wears the Perlin-and-banding pair. Shares the mussel preset with musselOpen on purpose - they are one animal in two states."
 moneyRoll1,1,,,"the yacht's explosive — a banded roll of hundreds. Size is 1 on purpose: the sizing that matters is `fit` in assets.js, set to the length of the oval barrel this replaces, so the swap is a look change and not a balance one."
 moneyRoll2,1,,,spare roll from the same pack. Unused by the yacht's two guns; here so a row exists before anybody reaches for it — an asset with no row spawns at 1 silently.
 moneyRoll3,1,,,the yacht's seeker — the shorter fit of the four
 moneyRoll4,1,,,"spare roll, seeker size. See moneyRoll2."
 musicNote,1,,,the harp's note
+musselOpen,2,,noise:mussel,"The mussel's detonation state. Equal to missile on purpose - the two are the same animal and the pop is the shell OPENING, not the shell growing, so any difference here would read as the wrong thing. Same preset too: one surface, two states."
 octoGrabber,1.34,,biolum:octoGrabber,
 orcaFriendBull,1,,,"The pod leader — Orca Family, slot 0."
-orcaFriendCalf,1,,,"Orca Family, slot 2. Smallest of the three."
-orcaFriendCow,1,,,"Orca Family, slot 1."
+orcaFriendCalf,1,,biolum:orcaFriendCalf,"Orca Family, slot 2. Smallest of the three."
+orcaFriendCow,1,,biolum:orcaFriendCow,"Orca Family, slot 1."
 rapidFireOrb,2.4,,,
 razorBlade,1,,,
 seagull,9.54,,,

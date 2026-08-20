@@ -111,6 +111,12 @@ export const strikeState = {
   sinceLoaded: 0,      // seconds since that moment (0 until it happens)
   toLoaded: Infinity,  // seconds still to run before it
   sweetStrike: false,  // ...and whether the dash IN FLIGHT was released inside it
+  // WHETHER THE DASH IN FLIGHT ARMS A FOOD CHAIN — a perfect charge OR an
+  // on-beat release. Deliberately a separate stamp from `sweetStrike` rather
+  // than a widening of it: the two conditions pay for different things now
+  // (this one the chain, that one the damage) and collapsing them would put
+  // the strike's whole damage output behind the charge again. See tryStrike.
+  armingStrike: false,
   // A SWEET STRIKE HAS BEEN THROWN AND ITS CHAIN HAS NOT LAPSED.
   //
   // This is what makes eating count. The release does not score a link — it
@@ -389,6 +395,7 @@ export function resetStrike() {
   strikeState.perfectFlash = 0;
   strikeState.perfectStrike = false;
   strikeState.sweetStrike = false;
+  strikeState.armingStrike = false;
   strikeState.armed = false;
   strikeState.charging = false;
   strikeState.power = 0;
@@ -402,6 +409,7 @@ export function resetStrike() {
   strikeState.pipsSinceStrike = 0;
   lastRelease.depth = 0;
   lastRelease.sweet = false;
+  lastRelease.arms = false;
   lastRelease.hadFood = false;
   lastRelease.hadWindow = false;
   strikeState.invulnTimer = 0;
@@ -651,10 +659,34 @@ export function tryStrike(aimDir, stats) {
   // for what riding on it.
   const sweet = inSweetSpot(stats);
   strikeState.sweetStrike = sweet;
+
+  // ---- WHAT ARMS A FOOD CHAIN, AND IT IS NOT THE TIMING ------------------
+  //
+  // A PERFECT CHARGE ARMS IT. `perfect` is the latch behind the PERFECT flash
+  // and the pop on the ring (see updateCharge) — the wind-up having nothing
+  // left to bank — so the thing the player SEES is the thing that arms. It
+  // used to be `sweet` alone, and that was a gate with no tell of its own: the
+  // sweet spot is a tenth of a second wide, every cue for it fires at its
+  // centre, and 90% of releases in the run logs armed nothing. Asking a player
+  // to hit a window nothing announces, in order to start the mechanic the whole
+  // game is built around, is not a skill gate.
+  //
+  // THE TIMING STILL DECIDES THE DAMAGE. `sweetStrike` above is untouched and
+  // still gates every point of damage the strike deals — riderDamage,
+  // strikeBurst and the contact bite all return zero without it. So the window
+  // is now what a mistimed strike COSTS you rather than what it locks you out
+  // of, and the lead-in on the ring (systems/strikeRing.js) is a damage cue.
+  //
+  // Read here, BEFORE clearPending() below wipes the latch, and stamped onto
+  // the dash for the same reason `power` and `perfectStrike` are: what a dash
+  // was bought with cannot change while it is in flight.
+  const arms = sweet || strikeState.perfect;
+  strikeState.armingStrike = arms;
+
   // Recorded with the SIGNED offset, which is the one number a player has no
   // way of seeing and the one that decides everything downstream: early and
   // late are different mistakes and look the same from the seat.
-  noteChain('release', { offset: sweetOffset(), sweet, half: sweetHalfWidth(stats) });
+  noteChain('release', { offset: sweetOffset(), sweet, arms, half: sweetHalfWidth(stats) });
 
   // Snapshot what this dash was bought with. Damage and reach both read it for
   // the whole dash, so clearing `pending` on the next line can't retroactively
@@ -717,13 +749,14 @@ export function tryStrike(aimDir, stats) {
   const hadFood = strikeState.pipsSinceStrike >= linkPips(stats);
   const hadWindow = strikeState.chainTimer > 0;
   strikeState.pipsSinceStrike = 0;
-  if (sweet) strikeState.armed = true;
+  if (arms) strikeState.armed = true;
   // HOW DEEP THE CHAIN WAS when this release happened — not what the release
   // scored, because a release scores nothing. Kept because it is the one thing
   // about a strike the report cannot reconstruct afterwards: whether the
   // player was opening a chain or feeding one that was already running.
   lastRelease.depth = liveChain();
   lastRelease.sweet = sweet;
+  lastRelease.arms = arms;
   lastRelease.hadFood = hadFood;
   lastRelease.hadWindow = hadWindow;
 
@@ -737,7 +770,11 @@ export function tryStrike(aimDir, stats) {
   // magnet reaching for food at all (chumHoming in systems/chumMagnet.js) —
   // reads the window rather than re-deriving the rule, so gating it here is
   // the single edit that gates all of them.
-  if (sweet && strikeState.chainTimer <= 0) strikeState.chainTimer = CONFIG.strike.chainWindow;
+  // ...and the window answers to the SAME condition the arming does. A release
+  // that arms but opens no window arms nothing in practice: `isFeeding()` would
+  // be true only for the length of the dash itself, and the chain would die the
+  // frame it landed.
+  if (arms && strikeState.chainTimer <= 0) strikeState.chainTimer = CONFIG.strike.chainWindow;
 
   return true;
 }
@@ -746,7 +783,7 @@ export function tryStrike(aimDir, stats) {
 // rather than returned because tryStrike's boolean is "did a dash launch",
 // which the caller branches on for the impulse — widening it to an object
 // would touch every call site to say something only one of them cares about.
-const lastRelease = { depth: 0, sweet: false, hadFood: false, hadWindow: false };
+const lastRelease = { depth: 0, sweet: false, arms: false, hadFood: false, hadWindow: false };
 
 /**
  * WHAT THE LAST RELEASE WAS — whether it landed on the beat, how deep the chain
@@ -868,11 +905,15 @@ function noteChainMouthful(count = 1) {
 
   // ---- AND THE LINK ITSELF, ONE PER MOUTHFUL ----------------------------
   //
-  // THE STRIKE ARMS, THE FOOD SCORES. A release in the sweet spot opens the
+  // THE STRIKE ARMS, THE FOOD SCORES. A release off a PERFECT CHARGE opens the
   // window and sets `armed`; every pip that goes down inside it ticks the
-  // chain up by one. So "release on the beat and eat one chum" IS a food
+  // chain up by one. So "bank a full wind-up, let go, eat one chum" IS a food
   // chain, and the number climbs with the eating rather than waiting on
   // another perfectly-timed release to cash it in.
+  //
+  // The timing of the release is not in this any more — see tryStrike. It
+  // decides the strike's DAMAGE; what it no longer decides is whether the
+  // mechanic turns on at all.
   //
   // `linkPips` is the mouthfuls it takes to get the FIRST one — the gate, one
   // by default. Measured against `pipsSinceStrike`, which every release
@@ -887,7 +928,10 @@ function noteChainMouthful(count = 1) {
     // WHY IT DID NOT LINK, recorded at the branch that decided it. Four
     // different failures look identical from the seat — nothing happens — and
     // each wants a different fix. See systems/chainTrace.js.
-    noteChain('miss', { why: 'no sweet strike behind it' });
+    // Reachable two ways and the wording has to cover both: a wind-up let go
+    // of EARLY never completed its charge, and a chain that lapsed took its
+    // arming with it.
+    noteChain('miss', { why: 'no charged strike behind it' });
     return;
   }
   if (strikeState.pipsSinceStrike < linkPips()) {
@@ -1245,7 +1289,7 @@ function finishDash() {
   // tryStrike opens, moved to where the player can use it, so it answers to
   // the same gate — without the check a mistimed strike would open its combo
   // window a fifth of a second late instead of not at all.
-  if (strikeState.sweetStrike && CONFIG.strike.windowFromDashEnd !== false) {
+  if (strikeState.armingStrike && CONFIG.strike.windowFromDashEnd !== false) {
     strikeState.chainTimer = Math.max(strikeState.chainTimer, CONFIG.strike.chainWindow);
   }
 }

@@ -113,7 +113,14 @@ export function formatChainEntry(e) {
       // window of a tenth of a second is not a thing to report in seconds.
       const ms = Number.isFinite(e.offset) ? `${e.offset >= 0 ? '+' : ''}${Math.round(e.offset * 1000)}ms` : '  --';
       const verdict = e.sweet ? 'SWEET' : (e.offset < 0 ? 'EARLY' : 'LATE ');
-      const tail = e.sweet ? 'armed' : 'speed boost only';
+      // TWO THINGS A RELEASE CAN BE, AND THEY COME APART NOW. The verdict is
+      // the TIMING, which decides the damage; the tail is whether it ARMED a
+      // chain, which a perfect charge does on its own (see tryStrike). A log
+      // that read the arming off the timing would call a mistimed perfect
+      // charge "speed boost only" on the exact release that started the chain.
+      const tail = e.arms
+        ? (e.sweet ? 'armed, full damage' : 'armed, no damage (off the beat)')
+        : 'speed boost only';
       return `${t}  RELEASE  ${ms.padStart(7)}  ${verdict}  ${tail}`;
     }
     case 'link':

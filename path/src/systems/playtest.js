@@ -369,14 +369,17 @@ export function recordControl(source, n = 1) {
  *                true so a caller written before the gate existed reads as it
  *                always did rather than filing every strike as mistimed.
  */
-export function recordStrike(depth, hadFood, hadWindow, sweet = true) {
+export function recordStrike(depth, hadFood, hadWindow, armed = true) {
   if (!run) return;
   bucket.strikes += 1;
-  // OFF THE BEAT IS THE ONLY WAY A RELEASE CAN FAIL NOW. It neither bites nor
-  // arms, so it is the whole of what went wrong; the other three buckets are
-  // kept because a hundred runs of backlog are full of them and the report
-  // still has to read those.
-  if (!sweet) { bucket.missOffBeat += 1; return; }
+  // WHETHER IT ARMED, NOT WHETHER IT WAS ON THE BEAT — those were the same
+  // question until a perfect charge started arming a chain on its own (see
+  // tryStrike), and `armed` is the one this report is built on: links per
+  // strike is meaningless against a denominator of releases that could never
+  // have linked. `missOffBeat` keeps its name because a hundred runs of
+  // backlog are bucketed under it and the report still has to read those; it
+  // now means "armed nothing".
+  if (!armed) { bucket.missOffBeat += 1; return; }
   bucket.armed += 1;
   // Kept off the `links` counter on purpose: a release ARMS a chain and the
   // FOOD scores it (see recordChainLink), so booking a link here would count

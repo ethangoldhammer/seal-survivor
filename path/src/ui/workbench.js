@@ -36,9 +36,9 @@ import { fireBossBoom, resetBossBooms } from '../systems/bossBoom.js';
 
 const RAIL_SECTIONS = [
   ['Your weapon', ['shoot', 'hit', 'bulletHit', 'kill', 'bigKill', 'bounce', 'missileLaunch', 'missileImpact']],
-  ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'breach', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'bubblePop', 'oxygenWarn']],
+  ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'breach', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'breathOut', 'bubblePop', 'oxygenWarn']],
   ['Strike & food chain', ['strike', 'strikeChain', 'strikeBurst', 'strikeRam', 'strikeMark', 'boostEmpty', 'foodChain']],
-  ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'levelUp']],
+  ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'chumChunkEaten', 'chumFull', 'levelUp']],
   ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaSplit', 'belugaTrap', 'belugaPop', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
   ['Thrown & launched', ['seagullDive', 'scallopLaunch', 'scallopJet', 'pearlShot', 'pearlBurst', 'bakalarHaul', 'bakalarBombDrop', 'bakalarBombBlast']],
@@ -48,7 +48,12 @@ const RAIL_SECTIONS = [
   // not a feedback event (see BOOM_ROW), and the rail adds it to the top of
   // this section by hand.
   ['Bosses', ['bossDieFlesh', 'bossDieShell', 'bossDieHull',
-    'bossHitFlesh', 'bossHitShell', 'bossHitHull', 'bossDaze']],
+    'bossHitFlesh', 'bossHitShell', 'bossHitHull', 'bossDaze',
+    // The weak spots. Placed under the material voices they play ON TOP of
+    // rather than in a section of their own — a crit is bossHitFlesh with
+    // hotSpotHit over it, and the two are audited by ear together or not at
+    // all.
+    'hotSpotHit', 'hotSpotBurst']],
 ];
 
 // The one rail row that is not a feedback event. `*` so it can never collide

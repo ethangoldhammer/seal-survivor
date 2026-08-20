@@ -464,6 +464,14 @@ const TREE = selector('kraken', [
   // -------------------------------------------------------------------------
   sequence('WEAVE', [
     condition('a player to wall in', (bb) => !!bb.player),
+    // NOT WHILE REGROUPING, and this is the condition that makes `regroup` a
+    // real number rather than a comment. The give-up branch below sets the
+    // cooldown, and updateKraken zeroes the elapsed-weave clock while it runs —
+    // but nothing ever stopped this branch being SELECTED, so the squid dropped
+    // straight back into weaving on the next frame and the pause it had just
+    // decided to take never happened. Measured before the fix: 99.9% of a
+    // 90-second fight in WEAVE, 0.1% in PROWL. The fight had one gear.
+    condition('not regrouping', () => krakenState.weaveCooldown <= 0),
     condition('close enough to work', (bb) => bb.distToPlayer <= (bb.c.trap?.engageRange ?? 34)),
     action('run the gap', (bb) => {
       const t = bb.c.trap ?? {};
@@ -631,8 +639,12 @@ export function updateKraken(dt, scene, playerPos, hooks = {}) {
     trace: [],
   };
 
-  // The weave is skipped entirely while regrouping, which is what gives the
-  // fight its rhythm — a stretch of ordinary circling after every failed trap.
+  // Regrouping starts the next attempt with a full `giveUp` window rather than
+  // with whatever was left of the last one. The SKIP itself is a condition on
+  // the WEAVE branch — this line alone used to be the whole mechanism, and it
+  // did the opposite of what it claimed: zeroing the clock while the branch
+  // still ran meant the squid could never accumulate enough weaving to give up
+  // again, so it wove continuously and the fight had no resting state at all.
   if (krakenState.weaveCooldown > 0) krakenState.weaving = 0;
 
   TREE.tick(bb);

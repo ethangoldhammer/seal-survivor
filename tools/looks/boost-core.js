@@ -407,10 +407,15 @@ log('\nWHERE THE SURFACE ACTUALLY LANDS');
 // is 50ms before the window shuts — reaction time alone made the gate
 // unhittable, and the logs agreed: 31 of 303 releases armed anything.
 //
+// The food chain no longer answers to this window at all (a perfect charge
+// arms it, see tryStrike), so what the lead-in now leads into is the strike's
+// DAMAGE. Still worth seeing coming — it is every point of bite the strike
+// has — and still the same measurement, which is why this sheet did not move.
+//
 // The panels walk the approach in real time. `sinceLoaded` / `toLoaded` are
 // what the meter reads (see releaseOffset in systems/strike.js), so posing them
 // here poses exactly the thing the game draws.
-section('The lead-in <span>— a ring expanding out of the core to land on the fuel ring at the instant a release is on the beat, with the tolerance drawn where it lands. Let go as they meet.</span>', 5);
+section('The lead-in <span>— a ring closing in from outside to land on the fuel ring at the instant a release is on the beat, with the tolerance drawn where it lands. Let go as they meet. The beat is the DAMAGE gate: a charged release starts a food chain at any timing, and only a strike on the beat also bites.</span>', 5);
 {
   const half = CONFIG.strike.charge.time * CONFIG.strike.charge.sweetFraction;
   const lead = CONFIG.strike.ring.lead;
