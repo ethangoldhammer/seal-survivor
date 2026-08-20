@@ -143,6 +143,18 @@ export const LOCOMOTION_STATES = ['idle', 'swim', 'boost', 'surfaceIdle', 'surfa
 // whole performance and explains why.
 export const ONESHOT_STATES = ['strike', 'bite', 'hit', 'bark', 'celebrate', 'death'];
 
+// THE TWO ATTACKS, and the reason they are a list rather than a pair of
+// priority numbers: an attack always beats a flinch, and that is a rule about
+// what the game is rather than a taste setting. `oneShotPriority` had 'hit'
+// (3) above both of them, so a creature taking fire refused to swing for as
+// long as the flinch was playing — and a boss under a stream of pellets is
+// re-flinching every few frames, which is "it reacts to every hit and never
+// attacks", exactly as it looks. The numbers still order everything else
+// (death outranks all of it; a bark loses to both), and they are ALSO a saved
+// tuning value, so correcting them in config.js alone would have changed
+// nothing on a machine with a snapshot on disk. Hence the rule in code.
+const ATTACK_STATES = ['strike', 'bite'];
+
 /**
  * WHICH BONES THE MIXER WILL ACTUALLY PUT BACK.
  *
@@ -351,6 +363,9 @@ export function createAnimationController(instance) {
   // springRest note above), and for a corpse the only honest target is the pose
   // it died in — not the bind pose, which is a shape the animal was never in.
   let limp = null;
+
+  // SPRING CHAINS SOMETHING ELSE HAS TAKEN OVER, by role. See muteSpring.
+  const mutedRoles = new Set();
 
   const warnedMissing = new Set();
   let current = null; // the action currently faded in
@@ -580,7 +595,18 @@ export function createAnimationController(instance) {
       // Per-one-shot enable toggle (CONFIG.animation.oneShots).
       if (CONFIG.animation.oneShots?.[state] === false) return false;
       const priority = CONFIG.animation.oneShotPriority?.[state] ?? 0;
-      if (oneShot && (CONFIG.animation.oneShotPriority?.[oneShot.state] ?? 0) > priority) return false;
+      // THE ATTACK/FLINCH CONTEST, BOTH WAYS ROUND — see ATTACK_STATES. An
+      // attack may always interrupt a playing flinch, and a flinch may never
+      // interrupt a playing attack. One direction alone fixes nothing: let the
+      // swing start and then hand the pose straight back to the next pellet,
+      // and the animal is still reacting rather than attacking, just half a
+      // frame later. Nothing else is affected — a death still owns the body,
+      // and a re-fired attack is handled by the timer refresh below.
+      const attacking = oneShot != null && ATTACK_STATES.includes(oneShot.state);
+      if (oneShot && state === 'hit' && attacking) return false;
+      const overFlinch = oneShot?.state === 'hit' && ATTACK_STATES.includes(state);
+      if (oneShot && !overFlinch
+        && (CONFIG.animation.oneShotPriority?.[oneShot.state] ?? 0) > priority) return false;
 
       const cfg = CONFIG.animation.states[state] ?? {};
       const speed = cfg.clipTimeScale ?? 1;
@@ -657,6 +683,7 @@ export function createAnimationController(instance) {
       // is not, and a mackerel spawning with a megalodon's death whip still in
       // its springs is the same leak wearing a smaller body.
       limp = null;
+      mutedRoles.clear();
       for (const { solver } of springs) solver.reset();
       // Stop every action outright rather than crossfading: fading from a
       // clamped death pose leaves it bleeding into the first moments of the
@@ -699,7 +726,10 @@ export function createAnimationController(instance) {
       // matter how (or whether) the creature is animated.
       const cfg = CONFIG.animation.spring;
       if (cfg.enabled) {
-        for (const { solver, role } of springs) solver.update(dt, springCfgFor(cfg, role), cfg.weight);
+        for (const { solver, role } of springs) {
+          if (mutedRoles.has(role)) continue; // posed by hand this frame — see muteSpring
+          solver.update(dt, springCfgFor(cfg, role), cfg.weight);
+        }
       }
     },
 
@@ -725,7 +755,50 @@ export function createAnimationController(instance) {
       const cfg = CONFIG.animation.spring;
       if (!cfg.enabled) return;
       const bias = tipBias ?? cfg.impulseTipBias;
-      for (const { solver } of springs) solver.impulse(dirWorld, strength, bias);
+      for (const { solver, role } of springs) {
+        // A MUTED CHAIN DOES NOT FLINCH. This is the impulse half of the same
+        // rule update() applies: a limb that is mid-attack is being posed
+        // deliberately, and a shove it absorbs now would still be bleeding out
+        // of it when the attack lands. See muteSpring.
+        if (mutedRoles.has(role)) continue;
+        solver.impulse(dirWorld, strength, bias);
+      }
+    },
+
+    /**
+     * HAND A SPRING CHAIN OVER TO WHOEVER IS POSING IT — or take it back.
+     *
+     * THE ATTACK BEATS THE HIT REACTION, for a creature that has no authored
+     * flinch to out-prioritise. A model with clips resolves that contest in
+     * trigger(), where an attack one-shot interrupts a playing 'hit'. Most of
+     * the roster has no such clip: their flinch IS the spring, and a limb that
+     * is being aimed by an IK solver has no way to say so. So the solver says
+     * it here.
+     *
+     * Muting does two things, and both are needed. The chain stops solving, so
+     * the pose the attack writes is the pose that ships; and it stops taking
+     * impulses, so a shove landing mid-swing is not stored up to be released
+     * the moment the limb is handed back. The velocity already in it is
+     * dropped on the way in for the same reason — an arm that finishes its
+     * pinch and then whips is the flinch arriving late rather than not at all.
+     *
+     * Coming back out costs nothing: the solver's target is whatever pose it
+     * finds, so it resumes from where the attack left the limb instead of
+     * snapping to where it would have been.
+     *
+     * @param role  the `role` on the rig's springChains entry ('claw' on the
+     *              crabs). A role no chain wears is a silent no-op.
+     * @param muted true while something else owns the chain.
+     */
+    muteSpring(role, muted) {
+      const already = mutedRoles.has(role);
+      if (muted === already) return;
+      if (muted) {
+        mutedRoles.add(role);
+        for (const { solver, role: r } of springs) if (r === role) solver.reset();
+      } else {
+        mutedRoles.delete(role);
+      }
     },
 
     /**
@@ -740,6 +813,11 @@ export function createAnimationController(instance) {
      *          it did — bossBoat's trawler has no rig at all.
      */
     setLimp(springCfg) {
+      // A BODY CUT LOOSE HAS NOBODY POSING IT. Whatever had claimed a chain —
+      // a crab mid-pinch is the case — is not going to run again to hand it
+      // back, and a corpse with one limb that will not swing reads as the
+      // ragdoll having missed it. See muteSpring.
+      mutedRoles.clear();
       if (!springCfg || !springs.length) {
         limp = null;
         return false;

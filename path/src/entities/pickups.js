@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, chumValueRamp } from '../config.js';
-import { createVisual } from '../assets.js';
+import { createVisual, ASSETS, getAssetSizeMultiplier } from '../assets.js';
 import { bounds } from '../arena.js';
 import { updateTumble } from '../systems/rocks.js';
 import { createInstancedPool } from '../systems/instancedPool.js';
@@ -14,6 +14,10 @@ import {
   foodReach, foodPull, foodDistance,
 } from '../systems/chumMagnet.js';
 import { telegraphMul } from '../systems/telegraph.js';
+import { initBubble, updateBubblePhysics, bubbleRadius, bubbleBirthPoint, growthOf } from '../systems/oxygenBubble.js';
+import { createCoralOrb, updateCoralOrb, disposeCoralOrb } from '../systems/coralOrb.js';
+
+export { bubbleBirthPoint, bubbleRadius };
 
 // Chum is drawn as instances, not as 140 separate meshes — see
 // systems/instancedPool.js. The orb objects themselves are unchanged: the pool
@@ -96,7 +100,10 @@ export function resetPickups(scene) {
   strikeOrbs.length = 0;
   for (const o of bubbleOrbs) scene.remove(o.mesh);
   bubbleOrbs.length = 0;
-  for (const o of rapidFireOrbs) scene.remove(o.mesh);
+  for (const o of rapidFireOrbs) {
+    scene.remove(o.mesh);
+    disposeCoralOrb(o.mesh);
+  }
   rapidFireOrbs.length = 0;
   for (const c of chumChunks) removeChunk(scene, c);
   chumChunks.length = 0;
@@ -220,16 +227,41 @@ export function spawnStrikeOrb(scene, pos) {
   strikeOrbs.push({ mesh, life: CONFIG.strike.orbLifetime });
 }
 
+// `pos` is where the bubble seeps out of, and the caller is expected to hand
+// over a point ON THE SEABED — see bubbleBirthPoint in systems/oxygenBubble.js.
+// Nothing here enforces that, because the boat-debris path drops one wherever
+// the hull came apart and that is a bubble too.
 export function spawnBubbleOrb(scene, pos) {
   const mesh = createVisual('bubbleOrb');
   mesh.position.copy(pos);
   scene.add(mesh);
-  bubbleOrbs.push({ mesh, life: CONFIG.oxygen.bubbleLifetime });
+  const orb = { mesh, life: CONFIG.oxygen.bubbleLifetime };
+  // The asset's authored radius, carried on the orb so the collect test and
+  // the collision loop size themselves off the same number the art uses. Read
+  // off the table rather than typed here — a bubble whose hitbox and whose
+  // drawn skin disagree is a pickup that refuses to be taken from the place it
+  // looks like it should be, and nothing about that reports itself.
+  orb.assetRadius = ASSETS.bubbleOrb?.radius ?? 0.44;
+  initBubble(orb);
+  bubbleOrbs.push(orb);
+  return orb;
 }
 
+// A GROWN CORAL, not a createVisual. Its geometry is rolled per spawn and its
+// pulse phase lives in a uniform, so both the geometry and the material are its
+// own — see systems/coralOrb.js. The `rapidFireOrb` asset entry stays in the
+// table as the Look panel's handle on the TINT it reads, and as the row
+// assets.csv sizes it from. Its glow is deliberately not read — see the note in
+// createCoralOrb.
 export function spawnRapidFireOrb(scene, pos) {
-  const mesh = createVisual('rapidFireOrb');
+  const mesh = createCoralOrb();
   mesh.position.copy(pos);
+  // The asset's size multiplier, which createVisual would have applied. Read
+  // here because this path does not go through it, and a coral that ignored
+  // assets.csv would be the one pickup in the game the Size column cannot
+  // reach.
+  const sizeMul = getAssetSizeMultiplier('rapidFireOrb');
+  if (sizeMul) mesh.scale.multiplyScalar(sizeMul);
   scene.add(mesh);
   rapidFireOrbs.push({ mesh, life: CONFIG.rapidFirePickup.lifetime });
 }
@@ -454,9 +486,14 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
 // `driftSpeed` is world units/sec, positive = rises (bubbles), 0 = stationary
 // until magnetised (strike/rapid-fire orbs). Returns 'collected', 'expired',
 // or null so the caller knows whether to splice the array.
-function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect) {
+function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect, tick, rawDt) {
   orb.life -= dt;
-  updateTumble(orb.mesh, dt);
+  // A tumble is what a ROCK does, and only the strike orb still is one. An orb
+  // with a `tick` of its own owns its whole motion — the coral turns on one
+  // axis and nods (see systems/coralOrb.js) — and layering a three-axis tumble
+  // under that would fight it for the same rotation every frame.
+  if (tick) tick(orb.mesh, dt, rawDt);
+  else updateTumble(orb.mesh, dt);
 
   if (driftSpeed) {
     orb.mesh.position.y += driftSpeed * dt;
@@ -491,11 +528,90 @@ function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect) {
   return null;
 }
 
-function updateOrbArray(dt, scene, player, arr, driftSpeed, onCollect) {
+// ---------------------------------------------------------------------------
+// THE BUBBLES. Their own loop rather than updateOrbArray's, because almost
+// nothing they do is what a floating orb does: they swell, they carry velocity,
+// they are pushed around by the creatures that swim into them, and they can be
+// destroyed by something other than the seal reaching them.
+//
+// `opts.bodies` is the enemy list. Optional on purpose — every existing harness
+// calls updatePickups without it, and a bubble rising through empty water is a
+// perfectly valid thing to test. `opts.onBubblePop` is the burst; it is NOT the
+// collect callback and it pays no air, which is the whole risk the pickup now
+// carries.
+// ---------------------------------------------------------------------------
+function updateBubbleOrbs(dt, scene, player, onCollect, opts) {
+  const bodies = opts?.bodies ?? null;
+  const onPop = opts?.onBubblePop ?? null;
+  for (let i = bubbleOrbs.length - 1; i >= 0; i--) {
+    const orb = bubbleOrbs[i];
+    orb.life -= dt;
+
+    const popped = updateBubblePhysics(dt, orb, bodies);
+    // AFTER the physics, because the physics is what grew it. Reading the
+    // radius first costs a frame of swell on the collect test below, which is
+    // the kind of one-frame lie that only ever shows up as a pickup that
+    // occasionally refuses to be taken.
+    const r = bubbleRadius(orb);
+
+    // MEASURED AFTER THE PHYSICS, so a bubble shoved into the seal on the same
+    // frame is taken rather than being tested against where it used to be.
+    const dx = player.mesh.position.x - orb.mesh.position.x;
+    const dy = player.mesh.position.y - orb.mesh.position.y;
+    const dist = Math.hypot(dx, dy) || 0.0001;
+
+    // The magnet still applies — a bubble is a pickup — but it pulls the
+    // bubble's VELOCITY rather than teleporting its position, or the drift and
+    // the magnet would fight each frame and the loser would be whichever ran
+    // last. It also does not reach a bubble that has not finished swelling:
+    // something still attached to the floor is not loose in the water yet.
+    const speed = player.velocity?.length?.() ?? 0;
+    const reach = magnetDistance(
+      player.mesh.position.x, player.mesh.position.y,
+      orb.mesh.position.x, orb.mesh.position.y, speed,
+    );
+    if ((orb.grow ?? 1) >= 1 && reach < magnetRadius(player.stats, speed)) {
+      const pull = magnetSpeed(speed);
+      orb.vx += ((dx / dist) * pull - orb.vx) * Math.min(1, 6 * dt);
+      orb.vy += ((dy / dist) * pull - orb.vy) * Math.min(1, 6 * dt);
+    }
+
+    // Taken by touching its SKIN, not its centre. A 1.25-unit bubble collected
+    // on the bare collectRadius would need the seal's nose most of the way
+    // inside it, which reads as the pickup ignoring a hit.
+    if (onCollect && dist < CONFIG.pickups.collectRadius + r) {
+      onCollect(orb.mesh.position.x, orb.mesh.position.y);
+      scene.remove(orb.mesh);
+      bubbleOrbs.splice(i, 1);
+      continue;
+    }
+    // Burst, or simply gone. Both remove it; only the burst gets a sound, and
+    // an expiry deliberately does not — a timer running out in open water
+    // several screens away is not an event.
+    if (popped) {
+      // How far it had SWELLED, not its radius: the caller wants to know how
+      // much of a bubble came apart, and that is a fraction, not a length.
+      onPop?.(orb.mesh.position.x, orb.mesh.position.y, growthOf(orb));
+      scene.remove(orb.mesh);
+      bubbleOrbs.splice(i, 1);
+      continue;
+    }
+    if (orb.life <= 0) {
+      scene.remove(orb.mesh);
+      bubbleOrbs.splice(i, 1);
+    }
+  }
+}
+
+function updateOrbArray(dt, scene, player, arr, driftSpeed, onCollect, opts = null) {
   for (let i = arr.length - 1; i >= 0; i--) {
-    const result = updateFloatingOrb(dt, player, arr[i], driftSpeed, onCollect);
+    const result = updateFloatingOrb(dt, player, arr[i], driftSpeed, onCollect, opts?.tick, opts?.rawDt ?? dt);
     if (result) {
       scene.remove(arr[i].mesh);
+      // An orb that built its own geometry and material has to give them back
+      // — nothing else holds a reference, and WebGL does not free on JS
+      // garbage collection.
+      opts?.dispose?.(arr[i].mesh);
       arr.splice(i, 1);
     }
   }
@@ -503,7 +619,7 @@ function updateOrbArray(dt, scene, player, arr, driftSpeed, onCollect) {
 
 // onCollect(xpValue, x, y, healMul) — main.js applies both xp and heal from
 // one callback so the two always travel together.
-export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbleOrb, onRapidFireOrb, onChunk) {
+export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbleOrb, onRapidFireOrb, onChunk, opts = null) {
   // A sealed mouth doesn't just refuse to swallow — it doesn't REACH either.
   // The magnet is off for the whole wind-up, so chum stays exactly where it is.
   // Leaving the magnet on looked far worse than no gate at all: every orb in
@@ -706,8 +822,21 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
   }
 
   if (onStrikeOrb) updateOrbArray(dt, scene, player, strikeOrbs, 0, onStrikeOrb);
-  if (onBubbleOrb) updateOrbArray(dt, scene, player, bubbleOrbs, CONFIG.oxygen.bubbleRiseSpeed, onBubbleOrb);
-  if (onRapidFireOrb) updateOrbArray(dt, scene, player, rapidFireOrbs, 0, onRapidFireOrb);
+  // The bubble runs UNGATED, unlike the two orbs either side of it, and for
+  // the same reason the chunks below do: it is a physical object now. An
+  // unconsumed bubble still has to swell, still has to rise, and still has to
+  // be shoved around by whatever swims into it — a caller with no handler
+  // leaving one frozen half-grown inside the seabed would be far worse than it
+  // simply not paying out. Only the COLLECT is gated.
+  updateBubbleOrbs(dt, scene, player, onBubbleOrb, opts);
+  if (onRapidFireOrb) {
+    updateOrbArray(dt, scene, player, rapidFireOrbs, 0, onRapidFireOrb, {
+      tick: updateCoralOrb,
+      dispose: disposeCoralOrb,
+      // The coral's pulse is beat-synced, so it wants the undilated clock.
+      rawDt: opts?.rawDt ?? dt,
+    });
+  }
 
   // Chunks run whether or not a callback was passed, unlike the three above:
   // an unconsumed chunk still has to sink, still has to expire and still has to

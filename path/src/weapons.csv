@@ -31,6 +31,22 @@ oyster.bombletDamage,24,1,80,oyster bomblet damage
 oyster.bombletDamagePerLevel,6,0,35,oyster bomblet damage per level
 oyster.bombletBlastRadius,2.4,0.5,15,oyster bomblet blast radius — must stay ABOVE max bomblet travel (see CONFIG.oyster)
 oyster.bombletBlastRadiusPerLevel,0.18,0,2,oyster blast radius per level
+razorClam.fireRate,1.6,0.2,8,razor clam seconds between volleys at level 1
+razorClam.fireRatePerLevel,0.95,0.5,1,razor clam cadence multiplier per level (compounds)
+razorClam.damage,24,1,120,razor clam damage per blade
+razorClam.damagePerLevel,5,0,40,razor clam damage per blade per level
+razorClam.count,3,1,20,razor clam blades in the level-1 volley
+razorClam.countPerLevel,1,0,5,razor clam blades per level
+razorClam.arc,0.5,0.05,6.283,razor clam level-1 fan width in radians
+razorClam.arcFullAt,8,2,20,razor clam level the fan closes into a full circle — must match the card's maxStacks
+razorClam.spread,0.045,0,0.5,razor clam per-blade angular jitter
+razorClam.speed,25,4,60,razor clam blade speed
+razorClam.speedJitter,0.08,0,0.5,razor clam per-blade speed variation
+razorClam.life,1.15,0.2,6,razor clam seconds a blade flies
+razorClam.radius,0.24,0.05,1.5,razor clam blade hit radius
+razorClam.basePierce,3,0,20,razor clam bodies one blade cuts past the first
+razorClam.piercePerLevel,0.6,0,3,razor clam pierce per level (floored)
+razorClam.pierceMax,9,0,30,razor clam pierce ceiling
 seagullBomb.baseFireRate,2.3,0.5,10,seagull seconds between runs at level 1
 seagullBomb.fireRatePerLevel,0.85,0.5,1,seagull fire rate mult per level
 seagullBomb.damage,87,1,150,seagull direct hit damage
@@ -116,6 +132,9 @@ club.teed.damageMul,2.4,1,6,club damage x on a body already held or dazed
 club.teed.launchMul,1.6,1,4,club launch x on a body already held or dazed
 club.teed.minPower,0,0,1.6,club floor under swing power for a teed hit — 0 on purpose
 club.bigRigShare,0.35,0,1,club share of Big Rigz a fin club takes (the ring takes it all)
+clubStacks.guaranteed,2,1,6,club stacks per type that always add a club before the roll starts
+clubStacks.sizeStep,1.18,1,2,club size x when a stack rolls size
+clubStacks.damageStep,1.3,1,3,club damage x when a stack rolls damage
 club.assistSpin,0,0,12,club free spin — a crutch; 0 means swings are performed
 club.finCarry,2.2,0,4.4,club carry-through from the fin turning (must stay under damping)
 club.finAuthority,8,1,30,club fin rate at which a swung flipper beats the water
@@ -137,10 +156,10 @@ clubThrow.countAtFull,7,1,16,hurler clubs at a full charge
 clubThrow.countPerLevel,2,0,4,hurler clubs per level
 clubThrow.damageMul,1.6,0.1,4,hurler damage x the melee club
 clubThrow.pierce,1,0,6,hurler bodies pierced
-clubBoom.damage,14,0,60,powder keg blast damage
-clubBoom.damagePerLevel,6,0,20,powder keg damage per level
-clubBoom.radius,3.1,0.5,12,powder keg blast radius
-clubBoom.radiusPerLevel,0.55,0,3,powder keg radius per level
+clubBoom.damage,6,0,60,boom boom club blast damage
+clubBoom.damagePerLevel,3,0,20,boom boom club damage per level
+clubBoom.radius,2.4,0.5,12,boom boom club blast radius
+clubBoom.radiusPerLevel,0.4,0,3,boom boom club radius per level
 clubIce.slowPerHit,0.2,0,0.7,cold snap slow added per hit
 clubIce.slowPerHitPerLevel,0.06,0,0.3,cold snap slow per level
 clubIce.duration,3.2,0.2,10,cold snap seconds before it thaws

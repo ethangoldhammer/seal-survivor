@@ -9,7 +9,8 @@ import { player } from '../entities/player.js';
 import { applyElementalHit, chillEnemy } from './elements.js';
 import { applyHarpCharm } from './harp.js';
 import { hitCreature } from './hitShape.js';
-import { pinchReach } from './crabClaw.js';
+import { hotSpotDamage } from './bossHotSpots.js';
+import { pinchReach, clawSetting } from './crabClaw.js';
 
 // Where the last hit landed on the body, refilled by every hitCreature call
 // that passes. One shared object rather than one per test: this is the hottest
@@ -61,7 +62,16 @@ export function resolveCombat(dt, scene, hooks) {
       // and not two that can drift apart.
       if (!hitCreature(e, b.mesh.position.x, b.mesh.position.y, b.radius, contact)) continue;
 
-      e.hp -= b.damage;
+      // A WEAK SPOT, IF THE SHOT FOUND ONE. Returns the damage unchanged for
+      // every hit on every creature in the game that is not a boss wearing
+      // one, so this is one lookup rather than a branch — and it has to happen
+      // HERE, before the subtraction, because everything downstream (the death
+      // check, the feedback hook, the playtest ledger) has to agree about what
+      // this shot was worth. `b.damage` itself is left alone: it is the
+      // pellet's own damage and is read again by the chain and the pierce.
+      const dealt = hotSpotDamage(e, contact, b.damage);
+
+      e.hp -= dealt;
       b.hits.add(e);
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
@@ -72,7 +82,7 @@ export function resolveCombat(dt, scene, hooks) {
       // supposedly struck. `contact` is the point on the skin, and everything
       // downstream (the flash, the sparks, the splash, the ripple) has always
       // taken this argument as "the impact" and simply been given a worse one.
-      hooks.onEnemyDamaged?.(e, b.damage, contact.x, contact.y, b.dir, b, contact);
+      hooks.onEnemyDamaged?.(e, dealt, contact.x, contact.y, b.dir, b, contact);
 
       // Glow Up! rides the BASIC SHOT and nothing else here. Gated on the
       // source rather than on the faction because every ability in the game
@@ -259,7 +269,6 @@ export function resolveCombat(dt, scene, hooks) {
     // Both are charged the same frame if the player is close enough for both,
     // which is correct: they walked into a crab that was already swinging.
     if (e.justPinched) {
-      const pc = CONFIG.crabClaw;
       const px = e.mesh.position.x - pPos.x;
       const py = e.mesh.position.y - pPos.y;
       // Scaled by the crab's own ARM — the reach the IK solver actually aims
@@ -271,13 +280,19 @@ export function resolveCombat(dt, scene, hooks) {
       // the two are one mechanic measured twice, and the last time they were
       // written separately only this one added `pRadius`, which silently killed
       // the pinch the moment the crab's hitbox was retuned.
-      const reachSq = pinchReach(e.claw?.reach() ?? 0, pRadius, pc.range ?? 0.65) ** 2;
+      // ...and through clawSetting, so a creature carrying its own claw block
+      // (the king crab does) is measured by the same numbers its commit gate
+      // used. Restating CONFIG.crabClaw here is exactly how the two halves came
+      // apart the first time.
+      const reachSq = pinchReach(e.claw?.reach() ?? 0, pRadius,
+        clawSetting(e.def, 'range') ?? 0.65) ** 2;
       if (px * px + py * py <= reachSq && !isInvulnerable()) {
         const base = e.contactDamage ?? e.def.contactDamage;
+        const knock = clawSetting(e.def, 'knockback') ?? 1.4;
         hooks.onPlayerHit(
-          base * (pc.damageMul ?? 0.75),
+          base * (clawSetting(e.def, 'damageMul') ?? 0.75),
           // Shoved harder than an ordinary contact, and away from the crab.
-          { x: -px * (pc.knockback ?? 1.4), y: -py * (pc.knockback ?? 1.4) },
+          { x: -px * knock, y: -py * knock },
           e.type,
         );
       }

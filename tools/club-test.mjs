@@ -288,9 +288,15 @@ section('SWING — the fins are what turn the clubs');
 {
   freshRun();
   const rig = rigWithFins(2);
-  swing(0.5, { level: 1, rig });
+  // ONE PICK IS ONE CLUB, so the pair takes two. The first card used to arm
+  // both flippers and the second one was never bought by anything.
+  swing(0.2, { level: 1, rig });
+  check('one card is one club, in one fin', clubGroup.children.length === 1,
+    `${clubGroup.children.length} built`);
+  swing(0.5, { level: 2, rig });
   const group = clubGroup;
-  check('one club per fin tip', group?.children.length === 2, `${group?.children.length ?? 0} built`);
+  check('...and the second card fills the other fin', group?.children.length === 2,
+    `${group?.children.length ?? 0} built`);
 
   // ATTACHED AT THE GRIP — measured end to end, on the drawn mesh, because
   // this is the claim two different art conventions can silently break: a
@@ -305,12 +311,12 @@ section('SWING — the fins are what turn the clubs');
       const [base, head] = shaftEnds(m);
       const tip = rig.muzzles[i];
       worstBase = Math.max(worstBase, Math.hypot(base.x - tip.x, base.y - tip.y));
-      worstHead = Math.max(worstHead, Math.abs(Math.hypot(head.x - tip.x, head.y - tip.y) - clubLength(1)));
+      worstHead = Math.max(worstHead, Math.abs(Math.hypot(head.x - tip.x, head.y - tip.y) - clubLength(2)));
     });
     check('...and each is gripped AT its fin tip', worstBase < 0.3,
       `worst butt-end sits ${worstBase.toFixed(3)}u off the tip`);
     check('...with the head out at the far end of the reach', worstHead < 0.3,
-      `worst head is ${worstHead.toFixed(3)}u off ${clubLength(1).toFixed(2)}u`);
+      `worst head is ${worstHead.toFixed(3)}u off ${clubLength(2).toFixed(2)}u`);
     const apart = group.children.length === 2
       && group.children[0].position.distanceTo(group.children[1].position) > 0.5;
     check('...and the pair is spread around the body, not stacked', apart);
@@ -560,7 +566,7 @@ check('bounces climb per stack', clubBounces(6) > clubBounces(1),
 
 // ------------------------------------------------------------------ the riders
 
-section('RIDERS — Powder Keg and Cold Snap, on every club hit');
+section('RIDERS — Boom Boom Club and Cold Snap, on every club hit');
 
 {
   // POWDER KEG reaches bodies the club never touched. Measured against a
@@ -685,7 +691,8 @@ section('HURLER — the variant, thrown on a strike release');
     const { clubsInHand } = await import('../path/src/systems/club.js');
     freshRun();
     const rig = rigWithFins(2);
-    swing(0.2, { level: 1, rig });
+    // Two picks, because one pick is one club now.
+    swing(0.2, { level: 2, rig });
     check('both fins start holding a club', clubsInHand() === 2, `${clubsInHand()} in hand`);
 
     resetProjectiles(scene);
@@ -697,7 +704,7 @@ section('HURLER — the variant, thrown on a strike release');
     // real rather than cosmetic.
     const fish = spawnAt('fish', 1.4, -20);
     const hp = fish.hp;
-    swing(CONFIG.club.respawnTime * 0.5, { level: 1, rig, finSpin: 10 });
+    swing(CONFIG.club.respawnTime * 0.5, { level: 2, rig, finSpin: 10 });
     check('...and an empty fin swings nothing', fish.hp === hp && clubsInHand() === 0,
       `fish ${fish.hp.toFixed(1)} of ${hp.toFixed(1)} hp`);
 
@@ -707,7 +714,7 @@ section('HURLER — the variant, thrown on a strike release');
       fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, origin, {}) === 0);
 
     // Then they come back.
-    swing(CONFIG.club.respawnTime * 0.7, { level: 1, rig, finSpin: 10 });
+    swing(CONFIG.club.respawnTime * 0.7, { level: 2, rig, finSpin: 10 });
     check('the clubs respawn in hand after the cooldown', clubsInHand() === 2,
       `${clubsInHand()} back after ${CONFIG.club.respawnTime}s`);
     resetProjectiles(scene);
@@ -729,14 +736,14 @@ section('VARIANTS — you can tell from the water what you are holding');
   check('a plain run holds the base club', clubAssetsFor({}).join() === 'club');
 
   // A VARIANT ON ITS OWN STILL ARMS THE SEAL. Straight out of playtest/runs
-  // .jsonl, which recorded three real runs that took Cold Snap and Powder Keg
+  // .jsonl, which recorded three real runs that took Cold Snap and Boom Boom Club
   // and NO Driftwood Club: the weapon was gated on the base card's level, so
   // those runs got no clubs at all and both picks did nothing. Every variant
   // is takeable on its own by design, so every variant has to arm the fins on
   // its own too.
   for (const [label, levels] of [
     ['Cold Snap alone', { ice: 1 }],
-    ['Powder Keg alone', { boom: 1 }],
+    ['Boom Boom Club alone', { boom: 1 }],
     ['Hurler alone', { throw: 1 }],
     ['Keg + Snap, no base card', { boom: 1, ice: 1 }],
   ]) {
@@ -753,7 +760,7 @@ section('VARIANTS — you can tell from the water what you are holding');
         `fish ${fish.hp.toFixed(1)} of ${hp.toFixed(1)} hp`);
     }
   }
-  check('Powder Keg puts its own club in a fin',
+  check('Boom Boom Club puts its own club in a fin',
     clubAssetsFor({ boom: 1 }).includes('clubBoom'));
   check('Cold Snap puts its own club in a fin',
     clubAssetsFor({ ice: 1 }).includes('clubIce'));
@@ -1142,8 +1149,11 @@ section('BIG RIGZ — the ring is a companion, the fins are only a little one');
   // THE RING TAKES IT WHOLE. An orbiting club is a companion in everything but
   // the stat it was reading, and Big Rigz already promises the size is REAL —
   // mesh and hitbox together — so this has to move with the card.
-  const ringSmall = drawn(1, { club: 1, ice: 1 }, (kids) => kids[kids.length - 1]);
-  const ringBig = drawn(1.5, { club: 1, ice: 1 }, (kids) => kids[kids.length - 1]);
+  // Three clubs, so there is a ring at all — two picks fill the flippers and
+  // the third is the first orbiter. {club 1, ice 1} is two clubs and no ring,
+  // which measured the FIN club and quietly compared it against itself.
+  const ringSmall = drawn(1, { club: 1, ice: 2 }, (kids) => kids[kids.length - 1]);
+  const ringBig = drawn(1.5, { club: 1, ice: 2 }, (kids) => kids[kids.length - 1]);
   check('an orbiting club takes Big Rigz whole',
     Math.abs(ringBig - ringSmall * 1.5) < 0.25,
     `${ringSmall.toFixed(2)}u -> ${ringBig.toFixed(2)}u at x1.5`);
@@ -1243,79 +1253,118 @@ section('BOUNCER — one card, every club in the run');
     `${bare.k.toFixed(2)} -> ${big.k.toFixed(2)}`);
 }
 
-// ------------------------------------------------------------------- the ring
+// ------------------------------------------------------- one pick, one club
 
-section('THE RING — the club types you are not holding orbit you');
+section('PICKS — one club per card, fins first, then the ring');
 
 {
-  const { clubAssetsFor, clubOrbiters, clubsInHand, clubsOrbiting } = await import('../path/src/systems/club.js');
+  const { clubAssetsFor, clubOrbiters, clubsForType, clubsInHand, clubsOrbiting } =
+    await import('../path/src/systems/club.js');
+  const { clubStackPerk, clubStackTotals } = await import('../path/src/config.js');
 
-  // THE FIRST TYPE YOU TOOK IS THE ONE IN YOUR FINS, and it is the run's
-  // history that decides it rather than a priority list. The same two levels
-  // taken in the other order have to put the other club in the flippers, or
-  // the card that just arrived is contradicted by the flipper it lands on.
+  // THE REAL STACK SEQUENCE, from a level of ZERO.
+  //
+  // `npm run test:upgrades` cannot make this claim and never will: its
+  // synthetic base seeds every stat at 100, so replaying a club card there
+  // rolls stacks 101-106 and reports on a part of the sequence no run reaches.
+  // The numbers it snapshots are still a real regression guard; they are just
+  // not the ones a player gets, and this is the only place that difference is
+  // visible.
+  const guaranteed = CONFIG.clubStacks.guaranteed;
+  for (const key of ['club', 'boom', 'ice', 'throw']) {
+    const opening = [];
+    for (let n = 1; n <= guaranteed; n++) opening.push(clubStackPerk(key, n));
+    check(`${key}: the opening ${guaranteed} picks are always a club`,
+      opening.every((p) => p === 'amount'), opening.join(' '));
+  }
+  // ...AND ANY TWO PICKS FILL THE FLIPPERS, which is the point of the
+  // guarantee: two of one card, or one each of two, both arm the seal.
+  check('two of one card arms both fins', clubStackTotals('club', 2).clubs === 2,
+    `${clubStackTotals('club', 2).clubs} club(s)`);
+  check('...and so does one each of two', clubsForType('club', 1).clubs + clubsForType('ice', 1).clubs === 2,
+    'club 1 + ice 1');
+
+  // THE ROLL IS DETERMINISTIC. This is the one that matters most: apply() is
+  // replayed from scratch on every recompute, so a real random here would hand
+  // the player a different build every time they levelled and the card's
+  // measured text would describe a different pick each time it was read.
+  const once = ['club', 'boom', 'ice', 'throw'].map((k) => clubStackTotals(k, 6).clubs).join();
+  const twice = ['club', 'boom', 'ice', 'throw'].map((k) => clubStackTotals(k, 6).clubs).join();
+  check('the stack roll is the same answer every time it is asked', once === twice, once);
+  // ...and it is not the same answer for everyone. A wheel that landed on
+  // `amount` for every type at every stack is deterministic and useless.
+  const faces = new Set();
+  for (const k of ['club', 'boom', 'ice', 'throw']) {
+    for (let n = 1; n <= 6; n++) faces.add(clubStackPerk(k, n));
+  }
+  check('...and it really does roll all three faces', faces.size === 3,
+    [...faces].join(' '));
+
+  // ONE PICK, ONE CLUB, AND THE FIRST TWO ARE THE ONES YOU HOLD — in the order
+  // the run took them, which is a fact about its history and not about the
+  // level table. Two runs holding {club 1, ice 1} took them in some order, and
+  // a fixed priority list would arm both the same way.
   freshRun();
   const rig = rigWithFins(2);
-  swing(0.2, { level: 1, rig, velocity: { x: 9, y: 0 } });              // base club first
-  swing(0.2, { level: 1, ice: 2, rig, velocity: { x: 9, y: 0 } });      // then Cold Snap
-  check('the club you took first is the one in your fins',
-    clubAssetsFor({ club: 1, ice: 2 }).join() === 'club',
-    clubAssetsFor({ club: 1, ice: 2 }).join());
-  check('...and the second type is on the ring, one club per stack',
-    clubOrbiters({ club: 1, ice: 2 }).join() === 'clubIce,clubIce',
+  swing(0.2, { level: 1, rig, velocity: { x: 9, y: 0 } });                 // Driftwood first
+  check('one card, one club, one empty fin', clubsInHand() === 1 && clubsOrbiting() === 0,
+    `${clubsInHand()} held, ${clubsOrbiting()} orbiting`);
+  swing(0.2, { level: 1, ice: 1, rig, velocity: { x: 9, y: 0 } });         // then Cold Snap
+  check('...the second pick fills the other fin',
+    clubAssetsFor({ club: 1, ice: 1 }).join() === 'club,clubIce',
+    clubAssetsFor({ club: 1, ice: 1 }).join());
+  check('...and nothing is orbiting yet', clubsOrbiting() === 0,
+    `${clubsOrbiting()} orbiting`);
+  swing(0.2, { level: 1, ice: 2, rig, velocity: { x: 9, y: 0 } });         // and a third
+  check('...the THIRD pick starts the ring',
+    clubOrbiters({ club: 1, ice: 2 }).join() === 'clubIce',
     clubOrbiters({ club: 1, ice: 2 }).join() || 'empty');
 
+  // Taking them the other way round has to arm the seal the other way round,
+  // or the order is decoration.
   freshRun();
   const rig2 = rigWithFins(2);
-  swing(0.2, { level: 0, ice: 1, rig: rig2, velocity: { x: 9, y: 0 } }); // Cold Snap first
-  swing(0.2, { level: 1, ice: 1, rig: rig2, velocity: { x: 9, y: 0 } }); // then the base club
-  check('...and taking them the other way round swaps which one you hold',
-    clubAssetsFor({ club: 1, ice: 1 }).join() === 'clubIce',
+  swing(0.2, { level: 0, ice: 1, rig: rig2, velocity: { x: 9, y: 0 } });   // Cold Snap first
+  swing(0.2, { level: 1, ice: 1, rig: rig2, velocity: { x: 9, y: 0 } });   // then Driftwood
+  check('the order really is the run\'s own history',
+    clubAssetsFor({ club: 1, ice: 1 }).join() === 'clubIce,club',
     clubAssetsFor({ club: 1, ice: 1 }).join());
 
-  // ONE TYPE MEANS NO RING AT ALL. A run holding one club card should look
-  // exactly like it always did — the ring is what the SECOND type buys.
-  freshRun();
-  swing(0.3, { level: 3, rig: rigWithFins(2), velocity: { x: 9, y: 0 } });
-  check('one club type still means fins only', clubsOrbiting() === 0 && clubsInHand() === 2,
-    `${clubsInHand()} held, ${clubsOrbiting()} orbiting`);
-
-  // STACKS ADD CLUBS. The whole promise of the second half of the card: a
-  // third pick of Cold Snap is a third club on the ring and you can count it.
-  const built = [];
-  for (const stacks of [1, 2, 4]) {
+  // STACKS ADD CLUBS UNTIL THE ROLL SAYS OTHERWISE, and the count in the water
+  // has to be the count the roll table says. Asserted against clubsForType
+  // rather than against hand-typed numbers — the wheel is tunable, and a test
+  // holding a copy of its output would fail the day somebody reorders it.
+  for (const stacks of [1, 2, 4, 6]) {
     freshRun();
     swing(0.3, { level: 1, ice: stacks, rig: rigWithFins(2), velocity: { x: 9, y: 0 } });
-    built.push(clubsOrbiting());
+    const want = clubsForType('club', 1).clubs + clubsForType('ice', stacks).clubs;
+    check(`ice x${stacks}: the water holds what the roll table says`,
+      clubsInHand() + clubsOrbiting() === want,
+      `${clubsInHand()} + ${clubsOrbiting()} = ${clubsInHand() + clubsOrbiting()}, want ${want}`);
   }
-  check('every extra stack is another club on the ring',
-    built.join() === '1,2,4', `${built.join(' -> ')} orbiting for 1, 2, 4 stacks`);
 
-  // CLONE WARZ SPINS UP MORE OF THEM. The card reads "+1 of everything you
-  // fire", and the ring is a count the player owns like any other.
-  check('Clone Warz adds a club to the ring',
-    clubOrbiters({ club: 1, ice: 1 }, 2).length === 3,
-    `${clubOrbiters({ club: 1, ice: 1 }, 2).length} orbiting at +2`);
-  // ONCE FOR THE RING, not once per orbiting type — two types on the ring is
-  // still one thing the player is looking at, and paying per type would make
-  // the same card worth +2 or +3 here for a reason nothing on screen explains.
-  check('...once for the whole ring, not once per type',
-    clubOrbiters({ club: 1, ice: 1, boom: 1 }, 2).length === 4,
-    `${clubOrbiters({ club: 1, ice: 1, boom: 1 }, 2).length} orbiting for 2 ring types at +2`);
-  // ...and the extras WALK the types, so a Keg-and-Snap ring gets one more of
-  // each rather than two more of whichever happened to be first.
-  {
-    const mixed = clubOrbiters({ club: 1, ice: 1, boom: 1 }, 2);
-    const counts = mixed.reduce((m, a) => (m[a] = (m[a] ?? 0) + 1, m), {});
-    check('...and the extras are spread across the types',
-      counts.clubIce === 2 && counts.clubBoom === 2, mixed.join(' + '));
-  }
-  // AND NOTHING WHEN THERE IS NO RING. projectileCount's own rule: a card that
-  // adds to a count you do not own would hand a one-club run a weapon it never
-  // picked.
-  check('...and nothing at all when there is no ring',
-    clubOrbiters({ club: 3 }, 3).length === 0,
-    `${clubOrbiters({ club: 3 }, 3).length} orbiting on a single-type run at +3`);
+  // ...and the fins are always full before the ring is used. The rule is
+  // "fins first"; a ring club while a flipper is empty is the bug.
+  freshRun();
+  swing(0.3, { level: 1, ice: 4, rig: rigWithFins(2), velocity: { x: 9, y: 0 } });
+  check('the flippers fill before the ring does',
+    clubsInHand() === 2 && clubsOrbiting() > 0,
+    `${clubsInHand()} held, ${clubsOrbiting()} orbiting`);
+
+  // A SIZE OR DAMAGE ROLL IS NOT A CLUB. The whole reason the wheel exists is
+  // that four types stacking six deep would otherwise be twenty-odd clubs.
+  const sixDeep = ['club', 'boom', 'ice', 'throw']
+    .reduce((n, k) => n + clubStackTotals(k, 6).clubs, 0);
+  check('a fully stacked club run is not a wall of wood', sixDeep < 24 && sixDeep > 8,
+    `${sixDeep} clubs at 6 stacks of all four types, vs 24 if every pick added one`);
+}
+
+// ------------------------------------------------------------------- the ring
+
+section('THE RING — everything past the second club orbits you');
+
+{
+  const { clubOrbiters, clubsInHand, clubsOrbiting } = await import('../path/src/systems/club.js');
 
   // ...AND THEY ACTUALLY GO ROUND. Measured off the meshes over time rather
   // than trusted from the config: a ring whose clubs are built and then parked
@@ -1325,7 +1374,7 @@ section('THE RING — the club types you are not holding orbit you');
   const at = [];
   for (let i = 0; i < 240; i++) {
     rig3.pose(i * dt * 6);
-    updateClub(dt, scene, playerPos, { club: 1, ice: 1 }, enemies,
+    updateClub(dt, scene, playerPos, { club: 1, ice: 2 }, enemies,
       { rig: rig3, velocity: { x: 0, y: 0 } }, {});
     // The orbiters are appended after the fin sockets, so the last child is one.
     const m = clubGroup.children[clubGroup.children.length - 1];
@@ -1360,7 +1409,7 @@ section('THE RING — the club types you are not holding orbit you');
   // another card's stacks for two seconds.
   freshRun();
   const rig4 = rigWithFins(2);
-  swing(0.3, { level: 1, ice: 2, throwLevel: 1, rig: rig4, velocity: { x: 9, y: 0 } });
+  swing(0.3, { level: 1, ice: 4, throwLevel: 1, rig: rig4, velocity: { x: 9, y: 0 } });
   const heldBefore = clubsInHand();
   const ringBefore = clubsOrbiting();
   const { fireClubThrow } = await import('../path/src/systems/club.js');
@@ -1368,7 +1417,32 @@ section('THE RING — the club types you are not holding orbit you');
   check('a throw empties the fins', clubsInHand() === 0, `${heldBefore} -> ${clubsInHand()} held`);
   check('...and leaves the ring alone', clubsOrbiting() === ringBefore,
     `${ringBefore} -> ${clubsOrbiting()} orbiting`);
+
+  // --- Clone Warz and Entourage --------------------------------------------
+  //
+  // Both add to the ring, and both are spent ONCE for the whole ring rather
+  // than once per type on it — two types orbiting is still one thing the
+  // player is looking at, and paying per type would make a card that reads
+  // "+1" worth +2 or +3 depending on a detail nothing on screen explains.
+  const ringOf = (levels, bonus) => clubOrbiters(levels, bonus).length;
+  const plain = ringOf({ club: 1, ice: 4 }, 0);
+  check('Clone Warz adds a club to the ring', ringOf({ club: 1, ice: 4 }, 2) === plain + 2,
+    `${plain} -> ${ringOf({ club: 1, ice: 4 }, 2)} at +2`);
+  const twoTypes = ringOf({ club: 1, ice: 3, boom: 2 }, 0);
+  check('...once for the whole ring, not once per type',
+    ringOf({ club: 1, ice: 3, boom: 2 }, 2) === twoTypes + 2,
+    `${twoTypes} -> ${ringOf({ club: 1, ice: 3, boom: 2 }, 2)} at +2`);
+  // ...and nothing at all when there is no ring to add to. `+1 of nothing is
+  // nothing` is orbiterCount's own rule and this is where it has to hold.
+  check('...and adds nothing to a run with no ring', ringOf({ club: 2 }, 3) === 0,
+    `${ringOf({ club: 2 }, 3)} orbiting`);
+  // The extras walk the ring's types in turn, so a mixed ring gets one more of
+  // each rather than several more of whichever happened to be first.
+  const mixed = clubOrbiters({ club: 1, ice: 3, boom: 2 }, 2);
+  check('...and the extras are spread across the types',
+    new Set(mixed).size > 1, mixed.join(' + '));
 }
+
 
 // ------------------------------------------------------------------ the shove
 

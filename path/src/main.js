@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } from './config.js';
-import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, clearVisualPool } from './assets.js';
+import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { updateEmissivePulse } from './systems/emissivePulse.js';
@@ -22,7 +22,7 @@ import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossState, capBossDamage } from './systems/boss.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, pickups, chumChunks } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks } from './entities/pickups.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
@@ -78,6 +78,7 @@ import { updateKrakenInk } from './systems/kraken.js';
 import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from './systems/projectileVoices.js';
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
 import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact } from './systems/bossImpact.js';
+import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots } from './systems/bossHotSpots.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
 import { initGore, updateGore, resetGore } from './systems/gore.js';
 import { tickHitShapes, initHitShapeDebug, updateHitShapeDebug } from './systems/hitShape.js';
@@ -104,6 +105,7 @@ import { updateCalamari, resetCalamari } from './systems/calamari.js';
 import { createDumboOcto, updateDumbo, resetDumbo, rebuildDumboOcto } from './systems/dumbo.js';
 import { createHarpVisual, updateHarp, resetHarp, rebuildHarp } from './systems/harp.js';
 import { firePearl, burstPearl, updateOyster, resetOyster } from './systems/oyster.js';
+import { razorClamVolley } from './systems/razorClam.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab, rebuildOctoGrabber } from './systems/octoGrab.js';
 import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
 import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines } from './systems/outlines.js';
@@ -149,6 +151,7 @@ import { initUpgradeDebug } from './ui/upgradeDebug.js';
 import { initAnimDebug } from './ui/animDebug.js';
 import * as playtest from './systems/playtest.js';
 import { causesOfDeath } from './deathCauses.js';
+import { sourceFamily } from './systems/playtestAnalysis.js';
 // The caption on the kill-shot polaroid. `playerName` and not the raw stored
 // value — see the note where it is used.
 import { playerName } from './systems/playerName.js';
@@ -183,6 +186,7 @@ initInput(world.renderer.domElement);
 initParticles(world.scene);
 initImpactFlashes(world.scene);
 initBossImpacts(world.scene);
+initBossHotSpots(world.scene);
 initBossGibs(world.scene);
 // The shockwave is a scene object (systems/organicRing.js); the smoke is not.
 // Without this the cloud still fires and the front silently never appears.
@@ -253,6 +257,7 @@ let shootCooldown = 0;
 let missileCooldown = 0;
 let scallopCooldown = 0;
 let oysterCooldown = 0;
+let razorClamCooldown = 0;
 let bounceCooldown = 0;
 let rapidFireTimer = 0; // seconds remaining on an active rapid-fire pickup
 let chargeHapticTimer = 0; // counts down between wind-up rumble pulses
@@ -877,7 +882,8 @@ function handleTunerChange(path) {
   // Same again for the trap bubble's film. Its material is built on the first
   // spawn and cached forever after, so this is the only thing that moves those
   // uniforms once one has been in the water.
-  if (path === '*' || path.startsWith('bubbleShell')) applyBubbleShellSettings();
+  if (path === '*' || path.startsWith('bubbleShell') || path.startsWith('oxygenBubbleShell')) applyBubbleShellSettings();
+  if (path === '*' || path.startsWith('chromeBlade')) applyChromeSettings();
   // Including the pattern dropdown — the pattern is a uniform, not a compile
   // switch, so switching it repaints every fish already swimming.
   if (path === '*' || path.startsWith('biolumSkin')) applyBiolumSkinSettings();
@@ -1095,6 +1101,10 @@ function startGame() {
   // animal by design (it fades on its own clock, not the creature's), so a run
   // reset is the one moment they have to be taken off the board by hand.
   clearBossImpacts();
+  // ...and every weak spot, for the same reason: a spot's light fades on its
+  // own clock rather than the creature's, so the one moment they have to be
+  // put out by hand is the moment the creature list is thrown away.
+  resetBossHotSpots();
   // And the wreckage of the last boss, which outlives its animal by design
   // (it sinks on its own clock, not the creature's) and would otherwise be
   // raining down through the opening seconds of the next run.
@@ -1279,6 +1289,7 @@ function startGame() {
   missileCooldown = 0;
   scallopCooldown = 0;
   oysterCooldown = 0;
+  razorClamCooldown = 0;
   bounceCooldown = 0;
   rapidFireTimer = 0;
   bubbleSpawnTimer = randomBetween(CONFIG.oxygen.bubbleSpawnMin, CONFIG.oxygen.bubbleSpawnMax);
@@ -2277,7 +2288,19 @@ function takeSubject(kind, id) {
 //
 // Everything not named here is 'ask', which is the harmless one: it multiplies
 // nothing unless the object's own owner asks for the multiplier.
-const PAINTED_SUBJECTS = new Set(['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'attractorOrb']);
+// The clam and the coral are NOT here any more. Both are composed objects whose
+// own systems write their colours every frame (systems/attractiveClam.js,
+// systems/coralOrb.js), which is exactly the case 'paint' must not take: a
+// claimed material would be overwritten by its owner on the next line and the
+// highlight would silently do nothing. They answer 'ask' and multiply the pulse
+// in themselves, which is the mode that exists for objects with a writer.
+//
+// The bubble stays listed and is REFUSED by telegraph's own guard, on purpose:
+// it wears a fresnel film now (an injected shader), and a clone of that
+// material would drop the injection and render the bubble as a flat white ball
+// for as long as the coach was explaining it. It falls back to no push — the
+// tip still stands beside it and the arrow still finds it. See paintable().
+const PAINTED_SUBJECTS = new Set(['bubbleOrb', 'strikeOrb']);
 function telegraphModeFor(stepId) {
   return PAINTED_SUBJECTS.has(stepId) ? 'paint' : 'ask';
 }
@@ -2954,6 +2977,74 @@ function firePearlShot() {
   feedback('pearlShot', { x: origin.x, y: origin.y, dirX: dir.x, dirY: dir.y });
 }
 
+// Razor Clams — one volley of piercing chrome blades. The fan's width and its
+// blade count both move with the level (see systems/razorClam.js), so from here
+// this is only: ask for the volley, throw it, make one noise.
+//
+// ONE feedback event for the whole volley rather than one per blade. Ten blades
+// leave on the same frame from two flipper tips, and ten muzzle flashes stacked
+// on one point is a white disc with a horn section behind it; the event is
+// scaled by how many went out instead, which is what makes the ring land harder
+// than the spray without making it louder ten times over.
+function fireRazorClams() {
+  const s = player.stats;
+  const dir = input.aim.clone().normalize();
+  const volley = razorClamVolley(s.razorClamLevel, Math.atan2(dir.y, dir.x), s);
+  razorClamCooldown = volley.fireRate;
+
+  const damage = abilityDamage(volley.damage);
+  const c = CONFIG.razorClam;
+
+  for (let i = 0; i < volley.headings.length; i++) {
+    const a = volley.headings[i];
+    const bladeDir = new THREE.Vector2(Math.cos(a), Math.sin(a));
+    // The emit point is asked for with THIS BLADE'S heading rather than the
+    // aim, so a ring leaves the flipper that is actually pointing that way
+    // instead of every shell in the circle erupting out of one shoulder.
+    const origin = emitPoint(player.aimRig, CONFIG.emitPoints.razorClam, i, bladeDir, player.mesh.position, muzzlePoint);
+    spawnProjectile(world.scene, {
+      origin,
+      dir: bladeDir,
+      faction: 'player',
+      damage,
+      speed: c.speed * (1 + (Math.random() * 2 - 1) * (c.speedJitter ?? 0)),
+      life: c.life,
+      radius: c.radius,
+      pierce: volley.pierce,
+      asset: 'razorBlade',
+      // Its own source tag. The playtest ledger has to be able to say whether
+      // the razor clam earned its picks, and a tag shared with anything else
+      // would credit one card's damage to another — see the note on the mussel
+      // barrage, which is the same weapon class and deliberately not 'missile'.
+      source: 'razorClam',
+      // Lies along its own heading. The blade is built long on +Y (art forward
+      // everywhere in assets.js), so without this a razor clam flies broadside
+      // and reads as a floating tile.
+      //
+      // 'axis' RATHER THAN true, and the difference is only visible on a weapon
+      // that fires in every direction at once. Plain `orient` mirrors a
+      // leftward shot so a model with a belly does not roll over, and that
+      // mirror is 90 degrees out at leftward DIAGONALS — which on a ring of ten
+      // blades is four of them flying sideways. A blade has no belly, so it
+      // simply declines the mirror. See updateProjectiles.
+      orient: 'axis',
+      // No spin: `orient` and `spin` both write rotation.z every frame and the
+      // second one to run wins. The roll that makes the chrome sweep is baked
+      // into the geometry instead — each blade is one of seven twists. See
+      // getBladeGeometry.
+    });
+  }
+
+  feedback('razorClamLaunch', {
+    x: player.mesh.position.x,
+    y: player.mesh.position.y,
+    dirX: dir.x,
+    dirY: dir.y,
+    scale: Math.min(1.7, 0.75 + volley.headings.length * 0.09),
+    source: 'razorClam',
+  });
+}
+
 function fireBounce() {
   const s = player.stats;
   bounceCooldown = s.bounceFireRate;
@@ -3098,18 +3189,6 @@ function randomArenaPoint() {
   return new THREE.Vector3(
     bounds.left + Math.random() * bounds.width,
     bounds.bottom + Math.random() * (bounds.surfaceY - bounds.bottom),
-    0
-  );
-}
-
-// Bubbles rise, so spawning them low gives them somewhere to rise TO —
-// spawning uniformly across the whole column would put half of them right
-// at the ceiling already.
-function randomLowArenaPoint() {
-  const span = bounds.surfaceY - bounds.bottom;
-  return new THREE.Vector3(
-    bounds.left + Math.random() * bounds.width,
-    bounds.bottom + Math.random() * span * 0.4,
     0
   );
 }
@@ -3334,6 +3413,7 @@ function animate(now) {
     missileCooldown -= dt;
     scallopCooldown -= dt;
     oysterCooldown -= dt;
+    razorClamCooldown -= dt;
     bounceCooldown -= dt;
     starfishCooldown -= dt;
     seagullCooldown -= dt;
@@ -3537,7 +3617,9 @@ function animate(now) {
     bubbleSpawnTimer -= dt;
     if (bubbleSpawnTimer <= 0) {
       bubbleSpawnTimer = randomBetween(CONFIG.oxygen.bubbleSpawnMin, CONFIG.oxygen.bubbleSpawnMax);
-      spawnBubbleOrb(world.scene, randomLowArenaPoint());
+      // OUT OF THE SEABED, not out of mid-water. Air comes from somewhere.
+      // See bubbleBirthPoint in systems/oxygenBubble.js.
+      spawnBubbleOrb(world.scene, bubbleBirthPoint());
     }
     rapidFireSpawnTimer -= dt;
     if (rapidFireSpawnTimer <= 0 && CONFIG.rapidFirePickup.enabled) {
@@ -3615,6 +3697,9 @@ function animate(now) {
     });
     updateBoats(dt, world.scene, gameState.difficulty, player.mesh.position, {
       onBoatDestroyed,
+      // For the attractive clam's beat-synced waves only — everything else in
+      // there runs on the water's dilated clock. See updateAttractiveClam.
+      rawDt,
     });
 
     // No trigger to pull any more — autofire is the whole answer. Kept as a
@@ -3630,6 +3715,11 @@ function animate(now) {
     // keeps the aim check the scallop doesn't need.
     if (player.stats.scallopCount > 0 && scallopCooldown <= 0) fireScallops();
     if (player.stats.oysterLevel > 0 && oysterCooldown <= 0 && input.aim.lengthSq() > 0.001) firePearlShot();
+    // Aim-gated even at the levels where the fan has closed into a ring and the
+    // heading no longer changes what gets hit. Consistency is worth more than
+    // the edge case: a weapon that needed a crosshair for seven picks and then
+    // silently stopped needing one reads as a bug in the aim, not as a perk.
+    if (player.stats.razorClamLevel > 0 && razorClamCooldown <= 0 && input.aim.lengthSq() > 0.001) fireRazorClams();
     if (wantsToFire && player.stats.bounceLevel > 0 && bounceCooldown <= 0 && input.aim.lengthSq() > 0.001) fireBounce();
     // Starfish and seagull bombs are passive abilities, like garlic/eel/beluga
     // below — they fire on their own timer once taken, independent of input.
@@ -4320,7 +4410,7 @@ function animate(now) {
       velocity: player.velocity,
       dashing: strikeState.active,
     }, {
-      // The club's own tag unless the hit names one — Powder Keg's blast does.
+      // The club's own tag unless the hit names one — Boom Boom Club's blast does.
       // See the note in club.js's detonate(): three cards deal damage through
       // one hook here, and a fixed tag credited all of it to the base club.
       onEnemyDamaged: (e, dmg, x, y, dir, projectile, at, source) => (
@@ -4343,7 +4433,7 @@ function animate(now) {
         scale: Math.max(0.5, 1 - i * 0.12),
         sfxOpts: { pitch: 1 + i * 0.08 },
       }),
-      // Powder Keg. Scaled by how many the blast actually caught, so a keg
+      // Boom Boom Club. Scaled by how many the blast actually caught, so a keg
       // that went off in a crowd reads heavier than one that popped on a lone
       // crab — and throttled, because with two clubs swinging this can fire
       // several times a second.
@@ -4710,7 +4800,31 @@ function animate(now) {
           // already been told which one this is by looking at it.
           sfxOpts: { pitch: 1.2 - 0.4 * chunk.t },
         });
-      }
+      },
+      {
+        // WHAT THE BUBBLES ARE ALLOWED TO BUMP INTO. The live enemy list, so a
+        // shark barging through a rising breath shoves it aside and a bubble
+        // caught between two bodies bursts. Passed in rather than imported by
+        // the pickups module on purpose: it keeps the enemy list a thing the
+        // game loop hands out, and it is what lets every existing harness call
+        // updatePickups with no world at all.
+        bodies: enemies,
+        // For the coral's beat-synced light. Everything else in there runs on
+        // the water's dilated clock.
+        rawDt,
+        // A BREATH DESTROYED. Pays nothing — that is the risk the bubble now
+        // carries, and the reason it is worth swimming for one early rather
+        // than letting it come to you.
+        onBubblePop: (x, y, t) => {
+          feedback('bubbleBurst', {
+            x, y,
+            // Scaled by how far it had swelled: one burst a moment after
+            // leaving the sand is a puff, a full one is an event.
+            scale: 0.45 + 0.95 * t,
+            sfxOpts: { pitch: 0.72, gain: 0.7 },
+          });
+        },
+      },
     );
     // Straight after the orbs, because it is the same currency arriving a beat
     // late: whatever the last mouthful was too big to pay at once.
@@ -5237,6 +5351,11 @@ function animate(now) {
   // screen while everything else is held, and holding it too reads as a stall.
   // This is also what drags each wound along with the bone it is stuck to.
   updateBossImpacts(realDt);
+  // BOTH CLOCKS. The breathing and the relight wait belong to the fight and
+  // slow down with it; the hit flash does not, for the same reason the impacts
+  // above take real time — a flash that freezes during its own hit-stop is the
+  // one thing on screen while everything else is held.
+  updateBossHotSpots(dt, realDt);
   // The wreckage of the last boss, and the one effect here that runs on the
   // GAMEPLAY clock rather than the wall one: it is part of the world the kill
   // shot is slowing down, and chunks hanging almost still in the dilated water
@@ -5499,6 +5618,17 @@ function animate(now) {
       // the only record of it by the time this runs.
       cause: bossState.killedBy,
       causeSource: bossState.killedBySource,
+      // CLUBBED BY. The one caption in the game that is not rolled from
+      // kickers.csv, and it earns the exception: a boss beaten down with wood
+      // has a verb of its own, and "cause of death: Boom Boom Club" throws away
+      // the fact that the fight was a mugging. damageCreditFor has already
+      // decided the club LINE out-damaged everything else and named the
+      // loudest club in it, so this is only putting the right word in front of
+      // an answer that is already correct.
+      //
+      // Left undefined for everything else, which is what makes bossShot.js
+      // roll the table as it always has — see the `?? pickKicker` there.
+      kicker: sourceFamily(bossState.killedBySource) === 'club' ? 'clubbed by ' : undefined,
       // Whose run this is, read once here rather than when a card is drawn.
       // playerName() and not loadPlayerName(): this is a caption, so it wants
       // the trimmed, never-blank reading — a print titled with an empty string

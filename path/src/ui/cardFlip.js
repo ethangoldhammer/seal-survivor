@@ -21,14 +21,19 @@
 //                 in the world, behind a DOM card that is covering it, and it
 //                 has two writers already.
 //
-// THE HALFWAY SWAP IS THE PART THAT MATTERS. `backface-visibility` hides the
-// off-face from the eye and from nothing else: it is still in the layout, still
-// focusable, and still passes the `.sv-hidden` test that ui.js's pad cursor
-// filters on. A controller player would walk onto buttons on the far side of a
-// card and the highlight would simply vanish — on the one screen that has to
-// get them back into a game. So the off-face gets `.sv-hidden` applied for
-// real, at the moment the card passes 90 degrees, and the cursor list rebuilds
-// itself around that on its next frame because it is rebuilt every frame.
+// THE HALFWAY SWAP IS THE PART THAT MATTERS, and it is now the ONLY thing
+// hiding the away face. The obvious alternative, `backface-visibility: hidden`,
+// hides a face from the eye and from nothing else: it is still in the layout,
+// still focusable, and still passes the `.sv-hidden` test that ui.js's pad
+// cursor filters on. A controller player would walk onto buttons on the far
+// side of a card and the highlight would simply vanish — on the one screen that
+// has to get them back into a game. So the off-face gets `.sv-hidden` applied
+// for real, at the moment the card passes 90 degrees, and the cursor list
+// rebuilds itself around that on its next frame because it is rebuilt every
+// frame. The property was carried alongside that class for a while and has been
+// taken off .sv-face: `display: none` already hides the far face better than it
+// did, and all it was still doing was forcing both faces onto permanent render
+// surfaces with every kill-shot canvas rasterised inside them. See turning().
 //
 // REDUCED MOTION TAKES THE WHOLE THING. No rotation, no sweep, no bubbles —
 // the faces just swap. A flip is a rotation and a particle burst, which is
@@ -95,7 +100,8 @@ export function mountCardFlip({ card, front, back, water }) {
 export function releaseCardFlip() {
   if (!live) return;
   cancelAnimationFrame(live.raf);
-  live.canvas?.remove();
+  dropCanvas(live);
+  turning(live, false);
   live = null;
 }
 
@@ -110,11 +116,28 @@ function hardReset(state) {
   state.angle = 0;
   state.target = 0;
   state.bubbles.length = 0;
-  state.canvas?.remove();
-  state.canvas = null;
-  state.ctx = null;
+  dropCanvas(state);
+  turning(state, false);
   applyFaces(state);
   paint(state);
+}
+
+// ---------------------------------------------------------------------------
+// THE PROMOTION, and why it is a state rather than a stylesheet line.
+//
+// `will-change: transform` on the card is correct FOR THE HALF SECOND IT IS
+// MOVING and wrong for the rest of the time. It promotes the card to its own
+// composited layer and keeps it there — and this card is a 580px slab holding
+// the whole leaderboard and a live canvas per kill shot, sat on for as long as
+// it takes somebody to type a name. A layer that big, left promoted and never
+// re-rasterised, comes back BLANK: the polaroids and the card behind them
+// render as empty rectangles, box intact, after a few turns.
+//
+// Taking the class off when the turn lands is also what forces the browser to
+// re-rasterise the card at its resting size on the frame it stops moving —
+// which is the frame the stale rasterisation would otherwise be visible on.
+function turning(state, on) {
+  state.card.classList.toggle('sv-flip-turning', !!on);
 }
 
 function turn(state, to) {
@@ -123,11 +146,13 @@ function turn(state, to) {
 
   if (prefersReducedMotion() || cfg().enabled === false) {
     state.angle = to;
+    turning(state, false);
     applyFaces(state);
     paint(state);
     return;
   }
 
+  turning(state, true);
   ensureCanvas(state);
   burst(state);
   if (!state.raf) {
@@ -157,9 +182,8 @@ function frame(state) {
     cancelAnimationFrame(state.raf);
     state.raf = 0;
     state.bubbles.length = 0;
-    state.canvas?.remove();
-    state.canvas = null;
-    state.ctx = null;
+    dropCanvas(state);
+    turning(state, false);
   }
 }
 
@@ -195,6 +219,13 @@ function tick(state) {
   if (moving) emit(state, dt);
   step(state, dt);
 
+  // DEMOTED WHEN THE ANGLE LANDS, not when the last bubble pops. The promotion
+  // is for the card's transform and the bubbles are on a canvas of their own —
+  // holding the card in a composited layer for the second the froth takes to
+  // clear would leave it promoted at exactly the moment its rasterisation has
+  // to be right, which is the frame it comes to rest.
+  if (state.angle === state.target) turning(state, false);
+
   if (state.angle !== state.target || state.bubbles.length) {
     state.raf = requestAnimationFrame(() => frame(state));
   } else {
@@ -202,9 +233,7 @@ function tick(state) {
     // left empty: it is a full-menu compositing layer, and the score screen is
     // then sat on for as long as it takes somebody to type their name.
     state.raf = 0;
-    state.canvas?.remove();
-    state.canvas = null;
-    state.ctx = null;
+    dropCanvas(state);
   }
 }
 
@@ -237,6 +266,27 @@ function paint(state) {
 // ---------------------------------------------------------------------------
 // Bubbles
 // ---------------------------------------------------------------------------
+// ONE FULL-SCREEN CANVAS IS ALLOCATED PER TURN, and its size is why the ratio
+// below is capped at 1 by default rather than at the device's.
+//
+// The layer is the whole menu — 430x932 on a phone, more on a desktop — and a
+// backing store is four bytes a pixel at the SQUARE of the ratio: at the
+// device's 3 that is a 14MB allocation, thrown away when the turn lands and
+// made again on the next one. Alongside a live polaroid canvas per kill shot
+// and the share renders warming behind them, that churn is what walks a page
+// into the browser's canvas budget — and what a browser does at that ceiling is
+// hand back blank bitmaps, which is a score card whose photographs are suddenly
+// empty rectangles.
+//
+// One is the right default rather than a compromise. These are 1px strokes
+// around 2-3px translucent discs drifting past in under a second; there is no
+// edge in them for a second sample to find. Raise `pixelRatio` if a future look
+// gives them one.
+function ratio() {
+  const want = bub().pixelRatio ?? 1;
+  return Math.max(0.5, Math.min(want, window.devicePixelRatio || 1));
+}
+
 function ensureCanvas(state) {
   if (state.canvas || !state.water || bub().enabled === false) return;
   const canvas = document.createElement('canvas');
@@ -244,7 +294,7 @@ function ensureCanvas(state) {
   canvas.setAttribute('aria-hidden', 'true');
   state.water.appendChild(canvas);
   const r = state.water.getBoundingClientRect();
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = ratio();
   canvas.width = Math.max(1, Math.round(r.width * dpr));
   canvas.height = Math.max(1, Math.round(r.height * dpr));
   canvas.style.width = `${r.width}px`;
@@ -252,6 +302,21 @@ function ensureCanvas(state) {
   state.canvas = canvas;
   state.ctx = canvas.getContext('2d');
   state.dpr = dpr;
+}
+
+// ZEROED BEFORE IT IS REMOVED. Dropping the element alone leaves the backing
+// store alive until the collector gets to it, and the next turn asks for
+// another one before that happens — so a player turning the card over and back
+// a few times holds several full-screen bitmaps at once for no reason.
+// Resizing a canvas to nothing releases it there and then.
+function dropCanvas(state) {
+  const canvas = state.canvas;
+  state.canvas = null;
+  state.ctx = null;
+  if (!canvas) return;
+  canvas.width = 0;
+  canvas.height = 0;
+  canvas.remove();
 }
 
 // WHERE THE EDGE IS. At angle a the card's visible half-width is its true half

@@ -807,21 +807,27 @@
     "cap": 6,
     "perStack": [
       {
+        "clubReachMul": 118,
         "clubLevel": 101
       },
       {
+        "clubDamageMul": 130,
         "clubLevel": 102
       },
       {
+        "clubCount": 101,
         "clubLevel": 103
       },
       {
+        "clubReachMul": 139.24,
         "clubLevel": 104
       },
       {
+        "clubDamageMul": 169,
         "clubLevel": 105
       },
       {
+        "clubCount": 102,
         "clubLevel": 106
       }
     ]
@@ -830,18 +836,23 @@
     "cap": 5,
     "perStack": [
       {
+        "clubReachMul": 118,
         "clubThrowLevel": 101
       },
       {
+        "clubDamageMul": 130,
         "clubThrowLevel": 102
       },
       {
+        "clubCount": 101,
         "clubThrowLevel": 103
       },
       {
+        "clubReachMul": 139.24,
         "clubThrowLevel": 104
       },
       {
+        "clubDamageMul": 169,
         "clubThrowLevel": 105
       }
     ]
@@ -850,18 +861,23 @@
     "cap": 5,
     "perStack": [
       {
+        "clubCount": 101,
         "clubBoomLevel": 101
       },
       {
+        "clubReachMul": 118,
         "clubBoomLevel": 102
       },
       {
+        "clubDamageMul": 130,
         "clubBoomLevel": 103
       },
       {
+        "clubCount": 102,
         "clubBoomLevel": 104
       },
       {
+        "clubReachMul": 139.24,
         "clubBoomLevel": 105
       }
     ]
@@ -900,18 +916,23 @@
     "cap": 5,
     "perStack": [
       {
+        "clubDamageMul": 130,
         "clubIceLevel": 101
       },
       {
+        "clubCount": 101,
         "clubIceLevel": 102
       },
       {
+        "clubReachMul": 118,
         "clubIceLevel": 103
       },
       {
+        "clubDamageMul": 169,
         "clubIceLevel": 104
       },
       {
+        "clubCount": 102,
         "clubIceLevel": 105
       }
     ]
@@ -1395,6 +1416,35 @@
       },
       {
         "oysterLevel": 108
+      }
+    ]
+  },
+  "razorClam": {
+    "cap": 8,
+    "perStack": [
+      {
+        "razorClamLevel": 101
+      },
+      {
+        "razorClamLevel": 102
+      },
+      {
+        "razorClamLevel": 103
+      },
+      {
+        "razorClamLevel": 104
+      },
+      {
+        "razorClamLevel": 105
+      },
+      {
+        "razorClamLevel": 106
+      },
+      {
+        "razorClamLevel": 107
+      },
+      {
+        "razorClamLevel": 108
       }
     ]
   },

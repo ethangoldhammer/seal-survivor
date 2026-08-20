@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { chainHex } from './chainColor.js';
-import { pipCount, liveChain } from './strike.js';
+import { pipCount, liveChain, releaseOffset, sweetHalfWidth } from './strike.js';
 import { ease } from '../ease.js';
 import { playerOverlayZ } from '../entities/player.js';
 
@@ -154,6 +154,18 @@ const fragmentShader = /* glsl */ `
                                // core's own single hue
   uniform float uChainR;       // the chain-window arc, outside the fuel ring
   uniform float uChainLeft;    // 0..1 of the window still to run, 0 = no chain
+
+  // --- THE LEAD-IN: the release moment ARRIVING ---------------------------
+  // A ring expanding out of the core to land on the fuel ring at the instant a
+  // release would be on the beat, and the tolerance drawn where it is going to
+  // land. Every other cue for that moment fires AT it; this is the only one
+  // that shows it coming. See CONFIG.strike.ring.lead.
+  uniform float uLeadR;        // where the traveller is NOW, in ring radii
+  uniform float uLeadW;        // its half-width
+  uniform float uLeadGlow;     // 0 = there is no wind-up to lead
+  uniform float uLeadHit;      // 1 while it is inside the tolerance
+  uniform float uSweetW;       // half-width of the TOLERANCE band, at r = 1
+  uniform float uSweetGlow;
   uniform vec3  uColor;
   uniform vec3  uReadyColor;
   uniform vec3  uComboColor;
@@ -348,6 +360,52 @@ const fragmentShader = /* glsl */ `
         ca *= uCoreFade;
         col = mix(col, lit * uInnerGlow * (1.0 + uCorePop * uCorePopGlow), ca);
         alpha = max(alpha, ca * mix(0.55, 1.0, uArmed));
+      }
+    }
+
+    // ---- THE LEAD-IN: the release moment arriving --------------------------
+    //
+    // TWO PARTS AND THEY ARE DIFFERENT THINGS. The TOLERANCE is a fixed band
+    // at the fuel ring — where a release scores, standing still. The
+    // TRAVELLER expands out of the core and crosses it. Let go as they meet.
+    //
+    // Drawn before the shock ring and after everything else, so a release fired
+    // on the beat is the pop landing on top of the cue that earned it.
+    if (uLeadGlow > 0.0) {
+      // The target first, so the traveller reads as passing OVER it rather
+      // than being occluded by its own destination.
+      if (uSweetGlow > 0.0) {
+        float mSweet = bandMask(r, 1.0, uSweetW);
+        if (mSweet > 0.001) {
+          col += uReadyColor * uSweetGlow * mSweet;
+          alpha = max(alpha, mSweet * min(1.0, uSweetGlow) * 0.7);
+        }
+      }
+      float mLead = bandMask(r, uLeadR, uLeadW);
+      if (mLead > 0.001) {
+        // TWO SIGNALS FOR ONE EVENT, because either alone is fragile.
+        //
+        // THE HUE: the charging colour on the way in, the ready colour for
+        // exactly as long as a release would arm — the same pair the core and
+        // the pips already use for "this will fire", so the cue is speaking the
+        // instrument's own language rather than inventing a vocabulary.
+        //
+        // THE COINCIDENCE: the traveller arriving on the target. That one is
+        // geometric and survives anything the composite does to the colours,
+        // which matters more here than it looks — the ring's hues are TUNED
+        // (they are orange and green in the shipped snapshot, not the blue and
+        // mint in config.js's defaults), so a cue that leaned on one specific
+        // pair of colours would be at the mercy of a tuner slider.
+        //
+        // The hit rides on top as brightness as well. Kept modest on purpose:
+        // everything here is multiplied by uGlow (2.2) on the way out, and a
+        // band that clips has no hue left to change — at glow 1.15 the
+        // traveller measured rgb(255,189,76), a clipped white-amber with the
+        // signal burnt out of it. See the pixel checks in
+        // tools/looks/boost-core.js, which are what set the number below.
+        vec3 leadCol = mix(uColor, uReadyColor, uLeadHit);
+        col += leadCol * uLeadGlow * (1.0 + uLeadHit * 0.9) * mLead;
+        alpha = max(alpha, mLead * min(1.0, uLeadGlow * (1.0 + uLeadHit)));
       }
     }
 
@@ -746,6 +804,78 @@ function updateCore(dt, strikeState, u, ring) {
   }
 }
 
+/**
+ * THE LEAD-IN — the release moment drawn as something you can SEE COMING.
+ *
+ * A pure mapping of one number onto one radius: the seconds between now and
+ * the moment a release would be on the beat, onto where the traveller sits
+ * between the core and the fuel ring.
+ *
+ *   offset -time  the traveller is born at the core's own reach
+ *   offset     0  it is ON the fuel ring — let go
+ *   offset +time  it has expanded past and is leaving
+ *
+ * LINEAR, and it has to be. This is a clock being read, and any easing on it
+ * would make the ring travel at a speed that does not match the time it is
+ * reporting — the moment would arrive early or late by however much the curve
+ * bent, which is precisely the failure the whole cue exists to fix.
+ *
+ * IT CANNOT MOVE THE GATE. `releaseOffset` is the same expression tryStrike
+ * judges the release with (systems/strike.js) and `sweetHalfWidth` is the same
+ * tolerance, so the band drawn here is the window by construction rather than
+ * by two files agreeing to use the same number.
+ */
+function updateLead(strikeState, u, ring, stats) {
+  const g = ring.lead ?? {};
+  const time = Math.max(0.05, g.time ?? 0.5);
+  const offset = releaseOffset(strikeState);
+
+  // NOTHING TO LEAD INTO. No wind-up in hand (`pending` is 0 from the frame a
+  // strike is spent, see clearPending), or the moment is further off than the
+  // cue is meant to reach.
+  if (g.enabled === false || !(strikeState.pending > 0)
+    || !Number.isFinite(offset) || Math.abs(offset) > time) {
+    u.uLeadGlow.value = 0;
+    u.uSweetGlow.value = 0;
+    return;
+  }
+
+  const span = Math.max(0.01, g.span ?? 0.3);
+  const half = sweetHalfWidth(stats);
+  // INWARD. The traveller is born OUTSIDE the instrument and closes on the fuel
+  // ring, which is the approach every rhythm game converged on and is not the
+  // direction this started in.
+  //
+  // Outward, from the core, read better on paper — born at the drop's own
+  // surface, the same gesture as the power being banked. It cannot work: the
+  // goo reaches 0.84 of the ring radius at a full bank (measured, see
+  // tools/looks/boost-core.js), so the first third of the travel is drawn
+  // INSIDE the drop, in front of a bright green blob, which is exactly the
+  // stretch of the approach the player is meant to be reading. Coming in from
+  // outside, the only thing it crosses is the chain arc at 1.14, and that for
+  // one frame.
+  u.uLeadR.value = 1 - (offset / time) * span;
+  u.uLeadW.value = Math.max(0.005, g.width ?? 0.055);
+  // The tolerance through the SAME mapping, so what the band covers and what
+  // the gate accepts are the same span of time by construction.
+  u.uSweetW.value = Math.max(0.005, (half / time) * span);
+  u.uLeadHit.value = Math.abs(offset) <= half ? 1 : 0;
+
+  // ARRIVING RATHER THAN APPEARING. Faded over the first slice of the
+  // approach — a cue that pops into existence is itself an event, and this one
+  // is on screen precisely to stop the player reacting to events.
+  const fade = Math.max(0, Math.min(0.99, g.fadeIn ?? 0.25));
+  const age = 1 - Math.min(1, Math.max(0, -offset) / time);   // 0 at birth, 1 at the moment
+  const fadeIn = fade <= 0 ? 1 : Math.min(1, age / fade);
+  // ...AND LEAVING AFTER IT. Past the moment the traveller is heading into the
+  // drop, and a miss should not end with the cue sitting on top of the core at
+  // full brightness arguing for a release that is already gone.
+  const fadeOut = offset <= 0 ? 1 : 1 - Math.min(1, offset / time);
+  const lit = fadeIn * fadeOut;
+  u.uLeadGlow.value = (g.glow ?? 1) * lit;
+  u.uSweetGlow.value = (g.sweetGlow ?? 0.45) * lit;
+}
+
 export function createStrikeRing() {
   const geometry = new THREE.PlaneGeometry(2 * OVERSCAN, 2 * OVERSCAN);
   const ring = CONFIG.strike.ring;
@@ -797,6 +927,12 @@ export function createStrikeRing() {
       uShockWheel: { value: 1 },
       uChainR: { value: ring.chainRadiusMul ?? 1.14 },
       uChainLeft: { value: 0 },
+      uLeadR: { value: 1 },
+      uLeadW: { value: 0.055 },
+      uLeadGlow: { value: 0 },
+      uLeadHit: { value: 0 },
+      uSweetW: { value: 0.05 },
+      uSweetGlow: { value: 0 },
       uColor: { value: new THREE.Color(ring.color) },
       uReadyColor: { value: new THREE.Color(ring.readyColor) },
       uComboColor: { value: new THREE.Color(ring.comboColor) },
@@ -861,6 +997,7 @@ export function updateStrikeRing(dt, playerPos, strikeState, running, stats = nu
     : 0;
 
   updateCore(dt, strikeState, u, ring);
+  updateLead(strikeState, u, ring, stats);
 
   u.uThickness.value = ring.thickness;
   u.uGap.value = ring.segmentGap;

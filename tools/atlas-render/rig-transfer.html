@@ -11,6 +11,13 @@
 // Skins a DIFFERENT mesh to octopus_rig.glb's skeleton by nearest-point weight
 // transfer, then bends the arms to see whether the deformation tracks.
 //
+// THE MESH IT COMPARES AGAINST IS NO LONGER IN public/. octopus.glb was the
+// unrigged candidate this page was written to evaluate; the evaluation came
+// back negative (see below), the game kept octopus_rig.glb, and the loser sat
+// in public/ shipping 1.35MB to every player for months. It is deleted. Rebuild
+// it with `node tools/build-octopus.mjs` from the sea-animals-01 pack if this
+// page is ever wanted again — it is a build output, not source art.
+//
 // This is the "what would the new octopus look like in the rig" question, and
 // it is worth stating up front that the measurement says it should not work:
 // searching all 24 axis-aligned rotations, the best overlap between the two

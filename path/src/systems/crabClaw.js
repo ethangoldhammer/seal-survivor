@@ -133,6 +133,37 @@ export function pinchReach(armReach, playerRadius, mul) {
 }
 
 /**
+ * ONE CRAB'S SETTING, WHICH IS THE SHARED ONE UNLESS ITS ROW SAYS OTHERWISE.
+ *
+ * CONFIG.crabClaw is tuned on the swarm — nine crabs on the sand, each of them
+ * scenery that occasionally bites. The king crab is the same rig doing a
+ * completely different job: it is the fight, it is 3.6x the size, and the pinch
+ * is the only attack it has. Sharing one cooldown between them means either a
+ * boss that reaches for you twice a fight or a seabed where every crab is a
+ * blender. So a creature may carry its own `claw` block (see
+ * CONFIG.enemies.bossCrab) and it overrides key by key.
+ *
+ * A LOOKUP RATHER THAN A MERGED OBJECT, deliberately. This is read several
+ * times per crab per frame with ten crabs on the floor, and spreading a
+ * twenty-key config into a fresh object each time is a few thousand
+ * short-lived allocations a second for values that never change between
+ * frames — the same reasoning as springCfgFor in systems/animation.js.
+ *
+ * Both halves of the pinch ask through this: the commit gate in
+ * entities/enemies.js and the damage check in systems/combat.js. They are one
+ * mechanic measured twice, and every time they have been written separately
+ * one of them has silently stopped agreeing with the other — see pinchReach.
+ *
+ * @param def  the creature's row (`e.def`), or null for the shared setting.
+ * @param key  any key of CONFIG.crabClaw.
+ */
+export function clawSetting(def, key) {
+  const over = def?.claw;
+  if (over && over[key] != null) return over[key];
+  return CONFIG.crabClaw?.[key];
+}
+
+/**
  * @param instance the posed model; reads `userData.clawRig`.
  * @returns null when the model declares no claw rig or no arm resolves, which
  *   every caller treats as "this creature doesn't pinch".

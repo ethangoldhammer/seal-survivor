@@ -129,6 +129,60 @@ console.log('\nit reports a one-shot, and stops reporting it when it expires');
   CONFIG.animation.oneShots.strike = wasOn;
 }
 
+// ---------------------------------------------------------------------------
+// AN ATTACK BEATS A FLINCH. Read back off the panel, which names whichever
+// one-shot owns the pose — so this asserts the state machine through the thing
+// that reports it rather than through its own internals.
+//
+// The bug it guards: 'hit' outranked both attacks in CONFIG.animation
+// .oneShotPriority, so a creature under continuous fire re-triggered its flinch
+// every few frames and every attack was refused. On a boss that is the whole
+// fight — it reacts to every pellet and never swings. See ATTACK_STATES in
+// systems/animation.js, which enforces this in code because the priority table
+// is a SAVED tuning value and a stale snapshot would otherwise restore it.
+// ---------------------------------------------------------------------------
+console.log('\nan attack interrupts a flinch, and a death interrupts the attack');
+{
+  const { CONFIG } = await import('../path/src/config.js');
+  const wasStrike = CONFIG.animation.oneShots.strike;
+  const wasHit = CONFIG.animation.oneShots.hit;
+  CONFIG.animation.oneShots.strike = true;
+  CONFIG.animation.oneShots.hit = true;
+
+  player.anim.reset();
+  player.anim.trigger('hit');
+  player.anim.update(DT, 'swim', true);
+  await frame();
+  check('the flinch takes the pose first', /hit holding the pose/.test(text()),
+    text().match(/\w+ holding the pose/)?.[0] ?? '(not found)');
+
+  check('the strike is accepted mid-flinch', player.anim.trigger('strike') === true);
+  player.anim.update(DT, 'swim', true); // still being shot, exactly as a boss is
+  await frame();
+  check('...and takes the pose off it', /strike holding the pose/.test(text()),
+    text().match(/\w+ holding the pose/)?.[0] ?? '(not found)');
+
+  // The other half of the rule: a flinch may NOT interrupt the attack it just
+  // lost to, or the two would simply swap every frame the player keeps firing.
+  check('the flinch cannot take it back', player.anim.trigger('hit') === false);
+  player.anim.update(DT, 'swim', true);
+  await frame();
+  check('...so the swing plays out', /strike holding the pose/.test(text()),
+    text().match(/\w+ holding the pose/)?.[0] ?? '(not found)');
+
+  // And nothing at all outranks dying.
+  check('a death still interrupts the attack', player.anim.trigger('death') === true);
+  player.anim.update(DT, 'swim', false);
+  await frame();
+  check('...and owns the body', /death holding the pose/.test(text()),
+    text().match(/\w+ holding the pose/)?.[0] ?? '(not found)');
+  check('an attack cannot interrupt a death', player.anim.trigger('strike') === false);
+
+  player.anim.reset();
+  CONFIG.animation.oneShots.strike = wasStrike;
+  CONFIG.animation.oneShots.hit = wasHit;
+}
+
 console.log('\nit reports the celebration against the trophy frame');
 {
   resetCelebration();

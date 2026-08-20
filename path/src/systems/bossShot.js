@@ -671,6 +671,29 @@ export async function shareBossShot(index) {
   return handOver(card?.blob ?? shot.blob, card?.url ?? shot.url, fileName(shot), title, text);
 }
 
+/**
+ * THE PICTURE ITSELF, for looking at rather than for handing over.
+ *
+ * The score screen's fan opens a print full size before the player commits to
+ * sharing or saving it, and what it has to show is not the paper the fan draws
+ * — it is the FILE. So this returns exactly what shareBossShot and
+ * saveBossShot would hand to the OS: the polaroid where Rive is drawing, the
+ * captioned composite where it is not. A preview of a different picture from
+ * the one that leaves the game would be worse than no preview.
+ *
+ * It costs nothing on the normal path: warmShareCards has already rendered
+ * every card by the time the screen can be touched, and cardImage hands the
+ * cached one straight back.
+ *
+ * @returns a URL, or null when there is no such shot.
+ */
+export async function bossShotImage(index) {
+  const shot = shotAt(index);
+  if (!shot?.url) return null;
+  const card = await cardImage(shot);
+  return card?.url ?? shot.url;
+}
+
 /** Straight to disk, no sheet. Also the fallback for share. */
 export async function saveBossShot(index) {
   const shot = shotAt(index);

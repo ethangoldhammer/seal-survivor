@@ -123,6 +123,7 @@ export const STAT_TEXT = {
   dumboLevel:         { label: 'dumbo octopus', kind: 'level', unlock: 'a charm on nearby enemies' },
   harpLevel:          { label: 'harp seal', kind: 'level', unlock: 'notes that charm the biggest enemy near you' },
   oysterLevel:        { label: 'oyster blaster', kind: 'level', unlock: 'bursting pearls' },
+  razorClamLevel:     { label: 'razor clam', kind: 'level', unlock: 'a spray of piercing chrome blades' },
   octoGrabLevel:      { label: 'octopus grabber', kind: 'level', unlock: 'tentacles that reel fish in' },
   orcaLevel:          { label: 'orca family', kind: 'level', unlock: 'three orcas hunting the boats' },
   // The card that raises this is a STUB — disabled in upgrades.csv, and no
@@ -139,6 +140,7 @@ export const STAT_TEXT = {
   // The Bouncer's three. All percentages, because the card is a multiplier on
   // a class rather than a level of anything — there is no "club power 3" to
   // name, only the numbers it moved.
+  clubCount:          { label: 'club', kind: 'count' },
   clubDamageMul:      { label: 'club damage', kind: 'percent' },
   clubKnockMul:       { label: 'club knockback', kind: 'percent' },
   clubReachMul:       { label: 'club reach', kind: 'percent' },

@@ -32,9 +32,13 @@ import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// crabpincer.glb, because that is the crab the game loads. This used to
+// default to crabwalking.glb — the predecessor it replaced — which is no
+// longer in public/ at all: it shipped 2.87MB to every player for a model
+// nothing referenced. Pass a path to point this at any other file.
 const FILE = process.argv[2]
   ? resolve(process.cwd(), process.argv[2])
-  : resolve(HERE, '../public/models/crabwalking.glb');
+  : resolve(HERE, '../public/models/crabpincer.glb');
 
 const buf = readFileSync(FILE);
 const gltf = await new GLTFLoader().parseAsync(

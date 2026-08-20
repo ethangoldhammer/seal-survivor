@@ -297,8 +297,24 @@ const CRAB_RIG = {
     ['leg37R_068', 'leg36R_069', 'leg35R_070', 'leg34R_071', 'leg33R_072', 'leg32R_073', 'leg31R_074'],
     ['leg27R_075', 'leg26R_076', 'leg25R_077', 'leg24R_078', 'leg23R_079', 'leg22R_080', 'leg21R_081'],
     ['leg17R_082', 'leg16R_083', 'leg15R_084', 'leg14R_085', 'leg13R_086', 'leg12R_087', 'leg11R_088'],
-    ['Shoulder2L_041', 'Hand1L_042', 'Hand2L_043', 'Hand3L_044'],
-    ['Shoulder2R_051', 'Hand1R_052', 'Hand2R_053', 'Hand3R_054'],
+    // THE TWO CHELIPEDS, and they are the only chains here that carry a role.
+    //
+    // Every other chain on this animal is a leg, and a leg has nothing to do
+    // but absorb a shove. These two are the ARM systems/crabClaw.js poses — the
+    // IK chain runs ShoulderL_039 -> Hand3L_044, which is these bones and their
+    // parent — so a hit landing mid-pinch shoves the exact bones the gesture is
+    // trying to aim. Measured on the king crab under 12 hits a second: the claw
+    // tip sat 9.7 world units from where the pinch alone would have put it, on
+    // an arm 7.9 units long. The pinch was playing perfectly and was completely
+    // invisible underneath the flinch.
+    //
+    // Naming the role is what lets the two be told apart: `claw` is stiffer
+    // than the shared baseline (CONFIG.animation.spring.roleLooseness), and
+    // entities/enemies.js mutes it outright for as long as the claw is striking
+    // — see anim.muteSpring, which is how an attack overrides a hit reaction on
+    // a creature with no authored flinch clip to out-prioritise.
+    { bones: ['Shoulder2L_041', 'Hand1L_042', 'Hand2L_043', 'Hand3L_044'], role: 'claw' },
+    { bones: ['Shoulder2R_051', 'Hand1R_052', 'Hand2R_053', 'Hand3R_054'], role: 'claw' },
   ],
 };
 
@@ -582,9 +598,22 @@ export const ASSETS = {
   // Chunkier than the bullet (lower frequency, more squash) so they read as
   // held objects rather than as debris.
   strikeOrb: { shape: 'rock', radius: 0.3, color: 0x4db8ff, unlit: true, rock: { tumble: 1.2, frequency: 1.8, squash: 0.34 } },
-  // NOT a rock, deliberately: this one is a literal air bubble rising to the
-  // surface. Flip `shape` to 'rock' here if you want it stony like the rest.
-  bubbleOrb: { shape: 'sphere', radius: 0.22, color: 0xdff6ff, opacity: 0.65, unlit: true },
+  // A LITERAL AIR BUBBLE — and a big one. It wears the same Fresnel film the
+  // trap bubble does (see makeShellMaterial) off its own config block, because
+  // the two are not the same object: a trap is a small hard capsule read
+  // against the fish inside it, this is a soft balloon read against open
+  // water, and one set of numbers cannot flatter both.
+  //
+  // `opacity: 1` because the shader owns the alpha from here (see
+  // CONFIG.oxygenBubbleShell.coreAlpha); it stays non-null so the material is
+  // still built transparent. Segments are up from the default for the same
+  // reason the trap bubble's are — the rim is a silhouette effect and a coarse
+  // sphere shows its facets exactly where the brightest line is drawn.
+  //
+  // The radius is the BUBBLE'S OWN, and it is load-bearing beyond the look:
+  // pickups.js widens the collect test by it, so a bubble is taken by touching
+  // its skin rather than by reaching its centre. See CONFIG.oxygen.bubble.
+  bubbleOrb: { shape: 'sphere', radius: 0.44, segments: 32, color: 0xbfefff, opacity: 1, unlit: true, shell: 'oxygenBubbleShell' },
   rapidFireOrb: { shape: 'rock', radius: 0.3, color: 0xffe066, unlit: true, rock: { tumble: 1.2, frequency: 1.8, squash: 0.34 } },
   // Boats read as dark silhouettes against the sky rather than lit objects —
   // they sit on the horizon line, far away in fiction if not in world units,
@@ -1339,6 +1368,35 @@ export const ASSETS = {
     shape: 'icosahedron', radius: 0.42, color: 0xff9a6a, unlit: true,
   },
 
+  // RAZOR CLAM. A thin chrome rectangle, and deliberately not a model: the
+  // whole look is the fake environment sweeping across a warped surface (see
+  // makeChromeMaterial), which needs nothing but normals, and a real shell
+  // model would only get in the way of a silhouette that has to stay legible
+  // at ten blades on screen going in ten directions.
+  //
+  // `shape: 'blade'` builds a POOL of slightly different warped rectangles
+  // rather than one — see getBladeGeometry for why that cannot live in the
+  // material. `radius` is not used by the geometry (the blade block below owns
+  // the dimensions); it is here because the outline and glow paths read it.
+  razorBlade: {
+    shape: 'blade', radius: 0.22, color: 0xdfe9f5, unlit: true, chrome: true,
+    blade: {
+      // A shell rather than a scalpel: the razor clam is long. Depth is
+      // genuinely thin, which is what makes the twist below worth having —
+      // the near face and the far face fall on opposite sides of the horizon.
+      width: 0.17, length: 1.1, depth: 0.05,
+      // Enough segments for the bow and the twist to be curves rather than
+      // creases. Ten is already past the point where more of them changes the
+      // silhouette; below about six the twist reads as a fold.
+      segments: 10,
+      variants: 7,
+      taper: 0.34,
+      bow: 0.1,
+      twist: 0.55,
+      grit: 0.1,
+    },
+  },
+
   // Oyster Blaster's payload. Both are unlit glowing spheres rather than
   // models on purpose: a pearl is a highlight, and any baked shading on a
   // thing this bright clips to flat white in the composite anyway.
@@ -1675,9 +1733,11 @@ export const ASSETS = {
   // --- predators (behavior:'hunt' in CONFIG.enemies — eat prey-tagged fish) ---
   //
   // The sea otter used to sit at the top of this block. It is gone: the
-  // creature, its row in enemies.csv, its row in assets.csv and its death
-  // cause. `/models/otter.glb` and `/textures/emissive/otter.jpg` are still on
-  // disk and nothing loads them — delete them when you are sure.
+  // creature, its row in enemies.csv, its row in assets.csv, its death cause,
+  // and now `/models/otter.glb` and `/textures/emissive/otter.jpg` too — they
+  // sat unreferenced in public/ for a fortnight, which is not free: vite copies
+  // public/ wholesale, so an unloaded model is still a model every player
+  // downloads. Both are in git history if the otter ever comes back.
   enemyMegalodon: {
     model: '/models/megalodon.glb',
     fit: 7.0,
@@ -3398,7 +3458,7 @@ export const ASSETS = {
 // model on Cold Snap later is a drag and a row, with no code change at all.
 // Today they all name the same file and differ only in colour.
 for (const [key, headTint] of [
-  ['clubBoom', 0xd94a2b],   // Powder Keg — ember
+  ['clubBoom', 0xd94a2b],   // Boom Boom Club — ember
   ['clubIce', 0x7fd4f5],    // Cold Snap — ice
   ['clubThrow', 0xe0c070],  // Hurler — bound in pale cord
 ]) {
@@ -4518,9 +4578,44 @@ export function createVisual(key) {
 // ---------------------------------------------------------------------------
 
 const visualPool = new Map();
-// Per key, because the pool exists to absorb a school dying at once and not to
-// hold the whole roster resident forever. Past this a body really is disposed.
-const POOL_PER_KEY = 24;
+
+// --- how many bodies a key is allowed to keep -------------------------------
+//
+// The cap exists so the pool absorbs a school dying at once without holding
+// the whole roster resident forever. It used to be a flat 24, and a flat
+// number is wrong in the one case it was written for: tools/crowd-profile.mjs
+// finds enemyClownFish sitting at 28 alive at a level-9 population, so four of
+// every wave landed over the cap, were disposed on death, and had to be cloned
+// fresh next wave — a new Skeleton each, and a new bone DataTexture uploaded on
+// the frame it first drew. The cheapest key in the game paying the most
+// expensive cost, forever.
+//
+// So the cap is the key's own high-water mark of CONCURRENTLY LIVE bodies
+// instead. That number has a property a hand-picked one cannot: holding it
+// costs exactly what the game already spent at its own busiest moment for that
+// key, because those bodies were all in the water together at some point. It
+// can never ask for memory the run has not already demonstrated it needs, and
+// it re-tunes itself when the spawn tables move — which they do, and which is
+// how the flat 24 went stale without anything failing.
+//
+// A body waiting in the pool is cheap: geometry and materials belong to the
+// template, so what is retained is a node hierarchy and (if it is skinned) one
+// Skeleton with its bone texture — 16KB of GPU for a 126-bone crab. Disposing
+// and re-cloning it is the expensive half, which is why the floor is generous.
+const POOL_MIN_PER_KEY = 24;
+// A backstop, not a target. Something spawning hundreds of one key at once is
+// a spawn-table bug, and the pool should not quietly hold the evidence.
+const POOL_MAX_PER_KEY = 96;
+
+// Acquired and not yet handed back — the bodies of this key the game has in
+// play right now — and the largest that has ever been.
+const liveByKey = new Map();
+const peakLiveByKey = new Map();
+
+function poolCap(key) {
+  const peak = peakLiveByKey.get(key) ?? 0;
+  return Math.min(POOL_MAX_PER_KEY, Math.max(POOL_MIN_PER_KEY, peak));
+}
 
 function captureRest(visual) {
   const order = [];
@@ -4578,6 +4673,13 @@ function disposeVisual(visual) {
  * clone. Drop-in for createVisual.
  */
 export function acquireVisual(key) {
+  // Counted here rather than at the call sites, because this is the only place
+  // a pooled body is issued from and the count has to mean "in play" whether
+  // the body came back off the free list or was cloned fresh.
+  const live = (liveByKey.get(key) ?? 0) + 1;
+  liveByKey.set(key, live);
+  if (live > (peakLiveByKey.get(key) ?? 0)) peakLiveByKey.set(key, live);
+
   const free = visualPool.get(key);
   while (free?.length) {
     const used = free.pop();
@@ -4603,13 +4705,19 @@ export function releaseVisual(visual) {
     disposeVisual(visual);
     return false;
   }
+  // Past the guard above, so only bodies this issued are counted down: the
+  // `__rest` snapshot is written by acquireVisual and by nothing else, which is
+  // what makes a foreign visual arriving here harmless to the live count.
+  const live = liveByKey.get(key);
+  if (live) liveByKey.set(key, live - 1);
+
   // Hidden while it waits. A system holding a stale reference to a creature
   // that just died can then still write to it without anything appearing on
   // screen — the reset clears the flag on the way back out.
   visual.visible = false;
   let free = visualPool.get(key);
   if (!free) { free = []; visualPool.set(key, free); }
-  if (free.length >= POOL_PER_KEY) {
+  if (free.length >= poolCap(key)) {
     disposeVisual(visual);
     return false;
   }
@@ -4625,12 +4733,28 @@ export function releaseVisual(visual) {
 export function clearVisualPool() {
   for (const free of visualPool.values()) for (const v of free) disposeVisual(v);
   visualPool.clear();
+  // The high-water marks go too. They describe bodies built from the asset
+  // that was just invalidated, and a cap carried across a look change would
+  // size the new pool from the old roster.
+  liveByKey.clear();
+  peakLiveByKey.clear();
 }
 
 /** Bodies waiting, per key. Diagnostics only. */
 export function visualPoolStats() {
   const out = {};
   for (const [key, free] of visualPool) if (free.length) out[key] = free.length;
+  return out;
+}
+
+/**
+ * What each key is allowed to keep, and the peak concurrent count that set it.
+ * Diagnostics only — this is the number to look at when spawns are still
+ * cloning fresh bodies mid-run.
+ */
+export function visualPoolCaps() {
+  const out = {};
+  for (const [key, peak] of peakLiveByKey) out[key] = { peak, cap: poolCap(key) };
   return out;
 }
 
@@ -6014,8 +6138,163 @@ function getRockGeometry(key, def) {
   return pool.geos[(Math.random() * pool.geos.length) | 0];
 }
 
+// ---------------------------------------------------------------------------
+// BLADE variant pool — the razor clam's shell.
+//
+// Second shape after `rock` where one asset key maps to SEVERAL geometries,
+// and for the same reason: the card promises a handful of shells thrown at
+// once, and a handful of identical rectangles reads as a UI element rather
+// than as a fistful of shrapnel. `geometryCache` is strictly one geometry per
+// key, so like the rocks this sidesteps it.
+//
+// It cannot be done in the material instead. Every primitive asset shares ONE
+// cached material per key (see getMaterial), so a per-blade warp driven from a
+// uniform would warp every blade in the water identically — the same trap as
+// fading one bubble and fading them all. The variation has to be in the
+// vertices, and once it is in the vertices it may as well be baked at boot.
+//
+// Four warps, all of them small, applied in this order down the body:
+//
+//   taper   the shell is narrower at the hinge than at the lip, and each
+//           variant disagrees slightly about how much
+//   bow     a gentle single-arc bend, so the edge is not a ruled line
+//   twist   the cross-section rotates about the long axis along its length.
+//           THIS IS THE ONE THAT MATTERS for the chrome: the fake environment
+//           is read off the normal (see makeChromeMaterial), so a body whose
+//           normal is constant along its length shades as one flat slab. A few
+//           degrees of twist is what puts a highlight that TRAVELS down the
+//           blade instead of a highlight that sits on it.
+//   grit    per-vertex noise, a fraction of the width. Kills the machined
+//           look without ever being individually visible.
+//
+// Normals are recomputed at the end. Skipping that is the quiet failure here —
+// the geometry warps, the shading does not follow it, and the blades go back to
+// looking stamped from one die while the silhouette says otherwise.
+// ---------------------------------------------------------------------------
+
+const bladePools = new Map(); // key -> { sig, geos }
+
+function bladeOptions(def) {
+  const b = def.blade ?? {};
+  return {
+    width: b.width ?? 0.16,
+    length: b.length ?? 1.05,
+    depth: b.depth ?? 0.05,
+    segments: Math.max(1, Math.round(b.segments ?? 10)),
+    variants: Math.max(1, Math.round(b.variants ?? 7)),
+    taper: b.taper ?? 0.34,
+    bow: b.bow ?? 0.1,
+    twist: b.twist ?? 0.55,
+    grit: b.grit ?? 0.1,
+  };
+}
+
+function bladeSignature(o) {
+  return [o.width, o.length, o.depth, o.segments, o.variants,
+    o.taper, o.bow, o.twist, o.grit].join('|');
+}
+
+// Mulberry32. Seeded so a variant is stable across a rebuild — dragging a
+// blade slider must not reshuffle which shells already exist, only reshape
+// them, and an unseeded Math.random() here would do both.
+function seededRandom(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function createBladeGeometry(o, seed) {
+  const rand = seededRandom(seed);
+  // Long along +Y, because art forward is +Y everywhere in this file and the
+  // shot is spawned with `orient: true` — a blade built along X would fly
+  // broadside-on down its own path.
+  const geo = new THREE.BoxGeometry(o.width, o.length, o.depth, 1, o.segments, 1);
+  const pos = geo.attributes.position;
+  const half = o.length * 0.5;
+
+  // Each variant disagrees about its own warp as well as its own noise, so the
+  // pool is a set of DIFFERENT shells rather than one shell at seven roughnesses.
+  const taper = o.taper * (0.6 + rand() * 0.8);
+  const bow = o.bow * (rand() * 2 - 1);
+  // A MAGNITUDE AND A SIGN, not a range through zero, and this is the one warp
+  // where that distinction matters. `o.twist * (rand() * 2 - 1)` is the obvious
+  // spelling and it is wrong: it draws a value NEAR ZERO about as often as an
+  // extreme one, and a blade with no twist is a blade whose normal is constant
+  // down its whole length — which is exactly the flat slab the chrome shader
+  // has nothing to say about. Measured at seven variants, one of them came out
+  // at 1.4 degrees of sweep against the other six at 17 to 19, and on screen
+  // that one is the shell that looks painted while the rest look polished.
+  // Half the configured twist is the floor; the direction is a coin flip.
+  const twist = o.twist * (0.5 + rand() * 0.5) * (rand() < 0.5 ? -1 : 1);
+  // Which way up the hinge is. Without it every shell in a fan tapers the same
+  // way and the volley reads as combed.
+  const flip = rand() < 0.5 ? -1 : 1;
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    // 0 at the hinge, 1 at the lip.
+    const t = (y * flip + half) / o.length;
+
+    // taper — narrower at the hinge, in both cross-section axes so the shell
+    // keeps its proportions instead of turning into a wedge of foil.
+    const s = 1 - taper * (1 - t);
+    let nx = x * s;
+    let nz = z * s;
+
+    // twist about the long axis, growing along it.
+    const a = twist * (t - 0.5);
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const tx = nx * ca - nz * sa;
+    const tz = nx * sa + nz * ca;
+    nx = tx;
+    nz = tz;
+
+    // bow — one gentle arc, zero at both ends, so the body bends rather than
+    // leaning. Scaled by the length, so a longer shell bows further and the
+    // curvature stays the same shape.
+    nx += bow * o.length * Math.sin(t * Math.PI);
+
+    pos.setXYZ(
+      i,
+      nx + (rand() * 2 - 1) * o.grit * o.width,
+      y + (rand() * 2 - 1) * o.grit * o.width,
+      nz + (rand() * 2 - 1) * o.grit * o.depth,
+    );
+  }
+
+  pos.needsUpdate = true;
+  // The whole point of the twist — see the note above.
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function getBladeGeometry(key, def) {
+  const o = bladeOptions(def);
+  const sig = bladeSignature(o);
+  let pool = bladePools.get(key);
+
+  if (!pool || pool.sig !== sig) {
+    if (pool) for (const g of pool.geos) g.dispose();
+    const base = hashKey(key);
+    const geos = [];
+    for (let i = 0; i < o.variants; i++) geos.push(createBladeGeometry(o, base + i * 2654435761));
+    pool = { sig, geos };
+    bladePools.set(key, pool);
+  }
+
+  return pool.geos[(Math.random() * pool.geos.length) | 0];
+}
+
 function getGeometry(key, def) {
   if (def.shape === 'rock') return getRockGeometry(key, def);
+  if (def.shape === 'blade') return getBladeGeometry(key, def);
   if (geometryCache.has(key)) return geometryCache.get(key);
   let geo;
   switch (def.shape) {
@@ -6080,7 +6359,18 @@ function getMaterial(key, def) {
   const mat = def.unlit === false ? new THREE.MeshStandardMaterial(opts) : new THREE.MeshBasicMaterial(opts);
   mat.userData.__originalMap = null;
   mat.userData.__originalColor = def.color ?? 0xffffff;
-  if (def.shell) makeShellMaterial(mat);
+  // `shell: true` takes the trap bubble's numbers; `shell: '<configKey>'` takes
+  // its own block off CONFIG. Two assets wear this film now and they are not
+  // the same object — a trap is a small hard capsule with a fish visible
+  // inside it, an oxygen bubble is a big soft one with nothing in it — so the
+  // fresnel that sells each of them is tuned separately. See makeShellMaterial.
+  if (def.shell) makeShellMaterial(mat, typeof def.shell === 'string' ? def.shell : 'bubbleShell');
+  // `chrome: true` takes CONFIG.chromeBlade; `chrome: '<configKey>'` takes its
+  // own block, on the same rule `shell` follows. Only one asset wears it today
+  // (the razor clam's shell) and the key is still read rather than assumed,
+  // because the second polished thing in the game will not want the first
+  // one's horizon. See makeChromeMaterial.
+  if (def.chrome) makeChromeMaterial(mat, typeof def.chrome === 'string' ? def.chrome : 'chromeBlade');
   materialCache.set(key, mat);
   return mat;
 }
@@ -6104,10 +6394,15 @@ function getMaterial(key, def) {
 // optics.
 // ---------------------------------------------------------------------------
 
-// Every live shell material, so a tuner edit reaches the ones already on
-// screen. A Set rather than a walk of ASSETS: getMaterial caches one material
-// per key, and this holds exactly those.
-const shellMaterials = new Set();
+// Every live shell material and WHICH CONFIG BLOCK IT READS, so a tuner edit
+// reaches the ones already on screen. A Map rather than a walk of ASSETS:
+// getMaterial caches one material per key, and this holds exactly those.
+//
+// The value is the config key, because the film is worn by two assets that
+// want opposite settings from it. Sharing one block meant every number was a
+// compromise between a 0.35-unit capsule seen against a fish and a 1.4-unit
+// balloon seen against open water.
+const shellMaterials = new Map();
 
 // The one place the injected GLSL lives. Kept as a plain string rather than
 // spread across .replace() calls so the whole shader can be read at once — and
@@ -6133,7 +6428,7 @@ const SHELL_FRAGMENT = `
   );
 `;
 
-function makeShellMaterial(mat) {
+function makeShellMaterial(mat, cfgKey = 'bubbleShell') {
   mat.transparent = true;
   // A bubble you can see the far side of, and see a fish THROUGH. Depth
   // writing is what would stop both: the near wall would z-reject the far one
@@ -6176,7 +6471,7 @@ function makeShellMaterial(mat) {
       .replace('vec4 diffuseColor = vec4( diffuse, opacity );', SHELL_FRAGMENT);
   };
 
-  shellMaterials.add(mat);
+  shellMaterials.set(mat, cfgKey);
   applyBubbleShellSettings();
   return mat;
 }
@@ -6185,8 +6480,12 @@ function makeShellMaterial(mat) {
 // already-compiled shader, so this is safe to call from a slider's every input
 // event — see handleTunerChange in main.js.
 export function applyBubbleShellSettings() {
-  const cfg = CONFIG.bubbleShell ?? {};
-  for (const mat of shellMaterials) {
+  for (const [mat, cfgKey] of shellMaterials) {
+    // Falls back to the trap bubble's block rather than to the bare defaults,
+    // so an asset naming a config key that has not been written yet wears a
+    // film that at least looks like a bubble instead of the hardcoded numbers
+    // nobody has looked at since this shader was written.
+    const cfg = CONFIG[cfgKey] ?? CONFIG.bubbleShell ?? {};
     const u = mat.userData.__shell;
     if (!u) continue;
     u.uShellPower.value = Math.max(0.1, cfg.power ?? 2.6);
@@ -6194,5 +6493,153 @@ export function applyBubbleShellSettings() {
     u.uShellRim.value = cfg.rimAlpha ?? 0.95;
     u.uShellBoost.value = cfg.rimBoost ?? 2.2;
     u.uShellSheen.value = cfg.sheen ?? 0.35;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FAKE CHROME. `chrome: true` on an asset turns its flat coloured body into
+// polished metal.
+//
+// Real metal is nothing but reflection — it has no diffuse colour of its own,
+// which is exactly why `metalness: 1` on a MeshStandardMaterial renders BLACK
+// in this game: there is no environment map anywhere in the scene for it to
+// reflect, and there is not going to be one. A cube-mapped PMREM probe to make
+// six shells on screen look shiny is not a trade worth making on a phone.
+//
+// So the environment is faked, and faked in VIEW SPACE, which is the whole
+// trick. Chrome is legible as chrome because of ONE feature: a hard horizon
+// between a dark ground and a bright sky, sitting still in the world while the
+// object turns through it. Read the ramp off a view-space normal and you get
+// that for free — the band sweeps across the body as it rolls and stays put as
+// the body travels, which is a matcap in four lines and no texture.
+//
+// Three things stack on the ramp, in ascending order of how much each one is
+// doing:
+//
+//   the horizon line   a narrow bright band where sky meets water. Without it
+//                      the ramp is a soft gradient, which reads as plastic.
+//   the key            one hot specular lobe, so a blade FLASHES once as it
+//                      rolls through it rather than glinting continuously.
+//   the rim            grazing angles on polished metal go BRIGHT. This is the
+//                      opposite of the bubble's fresnel, which is a film seen
+//                      edge-on, and the two must not be confused.
+//
+// All three are multiplied past 1.0 on purpose, the same as the shell above:
+// the scene renders to an HDR target, so they are what bloom's bright-pass
+// picks up while the body stays under threshold. Bloom thresholds LUMINANCE,
+// where blue counts for about 7%, so a highlight tinted cold enough to read as
+// steel will not bloom at all — which is why `light` and `spec` here are near
+// white and the COLD is spent on `dark` instead.
+//
+// Not lit, not shaded, not physical. This is a look.
+// ---------------------------------------------------------------------------
+
+// Every live chrome material and which CONFIG block it reads, exactly as
+// shellMaterials above — so a tuner edit reaches the blades already in flight.
+const chromeMaterials = new Map();
+
+// One string, no backtick anywhere in it including the comments: a backtick
+// inside a template literal ends the string and reports itself as a syntax
+// error somewhere else entirely.
+const CHROME_FRAGMENT = `
+  vec3 chromeN = normalize(vChromeN);
+  vec3 chromeV = normalize(vChromeV);
+
+  // THE ENVIRONMENT. A vertical ramp read off the view-space normal: dark
+  // water below, bright sky above, a horizon between them. The body turns,
+  // the horizon does not, and that is the read.
+  float chromeUp = chromeN.y * 0.5 + 0.5;
+  float chromeBand = smoothstep(uChromeHorizon - uChromeBlend, uChromeHorizon + uChromeBlend, chromeUp);
+  vec3 chromeEnv = mix(uChromeDark, uChromeLight, chromeBand);
+
+  // The horizon LINE, much narrower than the blend above. This is what makes
+  // the surface read as polished rather than as merely light-on-top.
+  float chromeEdge = 1.0 - smoothstep(0.0, max(uChromeLineWidth, 0.001), abs(chromeUp - uChromeHorizon));
+  chromeEnv += chromeEdge * uChromeLine;
+
+  // The key light, pinned to the camera rather than to the world, so every
+  // blade in a fan catches it at the same point in its own roll.
+  float chromeKey = pow(max(dot(chromeN, normalize(uChromeKeyDir)), 0.0), max(uChromeGloss, 1.0));
+  chromeEnv += chromeKey * uChromeSpec;
+
+  // Grazing angles. Bright, because this is metal and not film.
+  float chromeFace = 1.0 - abs(dot(chromeN, chromeV));
+  chromeEnv += pow(clamp(chromeFace, 0.0, 1.0), max(uChromePower, 0.01)) * uChromeRim;
+
+  vec4 diffuseColor = vec4(diffuse * chromeEnv, opacity);
+`;
+
+function makeChromeMaterial(mat, cfgKey = 'chromeBlade') {
+  // Opaque, unlike the shell: a blade is solid, and the far wall of the box
+  // has no business showing through the near one.
+  mat.side = THREE.FrontSide;
+
+  // Owned here rather than read off `shader.uniforms` afterwards, for the same
+  // reason the shell owns its block: onBeforeCompile does not run until the
+  // material is first RENDERED, so every boot value — and any tuner edit made
+  // while no blade happens to be in the water — would be dropped on the floor.
+  mat.userData.__chrome = {
+    uChromeDark: { value: new THREE.Color(0x0b1a2c) },
+    uChromeLight: { value: new THREE.Color(0xf2f8ff) },
+    uChromeHorizon: { value: 0.5 },
+    uChromeBlend: { value: 0.09 },
+    uChromeLineWidth: { value: 0.05 },
+    uChromeLine: { value: 1.1 },
+    uChromeKeyDir: { value: new THREE.Vector3(0.35, 0.7, 0.62) },
+    uChromeGloss: { value: 26 },
+    uChromeSpec: { value: 2.2 },
+    uChromePower: { value: 2.4 },
+    uChromeRim: { value: 0.9 },
+  };
+
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, mat.userData.__chrome);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vChromeN;\nvarying vec3 vChromeV;')
+      // AFTER project_vertex, where `mvPosition` is defined — it is a local of
+      // that chunk's scope and not a varying, so this cannot be hoisted any
+      // earlier. `normalMatrix` and `normal` are default uniforms/attributes
+      // and exist on every material, lit or not.
+      .replace('#include <project_vertex>',
+        '#include <project_vertex>\n\tvChromeN = normalize(normalMatrix * normal);\n\tvChromeV = normalize(-mvPosition.xyz);');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>',
+        '#include <common>\nuniform vec3 uChromeDark;\nuniform vec3 uChromeLight;\nuniform float uChromeHorizon;'
+        + '\nuniform float uChromeBlend;\nuniform float uChromeLineWidth;\nuniform float uChromeLine;'
+        + '\nuniform vec3 uChromeKeyDir;\nuniform float uChromeGloss;\nuniform float uChromeSpec;'
+        + '\nuniform float uChromePower;\nuniform float uChromeRim;\nvarying vec3 vChromeN;\nvarying vec3 vChromeV;')
+      // Replaces the line that DECLARES diffuseColor, so the map, the tint and
+      // the alpha test downstream all still run on top of it — injecting after
+      // <map_fragment> instead would throw away anything the Look panel put on
+      // the blade.
+      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', CHROME_FRAGMENT);
+  };
+
+  chromeMaterials.set(mat, cfgKey);
+  applyChromeSettings();
+  return mat;
+}
+
+// Push CONFIG.chromeBlade onto every chrome material. Pure uniform writes on an
+// already-compiled shader, so this is safe to call from a slider's every input
+// event — see handleTunerChange in main.js.
+export function applyChromeSettings() {
+  for (const [mat, cfgKey] of chromeMaterials) {
+    const cfg = CONFIG[cfgKey] ?? CONFIG.chromeBlade ?? {};
+    const u = mat.userData.__chrome;
+    if (!u) continue;
+    u.uChromeDark.value.set(cfg.dark ?? 0x0b1a2c);
+    u.uChromeLight.value.set(cfg.light ?? 0xf2f8ff);
+    u.uChromeHorizon.value = cfg.horizon ?? 0.5;
+    u.uChromeBlend.value = Math.max(0.001, cfg.blend ?? 0.09);
+    u.uChromeLineWidth.value = Math.max(0.001, cfg.lineWidth ?? 0.05);
+    u.uChromeLine.value = cfg.line ?? 1.1;
+    // Normalised in the shader, so a key direction dragged to all zeros is a
+    // dead specular rather than a NaN across the whole body.
+    u.uChromeKeyDir.value.set(cfg.keyX ?? 0.35, cfg.keyY ?? 0.7, cfg.keyZ ?? 0.62);
+    u.uChromeGloss.value = Math.max(1, cfg.gloss ?? 26);
+    u.uChromeSpec.value = cfg.spec ?? 2.2;
+    u.uChromePower.value = Math.max(0.01, cfg.rimPower ?? 2.4);
+    u.uChromeRim.value = cfg.rim ?? 0.9;
   }
 }

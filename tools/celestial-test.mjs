@@ -41,7 +41,7 @@ import { CONFIG } from '../path/src/config.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
 import { updateDayCycle, dayState, horizonY, bodySize } from '../path/src/systems/daylight.js';
 import { createCelestials, celestialFrame, clearCelestialFlares } from '../path/src/systems/celestial.js';
-import { updateCelestialPass, resetCelestialPass, passState } from '../path/src/systems/celestialPass.js';
+import { updateCelestialPass, resetCelestialPass, passState, CELESTIAL_PASS_DISABLED } from '../path/src/systems/celestialPass.js';
 
 let failures = 0;
 
@@ -228,6 +228,21 @@ section('THE TRIGGER ZONE — going through it');
   const inside = { x: sun.x, y: sun.y, speed: 30 };
   const outside = { x: sun.x + sun.radius * 4, y: sun.y, speed: 30 };
 
+  // THE MECHANIC IS STUBBED OFF (CELESTIAL_PASS_DISABLED in
+  // systems/celestialPass.js). The geometry above still holds — the zone is
+  // published by the rig, not by the pass system — but every rule below is a
+  // rule about an event that can no longer happen, so asserting them would be
+  // asserting 0 === 1 sixteen times. They are SKIPPED out loud rather than
+  // deleted: flip the flag back and the whole state machine is covered again,
+  // which is the difference between a stub and a hole.
+  if (CELESTIAL_PASS_DISABLED) {
+    for (let i = 0; i < 30; i++) updateCelestialPass(1 / 60, inside, hooks);
+    check('stubbed off — flying through the sun fires nothing at all',
+      hits.length === 0 && passState.sun.passes === 0,
+      `${hits.length} hit(s), ${passState.sun.passes} pass(es) recorded`);
+    console.log('  SKIP  entry / hysteresis / cooldown / speed scale / the enabled switch');
+    console.log('        — the pass mechanic is stubbed off; unset CELESTIAL_PASS_DISABLED to restore.');
+  } else {
   updateCelestialPass(1 / 60, inside, hooks);
   check('flying into it fires once', hits.length === 1, `${hits.length} hit(s)`);
 
@@ -286,12 +301,29 @@ section('THE TRIGGER ZONE — going through it');
   check('disabled means disabled', hits.length === off, `${hits.length - off} hit(s)`);
   pass.enabled = true;
   resetCelestialPass();
+  }
 }
 
 // ===========================================================================
 section('THE FLARE — the body shines and flickers');
 // ===========================================================================
-{
+if (CELESTIAL_PASS_DISABLED) {
+  // Nothing raises a flare while the mechanic is stubbed off — the envelope is
+  // only ever driven from updateCelestialPass. Assert the sky is COLD, which is
+  // the one thing about the flare that is still checkable and the one that
+  // would actually be wrong if the stub leaked: a sun left permanently hot.
+  clearCelestialFlares();
+  frame(12, 0, 0, 1, 1 / 60);
+  const halo = rig.group.children[0].children[0];
+  const cold = halo.material.uniforms.uStrength.value;
+  resetCelestialPass();
+  updateCelestialPass(1 / 60, { x: celestialFrame.sun.x, y: celestialFrame.sun.y, speed: 40 }, {});
+  for (let i = 0; i < 5; i++) frame(12, 0, 0, 1, 1 / 60);
+  check('stubbed off — a pass through the sun raises no flare',
+    near(halo.material.uniforms.uStrength.value, cold, 1e-4),
+    `${halo.material.uniforms.uStrength.value.toFixed(4)} vs cold ${cold.toFixed(4)}`);
+  console.log('  SKIP  brightness / flicker / burnout — no flare can be raised while stubbed off.');
+} else {
   clearCelestialFlares();
   frame(12, 0, 0, 1, 1 / 60);
   const halo = rig.group.children[0].children[0];
@@ -334,6 +366,11 @@ section('WIRING — the payout reaches the game');
   // The config side of every synergy main.js reads. Each of these is a live
   // number somewhere in onCelestialPass, and a missing one is a payout that
   // silently becomes zero rather than an error.
+  //
+  // STILL ASSERTED WHILE THE MECHANIC IS STUBBED OFF, on purpose: onCelestialPass
+  // and its tuned numbers are exactly what the stub is preserving, and this
+  // section is the only thing stopping them being quietly pruned or drifting to
+  // zero in the months before it comes back.
   const p = CONFIG.dayNight.pass;
   check('the sun blasts', p.sun.blast.damage > 0 && p.sun.blast.radius > 0,
     `${p.sun.blast.damage} over ${p.sun.blast.radius} units`);

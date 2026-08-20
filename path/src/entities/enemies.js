@@ -29,7 +29,7 @@ import { attachHitShape, releaseHitShape } from '../systems/hitShape.js';
 // a real animal to the denominator, and every clear rate in the report comes
 // out wrong with nothing to say why.
 import { createJawDriver } from '../systems/jaw.js';
-import { createClawDriver, pinchReach } from '../systems/crabClaw.js';
+import { createClawDriver, pinchReach, clawSetting } from '../systems/crabClaw.js';
 import { rollBiolumSkinVariant } from '../systems/biolumSkin.js';
 import { tickDaze, dazeSpeedMul, dazeVeer } from '../systems/control.js';
 import { player } from './player.js';
@@ -2191,7 +2191,7 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // crowd does not snap in unison — seeded short and random so the first
     // crab to reach you does not have to serve a full cooldown before it may
     // do anything at all.
-    pinchTimer: Math.random() * (CONFIG.crabClaw?.cooldown ?? 2.6),
+    pinchTimer: Math.random() * (clawSetting(def, 'cooldown') ?? 2.6),
     // Set for exactly one frame, on the frame the claws meet. systems/
     // combat.js reads it and bills the damage; nothing else may write it.
     justPinched: false,
@@ -3354,7 +3354,10 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // ease back OUT after a strike, and a driver that only ran while striking
     // would drop the arm on the frame the pinch ended.
     if (e.claw) {
-      const pc = CONFIG.crabClaw;
+      // Through clawSetting, so the king crab's own block (CONFIG.enemies
+      // .bossCrab.claw) reaches this without the swarm's numbers moving — and
+      // so that this gate and the damage check in systems/combat.js are still
+      // reading one set of numbers between them.
       if (e.pinchTimer > 0) e.pinchTimer -= dt;
 
       // A crab does not pinch at a corpse. The death pile-on is the last thing
@@ -3362,7 +3365,7 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       // reads as them eating it — which is what the pile already says, more
       // quietly. Also skipped while trapped or charmed, for the same reason
       // combat.js skips those: a bubbled crab is frozen, harmless.
-      const canPinch = !!pc?.enabled
+      const canPinch = !!clawSetting(e.def, 'enabled')
         && !deathState.active
         && e.trapTimer <= 0
         && e.charmTimer <= 0;
@@ -3385,8 +3388,9 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       // copies it through unmodified and no upgrade writes it — if one ever
       // does, this is the line that has to be handed player.stats instead.
       if (canPinch && e.pinchTimer <= 0 && !e.claw.isStriking()
-        && ctx.dist < pinchReach(e.claw.reach(), CONFIG.player.hitRadius, pc.commitRange ?? 0.55)) {
-        if (e.claw.strike()) e.pinchTimer = pc.cooldown ?? 2.6;
+        && ctx.dist < pinchReach(e.claw.reach(), CONFIG.player.hitRadius,
+          clawSetting(e.def, 'commitRange') ?? 0.55)) {
+        if (e.claw.strike()) e.pinchTimer = clawSetting(e.def, 'cooldown') ?? 2.6;
       }
 
       // Aim at the player in the PLAY PLANE, not at their exact position: the
@@ -3396,6 +3400,23 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       _clawAim.set(playerPos.x, playerPos.y, 0);
       e.claw.update(dt, canPinch ? _clawAim : null);
       e.justPinched = e.claw.didConnect();
+
+      // THE SWING OWNS THE ARM WHILE IT IS SWINGING, and the flinch gets it
+      // back afterwards.
+      //
+      // Both cheliped chains carry a spring (CRAB_RIG's `claw` role) so that a
+      // crab which gets shot shudders through its arms. Those are the same
+      // bones the solver above just aimed, and under sustained fire the shove
+      // is far larger than the gesture: measured on the king crab at 12 hits a
+      // second, the claw tip sat 9.7 world units off the pinch's line on an arm
+      // 7.9 units long. The pinch was running perfectly and read as flailing.
+      //
+      // This is the crab's version of an attack clip out-ranking a flinch clip
+      // (see ATTACK_STATES in systems/animation.js) — the crab has no clips to
+      // resolve it with, so the spring is muted instead. Set from the driver's
+      // own answer rather than from a timer, so it covers exactly the windup,
+      // the strike and the recover and not a frame more.
+      e.anim?.muteSpring('claw', e.claw.isStriking());
     }
 
     // Chewing. Applied here rather than inside the behavior so the actual

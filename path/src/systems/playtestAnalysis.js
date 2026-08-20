@@ -69,7 +69,7 @@ export const SOURCE_UPGRADES = {
   shrimp: { upgrades: ['shrimpRing'], label: 'Shrimp Ring' },
   club: { upgrades: ['club'], label: 'Driftwood Club' },
   clubThrow: { upgrades: ['clubThrow'], label: 'Hurler' },
-  clubBoom: { upgrades: ['clubBoom'], label: 'Powder Keg' },
+  clubBoom: { upgrades: ['clubBoom'], label: 'Boom Boom Club' },
   // These two were dealing real damage under a tag no upgrade claimed, which
   // meant zero stack-minutes, which meant a return of 0.00x that no amount of
   // over- or under-tuning could ever move. Same failure the SOURCE_ALIAS note
@@ -102,6 +102,11 @@ export const SOURCE_UPGRADES = {
   laserEyes: { upgrades: ['laserEyes'], label: 'Laser Eyes' },
   scallop: { upgrades: ['scallopSquirter'], label: 'Scallop Squirter' },
   oyster: { upgrades: ['oysterBlaster'], label: 'Oyster Blaster' },
+  // Without this row the blades deal their damage under a tag no upgrade
+  // claims: zero investment, so zero return, so the ledger can never call the
+  // razor clam over- or under-tuned however it performs — which is exactly the
+  // silent zero the four rows above were each found as.
+  razorClam: { upgrades: ['razorClam'], label: 'Razor Clams' },
   orca: { upgrades: ['orcaFamily'], label: 'Orca Family' },
 };
 
@@ -147,6 +152,32 @@ const ENVIRONMENT_LABELS = {
  * is a legible-enough last resort ('gun', 'strike') and is also the tell that
  * a source has been added without a row here.
  */
+// ===========================================================================
+// FAMILIES — sources that are one weapon wearing four tags.
+//
+// The club line books its damage under four keys, because the balance report
+// has to be able to answer "did Boom Boom Club earn its pick" separately from "did
+// Driftwood Club". That is right for the ledger and wrong for a CAPTION: a run
+// built entirely on clubs would split its output four ways and lose the stamp
+// on the polaroid to whatever single ability happened to out-damage each
+// quarter — a boss beaten to death with wood, captioned "Fin Pebbles".
+//
+// So a credit is decided by FAMILY first and by member second. Only the club
+// line is in here, because it is the only thing in the game that is one weapon
+// under several tags; everything else is its own weapon and its own row.
+export const SOURCE_FAMILY = {
+  club: 'club',
+  clubThrow: 'club',
+  clubBoom: 'club',
+  clubIce: 'club',
+};
+
+/** Which family a damage source belongs to, or the source itself. */
+export function sourceFamily(source) {
+  const s = resolveSource(source);
+  return SOURCE_FAMILY[s] ?? s;
+}
+
 export function sourceLabel(source) {
   const s = resolveSource(source);
   return SOURCE_UPGRADES[s]?.label ?? ENVIRONMENT_LABELS[s] ?? s;

@@ -31,6 +31,28 @@ import { celestialFrame, flareCelestial, clearCelestialFlares } from './celestia
 // for a hit-stop should not extend how long the sun stays dark.
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// DISABLED — STUBBED FOR LATER.
+//
+// The whole pass mechanic is off: no trigger, no flare, and none of the
+// payouts main.js hangs off `onPass` (the sun's blast and strike meter, the
+// moon's element surge and chum tide, the FOOD CHAIN links from either).
+// Nothing was deleted — flip this one flag back to `false` and it returns
+// exactly as it was, with every tuned number in CONFIG.dayNight.pass intact.
+//
+// WHY THE GATE IS HERE rather than on CONFIG.dayNight.pass.enabled: that flag
+// is persisted in imported-tuning.json (it reads `true` in the live snapshot),
+// and a saved value beats a config default — editing the default would have
+// been a silent no-op, and editing the snapshot loses the race with the
+// running game rewriting it. A constant in the source is the only off switch
+// the tuner cannot argue with.
+//
+// If the mechanic comes back in a different shape and only the PAYOUTS are
+// meant to stay off, move the gate to `hooks.onPass` at the bottom of
+// updateCelestialPass instead — that keeps the flare and the arming alive.
+// ---------------------------------------------------------------------------
+export const CELESTIAL_PASS_DISABLED = true;
+
 export const passState = {
   sun: { inside: false, cooldown: 0, passes: 0 },
   moon: { inside: false, cooldown: 0, passes: 0 },
@@ -56,6 +78,9 @@ export function resetCelestialPass() {
  * @param hooks { onPass(which, { x, y, scale, zone }) } — fired once, on entry.
  */
 export function updateCelestialPass(dt, at, hooks = {}) {
+  // Stubbed off — see CELESTIAL_PASS_DISABLED above. Returned before the
+  // state machine so nothing stays armed and no flare is ever raised.
+  if (CELESTIAL_PASS_DISABLED) return;
   const cfg = CONFIG.dayNight?.pass;
   const live = !!cfg?.enabled && !!CONFIG.dayNight?.enabled;
 

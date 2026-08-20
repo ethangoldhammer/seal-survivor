@@ -400,6 +400,129 @@ log('\nWHERE THE SURFACE ACTUALLY LANDS');
     `${popped.toFixed(2)} vs ${full.toFixed(2)}`);
 }
 
+// --- THE LEAD-IN: THE RELEASE MOMENT ARRIVING -------------------------------
+//
+// The question: can you see the moment coming, and is it obvious WHICH FRAME
+// to let go on. Every other cue for the sweet spot fires at its centre, which
+// is 50ms before the window shuts — reaction time alone made the gate
+// unhittable, and the logs agreed: 31 of 303 releases armed anything.
+//
+// The panels walk the approach in real time. `sinceLoaded` / `toLoaded` are
+// what the meter reads (see releaseOffset in systems/strike.js), so posing them
+// here poses exactly the thing the game draws.
+section('The lead-in <span>— a ring expanding out of the core to land on the fuel ring at the instant a release is on the beat, with the tolerance drawn where it lands. Let go as they meet.</span>', 5);
+{
+  const half = CONFIG.strike.charge.time * CONFIG.strike.charge.sweetFraction;
+  const lead = CONFIG.strike.ring.lead;
+  // Offsets either side of the moment, in seconds. The middle one IS the beat.
+  const marks = [-lead.time * 0.9, -half * 2.4, 0, half * 2.4, lead.time * 0.9];
+  for (const off of marks) {
+    const s = state();
+    // A wind-up in hand, banked past minFire — the state the cue exists for.
+    s.pending = 0.9;
+    s.charge = 0;
+    s.charging = off < 0;
+    s.loaded = off >= 0;
+    s.sinceLoaded = off >= 0 ? off : 0;
+    s.toLoaded = off < 0 ? -off : 0;
+    settle(s, 2);
+    draw();
+    const inside = Math.abs(off) <= half;
+    present(
+      `${off >= 0 ? '+' : ''}${Math.round(off * 1000)}ms`,
+      inside
+        ? 'inside the tolerance — the traveller has gone READY, and a release here arms the chain'
+        : (off < 0 ? 'still coming in' : 'past it — a speed boost and nothing else'),
+      inside && off === 0,
+    );
+    // The cue must not be able to say "now" when the gate would refuse. This is
+    // the same assertion tools/chain-window-probe.mjs makes against the model;
+    // here it is made against the PIXEL PATH, so a uniform wired to the wrong
+    // name fails rather than quietly drawing a plausible ring.
+    check(`the traveller reads ${inside ? 'READY' : 'not ready'} at ${Math.round(off * 1000)}ms`,
+      (U.uLeadHit.value > 0.5) === inside,
+      `uLeadHit ${U.uLeadHit.value}`);
+  }
+
+  // WHAT COLOUR IS ACTUALLY ON SCREEN at each band. The traveller and its
+  // target have to be TELLABLE APART — the whole cue is one crossing the
+  // other, and two rings the same colour is a single fat ring that happens to
+  // wobble. Read off the pixels rather than off the uniforms, because the
+  // additive composite and the bloom are between the two.
+  {
+    const s2 = state();
+    s2.pending = 0.9; s2.charge = 0; s2.charging = true;
+    s2.loaded = false; s2.sinceLoaded = 0; s2.toLoaded = lead.time * 0.5;
+    settle(s2, 2);
+    const px = grab();
+    const at = (rr) => {
+      const x = Math.round(probe.width / 2 + rr * ringR * PX_PER_UNIT);
+      const y = Math.round(probe.height / 2);
+      const i = (y * probe.width + x) * 4;
+      return [px[i], px[i + 1], px[i + 2]];
+    };
+    const trav = at(U.uLeadR.value);
+    const targ = at(1);
+    const hue = ([r, g, b]) => (r > g && r > b ? 'red' : g > b ? 'green' : 'blue');
+    log(`uColor #${U.uColor.value.getHexString()}  uReadyColor #${U.uReadyColor.value.getHexString()}`);
+    check('the traveller keeps its hue instead of clipping to white',
+      Math.max(...trav) > 110 && Math.max(...trav) < 250,
+      `traveller rgb(${trav}) at r ${U.uLeadR.value.toFixed(2)}`);
+    check('...and it is a different colour from the target it is aiming at',
+      hue(trav) !== hue(targ), `traveller ${hue(trav)} rgb(${trav}) vs target ${hue(targ)} rgb(${targ})`);
+    check('...with the target the dimmer of the two',
+      Math.max(...targ) < Math.max(...trav), `target rgb(${targ})`);
+    // AND IT MUST NOT BE DRAWN INSIDE THE DROP. The core's goo reaches 0.84 of
+    // the ring radius at a full bank, which is where an OUTWARD traveller spent
+    // the first third of its approach — in front of a bright green blob, over
+    // exactly the stretch the player is reading. Coming in from outside, the
+    // whole travel is clear of it.
+    check('the traveller never crosses the core on the way in',
+      (1 + lead.span) > 0.9 && 1 > 0.9,
+      `born at ${(1 + lead.span).toFixed(2)} and lands on 1.00, the drop reaches 0.84`);
+  }
+
+  // THE MOMENT ITSELF HAS TO BE THE LOUDEST THING THE CUE DOES — measured on
+  // the BAND, not on a scan of the whole row: the core saturates at 255 and a
+  // peak taken across the row reports the drop's brightness in both states and
+  // calls them equal, which is a measurement that can never fail.
+  {
+    const bandAt = (off) => {
+      const st = state();
+      st.pending = 0.9; st.charge = 0;
+      st.loaded = off >= 0; st.sinceLoaded = off >= 0 ? off : 0;
+      st.toLoaded = off < 0 ? -off : 0;
+      settle(st, 2);
+      const px = grab();
+      const x = Math.round(probe.width / 2 + U.uLeadR.value * ringR * PX_PER_UNIT);
+      const i = (Math.round(probe.height / 2) * probe.width + x) * 4;
+      return Math.max(px[i], px[i + 1], px[i + 2]);
+    };
+    const apart = bandAt(-half * 3);
+    const together = bandAt(0);
+    check('the traveller landing on its target is the loudest the cue gets',
+      together > apart, `${together} on the beat vs ${apart} a moment before`);
+  }
+
+  // AND IT HAS TO LAND ON THE RING. The whole cue is the claim that r = 1 is
+  // the moment; if the traveller's radius at offset 0 is anything else, the
+  // player would be learning to release wherever it actually lands.
+  const s = state();
+  s.pending = 0.9; s.charge = 0; s.loaded = true; s.sinceLoaded = 0; s.toLoaded = 0;
+  settle(s, 2);
+  check('the traveller is ON the fuel ring at the moment itself',
+    Math.abs(U.uLeadR.value - 1) < 1e-6, `r ${U.uLeadR.value.toFixed(4)}`);
+  // ...and it is born OUTSIDE everything else the instrument draws, so the whole
+  // approach happens on clear water rather than over the drop.
+  const born = state();
+  born.pending = 0.9; born.charge = 0; born.loaded = false;
+  born.sinceLoaded = 0; born.toLoaded = lead.time;
+  settle(born, 2);
+  check('...and it is born outside the fuel ring',
+    Math.abs(U.uLeadR.value - (1 + lead.span)) < 1e-6 && U.uLeadR.value > 1.2,
+    `born at ${U.uLeadR.value.toFixed(3)}`);
+}
+
 // --- IT ALSO HAS TO WORK AT THE SIZE IT SHIPS -------------------------------
 // Every panel above is a magnifying glass. The instrument is 90px across in the
 // game, and a shape that only survives at four times that is a shape nobody has

@@ -93,3 +93,18 @@ enemies.shark.hunt.lateral.weavePeriod,5.6,1,16,shark: seconds per weave
 enemies.shark.hunt.lateral.weaveAmp,2.4,0,10,shark: head swing
 enemies.shark.hunt.lateral.weaveBody,0.1,0,0.6,shark: weave reaching the body
 enemies.shark.hunt.lateral.wanderPitch,0.14,0,1,shark: idle wander pitch
+hotSpots.enabled,1,0,1,"Boss weak spots. Glowing sores on the outer edge of a boss's silhouette that crit when shot and burst when they've swallowed enough - systems/bossHotSpots.js."
+hotSpots.countMin,1,0,4,"Fewest a boss can roll on arrival. 0 here means some bosses get none at all, which is a real design option: it makes the ones that DO have them read as a variant."
+hotSpots.countMax,3,0,6,"Most a boss can roll. Read against the pool (CONFIG.hotSpots.pool, 12) - a boss's spots plus the ones still fading off the last corpse have to fit."
+hotSpots.critMul,2.2,1,6,"What a hit inside a spot is worth. Only the sources that AIM get it - bullets, the club swing, the strike. Auras and rings deliberately never crit; they cannot aim, so they would just be multiplying their own tick rate."
+hotSpots.ruptureFraction,0.06,0.01,0.4,"Damage (after critMul) that bursts one, as a fraction of the boss's max hp. At 0.06 with three spots a boss carries about a fifth of its bar in weak points at once. Raise it and popping one becomes a project; lower it and they burst faster than they relight."
+hotSpots.relightSeconds,4,0,20,"Wait before a burst spot is replaced elsewhere on the perimeter. This gap IS the cost of popping one - for these seconds the fight is an ordinary fight."
+hotSpots.radiusFrac,0.34,0.05,1,"Spot size as a fraction of the WHOLE boss's radius. This is the crit's reach AND the drawn boundary - one number, read from one place, on purpose. Not a fraction of the hitbox sphere it sits on: a megalodon's biggest fitted sphere is 1.9 units against a body whose reach is 5, so that reading pinned every spot at minRadius and this number did nothing."
+hotSpots.hostCap,1.1,0.3,4,"Cap on that size, as a multiple of the hitbox sphere the spot landed on. Stops a spot on a fin tip being drawn several times the size of the fin with a crit reach out over open water."
+hotSpots.minRadius,0.8,0.2,4,Floor on that size. Below about this a spot is a light nobody can reliably hit.
+hotSpots.maxRadius,3.2,0.5,10,Ceiling on it. Above about this a spot stops being a place to aim at and becomes a region.
+hotSpots.minGapFrac,0.7,0,3,"How far apart two spots try to sit, in multiples of the boss's own radius. A preference, not a rule - on a small body there may be no candidate far enough away, and a hard floor there would mean the second and third silently never appear."
+hotSpots.ruptureScale,1,0.2,4,"Size of the burst when one goes, on top of the spot's own size. The emitter's size and speed move together behind this - that is the only lever that makes a fusing mass bigger without changing what it is made of."
+hotSpots.rays,24,8,64,"Angular samples per hitbox sphere when hunting the outline. Runs once per arrival and once per rupture, never per frame."
+hotSpots.ruptureRefRadius,1.6,0.3,6,"The spot size the rupture burst was authored against, in world units. Only exists so ruptureScale above means '1 is as authored' - a bigger spot throws a proportionally bigger mass."
+hotSpots.bleedOffset,0.8,0,2,"How far out along the skin the per-hit bleed is born, in multiples of the spot's radius. Not zero: fired from the centre the lobes fuse into a disc that sits ON the light and hides both the hot core and the hit flash."

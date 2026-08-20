@@ -402,12 +402,18 @@ export function attachNoiseShader(material, preset = null) {
   if (uWetAmount > 0.0) {
     vec3 wetN = normalize(geometryNormal);
     vec3 wetV = geometryViewDir;
-    // THE KEY LIGHT IS THE SUN. daylight.js swings it across the sky over the
-    // run, so the wet highlight crawls along the body as the hours pass and
-    // goes low and long at dusk — for free, and correct by construction,
-    // because it is the same vector the diffuse shading used. Head-on off the
-    // camera if the scene has no directional light, which is only ever a
-    // harness.
+    // THE KEY LIGHT, which is the same vector the diffuse shading used — so the
+    // sheen sits where the body is already lit rather than somewhere of its own.
+    //
+    // IT DOES NOT MOVE. This comment used to say daylight.js swings it across
+    // the sky, and it does not: world.js's updateLighting reads
+    // CONFIG.lighting.keyPosition straight every frame and nothing writes it.
+    // The day bus reaches the caustics and the beams (skyLight.intensity), not
+    // the rig. So the highlight travels because the ANIMAL turns under a fixed
+    // light, and a dusk-angled sheen is not something this layer gets for free.
+    //
+    // Head-on off the camera if the scene has no directional light, which is
+    // only ever a harness.
     vec3 wetL = wetV;
     #if NUM_DIR_LIGHTS > 0
       wetL = directionalLights[0].direction;

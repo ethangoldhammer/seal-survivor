@@ -54,12 +54,19 @@ const EDITABLE_SECTIONS = [
     ['trawler', 'Trawler'],
     ['bakalarBoat', "Bakalar's boat (ability)"],
   ]],
+  // THE ATTRACTIVE CLAM IS NOT HERE, and that is on purpose. It is built by
+  // systems/attractiveClam.js out of three materials of its own and reads every
+  // colour it wears from CONFIG.attractorOrb.look — so a tint, a glow or an
+  // uploaded texture set on this panel would reach nothing. Its controls are in
+  // the main tuner under Boats & trawlers. A row here that silently does
+  // nothing is worse than no row.
   ['Pickups', [
-    ['attractorOrb', 'Attractor orb'],
     ['xpOrb', 'Chum bit (XP pickup)'],
-    ['bubbleOrb', 'Bubble (oxygen)'],
+    ['bubbleOrb', 'Air bubble (oxygen)'],
     ['strikeOrb', 'Strike orb'],
-    ['rapidFireOrb', 'Rapid-fire orb'],
+    // Tint only. The coral's brightness is its own gradient — see the note in
+    // createCoralOrb about why the glow slider here is not read.
+    ['rapidFireOrb', 'Coral (fire rate) — tint'],
     ['trapBubble', 'Beluga bubble'],
   ]],
   ['Weapons & projectiles', [
@@ -71,7 +78,7 @@ const EDITABLE_SECTIONS = [
     ['voicemailBomb', "Bakalar's voicemail bomb"],
     ['bounceShot', 'Bounce shot'],
     ['club', 'Fin club (ability)'],
-    ['clubBoom', 'Club — Powder Keg (ability)'],
+    ['clubBoom', 'Club — Boom Boom Club (ability)'],
     ['clubIce', 'Club — Cold Snap (ability)'],
     ['clubThrow', 'Club — thrown (ability)'],
     ['shrapnel', 'Strike shrapnel'],

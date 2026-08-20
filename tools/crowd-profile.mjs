@@ -8,6 +8,7 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
+import { visualPoolCaps } from '../path/src/assets.js';
 import {
   enemies, updateEnemies, updateSpawning, resetEnemies,
 } from '../path/src/entities/enemies.js';
@@ -134,8 +135,12 @@ console.log(`  ${materials.size} distinct materials -> that many draw calls at m
 console.log();
 
 // ---------------------------------------------------------------------------
-// WHICH KEYS. The body pool caps at 24 PER ASSET KEY, so the cap only bites for
-// a species that fields more than 24 at once. This is that distribution.
+// WHICH KEYS, and what the body pool will hold for each. The cap used to be a
+// flat 24 per asset key and this table is where that showed up: anything
+// fielding more than 24 at once had the surplus disposed on death and cloned
+// fresh next wave. The cap now follows each key's own peak live count, so the
+// column to read is whether the pool is sized to the crowd this key actually
+// fields — and the ceiling (96) is the only thing that can still clip it.
 // ---------------------------------------------------------------------------
 fill(220, 12, 9);
 const byKey = new Map();
@@ -143,8 +148,11 @@ for (const e of enemies) {
   const k = e.visual?.name ?? e.def?.asset ?? e.key ?? 'unknown';
   byKey.set(k, (byKey.get(k) ?? 0) + 1);
 }
-console.log('key                     alive   over the 24 pool cap?');
+const caps = visualPoolCaps();
+console.log('key                     alive    pool cap   sized for this crowd?');
 for (const [k, n] of [...byKey].sort((a, b) => b[1] - a[1])) {
-  console.log(`  ${String(k).padEnd(22)} ${String(n).padStart(5)}   ${n > 24 ? `YES — ${n - 24} of every wave clones fresh` : 'no'}`);
+  const cap = caps[k]?.cap ?? 0;
+  const verdict = cap >= n ? 'yes' : `NO — ${n - cap} of every wave clones fresh`;
+  console.log(`  ${String(k).padEnd(22)} ${String(n).padStart(5)}   ${String(cap).padStart(9)}   ${verdict}`);
 }
 console.log();

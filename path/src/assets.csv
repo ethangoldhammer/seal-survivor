@@ -7,7 +7,7 @@ bubbleOrb,2.84,,,
 bullet,1.2,,,
 chumChunk,2.2,,,the big health chunk - xpOrb has no row so it renders at 1; this is the multiple of an ordinary orb before CONFIG.chumChunk.scaleMin/Max scales it by the heal it rolled
 club,1,,,size is CONFIG.club.length at 1 - the hitbox is the config value
-clubBoom,1,,,Powder Keg club - same model as club - keep equal
+clubBoom,1,,,Boom Boom Club - same model as club - keep equal
 clubIce,1,,biolum:clubIce,Cold Snap club - same model as club - keep equal
 clubThrow,1,,biolum:hide,Hurler thrown club - same model as club - keep equal
 dumboOcto,1.9,,,
@@ -47,6 +47,7 @@ orcaFriendBull,1,,,"The pod leader — Orca Family, slot 0."
 orcaFriendCalf,1,,,"Orca Family, slot 2. Smallest of the three."
 orcaFriendCow,1,,,"Orca Family, slot 1."
 rapidFireOrb,2.4,,,
+razorBlade,1,,,
 seagull,9.54,,,
 sealTeam,2.72,,noise:sealTeam,
 ship,2.36,,noise:ship,

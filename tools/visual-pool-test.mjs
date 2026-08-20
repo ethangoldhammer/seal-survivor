@@ -21,7 +21,10 @@
 
 import '../tools/dom-stub.mjs';
 import * as THREE from 'three';
-import { ASSETS, acquireVisual, releaseVisual, clearVisualPool, visualPoolStats } from '../path/src/assets.js';
+import {
+  ASSETS, createVisual, acquireVisual, releaseVisual,
+  clearVisualPool, visualPoolStats, visualPoolCaps,
+} from '../path/src/assets.js';
 
 let failures = 0;
 const section = (n) => console.log(`\n${n}`);
@@ -96,15 +99,62 @@ check('a mote hung on the root is gone', strays === 0, `${strays} stray node(s) 
 check('including one buried in the hierarchy', !deep.parent);
 
 // ===========================================================================
-section('The cap is a cap');
+section('The cap is the key\'s own busiest moment');
 
+// A key that never got busy keeps the floor. Nothing here goes near it — the
+// point is that a rare creature is not sized down to the handful that happened
+// to die together.
+clearVisualPool();
+const few = [];
+for (let i = 0; i < 6; i++) few.push(acquireVisual(KEY));
+for (const v of few) releaseVisual(v);
+check('a quiet key keeps everything it is handed', (visualPoolStats()[KEY] ?? 0) === 6,
+  JSON.stringify(visualPoolCaps()[KEY]));
+check('and its cap is the floor, not its peak', visualPoolCaps()[KEY].cap === 24,
+  JSON.stringify(visualPoolCaps()[KEY]));
+
+// The case the flat 24 got wrong: a school bigger than the old cap. All 40
+// were in the water at once, so holding 40 costs what the game already spent.
 clearVisualPool();
 const many = [];
 for (let i = 0; i < 40; i++) many.push(acquireVisual(KEY));
+check('the peak is the live count, not the pool size', visualPoolCaps()[KEY].peak === 40,
+  JSON.stringify(visualPoolCaps()[KEY]));
 for (const v of many) releaseVisual(v);
 const held = visualPoolStats()[KEY] ?? 0;
-check('the pool stops growing at its cap', held === 24, `${held} held`);
-check('and the overflow was let go rather than kept', held < many.length);
+check('a school past the old flat 24 is kept whole', held === 40, `${held} held`);
+
+// And it is still a cap. Something spawning hundreds of one key is a spawn
+// bug, and the pool should not hold the evidence.
+clearVisualPool();
+const horde = [];
+for (let i = 0; i < 140; i++) horde.push(acquireVisual(KEY));
+for (const v of horde) releaseVisual(v);
+const kept = visualPoolStats()[KEY] ?? 0;
+check('but the ceiling still holds', kept === 96, `${kept} held`);
+check('and the overflow was let go rather than kept', kept < horde.length);
+
+// The live count has to come back down, or one busy wave would leave the pool
+// believing that many are permanently in play.
+clearVisualPool();
+const wave = [];
+for (let i = 0; i < 5; i++) wave.push(acquireVisual(KEY));
+for (const v of wave) releaseVisual(v);
+for (let i = 0; i < 5; i++) wave[i] = acquireVisual(KEY);
+check('a second wave of the same size does not raise the peak',
+  visualPoolCaps()[KEY].peak === 5, JSON.stringify(visualPoolCaps()[KEY]));
+for (const v of wave) releaseVisual(v);
+
+// A visual this never issued must not move the count — releaseVisual is
+// documented as safe on anything, and a foreign body arriving here used to be
+// the one way the live count could go negative.
+const before = visualPoolCaps()[KEY].peak;
+releaseVisual(new THREE.Object3D());
+const foreign = createVisual(KEY);
+releaseVisual(foreign);
+check('a foreign visual does not disturb the live count',
+  visualPoolCaps()[KEY].peak === before && acquireVisual(KEY) && visualPoolCaps()[KEY].peak === before,
+  JSON.stringify(visualPoolCaps()[KEY]));
 
 // ===========================================================================
 section('Bone textures are freed for anything not pooled');

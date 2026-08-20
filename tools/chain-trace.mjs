@@ -58,11 +58,29 @@ const step = (n = 1) => { for (let i = 0; i < n; i++) updateStrike(DT, null, { x
  * a harness calling tryStrike on its own cannot exercise.
  */
 function release(late = 0) {
+  fillTank();
   let guard = 0;
   while (!strikeLoaded() && guard++ < 20000) updateCharge(DT, true, stats);
   for (let t = 0; t < late - 1e-9; t += DT) updateCharge(DT, true, stats);
   updateCharge(DT, false, stats);        // the release frame, held already down
   return tryStrike(DIR, stats);
+}
+
+/**
+ * EAT UNTIL THERE IS FUEL TO WIND UP WITH — and every scenario has to, because
+ * the run opens on an EMPTY tank (charge.startPips is 0) and holding burns fuel
+ * it does not have.
+ *
+ * Without this the wind-up above banks nothing, `pending` never reaches
+ * minFire, and tryStrike returns false having recorded no release at all. Four
+ * of the five scenarios below silently fired NOTHING and printed a log of
+ * "no window open" misses — which is what a working strike with no chum looks
+ * like, so the harness read as evidence about the chain while testing a strike
+ * that never happened.
+ */
+function fillTank() {
+  let guard = 0;
+  while (strikeState.charge < 1 - 1e-6 && guard++ < 100) { feedChum(stats); consumeChainLink(); }
 }
 
 /** The gulp, or a swum-over orb — both land on feedChum, one mouthful each. */
@@ -100,6 +118,7 @@ scenario('ON THE BEAT, THEN EATING — what it is supposed to look like', () => 
 scenario('EARLY — let go while the bar still had fuel in it', () => {
   // Wound up to a hair inside the window's leading edge, then released a whole
   // window early. Fires, dashes, arms nothing.
+  fillTank();
   let guard = 0;
   while (sweetOffset() < -half * 2.5 && guard++ < 20000) updateCharge(DT, true, stats);
   updateCharge(DT, false, stats);
@@ -127,8 +146,7 @@ scenario('THE WINDOW LAPSING MID-CHAIN, THEN A FRESH STRIKE', () => {
   cancelDash();
   step(Math.ceil((CONFIG.strike.chainWindow + 0.1) / DT));
   eat(1);                                  // nothing: the arming died with it
-  strikeState.charge = 1;
-  release();
+  release();                               // eats its own fuel back, see fillTank
   eat(1);
   cancelDash();
 });

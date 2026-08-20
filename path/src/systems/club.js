@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG } from '../config.js';
+import { CONFIG, clubStackTotals } from '../config.js';
 import { bounds } from '../arena.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy, applyKnockback } from '../entities/enemies.js';
@@ -12,6 +12,7 @@ import { abilityDamage, aoe, targeting, companionScale } from './scaling.js';
 import { canHold, isDazed } from './control.js';
 import { recordControl } from './playtest.js';
 import { hitCreatureSegment } from './hitShape.js';
+import { hotSpotDamage } from './bossHotSpots.js';
 
 // Where the wood last met a body. Shared and read immediately — see the note
 // on combat.js's own `contact`.
@@ -99,15 +100,25 @@ const CLUB_TYPES = [
   { key: 'throw', asset: 'clubThrow' },
 ];
 
-// WHICH CLUB THE RUN PICKED UP FIRST, remembered rather than derived. The fin
-// club is "the first one you equipped", which is a fact about the run's
-// history and not about the level table — two runs holding {club 1, ice 1}
-// took them in some order, and a fixed priority list would put the same club
-// in the fins for both and quietly contradict the card that just arrived.
+// EVERY CLUB THE RUN HAS EARNED, IN THE ORDER IT EARNED THEM — one entry per
+// club, holding the type key that bought it.
 //
-// Sticky on purpose: once a type is in the fins it stays there for the run.
-// Cleared by resetClub with everything else.
-let typeOrder = [];
+// One pick, one club. The first goes in a flipper, the second goes in the
+// other flipper, and everything after that joins the ring — so a run's first
+// two club cards are the weapon in its hands and the rest is what circles it.
+// Which two those are is a fact about the run's HISTORY and not about the level
+// table: two runs holding {club 1, ice 1} took them in some order, and a fixed
+// priority list would arm both the same way and quietly contradict whichever
+// card had just arrived.
+//
+// Appended rather than recomputed, because the order cannot be derived from
+// the levels alone once they are interleaved — {club 2, ice 1} could be
+// club→ice→club or club→club→ice, and only one of those puts a Cold Snap in
+// the second fin. Cleared by resetClub with everything else.
+let clubOrder = [];
+// How many clubs each type had last time we looked, so a level-up is spotted
+// as a DELTA. This is the only way a per-pick order can be maintained at all.
+let clubTally = {};
 
 
 const _pivot = new THREE.Vector3();
@@ -135,60 +146,115 @@ export function createClubVisual() {
 }
 
 /**
- * Every club type the run owns, in the order it took them.
+ * How many clubs a type is worth at a level, and what its other stacks bought.
  *
- * Types already seen keep the slot they were first given; anything new is
- * appended in CLUB_TYPES order, which only decides ties inside a single frame
- * (a debug jump handing over two cards at once).
- *
- * Pure with respect to `levels` — it reads the remembered order but does not
- * add to it. `noteTypes` is the one thing that writes, and it is called once a
- * frame from updateClub, so the card text and the tuner readout can ask this
- * without quietly deciding which club the seal is holding.
+ * A thin pass-through to CONFIG.clubStackTotals, which is the single authority
+ * — the upgrade's own apply() calls the same function to move the stats its
+ * card text is measured from. One function, so the clubs in the water and the
+ * words on the card cannot disagree.
  */
-export function clubTypesFor(levels = {}) {
-  const level = (t) => Math.max(0, Math.floor(levels[t.key] ?? 0));
-  const owned = CLUB_TYPES.filter((t) => level(t) > 0);
-  const seen = owned.filter((t) => typeOrder.includes(t.key))
-    .sort((a, b) => typeOrder.indexOf(a.key) - typeOrder.indexOf(b.key));
-  const fresh = owned.filter((t) => !typeOrder.includes(t.key));
-  return [...seen, ...fresh].map((t) => ({ key: t.key, asset: t.asset, level: level(t) }));
+export function clubsForType(typeKey, level) {
+  return clubStackTotals(typeKey, Math.max(0, Math.floor(level ?? 0)));
 }
 
-// Remember any type the run has just started owning. Called once a frame, from
-// the one place that is entitled to decide the run's history has moved on.
-function noteTypes(levels) {
+/**
+ * Note any club the run has just earned, in order. Called once a frame, from
+ * the one place entitled to decide the run's history has moved on.
+ *
+ * Shrinking is a REBUILD rather than a pop. It only happens on a reset or when
+ * somebody drags a tuner slider that changes the roll table, and in both cases
+ * the per-pick order is already meaningless — reconstructing it grouped by
+ * first-seen type is the honest answer, and trying to pop the right entries
+ * out of the middle of the list would be inventing a history.
+ */
+function noteClubs(levels) {
+  let shrank = false;
   for (const t of CLUB_TYPES) {
-    if (!(levels[t.key] > 0) || typeOrder.includes(t.key)) continue;
-    typeOrder.push(t.key);
+    const want = clubsForType(t.key, levels[t.key] ?? 0).clubs;
+    const had = clubTally[t.key] ?? 0;
+    if (want < had) shrank = true;
+    else for (let i = had; i < want; i++) clubOrder.push(t.key);
+    clubTally[t.key] = want;
   }
+  if (!shrank) return;
+  const seen = clubOrder.slice();
+  clubOrder = [];
+  for (const t of CLUB_TYPES.slice().sort((x, y) => seen.indexOf(x.key) - seen.indexOf(y.key))) {
+    for (let i = 0; i < (clubTally[t.key] ?? 0); i++) clubOrder.push(t.key);
+  }
+}
+
+const assetFor = (key) => CLUB_TYPES.find((t) => t.key === key)?.asset ?? 'club';
+
+/**
+ * THE WHOLE ARRANGEMENT: which club is in which fin, and what is on the ring.
+ *
+ * @param levels   { club, boom, ice, throw } stacks
+ * @param bonus    extra ring clubs from Clone Warz and Entourage
+ * @param finSlots how many fin tips the rig published — 2 on the seal, 0 on a
+ *                 model that has not resolved yet
+ *
+ * Falls back to CLUB_TYPES order for any club the frame loop has not seen yet,
+ * so the card text and the harness can ask this without a frame having run and
+ * without quietly deciding the run's history on the way past.
+ */
+export function clubLayout(levels = {}, bonus = 0, finSlots = 2) {
+  const owned = [];
+  for (const key of clubOrder) if ((levels[key] ?? 0) > 0) owned.push(key);
+  for (const t of CLUB_TYPES) {
+    const want = clubsForType(t.key, levels[t.key] ?? 0).clubs;
+    const have = owned.filter((k) => k === t.key).length;
+    for (let i = have; i < want; i++) owned.push(t.key);
+  }
+
+  const fins = owned.slice(0, Math.max(0, finSlots)).map(assetFor);
+  const ring = owned.slice(Math.max(0, finSlots)).map(assetFor);
+
+  // CLONE WARZ AND ENTOURAGE BOTH SPIN UP MORE OF THEM. The ring is one count
+  // the player owns, so each card adds to it exactly the way it adds a shrimp
+  // or a pellet. Both have a fair claim: these are clubs you swing (Clone
+  // Warz) and they are things that circle you (Entourage).
+  //
+  // Summed by the CALLER into one `bonus` rather than read here, so this stays
+  // a function of its arguments and the harness can ask it questions.
+  //
+  // ONCE FOR THE RING, not once per orbiting type — two types on the ring is
+  // still one thing the player is looking at.
+  //
+  // And nothing when the ring is empty, which is orbiterCount's own rule
+  // rather than a guard written again here: a run with one or two clubs has no
+  // ring, and +1 of nothing is nothing.
+  const base = ring.length;
+  const want = orbiterCount(base, { orbiterBonus: Math.max(0, Math.floor(bonus)) });
+  // The extras walk the ring's types in turn, so a ring of a Keg and a Snap
+  // gets one more of each rather than two more of whichever was first. Indexed
+  // off `base` and NOT off `ring.length`, which is growing inside this very
+  // loop — the live length would re-read clubs the bonus had just added.
+  for (let i = base; i < want; i++) ring.push(ring[i % base]);
+
+  return { fins, ring };
 }
 
 /**
  * Which club assets go in the FINS, in fin order.
  *
- * THE FIRST TYPE YOU TOOK IS THE ONE YOU HOLD. Every fin gets that same club,
- * so the weapon in the seal's flippers is one identifiable object rather than
- * a pair that disagrees — and so the answer to "what am I swinging" does not
- * change when a rider card lands.
- *
- * Falls back to the base club when the run owns nothing yet, which is also
- * what a run with the base card alone should look like.
+ * ONE PICK, ONE CLUB, and the first two picks are the ones you HOLD. A run
+ * with a single club card swings one club and has an empty flipper, which is
+ * what "you found a club" should look like — the pair used to arrive together
+ * off one card, and the second one was never bought by anything.
  */
-export function clubAssetsFor(levels = {}) {
-  const first = clubTypesFor(levels)[0];
-  return [first ? first.asset : 'club'];
+export function clubAssetsFor(levels = {}, finSlots = 2) {
+  const fins = clubLayout(levels, 0, finSlots).fins;
+  return fins.length ? fins : ['club'];
 }
 
 /**
  * Which club assets ride the RING, one entry per club.
  *
- * THE SPARE CLUBS ORBIT. The seal has two fins and the run can own four kinds
- * of club, so everything past the first type used to fight for a socket — and
- * a card whose only visible effect is a mesh you cannot see is a card that
- * reads as nothing. Every type after the first floats around the animal
- * instead, one club per stack, so a third pick of Cold Snap is three clubs on
- * the ring and you can count them.
+ * THE OVERFLOW ORBITS. There are two flippers and the run can earn a dozen
+ * clubs, so everything past the second floats around the animal instead — a
+ * card whose only visible effect is a mesh you cannot see is a card that reads
+ * as nothing.
  *
  * They are real clubs: same swept hit test, same damage, same riders. What
  * they do not have is the fin's flop — nothing is holding them, so there is no
@@ -198,40 +264,8 @@ export function clubAssetsFor(levels = {}) {
  * is a companion that happens to be made of wood, and pretending otherwise
  * would mean a ring that goes limp whenever the seal swims in a straight line.
  */
-export function clubOrbiters(levels = {}, bonus = 0) {
-  const out = [];
-  for (const t of clubTypesFor(levels).slice(1)) {
-    for (let i = 0; i < t.level; i++) out.push(t.asset);
-  }
-  // CLONE WARZ AND ENTOURAGE BOTH SPIN UP MORE OF THEM. The ring is one count
-  // the player owns, so each card adds to it exactly the way it adds a shrimp
-  // or a pellet. Both have a fair claim: these are clubs you swing (Clone
-  // Warz) and they are things that circle you (Entourage), and the same
-  // overlap exists on the shrimp ring for the same reason.
-  //
-  // Summed by the CALLER into one `bonus` rather than read here, so this stays
-  // a function of its arguments and the harness can ask it questions.
-  //
-  // ONCE FOR THE RING, not once per orbiting type. Two types on the ring is
-  // still one thing the player is looking at, and paying the bonus per type
-  // would make a card that reads "+1 of everything you fire" worth +2 or +3
-  // here depending on a detail nothing on screen explains.
-  //
-  // And nothing when the ring is empty, which is projectileCount's own rule
-  // rather than a guard written again here: a run holding one club type has
-  // no ring, and +1 of nothing is nothing.
-  const base = out.length;
-  const want = orbiterCount(base, { orbiterBonus: Math.max(0, Math.floor(bonus)) });
-  // The extras walk the orbiting types in turn, so a run whose ring is a Keg
-  // and a Snap gets one more of each rather than two more of whichever
-  // happened to be first. Indexed off `base` and NOT off `out.length`, which
-  // is growing inside this very loop — the live length would re-read clubs the
-  // bonus had just added and the pattern would double back on itself.
-  //
-  // `base === 0` cannot reach here: orbiterCount returns 0 for a base of 0,
-  // which is the rule that stops a card adding to a count you do not own.
-  for (let i = base; i < want; i++) out.push(out[i % base]);
-  return out;
+export function clubOrbiters(levels = {}, bonus = 0, finSlots = 2) {
+  return clubLayout(levels, bonus, finSlots).ring;
 }
 
 // Build one club mesh and measure it. Split out from addClub because a socket
@@ -598,7 +632,7 @@ function finAngle(rig, i, tip, playerPos) {
 }
 
 // ---------------------------------------------------------------------------
-// THE TWO RIDERS — Powder Keg and Cold Snap.
+// THE TWO RIDERS — Boom Boom Club and Cold Snap.
 //
 // Neither is a weapon. Each is a thing that happens ON TOP of a club hit,
 // which is why they live here as a few lines rather than as systems of their
@@ -652,10 +686,10 @@ function detonate(scene, x, y, blast, enemiesList, exclude, hooks) {
     if (dx * dx + dy * dy > blast.radius * blast.radius) continue;
     caught.push(other);
   }
-  // TAGGED AS THE BOOM'S OWN, not the club's. Powder Keg is a separate pick
+  // TAGGED AS THE BOOM'S OWN, not the club's. Boom Boom Club is a separate pick
   // with a separate damage number, and every point of it was being filed under
   // `club` — which is why the balance report has the Driftwood Club returning
-  // 4.91x, ahead of everything in the game by a distance, and no Powder Keg row
+  // 4.91x, ahead of everything in the game by a distance, and no Boom Boom Club row
   // at all across forty runs. One card was wearing two cards' output.
   for (const other of caught) hurt(scene, other, blast.damage, enemiesList, hooks, null, 'clubBoom');
   hooks.onBlast?.(x, y, blast.radius, caught.length);
@@ -762,6 +796,14 @@ function land(f) {
  * earlier kill in the same frame.
  */
 function hurt(scene, e, dmg, enemiesList, hooks, at = null, source = null) {
+  // A WEAK SPOT, IF THE WOOD FOUND ONE — and the gate is `at` itself, which is
+  // the same thing as "did the caller aim". A swing knows where it landed; a
+  // detonation catching a body several metres away does not and passes
+  // nothing, so the blast never crits. That is the rule the whole feature runs
+  // on (see systems/bossHotSpots.js): aimed damage is rewarded for finding a
+  // spot, area damage cannot find anything.
+  if (at) dmg = hotSpotDamage(e, at, dmg);
+
   e.hp -= dmg;
   e.flash = CONFIG.fx.hitFlash;
   e.hitThisFrame = true;
@@ -829,7 +871,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // a card that can be dealt as a dead pick is worse than one that is merely
   // better in the right build — but the weapon used to be gated on `lv.club`
   // alone, which made them exactly that dead pick. A run that took Cold Snap
-  // and Powder Keg and no base card got no clubs at all: both cards did
+  // and Boom Boom Club and no base card got no clubs at all: both cards did
   // nothing, and there was nothing on screen to explain why. A variant on its
   // own now swings a level-1 club, which is what its card has claimed all
   // along.
@@ -882,27 +924,32 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // same degradation every emit point in the game already does.
   const tips = rig?.muzzles ?? [];
 
-  // THE WHOLE ARRANGEMENT, decided once. The run's first club type goes in
-  // every fin; every other type it owns rides the ring, one club per stack. A
-  // run holding one type has no ring at all, which is what a run with one club
-  // card should look like.
+  // THE WHOLE ARRANGEMENT, decided once. One club per pick, in pick order: the
+  // first fills a flipper, the second fills the other, and everything after
+  // that joins the ring. A run holding one club card swings ONE club and has
+  // an empty fin — which is what finding a club should look like, and is the
+  // thing the old "a card arms both flippers" rule was quietly giving away.
   //
-  // `noteTypes` is called here and nowhere else — this is the one place in the
-  // game entitled to say that the run has just picked up a kind of club it did
-  // not have, and the fin club is decided by that history rather than by a
-  // priority list. See clubTypesFor.
+  // `noteClubs` is called here and nowhere else: this is the one place in the
+  // game entitled to say the run has earned another club, and the order it
+  // records is what decides which two are in the seal's hands.
   const owned = { club: Math.floor(lv.club ?? 0), boom: boomLv, ice: iceLv, throw: throwLv };
-  noteTypes(owned);
-  const finAsset = clubAssetsFor(owned);
-  // Clone Warz AND Entourage reach the ring — see clubOrbiters for why both
-  // have a claim on it. Read live off the stat block for the reason scaling.js
+  noteClubs(owned);
+  // Clone Warz AND Entourage reach the ring — see clubLayout for why both have
+  // a claim on it. Read live off the stat block for the reason scaling.js
   // spells out: recomputeStats REPLACES the object on every level-up, so
   // anything captured earlier is scaling by an old run.
-  const orbiters = clubOrbiters(owned,
-    (player.stats?.projectileBonus ?? 0) + (player.stats?.orbiterBonus ?? 0));
+  //
+  // `alwaysOn` is the authoring switch, and it has to reach the LAYOUT rather
+  // than only the gate above: with no card taken there are no picks, so the
+  // arrangement would be empty and the switch would show nothing.
+  const layout = clubLayout(owned,
+    (player.stats?.projectileBonus ?? 0) + (player.stats?.orbiterBonus ?? 0),
+    tips.length);
+  const fins = layout.fins.length ? layout.fins : (c.alwaysOn ? ['club'] : []);
   const spec = [];
-  for (let i = 0; i < tips.length; i++) spec.push({ asset: finAsset[i % finAsset.length], mount: 'fin' });
-  for (const asset of orbiters) spec.push({ asset, mount: 'orbit' });
+  for (const asset of fins) spec.push({ asset, mount: 'fin' });
+  for (const asset of layout.ring) spec.push({ asset, mount: 'orbit' });
   syncSockets(spec);
   if (clubs.length === 0) {
     // Nothing to hang the weapon off this frame — a model being swapped in the
@@ -1417,7 +1464,7 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
       const struckDied = hurt(scene, other, ricochet, enemiesList, hooks);
       // THE FLYER IS ALWAYS EXCLUDED from its own blast. It is the thing
       // carrying the explosive, and letting it eat every detonation it causes
-      // would have Powder Keg quietly shortening the carom chains the base
+      // would have Boom Boom Club quietly shortening the carom chains the base
       // club is bought for — the two cards would fight instead of stacking.
       // The body just struck is excluded too, unless the collision killed it,
       // since it has already taken its damage this frame.
@@ -1627,8 +1674,9 @@ export function resetClub() {
   // the last one's and hands both clubs a shove nobody performed.
   _prevVel.valid = false;
   bodyAccel.valid = false;
-  // WHICH CLUB IS IN THE FINS IS A FACT ABOUT ONE RUN. Carried across a reset
-  // it would put the last run's first pick in this run's flippers, which is a
-  // wrong answer that looks exactly like a right one.
-  typeOrder = [];
+  // WHICH CLUBS ARE IN THE FINS IS A FACT ABOUT ONE RUN. Carried across a
+  // reset it would put the last run's first two picks in this run's flippers,
+  // which is a wrong answer that looks exactly like a right one.
+  clubOrder = [];
+  clubTally = {};
 }

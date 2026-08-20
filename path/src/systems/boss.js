@@ -63,6 +63,7 @@ import { startBossKill } from './bossKill.js';
 import { attachBossBoat, isBoatBoss, resetBossBoat, updateBossBoat } from './bossBoat.js';
 import { attachKraken, releaseKraken, resetKraken, updateKraken } from './kraken.js';
 import { attachAngler, releaseAngler, resetAngler, updateBossAngler } from './bossAngler.js';
+import { attachHotSpots, resetBossHotSpots } from './bossHotSpots.js';
 import { beginBossWarmup, cancelBossWarmup, tickBossWarmup } from './bossWarmup.js';
 import { startCelebration } from './celebrate.js';
 import { bossCycleRelief, setBossCycle } from './waves.js';
@@ -303,6 +304,7 @@ export function resetBoss(scene = null) {
   // exit uses releaseKraken, which leaves it drifting.
   if (scene) resetKraken(scene);
   resetAngler();
+  resetBossHotSpots();
   bossState.enemy = null;
   bossState.name = '';
   bossState.killedBy = '';
@@ -782,6 +784,11 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // it and a standoff it will not leave — see systems/kraken.js.
   attachKraken(scene, e);
   attachAngler(scene, e);
+  // ...and the weak spots, which every boss gets rather than only the ones
+  // that came with a body built for something. Rolled 1-3 here and PLACED on
+  // the first frame that finds the animal posed — see attachHotSpots for why
+  // those cannot be the same moment.
+  attachHotSpots(scene, e);
 
   bossState.enemy = e;
   bossState.archetype = archetype;

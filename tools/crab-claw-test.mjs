@@ -34,9 +34,11 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
 import { ASSETS, installModel, createVisual } from '../path/src/assets.js';
 import { createAnimationController, stateForSpeed } from '../path/src/systems/animation.js';
-import { createClawDriver, pinchReach } from '../path/src/systems/crabClaw.js';
+import { createClawDriver, pinchReach, clawSetting } from '../path/src/systems/crabClaw.js';
 import { spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
 import { bounds } from '../path/src/arena.js';
+import { parseBossCsv } from '../path/src/bossTable.js';
+import bossesCsv from '../path/src/bosses.csv?raw';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODEL = resolve(HERE, '../public/models/crabpincer.glb');
@@ -57,6 +59,19 @@ const gltf = await new GLTFLoader().parseAsync(
   buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '',
 );
 installModel('enemyWalkingCrab', gltf.scene, gltf.animations);
+// The king crab is the same binary under its own asset key — see the note on
+// enemyBossCrab in assets.js. Installed here as well so the boss section below
+// spawns a real 126-bone skeleton rather than the primitive stand-in a Node
+// harness would otherwise get, which has no arms to pinch with.
+// PARSED A SECOND TIME, not installed twice off the same scene: prepareModel
+// prunes and re-materials the object it is handed, so feeding it one scene
+// under two keys leaves the first key holding a skeleton the second pass has
+// already taken apart (measured: every leg track loses its target node and the
+// claw driver resolves nothing at all).
+const bossGltf = await new GLTFLoader().parseAsync(
+  buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '',
+);
+installModel('enemyBossCrab', bossGltf.scene, bossGltf.animations);
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -431,6 +446,192 @@ console.log('\nCRAB CLAW\n');
   check('...which is real daylight outside touching distance',
     firedAt - (walker.radius + pR) >= 0.5,
     `${(firedAt - (walker.radius + pR)).toFixed(2)} units before it touches you`);
+}
+
+// ---------------------------------------------------------------------------
+// THE KING CRAB — the same claw doing the opposite job.
+//
+// Two bugs lived here at once, and they looked like one thing in play: "the
+// boss reacts to every hit and never attacks."
+//
+//   THE GATE. `commitRange` is a fraction of the ARM, and contact distance is
+//   the HITBOX plus the seal. Those scale differently, so a number tuned to
+//   leave the swarm crab half a unit of daylight left the boss 0.22 — it could
+//   only commit from inside a band ordinary contact shoves the player out of.
+//   The same arithmetic that killed this mechanic twice before, surviving in
+//   the one place nothing measured it.
+//
+//   THE FLINCH. Both chelipeds carry an impact spring, and those are the exact
+//   bones the IK aims. Under fire the shove was bigger than the gesture — 9.7
+//   world units of tip displacement on a 7.9-unit arm — so the pinch played
+//   perfectly and was invisible underneath the flail.
+//
+// Neither failed anything. Both are asserted below, with the boss driven
+// through the real updateEnemies while being shot.
+// ---------------------------------------------------------------------------
+{
+  console.log('\nTHE KING CRAB');
+  const ARCH = parseBossCsv(bossesCsv, CONFIG.enemies, () => {}).find((b) => b.id === 'bossCrab');
+  const pR = CONFIG.player.hitRadius;
+  const FLOOR = bounds.bottom;
+
+  // The archetype's size step, applied the way systems/boss.js applies it —
+  // same shortcut tools/crab-boss-test.mjs takes, and for the same reason: this
+  // section wants a boss in the water without the arrival ceremony.
+  function spawnKing(at) {
+    const e = spawnNamed(scene, 'bossCrab', 0, at, { ignoreCaps: true, overfill: true });
+    if (!e) return null;
+    const mul = ARCH?.sizeMul ?? 1;
+    e.visual.scale.multiplyScalar(mul);
+    e.spawnScale *= mul;
+    e.sizeMul *= mul;
+    e.radius *= mul;
+    e.isBoss = true;
+    e.entering = false;
+    e.hp = 1e7; // it is being shot for twenty seconds below
+    e.pinchTimer = 0;
+    return e;
+  }
+
+  // Its own block, so tuning the fight cannot retune the seabed.
+  check('the boss carries its own claw settings', !!CONFIG.enemies.bossCrab.claw,
+    Object.keys(CONFIG.enemies.bossCrab.claw ?? {}).join(', ') || 'none');
+  check('...and a crab without one still reads the shared block',
+    clawSetting(CONFIG.enemies.walkingCrab, 'cooldown') === CONFIG.crabClaw.cooldown
+    && clawSetting(CONFIG.enemies.bossCrab, 'windup') === CONFIG.crabClaw.windup,
+    'overrides are per key, not per block');
+
+  // --- the gate, on the boss's own body --------------------------------------
+  resetEnemies(scene);
+  const seal = new THREE.Vector3(0, FLOOR + 3, 0);
+  const king = spawnKing({ x: -14, y: FLOOR + 1 });
+  for (let i = 0; i < 30; i++) updateEnemies(dt, scene, seal, () => {}, () => {});
+  const arm = king.claw.reach();
+  const commit = pinchReach(arm, pR, clawSetting(king.def, 'commitRange'));
+  const damageAt = pinchReach(arm, pR, clawSetting(king.def, 'range'));
+  const contact = king.radius + pR;
+  console.log(`        arm ${arm.toFixed(2)}   contact ${contact.toFixed(2)}`
+    + `   commit ${commit.toFixed(2)}   reach ${damageAt.toFixed(2)}`);
+  check('the boss commits with room to stand in, not on top of you',
+    commit - contact >= 0.5,
+    `${(commit - contact).toFixed(2)} units of daylight (the swarm's number gives it 0.22)`);
+  check('...and the claw still lands from where it committed', damageAt >= commit,
+    `reach ${damageAt.toFixed(2)} vs commit ${commit.toFixed(2)}`);
+
+  // The honest ceiling: damage may not be billed from further than the claw is
+  // ever seen to get. Measured on this body, at this size.
+  const far = new THREE.Vector3(60, FLOOR + 1, 0);
+  const tipBone = king.visual.getObjectByName('Hand6L_end_0106');
+  const tipAt = new THREE.Vector3();
+  const bodyAt = new THREE.Vector3();
+  let maxTip = 0;
+  king.claw.strike();
+  for (let i = 0; i < 180; i++) {
+    updateEnemies(dt, scene, far, () => {}, () => {});
+    king.visual.updateMatrixWorld(true);
+    king.visual.getWorldPosition(bodyAt);
+    tipBone.getWorldPosition(tipAt);
+    maxTip = Math.max(maxTip, Math.hypot(tipAt.x - bodyAt.x, tipAt.y - bodyAt.y));
+  }
+  check('the boss never bills damage from further than its claw gets',
+    damageAt <= maxTip + pR + 1e-6,
+    `bills to ${damageAt.toFixed(2)}, claw reaches ${(maxTip + pR).toFixed(2)}`);
+
+  // --- it pinches, and it keeps pinching, and being shot does not stop it ----
+  // Two identical twenty-second runs, one of them under a stream of pellets. A
+  // trace of the claw tip from each, compared frame for frame: the shape of the
+  // gesture is the thing being asserted, not that some bone moved.
+  const TIP = 'Hand6L_end_0106';
+  const shove = new THREE.Vector3(1, 0, 0);
+  function run(underFire) {
+    resetEnemies(scene);
+    const c = spawnKing({ x: -14, y: FLOOR + 1 });
+    const trace = [];
+    let pinches = 0;
+    let connects = 0;
+    let striking = 0;
+    let wasStriking = false;
+    let firstAt = 0;
+    let prev = Infinity;
+    for (let i = 0; i < 60 * 20; i++) {
+      const d = Math.hypot(c.mesh.position.x - seal.x, c.mesh.position.y - seal.y);
+      if (underFire && i % 5 === 0) {
+        // Exactly what main.js does on every pellet that lands — see
+        // onEnemyDamagedFeedback. Twelve a second is an ordinary rate of fire
+        // for a levelled gun, not a stress test.
+        c.hitThisFrame = true;
+        const sp = CONFIG.animation.spring;
+        c.anim?.impulse(shove, Math.min(sp.impulseMax, 30 * sp.impulsePerDamage));
+      }
+      updateEnemies(dt, scene, seal, () => {}, () => {});
+      const s = c.claw?.isStriking() ?? false;
+      if (s && !wasStriking) { pinches++; if (!firstAt) firstAt = prev; }
+      wasStriking = s;
+      if (s) striking++;
+      if (c.justPinched) connects++;
+      c.visual.updateMatrixWorld(true);
+      trace.push({
+        p: c.visual.getObjectByName(TIP).getWorldPosition(new THREE.Vector3()),
+        striking: s,
+      });
+      prev = d;
+    }
+    return { pinches, connects, striking, firstAt, trace };
+  }
+
+  const calm = run(false);
+  const fire = run(true);
+
+  check('the boss pinches, and keeps pinching', calm.pinches >= 12,
+    `${calm.pinches} pinches in 20s (the swarm's cooldown gives it 11)`);
+  check('...and is mid-gesture most of the time it is on you',
+    calm.striking / (60 * 20) > 0.6,
+    `reaching or pinching on ${Math.round(100 * calm.striking / (60 * 20))}% of frames`);
+  check('...committing from outside touching distance',
+    calm.firstAt - contact >= 0.5,
+    `first pinch committed at ${calm.firstAt.toFixed(2)}, contact starts at ${contact.toFixed(2)}`);
+  check('being shot does not cost it a single pinch',
+    fire.pinches >= calm.pinches && fire.connects >= calm.connects,
+    `${fire.pinches}/${fire.connects} under fire against ${calm.pinches}/${calm.connects} in peace`);
+
+  // THE REGRESSION, IN ONE NUMBER. How far the claw tip sits from where the
+  // pinch alone would have put it, on the frames the pinch owns the arm. It
+  // was 11.1 world units — the flinch was not competing with the gesture, it
+  // was replacing it.
+  let dev = 0;
+  let n = 0;
+  for (let i = 0; i < calm.trace.length; i++) {
+    if (!calm.trace[i].striking) continue;
+    dev += calm.trace[i].p.distanceTo(fire.trace[i].p);
+    n++;
+  }
+  const meanDev = dev / Math.max(1, n);
+  check('the swing owns the arm while it swings', meanDev < arm * 0.15,
+    `claw tip ${meanDev.toFixed(2)} off its unshot line, on a ${arm.toFixed(2)}-unit arm`
+    + ' (it was 11.08 before the claw spring was muted)');
+
+  // ...and the flinch is not simply gone. Muting is for the duration of the
+  // gesture; a crab that gets shot between pinches still shudders.
+  {
+    resetEnemies(scene);
+    const c = spawnKing({ x: -14, y: FLOOR + 1 });
+    // Out of range and never striking, so nothing mutes anything.
+    const away = new THREE.Vector3(bounds.right - 2, bounds.surfaceY - 3, 0);
+    for (let i = 0; i < 60; i++) updateEnemies(dt, scene, away, () => {}, () => {});
+    c.visual.updateMatrixWorld(true);
+    const before = c.visual.getObjectByName(TIP).getWorldPosition(new THREE.Vector3());
+    const bodyBefore = c.mesh.position.clone();
+    c.anim.impulse(shove, CONFIG.animation.spring.impulseMax);
+    updateEnemies(dt, scene, away, () => {}, () => {});
+    c.visual.updateMatrixWorld(true);
+    const after = c.visual.getObjectByName(TIP).getWorldPosition(new THREE.Vector3());
+    // The body walks while this happens, so the arm's own movement is what is
+    // left after the body's is taken out.
+    const bodyMoved = c.mesh.position.distanceTo(bodyBefore);
+    check('a crab that is not mid-pinch still flinches through its arms',
+      !c.claw.isStriking() && after.distanceTo(before) > bodyMoved + 0.01,
+      `tip moved ${after.distanceTo(before).toFixed(3)} against ${bodyMoved.toFixed(3)} of body travel`);
+  }
 }
 
 console.log(`\n${failures === 0 ? 'all good' : `${failures} FAILED`}\n`);

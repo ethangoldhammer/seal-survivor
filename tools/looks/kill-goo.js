@@ -346,6 +346,53 @@ kill({ frames: 14, cam: fightCam, at: [2, 1], scale: 1.4, vx: 4, goo: { radius: 
 present('Blob 6x, in frame', 'the same kill with the goo sized for the REAL frame');
 kill({ frames: 14, cam: fightCam, at: [2, 1], scale: 1.4, vx: 4, goo: { radius: 8, iso: 0.7 } });
 present('Blob 8x, iso 0.7', 'as far as it goes before it stops being a body');
+
+// --- A CLUB BLAST -----------------------------------------------------------
+// The third thing in the game that leaves a mass, and the one that arrived
+// last: Boom Boom Club's blast was `explosion` and nothing else — forty-six
+// sprites where the boss's own explosion is fused matter. `clubBoomGoo` puts
+// the same substance under it that `bossBoom` uses (group `boom`).
+//
+// TWO THINGS TO LOOK FOR HERE, and they are the two ways this preset can be
+// wrong. First, whether one blast reads as ONE MASS: the `boom` group is
+// additive with a narrow bright rim, and a lobe spread too far comes back out
+// of the pass as a handful of separate lit circles rather than as a cloud with
+// an edge. Second, the crowd panel — this event REPEATS, several times a second
+// with two clubs, and the failure that costs nothing on a kill (one body, once)
+// is a permanent smear here.
+//
+// The seal stays in frame, at the distance a fight is actually played at,
+// because a blast is only ever seen next to it.
+function blast({ frames = 12, cam = fightCam, at = [0, 0], scale = 1, spray = true, clear = true } = {}) {
+  if (clear) {
+    resetParticles();
+    reseed();
+    Object.assign(GOO, BASE);
+    Object.assign(FOAM, FOAM_BASE);
+  }
+  updateParticleScale(cam, gl);
+  const def = CONFIG.feedback.clubBoom;
+  const opts = { x: at[0], y: at[1], scale };
+  if (spray) emit(def.emit, at[0], at[1], opts);
+  if (def.goo) emit(def.goo, at[0], at[1], opts);
+  run(frames, cam);
+}
+
+check('the club blast carries a goo', !!CONFIG.feedback.clubBoom?.goo,
+  CONFIG.feedback.clubBoom?.goo ?? 'sprites only');
+check('...into the same substance the boss explosion uses',
+  CONFIG.emitters[CONFIG.feedback.clubBoom?.goo]?.goo === 'boom',
+  CONFIG.emitters[CONFIG.feedback.clubBoom?.goo]?.goo ?? 'none');
+
+blast({ at: [1.5, 0.5], scale: 1.2, spray: false });
+present('One blast, goo only', 'the mass on its own — it has to read as one body, not as lit circles');
+blast({ at: [1.5, 0.5], scale: 1.2 });
+present('One blast, shipped', 'spray and mass together, at fight distance', true);
+blast({ at: [1.5, 0.5], scale: 1.2, spray: true, clear: true });
+blast({ frames: 6, at: [-1.5, -1], scale: 1.4, clear: false });
+blast({ frames: 6, at: [3, -0.5], scale: 1, clear: false });
+present('Three inside a second', 'the repeating case — this is where a long life or a high count smears the water');
+
 scene.remove(seal);
 
 // --- THE SECOND SUBSTANCE ---------------------------------------------------

@@ -153,6 +153,7 @@ export function baseStats() {
     harpLevel: 0,
     scallopCount: 0,
     oysterLevel: 0,
+    razorClamLevel: 0,
     octoGrabLevel: 0,
     orcaLevel: 0,
     // STUBBED — the card that would raise this is disabled in upgrades.csv and
@@ -170,6 +171,13 @@ export function baseStats() {
     // Read live off here by systems/club.js in the shape systems/scaling.js
     // established, so a run without the card multiplies by 1 and every call
     // site can apply them unconditionally.
+    // How many clubs the run's club cards have bought, total. THE COUNT, not a
+    // bonus on top of one: every club in the water came from a pick that rolled
+    // `amount` (see clubStackPerk in config.js), including the first pick of
+    // each type, which is never rolled. Here so the card can MEASURE itself —
+    // systems/club.js derives the same number from the same function when it
+    // needs to know which type each club is.
+    clubCount: 0,
     clubDamageMul: 1,
     clubKnockMul: 1,
     clubReachMul: 1,
@@ -204,7 +212,7 @@ export const INTEGER_STATS = new Set([
   'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'starfishLevel',
   'maneaterLevel', 'ironLungLevel', 'homingShotLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
-  'dumboLevel', 'harpLevel', 'oysterLevel', 'octoGrabLevel', 'orcaLevel', 'dolphinPodLevel',
+  'dumboLevel', 'harpLevel', 'oysterLevel', 'razorClamLevel', 'octoGrabLevel', 'orcaLevel', 'dolphinPodLevel',
   'musselVolleyLevel',
   'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel',
 ]);

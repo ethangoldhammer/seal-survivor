@@ -239,4 +239,5 @@ export const PAGES = [
   { file: 'tools/looks/note-storm.html', on: 'built', script: 'looks:notes', title: 'Note storm' },
   { file: 'tools/looks/crab-reach.html', on: 'built', script: 'looks:crab', title: 'Crab reach' },
   { file: 'tools/looks/whale-sweep.html', on: 'built', script: 'looks:whale', title: 'Whale sweep' },
+  { file: 'tools/looks/pickups.html', on: 'built', script: 'looks:pickups', title: 'Pickups' },
 ].map((p) => ({ ...p, blurb: p.blurb ?? blurbFromFile(join(ROOT, p.file.replace(/\.html$/, '.js'))) }));

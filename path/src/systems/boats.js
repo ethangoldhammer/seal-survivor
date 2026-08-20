@@ -10,6 +10,7 @@ import { snapSide } from './facing.js';
 import { RigidBody, addBody, removeBody, blastBodies } from './rigidBody.js';
 import { updateHullWake } from './boatWake.js';
 import { emit } from '../entities/particles.js';
+import { createAttractiveClam, updateAttractiveClam, disposeAttractiveClam } from './attractiveClam.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
@@ -39,7 +40,10 @@ export function resetBoats(scene) {
     scene.remove(b.mesh);
   }
   boats.length = 0;
-  for (const o of attractorOrbs) scene.remove(o.mesh);
+  for (const o of attractorOrbs) {
+    scene.remove(o.mesh);
+    disposeAttractiveClam(o.mesh);
+  }
   attractorOrbs.length = 0;
   resetBoatDebris(scene);
   resetCrew(scene);
@@ -232,12 +236,14 @@ function spawnBoat(scene, difficulty) {
   spawnCrewFor(scene, boat);
 }
 
+// THE ATTRACTIVE CLAM going into the water. Built by hand rather than through
+// createVisual, because it is a composed object with its own per-instance
+// materials and its own beat clock — see systems/attractiveClam.js. The asset
+// entry `attractorOrb` is kept as the fallback for anything that still asks
+// assets.js for one (the tuner's Look panel enumerates the table).
 export function spawnAttractorOrb(scene, pos) {
-  const mesh = createVisual('attractorOrb');
+  const mesh = createAttractiveClam();
   mesh.scale.setScalar(CONFIG.attractorOrb.scale);
-  if (mesh.material?.color) {
-    mesh.material.color.set(CONFIG.attractorOrb.color).multiplyScalar(CONFIG.attractorOrb.glow);
-  }
   mesh.position.copy(pos);
   scene.add(mesh);
   attractorOrbs.push({ mesh, life: CONFIG.attractorOrb.lifetime });
@@ -301,9 +307,15 @@ function updateHullSmoke(dt, b) {
   }
 }
 
-// hooks: { onBoatDestroyed(boat), onChumSpawned(n) }
+// hooks: { onBoatDestroyed(boat), onChumSpawned(n), rawDt }
+//
+// `hooks.rawDt` is the undilated frame time. It reaches exactly one thing here
+// — the clam's beat-synced wave train — and it is optional, so every existing
+// caller and harness is unchanged and simply gets a wave train that slows with
+// the water. See updateAttractiveClam.
 export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
   clock += dt;
+  const rawDt = hooks.rawDt ?? dt;
 
   if (CONFIG.boats.enabled) {
     spawnTimer -= dt;
@@ -398,7 +410,15 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
     const o = attractorOrbs[i];
     o.life -= dt;
     o.mesh.position.y += CONFIG.attractorOrb.riseSpeed * dt;
-    o.mesh.rotation.z += dt * 3;
+    // The clam does not SPIN any more. It used to turn at 3 rad/s, which is
+    // what you do to a featureless ball to stop it looking dead — this one has
+    // a front (the crease) and a pulse of its own, and turning it just hid
+    // them. What is left is a slow roll, so it reads as drifting rather than
+    // as being held.
+    o.mesh.rotation.z = Math.sin(o.mesh.position.y * 0.12) * 0.22;
+    // rawDt, not dt: the wave train is a musical effect and has no business
+    // stuttering because the game froze for 60ms on a hit.
+    updateAttractiveClam(o.mesh, dt, scene, rawDt);
 
     for (const p of pickups) {
       const dx = playerPos.x - p.mesh.position.x;
@@ -410,6 +430,7 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
 
     if (o.life <= 0) {
       scene.remove(o.mesh);
+      disposeAttractiveClam(o.mesh);
       attractorOrbs.splice(i, 1);
     }
   }

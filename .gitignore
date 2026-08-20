@@ -8,6 +8,7 @@ dist-cash-look
 dist-yacht-look
 dist-note-look
 dist-goo-look
+dist-hotspot-look
 dist-ring-look
 dist-core-look
 dist-crab-look
@@ -78,3 +79,5 @@ dist-wet-look
 # the hive look sheets are generated (npm run look:hive / look:stacks)
 hive-look.html
 hive-stacks.html
+dist-razor-look
+dist-pickup-look

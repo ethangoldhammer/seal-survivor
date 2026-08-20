@@ -17,6 +17,8 @@
 // ---------------------------------------------------------------------------
 import { initTypography } from '../../path/src/ui/typography.js';
 import { initUI, showGameOver, showLeaderboard, hideLeaderboard } from '../../path/src/ui/ui.js';
+import { captureBossShot, resetBossShot } from '../../path/src/systems/bossShot.js';
+import { initSnapshotCards, snapshotCardsLive } from '../../path/src/ui/snapshotCard.js';
 
 const say = (t) => { document.getElementById('say').textContent = t; };
 
@@ -54,10 +56,55 @@ const RUN = {
   deathSource: { kind: 'enemy', type: 'shark' },
 };
 
-function open() {
-  showGameOver(RUN, { bosses: 3 });
-  say('card open');
+// THE ROLL. Three kill shots, captured through the real bossShot.js off a
+// hand-painted "frame" — so the fan, the polaroid papers and the preview are
+// the shipped ones rather than three coloured rectangles. Without these the
+// trophy block stays hidden and half this screen is untestable here.
+const BOSSES = [
+  { name: 'Grimtide', cause: 'Homing Missile', causeSource: 'missile', level: 9, score: 21400, time: 214, hue: 196 },
+  { name: 'The Flensing Knife', cause: 'Fin Pebbles', causeSource: 'gun', level: 18, score: 74800, time: 452, hue: 24 },
+  { name: 'Mother Abyss', cause: 'Cold Snap', causeSource: 'clubIce', level: 27, score: 148230, time: 727, hue: 286 },
+];
+
+function paintFrame(hue) {
+  const c = document.createElement('canvas');
+  c.width = 1280; c.height = 720;
+  const g = c.getContext('2d');
+  const sky = g.createLinearGradient(0, 0, 0, c.height);
+  sky.addColorStop(0, `hsl(${hue} 60% 26%)`);
+  sky.addColorStop(1, `hsl(${(hue + 40) % 360} 70% 8%)`);
+  g.fillStyle = sky;
+  g.fillRect(0, 0, c.width, c.height);
+  // Something with a silhouette in it, so a crop that lost the subject is
+  // visible rather than a slightly different flat colour.
+  g.fillStyle = `hsl(${(hue + 180) % 360} 80% 62%)`;
+  g.beginPath();
+  g.ellipse(700, 430, 320, 130, -0.25, 0, 6.2832);
+  g.fill();
+  g.fillStyle = 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < 40; i++) {
+    g.fillRect((i * 173) % c.width, (i * 91) % c.height, 3, 3);
+  }
+  return c;
 }
+
+function seedShots() {
+  resetBossShot();
+  for (const b of BOSSES) captureBossShot(paintFrame(b.hue), b);
+}
+
+function open() {
+  seedShots();
+  showGameOver(RUN, { bosses: BOSSES.length });
+  say(`card open — polaroid: ${snapshotCardsLive() ? 'Rive' : 'coded paper'}`);
+}
+
+// THE RIVE POLAROID, PARSED FIRST. main.js does this at boot; without it the
+// fan falls back to the coded paper, and the two papers are different objects —
+// one is an <img>, the other a live Rive canvas being drawn into inside a card
+// that is about to be rotated in 3D. Looking at the coded one here and calling
+// it the score screen is how the shipped screen goes unlooked-at.
+initSnapshotCards().finally(open);
 open();
 
 document.getElementById('btnShow').addEventListener('click', open);

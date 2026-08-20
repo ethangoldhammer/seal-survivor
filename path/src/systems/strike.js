@@ -3,6 +3,7 @@ import { removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { applyElementalHit } from './elements.js';
 import { markTarget } from './marks.js';
 import { hitCreature } from './hitShape.js';
+import { hotSpotDamage } from './bossHotSpots.js';
 import { noteChain, tickChainTrace } from './chainTrace.js';
 
 // Where the dash last connected on a body. Shared and consumed immediately —
@@ -462,7 +463,24 @@ export function updateCharge(dt, held, stats) {
   if (left <= 1e-6 && strikeState.pending >= (CONFIG.strike.charge.minFire ?? 0.35)) {
     // += on the frames after, 0 on the frame itself, so `sinceLoaded` is the
     // age of the moment rather than the age plus one frame.
-    strikeState.sinceLoaded = strikeState.loaded ? strikeState.sinceLoaded + dt : 0;
+    //
+    // ...AND ONLY WHILE THE BUTTON IS DOWN, which is what makes the number
+    // tryStrike judges the release on the same number the player was shown.
+    //
+    // The release frame arrives with `held` ALREADY FALSE (input.js drops the
+    // level and raises the edge together) and runs a few lines before
+    // tryStrike reads the offset. Advancing here on that frame charged the
+    // player a whole frame they never got to see: the HUD drew +33ms, the gate
+    // measured +50ms, and every release in the game was judged one frame later
+    // than it was made. At 30fps that is the ENTIRE late half of the window —
+    // measured, 6 of 13 frames armed at 60fps and 2 of 13 at 30.
+    //
+    // The early side has always worked this way and that is the argument for
+    // it: `toLoaded` below is derived from `left`, nothing burns with the
+    // button up, so a wind-up let go of keeps its distance. The two sides of
+    // one window disagreeing about whether a released button still counts was
+    // the asymmetry, not this line.
+    strikeState.sinceLoaded = strikeState.loaded ? strikeState.sinceLoaded + (held ? dt : 0) : 0;
     strikeState.loaded = true;
     strikeState.toLoaded = 0;
   } else {
@@ -567,7 +585,33 @@ export function sweetHalfWidth(stats = null) {
  */
 export function sweetOffset() {
   if (strikeState.pending < (CONFIG.strike.charge.minFire ?? 0.35)) return -Infinity;
-  return strikeState.loaded ? strikeState.sinceLoaded : -strikeState.toLoaded;
+  return releaseOffset();
+}
+
+/**
+ * THE SAME NUMBER, WITHOUT THE "could this even fire" GATE — how far the
+ * wind-up is from its moment, whether or not there is enough banked to spend.
+ *
+ * The lead-in on the ring (systems/strikeRing.js) is drawn off this rather
+ * than off sweetOffset above, and the difference is the whole point of it: an
+ * indicator that only appears once `pending` clears minFire cannot show the
+ * moment APPROACHING, which is the one thing the instrument was missing. On a
+ * short wind-up minFire is crossed a few frames before the moment arrives, so
+ * gating the drawing on it would put the cue on screen after it was useful.
+ *
+ * Split off rather than inlined at the call site so the two can never drift:
+ * what the ring draws and what the gate judges are one expression, and the
+ * gate is that expression plus a rule about being able to fire at all.
+ *
+ * Takes the state to read as an argument, defaulting to the run's own. The
+ * look sheet (tools/looks/boost-core.js) drives a hand-built state to pose the
+ * meter without running the charge economy, and a reader pinned to this
+ * module's singleton would draw the LIVE wind-up on every panel of it — which
+ * is to say nothing at all, and the one part of the instrument that page
+ * cannot see is the part that has to be compiled to be believed.
+ */
+export function releaseOffset(s = strikeState) {
+  return s.loaded ? s.sinceLoaded : -s.toLoaded;
 }
 
 /**
@@ -1334,6 +1378,14 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
         // the difficulty ramp scaling that hp up out of reach mid-run.
         dmg = Math.max(dmg, e.hp);
       }
+
+      // A WEAK SPOT, IF THE RAM FOUND ONE. Before the subtraction, so
+      // everything downstream — the death check, the hook, the ledger — agrees
+      // about what this dash was worth. A ram is aimed (the player chose where
+      // to point a seal travelling at dash speed), which is the whole test for
+      // whether a source may crit. Returns `dmg` untouched for anything that
+      // is not a boss wearing a spot, the prey cull's minnows included.
+      if (dmg > 0) dmg = hotSpotDamage(e, strikeContact, dmg);
 
       if (dmg > 0) e.hp -= dmg;
       e.flash = CONFIG.fx.hitFlash;

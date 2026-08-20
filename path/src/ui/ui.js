@@ -25,7 +25,7 @@ import { mountRiveSplash } from './riveSplash.js';
 import { tipJarLink } from './tipJar.js';
 import { titlePreviewRequested } from '../systems/titleSeal.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
-import { bossShot, bossShots, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
+import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
 import { buildPrintPaper, initSnapshotPrints } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import { chainCss } from '../systems/chainColor.js';
@@ -725,6 +725,46 @@ const STYLES = `
     border: 1px solid rgba(122,215,255,0.35); }
   .sv-btn-ghost:hover { background: rgba(122,215,255,0.22); }
 
+  /* --- THE PRINT, HELD UP ---------------------------------------------------
+     A photograph in a fan is a thumbnail: at 120px on a phone there is no
+     reading the boss's name off the chin, let alone deciding whether this is
+     the one worth posting. Tapping one holds it up to the light — the FILE, at
+     nearly the size of the screen, with the two things you would do with it
+     underneath.
+
+     OUTSIDE THE CARD, not inside a face. The faces are overflow:hidden on a
+     slab that spends half a second rotated in 3D, so a viewer mounted in one
+     would be clipped to the card and would turn over with it. This is a sheet
+     over the whole menu, and the card carries on existing behind it.
+
+     A SCRIM AND NOT A BACKDROP-FILTER. A blur here would look better for about
+     one frame and then cost a full-screen filter pass on every frame the water
+     behind this menu paints — on the one screen this change set exists to take
+     work OFF. The card behind does not need to be legible; it needs to be
+     clearly not the thing you are looking at, and a dark sheet says that. */
+  .sv-shot-view { position: absolute; inset: 0; z-index: 8; display: flex;
+    flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    padding: 3vh 4vw; pointer-events: all;
+    background: rgba(3,6,10,0.93); }
+  /* The picture is the whole point, so it takes whatever the screen has left
+     after the two rows and keeps its own shape. min-height:0 because a flex
+     item will not shrink below its content otherwise and a 2000px-tall polaroid
+     would push the buttons off the bottom of a phone. */
+  .sv-shot-img { max-width: 100%; min-height: 0; flex: 0 1 auto;
+    max-height: calc(100% - 96px); width: auto; height: auto; object-fit: contain;
+    border-radius: 6px; box-shadow: 0 26px 60px rgba(0,0,0,0.7); }
+  .sv-shot-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  /* Top-right rather than in the row: the row is for the two things you came
+     here to do, and a Close sitting beside Share is a third thing to read
+     before either of them. */
+  .sv-shot-close { position: absolute; top: 12px; right: 14px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+    color: #e8ecf3; font: inherit; font-size: 15px; line-height: 1;
+    width: 34px; height: 34px; border-radius: 50%; cursor: pointer; pointer-events: all; }
+  .sv-shot-close:hover { background: rgba(255,255,255,0.16); }
+  .sv-shot-close:focus-visible, .sv-shot-close.sv-nav-sel { outline: 2px solid #fff; outline-offset: 2px; }
+  .sv-touch .sv-shot-close { width: 44px; height: 44px; }
+
   /* THE SCORECARD. The same five figures the shared image carries (see
      drawScorecard in systems/bossShot.js), but not as five equal chips any
      more.
@@ -981,15 +1021,35 @@ const STYLES = `
      for running it: a cascade collision does not announce itself, it just makes
      an unrelated screen slightly wrong. */
   .sv-flip-card {
-    position: relative; transform-style: preserve-3d; will-change: transform;
+    position: relative; transform-style: preserve-3d;
     transform: rotateY(var(--sv-flip, 0deg));
     max-height: 92vh; max-width: 90vw; width: 580px;
   }
+  /* WILL-CHANGE ONLY WHILE IT IS TURNING, and this is a fix rather than a
+     micro-optimisation. will-change:transform promotes the card to a
+     composited layer and KEEPS it there, and the card is not a strip of text —
+     it is a 580x940 slab holding the whole leaderboard and one live canvas per
+     kill shot. Left promoted for the minutes somebody sits on this screen, that
+     layer's rasterisation goes stale and comes back blank: the polaroids and
+     the card itself render as empty rectangles after a few turns, with the box
+     still there. Added by ui/cardFlip.js when a turn starts and taken off when
+     it lands, which also forces the browser to re-rasterise the card at its
+     resting size on the frame it stops moving. */
+  .sv-flip-turning { will-change: transform; }
   /* The container box. .sv-menu's own look moved out here, because the thing
-     that is a panel now is the FACE and not the card. */
+     that is a panel now is the FACE and not the card.
+
+     NO backface-visibility HERE, and its absence is load-bearing. It was
+     doing nothing the away face's own .sv-hidden was not already doing —
+     ui/cardFlip.js applies that class for real at the halfway point of the
+     turn (the pad's cursor depends on it, see gameOverControls) and
+     .sv-hidden is display:none, so the far face is not rendered at all
+     rather than merely turned away. What it DID do was force each face onto a
+     permanent render surface of its own, every kill-shot canvas rasterised
+     inside it, which is half of why this card went blank after a few turns.
+     See .sv-flip-turning above for the other half. */
   .sv-face {
     position: absolute; inset: 0; overflow: hidden;
-    backface-visibility: hidden; -webkit-backface-visibility: hidden;
     background: var(--sv-emulsion, #07090d);
     border: 1px solid rgba(255,255,255,0.14); border-radius: 14px;
     color: #e8ecf3; text-align: center;
@@ -1500,6 +1560,20 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
 
         </div>
       </div>
+
+      <!-- THE PRINT HELD UP TO THE LIGHT. A sheet over the whole menu rather
+           than anything inside the card: the faces clip their contents and turn
+           over, and this must do neither. Empty until a photograph in the fan
+           is tapped — see openShotView. -->
+      <div class="sv-shot-view sv-hidden" id="svShotView">
+        <img class="sv-shot-img" id="svShotImg" alt="" />
+        <div class="sv-shot-row">
+          <button class="sv-btn sv-btn-sm" id="svShotShare">Share this one</button>
+          <button class="sv-btn sv-btn-sm" id="svShotSave">Save this one</button>
+        </div>
+        <div class="sv-status" id="svShotStatus"></div>
+        <button class="sv-shot-close" id="svShotClose" aria-label="Close the preview">&#10005;</button>
+      </div>
     </div>
 
     <div class="sv-transition sv-hidden" id="svTransition"></div>
@@ -1523,6 +1597,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     // binding until the pad needed to find it by name.
     'svGameOverTitle', 'svRestartBtn',
     'svTrophy', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
+    'svShotView', 'svShotImg', 'svShotShare', 'svShotSave', 'svShotStatus', 'svShotClose',
     'svTipRow',
   ]) {
     el[id] = document.getElementById(id);
@@ -1931,6 +2006,11 @@ export function hideAllMenus() {
   // bubbles left, and a run that restarts mid-flip would otherwise leave a
   // canvas and a rAF alive over the new run — see releaseCardFlip.
   releaseCardFlip();
+  // And the print that was being held up. It is a sheet over the MENU rather
+  // than a child of the card, so hiding the menu takes it off screen — but it
+  // would still be holding a decoded 1600x2000 bitmap and would still be the
+  // thing the pad's cursor was routed to, into the next run.
+  closeShotView();
   unwatchCardSize();
   flip = null;
   levelUpCards = [];
@@ -2890,14 +2970,24 @@ function gameOverAll() {
   // gameOverAll() is a list of elements, not a query.
   return [el.svTrophyShare, el.svTrophySave, el.svSheetShare, el.svSheetSave,
     el.svTurnOver, el.svNameSubmit, el.svRestartBtn, el.svTipJar,
-    el.svTurnBack].filter(Boolean);
+    el.svTurnBack,
+    // The preview sheet's own three. In this list rather than beside it so the
+    // highlight is cleaned up with everything else when the card goes away —
+    // see the note above about working from the unfiltered list.
+    el.svShotShare, el.svShotSave, el.svShotClose].filter(Boolean);
 }
 
 function gameOverControls() {
   // A disabled button and one inside a hidden block are both unreachable for a
   // mouse, so neither may be a stop for the pad either — a cursor that lands
   // on something invisible is a cursor that has vanished.
-  return gameOverAll().filter((c) => !c.disabled && !c.closest('.sv-hidden'));
+  const live = gameOverAll().filter((c) => !c.disabled && !c.closest('.sv-hidden'));
+  // WHILE A PRINT IS HELD UP, THE SHEET OWNS THE PAD. Everything on the card is
+  // still in the layout and still passes the filter above — the sheet is drawn
+  // over it rather than replacing it — so without this the cursor walks onto
+  // buttons behind a backdrop, and a confirm presses one nobody can see.
+  if (shotViewOpen()) return live.filter((c) => el.svShotView.contains(c));
+  return live;
 }
 
 // The name FIELD is deliberately not in that list. A pad cannot type, so a
@@ -2908,7 +2998,12 @@ function selectGameOver(i, controls) {
   const previous = overIndex;
   overIndex = Math.max(0, Math.min(controls.length - 1, i));
   if (previous !== overIndex) feedback('uiHover');
-  for (const c of controls) c.classList.toggle('sv-nav-sel', c === controls[overIndex]);
+  // CLEARED ACROSS EVERY CONTROL ON THE CARD, not just the ones in this list.
+  // The list SHRINKS — the far face's controls leave it on a turn, and all of
+  // them leave it while a print is held up — and a highlight cleared only
+  // within the new list is a button still lit behind a backdrop, which is also
+  // the first thing `#svGameOverMenu .sv-nav-sel` finds.
+  for (const c of gameOverAll()) c.classList.toggle('sv-nav-sel', c === controls[overIndex]);
   controls[overIndex].focus({ preventScroll: true });
 }
 
@@ -3929,6 +4024,8 @@ function fanTilt(i, total) {
 
 function showTrophy() {
   const shots = bossShots();
+  // A print from the LAST run must not still be held up over this one's card.
+  closeShotView();
   if (!el.svTrophy || !el.svFan) return;
   el.svFan.innerHTML = '';
   if (!shots.length) {
@@ -3955,7 +4052,12 @@ function showTrophy() {
     if (i > 0) slot.style.marginLeft = `${-Math.round(width * 0.34)}px`;
     slot.setAttribute('aria-label', shot.name ? `Kill shot: ${shot.name}` : `Kill shot ${i + 1}`);
     slot.appendChild(buildPrintPaper(shot.url, shot, width));
-    slot.addEventListener('click', () => selectShot(i));
+    // A tap PICKS IT AND HOLDS IT UP. Picking alone was the whole gesture, and
+    // on a phone it meant the answer to "is this the one?" was a print the
+    // width of a thumb — so the two buttons under the fan were pressed on
+    // faith. openShotView selects as well, so the row below the fan still acts
+    // on whatever was last touched once the sheet is closed.
+    slot.addEventListener('click', () => openShotView(i));
     el.svFan.appendChild(slot);
   });
   selectShot(selectedShot);
@@ -3983,6 +4085,122 @@ function selectShot(i) {
     // and it has to go back to its place in the fan when another is picked.
     slots[n].style.zIndex = String(n === i ? slots.length + 1 : n + 1);
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE PRINT, HELD UP TO THE LIGHT
+// ---------------------------------------------------------------------------
+// A photograph in the fan is 120px of paper on a phone. That is enough to see
+// that there are three of them and nowhere near enough to decide which one is
+// worth posting — the boss's name is on the chin at four pixels tall. Tapping
+// one opens it at nearly the size of the screen, with Share and Save under it,
+// so the decision is made while LOOKING at the picture rather than after it has
+// already gone to the OS.
+//
+// WHAT IT SHOWS IS THE FILE, not a bigger copy of the fan's paper. The two are
+// genuinely different objects — the fan draws a Rive artboard live, and what
+// leaves the game is a PNG rendered off screen at share size (see
+// bossShotImage) — and a preview of the wrong one is worse than none, because
+// it would be believed. The composite goes up on the first frame because it is
+// already decoded and in the fan; the share file replaces it as soon as it is
+// ready, which on the normal path is immediately (warmShareCards rendered every
+// card while the screen was arriving).
+//
+// The token is what stops a slow render landing in a viewer that has since been
+// closed, or reopened on a different print.
+let shotViewToken = 0;
+
+function shotViewOpen() {
+  return !!el.svShotView && !el.svShotView.classList.contains('sv-hidden');
+}
+
+async function openShotView(i) {
+  if (!el.svShotView || !el.svShotImg) return;
+  wireShotView();
+  selectShot(i);
+  const shot = bossShots()[i];
+  if (!shot) return;
+  const token = ++shotViewToken;
+
+  if (el.svShotStatus) el.svShotStatus.textContent = '';
+  el.svShotImg.alt = shot.name ? `You beat ${shot.name}` : 'Your boss kill';
+  el.svShotImg.src = shot.url ?? '';
+  el.svShotView.classList.remove('sv-hidden');
+  // Focus moves onto the way out, so Escape and a pad both have somewhere to
+  // be. Not onto Share: the first thing a confirm should do on a sheet the
+  // player has just opened is not post their run to the internet.
+  el.svShotClose?.focus({ preventScroll: true });
+
+  const url = await bossShotImage(i);
+  if (url && token === shotViewToken && shotViewOpen()) el.svShotImg.src = url;
+}
+
+function closeShotView() {
+  if (!el.svShotView) return;
+  shotViewToken++;
+  el.svShotView.classList.add('sv-hidden');
+  // The attribute is REMOVED rather than blanked. A blank src is a request for
+  // the current document, and what this is holding is a 1600x2000 data URL —
+  // dropping it gives the decoded bitmap back rather than keeping one per
+  // print looked at for the rest of the screen.
+  el.svShotImg?.removeAttribute('src');
+  if (el.svShotStatus) el.svShotStatus.textContent = '';
+}
+
+let shotViewWired = false;
+
+function wireShotView() {
+  if (shotViewWired) return;
+  shotViewWired = true;
+  const say = (msg) => { if (el.svShotStatus) el.svShotStatus.textContent = msg; };
+  // Same three outcomes the trophy row reports, and said the same way — see
+  // told() in wireTrophy for why "shared!" cannot cover all of them.
+  const told = (how) => say({
+    shared: 'Shared',
+    saved: 'Saved to your downloads',
+    opened: 'Opened — press and hold the picture to save it',
+    cancelled: '',
+    unavailable: 'Nothing to share',
+  }[how] ?? '');
+
+  // The same rule as the trophy row: where the OS has a share sheet, that sheet
+  // is also how you save, so a second button is one doing the first one's job.
+  if (canShareImages()) {
+    el.svShotSave?.remove();
+    el.svShotSave = null;
+    if (el.svShotShare) el.svShotShare.textContent = 'Share this print';
+  }
+
+  bindMenuSounds(el.svShotShare)?.addEventListener('click', async () => {
+    say('…');
+    told(await shareBossShot(selectedShot));
+  });
+  bindMenuSounds(el.svShotSave)?.addEventListener('click', async () => {
+    told(await saveBossShot(selectedShot));
+  });
+  bindMenuSounds(el.svShotClose)?.addEventListener('click', closeShotView);
+
+  // THE SHEET'S OWN BACKDROP CLOSES IT.
+  //
+  // AND NOTHING IN HERE REACHES THE MENU UNDERNEATH. That one turns the card
+  // over on any click outside the card (see bindTurn), and this sheet is inside
+  // it — so without the stop, putting a photograph down would flip the card
+  // behind it, and so would pressing Share. Stopped for the whole sheet rather
+  // than for the backdrop alone, because every one of its controls is a click
+  // outside the card as far as the menu can tell.
+  el.svShotView?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (e.target === el.svShotView) closeShotView();
+  });
+
+  // Escape, before main.js's pause key sees it. The score screen is not a
+  // paused game, so nothing else would answer.
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !shotViewOpen()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeShotView();
+  }, true);
 }
 
 // The buttons are wired once, on first show, and they must be wired to a real
@@ -4436,6 +4654,30 @@ function bindTurn() {
     // which the event audit reads as a typo.
     bindMenuSounds(button).addEventListener('click', () => flip?.flip());
   }
+
+  // THE WATER AROUND THE CARD TURNS IT OVER TOO.
+  //
+  // "Turn it over" is a caption in the card's own type — small, low contrast,
+  // and deliberately not a fifth button competing with Try again — which makes
+  // it the right size for a label and the wrong size for a target. The card is
+  // an object on a table and the rest of the screen is the table, so clicking
+  // the table turns the object over: a whole screen's worth of hit area for a
+  // gesture that has no cost, because the way back is the same gesture.
+  //
+  // The card itself is exempt, or every press on Try again would flip on its
+  // way through — a click on a control inside the card bubbles up to here as
+  // well as firing its own handler.
+  el.svGameOverMenu?.addEventListener('click', (e) => {
+    // The preview sheet is drawn over this and handles its own backdrop; a tap
+    // there puts the photograph down and must not also turn the card behind it.
+    if (shotViewOpen()) return;
+    if (e.target?.closest?.('#svCard')) return;
+    // Somebody who has just dragged across the leaderboard to copy a name is
+    // finishing a selection, not asking for anything.
+    if (window.getSelection?.()?.toString()) return;
+    feedback('uiClick');
+    flip?.flip();
+  });
 }
 
 export function showGameOver(gameState, extra = {}) {

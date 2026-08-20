@@ -392,7 +392,21 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
       // Art forward is +Y, hence the quarter turn.
       p.mesh.rotation.z = Math.atan2(p.dir.y, p.dir.x) - Math.PI / 2;
       // Mirror instead of rolling belly-up when travelling leftward.
-      p.mesh.rotation.y = p.dir.x < 0 ? Math.PI : 0;
+      //
+      // `orient: 'axis'` OPTS OUT, for a body that has no belly to protect —
+      // the razor clam's blade, which is symmetric end to end and face to face.
+      // It is not merely unnecessary there, it is wrong: the mirror is a Ry(PI)
+      // composed AFTER the heading (three's XYZ order applies z first), which
+      // lands on the intended pose only when the heading is on an axis. At a
+      // leftward DIAGONAL it is 90 degrees out — measured at 135 and 225
+      // degrees — and a blade fired up-left flies broadside.
+      //
+      // Every other projectile keeps the old behaviour deliberately. It has the
+      // same 90-degree error at those two headings, and a mussel or a gull is
+      // round enough that nobody has ever seen it; changing the shared branch
+      // would silently re-pose every weapon in the game, which is not something
+      // to do from inside a new card.
+      p.mesh.rotation.y = p.orient !== 'axis' && p.dir.x < 0 ? Math.PI : 0;
     }
     if (p.spin) p.mesh.rotation.z += p.spin * dt;
     // Rock ammo tumbles about its own arbitrary axis. Only when nothing else

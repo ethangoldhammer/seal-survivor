@@ -580,6 +580,99 @@ section('THE BOARD IS A HUNDRED DEEP');
     `"${$('svNameInput').style.fontSize}" ${$('svNameRow').className}`);
 }
 
+// ---------------------------------------------------------------------------
+section('THE WATER AROUND THE CARD');
+// ---------------------------------------------------------------------------
+// "Turn it over" is a caption in the card's own type, not a button, and on a
+// phone it is a 90x14 target for the one gesture that reveals half the screen.
+// The rest of the menu turns the card too — and the two ways that goes wrong
+// are both silent: a click on Try again bubbles up here and flips on its way
+// out, or the preview sheet's own buttons do.
+{
+  ui.showGameOver(gameState);
+  const card = $('svCard');
+  const fire = (node) => node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+
+  fire($('svGameOverTitle'));
+  check('a click on the card itself does not turn it', !cardFlipMoving());
+
+  fire($('svGameOverMenu'));
+  check('a click on the water around it does', cardFlipMoving());
+  // THE PROMOTION IS A STATE. will-change: transform left on for the minutes
+  // somebody sits here keeps a 580px slab holding a live canvas per kill shot
+  // in a composited layer that is never re-rasterised, and what that renders as
+  // is a card of empty rectangles. It goes on with the turn and off with it.
+  check('...and the card is promoted while it moves',
+    card.classList.contains('sv-flip-turning'), card.className);
+  await settle();
+  check('...and demoted the moment it lands',
+    !card.classList.contains('sv-flip-turning'), card.className);
+  // WAITED FOR SEPARATELY, and the difference is the point: settle() watches
+  // the ANGLE, and the froth off the leading edge outlives it by a second. The
+  // canvas is a full-menu layer — if it were left behind after a turn there
+  // would be one of them for every turn the player took.
+  for (let i = 0; i < 600 && document.querySelectorAll('.sv-flip-bubbles').length; i++) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  check('...and the bubble layer goes once the froth has cleared',
+    document.querySelectorAll('.sv-flip-bubbles').length === 0);
+
+  $('svTurnBack').click();
+  await settle();
+}
+
+// ---------------------------------------------------------------------------
+section('THE PRINT, HELD UP');
+// ---------------------------------------------------------------------------
+// A photograph in the fan is 120px of paper. Tapping one holds it up at nearly
+// the size of the screen so the choice to share it is made while looking at it.
+{
+  ui.showGameOver(gameState);
+  const view = $('svShotView');
+  const slots = [...$('svFan').children];
+  check('the fan has a print to open', slots.length > 0, `${slots.length} slot(s)`);
+
+  slots[0].click();
+  check('a tap on a print opens it', !hidden(view));
+  // WHAT IT SHOWS IS THE FILE. The composite goes up first because it is
+  // already decoded and in the fan; bossShotImage replaces it with exactly what
+  // share and save hand to the OS. A preview of a different picture would be
+  // believed, which is what makes it worse than none.
+  check('...with a picture on it', !!$('svShotImg').getAttribute('src'));
+  check('...and it picks that print, so the card\'s own row acts on it too',
+    slots[0].classList.contains('sv-fan-sel'), slots[0].className);
+
+  // THE SHEET OWNS THE PAD WHILE IT IS UP. Everything on the card is still in
+  // the layout — this is drawn over it, not instead of it — so without the
+  // routing the cursor walks onto buttons behind a backdrop and a confirm
+  // presses one nobody can see.
+  const stops = padStops();
+  check('the cursor cannot reach the card behind it',
+    !stops.some((id) => id === 'svRestartBtn' || id === 'svNameSubmit' || id === 'svTurnOver'),
+    stops.join(' → '));
+  check('...and can reach the way out of the sheet',
+    stops.includes('svShotClose'), stops.join(' → '));
+
+  // A press on Share is a click outside the card as far as the menu can tell.
+  const before = cardFlipMoving();
+  $('svShotShare').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  check('a press inside the sheet does not turn the card underneath',
+    cardFlipMoving() === before);
+
+  view.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  check('a tap on its backdrop puts the print down', hidden(view));
+  check('...without turning the card on the way', !cardFlipMoving());
+
+  slots[0].click();
+  window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('Escape puts it down as well', hidden(view));
+  // Held open across a restart it would keep a 1600x2000 bitmap alive and keep
+  // the pad routed into a sheet over the next run.
+  slots[0].click();
+  ui.hideAllMenus();
+  check('...and so does starting another run', hidden(view));
+}
+
 console.warn = realWarn;
 console.log(failures ? `\n${failures} FAILED` : '\nPASS — all checks');
 process.exit(failures ? 1 : 0);

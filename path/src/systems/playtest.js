@@ -1,3 +1,4 @@
+import { sourceFamily } from './playtestAnalysis.js';
 // ---------------------------------------------------------------------------
 // PLAYTEST RECORDER
 //
@@ -52,6 +53,19 @@ let stacks = {}; // upgrade id -> picks taken so far this run
 // than a field on the enemy: nothing here should keep a corpse alive, and the
 // game object stays exactly as it was.
 const lastDamager = new WeakMap();
+// EVERYTHING that has damaged a body, by source, while it is still alive.
+//
+// `lastDamager` alone answers "what landed the killing blow", which is the
+// right credit for the kill LEDGER — it is cheap, it is what recordKill has
+// always used, and over a run it ranks abilities correctly. It is the wrong
+// answer for a caption: the last tick before a boss falls is whatever happened
+// to be ticking, and a boss beaten down over ninety seconds by the club line
+// gets stamped with the pellet that finished it.
+//
+// So a second, per-body tally, and only for the one question that needs it.
+// A WeakMap keyed on the creature: it dies with the body, so a run that killed
+// four hundred fish holds four hundred nothings.
+const damageTally = new WeakMap();
 
 function newBucket(t) {
   return {
@@ -210,26 +224,76 @@ export function recordDamage(source, amount, target) {
   if (target && typeof target === 'object' && target.invincible) return;
   if (amount >= SENTINEL_HP) return;
   add(bucket.dealtBySource, source, amount);
+  // The per-body tally the polaroid reads. Behind the same two guards as the
+  // ledger above and deliberately so: a caption must not credit a weapon for
+  // swinging at scenery, and the turtle's sentinel hp would out-total every
+  // real weapon in the run on its own. See SENTINEL_HP.
+  if (target && typeof target === 'object') {
+    let tally = damageTally.get(target);
+    if (!tally) { tally = Object.create(null); damageTally.set(target, tally); }
+    tally[source] = (tally[source] ?? 0) + amount;
+  }
 }
 
 /**
- * What last damaged `target`, or null. The same credit recordKill would give
- * it, exposed because ONE death in the game needs the answer while the body is
+ * WHAT ACTUALLY KILLED `target` — the weapon that did the most damage to it,
+ * not the one that happened to land last.
+ *
+ * Exposed because ONE death in the game needs the answer while the body is
  * still warm rather than as a bucket total afterwards: the boss's, which the
  * kill shot stamps onto the polaroid (systems/boss.js -> systems/bossShot.js).
  *
- * Reads the same WeakMap every kill is credited from rather than a second
- * ledger, so the name on the print and the ability the balance report gives
- * the kill to are the same answer by construction — they cannot disagree the
- * way two parallel trackers eventually would.
+ * MOST DAMAGE, NOT LAST HIT, and the two are different often enough to matter.
+ * A boss is worn down over a minute and a half; whatever ticks on the frame it
+ * falls is close to arbitrary — an aura, a carom, a pellet — and stamping that
+ * on the photograph captions the fight with a footnote. The ledger still
+ * credits the KILL to the last damager (see recordKill), which is the right
+ * rule there and cheap; this is the caption's own question.
  *
+ * BY FAMILY FIRST. The club line books under four separate tags so the balance
+ * report can rank Boom Boom Club against Cold Snap — correct for the ledger, and
+ * ruinous for a caption: a run built entirely on wood splits its output four
+ * ways and loses the stamp to whatever single ability out-damaged each
+ * quarter. So the totals are summed per family, the winning family is chosen,
+ * and the loudest member of THAT family is what gets named. See SOURCE_FAMILY.
+ *
+ * Falls back to the last damager when nothing was tallied at all — a body
+ * killed by something that deals no damage (the net haul) still has a killer.
  * Null while no run is recording, which never happens in practice (main.js
  * calls beginRun on every start) and is still not something a caller may
  * assume: the polaroid falls back to saying nothing rather than to a guess.
  */
 export function damageCreditFor(target) {
   if (!target || typeof target !== 'object') return null;
-  return lastDamager.get(target) ?? null;
+  const tally = damageTally.get(target);
+  if (!tally) return lastDamager.get(target) ?? null;
+
+  // Two passes rather than one. The family has to be decided across ALL of its
+  // members before any member can win — picking the loudest single source and
+  // then asking what family it is in is the bug this whole function exists to
+  // fix, because that is exactly what "the club line lost to a pellet" is.
+  const families = Object.create(null);
+  for (const key in tally) {
+    const fam = sourceFamily(key);
+    families[fam] = (families[fam] ?? 0) + tally[key];
+  }
+  let bestFam = null;
+  let bestFamTotal = -Infinity;
+  for (const fam in families) {
+    if (families[fam] <= bestFamTotal) continue;
+    bestFamTotal = families[fam];
+    bestFam = fam;
+  }
+
+  let best = null;
+  let bestTotal = -Infinity;
+  for (const key in tally) {
+    if (sourceFamily(key) !== bestFam) continue;
+    if (tally[key] <= bestTotal) continue;
+    bestTotal = tally[key];
+    best = key;
+  }
+  return best ?? lastDamager.get(target) ?? null;
 }
 
 /**

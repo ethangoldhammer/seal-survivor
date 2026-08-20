@@ -244,5 +244,82 @@ b = runWith(() => {
 check('non-positive damage is still refused', b.dealtBySource.gun === 12,
   `got ${b.dealtBySource.gun}`);
 
+// ===========================================================================
+// THE CAPTION'S OWN QUESTION — what actually killed this body?
+//
+// Separate from the kill LEDGER on purpose, and these checks are the line
+// between them: recordKill credits the last damager (cheap, right over a run,
+// and what the balance report wants), while damageCreditFor answers what the
+// polaroid asks, which is what the fight was actually WON with.
+// ===========================================================================
+
+{
+  const { sourceFamily } = await import('../path/src/systems/playtestAnalysis.js');
+
+  playtest.beginRun({ playerMaxHp: 100 });
+  const boss = { id: 'boss' };
+  // Ninety seconds of clubbing, split four ways the way a real club build
+  // books it — no single club tag beats the pellets, and together they bury
+  // them.
+  playtest.recordDamage('club', 400, boss);
+  playtest.recordDamage('clubBoom', 300, boss);
+  playtest.recordDamage('clubIce', 100, boss);
+  playtest.recordDamage('clubThrow', 250, boss);
+  playtest.recordDamage('gun', 500, boss);
+  // ...and the pellet that happened to land last.
+  playtest.recordDamage('gun', 1, boss);
+
+  const credit = playtest.damageCreditFor(boss);
+  check('the club line beats the weapon that out-damaged each of its tags',
+    sourceFamily(credit) === 'club', `credited ${credit}`);
+  // ...and it names the LOUDEST club, so the caption is specific rather than
+  // just "a club".
+  check('...and names the loudest club in it', credit === 'club', `credited ${credit}`);
+
+  // THE FAMILY IS DECIDED BEFORE ANY MEMBER WINS. Picking the loudest single
+  // source and then asking what family it is in is the exact bug this exists
+  // to fix: `gun` is bigger than any one club tag here.
+  const solo = { id: 'solo' };
+  playtest.recordDamage('gun', 500, solo);
+  playtest.recordDamage('club', 400, solo);
+  check('a genuinely bigger weapon still wins', playtest.damageCreditFor(solo) === 'gun',
+    `credited ${playtest.damageCreditFor(solo)}`);
+
+  // LAST HIT IS NOT THE ANSWER any more, and this is the case that used to be
+  // captioned wrong: a boss worn down by one thing and finished by an aura
+  // tick.
+  const worn = { id: 'worn' };
+  playtest.recordDamage('club', 900, worn);
+  playtest.recordDamage('garlic', 3, worn);
+  check('the last tick does not steal the caption',
+    playtest.damageCreditFor(worn) === 'club', `credited ${playtest.damageCreditFor(worn)}`);
+
+  // A KILL WITH NO DAMAGE BEHIND IT still has a killer — the net haul. Falls
+  // back to the last damager rather than to null, or a print that should say
+  // "Bakalar's Boat" says nothing at all.
+  const netted = { id: 'netted' };
+  check('a body with no tally at all credits nobody', playtest.damageCreditFor(netted) === null,
+    String(playtest.damageCreditFor(netted)));
+
+  // SCENERY NEVER ENTERS THE TALLY. The claim is not that an invincible body
+  // credits nobody — `lastDamager` moves for a placeholder on purpose, and the
+  // note on recordDamage says why — it is that the figure a weapon *tried* to
+  // deal cannot out-total a real one. Asserted by giving the scenery a huge
+  // swing and a small real hit from something else: if the swing were tallied
+  // it would win by two hundred to one, and the fallback cannot produce that
+  // answer because the fallback is the LAST damager.
+  const turtle = { id: 'turtle', invincible: true };
+  playtest.recordDamage('club', 9999, turtle);
+  playtest.recordDamage('gun', 1, turtle);
+  check('a swing at scenery cannot out-total a real weapon',
+    playtest.damageCreditFor(turtle) === 'gun',
+    `credited ${playtest.damageCreditFor(turtle)}`);
+  const sentinel = { id: 'sentinel' };
+  playtest.recordDamage('club', PLACEHOLDER, sentinel);
+  playtest.recordDamage('gun', 5, sentinel);
+  check('...and neither does a sentinel-hp figure',
+    playtest.damageCreditFor(sentinel) === 'gun', String(playtest.damageCreditFor(sentinel)));
+}
+
 console.log(failures === 0 ? '\nAll ledger checks passed.' : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
