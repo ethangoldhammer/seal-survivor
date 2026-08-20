@@ -67,6 +67,20 @@
 //     speedPerDifficulty         0     linear speed gain per difficulty point
 //     turnRate                   none  rad/s; blank = pivots on the spot
 //     contactDamagePerDifficulty 0
+//     biteDamage                 0     what the JAWS CLOSING costs the player,
+//                                      as one burst on the frame they shut.
+//                                      Blank — every wildlife row — means the
+//                                      snap is what it has always been: a
+//                                      sound, a puff and a pose, with contact
+//                                      doing the damage. Filled in, the animal
+//                                      has a real attack, and it needs a
+//                                      `hunt` block to have jaws to close (see
+//                                      the bite gate in entities/enemies.js).
+//                                      Ramped by the run's damage curve like
+//                                      contactDamage and shoot.damage are, and
+//                                      then held to the boss per-hit ceiling —
+//                                      so the useful range is a fifth to a
+//                                      third of a starting health bar.
 //     scalePerDifficulty         0     visual+hitbox growth over a run
 //     maxGrowth                  ∞     cap for the above
 //     scaleVariance              0     per-individual size jitter, +/- this
@@ -125,6 +139,9 @@ const OPTIONAL = {
   speedPerDifficulty: { min: 0 },
   turnRate: { min: 0 },
   contactDamagePerDifficulty: { min: 0 },
+  // The burst a closing set of jaws is worth. See the column note above: blank
+  // is the whole roster except the bosses that chase.
+  biteDamage: { min: 0 },
   scalePerDifficulty: { min: 0 },
   maxGrowth: { min: 0 },
   scaleVariance: { min: 0 },

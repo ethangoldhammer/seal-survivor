@@ -203,6 +203,7 @@ function releaseBoss() {
   e.perkDrive = false;
   e.invuln = 0;
   if (baseContactDamage > 0) e.contactDamage = baseContactDamage;
+  e.ramming = false;
   if (e.visual) e.visual.visible = true;
   baseContactDamage = 0;
 }
@@ -596,6 +597,7 @@ export function interruptBossPerk(e) {
   // belt and braces — but a cancelled perk that left the multiplier standing
   // would be a boss quietly hitting for double for the rest of the fight.
   if (baseContactDamage > 0) e.contactDamage = baseContactDamage;
+  e.ramming = false;
   if (e.visual) e.visual.visible = true;
   if (active.flare) active.flare.visible = false;
   if (active.marker) active.marker.visible = false;
@@ -666,6 +668,9 @@ function updateLunge(dt, e, r, dirX, dirY) {
       // Read off the saved base rather than compounding, so a lunge that was
       // interrupted and re-entered can't stack the multiplier.
       e.contactDamage = baseContactDamage * (p.damage ?? 2);
+      // ...and the body counts as the attack while it is doing this — see
+      // `ramming` in entities/enemies.js.
+      e.ramming = true;
     }
     return;
   }
@@ -689,6 +694,7 @@ function updateLunge(dt, e, r, dirX, dirY) {
   if (active.timer <= 0) {
     e.perkDrive = false;
     e.contactDamage = baseContactDamage;
+    e.ramming = false;
     active.flare.visible = false;
     active.stage = 'ready';
     active.timer = p.cooldown ?? 5.5;

@@ -64,11 +64,6 @@ biolum.damageFraction,0.3,0,1,glow-up element damage as a share of the hit that 
 biolum.damageFractionPerLevel,0.16,0,0.5,glow-up element damage per level
 biolum.statusPerLevel,0.22,0,1,glow-up status strength per level
 biolum.strikeFraction,0.5,0,1,glow-up share a dash carries
-biolum.night.damageMul,1.2,1,3,glow-up damage x after dark
-biolum.night.durationMul,1.8,1,4,glow-up status duration x after dark
-biolum.night.twilightBoost,0.35,0,1,glow-up how much of full night dusk counts for
-biolum.night.dayPower,0.35,0,1,glow-up power kept in daylight — 0 makes the card inert for the whole working day (see systems/elements.js)
-biolum.night.blendGamma,1.2,0.25,4,glow-up day to night fade curve
 starfish.baseFireRate,0.42,0.05,2,starfish seconds between throws at level 1
 starfish.fireRatePerLevel,0.88,0.5,1,starfish fire rate mult per level (compounds)
 starfish.damage,22,1,120,starfish damage per hit

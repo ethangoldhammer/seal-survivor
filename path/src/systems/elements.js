@@ -39,8 +39,10 @@ import { holdEnemy, clearDaze } from './control.js';
 // damage there could remove enemies from the array being iterated, which is the
 // same hazard main.js's `pendingSplashes` queue already exists to avoid.
 //
-// THE NIGHT RAMP is the reason this ability is bioluminescence and not
-// "elemental damage" — see nightFactor().
+// THE SKY IS A LOOK, NOT A NUMBER. The seal glows harder after dark and its
+// pellets carry more of the element's colour, but nothing the element DOES
+// changes with the clock. See elementGlow() for why that used to be the other
+// way round and what it cost.
 // ============================================================================
 
 // The active element for this run, or null before the first Glow Up! is taken.
@@ -113,32 +115,34 @@ export function nightFactor() {
 }
 
 /**
- * HOW AWAKE THE ELEMENT IS RIGHT NOW, 0..1. The one number both halves of the
- * ability read: what it does (applyElementalHit) and what it looks like
- * (updateElementSkin), so they can never disagree about whether the seal is
- * glowing while it is also poisoning things.
+ * HOW BRIGHTLY THE ELEMENT IS SHOWING RIGHT NOW, 0..1. A LOOK NUMBER ONLY.
  *
- * WHY IT EXISTS. Bioluminescence at noon is a contradiction — the whole
- * conceit is light the deep sea makes for itself, and a seal blazing away
- * under a midday sun reads as a bug in the shader rather than as a power.
- * `nightStrengthMul` only ever made the glow BRIGHTER after dark; it never
- * turned it off, so the daytime seal was a permanently-lit animal with a
- * modest night bonus.
+ * Every reader of this is a renderer: the seal's skin (updateElementSkin), the
+ * pellet's colour and the ribbon behind it (shotMix / elementTrailMix). It
+ * decides how much of the seal's bioluminescence you can SEE, never how much
+ * of it lands.
+ *
+ * IT USED TO GATE THE DAMAGE, and that was the bug. Folded into `share` in
+ * applyElementalHit, a `dayGlow` of 0 meant an element rolled at 9am did
+ * nothing whatsoever for several minutes of real play — no bonus packet, no
+ * venom, no arc — and no card, tooltip or readout said so. The floor was
+ * raised to 0.35 to make that survivable, which left a strange half-strength
+ * ability instead of a broken one. The clock now moves the LOOK and leaves
+ * the numbers alone: what Glow Up! does is the same at noon and at midnight,
+ * and the sky is what it looks like while it does it.
  *
  * A FADE, NOT A SWITCH. `nightFactor` already ramps through dusk (twilight
  * counts most of the way to night for this ability), so this rides it and the
- * ability wakes up across the sunset instead of popping on at a threshold.
- * `blendGamma` shapes that: above 1 holds it off until it is properly dark.
+ * seal lights up across the sunset instead of popping on at a threshold.
+ * `blendGamma` shapes that: above 1 holds it dark until it is properly night.
  *
- * Returns 1 — fully awake, always — when there is no clock to wait out.
- * Anything else would delete the ability outright from a run with the day
- * cycle switched off, and there would be no message saying why. Same failure
- * and the same answer as the nightlife spawn gate in entities/enemies.js.
+ * Returns 1 — fully lit, always — when there is no clock to wait out, so a run
+ * with the day cycle switched off still shows the element on the animal.
  */
-export function elementPower() {
+export function elementGlow() {
   const n = cfg().night;
   if (!n?.enabled || !CONFIG.dayNight?.enabled) return 1;
-  const floor = Math.min(1, Math.max(0, n.dayPower ?? 0));
+  const floor = Math.min(1, Math.max(0, n.dayGlow ?? 0));
   const t = Math.pow(nightFactor(), Math.max(0.05, n.blendGamma ?? 1));
   // A MAX, not a sum: the surge below is "the element is fully awake", and
   // adding it to a night that is already awake would push past 1 and quietly
@@ -154,8 +158,15 @@ export function elementPower() {
 // Fly through the moon and the seal comes out lit: for a few seconds the
 // element runs at full dark-hour power whatever the clock says. This is the
 // whole synergy, and it is deliberately worth exactly nothing to a run that
-// never took Glow Up! — every reader of `elementPower` is already gated on
+// never took Glow Up! — every reader of `elementGlow` is already gated on
 // there being an element at all.
+//
+// SINCE THE CLOCK STOPPED TOUCHING THE NUMBERS this is a LOOK reward and not a
+// power one: flying through the moon makes the seal blaze at full midnight
+// brightness for a few seconds, and does not make it hit harder. That is a
+// real demotion and it is recorded here rather than quietly left as-is — if
+// the pass is meant to be worth something mechanically it now needs an effect
+// of its own, not a share of a night bonus that no longer exists.
 //
 // Module state for the same reason `element` is: recomputeStats() rebuilds the
 // stat block on every level-up and every tuner nudge, and a surge living there
@@ -197,16 +208,6 @@ function fadeSurge(dt) {
   }
   surge = Math.max(0, surge - dt / Math.max(0.05, surgeFade));
   if (surge <= 0) surgeFade = 0;
-}
-
-function nightDamageMul() {
-  const n = cfg().night;
-  return 1 + ((n?.damageMul ?? 1) - 1) * nightFactor();
-}
-
-function nightDurationMul() {
-  const n = cfg().night;
-  return 1 + ((n?.durationMul ?? 1) - 1) * nightFactor();
 }
 
 /** How far the element has been levelled — 0 when Glow Up! was never taken. */
@@ -260,12 +261,21 @@ export function elementCardName(baseName, id, stack) {
   return `${baseName} ${stack}: ${label}`;
 }
 
-/** What the card says. First pick announces the element; later ones deepen it. */
+/**
+ * What the card says. First pick announces the element; later ones deepen it.
+ *
+ * IT NO LONGER SAYS "Stronger at night", because it isn't. That line was true
+ * and it was also the only place the day ramp was ever explained — which meant
+ * the card was quietly telling a player who picked it at 9am that they had
+ * bought something for later, without saying how much later or how much less.
+ * The sky moves the seal's brightness now and nothing else, so there is
+ * nothing here to warn anybody about.
+ */
 export function elementCardDesc(id, stack) {
   const e = elementCfg(id);
   if (!e) return null;
-  if (stack <= 1) return `${e.desc}. Stronger at night.`;
-  return `${e.label}: +damage, +duration. Stronger at night.`;
+  if (stack <= 1) return `${e.desc}.`;
+  return `${e.label}: +damage, +duration.`;
 }
 
 // ===========================================================================
@@ -281,30 +291,24 @@ export function elementCardDesc(id, stack) {
  * would otherwise apply six full-strength statuses on one frame and make the
  * gun, which the card is nominally about, irrelevant.
  *
+ * `carrier` is the projectile the hit rode in on, or null for the strike and
+ * anything else with no body behind it. Only infection reads it, and only to
+ * hand the pellet's motes over to the fish — see handOverMotes.
+ *
  * Returns the bonus damage dealt, so the caller can attribute it.
  */
-export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks = {}, share = 1) {
+export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks = {}, share = 1, carrier = null) {
   if (!element || !cfg().enabled || !enemy) return 0;
   const lv = level();
   if (lv <= 0) return 0;
 
-  // Asleep in daylight. Folded into `share` rather than tested per effect
-  // because `share` is already the "how much of a full hit is this" scalar
-  // every element downstream honours — the shock's proc chance, the venom and
-  // infection durations, the chill's slow — so one multiply fades the whole
-  // ability together instead of four that can drift apart.
-  //
-  // Only APPLICATION is gated. A venom applied at midnight keeps ticking into
-  // the morning: cancelling live statuses at sunrise would read as the poison
-  // being cured by daylight, which is a different (and much stranger) rule
-  // than the one this is implementing.
-  const power = elementPower();
-  if (power <= 0) return 0;
-  share *= power;
-
+  // NO DAYLIGHT GATE, and no night bonus either. `share` is now only what the
+  // caller said it was — a full pellet, or the strike's discounted fraction —
+  // and the sky is not a term in it. See elementGlow() for what this used to
+  // do and why it went.
   const c = cfg();
   const frac = (c.damageFraction ?? 0) + (c.damageFractionPerLevel ?? 0) * (lv - 1);
-  const bonus = baseDamage * frac * share * nightDamageMul();
+  const bonus = baseDamage * frac * share;
 
   enemy.hp -= bonus;
   // RECORDED, but through a channel of its own rather than the generic damage
@@ -323,7 +327,13 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
     case 'shock': applyShock(scene, enemy, bonus, enemiesList, hooks, share); break;
     case 'venom': applyVenom(enemy, share); break;
     case 'chill': applyChill(enemy, share, hooks, x, y); break;
-    case 'infection': applyInfection(enemy, share, 0); break;
+    case 'infection':
+      applyInfection(enemy, share, 0);
+      // AFTER the infection, not before: handOverMotes sends the lights to a
+      // body that is about to start orbiting them, and a mote that arrived at
+      // a clean fish would retire on touchdown.
+      handOverMotes(carrier, enemy);
+      break;
     default: break;
   }
 
@@ -332,8 +342,27 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
 }
 
 // --- shock ------------------------------------------------------------------
-// One extra body, sometimes. Everything about it resolves within the frame,
-// which is why it needs no per-enemy state at all.
+// THE CHAIN. Everything about it resolves within the frame, which is why it
+// needs no per-enemy state at all.
+//
+// IT TRAVELS BETWEEN POINTS, NOT BETWEEN BODIES. The chain used to hop from
+// enemy object to enemy object and `break` the moment a hop killed something —
+// "the chain died with its victim; don't hop off a corpse". That reads fine
+// and played terribly: against the mackerel schools this element exists to
+// answer, the first hop kills, so a four-hop chain landed exactly one hop.
+// The lightning was strongest in precisely the fight where it did the least.
+//
+// So the chain carries a POSITION and the bodies are what it happens to find
+// there. A kill costs one extra hop out of the budget — the chain is visibly
+// slowed by having to blow through something rather than stopped by it — and
+// then it keeps going from where that body was.
+//
+// AND IT DIMINISHES. Each hop is `arcFalloff` of the one before, and the chain
+// gives up once a hop is worth less than `arcDamageFloor` of the packet that
+// started it. Two things this buys: a long chain is a real reward for a dense
+// crowd without being a damage multiplier bolted to the gun, and the bolt
+// itself is drawn thinner each hop, so how far down the chain you are reading
+// is something you can SEE rather than something only the numbers know.
 function applyShock(scene, from, packet, enemiesList, hooks, share) {
   const e = elementCfg('shock');
   if (!e || !enemiesList) return;
@@ -341,29 +370,53 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
   const chance = Math.min(e.chanceMax ?? 1, (e.chance ?? 0) + (e.chancePerLevel ?? 0) * (lv - 1));
   if (Math.random() > chance * share) return;
 
-  const hops = Math.max(1, Math.floor((e.arcs ?? 1) + (e.arcsPerLevel ?? 0) * (lv - 1)));
-  const range2 = (e.arcRange ?? 6) ** 2;
-  const damage = packet * (e.arcDamage ?? 0.7);
+  const range2 = (e.arcRange ?? 6.5) ** 2;
+  const falloff = Math.max(0, Math.min(1, e.arcFalloff ?? 0.62));
+  // As a share of the packet, not an absolute — the packet is a fraction of a
+  // hit that itself scales all run, so an absolute floor would cut the chain
+  // short at level 3 and never bite again by level 30.
+  const floor = packet * Math.max(0, e.arcDamageFloor ?? 0.06);
+  let damage = packet * (e.arcDamage ?? 0.7);
 
-  let source = from;
+  // Hops REMAINING, decremented in two places — once per hop taken, and again
+  // for a hop that killed. A plain `for` over a fixed count could not express
+  // the second without a second counter that means the same thing.
+  let budget = Math.max(1, Math.floor((e.arcs ?? 1) + (e.arcsPerLevel ?? 0) * (lv - 1)));
+
+  let sx = from.mesh.position.x;
+  let sy = from.mesh.position.y;
+  // Bodies already hit by THIS chain. Keeps it moving outward instead of
+  // rebounding between the same two fish, and a corpse left in here is
+  // harmless: it is gone from enemiesList a line after it dies.
   const struck = new Set([from]);
-  for (let hop = 0; hop < hops; hop++) {
+
+  while (budget > 0) {
+    budget--;
+
     let best = null;
     let bestD = range2;
     for (const other of enemiesList) {
       if (struck.has(other)) continue;
-      const dx = other.mesh.position.x - source.mesh.position.x;
-      const dy = other.mesh.position.y - source.mesh.position.y;
+      const dx = other.mesh.position.x - sx;
+      const dy = other.mesh.position.y - sy;
       const d2 = dx * dx + dy * dy;
       if (d2 < bestD) { bestD = d2; best = other; }
     }
     if (!best) break;
 
     struck.add(best);
-    hooks.onArc?.(
-      source.mesh.position.x, source.mesh.position.y,
-      best.mesh.position.x, best.mesh.position.y,
-    );
+    // Read BEFORE the damage. removeEnemy takes the mesh out of the scene, and
+    // the whole point of this rewrite is that the chain continues from where
+    // the body was — which means the last thing to read that position cannot
+    // be something that runs after it has died.
+    const tx = best.mesh.position.x;
+    const ty = best.mesh.position.y;
+
+    // The share of the original packet this hop is worth, for the bolt's
+    // thickness. Guarded because a packet of 0 is reachable — a hit on a
+    // sentinel-hp body at level 1 rounds there — and NaN width draws nothing.
+    hooks.onArc?.(sx, sy, tx, ty, packet > 0 ? damage / packet : 1);
+
     best.hp -= damage;
     best.flash = CONFIG.fx.hitFlash;
     best.hitThisFrame = true;
@@ -374,16 +427,23 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
     // credited to Fin Pebbles. The gun is the most overtuned thing in the
     // report; it should not also be wearing another card's output.
     hooks.onEnemyDamaged?.(
-      best, damage, best.mesh.position.x, best.mesh.position.y,
+      best, damage, tx, ty,
       null, null, null, 'bioluminescence',
     );
     if (best.hp <= 0) {
       const idx = enemiesList.indexOf(best);
       hooks.onEnemyKilled?.(best);
       if (idx >= 0) removeEnemy(scene, idx);
-      break; // the chain died with its victim; don't hop off a corpse
+      // A kill costs a hop on top of the one it already spent. A chain that
+      // clears a school for free would make every other element a worse
+      // version of this one.
+      budget--;
     }
-    source = best;
+
+    sx = tx;
+    sy = ty;
+    damage *= falloff;
+    if (damage < floor) break;
   }
 }
 
@@ -397,7 +457,7 @@ function applyVenom(enemy, share) {
   // own poison alive — which is the behaviour that makes venom feel like
   // pressure rather than bookkeeping.
   if (e.refreshes !== false || enemy.venomTimer <= 0) {
-    enemy.venomTimer = (e.duration ?? 3) * nightDurationMul() * share;
+    enemy.venomTimer = (e.duration ?? 3) * share;
   }
 }
 
@@ -470,8 +530,7 @@ function applyChill(enemy, share, hooks, x, y) {
   const lv = level();
   const per = ((e.slowPerHit ?? 0.16) + (e.slowPerHitPerLevel ?? 0) * (lv - 1)) * share;
   const dur = (e.freezeDuration ?? 0.9) + (e.freezeDurationPerLevel ?? 0) * (lv - 1);
-  chillEnemy(enemy, per, (e.duration ?? 2.5) * nightDurationMul(),
-    dur * nightDurationMul(), hooks, x, y);
+  chillEnemy(enemy, per, e.duration ?? 2.5, dur, hooks, x, y);
 }
 
 /**
@@ -501,18 +560,18 @@ function applyInfection(enemy, share, generation) {
   if (!e) return;
   const lv = level();
   const falloff = (e.hopFalloff ?? 0.8) ** Math.max(0, generation);
-  const dps = ((e.dps ?? 3.5) + (e.dpsPerLevel ?? 0) * (lv - 1)) * share * falloff * nightDamageMul();
+  const dps = ((e.dps ?? 3.5) + (e.dpsPerLevel ?? 0) * (lv - 1)) * share * falloff;
 
   // Re-infecting an already-sick fish takes the STRONGER of the two rather
   // than stacking. Without that, a contagion that loops back on itself
   // compounds without limit and the whole school evaporates.
   if (enemy.infectTimer > 0 && enemy.infectDps >= dps) {
-    enemy.infectTimer = Math.max(enemy.infectTimer, (e.duration ?? 5) * nightDurationMul());
+    enemy.infectTimer = Math.max(enemy.infectTimer, e.duration ?? 5);
     return;
   }
   enemy.infectDps = dps;
   enemy.infectGen = generation;
-  enemy.infectTimer = (e.duration ?? 5) * nightDurationMul();
+  enemy.infectTimer = e.duration ?? 5;
   enemy.infectSpreadTimer = e.spreadInterval ?? 1.2;
 }
 
@@ -547,7 +606,7 @@ export function onEnemyKilled(enemy) {
  * hooks: { onEnemyDamaged(e, dmg, x, y), onEnemyKilled(e), onBurst(x, y, r),
  *          onSpread(fromX, fromY, toX, toY) }
  */
-export function updateElements(dt, scene, enemiesList, hooks = {}) {
+export function updateElements(dt, scene, enemiesList, hooks = {}, projectiles = []) {
   // BEFORE both gates. Chill is not only an element any more — see thawChilled.
   thawChilled(dt, enemiesList);
   // Also before the gates, and for a related reason: a surge left burning by a
@@ -563,6 +622,21 @@ export function updateElements(dt, scene, enemiesList, hooks = {}) {
 
   updateMotes(dt, scene);
   if (!element) return;
+
+  // THE CONTAGION RIDES THE AMMUNITION. Seeded here rather than at spawn so a
+  // shot already in the air picks the lights up the moment the card is taken,
+  // and so this costs a run without infection exactly one `element` compare.
+  //
+  // GUN PELLETS ONLY, matching the rule in combat.js: the element rides the
+  // basic shot, and an un-gated version would put spores on mussels,
+  // starfish, ricochets and shrapnel too.
+  if (element === 'infection') {
+    for (const p of projectiles) {
+      if (p.source === 'gun' || (p.faction === 'player' && p.mesh?.name === 'bullet')) {
+        ensureMotes(scene, p, true);
+      }
+    }
+  }
 
   if (element === 'infection') drainBursts(scene, enemiesList, hooks);
 
@@ -580,7 +654,7 @@ export function updateElements(dt, scene, enemiesList, hooks = {}) {
         e.venomTick = c?.tick ?? 0.35;
         const lv = level();
         const dps = ((c?.dps ?? 4) + (c?.dpsPerLevel ?? 0) * (lv - 1)) * (e.venomStacks ?? 1);
-        dead = damageOverTime(scene, enemiesList, i, e, dps * (c?.tick ?? 0.35) * nightDamageMul(), hooks);
+        dead = damageOverTime(scene, enemiesList, i, e, dps * (c?.tick ?? 0.35), hooks);
       }
       if (!dead && e.venomTimer <= 0) { e.venomTimer = 0; e.venomStacks = 0; }
     }
@@ -659,7 +733,7 @@ function drainBursts(scene, enemiesList, hooks) {
   const c = elementCfg('infection');
   const lv = level();
   const radius = (c?.burstRange ?? 4.5) + (c?.burstRangePerLevel ?? 0) * (lv - 1);
-  const damage = ((c?.burstDamage ?? 9) + (c?.burstDamagePerLevel ?? 0) * (lv - 1)) * nightDamageMul();
+  const damage = (c?.burstDamage ?? 9) + (c?.burstDamagePerLevel ?? 0) * (lv - 1);
   const r2 = radius * radius;
 
   for (const b of pendingBursts) {
@@ -711,19 +785,53 @@ function moteGeometry(size) {
   return moteGeo;
 }
 
+/**
+ * WHO THE LIVE MOTES ARE ORBITING — `[{ host, target, travelling, onShot }]`.
+ *
+ * A test hook, and the only one in this file. The motes are the one part of
+ * the contagion with no numeric trace: nothing on the enemy records that it is
+ * wearing lights, so a harness cannot otherwise tell "the shot handed its
+ * motes over" from "the shot's motes were dropped and the fish grew new ones",
+ * and those two look identical on screen for about a tenth of a second.
+ *
+ * Returns a fresh array of plain records rather than the pool itself — a test
+ * holding the live objects would be one `.splice` away from asserting against
+ * a mote that had already been retired.
+ */
+export function moteSnapshot() {
+  return motes.map((mo) => ({
+    host: mo.host, target: mo.target, travelling: mo.travel > 0, onShot: !!mo.onShot,
+  }));
+}
+
 function moteConfig() {
   return elementCfg('infection')?.motes ?? {};
 }
 
 // Give a host its full complement of motes, if the pool has room.
-function ensureMotes(scene, host) {
+//
+// `onShot` marks a mote orbiting a PELLET rather than a fish, which is the
+// only difference between the two kinds and exists purely to budget them
+// apart — see the reserve below.
+function ensureMotes(scene, host, onShot = false) {
   const m = moteConfig();
   if (m.enabled === false) return;
   let mine = 0;
-  for (const mo of motes) if (mo.host === host) mine += 1;
-  const want = m.perHost ?? 5;
+  let onShots = 0;
+  for (const mo of motes) {
+    if (mo.host === host) mine += 1;
+    if (mo.onShot) onShots += 1;
+  }
+  const want = onShot ? (m.perShot ?? 2) : (m.perHost ?? 5);
   if (mine >= want) return;
-  if (motes.length >= (m.maxAlive ?? 90)) return;
+  const cap = m.maxAlive ?? 90;
+  if (motes.length >= cap) return;
+  // PELLETS MAY NOT EAT THE POOL. A volley is eight shots and the pool is one
+  // shared ceiling, so without a reserve a Cloned-Pebbles run would spend its
+  // whole mote budget on ammunition in the air and the infected fish — the
+  // thing the ability actually is — would orbit nothing at all. The cheap
+  // decoration must never be able to starve the readout.
+  if (onShot && onShots >= Math.floor(cap * (m.shotShare ?? 0.3))) return;
 
   const mesh = new THREE.Mesh(moteGeometry(m.size ?? 0.09), moteMaterial());
   mesh.position.copy(host.mesh.position);
@@ -731,6 +839,7 @@ function ensureMotes(scene, host) {
   motes.push({
     mesh,
     host,
+    onShot,
     angle: Math.random() * Math.PI * 2,
     phase: Math.random() * Math.PI * 2,
     travel: 0,
@@ -738,6 +847,28 @@ function ensureMotes(scene, host) {
     ty: 0,
     target: null,
   });
+}
+
+/**
+ * HAND A PELLET'S MOTES TO THE FISH IT JUST HIT.
+ *
+ * The same picture the contagion already draws when it spreads between two
+ * fish (see sendMote), started one step earlier: the lights the shot was
+ * carrying cross the gap and take up orbit around the body. That is the whole
+ * reason the motes ride the pellet rather than a particle trail — a spore
+ * emitter would have to be extinguished and a separate burst lit, and the two
+ * would never quite look like the same objects.
+ *
+ * Silently does nothing for the other three elements, which have no motes.
+ */
+function handOverMotes(carrier, target) {
+  if (!carrier || !target) return;
+  for (const mo of motes) {
+    if (mo.host !== carrier || mo.travel > 0) continue;
+    mo.travel = 1;
+    mo.target = target;
+    mo.onShot = false; // it belongs to the fish now, and to the fish's budget
+  }
 }
 
 // Peel one of the host's motes off and send it to the fish being infected.
@@ -759,8 +890,15 @@ function updateMotes(dt, scene) {
 
     // Host gone, or cured. The mote goes with it — a light orbiting nothing is
     // the clearest possible sign of a leak.
+    //
+    // A PELLET IS NOT CURED, IT EXPIRES. `infectTimer` is undefined on a
+    // projectile, so the third clause below is false for one and the mote
+    // rides until the shot leaves the scene — which is what the `parent`
+    // check catches, on the frame the projectile is disposed. That is also
+    // what retires the motes of a shot that simply flew off and timed out
+    // without hitting anything.
     if (!host || !host.mesh || host.mesh.parent == null
-      || (mo.travel <= 0 && host.infectTimer <= 0)) {
+      || (mo.travel <= 0 && !mo.onShot && !(host.infectTimer > 0))) {
       scene.remove(mo.mesh);
       motes.splice(i, 1);
       continue;
@@ -881,7 +1019,7 @@ export function updateElementSkin(body, rawDt = 0) {
   // seconds of real time, which reads as the glow stuttering on. At 32 it
   // restamps a bit under once a second through the transition and is smooth,
   // and still costs nothing at noon or midnight where the value is pinned.
-  const power = Math.round(elementPower() * 32) / 32;
+  const power = Math.round(elementGlow() * 32) / 32;
   const night = Math.round(nightFactor() * 8) / 8;
   const key = `${element}:${lv}:${night}:${power}`;
   // The body check is what survives a model swap from the tuner: same element,
@@ -920,12 +1058,12 @@ export function updateElementSkin(body, rawDt = 0) {
 // element's colour, and the pellet flying between them stayed the stone yellow
 // it is at level 1.
 //
-// IT RIDES elementPower(), the same number the seal's glow does, so this is a
-// readout and not decoration — at noon with `dayPower` at 0 the gun really is
-// firing plain pellets (applyElementalHit returns before it applies anything),
-// and the colour goes back to say so. Both halves reading one function is the
-// same guarantee the skin note above describes: they cannot drift into a seal
-// that glows while its shots are inert.
+// IT RIDES elementGlow(), the same number the seal's glow does, so the pellet
+// and the animal that fired it are lit to the same degree at every hour. That
+// is now the whole of what the sky decides. It is decoration and it is allowed
+// to be: the pellet does exactly the same damage whatever colour it is, so
+// `dayPower` cannot be read as "how much of the ability you have" any more —
+// only as how much of it is showing.
 //
 // A BLEND, NOT A TINT. setAssetBlendTint layers over the Look panel's tint
 // instead of writing it, so this can never eat a bullet colour set in the
@@ -939,7 +1077,7 @@ export function updateElementSkin(body, rawDt = 0) {
 // a projectile that lives 1.6 seconds.
 // ===========================================================================
 
-// Bucketed for the same reason the skin's stamp is: elementPower moves
+// Bucketed for the same reason the skin's stamp is: elementGlow moves
 // continuously all through dusk, and every distinct value here is a material
 // rewrite. 32 steps is under a second apart through the fade and free at noon
 // or midnight, where the value is pinned.
@@ -947,7 +1085,29 @@ function shotMix() {
   const s = cfg().shot;
   if (!element || s?.enabled === false || !cfg().enabled || level() <= 0) return 0;
   const amount = Math.max(0, Math.min(1, s?.amount ?? 1));
-  return Math.round(elementPower() * amount * 32) / 32;
+  return Math.round(elementGlow() * amount * 32) / 32;
+}
+
+/**
+ * WHAT THE PELLET SHEDS ON ITS WAY TO THE FISH — `{ emitter, perSecond }`, or
+ * null for an element that sheds nothing. Shock crackles and venom drips;
+ * chill is deliberately bare, and infection does not shed at all — its motes
+ * ride the pellet as real objects instead (see handOverMotes). The reasons are
+ * on CONFIG.biolum.elements.shock.flight.
+ *
+ * For systems/projectileTrails.js, pulled per frame rather than pushed, for
+ * the same reason the trail colour is: the element can be rolled, levelled or
+ * retuned while pellets are already in the air.
+ *
+ * IT DOES NOT RIDE elementGlow(). The pellet's COLOUR fades with the sky
+ * because that is a wash over a thing already on screen and reads as light;
+ * particles that thinned out at noon would read as the gun misfiring. The
+ * sparks are the same at every hour, which is also what the damage now does.
+ */
+export function elementFlightParticles() {
+  if (!element || !cfg().enabled || level() <= 0) return null;
+  const f = elementCfg()?.flight;
+  return f?.emitter && f.perSecond > 0 ? f : null;
 }
 
 /**

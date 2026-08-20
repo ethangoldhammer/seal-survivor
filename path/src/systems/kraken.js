@@ -423,6 +423,13 @@ const TREE = selector('kraken', [
           // somehow re-entered cannot compound its own multiplier.
           krakenState.baseContact = e.def?.contactDamage ?? e.contactDamage ?? 0;
           e.contactDamage = krakenState.baseContact * (k.damage ?? 3.2);
+          // The body IS the attack for the length of the dash, so the touch is
+          // billed against the fight's budget rather than against the chip
+          // ceiling overlap is held to — see `ramming` in entities/enemies.js.
+          // Without this the x3.2 is clipped straight back down to the same
+          // quarter-bar-per-second as brushing an arm, and the one attack this
+          // archetype has stops existing.
+          e.ramming = true;
           e.anim?.trigger('strike');
         }
         return RUNNING;
@@ -438,6 +445,7 @@ const TREE = selector('kraken', [
           krakenState.crushStage = 'recover';
           krakenState.crushTimer = k.recover ?? 1.5;
           if (krakenState.baseContact > 0) e.contactDamage = krakenState.baseContact;
+          e.ramming = false;
         }
         return RUNNING;
       }
@@ -569,6 +577,7 @@ export function updateKraken(dt, scene, playerPos, hooks = {}) {
     // afterwards would dash from a position it never aimed from.
     if (krakenState.committed && krakenState.baseContact > 0) {
       e.contactDamage = krakenState.baseContact;
+      e.ramming = false;
     }
     krakenState.committed = false;
     krakenState.crushStage = 'rear';

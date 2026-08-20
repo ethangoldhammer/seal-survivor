@@ -213,6 +213,27 @@ check('...resolved from what actually did the damage',
   /function damageSourceColor[\s\S]*?elementColor\(/.test(MAIN)
   && /spawnBossImpact\([\s\S]{0,200}?color:\s*damageSourceColor\(/.test(MAIN));
 
+// A PICKUP GOING DOWN is the third case, and it is the same argument twice
+// over. There is ONE burst emitter for every pickup in the game
+// (CONFIG.emitters.pickupGoo) precisely so that what separates a breath of air
+// from a strike orb from a coral is the colour of the thing you just ate — so
+// the colour is the readout, and a fixed palette there would say the same
+// thing every time. A per-pickup emitter with its own hardcoded colours is the
+// alternative, and it is strictly worse: four copies of a tint that go stale
+// the moment anyone re-skins a pickup.
+//
+// The three SWALLOWS resolve through assetBaseColor, which is the same
+// sanctioned resolver the kill uses and is already exempt below. The clam is
+// the odd one out: it is never swallowed, it is not built by createVisual, and
+// it reads none of the Look panel — so its colour comes from its own tuned
+// block. Held to that one call and to that one source, so a hardcoded pink
+// would still fail this.
+const BOATS = fs.readFileSync(path.join(HERE, '../path/src/systems/boats.js'), 'utf8');
+check('the clam announces itself in its own tuned colour',
+  /feedback\('clamDrop'[\s\S]{0,300}?color:\s*CONFIG\.attractorOrb\.look\?\.waveColorNear/.test(BOATS));
+check('...and every swallow resolves its colour off the asset',
+  (MAIN.match(/feedback\('(?:bubblePop|strikeOrbTaken|coralTaken)'[\s\S]{0,300}?color:\s*assetBaseColor\(/g) || []).length === 3);
+
 // Every other feedback() call in the game must NOT. Comments are allowed to
 // discuss it; code isn't.
 const strip = (s) => s.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -250,7 +271,12 @@ for (const file of srcFiles) {
   const code = strip(fs.readFileSync(file, 'utf8'));
   for (const args of [...callArgs(code, 'feedback'), ...callArgs(code, 'emit')]) {
     if (!/\bcolor:/.test(args)) continue;
-    if (file.endsWith('main.js') && /assetBaseColor\(/.test(args)) continue; // the kill
+    if (file.endsWith('main.js') && /assetBaseColor\(/.test(args)) continue; // the kill, and the three swallows
+    // The clam's arrival, checked properly above. Matched on the EVENT and on
+    // the source of the colour rather than on the file, so boats.js is not a
+    // blanket exemption — a second tinted burst added there is still a failure.
+    if (/feedback\(\s*'clamDrop'/.test(`feedback('clamDrop'${args}`)
+      && /\bcolor:\s*CONFIG\.attractorOrb\.look\?\.waveColorNear/.test(args)) continue;
     // The boss hit mark, checked properly above. Matched on the emitter name
     // rather than on the file, so bossImpact.js is not a blanket exemption —
     // a second tinted burst added there is still a failure.

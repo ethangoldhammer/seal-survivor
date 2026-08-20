@@ -149,6 +149,7 @@ export function releaseAngler() {
   // holds a lunge pose.
   if (e) {
     if (anglerState.baseContact > 0) e.contactDamage = anglerState.baseContact;
+    e.ramming = false;
     e.animState = null;
     e.perkDrive = false;
   }
@@ -230,6 +231,7 @@ function stageMachine(dt, e, playerPos, hooks) {
   const perk = activeBossPerk();
   if (perk && perk.stage && perk.stage !== 'ready') {
     if (anglerState.baseContact > 0) e.contactDamage = anglerState.baseContact;
+    e.ramming = false;
     e.animState = null;
     anglerState.stage = 'lurk';
     anglerState.timer = c.settle ?? 0.6;
@@ -315,6 +317,9 @@ function stageMachine(dt, e, playerPos, hooks) {
       anglerState.dirX = dx;
       anglerState.dirY = dy;
       e.contactDamage = anglerState.baseContact * (c.lungeDamage ?? 2);
+      // The committed run is an ATTACK, not overlap — see `ramming` in
+      // entities/enemies.js for which of the boss ceilings each is held to.
+      e.ramming = true;
       anglerState.cues?.fire('commit');
       anglerState.cues?.hold('travel');
       hooks.onAnglerLunge?.(e);
@@ -333,6 +338,7 @@ function stageMachine(dt, e, playerPos, hooks) {
       anglerState.stage = 'snap';
       anglerState.timer = c.snapTime ?? 0.45;
       e.contactDamage = anglerState.baseContact;
+      e.ramming = false;
       // The jaws close whether or not anything was in them. See the cadence
       // note: selling the miss is most of what makes the dodge land.
       e.anim?.trigger('bite');

@@ -11,6 +11,7 @@ import { RigidBody, addBody, removeBody, blastBodies } from './rigidBody.js';
 import { updateHullWake } from './boatWake.js';
 import { emit } from '../entities/particles.js';
 import { createAttractiveClam, updateAttractiveClam, disposeAttractiveClam } from './attractiveClam.js';
+import { feedback } from './feedback.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
@@ -247,6 +248,20 @@ export function spawnAttractorOrb(scene, pos) {
   mesh.position.copy(pos);
   scene.add(mesh);
   attractorOrbs.push({ mesh, life: CONFIG.attractorOrb.lifetime });
+  // IT ANNOUNCES ITSELF ON ARRIVAL, because there is no other moment it could.
+  // Every other pickup gets its feedback when the seal swallows it; this one is
+  // never swallowed — it works where it lands and expires on its own clock — so
+  // without this the single most powerful thing a trawler drops entered the
+  // water in silence and the player's first clue was their chum moving.
+  //
+  // The colour is the wave's, so the burst and the pulses that follow it are
+  // plainly the same object.
+  feedback('clamDrop', {
+    x: pos.x,
+    y: pos.y,
+    scale: 1.2,
+    color: CONFIG.attractorOrb.look?.waveColorNear ?? 0xff5fd2,
+  });
 }
 
 // A HULL BURNING WHERE IT WAS HIT.

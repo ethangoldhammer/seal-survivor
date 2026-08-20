@@ -71,25 +71,44 @@
       }
     },
     "enemyShark": {
-      "surface": "biolum",
+      "surface": "noise",
       "assets": {
-        "biolumSkin": "hide",
-        "csvSkinColumn": "hide"
+        "noiseShader": "shark",
+        "toonShade": "shark"
       },
       "presets": {
-        "biolumSkin": {
-          "hide": {
-            "pigment": 1,
-            "scale": 0.42,
-            "contrast": 0.9,
-            "coverage": 0.56,
-            "strength": 0,
-            "flow": 1.18,
-            "pattern": "veins",
-            "colorA": 0,
-            "colorB": 2171942,
-            "colorC": 1352191,
-            "shellColor": 16510702
+        "sealShader": {
+          "shark": {
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 1.15,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.76,
+            "wetTight": 81,
+            "wetEdge": 0.15,
+            "wetRim": 0.46,
+            "wetRimPower": 2.7,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735
+          }
+        },
+        "toonShade": {
+          "shark": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1.15,
+            "low": 0.3,
+            "high": 1,
+            "soft": 0.12,
+            "range": 1.5
           }
         }
       }
@@ -255,25 +274,44 @@
       }
     },
     "enemyBossHammerhead": {
-      "surface": "biolum",
+      "surface": "noise",
       "assets": {
-        "biolumSkin": "hide",
-        "csvSkinColumn": "hide"
+        "noiseShader": "bossHammerhead",
+        "toonShade": "bossHammerhead"
       },
       "presets": {
-        "biolumSkin": {
-          "hide": {
-            "pigment": 1,
-            "scale": 0.42,
-            "contrast": 0.9,
-            "coverage": 0.42,
-            "strength": 0,
-            "flow": 1.18,
-            "pattern": "veins",
-            "colorA": 0,
-            "colorB": 2171942,
-            "colorC": 1352191,
-            "shellColor": 14877186
+        "sealShader": {
+          "bossHammerhead": {
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735
+          }
+        },
+        "toonShade": {
+          "bossHammerhead": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
           }
         }
       }
@@ -387,33 +425,125 @@
           }
         }
       }
+    },
+    "enemyMegalodon": {
+      "surface": "noise",
+      "assets": {
+        "noiseShader": "megalodon",
+        "toonShade": "megalodon"
+      },
+      "presets": {
+        "sealShader": {
+          "megalodon": {
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735
+          }
+        },
+        "toonShade": {
+          "megalodon": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        }
+      }
+    },
+    "enemyMosasaur": {
+      "surface": "noise",
+      "assets": {
+        "noiseShader": "mosasaur",
+        "toonShade": "mosasaur"
+      },
+      "presets": {
+        "sealShader": {
+          "mosasaur": {
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735
+          }
+        },
+        "toonShade": {
+          "mosasaur": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        }
+      }
     }
   },
   "config": {
     "toonShade": {
-      "ship": {
-        "low": 0.14,
-        "steps": 2,
-        "gamma": 1.05,
-        "soft": 0,
+      "shark": {
         "range": 1.5
       }
     },
     "sealShader": {
-      "ship": {
-        "wetSteps": 3,
-        "wetTight": 21,
-        "wetRimPower": 4.4,
-        "wetCaustics": 0.95,
-        "wetCausticScale": 4.9
+      "shark": {
+        "wet": 1.15,
+        "wetSoft": 0.76,
+        "wetTight": 81,
+        "wetEdge": 0.15,
+        "wetRim": 0.46,
+        "wetRimPower": 2.7
+      },
+      "greatWhite": {
+        "wet": 0.7
+      }
+    },
+    "biolumSkin": {
+      "hide": {
+        "flow": 0.8
       }
     },
     "creatureOutline": {
       "__flat": {
         "color": 0,
-        "thickness": 0.09
+        "thickness": 0.455,
+        "glow": 5
       }
     }
   },
-  "recorded": "ship"
+  "recorded": "enemyMosasaur"
 }

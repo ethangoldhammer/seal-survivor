@@ -45,7 +45,7 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { survey, ROLES, stop as stopPid } from './servers.mjs';
-import { commands, PAGES, GROUP_ORDER, ROOT } from './hub-catalogue.mjs';
+import { commands, pages, GROUP_ORDER, ROOT } from './hub-catalogue.mjs';
 
 // The one number in this repo that is allowed to be a constant. PORT is
 // honoured so a second session can run its own hub rather than failing on
@@ -182,6 +182,13 @@ function state() {
     servers: found.map((p) => ({
       pid: p.pid,
       role: p.role,
+      // Which build a look server is serving, straight off its command line
+      // (`node tools/looks/serve.mjs dist-shaderlab --out ...`). This is what
+      // ties a running server back to the page on its card — several can be up
+      // at once, on ports none of them chose, so the address cannot be the key.
+      dist: p.role === 'looks'
+        ? (/serve\.mjs\s+(?!--)(\S+)/.exec(p.command)?.[1] ?? '')
+        : '',
       label: ROLES[p.role].label,
       why: ROLES[p.role].why,
       start: ROLES[p.role].start,
@@ -230,7 +237,7 @@ const server = createServer(async (req, res) => {
   // the next poll — a tool index that needs restarting to see a new tool is
   // the failure mode this whole file exists to avoid.
   if (path === '/api/catalogue') {
-    return json(res, { commands: commands(), pages: PAGES, groups: GROUP_ORDER });
+    return json(res, { commands: commands(), pages: pages(), groups: GROUP_ORDER });
   }
 
   if (path === '/api/state') return json(res, state());
@@ -289,6 +296,34 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     process.exit(0);
   });
 }
+
+// STARTING A HUB THAT IS ALREADY UP IS NOT AN ERROR.
+//
+// This is the one server in the repo you are told to leave running forever, so
+// something will inevitably try to start a second one — a launch config, a
+// second terminal, a session that did not check. Crashing on EADDRINUSE would
+// present as the workbench being broken at the exact moment it is working.
+//
+// So knock first: if the thing on our port answers /api/state like a hub, the
+// job is already done. If it is something else entirely, that IS an error —
+// silently taking another port would break the one promise this port makes.
+server.on('error', async (err) => {
+  if (err.code !== 'EADDRINUSE') {
+    console.error(`  hub: ${err.message}`);
+    process.exit(1);
+  }
+  const mine = await fetch(`http://localhost:${PORT}/api/state`)
+    .then((r) => r.json())
+    .then((s) => s.port === PORT)
+    .catch(() => false);
+  if (mine) {
+    console.log(`\n  Workbench already running — http://localhost:${PORT}\n`);
+    process.exit(0);
+  }
+  console.error(`\n  Port ${PORT} is taken by something that is not the workbench.`);
+  console.error(`  Find it with: npm run servers\n`);
+  process.exit(1);
+});
 
 // 127.0.0.1, not 0.0.0.0. This endpoint spawns processes in the repo; it has
 // no business being reachable from anything but this machine.

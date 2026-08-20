@@ -214,7 +214,22 @@ export function survey() {
     else if (p.role === 'csv') { p.verdict = 'stale'; p.note = 'duplicate CSV editor'; }
     else if (p.role === 'hub') { p.verdict = 'stale'; p.note = 'duplicate hub'; }
     else if (p.role === 'preview') { p.verdict = 'stale'; p.note = 'serving a build from ' + humanAge(p.age) + ' ago'; }
-    else if (p.role === 'looks' || p.role === 'atlas') { p.verdict = 'stale'; p.note = 'read-only render server, still up from ' + humanAge(p.age) + ' ago'; }
+    // `idle`, NOT `stale`, and the distinction is the whole reason this verdict
+    // exists. A look server is read-only and harmless, but it is also the thing
+    // you are looking at right now — comparing two looks side by side means
+    // several of these are up ON PURPOSE. Calling them stale put a server the
+    // user was actively using in front of `clean`, which is the one mistake
+    // this panel is supposed to prevent, not commit.
+    //
+    // Past a few hours it is leftovers again, so it ages into `stale` and
+    // becomes fair game. Nothing here can ever mark the newest one for death.
+    else if (p.role === 'looks' || p.role === 'atlas') {
+      const old = p.age > 4 * 3600;
+      p.verdict = old ? 'stale' : 'idle';
+      p.note = old
+        ? 'read-only render server, forgotten ' + humanAge(p.age) + ' ago'
+        : 'read-only render server, up ' + humanAge(p.age) + ' — kill it by hand when you are done';
+    }
     else if (p.role === 'scratch') { p.verdict = 'stale'; p.note = 'left behind by an agent session'; }
     else { p.verdict = 'unknown'; p.note = 'not started by this repo'; }
   }
@@ -232,6 +247,7 @@ const C = process.stdout.isTTY
 
 const MARK = {
   keep: `${C.green}●${C.off} keep `,
+  idle: `${C.dim}◍${C.off} idle `,
   stomp: `${C.red}▲${C.off} STOMP`,
   stale: `${C.yellow}○${C.off} stale`,
   unknown: `${C.dim}?${C.off}     `,

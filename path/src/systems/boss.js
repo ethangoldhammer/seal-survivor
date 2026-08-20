@@ -246,6 +246,24 @@ function bossGap() {
 //                makes "cannot kill you instantly" mean anything for a source
 //                that never deals a large number.
 //
+// ...AND THE PER-SECOND ONE IS NESTED, which is the part that took a player
+// saying "I just take a ton of damage if I'm touching a boss anywhere" to
+// notice. One shared budget does not mean "a boss may take three quarters of
+// your bar in a second": it means WHICHEVER SOURCE ARRIVES FIRST spends it,
+// and contact arrives first every single frame you are overlapping. Measured
+// on the shipped numbers, the shark's contact drain passed the whole budget by
+// itself at the second boss of a run (100 dps against 75), so from there on
+// every telegraphed thing the boss did — a barrel, an eye beam, a volley, the
+// crab's pinch — was clipped to LITERALLY ZERO for as long as you were touching
+// the animal. The fight had one damage source wearing eight costumes.
+//
+// So contact draws against a second, much smaller window of its own as well as
+// against the shared one. Overlap is chip; the ceiling it cannot pass is
+// `contactPerSecond`. Everything the boss aims still draws only on the big
+// budget, and the guarantee that made the big budget worth having — a boss
+// cannot end a run between two frames — is unchanged, because contact still
+// spends from it too.
+//
 // APPLIED AT THE FUNNEL, in main.js's onPlayerHit, which every single point of
 // damage in the game already goes through — contact, shots, perks, blasts.
 // Capping at the sources would mean finding all of them, and bossPerks.csv is
@@ -255,24 +273,39 @@ function bossGap() {
 // barracuda chewing through the bar in a second is the fight working, and the
 // answer to it is to move. This is about the one creature the run stops for.
 let bossDamageWindow = [];
+// The nested one. Same shape, same clock, drawn on only by the contact channel.
+let bossContactWindow = [];
 
 /** Every source string the boss can deal damage under starts with "boss". */
 function isBossDamage(source) {
   return typeof source === 'string' && source.startsWith('boss');
 }
 
+/** What a rolling window has spent, having first dropped what fell out of it. */
+function spentIn(window, cutoff) {
+  while (window.length && window[0].t < cutoff) window.shift();
+  let spent = 0;
+  for (const h of window) spent += h.d;
+  return spent;
+}
+
 /**
  * Trim a single point of incoming damage to what a boss is allowed to do.
  * Returns the damage to actually apply — unchanged for everything that is not
- * a boss, and for a boss that is inside both ceilings.
+ * a boss, and for a boss that is inside every ceiling that applies to it.
  *
  * @param {number} dmg
  * @param {string} source  the tag main.js's onPlayerHit was given
  * @param {number} maxHp   the player's CURRENT maximum, so the ceilings track
  *                         every point of health the run has bought
  * @param {number} now     seconds, any monotonic clock
+ * @param {string} channel 'contact' for the per-frame overlap drain, which is
+ *   held to `contactPerSecond` as well as to the shared budget; anything else
+ *   is a thing the boss AIMED and draws on the shared budget alone. Defaults to
+ *   the aimed case, so a new damage source that forgets to say gets the same
+ *   ceilings every shot and blast in the game already has.
  */
-export function capBossDamage(dmg, source, maxHp, now) {
+export function capBossDamage(dmg, source, maxHp, now, channel = 'attack') {
   const cap = CONFIG.boss?.damageCap;
   if (cap?.enabled === false || !(dmg > 0) || !(maxHp > 0) || !isBossDamage(source)) return dmg;
 
@@ -281,20 +314,33 @@ export function capBossDamage(dmg, source, maxHp, now) {
   // The rolling second. Entries older than the window are dropped on the way
   // in, so this costs a few array ops per hit and never grows.
   const window = cap?.window ?? 1;
-  const budget = maxHp * (cap?.perSecond ?? 0.75);
   const cutoff = now - window;
-  while (bossDamageWindow.length && bossDamageWindow[0].t < cutoff) bossDamageWindow.shift();
-  let spent = 0;
-  for (const h of bossDamageWindow) spent += h.d;
+  const contact = channel === 'contact';
 
-  out = Math.max(0, Math.min(out, budget - spent));
-  if (out > 0) bossDamageWindow.push({ t: now, d: out });
+  // THE NESTED CEILING FIRST, so the shared budget is never charged for damage
+  // the contact ceiling was going to refuse anyway. The other order silently
+  // spends the fight's budget on nothing.
+  if (contact) {
+    const chip = maxHp * (cap?.contactPerSecond ?? 0.25);
+    out = Math.max(0, Math.min(out, chip - spentIn(bossContactWindow, cutoff)));
+    if (!(out > 0)) return 0;
+  }
+
+  const budget = maxHp * (cap?.perSecond ?? 0.75);
+  out = Math.max(0, Math.min(out, budget - spentIn(bossDamageWindow, cutoff)));
+  if (out > 0) {
+    bossDamageWindow.push({ t: now, d: out });
+    // Contact spends from BOTH — that is what keeps the old guarantee intact:
+    // the shared budget still sees every point of damage a boss deals.
+    if (contact) bossContactWindow.push({ t: now, d: out });
+  }
   return out;
 }
 
 /** A new run starts owing nothing. */
 export function resetBossDamageCap() {
   bossDamageWindow = [];
+  bossContactWindow = [];
 }
 
 export function resetBoss(scene = null) {

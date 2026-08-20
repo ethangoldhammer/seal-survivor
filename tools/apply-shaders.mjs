@@ -440,13 +440,39 @@ function spliceHandPresets(text, presetsByRoot, editBuffer = {}) {
         }
       }
       if (additions.length) {
-        // Indent taken from the block's own last field rather than assumed, and
-        // inserted before the closing brace so a trailing comment stays last.
         const body = text.slice(block[0] + 1, block[1]);
-        const indent = (body.match(/\n(\s+)\S/) || [null, '        '])[1];
-        const lead = /\n\s*$/.test(body) ? '' : '\n';
-        const add = additions.map(([k, v]) => `${indent}${k}: ${v},`).join('\n');
-        edits.push([block[1], block[1], `${lead}${add}\n${indent.slice(0, -2)}`]);
+        // AFTER THE LAST REAL CHARACTER, not at the closing brace. Inserting at
+        // the brace put the new field after the block's own trailing whitespace,
+        // which on a ONE-LINE preset meant it landed with no comma in front of
+        // it and no line break behind the field before it:
+        //
+        //   shark: { steps: 3, low: 0.3, gamma: 1.15, soft: 0.12
+        //     range: 1.5,
+        //   },
+        //
+        // — a syntax error, in config.js, written by a button. It broke the
+        // build the first time a hand-authored preset gained a field, because
+        // every earlier addition had happened to land in a multi-line block
+        // whose last field already carried a trailing comma. Anchoring to the
+        // last non-whitespace character leaves the block's own closing
+        // whitespace (and any trailing comment) exactly where it was.
+        const tail = body.length - body.replace(/\s+$/, '').length;
+        const at = block[1] - tail;
+        // The separator the block does not already have. A block whose last
+        // field ends in a comma needs none; one that does not needs one, and
+        // that is the whole of the bug above.
+        const sep = /,\s*$/.test(body) ? '' : ',';
+        // A ONE-LINE PRESET STAYS ONE LINE. Several of the hand-authored blocks
+        // are single-line on purpose — they are read down a column against each
+        // other — and exploding one into seven lines because a slider moved is
+        // a diff nobody asked for.
+        const add = body.includes('\n')
+          ? '\n' + additions.map(([k, v]) => {
+            const indent = (body.match(/\n(\s+)\S/) || [null, '        '])[1];
+            return `${indent}${k}: ${v},`;
+          }).join('\n')
+          : ' ' + additions.map(([k, v]) => `${k}: ${v}`).join(', ');
+        edits.push([at, at, sep + add]);
         for (const [k, v] of additions) changes.push(`${root}.${name}.${k}: (absent) -> ${v}`);
       }
     }

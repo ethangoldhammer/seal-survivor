@@ -160,7 +160,15 @@ export function updateBubblePhysics(dt, orb, bodies = null) {
   // being overwritten. `bubbleRiseSpeed` stays the number that means "how fast
   // does a bubble go up" — this only changes how it gets there.
   const rise = CONFIG.oxygen?.bubbleRiseSpeed ?? 1.6;
-  const lift = c.lift ?? 3.2;
+  // ...AND IT YIELDS TO THE MAGNET. Buoyancy is a force that re-asserts itself
+  // in well under a second, which is correct for a shove and completely wrong
+  // for the seal reaching for it: a bubble ABOVE the player had its downward
+  // pull erased faster than the magnet could apply it, so the one pickup you
+  // most want to come to you was the one that could only ever be chased.
+  // `magnetHold` is set by the caller on any frame the magnet has it, and it
+  // is consumed rather than latched — let go and it floats again on the next
+  // frame.
+  const lift = (c.lift ?? 3.2) * (orb.magnetHold ? (c.magnetLiftMul ?? 0.15) : 1);
   orb.vy += (rise - orb.vy) * Math.min(1, lift * dt);
 
   // --- the wander -----------------------------------------------------------
@@ -170,7 +178,9 @@ export function updateBubblePhysics(dt, orb, bodies = null) {
   // every knock the moment the creature let go.
   const sway = c.sway ?? 1.1;
   orb.vx += Math.cos(orb.age * (orb.swayRate ?? 0.28) * Math.PI * 2 + (orb.swayPhase ?? 0)) * sway * dt;
-  const drag = c.drag ?? 1.6;
+  // Drag yields too, and for the same reason — it is what stops a shoved
+  // bubble, and the magnet is a shove the player asked for.
+  const drag = (c.drag ?? 1.6) * (orb.magnetHold ? (c.magnetLiftMul ?? 0.15) : 1);
   orb.vx -= orb.vx * Math.min(1, drag * dt);
 
   // --- what is touching it --------------------------------------------------
@@ -225,6 +235,10 @@ export function updateBubblePhysics(dt, orb, bodies = null) {
 
   // --- the look -------------------------------------------------------------
   applyBubbleShape(orb, r);
+
+  // Consumed, not latched — the caller re-raises it every frame the magnet
+  // still has the bubble, so letting go hands it straight back to buoyancy.
+  orb.magnetHold = false;
 
   if (orb.skin <= 0) return 'popped';
   return null;

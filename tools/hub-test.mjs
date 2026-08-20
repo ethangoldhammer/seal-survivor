@@ -28,11 +28,11 @@
 // against the endpoint that reads the table, is a comment.
 // ---------------------------------------------------------------------------
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { commands, PAGES, GROUP_ORDER, ROOT, blurbFromFile, targetFile } from './hub-catalogue.mjs';
+import { commands, pages, GROUP_ORDER, ROOT, blurbFromFile, targetFile } from './hub-catalogue.mjs';
 
 let failures = 0;
 const check = (label, cond, detail = '') => {
@@ -41,6 +41,7 @@ const check = (label, cond, detail = '') => {
 };
 
 const CMDS = commands();
+const PAGES = pages();
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
 console.log('\nCOVERAGE — every script is in a drawer, described, and points at a real file');
@@ -108,9 +109,48 @@ check('every page file exists',
   badPageFile.map((p) => p.file).join(', '));
 
 const badPageScript = PAGES.filter((p) => p.script && !pkg.scripts[p.script]);
+const orphans = PAGES.filter((p) => p.orphan);
+if (orphans.length) console.log(`        (${orphans.length} look page(s) with no build script, carded as such: ${orphans.map((p) => p.file.split('/').pop()).join(', ')})`);
 check('every page script is a real script',
   !badPageScript.length,
   badPageScript.map((p) => `${p.title} -> ${p.script}`).join(', '));
+
+// THE CHECK THAT WAS MISSING, and the reason the shader lab could not be
+// opened from the hub for two days. Every assertion here ran the other way
+// round — is everything LISTED real — and passed the whole time, while the
+// list named eight of twenty-six look pages. A coverage test that only checks
+// its own entries is a test of nothing.
+const lookHtml = readdirSync(join(ROOT, 'tools/looks'))
+  .filter((f) => f.endsWith('.html'));
+const catalogued = new Set(PAGES.map((p) => p.file.split('/').pop()));
+const missedLook = lookHtml.filter((f) => !catalogued.has(f));
+check('every look page in tools/looks is on a card',
+  !missedLook.length,
+  `no looks:* script builds these, so nothing can open them: ${missedLook.join(', ')}`);
+
+// Same question at the repo root, where the previews live.
+const rootHtml = readdirSync(ROOT).filter((f) => f.endsWith('.html'));
+const missedRoot = rootHtml.filter((f) => !catalogued.has(f));
+check('every page in the repo root is on a card',
+  !missedRoot.length,
+  `add to FIXED_PAGES in hub-catalogue.mjs: ${missedRoot.join(', ')}`);
+
+// A built page whose link is guessed rather than derived lands on a 404 that
+// says "no", which is indistinguishable from a failed build.
+const badBuilt = PAGES.filter((p) => p.on === 'built' && !p.orphan && (!p.outDir || !p.path?.endsWith('.html')));
+check('every built page carries the dist and the path its link needs',
+  !badBuilt.length,
+  badBuilt.map((p) => `${p.title}: outDir=${p.outDir} path=${p.path}`).join(', '));
+
+// The link a look server's card offers has to be a path that build really
+// emits. Checked against the last build on disk where there is one — a stale
+// dist is skipped rather than failed, since not every look page has been built
+// on this machine.
+const builtOnDisk = PAGES.filter((p) => p.on === 'built' && p.outDir && existsSync(join(ROOT, p.outDir)));
+const wrongPath = builtOnDisk.filter((p) => !existsSync(join(ROOT, p.outDir, p.path.slice(1))));
+check(`every built page's path matches what vite emitted (${builtOnDisk.length} built)`,
+  !wrongPath.length,
+  wrongPath.map((p) => `${p.title} -> ${p.outDir}${p.path}`).join(', '));
 
 const badOn = PAGES.filter((p) => !['dev', 'own', 'built'].includes(p.on));
 check('every page says which server puts it on an origin', !badOn.length,
@@ -177,6 +217,13 @@ if (!up) {
 
   const cat = await fetch(`${base}/api/catalogue`).then((r) => r.json());
   check('serves the whole catalogue', cat.commands.length === CMDS.length);
+  // Not a duplicate of the check above: pages used to be a module constant
+  // built at import, so a hub left open never saw a page added after it
+  // started. Comparing the endpoint against a list read from disk NOW is what
+  // catches that coming back.
+  check('serves pages read from disk, not frozen at boot',
+    cat.pages.length === PAGES.length,
+    `endpoint ${cat.pages.length} vs disk ${PAGES.length}`);
 
   const page = await fetch(base).then((r) => r.text());
   check('serves the page at /', page.includes('Seal Survivor'));

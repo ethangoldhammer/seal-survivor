@@ -34,12 +34,12 @@ import { rarities, rollRarity, rarityMul, applyWithRarity, bestRarity } from '..
 import {
   rollElementFor, commitElement, resetElements, activeElement,
   applyElementalHit, updateElements, onEnemyKilled, nightFactor,
-  elementCardName, elementCardDesc, clearStatuses, elementHitEvent, elementPower,
+  elementCardName, elementCardDesc, clearStatuses, elementHitEvent, elementGlow, moteSnapshot,
   updateElementSkin,
 } from '../path/src/systems/elements.js';
 import { attachNoiseShader } from '../path/src/systems/noiseShader.js';
 import { getAssetMaterials, setAssetTint } from '../path/src/assets.js';
-import { elementColor, elementTrailMix } from '../path/src/systems/elements.js';
+import { elementColor, elementTrailMix, elementFlightParticles } from '../path/src/systems/elements.js';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -81,18 +81,14 @@ function setup({ element, level = 1, night = 0 }) {
 const noHooks = {};
 const b = CONFIG.biolum;
 
-// THE DAY GATE IS HELD OPEN for every section except the one that tests it.
+// NOTHING IS HELD OPEN ANY MORE, and that is the point.
 //
-// The element is asleep in daylight now — elementPower() folds into `share`,
-// so at noon there is no packet, no status and no arc (systems/elements.js).
-// Every mechanical check below runs at `night: 0` because that is where the
-// night DAMAGE and DURATION multipliers are 1 and the raw numbers are
-// readable; without this line all of them would instead be measuring a
-// switched-off ability and passing on zeroes.
-//
-// Restored to the shipped value in THE DAY GATE at the end.
-const SHIPPED_DAY_POWER = b.night.dayPower;
-b.night.dayPower = 1;
+// This file used to force `night.dayPower` to 1 for every section, because the
+// day gate folded into `share` and every mechanical check below would
+// otherwise have been measuring a switched-off ability and passing on zeroes.
+// The sky no longer reaches a single number — see THE SKY IS A LOOK at the
+// end, which is now an invariant rather than a tuning check — so the sections
+// below run at whatever hour they like and read the same figures either way.
 
 // ===========================================================================
 section('THE ROLL');
@@ -171,13 +167,19 @@ section('THE NIGHT RAMP');
   check('dusk counts for part of it, so the ability wakes at sunset',
     nightFactor() > 0 && nightFactor() < 1, nightFactor().toFixed(2));
 
-  // The damage bonus should be small and the duration bonus large — that split
-  // IS the design, so it is asserted rather than left to the config.
-  check('the night damage bonus is modest', b.night.damageMul <= 1.5, `${b.night.damageMul}x`);
-  check('...and the duration bonus is the real payoff', b.night.durationMul >= 1.5, `${b.night.durationMul}x`);
+  // THE MULTIPLIERS ARE GONE. They are asserted absent rather than merely not
+  // used, because a leftover `damageMul` sitting in the config is an invitation
+  // to wire it back up, and the next person to do it would be re-creating an
+  // ability whose worth depended on what time the player sat down.
+  check('no night damage multiplier survives in the config',
+    b.night.damageMul === undefined, `damageMul ${b.night.damageMul}`);
+  check('...and no night duration multiplier either',
+    b.night.durationMul === undefined, `durationMul ${b.night.durationMul}`);
 
-  // Measured end to end rather than read off the config: a ramp wired to
-  // nothing would still pass a config check.
+  // Measured end to end rather than read off the config: a multiplier deleted
+  // from the config but still applied from a literal would pass the two checks
+  // above and fail these.
+  skyLight.twilight = 0;
   setup({ element: 'venom', level: 3, night: 0 });
   const byDay = fakeEnemy(0, 0);
   applyElementalHit(scene, byDay, 100, [byDay], noHooks);
@@ -190,10 +192,12 @@ section('THE NIGHT RAMP');
   const nightDamage = 400 - byNight.hp;
   const nightDuration = byNight.venomTimer;
 
-  check('elemental damage rises at night', nightDamage > dayDamage,
-    `${dayDamage.toFixed(1)} -> ${nightDamage.toFixed(1)}`);
-  check('...and statuses last markedly longer', nightDuration > dayDuration * 1.4,
-    `${dayDuration.toFixed(2)}s -> ${nightDuration.toFixed(2)}s`);
+  check('the same hit does the same damage at noon and at midnight',
+    Math.abs(nightDamage - dayDamage) < 1e-9,
+    `${dayDamage.toFixed(2)} vs ${nightDamage.toFixed(2)}`);
+  check('...and its status lasts exactly as long',
+    Math.abs(nightDuration - dayDuration) < 1e-9,
+    `${dayDuration.toFixed(3)}s vs ${nightDuration.toFixed(3)}s`);
 }
 
 // ===========================================================================
@@ -315,6 +319,264 @@ section('SHOCK — the reach element');
   check('...and never to something out of it', far.hp === 400,
     `${(c.arcRange * 4).toFixed(1)} units away, untouched`);
   check('the arc costs the victim less than the shot', c.arcDamage < 1, `${c.arcDamage}x`);
+
+  // --- the chain diminishes ------------------------------------------------
+  // Forced to a certain proc for everything below: this is a test of the CHAIN
+  // and the roll in front of it is measured in THE SKY IS A LOOK. Restored at
+  // the end of the section, because CONFIG is shared with every file after it.
+  // BOTH of them, or this flakes one run in ten: `chance` is what the level
+  // curve climbs toward and `chanceMax` is the ceiling it is clamped to, and
+  // the ceiling ships at 0.9. Setting only the first leaves a 90% coin in
+  // front of every measurement below, which fails rarely enough to look like
+  // a real intermittent bug in the chain. See [[seeded-rng-in-spawn-harnesses]].
+  const shippedChance = c.chance;
+  const shippedMax = c.chanceMax;
+  const shippedArcs = c.arcs;
+  const shippedPerLevel = c.arcsPerLevel;
+  c.chance = 1;
+  c.chanceMax = 1;
+
+  // A LINE OF TANKS, so nothing dies and every hop is spent on reaching rather
+  // than on killing. 1.2 units apart against an arcRange of 6.5 — close enough
+  // that the nearest unstruck body is always the next one along, so the chain
+  // walks the line in order and the hops can be read off in sequence.
+  const chainLine = (n, hp = 1e7) => {
+    const list = [fakeEnemy(0, 0, 0.5, hp)];
+    for (let i = 1; i <= n; i++) list.push(fakeEnemy(i * 1.2, 0, 0.5, hp));
+    return list;
+  };
+
+  setup({ element: 'shock', level: 1, night: 0 });
+  c.arcs = 6;
+  c.arcsPerLevel = 0;
+  {
+    const line = chainLine(6);
+    const strengths = [];
+    applyElementalHit(scene, line[0], 100, line, {
+      onArc: (x1, y1, x2, y2, strength) => { strengths.push(strength); },
+    });
+    const hops = line.slice(1).map((e) => 1e7 - e.hp).filter((d) => d > 0);
+
+    check('the chain reaches past the second body', hops.length >= 3,
+      `${hops.length} bodies hit`);
+    check('...taking less out of each one than the last',
+      hops.every((d, i) => i === 0 || d < hops[i - 1]),
+      hops.map((d) => d.toFixed(1)).join(' -> '));
+    check('...by the configured falloff, not by some other number',
+      hops.length > 1 && Math.abs(hops[1] / hops[0] - c.arcFalloff) < 1e-9,
+      `${(hops[1] / hops[0]).toFixed(3)} vs arcFalloff ${c.arcFalloff}`);
+    // The bolt is the only thing on screen that says how far down the chain a
+    // hop is. If it stopped tracking the damage, a chain would LOOK the same
+    // all the way along while landing a sixteenth as much at the far end.
+    check('...and the bolt is drawn weaker in step with it',
+      strengths.length === hops.length
+      && strengths.every((v, i) => i === 0 || v < strengths[i - 1]),
+      strengths.map((v) => v.toFixed(2)).join(' -> '));
+  }
+
+  // --- it does not die with its first victim -------------------------------
+  // THE BUG THIS REPLACED. The chain used to `break` on a kill, so against the
+  // schools it exists to answer — where the first hop always kills — a
+  // six-hop chain landed exactly one hop. It was weakest in the only fight
+  // that ever needed it.
+  {
+    setup({ element: 'shock', level: 1, night: 0 });
+    const line = chainLine(6, 1);
+    let killed = 0;
+    applyElementalHit(scene, line[0], 100, line, {
+      onEnemyKilled: () => { killed++; },
+    });
+    check('a chain through a school does not stop at the first kill', killed > 1,
+      `${killed} killed`);
+
+    // ...but a kill is not free either. Same budget, same spacing, bodies that
+    // survive: the chain reaches strictly further when it is not blowing
+    // through anything.
+    const tanky = chainLine(6);
+    applyElementalHit(scene, tanky[0], 100, tanky, noHooks);
+    const reached = tanky.slice(1).filter((e) => e.hp < 1e7).length;
+    check('...and a kill still costs it a hop', reached > killed,
+      `${reached} bodies through survivors vs ${killed} through kills`);
+  }
+
+  // --- it gives up rather than hopping forever ------------------------------
+  // Without the floor the falloff is an infinite series: in a dense enough
+  // crowd the chain keeps going for hops worth fractions of a point, each one
+  // a bolt, a spark burst and a sound.
+  {
+    setup({ element: 'shock', level: 1, night: 0 });
+    c.arcs = 200;
+    const line = chainLine(199);
+    let arcs2 = 0;
+    applyElementalHit(scene, line[0], 100, line, { onArc: () => { arcs2++; } });
+    const expected = Math.ceil(Math.log(c.arcDamageFloor / c.arcDamage) / Math.log(c.arcFalloff));
+    check('a 200-hop budget still stops where the damage floor says',
+      arcs2 > 1 && arcs2 <= expected + 1,
+      `${arcs2} hops, floor reached at about ${expected}`);
+  }
+
+  c.chance = shippedChance;
+  c.chanceMax = shippedMax;
+  c.arcs = shippedArcs;
+  c.arcsPerLevel = shippedPerLevel;
+}
+
+// ===========================================================================
+section('THE PELLET SHOWS WHAT IT IS CARRYING');
+// ===========================================================================
+// Each element gets its own answer to "what does this look like on the way
+// there", and two of them are deliberately NOTHING. That is the part worth
+// testing: a gap that is a decision looks exactly like a gap that is an
+// oversight, and the next person to read the config cannot tell them apart
+// without this section.
+//
+//   shock      crackles      — its whole effect is over in the frame it lands
+//   venom      drips         — heavy, sagging, obviously about to be left on something
+//   chill      nothing       — ice on the body is already its loudest moment
+//   infection  motes         — real objects, handed to the fish on impact
+{
+  setup({ element: 'shock', level: 1, night: 0 });
+  const spec = elementFlightParticles();
+  check('a Voltaic run crackles in flight', !!spec?.emitter, spec?.emitter ?? 'nothing');
+  check('...on a rate, so it holds at any framerate', spec?.perSecond > 0,
+    `${spec?.perSecond}/s`);
+  check('...from an emitter that actually exists', !!CONFIG.emitters[spec?.emitter],
+    spec?.emitter ?? '');
+  // The gun fires a lot of pellets and every one of them runs this rate. A
+  // burst count above a couple here is a four-figure particle budget for a
+  // detail meant to be read out of the corner of an eye.
+  check('...one speck at a time, because there are a lot of pellets',
+    CONFIG.emitters[spec.emitter].count <= 2, `count ${CONFIG.emitters[spec.emitter].count}`);
+  check('...in the element\'s own colours',
+    CONFIG.emitters[spec.emitter].colors.includes(b.elements.shock.color),
+    CONFIG.emitters[spec.emitter].colors.map((c2) => '#' + c2.toString(16)).join(' '));
+
+  // IT DOES NOT RIDE THE SKY. The pellet's colour fades at noon because that
+  // is a wash over something already on screen; sparks that thinned out would
+  // read as the gun misfiring.
+  setup({ element: 'shock', level: 1, night: 1 });
+  const atNight = elementFlightParticles();
+  check('the sparks are the same at noon as at midnight',
+    atNight?.perSecond === spec.perSecond, `${spec.perSecond}/s either way`);
+
+  // --- venom drips ---------------------------------------------------------
+  setup({ element: 'venom', level: 1, night: 0 });
+  const drip = elementFlightParticles();
+  check('a venom run drips in flight', !!drip?.emitter, drip?.emitter ?? 'nothing');
+  const dripDef = CONFIG.emitters[drip?.emitter];
+  check('...from an emitter that actually exists', !!dripDef, drip?.emitter ?? '');
+  // THE THREE THINGS THAT MAKE IT A DRIP rather than a spark, all of which a
+  // copy-paste from the shock preset would silently get wrong.
+  check('...and it falls, which is the whole read', dripDef.gravity[1] < 0,
+    `gravity ${dripDef.gravity[1]}`);
+  check('...lingering longer than a spark does', dripDef.life[1] > CONFIG.emitters[spec.emitter].life[1],
+    `${dripDef.life[1]}s vs ${CONFIG.emitters[spec.emitter].life[1]}s`);
+  // A drop thrown along WITH the pellet arrives where the pellet does and the
+  // trail never sags. Near-zero inherit is what leaves it behind in the water.
+  check('...and is left behind rather than thrown along', dripDef.inherit < 0.1,
+    `inherit ${dripDef.inherit}`);
+  check('...in the element\'s own colours', dripDef.colors.includes(b.elements.venom.color),
+    dripDef.colors.map((c2) => '#' + c2.toString(16)).join(' '));
+
+  // --- chill and infection shed nothing, on purpose ------------------------
+  // Chill's ice and freeze are already its loudest moment. Infection does not
+  // use this path at all: its motes are real objects that ride the pellet and
+  // are handed over on impact, which no emitter could do — see the section
+  // below.
+  for (const id of ['chill', 'infection']) {
+    setup({ element: id, level: 1, night: 0 });
+    check(`${id} sheds nothing in flight, deliberately`, elementFlightParticles() === null);
+  }
+
+  setup({ element: 'shock', level: 0, night: 0 });
+  check('a run that never took the card sheds nothing', elementFlightParticles() === null);
+}
+
+// ===========================================================================
+section('THE CONTAGION RIDES THE PELLET');
+// ===========================================================================
+// The infected fish already wear orbiting lights, and a spread is drawn as one
+// of those lights crossing the gap to the next body. So the shot carries them
+// too, and impact is that same crossing one step earlier — the ammunition was
+// holding the contagion and it visibly changes hands.
+//
+// WHY NOT A PARTICLE TRAIL. A spore emitter would have to be extinguished and
+// a separate burst lit on the fish, and the two would never quite read as the
+// same objects. These are the same objects.
+{
+  const fakeShot = (x, y) => {
+    const mesh = new THREE.Object3D();
+    mesh.position.set(x, y, 0);
+    scene.add(mesh);
+    return { mesh, radius: 0.18, source: 'gun', faction: 'player' };
+  };
+  // Settled on it, not merely aimed at it — a mote mid-flight is still the
+  // pellet's picture, not the fish's.
+  const orbiting = (host) => moteSnapshot().filter((mo) => !mo.travelling && mo.host === host).length;
+  const motesInFlightTo = (t) => moteSnapshot().filter((mo) => mo.travelling && mo.target === t).length;
+
+  setup({ element: 'infection', level: 3, night: 0 });
+  const shot = fakeShot(-3, 0);
+  // Several frames: ensureMotes adds ONE per call, so a host ramps up to its
+  // complement over a few frames rather than popping into existence wearing
+  // all of them. A single tick here would assert against a half-dressed shot.
+  for (let i = 0; i < 6; i++) updateElements(dt, scene, [], noHooks, [shot]);
+  const carried = orbiting(shot);
+  const perShot = b.elements.infection.motes.perShot;
+  check('a pellet in the air carries motes', carried === perShot, `${carried} on the shot`);
+  check('...fewer than an infected fish gets, because it is a promise not the ability',
+    carried < b.elements.infection.motes.perHost, `${carried} vs ${b.elements.infection.motes.perHost}`);
+
+  // THE HAND-OVER. After the hit the lights belong to the fish, and they are
+  // in flight toward it rather than teleported.
+  const fish = fakeEnemy(0, 0);
+  applyElementalHit(scene, fish, 100, [fish], noHooks, 1, shot);
+  check('the fish it hits is infected', fish.infectTimer > 0);
+  check('...and the pellet is no longer holding them', orbiting(shot) === 0,
+    `${orbiting(shot)} left on the shot`);
+  const travelling = motesInFlightTo(fish);
+  check('...they are crossing the gap to it', travelling === carried,
+    `${travelling} in flight`);
+
+  // ...and they actually arrive, rather than easing forever toward a fish.
+  for (let i = 0; i < 240; i++) updateElements(dt, scene, [fish], noHooks, []);
+  check('...and arrive', orbiting(fish) > 0, `${orbiting(fish)} now orbiting the fish`);
+
+  // --- a pellet that hits nothing does not leak ----------------------------
+  // The one failure a pool like this fails with: a light orbiting an object
+  // that is gone. A shot that flies off and expires takes its motes with it.
+  setup({ element: 'infection', level: 3, night: 0 });
+  const missed = fakeShot(6, 6);
+  updateElements(dt, scene, [], noHooks, [missed]);
+  check('a shot that hits nothing still carries them', orbiting(missed) > 0);
+  scene.remove(missed.mesh); // what despawning a projectile does
+  updateElements(dt, scene, [], noHooks, []);
+  check('...and takes them with it when it despawns', orbiting(missed) === 0,
+    `${orbiting(missed)} orphaned`);
+
+  // --- the volley may not eat the pool -------------------------------------
+  // Eight pellets against one shared ceiling. Without the reserve a Cloned
+  // Pebbles run spends its whole mote budget on ammunition in the air and the
+  // infected fish — the actual readout — orbit nothing at all.
+  setup({ element: 'infection', level: 3, night: 0 });
+  const volley = [];
+  for (let i = 0; i < 80; i++) volley.push(fakeShot(i * 0.5 - 20, 4));
+  for (let i = 0; i < 10; i++) updateElements(dt, scene, [], noHooks, volley);
+  const m = b.elements.infection.motes;
+  const onShots = moteSnapshot().filter((mo) => mo.onShot).length;
+  check('a huge volley cannot spend the whole mote pool',
+    onShots <= Math.floor(m.maxAlive * m.shotShare),
+    `${onShots} on pellets, reserve ${Math.floor(m.maxAlive * m.shotShare)} of ${m.maxAlive}`);
+
+  // ...and with the pellets holding their share, a fish infected afterwards
+  // still gets lights. This is the check the reserve exists for.
+  const late = fakeEnemy(0, -4);
+  applyElementalHit(scene, late, 100, [late], noHooks);
+  for (let i = 0; i < 10; i++) updateElements(dt, scene, [late], noHooks, volley);
+  check('...and a fish infected while it is in the air still gets its own',
+    orbiting(late) > 0, `${orbiting(late)} on the fish`);
+
+  resetElements(scene);
 }
 
 // ===========================================================================
@@ -527,84 +789,107 @@ section('SPLASH ZONE — aoe and targeting');
 }
 
 // ===========================================================================
-section('THE DAY GATE — the element is faint in daylight');
+section('THE SKY IS A LOOK — and may not touch a number');
 // ===========================================================================
-// Bioluminescence at noon is a contradiction, so Glow Up! is a night ability
-// in both halves: it dims AND it does less. The two share one number
-// (elementPower) precisely so they cannot disagree — a seal that is visibly
-// dark while still poisoning things is the bug this shape exists to prevent.
+// THE INVARIANT THIS FILE EXISTS TO PROTECT, now that the day ramp has been
+// pulled out of the numbers.
 //
-// FAINT, NOT ASLEEP. `dayPower` was 0 and the ledger caught what that meant:
-// 39 damage across eight runs that took the card, last in the game by ninety
-// times. 30 real seconds is a game hour and the awake window is 17:20–07:00,
-// so a median 2:39 run begun during the working day never sees dark at all —
-// the pick was worth literally nothing and the card never said so. These
-// checks are written against the RELATIONSHIP (day is a fraction of night)
-// rather than against a specific floor, so retuning `dayPower` is a one-cell
-// change in weapons.csv and not a test edit.
+// It used to be the other way round: `dayPower` scaled the packet, the status
+// durations and the arc chance, and the ledger caught what that cost. Thirty
+// real seconds is a game hour and the awake window is 17:20–07:00, so a median
+// 2:39 run begun during the working day never sees dark at all — Glow Up! did
+// 39 damage across eight runs that took it, last in the game by ninety times,
+// and no card, tooltip or readout said why. Raising the floor made it a
+// half-strength ability instead of a dead one, which is a better bug.
+//
+// So the checks below are written as EQUALITIES, not as ratios. There is no
+// tuning value that makes them pass by degrees: either the sky is out of the
+// numbers or it is not.
 {
-  b.night.dayPower = SHIPPED_DAY_POWER;
+  const SHIPPED_DAY_GLOW = b.night.dayGlow;
 
-  check('the daylight floor is not zero — the card is never a dead pick',
-    SHIPPED_DAY_POWER > 0, `dayPower ${SHIPPED_DAY_POWER}`);
-  check('...and is still well short of a full night', SHIPPED_DAY_POWER < 0.6,
-    `dayPower ${SHIPPED_DAY_POWER}`);
+  // --- the numbers do not move -------------------------------------------
+  const measure = (night) => {
+    setup({ element: 'venom', level: 3, night });
+    const e = fakeEnemy(0, 0);
+    const dealt = applyElementalHit(scene, e, 100, [e], noHooks);
+    return { dealt, timer: e.venomTimer, stacks: e.venomStacks };
+  };
+  const noon = measure(0);
+  const dusk = measure(0.5);
+  const dark = measure(1);
 
+  check('a hit lands the same packet at every hour',
+    noon.dealt === dusk.dealt && dusk.dealt === dark.dealt,
+    `${noon.dealt.toFixed(2)} / ${dusk.dealt.toFixed(2)} / ${dark.dealt.toFixed(2)}`);
+  check('...and the same status, for the same length of time',
+    noon.timer === dark.timer && noon.stacks === dark.stacks,
+    `${noon.timer.toFixed(3)}s x${noon.stacks} vs ${dark.timer.toFixed(3)}s x${dark.stacks}`);
+
+  // The chain too, which read the sky through `share` on its PROC ROLL — the
+  // one place a day gate would have shown up as "this element is unreliable"
+  // rather than as "this element is weak".
+  const chainAt = (night) => {
+    setup({ element: 'shock', level: 8, night });
+    const shot = fakeEnemy(0, 0);
+    const crowd = [shot];
+    for (let i = 1; i <= 6; i++) crowd.push(fakeEnemy(i * 1.2, 0, 0.5, 100000));
+    let arcs = 0;
+    for (let i = 0; i < 200; i++) applyElementalHit(scene, shot, 40, crowd, { onArc: () => { arcs++; } });
+    return arcs;
+  };
+  const arcsByDay = chainAt(0);
+  const arcsByNight = chainAt(1);
+  // A PROC ROLL, so this is the one figure here that cannot be an equality —
+  // it is 200 samples of a coin. A ratio well inside the noise is the claim.
+  check('the chain fires about as often by day as by night',
+    arcsByDay > 0 && Math.abs(arcsByDay - arcsByNight) < arcsByNight * 0.25,
+    `${arcsByDay} arcs by day vs ${arcsByNight} by night`);
+
+  // --- the look does move -------------------------------------------------
+  // The other half. If elementGlow stopped tracking the sky, every check above
+  // would still pass and the ability would have quietly become a flat one.
   setup({ element: 'venom', level: 3, night: 0 });
-  check('at noon the element runs at exactly the floor',
-    Math.abs(elementPower() - SHIPPED_DAY_POWER) < 1e-9, `power ${elementPower()}`);
-  const noon = fakeEnemy(0, 0);
-  const dealt = applyElementalHit(scene, noon, 100, [noon], noHooks);
-  check('...so a hit still lands a packet', dealt > 0, `${dealt.toFixed(1)} bonus damage`);
-  check('...and still applies its status', noon.venomTimer > 0 && noon.venomStacks === 1,
-    `timer ${noon.venomTimer?.toFixed?.(2) ?? noon.venomTimer}, stacks ${noon.venomStacks ?? 0}`);
-  check('...but a smaller one than after dark',
-    dealt < dealtAtNight() * 0.75, `${dealt.toFixed(1)} by day vs ${dealtAtNight().toFixed(1)} by night`);
-
-  setup({ element: 'venom', level: 3, night: 1 });
-  check('at midnight it is fully awake', elementPower() === 1, `power ${elementPower()}`);
-  const dark = fakeEnemy(0, 0);
-  check('...and the same hit does land', applyElementalHit(scene, dark, 100, [dark], noHooks) > 0);
-  check('...and does poison', dark.venomTimer > 0 && dark.venomStacks === 1,
-    `timer ${dark.venomTimer?.toFixed?.(2) ?? dark.venomTimer}, stacks ${dark.venomStacks}`);
-
-  // A FADE, NOT A SWITCH. Dusk has to be partial in both halves at once, or
-  // the ability pops on at a threshold and the crossfade to the plain
-  // noise-shaded seal has nothing to ride.
+  const glowNoon = elementGlow();
   setup({ element: 'venom', level: 3, night: 0.5 });
-  const dusk = elementPower();
-  check('dusk is partway between', dusk > SHIPPED_DAY_POWER && dusk < 1, dusk.toFixed(3));
-  const half = fakeEnemy(0, 0);
-  const duskDealt = applyElementalHit(scene, half, 100, [half], noHooks);
-  check('...and the packet scales with it', duskDealt > 0 && duskDealt < dealtAtNight(),
-    `${duskDealt.toFixed(1)} at dusk`);
+  const glowDusk = elementGlow();
+  setup({ element: 'venom', level: 3, night: 1 });
+  const glowNight = elementGlow();
 
-  // The same failure the nightlife spawn gate documents: a world with no
-  // clock must not have the ability silently deleted from it, with no message
-  // saying why.
+  check('the element still shows brightest after dark', glowNight === 1 && glowNoon < 1,
+    `${glowNoon.toFixed(2)} at noon -> ${glowNight.toFixed(2)} at midnight`);
+  check('...fading across dusk rather than switching on',
+    glowDusk > glowNoon && glowDusk < glowNight, glowDusk.toFixed(3));
+  check('...and never all the way out, or a daylight run cannot tell which element it rolled',
+    SHIPPED_DAY_GLOW > 0 && Math.abs(glowNoon - SHIPPED_DAY_GLOW) < 1e-9,
+    `dayGlow ${SHIPPED_DAY_GLOW}`);
+
+  // THE OLD KEY IS GONE. `dayPower` meant "how much of the ability is live"
+  // and the saved tuning snapshot was carrying a 0 for it. Read as the
+  // brightness it is now, that 0 means "invisible for the whole working day" —
+  // an answer to a question nobody asked. Renaming is what stops a stale
+  // snapshot value surviving a change of meaning.
+  check('the old `dayPower` key is gone, so no saved snapshot can revive it',
+    b.night.dayPower === undefined, `dayPower ${b.night.dayPower}`);
+
+  // The same failure the nightlife spawn gate documents: a world with no clock
+  // must not have the ability silently deleted from it, with no message why.
   const hadClock = CONFIG.dayNight.enabled;
   CONFIG.dayNight.enabled = false;
   setup({ element: 'venom', level: 3, night: 0 });
-  check('a world with no day cycle keeps the element fully awake', elementPower() === 1,
-    `power ${elementPower()} with dayNight.enabled = false`);
+  check('a world with no day cycle shows the element at full brightness', elementGlow() === 1,
+    `glow ${elementGlow()} with dayNight.enabled = false`);
   CONFIG.dayNight.enabled = hadClock;
-
-  b.night.dayPower = 1;
-}
-
-function dealtAtNight() {
-  setup({ element: 'venom', level: 3, night: 1 });
-  const e = fakeEnemy(0, 0);
-  return applyElementalHit(scene, e, 100, [e], noHooks);
 }
 
 // ===========================================================================
 section('THE SHOT WEARS THE ELEMENT');
 // ===========================================================================
 // The card says the shots carry an element, and the pellet was the one place
-// that never showed it. It rides elementPower() like the seal's glow does, so
-// these checks are as much about the day gate as about the colour: a shot that
-// stayed green at noon would be advertising an ability that applies nothing.
+// that never showed it. It rides elementGlow() like the seal's glow does, so
+// the pellet and the animal that fired it are lit to the same degree at every
+// hour — a purely visual claim now: the shot does the same damage at noon as
+// it does at midnight whatever colour it is wearing.
 {
   const bulletHex = () => getAssetMaterials('bullet')[0].color.getHex();
   const asColor = (hex) => new THREE.Color(hex).getHex();
@@ -626,22 +911,20 @@ section('THE SHOT WEARS THE ELEMENT');
   check('a chill run is a different colour again',
     bulletHex() === asColor(elementColor('chill')), `#${bulletHex().toString(16)}`);
 
-  // THE DAY GATE, on the colour. Held open by the line at the end of the day
-  // gate section above, so it has to be closed again here.
-  b.night.dayPower = SHIPPED_DAY_POWER;
+  // THE DAY RAMP, on the colour — which is the only thing it moves now.
   setup({ element: 'venom', level: 2, night: 0 });
   updateElements(dt, scene, [], noHooks);
   const noonHex = bulletHex();
   const noonMix = elementTrailMix();
-  const noonPower = elementPower(); // read HERE — the night setup below moves it
+  const noonGlow = elementGlow(); // read HERE — the night setup below moves it
   setup({ element: 'venom', level: 2, night: 1 });
   updateElements(dt, scene, [], noHooks);
   const nightMix = elementTrailMix();
-  // Dim, not absent — the pellet is the readout for how awake the element is,
-  // and the element is faint at noon rather than switched off.
+  // Dim, not absent — the pellet says WHICH element the run rolled, and a
+  // stone-coloured pellet at noon says nothing at all.
   check('at noon the shot is only faintly tinted', noonHex !== stone
     && noonHex !== asColor(elementColor('venom')),
-    `#${noonHex.toString(16)} at power ${noonPower}`);
+    `#${noonHex.toString(16)} at glow ${noonGlow}`);
   check('...and its ribbon carries less than it does after dark',
     noonMix > 0 && noonMix < nightMix, `mix ${noonMix.toFixed(2)} vs ${nightMix.toFixed(2)}`);
 
@@ -650,7 +933,6 @@ section('THE SHOT WEARS THE ELEMENT');
   check('dusk is partway between, not a switch',
     bulletHex() !== stone && bulletHex() !== asColor(elementColor('venom')),
     `#${bulletHex().toString(16)}`);
-  b.night.dayPower = 1;
 
   // A LOOK-PANEL TINT UNDERNEATH SURVIVES IT. The element writes a blend layer
   // rather than the tint itself precisely so a bullet colour set in the

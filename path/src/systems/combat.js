@@ -94,7 +94,9 @@ export function resolveCombat(dt, scene, hooks) {
       // Applied BEFORE the death check below, so a pellet that finishes a fish
       // with its elemental half still counts as the kill.
       if (b.source === 'gun') {
-        applyElementalHit(scene, e, b.damage, enemies, hooks);
+        // `b` rides along so the element can tell WHICH pellet landed — the
+        // contagion's motes orbit the shot and are handed to the fish here.
+        applyElementalHit(scene, e, b.damage, enemies, hooks, 1, b);
       }
 
       // A shot that carries ice (the ice club's thrown variant). Its own
@@ -312,7 +314,24 @@ export function resolveCombat(dt, scene, hooks) {
       // out of the flank, which would slide the player along a shark rather
       // than pushing them off it — and being pushed along the animal you are
       // touching keeps you touching it.
-      hooks.onPlayerHit((e.contactDamage ?? e.def.contactDamage) * dt, { x: -dx, y: -dy }, e.type); // damage-per-second on contact
+      //
+      // THE ONE PLACE THE 'contact' CHANNEL IS DECLARED. It is what holds a
+      // boss's overlap to CONFIG.boss.damageCap.contactPerSecond instead of
+      // letting it eat the whole fight's budget every frame you are inside the
+      // body — see capBossDamage in systems/boss.js for what that was doing.
+      // Ordinary wildlife ignores the channel entirely; a school chewing
+      // through your bar is the fight working.
+      //
+      // ...unless the animal is RAMMING, which is the kraken's crush, the
+      // anglerfish's strike and the lunge perk. Those three multiply this same
+      // number for a committed run, so for as long as one is live the body is
+      // the attack and is billed as one.
+      hooks.onPlayerHit(
+        (e.contactDamage ?? e.def.contactDamage) * dt, // damage-per-second on contact
+        { x: -dx, y: -dy },
+        e.type,
+        e.ramming ? 'attack' : 'contact',
+      );
     }
   }
 }

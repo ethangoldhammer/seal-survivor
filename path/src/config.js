@@ -5727,13 +5727,19 @@ export const CONFIG = {
     // pick it — so it's a variant you accept rather than a surprise you're
     // handed. Every stack after the first deepens the element you already have.
     //
-    // THE NIGHT RAMP is the reason the ability is bioluminescence rather than
-    // "elemental damage". `skyLight.night` already runs 0 by day to 1 in full
+    // THE NIGHT RAMP IS A LOOK. `skyLight.night` runs 0 by day to 1 in full
     // dark (systems/daylight.js), and a game day is 12 real minutes, so any run
-    // past the first few levels crosses at least one dusk. The damage bonus at
-    // night is deliberately SMALL — the real night payoff is `durationMul`,
-    // because a status that lingers changes how a fight plays out, while 20%
-    // more damage is a number nobody can feel.
+    // past the first few levels crosses at least one dusk — which is why the
+    // ability is bioluminescence rather than "elemental damage": the seal is
+    // visibly lit by what it is carrying, and most brightly at midnight.
+    //
+    // IT DOES NOT TOUCH THE NUMBERS. It used to: a night damage bonus, a much
+    // bigger night duration bonus, and a `dayPower` floor that scaled the whole
+    // ability down toward nothing in daylight. What that produced was an
+    // upgrade whose worth depended on the hour the player happened to start
+    // playing at, with nothing on the card saying so. The hour now decides how
+    // the element LOOKS and the spawn gates it always did, and every damage,
+    // duration and proc number below is the same at noon as at midnight.
     // ---------------------------------------------------------------------------
     biolum: {
       enabled: true,
@@ -5755,49 +5761,41 @@ export const CONFIG = {
       // make the gun — the thing this upgrade is nominally about — irrelevant.
       strikeFraction: 0.5,
 
+      // HOW BRIGHTLY THE ELEMENT SHOWS, hour by hour. Every knob in here is a
+      // look knob — see elementGlow() in systems/elements.js.
       night: {
         enabled: true,
-        // At full dark. Modest on purpose; see the note above.
-        damageMul: 1.2,
-        // The one that matters. A venom that ticks for three seconds by day
-        // ticks for five and a half at midnight, and an infection gets that
-        // much longer to find its next host.
-        durationMul: 1.8,
         // Twilight counts as most of the way to night for this ability, so
-        // dusk is when it visibly wakes up rather than an hour later.
+        // dusk is when it visibly lights up rather than an hour later.
         twilightBoost: 0.35,
 
-        // HOW MUCH OF THE ABILITY IS LIVE AT FULL NOON, 0..1. Zero is the
-        // point: bioluminescence at midday is a contradiction, and a seal
-        // blazing away under the sun reads as a bug in the shader rather than
-        // as a power. At 0 the glow goes out AND nothing elemental is applied
-        // — no bonus packet, no venom, no arc — until the light starts going.
+        // HOW BRIGHT THE SEAL IS AT FULL NOON, 0..1. Nothing else: the pellet
+        // does the same damage, the venom ticks as long and the arc jumps as
+        // far at midday as it does at midnight.
         //
-        // The knob is here rather than hardcoded because it is a real design
-        // trade: a run that rolls Glow Up! at 9am has bought an ability that
-        // does nothing for several minutes, and the card does not currently
-        // say so.
+        // WHY IT IS NOT 0 EVEN NOW. Zero is tempting — bioluminescence at noon
+        // is a contradiction, and a seal blazing under the sun reads as a bug
+        // in the shader. But the glow is the only thing on screen that says
+        // which element the run rolled, and at 0 a player who took Glow Up! at
+        // 9am cannot tell it apart from not having taken it. Faint reads as a
+        // creature holding its light in; absent reads as nothing at all.
         //
-        // IT READ AS BROKEN. At 0, across eight logged runs that took the card,
-        // Glow Up! did 39 damage in total — 2 per stack-minute against a median
-        // weapon's 2,500, last in the game by ninety times. The clock is why:
-        // 30 real seconds is one game hour, so a 2:39 run is 5.3 hours, and the
-        // awake window is 17:20 to 07:00. `startFromSystemClock` means a run
-        // begun at any point in the working day is dark for NONE of itself. The
-        // card is offered at every hour and costs a pick at every hour.
-        //
-        // So: a floor, and the night is a multiplier on top of it rather than
-        // the only thing that switches it on. The glow is faint at noon, which
-        // was always the real point — a seal blazing under the sun reads as a
-        // bug in the shader. Being unable to tell the ability from not having
-        // taken it does not.
-        //
-        // Live statuses are NOT cancelled at sunrise — see applyElementalHit.
-        dayPower: 0.35,
+        // THIS KNOB USED TO BE THE ABILITY. It scaled damage, durations and
+        // proc chances too, and at 0 that cost eight logged runs their entire
+        // Glow Up! output — 39 damage in total against a median weapon's
+        // 2,500. It is a brightness now and cannot do that again.
+        // RENAMED FROM `dayPower`, on purpose. The saved snapshot was carrying
+        // a 0 for that key — authored back when it meant "how much of the
+        // ability is live", where 0 was a defensible if brutal choice. Read as
+        // a brightness it means "the element is invisible for the whole
+        // working day", which is not what anybody chose. A key whose MEANING
+        // changes needs a new name or the old value silently survives as an
+        // answer to a question nobody asked. See [[tuning-nulls-override-config-defaults]].
+        dayGlow: 0.35,
         // Shapes the fade between the two. 1 is linear in `nightFactor`;
-        // above 1 holds the ability off until it is properly dark, below 1
-        // wakes it early in the dusk. The crossfade to the plain noise-shaded
-        // seal rides the same curve, so this is also how sharp dawn looks.
+        // above 1 holds the seal dark until it is properly night, below 1 lights
+        // it early in the dusk. The crossfade to the plain noise-shaded seal
+        // rides the same curve, so this is also how sharp dawn looks.
         blendGamma: 1.2,
       },
 
@@ -5868,21 +5866,21 @@ export const CONFIG = {
       // lit up, the impact flashed in the element's colour, and the pellet in
       // between stayed the same stone yellow it is at level 1.
       //
-      // IT RIDES elementPower(), exactly like the seal's glow — so the colour
-      // is not decoration, it is the readout for whether the element is awake.
-      // At noon the shot carries `dayPower`'s share of the element and is tinted
-      // that far toward it — dim rather than absent, which is the readout for an
-      // ability that is awake but faint. It takes the element's full colour
-      // across the same dusk the seal does.
+      // IT RIDES elementGlow(), exactly like the seal's glow, so the pellet and
+      // the animal that fired it are lit to the same degree at every hour. At
+      // noon the shot carries `dayPower`'s share of the element's colour and
+      // takes the whole of it across the same dusk the seal does. This is a
+      // look and only a look — the pellet hits for the same amount whatever
+      // colour it is showing.
       //
       // The tint is a BLEND on top of the asset's own colour (setAssetBlendTint
       // in assets.js), not a write to the Look panel's tint, so recolouring the
       // shot can never eat a tint set in the texture workbench.
       shot: {
         enabled: true,
-        // How far toward the element's colour the pellet travels when the
-        // element is fully awake. 1 is the element's colour outright; below
-        // that keeps some of the stone in it.
+        // How far toward the element's colour the pellet travels at full
+        // brightness. 1 is the element's colour outright; below that keeps
+        // some of the stone in it.
         amount: 1,
         // The ribbon behind it (CONFIG.trails.bullet), on its own knob because
         // the trail is a much bigger area of colour than the pellet — a full
@@ -5912,9 +5910,50 @@ export const CONFIG = {
           arcRange: 6.5,
           arcs: 1,
           arcsPerLevel: 0.34, // floored, so every third stack buys another hop
-          // Fraction of the elemental packet the arc victim takes. Under 1 so a
-          // chain is a bonus rather than free damage multiplication.
+          // Fraction of the elemental packet the FIRST arc victim takes. Under
+          // 1 so a chain is a bonus rather than free damage multiplication.
           arcDamage: 0.7,
+          // ...and every hop after that is this much of the one before it. The
+          // chain is meant to be a reach, not a multiplier: at 0.62 the fourth
+          // body takes about a sixth of what the first one did, so a long
+          // chain is worth having without a packed school turning one pellet
+          // into a screen clear.
+          //
+          // The bolt is drawn thinner by the same number (see spawnArcBolt in
+          // systems/eel.js), so this is a knob you can watch rather than one
+          // you have to take on trust.
+          arcFalloff: 0.62,
+          // Where the chain gives up, as a share of the packet it started
+          // from. Without it the falloff is an infinite series and a chain in
+          // a dense enough crowd would keep hopping for hops that land for
+          // fractions of a point — a lot of bolts, a lot of hit feedback, and
+          // no damage. A share rather than an absolute because the packet
+          // itself scales all run.
+          arcDamageFloor: 0.06,
+
+          // WHAT THE PELLET DOES ON THE WAY THERE. Read by
+          // systems/projectileTrails.js, which already sheds the mussel's
+          // burning chips and the yacht's paper on a rate — this is that
+          // machinery, handed an emitter by the element instead of by the
+          // trail preset.
+          //
+          // NOT EVERY ELEMENT HAS ONE, and the gaps are decisions. A pellet
+          // that visibly crackles the whole way to the fish is a promise that
+          // something electrical is about to happen, and shock is the element
+          // that pays it off inside the same frame it lands. Venom has its own
+          // block below (it drips). Infection does not use this at all — its
+          // motes ride the pellet as real objects and are handed to the fish
+          // on impact, which no particle emitter could do. CHILL IS BARE ON
+          // PURPOSE: ice on the body and the freeze are already the loudest
+          // things it does, and a frost trail would be the third.
+          //
+          // An absent `flight` block simply means the pellet flies as it
+          // always did.
+          //
+          // A RATE, NOT A PER-FRAME COUNT, so it holds at any framerate and so
+          // the trail's existing debt carry keeps a rate under one per frame
+          // from silently rounding to nothing.
+          flight: { emitter: 'elementShockFlight', perSecond: 26 },
         },
 
         // Stacking damage over time. The focus-fire element: five stacks on one
@@ -5932,6 +5971,20 @@ export const CONFIG = {
           // stack's own clock — one timer per enemy, and a fight you're
           // actually in keeps the poison alive by itself.
           refreshes: true,
+
+          // WHAT THE PELLET DOES ON THE WAY THERE — see the long note on
+          // shock's `flight` block for the machinery.
+          //
+          // VENOM DRIPS. The drops fall out of the shot under their own
+          // gravity and hang in the water behind it, so the line a venom
+          // pellet leaves sags where a Voltaic one crackles straight. That is
+          // the whole read: something heavy and wet is being carried, and it
+          // is going to be left on whatever it hits.
+          //
+          // SLOWER THAN THE SPARKS, because a drop is a bigger, longer-lived
+          // object than a spark and the same rate would be a solid green
+          // stripe rather than a drip.
+          flight: { emitter: 'elementVenomDrip', perSecond: 11 },
         },
 
         // Slow, then a hard stop at saturation. The defensive element.
@@ -6010,6 +6063,23 @@ export const CONFIG = {
             pulseAmp: 0.6,
             glow: 3.4,
             travelSpeed: 9, // world units/sec on a spread hop
+            // HOW MANY RIDE A PELLET IN FLIGHT. The contagion is the one
+            // element whose spread is already drawn as lights crossing a gap,
+            // so the shot carries the same lights and hands them over on
+            // impact — the jump from pellet to fish is the picture the spread
+            // makes between two fish, one step earlier.
+            //
+            // FEWER THAN A HOST GETS, because there are a great many more
+            // pellets than hosts and because the shot is the promise, not the
+            // ability. Two reads as "this is carrying something"; five reads
+            // as a bullet that has already been infected.
+            perShot: 2,
+            // ...and the share of the pool below that pellets may occupy.
+            // A volley is eight shots against one shared ceiling, so without
+            // this a Cloned-Pebbles run would spend its whole mote budget on
+            // ammunition and the infected FISH — the actual readout — would
+            // orbit nothing. Decoration never starves the signal.
+            shotShare: 0.3,
             // Motes are pooled — this is the ceiling across every host at once,
             // so a maxed infection in a dense school can't allocate its way
             // into a frame spike.
@@ -6659,10 +6729,42 @@ export const CONFIG = {
         // The most any single hit may take. Burst sources — barrels, eye
         // beams, a volley arriving on one frame.
         perHit: 0.35,
-        // ...and the most all of it together may take inside `window`. This is
-        // the one that covers CONTACT damage, which arrives as fifty tiny
-        // slices a second and would sail under any per-hit ceiling ever set.
+        // ...and the most all of it together may take inside `window`. Every
+        // channel draws on this one, contact included, so it stays the single
+        // answer to "can a boss end my run between two frames".
         perSecond: 0.75,
+        // THE CEILING ON TOUCHING THE ANIMAL, as a fraction of the bar per
+        // second, nested inside `perSecond` above.
+        //
+        // Contact is chip. It is what says the boss is a solid object you are
+        // too close to; it is not supposed to be the fight. Everything the boss
+        // AIMS — a bite, the crab's pinch, a barrel, an eye beam, a volley — is
+        // the fight, and until this existed none of it could land: contact
+        // arrives every frame and spent the whole shared budget before any of
+        // them got a look in (see the long note on capBossDamage).
+        //
+        // A SEVENTH of the bar per second is deliberately survivable for a few
+        // seconds and deliberately not free — swimming through a boss should
+        // cost you, and staying inside one should cost you steadily.
+        //
+        // SET AGAINST `perHit` ABOVE, not picked on its own. The two together
+        // are what decides whether a bite reads as bigger than the chewing it
+        // lands amongst, because late in a run BOTH channels sit at their
+        // ceilings: a snap is worth `perHit` and a second of overlap is worth
+        // this. At 0.35 and 0.15 a bite is about one and a half seconds of
+        // chewing delivered in one frame, which is the margin that makes the
+        // jaws the thing the player watches for. At the 0.25 this started at,
+        // a bite was worth LESS than the second of contact it interrupted and
+        // the whole change would have been invisible.
+        //
+        // Paired with the cut to the boss rows in enemies.csv: those numbers
+        // are what contact is worth for the first fight or two, and this is
+        // where it stops climbing. The roster damage ramp (spawning.csv, 3.2%
+        // per difficulty point to a 8x cap) still applies to a boss like it
+        // applies to everything else, so the ceiling is where a boss's contact
+        // spends most of a run. That is the intent, not a leak: this number is
+        // the late-game figure and the CSV is the early one.
+        contactPerSecond: 0.15,
         // Seconds the rolling budget covers. One is the natural choice: it is
         // roughly the span a player can react across, which is the thing being
         // protected.
@@ -10178,10 +10280,52 @@ export const CONFIG = {
       // fired for the same pellet on the same frame. Half the count of `sparks`
       // and a shorter life, so the element decorates the impact rather than
       // doubling it.
+      // VOLTAIC IS THE EXCEPTION TO "all four are small". The other three
+      // elements show themselves for seconds after the hit — venom ticking,
+      // ice on the body, motes orbiting a host — so their impact burst only
+      // has to introduce something. Shock is over within the frame: the burst
+      // and the bolt ARE the ability, and a spray the size of the other three
+      // was the whole of what a player got to see for it.
+      //
+      // It is still not a hitstop and still not much shake. What it is is more
+      // sparks, thrown harder and hotter, in a cone that reads as a discharge
+      // off the body rather than a puff on it.
+      //
+      // THE MULTISHOT WORRY IS REAL: eight pellets landing on the same frame
+      // fire eight of these. What keeps that legible is that they are small,
+      // fast and additive — eight overlapping sparks read as one bright hit,
+      // where eight overlapping SMOKE puffs would read as fog. If it ever does
+      // go to mud, `count` is the knob, not `life`.
       elementShock: {
-        count: 8, speed: [9, 24], size: [0.05, 0.13], life: [0.1, 0.26],
-        colors: [0x9fe8ff, 0xffffff, 0x6fd0ff], cone: 1.6, drag: 5,
-        gravity: [0, 0], inherit: 0.3, glow: 2.6,
+        count: 16, speed: [12, 34], size: [0.05, 0.15], life: [0.1, 0.3],
+        colors: [0x9fe8ff, 0xffffff, 0x6fd0ff], cone: 1.7, drag: 5.5,
+        gravity: [0, 0], inherit: 0.3, glow: 3.4,
+    },
+      // The venom pellet's drips. Count 1 for the same reason the sparks are
+      // — a rate per pellet, times a volley, is a big number — but everything
+      // else is the opposite of a spark: it falls, it lingers, and it barely
+      // moves sideways. `inherit` is near zero so a drop is LEFT BEHIND by the
+      // shot instead of being thrown along with it, which is what makes the
+      // trail sag.
+      elementVenomDrip: {
+        count: 1, speed: [0.3, 1.6], size: [0.07, 0.15], life: [0.45, 1.0],
+        colors: [0x7dff3d, 0xc6ff9e, 0x3aa81f], cone: 0, drag: 1.8,
+        gravity: [0, -2.6], inherit: 0.05, glow: 2.0,
+    },
+      // Shed by the pellet ALL THE WAY DOWN ITS FLIGHT, not at the end of it —
+      // see CONFIG.biolum.elements.shock.flight and systems/projectileTrails.js.
+      //
+      // COUNT 1, and that is the whole design. This fires on a rate per pellet,
+      // and the gun's whole point is that there are a lot of pellets: at eight
+      // shots a volley and a dozen emissions a second, a count of 8 here would
+      // be putting a thousand particles a second into the water for a detail
+      // that is meant to be read out of the corner of an eye. One hot speck at
+      // a time, shed often, is a crackle. Sixteen at a time is a firework, and
+      // there is already a firework at the end of the flight.
+      elementShockFlight: {
+        count: 1, speed: [1.5, 5], size: [0.04, 0.1], life: [0.07, 0.22],
+        colors: [0x9fe8ff, 0xffffff, 0x6fd0ff], cone: 0, drag: 7,
+        gravity: [0, 0], inherit: 0.15, glow: 3.2,
     },
       elementVenom: {
         // Slower and heavier than the rest — venom should look like it drips
@@ -10285,11 +10429,13 @@ export const CONFIG = {
     },
 
       // --- A CLUB HIT GOING OFF (goo group `boom`) -----------------------------
-      // Fired alongside `explosion` on every Boom Boom Club blast, the same way
-      // a kill fires `killGoo` under its spray: the sprites are the FLASH and
-      // this is the body of burnt water it leaves. Before it, the blast was the
-      // one big AoE in the game with nothing but sprites behind it — forty-six
-      // separate specks where the boss's own explosion is a fused mass.
+      // THE WHOLE OF a Boom Boom Club blast, not the mass under a spray the way
+      // `killGoo` sits under `explosion`. The blast used to be `explosion` and
+      // nothing else, and at fight distance that came out as a scatter of red,
+      // green and blue specks — sprites too small to be sprites. This is the
+      // same substance the boss's own explosion is made of, and it is here
+      // because a density field is the one thing that still reads as one object
+      // when it is only a few pixels across.
       //
       // Same substance as `bossBoom` (group `boom`, additive, cel-edged) and
       // the same recipe as every goo in here: a narrow speed band, heavy drag
@@ -10310,7 +10456,7 @@ export const CONFIG = {
       // speed/drag units before it stops, so the top of the band lands near the
       // 2.4-unit radius of a first-stack blast rather than outside it.
       clubBoomGoo: {
-        count: 7, speed: [1.0, 4.0], size: [0.3, 0.55], life: [0.5, 1.0],
+        count: 10, speed: [1.0, 4.0], size: [0.3, 0.6], life: [0.5, 1.0],
         colors: [0xffd9b0, 0xffa860, 0xf2703a], cone: 0, drag: 3.4,
         gravity: [0, 1.2], inherit: 0.25, glow: 1.0, goo: 'boom',
         // Held back like killGoo's, and for the same reason: at full strength
@@ -10778,6 +10924,22 @@ export const CONFIG = {
         colors: [0xbfefff, 0xffffff, 0x9fe8ff], cone: 0.55, drag: 1.1,
         gravity: [0, 4.5], inherit: 0.2, glow: 1.0, surfacePop: 'bubbleBurst',
     },
+      // A PICKUP GOING DOWN. One burst, fired by every collect in the game, and
+      // it takes its COLOUR FROM THE CALL SITE — that is the whole design here,
+      // and it is why there is one emitter rather than four. What separates a
+      // breath of air from a strike orb from a coral is which of them you just
+      // ate, so the colour IS the information; a palette written here would be
+      // decoration on top of it, saying the same thing every time.
+      //
+      // The list below is only the fallback for a caller that names no colour.
+      // See CONFIG.fx.goo.groups.pickup for the substance.
+      pickupGoo: {
+        count: 7, speed: [3.5, 9], size: [0.2, 0.42], life: [0.2, 0.42],
+        colors: [0xffffff, 0xdff6ff], cone: 6.28, drag: 5.2,
+        // NO GRAVITY. This is a thing being drawn INTO the seal, not spilled
+        // out of it — a burst that then sags reads as something dropped.
+        gravity: [0, 0], inherit: 0.35, glow: 2.4, goo: 'pickup',
+      },
       wakeBubbles: {
         count: 2, speed: [0.8, 3.0], size: [0.05, 0.14], life: [0.6, 1.4],
         colors: [0x9fe8ff, 0xdff6ff, 0xffffff], cone: 0.6, drag: 1.6,
@@ -11484,7 +11646,14 @@ export const CONFIG = {
       bounce:    { emit: 'bounce',      shake: 0.12, hitstop: 0,     glow: 0.25, ripple: { strength: 1.2, radius: 6 },   sfx: 'bounce',   haptic: [8] },
       // Collecting a bubble orb bursts it into smaller bubbles rather than the
       // generic pickup spray — it's the one pickup that IS a bubble.
-      bubblePop: { emit: 'breathBubbles',shake: 0.03, hitstop: 0,    glow: 0.25, ripple: { strength: 0.5, radius: 4 },   sfx: 'bubblePop',haptic: [8] },
+      // TAKING A BREATH. The goo burst is the confirmation — a pickup that pays
+      // out invisibly is a pickup players report as broken, which is exactly
+      // what the toast channel was built for (see the note beside `toast` in
+      // systems/feedback.js). The colour is passed at the call site, not here:
+      // one emitter serves every pickup and the colour is what separates them.
+      bubblePop: { emit: 'breathBubbles', goo: 'pickupGoo', shake: 0.03, hitstop: 0, glow: 0.25,
+                   ripple: { strength: 0.5, radius: 4 }, sfx: 'bubblePop', haptic: [8],
+                   toast: 'Oxygen up!', toastMinGap: 0.6 },
       // A bubble BURST BY SOMETHING ELSE — squeezed between two bodies, or
       // driven into the arena wall. The air is lost, so this is the same
       // moment as `bubblePop` with the reward taken out of it: bigger burst
@@ -11497,6 +11666,24 @@ export const CONFIG = {
       // caller shapes the instance.
       bubbleBurst: { emit: 'bubbleBurst', shake: 0.05, hitstop: 0, glow: 0, ripple: { strength: 0.8, radius: 5 },
                      sfx: 'bubblePop', haptic: null },
+      // THE ATTRACTIVE CLAM ARRIVING. The one pickup in the game that is never
+      // collected — it works where it lands and expires on its own clock — so
+      // there is no swallow to hang the announcement on, and without one the
+      // most powerful thing a trawler drops entered the water in silence.
+      // Fired from spawnAttractorOrb instead. See systems/attractiveClam.js.
+      clamDrop: { emit: 'levelUp', goo: 'pickupGoo', shake: 0.12, hitstop: 0, glow: 0.5,
+                  ripple: { strength: 1.6, radius: 9 }, sfx: 'levelUp', haptic: [14],
+                  toast: 'Clam jam!', toastMinGap: 1 },
+      // The other two swallows. Their own events rather than a second use of
+      // `levelUp`: that one also fires on an actual level-up, and hanging a
+      // pickup's goo burst on it would spray the seal every time a card came
+      // up. Same emitter as the bubble's, same colour-from-the-call-site rule.
+      strikeOrbTaken: { emit: 'levelUp', goo: 'pickupGoo', shake: 0.09, hitstop: 0, glow: 0.6,
+                        ripple: { strength: 1.2, radius: 7 }, sfx: 'levelUp', haptic: [12],
+                        toast: 'Boost!', toastMinGap: 0.6 },
+      coralTaken: { emit: 'levelUp', goo: 'pickupGoo', shake: 0.11, hitstop: 0, glow: 0.7,
+                    ripple: { strength: 1.4, radius: 8 }, sfx: 'levelUp', haptic: [14],
+                    toast: 'Rapid fire!', toastMinGap: 0.6 },
       // Launching a mussel, not detonating one — heavier than a bullet's muzzle
       // flash and roughly as loud as a kill, since a volley leaving the flippers
       // is the moment the weapon reads as a weapon. Deliberately no hitstop: the
@@ -11758,11 +11945,20 @@ export const CONFIG = {
       // costs nothing to fire often. Its own ripple is sized off the blast in
       // main.js rather than fixed here, since the radius grows per stack.
       //
-      // `goo` is the mass under the spray — the same pairing `kill` uses, and
-      // the reason the blast stopped reading as loose sprites. It is the one
-      // goo in the game hanging off a REPEATING event, which is what every
-      // number in `clubBoomGoo` is bent around.
-      clubBoom:    { emit: 'explosion', goo: 'clubBoomGoo', shake: 0.16, hitstop: 0, glow: 0.6, sfx: 'clubBoom',
+      // NO `emit`, WHICH MAKES IT THE ONLY BIG EVENT IN THE GAME WITHOUT A
+      // SPRITE BURST. It used to fire `explosion`, and at the distance a fight
+      // is actually played at that burst is not a spray — every one of its
+      // forty-six sprites is about a pixel wide, so what reached the screen was
+      // a scatter of pure red, green and blue specks around the core. Confetti,
+      // and three blasts inside a second (which is an ordinary second with two
+      // clubs) filled the frame with it.
+      //
+      // `goo` replaces it rather than joining it. Where `kill` pairs the two —
+      // spray over mass — a blast that repeats several times a second cannot
+      // afford the spray at all, and the density pass is the one thing here
+      // that survives being small: it thresholds to a single fused body with a
+      // cel edge instead of to loose dots. See `clubBoomGoo`.
+      clubBoom:    { goo: 'clubBoomGoo', shake: 0.16, hitstop: 0, glow: 0.6, sfx: 'clubBoom',
                      haptic: [{ duration: 22, magnitude: 0.5 }], sfxMinGap: 0.07 },
       // A CLUB LANDING ON A BODY SOMETHING ELSE HAD ALREADY STOPPED. Accented
       // rather than loud: it fires on the same frame as `clubWhack` and is
@@ -11821,8 +12017,12 @@ export const CONFIG = {
       // and that is exactly why they can't be collapsed into one row: a burst's
       // colour belongs to the emitter (feedback() takes no `color`, on purpose),
       // so four colours means four emitters means four rows.
-      elementHitShock: { emit: 'elementShock', shake: 0.012, hitstop: 0, glow: 0.3, sfx: 'elementHit',
-                     haptic: [{ duration: 8, magnitude: 0.12 }], sfxMinGap: 0.11 },
+      // Voltaic's is the loud one — see the note on the `elementShock` emitter
+      // for why this element and not the other three. Still no hitstop: this
+      // lands on top of `bulletHit`, and two stops on one frame is a stutter.
+      elementHitShock: { emit: 'elementShock', shake: 0.022, hitstop: 0, glow: 0.55, sfx: 'elementHit',
+                     ripple: { strength: 0.7, radius: 4.5 },
+                     haptic: [{ duration: 10, magnitude: 0.18 }], sfxMinGap: 0.11 },
       elementHitVenom: { emit: 'elementVenom', shake: 0.012, hitstop: 0, glow: 0.26, sfx: 'elementHit',
                      haptic: [{ duration: 8, magnitude: 0.12 }], sfxMinGap: 0.11 },
       elementHitChill: { emit: 'elementChill', shake: 0.012, hitstop: 0, glow: 0.3, sfx: 'elementHit',
@@ -12263,6 +12463,35 @@ export const CONFIG = {
             rimWidth: 0.5,
             spec: 0,
             normal: 3,
+          },
+          // SOMETHING BEING SWALLOWED. Its own group rather than a borrowed
+          // one, on the rule the rest of this block runs on: a group is a
+          // SUBSTANCE, and anything sharing a group fuses with it. Routed
+          // through `hit` a collected bubble would weld onto whatever the seal
+          // was shooting at the time, and through `blood` it would read as an
+          // injury — which is the opposite of what a pickup means.
+          //
+          // Wet, not hot: it keeps the specular and a fat rim, because this is
+          // a blob of something being taken INTO a mouth and the highlight is
+          // what says there is a surface there. Additive so it lights the
+          // water rather than punching a hole in it, and short-lived — the
+          // burst is punctuation on a moment the player already caused.
+          //
+          // A LOW ISOLINE, because these bursts are small. A splat peaks at 1
+          // by construction, so anything near that needs two lobes overlapping
+          // before a single one shows up at all — and a four-particle burst
+          // that has already flown apart is exactly the case that renders as
+          // nothing. See the note in `aura`.
+          pickup: {
+            radius: 3.6,
+            iso: 0.28,
+            soft: 0.24,
+            opacity: 0.9,
+            additive: true,
+            rim: 1.1,
+            rimWidth: 0.42,
+            spec: 0.5,
+            normal: 2.6,
           },
           // WHAT COMES OUT OF A RUPTURED WEAK SPOT (systems/bossHotSpots.js).
           // The only goo in the game that is meant to look HOT rather than
@@ -13507,6 +13736,28 @@ export const CONFIG = {
       // the def to reuse. This is the contact reach (hunter radius + player
       // radius) the snap fires at, as a multiple.
       playerReach: 1.35,
+      // HOW CLOSE TO THE HEAD A BITE HAS TO LAND TO COST ANYTHING, as a
+      // fraction of the creature's own radius, before the player's hit radius
+      // is added. Only read by rows carrying a `biteDamage` in enemies.csv,
+      // which today is the five bosses that chase.
+      //
+      // A SECOND GATE, and far narrower than `playerReach` above. That one is
+      // multiplied by `lead` and decides when the mouth starts OPENING — about
+      // twenty-five units out on a boss, deliberately, because a twenty-metre
+      // animal telegraphing a bite from a body length away is the whole reason
+      // the jaw is animated at all. This decides whether the teeth reached you,
+      // and widening it until the two agree would put a megalodon's bite damage
+      // on its tail: precisely what the contact ceiling next door exists to
+      // stop, arriving through a different door.
+      //
+      // 0.55 of a radius is the front of the animal and nothing else. On the
+      // megalodon that is 5.0 units around a container whose origin sits 3.9
+      // in front of the snout tip and 21.9 in front of the fluke, so it covers
+      // the head with a little room and stops well short of the body. See the
+      // note on onPlayerBite in main.js for why the origin is the right place
+      // to measure from, and tools/boss-bite-test.mjs for the check that keeps
+      // it true as bodies change.
+      mouthReach: 0.55,
 
       // Procedural jaw timing (systems/jaw.js). Ignored by megalodon, which
       // plays its authored clip instead.
@@ -18960,6 +19211,11 @@ export const CONFIG = {
       drag: 1.5,
       // Ceiling on the whole velocity, so a pile-up cannot fling one.
       maxSpeed: 14,
+      // What `lift` and `drag` are worth on a frame the seal's magnet has hold
+      // of the bubble. Near zero, because both of them exist to kill a shove
+      // and the magnet is a shove the player asked for — at 1 a bubble above
+      // the seal cannot be pulled down at all.
+      magnetLiftMul: 0.15,
 
       // --- being barged ------------------------------------------------------
       // Units/sec of shove per unit/sec of the creature's own speed.
@@ -21497,7 +21753,7 @@ export const CONFIG = {
       // The two the tool was built for. Sharks and orcas are big, smooth,
       // near-untextured bodies, which is exactly where photographic shading has
       // least to say and banding has most.
-      shark: { steps: 3, low: 0.3, gamma: 1.15, soft: 0.12 },
+      shark: { steps: 3, low: 0.3, gamma: 1.15, soft: 0.12, range: 1.5 },
       orca: { steps: 2, low: 0.22, high: 1.0, soft: 0.06 },
     },
   },
@@ -21977,27 +22233,33 @@ function celestialBloomReadout(which) {
   return lines;
 }
 
-// The Glow Up! day/night ramp, as a table. `elementPower` itself lives in
+// The Glow Up! day/night ramp, as a table. `elementGlow` itself lives in
 // systems/elements.js and cannot be imported here (it imports CONFIG), so the
 // curve is restated — it is three lines and the alternative is a slider whose
 // effect you can only see by waiting for dusk.
-function elementPowerReadout() {
+//
+// IT SAYS "GLOW" EVERYWHERE AND MEANS IT. This readout used to say `power`,
+// and it was read as the share of the ability that was live, because that is
+// what it was. The sky no longer touches a single number: the row below is
+// how bright the seal and its pellets are and nothing more.
+function elementGlowReadout() {
   const n = CONFIG.biolum?.night ?? {};
   if (!n.enabled || CONFIG.dayNight?.enabled === false) {
-    return ['no day cycle (or the night bonus is off) — the element is always fully awake'];
+    return ['no day cycle (or the ramp is off) — the element shows at full brightness always'];
   }
-  const floor = Math.min(1, Math.max(0, n.dayPower ?? 0));
+  const floor = Math.min(1, Math.max(0, n.dayGlow ?? 0));
   const g = Math.max(0.05, n.blendGamma ?? 1);
   const at = (dark) => floor + (1 - floor) * Math.pow(dark, g);
   const row = [0, 0.25, 0.5, 0.75, 1]
     .map((d) => `${String(Math.round(d * 100)).padStart(3)}%->${String(Math.round(at(d) * 100)).padStart(3)}%`)
     .join('  ');
   return [
-    'how dark it is -> how much glow + elemental effect:',
+    'how dark it is -> how brightly the element shows:',
     row,
     floor <= 0
-      ? 'at noon: no glow at all, and no elemental hit is applied (statuses already ticking still finish)'
-      : `at noon: ${Math.round(floor * 100)}% power`,
+      ? 'at noon: invisible — same damage, but nothing on screen says which element you rolled'
+      : `at noon: ${Math.round(floor * 100)}% brightness, full damage`,
+    'damage, durations and arc chance do not read this at all',
   ];
 }
 
@@ -22521,12 +22783,19 @@ for (const [root, presets] of Object.entries({
     "greatWhite": { high: 0.71, gamma: 2.1, steps: 4 },
     "sealTeam": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
     "ship": { strength: 1, steps: 2, gamma: 1.05, low: 0.14, high: 1, soft: 0, range: 1.5 },
+    "megalodon": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "bossHammerhead": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "mosasaur": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
   },
   sealShader: {
     "mightyMeg": { strength: 0, size: 0.04, contrast: 3.55 },
     "greatWhite": { strength: 1.3 },
     "sealTeam": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.6, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.6, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1.3, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
     "ship": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 3, wetSoft: 0.5, wetTight: 21, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 4.4, wetPatch: 0.35, wetCaustics: 0.95, wetCausticScale: 4.9, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "shark": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 1.15, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.76, wetTight: 81, wetEdge: 0.15, wetRim: 0.46, wetRimPower: 2.7, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "megalodon": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "bossHammerhead": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "mosasaur": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
   },
   biolumSkin: {
     "clubIce": { shellColor: 0x000000, colorC: 0x000000, colorB: 0xade6e5, flow: 1.16, pattern: "flow", scale: 0.07 },
@@ -23067,11 +23336,13 @@ export const TUNER_SCHEMA = [
     panel: 'companions',
     section: 'Auras & orbits',
     items: [
-      // The shared curve and the whole day gate are weapons.csv's — see the
-      // fence on that table. The readout stays: it is the one thing here that
-      // answers "is my element awake right now", which is a question about the
-      // sky rather than about a number.
-      { type: 'readout', label: 'day/night', lines: () => elementPowerReadout() },
+      // The shared damage curve is weapons.csv's — see the fence on that
+      // table. The day ramp is NOT, any more: it moves brightness only, and
+      // brightness is judged by eye on a seal at dusk.
+      { type: 'readout', label: 'day/night', lines: () => elementGlowReadout() },
+      { path: 'biolum.night.dayGlow', min: 0, max: 1, step: 0.05, label: 'glow kept at noon' },
+      { path: 'biolum.night.blendGamma', min: 0.25, max: 4, step: 0.05, label: '...day to night curve' },
+      { path: 'biolum.night.twilightBoost', min: 0, max: 1, step: 0.05, label: '...how much of night dusk counts for' },
       { path: 'biolum.skin.strength', min: 0, max: 5, step: 0.1, label: 'seal glow' },
       { path: 'biolum.skin.strengthPerLevel', min: 0, max: 1, step: 0.05, label: '...per level' },
       { path: 'biolum.skin.nightStrengthMul', min: 1, max: 4, step: 0.1, label: '...at night' },
@@ -23089,9 +23360,10 @@ export const TUNER_SCHEMA = [
       { path: 'biolum.skin.pulseAmp', min: 0, max: 1, step: 0.05, label: 'seal glow breath' },
       { path: 'biolum.skin.pulseSync', type: 'choice', options: BEAT_DIVISIONS, label: 'breath — one per' },
       { path: 'biolum.skin.pulseSpeed', min: 0.1, max: 8, step: 0.1, label: '...rate when free (rad/s)' },
-      // The basic shot in the element's colour. Both ride elementPower(), so
-      // at noon with 'power kept in daylight' at 0 these do nothing however
-      // far they are dragged — which is correct, and is the readout.
+      // The basic shot in the element's colour. Both ride elementGlow(), so at
+      // noon with 'glow kept at noon' at 0 these do nothing however far they
+      // are dragged. The pellet still hits for exactly the same amount — it is
+      // only the colour that the sky is holding back.
       { path: 'biolum.shot.amount', min: 0, max: 1, step: 0.05, label: 'shot takes element colour' },
       { path: 'biolum.shot.trailAmount', min: 0, max: 1, step: 0.05, label: '...and its trail' },
     ],
@@ -23105,8 +23377,13 @@ export const TUNER_SCHEMA = [
       { path: 'biolum.elements.shock.chance', min: 0, max: 1, step: 0.05, label: 'arc chance' },
       { path: 'biolum.elements.shock.chancePerLevel', min: 0, max: 0.3, step: 0.01 },
       { path: 'biolum.elements.shock.arcRange', min: 1, max: 20, step: 0.5 },
-      { path: 'biolum.elements.shock.arcDamage', min: 0, max: 2, step: 0.05 },
+      { path: 'biolum.elements.shock.arcDamage', min: 0, max: 2, step: 0.05, label: 'first hop damage (x packet)' },
+      { path: 'biolum.elements.shock.arcFalloff', min: 0.1, max: 1, step: 0.02, label: '...each hop after (x previous)' },
+      { path: 'biolum.elements.shock.arcDamageFloor', min: 0, max: 0.5, step: 0.01, label: '...chain stops below (x packet)' },
       { path: 'biolum.elements.shock.arcsPerLevel', min: 0, max: 2, step: 0.02 },
+      // The crackle on the way to the fish. A rate per pellet, so a volley
+      // multiplies it — drag it against Cloned Pebbles, not against one shot.
+      { path: 'biolum.elements.shock.flight.perSecond', min: 0, max: 60, step: 1, label: 'sparks in flight (per pellet/sec)' },
     ],
   },
   {
@@ -26456,13 +26733,16 @@ const PATH_TABLES = [
       // handful that decide whether the card is worth a pick at all, and one of
       // them (`dayPower`) was sitting at 0 in a saved snapshot where no edit to
       // config.js could reach it.
+      // `biolum.night.*` is NOT in here any more. It was, while the day ramp
+      // scaled damage and durations — that made it throughput and the CSV's.
+      // Every knob under it is a brightness now, judged by eye on a seal at
+      // dusk, so it belongs with the rest of the look.
       const BIOLUM_OWNED = new Set([
         'biolum.damageFraction', 'biolum.damageFractionPerLevel', 'biolum.statusPerLevel',
-        'biolum.strikeFraction', 'biolum.night.damageMul', 'biolum.night.durationMul',
-        'biolum.night.twilightBoost', 'biolum.night.dayPower', 'biolum.night.blendGamma',
+        'biolum.strikeFraction',
       ]);
       if (id.startsWith('biolum.') && !BIOLUM_OWNED.has(id)) {
-        return 'weapons.csv owns Glow Up!\'s shared curve and its day gate only — the glow, the tints and the per-element look are tuner sliders';
+        return 'weapons.csv owns Glow Up!\'s shared curve only — the glow, the day ramp, the tints and the per-element look are tuner sliders';
       }
       return null;
     },

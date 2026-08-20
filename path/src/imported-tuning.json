@@ -11294,12 +11294,6 @@
       "range": 1
     },
     "presets": {
-      "shark": {
-        "steps": 3,
-        "low": 0.3,
-        "gamma": 1.15,
-        "soft": 0.12
-      },
       "orca": {
         "steps": 2,
         "low": 0.22,

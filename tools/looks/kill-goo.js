@@ -363,7 +363,7 @@ present('Blob 8x, iso 0.7', 'as far as it goes before it stops being a body');
 //
 // The seal stays in frame, at the distance a fight is actually played at,
 // because a blast is only ever seen next to it.
-function blast({ frames = 12, cam = fightCam, at = [0, 0], scale = 1, spray = true, clear = true } = {}) {
+function blast({ frames = 12, cam = fightCam, at = [0, 0], scale = 1, spray = null, clear = true } = {}) {
   if (clear) {
     resetParticles();
     reseed();
@@ -373,25 +373,35 @@ function blast({ frames = 12, cam = fightCam, at = [0, 0], scale = 1, spray = tr
   updateParticleScale(cam, gl);
   const def = CONFIG.feedback.clubBoom;
   const opts = { x: at[0], y: at[1], scale };
-  if (spray) emit(def.emit, at[0], at[1], opts);
+  // `spray` is the BEFORE picture and is named explicitly, because the shipped
+  // event has no `emit` any more — reading it off def would render nothing and
+  // the comparison panel would quietly become a second copy of the shipped one.
+  if (spray) emit(spray, at[0], at[1], opts);
+  if (def.emit) emit(def.emit, at[0], at[1], opts);
   if (def.goo) emit(def.goo, at[0], at[1], opts);
   run(frames, cam);
 }
 
 check('the club blast carries a goo', !!CONFIG.feedback.clubBoom?.goo,
   CONFIG.feedback.clubBoom?.goo ?? 'sprites only');
+check('...and no sprite burst under it', !CONFIG.feedback.clubBoom?.emit,
+  CONFIG.feedback.clubBoom?.emit ?? 'none');
 check('...into the same substance the boss explosion uses',
   CONFIG.emitters[CONFIG.feedback.clubBoom?.goo]?.goo === 'boom',
   CONFIG.emitters[CONFIG.feedback.clubBoom?.goo]?.goo ?? 'none');
 
-blast({ at: [1.5, 0.5], scale: 1.2, spray: false });
-present('One blast, goo only', 'the mass on its own — it has to read as one body, not as lit circles');
+blast({ at: [1.5, 0.5], scale: 1.2, spray: 'explosion' });
+present('One blast, the old sprites', 'what it was — at this distance the burst is red/green/blue specks, not a spray');
 blast({ at: [1.5, 0.5], scale: 1.2 });
-present('One blast, shipped', 'spray and mass together, at fight distance', true);
-blast({ at: [1.5, 0.5], scale: 1.2, spray: true, clear: true });
+present('One blast, shipped', 'the same blast as one fused body with a cel edge', true);
+blast({ at: [1.5, 0.5], scale: 1.2, spray: 'explosion' });
+blast({ frames: 6, at: [-1.5, -1], scale: 1.4, spray: 'explosion', clear: false });
+blast({ frames: 6, at: [3, -0.5], scale: 1, spray: 'explosion', clear: false });
+present('Three of the old ones', 'an ordinary second with two clubs — this is the confetti the swap removes');
+blast({ at: [1.5, 0.5], scale: 1.2 });
 blast({ frames: 6, at: [-1.5, -1], scale: 1.4, clear: false });
 blast({ frames: 6, at: [3, -0.5], scale: 1, clear: false });
-present('Three inside a second', 'the repeating case — this is where a long life or a high count smears the water');
+present('Three, shipped', 'the repeating case — where a long life or a high count would smear the water');
 
 scene.remove(seal);
 

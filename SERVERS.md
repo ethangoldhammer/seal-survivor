@@ -20,6 +20,13 @@ It will not deploy, publish, or ship. Those have a copyable command and no
 button, and `npm run test:hub` fails if a new script that reaches the outside
 world ever gets one.
 
+Look pages are the exception to "one server": several can be up at once on
+purpose, to compare two looks. They take a free port if the one they asked for
+is busy and print the URL of the page itself, so the address is never something
+you have to know. The panel marks them `idle` rather than `stale` while they
+are fresh, and `clean` leaves those alone — a server you are looking at is not
+a leftover.
+
 Run `npm run servers` for the same picture in the terminal — it reads the live
 socket table, works out what each process is, and says which ones are safe to
 kill. Everything below is the reasoning behind both.

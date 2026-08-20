@@ -275,6 +275,7 @@ const DOCS = {
     turnRate: 'Radians/sec. Blank means it pivots on the spot.',
     contactDamage: 'Damage dealt on touching the seal.',
     contactDamagePerDifficulty: 'Contact damage gained per difficulty point.',
+    biteDamage: 'What the JAWS CLOSING cost the seal, as one burst on the frame they shut — separate from the per-second drain of touching the body, and only for a creature with a hunt block to close them with. Blank means the snap is a sound and a pose, which is right for every wildlife row; the bosses that chase fill it in, and it is the whole of what their attack is worth.',
     scalePerDifficulty: 'Visual + hitbox growth over a run.',
     maxGrowth: 'Cap on scalePerDifficulty.',
     scaleVariance: 'Per-individual size jitter, +/- this fraction, rolled once at spawn. The hitbox follows the visual, so it is a real spread of body sizes — and for the sea turtle, which has a rigid body, a spread of masses with it.',
@@ -401,7 +402,7 @@ const BLANK_MEANS = {
     // Short enough to fit a 92px number column — the full sentence is in the
     // column tooltip, which is where a placeholder that clips belongs anyway.
     speedVariance: '0', speedPerDifficulty: '0', turnRate: 'pivots',
-    contactDamagePerDifficulty: '0', scalePerDifficulty: '0', maxGrowth: '∞',
+    contactDamagePerDifficulty: '0', biteDamage: 'no bite', scalePerDifficulty: '0', maxGrowth: '∞',
     scaleVariance: '0',
     weightPerDifficulty: '0', maxWeight: '∞', maxConcurrent: '∞',
     minDifficulty: '0', minPlayerLevel: '0', spawnRateMul: '1',

@@ -12,7 +12,7 @@
 // goes blank or times out on a tall contact sheet, so each cell POSTs its
 // canvas here as a PNG and the frames are read off disk instead.
 import http from 'node:http';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyRecorded } from '../apply-shaders.mjs';
@@ -208,8 +208,58 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// localhost and not 127.0.0.1 — see the note in the header.
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`looks: http://localhost:${PORT}/  (root ${ROOT})`);
+// THE PAGE, not the root. `vite build` keeps the input's path relative to the
+// project root, so the built page is at /tools/looks/<name>.html and the root
+// of this server is a directory listing nothing serves — a link to `/` 404s
+// with "no", which reads exactly like the build having failed.
+//
+// So find what was actually built and print that. One line per page, absolute,
+// clickable in a terminal and scrapeable by the workbench (tools/hub.mjs),
+// which turns whatever a run prints into the link on its card.
+async function builtPages() {
+  const out = [];
+  const walk = async (dir, prefix) => {
+    let entries = [];
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'shots' || e.name === 'assets') continue;
+      if (e.isDirectory()) await walk(join(dir, e.name), `${prefix}${e.name}/`);
+      else if (e.name.endsWith('.html')) out.push(`${prefix}${e.name}`);
+    }
+  };
+  await walk(ROOT, '/');
+  return out;
+}
+
+async function announce(port) {
+  const pages = await builtPages();
+  if (pages.length) for (const page of pages) console.log(`looks: http://localhost:${port}${page}`);
+  else console.log(`looks: http://localhost:${port}/  (root ${ROOT} — nothing built?)`);
   console.log(`shots: ${SHOTS}`);
+}
+
+// A SECOND LOOK PAGE MUST NOT KILL ITSELF ON THE FIRST ONE'S PORT.
+//
+// Every `looks:*` script calls this file with no --port, so they all want
+// 4600. Opening a second look page while one is up used to die on EADDRINUSE
+// before printing anything, which from the workbench looks like the build
+// failing and from a terminal looks like nothing at all. Comparing two looks
+// side by side is a normal thing to want, so take any free port instead and
+// say which one — the address was never the interesting part, the link is.
+//
+// An explicitly requested --port is honoured strictly: if you asked for a
+// number you have a reason, and silently landing somewhere else would be worse
+// than failing.
+const asked = argv.includes('--port');
+
+// localhost and not 127.0.0.1 — see the note in the header.
+server.on('error', (err) => {
+  if (err.code !== 'EADDRINUSE' || asked) {
+    console.error(`looks: ${err.message}`);
+    process.exit(1);
+  }
+  console.log(`looks: ${PORT} is taken — taking a free port instead`);
+  server.listen(0, '127.0.0.1');
 });
+server.on('listening', () => announce(server.address().port));
+server.listen(PORT, '127.0.0.1');

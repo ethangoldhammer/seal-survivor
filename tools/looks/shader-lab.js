@@ -944,17 +944,28 @@ function buildPanels() {
 
   const btns = document.createElement('div');
   btns.className = 'btns';
-  // "record", not "apply", and the difference is the whole of a bug report.
+  // "record", not "apply", and the difference USED to be the whole of a bug
+  // report. It no longer is: the button writes tools/looks/shader-lab.json AND
+  // the server applies it on the same request (see the POST handler in
+  // tools/looks/serve.mjs, which imports applyRecorded from
+  // tools/apply-shaders.mjs). One press moves the choice into assets.csv, the
+  // numbers into config.js, and clears those presets out of
+  // imported-tuning.json so the new values are what boots.
   //
-  // The button writes tools/looks/shader-lab.json. It does NOT touch assets.csv,
-  // and it cannot: this page is a vite build behind a server that never imports
-  // config.js and never writes into path/src — the rule that keeps a look page
-  // from racing the game's tuning (SERVERS.md). `npm run shaders:apply` is the
-  // step that moves a recorded choice into the CSV.
+  // The name stayed anyway. `record` says what the button is FOR — pinning this
+  // creature's look — where "apply" invited the reading that the whole roster
+  // had just moved, and the write is deliberately scoped to one creature (see
+  // `recorded` below). Running `npm run shaders:apply --all` by hand is still
+  // possible and still replays the whole document, which is why it needs a flag.
   //
-  // Labelled "apply to enemyOrcaBull", it read as the whole job being done, so
-  // the second step was never run and the choice appeared not to work. The
-  // status line below now names the command rather than leaving it implied.
+  // THE SERVER STILL CANNOT REACH THE RUNNING GAME. It reads config.js as TEXT
+  // and never imports it, so the rule this page was built under holds: a look
+  // page does not race the game's tuning (SERVERS.md). The tuning clear is
+  // refused outright while a dev server is up.
+  //
+  // Labelled "apply to enemyOrcaBull", it read as the whole job being done when
+  // it was half of it — the second step was never run and the choice appeared
+  // not to work. That is the history the name is carrying.
   btns.innerHTML = `<button class="act" id="bApply">record ${subjectKey}</button>
     <button class="act" id="bSave">save presets</button>
     <button class="act" id="bShot">save frame</button>

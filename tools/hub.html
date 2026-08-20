@@ -53,6 +53,7 @@
   .dot.keep { background: var(--go); box-shadow: 0 0 8px var(--go); }
   .dot.stomp { background: var(--stop); box-shadow: 0 0 8px var(--stop); }
   .dot.stale { background: var(--warn); }
+  .dot.idle { background: var(--dim); }
   .dot.unknown, .dot.down { background: var(--faint); }
 
   .btn { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
@@ -199,7 +200,8 @@ function drawServers() {
     row.append(el('span', 'dot ' + s.verdict));
     row.append(el('span', 'name', s.label));
     const b = el('span', 'blurb');
-    b.append(el('span', null, s.note));
+    const serving = s.dist && CAT.pages.find((p) => p.outDir === s.dist);
+    b.append(el('span', null, serving ? 'serving ' + serving.title : s.note));
     const meta = el('span', null, ' — port ' + s.ports.join(', ') + ' · up ' + age(s.age) + ' · ' + s.owner);
     meta.style.color = 'var(--faint)';
     b.append(meta);
@@ -207,7 +209,10 @@ function drawServers() {
 
     const acts = el('div', 'acts');
     const open = el('a', 'btn', 'open');
-    open.href = 'http://localhost:' + s.ports[0] + (s.role === 'atlas' ? '/render.html' : '/');
+    // A look server's root is a directory nothing serves — linking to `/` gets
+    // you a page that says "no". Go to the built page itself.
+    open.href = 'http://localhost:' + s.ports[0]
+      + (serving ? serving.path : s.role === 'atlas' ? '/render.html' : '/');
     open.target = '_blank';
     acts.append(open);
     // `unknown` is something listening that this repo did not start. The
@@ -263,20 +268,44 @@ function drawPages() {
       }
     } else if (p.on === 'built') {
       // A look page is a vite build, so there is no URL until something builds
-      // and serves it. Run the script; the link appears when the server it
-      // starts prints its own address.
-      const live = ST.runs.find((r) => r.name === p.script && r.status === 'running' && r.urls.length);
-      if (live) {
+      // and serves it. Two ways it can already be up, and both matter:
+      //
+      //   a server on the socket table serving this page's dist — which
+      //   includes one started from a terminal hours ago, by another session,
+      //   or before this hub existed; and
+      //
+      //   a run started from this page, whose server has printed its address.
+      //
+      // The socket table is checked FIRST because it is the one that knows
+      // about servers this page did not start. Missing that is why a shader
+      // lab that was already being served still showed a "build & serve"
+      // button and no way in.
+      const server = ST.servers.find((s) => s.role === 'looks' && s.dist === p.outDir);
+      const started = ST.runs.find((r) => r.name === p.script && r.status === 'running' && r.urls.length);
+      const href = server ? 'http://localhost:' + server.ports[0] + p.path
+        : started ? started.urls.find((u) => u.includes(p.path)) ?? started.urls[0]
+        : '';
+      if (p.orphan) {
+        // On disk, no script builds it. Say so rather than offering a button
+        // that cannot work — the card exists so the tool is findable at all.
+        const note = el('span', 'chip', 'no build script');
+        note.title = 'A vite config for this page exists or once did, but no looks:* script runs it.';
+        foot.append(note);
+        foot.append(copyBtn(p.file));
+      } else if (href) {
         const a = el('a', 'btn go', 'open');
-        a.href = live.urls[0];
+        a.href = href;
         a.target = '_blank';
         foot.append(a);
+        const again = el('button', 'btn', 'rebuild');
+        again.onclick = () => run(p.script);
+        foot.append(again);
       } else {
         const b = el('button', 'btn', 'build & serve');
         b.onclick = () => run(p.script);
         foot.append(b);
       }
-      foot.append(el('span', 'chip serves', p.script));
+      if (p.script) foot.append(el('span', 'chip serves', p.script));
     }
     foot.append(el('span', 'path', p.file));
     card.append(foot);

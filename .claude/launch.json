@@ -1,92 +1,49 @@
 {
   "version": "0.0.1",
+  "_comment": [
+    "The servers this repo actually has, one entry each. See SERVERS.md.",
+    "",
+    "There is exactly ONE game entry on purpose. This file previously held five",
+    "configurations that each started a vite dev server (dev, dev-alt, dev-alt2,",
+    "dev-auto, and rive-test, which was a bare `npx vite`). Every dev server",
+    "carries the /__tuning writer from vite.config.js, so a second one is not a",
+    "duplicate — any tab still pointed at it can POST its boot-time snapshot over",
+    "path/src/imported-tuning.json and silently revert hours of tuning. A picker",
+    "with five ways to make that mistake is a trap.",
+    "",
+    "`workbench` is the one to start. It is read-only, it is the index of every",
+    "tool in the repo, and it links to whatever else is running - including the",
+    "game, whose port it resolves live because vite's port moves every restart.",
+    "",
+    "autoPort where the server honours PORT (vite.config.js and csv-editor.mjs",
+    "both do) so two sessions never collide. Fixed 5178 for the workbench: a port",
+    "that never moves is the entire point of that one."
+  ],
   "configurations": [
+    {
+      "name": "workbench",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "hub"],
+      "port": 5178,
+      "autoPort": false
+    },
     {
       "name": "csv-editor",
       "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "csv"
-      ],
+      "runtimeArgs": ["run", "csv"],
       "autoPort": true
     },
     {
-      "name": "dev",
+      "name": "game",
       "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "dev"
-      ],
+      "runtimeArgs": ["run", "dev"],
       "autoPort": true
     },
     {
-      "name": "dev-alt",
+      "name": "built-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "dev",
-        "--",
-        "--port",
-        "5199",
-        "--strictPort"
-      ],
-      "port": 5199
-    },
-    {
-      "name": "dev-alt2",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "dev",
-        "--",
-        "--port",
-        "5223",
-        "--strictPort"
-      ],
-      "port": 5223
-    },
-    {
-      "name": "design-preview",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "5180"
-      ],
-      "port": 5180
-    },
-    {
-      "name": "frozen",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "preview",
-        "--",
-        "--port",
-        "4173",
-        "--strictPort"
-      ],
+      "runtimeArgs": ["run", "preview", "--", "--port", "4173", "--strictPort"],
       "port": 4173
-    },
-    {
-      "name": "rive-test",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "vite",
-        "--port",
-        "5181",
-        "--strictPort"
-      ],
-      "port": 5181
-    },
-    {
-      "name": "dev-auto",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "dev"
-      ],
-      "autoPort": true
     }
   ]
 }

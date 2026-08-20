@@ -1981,6 +1981,13 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // fires with e.shotDamage, not def.shoot.damage, for the same
   // per-instance reason as above.
   const shotDamage = def.shoot ? def.shoot.damage * difficultyRamp('damage', difficulty) : 0;
+  // ...and so does the BITE, on the same curve and baked at spawn for the same
+  // reason. Zero for everything that leaves `biteDamage` blank in enemies.csv,
+  // which is every wildlife row: their snap stays what it always was, a sound
+  // and a pose over a contact drain that never stops. The bosses that chase
+  // fill it in, and it is the whole of what their jaws are worth — see the
+  // hook in main.js and the cut to their contactDamage next to it.
+  const biteDamage = (def.biteDamage ?? 0) * difficultyRamp('damage', difficulty);
   // Speed variance stays outside the ramp: it's the per-individual jitter
   // that keeps a school from moving as one body, not part of the threat
   // curve, and multiplying it up would spread a late-run school apart.
@@ -2152,6 +2159,7 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // Per-instance, so a crab that spawned at minute one keeps hitting for
     // what it was worth then. combat.js reads e.contactDamage, not the def.
     contactDamage,
+    biteDamage,
     shotDamage,
     vx: Math.cos(heading) * speed * 0.5,
     vy: Math.sin(heading) * speed * 0.5,
@@ -2195,6 +2203,18 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // Set for exactly one frame, on the frame the claws meet. systems/
     // combat.js reads it and bills the damage; nothing else may write it.
     justPinched: false,
+    // A BODY BEING USED AS A WEAPON. Set by the three systems that multiply a
+    // boss's contact damage for a committed run — the perk lunge, the kraken's
+    // crush and the anglerfish's strike — and cleared when each restores it.
+    //
+    // systems/combat.js reads it to decide which of the boss damage ceilings
+    // the overlap draws on. While it is false, touching the animal is chip and
+    // is held to CONFIG.boss.damageCap.contactPerSecond; while it is true the
+    // touch IS the attack the boss committed to, and it draws on the fight's
+    // budget like a bite or a shell does. Without the flag a x3.2 crush is
+    // clipped to the same quarter-bar-per-second as drifting into a tail fin,
+    // which is the whole reason the multiplier stopped meaning anything.
+    ramming: false,
     biteCooldown: 0,
     lungeTimer: 0,
     look,

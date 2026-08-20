@@ -25,7 +25,7 @@
 //           you; it will not deploy for you. See RISK below.
 // ============================================================================
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -49,6 +49,7 @@ const PUBLISH = new Set(['deploy', 'deploy:preview', 'ship']);
 
 const WRITES = new Set([
   'build', 'whale', 'notes', 'split', 'placeholder', 'webp', 'shaders:apply',
+  'anglerfish', 'guest', 'icons', 'icons:sheet',
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
   'upgrades:icons',
 ]);
@@ -82,6 +83,8 @@ const GROUP_BY_NAME = {
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
   bones: 'Assets', split: 'Assets', whale: 'Assets', notes: 'Assets', takes: 'Assets',
+  anglerfish: 'Assets', guest: 'Assets', icons: 'Assets', 'icons:sheet': 'Assets',
+  emissive: 'Audits', sockets: 'Audits', headsocket: 'Audits', 'chain:window': 'Audits',
   placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets',
   test: 'Checks',
   // The chain trace is a CHECK that prints rather than asserts: it replays the
@@ -104,6 +107,9 @@ const BLURBS = {
   hub: 'This page. The index of every tool in the repo, on a port that never moves.',
   test: 'Every check in the repo, chained. The first failure hides the rest — see npm-test-is-and-chained.',
   'playtest:sync': 'Pulls remote runs and rebuilds the playtest atlas from them in one step.',
+  // No banner on tools/head-socket-measure.mjs yet — its sibling
+  // eye-socket-measure.mjs has one, and this stands in until it does.
+  headsocket: 'Where a head-mounted socket lands on a rig, measured rather than guessed.',
 };
 
 // ---------------------------------------------------------------------------
@@ -196,7 +202,93 @@ export function commands() {
 //   built  a vite BUILD that a script builds and serves on demand — there is
 //          nothing to link to until you run it, so the hub offers the script.
 // ---------------------------------------------------------------------------
-export const PAGES = [
+// ---------------------------------------------------------------------------
+// LOOK PAGES — derived, because a hand-written list of them went stale in
+// forty-eight hours.
+//
+// This file shipped with eight look pages typed out. Two days later there were
+// twenty-six, and the hub was confidently showing a third of them — which is
+// the precise failure this module's header warns about, committed by the
+// module itself. So they are read out of the build configs instead:
+//
+//   npm run looks:<x>  ->  --config tools/looks/vite.<x>.config.mjs
+//                      ->  input:  tools/looks/<page>.html   (what to open)
+//                          outDir: dist-<x>                  (how to tell
+//                                  which running server is serving it)
+//
+// The outDir is the load-bearing half. Several look servers can be up at once
+// and they no longer share a port, so "is this page being served, and where"
+// is answered by matching a server's command line against its dist directory,
+// never by assuming an address.
+//
+// The URL path is `/` + the input path relative to the project root: vite
+// keeps the input's own path in the output, and serve.mjs mounts the build at
+// the root. Deriving it rather than assuming `/index.html` is why these links
+// land on the page instead of on a 404 that says "no".
+// ---------------------------------------------------------------------------
+function lookPages(scripts) {
+  const out = [];
+  const claimed = new Set();
+
+  for (const [name, command] of Object.entries(scripts)) {
+    if (!name.startsWith('looks:')) continue;
+    const cfg = /--config\s+(\S+)/.exec(command)?.[1];
+    if (!cfg) continue;
+    let src = '';
+    try { src = readFileSync(join(ROOT, cfg), 'utf8'); } catch { continue; }
+
+    // EVERY input, not the first. `input:` takes a string, an array of them, or
+    // a whole block — vite.tip.config.mjs builds two pages from one config, and
+    // matching only the first shape silently loses the second page. matchAll
+    // over the config's HERE-relative html names is shape-agnostic and cannot
+    // quietly return one when there were two.
+    const block = /input:\s*(\[[^\]]*\]|\{[^}]*\}|resolve\([^)]*\))/.exec(src)?.[1] ?? '';
+    const found = [...block.matchAll(/resolve\(HERE,\s*'([^']+\.html)'\)/g)].map((m) => m[1]);
+    const outDir = /outDir:\s*resolve\(PROJECT,\s*'([^']+)'/.exec(src)?.[1]
+      ?? /--outDir\s+(\S+)/.exec(command)?.[1];
+    if (!found.length || !outDir) continue;
+
+    for (const page of found) {
+      claimed.add(page);
+      out.push(lookCard(page, { script: name, outDir }));
+    }
+  }
+
+  // A look page with no script that builds it. It is still a tool, it is still
+  // on disk, and leaving it off the page means the only way to know it exists
+  // is to already know — so it gets a card that says plainly that nothing
+  // builds it. Hiding it would make the index a liar in the one direction it
+  // cannot afford, and this is how yacht-deck and trail-looks were invisible.
+  let onDisk = [];
+  try { onDisk = readdirSync(join(ROOT, 'tools/looks')).filter((f) => f.endsWith('.html')); } catch { /* none */ }
+  for (const page of onDisk) {
+    if (!claimed.has(page)) out.push(lookCard(page, { orphan: true }));
+  }
+
+  return out.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function lookCard(page, extra) {
+  const file = `tools/looks/${page}`;
+  return {
+    file, on: 'built', path: `/${file}`,
+    title: titleOf(join(ROOT, file)) || page.replace(/\.html$/, ''),
+    blurb: blurbFromFile(join(ROOT, file.replace(/\.html$/, '.js'))),
+    ...extra,
+  };
+}
+
+// The page's own <title>, minus the "Name — the rest of the sentence" tail that
+// most of them carry: the tail is the description, and it is already the blurb.
+function titleOf(file) {
+  if (!existsSync(file)) return '';
+  try {
+    const m = /<title>([^<]*)<\/title>/i.exec(readFileSync(file, 'utf8'));
+    return m ? m[1].split(/\s+[—–-]\s+/)[0].trim() : '';
+  } catch { return ''; }
+}
+
+const FIXED_PAGES = [
   { file: 'index.html', on: 'dev', path: '/', title: 'The game',
     blurb: 'Seal Survivor itself. Backtick opens the tuner, T the workbench.' },
   { file: 'tuner.html', on: 'dev', path: '/tuner.html', title: 'Standalone tuner',
@@ -215,6 +307,8 @@ export const PAGES = [
     blurb: 'Frame cost of one system at a time, isolated from a real run.' },
   { file: 'rive-test.html', on: 'dev', path: '/rive-test.html', title: 'Rive splash harness',
     blurb: 'Drives seal_survivor.riv outside the game — artboards, state machines, data binding.' },
+  { file: 'hive-stacks.html', on: 'dev', path: '/hive-stacks.html', title: 'Hex hive',
+    blurb: 'Hive tile layouts and styles, side by side — the stacked-sibling arrangement the upgrade hive uses.' },
 
   { file: 'tools/csv-editor.html', on: 'own', server: 'csv', script: 'csv', port: 5177, path: '/', title: 'CSV editor',
     blurb: 'Spreadsheet for enemies, upgrades and quips, with the game’s own column rules baked into every cell.' },
@@ -231,13 +325,20 @@ export const PAGES = [
     script: 'atlas', title: 'Rig transfer',
     blurb: 'Compare two rigs bone by bone before retargeting a clip between them.' },
 
-  { file: 'tools/looks/shader-lab.html', on: 'built', script: 'looks:shaderlab', title: 'Shader lab' },
-  { file: 'tools/looks/skins.html', on: 'built', script: 'looks:skins', title: 'Skins' },
-  { file: 'tools/looks/kill-goo.html', on: 'built', script: 'looks:goo', title: 'Kill goo' },
-  { file: 'tools/looks/gore.html', on: 'built', script: 'looks:gore', title: 'Gore' },
-  { file: 'tools/looks/cash-ordnance.html', on: 'built', script: 'looks:cash', title: 'Cash ordnance' },
-  { file: 'tools/looks/note-storm.html', on: 'built', script: 'looks:notes', title: 'Note storm' },
-  { file: 'tools/looks/crab-reach.html', on: 'built', script: 'looks:crab', title: 'Crab reach' },
-  { file: 'tools/looks/whale-sweep.html', on: 'built', script: 'looks:whale', title: 'Whale sweep' },
-  { file: 'tools/looks/pickups.html', on: 'built', script: 'looks:pickups', title: 'Pickups' },
-].map((p) => ({ ...p, blurb: p.blurb ?? blurbFromFile(join(ROOT, p.file.replace(/\.html$/, '.js'))) }));
+];
+
+// Called per request, never cached in a module constant. The hub is left open
+// for days while the repo grows underneath it — a list frozen at import is a
+// hub that silently stops mentioning anything added after you started it, and
+// that is not a theoretical failure: it is how a shader lab that existed, was
+// catalogued and was already being served still could not be found on this
+// page.
+export function pages() {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  return [...FIXED_PAGES, ...lookPages(pkg.scripts)]
+    .map((p) => ({ ...p, blurb: p.blurb || blurbFromFile(join(ROOT, p.file.replace(/\.html$/, '.js'))) }));
+}
+
+// Kept as a live getter so anything still reading PAGES sees current data
+// rather than a snapshot.
+export const PAGES = pages();

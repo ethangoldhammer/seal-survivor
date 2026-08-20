@@ -224,7 +224,7 @@ export function spawnStrikeOrb(scene, pos) {
   const mesh = createVisual('strikeOrb');
   mesh.position.copy(pos);
   scene.add(mesh);
-  strikeOrbs.push({ mesh, life: CONFIG.strike.orbLifetime });
+  strikeOrbs.push({ mesh, life: CONFIG.strike.orbLifetime, bodyRadius: assetBodyRadius('strikeOrb') });
 }
 
 // `pos` is where the bubble seeps out of, and the caller is expected to hand
@@ -263,7 +263,31 @@ export function spawnRapidFireOrb(scene, pos) {
   const sizeMul = getAssetSizeMultiplier('rapidFireOrb');
   if (sizeMul) mesh.scale.multiplyScalar(sizeMul);
   scene.add(mesh);
-  rapidFireOrbs.push({ mesh, life: CONFIG.rapidFirePickup.lifetime });
+  // MEASURED off the coral it actually grew, not derived from the asset's
+  // authored radius: this is the one pickup whose body is a different shape
+  // every time, and `ASSETS.rapidFireOrb.radius` describes the rock it
+  // replaced. Measured once here rather than per frame — the geometry never
+  // changes after it is grown.
+  rapidFireOrbs.push({ mesh, life: CONFIG.rapidFirePickup.lifetime, bodyRadius: measuredBodyRadius(mesh) });
+}
+
+// Half the widest side of whatever this object actually occupies, in world
+// units. `Box3` rather than a bounding sphere: a sphere around a branching
+// coral is mostly empty air, and a pickup that could be taken from a unit
+// clear of its own tips would read as sloppy in the other direction.
+const _bodyBox = new THREE.Box3();
+const _bodySize = new THREE.Vector3();
+function measuredBodyRadius(obj) {
+  _bodyBox.setFromObject(obj);
+  if (!Number.isFinite(_bodyBox.min.x)) return 0;
+  _bodyBox.getSize(_bodySize);
+  return Math.max(_bodySize.x, _bodySize.y) / 2;
+}
+
+// The same question for an asset that is always the same shape, answered off
+// the table so it costs nothing at spawn.
+function assetBodyRadius(key) {
+  return (ASSETS[key]?.radius ?? 0) * (getAssetSizeMultiplier(key) || 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -520,7 +544,16 @@ function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect, tick, rawDt) 
     orb.mesh.position.y += (dy / dist) * pull;
   }
 
-  if (dist < CONFIG.pickups.collectRadius) {
+  // TAKEN BY TOUCHING ITS BODY, not its centre. `collectRadius` is one number
+  // for every pickup in the game and it is measured to a POINT, which was fine
+  // while all three of these were the same half-unit ball. They are not any
+  // more — the coral is a branching thing over a unit and a half tall — and a
+  // pickup drawn wider than the circle that takes it is one you visibly swim
+  // through. The magnet normally hides this by dragging the orb the last half
+  // unit in a single frame, which is exactly why it went unnoticed: turn the
+  // magnet off and every one of them was being collected from inside its own
+  // body. Same widening the chunk and the bubble already do.
+  if (dist < CONFIG.pickups.collectRadius + (orb.bodyRadius ?? 0)) {
     onCollect(orb.mesh.position.x, orb.mesh.position.y);
     return 'collected';
   }
@@ -574,6 +607,10 @@ function updateBubbleOrbs(dt, scene, player, onCollect, opts) {
       const pull = magnetSpeed(speed);
       orb.vx += ((dx / dist) * pull - orb.vx) * Math.min(1, 6 * dt);
       orb.vy += ((dy / dist) * pull - orb.vy) * Math.min(1, 6 * dt);
+      // Tells the physics to stand down for this frame — see the note on
+      // `magnetHold`. Set AFTER the pull, and read on the NEXT frame's
+      // updateBubblePhysics, which is the frame it has to survive.
+      orb.magnetHold = true;
     }
 
     // Taken by touching its SKIN, not its centre. A 1.25-unit bubble collected

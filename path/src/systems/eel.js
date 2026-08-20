@@ -273,7 +273,12 @@ function buildBoltGeometry(points, t, cfg) {
   return { mainRuns, branchRuns };
 }
 
-function spawnBolt(scene, points) {
+// `strength` scales the whole bolt — both ribbon widths and both opacities —
+// so one hop of a Voltaic chain can be drawn visibly weaker than the hop
+// before it. The eel's own chain never passes it and is unchanged. Clamped
+// well off zero at the bottom: a bolt is the only thing that says the chain
+// reached this far, and one drawn at 3% is a bolt that did not happen.
+function spawnBolt(scene, points, strength = 1) {
   const cfg = eelCfg();
   const t = performance.now() / 1000;
   const { mainRuns, branchRuns } = buildBoltGeometry(points, t, cfg);
@@ -296,10 +301,11 @@ function spawnBolt(scene, points) {
 
   // Wide soft halo behind a bright thin core — both real geometry now, so
   // the width sliders genuinely change the arc's thickness.
-  addRibbons(mainRuns, cfg.glowWidth, cfg.glowOpacity, 0.4);
-  addRibbons(mainRuns, cfg.coreWidth, 1, 1);
-  addRibbons(branchRuns, cfg.glowWidth * 0.5, cfg.glowOpacity * cfg.branchTaper, 0.35);
-  addRibbons(branchRuns, cfg.coreWidth * 0.6, cfg.branchTaper, 0.8);
+  const k = Math.max(0.3, Math.min(1, strength));
+  addRibbons(mainRuns, cfg.glowWidth * k, cfg.glowOpacity * k, 0.4);
+  addRibbons(mainRuns, cfg.coreWidth * k, k, 1);
+  addRibbons(branchRuns, cfg.glowWidth * 0.5 * k, cfg.glowOpacity * cfg.branchTaper * k, 0.35);
+  addRibbons(branchRuns, cfg.coreWidth * 0.6 * k, cfg.branchTaper * k, 0.8);
 
   group.position.z = 0.12;
   scene.add(group);
@@ -415,8 +421,8 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
  * loop above, which runs every frame whether or not the eel upgrade was ever
  * taken — that unconditional pass is what makes lending the renderer safe.
  */
-export function spawnArcBolt(scene, x1, y1, x2, y2) {
-  spawnBolt(scene, [new THREE.Vector3(x1, y1, 0), new THREE.Vector3(x2, y2, 0)]);
+export function spawnArcBolt(scene, x1, y1, x2, y2, strength = 1) {
+  spawnBolt(scene, [new THREE.Vector3(x1, y1, 0), new THREE.Vector3(x2, y2, 0)], strength);
 }
 
 export function resetEelBolts(scene) {

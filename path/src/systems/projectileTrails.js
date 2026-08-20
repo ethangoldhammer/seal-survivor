@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { emit } from '../entities/particles.js';
-import { elementColor, elementTrailMix } from './elements.js';
+import { elementColor, elementTrailMix, elementFlightParticles } from './elements.js';
 
 // Ribbon trails behind projectiles. Same reason as the lightning arcs: WebGL
 // ignores line width, so a trail has to be real geometry to be visible at
@@ -111,8 +111,7 @@ function tailPoint(p, back, extraBack = 0) {
 // carried in emitDebt rather than dropped, so the rate holds at any framerate
 // instead of quietly thinning out when frames are long — and a rate under one
 // per frame still emits, just not every frame.
-function shedParticles(t, p, cfg, dt, back) {
-  const spec = cfg.particles;
+function shedParticles(t, p, spec, dt, back) {
   if (!spec?.emitter || !(spec.perSecond > 0)) return;
   t.emitDebt += spec.perSecond * dt;
   let bursts = Math.floor(t.emitDebt);
@@ -138,6 +137,26 @@ function shedParticles(t, p, cfg, dt, back) {
 // listed simply gets no trail.
 function presetFor(p) {
   return CONFIG.trails[p.mesh?.name] ?? null;
+}
+
+// WHAT THIS PROJECTILE IS SHEDDING, which is usually its preset's own chips —
+// the mussel's embers, the yacht's paper — and on the basic shot is the run's
+// element instead.
+//
+// THE ELEMENT WINS on the pellet rather than adding to it. `bullet` has no
+// `particles` of its own today, so in practice there is nothing to stack; the
+// rule is written down anyway because the alternative reads as an accident the
+// first time somebody gives the plain pellet a spark of its own and finds a
+// Voltaic run shedding two kinds at once from one 0.18-wide stone.
+//
+// Keyed on the asset name for the same reason the preset and the colour are:
+// 'bullet' is the gun's ammunition and nothing else's. The escorts fire the
+// same asset and so crackle too, which is correct — Seal Team's volley IS the
+// player's gun, scaled (see systems/sealTeam.js), and it already takes the
+// element's colour for exactly that reason.
+function shedSpec(p, cfg) {
+  if (p.mesh?.name !== 'bullet') return cfg.particles;
+  return elementFlightParticles() ?? cfg.particles;
 }
 
 // Scratch colours for trailColour below — one ribbon rewrites its whole colour
@@ -184,7 +203,7 @@ export function updateProjectileTrails(dt, scene, projectiles) {
     // Both are measured off the shell as it actually renders, so a size
     // change in the Look panel moves them with it.
     const back = tailBack(t, p, cfg);
-    shedParticles(t, p, cfg, dt, back);
+    shedParticles(t, p, shedSpec(p, cfg), dt, back);
 
     // Tracked live, so dragging the depth in the tuner moves a trail that's
     // already in the air rather than only the next one to spawn.

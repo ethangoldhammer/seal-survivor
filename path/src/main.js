@@ -1914,17 +1914,24 @@ function processPendingSplashes() {
  * skipped the playtest accounting, the hit flash, the tail impulse and the
  * death check. Anything that hurts the seal should come through here.
  */
-function onPlayerHit(dmg, dir, source = 'unknown') {
+function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
   // THE ONE PLACE EVERY POINT OF DAMAGE ARRIVES — contact, shots, perks,
   // blasts — which is why the boss's ceilings are applied here rather than at
   // the sources. See capBossDamage: it trims a boss down to what it is allowed
   // to take in one hit and in one second, and returns everything else exactly
   // as it came. Ordinary wildlife is untouched.
   //
+  // `channel` separates the two kinds of damage a boss deals, because they
+  // want different ceilings and the shared one let the wrong one win. 'contact'
+  // is the per-frame drain from overlapping the body; everything else is
+  // something the animal aimed. Only the boss cap reads it — the ledger, the
+  // hit flash and the shove are all channel-blind, since they describe what
+  // the player felt rather than where it came from.
+  //
   // Before recordPlayerDamage, so the playtest ledger records what the player
   // actually took. Filing the uncapped figure would leave every incoming-damage
   // reading in the report describing a game nobody played.
-  dmg = capBossDamage(dmg, source, player.stats.maxHp, gameState.time);
+  dmg = capBossDamage(dmg, source, player.stats.maxHp, gameState.time, channel);
   if (!(dmg > 0)) return;
   playtest.recordPlayerDamage(dmg, source);
   lastDamageSource = source;
@@ -1975,6 +1982,68 @@ function onPlayerHit(dmg, dir, source = 'unknown') {
     }
   }
   if (player.hp <= 0 && !deathState.active) killPlayer();
+}
+
+/**
+ * A SET OF JAWS ACTUALLY CLOSING ON THE SEAL.
+ *
+ * Fired from the bite hook in entities/enemies.js, on the one frame the snap
+ * commits — already rate-limited to the species' own eat cooldown, already
+ * gated on the player being inside reach, and already the frame the mouth
+ * moves on screen. All of which is why this is the right place for the damage
+ * and the old inline `feedback('bite')` was not enough on its own.
+ *
+ * IT USED TO BE FREE. The chomp was a sound, a puff and a pose, and the
+ * roster's four chasing bosses — the shark, the orca, the mosasaur, the
+ * hammerhead — had no attack of any kind: every point of health they took off
+ * you came from the per-second drain of overlapping their body. So the
+ * megalodon's authored 1.30s bite and the mosasaur's 62 degrees of gape were
+ * theatre played over a number that did not care where the animal's head was.
+ *
+ * `biteDamage` is blank for every wildlife row and stays that way. A shark
+ * eating you is still a contact drain, which is the fight those creatures have
+ * always been in; this is for the one animal the run stops for.
+ *
+ * AND IT LANDS AT THE FRONT OF THE ANIMAL, which is a second gate and not the
+ * one that fired the snap. `playerBiteReach` is deliberately enormous — it is
+ * multiplied by CONFIG.bite.lead, so on a boss the jaws start opening from
+ * about twenty-five units away, a whole body length, because the anticipation
+ * is most of what sells a bite on something that size. Billing damage on that
+ * gate would mean a megalodon biting you with its tail, which is the exact
+ * complaint this whole change is answering, one channel along.
+ *
+ * IT IS MEASURED FROM `mesh.position`, and that is a fact about these bodies
+ * rather than an approximation anybody should assume about the next one. On
+ * every rig that bites, the container's origin sits near the HEAD and not at
+ * the middle of the animal — the megalodon's snout is 3.9 units in front of it
+ * and its tail 21.9 behind, and the orca, the mosasaur, the hammerhead and the
+ * anglerfish all measure the same way. So a modest sphere around the origin IS
+ * the head, and it needs no rig to find.
+ *
+ * WHICH IS WHY IT IS NOT THE HEAD CHAIN'S TIP, which was the obvious answer and
+ * is worse in three ways: enemyBossAnglerfish ships no lookRig at all, so one
+ * of the five would have had no snout to measure from; the tip is only written
+ * on frames the chain actually solves, so it holds the zero vector on the first
+ * frame of a fight, which reads as a mouth at the world origin; and on the
+ * hammerhead it solves to 0.4 units from the container anyway. Measured, the
+ * simpler thing is also the more accurate one. tools/boss-bite-test.mjs is what
+ * holds that claim, on the real bodies, so a new boss whose model is built
+ * around its middle fails there instead of biting with its tail.
+ */
+function onPlayerBite(e) {
+  const dmg = e.biteDamage ?? 0;
+  if (!(dmg > 0) || isInvulnerable()) return;
+
+  const reach = (e.radius ?? 1) * (CONFIG.bite?.mouthReach ?? 0.55)
+    + (player.stats?.hitRadius ?? 0.5);
+  const mx = e.mesh.position.x - player.mesh.position.x;
+  const my = e.mesh.position.y - player.mesh.position.y;
+  if (mx * mx + my * my > reach * reach) return;
+
+  // Shoved away from the head rather than from wherever the body's mass is,
+  // which is the one place in the game that distinction is worth making: the
+  // whole point of a bite is that it happened at a particular end of an animal.
+  onPlayerHit(dmg, { x: -mx, y: -my }, e.type, 'attack');
 }
 
 function onEnemyKilledFeedback(e, killEvent = null) {
@@ -4111,7 +4180,7 @@ function animate(now) {
         // through, for the reason the perk hook below says: a beam should not
         // be the one attack in the game that ignores the seal's only defensive
         // window.
-        onPlayerHit: (dmg, dir, source) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source); },
+        onPlayerHit: (dmg, dir, source, channel) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source, channel); },
       },
     });
     updateBossAbilities(dt, world.scene, player.mesh.position, {
@@ -4119,7 +4188,7 @@ function animate(now) {
       // reason resolveCombat does it at each of its own damage sites: a dash
       // through an aura should be a dash through an aura, not the one attack
       // in the game that ignores the seal's only defensive window.
-      onPlayerHit: (dmg, dir, source) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source); },
+      onPlayerHit: (dmg, dir, source, channel) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source, channel); },
     });
 
     // WHAT THE SCHOOLS SEE COMING. Small fish break away from a strike — the
@@ -4159,6 +4228,7 @@ function animate(now) {
       // seal. Ambient feeding is `preyEaten` and is silent — see the note on
       // CONFIG.feedback.bite.
       feedback('bite', { x, y, vx: e.vx, vy: e.vy });
+      onPlayerBite(e);
     });
 
     // THE PHYSICS FRAME. Everything that owns a body (the boats above, the sea
@@ -4227,9 +4297,14 @@ function animate(now) {
       // emitters and therefore four entries. `kind` is the element id, which
       // is what builds the key.
       onElementHit: (x, y, kind) => feedback(elementHitEvent(kind), { x, y }),
-      onArc: (fromX, fromY, toX, toY) => {
-        spawnArcBolt(world.scene, fromX, fromY, toX, toY);
-        feedback('elementArc', { x: toX, y: toY });
+      // One hop of a Voltaic chain. `strength` is what this hop is worth as a
+      // share of the packet that started the chain, and it drives BOTH halves
+      // of the moment — a thinner bolt and a smaller, quieter crack — so the
+      // far end of a long chain looks and sounds like the tail of something
+      // rather than like six identical strikes.
+      onArc: (fromX, fromY, toX, toY, strength = 1) => {
+        spawnArcBolt(world.scene, fromX, fromY, toX, toY, strength);
+        feedback('elementArc', { x: toX, y: toY, scale: 0.55 + 0.45 * strength });
       },
       onFreeze: (x, y) => feedback('elementFreeze', { x, y }),
       // --- harp seal --------------------------------------------------------
@@ -4272,7 +4347,10 @@ function animate(now) {
       onEnemyKilled: onEnemyKilledFeedback,
       onBurst: (x, y, radius) => feedback('infectionBurst', { x, y, scale: Math.min(2, radius / 4) }),
       onSpread: (fx, fy, tx, ty) => feedback('infectionSpread', { x: tx, y: ty, dirX: tx - fx, dirY: ty - fy }),
-    });
+    // The shots in the air. Only the contagion reads them — its motes orbit
+    // the pellet and are handed to the fish on impact — so every other element
+    // pays one compare for this.
+    }, projectiles);
 
     // Sea garlic and the shrimp ring damage independently of gunfire.
     updateGarlic(dt, world.scene, player.mesh.position, player.stats.garlicLevel, enemies, {
@@ -4737,7 +4815,10 @@ function animate(now) {
         // If that fill lands inside a combo it reaches the chain the same way
         // chum does — through the meter, which is the only route orbs have.
         const filled = restoreCharge(player.stats);
-        feedback('levelUp', { x, y, scale: 0.6 });
+        // The orb's OWN colour, read off the asset so the burst follows the
+        // Look panel rather than carrying a second copy of the tint that goes
+        // stale the first time anyone re-skins it.
+        feedback('strikeOrbTaken', { x, y, scale: 0.85, color: assetBaseColor('strikeOrb') });
         // One pickup, one mouthful — so it links exactly like a chum orb does
         // inside an armed chain. Without this the one pickup that hands over a
         // whole bar would be the one that could not extend the chain.
@@ -4771,7 +4852,12 @@ function animate(now) {
         // already carry their own reward, and letting every floating thing in
         // the water sustain a combo would make the food chain about hoovering
         // rather than about hunting.
-        feedback('bubblePop', { x, y, scale: 0.8 + 0.6 * need, sfxOpts: { pitch: 1.25 - 0.45 * need } });
+        feedback('bubblePop', {
+          x, y,
+          scale: 0.8 + 0.6 * need,
+          color: assetBaseColor('bubbleOrb'),
+          sfxOpts: { pitch: 1.25 - 0.45 * need },
+        });
       },
       (x, y) => {
         noteTutorialEvent('rapidFireOrb');
@@ -4779,7 +4865,7 @@ function animate(now) {
         // Same top-up as the bubble — see the note there. Slightly bigger,
         // because this orb is rarer.
         if (addCharge(CONFIG.strike.orbPipRefill?.rapidFire ?? 0.35, player.stats)) chargeCrossed();
-        feedback('levelUp', { x, y, scale: 1.1 });
+        feedback('coralTaken', { x, y, scale: 1.1, color: assetBaseColor('rapidFireOrb') });
       },
       // A CHUNK GOING DOWN. Health only, and this is the one pickup in the game
       // that pays no xp and no charge: it is already the largest single thing
