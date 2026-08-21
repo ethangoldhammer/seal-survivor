@@ -10,6 +10,7 @@ import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin, split
 import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
 import { makeOrganicRing } from './systems/organicRing.js';
 import { createRockGeometry, startTumble } from './systems/rocks.js';
+import { SEABED_VARIANTS } from './seabedProps.js';
 
 // ============================================================================
 // ASSETS — one entry per visual thing in the game.
@@ -2985,6 +2986,40 @@ export const ASSETS = {
     material: { roughness: 0.9, metalness: 0 },
     shape: 'cone', radius: 0.5, height: 1.2, color: 0x3f7d44,
   },
+
+  // The SeaFlora&Shells bed — nineteen watercolour props cut out of one
+  // Sketchfab scene by tools/split-seabed.mjs, which also writes the table
+  // spread in here. Registered from that table rather than written out
+  // nineteen times because every field below is either shared by all of them
+  // or measured: hand-copying either kind is how one entry ends up with a
+  // stale number and no way to tell which.
+  //
+  // `fit` IS THE PROP'S OWN MEASURED LENGTH, not a chosen size. assets.js
+  // normalises the longest axis to fit, so passing each prop its real length
+  // makes fit a no-op that preserves the pack's proportions — the kelp frond
+  // stays thirteen times the leaf. systems/seabedScatter.js then scales the
+  // whole bed with one number, which is the only place a size decision is
+  // made. One shared fit here would flatten the bed to a single height and
+  // there would be nothing left to scatter.
+  //
+  // forward/up are grass's pair and for grass's reason: these plants grow
+  // along model +Y (split-seabed.mjs bakes them that way and asserts it), and
+  // in the side view orientationQuaternion sends model forward to world +Y.
+  // The intuitive '+Z'/'+Y' lays every plant on its side.
+  ...Object.fromEntries(SEABED_VARIANTS.map((v) => [v.id, {
+    model: v.model,
+    fit: v.fit,
+    forward: '+Y', up: '-X',
+    // Lit, like grass and for the same reason — a bed that stays noon-bright
+    // while the water goes to dusk is the thing that gives decor away. The
+    // props ship without KHR_materials_unlit precisely so this can happen.
+    material: { roughness: 0.9, metalness: 0 },
+    // Fallback if the model has not loaded: a green cone is wrong for a shell,
+    // but the alternative is nothing at all, and the fallback only ever shows
+    // when createVisual is called before preloadAssets resolves.
+    shape: 'cone', radius: 0.5, height: 1.2, color: 0x5f9e6a,
+  }])),
+
   // --- new creatures -------------------------------------------------------
   // Axes below come from rendering each file with an axis helper (see
   // model-inspector.html), not from guessing at the longest dimension.

@@ -970,8 +970,149 @@ function refreshApexCrowd(dt, playerPos) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE BURST CHASE — a slow cruise punctuated by one committed run.
+//
+// A modifier on `chase` rather than a `behavior` of its own, and that is a
+// deliberate choice about WHERE THE SWITCH LIVES. `behavior` is a string in
+// config.js, and config.js is merged UNDER imported-tuning.json — every
+// snapshot ever saved carries `enemies.sailfish.behavior: 'chase'`, so a new
+// name typed here would be silently overwritten on every load and the creature
+// would go on plain-chasing while the code said otherwise. A nested block the
+// snapshots have never seen cannot be shadowed: a def carrying `lunge` bursts,
+// one without it chases exactly as before.
+//
+// The shape is the anglerfish's (systems/bossAngler.js), scaled down from an
+// ambush to a pass and made per-instance:
+//
+//   cruise   Slow — the whole point. It closes at a speed the seal can simply
+//            swim away from, which is what makes the burst mean anything.
+//   wind     Inside `range`, it gathers: throttles back and turns hard onto
+//            you. This is the tell, and the only warning there is.
+//   strike   The line LOCKS at the end of the wind-up and it commits, at
+//            `speedMul` times cruise with `strikeTurnRate` of correction —
+//            enough to punish standing still, nowhere near enough to follow a
+//            player who moved. A homing lunge is not a lunge, it is a fast
+//            chase with extra steps.
+//   rest     It carries the overshoot, veering off the side the player ISN'T
+//            on, and cannot strike again for `cooldown`. The gap is the
+//            creature: without it a burst chase is just a chase whose speed
+//            flickers.
+//
+// The exit from `strike` is a CLOCK, never "hit or died" — a turn-limited body
+// aimed at a moving target orbits it forever otherwise, which is the trap
+// documented on `turnRate` in the roster.
+//
+// `e.lungeStage` / `e.lungeClock` are rolled on first update rather than at
+// spawn, like `glideY` above. `e.lungeTimer` is a DIFFERENT and unrelated
+// thing — the jaws' burst window in CONFIG.bite.lunge, which this creature
+// does not have.
+function lungeChase(e, dt, ctx) {
+  const c = e.def.lunge ?? {};
+
+  if (e.lungeStage == null) {
+    // Staggered, not zeroed. These arrive in twos and threes from the same
+    // spawn tick, so a shared clock would have the whole group wind up on the
+    // same frame for the rest of its life — one animal with two bodies. A
+    // random part of a cooldown spent before the first strike is the cheapest
+    // way to make them individuals.
+    e.lungeStage = 'rest';
+    e.lungeClock = (c.cooldown ?? 3.2) * Math.random();
+  }
+  e.lungeClock = Math.max(0, (e.lungeClock ?? 0) - dt);
+
+  // --- STRIKE ---------------------------------------------------------------
+  // Velocity written from the heading rather than through steerTo, because
+  // steerTo's turn limit is a MINIMUM against the creature's own turnRate and
+  // collapses to the unlimited velocity-lerp branch on a def that has none.
+  // The commitment is the whole effect, so it does not get to depend on a
+  // field the CSV can blank.
+  if (e.lungeStage === 'strike') {
+    e.animState = 'boost';
+    let diff = Math.atan2(ctx.dirY, ctx.dirX) - e.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    const rate = c.strikeTurnRate ?? 0.5;
+    e.heading += Math.min(Math.abs(diff), rate * dt) * Math.sign(diff);
+    // e.heading, not just vx/vy: every steerTo the moment this ends re-derives
+    // the velocity from it, so a heading left where the wind-up put it would
+    // teleport the fish's course back a second into the past.
+    const speed = e.speed * (c.speedMul ?? 3.6);
+    e.vx = Math.cos(e.heading) * speed;
+    e.vy = Math.sin(e.heading) * speed;
+    if (e.lungeClock <= 0) {
+      e.lungeStage = 'rest';
+      e.lungeClock = c.cooldown ?? 3.2;
+      // Off the side the player is NOT on, so the pass opens a gap whether it
+      // connected or whiffed. Steered toward rather than snapped to — the arc
+      // out is as much of the shape as the arc in.
+      e.lungeVeer = e.heading - Math.sign(diff || 1) * (c.veerSwing ?? 0.9);
+    }
+    return;
+  }
+
+  // --- WIND-UP --------------------------------------------------------------
+  if (e.lungeStage === 'wind') {
+    // Throttled back but NOT stopped. `faceMotion` takes this creature's
+    // facing from its velocity and gives up below 0.05, so a billfish that
+    // hovered would hold whatever heading it arrived on and then launch along
+    // a line it never visibly aimed — the tell has to be a turn you can watch.
+    //
+    // `animState` is written rather than left to stateForSpeed for the same
+    // reason it exists at all: the throttled speed lands a hair either side of
+    // animation.moveThreshold depending on this individual's speedVariance
+    // roll, and a wind-up that flickers between the swim and idle takes is the
+    // one second of this creature the player has to be able to read.
+    e.animState = 'swim';
+    steerTo(e, ctx.dirX, ctx.dirY, dt, 6, c.windSpeedMul ?? 0.4);
+    if (e.lungeClock <= 0) {
+      e.lungeStage = 'strike';
+      e.lungeClock = c.strikeTime ?? 0.8;
+      e.animState = 'boost';
+    }
+    return;
+  }
+
+  e.animState = null;
+
+  // --- REST -----------------------------------------------------------------
+  if (e.lungeStage === 'rest') {
+    if (e.lungeVeer != null) steerTo(e, Math.cos(e.lungeVeer), Math.sin(e.lungeVeer), dt, 6);
+    else steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
+    if (e.lungeClock <= 0) {
+      e.lungeStage = 'cruise';
+      e.lungeVeer = null;
+    }
+    return;
+  }
+
+  // --- CRUISE ---------------------------------------------------------------
+  //
+  // `minRange` is not a taste knob: the wind-up is the only warning there is,
+  // and one that starts from inside the length of the strike is one the player
+  // cannot use. So the gate has a floor as well as a ceiling — and a fish that
+  // finds itself under the floor MAKES ROOM rather than milling around inside
+  // it. Without that half a turn-limited body that keeps steering at something
+  // it is already on top of orbits it at its own turning circle forever, and
+  // the gate never opens again.
+  const range = c.range ?? 12;
+  if (ctx.dist < (c.minRange ?? 6)) {
+    steerTo(e, -ctx.dirX, -ctx.dirY, dt, 6);
+    return;
+  }
+  steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
+  if (ctx.dist <= range) {
+    e.lungeStage = 'wind';
+    e.lungeClock = c.windup ?? 0.45;
+  }
+}
+
 const BEHAVIORS = {
   chase(e, dt, ctx) {
+    // A def carrying a `lunge` block chases in bursts instead — see
+    // lungeChase, and the note there for why this is a block on the def
+    // rather than a `behavior` of its own.
+    if (e.def.lunge) { lungeChase(e, dt, ctx); return; }
     steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
   },
 

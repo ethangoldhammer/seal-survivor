@@ -100,6 +100,8 @@ console.warn = (...a) => warnings.push(a.map(String).join(' '));
 
 const { CONFIG } = await import('../path/src/config.js');
 const strike = await import('../path/src/systems/strike.js');
+const { chainRgb255 } = await import('../path/src/systems/chainColor.js');
+const { CALLOUTS, resolveCalloutText } = await import('../path/src/systems/callouts.js');
 const ui = await import('../path/src/ui/ui.js');
 
 ui.initUI({ onStart() {}, onRestart() {}, onLevelChoice() {}, onResume() {}, onPauseRestart() {} });
@@ -119,6 +121,10 @@ camera.updateProjectionMatrix();
 
 const layer = () => document.getElementById('svToastLayer');
 const banner = () => layer().querySelector('.sv-chain');
+const word = () => layer().querySelector('.sv-chain-word');
+const count = () => layer().querySelector('.sv-chain-x');
+const nowVar = () => Number(banner()?.style.getPropertyValue('--sv-chain-now'));
+const PROMPT = resolveCalloutText(CALLOUTS.get('strikeNow'), 'key', {});
 const strip = () => layer().querySelector('.sv-chain-strip');
 const fillOf = () => layer().querySelector('.sv-chain-fill');
 const leftVar = () => Number(strip()?.style.getPropertyValue('--sv-chain-left'));
@@ -129,7 +135,11 @@ const leftPx = () => Number.parseFloat(banner()?.style.left ?? 'NaN');
 // The seal, and a pin built the way main.js builds it. `left` is asked of the
 // real model rather than invented, which is the whole point — see the header.
 const seal = { x: 0, y: 0 };
-const pinAt = () => ({ x: seal.x, y: seal.y, left: strike.chainWindowLeft() });
+let prompting = false;
+const pinAt = () => ({
+  x: seal.x, y: seal.y, left: strike.chainWindowLeft(),
+  prompt: prompting, promptText: PROMPT,
+});
 
 // Open a chain window on the model, without going anywhere near tryStrike's
 // timing gate. `chainTimer` IS the window (see the note on it in strike.js), so
@@ -322,6 +332,176 @@ section('Nothing is left over when it is done');
   let n = 0;
   while (banner() && n < 300) { ui.updateToasts(1 / 60, camera, null); n++; }
   check('...it simply ages out like any other popup', !banner(), `${(n / 60).toFixed(2)}s`);
+}
+
+// ---------------------------------------------------------------------------
+section('One colour, so it is always legible');
+{
+  ui.clearToasts();
+  openWindow();
+  const want = CONFIG.strike.foodChain.color;
+  const hex = `#${(want >>> 0 & 0xffffff).toString(16).padStart(6, '0')}`;
+
+  // THE SAME COLOUR AT EVERY DEPTH. The banner used to walk the chain wheel one
+  // step per link, which is right for a band on a lit meter and wrong for type
+  // over open water — a couple of depths a lap sank into the sea, and which
+  // ones depended on the time of day.
+  const seen = new Set();
+  for (const depth of [1, 3, 6, 9, 14, 27]) {
+    ui.spawnChainToast(depth);
+    ui.updateToasts(1 / 60, camera, pinAt());
+    seen.add(banner().style.color);
+  }
+  check('every depth wears one colour', seen.size === 1, [...seen].join(' / '));
+  // Compared through the DOM rather than as a string: jsdom (and every browser)
+  // normalises an inline `color` to rgb(), so `#6dffa8 === "rgb(109, 255, 168)"`
+  // is a comparison that can only ever fail. Both sides go through one parser.
+  const norm = (v) => { const n = document.createElement('i'); n.style.color = v; return n.style.color; };
+  check('...and it is the one CONFIG names', banner().style.color === norm(hex),
+    `${banner().style.color} vs ${norm(hex)}`);
+
+  // ...and it is NOT the wheel. Asserted against the wheel's own output rather
+  // than against "not blue": chainColor.js still drives the ring's arc and the
+  // ring's prompt, and the check that matters is that the banner has left it.
+  const wheelDepths = [1, 3, 6, 9, 14, 27].map((d) => {
+    const { r, g, b } = chainRgb255(d);
+    return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+  });
+  check('...not a step on the chain wheel', !wheelDepths.map(norm).includes(norm(hex)),
+    `banner ${hex}, wheel walks ${wheelDepths.slice(0, 3).join(' ')}...`);
+
+  // Depth is still ON the banner. Losing the hue is only acceptable because the
+  // exact readout was always the count beside the words.
+  check('the depth is still printed', count().textContent === '×27', count().textContent);
+
+  // ...AND THE COLOUR HAS TO BE A LEGIBLE ONE. The whole reason the banner left
+  // the wheel was that some of the wheel could not be read over water, so a
+  // fixed colour that is itself dark would be the same failure arrived at from
+  // the other direction — and it would be one slider away at any time.
+  //
+  // Relative luminance, the WCAG definition, against the darkest thing the
+  // banner is ever drawn over: its own plate (rgba(6,10,16,0.62)) over deep
+  // water. 0.35 is a floor rather than a target — it rules out a dark colour
+  // without pretending to know what looks good.
+  const lin = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const lum = (n) => 0.2126 * lin(((n >> 16) & 255) / 255)
+    + 0.7152 * lin(((n >> 8) & 255) / 255)
+    + 0.0722 * lin((n & 255) / 255);
+  const L = lum(want);
+  check('the banner colour is bright enough to be read over water', L > 0.35,
+    `relative luminance ${L.toFixed(2)}`);
+  // The count is drawn at 0.9 alpha in the same colour, so it inherits this —
+  // there is nothing here that could be legible while the number beside it was
+  // not.
+}
+
+// ---------------------------------------------------------------------------
+section('The banner takes the STRIKE NOW! prompt');
+{
+  ui.clearToasts();
+  openWindow();
+  prompting = false;
+  ui.spawnChainToast(4);
+  frame(1 / 60);
+  check('it says the chain by default', word().textContent === 'FOOD CHAIN!', word().textContent);
+  check('...with the count beside it', count().style.display !== 'none', `display "${count().style.display}"`);
+  check('...and reports the ring can keep its own line',
+    ui.chainBannerHasPrompt() === false, '');
+
+  // The moment arrives.
+  prompting = true;
+  frame(1 / 60);
+  check('the moment swaps the words in place', word().textContent === PROMPT, word().textContent);
+  // THE WORDS ARE callouts.csv's. Nothing in ui.js or config.js types them, so
+  // rewording the row rewords the banner — the check that the two surfaces
+  // cannot start saying different things.
+  check('...and they are the callouts.csv row, not a string in the UI',
+    PROMPT === CALLOUTS.get('strikeNow').text, `"${PROMPT}"`);
+  check('...the count steps aside', count().style.display === 'none', `display "${count().style.display}"`);
+  check('...the plate is marked for the neon edge',
+    banner().classList.contains('sv-chain-now'), banner().className);
+  check('...and the banner reports it, so the ring stands down',
+    ui.chainBannerHasPrompt() === true, '');
+
+  // IT FLASHES, and a blink is EDGES. A single sample cannot tell a flash from
+  // a thing that simply got brighter and stayed there.
+  const lit = [];
+  for (let i = 0; i < 60; i++) { frame(1 / 60); lit.push(nowVar()); }
+  let edges = 0;
+  for (let i = 1; i < lit.length; i++) if (lit[i - 1] <= 0.5 && lit[i] > 0.5) edges++;
+  check('the prompt flashes rather than holding lit',
+    edges >= 3 && lit.some((v) => v < 0.05),
+    `${edges} flashes and ${lit.filter((v) => v < 0.05).length} dark frames in 1s`);
+  // ...faster than the almost-empty blink, which is the other thing this plate
+  // can be doing. Two urgencies on one object have to be tellable apart.
+  check('...faster than the window-running-out blink',
+    (CONFIG.strike.foodChain.prompt.flashHz ?? 0) > (CONFIG.strike.foodChain.strip.flashHz ?? 0),
+    `${CONFIG.strike.foodChain.prompt.flashHz}Hz vs ${CONFIG.strike.foodChain.strip.flashHz}Hz`);
+
+  // THE FLIP BACK, on the link itself. Not on the next frame: the release that
+  // earned the link is over by definition, and a banner that showed the new
+  // count one frame after the pop reads as correcting itself.
+  strike.strikeState.chainTimer = CONFIG.strike.chainWindow;
+  ui.spawnChainToast(5);
+  check('a link puts the chain back immediately', word().textContent === 'FOOD CHAIN!', word().textContent);
+  check('...with the new count', count().textContent === '×5', count().textContent);
+  check('...and the neon edge off', !banner().classList.contains('sv-chain-now'), banner().className);
+  prompting = false;
+}
+
+// ---------------------------------------------------------------------------
+section('The prompt only moves when there is a plate to move it to');
+{
+  // A WINDOW WITH NO BANNER YET is the case that decides this. A release opens
+  // the window before any link is scored, so there is a chain running and
+  // nothing announcing it — and that is the moment the prompt matters most.
+  // If the banner claimed the line here, nothing at all would say it.
+  ui.clearToasts();
+  openWindow();
+  prompting = true;
+  ui.updateToasts(1 / 60, camera, pinAt());
+  check('a live window with no banner does not claim the prompt',
+    ui.chainBannerHasPrompt() === false, 'the ring keeps its line');
+
+  // ...and no chain at all, obviously.
+  strike.resetStrike();
+  ui.updateToasts(1 / 60, camera, pinAt());
+  check('...nor does no chain at all', ui.chainBannerHasPrompt() === false, '');
+
+  // The banner must not hold a stale prompt across a clear either.
+  openWindow();
+  ui.spawnChainToast(3);
+  ui.updateToasts(1 / 60, camera, pinAt());
+  check('a banner does claim it', ui.chainBannerHasPrompt() === true, '');
+  ui.clearToasts();
+  check('...and lets go of it when the layer is cleared',
+    ui.chainBannerHasPrompt() === false, '');
+  prompting = false;
+}
+
+// ---------------------------------------------------------------------------
+section('The neon edge has a colour to be');
+{
+  ui.clearToasts();
+  openWindow();
+  ui.spawnChainToast(2);
+  const p = CONFIG.strike.foodChain.prompt;
+  const triple = `${(p.neon >> 16) & 255},${(p.neon >> 8) & 255},${p.neon & 255}`;
+  // Stamped as an R,G,B TRIPLE and not a hex, which is not a detail: the
+  // stylesheet drops it inside an rgba() whose alpha is a calc() over
+  // --sv-chain-now, and rgba() cannot take a hex.
+  check('the prompt colour reaches the plate as an rgb triple',
+    banner().style.getPropertyValue('--sv-chain-neon') === triple,
+    `"${banner().style.getPropertyValue('--sv-chain-neon')}" vs "${triple}"`);
+  check('...and the glow reaches it with a unit on it',
+    banner().style.getPropertyValue('--sv-chain-glow') === `${p.glow}px`,
+    banner().style.getPropertyValue('--sv-chain-glow'));
+  // It is a DIFFERENT colour from the banner's own. The plate is green because
+  // green is what this instrument says READY in; the edge is what it says NOW
+  // in, and the same hue louder would be the same word twice.
+  check('...and it is not the colour the banner already wears',
+    p.neon !== CONFIG.strike.foodChain.color,
+    `edge #${p.neon.toString(16)} vs banner #${CONFIG.strike.foodChain.color.toString(16)}`);
 }
 
 // ---------------------------------------------------------------------------

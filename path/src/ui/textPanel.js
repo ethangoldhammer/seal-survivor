@@ -412,8 +412,17 @@ function paintSpecimen() {
     const font = s.font && s.font !== 'global' ? fontLabel(s.font) : 'global';
     line.firstChild.textContent = `${role.label} · ${font} · ${s.size}px`;
     if (role.inlineColor) {
+      // THE LIVE COLOUR WHERE THE ROLE NAMES ONE. An inlineColor role is one
+      // ui.js paints per element, so its STORED colour is by definition not
+      // what is on screen — and a specimen showing a colour the game does not
+      // draw is worse than no specimen, because somebody will tune against it.
+      // Falls back to the stored value for the roles whose live colour is not a
+      // single number (the strike prompt walks a hue wheel). See textRoles.js.
       const sample = line.lastChild;
-      const hex = ((s.color ?? 0) >>> 0).toString(16).padStart(6, '0');
+      const live = role.colorFrom
+        ? role.colorFrom.split('.').reduce((o, k) => (o == null ? undefined : o[k]), CONFIG)
+        : undefined;
+      const hex = (((live ?? s.color ?? 0) >>> 0) & 0xffffff).toString(16).padStart(6, '0');
       sample.style.color = `#${hex}`;
     }
   }

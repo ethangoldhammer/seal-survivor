@@ -386,35 +386,50 @@ section('Popup motion: the curves are the shared ones');
 }
 
 // ---------------------------------------------------------------------------
-section('The chain banner wheel');
+section('The chain wheel, and the banner that left it');
 {
-  // THE BANNER WEARS ITS LINK'S PLACE ON THE HUE WHEEL, and the wheel is
-  // shared: the STRIKE NOW! prompt and the ring's combo arc read the same four
-  // numbers, so what is really pinned here is that the banner asks
-  // systems/chainColor.js rather than mixing a ramp of its own. It replaced a
-  // two-stop gold-to-orange ramp that was fully spent by link eight — the
-  // depth at which a chain most deserves to look like something.
+  // THE WHEEL IS SHARED BY THE TWO SURFACES ON THE SEAL'S OWN METER: the
+  // "STRIKE NOW!" prompt riding the boost ring and the ring's combo arc. Both
+  // ask systems/chainColor.js rather than mixing a ramp of their own, which is
+  // what stops them agreeing at link one and drifting apart by link six.
+  //
+  // THE BANNER USED TO BE THE THIRD AND IS NOT ANY MORE, and this section is
+  // where that is pinned. The wheel holds saturation and lightness constant,
+  // which keeps every link equally legible against a flat background — exactly
+  // right for a thin band on a lit instrument, and wrong for TYPE over a sea
+  // that runs a full day/night cycle. A couple of depths a lap were unreadable
+  // and which ones depended on the time of day.
   CONFIG.strike.chainColor.hue = 0;
   CONFIG.strike.chainColor.huePerLink = 0.1;
   CONFIG.strike.chainColor.sat = 1;
   CONFIG.strike.chainColor.light = 0.5;
   CONFIG.textMotion.chain.life = 2;
 
-  // previewToasts fires the banner at six links, which at 0.1 a link from a
-  // start of 0 is hue 0.6 — pure blue-violet at full saturation and half
-  // lightness, rgb(0, 102, 255). A number that can only come out right if all
-  // four are being read: a baked ramp, or a wheel that ignored `huePerLink`,
-  // would answer something else here whatever these say.
+  // Hue 0.6 at these four numbers is pure blue-violet, rgb(0, 102, 255) — a
+  // value that can only come out right if all four are being read. It is what
+  // link six USED to paint the banner, and it is the check that the banner has
+  // stopped asking: a wheel this saturated is precisely the colour that
+  // disappeared into deep water.
   ui.clearToasts();
   ui.previewToasts();
   const banner = document.getElementById('svToastLayer').querySelector('.sv-chain');
   check('the banner is on screen', !!banner);
-  check('the banner wears its link\'s place on the wheel',
-    banner.style.color.replace(/\s/g, '') === 'rgb(0,102,255)', `got ${banner.style.color}`);
+  check('the banner does NOT take its link\'s place on the wheel',
+    banner.style.color.replace(/\s/g, '') !== 'rgb(0,102,255)', `got ${banner.style.color}`);
+  // ...it is the one colour CONFIG names, at any depth. Compared through the
+  // DOM: an inline `color` is normalised to rgb(), so a hex string comparison
+  // can only ever fail.
+  const norm = (v) => { const n = document.createElement('i'); n.style.color = v; return n.style.color; };
+  const want = `#${((CONFIG.strike.foodChain.color >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
+  check('...it wears CONFIG.strike.foodChain.color instead',
+    banner.style.color === norm(want), `${banner.style.color} vs ${norm(want)}`);
 
   // THE WHEEL COMES ROUND rather than running out, which is the whole reason
-  // it replaced the ramp: ten links at 0.1 apiece is a full revolution, so a
-  // very deep chain is back where it started instead of stuck on the hot end.
+  // it replaced the two-stop gold-to-orange ramp: that one was fully spent by
+  // link eight, the depth at which a chain most deserves to look like
+  // something. Ten links at 0.1 apiece is a full revolution, so a very deep
+  // chain is back where it started instead of stuck on the hot end. Still the
+  // arc's and the prompt's rule, which is why it is still checked here.
   check('ten links is one full turn, back to the start',
     chainCss(10) === chainCss(0), `${chainCss(10)} vs ${chainCss(0)}`);
   check('...and a chain that has lapsed reads as no chain at all',

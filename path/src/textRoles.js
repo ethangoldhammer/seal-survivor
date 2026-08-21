@@ -89,9 +89,23 @@ export const FONT_GLOBAL = 'global';
  *           per card by --sv-fit so a long name shrinks to fit the hex
  *           (ui.js, fitCardText). Multiplied in rather than replacing scale.
  * inlineColor  true where ui.js writes `style.color` per element and would win
- *           over any rule here anyway — the chain banner ramps gold to orange
- *           with the link count. The role's colour is still read: it is the
- *           BOTTOM of that ramp (see CONFIG.textMotion.chain.colorHot).
+ *           over any rule here anyway — the "STRIKE NOW!" prompt on the ring
+ *           walks the chain's hue wheel, and the FOOD CHAIN! banner is pinned
+ *           to one colour that lives with the mechanic rather than with the
+ *           type. typography.js emits no `color` for these roles: two writers
+ *           on one property, where one of them silently never wins, is a bug
+ *           that costs an afternoon.
+ * colorFrom A dotted CONFIG path the LIVE colour of an inlineColor role comes
+ *           from. The Text panel's specimen reads it so the swatch is what the
+ *           game actually draws — without it the panel shows the role's stored
+ *           colour, which for an inlineColor role is by definition NOT what is
+ *           on screen. (It showed the chain banner in gold for a while after
+ *           the banner stopped being gold, and a saved tuning snapshot means
+ *           correcting the stored value would not have fixed it — see
+ *           pruneUnknownKeys and the notes about renames in config.js.)
+ *           Absent where the live colour is not a single CONFIG value, which is
+ *           the prompt's case: it is a hue wheel, and its stored colour is at
+ *           least the start of that wheel.
  */
 export const TEXT_ROLES = [
   // --- screens: menus, the score card, the pause menu -----------------------
@@ -183,13 +197,17 @@ export const TEXT_ROLES = [
     style: { font: FONT_GLOBAL, size: 15, weight: 700, tracking: 0.02, case: 'as typed', useInk: false, color: 0xffe066, alpha: 1, shadow: 8, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'chain', label: 'Chain banner', selector: '.sv-chain', section: 'Popups',
     sample: 'FOOD CHAIN! ×6', inlineColor: true, motion: 'chain',
+    // ONE COLOUR, and it lives with the mechanic rather than with the type:
+    // the banner used to walk the chain's hue wheel and two depths a lap were
+    // unreadable over open water. See CONFIG.strike.foodChain.color.
+    colorFrom: 'strike.foodChain.color',
     // 900 with the Strike prompt, and heavier than the warning band's 800 on
     // purpose: the food chain is its own voice, and it should be recognisable
     // as one before a word of it has been read.
     style: { font: FONT_GLOBAL, size: 21, weight: 900, tracking: 0.1, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 10, glow: 16, scan: 0, scanGap: 3, scanGlow: 0 } },
   // AN UPGRADE PAYING OUT — "MANEATER +12%", fired by a `toast` channel on a
-  // feedback event (systems/feedback.js). Cool where the chain banner is gold,
-  // and well under half its size: both ride the same layer, and a proc reading
+  // feedback event (systems/feedback.js). Cool where the chain banner is a hot
+  // green, and well under half its size: both ride the same layer, and a proc reading
   // as loudly as a chain extension would have the quietest event in the game
   // shouting over the loudest. It is a receipt, and a receipt is read once.
   { key: 'proc', label: 'Upgrade proc', selector: '.sv-proc', section: 'Popups',

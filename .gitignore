@@ -5,6 +5,7 @@ dist
 # tools/looks/serve.mjs — generated, and only useful for the hour you look at
 # them. The PAGES are tracked; their output is not.
 dist-cash-look
+dist-seabed-look
 dist-yacht-look
 dist-note-look
 dist-goo-look

@@ -40,7 +40,6 @@ import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
 import { buildPrintPaper, initSnapshotPrints, resyncPrintCards } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
-import { chainCss } from '../systems/chainColor.js';
 import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform } from './upgradeHive.js';
 import {
   BOARD_SIZE,
@@ -923,12 +922,21 @@ const STYLES = `
     transform: translate(-50%, -50%); will-change: transform, opacity; }
   .sv-toast-combo { color: #ffe066; font-size: 15px; }
   /* FOOD CHAIN! — the chain-extension banner. Reuses the toast layer and the
-     toast update loop, but it is an announcement rather than a number: it
-     rises from the seal, only one is ever on screen (an extension re-uses the
-     live node), and it runs hotter the deeper the chain goes — the colour is
-     set inline from the link count, so it is not a fixed palette here. */
+     toast update loop, but it is an announcement rather than a number: it is
+     pinned above the seal, only one is ever on screen (an extension re-uses
+     the live node), and it holds for as long as the chain window does.
+     ONE COLOUR, written inline from CONFIG.strike.foodChain.color, because the
+     chain wheel it used to walk took the type through two unreadable stretches
+     a lap over open water. Depth is the count, not the hue. That inline write
+     is why textRoles.js marks this role inlineColor and typography.js emits no
+     colour for it: two writers on one property, where one silently never wins,
+     is a bug that costs an afternoon.
+     min-width so the plate is ONE SIZE. The words are swapped for the STRIKE
+     NOW! prompt mid-chain and back again, and a shrink-to-fit box would jump
+     between two widths every time — on a plate the eye is using as a bar. */
   .sv-chain { position: absolute; font-size: 21px; font-weight: 800;
     letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap;
+    text-align: center; min-width: 9.2em;
     text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 16px currentColor;
     pointer-events: none; transform: translate(-50%, -50%);
     will-change: transform, opacity; }
@@ -936,6 +944,16 @@ const STYLES = `
      own size, so it tracks whatever the Chain banner role is set to. */
   .sv-chain-x { font-size: 0.76em; margin-left: 7px; font-weight: 700;
     font-variant-numeric: tabular-nums; opacity: 0.9; }
+  /* THE PROMPT WEARING THE BANNER. Same node, same plate, different sentence —
+     and the flash is what separates an instruction from the announcement it is
+     interrupting. --sv-chain-now is written per frame by updateToasts from the
+     game's own clock, not a CSS animation, for the same reason every other
+     motion here is: it has to stop when the game does.
+     The words do NOT change colour. The edge does (see the strip), and giving
+     the type its own hue as well would be the same word said twice — what says
+     NOW here is the box lighting up around a line that has changed. */
+  .sv-chain-now .sv-chain-word {
+    filter: drop-shadow(0 0 calc(3px + 9px * var(--sv-chain-now, 0)) currentColor); }
   /* THE WINDOW, AS A STRIP UNDER THE WORDS.
      The chain lapses on a clock (CONFIG.strike.chainWindow, 2.2s) and the only
      thing that ever drew that clock was a thin arc outside the boost ring —
@@ -962,7 +980,25 @@ const STYLES = `
        lapse showed almost nothing. The plate is the ground the type is read
        off and the ground does not move. What leaves is the BANNER, on the
        toast layer's own departure curve. */
-    box-shadow: 0 0 calc(2px + 14px * var(--sv-chain-flash, 0)) currentColor; }
+    /* THREE SHADOWS, ONE PROPERTY, and they have to be stacked rather than
+       written by three owners: the two glows and the edge are separate facts
+       (a chain nearly out, a release due, and the plate having a rim at all)
+       and CSS gives them one slot each in a single list.
+         1  the rim. Always there, faintly, so the plate is a box.
+         2  the neon rim, alpha driven by --sv-chain-now, in the prompt's own
+            colour — --sv-chain-neon is an R,G,B triple written once when the
+            banner is built, which is what lets rgba() take a calc alpha.
+         3  the outer halo: the almost-empty blink in the banner's own colour,
+            and the prompt's neon on top of it. Both can be lit at once — a
+            chain can be about to lapse AND have a release due — and that
+            reads correctly, as two urgencies rather than one overriding. */
+    box-shadow:
+      inset 0 0 0 1px rgba(255,255,255,0.12),
+      inset 0 0 0 calc(1px + 2px * var(--sv-chain-now, 0)) rgba(var(--sv-chain-neon, 125,252,255), calc(0.95 * var(--sv-chain-now, 0))),
+      inset 0 0 calc(10px * var(--sv-chain-now, 0)) rgba(var(--sv-chain-neon, 125,252,255), calc(0.5 * var(--sv-chain-now, 0))),
+      0 0 calc(3px + 16px * var(--sv-chain-flash, 0)) currentColor,
+      0 0 calc(var(--sv-chain-glow, 22px) * var(--sv-chain-now, 0)) rgba(var(--sv-chain-neon, 125,252,255), 0.95),
+      0 0 calc(0.35 * var(--sv-chain-glow, 22px) * var(--sv-chain-now, 0)) rgba(255,255,255,calc(0.5 * var(--sv-chain-now, 0))); }
   /* THE FILL. transform, not width: a width animation relayouts the banner's
      box every frame and the type inside it reflows by a subpixel, which at this
      size reads as the words shimmering. transform-origin left, so it drains the
@@ -970,7 +1006,15 @@ const STYLES = `
      --sv-chain-left is written per frame by updateToasts. */
   .sv-chain-fill { position: absolute; inset: 0; transform-origin: left center;
     transform: scaleX(var(--sv-chain-left, 1));
-    background: currentColor; opacity: 0.5; }
+    /* 0.32 AND NOT 0.5, and this is the number the whole banner's legibility
+       turns on. The type is the same green as the fill, so a bold fill puts
+       light green on mid green — and the state it ruins is a FULL window,
+       which is most of every chain. Measured over the plate: 0.5 gives the
+       words a contrast ratio of about 2.9 against the bar they sit on, and
+       0.32 about 4.0. The drain still reads because what the eye is following
+       is the EDGE between filled and empty, and an edge does not need a loud
+       fill behind it. */
+    background: currentColor; opacity: 0.32; }
   /* NEARLY OUT, and it washes the WHOLE plate rather than the remaining fill.
      That is the entire point of it: at a tenth of the window left there is a
      sliver of fill three pixels wide, and blinking three pixels is not a
@@ -981,8 +1025,14 @@ const STYLES = `
      writes it, and nothing has to remember to keep a fourth element in step.
      It is driven from the game's own clock rather than a CSS animation, for the
      same reason the popups' motion is: it has to stop when the game does. */
+  /* 0.26 AND NOT MORE, and the number was found by looking. At 0.42 the wash
+     put the banner's own green behind the banner's own green type and the words
+     went soft at exactly the moment they were being shouted — a warning that
+     costs legibility is the opposite of this banner's whole job. The urgency it
+     lost is paid back on the halo outside the plate, which is over water rather
+     than over type and can be as loud as it likes. */
   .sv-chain-strip::after { content: ''; position: absolute; inset: 0;
-    background: currentColor; opacity: calc(0.42 * var(--sv-chain-flash, 0)); }
+    background: currentColor; opacity: calc(0.26 * var(--sv-chain-flash, 0)); }
   /* AN UPGRADE PAYING OUT — "MANEATER +12%". Same layer and same loop as the
      numbers, and deliberately smaller and cooler than the chain banner: this
      is a receipt, not an announcement. One line per upgrade at a time; a
@@ -4158,8 +4208,42 @@ function pushToast(node, x, y, kind) {
 // as the window does. The arrival pop still plays on every link (that is the
 // feedback for the link); what it no longer does is drift off and expire.
 // See pinChainBanner below for where "above the seal" is measured from.
+//
+// ---------------------------------------------------------------------------
+// AND WHILE IT IS UP, IT IS ALSO THE STRIKE PROMPT.
+//
+// The banner now sits directly above the slot the "STRIKE NOW!" line rides
+// (ui/callout.js's on-seal surface), so mid-chain the player was shown two
+// stacked lines — one of them the reason the other one exists. The banner takes
+// the sentence instead: the words are replaced in place, the plate's edge
+// lights neon, both flash on one clock, and the count comes back with the next
+// link. The ring's own line still covers every moment the banner is not up,
+// which includes the one that matters most — the window a release OPENS,
+// before any link has been scored and therefore before there is a banner.
+//
+// The handover is decided in main.js and passed in, rather than being asked of
+// this file: whether the moment is live is a fact about the strike model and
+// the input, and the two surfaces have to answer to one reading of it. See
+// `promptOnBanner`.
+//
+// THE WORDS ARE STILL callouts.csv's. `pin.promptText` is the resolved
+// `strikeNow` row, so rewording it is a text edit and the ring's line and this
+// one cannot start saying different things.
 // ---------------------------------------------------------------------------
 let chainToast = null;
+
+/** 0xRRGGBB as a CSS hex string. The banner's colours arrive from CONFIG the
+ *  way every other colour in the game does; the DOM wants a string. */
+function hexCss(n) {
+  return `#${(Number(n) >>> 0 & 0xffffff).toString(16).padStart(6, '0')}`;
+}
+
+/** ...and as an "r,g,b" triple, which is what lets a stylesheet drop it into an
+ *  rgba() whose alpha is a calc() over a custom property. */
+function rgbTriple(n) {
+  const v = Number(n) >>> 0;
+  return `${(v >> 16) & 255},${(v >> 8) & 255},${v & 255}`;
+}
 
 /**
  * A link landed. `chain` is the new depth.
@@ -4187,44 +4271,78 @@ export function spawnChainToast(chain) {
 // on one property, where one of them silently never wins, is the bug that
 // costs an afternoon.
 function chainToastAt(x, y, chain) {
-  const color = chainCss(chain);
+  const fc = CONFIG.strike?.foodChain ?? {};
+  const color = hexCss(fc.color ?? 0x6dffa8);
+
+  // A LINK TAKES THE PROMPT BACK OFF, here rather than a frame later. The
+  // release that armed this link is over by definition, so the words are stale
+  // the instant the count changes — and leaving it to the next updateToasts
+  // would flip "STRIKE NOW!" to a NEW count one frame after the pop that
+  // announced it, which reads as the banner correcting itself.
+  chainPin.prompt = 0;
+  chainPin.now = 0;
 
   if (chainToast && toasts.includes(chainToast)) {
     chainToast.age = 0;
     chainToast.x = x;
     chainToast.y = y;
     chainToast.node.style.color = color;
+    chainToast.node.classList.remove('sv-chain-now');
+    chainToast.word.textContent = CHAIN_WORDS;
     chainToast.count.textContent = `×${chain}`;
+    chainToast.count.style.display = '';
     return chainToast;
   }
 
   const node = document.createElement('div');
   node.className = 'sv-chain';
   node.style.color = color;
-  // The strip FIRST, and as an element rather than as text: `textContent` on
-  // the parent below would wipe any child already in it. It carries no text of
-  // its own — the fill inside it is what moves — and it inherits `color`, which
-  // is what puts the window's bar on the live chain's hue without a second
-  // writer for it.
+  // The prompt's own colour, as a triple the stylesheet can put inside an
+  // rgba() with a calc()'d alpha. Stamped when the banner is built rather than
+  // per frame: it is a palette entry, and the thing that moves is the alpha.
+  node.style.setProperty('--sv-chain-neon', rgbTriple(fc.prompt?.neon ?? 0x7dfcff));
+  node.style.setProperty('--sv-chain-glow', `${Math.max(0, fc.prompt?.glow ?? 16)}px`);
+
+  // THE WORDS IN A NODE OF THEIR OWN. They are swapped for the strike prompt
+  // and back, and `textContent` on the banner itself would take the count and
+  // the strip with them — the failure where a plate silently stops existing
+  // the first time the prompt fires.
+  const word = document.createElement('span');
+  word.className = 'sv-chain-word';
+  word.textContent = CHAIN_WORDS;
+
+  const count = document.createElement('span');
+  count.className = 'sv-chain-x';
+  count.textContent = `×${chain}`;
+
+  // The strip as an element rather than as text, for the same reason. It
+  // carries no words of its own — the fill inside it is what moves — and it
+  // inherits `color`, which is what puts the window's bar on the banner's hue
+  // without a second writer for it.
   const strip = document.createElement('i');
   strip.className = 'sv-chain-strip';
   const fill = document.createElement('i');
   fill.className = 'sv-chain-fill';
   strip.appendChild(fill);
 
-  node.textContent = 'FOOD CHAIN!';
-  const count = document.createElement('span');
-  count.className = 'sv-chain-x';
-  count.textContent = `×${chain}`;
+  node.appendChild(word);
   node.appendChild(count);
   node.appendChild(strip);
   el.svToastLayer.appendChild(node);
 
   chainToast = pushToast(node, x, y, 'chain');
+  chainToast.word = word;
   chainToast.count = count;
   chainToast.strip = strip;
   return chainToast;
 }
+
+// What the banner says when it is being itself. A constant rather than a CSV
+// row because, unlike the prompt it hands its plate to, this is the name of the
+// mechanic rather than an instruction — it is in upgrades.csv, in the tuner's
+// labels and in this file's comments, and it is not a thing to be reworded per
+// device.
+const CHAIN_WORDS = 'FOOD CHAIN!';
 
 // ---------------------------------------------------------------------------
 // WHERE THE BANNER HANGS, and how much of the window is left.
@@ -4235,7 +4353,15 @@ function chainToastAt(x, y, chain) {
 // for one frame. `left` is 0 with no chain running, which is also the whole of
 // "stop pinning it and let it leave".
 // ---------------------------------------------------------------------------
-const chainPin = { x: 0, y: 0, left: 0, live: false, flash: 0, clock: 0 };
+const chainPin = {
+  x: 0, y: 0, left: 0, live: false, flash: 0, clock: 0,
+  // THE PROMPT. `prompt` is the gate — is a release due right now — and `now`
+  // is the flash it drives, 0..1 on the layer's own clock. Two fields rather
+  // than one because the gate is a fact handed in from main.js and the flash is
+  // a picture of it, and collapsing them would make "is the prompt up" a
+  // question with a different answer on every other frame.
+  prompt: 0, now: 0, text: '',
+};
 
 /**
  * Project the anchor and decide whether the banner is being held.
@@ -4261,6 +4387,7 @@ const chainPin = { x: 0, y: 0, left: 0, live: false, flash: 0, clock: 0 };
 function pinChainBanner(camera, pin) {
   chainPin.live = false;
   chainPin.left = 0;
+  chainPin.prompt = 0;
   if (!camera || !pin) return;
 
   const ring = CONFIG.strike?.ring ?? {};
@@ -4280,6 +4407,26 @@ function pinChainBanner(camera, pin) {
   chainPin.y = screenPt.y - slot - half - (slot > 0 ? 6 : 2);
   chainPin.left = Math.max(0, Math.min(1, pin.left ?? 0));
   chainPin.live = chainPin.left > 0;
+  // ONLY WHILE THE BANNER IS ACTUALLY UP. main.js decides whether the moment is
+  // live; this decides whether there is a plate to say it on, and the two
+  // together are what stop the prompt and the ring's own line ever being on
+  // screen at once. `chainBannerHasPrompt()` reports the AND back so the
+  // handover is one reading rather than two guesses.
+  chainPin.prompt = pin.prompt && chainPin.live && chainToast ? 1 : 0;
+  if (pin.promptText) chainPin.text = pin.promptText;
+}
+
+/**
+ * Is the banner carrying the "STRIKE NOW!" line this frame?
+ *
+ * Read by main.js immediately after updateToasts to decide whether the ring's
+ * own line should stand down. A reader rather than a return value because the
+ * answer is also what the NEXT frame's callout gate wants, and a value that has
+ * to be caught on exactly one line is a value somebody eventually forgets to
+ * catch.
+ */
+export function chainBannerHasPrompt() {
+  return chainPin.prompt > 0;
 }
 
 // The on-seal callout's height when it is actually on screen, 0 otherwise.
@@ -4396,6 +4543,34 @@ export function updateToasts(dt, camera = null, pin = null) {
     chainPin.flash = 0;
   }
 
+  // A RELEASE IS DUE. Its own flash, on its own rate, and it can be lit at the
+  // same time as the one above: a chain can be about to lapse AND have a
+  // release due, and those are two different things to do about it. Squared for
+  // the same reason — a blink, not a throb.
+  const prompt = CONFIG.strike?.foodChain?.prompt ?? {};
+  if (chainPin.prompt > 0) {
+    const s = Math.sin(chainPin.clock * (prompt.flashHz ?? 7) * Math.PI * 2);
+    chainPin.now = s > 0 ? s * s : 0;
+  } else {
+    chainPin.now = 0;
+  }
+
+  // THE WORDS, SWAPPED IN PLACE. Written only on the frames it CHANGES: this
+  // runs every frame of every chain, and setting textContent unconditionally
+  // would dirty the layout of a node the plate is sized from sixty times a
+  // second for nothing. The count is hidden rather than emptied so the box does
+  // not resize around it — though min-width on the banner is what actually
+  // holds the plate still, and this is belt and braces on a surface that is
+  // being used as a bar.
+  if (chainToast?.word) {
+    const want = chainPin.prompt > 0 ? (chainPin.text || CHAIN_WORDS) : CHAIN_WORDS;
+    if (chainToast.word.textContent !== want) chainToast.word.textContent = want;
+    const showCount = chainPin.prompt <= 0;
+    const wantDisplay = showCount ? '' : 'none';
+    if (chainToast.count.style.display !== wantDisplay) chainToast.count.style.display = wantDisplay;
+    chainToast.node.classList.toggle('sv-chain-now', chainPin.prompt > 0);
+  }
+
   for (let i = toasts.length - 1; i >= 0; i--) {
     const t = toasts[i];
     const m = motionFor(t.kind);
@@ -4456,6 +4631,10 @@ export function updateToasts(dt, camera = null, pin = null) {
     if (t.strip) {
       t.strip.style.setProperty('--sv-chain-left', chainPin.left.toFixed(3));
       t.strip.style.setProperty('--sv-chain-flash', chainPin.flash.toFixed(3));
+      // On the BANNER and not the strip: the plate's edge reads it and so does
+      // the type, and the type is the strip's sibling rather than its child.
+      // Custom properties inherit downward only.
+      t.node.style.setProperty('--sv-chain-now', chainPin.now.toFixed(3));
     }
 
     t.node.style.transform = `translate(-50%,-50%) scale(${pose.scale})`;
@@ -4634,6 +4813,8 @@ export function clearToasts() {
   chainPin.live = false;
   chainPin.left = 0;
   chainPin.flash = 0;
+  chainPin.prompt = 0;
+  chainPin.now = 0;
 }
 
 // The run is NOT posted to the board here — the player names it first, and

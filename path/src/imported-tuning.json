@@ -659,9 +659,7 @@
       "hoverWobble": 0.03,
       "hoverHz": 0.7,
       "dripRate": 5.5,
-      "easeRate": 9,
-      "lightX": -0.05,
-      "lightY": 0.6
+      "easeRate": 9
     },
     "aimLerp": 7
   },
@@ -1741,7 +1739,11 @@
       "bannerFrom": 1,
       "ceremonyGap": 0.14,
       "punch": 0.045,
-      "punchPerChain": 0.012
+      "punchPerChain": 0.012,
+      "strip": {
+        "flashAt": 0.28,
+        "flashHz": 5.5
+      }
     },
     "breachChain": {
       "linksPerLevel": 1
@@ -1757,7 +1759,6 @@
       "comboColor": 16769126,
       "lastPipColor": 10354640,
       "glow": 2.2,
-      "pulseSpeed": 9,
       "segmentGap": 0.12,
       "innerRadiusMul": 0.58,
       "innerGlowMul": 0.55,
@@ -1805,6 +1806,34 @@
         "burstEase": "outQuad"
       },
       "chainRadiusMul": 1.14,
+      "track": {
+        "idle": 0,
+        "glow": 0.34,
+        "width": 0.055,
+        "fade": 0.18
+      },
+      "perfect": {
+        "glow": 0.95,
+        "breathe": 0.3,
+        "breatheHz": 1.6,
+        "width": 0.075
+      },
+      "verdict": {
+        "enabled": true,
+        "time": 0.55,
+        "range": 4,
+        "markSpan": 0.3,
+        "markWidth": 0.045,
+        "markGlow": 1.5,
+        "width": 0.07,
+        "hitSpan": 0.34,
+        "hitGlow": 1.6,
+        "missSpan": 0.2,
+        "missGlow": 0.5,
+        "bandGlow": 1,
+        "missColor": 7176854,
+        "ease": "outCubic"
+      },
       "lead": {
         "enabled": true,
         "time": 0.5,
@@ -2512,6 +2541,15 @@
     "arrival": {
       "enabled": true,
       "seconds": 2,
+      "music": {
+        "enabled": true,
+        "cut": 0.9,
+        "feed": 0.45,
+        "tailSeconds": 6,
+        "tailDecay": 1.6,
+        "tailLevel": 1.2,
+        "send": 1
+      },
       "ease": "outCubic",
       "invulnerable": true,
       "riser": {
@@ -6591,6 +6629,25 @@
       "toast": "Rapid fire!",
       "toastMinGap": 0.6
     },
+    "levelOrbTaken": {
+      "emit": "levelUp",
+      "goo": "pickupGoo",
+      "shake": 0.18,
+      "hitstop": 0.05,
+      "glow": 0.9,
+      "ripple": {
+        "strength": 2.4,
+        "radius": 12
+      },
+      "sfx": "levelUp",
+      "haptic": [
+        18,
+        20,
+        22
+      ],
+      "toast": "Level up!",
+      "toastMinGap": 0.6
+    },
     "missileLaunch": {
       "emit": "missileLaunch",
       "shake": 0.14,
@@ -8360,10 +8417,8 @@
       "filterVary": 0.2,
       "srcs": [
         "/sfx/HGUI_Plop_Sushi-converted.mp3",
-        "/sfx/EliArf_clack_02.mp3",
         "/sfx/EG_FlickPlop_06.mp3",
-        "/sfx/EG_FlickPlop_16.mp3",
-        "/sfx/Razor_Hit_01.mp3"
+        "/sfx/EG_FlickPlop_16.mp3"
       ]
     },
     "thunderCrack": {
@@ -8397,19 +8452,14 @@
         50
       ],
       "decay": 1.11,
-      "gain": 2.9853826189179595,
+      "gain": 1.7782794100389228,
       "noise": 0,
       "filter": 5140,
       "pitchVary": 0.1,
       "filterVary": 0.3,
       "detune": 2,
       "srcs": [
-        "/sfx/HG_UI_Blip_Noah-converted.mp3",
-        "/sfx/EG_FlickPlop_15.mp3",
-        "/sfx/EG_FlickPlop_04.mp3",
-        "/sfx/EG_FlickPlop_05.mp3",
-        "/sfx/ESM_MG3_fx_foley_slime_smash_squish_splat_01c.mp3",
-        "/sfx/ESM_MG3_fx_foley_slime_smash_squish_splat_03c.mp3"
+        "/sfx/HG_UI_Blip_Noah-converted.mp3"
       ]
     },
     "bigKill": {
@@ -8428,6 +8478,40 @@
       "srcs": [
         "/sfx/EliArf_BigKill_01.mp3",
         "/sfx/EliArf_BigKill_02.mp3"
+      ]
+    },
+    "boatExplosion": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        150,
+        32
+      ],
+      "decay": 0.6,
+      "gain": 0.45,
+      "noise": 0.7,
+      "filter": 900,
+      "pitchVary": 0.12,
+      "filterVary": 0.18,
+      "srcs": [
+        "/sfx/ESM_PG_cinematic_fx_weapons_warefare_cannon_ship_impact_explosion_wood_03.mp3"
+      ]
+    },
+    "debrisBreak": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        220,
+        50
+      ],
+      "decay": 0.34,
+      "gain": 0.34,
+      "noise": 0.5,
+      "filter": 1400,
+      "pitchVary": 0.12,
+      "filterVary": 0.18,
+      "srcs": [
+        "/sfx/ESM_PG_cinematic_fx_foley_ship_shipwrecking_moving_stone_impact_debris_creak_02.mp3"
       ]
     },
     "bossHitFlesh": {
@@ -8926,12 +9010,10 @@
         1500
       ],
       "decay": 0.22,
-      "gain": 1.8836490894898006,
+      "gain": 0.44668359215096315,
       "pitchVary": 0.05,
       "detune": 48,
       "srcs": [
-        "/sfx/EliArf_EatChum_06.mp3",
-        "/sfx/EliArf_EatChum_08.mp3",
         "/sfx/Chain_01.mp3"
       ]
     },
@@ -9077,8 +9159,7 @@
       "pitchVary": 0.1,
       "filterVary": 0.2,
       "srcs": [
-        "/sfx/HGUI_Organ_Shark.mp3",
-        "/sfx/ESM_PG_cinematic_fx_weapons_warefare_cannon_shot_ship_clanking_metal_03.mp3"
+        "/sfx/HGUI_Organ_Shark.mp3"
       ]
     },
     "musselBarrage": {
@@ -9103,15 +9184,14 @@
         70
       ],
       "decay": 0.22,
-      "gain": 5.011872336272722,
+      "gain": 2.6607250597988097,
       "noise": 0.85,
       "filter": 2800,
       "pitchVary": 0.41,
       "filterVary": 0.31,
       "srcs": [
         "/sfx/EliArf_Explode1.mp3",
-        "/sfx/EliArf_Explode_01.mp3",
-        "/sfx/ESM_PG_fx_water_splash_weapon_cannon_impact_near_air_projectile_whoosh_02.mp3"
+        "/sfx/EliArf_Explode_01.mp3"
       ]
     },
     "eelBolt": {
@@ -9826,18 +9906,6 @@
         "/sfx/EliArf_EatChum_07.mp3",
         "/sfx/EliArf_EatChum_08.mp3"
       ]
-    },
-    "boatExplosion": {
-      "srcs": [
-        "/sfx/ESM_PG_cinematic_fx_weapons_warefare_cannon_ship_impact_explosion_wood_03.mp3"
-      ],
-      "src": null
-    },
-    "debrisBreak": {
-      "srcs": [
-        "/sfx/ESM_PG_cinematic_fx_foley_ship_shipwrecking_moving_stone_impact_debris_creak_02.mp3"
-      ],
-      "src": null
     }
   },
   "flightSfx": {
@@ -11023,6 +11091,8 @@
       "/music/SealSurvivor_Boss_Loop06.mp3"
     ],
     "bossIntro": true,
+    "bossFadeIn": 0.08,
+    "bossTailFade": 1.2,
     "surfaceHz": 20000,
     "deepHz": 700,
     "depthSmoothing": 0.18,
@@ -11574,6 +11644,7 @@
     "gap": 1.2,
     "nearSurface": 12,
     "breachAir": 0.3,
+    "hiveWindow": 8,
     "showRange": 22,
     "dissipate": {
       "style": "current",
@@ -12089,6 +12160,34 @@
       "spin": 0.55,
       "bob": 0.14,
       "bobRate": 0.7
+    }
+  },
+  "levelPickup": {
+    "blob": {
+      "detail": 3,
+      "lump": 0.36,
+      "lumpScale": 6.5,
+      "fit": 0.8,
+      "colorSync": "1/4",
+      "colorFreeRate": 2,
+      "blendFrac": 0.35,
+      "hueStep": 0.18,
+      "colorMode": "even",
+      "lumTarget": 0.56,
+      "glow": 0.76,
+      "saturation": 0.95,
+      "dim": 0.5,
+      "core": 0.95,
+      "corePower": 3.5,
+      "rim": 0.38,
+      "churn": 0.62,
+      "churnScale": 14,
+      "churnRate": 1.1,
+      "warp": 1.9,
+      "groove": 4,
+      "spin": 0.7,
+      "pop": 0.16,
+      "popSeconds": 0.18
     }
   },
   "chumChunk": {
@@ -12952,5 +13051,5 @@
       "msPerPx": 0.9
     }
   },
-  "_savedAt": 1787280591318
+  "_savedAt": 1787320791729
 }

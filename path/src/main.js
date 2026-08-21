@@ -7,6 +7,7 @@ import { updateEmissivePulse } from './systems/emissivePulse.js';
 import { pulseDemoFor, panDemoFor, resolvedGlow, describeGlow } from './systems/glowDebug.js';
 import { updateBeatSync } from './systems/beatSync.js';
 import { reseatDecor } from './systems/decor.js';
+import { scatterSeabed, reseatSeabed } from './systems/seabedScatter.js';
 import { createWorld } from './world.js';
 import { midWater, bounds, seabedTopY } from './arena.js';
 import {
@@ -133,9 +134,9 @@ import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, 
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
-import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld } from './ui/ui.js';
+import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple } from './ui/upgradeHive.js';
-import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
+import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
 // THE HELLO at the top of a run, which is not a tip: it fires every run and
 // its words are rolled rather than written into callouts.csv. See
@@ -429,6 +430,13 @@ async function boot() {
   world.scene.add(octoGrabber);
   // Adds itself to the scene (it owns two objects — the hull and the net).
   createBakalarBoat(world.scene);
+
+  // The seabed plant bed. HERE for the reason the mussel shells above are:
+  // it is built out of createVisual, so before preloadAssets every plant in it
+  // would be a fallback cone — and silently, since that path does not throw.
+  // world.scene rather than the backdrop group, which is disposed and rebuilt
+  // on every resize and would take the bed's geometry with it.
+  scatterSeabed(world.scene);
 
   initPlayer(world.scene);
   player.mesh.position.set(0, midWater(), 0);
@@ -886,7 +894,11 @@ function handleTunerChange(path) {
   // world.resize() called directly, so it does NOT fire the window resize
   // event systems/decor.js listens on — anything standing on the seabed has
   // to be re-seated by hand here or it hangs at the old floor height.
-  if (path === '*' || path.startsWith('arena') || path.startsWith('camera')) { world.resize(); reseatDecor(); }
+  if (path === '*' || path.startsWith('arena') || path.startsWith('camera')) { world.resize(); reseatDecor(); reseatSeabed(world.scene); }
+  // Every knob on the bed is a REBUILD — the sampler decides positions, so
+  // there is no uniform to write. Seeded, so a bed rebuilt by a slider you did
+  // not touch comes back identical rather than reshuffling.
+  if (path === '*' || path.startsWith('seabed')) scatterSeabed(world.scene);
   // Render scale, on its own line rather than folded into the arena branch
   // above: this changes the size of the drawing buffer and NOTHING about the
   // world. A full world.resize() here would rebuild the backdrop, the grid,
@@ -5302,10 +5314,38 @@ function animate(now) {
   // wherever the body went down, and the strip would keep reporting time on a
   // chain that ended with the run. `chainWindowLeft()` is the same expression
   // the arc outside the boost ring quotes.
+  //
+  // ---- THE STRIKE PROMPT, AND WHICH SURFACE SAYS IT ------------------------
+  //
+  // "STRIKE NOW!" has two homes and must never be in both at once. The banner
+  // is pinned directly above the slot the ring's own line rides, so mid-chain
+  // the player was reading two stacked sentences, one of them the reason the
+  // other exists.
+  //
+  // THE MOMENT IS DECIDED HERE, ONCE, and handed to both. strikeLoaded() is
+  // what tryStrike times the release against, so this is not advice about the
+  // mechanic — it is the mechanic's clock. Spelling the test out twice would
+  // let the two surfaces disagree about a window a tenth of a second wide, and
+  // "disagree" here means both lines up together or neither.
+  //
+  // The WORDS come from callouts.csv through the same resolver the band uses,
+  // so the prompt is one row and rewording it is still a text edit.
+  const strikeMoment = strikeLoaded() && input.strikeHeld;
   const chainPin = gameState.running && !deathState.active
-    ? { x: player.mesh.position.x, y: player.mesh.position.y, left: chainWindowLeft() }
+    ? {
+      x: player.mesh.position.x,
+      y: player.mesh.position.y,
+      left: chainWindowLeft(),
+      prompt: strikeMoment,
+      promptText: resolveCalloutText(CALLOUTS.get('strikeNow'), inputDevice(), inputTokens()),
+    }
     : null;
   updateToasts(realDt, world.camera, chainPin);
+  // WHETHER IT TOOK IT. Asked rather than assumed: the banner only carries the
+  // line while it is actually on screen, and "is there a chain running" is not
+  // the same question — a window opened by a release has no banner until the
+  // first link lands, and that is the moment the ring's line matters most.
+  const promptOnBanner = chainBannerHasPrompt();
 
   // ---------------------------------------------------------------------------
   // THE WARNING BAND AND THE FIRST-RUN TIPS — systems/callouts.js.
@@ -5382,7 +5422,11 @@ function animate(now) {
     //                for a strike and the game gave them nothing. Held down, it
     //                would nag for as long as a finger stayed on a button that
     //                was never going to answer.
-    strikeNow: strikeLoaded() && input.strikeHeld,
+    //                AND THE BANNER TAKES IT WHILE ONE IS UP. The FOOD CHAIN!
+    //                plate is pinned to this very slot during a chain, so the
+    //                two would otherwise stack. Same reading of the same
+    //                moment, one surface at a time — see `strikeMoment` above.
+    strikeNow: strikeMoment && !promptOnBanner,
     boost: boostDenied,
   }, bandLive && !gameState.paused);
 

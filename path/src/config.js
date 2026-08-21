@@ -3936,11 +3936,11 @@ export const CONFIG = {
         // same number the arc outside the boost ring draws, through the same
         // chainWindowLeft() so the two cannot disagree.
         //
-        // WHY A FLASH AND NOT A COLOUR. The banner's hue is already spoken for:
-        // it walks the chain wheel one step per link (CONFIG.strike.chainColor)
-        // and that is the depth readout. A strip that went red near the end
-        // would be a second colour language on one object, and the two would be
-        // read as one. Blinking is a channel nothing else here uses.
+        // WHY A FLASH AND NOT A COLOUR. The banner has exactly one hue and
+        // spends it on being READABLE (see `color` below). A strip that went
+        // red near the end would put a second colour language on one object,
+        // and at the size this draws the two would be read as one. Blinking is
+        // a channel nothing else on the banner uses.
         strip: {
           // Below this fraction of the window the strip blinks. A quarter of
           // 2.2s is a little over half a second — long enough to react to a
@@ -3951,6 +3951,71 @@ export const CONFIG = {
           // as the bar empties (see updateToasts), so the rate itself is the
           // second half of the warning.
           flashHz: 5.5,
+        },
+
+        // --- ONE COLOUR, AND IT IS GREEN --------------------------------------
+        //
+        // THE BANNER NO LONGER WALKS THE CHAIN WHEEL. systems/chainColor.js
+        // steps the hue once per link and the ring's arc still wears it, which
+        // is right for a thin band whose only job is depth — but it was wrong
+        // for TYPE. A wheel with constant saturation and lightness is equally
+        // legible against a flat background and this is drawn over open water
+        // at every brightness the day/night cycle has: the cold third of the
+        // wheel sank into the deep blue and the warm third disappeared over a
+        // lit surface, so the one line naming the mechanic was unreadable at a
+        // couple of depths per lap and nobody could predict which.
+        //
+        // Depth is still on the banner — it is the ×N, which is the exact
+        // readout and always was. What the hue was adding was a second, vaguer
+        // copy of the same fact, paid for in legibility.
+        //
+        // GREEN because it is the READY colour the whole strike instrument
+        // already speaks in (CONFIG.strike.ring.readyColor, the drop's
+        // `armedColor`, the traveller going ready): the food chain is what a
+        // fed, armed seal is doing, and it should look like the rest of that
+        // sentence. It is also the half of the spectrum bloom likes — the
+        // bright pass thresholds LUMINANCE, which is 71% green, so this haloes
+        // at a brightness a blue would need to be blown out to reach.
+        color: 0x6dffa8,
+
+        // --- THE BANNER TAKES THE PROMPT ---------------------------------------
+        //
+        // WHILE A CHAIN IS RUNNING, "STRIKE NOW!" IS SAID BY THE BANNER — the
+        // words replace FOOD CHAIN! in place, the box's edge lights neon, and
+        // both flash together until the release. The count comes back with the
+        // next link.
+        //
+        // WHY MOVE IT AT ALL. The prompt already existed as a line riding the
+        // boost ring (callouts.csv, `strikeNow`), and the pinned banner now
+        // sits directly above that slot — so mid-chain the player was being
+        // shown two stacked lines, one of them the reason the other one
+        // exists. One surface, one voice: the banner is where the eye already
+        // is during a chain, and the ring's own line covers every moment the
+        // banner is not up (which includes the most important one — the window
+        // a release opens BEFORE any link has been scored). See the
+        // `promptOnBanner` handover in main.js.
+        //
+        // THE WORDS ARE STILL callouts.csv's. Nothing here says "STRIKE NOW!";
+        // it is read from the `strikeNow` row through resolveCalloutText, so
+        // rewording the prompt is still a text edit and the two surfaces cannot
+        // start saying different things.
+        prompt: {
+          // Flashes per second. Fast — this is an instruction with a tenth of a
+          // second behind it, not a state to be watched, and it is the one
+          // thing on the banner allowed to be urgent.
+          flashHz: 7,
+          // THE EDGE, and it is a different colour from everything else here on
+          // purpose. The banner is green because green is what the strike
+          // instrument says READY in; this is what it says NOW in, and a
+          // brighter green would have been the same word said louder. Cyan is
+          // the nearest hue that still blooms hard (luminance is 71% green and
+          // 21% red, so a green-blue clears the bright pass where a pure blue
+          // does not) and cannot be mistaken for the ready state it interrupts.
+          neon: 0x7dfcff,
+          // How far the glow throws at the peak of a flash, in px. The banner
+          // is roughly 190px wide at the shipped type size, so this is a halo
+          // around the box rather than a bloom over the water.
+          glow: 22,
         },
     },
 
@@ -10632,22 +10697,32 @@ export const CONFIG = {
       //
       // Deliberately NOT a second barracuda with bigger numbers. The barracuda
       // is a glass cannon that arrives in threes at minute one — you answer it
-      // by killing it before it reaches you. This is faster (12 against 9, the
-      // fastest thing in the water and the fastest fish alive, which is the
-      // whole reason to use the asset) but it comes in TWOS and it has enough
-      // hp to survive the trade, so the answer is to move rather than to
-      // out-shoot it. Two creatures asking different questions in the same
-      // slot is worth more than one asking the same question louder.
+      // by killing it before it reaches you. This is the biggest fish in the
+      // wave roster, it comes in TWOS, and it has enough hp to survive the
+      // trade: the answer is to move rather than to out-shoot it. Two
+      // creatures asking different questions in the same slot is worth more
+      // than one asking the same question louder.
       //
-      // It also gets `turnRate`, which the barracuda does not. A 3-unit body
-      // at speed 12 with an unbounded turn snaps between headings like a
-      // cursor; capping it means the sailfish commits to a pass, overshoots,
-      // and has to come back around — which is both what a billfish does and
-      // the only thing that makes something this fast dodgeable at all.
+      // AND ITS SPEED IS A SPRINT, NOT A CRUISE. It used to hold a flat 12
+      // against the seal's ~8.9 — the fastest fish alive, spending it on
+      // walking pace, and arriving no matter what the player did. Now it
+      // idles along under half the seal's speed and banks the difference into
+      // `lunge` below, which is the same top speed and then some, released in
+      // one committed run you get to see coming.
       //
-      // `separates`, unlike the barracuda: at 3 units two of these overlapping
-      // read as one wide smear rather than as two animals, and the sail makes
-      // that worse than the length alone would.
+      // It also gets `turnRate`, which the barracuda does not. A long body
+      // with an unbounded turn snaps between headings like a cursor; capping
+      // it means the sailfish commits to a pass, overshoots, and has to come
+      // back around — which is both what a billfish does and what makes the
+      // burst something you can be out of the way of.
+      //
+      // `separates`, unlike the barracuda: at six units two of these
+      // overlapping read as one wide smear rather than as two animals, and the
+      // sail makes that worse than the length alone would.
+      //
+      // Size and the spread of sizes are in assets.csv (`enemySailfish`, kept
+      // equal to `enemyGlowSailfish`) and in the `scaleVariance` column of
+      // enemies.csv — the hitbox follows the visual, so both are real.
       sailfish: {
         separates: true,
         asset: 'enemySailfish', behavior: 'chase', faceMotion: true,
@@ -10655,6 +10730,41 @@ export const CONFIG = {
         radius: 0.5, hp: 30, hpPerDifficulty: 2.6,
         speed: 12, speedVariance: 1.6, contactDamage: 24, xp: 13,
         turnRate: 3.2,
+        // THE BURST. It cruises at a third of what it used to and gets the
+        // difference back in one committed run — see lungeChase in
+        // entities/enemies.js for the state machine and for why this is a
+        // block on the def rather than a `behavior` of its own.
+        //
+        // A sailfish's speed is a SPRINT in life and it was a cruise here: at
+        // a flat 12 against the seal's ~8.9 it simply arrived, and nothing the
+        // player did between spawning and contact changed the outcome. Held at
+        // 4.2 with a x3.8 burst it tops out at 16 — faster than it ever was —
+        // but only for the 0.8s it has committed to, and only along a line it
+        // showed you first. Same animal, and now a thing you answer rather
+        // than a thing that happens.
+        //
+        // The numbers are read against each other, not on their own:
+        //   range x speedMul x strikeTime   12 units of gap against 13.5 units
+        //                                   of run — it crosses where you were
+        //                                   and blows past, which is what
+        //                                   makes the dodge readable.
+        //   strikeTurnRate                  0.5 rad/s at 16 units/s is a 32
+        //                                   unit turning circle. It cannot
+        //                                   follow you; it can only lean.
+        //   windup vs the seal's thrust     0.45s at ~8.9 units/s is 4 units
+        //                                   of travel — enough to be out of
+        //                                   the line, not enough to ignore it.
+        lunge: {
+          range: 12,          // gap it will commit from
+          minRange: 6,        // closer than this there is no warning to give
+          windup: 0.45,       // the tell: throttled back, turning onto you
+          windSpeedMul: 0.4,  // cruise x this while it gathers
+          speedMul: 3.8,      // cruise x this down the line
+          strikeTime: 0.8,    // how long it stays committed
+          strikeTurnRate: 0.5,// rad/s of correction mid-run
+          cooldown: 3.2,      // dead time before it may strike again
+          veerSwing: 0.9,     // rad it peels off by on the way out
+        },
         group: { min: 2, max: 3, spread: 3 },
         // MEASURED DOWN from 0.14/0.02/0.6, which is what a creature of this
         // threat looked like on paper next to the barracuda's 0.16/0.022/0.85.
@@ -17167,6 +17277,69 @@ export const CONFIG = {
   },
 
   // ---------------------------------------------------------------------------
+  // SEABED — the scattered plant bed (systems/seabedScatter.js). Nineteen
+  // watercolour props cut out of one Sketchfab scene by tools/split-seabed.mjs
+  // and drawn as one InstancedMesh per variant, so the whole floor is nineteen
+  // draw calls no matter how many plants stand on it.
+  //
+  // Everything here is a REBUILD, not a uniform: changing any of it re-runs the
+  // sampler and rewrites the instance buffers. That is cheap enough to drag a
+  // slider through (a few hundred matrix composes) and is why the layout is
+  // seeded — the bed has to come back identical when the tuner moves the floor,
+  // or the scenery looks like it is glitching rather than like the tuner is
+  // working.
+  // ---------------------------------------------------------------------------
+  seabed: {
+    enabled: true,
+    // Same seed, same bed, every load. Change it to roll a different one.
+    seed: 1337,
+    // Plants ATTEMPTED. The spacing rejection means the bed lands under this —
+    // that gap is the point, since it is what leaves clearings. Raise
+    // `attempts` to close it, raise `spacing` to open it.
+    count: 150,
+    attempts: 30,
+    // Minimum gap between two plants' roots, in world units. This is the
+    // density dial: it is a hard floor on how close two plants can be, so
+    // raising it thins the bed no matter what `count` says.
+    spacing: 1.8,
+    // The bed runs WALL TO WALL — its width comes from bounds.left/right, which
+    // move with the aspect ratio, so there is no width to set here. `overhang`
+    // is how far past each wall it keeps going: the rock face has depth and the
+    // camera's frustum is asymmetric, so a bed stopping exactly at the wall
+    // shows open floor beside its last plant.
+    overhang: 3,
+    // The band of DEPTH the plants are scattered through. The seabed plane is
+    // drawn at z=-4 and the play area is at z=0, so this is the slice where a
+    // plant reads as standing on the floor behind the action rather than in
+    // front of the seal or behind the backdrop.
+    depth: [-5.5, -1.5],
+    // One multiplier for the whole bed. Each prop's assets.js `fit` is its own
+    // measured length, so the pack's proportions are already right and this is
+    // the only place a bed-wide size decision is made.
+    bedScale: 1.8,
+    // Per-plant variation on top of bedScale, as a [smallest, largest] RANGE.
+    // Wide on purpose: this is a mixed bed, and a narrow range makes every
+    // plant of one species the same height, which reads as a stamp repeated
+    // however good the positions are. 0.4 to 2.1 puts seedlings and full-grown
+    // fronds of the same plant in the same frame, which is what a real bed
+    // looks like and what one number cannot fake.
+    scale: [0.4, 2.1],
+    // Full turn. These props are solid extrusions rather than flat cards, so a
+    // plant turned edge-on still reads as a stem; narrow it if the bed starts
+    // looking like it is made of sticks.
+    yawRange: 6.283,
+    // RELATIVE weights — a 0 turns a species off and the rest keep their
+    // proportions. Names are the species keys in path/src/seabedProps.js;
+    // anything not listed simply never gets picked. The shells are deliberately
+    // rare: they are punctuation, and a floor evenly mixed with them reads as
+    // a gift shop.
+    species: {
+      kelp: 3, ribbonweed: 3, bladegrass: 2.5, fern: 1.5,
+      reed: 2, broadleaf: 2, fanweed: 1, coral: 1,
+      clamshell: 0.35, conchshell: 0.35,
+    },
+  },
+
   // GRASS — seabed plants bending in the current. Entirely a vertex shader
   // (systems/grassSway.js), so the cost is the same for two clumps or two
   // hundred and every number here is a uniform write rather than a rebuild.
@@ -25105,6 +25278,17 @@ export const TUNER_SCHEMA = [
       // the same chainWindowLeft() the arc outside the boost ring draws.
       { path: 'strike.foodChain.strip.flashAt', min: 0, max: 0.8, step: 0.01, label: 'FOOD CHAIN!: strip blinks below (x window)' },
       { path: 'strike.foodChain.strip.flashHz', min: 0, max: 14, step: 0.25, label: 'FOOD CHAIN!: strip blink rate' },
+      // ONE COLOUR, fixed, because this is TYPE over open water at every
+      // brightness the day/night cycle has — the chain wheel that the ring's
+      // arc still wears took the banner through two unreadable stretches a lap.
+      // Depth is the ×N, which was always the exact readout.
+      { path: 'strike.foodChain.color', type: 'color', label: 'FOOD CHAIN!: colour' },
+      // The banner takes the STRIKE NOW! prompt while a chain is running (the
+      // ring's own line covers every moment it is not). The WORDS are the
+      // strikeNow row in callouts.csv; these are only how loud it is.
+      { path: 'strike.foodChain.prompt.flashHz', min: 0, max: 16, step: 0.25, label: 'STRIKE NOW! on the banner: flash rate' },
+      { path: 'strike.foodChain.prompt.neon', type: 'color', label: 'STRIKE NOW! on the banner: edge colour' },
+      { path: 'strike.foodChain.prompt.glow', min: 0, max: 40, step: 1, label: 'STRIKE NOW! on the banner: glow (px)' },
       { path: 'strike.breachChain.linksPerLevel', min: 1, max: 4, step: 1, label: 'Porpoising: links per breach, per stack' },
       // The two rows above are how hard the food chain HITS the lens. What the
       // lens then does with it — whether it punches at all, how far, and how
@@ -28052,6 +28236,43 @@ export const TUNER_SCHEMA = [
       { path: 'wallRocks.aboveWater', min: 0, max: 20, step: 0.5, label: 'shore above water' },
       { path: 'wallRocks.color', type: 'color', label: 'rock colour' },
       { path: 'arena.waveAmplitude', min: 0, max: 2, step: 0.05 },
+    ],
+  },
+  {
+    group: 'Seabed plants',
+    section: 'The ocean',
+    items: [
+      { path: 'seabed.enabled', type: 'bool', label: 'plants on the floor' },
+      // Every one of these RE-RUNS THE SAMPLER — there is no uniform to write,
+      // because the thing being tuned is where things are. That is a few
+      // hundred matrix composes, cheap enough to drag a slider through, and it
+      // is why the layout is seeded: a bed rebuilt by a slider you did not
+      // touch has to come back identical or the floor looks like it is
+      // twitching while you work on something else.
+      { path: 'seabed.count', min: 0, max: 500, step: 5, label: 'plants attempted' },
+      // The density dial. A hard floor on how close two plants may be, so it
+      // thins the bed whatever `count` says — which is why it is the one to
+      // reach for first and `count` is the one to reach for second.
+      { path: 'seabed.spacing', min: 0.3, max: 6, step: 0.1, label: 'minimum gap between plants' },
+      { path: 'seabed.attempts', min: 1, max: 80, step: 1, label: 'tries before giving up a plant' },
+      // Two sliders because `scale` is a [smallest, largest] RANGE, and the
+      // spread between them is the whole point. wallRocks.size above has the
+      // same shape for the same reason, and the note there records what a
+      // single slider did to it: wrote a bare number over the pair, and the
+      // destructure in the system threw before the first frame.
+      { path: 'seabed.scale.0', min: 0.1, max: 3, step: 0.05, label: 'plant size (smallest)' },
+      { path: 'seabed.scale.1', min: 0.1, max: 3, step: 0.05, label: 'plant size (largest)' },
+      { path: 'seabed.bedScale', min: 0.2, max: 5, step: 0.1, label: 'whole bed size' },
+      // No width slider: the bed runs wall to wall off `bounds`, which the
+      // arena width above already moves. This is only how far past the walls
+      // it keeps going.
+      { path: 'seabed.overhang', min: 0, max: 12, step: 0.5, label: 'run past the walls by' },
+      { path: 'seabed.depth.0', min: -12, max: 2, step: 0.25, label: 'depth band (back)' },
+      { path: 'seabed.depth.1', min: -12, max: 2, step: 0.25, label: 'depth band (front)' },
+      { path: 'seabed.yawRange', min: 0, max: 6.283, step: 0.1, label: 'random turn' },
+      // Rolls a different bed. Every other slider here changes the bed you
+      // have; this one is for when you do not like it.
+      { path: 'seabed.seed', min: 1, max: 9999, step: 1, label: 'layout seed' },
     ],
   },
 ];
