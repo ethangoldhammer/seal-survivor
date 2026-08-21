@@ -41,7 +41,7 @@ projectileAmount,Clone Warz,{effect} ,3,TRUE,0.5,Sardines,,
 orbiterAmount,Entourage,{effect} ,3,TRUE,0.5,OpeanOcean_001,,
 areaOfEffect,Splash Zone,{effect} ,5,TRUE,0.6,Reef_003,,
 companionSize,Big Rigz,{effect} ,5,TRUE,0.6,Humpback,,
-bioluminescence,Glow Up!,{effect} ,6,TRUE,0.8,AnglerFish,,{element} Pebbles
+bioluminescence,Glow Up!!,{effect} ,6,TRUE,0.8,AnglerFish,,{element} Pebbles
 club,Basic Baby Club,{effect} ,6,TRUE,1,SeaLion,,
 clubThrow,Throwin' Clubs,{effect} ,5,TRUE,1,SeaLion,,
 clubBoom,Boom Boom Club,{effect} ,5,TRUE,1,DeepSea_003,,

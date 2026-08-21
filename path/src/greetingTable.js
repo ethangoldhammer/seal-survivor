@@ -29,9 +29,24 @@
 // and follows the same rule: a line written for how you died beats the general
 // pool rather than joining it.
 //
+// ...AND IT CAN NAME WHO IT HAPPENED TO. `{departed}` is the third chip: the
+// seal that died last run, by name. It exists because death is permanent here
+// (systems/nameLedger.js) — the player who was "Fat Tony" last run is somebody
+// else now and can never be Fat Tony again, so the two names in a hello are
+// two different characters rather than one string used twice:
+//
+//     "{departed} is on the seabed. Try not to join them, {player}."
+//
+// THE THREE CHIPS ARE SPENT IN TWO DIFFERENT PLACES and it matters which.
+// `{cause}` and `{departed}` are facts about a run that is already over, so
+// they are spent ONCE when the line is rolled. `{player}` is spent on the way
+// to the screen on every frame, so a player who renames themselves mid-run is
+// called by the new name immediately. Read the note in systems/greeting.js
+// before moving any of them.
+//
 // Columns (order doesn't matter, unknown columns are ignored):
 //   id       a short handle for the row. Must be unique; never shown.
-//   text     the line itself. May spend `{player}` and `{cause}`.
+//   text     the line itself. May spend `{player}`, `{cause}` and `{departed}`.
 //   enabled  FALSE takes it out of rotation. Blank means enabled.
 //   weight   how likely this line is RELATIVE TO THE OTHERS IT IS POOLED WITH.
 //            Blank means 1; 0 is never shown. Same rule as quips.csv.
@@ -56,6 +71,20 @@
 // run, or a run the player abandoned rather than died in. Those rows are held
 // out of the pool automatically (see needsCause), which is why the chip is not
 // something an author has to remember to guard: writing it is the guard.
+//
+// `{departed}` IS GUARDED THE SAME WAY AND SEPARATELY, because the two facts
+// are not the same fact. A death always has a cause; it only has a NAME if the
+// run that ended was played after this was built, or in a browser that stored
+// it. So a row naming the seal is held back on its own condition rather than
+// on the cause's — sharing one guard would put "{departed} is on the seabed"
+// on screen as "is on the seabed" for anybody whose last death predates the
+// field, which is the sort of thing that ships because it works on the machine
+// it was written on.
+//
+// `{departed}` IS A PROPER NOUN and the opposite of `{cause}` in every way
+// that matters to a writer: it is capitalised as the player typed it, it is
+// safe at the start of a sentence, and it is somebody rather than something.
+// Write "{departed} didn't make it." and not "Last time it was {departed}." 
 // ============================================================================
 
 import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
@@ -66,6 +95,10 @@ const FILE = 'greetings.csv';
 
 /** Which run a row is for. Blank — neither of these — means either. */
 export const GREETING_WHENS = ['first', 'again'];
+
+/** The chip that becomes the name of the seal that died last run. A proper
+ *  noun, unlike {cause} — see the header. */
+export const DEPARTED_TOKEN = /\{departed\}/g;
 
 /** The chip that becomes the last run's cause of death. See the header. */
 const CAUSE_TOKEN = /\{cause\}/g;
@@ -91,18 +124,25 @@ export function parseGreetingCsv(text, warn = console.warn) {
     // answer to that question able to disagree with the first.
     const needsCause = CAUSE_TOKEN.test(line);
     CAUSE_TOKEN.lastIndex = 0;
+    // Its own flag and not folded into needsCause: a death always has a cause
+    // and does not always have a name on record. See the header.
+    const needsDeparted = DEPARTED_TOKEN.test(line);
+    DEPARTED_TOKEN.lastIndex = 0;
 
     // A LINE THAT CAN NEVER BE SAID, warned about at parse where it is
     // visible. Both shapes are the same mistake — a row about the last run
     // filed as a first-run line — and both are invisible in the game, which is
     // the failure this whole file is written to avoid: the row simply never
     // comes up, and never coming up looks exactly like never being rolled.
-    if (when === 'first' && (needsCause || causes)) {
-      warn(`[${LABEL}] "${id}" is a first-run line but ${needsCause ? 'names {cause}' : 'is tagged for a cause'} `
+    if (when === 'first' && (needsCause || needsDeparted || causes)) {
+      const what = needsCause ? 'names {cause}'
+        : needsDeparted ? 'names {departed}'
+        : 'is tagged for a cause';
+      warn(`[${LABEL}] "${id}" is a first-run line but ${what} `
         + '— a first run has no last run, so this line can never appear. Set when=again.');
     }
 
-    out.push({ id, text: line, weight: w == null ? 1 : w, when, causes, needsCause });
+    out.push({ id, text: line, weight: w == null ? 1 : w, when, causes, needsCause, needsDeparted });
   }
 
   if (!out.length) {
@@ -158,6 +198,37 @@ export function expandCause(text, label) {
 }
 
 /**
+ * `{departed}` -> the seal that died last run, by name.
+ *
+ * Same contract as expandCause and for the same reason: a missing name leaves
+ * the chip ALONE rather than blanking it, because a brace on the band is a bug
+ * report and a sentence with a hole where a person should be is just bad
+ * writing that nobody will trace back to here. pickGreeting cannot return a
+ * `needsDeparted` row without a name to spend, so this is the guard for the
+ * one way that could stop being true.
+ */
+export function expandDeparted(text, name) {
+  if (!text || !text.includes('{')) return text ?? '';
+  const who = String(name ?? '').trim();
+  if (!who) return String(text);
+  return String(text).replace(DEPARTED_TOKEN, who);
+}
+
+/**
+ * Both facts about the run that just ended, spent together.
+ *
+ * One call rather than two nested ones at the call site, because they are one
+ * question — "what may this line say about last time" — and a caller that
+ * remembers to expand the cause and forgets the name produces a hello with a
+ * literal {departed} in it, on the band, as the first thing a returning player
+ * reads. `{player}` is deliberately NOT here; see the header for why it is
+ * spent somewhere else entirely.
+ */
+export function expandLastRun(text, { cause = null, departed = null } = {}) {
+  return expandDeparted(expandCause(text, cause), departed);
+}
+
+/**
  * One greeting, weighted, or null when the table has nothing to say — silence
  * is a perfectly good way to open a run, which is why this does not have
  * quips.csv's never-empty promise. A blank score-screen headline is a broken
@@ -199,7 +270,7 @@ export function pickGreeting(rows, random = Math.random, opts = {}) {
 
 // The narrowing, step by step, because every step is a fallback and the order
 // is the whole behaviour.
-function poolFor(rows, { returning = false, causes = null, avoid = null } = {}) {
+function poolFor(rows, { returning = false, causes = null, departed = null, avoid = null } = {}) {
   // 1. THE RIGHT HALF OF THE FILE. A row with no `when` is in both halves.
   const want = returning ? 'again' : 'first';
   let pool = rows.filter((g) => !g.when || g.when === want);
@@ -209,6 +280,15 @@ function poolFor(rows, { returning = false, causes = null, avoid = null } = {}) 
   // one is out, whether it says so with a tag or with the chip.
   const has = (c) => (causes?.has ? causes.has(c) : !!causes?.includes?.(c));
   const known = returning && !!(causes?.size ?? causes?.length);
+  // ITS OWN GATE, APPLIED FIRST AND UNCONDITIONALLY. A run can have a known
+  // cause and no name on record — a death filed before the name was stored, or
+  // in a browser that stored nothing — so this cannot ride on `known`. Applied
+  // before the cause narrowing below rather than after, so a cause-tagged pool
+  // that would otherwise be all `{departed}` lines falls back to the general
+  // pool instead of coming back empty and opening the run in silence.
+  if (!(returning && String(departed ?? '').trim())) {
+    pool = pool.filter((g) => !g.needsDeparted);
+  }
   if (!known) {
     pool = pool.filter((g) => !g.needsCause && !g.causes);
   } else {
@@ -222,7 +302,26 @@ function poolFor(rows, { returning = false, causes = null, avoid = null } = {}) 
     pool = matched.length ? matched : pool.filter((g) => !g.causes);
   }
 
-  // 4. NOT THE SAME HELLO TWICE. Last, so it can never empty a pool that had
+  // 4. NEVER EMPTY. The last resort, and it exists because the file keeps
+  // arriving at this state honestly rather than by mistake.
+  //
+  // `{departed}` turned out to be the chip everybody wants to use, and once
+  // every returning line names the dead seal there is nothing left to say to a
+  // player who RESTARTED rather than died — no death means no name to spend,
+  // and the pool empties. Requiring a couple of plain rows to be kept back for
+  // that case is a rule nobody can see in a spreadsheet, and it was broken
+  // twice within an hour of the chip existing.
+  //
+  // So the fallback is the lines that need nothing at all — in practice the
+  // first-run pool. "Hello {player}!" to somebody who restarted mid-run is not
+  // even wrong: they never died, they are still the same seal, and being
+  // greeted from the top is exactly what happened. Silence, which is what this
+  // replaces, is indistinguishable from the feature being switched off.
+  if (!pool.length) {
+    pool = rows.filter((g) => !g.needsCause && !g.needsDeparted && !g.causes);
+  }
+
+  // 5. NOT THE SAME HELLO TWICE. Last, so it can never empty a pool that had
   // something in it — if the only line left is the one we said last time, it
   // is better to repeat than to open in silence.
   if (avoid && pool.length > 1) {

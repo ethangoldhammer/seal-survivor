@@ -3,6 +3,8 @@ import { CONFIG } from '../config.js';
 import { buildChain, applyChainToPoint, measureReach, smoothstep } from './ikChain.js';
 import { trackCoverage } from './animation.js';
 import { snapshotMoment } from './bossKill.js';
+import { feedback } from './feedback.js';
+import { setSfxEcho } from './audio.js';
 
 // ============================================================================
 // THE VICTORY LAP — what the seal does with its body in the second after a
@@ -177,7 +179,7 @@ function pickVariant(rng, weights = cfg().weights ?? {}) {
  */
 export function playCelebration({
   variant = null, weights = null, peakAt = null,
-  hold = null, release = null, escorts = true, rng = Math.random,
+  hold = null, release = null, escorts = true, rng = Math.random, at = null,
 } = {}) {
   const c = cfg();
   if (c.enabled === false) return null;
@@ -193,6 +195,22 @@ export function playCelebration({
   celebrationState.release = release ?? c.release ?? 0.5;
   celebrationState.escorts = escorts;
   celebrationState.duration = peak + (hold ?? c.hold ?? 0.35) + celebrationState.release;
+
+  // The seal says something, and the water opens up behind it.
+  //
+  // Fired HERE rather than from the boss kill, because this is the one door
+  // every celebration comes through — the kill's victory lap and the level-up
+  // salute both — and a hook on the kill would give the salute a pose with no
+  // voice and no echo. It is also after the early returns above: a roll that
+  // came up short is not a celebration, and must not sound like one.
+  feedback('celebrate', {
+    x: at?.x, y: at?.y,
+    // Straight to the listener when the caller has no position for it. The
+    // salute happens on a paused run with the camera already framed on the
+    // seal, and panning that to wherever the seal's mesh drifted to is a
+    // celebration coming from off to one side.
+  });
+  setSfxEcho(true);
   return name;
 }
 
@@ -229,6 +247,10 @@ export function updateCelebration(rawDt) {
 }
 
 export function resetCelebration() {
+  // Shut on the way out whether the performance ended on its own clock or was
+  // torn down under it — a run ending mid-celebration (entities/player.js
+  // calls this on reset) would otherwise leave the bus echoing into the menu.
+  setSfxEcho(false);
   celebrationState.active = false;
   celebrationState.variant = null;
   celebrationState.clock = 0;

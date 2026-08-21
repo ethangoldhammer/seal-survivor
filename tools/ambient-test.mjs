@@ -128,6 +128,11 @@ class FakeCtx {
     return node({ type: 'lowpass', frequency: new Param(20000), Q: new Param(1), detune: new Param(0) });
   }
   createConvolver() { return node({ buffer: null }); }
+  // The bus builds a feedback delay for the celebration echo. Missing here it
+  // does not throw anything this test can see — unlockAudio catches, warns to
+  // a console nobody is reading, and leaves HALF A BUS wired, which fails as
+  // "the bus input never reaches the speakers".
+  createDelay(max) { return node({ maxDelayTime: max, delayTime: new Param(0) }); }
   // The bus's dynamics stage. Not exercised by anything in this file, but
   // unlockAudio builds the whole bus before the ambient system can attach to
   // it — and a missing factory here is swallowed by unlockAudio's try/catch,

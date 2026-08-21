@@ -111,9 +111,9 @@ function tailPoint(p, back, extraBack = 0) {
 // carried in emitDebt rather than dropped, so the rate holds at any framerate
 // instead of quietly thinning out when frames are long — and a rate under one
 // per frame still emits, just not every frame.
-function shedParticles(t, p, spec, dt, back) {
+function shedParticles(t, p, spec, dt, back, fx = 1) {
   if (!spec?.emitter || !(spec.perSecond > 0)) return;
-  t.emitDebt += spec.perSecond * dt;
+  t.emitDebt += spec.perSecond * fx * dt;
   let bursts = Math.floor(t.emitDebt);
   if (bursts <= 0) return;
   t.emitDebt -= bursts;
@@ -181,79 +181,107 @@ function trailColour(p, cfg) {
   return _trailCol;
 }
 
-export function updateProjectileTrails(dt, scene, projectiles) {
+/**
+ * Draw one mover's ribbon.
+ *
+ * A "mover" is anything shaped like a projectile — { mesh, dir, speed } — and
+ * that is deliberately a smaller contract than "a projectile". The clubs on
+ * the ring are not projectiles and never will be (they are swung, they carry
+ * riders, they belong to systems/club.js), but a ribbon only ever needed a
+ * position with a name on it and a heading, so they hand one over and get the
+ * same trail the thrown ones get rather than a second implementation of this
+ * file. See clubTrailMovers in systems/club.js.
+ */
+function updateTrail(p, dt, scene, live) {
+  const cfg = presetFor(p);
+  if (!cfg) return;
+  live.add(p);
+  // HOW BIG THIS PARTICULAR ONE'S RIBBON IS. An upgrade's only channel on a
+  // thing already in flight — see `trailScale` in entities/projectiles.js.
+  // Multiplies the WIDTH and the shed rate and nothing else: the length is
+  // `points`, which is geometry allocated once at the maximum, and the glow
+  // is left alone because a trail bright enough to bloom at one stack should
+  // not be six times over the threshold at six.
+  const fx = Math.max(0, p.trailScale ?? 1);
+
+  let t = trails.get(p);
+  if (!t) {
+    t = makeTrail(scene, cfg);
+    trails.set(p, t);
+  }
+
+  // Both are measured off the shell as it actually renders, so a size
+  // change in the Look panel moves them with it.
+  const back = tailBack(t, p, cfg);
+  shedParticles(t, p, shedSpec(p, cfg), dt, back, fx);
+
+  // Tracked live, so dragging the depth in the tuner moves a trail that's
+  // already in the air rather than only the next one to spawn.
+  t.mesh.position.z = trailZ(t, p, cfg);
+
+  // Record the head position — the shell's TAIL, not its centre — and drop
+  // the oldest once past the cap.
+  const head = tailPoint(p, back);
+  t.history.unshift(new THREE.Vector3(head.x, head.y, 0));
+  while (t.history.length > t.maxPts) t.history.pop();
+
+  const pos = t.geo.attributes.position;
+  const col = t.geo.attributes.color;
+  const colour = trailColour(p, cfg);
+  const up = new THREE.Vector3(0, 0, 1);
+  const dir = new THREE.Vector3();
+  const side = new THREE.Vector3();
+  const n = t.history.length;
+
+  for (let i = 0; i < t.maxPts; i++) {
+    // Past the end of the recorded history, collapse remaining vertices
+    // onto the tail so the ribbon doesn't stretch back to the origin
+    // while it's still filling up.
+    const idx = Math.min(i, n - 1);
+    const cur = t.history[idx];
+    const prev = t.history[Math.max(0, idx - 1)];
+    const next = t.history[Math.min(n - 1, idx + 1)];
+    dir.subVectors(next, prev);
+    if (dir.lengthSq() < 1e-10) dir.set(1, 0, 0);
+    dir.normalize();
+
+    const f = i / (t.maxPts - 1); // 0 at the head, 1 at the tail
+    const w = cfg.width * fx * 0.5 * (1 - f) ** cfg.taper;
+    side.crossVectors(dir, up).normalize().multiplyScalar(w);
+
+    const a = i * 2;
+    pos.setXYZ(a, cur.x + side.x, cur.y + side.y, 0);
+    pos.setXYZ(a + 1, cur.x - side.x, cur.y - side.y, 0);
+
+    // Fade to black toward the tail — with additive blending, black is
+    // transparent, so this doubles as the alpha ramp.
+    const bright = cfg.glow * (1 - f) ** cfg.fade;
+    col.setXYZ(a, colour.r * bright, colour.g * bright, colour.b * bright);
+    col.setXYZ(a + 1, colour.r * bright, colour.g * bright, colour.b * bright);
+  }
+  pos.needsUpdate = true;
+  col.needsUpdate = true;
+}
+
+/**
+ * @param projectiles the live shots
+ * @param extra       anything else that wants a ribbon this frame, shaped the
+ *                    same way — today, the clubs on the ring. Iterated as a
+ *                    second list rather than concatenated, so the common frame
+ *                    allocates nothing.
+ */
+export function updateProjectileTrails(dt, scene, projectiles, extra = null) {
   if (!CONFIG.trails.enabled) {
     if (trails.size) clearProjectileTrails(scene);
     return;
   }
 
   const live = new Set();
+  for (const p of projectiles) updateTrail(p, dt, scene, live);
+  if (extra) for (const p of extra) updateTrail(p, dt, scene, live);
 
-  for (const p of projectiles) {
-    const cfg = presetFor(p);
-    if (!cfg) continue;
-    live.add(p);
-
-    let t = trails.get(p);
-    if (!t) {
-      t = makeTrail(scene, cfg);
-      trails.set(p, t);
-    }
-
-    // Both are measured off the shell as it actually renders, so a size
-    // change in the Look panel moves them with it.
-    const back = tailBack(t, p, cfg);
-    shedParticles(t, p, shedSpec(p, cfg), dt, back);
-
-    // Tracked live, so dragging the depth in the tuner moves a trail that's
-    // already in the air rather than only the next one to spawn.
-    t.mesh.position.z = trailZ(t, p, cfg);
-
-    // Record the head position — the shell's TAIL, not its centre — and drop
-    // the oldest once past the cap.
-    const head = tailPoint(p, back);
-    t.history.unshift(new THREE.Vector3(head.x, head.y, 0));
-    while (t.history.length > t.maxPts) t.history.pop();
-
-    const pos = t.geo.attributes.position;
-    const col = t.geo.attributes.color;
-    const colour = trailColour(p, cfg);
-    const up = new THREE.Vector3(0, 0, 1);
-    const dir = new THREE.Vector3();
-    const side = new THREE.Vector3();
-    const n = t.history.length;
-
-    for (let i = 0; i < t.maxPts; i++) {
-      // Past the end of the recorded history, collapse remaining vertices
-      // onto the tail so the ribbon doesn't stretch back to the origin
-      // while it's still filling up.
-      const idx = Math.min(i, n - 1);
-      const cur = t.history[idx];
-      const prev = t.history[Math.max(0, idx - 1)];
-      const next = t.history[Math.min(n - 1, idx + 1)];
-      dir.subVectors(next, prev);
-      if (dir.lengthSq() < 1e-10) dir.set(1, 0, 0);
-      dir.normalize();
-
-      const f = i / (t.maxPts - 1); // 0 at the head, 1 at the tail
-      const w = cfg.width * 0.5 * (1 - f) ** cfg.taper;
-      side.crossVectors(dir, up).normalize().multiplyScalar(w);
-
-      const a = i * 2;
-      pos.setXYZ(a, cur.x + side.x, cur.y + side.y, 0);
-      pos.setXYZ(a + 1, cur.x - side.x, cur.y - side.y, 0);
-
-      // Fade to black toward the tail — with additive blending, black is
-      // transparent, so this doubles as the alpha ramp.
-      const bright = cfg.glow * (1 - f) ** cfg.fade;
-      col.setXYZ(a, colour.r * bright, colour.g * bright, colour.b * bright);
-      col.setXYZ(a + 1, colour.r * bright, colour.g * bright, colour.b * bright);
-    }
-    pos.needsUpdate = true;
-    col.needsUpdate = true;
-  }
-
-  // Tear down trails whose projectile is gone.
+  // Tear down trails whose mover is gone — a shot that landed, a club that
+  // moved into a flipper or was taken off the ring by a level-up.
   for (const [p, t] of trails) {
     if (live.has(p)) continue;
     scene.remove(t.mesh);

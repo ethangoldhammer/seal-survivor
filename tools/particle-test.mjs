@@ -244,6 +244,15 @@ check('...and every swallow resolves its colour off the asset',
   (MAIN.match(/feedback\('(?:bubblePop|strikeOrbTaken|coralTaken)'[\s\S]{0,300}?color:\s*assetBaseColor\(/g) || []).length === 3);
 check('...and the blob reports the colour it is actually wearing',
   /feedback\('levelOrbTaken'[\s\S]{0,400}?color:\s*levelOrbColor\(/.test(MAIN));
+//   THE WEAK SPOT'S MEAT is the third odd one out, and it is the blob's reason
+//              again: the piece is drawn with the chumChunk asset but is
+//              deliberately NOT wearing that asset's colour — it pays boost
+//              pips rather than health and wears the fuel tint to say so (see
+//              CONFIG.hotSpots.chum.tint), so assetBaseColor would hand back
+//              the meat's red-to-amber and undo the one tell that separates
+//              the two pickups. It reports the colour it was spawned with.
+check('...and a piece off a weak spot reports the fuel tint it was spawned with',
+  /feedback\('hotSpotChumTaken'[\s\S]{0,400}?color:\s*chunk\.base/.test(MAIN));
 
 // Every other feedback() call in the game must NOT. Comments are allowed to
 // discuss it; code isn't.
@@ -298,6 +307,10 @@ for (const file of srcFiles) {
     // the SOURCE of the colour, so main.js is not widened by it and a second
     // hand-tinted burst there is still a failure.
     if (/^\s*'levelOrbTaken'/.test(args) && /\bcolor:\s*levelOrbColor\(/.test(args)) continue;
+    // The weak spot's meat, checked properly above. Same shape again — the
+    // EVENT and the SOURCE, so main.js is not widened and a hand-typed hex
+    // here would still fail.
+    if (/^\s*'hotSpotChumTaken'/.test(args) && /\bcolor:\s*chunk\.base\b/.test(args)) continue;
     strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }

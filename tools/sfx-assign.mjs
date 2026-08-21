@@ -172,6 +172,19 @@ const ASSIGN = {
   // the nearest thing the game has to artillery.
   missileLaunch:  ['ESM_PG_cinematic_fx_weapons_warefare_cannon_shot_ship_clanking_metal_03'],
   missileImpact:  ['ESM_PG_fx_water_splash_weapon_cannon_impact_near_air_projectile_whoosh_02'],
+
+  // =========================================================================
+  // THE WEDDELL / PAPS BATCH, August 2026.
+  //
+  // Seal_Paps_takeDamage_01 is NOT here: 1253 bytes, three frames of audio,
+  // and it decodes to 0.008s of digital silence. It is a broken export, not a
+  // quiet take, and a silent take in a nine-deep voice is one hit in nine
+  // where the seal says nothing.
+  // =========================================================================
+  playerHit:      ['Seal_Paps_takeDamage_02', 'Seal_Paps_takeDamage_03'],
+  // The new `celebrate` voice, fired once as the victory lap starts.
+  celebrate:      ['Seal_Weddell_01', 'Seal_Weddell_02', 'Seal_Weddell_03', 'Seal_Weddell_04',
+                   'Seal_Weddell_05', 'Seal_Weddell_06', 'Seal_Weddell_07'],
 };
 
 if (!process.argv.includes('--force')) {

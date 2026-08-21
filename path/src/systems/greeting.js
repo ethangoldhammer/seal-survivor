@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import greetingsCsv from '../greetings.csv?raw';
-import { parseGreetingCsv, pickGreeting, expandCause } from '../greetingTable.js';
+import { parseGreetingCsv, pickGreeting, expandLastRun } from '../greetingTable.js';
 import { causesOfDeath, primaryCause } from '../deathCauses.js';
 import { lastRun, noteRunStart } from './lastRun.js';
 import {
@@ -144,9 +144,16 @@ export function resetGreetingRun(random = Math.random) {
   // deathCauses.js, where that split is the whole point of having both.
   const causes = returning ? causesOfDeath(before.source) : null;
   const cause = returning ? primaryCause(before.source) : null;
+  // WHO died, as well as what killed them. A different character from the seal
+  // about to swim — death is permanent (systems/nameLedger.js), so the name in
+  // the record and the name on the HUD are two people, and a line naming both
+  // is naming two people. Null on a run that followed no death, and on any
+  // death filed before this field existed; `{departed}` rows are gated on it.
+  const departed = returning ? before.name : null;
   const pick = cfg().enabled === false ? null : pickGreeting(GREETINGS, random, {
     returning,
     causes,
+    departed,
     avoid: before.greeting,
   });
 
@@ -159,11 +166,14 @@ export function resetGreetingRun(random = Math.random) {
   noteRunStart(pick?.id ?? null);
   if (!pick) return;
 
-  // `{cause}` now, `{player}` never — the name is spent on the way to the
-  // screen every frame (fillBindings in systems/callouts.js) so that a player
-  // who types their name mid-run is called by it immediately, and the cause is
-  // a fact about a run that is already over.
-  row = buildRow(expandCause(pick.text, cause?.label));
+  // `{cause}` and `{departed}` now, `{player}` never. The two spent here are
+  // facts about a run that is already OVER and cannot change during this one.
+  // The name is spent on the way to the screen every frame (fillBindings in
+  // systems/callouts.js) so that a player who renames themselves mid-run is
+  // called by it immediately — which is also exactly why the dead seal's name
+  // cannot go through that path: it would follow the rename and put the living
+  // seal's name on the headstone line.
+  row = buildRow(expandLastRun(pick.text, { cause: cause?.label, departed }));
   phase = 'wait';
   wait = Math.max(0, cfg().delay ?? 0.8);
 }

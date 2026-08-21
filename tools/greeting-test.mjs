@@ -96,7 +96,7 @@ const CSV = resolve(here, '../path/src/greetings.csv');
 
 const { CONFIG } = await import('../path/src/config.js');
 const {
-  parseGreetingCsv, pickGreeting, expandCause, GREETING_WHENS,
+  parseGreetingCsv, pickGreeting, expandCause, expandDeparted, expandLastRun, GREETING_WHENS,
 } = await import('../path/src/greetingTable.js');
 const { causesOfDeath, primaryCause, DEATH_CAUSES } = await import('../path/src/deathCauses.js');
 const { lastRun, noteRunStart, noteDeath, clearRunHistory } = await import('../path/src/systems/lastRun.js');
@@ -142,18 +142,71 @@ check('every line has a positive weight', shipped.every((g) => g.weight > 0));
 // doesn't is just another line of text at the top of a run.
 check('every line spends {player}', shipped.every((g) => g.text.includes('{player}')),
   shipped.filter((g) => !g.text.includes('{player}')).map((g) => g.id).join(', '));
-// The band is one line across the middle of the screen. The longest coach row
-// in callouts.csv is about a hundred characters and is a sentence somebody has
-// to act on; a hello is read in passing and should not be near that.
-check('no line is long enough to wrap the band',
-  shipped.every((g) => g.text.length <= 72),
-  shipped.map((g) => g.text.length).sort((a, b) => b - a).slice(0, 1).join());
+// THE LENGTH A PLAYER ACTUALLY SEES, not the length of the row.
+//
+// This used to measure `g.text.length` and that stopped being the right
+// question the moment `{departed}` existed. A chip is eleven characters in the
+// file and expands to a NAME — up to MAX_NAME_LEN, and a rolled one runs to
+// eighteen at the ninetieth percentile — so a line naming both seals is about
+// thirty characters longer on screen than it is in the spreadsheet. Measured
+// raw, fifteen of twenty-six rows were inside a limit they broke every time
+// they were spoken.
+//
+// Measured against a p90 rolled name rather than MAX_NAME_LEN: the worst case
+// is a player who types thirty-two characters, which is a tail this rule should
+// not be designed around — the band wraps (white-space: normal, max-width) so a
+// long line is ugly rather than broken. What this catches is a line that is
+// long for everybody.
+//
+// The limit is 105 and not the old 72 because naming two seals costs what it
+// costs — "{departed} was lost to {cause}. Your turn, {player}." is the feature
+// working, and it cannot be said in seventy-two characters on screen. 105 is a
+// TWO-LINE budget: the band wraps (white-space: normal, max-width: min(720px,
+// 88vw)) so a long hello is two lines rather than broken, and at the coach's
+// 20px that is about sixty-five characters a line. What this still catches is
+// the line that would run to three.
+const P90_NAME = 'X'.repeat(18);
+const MID_CAUSE = 'x'.repeat(11);
+const spoken = (t) => t
+  .replace(/\{player\}/g, P90_NAME)
+  .replace(/\{departed\}/g, P90_NAME)
+  .replace(/\{cause\}/g, MID_CAUSE)
+  .length;
+check('no line is long enough to fill the band once its chips are spent',
+  shipped.every((g) => spoken(g.text) <= 105),
+  shipped.filter((g) => spoken(g.text) > 105)
+    .map((g) => `${g.id} (${spoken(g.text)})`).join(', '));
 check('both halves of the file are populated',
   shipped.some((g) => g.when !== 'again') && shipped.some((g) => g.when !== 'first'));
-check('a first run has something to be told',
-  shipped.filter((g) => g.when !== 'again' && !g.needsCause && !g.causes).length >= 2);
-check('a returning run with no death has something too',
-  shipped.filter((g) => g.when !== 'first' && !g.needsCause && !g.causes).length >= 2);
+// EVERY SITUATION HAS SOMETHING TO SAY, asked through the REAL pool rather than
+// by counting rows against a list of flags.
+//
+// This was a flag count, and the flag count is what let the file go silent. It
+// tested `!needsCause && !causes` — correct when those were the only two things
+// that could hold a row back, and quietly wrong the moment `{departed}` added a
+// third. Every row in the returning pool was rewritten to name the dead seal,
+// which is a fine thing to want, and this check went on passing because it had
+// never heard of the chip: it counted rows that pickGreeting would refuse.
+//
+// A run that follows a death the player RESTARTED out of rather than died in
+// then opened in total silence, and silence is indistinguishable from the
+// feature being switched off.
+//
+// So it asks pickGreeting itself now. A check that duplicates the selection
+// logic can disagree with it; a check that CALLS it cannot.
+const situations = [
+  ['a first run', { returning: false, causes: null, departed: null }],
+  ['a returning run that had no death', { returning: true, causes: null, departed: null }],
+  ['a death with no name on record', { returning: true, causes: new Set(['shark']), departed: null }],
+  ['a death with a name', { returning: true, causes: new Set(['shark']), departed: 'Fat Tony' }],
+  ['a cause nobody wrote a line for', { returning: true, causes: new Set(['oyster']), departed: 'Fat Tony' }],
+];
+for (const [label, opts] of situations) {
+  const got = new Set(Array.from({ length: 300 }, () => pickGreeting(shipped, Math.random, opts)?.id));
+  got.delete(undefined);
+  check(`${label} has something to be told`, got.size >= 1,
+    got.size ? `${got.size} line(s)` : 'NOTHING — this run opens in silence');
+}
 check('at least one line comments on the last death with the chip',
   shipped.some((g) => g.needsCause));
 check('at least one line is written for a specific cause',
@@ -411,6 +464,75 @@ section('On the screen');
   root.remove();
 }
 
+section('The {departed} chip');
+check('the chip becomes the name of the seal that died',
+  expandDeparted("{departed} didn't make it.", 'Fat Tony') === "Fat Tony didn't make it.");
+check('every chip in a line is spent, not just the first',
+  expandDeparted('{departed}. Poor {departed}.', 'Brine') === 'Brine. Poor Brine.');
+check('no name leaves the text alone rather than blanking it',
+  expandDeparted('Poor {departed}.', null).includes('{departed}'));
+check('...and so does a name that is only whitespace',
+  expandDeparted('Poor {departed}.', '   ').includes('{departed}'));
+// The two facts about the last run are spent TOGETHER, because a caller that
+// remembers one and forgets the other puts a literal brace on the band as the
+// first thing a returning player reads.
+check('both chips are spent in one call',
+  expandLastRun('{departed} was lost to {cause}.', { cause: 'a shark', departed: 'Fat Tony' })
+    === 'Fat Tony was lost to a shark.');
+check('...and one without the other still spends what it has',
+  expandLastRun('{departed} was lost to {cause}.', { cause: 'a shark' })
+    === '{departed} was lost to a shark.');
+
+section('A line naming the dead can never be said without them');
+{
+  // The gate is SEPARATE from the cause's, because a death always has a cause
+  // and does not always have a name on record — a run that ended before the
+  // field existed, or in a browser that stored nothing. Sharing one guard puts
+  // "is on the seabed" on the band with the name missing off the front.
+  const rows = parseGreetingCsv([
+    'id,text,when,causes',
+    'plain,"Back again, {player}?",again,',
+    'named,"{departed} is gone, {player}.",again,',
+    'namedshark,"{departed} fed the sharks, {player}.",again,shark',
+  ].join('\n'));
+  const ids = (opts) => new Set(
+    Array.from({ length: 200 }, () => pickGreeting(rows, Math.random, opts)?.id),
+  );
+
+  const noName = ids({ returning: true, causes: new Set(['shark']), departed: null });
+  check('a death with no name on record never rolls a {departed} line',
+    !noName.has('named') && !noName.has('namedshark'), [...noName].join(', '));
+  check('...and still has something to say', noName.has('plain'));
+
+  const blank = ids({ returning: true, causes: new Set(['shark']), departed: '   ' });
+  check('a whitespace name counts as no name',
+    !blank.has('named') && !blank.has('namedshark'), [...blank].join(', '));
+
+  const withName = ids({ returning: true, causes: new Set(['shark']), departed: 'Fat Tony' });
+  check('a death WITH a name can roll one', withName.has('namedshark'), [...withName].join(', '));
+
+  // The cause-tagged pool is all {departed} lines here, so a run with a cause
+  // and no name has to FALL BACK rather than come back empty — an empty pool
+  // opens the run in silence, which looks exactly like the feature being off.
+  const tagged = parseGreetingCsv([
+    'id,text,when,causes',
+    'plain,"Back again, {player}?",again,',
+    'onlynamed,"{departed} fed the sharks, {player}.",again,shark',
+  ].join('\n'));
+  const fell = new Set(Array.from({ length: 200 }, () => pickGreeting(tagged, Math.random,
+    { returning: true, causes: new Set(['shark']), departed: null })?.id));
+  check('a cause whose only line names the dead falls back rather than going silent',
+    fell.has('plain') && !fell.has('onlynamed') && !fell.has(undefined), [...fell].join(', '));
+}
+
+section('A first-run line that names the dead is warned about');
+{
+  let warn = '';
+  parseGreetingCsv('id,text,when\nbad,"{departed} is gone, {player}",first', (m) => { warn += m; });
+  check('the parser says so, naming the row and the chip',
+    warn.includes('bad') && warn.includes('{departed}'), warn.trim());
+}
+
 // ---------------------------------------------------------------------------
 section('Run to run');
 clearRunHistory();
@@ -440,6 +562,53 @@ resetGreetingRun(() => 0);
 const third = greetingLine();
 check('a run that follows an abandoned one says nothing about a death',
   !!third && !/shark/i.test(third), third ?? '');
+
+// THE DEAD SEAL'S NAME, END TO END. Death is permanent, so the name in the
+// record and the name on the HUD are two different characters — and the whole
+// risk of this feature is that the dead one is spent through the LIVING one's
+// path and follows the rename. Recorded as one seal, greeted as another.
+{
+  clearRunHistory();
+  resetCallouts();
+  resetGreetingRun(() => 0);          // run one, as anybody
+  noteDeath('greatWhite', 'Fat Tony'); // ...who dies as Fat Tony
+  let named = null;
+  // Rolled until the pool offers a {departed} line — the draw is weighted and
+  // this is about whether the chip RESOLVES, not about how often it comes up.
+  for (let i = 0; i < 400 && !named; i++) {
+    resetCallouts();
+    resetGreetingRun(Math.random);
+    const line = greetingLine();
+    if (line && /Fat Tony/.test(line)) named = line;
+    // resetGreetingRun consumes the death, so put it back for the next draw.
+    noteDeath('greatWhite', 'Fat Tony');
+  }
+  check('the next run can mourn the seal that died, by name', !!named, named ?? 'never rolled one');
+  check('...with the chip already spent', !named || !named.includes('{departed}'), named ?? '');
+  // The living seal's name is still a token at this point — it is spent on the
+  // way to the screen so a rename mid-run lands immediately. If the dead one
+  // went through that path too it would follow the rename, and the headstone
+  // line would name the seal that is currently swimming.
+  check('...while the LIVING seal is still a token', !named || named.includes('{player}'), named ?? '');
+}
+
+// A death filed with no name at all — every run recorded before this field
+// existed. The hello has to work and must never show a brace.
+{
+  clearRunHistory();
+  resetCallouts();
+  resetGreetingRun(() => 0);
+  noteDeath('greatWhite');
+  let brace = 0;
+  for (let i = 0; i < 300; i++) {
+    resetCallouts();
+    resetGreetingRun(Math.random);
+    const line = greetingLine();
+    if (line && line.includes('{departed}')) brace++;
+    noteDeath('greatWhite');
+  }
+  check('an old death with no name never leaves {departed} on the band', brace === 0, `${brace} of 300`);
+}
 
 // EVERY CAUSE, END TO END. The chip has to resolve for all of them — this is
 // the check that a creature added to enemies.csv and classified in

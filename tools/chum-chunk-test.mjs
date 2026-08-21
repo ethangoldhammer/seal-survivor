@@ -170,10 +170,28 @@ player.mesh.position.set(0, -10, 0);
 // out from under a measurement.
 const parked = () => player.mesh.position.set(0, -10, 0);
 
+// AT ONE ORIENTATION. A chunk is `shape: 'rock'`, and every rock is given a
+// RANDOM orientation at spawn (startTumble in assets.js) — so the box measured
+// off a lumpy body is a different box every run, and the radius ladder below
+// disagrees with itself about a fifth of the time on nothing but that. Same
+// stream per chunk, so all five are lying at the same angle and the only thing
+// that differs between them is the roll.
+function atOneAngle(fn) {
+  const real = Math.random;
+  let a = 0x9e3779b9;
+  Math.random = () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  try { return fn(); } finally { Math.random = real; }
+}
+
 resetPickups(scene);
 const sizes = [];
 for (const t of [0, 0.25, 0.5, 0.75, 1]) {
-  const c = spawnChumChunk(scene, new THREE.Vector3(200 + t * 10, 0, 0), { t });
+  const c = atOneAngle(() => spawnChumChunk(scene, new THREE.Vector3(200 + t * 10, 0, 0), { t }));
   sizes.push({ t, scale: c.mesh.scale.x, radius: c.radius, heal: c.healFrac, color: c.base.clone() });
 }
 let sizeUp = true;
@@ -462,6 +480,110 @@ resetChumChunkSpawner(mulberry32(1));
     Math.abs(avg - expected) < expected * 0.25, `expected about ${expected.toFixed(1)}`);
   check('...and stays rare enough to be an event',
     avg < 600 / 30, `one every ${(600 / avg).toFixed(0)}s`);
+}
+
+// ===========================================================================
+section('The other kind — a piece off a boss weak spot');
+// A chunk carrying `pips` is FUEL: it refills boost pips and heals nothing (see
+// CONFIG.hotSpots.chum and the header of systems/bossHotSpots.js). It shares
+// this entity because in the water it IS one, which is exactly why the two
+// things it must never share are the PAYOUT and the TELL — a piece wearing the
+// heal ramp's colour is a lie about what swallowing it does, and it is a lie
+// nothing on screen can correct.
+{
+  const M = CONFIG.hotSpots?.chum ?? {};
+  resetPickups(scene);
+  parked();
+  const fuel = spawnChumChunk(scene, new THREE.Vector3(200, 0, 0), {
+    t: 0.4, pips: M.pips ?? 2, tint: M.tint ?? 0xffe07a, lifetime: M.lifetime,
+  });
+  const meal = spawnChumChunk(scene, new THREE.Vector3(210, 0, 0), { t: 0.4 });
+
+  check('a piece off a spot carries boost pips', fuel.pips > 0, `${fuel.pips} pips`);
+  check('...and heals nothing', fuel.healFrac === 0, `${fuel.healFrac}`);
+  check('a chunk from every other source still heals and pays no pips',
+    meal.healFrac > 0 && !(meal.pips > 0),
+    `${(meal.healFrac * 100).toFixed(0)}% HP, ${meal.pips} pips`);
+
+  // THE TELL. Same roll, same size — and they must not be the same colour, or
+  // the one number the player reads off a chunk before swimming for it is
+  // answering a question about the wrong currency.
+  const apart = Math.hypot(fuel.base.r - meal.base.r, fuel.base.g - meal.base.g,
+    fuel.base.b - meal.base.b);
+  check('fuel and food are told apart by colour at the same size', apart > 0.2,
+    `#${fuel.base.getHexString()} vs #${meal.base.getHexString()}, ${apart.toFixed(2)} apart`);
+  // ...and the material really is per-chunk. The shared-material trap this file
+  // already checks for the heal ramp, arriving by a second route: an override
+  // written to the asset's own material would repaint every chunk in the water.
+  //
+  // AFTER A FRAME. The colour a chunk wears is written by the update (base x
+  // brightness), not at spawn — comparing the materials straight after
+  // spawnChumChunk reads the asset's own untouched colour on both and passes
+  // whether or not they are shared.
+  for (let i = 0; i < 2; i++) updatePickups(1 / 60, scene, player, () => {}, null, null, null, () => {});
+  check('...and neither repainted the other',
+    fuel.mesh.material !== meal.mesh.material
+    && Math.hypot(fuel.mesh.material.color.r - meal.mesh.material.color.r,
+      fuel.mesh.material.color.g - meal.mesh.material.color.g,
+      fuel.mesh.material.color.b - meal.mesh.material.color.b) > 0.05);
+
+  check('it leaves the water sooner than a chunk worth crossing the arena for',
+    fuel.life < meal.life, `${fuel.life}s vs ${meal.life}s`);
+}
+
+// ===========================================================================
+section('...and it is thrown, not handed over');
+// THE MAGNET OUTRANKS A THROW AND CANCELS IT — which is right for a chunk
+// dropped in open water and wrong for one FIRED out of a boss the player is
+// standing next to. Food reach is six units before upgrades and the whole
+// magnet radius during a chain, so without the flight gate a piece kicked out
+// of a weak spot is claimed on its first frame: no travel, no trail, and a
+// pickup that appears to spawn at the mouth. This is the one check that can
+// see that, because it needs a seal, a throw and a frame loop at once.
+{
+  const M = CONFIG.hotSpots?.chum ?? {};
+  resetPickups(scene);
+  // INSIDE THE MAGNET'S REACH AND OUTSIDE THE MOUTH. Six units is the base
+  // food reach, and the swallow test is `collectRadius + the chunk's own body`
+  // — perhaps three and a half — so a piece placed on top of the seal is eaten
+  // on frame one whatever the magnet does, which would make this check pass
+  // for the wrong reason and then fail for it too.
+  player.mesh.position.set(0, 0, 0);
+  const shot = spawnChumChunk(scene, new THREE.Vector3(5, 0, 0), {
+    t: 0.4, pips: M.pips ?? 2, tint: M.tint, settleSpeed: M.settleSpeed,
+    vel: { x: M.tossSpeed ?? 42, y: 0 },
+  });
+  const bornAt = shot.mesh.position.x;
+  let travelled = 0;
+  let taken = false;
+  for (let i = 0; i < 90 && !taken; i++) {
+    updatePickups(1 / 60, scene, player, () => {}, null, null, null, () => { taken = true; });
+    travelled = Math.max(travelled, shot.mesh.position.x - bornAt);
+  }
+  check('a piece thrown past the seal travels instead of being claimed on frame one',
+    travelled > 3, `${travelled.toFixed(2)} units out before the magnet took it`);
+  check('...and it is still a pickup afterwards, not lost',
+    chumChunks.includes(shot) || taken, taken ? 'collected' : 'in the water');
+
+  // ...and the gate lets go. The same throw with no settleSpeed is the old
+  // behaviour, and it is what the check above would read if the gate stopped
+  // working — so the two together say the gate is doing it, not the physics.
+  resetPickups(scene);
+  player.mesh.position.set(0, 0, 0);
+  const handed = spawnChumChunk(scene, new THREE.Vector3(5, 0, 0), {
+    t: 0.4, pips: M.pips ?? 2, tint: M.tint,
+    vel: { x: M.tossSpeed ?? 42, y: 0 },
+  });
+  const handedFrom = handed.mesh.position.x;
+  let handedOut = 0;
+  let eaten = false;
+  for (let i = 0; i < 90 && !eaten; i++) {
+    updatePickups(1 / 60, scene, player, () => {}, null, null, null, () => { eaten = true; });
+    handedOut = Math.max(handedOut, handed.mesh.position.x - handedFrom);
+  }
+  check('...and the same throw with no flight gate is taken where it stands',
+    handedOut < travelled, `${handedOut.toFixed(2)} vs ${travelled.toFixed(2)} units`);
+  parked();
 }
 
 // ===========================================================================

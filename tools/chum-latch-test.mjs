@@ -114,6 +114,38 @@ console.log('\nA claimed orb arrives');
 }
 
 {
+  // AND IT SWIMS OFF AT EVERYTHING IT HAS. The case above leaves at 8 u/s,
+  // which is slower than the base pull of 14 and so passes with no floor under
+  // the magnet at all. These are the speeds the game actually reaches: a full
+  // cruise (CONFIG.player.maxSpeed) and a dash (CONFIG.strike.dashSpeed), both
+  // of which are FASTER than the base pull. Without outrunPull() the claimed
+  // orb closes at a negative rate and simply trails the seal for the whole run.
+  //
+  // The velocity is set as well as the position, and that is the whole test:
+  // `speed` comes off player.velocity, so a stub that moves the mesh alone
+  // reports a stationary seal and measures the idle pull while the mouth is
+  // crossing the arena.
+  for (const [label, speed] of [['a full cruise', CONFIG.player.maxSpeed], ['a dash', CONFIG.strike.dashSpeed]]) {
+    resetPickups(scene);
+    const player = makePlayer(0, 0);
+    orbAt(5, 0);
+    step(player);
+    player.velocity.set(-speed, 0, 0);
+    let took = null;
+    let gained = 0; // furthest the orb ever fell behind, in units
+    const start = player.mesh.position.x - pickups[0]?.mesh.position.x;
+    for (let t = 0; t < 4; t += DT) {
+      player.mesh.position.x -= speed * DT;
+      const orb = pickups[0];
+      if (orb) gained = Math.max(gained, Math.abs(player.mesh.position.x - orb.mesh.position.x) - Math.abs(start));
+      if (step(player) > 0) { took = t; break; }
+    }
+    check(`${label} cannot outswim it (${speed} u/s)`, took !== null && took < 1,
+      took === null ? `left behind — fell ${gained.toFixed(1)} units further back` : `caught up ${took.toFixed(2)}s later`);
+  }
+}
+
+{
   // SOMETHING ELSE TRIES TO EAT IT. `amount` of 1 is a whole orb in one bite,
   // which is what a crab finishing its meal or a whale swallowing looks like
   // to bitePickup — and the claimed orb has to survive it.

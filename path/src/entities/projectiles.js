@@ -51,6 +51,16 @@ export function spawnProjectile(scene, {
   // beside `orient`, which rewrites the whole orientation every frame.
   tilt = 0,
   gravityScale = 1, chill = null, charm = null, knockback = 0,
+  // HOW BIG THIS SHOT'S RIBBON IS, against whatever CONFIG.trails says for its
+  // asset. Purely a look — read only by systems/projectileTrails.js, which
+  // multiplies the width and the rate the trail sheds particles at.
+  //
+  // It exists because a ribbon is the only channel some upgrades have. The
+  // Hurler's clubs get bigger, faster and more numerous with its stacks and
+  // every one of those is visible; the fact that they also hit harder is not,
+  // and a fatter, busier wake is what says so. Defaults to 1, so every shot in
+  // the game that does not ask for it is exactly as it was.
+  trailScale = 1,
 }) {
   const mesh = createVisual(asset ?? (faction === 'player' ? 'bullet' : 'enemyBullet'));
   mesh.position.copy(origin);
@@ -127,6 +137,7 @@ export function spawnProjectile(scene, {
     gravityScale,
 
     spin, // radians/sec, purely visual
+    trailScale, // ribbon size multiplier — see the argument note above
     orient, // face the direction of travel each frame
     splashDamage, // AoE dealt to OTHER nearby enemies on the first hit (see main.js)
     splashRadius,

@@ -4,7 +4,7 @@ import { emit } from '../entities/particles.js';
 import { describeHaptic, previewHaptic } from '../systems/haptics.js';
 import {
   playSfx, unlockAudio, gainToDb, dbToGain, DB_FLOOR, watchSfx, sfxVoiceLoad,
-  busReduction, sampleCount, reloadSample, getAudioContext, isMuted,
+  busReduction, sampleCount, reloadSample, getAudioContext, isMuted, setSfxEcho, sfxEchoOpen,
 } from '../systems/audio.js';
 import { uploadAsset } from '../systems/assetUpload.js';
 import { stageState, onStageChanged, stageAnchor } from '../systems/stage.js';
@@ -1585,6 +1585,31 @@ function renderGlobal() {
   slider(au, 'cutoff', { min: 20, max: 20000, step: 10, dp: 0, get: () => bus.filterHz ?? 20000, set: (v) => { bus.filterHz = v; } });
   slider(au, 'reverb mix', { get: () => bus.reverbMix ?? 0, set: (v) => { bus.reverbMix = v; } });
   slider(au, 'ceiling', { min: 0.1, get: () => (bus.comp ??= {}).ceiling ?? 0.95, set: (v) => { (bus.comp ??= {}).ceiling = v; } });
+
+  // The celebration echo is shut for the whole run, which makes it the one
+  // thing on this panel you cannot hear by moving its slider. So: hold it
+  // open. Everything fired while this is down goes through the delay at the
+  // level the T panel's `echo level` is set to, and letting go runs the same
+  // fade-out gameplay gets.
+  const echo = (bus.echo ??= {});
+  const echoBtn = document.createElement('button');
+  echoBtn.className = 'sv-wb-btn';
+  echoBtn.textContent = 'hold echo open';
+  echoBtn.title = 'Open the celebration delay for as long as this is held, to tune against';
+  const shut = () => { setSfxEcho(false); echoBtn.textContent = 'hold echo open'; };
+  echoBtn.addEventListener('pointerdown', () => {
+    unlockAudio();
+    if (echo.enabled === false) { echoBtn.textContent = 'echo is switched off'; return; }
+    setSfxEcho(true);
+    echoBtn.textContent = 'echo open — release to close';
+  });
+  // Released ANYWHERE, not just over the button: a pointerup that lands off
+  // the control never fires on it, and the echo would stay open for the rest
+  // of the session with nothing on screen saying so.
+  echoBtn.addEventListener('lostpointercapture', shut);
+  window.addEventListener('pointerup', shut);
+  window.addEventListener('pointercancel', shut);
+  au.appendChild(echoBtn);
 
   const rep = (CONFIG.audio.repetition ??= {});
   const cr = card(cols, 'sv-wb-snd', 'Crowding',

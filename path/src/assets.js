@@ -1573,20 +1573,47 @@ export const ASSETS = {
   enemyBullet: { shape: 'sphere', radius: 0.15, color: 0xff7766, unlit: true },
 
   // --- what a boss shoots (see systems/bossPerks.js) ------------------------
-  // Both are spawned with `orient: true`, so the elongation runs along the
-  // direction of travel: a beam is a streak pointing where it is going and a
-  // barrel noses over as it goes.
   //
   // A LONG THIN BOLT, not a beam that exists for one frame. An instant
   // hitscan line is unreadable on a body the size of a boss — by the time the
   // player has seen it they have taken it — so the eyebeam fires something
   // that TRAVELS, and the shape is what sells it as light rather than as
-  // another rock.
+  // another rock. Spawned with `orient: true`, so the elongation runs along
+  // the direction of travel.
   bossBeam: { shape: 'oval', radius: 0.12, elongate: 5, color: 0xff5a3c, unlit: true },
-  // Dark and dull against everything else the boss throws, on purpose: a
-  // barrel is the one projectile the player is meant to read as an OBJECT
-  // sitting in the water rather than as an attack in flight.
-  bossBarrel: { shape: 'oval', radius: 0.36, elongate: 1.4, color: 0x7a5230, unlit: true },
+
+  // THE EXPLODING BARREL. What the `barrels` boss perk lobs and what the boat
+  // boss rains down the arena (systems/bossPerks.js GUNS.barrels, and the
+  // `rain` pattern in CONFIG.bossBoat) — one object, both callers.
+  //
+  // It was a brown oval primitive until now, and the oval is the reason `fit`
+  // is 1 rather than anything measured off the barrel: `radius: 0.36` with
+  // `elongate: 1.4` is 1.008 units end to end, so normalising the model's
+  // longest axis to 1 makes this a look change and not a balance one. The
+  // gun's own `radius` — what it can hit you with — is untouched, and so is
+  // every number in bossPerks.csv.
+  //
+  // STILL THE OBJECT AND NOT THE ATTACK. The old primitive was deliberately
+  // dark and dull so a barrel read as something SITTING in the water rather
+  // than as a bolt in flight, and that is the one property worth keeping now
+  // that it has real art: no `emissiveFromMap` (the yacht's rolls of cash use
+  // it because money is supposed to flash, and a barrel is not), no glow, and
+  // a high roughness so the key light lands as a broad sheen across the staves
+  // instead of a hot line down the one that faces it. The blast is what is
+  // bright; the thing that is about to go off is not.
+  //
+  // `forward: '+Y'` is the barrel's axis — tools/prop-import.mjs bakes the
+  // pack's node chain, and this one comes out standing on its end, 86.7 x
+  // 101.3 x 86.7 in the source's centimetres. On this gun `orient` is false
+  // (see GUNS.barrels), so that axis stays screen-up for the whole flight and
+  // the barrel drifts upright the way the oval did. `up: '+Z'` turns its side
+  // to the camera, which is the read: staves and hoops, not a lid.
+  bossBarrel: {
+    model: '/models/barrel.glb',
+    fit: 1,
+    forward: '+Y', up: '+Z',
+    material: { roughness: 0.88, metalness: 0 },
+  },
 
   // --- THE YACHT'S ORDNANCE — banded rolls of hundreds ----------------------
   //
@@ -3019,6 +3046,63 @@ export const ASSETS = {
     // when createVisual is called before preloadAssets resolves.
     shape: 'cone', radius: 0.5, height: 1.2, color: 0x5f9e6a,
   }])),
+
+  // --- RUN MARKERS — where a previous run ended ------------------------------
+  //
+  // Three stones cut out of one Sketchfab collection by tools/prop-import.mjs.
+  // NOTHING SPAWNS THESE YET: the marker system that puts one on the seabed at
+  // a previous run's death spot is not built, and systems/lastRun.js records
+  // the run count and what killed you but no position. They are registered now
+  // so the models are real and loadable — the same reason moneyRoll2 and
+  // moneyRoll4 have entries nothing fires.
+  //
+  // THE PACK'S FOURTH STONE, A CROSS, IS DELIBERATELY NOT HERE. A marker has to
+  // carry an inscription and a cross has no face to carry one.
+  //
+  // ONE SCALE FACTOR ACROSS THE SET, not a chosen size each. These are one
+  // real-world-scaled collection, so every `fit` below is the stone's own
+  // measured long axis times the SAME 0.01922 — which is whatever made the
+  // headstone 1.8 units, a little under the seal's 2.6. Giving each stone the
+  // same fit would flatten a 2.4-metre tomb and a 0.6-metre plaque to one size
+  // and throw away the only thing that makes them read as a set.
+  //
+  // forward/up ARE NOT "WHICH WAY IS UP IN THE FILE" — see the note on grass
+  // above. In the side view orientationQuaternion sends model forward to world
+  // +Y and turns the FLANK (forward x up) to the camera, so `forward: '+Y'`
+  // stands the stone up and `up` is what decides which way it faces. That is
+  // the whole reason these three are not all the same pair: prop-import
+  // measured each stone's inscription face, and the plaque's slopes the
+  // opposite way to the other two.
+  //
+  //   headstone  face normal -X  ->  up '-Z'  turns -X to the camera
+  //   tomb       gabled, slopes at -+X, symmetric — takes the headstone's pair
+  //   plaque     face normal +X  ->  up '+Z'
+  //
+  // Get this wrong and the stone still stands, still lights, and presents its
+  // 14cm EDGE to the player — a picture-only bug with nothing in the bounds or
+  // the transform to give it away.
+  //
+  // Lit, like every other thing that sits on the seabed, so the daylight cycle
+  // reaches it. High roughness: wet stone is not polished, and a specular
+  // hotspot on a flat face is the one thing that would fight an inscription.
+  headstone: {
+    model: '/models/graves/headstone.glb',
+    fit: 1.8,
+    forward: '+Y', up: '-Z',
+    material: { roughness: 0.92, metalness: 0 },
+  },
+  tomb: {
+    model: '/models/graves/tomb.glb',
+    fit: 4.687,
+    forward: '+Y', up: '-Z',
+    material: { roughness: 0.92, metalness: 0 },
+  },
+  plaque: {
+    model: '/models/graves/plaque.glb',
+    fit: 1.172,
+    forward: '+Y', up: '+Z',
+    material: { roughness: 0.92, metalness: 0 },
+  },
 
   // --- new creatures -------------------------------------------------------
   // Axes below come from rendering each file with an axis helper (see

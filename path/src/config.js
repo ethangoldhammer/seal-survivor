@@ -2033,6 +2033,30 @@ export const CONFIG = {
 
     player: {
       maxHp: 100,
+      // BASELINE HEALTH GROWTH, compounding per level — the health half of
+      // what CONFIG.weapon.damagePerLevel does for the gun. Everything the
+      // water throws at you compounds (see CONFIG.spawn.ramp: toughness is a
+      // per-difficulty multiplier, not an addition), so a FLAT maximum means
+      // the seal's survivability falls away by a factor of the ramp over a run
+      // whether or not it ever gets hit harder in absolute terms.
+      //
+      // DELIBERATELY TIMID. 1.5% a level is 1.14x by level 10, 1.33x by 20 and
+      // 1.45x by 26 — which is where a fifteen-minute run ends
+      // (tools/xp-economy-test.mjs). So the whole thing is worth less than two
+      // Vitality cards over an entire run.
+      //
+      // That is the point rather than a compromise: this exists to stop the
+      // seal's survivability falling away against a compounding ramp, not to
+      // hand out a defensive build nobody picked. The health cards have to stay
+      // the way you get durable, and the difference between a run that took
+      // them and one that did not has to stay obvious. 4% was tried first and
+      // is far too much — it triples the bar by level 30 and does the work of
+      // ten cards.
+      //
+      // Spent in applyLevelGrowth (stats.js) as a MULTIPLIER on the finished
+      // block, so every flat +max-health card is carried up with it rather
+      // than being worth progressively less the longer the run goes.
+      hpPerLevel: 0.015,
       thrustEnabled: true,
       thrust: 19,
       friction: 0.965, // per-frame drag at 60fps, applied framerate-independently
@@ -2870,6 +2894,52 @@ export const CONFIG = {
         // rather than a swing. (weapons.csv owns it)
         armTime: 0.3,
       },
+
+      // --- THE TWIRL, a driftwood club's answer to a strike ------------------
+      //
+      // THE HURLER NEVER TAKES THE BASIC CLUB. See `clubThrow.neverThrown` for
+      // the rule; this is what the club does instead. On a strike release the
+      // variants leave the flippers and the driftwood spins up — hard, for as
+      // long as the dash lasts, and then it winds down on the same damping
+      // everything else in this weapon uses.
+      //
+      // WHY THE CLUB GETS A PAYOFF AT ALL RATHER THAN JUST BEING EXEMPT. A
+      // strike used to be the moment the melee weapon disappeared: both fins
+      // emptied, and for `respawnTime` the animal was swimming with nothing in
+      // its hands right through the one window it is closing on things. Taking
+      // the basic club out of the throw fixes that by itself, but it would
+      // leave the base card as the one club with no reaction to the biggest
+      // thing the player does. So it gets the opposite reaction: the clubs you
+      // keep are the clubs that come alive.
+      //
+      // THIS IS NOT `assistSpin`. That dial is a free rate the weapon awards
+      // itself for nothing and ships at 0 on purpose — a club that turns
+      // because the animal isn't moving is a club that contradicts the whole
+      // class. A twirl is bounded to a dash the player bought with a full
+      // charge, so it is still the animation being the weapon; it is just an
+      // animation the strike is driving instead of the fins.
+      twirl: {
+        enabled: true,
+        // Radians/sec the club is driven toward while the dash is live.
+        //
+        // SET AGAINST THREE OTHER NUMBERS AND NOT BY EYE. It has to clear
+        // `shock.fullSwing` (22) so a twirl cracks a full-grade shockwave
+        // rather than a graded fraction of one; it has to clear
+        // `powerReference` x `powerMax` (9 x 1.6 = 14.4) so every hit it lands
+        // is at the swing's ceiling; and it has to stay under `maxSwing` (34)
+        // or the cap silently owns this number instead.
+        spin: 24,
+        // How fast it gets there, as a per-second approach rate. At 14 the
+        // club is at two thirds in the first tenth of a second, which is what
+        // "rapidly" has to mean on a dash that can be over in half of one.
+        spinUp: 14,
+        // Two fins turning the same way reads as one object; opposed, it reads
+        // as an animal. Only used when a club is near enough to still that it
+        // has no direction of its own to keep — a club already turning keeps
+        // turning that way, because reversing a moving club is the one thing
+        // here that would look like a glitch.
+        counterRotate: true,
+      },
       // --- the ring -------------------------------------------------------
       // CLUBS YOU ARE NOT HOLDING ORBIT YOU. The seal has two fins and the run
       // can own four kinds of club, so everything past the first type used to
@@ -2901,6 +2971,79 @@ export const CONFIG = {
         // arrangement reading as a decal welded to the player.
         spring: 26,
         damp: 6,
+      },
+
+      // --- WHAT THE WOOD THROWS OFF -----------------------------------------
+      // THE JUICE, and the one place the run's own cards reach it.
+      //
+      // Every club event in the game — the whack, the carom, the shockwave,
+      // the keg, the freeze, a thrown club landing — now fires an ACCENT burst
+      // of the substance that particular club is made of, on top of the impact
+      // event it has always had. Exactly the arrangement Glow Up! uses on the
+      // pellet (see `elementShock` and friends in CONFIG.emitters): the impact
+      // keeps the thud, the shake and the sound, and the accent only ever
+      // answers "what is this club made of". Two events, one blow.
+      //
+      // WHICH SUBSTANCE IS DECIDED BY THE CLUB'S ASSET, in `accent` below —
+      // driftwood off a plain club, embers off a Boom Boom, frost off a Cold
+      // Snap. That is a table rather than a branch in main.js because a fifth
+      // club type should arrive as a row here and nothing else.
+      //
+      // AND IT GROWS WITH THE CARDS THAT BOUGHT IT. A run six stacks into Boom
+      // Boom Club throws a denser, bigger, faster shower than a run one stack
+      // in, because the shower is the only thing on screen that can say so:
+      // the blast radius moves a metre and a half and the damage number is
+      // invisible. Three channels, and they are deliberately three different
+      // questions:
+      //
+      //   amount  HOW MANY. Stacks of the card that owns this club, plus the
+      //           Bouncer, times how hard THIS swing is actually going — so
+      //           the weapon stays a readout of the animation.
+      //   size    HOW BIG each speck is. Follows the club's DRAWN size, which
+      //           already folds in reach-per-level, the ring's smaller
+      //           orbiters and Big Rigz — a bigger stick sheds bigger
+      //           splinters, and nothing here has to learn about those three
+      //           separately.
+      //   speed   HOW HARD they are thrown. The swing again, plus the
+      //           Bouncer's shove: the two things that decide how hard the
+      //           wood actually arrived.
+      //
+      // ALL THREE ARE CAPPED, and the caps are not decoration. A run stacked
+      // deep in every club card multiplies the raw terms past 4x, and four
+      // times the particles on a repeating event that already fires several
+      // times a second is a frame rate problem, not a feel one.
+      fx: {
+        enabled: true,
+        // Which burst each club sheds. Keyed on the ASSET (assets.csv), which
+        // is what systems/club.js reports, and NOT on the upgrade id — a fin
+        // holding a Hurler club is holding a piece of driftwood, whatever card
+        // paid for it.
+        accent: {
+          club: 'clubChips',
+          clubThrow: 'clubChips',
+          clubBoom: 'clubEmbers',
+          clubIce: 'clubFrost',
+        },
+        perStack: 0.18,    // added per stack of the card that owns this club
+        perPower: 0.35,    // added per +1.00 of the Bouncer's damage multiplier
+        // What a lazy swing still gets, as a share of a full-power one.
+        // Emphatically not 0: a club that connected at all HIT something, and
+        // a hit with no particles reads as a miss rather than as a weak blow.
+        powerFloor: 0.45,
+        sizeShare: 0.6,    // how much of the club's drawn size reaches the specks
+        knockShare: 0.5,   // how much of the Bouncer's shove reaches the throw
+        maxAmount: 2.6,
+        maxSize: 2,
+        maxSpeed: 2,
+        // THE RIBBON, on the clubs that are not in a flipper — the thrown ones
+        // and the ring. The same growth one step down: a trail is a long-lived
+        // object rather than a burst that is gone in a third of a second, so
+        // it takes a gentler share of it and caps lower. See CONFIG.trails.club*
+        // for the ribbons themselves and systems/projectileTrails.js for what
+        // `trailScale` actually multiplies — the width, and the rate the
+        // ribbon sheds particles at.
+        trailShare: 0.55,
+        maxTrail: 1.8,
       },
     },
 
@@ -2983,6 +3126,32 @@ export const CONFIG = {
       maxSpeed: 40,
       arc: 0.7,      // radians the fan spans, centred on the heading
       spread: 0.09,  // random jitter on top, so two throws never trace one path
+      // --- WHAT THE HURLER WILL NOT TAKE OUT OF YOUR HANDS --------------------
+      //
+      // THE BASIC CLUB NEVER LEAVES ITS SOCKET. Every other club in a flipper
+      // is fair game; the driftwood stays, and what it does during the strike
+      // instead is CONFIG.club.twirl.
+      //
+      // WHY THE BASE CARD AND NOT THE VARIANTS. The Hurler throws the clubs the
+      // seal is holding, and the cost of the card is that the melee weapon is
+      // gone until they come back. That cost was landing on the wrong card: a
+      // run's first two picks are its FIN clubs (see clubLayout), so on most
+      // builds the thing being spent was the Driftwood Club — the base weapon,
+      // the pick that arms the animal at all — and Basic Baby Club's whole
+      // contribution to a Hurler run was to be disarmed for two seconds at a
+      // time. A card should not get worse because you took a different one.
+      //
+      // So the cost now falls on the variants, which are the clubs a Hurler run
+      // actually stacks, and the base club is the thing you always still have.
+      // A run whose fins hold nothing but driftwood throws for free — which is
+      // correct rather than generous: it spent both of its fin picks on a club
+      // that cannot be thrown, and its Hurler is out on the ring where the card
+      // has never been able to reach it.
+      //
+      // A LIST OF ASSET KEYS, and a REFUSAL list rather than a permission one:
+      // "the seal throws the clubs it is holding" is still the rule, and a club
+      // type added tomorrow is throwable unless somebody says otherwise here.
+      neverThrown: ['club'],
       // THEN THE SEEKER. `homingDelay` is the straight flight first, and it is
       // long on purpose — seeing the club leave on the body's momentum is the
       // point of the weapon, and homing from frame one hides it.
@@ -4000,9 +4169,38 @@ export const CONFIG = {
         // rewording the prompt is still a text edit and the two surfaces cannot
         // start saying different things.
         prompt: {
-          // Flashes per second. Fast — this is an instruction with a tenth of a
-          // second behind it, not a state to be watched, and it is the one
-          // thing on the banner allowed to be urgent.
+          // --- IT IS ONE SHOT ---------------------------------------------
+          //
+          // HOW LONG THE ANNOUNCEMENT LASTS, in seconds, and it is a duration
+          // rather than a state for a reason worth writing down.
+          //
+          // strikeLoaded() — the moment this fires on — stays true for the
+          // WHOLE REST OF THE HOLD. Drawn as a state, the banner sat on
+          // "STRIKE NOW!" for as long as the player kept the button down,
+          // which meant the chain's count and its window were off screen for
+          // seconds at a time, and the line itself stopped reading as urgent
+          // about a second in. An instruction that never leaves is furniture.
+          //
+          // So the banner ANNOUNCES: the words swap in, one wave sweeps the
+          // line, and it goes back to being the food chain. What carries the
+          // moment for the rest of the hold is the RING — the lead-in's
+          // traveller closing on the track and the perfect latch holding it
+          // lit (systems/strikeRing.js) — which is the instrument's job and
+          // which the banner was duplicating in words.
+          //
+          // 0.5s because the whole sweep has to fit inside it: at the shipped
+          // crest width that is a readable pace across eleven glyphs, and it
+          // is short enough that a well-timed release cuts it off with a link
+          // rather than waiting it out.
+          //
+          // ONE SHOT PER WIND-UP. It re-arms only when the moment goes false,
+          // so holding through it does not re-fire — see the promptArmed latch
+          // in ui/ui.js.
+          time: 0.5,
+          // Flashes per second, riding INSIDE that one shot on an envelope
+          // that attacks fast and eases away. Fast — this is an instruction
+          // with a tenth of a second behind it, not a state to be watched, and
+          // it is the one thing on the banner allowed to be urgent.
           flashHz: 7,
           // THE EDGE, and it is a different colour from everything else here on
           // purpose. The banner is green because green is what the strike
@@ -4012,6 +4210,84 @@ export const CONFIG = {
           // 21% red, so a green-blue clears the bright pass where a pure blue
           // does not) and cannot be mistaken for the ready state it interrupts.
           neon: 0x7dfcff,
+          // THE WORDS GO HOT ORANGE, and this is the only place on the banner
+          // that changes hue at all. The plate stays green because green is
+          // what this instrument says READY in and the chain has not gone
+          // anywhere; what changed is that there is something to DO about it,
+          // and the sentence that says so is the thing that should look
+          // different.
+          //
+          // Orange rather than red: a mistimed release is not a failure, it is
+          // a dash without a bite (see the sweet spot note in
+          // systems/strike.js), and an alarm colour for "you still got the
+          // boost" would be the instrument scolding a player who did nothing
+          // wrong. Orange is the hottest hue that is not a warning — and it is
+          // as far from the plate's green as the wheel goes without arriving
+          // at red.
+          //
+          // It BRIGHTENS on the flash rather than cross-fading back to green.
+          // Cross-fading would mean the words are the chain's colour half the
+          // time, which is the one thing they must not be while they are
+          // saying something else; brightening drives the orange toward white
+          // and reads as heat.
+          hot: 0xff8a1f,
+
+          // --- THE WAVE, PER CHARACTER, ONCE ------------------------------
+          //
+          // A single crest of position and size travelling the length of the
+          // line, left to right, over the whole of `time` above. The line is
+          // at rest before it, warped as it passes, and at rest again behind
+          // it: the crest is born clear of the first glyph and dies clear of
+          // the last, so the sweep BEGINS and ENDS on the plain word.
+          //
+          // IT WAS A CONTINUOUS RIPPLE FIRST, and the difference is the whole
+          // point. A repeating wave is a TEXTURE — it says "this line is the
+          // animated one" and after half a second it is wallpaper. One clean
+          // pass is a GESTURE: it has a beginning and an end, it happens TO
+          // the sentence, and the eye follows it across the words in the
+          // direction it is meant to read them.
+          //
+          // It also means the line is never left mid-warp. A cycling ripple
+          // has to be cut off at whatever phase it happens to be at when the
+          // prompt ends, which is a snap on letters that were halfway
+          // somewhere; a sweep that has finished is already back to normal, so
+          // the swap back to FOOD CHAIN! is the only thing that moves.
+          //
+          // IT IS THE ONLY ANIMATED TYPE IN THE GAME and it stays that way on
+          // purpose: this is the one line that is an INSTRUCTION with a tenth
+          // of a second behind it. Everything else on screen is a state or a
+          // number, and per-letter motion on a thing that is merely true reads
+          // as decoration.
+          //
+          // NOTHING HERE MOVES THE LAYOUT. `translate` and `scale` are applied
+          // per glyph and neither affects the box, so the plate the letters sit
+          // on holds exactly still while they ripple over it — which is what
+          // keeps the drain underneath readable as a bar.
+          wave: {
+            // How far a letter rides at the top of the crest, in EM, so it
+            // tracks the Chain banner's type size out of the Text panel rather
+            // than being a px value that stops looking right the moment the
+            // type is scaled. The plate has 0.26em of headroom above the caps
+            // (see the strip's inset), so this stays inside it.
+            amp: 0.1,
+            // ...and how much it swells there, as a fraction. Small: the
+            // letters are tracked 0.1em apart and a big scale makes neighbours
+            // collide, which reads as the text breaking rather than as it
+            // moving.
+            size: 0.2,
+            // HOW WIDE THE CREST IS, in glyphs, measured from its peak to
+            // where the line is flat again. This is the shape of the wave and
+            // the one number here worth arguing about.
+            //
+            // Under about 1 the crest is narrower than a letter and only one
+            // is ever moving, which reads as the glyphs popping one at a time
+            // rather than as something passing through them. Much over 4 and
+            // most of "STRIKE NOW!" is inside the crest at once, so the line
+            // simply swells and shrinks and the travel disappears. 2.4 keeps
+            // three or four letters in the crest, which is enough to see a
+            // SHAPE and few enough to see it move.
+            crest: 2.4,
+          },
           // How far the glow throws at the peak of a flash, in px. The banner
           // is roughly 190px wide at the shipped type size, so this is a halo
           // around the box rather than a bloom over the water.
@@ -11808,6 +12084,67 @@ export const CONFIG = {
         gravity: [0, 0], inherit: 0.4, glow: 2.3, goo: 'ichor',
         killAtSurface: false, turbulence: 1,
     },
+      // A PIECE OF MEAT COMING OFF ONE. Fired where the chunk is born, along
+      // the same normal it is thrown down — see CONFIG.hotSpots.chum.
+      //
+      // THE BRIGHTEST EMITTER IN THE WEAK-SPOT FAMILY, and that is the job: the
+      // two above are the ANIMAL (ichor, in the goo pass, dark and wet by
+      // design), and this is the thing you get to keep. It is SPRITES rather
+      // than goo for exactly that reason — the goo composite writes linear
+      // straight to the framebuffer and lands a stop and a half darker than its
+      // hex, which is why the ichor is authored in apricot, and a fuel pickup
+      // announcing itself in a pass that eats brightness would be the one event
+      // here that could not throw light.
+      //
+      // The palette is the METER's, not the meat's, because the burst is the
+      // first half of the tell the chunk itself wears (`chum.tint`): what came
+      // off the animal is fuel, and the player should know that before they
+      // have read the lump.
+      //
+      // Cone-shaped and inheriting most of the throw, so the spray goes with
+      // the piece instead of blooming symmetrically around it and leaving the
+      // chunk to fall out of a ball of light nobody can see into.
+      hotSpotChum: {
+        count: 46, speed: [5, 21], size: [0.12, 0.42], life: [0.3, 0.8],
+        colors: [0xffe07a, 0xffc24a, 0xfff3c8, 0xffffff], cone: 1.05, drag: 3.4,
+        gravity: [0, -0.8], inherit: 0.45, glow: 4.2, turbulence: 0.5,
+    },
+      // ...AND THE STREAK IT LEAVES ON THE WAY OUT (goo group `ichor`). One
+      // emission every few hundredths of a second at the flying piece's own
+      // position — see CONFIG.hotSpots.chum.trail.
+      //
+      // BARELY MOVING AND BARELY INHERITING, which is what makes it a trail at
+      // all. These blobs are matter being SHED: they are dropped where the
+      // piece was and left there, and the streak is drawn by the piece moving
+      // on rather than by anything here travelling. Give them real speed and
+      // they fly alongside it as a second spray; give them the throw's velocity
+      // and they keep up with it, which draws no line at all.
+      //
+      // Two per emission and small, because there are twenty of these along one
+      // flight: the `ichor` group's splats are wide (radius 4.2) against a low
+      // isoline, so a chain of small blobs a unit and a half apart fuses into a
+      // line — the same property that makes the rupture read as one torn mass.
+      //
+      // Authored LIGHT, like every other ichor emitter: the goo composite
+      // writes linear straight to the framebuffer, so each of these lands about
+      // a stop and a half darker than its hex. These are the fuel golds seen
+      // through that, not a second palette.
+      // BIG BLOBS, ONE AT A TIME, and the size is the whole reason this reads as
+      // a streak rather than as a row of beads. A splat's diameter is
+      // `aSize * group.radius` — the group's number is a MULTIPLE of the
+      // particle's own size, not a world radius — so at the bleed's 0.08-0.18
+      // these would be a third of a unit across, laid down two thirds of a unit
+      // apart, and nothing would touch anything. Sized like this each one is
+      // about a unit and a half wide and its neighbours are well inside it,
+      // which is what puts the field over the isoline BETWEEN them. See the
+      // fusion check in tools/boss-hotspot-test.mjs, which does that arithmetic
+      // rather than trusting the two numbers to look sensible.
+      hotSpotChumTrail: {
+        count: 1, speed: [0.3, 1.6], size: [0.36, 0.56], life: [0.3, 0.6],
+        colors: [0xffeaa8, 0xffd489, 0xfff7e2], cone: 0, drag: 6,
+        gravity: [0, -0.4], inherit: 0.08, glow: 2.2, goo: 'ichor',
+        killAtSurface: false, turbulence: 0.35,
+    },
       // THE CHARGED WATER INSIDE AN ELECTRIC AURA (goo group `aura`). One lobe
       // per emission, placed on a ring inside the zone by systems/bossPerks.js
       // — the placement is the whole safety argument, so it lives there and not
@@ -11882,6 +12219,114 @@ export const CONFIG = {
         count: 22, speed: [9, 15], size: [0.05, 0.13], life: [0.1, 0.24],
         colors: [0xdff6ff, 0xffffff, 0xa9dcf5], cone: 0, drag: 9,
         gravity: [0, 0], inherit: 0.2, glow: 1.2, killAtSurface: true,
+      },
+
+      // --- WHAT COMES OFF THE WOOD (systems/club.js) --------------------------
+      // One emitter per club type, fired as an ACCENT on top of the impact
+      // event the hit has always had — the same relationship the Glow Up!
+      // bursts have with `bulletHit`, and for the same reason. The impact says
+      // that something was hit; these three say what hit it.
+      //
+      // THREE EMITTERS RATHER THAN ONE PRESET TINTED PER CALL, because a
+      // burst's colour is its emitter's here (see the palette note above).
+      // That rule is what keeps particle colour authored in this file instead
+      // of decided by whichever system happened to fire the event, and "the
+      // club is a different colour now" is no reason to break it.
+      //
+      // ALL THREE ARE FEWER AND FATTER THAN THEY LOOK LIKE THEY SHOULD BE, and
+      // that is the one thing about them that is easy to get wrong. `clubBoom`
+      // learned it the hard way (see the long note on that event): at the
+      // distance a fight is actually played at, forty 0.08-wide specks are
+      // confetti, not a spray. A handful of fat chips reads as debris; thirty
+      // fine ones read as noise, and the club is a weapon that connects several
+      // times a second.
+      //
+      // AND THE COUNTS ARE SET AGAINST `CONFIG.fx.spriteDensity`, NOT AGAINST
+      // THEMSELVES. That knob thins every sprite burst in the game and is well
+      // under 1 in practice, so these were authored at a third of what they
+      // read as here and arrived on screen as two or three specks — an accent
+      // nobody could see. The number to compare against is the neighbouring
+      // impact burst AFTER the same thinning: `bite`, which is what a club
+      // whack already throws, and `sparks`, which is the tee-off's. Judged on
+      // the fight-scale panel of `npm run looks:clubs` and nowhere else.
+      //
+      // The COUNT, the SIZE and the SPEED of every one of these is multiplied
+      // per burst by what the run has actually bought — see CONFIG.club.fx.
+      // These numbers are the one-stack, one-club, full-swing case.
+
+      // DRIFTWOOD. The base club, a Hurler club in a fin, and a thrown club
+      // landing. Bone, tan and weathered — the only wood palette in the game,
+      // so this colour on screen means the stick connected. Gravity is
+      // NEGATIVE (down, the way every falling thing here is signed): splinters
+      // are the one club substance heavier than the water.
+      //
+      // `cone` is set, so this burst has a DIRECTION and the caller must give
+      // it one — chips come off the way the blow went. systems/club.js fills
+      // that in from the throw heading, the head's travel, or the carom's own
+      // course, and never leaves it at zero.
+      clubChips: {
+        count: 20, speed: [4, 13], size: [0.12, 0.3], life: [0.25, 0.6],
+        colors: [0xe8d3a8, 0xbf9c68, 0x8a6f4a], cone: 1.1, drag: 3.2,
+        gravity: [0, -2.2], inherit: 0.25, glow: 1.1,
+      },
+      // BOOM BOOM CLUB. `clubBoomGoo` is the mass of the blast; this is the
+      // heat coming off it, and it shares that ramp exactly so the two read as
+      // one event. `cone: 0` — a keg goes off in every direction at once, and
+      // any cone at all would read as the blast having been AIMED. Rises,
+      // because embers in water do. Two thirds the count of the chips at over
+      // twice the glow: it lands on the same frame as the goo, and what it has
+      // to add is heat, not volume.
+      clubEmbers: {
+        count: 15, speed: [6, 18], size: [0.14, 0.34], life: [0.3, 0.7],
+        colors: [0xffd9b0, 0xffa860, 0xf2703a], cone: 0, drag: 3.6,
+        gravity: [0, 1.8], inherit: 0.3, glow: 2.6,
+      },
+      // COLD SNAP. Shards rather than a puff, and the whole difference is the
+      // DRAG: at 6.5 they stop almost where they were made and hang there for
+      // a beat, which is what ice does and what neither of the other two do.
+      // `cone: 0` for the same reason `trapPop` has it — a body going stiff is
+      // not a thing that points anywhere. Shares the chill family's palette
+      // (`elementChill`) deliberately: cold is cold whichever card put it
+      // there, and a second blue would be a second thing to learn.
+      clubFrost: {
+        count: 17, speed: [3, 11], size: [0.1, 0.26], life: [0.35, 0.8],
+        colors: [0xbfefff, 0xffffff, 0x7ad7ff], cone: 0, drag: 6.5,
+        gravity: [0, 0.4], inherit: 0.2, glow: 2,
+      },
+
+      // --- ...AND WHAT THE RIBBON SHEDS ---------------------------------------
+      // THE SAME THREE SUBSTANCES AS A WAKE RATHER THAN AS AN IMPACT, and they
+      // have to be separate emitters rather than the impact bursts fired
+      // slowly. That was the first version and it is the `clubBoom` mistake
+      // again, arrived at from the other direction: a trail's `perSecond` is
+      // EMISSIONS per second and each emission fires the emitter's whole count,
+      // so a ring of five clubs shedding the impact burst a dozen times a
+      // second put four hundred sprites a second into the water. At fight
+      // framing every one of them is about a pixel, and a pixel of pure red
+      // beside a pixel of pure blue is confetti — which is exactly what the
+      // ring looked like on the fight-scale panel of `npm run looks:clubs`.
+      //
+      // So: TWO per emission, like `missileTrail` and `cashTrail`, which are
+      // the same idea for the same reason. Bigger, slower, longer-lived, and on
+      // a TIGHTER palette than the impact — an impact is allowed three distinct
+      // hues because it arrives as a mass and reads as one event, and a wake
+      // arrives one speck at a time where the spread between them is the only
+      // thing on screen. Each stays unmistakably its family's colour, so the
+      // debris and the ribbon and the burst are all one object.
+      clubChipTrail: {
+        count: 2, speed: [0.3, 1.4], size: [0.1, 0.22], life: [0.45, 1],
+        colors: [0xf0dcb4, 0xd8b98a, 0xfff2dc], cone: 0, drag: 1.2,
+        gravity: [0, -0.6], inherit: 0.08, glow: 1.6,
+      },
+      clubEmberTrail: {
+        count: 2, speed: [0.3, 1.6], size: [0.1, 0.24], life: [0.4, 0.9],
+        colors: [0xffc98a, 0xff9a52, 0xffe9d2], cone: 0, drag: 1, glow: 3,
+        gravity: [0, 0.9], inherit: 0.08,
+      },
+      clubFrostTrail: {
+        count: 2, speed: [0.2, 1], size: [0.09, 0.2], life: [0.6, 1.3],
+        colors: [0xd8f2ff, 0xffffff, 0xa8dcf5], cone: 0, drag: 2, glow: 2.2,
+        gravity: [0, 0.2], inherit: 0.06,
       },
       chargeBurst: {
         count: 26, speed: [3, 9], size: [0.04, 0.11], life: [0.14, 0.34],
@@ -12169,6 +12614,11 @@ export const CONFIG = {
       // seabed full of feeding crabs would otherwise be one continuous hiss.
       chumHoover: { emit: 'chumCrumbs', shake: 0,    hitstop: 0,                                                          sfx: 'chumSlurp', sfxMinGap: 0.4 },
       levelUp:   { emit: 'levelUp',     shake: 0.4,  hitstop: 0,     glow: 0.8,  ripple: { strength: 3.5, radius: 22 },  sfx: 'levelUp',  haptic: [20, 40, 20] },
+      // Fired from systems/celebrate.js the frame a performance begins — the
+      // boss kill's victory lap and the level-up salute both. No shake and no
+      // hit-stop: the celebration IS the aftermath, and the kill has already
+      // spent both. See CONFIG.audio.bus.echo, which opens on the same frame.
+      celebrate: { emit: null,          shake: 0,    hitstop: 0,     glow: 0.4,  ripple: { strength: 1.6, radius: 14 }, sfx: 'celebrate', haptic: [18, 30, 18] },
 
       // A CHUM CHUNK LANDING IN THE WATER. The one pickup in the game that
       // announces itself, because it is the only one worth crossing the arena
@@ -12352,6 +12802,46 @@ export const CONFIG = {
       hotSpotBurst: { emit: 'hotSpotRupture', shake: 0.34, hitstop: 0.05, glow: 0.9,
                       ripple: { strength: 2.6, radius: 12 },
                       sfx: 'hotSpotBurst', haptic: [22, 18, 40] },
+      // A PIECE OF MEAT ARRIVING IN THE WATER — the wound handing over fuel.
+      //
+      // LOUD IN THE GLOW CHANNEL AND QUIET IN EVERY OTHER ONE, which is the
+      // whole design of this row. It fires INSIDE another event every single
+      // time — a crit that shook a piece loose, or the rupture — and those two
+      // already own the shake, the hit-stop and the punch. What they do not do
+      // is say "and here is something to swim into", so this is a bloom pulse
+      // and a bright spray and almost nothing else. Shake and hitstop above a
+      // token amount here would be double-counting a beat the player has
+      // already been given.
+      //
+      // `sfxMinGap` is long by the standards of this table because a rupture
+      // throws its pieces on ONE frame: without it the burst is the same boom
+      // played three times inside a frame, which is a click rather than three
+      // arrivals. One announcement per spray is the honest reading.
+      //
+      // The `glow` here is the SCREEN's bloom swell and it is deliberately
+      // under the chunk's own 0.85, even though this is the louder arrival:
+      // the emission that matters is at the POINT — the emitter overdrives its
+      // palette to 4.2 and the piece itself arrives at `chum.flashMul` times
+      // the chunk flash — while this channel is global, shared, and clamped at
+      // 3 across everything firing on the frame. A rupture throws its pieces on
+      // one frame alongside its own 0.9, so a bigger number here would spend
+      // the whole ceiling on one event and flatten the burst it came with.
+      hotSpotChum: { emit: 'hotSpotChum', shake: 0.07, hitstop: 0, glow: 0.6,
+                     ripple: { strength: 1.6, radius: 9 },
+                     sfx: 'chumChunkSpawn', haptic: [12], sfxMinGap: 0.22 },
+      // THE STREAK BEHIND IT. Every channel but the emitter is null, and that
+      // is the row's whole content: this fires around twenty times during one
+      // piece's flight, so anything with a sound, a shake or a glow on it would
+      // be that thing twenty times over — a buzz, a rattle and a flare where
+      // what is wanted is a line in the water.
+      //
+      // It is an EVENT rather than a bare emit() call for the reason the leak
+      // and the rupture are (see the note by `bleed` in
+      // systems/bossHotSpots.js): an emitter fired inline is one that has no
+      // row in the Feel Workbench, and a look nobody can reach from the
+      // instrument is a look nobody edits.
+      hotSpotChumTrail: { emit: 'hotSpotChumTrail', shake: 0, hitstop: 0, glow: 0,
+                          sfx: null, haptic: null },
       // Its own sound now rather than the generic `splash`, which is what a body
       // knocked off a boat makes. Coming out of the water and landing in it are
       // opposite events and were sharing one voice.
@@ -12436,6 +12926,19 @@ export const CONFIG = {
       strikeOrbTaken: { emit: 'levelUp', goo: 'pickupGoo', shake: 0.09, hitstop: 0, glow: 0.6,
                         ripple: { strength: 1.2, radius: 7 }, sfx: 'levelUp', haptic: [12],
                         toast: 'Boost!', toastMinGap: 0.6 },
+      // A PIECE OFF A WEAK SPOT GOING DOWN. In the swallow family rather than
+      // with the meat's `chumChunkEaten`, because what it pays is BOOST: it is
+      // the strike orb's moment at a smaller size, and the wet gulp the health
+      // chunk makes would say "health" over a pickup that hands over none.
+      //
+      // Its colour comes from the call site like every other pickup here — and
+      // it is the one pickup whose tint assetBaseColor cannot answer for, since
+      // the asset is the MEAT and this piece is deliberately wearing something
+      // else (CONFIG.hotSpots.chum.tint). Same shape of exemption as the level
+      // blob's, for the same reason: it reports what it is actually wearing.
+      hotSpotChumTaken: { emit: 'levelUp', goo: 'pickupGoo', shake: 0.1, hitstop: 0, glow: 0.7,
+                          ripple: { strength: 1.3, radius: 8 }, sfx: 'levelUp', haptic: [12],
+                          toast: 'Boost!', toastMinGap: 0.6 },
       coralTaken: { emit: 'levelUp', goo: 'pickupGoo', shake: 0.11, hitstop: 0, glow: 0.7,
                     ripple: { strength: 1.4, radius: 8 }, sfx: 'levelUp', haptic: [14],
                     toast: 'Rapid fire!', toastMinGap: 0.6 },
@@ -12756,6 +13259,20 @@ export const CONFIG = {
       // event — this is the payoff the card is bought for.
       clubFreeze:  { emit: 'bubbleBurst', shake: 0.06, hitstop: 0, glow: 0.45, ripple: { strength: 1.0, radius: 5 },
                      sfx: 'clubFreeze', haptic: [{ duration: 16, magnitude: 0.4 }], sfxMinGap: 0.06 },
+      // --- WHAT THE CLUB IS MADE OF -------------------------------------------
+      // The three accents, one per substance. SILENT AND STILL by design —
+      // no sound, no shake, no hitstop, no haptic: every one of them fires on
+      // the same frame as a club event that already carries all four, and a
+      // second sound under `clubWhack` is not an accent, it is a smear. What
+      // they have is particles and, on the two that are hot, a touch of glow.
+      //
+      // Which of them fires is CONFIG.club.fx.accent, and how big it comes out
+      // is the rest of that block. See main.js's club hooks for the call sites
+      // — there are six, and they all go through one helper so a new club
+      // event cannot quietly ship without its substance.
+      clubChips:   { emit: 'clubChips',  shake: 0, hitstop: 0, sfx: null, haptic: null },
+      clubEmbers:  { emit: 'clubEmbers', shake: 0, hitstop: 0, glow: 0.2, sfx: null, haptic: null },
+      clubFrost:   { emit: 'clubFrost',  shake: 0, hitstop: 0, glow: 0.15, sfx: null, haptic: null },
       // An enemy sealed in a bubble. Was playing `bulletHit` — an impact sound
       // for something that deals no damage at all.
       belugaTrap:  { emit: 'breathBubbles', shake: 0.02, hitstop: 0, glow: 0.2, ripple: { strength: 0.6, radius: 5 }, sfx: 'belugaTrap',
@@ -13813,6 +14330,400 @@ export const CONFIG = {
         // `time` — a third gets it essentially there by the time the run starts
         // without the last of it sounding like a switch being thrown.
         filterGlide: 0.33,
+    },
+    },
+
+    // ---------------------------------------------------------------------------
+    // GRAVESITES — where the last few seals died, marked on the seabed.
+    //
+    // A stone falls onto the spot the body came to rest, knocks a cloud of silt
+    // off the bed, rocks itself still, and has the seal's name and what killed
+    // it cut into its face. systems/gravesite.js runs it; systems/epitaph.js
+    // cuts the inscription.
+    //
+    // THE YARD IS SESSION-ONLY. Stones survive restart after restart while the
+    // tab is open and are gone on reload — see the header in gravesite.js for
+    // why that is a design decision and not a stub.
+    //
+    // EVERYTHING HERE IS WALL-CLOCK. The death dive dilates the world hard, and
+    // a stone dropped on the run clock falls in slow motion for the better part
+    // of a minute while the score card waits for it.
+    // ---------------------------------------------------------------------------
+    gravesite: {
+      enabled: true,
+      // How many stones the yard holds. A cap rather than an unbounded list:
+      // each stone is a draw call and its own inscription texture, and a player
+      // who dies twenty times in a sitting wants a graveyard, not a wall. The
+      // oldest goes first — the interesting deaths are the recent ones.
+      max: 6,
+      // WHICH STONES THE YARD USES, cycled by grave index rather than rolled — a
+      // roll would reshuffle the yard's own history every time the floor moved
+      // and everything was re-seated, which reads as the scenery glitching.
+      //
+      // JUST THE HEADSTONE. All three are still registered in assets.js and
+      // still measured; putting 'plaque' or 'tomb' back in this list is all it
+      // takes. What the other two cost, in the order that decided it:
+      //
+      //   THEY CANNOT CARRY A BOSS NAME. Both have a recessed letterbox panel —
+      //   five and six times as wide as it is tall — and a boss's own rolled
+      //   name runs to forty-nine characters. There is no size at which that is
+      //   both inside the panel and readable. The headstone's panel is most of
+      //   the stone, so it wraps to three lines and stays legible.
+      //
+      //   THE TOMB IS SEVEN MEGABYTES. Its inscription canvas is 2610x736 at
+      //   dpi 256, against the headstone's 2.3MB — for text that renders a few
+      //   hundred pixels wide. A yard of mixed stones is about 23MB of texture;
+      //   a yard of headstones is 14.
+      //
+      //   AND IT IS TWENTY UNITS WIDE, which is close to half the play view and
+      //   wide enough to overlap the next grave along, since a marker goes where
+      //   the body did and nothing moves it.
+      //
+      // A row of headstones also simply reads as a graveyard, which the mixed
+      // set did not: three shapes at three scales read as three props.
+      stones: ['headstone'],
+      // HOW BIG THE STONES ARE, and the only knob for it. Multiplied onto the
+      // whole set rather than written into each asset's `fit`: those three
+      // numbers (headstone 1.8, tomb 4.687, plaque 1.172) are one measured
+      // collection scaled by one shared factor, which is what makes them read
+      // as a SET. Editing them individually turns a set into three unrelated
+      // props, and the assets.csv `size` column would do the same thing one row
+      // at a time. This scales all three together and leaves the proportion be.
+      //
+      // 3 rather than 1, which is where this shipped: at the stones' own real
+      // scale a headstone is 1.8 units against a 2.6-unit seal, sitting a unit
+      // and a half behind the play plane — correct, and far too small to read
+      // during a fight. A marker nobody notices is a marker that isn't there.
+      scale: 3,
+      // Depth. The seabed plane is at z=-4 and the play area at z=0, so this
+      // sits the stones on the floor BEHIND the action — a graveyard you have
+      // to swim through is a graveyard that blocks shots.
+      z: -3.2,
+      // Radians of cant, alternating by index, so a row doesn't read as fence
+      // posts. Small: these are markers, not ruins.
+      lean: 0.05,
+      // World units to push below the bed, so the base beds in rather than
+      // resting on the surface like a sticker.
+      sink: 0.05,
+
+      // --- the inscription's rectangle on the face ------------------------------
+      // Fractions of the stone's own measured bounding box, not world units —
+      // the three stones are different shapes on one shared scale factor, and
+      // `fit` is tunable, so anything written here in units would drift the
+      // first time a stone was resized. See attachEpitaph.
+      //
+      // THESE ARE THE FALLBACK. Per-stone rects live in `faces` below, because
+      // one rectangle cannot serve all three: two of the models have a RECESSED
+      // PANEL cut into them, in a different place on each, and a fraction of
+      // the bounding box lands in it only by accident. It landed correctly on
+      // the headstone (which is mostly panel) and put the tomb's inscription
+      // below its panel, half on the plinth.
+      faceWidth: 0.72,
+      faceHeight: 0.44,
+      faceRise: 0.12,  // up from centre, so the text sits in the upper half
+      faceLift: 0.02,  // world units proud of the face — clear of z-fighting
+
+      // WHERE THE PANEL IS, PER STONE. Measured off the rendered models on the
+      // look page (npm run looks:graves), which is the only place the panel is
+      // visible — nothing in the file marks it, the bounding box does not know
+      // about it, and a stone whose text sits beside its panel instead of in it
+      // renders perfectly and looks like nobody checked.
+      //
+      // Keyed by asset id, and a stone missing from here falls back to the
+      // three numbers above. That is why the headstone is written out even
+      // though its values are the fallback: the three belong side by side, and
+      // a set where one member is defined by ABSENCE is a set somebody breaks
+      // by editing the fallback for a different reason.
+      // `scale` here is this stone's own size, multiplied onto the set's. It is a
+      // DELIBERATE break from the "one shared factor keeps them in proportion"
+      // rule the set was imported under, and the reason is that the proportion
+      // those models were cut at is a real-world one: a plaque really is a
+      // sixth the height of a headstone, and in a side-view game at fight
+      // distance that reads as a chip of gravel rather than as a grave. The set
+      // now reads as a set of MARKERS rather than as a scale model of three
+      // stones, which is the thing a player is actually looking at.
+      // THE RECT IS TALLER THAN THE RECESSED TRAY ON TWO OF THESE, on purpose.
+      // The plaque and the tomb both have a letterbox panel — five or six times
+      // as wide as it is tall — and the canvas is sized to the rect, so text can
+      // never leave it. A cause that is four words fits a letterbox beautifully;
+      // a boss's own name runs to forty-nine characters, and at a height that
+      // only holds one line there is no size at which it is both inside the tray
+      // and readable. The stone's shape is the constraint, and the only lever is
+      // to let the writing spill past the frame onto the face below it, which is
+      // what a real mason would do with a long inscription and a small tablet.
+      faces: {
+        // Mostly panel already — a plain upright slab with a shallow rim, and
+        // the one the other two are sized against. Its text runs nearly to the
+        // edge of the stone: there is no ornament on this model to protect, and
+        // a name a player has to lean in for is a name they will not read at
+        // all during a fight.
+        headstone: { scale: 1, width: 0.88, height: 0.52, rise: 0.11, namePx: 0.26 },
+        // A slanted slab with a long recessed tray in the top face. Wide and
+        // shallow, and sitting above the stone's own centre because the lower
+        // half is the base it stands on.
+        // Its own type scale for the same reason the tomb has one: the recessed
+        // tray in its top face is about five times as wide as it is tall, and
+        // type sized as a fraction of THAT height comes out a fifth of what the
+        // width could carry. Every stone with a letterbox panel needs this; the
+        // headstone is the only one that does not, because its panel is most of
+        // the stone.
+        plaque: { scale: 2.0, width: 0.74, height: 0.50, rise: 0.10, namePx: 0.20, baseline: 0.30 },
+        // The gabled one, and the reason this table exists. It is 14 units wide
+        // at scale 3 but its inscription panel is a framed rectangle in the
+        // upper slab, half that width and a third of the height — a generic
+        // fraction of the bounding box spilled the cause line off the panel and
+        // onto the plinth underneath.
+        // `namePx` and `baseline` are the etch block's own settings, overridden
+        // for this stone alone — see makeEpitaph's `type`. The panel is roughly
+        // six times as wide as it is tall, and type sized as a fraction of that
+        // HEIGHT comes out a sixth of what the width could carry: legible on
+        // the headstone, an unreadable smudge here. Raised until the name uses
+        // the letterbox, with the baseline lifted to keep the two lines under
+        // it inside the frame.
+        tomb: { scale: 1.45, width: 0.50, height: 0.52, rise: 0.16, namePx: 0.20, baseline: 0.28 },
+    },
+
+      // --- reading one, in passing ----------------------------------------------
+      // The stone carries the inscription; this is the caption that answers it
+      // when the seal swims over. ui/graveLabel.js, and its header has the
+      // argument for why this is not a callout.
+      label: {
+        enabled: true,
+        // How close counts, in world units, measured HORIZONTALLY only — the
+        // yard is a unit and a half behind the play plane, so a true distance
+        // could never be smaller than that and every radius would be written
+        // around a constant that has nothing to do with the question.
+        // Tight enough that it is a thing you swim OVER rather than near. 7 was
+        // the first guess and it fired most of a stone's width early, which
+        // reads as the caption belonging to the water rather than to the grave
+        // — and with six stones nine units apart it could catch two of them at
+        // once. Still wide enough to trigger at full swim without asking the
+        // player to stop.
+        radius: 4.5,
+        gap: 26,      // pixels above the top of the stone
+        pad: 10,      // never closer than this to the edge of the frame
+        rise: 10,     // pixels of travel on the way in, easing to a settle
+        fadeIn: 0.22,
+        // Slower out than in, deliberately: arriving is the answer to a
+        // question the player asked by swimming there, and leaving is them
+        // having finished. A fast fade-out on a seal that overshot by half a
+        // unit takes the sentence away mid-read.
+        fadeOut: 0.35,
+        nameSize: 17,
+        causeSize: 12,
+        // The stone's grey, not an interface colour. Everything else the game
+        // writes over the water is a SYSTEM talking and is warm or cyan and
+        // bloomed to say so; this is a thing in the water being read.
+        color: 0xd9d2c4,
+    },
+
+      // --- the beam --------------------------------------------------------------
+      // A shaft of caustic light that crosses the stone as the caption arrives,
+      // once, and is gone. The label says WHO is buried; this says where to
+      // look. systems/graveBeam.js.
+      //
+      // THE CAUSTIC FUNCTION IS THE WATER'S OWN AND THESE NUMBERS ARE NOT.
+      // Caustic scale and intensity everywhere else in this game are authored
+      // against the fill, which is tens of units across. A stone is five. At
+      // the water's scale one bright vein is wider than the whole headstone, so
+      // it comes up evenly brighter and reads as a wash rather than as light
+      // through water. `scale` is several times the ocean's for that reason and
+      // is the first number to distrust when this looks wrong.
+      beam: {
+        enabled: true,
+        width: 1.7,     // half-width of the band, in world units
+        span: 9,        // how far either side of the stone it travels
+        // Seconds for the whole crossing. 2.0, up from 1.1: at the old speed the
+        // shaft crossed a stone faster than the eye follows it, which made the
+        // light read as a flash rather than as something moving through water.
+        // Slow enough now that you watch it arrive, pass, and leave.
+        //
+        // ONE NUMBER FOR BOTH SWEEPS. This is also how long the beam takes when
+        // the player swims over a grave mid-run, and the two are the same event
+        // — the same light finding the same stone. Splitting them is a real
+        // option if the in-run pass ever feels sluggish, but two speeds for one
+        // beam is a thing to do deliberately rather than by accident.
+        time: 2.0,
+        // Peak brightness added to the stone. Down from 1.6 — the veins were
+        // clipping to flat white, and a blown highlight has no pattern left in
+        // it to read as anything.
+        strength: 1.05,
+        // How fine the caustic veins are ON THE STONE, and the number this
+        // effect lives or dies by. See the note above: 2.2 is the ocean's own
+        // register and it put TWO lobes on a 3.7-unit headstone — which reads
+        // as a pair of spotlights, not as light through moving water. Caustics
+        // need several veins across the thing they fall on before the eye reads
+        // them as caustics at all.
+        scale: 6.5,
+        // How fast the caustic pattern moves through the band. Slowed with the
+        // sweep rather than left alone: a shaft that travels slowly while the
+        // veins inside it race is two speeds in one object, and the eye reads
+        // the mismatch as the texture sliding over the light instead of being
+        // carried by it.
+        crawl: 0.45,
+        // The rake. A vertical band on a vertical stone reads as the stone
+        // changing colour; a slanted one reads as light arriving from a
+        // direction. Radians of lean per unit of height.
+        tilt: 0.35,
+        // The base term under the veins. Caustics are mostly dark with bright
+        // threads through them, so band x pattern alone is scattered dashes
+        // with nothing joining them; this is the shaft they travel in. At 0 the
+        // effect stops being a beam and becomes a sprinkle.
+        floor: 0.18,
+
+        // --- the wisp ----------------------------------------------------------
+        // What makes it organic rather than a gradient. A clean smoothstep band
+        // is a soft-edged stripe, and the give-away is that its edges are the
+        // same all the way down its length — which no light through water has
+        // ever been. systems/wispGlsl.js eats into it: thinning it in places,
+        // tearing it open in others, drifting as it goes.
+        //
+        // THE SHAFT AND THE LANDING ARE TORN BY THE SAME FIELD, at the same
+        // world coordinates on the same frame, which is why these three numbers
+        // are read by both systems/water.js and systems/graveBeam.js. A hole in
+        // the shaft has to be a hole in what lands under it.
+        wisp: 0.75,      // how much of the band the water is allowed to eat; 0 is the plain band
+        wispScale: 0.55, // world units per noise cell — LOW is big slow shapes
+        wispSpeed: 0.35, // how fast the field drifts through the beam
+
+        // --- the shaft in the water ---------------------------------------------
+        // The other half of the beam, and the half you can see from a distance.
+        // Drawn by the water fill's own ray loop rather than as a mesh of its
+        // own, because that loop is already how every light beam in this game is
+        // drawn — see systems/water.js. The x, the rake and the clock come from
+        // the sweep so the two ends are one beam; everything here is look.
+        shaft: true,
+        // Relative to the light landing on the stone. Lower, because the water
+        // is a wash and the stone is the thing being pointed at — a shaft as
+        // bright as its own pool reads as a solid object standing in the water.
+        shaftStrength: 0.5,
+        // WIDER than the landing, and deliberately: a shaft exactly the width of
+        // the bright patch on the stone reads as a rectangle standing on it.
+        // Light spreading through water is wider than the pool it makes.
+        shaftWidth: 1.7,
+        // How far up from the stone's base the shaft reaches before it is gone.
+        // Without a reach it is a stripe the full height of the arena, which is
+        // a curtain rather than a beam — what makes a god ray read as one is
+        // that you can watch it run out.
+        shaftReach: 26,
+        // Pale and slightly cold, but NOT blue. Bloom thresholds on luminance
+        // and blue carries about 7% of it, so a properly oceanic beam sits
+        // under the threshold and never blooms at all — which on a dark seabed
+        // is the difference between light and a grey stripe.
+        color: 0xbfe9ff,
+        // Right to left, against the reading direction, so the light does not
+        // race the eye to the caption arriving at the same moment.
+        reversed: true,
+    },
+
+      // --- the drop ------------------------------------------------------------
+      drop: {
+        height: 14,     // world units above the resting place it starts from
+        gravity: 42,    // deliberately well above real gravity: this is a beat
+        spin: 0.6,      // radians/s of tumble on the way down, either way
+        settleRate: 9,  // how fast the rock after landing dies out
+        settleHz: 22,   // how fast it rocks
+        settleTilt: 0.05, // radians of rock at its widest, before the decay
+        settleTime: 0.9,  // wall-clock seconds before the etching starts
+        // The silt. Fired as a few bursts spread across the stone's width
+        // rather than one at its centre, which reads as a puff coming out from
+        // under it. The emitter is CONFIG.emitters.silt — the SAME one the dead
+        // seal's own landing uses, because the two events are seconds apart on
+        // the same patch of floor.
+        siltPuffs: 3,
+        siltSpread: 0.6,
+        siltSpeed: 1.15,
+        // The etch. Held for a beat after the stone is still, so the two are
+        // separate events rather than one — the stone lands, the water settles,
+        // and THEN the name arrives.
+        etchDelay: 0.25,
+        etchTime: 1.4,
+
+        // --- and one last look, before the score card ----------------------------
+        // The name has just finished being cut, and the obvious next move is to
+        // put the card up. That is the mistake: a card is an INTERFACE, and the
+        // moment it arrives the player is reading numbers and looking for a
+        // button — whatever is on the seabed behind it has stopped being
+        // something they are watching.
+        //
+        // So the stone gets one unhurried pass of light with nothing competing
+        // for it, and the run ends on the grave instead of on a menu that
+        // happens to have a grave behind it. Roughly two seconds all told, and
+        // every part of it is here because a beat you cannot shorten is a beat
+        // somebody will come to resent.
+        // Barely a pause. This was 0.35 and the gap read as the sequence having
+        // finished and then thinking of something else — the light wants to
+        // arrive while the last letter is still settling, not after a silence
+        // long enough to wonder whether anything else is coming.
+        glanceDelay: 0.05,  // stillness after the last letter, before the light
+        glanceTail: 0.45,   // and after the light has gone, before the card
+    },
+
+      // --- how the inscription is cut -------------------------------------------
+      etch: {
+        // A serif, and a display one. The shelf in fonts.js is aimed at the HUD
+        // and the cards; a headstone is the one surface in the game that wants
+        // to look chiselled rather than printed.
+        font: "'Cinzel', Georgia, serif",
+        dpi: 256,        // texels per world unit
+        padding: 0.12,   // fraction of the canvas kept clear at each side
+        baseline: 0.42,  // where the name's centre sits, top to bottom
+        namePx: 0.2,     // the name's cap height as a fraction of the canvas
+        nameWeight: 700,
+        causeScale: 0.42, // the cause, relative to whatever size the name fit at
+        causeWeight: 400,
+        lineGap: 1.35,
+        // How many lines the CAUSE may take before it starts shrinking. Three,
+        // because a boss's own name lands here now and those run to forty-nine
+        // characters — see fitLines in systems/epitaph.js for why it wraps
+        // first and shrinks second.
+        causeLines: 3,
+        causeLineGap: 1.15,
+        // The sentence the cause lands in. deathCauses.js writes its labels to
+        // be dropped into any sentence, and eighteen of them have to land in
+        // THIS one — so the lead is chosen against the whole list rather than
+        // against the death anyone pictures first.
+        //
+        // 'lost to' and not 'taken by', which is what this shipped as. Seventeen
+        // causes are noun phrases with an article ("a shark", "the orca",
+        // "something that shoots") and read fine either way. The eighteenth is
+        // drowning, whose label is the gerund "running out of air" — and
+        // "taken by running out of air" is the kind of sentence that is
+        // technically grammatical and obviously written by a machine. It is
+        // also not a rare death: running out of air is a core mechanic here,
+        // so the odd one out is one of the most common stones in the yard.
+        // "lost to running out of air" reads, and so does "lost to a shark".
+        //
+        // IF YOUR STONES STILL SAY "taken by", THIS IS WHY and it is not a bug
+        // in the change. `lead` has a real pill in the Epitaph panel, so the
+        // tuner writes it into every snapshot it saves — and a value in
+        // imported-tuning.json beats config.js in the merge (see deepMerge).
+        // Any tab that was open while this said 'taken by' has already banked
+        // that, and it will keep winning on every load from now on. Moving the
+        // pill once is the fix; so is deleting `gravesite.etch.lead` from the
+        // snapshot. It is deliberately NOT stripped in withoutTableOwnedKeys,
+        // because everything stripped there is an echo of a value with no
+        // control behind it — this one has a control, and a player who chooses
+        // "done in by" is entitled to keep it.
+        lead: 'lost to',
+        leadAlpha: 0.72,
+        // The groove. `depth` is the bevel's half-width as a fraction of the
+        // canvas height, so a letter is cut the same on a plaque and a tomb.
+        // The quad multiplies against the stone rather than lighting itself:
+        // an inscription is a shadow cut INTO a lit surface, and lighting it a
+        // second time washes it out at noon and erases it at night.
+        depth: 0.006,
+        ink: 0x1a1714,
+        // NOT opaque. The quad is an alpha decal over a lit stone (see the
+        // blending note in systems/epitaph.js), so a groove that lets a little
+        // of the stone through is a groove the daylight cycle still reaches —
+        // which is the one thing multiply blending bought and this is how it is
+        // bought back.
+        inkAlpha: 0.88,
+        lip: 0xe8e0d0,
+        lipAlpha: 0.55,
+        shadow: 0x000000,
+        shadowAlpha: 0.4,
     },
     },
 
@@ -14951,6 +15862,27 @@ export const CONFIG = {
         reverbMix: 0,
         reverbSeconds: 1.6, // tail length
         reverbDecay: 2, // higher = faster fall-off = smaller room
+
+        // --- the celebration echo ------------------------------------------------
+        // A feedback delay that is shut for the whole run and opens for the second
+        // the seal is performing — the boss kill's victory lap and the level-up
+        // salute both, since systems/celebrate.js drives them through one entry.
+        // Every sound on the SFX bus goes through it while it is open, on purpose:
+        // the moment should feel like the water changed, not like one sound got an
+        // effect put on it.
+        //
+        // `wet` is the only level setSfxEcho touches. The rest are the shape of the
+        // delay and are safe to move while it is open.
+        echo: {
+          enabled: true,
+          wet: 0.5,          // how loud the repeats get at full open
+          timeSeconds: 0.26, // gap between repeats
+          feedback: 0.42,    // how much of each repeat feeds the next; < 1 or it never decays
+          toneHz: 2600,      // damping inside the loop, so repeats darken
+          fadeIn: 0.35,      // seconds to open, from the frame the pose starts
+          fadeOut: 0.7,      // seconds to shut, from the frame gameplay resumes
+        },
+
         // Ties the bus cutoff to how deep the player is, the same way the music
         // filter works — but with its OWN range. SFX sit in a different part of
         // the mix and want a much narrower sweep than the score; borrowing the
@@ -15203,6 +16135,10 @@ export const CONFIG = {
       // the note. pitchVary stays 0 so that reading isn't muddied by noise.
       pickup:    { src: null, type: 'blip',  wave: 'triangle', freq: [620, 1180], decay: 0.12, gain: 0.16, pitchVary: 0 },
       levelUp:   { src: null, type: 'blip',  wave: 'triangle', freq: [440, 1320], decay: 0.5,  gain: 0.26, pitchVary: 0.03 },
+      // The seal's own noise over its victory lap. Synth fallback is a warmer,
+      // slower relative of the level-up blip so a missing sample still reads
+      // as pleased rather than as an error.
+      celebrate: { src: null, type: 'blip',  wave: 'triangle', freq: [520, 880],  decay: 0.7,  gain: 0.3,  pitchVary: 0.08 },
       // A PASSIVE UPGRADE PAYING OUT. `levelUp`'s shape — a triangle sweeping
       // up, because up is what "you are permanently stronger" sounds like in
       // this table — but a fifth of its gain, a third of its length and a much
@@ -17751,6 +18687,127 @@ export const CONFIG = {
     // The ichor. Off is a fight with silent weak points, for anyone tuning the
     // lights on their own.
     goo: true,
+
+    // --- the meat it kicks loose -----------------------------------------
+    // BIG CHUM, AND IT IS FUEL. Working a weak spot shakes lumps of the animal
+    // loose and swallowing one refills BOOST PIPS rather than health — see the
+    // header of systems/bossHotSpots.js for why this is deliberately a
+    // different currency from the chunk a boss throws on a timer
+    // (CONFIG.chumChunk.boss, which is a break the fight hands you). This one
+    // is the fight paying for AIM, and it pays into the meter that makes the
+    // next strike — which is the loop the whole strike line is built on:
+    // aim at the light, eat what comes off it, strike again.
+    chum: {
+      enabled: true,
+      // Crit damage into ONE spot between pieces, as a fraction of the pool
+      // that ruptures it — so a piece comes loose for every third of the way
+      // to the burst, whatever weapon is doing the chewing. Not per hit: an
+      // automatic weapon lands ten times a second and the club once, and
+      // counting hits would make one a fountain and the other pay nothing.
+      damageShare: 0.34,
+      // What one piece is worth, in BOOST PIPS. Read against the bar: five
+      // pips is a whole meter by default (see pipCount in systems/strike.js),
+      // so two is a hit's worth of a strike and the pieces from one spot are
+      // most of a bar.
+      pips: 2,
+      // ...and what the BURST throws: bigger pieces, and more than one. The
+      // rupture is the moment a spot is worth the most and it should read that
+      // way in the water — a spray of meat, not one more lump.
+      ruptureCount: 2,
+      rupturePips: 3,
+      // THROWN, AND THROWN HARD. Out along the skin's normal at this speed
+      // (u/s), inside this many radians either side of it.
+      //
+      // The speed is the read. Drag under water is exponential
+      // (CONFIG.pickups.toss.waterDrag, 4.5), so a piece travels about
+      // `tossSpeed / 4.5` units before it stops — 13 was under three units,
+      // which on a thirteen-metre megalodon is a lump that appears at the
+      // wound and settles against the flank still inside the animal's
+      // silhouette. At 42 it clears the body: the piece LEAVES, in a straight
+      // line the eye can follow, and lands in open water where it can be swum
+      // to. That is also what makes the goo trail below possible — a trail is
+      // a statement about speed, and there is no trail to draw at a drift.
+      //
+      // Narrow, and along the normal rather than in a full circle: a spot is
+      // somewhere the player aimed, so the meat comes out toward them. Meat
+      // from the far flank landing behind the animal is a reward you have to
+      // swim through the boss to collect.
+      tossSpeed: 42,
+      spread: 0.28,
+      // WHEN IT STOPS BEING IN FLIGHT AND STARTS BEING FOOD (u/s). One number
+      // doing two jobs, because they are the same fact: above this the piece
+      // is still travelling — it lays a goo trail and the food magnet may NOT
+      // claim it — and below it the piece is a pickup lying in the water like
+      // any other.
+      //
+      // The magnet half is what makes the throw visible at all. Reach is six
+      // units before upgrades and the whole magnet radius during a chain, a
+      // player fighting a boss is usually inside that, and the magnet outranks
+      // a throw and cancels it — so without this gate a piece kicked out of a
+      // spot near the seal would be claimed on its FIRST frame, never travel,
+      // never trail, and simply appear to spawn at the mouth. Nothing is lost
+      // by waiting: drag brings any throw under this inside half a second, and
+      // the piece then sits in the water for its whole lifetime.
+      settleSpeed: 7,
+      // --- the streak it leaves ---------------------------------------------
+      // ICHOR STRUNG OUT BEHIND IT. One small goo blob every `every` seconds
+      // while the piece is still travelling, dropped at its position — they
+      // fuse into a streak because the `ichor` group's splats are wide against
+      // a low isoline (see CONFIG.fx.goo.groups.ichor), which is the same
+      // property that makes the rupture read as one torn mass rather than as a
+      // dozen balls.
+      //
+      // DROPPED, NOT DRAGGED, and that is the whole reason this is a string of
+      // blobs and not a ribbon. A ribbon through a moving point survives only
+      // while it stays thin; goo left at a position and abandoned is matter the
+      // piece is shedding, which is what it should look like, and it keeps
+      // hanging in the water for a moment after the chunk has stopped.
+      trail: {
+        enabled: true,
+        // Seconds between blobs. At 42 u/s this is one every 0.63 units, which
+        // is inside the radius of even the smallest splat the emitter rolls
+        // (0.36 x the ichor group's 4.2, halved: 0.76) — and that is the whole
+        // condition for a line. Spaced wider than a splat, the identical code
+        // draws a row of beads, which looks deliberate and is why the harness
+        // asserts the arithmetic instead of the numbers.
+        every: 0.015,
+        // ...and it runs for exactly as long as the piece is in FLIGHT, which
+        // is `chum.settleSpeed` above — one fact, not two thresholds that can
+        // drift into a piece that trails after it has stopped or stops
+        // trailing while it is still moving.
+      },
+      // Where it is born, out along that normal in multiples of the spot's own
+      // radius — same reason the bleed is (see bleedOffset): a piece spawned on
+      // the centre sits on top of the light it came out of.
+      bornAt: 1,
+      // Seconds before an uncollected piece leaves the water. FAR shorter than
+      // an ambient chunk's 34, and that is the difference between the two: a
+      // chunk is worth crossing the arena for, and this is fuel for the fight
+      // it fell out of.
+      lifetime: 11,
+      // Ceiling on how many can be in the water at once, counting the health
+      // chunks with them. A boss with three spots being worked by a fast
+      // weapon can otherwise carpet the arena, and a pickup you cannot avoid
+      // stops being a reward for aiming.
+      maxAlive: 7,
+      // The tell that it is FUEL and not food. The boost colour (see
+      // CONFIG.hud.boostColor) rather than the meat's red-to-amber ramp, so
+      // the two pickups are never confused at a glance — and it is a colour,
+      // judged by eye, which is one of the two numbers in this block that are
+      // tuner sliders rather than behaviour.csv rows.
+      tint: 0xffe07a,
+      // HOW HARD IT ARRIVES, over the chunk's shared arrival flash
+      // (CONFIG.chumChunk.flash.boost). A piece thrown out of a wound comes in
+      // white-hot: the burst that throws it (feedback `hotSpotChum`) is the
+      // emission, and this is the piece itself carrying some of that light for
+      // the second afterwards, so the eye that followed the spray finds the
+      // thing it was announcing still lit instead of already resting.
+      //
+      // The ARRIVAL only — it decays into the same resting glow every other
+      // chunk wears. A permanently brighter body would be saying "this is a big
+      // one" in the language the size and the tint already speak.
+      flashMul: 2.2,
+    },
 
     // --- what it looks like ----------------------------------------------
     look: {
@@ -22123,6 +23180,45 @@ export const CONFIG = {
     moneyRoll3: { points: 16, width: 0.15, color: 0xc6e0a8, glow: 2.4, taper: 1.15, fade: 1.3,
                   tailOffset: 1.05, depthClearance: 1.4,
                   particles: { emitter: 'cashTrail', perSecond: 24 } },
+
+    // --- THE CLUBS THAT ARE NOT IN A FLIPPER ---------------------------------
+    // A ribbon on every club the seal is not holding: the thrown ones, and the
+    // ring. NOT the fin clubs, and that is the whole rule — a club in a fin is
+    // welded to the animal and already reads as part of it, so a streak off it
+    // would be a streak off the seal. A club that has LEFT is a separate
+    // object the player has to track across the water, and the ribbon is what
+    // makes it trackable.
+    //
+    // KEYED ON THE ASSET, like every preset above (systems/projectileTrails.js
+    // looks up `CONFIG.trails[mesh.name]`, and createVisual names every mesh
+    // after its key). Which means one preset per club TYPE, shared between the
+    // thrown club and the orbiting one of that type — deliberately: the ribbon
+    // says WHICH CLUB, and a player working out what is circling them should
+    // be reading the object, not the colour of its wake.
+    //
+    // The colours are each type's accent burst pushed toward white (see
+    // `clubChips`, `clubEmbers`, `clubFrost` in CONFIG.emitters), so a club and
+    // the debris it sheds are unmistakably one thing. WIDTH AND SHED RATE ARE
+    // MULTIPLIED per club by what the run has bought — see CONFIG.club.fx's
+    // `trailShare`.
+    //
+    // No `tailOffset` and no `depthClearance` on any of them, unlike the
+    // mussel and the yacht's rolls. Both of those are multiples of a measured
+    // half-LENGTH, which is a meaningful anchor on a shell that flies nose-on
+    // and a meaningless one on a club that is tumbling end over end — there is
+    // no "back" of a thrown club. The ribbon is anchored at the head instead,
+    // which is the end that is doing the travelling.
+    club:      { points: 12, width: 0.22, color: 0xffdca8, glow: 2.0, taper: 1.1, fade: 1.5,
+                 particles: { emitter: 'clubChipTrail', perSecond: 9 } },
+    clubBoom:  { points: 14, width: 0.26, color: 0xffa860, glow: 2.8, taper: 1.0, fade: 1.3,
+                 particles: { emitter: 'clubEmberTrail', perSecond: 12 } },
+    clubIce:   { points: 14, width: 0.24, color: 0xbfefff, glow: 2.6, taper: 1.1, fade: 1.4,
+                 particles: { emitter: 'clubFrostTrail', perSecond: 10 } },
+    // The Hurler's. The longest and the only one tuned for a straight line at
+    // speed — this is the club the player throws and then watches go, and the
+    // ribbon is most of how they follow it once the seeker takes over.
+    clubThrow: { points: 16, width: 0.24, color: 0xffe6c0, glow: 2.6, taper: 1.0, fade: 1.3,
+                 particles: { emitter: 'clubChipTrail', perSecond: 16 } },
   },
 
   // ---------------------------------------------------------------------------
@@ -22429,6 +23525,37 @@ export const CONFIG = {
         corridorBack: 10,
         corridorAhead: 3,
       },
+
+      // --- YOU CANNOT OUTSWIM YOUR OWN FOOD ---------------------------------
+      //
+      // A FLOOR under the pull, in world units/sec, measured against the seal's
+      // own speed. Every number above is a fixed speed or a multiple of one,
+      // and a fixed speed loses a race: the base pull is 14 and the seal cruises
+      // at 34 (CONFIG.player.maxSpeed), so an orb the magnet had already CLAIMED
+      // chased the mouth at -20 u/s and never arrived. It is latched, so it
+      // chases forever — food flying at you, falling behind, and following you
+      // around the arena. Only the striking multiplier ever cleared the seal's
+      // speed, which meant the hoover worked during a dash and nowhere else.
+      //
+      // So the pull is at least `gain` faster than the seal is travelling,
+      // whatever the state multipliers say. `gain` is not the pull speed, it is
+      // the CLOSING speed: the gap always shrinks at `gain` u/s or better, so an
+      // orb at the rim of a 6-unit reach arrives in well under half a second no
+      // matter how hard the player is swimming away from it.
+      //
+      // `min` is the same promise standing still, where `speed` is 0 and the
+      // seal is not outrunning anything — the hoover has to feel like a hoover
+      // when parked on a pile too.
+      //
+      // Deliberately NOT a multiple of the seal's speed: a multiplier gives its
+      // biggest advantage exactly where the player already had one (a dash, at
+      // 46 u/s) and its smallest where the problem is (an ordinary cruise).
+      // A constant closing speed reads the same everywhere.
+      //
+      // Applies to EVERY pickup, not just chum — a bubble that a drowning seal
+      // can outswim is the same bug with worse consequences. See outrunPull()
+      // in systems/chumMagnet.js.
+      outrun: { enabled: true, gain: 18, min: 24 },
     },
     collectRadius: 0.6,
     // How fast chum falls through the water. The column is about 40 units
@@ -25106,6 +26233,22 @@ export const TUNER_SCHEMA = [
       { path: 'club.orbit.scale', min: 0.2, max: 2, step: 0.05, label: 'ring: size of an orbiting club' },
       { path: 'club.orbit.spring', min: 2, max: 90, step: 1, label: 'ring: how hard it chases the seal' },
       { path: 'club.orbit.damp', min: 0.5, max: 30, step: 0.5, label: 'ring: how fast that settles' },
+      // THE JUICE. Pure look — every one of these multiplies a particle burst
+      // or a ribbon and none of them touches a hitbox, a number or a rate,
+      // which is exactly why they live here and the swing's damage does not.
+      // `accent` is a table of emitter names and has no slider: it is which
+      // substance each club sheds, not how much of it.
+      { path: 'club.fx.enabled', type: 'bool', label: 'juice: club impact bursts' },
+      { path: 'club.fx.perStack', min: 0, max: 0.6, step: 0.01, label: 'juice: growth per card stack' },
+      { path: 'club.fx.perPower', min: 0, max: 1.5, step: 0.05, label: 'juice: growth per Bouncer multiplier' },
+      { path: 'club.fx.powerFloor', min: 0, max: 1, step: 0.05, label: 'juice: what a lazy swing still throws' },
+      { path: 'club.fx.sizeShare', min: 0, max: 1.5, step: 0.05, label: 'juice: how much club size reaches the specks' },
+      { path: 'club.fx.knockShare', min: 0, max: 1.5, step: 0.05, label: 'juice: how much shove reaches the throw' },
+      { path: 'club.fx.maxAmount', min: 1, max: 5, step: 0.1, label: 'juice: ceiling on how many' },
+      { path: 'club.fx.maxSize', min: 1, max: 4, step: 0.1, label: 'juice: ceiling on how big' },
+      { path: 'club.fx.maxSpeed', min: 1, max: 4, step: 0.1, label: 'juice: ceiling on how hard' },
+      { path: 'club.fx.trailShare', min: 0, max: 1.5, step: 0.05, label: 'ribbon: share of that growth it takes' },
+      { path: 'club.fx.maxTrail', min: 1, max: 4, step: 0.1, label: 'ribbon: ceiling on it' },
     ],
   },
   {
@@ -25286,8 +26429,25 @@ export const TUNER_SCHEMA = [
       // The banner takes the STRIKE NOW! prompt while a chain is running (the
       // ring's own line covers every moment it is not). The WORDS are the
       // strikeNow row in callouts.csv; these are only how loud it is.
+      // ONE SHOT. `time` is how long the whole announcement lasts — the wave
+      // sweeps once over it and the banner then goes back to being the food
+      // chain, because strikeLoaded() stays true for the rest of the hold and
+      // an instruction that never leaves is furniture. The ring carries the
+      // moment after that; see CONFIG.strike.foodChain.prompt.
+      { path: 'strike.foodChain.prompt.time', min: 0.15, max: 2, step: 0.05, label: 'STRIKE NOW! on the banner: how long it holds (s)' },
       { path: 'strike.foodChain.prompt.flashHz', min: 0, max: 16, step: 0.25, label: 'STRIKE NOW! on the banner: flash rate' },
       { path: 'strike.foodChain.prompt.neon', type: 'color', label: 'STRIKE NOW! on the banner: edge colour' },
+      { path: 'strike.foodChain.prompt.hot', type: 'color', label: 'STRIKE NOW! on the banner: text colour' },
+      // The per-letter wave. `spread` is the one worth understanding: it is the
+      // wavelength in CHARACTERS, so 0 is the whole line bobbing together and
+      // 0.5 is alternate letters in antiphase. See CONFIG.strike.foodChain.prompt.wave.
+      { path: 'strike.foodChain.prompt.wave.amp', min: 0, max: 0.4, step: 0.01, label: 'STRIKE NOW! wave: how far a letter rides (em)' },
+      { path: 'strike.foodChain.prompt.wave.size', min: 0, max: 0.8, step: 0.02, label: 'STRIKE NOW! wave: how much it swells (x)' },
+      // The crest's width in GLYPHS, peak to flat. Under 1 the letters pop one
+      // at a time; over about 4 the whole line swells at once and the travel
+      // disappears. The sweep's SPEED is not a knob — it is one pass over
+      // `time`, which is what makes it a gesture rather than a texture.
+      { path: 'strike.foodChain.prompt.wave.crest', min: 0.4, max: 6, step: 0.1, label: 'STRIKE NOW! wave: crest width (letters)' },
       { path: 'strike.foodChain.prompt.glow', min: 0, max: 40, step: 1, label: 'STRIKE NOW! on the banner: glow (px)' },
       { path: 'strike.breachChain.linksPerLevel', min: 1, max: 4, step: 1, label: 'Porpoising: links per breach, per stack' },
       // The two rows above are how hard the food chain HITS the lens. What the
@@ -25704,6 +26864,12 @@ export const TUNER_SCHEMA = [
       // side can never catch a dashing seal and the extra radius is decorative.
       { path: 'player.pickupRadius', min: 0.5, max: 16, step: 0.1, label: 'magnet: base radius' },
       { path: 'pickups.magnetSpeed', min: 2, max: 60, step: 0.5, label: 'magnet: base pull speed' },
+      // The floor under all of the above, against the seal's own speed — this
+      // is what stops a claimed orb chasing a swimming seal forever, and it
+      // overrides the base pull and the multipliers whenever they are slower.
+      { path: 'pickups.magnet.outrun.enabled', type: 'bool', label: 'magnet: chum can never be outswum' },
+      { path: 'pickups.magnet.outrun.gain', min: 0, max: 40, step: 0.5, label: 'magnet: closing speed over the seal' },
+      { path: 'pickups.magnet.outrun.min', min: 0, max: 60, step: 0.5, label: 'magnet: pull when standing still' },
       { path: 'pickups.magnet.swimming.radiusMul', min: 1, max: 4, step: 0.05, label: 'swimming: radius (x)' },
       { path: 'pickups.magnet.swimming.speedMul', min: 1, max: 6, step: 0.05, label: 'swimming: pull (x)' },
       { path: 'pickups.magnet.boosting.radiusMul', min: 1, max: 4, step: 0.05, label: 'fast swim: radius (x)' },
@@ -27911,6 +29077,16 @@ export const TUNER_SCHEMA = [
       { path: 'hotSpots.look.openSeconds', min: 0.05, max: 2, step: 0.05, label: 'opens over (s)' },
       { path: 'hotSpots.look.closeSeconds', min: 0.05, max: 2, step: 0.02, label: 'closes over (s)' },
       { path: 'hotSpots.look.flashSeconds', min: 0.02, max: 1, step: 0.02, label: 'hit flash lasts (s)' },
+      // THE ONE NUMBER FROM `chum` THAT IS A SLIDER. Everything else about the
+      // meat a spot kicks loose — what it pays, how often, how many — is
+      // throughput and lives in behaviour.csv; this is the tell that the piece
+      // is FUEL and not food, and a tell is judged by eye against the health
+      // chunk's red-to-amber ramp with both in the water.
+      { path: 'hotSpots.chum.tint', type: 'color', label: 'meat it kicks loose — colour' },
+      { path: 'hotSpots.chum.flashMul', min: 0, max: 5, step: 0.1, label: '…how hot it arrives (x the chunk flash)' },
+      { path: 'hotSpots.chum.trail.enabled', type: 'bool', label: '…goo trail behind it' },
+      { path: 'hotSpots.chum.trail.every', min: 0.01, max: 0.3, step: 0.005, label: '…a blob every (s)' },
+
     ],
   },
   {
@@ -28172,6 +29348,110 @@ export const TUNER_SCHEMA = [
       { path: 'touch.strike.doubleTapMs', min: 120, max: 600, step: 10, label: 'double-tap window (ms)' },
       { path: 'touch.strike.tapMaxMs', min: 80, max: 500, step: 10, label: 'longest press still a tap (ms)' },
       { path: 'touch.strike.tapSlop', min: 4, max: 48, step: 2, label: 'tap drift allowed (px)' },
+    ],
+  },
+  {
+    group: 'Gravesites',
+    section: 'Gameplay',
+    items: [
+      { path: 'gravesite.enabled', type: 'bool', label: 'mark where the last runs ended' },
+      { path: 'gravesite.max', min: 1, max: 12, step: 1, label: 'stones the yard holds' },
+      { path: 'gravesite.scale', min: 0.5, max: 8, step: 0.1, label: 'stone size (whole set)' },
+      { path: 'gravesite.z', min: -6, max: 0, step: 0.1, label: 'depth (behind the action)' },
+      { path: 'gravesite.lean', min: 0, max: 0.4, step: 0.01, label: 'cant (rad)' },
+      { path: 'gravesite.sink', min: 0, max: 0.6, step: 0.01, label: 'bedded into the floor' },
+      { path: 'gravesite.label.enabled', type: 'bool', label: 'name the grave you swim over' },
+      { path: 'gravesite.label.radius', min: 1, max: 20, step: 0.5, label: 'how close counts (units)' },
+      { path: 'gravesite.label.gap', min: 0, max: 120, step: 2, label: 'label height above stone (px)' },
+      { path: 'gravesite.label.rise', min: 0, max: 40, step: 1, label: 'label rise on arrival (px)' },
+      { path: 'gravesite.label.fadeIn', min: 0.05, max: 1.5, step: 0.01, label: 'label fade in (s)' },
+      { path: 'gravesite.label.fadeOut', min: 0.05, max: 2, step: 0.01, label: 'label fade out (s)' },
+      { path: 'gravesite.label.nameSize', min: 8, max: 40, step: 1, label: 'label name size (px)' },
+      { path: 'gravesite.label.causeSize', min: 6, max: 30, step: 1, label: 'label cause size (px)' },
+      { path: 'gravesite.label.color', type: 'color', label: 'label ink' },
+      { path: 'gravesite.beam.enabled', type: 'bool', label: 'light the grave as you pass' },
+      { path: 'gravesite.beam.strength', min: 0, max: 5, step: 0.05, label: 'beam brightness' },
+      { path: 'gravesite.beam.width', min: 0.2, max: 10, step: 0.1, label: 'beam width (units)' },
+      { path: 'gravesite.beam.span', min: 1, max: 30, step: 0.5, label: 'beam travel (units)' },
+      { path: 'gravesite.beam.time', min: 0.2, max: 5, step: 0.05, label: 'beam crossing (s)' },
+      { path: 'gravesite.beam.scale', min: 0.2, max: 12, step: 0.1, label: 'caustic vein size' },
+      { path: 'gravesite.beam.crawl', min: 0, max: 4, step: 0.05, label: 'caustic crawl' },
+      { path: 'gravesite.beam.tilt', min: -1.5, max: 1.5, step: 0.05, label: 'beam rake' },
+      { path: 'gravesite.beam.floor', min: 0, max: 1, step: 0.02, label: 'shaft under the veins' },
+      { path: 'gravesite.beam.color', type: 'color', label: 'beam light' },
+      { path: 'gravesite.beam.reversed', type: 'bool', label: 'sweep right to left' },
+      { path: 'gravesite.beam.wisp', min: 0, max: 1, step: 0.02, label: 'wispiness (0 = plain band)' },
+      { path: 'gravesite.beam.wispScale', min: 0.05, max: 3, step: 0.05, label: 'wisp size (low = big shapes)' },
+      { path: 'gravesite.beam.wispSpeed', min: 0, max: 2, step: 0.05, label: 'wisp drift' },
+      { path: 'gravesite.beam.shaft', type: 'bool', label: 'shaft in the water' },
+      { path: 'gravesite.beam.shaftStrength', min: 0, max: 2, step: 0.05, label: 'shaft brightness' },
+      { path: 'gravesite.beam.shaftWidth', min: 0.5, max: 5, step: 0.1, label: 'shaft width (x the landing)' },
+      { path: 'gravesite.beam.shaftReach', min: 4, max: 60, step: 1, label: 'shaft reach up (units)' },
+      { path: 'gravesite.drop.height', min: 2, max: 40, step: 1, label: 'dropped from (units)' },
+      { path: 'gravesite.drop.gravity', min: 5, max: 120, step: 1, label: 'fall gravity' },
+      { path: 'gravesite.drop.spin', min: 0, max: 3, step: 0.05, label: 'tumble on the way down' },
+      { path: 'gravesite.drop.settleTime', min: 0.1, max: 3, step: 0.05, label: 'rock still over (s)' },
+      { path: 'gravesite.drop.settleTilt', min: 0, max: 0.3, step: 0.01, label: 'rock width (rad)' },
+      { path: 'gravesite.drop.settleHz', min: 2, max: 40, step: 1, label: 'rock rate (hz)' },
+      { path: 'gravesite.drop.settleRate', min: 1, max: 30, step: 0.5, label: 'rock decay' },
+      { path: 'gravesite.drop.siltPuffs', min: 1, max: 8, step: 1, label: 'silt bursts on impact' },
+      { path: 'gravesite.drop.siltSpread', min: 0, max: 3, step: 0.05, label: 'silt spread (units)' },
+      { path: 'gravesite.drop.siltSpeed', min: 0.2, max: 3, step: 0.05, label: 'silt thrown (x)' },
+      { path: 'gravesite.drop.etchDelay', min: 0, max: 2, step: 0.05, label: 'pause before etching (s)' },
+      { path: 'gravesite.drop.etchTime', min: 0.1, max: 5, step: 0.05, label: 'etching takes (s)' },
+      { path: 'gravesite.drop.glanceDelay', min: 0, max: 3, step: 0.05, label: 'pause before the glance (s)' },
+      { path: 'gravesite.drop.glanceTail', min: 0, max: 3, step: 0.05, label: 'pause after it, before the card (s)' },
+    ],
+  },
+  {
+    group: 'Epitaph',
+    section: 'Gameplay',
+    items: [
+      { path: 'gravesite.etch.font', options: FONT_STACKS, labels: FONT_LABELS, label: 'family' },
+      // A CHOICE and not a free text box, because the tuner has no text row —
+      // see ui/tunerControls.js, which knows readout, choice, color, bool and
+      // slider. Five lines rather than one: the register of this line is the
+      // whole tone of the stone, and the cause it sits above is already
+      // written to drop into any sentence (see deathCauses.js).
+      { path: 'gravesite.etch.lead',
+        options: ['lost to', 'taken by', 'finished by', 'done in by', 'here lies one lost to'],
+        label: 'line above the cause' },
+      { path: 'gravesite.etch.namePx', min: 0.06, max: 0.4, step: 0.01, label: 'name size (of the face)' },
+      { path: 'gravesite.etch.nameWeight', min: 300, max: 900, step: 100, label: 'name weight' },
+      { path: 'gravesite.etch.causeScale', min: 0.2, max: 1, step: 0.02, label: 'cause size (of the name)' },
+      { path: 'gravesite.etch.causeWeight', min: 300, max: 900, step: 100, label: 'cause weight' },
+      { path: 'gravesite.etch.lineGap', min: 0.8, max: 2.5, step: 0.05, label: 'line spacing' },
+      { path: 'gravesite.etch.causeLines', min: 1, max: 5, step: 1, label: 'cause: max lines' },
+      { path: 'gravesite.etch.causeLineGap', min: 0.9, max: 2, step: 0.05, label: 'cause: line spacing' },
+      { path: 'gravesite.etch.leadAlpha', min: 0.2, max: 1, step: 0.02, label: '"taken by" fade' },
+      { path: 'gravesite.etch.baseline', min: 0.2, max: 0.7, step: 0.01, label: 'text height on the face' },
+      { path: 'gravesite.etch.padding', min: 0, max: 0.35, step: 0.01, label: 'margin' },
+      { path: 'gravesite.etch.depth', min: 0, max: 0.02, step: 0.0005, label: 'carve depth' },
+      { path: 'gravesite.etch.ink', type: 'color', label: 'letter' },
+      { path: 'gravesite.etch.inkAlpha', min: 0.3, max: 1, step: 0.02, label: 'letter opacity' },
+      { path: 'gravesite.etch.lip', type: 'color', label: 'lit lip' },
+      { path: 'gravesite.etch.lipAlpha', min: 0, max: 1, step: 0.02, label: 'lit lip strength' },
+      { path: 'gravesite.etch.shadow', type: 'color', label: 'groove shadow' },
+      { path: 'gravesite.etch.shadowAlpha', min: 0, max: 1, step: 0.02, label: 'groove shadow strength' },
+      { path: 'gravesite.etch.dpi', min: 96, max: 512, step: 16, label: 'inscription texels / unit' },
+      { path: 'gravesite.faces.headstone.scale', min: 0.3, max: 4, step: 0.05, label: 'headstone size (x the set)' },
+      { path: 'gravesite.faces.plaque.scale', min: 0.3, max: 4, step: 0.05, label: 'plaque size (x the set)' },
+      { path: 'gravesite.faces.tomb.scale', min: 0.3, max: 4, step: 0.05, label: 'tomb size (x the set)' },
+      { path: 'gravesite.faces.headstone.namePx', min: 0.06, max: 0.5, step: 0.01, label: 'headstone panel: name size' },
+      { path: 'gravesite.faces.headstone.width', min: 0.2, max: 1, step: 0.01, label: 'headstone panel: width' },
+      { path: 'gravesite.faces.headstone.height', min: 0.1, max: 0.9, step: 0.01, label: 'headstone panel: height' },
+      { path: 'gravesite.faces.headstone.rise', min: -0.3, max: 0.45, step: 0.01, label: 'headstone panel: rise' },
+      { path: 'gravesite.faces.plaque.width', min: 0.2, max: 1, step: 0.01, label: 'plaque panel: width' },
+      { path: 'gravesite.faces.plaque.height', min: 0.1, max: 0.9, step: 0.01, label: 'plaque panel: height' },
+      { path: 'gravesite.faces.plaque.rise', min: -0.3, max: 0.45, step: 0.01, label: 'plaque panel: rise' },
+      { path: 'gravesite.faces.plaque.namePx', min: 0.06, max: 0.5, step: 0.01, label: 'plaque panel: name size' },
+      { path: 'gravesite.faces.plaque.baseline', min: 0.2, max: 0.7, step: 0.01, label: 'plaque panel: text height' },
+      { path: 'gravesite.faces.tomb.width', min: 0.2, max: 1, step: 0.01, label: 'tomb panel: width' },
+      { path: 'gravesite.faces.tomb.height', min: 0.1, max: 0.9, step: 0.01, label: 'tomb panel: height' },
+      { path: 'gravesite.faces.tomb.rise', min: -0.3, max: 0.45, step: 0.01, label: 'tomb panel: rise' },
+      { path: 'gravesite.faces.tomb.namePx', min: 0.06, max: 0.5, step: 0.01, label: 'tomb panel: name size' },
+      { path: 'gravesite.faces.tomb.baseline', min: 0.2, max: 0.7, step: 0.01, label: 'tomb panel: text height' },
+      { path: 'gravesite.faceLift', min: 0, max: 0.2, step: 0.005, label: 'proud of the face (units)' },
     ],
   },
   {
@@ -28733,7 +30013,8 @@ const PATH_TABLES = [
     // together: how fast, how long, and how quick the lunge is against them.
     roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies', 'hotSpots', 'kraken'],
     forbid: (id) => {
-      if (id.startsWith('hotSpots.look.')) {
+      if (id.startsWith('hotSpots.look.') || id.startsWith('hotSpots.chum.trail.')
+        || id === 'hotSpots.chum.tint' || id === 'hotSpots.chum.flashMul') {
         return 'behaviour.csv owns the weak spots\' throughput only — the colours, the glow and the pulse are tuner sliders';
       }
       return enemyCsvOwns(id);
@@ -29045,6 +30326,20 @@ function withoutTableOwnedKeys(snapshot) {
   if (rest.audio && 'maxConcurrent' in rest.audio) {
     const { maxConcurrent, ...audio } = rest.audio;
     rest.audio = audio;
+  }
+  // THE GRAVEYARD'S ROSTER, and the same story as the voice cap above.
+  // `gravesite.stones` is an ARRAY and the tuner has no control that can edit
+  // one — no slider, no pill, nothing — so every snapshot carrying it is an
+  // echo of whatever config.js held the day it was written. Left in, that echo
+  // wins: cutting the yard back to headstones alone in source did nothing at
+  // all, because a snapshot on disk still said all three.
+  //
+  // Stripped rather than reconciled, because there is nothing to reconcile: a
+  // value nobody can change through the interface is not tuning, it is a copy.
+  // Everything else under `gravesite` is real, reachable and merges normally.
+  if (rest.gravesite && 'stones' in rest.gravesite) {
+    const { stones, ...gravesite } = rest.gravesite;
+    rest.gravesite = gravesite;
   }
   // HOW FAST CHUM FALLS, for the same reason. There is no slider for it and
   // spawning.csv is fenced to `pickups.mass.*`, so the `sinkSpeed` in every

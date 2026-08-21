@@ -5,6 +5,11 @@ import { skyLight } from './daylight.js';
 // The veins are sampled here AND on the seal's wet film — see the note in that
 // file for why there is only one copy of them.
 import { CAUSTICS_GLSL } from './causticsGlsl.js';
+import { WISP_GLSL } from './wispGlsl.js';
+// A LEAF, deliberately — see its header. The beam's numbers are owned by
+// systems/graveBeam.js, which imports assets.js and everything behind it; this
+// file has no business loading a glTF parser to find out where a light is.
+import { graveRay } from './graveRay.js';
 
 // The water fill, replacing a flat rectangle. Everything — the depth gradient,
 // the caustic veins, and the light beams — is one fragment
@@ -75,6 +80,24 @@ const fragmentShader = /* glsl */ `
   uniform float uRayFalloff;
   uniform vec3 uRayColor;
 
+  // THE AIMED ONE. Everything above is the ambient bundle — five beams the
+  // daylight scatters across the arena and nobody is looking at. This is a
+  // single beam pointed AT something: the gravestone the seal has just swum
+  // over. See systems/graveRay.js for why its numbers arrive from another
+  // system rather than from CONFIG, and systems/graveBeam.js for the other half
+  // of it — the light this shaft is carrying, landing on the stone.
+  uniform float uGraveRayStrength;
+  uniform float uGraveRayX;
+  uniform float uGraveRayY;
+  uniform float uGraveRayHalf;
+  uniform float uGraveRayTilt;
+  uniform float uGraveRayTime;
+  uniform float uGraveRayWisp;
+  uniform float uGraveRayWispScale;
+  uniform float uGraveRayWispSpeed;
+  uniform float uGraveRayReach;
+  uniform vec3 uGraveRayColor;
+
   varying vec2 vWorldPos;
 
   float hash(float n) {
@@ -92,6 +115,7 @@ const fragmentShader = /* glsl */ `
   }
 
 ${CAUSTICS_GLSL}
+${WISP_GLSL}
 
   void main() {
     // A soft band rather than a hard cut, so the crest edge doesn't crawl with
@@ -155,6 +179,42 @@ ${CAUSTICS_GLSL}
       color += uRayColor * min(sum, 1.5) * uRayIntensity * fade;
     }
 
+    // --- THE AIMED SHAFT ---------------------------------------------------
+    // Behind a branch on a uniform, like the absorption above and for the same
+    // reason: this plane covers most of the screen, the branch is uniform so
+    // every fragment in the draw takes the same side of it, and a graveyard the
+    // seal is nowhere near should cost the fill nothing at all.
+    if (uGraveRayStrength > 0.0) {
+      // The SAME line the stone's own band is cut from — rake included, and
+      // measured from the same base. If these two expressions ever stop
+      // matching, the shaft stands beside the stone it is lighting, and neither
+      // system can tell: each is correct on its own. See systems/graveRay.js.
+      float gd = abs(vWorldPos.x - uGraveRayX + (vWorldPos.y - uGraveRayY) * uGraveRayTilt);
+      float band = smoothstep(uGraveRayHalf, 0.0, gd);
+
+      // IT COMES FROM ABOVE AND DIES AT THE FLOOR. Without this the shaft is a
+      // stripe the full height of the arena, which is a curtain rather than a
+      // beam — light entering water gets eaten on the way down, and the thing
+      // that makes a god ray read as one is that you can see it running out.
+      // Brightest at the top of its reach, gone by the time it has travelled
+      // 'reach' world units below the stone's own base. (No backticks anywhere
+      // in this string: one inside a shader comment ends the template literal,
+      // and the error points at the comment rather than at the backtick.)
+      float up = (vWorldPos.y - uGraveRayY) / max(uGraveRayReach, 0.0001);
+      band *= smoothstep(-0.15, 0.25, up) * (1.0 - smoothstep(0.55, 1.0, up));
+
+      // Torn by the same field, at the same coordinates, on the same frame as
+      // the band on the stone under it — that is the whole reason wispGlsl.js
+      // is a shared string. A hole in the shaft is a hole in what lands.
+      float w = wisp(vWorldPos * uGraveRayWispScale, uGraveRayTime * uGraveRayWispSpeed);
+      band *= mix(1.0, w, uGraveRayWisp);
+
+      // And the veins inside it, from the water's own caustic field. A shaft
+      // with nothing moving inside it is a shape; this is what makes it light.
+      float gc = caustics(vWorldPos * uCausticsScale, uTime * uCausticsSpeed);
+      color += uGraveRayColor * band * uGraveRayStrength * (0.35 + gc);
+    }
+
     gl_FragColor = vec4(color, mask);
   }
 `;
@@ -200,6 +260,21 @@ export function createWaterMaterial() {
       uRayIntensity: { value: 0.22 },
       uRayFalloff: { value: 1.2 },
       uRayColor: { value: new THREE.Color() },
+
+      // The aimed shaft. Zero strength is "no beam" and is what the branch in
+      // the fragment shader tests, so the whole block costs nothing on every
+      // frame the seal is not over a grave — which is nearly all of them.
+      uGraveRayStrength: { value: 0 },
+      uGraveRayX: { value: 0 },
+      uGraveRayY: { value: 0 },
+      uGraveRayHalf: { value: 2 },
+      uGraveRayTilt: { value: 0.35 },
+      uGraveRayTime: { value: 0 },
+      uGraveRayWisp: { value: 0.75 },
+      uGraveRayWispScale: { value: 0.55 },
+      uGraveRayWispSpeed: { value: 0.35 },
+      uGraveRayReach: { value: 26 },
+      uGraveRayColor: { value: new THREE.Color(0xbfe9ff) },
     },
   });
 }
@@ -333,6 +408,37 @@ export function updateWaterMaterial(material, clock) {
   // (CONFIG.sealShader.wetCaustics). The veins still die at night, still switch
   // off with the tuner, and are no longer scaled by a number that describes a
   // completely different surface.
+  // --- THE AIMED SHAFT ---------------------------------------------------
+  // Read, never written — systems/graveBeam.js owns the sweep and is the only
+  // thing that sets it. The x, the rake and the clock come from THERE so the
+  // shaft and the light it lands on the stone are one beam; everything about
+  // how it LOOKS is config, exactly like the ambient bundle above.
+  //
+  // Multiplied by the same day/night bus the veins ride. A shaft that stayed
+  // full brightness at midnight would be the one thing in the water that has
+  // not noticed the sun has gone.
+  {
+    const gb = CONFIG.gravesite?.beam ?? {};
+    const on = gb.enabled !== false && gb.shaft !== false;
+    u.uGraveRayStrength.value = on
+      ? graveRay.strength * (gb.shaftStrength ?? 0.5) * causticsLight
+      : 0;
+    u.uGraveRayX.value = graveRay.x;
+    u.uGraveRayY.value = graveRay.baseY;
+    // WIDER THAN THE LANDING, and deliberately: a shaft exactly the width of
+    // the bright patch on the stone reads as a rectangle standing on it. Light
+    // spreading through water is wider than the pool it makes.
+    u.uGraveRayHalf.value = graveRay.halfWidth * (gb.shaftWidth ?? 1.7);
+    u.uGraveRayTilt.value = graveRay.tilt;
+    u.uGraveRayTime.value = graveRay.time;
+    u.uGraveRayWisp.value = gb.wisp ?? 0.75;
+    u.uGraveRayWispScale.value = gb.wispScale ?? 0.55;
+    u.uGraveRayWispSpeed.value = gb.wispSpeed ?? 0.35;
+    u.uGraveRayReach.value = gb.shaftReach ?? 26;
+    u.uGraveRayColor.value.set(gb.color ?? 0xbfe9ff);
+    if (day && cc.followSun) u.uGraveRayColor.value.lerp(skyLight.color, cc.tintMix ?? 0);
+  }
+
   liveCaustics.light = causticsLight;
   liveCaustics.intensity = u.uCausticsIntensity.value;
   liveCaustics.scale = u.uCausticsScale.value;

@@ -46,7 +46,9 @@ import { enemies, spawnNamed, resetEnemies } from '../path/src/entities/enemies.
 import {
   updateClub, resetClub, createClubVisual,
   clubDamage, clubLength, clubBounces, clubSwingSpeed, clubBlast, clubIce,
+  clubHitFx, clubTrailMovers, clubsOrbiting, clubsInHand,
 } from '../path/src/systems/club.js';
+import { player } from '../path/src/entities/player.js';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -687,38 +689,87 @@ section('HURLER — the variant, thrown on a strike release');
   // THE SOCKETS. The Hurler throws the REAL clubs off the fins, so the melee
   // weapon is gone until they come back — that gap is the whole price of the
   // card, and without it the respawn timer is decoration.
+  //
+  // ...EXCEPT THE BASIC CLUB, WHICH NEVER LEAVES. See
+  // CONFIG.clubThrow.neverThrown: the cost used to land on whichever clubs
+  // happened to be in the flippers, which on most builds is the Driftwood Club
+  // — so the base weapon was the thing a DIFFERENT card spent, and Basic Baby
+  // Club's contribution to a Hurler run was to be disarmed twice a minute. The
+  // price now falls on the variants, and the driftwood twirls instead (see the
+  // twirl section below).
   {
-    const { clubsInHand } = await import('../path/src/systems/club.js');
+    const { clubsInHand, clubsThrowable } = await import('../path/src/systems/club.js');
     freshRun();
     const rig = rigWithFins(2);
-    // Two picks, because one pick is one club now.
-    swing(0.2, { level: 2, rig });
+    // ONE OF EACH, so the fins hold a club that goes and a club that stays —
+    // which is the only arrangement that can tell the new rule from the old
+    // one. Two picks, because one pick is one club.
+    swing(0.2, { level: 1, ice: 1, rig });
     check('both fins start holding a club', clubsInHand() === 2, `${clubsInHand()} in hand`);
+    check('...and only one of them is the Hurler\'s to take', clubsThrowable() === 1,
+      `${clubsThrowable()} of ${clubsInHand()} throwable`);
 
     resetProjectiles(scene);
     const thrown = fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, origin, {});
-    check('a throw empties the fins', clubsInHand() === 0,
-      `${thrown} thrown, ${clubsInHand()} left in hand`);
+    check('a throw takes the variant out of its fin', clubsThrowable() === 0,
+      `${thrown} thrown, ${clubsThrowable()} throwable left`);
+    check('...and leaves the driftwood in the other', clubsInHand() === 1,
+      `${clubsInHand()} still in hand`);
 
-    // ...and an empty fin cannot hit. This is the claim that makes the cost
-    // real rather than cosmetic.
-    const fish = spawnAt('fish', 1.4, -20);
-    const hp = fish.hp;
-    swing(CONFIG.club.respawnTime * 0.5, { level: 2, rig, finSpin: 10 });
-    check('...and an empty fin swings nothing', fish.hp === hp && clubsInHand() === 0,
-      `fish ${fish.hp.toFixed(1)} of ${hp.toFixed(1)} hp`);
+    // ...and the emptied fin cannot hit, which is the claim that makes the cost
+    // real rather than cosmetic. Measured as a SHARE of what two clubs do
+    // rather than as "no damage at all", because the club that stayed is still
+    // swinging — that is the whole point of the change, and a test written as
+    // `hp === startHp` would now be asserting the bug.
+    const bothFish = spawnAt('fish', 1.4, -20);
+    const bothHp = bothFish.hp;
+    swing(CONFIG.club.respawnTime * 0.5, { level: 1, ice: 1, rig, finSpin: 10 });
+    const oneArmed = bothHp - bothFish.hp;
+    check('...and the emptied fin swings nothing', clubsInHand() === 1,
+      `${clubsInHand()} club still swinging while the other is away`);
+    check('...but the club that stayed is still a weapon', oneArmed > 0,
+      `fish took ${oneArmed.toFixed(1)} while one fin was empty`);
 
-    // A second release while empty-handed throws nothing at all.
+    // A second release while a socket is still recovering throws nothing. THIS
+    // is the cost, and it is the assertion that would have quietly died: the
+    // old gate asked whether anything was in hand, and a driftwood club that
+    // never leaves makes that true forever.
     resetProjectiles(scene);
-    check('...and a second strike while empty-handed throws nothing',
+    check('...and a second strike before it is back throws nothing',
       fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, origin, {}) === 0);
 
-    // Then they come back.
-    swing(CONFIG.club.respawnTime * 0.7, { level: 2, rig, finSpin: 10 });
-    check('the clubs respawn in hand after the cooldown', clubsInHand() === 2,
-      `${clubsInHand()} back after ${CONFIG.club.respawnTime}s`);
+    // Then it comes back.
+    swing(CONFIG.club.respawnTime * 0.7, { level: 1, ice: 1, rig, finSpin: 10 });
+    check('the club respawns in hand after the cooldown', clubsThrowable() === 1,
+      `${clubsThrowable()} back after ${CONFIG.club.respawnTime}s`);
     resetProjectiles(scene);
     check('...and the throw is available again',
+      fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, origin, {}) > 0);
+  }
+
+  // A RUN WHOSE FINS ARE NOTHING BUT DRIFTWOOD. Its Hurler is out on the ring,
+  // where the card has never been able to reach it, so there is nothing to
+  // spend and the throw is free — which is the correct answer rather than a
+  // hole, and it is emphatically not the same as being DEAD. The gate is about
+  // an empty socket, and this run never has one.
+  {
+    const { clubsInHand, clubsThrowable } = await import('../path/src/systems/club.js');
+    freshRun();
+    const rig = rigWithFins(2);
+    swing(0.2, { level: 2, rig });
+    check('two driftwood clubs are nobody\'s to throw', clubsThrowable() === 0,
+      `${clubsInHand()} in hand, ${clubsThrowable()} throwable`);
+
+    resetProjectiles(scene);
+    const first = fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, origin, {});
+    check('...and the Hurler still fires', first > 0, `${first} thrown`);
+    check('...without emptying a fin', clubsInHand() === 2, `${clubsInHand()} still in hand`);
+
+    // And again on the next beat, because nothing is recovering. A gate written
+    // as "is a throwable club in hand" would have made this run's Hurler a dead
+    // card forever, which is the failure this case exists to catch.
+    resetProjectiles(scene);
+    check('...and again on the next strike, with no cooldown to serve',
       fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, origin, {}) > 0);
   }
 
@@ -1412,9 +1463,11 @@ section('THE RING — everything past the second club orbits you');
   swing(0.3, { level: 1, ice: 4, throwLevel: 1, rig: rig4, velocity: { x: 9, y: 0 } });
   const heldBefore = clubsInHand();
   const ringBefore = clubsOrbiting();
-  const { fireClubThrow } = await import('../path/src/systems/club.js');
+  const { fireClubThrow, clubsThrowable } = await import('../path/src/systems/club.js');
   fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, () => playerPos.clone(), {}, {});
-  check('a throw empties the fins', clubsInHand() === 0, `${heldBefore} -> ${clubsInHand()} held`);
+  // The Cold Snap in the second fin goes; the driftwood in the first stays.
+  check('a throw empties the fins it is allowed to',
+    clubsThrowable() === 0 && clubsInHand() === 1, `${heldBefore} -> ${clubsInHand()} held`);
   check('...and leaves the ring alone', clubsOrbiting() === ringBefore,
     `${ringBefore} -> ${clubsOrbiting()} orbiting`);
 
@@ -1585,6 +1638,494 @@ section('THE MODEL — club.glb, through the real fitting path');
   });
   check('...with the heavy end out at the far end', hiMass > loMass,
     `${loMass} verts at the grip, ${hiMass} at the head`);
+}
+
+// ------------------------------------------------------------------- the twirl
+
+section('THE TWIRL — what the club the Hurler leaves behind does with a strike');
+
+// The other half of CONFIG.clubThrow.neverThrown. The basic club stays in the
+// fin through a strike, so it needs something to DO with the strike, or the
+// base card is the one club in the game with no reaction to the biggest thing
+// the player does.
+//
+// Measured as angular velocity, because that is what the weapon actually runs
+// on: every hit is scaled by the club's own measured spin (see `power` in
+// updateClub), so "it twirls" and "it hits harder" are the same claim about
+// one number rather than two features.
+{
+  // The fastest a fin club reached over the window, which is the honest read
+  // for a spin-up: the twirl ramps in over about a tenth of a second and a
+  // sample at one instant would be measuring the ramp rather than the peak.
+  const peakSwing = ({ dashing, levels = { level: 1 }, finSpin = 4, seconds = 0.6 }) => {
+    freshRun();
+    const rig = rigWithFins(2);
+    swing(0.4, { ...levels, rig, finSpin, speed: CONFIG.player.maxSpeed });
+    let peak = 0;
+    const frames = Math.round(seconds / dt);
+    for (let i = 0; i < frames; i++) {
+      rig.pose(0.4 * finSpin + i * dt * finSpin);
+      updateClub(dt, scene, playerPos, {
+        club: levels.level ?? 0, boom: levels.boom ?? 0, ice: levels.ice ?? 0, throw: levels.throwLevel ?? 0,
+      }, enemies, {
+        rig, velocity: { x: CONFIG.player.maxSpeed, y: 0 }, dashing,
+      }, {});
+      peak = Math.max(peak, clubSwingSpeed());
+    }
+    return peak;
+  };
+
+  const cruising = peakSwing({ dashing: false });
+  const striking = peakSwing({ dashing: true });
+  check('a strike spins the driftwood club up', striking > cruising * 1.5,
+    `${cruising.toFixed(1)} rad/s cruising vs ${striking.toFixed(1)} striking`);
+
+  // NOT AN ARBITRARY NUMBER. The twirl has to clear three thresholds or it is
+  // a cosmetic spin: `powerReference` x `powerMax` is where a hit stops getting
+  // stronger, `shock.fullSwing` is where a shockwave stops being graded down,
+  // and `maxSwing` is the ceiling that would silently own this value.
+  const c = CONFIG.club;
+  check('...past the point where its hits stop getting weaker',
+    striking >= c.powerReference * c.powerMax,
+    `${striking.toFixed(1)} rad/s against ${(c.powerReference * c.powerMax).toFixed(1)}`);
+  check('...and past a full-grade shockwave',
+    striking >= c.shock.fullSwing,
+    `${striking.toFixed(1)} rad/s against ${c.shock.fullSwing}`);
+  check('...but under the swing ceiling, which would own the number instead',
+    c.twirl.spin < c.maxSwing, `twirl ${c.twirl.spin} vs maxSwing ${c.maxSwing}`);
+
+  // ...and it is over when the dash is. The wind-down is the weapon's ordinary
+  // damping rather than a second timer, so what this really checks is that
+  // nothing latched.
+  {
+    freshRun();
+    const rig = rigWithFins(2);
+    swing(0.4, { level: 1, rig, finSpin: 4, speed: CONFIG.player.maxSpeed });
+    for (let i = 0; i < 30; i++) {
+      rig.pose(i * dt * 4);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: CONFIG.player.maxSpeed, y: 0 }, dashing: true }, {});
+    }
+    const atRelease = clubSwingSpeed();
+    for (let i = 0; i < 40; i++) {
+      rig.pose(30 * dt * 4 + i * dt * 4);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: CONFIG.player.maxSpeed, y: 0 }, dashing: false }, {});
+    }
+    check('...and it winds down when the dash ends', clubSwingSpeed() < atRelease * 0.6,
+      `${atRelease.toFixed(1)} rad/s at the end of the dash, ${clubSwingSpeed().toFixed(1)} two thirds of a second later`);
+  }
+
+  // AND IT HITS HARDER FOR IT, which is the whole reason the twirl is worth
+  // having rather than being decoration. Same fish, same fins, same seconds —
+  // the only difference is whether a dash is live.
+  const chewed = (dashing) => {
+    freshRun();
+    const rig = rigWithFins(2);
+    const fish = spawnAt('fish', playerPos.x + 1.3, playerPos.y);
+    fish.hp = 1e6; // so it survives the window and the number is the damage
+    const start = fish.hp;
+    const frames = Math.round(0.8 / dt);
+    for (let i = 0; i < frames; i++) {
+      rig.pose(i * dt * 4);
+      updateClub(dt, scene, playerPos, { club: 1 }, enemies,
+        { rig, velocity: { x: CONFIG.player.maxSpeed, y: 0 }, dashing }, {});
+    }
+    return start - fish.hp;
+  };
+  const calm = chewed(false);
+  const spun = chewed(true);
+  check('a twirling club chews harder than a carried one', spun > calm,
+    `${calm.toFixed(1)} hp cruising vs ${spun.toFixed(1)} striking`);
+
+  // THE EXEMPTIONS, and both are the same line the shockwave is drawn on.
+  {
+    // An orbiter performs nothing the player did, so a dash must not spin it —
+    // its rate is the ring's and reading a strike into it would make the ring a
+    // second damage spike nobody swung.
+    freshRun();
+    const rig = rigWithFins(2);
+    const ringSpeed = (dashing) => {
+      freshRun();
+      swing(0.6, { level: 4, rig, finSpin: 4, speed: CONFIG.player.maxSpeed, dashing });
+      // The orbiters are everything past the two fin sockets.
+      const movers = clubTrailMovers();
+      return Math.max(0, ...movers.map((m) => m.speed));
+    };
+    const ringCalm = ringSpeed(false);
+    const ringDash = ringSpeed(true);
+    check('the ring is not twirled by a strike',
+      Math.abs(ringDash - ringCalm) < Math.max(1, ringCalm * 0.35),
+      `${ringCalm.toFixed(1)}u/s cruising vs ${ringDash.toFixed(1)} striking`);
+  }
+  {
+    // ...and neither is a socket that just gave its club away. Nothing to spin.
+    const { clubsThrowable, fireClubThrow } = await import('../path/src/systems/club.js');
+    const { resetProjectiles } = await import('../path/src/entities/projectiles.js');
+    freshRun();
+    const rig = rigWithFins(2);
+    swing(0.3, { level: 1, ice: 1, rig, finSpin: 4, speed: CONFIG.player.maxSpeed });
+    resetProjectiles(scene);
+    fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, () => playerPos.clone(), {}, {});
+    swing(0.5, { level: 1, ice: 1, rig, finSpin: 4, speed: CONFIG.player.maxSpeed, dashing: true });
+    check('an emptied fin has nothing to twirl', clubsThrowable() === 0,
+      'the socket is still recovering, and a socket with no club in it swings nothing');
+    resetProjectiles(scene);
+  }
+}
+
+// ------------------------------------------------------------------- the juice
+
+section('THE JUICE — what a club is made of, and how much of it');
+
+// The caps, read from config rather than typed here — they are the numbers a
+// tuner drags, and a test that hard-coded them would fail the moment somebody
+// tuned the thing it exists to protect.
+const fxCeiling = (key) => CONFIG.club.fx?.[key] ?? Infinity;
+
+// Everything here is a claim about FEEDBACK, and none of it is a claim about
+// how it LOOKS. That half is a controller in your hands, the same way the swing
+// is. What can be failed over is the plumbing under it, and the plumbing is the
+// part that has silently broken before: an accent keyed on an asset that no
+// longer exists, a growth term that stops growing, a ribbon anchored at the
+// grip so it scribbles round the orbit point instead of trailing the head.
+//
+// systems/club.js fills one shared record the instant before it calls a hook
+// (clubHitFx) and main.js reads it back, so a hook here can snapshot exactly
+// what the game would have drawn.
+{
+  const fxCfg = CONFIG.club.fx;
+  const accent = fxCfg?.accent ?? {};
+
+  // The two tables that can go stale without anything throwing: an accent
+  // naming an emitter that was renamed fires nothing at all (feedback() warns
+  // to a console nobody is reading), and a club type with no trail preset is a
+  // club that silently orbits with no ribbon.
+  const missingEmitters = Object.entries(accent)
+    .filter(([, name]) => !CONFIG.emitters[name])
+    .map(([asset, name]) => `${asset} -> ${name}`);
+  check('every club substance names a real emitter', missingEmitters.length === 0,
+    missingEmitters.length ? missingEmitters.join(', ') : `${Object.keys(accent).length} club assets`);
+
+  const noTrail = Object.keys(accent).filter((asset) => !CONFIG.trails[asset]);
+  check('...and every club type has a ribbon to trail', noTrail.length === 0,
+    noTrail.length ? noTrail.join(', ') : Object.keys(accent).join(', '));
+
+  // Every one of those trails sheds a substance too, and it has to be the same
+  // FAMILY as the one the club hits with — a Cold Snap trailing embers is the
+  // ribbon and the impact disagreeing about what one object is made of.
+  //
+  // The same family, NOT the same emitter, and the difference is the whole
+  // reason this is a colour test rather than a string comparison. A wake and an
+  // impact are two different bursts on purpose: a trail's `perSecond` fires the
+  // emitter's whole count each time, so shedding the impact burst put four
+  // hundred sprites a second into the water off a five-club ring and the fight
+  // frame came back as confetti. What has to hold across the pair is the
+  // colour, and nothing else.
+  //
+  // Compared as a NORMALISED palette average — the hue rather than how bright
+  // it was authored, since a wake at glow 1.6 and an impact at 2.6 are the same
+  // colour at two intensities.
+  const paletteHue = (name) => {
+    const cols = CONFIG.emitters[name]?.colors ?? [];
+    if (!cols.length) return null;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (const c of cols) {
+      r += ((c >> 16) & 255) / 255;
+      g += ((c >> 8) & 255) / 255;
+      b += (c & 255) / 255;
+    }
+    const peak = Math.max(r, g, b, 1e-6);
+    return [r / peak, g / peak, b / peak];
+  };
+  const strayed = Object.entries(accent).map(([asset, name]) => {
+    const shed = CONFIG.trails[asset]?.particles?.emitter;
+    if (!shed) return null;
+    const hit = paletteHue(name);
+    const wake = paletteHue(shed);
+    if (!hit || !wake) return `${asset}: ${shed} has no palette`;
+    const d = Math.abs(hit[0] - wake[0]) + Math.abs(hit[1] - wake[1]) + Math.abs(hit[2] - wake[2]);
+    return d > 0.25 ? `${asset}: ${name} vs ${shed} ${d.toFixed(2)} apart` : null;
+  }).filter(Boolean);
+  check('...and sheds the same colour it hits with', strayed.length === 0,
+    strayed.join(' · ') || Object.keys(accent)
+      .map((asset) => CONFIG.trails[asset]?.particles?.emitter).join(', '));
+}
+
+// WHICH CLUB DID IT. The whole point of the accent: four kinds of club can be
+// swinging and orbiting at once, and the burst is the only channel that says
+// which one landed the blow you just felt.
+{
+  const seen = (levels) => {
+    freshRun();
+    const fish = spawnAt('fish', playerPos.x + 1.2, playerPos.y);
+    const assets = new Set();
+    swing(1.5, {
+      ...levels,
+      finSpin: 12,
+      speed: CONFIG.player.maxSpeed,
+      hooks: { onWhack: () => assets.add(clubHitFx().asset) },
+    });
+    void fish;
+    return assets;
+  };
+
+  const ice = seen({ level: 0, ice: 1 });
+  check('a Cold Snap club reports itself as one', ice.has('clubIce'),
+    [...ice].join(', ') || 'nothing connected');
+
+  const boom = seen({ level: 0, boom: 1 });
+  check('...and a Boom Boom Club as one', boom.has('clubBoom'),
+    [...boom].join(', ') || 'nothing connected');
+
+  const plain = seen({ level: 1 });
+  check('...and a plain club is driftwood', plain.has('club'),
+    [...plain].join(', ') || 'nothing connected');
+}
+
+// HOW MUCH. Three growth claims, and each one is a separate question — see
+// CONFIG.club.fx. Asserted as MULTIPLES rather than as "more", because a
+// growth term that has come unhooked still drifts up a hair with the swing and
+// "more than before" would pass on that alone.
+{
+  const amountAt = (stacks) => {
+    freshRun();
+    spawnAt('fish', playerPos.x + 1.2, playerPos.y);
+    let peak = 0;
+    swing(1.5, {
+      level: stacks,
+      finSpin: 12,
+      speed: CONFIG.player.maxSpeed,
+      hooks: { onWhack: () => { peak = Math.max(peak, clubHitFx().amount); } },
+    });
+    return peak;
+  };
+
+  const one = amountAt(1);
+  const six = amountAt(6);
+  check('a deeper stack throws more of it', six > one * 1.5,
+    `${one.toFixed(2)}x at one stack, ${six.toFixed(2)}x at six`);
+  check('...and never past the ceiling', six <= fxCeiling('maxAmount') + 1e-6,
+    `${six.toFixed(2)}x against a cap of ${fxCeiling('maxAmount')}`);
+
+  // And the swing still matters at every stack, which is the rule the whole
+  // weapon runs on: a six-stack club drifting into a fish is still a drift.
+  const lazy = (() => {
+    freshRun();
+    spawnAt('fish', playerPos.x + 1.2, playerPos.y);
+    let low = Infinity;
+    swing(2.5, {
+      level: 6,
+      finSpin: 0.8,
+      speed: 0,
+      hooks: { onWhack: () => { low = Math.min(low, clubHitFx().amount); } },
+    });
+    return low;
+  })();
+  check('...and a lazy swing still throws less than a whip',
+    Number.isFinite(lazy) && lazy < six,
+    `${lazy === Infinity ? 'no hit' : lazy.toFixed(2)}x at a drift vs ${six.toFixed(2)}x at a whip`);
+  check('...but a connecting club always throws SOMETHING',
+    !Number.isFinite(lazy) || lazy > 0,
+    'a hit with no particles reads as a miss, not as a weak hit');
+}
+
+// SIZE follows the club's DRAWN size, which is what folds Big Rigz, the ring's
+// smaller orbiters and reach-per-level into one number. Measured through the
+// stat block, because that is how the card actually arrives.
+{
+  const sizeWith = (companionScale) => {
+    const saved = player.stats;
+    player.stats = { ...saved, companionScale };
+    freshRun();
+    spawnAt('fish', playerPos.x + 1.2, playerPos.y);
+    let peak = 0;
+    swing(1.5, {
+      level: 4,
+      finSpin: 12,
+      speed: CONFIG.player.maxSpeed,
+      hooks: { onWhack: () => { peak = Math.max(peak, clubHitFx().size); } },
+    });
+    player.stats = saved;
+    return peak;
+  };
+  const small = sizeWith(1);
+  const big = sizeWith(2);
+  check('a bigger stick sheds bigger splinters', big > small,
+    `${small.toFixed(2)}x at Big Rigz 1, ${big.toFixed(2)}x at 2`);
+  check('...within the ceiling', big <= fxCeiling('maxSize') + 1e-6,
+    `${big.toFixed(2)}x against a cap of ${fxCeiling('maxSize')}`);
+}
+
+// THE DIRECTION. `clubChips` has a cone, and emit() reads a missing direction
+// as due east — so a burst handed (0, 0) fires every splinter to the right of
+// the screen forever. There is no assertion that would catch that by looking
+// at the picture; there is one here.
+{
+  freshRun();
+  spawnAt('fish', playerPos.x + 1.2, playerPos.y);
+  let flat = 0;
+  let total = 0;
+  const watch = () => {
+    const fx = clubHitFx();
+    total++;
+    if (Math.hypot(fx.dirX, fx.dirY) < 1e-6) flat++;
+  };
+  swing(2, {
+    level: 2, boom: 1, finSpin: 12, speed: CONFIG.player.maxSpeed,
+    hooks: { onWhack: watch, onShock: watch, onBlast: watch, onRicochet: watch },
+  });
+  check('every club event points somewhere', total > 0 && flat === 0,
+    `${total - flat} of ${total} events carried a heading`);
+}
+
+// A CAROM CARRIES THE BLOW THAT THREW IT. The one club event that cannot read
+// its numbers off a club still in front of it — the swing happened frames ago
+// and the club that made it may since have been thrown or swapped.
+{
+  freshRun();
+  spawnAt('shark', playerPos.x + 1.4, playerPos.y);
+  for (let i = 0; i < 8; i++) spawnAt('fish', playerPos.x + 5 + i * 1.2, playerPos.y + 0.2);
+  const caromed = [];
+  swing(3, {
+    level: 0, ice: 3, finSpin: 14, speed: CONFIG.player.maxSpeed,
+    hooks: { onRicochet: () => caromed.push({ ...clubHitFx() }) },
+  });
+  check('a carom is made of the club that launched it', caromed.length > 0
+    && caromed.every((fx) => fx.asset === 'clubIce'),
+    `${caromed.length} carom(s), ${new Set(caromed.map((f) => f.asset)).size} substance(s)`);
+  check('...and carries that swing\'s size with it, not a default',
+    caromed.length > 0 && caromed.every((fx) => fx.amount > 0),
+    caromed.length ? `${caromed[0].amount.toFixed(2)}x` : 'no carom');
+}
+
+// ------------------------------------------------------------------ the ribbon
+
+section('THE RIBBON — the clubs you are not holding');
+
+{
+  freshRun();
+  // Two in the fins and three on the ring: five club picks, and the layout
+  // rule is that the first two go in the flippers.
+  swing(1, { level: 3, ice: 2, finSpin: 8, speed: CONFIG.player.maxSpeed });
+  const movers = clubTrailMovers();
+  const orbiting = clubsOrbiting();
+  check('every club on the ring gets an anchor', orbiting > 0 && movers.length === orbiting,
+    `${movers.length} anchor(s) for ${orbiting} orbiter(s)`);
+  const held = clubsInHand();
+  check('...and the clubs in the fins get none', held > 0 && movers.length === orbiting,
+    `${held} in the fins, ${movers.length} anchors — a ribbon off a fin club is a ribbon off the seal`);
+
+  // NAMED AFTER THE ASSET, because that is what CONFIG.trails is keyed on —
+  // an anchor with the wrong name resolves no preset and draws nothing at all,
+  // silently.
+  const named = movers.filter((m) => CONFIG.trails[m.mesh.name]);
+  check('...each naming a preset that exists', movers.length > 0 && named.length === movers.length,
+    [...new Set(movers.map((m) => m.mesh.name))].join(', '));
+
+  // ANCHORED AT THE HEAD. The grip is the end that barely moves, so a ribbon
+  // hung off the mesh origin draws a tight scribble around the orbit point
+  // instead of a trail. The head is further out than the grip, by roughly the
+  // shaft — which is exactly the thing to measure.
+  const gripGap = movers.map((m) => Math.min(...clubGroup.children.map(
+    (club) => Math.hypot(club.position.x - m.mesh.position.x, club.position.y - m.mesh.position.y),
+  )));
+  const outboard = gripGap.filter((d) => d > 0.2).length;
+  check('...hung off the head rather than the handle',
+    movers.length > 0 && outboard === movers.length,
+    `nearest club origin is ${Math.min(...gripGap).toFixed(2)}u away at the closest`);
+
+  // And it is MOVING, which is what a ribbon is drawn through. Differenced
+  // rather than taken from the ring's own numbers, because the head's travel
+  // is the orbit plus the spring lag plus the tumble.
+  const moving = movers.filter((m) => m.speed > 0.5);
+  check('...and travelling, so there is a trail to draw',
+    moving.length === movers.length && movers.length > 0,
+    `${moving.length} of ${movers.length} moving, fastest ${Math.max(0, ...movers.map((m) => m.speed)).toFixed(1)}u/s`);
+
+  // The growth, one step down from the bursts' — see CONFIG.club.fx.trailShare.
+  const widest = Math.max(0, ...movers.map((m) => m.trailScale));
+  check('...at a width the run\'s cards have bought',
+    widest >= 1 && widest <= fxCeiling('maxTrail') + 1e-6,
+    `${widest.toFixed(2)}x against a cap of ${fxCeiling('maxTrail')}`);
+}
+
+{
+  // A ring that is taken away leaves no anchors behind. The trail system keys
+  // its ribbons on these objects, so a stale list is a ribbon hanging in the
+  // water behind a club that is not there.
+  freshRun();
+  swing(1, { level: 4, finSpin: 8, speed: CONFIG.player.maxSpeed });
+  const had = clubTrailMovers().length;
+  resetClub();
+  check('a reset takes the ribbons with it', had > 0 && clubTrailMovers().length === 0,
+    `${had} anchor(s) -> 0`);
+}
+
+{
+  // THE THROWN CLUB gets its ribbon through the projectile itself, since by
+  // the time it is in the air it is an ordinary shot. `trailScale` is what
+  // carries the Hurler's stacks onto it — and onto the debris it sheds when it
+  // lands, which reads the same number (see main.js).
+  const { projectiles } = await import('../path/src/entities/projectiles.js');
+  const { fireClubThrow } = await import('../path/src/systems/club.js');
+  const throwAt = (throwLevel) => {
+    freshRun();
+    projectiles.length = 0;
+    swing(0.5, { level: 1, throwLevel, finSpin: 8, speed: CONFIG.player.maxSpeed });
+    fireClubThrow(scene, 1, throwLevel, 1, { x: 20, y: 0 },
+      () => new THREE.Vector3(playerPos.x, playerPos.y, 0), {}, {});
+    const thrown = projectiles.filter((b) => b.source === 'clubThrow');
+    const scale = Math.max(0, ...thrown.map((b) => b.trailScale ?? 0));
+    projectiles.length = 0;
+    return scale;
+  };
+  const one = throwAt(1);
+  const five = throwAt(5);
+  check('a thrown club trails a ribbon at all', one > 0, `${one.toFixed(2)}x at one stack`);
+  check('...that thickens with the Hurler\'s stacks', five > one,
+    `${one.toFixed(2)}x at one, ${five.toFixed(2)}x at five`);
+}
+
+// --------------------------------------------------------- and main.js wires it
+
+section('THE WIRING — no club event ships without its substance');
+
+// A SOURCE SCAN, and it earns its place: everything above proves the club
+// REPORTS what it is made of, and none of it proves anybody listens. The six
+// hooks live in main.js, which needs a browser and cannot be imported here, so
+// the only thing that can be checked from Node is that each handler actually
+// reaches the one helper. Cheap, and it is exactly the regression that would
+// otherwise ship — a seventh club event added next to six that all look done.
+{
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../path/src/main.js', import.meta.url), 'utf8');
+  // SCOPED TO THE CLUB'S OWN HOOK BLOCK, and that is not fussiness: `onBlast`
+  // and `onFreeze` are both names the oyster and the elements use too, and a
+  // whole-file search finds theirs first and reports the club's as wired when
+  // it is not. The block starts at the updateClub call and is generously
+  // bounded — crude on purpose, since a parser here would be a bigger thing to
+  // keep right than the claim it is protecting.
+  // Bounded at the next system's update rather than by a character count: the
+  // club's hooks run to about six thousand characters of comment and a fixed
+  // window that fitted them yesterday silently drops the last one tomorrow.
+  const from = src.indexOf('updateClub(dt,');
+  const to = src.indexOf('updateOctoGrab(', from);
+  const block = src.slice(from, to > from ? to : from + 12000);
+  const wired = ['onWhack', 'onRicochet', 'onBlast', 'onShock', 'onFreeze'].filter((hook) => {
+    const at = block.indexOf(`${hook}: (`);
+    if (at < 0) return false;
+    return /clubAccent\(/.test(block.slice(at, at + 1600));
+  });
+  check('every club hook fires an accent', wired.length === 5, `${wired.join(', ') || 'none'}`);
+
+  // ...and the thrown club, which does not come through those hooks at all —
+  // it is an ordinary projectile by the time it lands, resolved in combat.js.
+  check('...and so does a thrown club landing',
+    /CONFIG\.club\.fx\?\.accent\?\.\[projectile\?\.mesh\?\.name\]/.test(src),
+    'the impact reads the same table the hooks do');
 }
 
 console.log(`\n${failures === 0 ? 'PASS' : 'FAIL'} — ${failures} failure(s)\n`);

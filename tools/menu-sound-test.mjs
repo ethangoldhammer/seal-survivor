@@ -119,6 +119,11 @@ dom.window.AudioContext = class {
   createGain() { return fakeNode({ gain: fakeParam() }); }
   createBiquadFilter() { return fakeNode({ type: '', frequency: fakeParam(), Q: fakeParam() }); }
   createConvolver() { return fakeNode({ buffer: null }); }
+  // The bus builds a feedback delay for the celebration echo. Missing here it
+  // does not throw anything this test can see — unlockAudio catches, warns to
+  // a console nobody is reading, and leaves HALF A BUS wired, which fails as
+  // "the bus input never reaches the speakers".
+  createDelay(max) { return fakeNode({ maxDelayTime: max, delayTime: fakeParam() }); }
   createWaveShaper() { return fakeNode({ curve: null, oversample: '' }); }
   createDynamicsCompressor() { return fakeNode({ threshold: fakeParam(), knee: fakeParam(), ratio: fakeParam(), attack: fakeParam(), release: fakeParam(), reduction: 0 }); }
   createBuffer(c, l) { return { numberOfChannels: c, length: l, getChannelData: () => new Float32Array(l) }; }
@@ -428,7 +433,7 @@ section('The score card on a pad');
   // card turns over now, so this is the FRONT face's list; the back's own
   // control is inside a .sv-hidden face while the front is up.
   const reachable = ['svTrophyShare', 'svTrophySave', 'svSheetShare', 'svSheetSave',
-    'svTurnOver', 'svNameSubmit', 'svRestartBtn']
+    'svTurnOver', 'svNameSubmit', 'svNextRoll', 'svRestartBtn']
     .map((id) => document.getElementById(id))
     .filter((c) => c && !c.disabled && !c.closest('.sv-hidden'));
   check('the card has controls to reach', reachable.length >= 2,

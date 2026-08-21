@@ -375,10 +375,20 @@ const chunkSize = new THREE.Vector3();
  * bias. `opts.vel` is a {x, y} throw for a chunk being kicked out of something
  * (a boss), which runs through the same toss physics chum from a broken hull
  * does. Returns the chunk, so the caller can announce it at the size it rolled.
+ *
+ * A PIECE OF MEAT CAN PAY IN FUEL INSTEAD OF HEALTH. `opts.pips` is boost pips
+ * — what a weak spot's ejecta is worth (see CONFIG.hotSpots.chum) — and a
+ * chunk carrying it pays NO heal unless `opts.healFrac` says otherwise. The two
+ * currencies share this entity because they are the same object in the water,
+ * and they must never share a LOOK: pass `opts.tint` with the pips, or the
+ * size-and-colour tell that says how much health a chunk is worth would be
+ * sitting on one that heals nothing. `opts.lifetime` overrides the ambient
+ * chunk's long wait, which belongs to a pickup worth crossing the arena for.
  */
 export function spawnChumChunk(scene, pos, opts = {}) {
   const c = CONFIG.chumChunk ?? {};
   const t = opts.t ?? rollChunkT(Math.random, c.healBias ?? 1);
+  const pips = Math.max(0, opts.pips ?? 0);
   const mesh = createVisual('chumChunk');
   mesh.position.copy(pos);
   // multiplyScalar, NOT setScalar: the asset carries its own size from
@@ -397,8 +407,14 @@ export function spawnChumChunk(scene, pos, opts = {}) {
     mesh.material = mesh.material.clone();
     mesh.userData.ownMaterial = true;
   }
-  const base = chunkColor.set(c.tintMin ?? 0xff6a4a).clone()
-    .lerp(new THREE.Color(c.tintMax ?? 0xffd166), t);
+  // The heal ramp, or the flat tint of a piece that pays something else. Not
+  // lerped when it is overridden: the ramp MEANS a heal, and running a fuel
+  // colour through it would say "this one is a small one" about a currency the
+  // ramp knows nothing about.
+  const base = opts.tint !== undefined
+    ? chunkColor.set(opts.tint).clone()
+    : chunkColor.set(c.tintMin ?? 0xff6a4a).clone()
+      .lerp(new THREE.Color(c.tintMax ?? 0xffd166), t);
 
   // MEASURED, not assumed. A chunk's size is the asset's authored radius times
   // its assets.csv row times the roll above, and any of those three can move —
@@ -418,11 +434,23 @@ export function spawnChumChunk(scene, pos, opts = {}) {
     // generous end of that is the one that matches what the player sees.
     radius: Math.max(chunkSize.x, chunkSize.y) * 0.5,
     t,
-    healFrac: chunkHealFrac(t),
+    // Fuel or food. A chunk with pips on it heals nothing by default — see the
+    // note above — so the size the player reads is telling them about the one
+    // thing this piece actually pays.
+    pips,
+    healFrac: opts.healFrac ?? (pips > 0 ? 0 : chunkHealFrac(t)),
     base,
-    life: c.lifetime ?? 34,
+    life: opts.lifetime ?? c.lifetime ?? 34,
     // Counts DOWN from the arrival flash; see the brightness in updateChunk.
     flash: c.flash?.enabled === false ? 0 : (c.flash?.seconds ?? 0),
+    // How hard that arrival burns, over the shared one. A piece thrown out of a
+    // wound arrives lit rather than merely present — see CONFIG.hotSpots.chum.
+    flashMul: opts.flashMul ?? 1,
+    // Above this it is still IN FLIGHT: it may not be claimed by the food
+    // magnet, and whoever threw it may draw a trail behind it. 0 disables the
+    // whole idea, which is what every chunk that is dropped rather than fired
+    // gets.
+    settleSpeed: opts.settleSpeed ?? 0,
     vx: opts.vel?.x ?? 0,
     vy: opts.vel?.y ?? 0,
     phase: Math.random() * Math.PI * 2,
@@ -443,7 +471,7 @@ function removeChunk(scene, chunk) {
 // rolled. Exported and pure for the same reason chumGlowAt is: the arrival
 // flash has to be plainly brighter than the resting glow and has to actually
 // reach it, and both of those are visible in the numbers alone.
-export function chunkBrightness(flashLeft, clock, phase = 0) {
+export function chunkBrightness(flashLeft, clock, phase = 0, flashMul = 1) {
   const c = CONFIG.chumChunk ?? {};
   const glow = c.glow ?? 1.5;
   const pulse = 1 + (c.pulseDepth ?? 0) * Math.sin(clock * (c.pulseHz ?? 0.8) * Math.PI * 2 + phase);
@@ -453,7 +481,12 @@ export function chunkBrightness(flashLeft, clock, phase = 0) {
     // Exponential, so the afterglow drops off fast enough to still read as a
     // flash but never hits the resting value with a visible corner on it.
     const k = Math.max(0, Math.min(1, flashLeft / seconds));
-    mul += (c.flash?.boost ?? 0) * k * k;
+    // `flashMul` is the ARRIVAL only, deliberately — a piece kicked out of a
+    // weak spot comes in white-hot and settles to the same resting glow every
+    // other chunk wears. Multiplying the whole return instead would give one
+    // pickup a permanently brighter body, which says "this is a bigger one"
+    // in the language the size and the tint already speak.
+    mul += (c.flash?.boost ?? 0) * k * k * Math.max(0, flashMul);
   }
   return Math.max(0, mul);
 }
@@ -466,6 +499,9 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
   const dx = player.mesh.position.x - chunk.mesh.position.x;
   const dy = player.mesh.position.y - chunk.mesh.position.y;
   const dist = Math.hypot(dx, dy) || 0.0001;
+  // What the swallow is tested on: this frame's distance until the magnet
+  // moves it. See the note by the subtraction below.
+  let gap = dist;
 
   const speed = player.velocity?.length?.() ?? 0;
   // THE FOOD MAGNET, not the general one: a chunk is what the FOOD CHAIN is
@@ -475,12 +511,22 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     player.mesh.position.x, player.mesh.position.y,
     chunk.mesh.position.x, chunk.mesh.position.y, speed,
   );
+  // A PIECE STILL IN FLIGHT IS NOT YET FOOD. The magnet outranks a throw and
+  // cancels it (see below), so anything thrown hard enough to be worth watching
+  // is claimed on its first frame whenever the seal is anywhere near — which is
+  // always, for meat kicked out of the boss the player is shooting. Above its
+  // own `settleSpeed` a chunk is off limits; drag brings any throw under that
+  // within half a second and it is an ordinary pickup from then on. Zero for
+  // every chunk that isn't thrown, which is the behaviour this had before.
+  const flying = chunk.settleSpeed > 0
+    && !chunk.magnetLatch
+    && Math.hypot(chunk.vx, chunk.vy) >= chunk.settleSpeed;
   // Latched, exactly as chum is: coming into reach CLAIMS the chunk, and a
   // claimed chunk travels to the mouth until it is swallowed. The reach behind
   // it can close — chain over, dash over, seal turned away — without stranding
   // it, which matters more here than anywhere: this is the rarest pickup in
   // the game to lose in mid water.
-  const magnetised = reach < foodReach(player.stats, speed) || chunk.magnetLatch;
+  const magnetised = !flying && (reach < foodReach(player.stats, speed) || chunk.magnetLatch);
   if (magnetised) chunk.magnetLatch = true;
 
   if (magnetised) {
@@ -493,6 +539,11 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     const step = Math.min(foodPull(speed) * dt, dist);
     chunk.mesh.position.x += (dx / dist) * step;
     chunk.mesh.position.y += (dy / dist) * step;
+    // And the swallow is tested on where it landed, not on where it started
+    // the frame — `dist` predates this step and postdates the seal's own, so a
+    // chunk parked on the mouth by the clamp still reads a frame of seal travel
+    // out. See the same subtraction on chum in updatePickups.
+    gap = dist - step;
   } else if (chunk.vx || chunk.vy) {
     // Kicked out of something. The same toss model chum spilling from a hull
     // uses — drag below the water line, gravity above it — so a chunk thrown
@@ -523,6 +574,21 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     chunk.mesh.position.y = floor;
     chunk.vy = 0;
   }
+  // AND NOT THROUGH THE SIDE WALLS EITHER, for exactly the same reason. This
+  // only started to matter when a piece off a weak spot began leaving the boss
+  // at 42 u/s (CONFIG.hotSpots.chum.tossSpeed) — about nine units of travel
+  // against the boss's own three — so a fight against the wall can now throw
+  // one clean out of the arena, where it is visible, unreachable and the
+  // rarest thing in the water to lose that way. The ambient chunk's own toss
+  // has never come close to the edge and is unaffected.
+  const wall = chunk.radius + 0.2;
+  if (chunk.mesh.position.x < bounds.left + wall) {
+    chunk.mesh.position.x = bounds.left + wall;
+    chunk.vx = Math.max(chunk.vx, 0);
+  } else if (chunk.mesh.position.x > bounds.right - wall) {
+    chunk.mesh.position.x = bounds.right - wall;
+    chunk.vx = Math.min(chunk.vx, 0);
+  }
 
   if (chunk.mesh.material?.color) {
     // The coach's highlight rides the same multiply, for the same reason the
@@ -531,7 +597,8 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     // resting pulse. Multiplying keeps all three legible — a chunk that rolled
     // dark red still goes bright RED rather than being repainted.
     chunk.mesh.material.color.copy(chunk.base)
-      .multiplyScalar(chunkBrightness(chunk.flash, orbClock, chunk.phase) * telegraphMul(chunk.mesh));
+      .multiplyScalar(chunkBrightness(chunk.flash, orbClock, chunk.phase, chunk.flashMul)
+        * telegraphMul(chunk.mesh));
   }
 
   // The seal's own reach PLUS the chunk's body — a big chunk is taken from
@@ -542,7 +609,7 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
   // Gated on there BEING a handler: without one the chunk is left in the water
   // to sink and expire normally, rather than being swum through and deleted
   // with nothing paid out.
-  if (onCollect && dist < CONFIG.pickups.collectRadius + chunk.radius) {
+  if (onCollect && gap < CONFIG.pickups.collectRadius + chunk.radius) {
     onCollect(chunk);
     return 'collected';
   }
@@ -587,10 +654,18 @@ function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect, tick, rawDt) 
     player.mesh.position.x, player.mesh.position.y,
     orb.mesh.position.x, orb.mesh.position.y, speed,
   );
+  let gap = dist;
   if (reach < magnetRadius(player.stats, speed)) {
-    const pull = magnetSpeed(speed) * dt;
+    // CLAMPED TO THE GAP, and the collect test below measures what is left of
+    // it — both for the reason the chum magnet is (see updatePickups). An
+    // unclamped pull that outruns the seal overshoots by more than the collect
+    // radius, so the orb flicks through the mouth frame after frame without
+    // ever being measured close enough to take; and testing the distance the
+    // orb had BEFORE this step leaves it pinned to a fast seal, uncollected.
+    const pull = Math.min(magnetSpeed(speed) * dt, dist);
     orb.mesh.position.x += (dx / dist) * pull;
     orb.mesh.position.y += (dy / dist) * pull;
+    gap = dist - pull;
   }
 
   // TAKEN BY TOUCHING ITS BODY, not its centre. `collectRadius` is one number
@@ -602,7 +677,7 @@ function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect, tick, rawDt) 
   // unit in a single frame, which is exactly why it went unnoticed: turn the
   // magnet off and every one of them was being collected from inside its own
   // body. Same widening the chunk and the bubble already do.
-  if (dist < CONFIG.pickups.collectRadius + (orb.bodyRadius ?? 0)) {
+  if (gap < CONFIG.pickups.collectRadius + (orb.bodyRadius ?? 0)) {
     // The ENTRY as a third argument, which the three older handlers ignore. It
     // is here for the level blob, whose burst takes the colour it happened to
     // be wearing on the frame it was swallowed — there is no `assetBaseColor`
@@ -754,6 +829,10 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
     const dx = player.mesh.position.x - p.mesh.position.x;
     const dy = player.mesh.position.y - p.mesh.position.y;
     const dist = Math.hypot(dx, dy) || 0.0001;
+    // How far the orb is from the mouth once everything below has moved it —
+    // the number the swallow is tested on. Starts as this frame's distance and
+    // is rewritten by the magnet, which is the only thing here that closes it.
+    let gap = dist;
     // DISTANCE TO THE MOUTH, which is the corridor while sweeping mid-dash.
     // Hoisted rather than measured inside the branch below because the halo at
     // the bottom of the loop is about the same reach, and two answers to "how
@@ -815,6 +894,19 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       const step = Math.min(foodPull(sealSpeed) * dt, dist);
       p.mesh.position.x += (dx / dist) * step;
       p.mesh.position.y += (dy / dist) * step;
+      // AND THE SWALLOW TEST SEES WHERE IT LANDED. `dist` was measured at the
+      // top of the frame, before this step and after the seal had already
+      // moved, so an orb the clamp has just parked ON the mouth still reads a
+      // whole frame of seal travel away. Below about 36 u/s that is under the
+      // collect radius and it is swallowed anyway; a dash covers 0.77 units a
+      // frame and never was. The orb rode the seal, pinned to the mouth,
+      // uncollected, for the whole dash — and the faster the magnet gets the
+      // more of the game that covers, which is why raising the pull without
+      // this fixes nothing.
+      //
+      // Subtracted rather than re-measured: the step is clamped to `dist` and
+      // aimed straight at the seal, so what is left is exactly the difference.
+      gap = dist - step;
     } else if (p.hoover) {
       // IN A MOUTH: already moved this frame by whatever is eating it (see
       // bitePickup), and neither sinking nor drifting on its own until it lets
@@ -870,7 +962,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
 
     // Nothing goes down while the mouth is sealed; the release gulps the lot
     // instead (see gulpPickups and CONFIG.strike.charge.gulp).
-    if (!sealed && dist < CONFIG.pickups.collectRadius) {
+    if (!sealed && gap < CONFIG.pickups.collectRadius) {
       onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul, p.sank);
       orbPool?.release(p.mesh);
       pickups.splice(i, 1);
@@ -1213,9 +1305,22 @@ function listFor(kind) {
   return null;
 }
 
+// THE COACH'S CHUNK TIP IS ABOUT THE MEAL. A piece kicked out of a boss's weak
+// spot rides the same array (see spawnChumChunk) and pays boost pips instead of
+// health, so a tip that fired for one would put "this one's a real deal seal
+// meal" over a pickup that heals nothing — and would then never be marked off,
+// because eating it is not the event the step is waiting for. Applied to the
+// three functions the coach asks with and nowhere else: everything else about a
+// chunk is the same for both kinds, which is the point of them sharing the
+// entity.
+function coachEligible(kind, item) {
+  return kind !== 'chumChunk' || !(item.pips > 0);
+}
+
 /** Is there one of `kind` in the water right now? A first-run tip's cue. */
 export function pickupTypeInWater(kind) {
-  return (listFor(kind)?.length ?? 0) > 0;
+  const list = listFor(kind);
+  return !!list && list.some((o) => coachEligible(kind, o));
 }
 
 /**
@@ -1236,6 +1341,7 @@ export function nearestPickup(x, y, kind, maxDist = Infinity) {
   let best = null;
   let bestD2 = maxDist * maxDist;
   for (const o of list) {
+    if (!coachEligible(kind, o)) continue;
     const dx = o.mesh.position.x - x;
     const dy = o.mesh.position.y - y;
     const d2 = dx * dx + dy * dy;
@@ -1270,6 +1376,7 @@ export function pickupEntry(kind, x, y, maxDist = Infinity) {
   let best = null;
   let bestD2 = maxDist * maxDist;
   for (const o of list) {
+    if (!coachEligible(kind, o)) continue;
     const dx = o.mesh.position.x - x;
     const dy = o.mesh.position.y - y;
     const d2 = dx * dx + dy * dy;

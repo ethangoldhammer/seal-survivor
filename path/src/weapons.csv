@@ -143,6 +143,9 @@ club.shock.damagePerLevel,4,0,20,club shockwave damage per level
 club.shock.knock,0.9,0,2,club shockwave shove
 club.shock.cooldown,0.55,0.05,3,club shockwave minimum gap per club
 club.shock.armTime,0.3,0,2,club shockwave: settle time before a new club may fire one
+club.twirl.enabled,1,,,"club twirl: the basic club is never thrown (CONFIG.clubThrow.neverThrown) - this is what it does with a strike instead"
+club.twirl.spin,24,0,34,"club twirl: rad/sec a kept fin club is driven to while a dash is live. THIS IS ITS DAMAGE - every club hit is scaled by the club's own measured spin - so it is set against three other numbers, not by eye: over powerReference x powerMax (14.4) so its hits are at the swing ceiling, over shock.fullSwing (22) so it cracks a full-grade shockwave, and under maxSwing (34) or that cap owns this value instead"
+club.twirl.spinUp,14,1,60,"club twirl: per-second approach rate toward that spin. At 14 it is two thirds of the way there in the first tenth of a second, which is what 'rapidly' has to mean on a dash that can be over in half of one"
 club.orbit.radius,3.6,1,10,club ring how far the spare clubs orbit
 club.orbit.speed,1.5,0,8,club ring how fast it turns
 club.orbit.spin,8,0,24,club ring tumble rate — this is an orbiter's damage

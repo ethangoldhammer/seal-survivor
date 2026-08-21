@@ -67,8 +67,9 @@ import { updateBeatSync, divisionSeconds } from '../path/src/systems/beatSync.js
 import {
   initBossHotSpots, attachHotSpots, updateBossHotSpots, hotSpotDamage,
   hotSpotsOf, resetBossHotSpots, perimeterCandidates, liveHotSpotCount,
-  hotSpotShells, spotAt, setHotSpotLook,
+  hotSpotShells, spotAt, setHotSpotLook, drainHotSpotChum,
 } from '../path/src/systems/bossHotSpots.js';
+import { pipCount } from '../path/src/systems/strike.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DT = 1 / 60;
@@ -842,6 +843,203 @@ section('6. The ichor is a goo group and the burst is scaled by size AND speed')
   // gradient renders a small fused blob as a glass marble with a blue fringe,
   // and ichor is hot rather than wet.
   check('the ichor carries no specular highlight', g && !g.spec, `spec ${g?.spec}`);
+}
+
+// ---------------------------------------------------------------------------
+section('6b. Working a spot kicks big chum loose');
+// ---------------------------------------------------------------------------
+// THE PAYOUT FOR AIM. Hitting a weak spot shakes lumps of the animal loose and
+// swallowing one refills BOOST PIPS — see CONFIG.hotSpots.chum. Four ways that
+// goes wrong, and every one of them is invisible in a fight:
+//
+//   PER HIT INSTEAD OF PER DAMAGE. Sources call hotSpotDamage at wildly
+//   different rates — an automatic weapon ten times a second, the club once —
+//   so a payout counted in hits is a chum fountain on one build and nothing at
+//   all on another. Asserted as the SAME total from the same damage delivered
+//   in ten bites and in one.
+//
+//   THE PIECE LANDS INSIDE THE BOSS. Meat born on the spot's centre, or thrown
+//   inward, is a reward you have to swim through the one hitbox in the game you
+//   cannot enter to collect.
+//
+//   IT PAYS A FORTUNE. Pips are the strike meter, so what one spot is worth has
+//   to be read against the BAR (pipCount) rather than as a number of pieces.
+//
+//   THE QUEUE OUTLIVES THE FIGHT. It is drained by main.js once a frame; one
+//   that survived a reset would spill the last boss's meat into the next run.
+{
+  const M = CONFIG.hotSpots.chum ?? {};
+  const e = spawnBoss();
+  const owner = lightUp(e);
+  const s = owner.spots[0];
+  const where = { x: s.wx, y: s.wy };
+  drainHotSpotChum();
+
+  // ONE SHARE of the pool, in ten bites — the config's own share rather than a
+  // number typed here, or this would be testing imported-tuning.json. Divided
+  // by critMul because the pool takes the CRIT damage, the same arithmetic the
+  // rupture threshold uses.
+  const share = s.pool * (M.damageShare ?? 0.34);
+  const bite = share / (CONFIG.hotSpots.critMul * 10);
+  // SEEDED, because the throw is scattered inside `chum.spread` and the checks
+  // below are about the geometry rather than about which way one roll went.
+  seeded(9001, () => {
+    for (let i = 0; i < 10; i++) hotSpotDamage(e, where, bite);
+  });
+  const drip = drainHotSpotChum();
+  check('a share of a spot\'s pool shakes a piece loose', drip.length >= 1,
+    `${drip.length} from ${Math.round(share)} damage in 10 bites`);
+  check('...worth boost pips', drip.every((q) => q.pips > 0),
+    drip.map((q) => `${q.pips}p`).join(' '));
+
+  // THE SAME DAMAGE IN ONE HIT. A fresh spot on the same body, so the pool is
+  // the same number.
+  const s2 = owner.spots[1] ?? owner.spots[0];
+  if (s2 !== s) {
+    const before = s2.taken;
+    seeded(9002, () => hotSpotDamage(e, { x: s2.wx, y: s2.wy }, share / CONFIG.hotSpots.critMul));
+    const lump = drainHotSpotChum();
+    check('one big hit pays the same as ten small ones for the same damage',
+      lump.length === drip.length,
+      `${lump.length} vs ${drip.length} (pool ${Math.round(s2.taken - before)} either way)`);
+  }
+
+  // OUT THROUGH THE SKIN. Measured against the SPOT'S OWN NORMAL and not
+  // against the boss's centre — the centre is the wrong ruler and it fails on
+  // correct behaviour: meat leaving a spot on the belly travels down and away
+  // through the belly, which is outward through the surface and "toward the
+  // middle" of a body whose centroid is above it.
+  //
+  // The angle is the assertion, and it is the config's: a throw is allowed to
+  // scatter inside `chum.spread` of the normal and nowhere else. At the ceiling
+  // (spread >= PI/2) a piece could legally be thrown back into the animal,
+  // which is what this would catch.
+  const spread = M.spread ?? 0.5;
+  const off = drip.map((q) => {
+    const speed = Math.hypot(q.vx, q.vy) || 1;
+    return Math.acos(Math.max(-1, Math.min(1, (q.vx * s.wnx + q.vy * s.wny) / speed)));
+  });
+  check('every piece is thrown out through the skin, inside the spread',
+    off.every((a) => a <= spread + 1e-6),
+    `${off.map((a) => a.toFixed(2)).join(' ')} rad off the normal, spread ${spread}`);
+  check('...and none is born on top of the light it came out of',
+    drip.every((q) => Math.hypot(q.x - s.wx, q.y - s.wy) > s.r * 0.5),
+    `${drip.map((q) => Math.hypot(q.x - s.wx, q.y - s.wy).toFixed(2)).join(' ')} vs r ${s.r.toFixed(2)}`);
+
+  // WHAT ONE WHOLE SPOT IS WORTH. Fed the rest of its pool, so what is counted
+  // is the drip plus the burst — the spot's entire life.
+  const s3 = owner.spots[2] ?? null;
+  if (s3) {
+    const per = s3.pool / (CONFIG.hotSpots.critMul * 40);
+    seeded(9003, () => {
+      for (let i = 0; i < 60 && s3.alive; i++) hotSpotDamage(e, { x: s3.wx, y: s3.wy }, per);
+    });
+    const all = drainHotSpotChum();
+    const pips = all.reduce((a, q) => a + q.pips, 0);
+    const bars = pips / pipCount();
+    console.log(`  --   one spot, cradle to rupture: ${all.length} pieces, ${pips} pips, `
+      + `${bars.toFixed(2)} of a ${pipCount()}-pip bar`);
+    check('a spot worked to its burst pays a real amount of the meter', bars >= 0.5,
+      `${bars.toFixed(2)} bars`);
+    check('...and nowhere near enough to stop the eating mattering', bars <= 3,
+      `${bars.toFixed(2)} bars`);
+    check('the burst throws its own pieces on top of the drip',
+      all.length >= (M.ruptureCount ?? 2), `${all.length} pieces, burst owes ${M.ruptureCount}`);
+  }
+
+  // AND IT ARRIVES LIT. The spawn is announced by its own event, and the whole
+  // point of that event is emission at the POINT — so what is asserted is the
+  // two places the light actually comes from, not that a row exists.
+  {
+    const ev = CONFIG.feedback.hotSpotChum;
+    const em = CONFIG.emitters[ev?.emit];
+    check('the arrival has an event and an emitter', !!em, ev?.emit ?? 'missing');
+    // SPRITES, NOT GOO, and this is the check worth having: the goo composite
+    // writes linear straight to the framebuffer and lands about a stop and a
+    // half darker than its hex — which is why the ichor beside it is authored
+    // in apricot. A fuel pickup announcing itself in that pass would be the one
+    // burst here that cannot throw light.
+    check('...and it is a sprite burst, so it can bloom', !em?.goo, em?.goo ?? 'sprites');
+    // Past the bright pass by a wide margin. Luminance, not brightness — the
+    // pass thresholds luma, so a palette can look bright and never bloom.
+    const luma = (hex) => {
+      const c = new THREE.Color(hex);
+      return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    };
+    const dimmest = Math.min(...(em?.colors ?? [0]).map(luma)) * (em?.glow ?? 1);
+    const thresh = CONFIG.bloom?.threshold ?? 0.58;
+    check('...and its dimmest particle still clears the bloom threshold',
+      dimmest > thresh, `${dimmest.toFixed(2)} vs ${thresh}`);
+    // The piece itself carries some of that light for the second afterwards.
+    check('...and the piece arrives hotter than an ordinary chunk',
+      (M.flashMul ?? 1) > 1, `x${M.flashMul}`);
+  }
+
+  // AND IT LEAVES THE ANIMAL. Drag under water is exponential, so a throw
+  // travels `tossSpeed / waterDrag` and no further — which makes the speed a
+  // DISTANCE, and the distance has to be read against the body it is leaving.
+  // The failure this catches is a piece that appears at the wound and settles
+  // against the flank still inside the silhouette, which is what the shipped
+  // 13 u/s did on a thirteen-metre shark and which looks, in the water, like
+  // the pickup simply spawning on the boss.
+  {
+    const drag = CONFIG.pickups.toss?.waterDrag ?? 4.5;
+    const travel = (M.tossSpeed ?? 0) / drag;
+    console.log(`  --   thrown at ${M.tossSpeed} u/s against drag ${drag}: `
+      + `${travel.toFixed(1)} units, off a boss whose own reach is ${e.radius.toFixed(1)}`);
+    check('a piece travels clear of the body it came out of', travel > e.radius,
+      `${travel.toFixed(1)} vs ${e.radius.toFixed(1)}`);
+
+    // THE TRAIL. Blobs are dropped at the piece's position on a fixed cadence,
+    // so what decides whether they read as a LINE is how far apart they land
+    // against the size of a splat: the `ichor` group's field is wide and its
+    // isoline low precisely so neighbours keep summing over it after they have
+    // separated. Spaced further than a splat, the same code renders a row of
+    // beads — and beads look deliberate, which is why this is worth an
+    // assertion rather than an eye.
+    const tr = M.trail ?? {};
+    const em = CONFIG.emitters[CONFIG.feedback.hotSpotChumTrail?.emit];
+    const goo = CONFIG.fx.goo.groups[em?.goo];
+    check('the trail is goo, in the group the wound already bleeds', !!goo,
+      em?.goo ?? 'missing');
+    // THE RULER IS THE SPLAT, IN WORLD UNITS, and working it out is the point:
+    // `group.radius` is a splat DIAMETER as a multiple of the particle's own
+    // `size` (see gl_PointSize in entities/particles.js), not a distance. Read
+    // as a distance it is 4.2 — comfortably more than any spacing this could
+    // ever have — so a check that compared the two directly would pass with the
+    // blobs a hundredth of their needed size and the trail rendering as dots.
+    const splat = (em?.size?.[0] ?? 0) * (goo?.radius ?? 0) * 0.5;
+    const gap = (M.tossSpeed ?? 0) * (tr.every ?? 0);
+    check('...and its blobs land close enough together to fuse into a line',
+      splat > 0 && gap < splat,
+      `${gap.toFixed(2)} apart vs the smallest splat's ${splat.toFixed(2)} radius`);
+    // ONE THRESHOLD FOR BOTH JOBS. `settleSpeed` is what stops the trail AND
+    // what keeps the food magnet off the piece while it is travelling — see
+    // the flight check in tools/chum-chunk-test.mjs, which is where the magnet
+    // half is measured. It has to be under the throw or the piece is never in
+    // flight at all: no trail, and claimed on the frame it is born.
+    check('...and it runs for as long as the piece is in flight',
+      (M.settleSpeed ?? 0) > 0 && (M.settleSpeed ?? 0) < (M.tossSpeed ?? 0),
+      `settles at ${M.settleSpeed} u/s, thrown at ${M.tossSpeed}`);
+
+    // It fires around twenty times per flight, so every channel that punches
+    // has to be off. A sound or a shake on this row is a buzz and a rattle,
+    // and neither is visible in the config until you are in a fight.
+    const row = CONFIG.feedback.hotSpotChumTrail ?? {};
+    check('...and the trail punches in no channel at all',
+      !row.sfx && !row.shake && !row.hitstop && !row.glow && !row.ripple && !row.haptic,
+      `sfx ${row.sfx} shake ${row.shake} glow ${row.glow}`);
+  }
+
+  // Nothing is owed to a creature with no spots, and nothing survives a reset.
+  {
+    const fish = spawnNamed(scene, 'fish', 0, undefined, { ignoreCaps: true, overfill: true });
+    if (fish) hotSpotDamage(fish, { x: 0, y: 0 }, 500);
+    check('an ordinary creature sheds nothing', drainHotSpotChum().length === 0);
+  }
+  hotSpotDamage(e, where, s.pool);
+  resetBossHotSpots();
+  check('and a reset drops whatever was still owed', drainHotSpotChum().length === 0);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 id,size,skin,surface,notes
 attractorOrb,2.06,,,
 belugaDrone,3.1,,,
+bossBarrel,1,,,"the exploding barrel every boss but the yacht throws (the yacht overrides it with moneyRoll1). Size is 1 on purpose: the sizing that matters is `fit` in assets.js, set to the length of the oval primitive this replaces, so the model swap is a look change and not a balance one."
 bossYacht,1,,biolum:bossYacht,"The boss yacht. SIZE 1 IS NOT A CHOICE - it is what this asset already had. An id with no row resolves to 1 (sizeMultiplierFor returns ?? 1, and setting 1 deletes the entry), so the row exists to carry the surface cell and leaves the scale exactly where it was. The hull is sized by fit: 13 in assets.js, measured against the trawler, and that is the number to move."
 bounceShot,1.58,,,
 bubbleOrb,2.84,,,
@@ -39,6 +40,7 @@ enemyStingray,3.1,,,
 enemyTuna,1,tuna,noise:tuna+toon:tuna+biolum:tuna,"Added for the SURFACE, not the size. enemyTuna has never carried a row, and an asset with no row spawns at 1 - so size=1 is exactly what it is already, and this changes nothing about how big the tuna is or how big it is to hit. Its night variant enemyGlowTuna has no row either and is therefore also 1: keep these two equal, or the school changes size at dusk. The night one wears lantern rather than these three layers, on purpose."
 enemyWalkingCrab,2.3,,noise:walkingCrab+toon:walkingCrab+biolum:carapace,matched to enemyEmberCrab; 2.3 reproduces the old crab's on-screen height on the new rig
 harp,1,,,"the orbiting harp - fit is 1.6 world units against the seal's 2.6, so this column is the multiple of a deliberately under-sized instrument"
+headstone,1,,,"the upright run marker. Size 1: `fit` in assets.js (1.8) is where the scale lives, and it is one factor shared across the three stones so the set stays in proportion."
 levelOrb,2.2,,,"The level blob. Grown per spawn by systems/levelOrb.js rather than built by createVisual, so this row and the entry in assets.js exist for the SIZE alone - the blob normalises its own geometry to levelPickup.blob.fit first, and this is the multiplier on top. Sized between the coral (2.4) and the strike orb (1.18): it has to read as the biggest prize in the water without being wider than the circle that collects it."
 missile,2,,noise:mussel+toon:mussel,"The homing mussel. SIZE 2 IS NOT A CHOICE - it is what this asset already had, and assets.js's fit (0.58) is the oval it replaced measured exactly, so the model swap carried no size change. The surface is the new part: the shell is lit now and wears the Perlin-and-banding pair. Shares the mussel preset with musselOpen on purpose - they are one animal in two states."
 moneyRoll1,1,,,"the yacht's explosive — a banded roll of hundreds. Size is 1 on purpose: the sizing that matters is `fit` in assets.js, set to the length of the oval barrel this replaces, so the swap is a look change and not a balance one."
@@ -51,6 +53,7 @@ octoGrabber,1.34,,biolum:octoGrabber,
 orcaFriendBull,1,,noise:orcaFriendBull+toon:orcaFriendBull,"The pod leader — Orca Family, slot 0."
 orcaFriendCalf,1,,biolum:orcaFriendCalf,"Orca Family, slot 2. Smallest of the three."
 orcaFriendCow,1,,biolum:orcaFriendCow,"Orca Family, slot 1."
+plaque,1,,,the small slanted run marker. See headstone.
 rapidFireOrb,2.4,,,
 razorBlade,1,,,
 seagull,9.54,,,
@@ -60,6 +63,7 @@ shrapnel,2.52,,,
 shrimp,2.36,,,
 starfish,6.2,,,
 strikeOrb,1.18,,,
+tomb,1,,,the big gabled run marker. See headstone.
 trapBubble,5.02,,,
 trawler,0.84,,,
 whale,2.6,,toon:whale+biolum:whale,"The bowhead sweeper. 12 fit x this = 31.2 world units of animal in an 80-wide frame - bigger than the mosasaur boss at 27.2, which is the largest thing in the game otherwise. Deliberately out of family with the boss column: the sweep reads as relief rather than as another arrival only if the silhouette is unmistakable at a glance. Its gulp reach is NOT derived from this - see whale.mouthRadius in spawning.csv."

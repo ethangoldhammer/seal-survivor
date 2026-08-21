@@ -18,6 +18,50 @@ import { hotSpotDamage } from './bossHotSpots.js';
 // on combat.js's own `contact`.
 const clubContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 
+// WHAT KIND OF CLUB JUST DID THAT, AND HOW LOUD IT SHOULD READ.
+//
+// Shared and read immediately — the same arrangement as `clubContact` above
+// and for exactly the same reason. Every club event in a frame fills this in
+// and hands it straight to a hook that has already spent it before the next
+// hit is tested, so one object serves the whole file and nothing is allocated
+// per whack. Nothing outside this file may HOLD it; `clubHitFx()` exists to be
+// read inside a hook and forgotten.
+//
+// It is passed to nobody. The hooks keep the signatures they have always had
+// and main.js reads this instead, which is what let the six accent call sites
+// arrive without changing a single hook contract — including `onFreeze`, which
+// comes back out of systems/elements.js and could never have carried an extra
+// argument without teaching the element system about clubs.
+const clubFx = {
+  // The club's ASSET, which is what CONFIG.club.fx.accent is keyed on.
+  asset: 'club',
+  // Stacks of the card that owns THIS club, which is not the same as the run's
+  // club level — a Cold Snap on the ring grows with Cold Snap picks.
+  level: 1,
+  // The three channels. See the long note on CONFIG.club.fx for what each one
+  // is a question about; they are multipliers on the emitter's own numbers, so
+  // 1/1/1 is a one-stack club at a full swing.
+  amount: 1,
+  size: 1,
+  speed: 1,
+  // WHICH WAY THE BLOW WENT, for the burst's cone. Always a real direction —
+  // `clubChips` has a cone and a burst handed (0, 0) would fire every splinter
+  // due east. Every site below fills it from something that cannot be zero:
+  // the throw heading, the head's tangential travel, or the carom's course.
+  dirX: 1,
+  dirY: 0,
+  orbiting: false,
+};
+
+/**
+ * The club that fired the event you are handling, for a feedback hook.
+ *
+ * Valid ONLY inside a hook, synchronously. See the note on `clubFx`.
+ */
+export function clubHitFx() {
+  return clubFx;
+}
+
 // ---------------------------------------------------------------------------
 // THE CLUB — a weapon lashed to the fin tips, swung by THE FINS THEMSELVES.
 //
@@ -74,6 +118,20 @@ let group = null;
 // on the enemy, because a flight owns state the creature has no business
 // carrying around after it lands (bounces left, what it has already hit).
 let flights = [];
+// THE RIBBON ANCHORS — one per club that is NOT in a flipper.
+//
+// Rebuilt into the same array every frame (never reallocated) and handed to
+// systems/projectileTrails.js beside the projectile list, because an orbiting
+// club wants exactly what a thrown one gets and that file already draws it.
+// Each entry is shaped like a projectile — { mesh, dir, speed } — which is the
+// whole interface a ribbon needs, and each is STABLE for the life of its club:
+// the trail system keys its ribbons on object identity, so handing it a fresh
+// record every frame would tear down and rebuild every trail in the ring sixty
+// times a second.
+//
+// A fin club has no entry, deliberately. It is welded to the animal and reads
+// as part of it; a streak coming off it would be a streak coming off the seal.
+let trailMovers = [];
 // Free-running only for the assist spin below — NOT the swing. The swing has
 // no clock; it comes off the flippers.
 let assistClock = 0;
@@ -469,6 +527,196 @@ function clubReach() {
   return player.stats?.clubReachMul ?? 1;
 }
 
+// --- THE JUICE, and the one place the run's cards reach it -------------------
+//
+// See the long note on CONFIG.club.fx. Three questions, three numbers, and
+// they are computed HERE rather than at the six call sites because "how big is
+// this club's spray" has to have one answer — the swing, the carom, the
+// shockwave and the ribbon are all the same club, and six copies of the
+// formula is six chances for one of them to stop growing when a card is taken.
+
+/** Which upgrade a club asset belongs to, for looking its stacks up. */
+function typeKeyFor(asset) {
+  return CLUB_TYPES.find((t) => t.asset === asset)?.key ?? 'club';
+}
+
+/**
+ * WILL THE HURLER TAKE THIS CLUB OUT OF THE FIN?
+ *
+ * A refusal list in CONFIG.clubThrow.neverThrown rather than a permission one,
+ * so "the seal throws the clubs it is holding" is still the rule and a club
+ * type added tomorrow is throwable without anybody remembering to say so. See
+ * the long note there for why the basic club is the one exception, and
+ * CONFIG.club.twirl for what it does with the strike instead.
+ */
+function isThrowable(asset) {
+  const never = CONFIG.clubThrow?.neverThrown;
+  return !(Array.isArray(never) && never.includes(asset));
+}
+
+/**
+ * HOW MANY specks this club throws, as a multiplier on the emitter's count.
+ *
+ * Stacks and the Bouncer are the CARDS; `power` is the swing. They multiply
+ * rather than add, because they are answering different questions — the cards
+ * decide what this club is capable of and the swing decides how much of that
+ * it just spent — and a lazy swing on a six-stack club should still read as a
+ * lazy swing.
+ */
+function fxAmount(level, power) {
+  const f = CONFIG.club.fx ?? {};
+  const stack = 1 + (f.perStack ?? 0) * Math.max(0, level - 1)
+    + (f.perPower ?? 0) * Math.max(0, clubPower() - 1);
+  const floor = f.powerFloor ?? 0.45;
+  return Math.min(f.maxAmount ?? 2.6, stack * (floor + (1 - floor) * Math.min(1, power)));
+}
+
+/**
+ * THE THREE CHANNELS, as multipliers on an emitter's own numbers.
+ *
+ * Pure, and exported for the look page (tools/looks/club-fx.js) — which is the
+ * only place these are ever LOOKED at, and would otherwise have to re-derive
+ * the formula and slowly stop agreeing with the game it exists to preview.
+ *
+ * The Bouncer is read off the stat block inside, not passed: it multiplies
+ * every club in the run and a caller that had to remember it is a caller that
+ * will one day forget.
+ */
+export function clubFxFor(level, power, drawRatio = 1) {
+  const f = CONFIG.club.fx ?? {};
+  const floor = f.powerFloor ?? 0.45;
+  const swing = floor + (1 - floor) * Math.min(1, power);
+  return {
+    amount: fxAmount(level, power),
+    size: Math.min(f.maxSize ?? 2, 1 + (drawRatio - 1) * (f.sizeShare ?? 0.6)),
+    // The swing and the shove. Both are about how hard the wood ARRIVED, which
+    // is the one thing a particle's launch speed can say.
+    speed: Math.min(f.maxSpeed ?? 2, swing + (f.knockShare ?? 0.5) * Math.max(0, clubKnock() - 1)),
+  };
+}
+
+/**
+ * The ribbon's multiplier, from the same growth the bursts take.
+ *
+ * A gentler share of it, and capped lower. A burst is gone in half a second
+ * and a trail is on screen for as long as the club is, so the same 2.6x that
+ * reads as a heavier impact reads as a stripe of paint across the arena.
+ */
+export function trailScaleFor(amount) {
+  const f = CONFIG.club.fx ?? {};
+  return Math.min(f.maxTrail ?? 1.8, 1 + Math.max(0, amount - 1) * (f.trailShare ?? 0.55));
+}
+
+/**
+ * Fill `clubFx` for a club that is about to fire an event.
+ *
+ * @param asset      the club's asset key — decides the substance
+ * @param level      stacks of the card that owns this club
+ * @param power      this club's swing power, the same 0..powerMax the damage uses
+ * @param drawRatio  how big the club is actually DRAWN, against a level-1 fin
+ *                   club at 1. Reach per level, the ring's smaller orbiters and
+ *                   Big Rigz are all already folded into it, which is why the
+ *                   size channel reads this rather than three stats.
+ * @param dirX       which way the blow went. Never zero — see `clubFx`.
+ */
+function noteFx(asset, level, power, drawRatio, dirX, dirY, orbiting) {
+  const fx = clubFxFor(level, power, drawRatio);
+  clubFx.asset = asset;
+  clubFx.level = level;
+  clubFx.amount = fx.amount;
+  clubFx.size = fx.size;
+  clubFx.speed = fx.speed;
+  clubFx.dirX = dirX;
+  clubFx.dirY = dirY;
+  clubFx.orbiting = orbiting;
+  return clubFx;
+}
+
+/**
+ * Point this club's ribbon anchor at its head, and measure how it is moving.
+ *
+ * ANCHORED AT THE HEAD, not at the mesh. The mesh's origin is the GRIP — a
+ * club is pivoted at its handle — and a ribbon off the handle of a tumbling
+ * club draws a small tight scribble around the orbit point, because the grip
+ * is the end that barely moves. The head is the end that travels, which is
+ * both the end a trail is a trail OF and the end that does the hitting.
+ *
+ * The anchor is a bare Object3D that is never added to the scene: it exists so
+ * the trail system has something with a `.position`, a `.name` (the asset, so
+ * the preset resolves) and a `.scale` to read, and nothing renders it.
+ *
+ * Direction and speed are DIFFERENCED rather than taken from the ring's
+ * parameters, for the same reason the swing power is measured rather than
+ * configured: the head's motion is the orbit plus the spring lag plus the
+ * tumble, and only one of those three is a number this file could have asked
+ * for. `primed` is false for one frame after the anchor is made, where there
+ * is no previous position and the honest answer is "not moving yet" rather
+ * than a spike differenced against the origin.
+ */
+function syncMover(club, asset, drawScale, dt, trailScale) {
+  let m = club.mover;
+  if (!m) {
+    m = club.mover = {
+      mesh: new THREE.Object3D(),
+      dir: { x: 1, y: 0 },
+      speed: 0,
+      trailScale: 1,
+      primed: false,
+      px: 0,
+      py: 0,
+    };
+  }
+  const a = m.mesh;
+  a.name = asset;
+  a.scale.setScalar(drawScale);
+  a.position.copy(club.head);
+  if (m.primed && dt > 0) {
+    const dx = a.position.x - m.px;
+    const dy = a.position.y - m.py;
+    const len = Math.hypot(dx, dy);
+    m.speed = len / dt;
+    if (len > 1e-6) { m.dir.x = dx / len; m.dir.y = dy / len; }
+  }
+  m.px = a.position.x;
+  m.py = a.position.y;
+  m.primed = true;
+  m.trailScale = trailScale;
+  return m;
+}
+
+/**
+ * The clubs that want a ribbon this frame, for systems/projectileTrails.js.
+ *
+ * The live array, not a copy — it is rebuilt in place by updateClub and read
+ * once a frame by main.js immediately afterwards.
+ */
+export function clubTrailMovers() {
+  return trailMovers;
+}
+
+/**
+ * Put a FLIGHT's stored juice back into the scratch, for a carom.
+ *
+ * A carom happens frames after the swing that caused it, in a different loop,
+ * so this is the one club event whose numbers cannot be read off a club that
+ * is still in front of us — the club that hit this body may since have been
+ * thrown, swapped by a level-up, or gone. They are snapshotted at the launch
+ * instead (see `launch`), which is also the honest reading: a body flying
+ * across the arena carries the blow that put it there.
+ */
+function noteFlightFx(f, dirX, dirY) {
+  const s = f.fx;
+  clubFx.asset = s?.asset ?? 'club';
+  clubFx.level = s?.level ?? 1;
+  clubFx.amount = s?.amount ?? 1;
+  clubFx.size = s?.size ?? 1;
+  clubFx.speed = s?.speed ?? 1;
+  clubFx.dirX = dirX;
+  clubFx.dirY = dirY;
+  clubFx.orbiting = false;
+  return clubFx;
+}
+
 /** What one connecting swing hits for. */
 export function clubDamage(level) {
   const c = CONFIG.club;
@@ -494,6 +742,25 @@ export function clubsInHand() {
   return n;
 }
 
+/**
+ * How many of the clubs in the fins the Hurler would actually take.
+ *
+ * Not the same as clubsInHand: a driftwood club is held and is never thrown.
+ */
+export function clubsThrowable() {
+  let n = 0;
+  for (const club of clubs) {
+    if (club.armed && club.mount === 'fin' && isThrowable(club.mesh.userData.clubAsset ?? 'club')) n++;
+  }
+  return n;
+}
+
+/** Is any fin sitting empty, waiting for a thrown club to come back? */
+function finSocketRecovering() {
+  for (const club of clubs) if (club.mount === 'fin' && !club.armed) return true;
+  return false;
+}
+
 /** How many clubs are riding the ring right now. */
 export function clubsOrbiting() {
   let n = 0;
@@ -506,8 +773,15 @@ export function clubsOrbiting() {
  *
  * Returns how many were actually there to throw. The Hurler hurls the REAL
  * clubs off the flippers rather than conjuring copies, so the cost of the
- * ability is that the melee weapon is gone until they come back: throw, and
- * for `respawnTime` the seal is swimming with empty fins.
+ * ability is that those clubs are gone until they come back: throw, and for
+ * `respawnTime` that fin is empty.
+ *
+ * THE BASIC CLUB IS NEVER TAKEN. See CONFIG.clubThrow.neverThrown for why the
+ * base card is the exception — in short, a run's first two picks are its FIN
+ * clubs, so the thing the Hurler was spending on most builds was the Driftwood
+ * Club, and one card should not make another one worse. The driftwood stays put
+ * and spins up instead (CONFIG.club.twirl), so the seal is never left swimming
+ * empty-handed through the one window it is closing on things.
  *
  * THE RING IS NOT THROWN. The cost of this card is the weapon leaving your
  * HANDS, and the orbiting clubs are not in them — they are a second thing the
@@ -519,6 +793,12 @@ export function disarmClubs() {
   let taken = 0;
   for (const club of clubs) {
     if (!club.armed || club.mount !== 'fin') continue;
+    // THE BASIC CLUB STAYS IN THE HAND. See isThrowable — and note this is
+    // checked per SOCKET rather than per run: a seal holding a Driftwood Club
+    // and a Cold Snap throws the Cold Snap and keeps swinging the driftwood,
+    // which is the whole shape of the change. What the kept club does with the
+    // dash is the twirl in updateClub.
+    if (!isThrowable(club.mesh.userData.clubAsset ?? 'club')) continue;
     club.armed = false;
     club.respawnLeft = c.respawnTime;
     club.mesh.visible = false;
@@ -762,9 +1042,20 @@ function flightFor(e) {
  * a body that has landed, but two live flights for one creature would
  * integrate its position twice per frame and fling it off the map.
  */
-function launch(e, dirX, dirY, speed, level) {
+function launch(e, dirX, dirY, speed, level, fx = null) {
   const existing = flightFor(e);
-  const f = existing ?? { e, vx: 0, vy: 0, bounces: 0, life: 0, lock: new Map(), dead: false };
+  const f = existing ?? { e, vx: 0, vy: 0, bounces: 0, life: 0, lock: new Map(), dead: false, fx: null };
+  // SNAPSHOTTED, not held. `fx` is the shared scratch every club event in the
+  // frame writes through, so keeping the reference would have the last hit of
+  // the frame decide what every body already in the air is made of.
+  if (fx) {
+    f.fx = f.fx ?? {};
+    f.fx.asset = fx.asset;
+    f.fx.level = fx.level;
+    f.fx.amount = fx.amount;
+    f.fx.size = fx.size;
+    f.fx.speed = fx.speed;
+  }
   f.vx = dirX * speed;
   f.vy = dirY * speed;
   f.bounces = clubBounces(level);
@@ -854,6 +1145,11 @@ function hurt(scene, e, dmg, enemiesList, hooks, at = null, source = null) {
 export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {}, hooks = {}) {
   if (!group) return;
   const c = CONFIG.club;
+  // EMPTIED FIRST, REFILLED BY THE LOOP. Every early return below is a frame
+  // with no ring to draw — the weapon switched off in the tuner, a rig still
+  // resolving — and a stale list would leave ribbons hanging in the water
+  // behind clubs that are no longer anywhere.
+  trailMovers.length = 0;
   // A bare number still works, and is what every harness and the tuner pass
   // when they only care about the base weapon.
   const lv = typeof levels === 'number' ? { club: levels } : (levels ?? {});
@@ -974,6 +1270,10 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   for (let i = 0; i < clubs.length; i++) {
     const club = clubs[i];
     const orbiting = club.mount === 'orbit';
+    // WHICH CLUB THIS SOCKET IS HOLDING, read once at the top because three
+    // separate things below turn on it — the twirl (does the Hurler leave this
+    // one behind), the accent burst, and the ribbon's preset.
+    const asset = club.mesh.userData.clubAsset ?? 'club';
 
     // THE SOCKET IS EMPTY — thrown, and not back yet. No mesh, no swing, no
     // hitbox. Ticked before anything else so the frame it refills is a frame
@@ -1097,7 +1397,55 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     // ends up feeling different on a 144Hz monitor.
     const err = wrapAngle(target - club.angle);
     club.angVel += err * c.stiffness * dt;
-    club.angVel *= Math.exp(-c.damping * dt);
+
+    // THE TWIRL — what a club the Hurler refuses to take does with a strike.
+    //
+    // FIN CLUBS ONLY, and only the ones still there: a variant is in the air
+    // by now (see disarmClubs) and an orbiter performs nothing the player did,
+    // which is the same line the shockwave below is drawn on. So in practice
+    // this is the basic club, and it is written as "whatever the throw left
+    // behind" rather than as `asset === 'club'` so that the exemption and the
+    // payoff can never disagree about which club they mean.
+    //
+    // DRIVEN ON THE VELOCITY, not on the target. That is the same distinction
+    // the carry-through above turns on and it matters more here than anywhere:
+    // a target is a place the club settles at and stops, so a twirl written as
+    // a rest angle would be a club that snapped to a heading and sat there. An
+    // approach on the velocity spins the wood UP, and the moment the dash ends
+    // it simply stops being applied and the ordinary damping winds it back
+    // down — no second timer, no ramp to author, and the club is never doing
+    // anything the rest of this file does not already understand.
+    //
+    // Exponential, so the spin-up is framerate-independent for the same reason
+    // the damping is.
+    const tw = c.twirl;
+    const twirling = !!(tw?.enabled && dashing && !orbiting && club.armed && !isThrowable(asset));
+    // THE WATER GETS NO VOTE WHILE THE STRIKE IS DRIVING THE CLUB, and skipping
+    // the damping for exactly those frames is the whole of what makes `spin`
+    // mean the rate the club reaches. Run both and they fight: the approach
+    // pulls toward `spin` while the decay drags the result back every frame, so
+    // the club settles at about three quarters of the number, the tuner is
+    // dragging a value the weapon cannot reach, and the three thresholds that
+    // value is set against (see CONFIG.club.twirl) are all wrong by the same
+    // invisible factor. It is also the right physical reading: a club being
+    // whipped round by an animal that is dashing is not a club the water is
+    // slowing down.
+    //
+    // The damping is still what winds the twirl DOWN — the frame the dash ends,
+    // this branch stops being taken and the decay below picks the club up mid-
+    // spin. That is the whole ramp-out, and it costs no timer.
+    if (!twirling) club.angVel *= Math.exp(-c.damping * dt);
+    if (twirling) {
+      // Which way. A club already turning keeps turning that way — reversing a
+      // moving club is the one thing here that would read as a glitch — and
+      // one that is essentially still takes its side's direction, so the two
+      // flippers counter-rotate instead of both picking the same sign and
+      // reading as one object.
+      let spinSign = Math.sign(club.angVel);
+      if (!spinSign || Math.abs(club.angVel) < 1) spinSign = (tw.counterRotate && i % 2) ? -1 : 1;
+      const want = (tw.spin ?? 0) * spinSign;
+      club.angVel += (want - club.angVel) * (1 - Math.exp(-(tw.spinUp ?? 0) * dt));
+    }
     // A ceiling, because a spring given an impulsive target (an aim that
     // snapped across the screen) can wind itself up past the point where the
     // swept hit test can keep up.
@@ -1155,6 +1503,32 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     // a readout of the animation rather than a system with its own tempo.
     const swing = Math.abs(club.angVel);
     const power = Math.min(c.powerMax, swing / Math.max(1e-3, c.powerReference));
+
+    // --- WHAT THIS CLUB SHEDS, decided once per club per frame --------------
+    //
+    // Both of the things the player can see about this club's material go
+    // through here: the accent burst any event it fires will throw, and the
+    // ribbon behind it if it is not in a flipper. Together rather than at each
+    // site, because they are one claim — this is a Cold Snap, three stacks
+    // deep, swung this hard — and two places to compute it is two places for
+    // one of them to stop growing when a card is taken.
+    //
+    // The stacks are the card that owns THIS club, not the run's club level: a
+    // Boom Boom on the ring grows with Boom Boom picks and is untouched by
+    // Driftwood Club. The base club is the one exception and it reads `level`,
+    // which already folds in the authoring switch and the "any club card arms
+    // the seal" rule above — `owned.club` alone would leave a run holding only
+    // Cold Snap swinging a club whose stack count was zero.
+    const typeKey = typeKeyFor(asset);
+    const fxLevel = Math.max(1, (typeKey === 'club' ? level : owned[typeKey]) ?? 0);
+    // The direction is overwritten at every call site with the one that site
+    // actually means; this is the fallback, and it is the shaft, which is
+    // never a zero vector.
+    noteFx(asset, fxLevel, power, reachScale, dirX, dirY, orbiting);
+    // THE RIBBON. Orbiters only — see `trailMovers`. Sized off the same
+    // `amount` the bursts use, so a ring that is throwing more debris is also
+    // trailing a fatter stripe rather than the two growing apart.
+    if (orbiting && club.armed) trailMovers.push(syncMover(club, asset, drawScale, dt, trailScaleFor(clubFx.amount)));
     // `launchKnockMul` is the club's extra knockback for everything the launch
     // WILL take — the other half of `knock`, which only ever reaches bodies
     // the launch refuses. Raised here rather than by editing `launchSpeed`
@@ -1199,6 +1573,14 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
         const radius = aoe(sh.radius * grade);
         const dmg = abilityDamage((sh.damage + sh.damagePerLevel * Math.max(0, level - 1)) * grade)
           * clubPower();
+        // ALONG THE HEAD'S OWN TRAVEL. The wave itself is a circle and its
+        // emitter is coneless, but the club's accent rides on top of it and
+        // the chips a crack throws come off the way the wood was going.
+        // Tangential to the shaft, signed by which way the swing is turning —
+        // the same vector the launch is built from, a few lines down.
+        const peakSign = club.angVel >= 0 ? 1 : -1;
+        clubFx.dirX = -dirY * peakSign;
+        clubFx.dirY = dirX * peakSign;
         // From `prevHead` — where the head was ON the peak frame, not where it
         // has already decelerated to by the time this runs.
         shockwave(scene, club.prevHead.x, club.prevHead.y, radius,
@@ -1294,6 +1676,14 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       const tc = c.teed ?? {};
       const hitPower = teed ? Math.max(power, tc.minPower ?? 0) : power;
 
+      // WHICH WAY THIS BLOW WENT, for everything that fires from here — the
+      // whack, the tee-off, the ice and the keg all read it off `clubFx` (see
+      // clubHitFx). The throw heading rather than the shaft: it is the
+      // direction the body is being sent, which is the direction the debris
+      // came off at.
+      clubFx.dirX = throwX;
+      clubFx.dirY = throwY;
+
       // Its own event, so the player can SEE that the setup paid. Fired before
       // the whack rather than after, so the two read as one blow with an
       // accent on it rather than as two hits.
@@ -1355,7 +1745,10 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       // is worth building toward rather than just noticing.
       const teedLaunch = launchSpeed / Math.max(1e-3, power) * hitPower
         * (teed ? (tc.launchMul ?? 1) : 1);
-      launch(e, throwX, throwY, teedLaunch / mass, level);
+      // The blow travels with the body. See noteFlightFx — a carom lands
+      // frames later, and by then the club that caused it may have been thrown
+      // or swapped out from under the flight.
+      launch(e, throwX, throwY, teedLaunch / mass, level, clubFx);
     }
   }
 
@@ -1444,6 +1837,11 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
 
       const cx = other.mesh.position.x;
       const cy = other.mesh.position.y;
+      // The blow that put this body in the air, back into the scratch — and
+      // pointed along the course it actually arrived on, which is what the
+      // chips coming off the collision should follow.
+      const flightSpeed = Math.hypot(f.vx, f.vy) || 1;
+      noteFlightFx(f, f.vx / flightSpeed, f.vy / flightSpeed);
       hooks.onRicochet?.(cx, cy, clubBounces(level) - f.bounces);
       // THE RIDERS TRAVEL WITH THE BODY. A carom is a club hit that happens to
       // be delivered by a shark, so it freezes and it detonates like any other
@@ -1548,16 +1946,28 @@ export function clubThrowCount(power, level) {
 export function clubThrowReady(power, level) {
   const c = CONFIG.clubThrow;
   if (!c?.enabled || !(level > 0) || power < c.minPower) return false;
-  // AND THERE HAS TO BE A CLUB IN HAND. This is the whole cost of the card:
-  // the seal throws the clubs it is holding, so a second strike released
-  // before they have come back throws nothing. Without this the ability is
-  // free and the respawn timer is decoration.
+  // AND NO FIN MAY STILL BE WAITING FOR ITS CLUB BACK. This is the whole cost
+  // of the card: the seal throws the clubs it is holding, so a second strike
+  // released before they have returned throws nothing. Without it the ability
+  // is free and the respawn timer is decoration.
   //
-  // `clubs.length === 0` means the weapon has no sockets at all yet — a rig
-  // still resolving, or a harness driving the throw on its own. That is not
-  // the same as empty hands, and refusing it would make the throw untestable
-  // and silently dead for a frame or two at the start of a run.
-  return clubs.length === 0 || clubsInHand() > 0;
+  // ASKED AS "IS A SOCKET RECOVERING", NOT AS "IS ANYTHING IN HAND", and the
+  // difference is the whole of what the basic club being unthrowable did to
+  // this gate. `clubsInHand() > 0` was the old reading and it is now true
+  // forever on any run holding driftwood — a club that never leaves is a club
+  // always in hand — so the cost would have evaporated on exactly the builds it
+  // is supposed to fall on. Asking about the EMPTY socket instead is the same
+  // question the old form was really asking, and it answers correctly in both
+  // directions: a fin that gave up a Cold Snap refuses the next throw until it
+  // has one again, and a pair of fins holding nothing but driftwood has no
+  // socket to be waiting on and throws freely. See CONFIG.clubThrow.neverThrown
+  // for why that second case is correct rather than a hole.
+  //
+  // A weapon with no sockets at all — a rig still resolving, or a harness
+  // driving the throw on its own — has nothing recovering either, so it falls
+  // out of the same loop as ready. Refusing it would make the throw untestable
+  // and silently dead for the first frame or two of a run.
+  return !finSocketRecovering();
 }
 
 /**
@@ -1659,6 +2069,10 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
       // learns what a knockback IS. Without it the Hurler was the one club that
       // hit like a bullet, which is the opposite of what the class reads as.
       knockback: CONFIG.club.knock * clubKnock(),
+      // THE RIBBON, grown by the Hurler's own stacks. A thrown club is always
+      // at a full swing by definition — it left the flipper, there is no lazy
+      // version of that — so the power term is 1 and what is left is the cards.
+      trailScale: trailScaleFor(fxAmount(Math.max(1, level), 1)),
     });
   }
   return count;
@@ -1668,6 +2082,10 @@ export function resetClub() {
   for (const club of clubs) group?.remove(club.mesh);
   clubs = [];
   flights = [];
+  // The anchors go with the clubs that owned them. main.js clears the ribbons
+  // themselves (clearProjectileTrails) on the same reset; this is only the
+  // list that would otherwise still be naming last run's clubs.
+  trailMovers.length = 0;
   assistClock = 0;
   orbitClock = 0;
   // Or the first frame of the new run differences this run's velocity against

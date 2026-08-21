@@ -44,7 +44,7 @@ let cached;
 
 /** What a player we have never seen looks like. */
 function empty() {
-  return { runs: 0, source: null, greeting: null };
+  return { runs: 0, source: null, name: null, greeting: null };
 }
 
 function read() {
@@ -61,6 +61,16 @@ function read() {
       cached = {
         runs: Number.isFinite(runs) && runs > 0 ? Math.floor(runs) : 0,
         source: typeof rec.source === 'string' && rec.source ? rec.source : null,
+        // WHO died, alongside what killed them. Under permadeath that seal is
+        // gone for good (systems/nameLedger.js), which is what makes it worth
+        // storing: the name is not a stale copy of the player's current one, it
+        // is the only remaining record of somebody the game will never call
+        // them again. greetings.csv spends it as `{departed}`.
+        //
+        // Read defensively like every other field here — this is a
+        // hand-editable key on a machine we do not own, and a `name: 42` must
+        // not reach a sentence.
+        name: typeof rec.name === 'string' && rec.name.trim() ? rec.name.trim() : null,
         greeting: typeof rec.greeting === 'string' && rec.greeting ? rec.greeting : null,
       };
     }
@@ -103,6 +113,11 @@ export function noteRunStart(greetingId = null) {
     // Cleared, not carried. See the header: a death belongs to the run it
     // happened in, and this one has not happened yet.
     source: null,
+    // And so does the seal it happened to. Carried forward instead, a hello
+    // three runs later would mourn somebody who died on a different afternoon
+    // — and `{departed}` is gated on this being present, so leaving it set is
+    // how a line about a death fires on a run that had none.
+    name: null,
     greeting: greetingId ?? null,
   });
   return before;
@@ -114,11 +129,18 @@ export function noteRunStart(greetingId = null) {
  * cause id: deathCauses.js turns one source into a cause for the label and a
  * SET of them for the tagging, and banking either answer here would be
  * choosing one of the two before knowing which the greeting needs.
+ *
+ * `name` is the seal it happened to — the one thing about a dead seal that the
+ * ledger of the buried does not answer, because that record says only that a
+ * name is spent and not which death spent it. Optional so the harnesses that
+ * call this with one argument keep working; the game always passes it, and a
+ * death filed without a name is one the next hello cannot mourn by name.
  */
-export function noteDeath(source) {
+export function noteDeath(source, name = null) {
   const s = String(source ?? '').trim();
+  const who = String(name ?? '').trim();
   const rec = read();
-  write({ ...rec, source: s || null });
+  write({ ...rec, source: s || null, name: who || null });
 }
 
 /**

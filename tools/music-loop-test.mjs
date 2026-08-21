@@ -126,6 +126,11 @@ class FakeCtx {
     return baseNode('biquad', { type: 'lowpass', frequency: new Param(20000), Q: new Param(1) });
   }
   createConvolver() { return baseNode('convolver', { buffer: null }); }
+  // The bus builds a feedback delay for the celebration echo. Missing here it
+  // does not throw anything this test can see — unlockAudio catches, warns to
+  // a console nobody is reading, and leaves HALF A BUS wired, which fails as
+  // "the bus input never reaches the speakers".
+  createDelay(max) { return baseNode('delay', { maxDelayTime: max, delayTime: new Param(0) }); }
   createWaveShaper() { return baseNode('waveshaper', { curve: null, oversample: 'none' }); }
   createDynamicsCompressor() {
     return baseNode('compressor', {

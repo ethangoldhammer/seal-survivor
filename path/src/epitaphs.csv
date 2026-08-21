@@ -1,0 +1,51 @@
+id,text,cause,enabled,weight,notes
+general1,lost to,,TRUE,3,the plain one — every cause nobody wrote for gets this pool
+general2,taken by,,TRUE,2,
+general3,done in by,,TRUE,2,
+general4,finished by,,TRUE,1,
+general5,who met,,TRUE,1,reads as an encounter rather than an attack
+sharkchomp,chomped by,shark,TRUE,3,
+sharkbit,bitten clean through by,shark,TRUE,2,
+sharkate,eaten by,shark,TRUE,2,
+sharkchum,turned into chum by,shark,TRUE,1,
+orcaswallow,swallowed by,orca,TRUE,3,
+orcaout,outsmarted by,orca,TRUE,2,the orca is the clever one — see bossNames.csv
+orcaplay,played with by,orca,TRUE,1,orcas famously do not eat their food straight away
+mosajaw,snapped up by,mosasaur,TRUE,3,
+mosaold,dragged under by,mosasaur,TRUE,2,
+squidgrab,pulled apart by,squid,TRUE,3,
+squidink,lost in the ink of,squid,TRUE,2,
+squidarm,wrapped up by,squid,TRUE,1,
+crabpinch,pinched to bits by,crab,TRUE,3,
+crabsnip,snipped in half by,crab,TRUE,2,
+crabclaw,clawed by,crab,TRUE,1,
+boathull,run down by,boat,TRUE,3,
+boatprop,minced by the propeller of,boat,TRUE,2,
+boatnet,hauled up by,boat,TRUE,1,
+barrarush,skewered by,barracuda,TRUE,3,
+barrafast,never saw,barracuda,TRUE,1,"reads as 'never saw / a barracuda' — still a connector"
+sailspear,run through by,sailfish,TRUE,3,
+sailfast,outrun by,sailfish,TRUE,2,
+rayzap,stung by,ray,TRUE,3,
+raybarb,barbed by,ray,TRUE,2,
+puffspine,punctured by,puffer,TRUE,3,
+pufftox,poisoned by,puffer,TRUE,2,
+dolphgang,bullied by,dolphin,TRUE,3,
+dolphpod,cornered by,dolphin,TRUE,2,
+turtleslow,somehow outpaced by,turtle,TRUE,3,the turtle death is inherently embarrassing
+turtleshell,shelled by,turtle,TRUE,1,
+oysterclamp,clamped by,oyster,TRUE,3,
+oystershut,shut in by,oyster,TRUE,2,
+frynibble,nibbled to death by,fish,TRUE,3,
+frymany,outnumbered by,fish,TRUE,2,
+fryshame,embarrassed by,fish,TRUE,1,
+bossslain,slain by,boss,TRUE,3,the catch-all for a boss attack no species claims
+bossundone,undone by,boss,TRUE,2,
+bossout,outmatched by,boss,TRUE,2,
+drownundone,undone by,drowning,TRUE,3,"drowning's label is the gerund 'running out of air' — its leads must take one"
+drownbeaten,beaten by,drowning,TRUE,2,
+drownoutlasted,outlasted by,drowning,TRUE,1,
+boltstruck,caught by,lightning,TRUE,3,
+boltsky,lit up by,lightning,TRUE,2,
+shotholed,holed by,shot,TRUE,3,
+shotpeppered,peppered by,shot,TRUE,2,

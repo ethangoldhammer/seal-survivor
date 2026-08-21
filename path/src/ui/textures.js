@@ -1248,6 +1248,30 @@ function buildBusRow() {
   slider(el, 'reverb tail', 0.05, 6, 0.05, () => bus().reverbSeconds ?? 1.6, (v) => { bus().reverbSeconds = v; changed(); });
   slider(el, 'reverb decay', 0.1, 8, 0.1, () => bus().reverbDecay ?? 2, (v) => { bus().reverbDecay = v; changed(); });
 
+  // --- the celebration echo -------------------------------------------------
+  // Shut except while the seal is performing, so dragging these hears nothing
+  // unless a celebration is running. The F panel's Sound bus card has a hold
+  // button that opens it for as long as you need to tune against.
+  const echo = () => (bus().echo ??= {});
+  const echoRow = document.createElement('div');
+  echoRow.className = 'sv-sfx-field';
+  const echoLab = document.createElement('label');
+  echoLab.textContent = 'celeb echo';
+  echoLab.title = 'delay that fades up while the seal celebrates';
+  const echoBox = document.createElement('input');
+  echoBox.type = 'checkbox';
+  echoBox.checked = echo().enabled !== false;
+  echoBox.addEventListener('change', () => { echo().enabled = echoBox.checked; changed(); });
+  echoRow.append(echoLab, echoBox);
+  el.appendChild(echoRow);
+
+  slider(el, 'echo level', 0, 1, 0.01, () => echo().wet ?? 0.5, (v) => { echo().wet = v; changed(); });
+  slider(el, 'echo time', 0.02, 1, 0.01, () => echo().timeSeconds ?? 0.26, (v) => { echo().timeSeconds = v; changed(); });
+  slider(el, 'echo repeats', 0, 0.95, 0.01, () => echo().feedback ?? 0.42, (v) => { echo().feedback = v; changed(); });
+  slider(el, 'echo damping', 200, 12000, 50, () => echo().toneHz ?? 2600, (v) => { echo().toneHz = v; changed(); });
+  slider(el, 'echo fade in', 0.05, 2, 0.05, () => echo().fadeIn ?? 0.35, (v) => { echo().fadeIn = v; changed(); });
+  slider(el, 'echo fade out', 0.05, 3, 0.05, () => echo().fadeOut ?? 0.7, (v) => { echo().fadeOut = v; changed(); });
+
   // Depth tracking. Its own range rather than the music's — see the note in
   // CONFIG.audio.bus.depth for why they can't share one.
   const depth = () => (bus().depth ??= {});

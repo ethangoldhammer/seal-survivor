@@ -257,11 +257,25 @@ export function orbiterCount(base, s) {
 // level even on a run where you never picked a damage upgrade. Extra pellets
 // arrive on a fixed cadence (every `levelsPerExtraShot`) on top of whatever
 // Multishot added. Mutates `s` and returns it.
+//
+// HEALTH IS THE ONE THAT COMPOUNDS, and it is the only shape that works: the
+// water's toughness is a per-difficulty MULTIPLIER (see difficultyRamp), so a
+// maximum that grew by a flat amount a level would still be losing ground the
+// whole run — the same flat-income-against-a-compounding-cost that the xp
+// ladder had. See CONFIG.player.hpPerLevel for the rate and why it is small.
+//
+// A multiplier on the FINISHED block rather than on CONFIG.player.maxHp, which
+// is what makes the two halves agree: a +30 card taken at level 4 is worth 30
+// of a 100-point bar then and 30 of a 300-point bar at level 30 if this ran
+// first, i.e. worth a third as much for having been taken early. Taking it
+// with the block already assembled means every flat card keeps the share of
+// the bar it bought.
 export function applyLevelGrowth(s, level) {
   const lvl = Math.max(1, level ?? 1);
   s.damage += CONFIG.weapon.damagePerLevel * (lvl - 1);
   s.speed += CONFIG.weapon.speedPerLevel * (lvl - 1);
   s.multishot += Math.floor((lvl - 1) / CONFIG.weapon.levelsPerExtraShot);
+  s.maxHp *= Math.pow(1 + (CONFIG.player.hpPerLevel ?? 0), lvl - 1);
   return s;
 }
 

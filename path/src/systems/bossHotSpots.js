@@ -81,6 +81,28 @@ import { advanceCycles, phaseOffset } from './beatSync.js';
 //   CONFIG.hotSpots     owns the colours, the glow, the pulse, the jag on the
 //                       edge, the goo. Judged by eye in the second it happens.
 // ---------------------------------------------------------------------------
+//
+// WHAT A SPOT PAYS OUT: BIG CHUM, AND IT IS FUEL RATHER THAN FOOD.
+//
+// Working a weak spot shakes lumps of the animal loose, and swallowing one
+// refills BOOST PIPS — the strike meter — not health. That is the whole reason
+// the payout is here rather than on the boss: a chunk kicked out on a timer
+// (systems/chumChunkSpawner.js) is a break the fight hands you, and this is
+// the fight paying for AIM. The two must not be the same currency, or the
+// better-aimed fight would simply be the longer-surviving one and the meat
+// would read as one pickup that sometimes heals and sometimes does not.
+//
+// PAID ON DAMAGE, NOT ON HITS. Every source that crits calls hotSpotDamage —
+// bullets at ten a second, the club once. Counting hits would make an
+// automatic weapon a chum fountain and a slow one pay nothing; counting the
+// pool means a piece comes loose for every `chum.damageShare` of the rupture
+// pool that goes in, so a spot pays the same whatever is chewing it, and the
+// burst throws the rest.
+//
+// THIS MODULE NEVER SPAWNS ONE. It has no scene and no pickup list, and the
+// three call sites that reach hotSpotDamage are deep inside combat, the club
+// and the strike. So an ejection is QUEUED with a place and a throw, and
+// main.js drains the queue once a frame — see drainHotSpotChum.
 
 // How many spots one shader can paint. The loop is unrolled against this, so
 // it is a compile-time constant and not a config value — `countMax` is clamped
@@ -264,6 +286,13 @@ let pulseCycle = 0;
 // shells and the one uniform block they share.
 const owners = new Map();
 
+// MEAT WAITING TO BE PUT IN THE WATER — see the header note. Each entry is a
+// place, a throw and what it is worth in boost pips; main.js drains it once a
+// frame. A plain array rather than a callback because the queue is what makes
+// the payout testable at all: the harness feeds a spot damage and reads what
+// came off it, with no scene, no pickup list and no game loop.
+const chumQueue = [];
+
 const _p = { x: 0, y: 0, z: 0 };
 const _col = new THREE.Color();
 
@@ -424,6 +453,10 @@ export function disposeBossHotSpots() {
 export function resetBossHotSpots() {
   for (const owner of owners.values()) dropShells(owner);
   owners.clear();
+  // Anything a dying fight shook loose and nobody drained. A queue that
+  // survived a reset would put the last boss's meat in the water on the first
+  // frame of the next run.
+  chumQueue.length = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -836,6 +869,12 @@ function tryLightSpot(owner, cands) {
     // How much damage it has swallowed, against the pool that ruptures it.
     taken: 0,
     pool: Math.max(1, (e.maxHp ?? 1) * (c.ruptureFraction ?? 0.06)),
+    // ...and how much of that has already been paid out as meat. Tracked as a
+    // WATERMARK rather than as a countdown so the payout is a function of the
+    // damage in the spot: whatever `chum.damageShare` is when a hit lands, the
+    // pieces owed are (taken - paid) / share, and a mid-fight retune cannot
+    // leave a spot owing a piece it already threw.
+    paid: 0,
     alive: 1,
     fade: 0,       // eases 0 → 1 as it opens
     flash: 0,
@@ -1044,8 +1083,80 @@ export function hotSpotDamage(e, at, dmg, where = null) {
   const ramp = (c.rampMin ?? 0.45) + heat * ((c.rampMax ?? 1.9) - (c.rampMin ?? 0.45));
   bleed(spot, c, ramp);
 
+  // WHAT THE HITS SHOOK LOOSE. Before the rupture test on purpose: a spot that
+  // bursts on this hit has already paid for the damage that filled it, and the
+  // burst's own pieces are thrown on top of those rather than instead of them.
+  ejectChum(spot, c);
+
   if (spot.taken >= spot.pool) rupture(spot, c);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// THE MEAT
+// ---------------------------------------------------------------------------
+
+/**
+ * Queue one piece, born at the rim and thrown out along the skin's normal.
+ *
+ * OUT ALONG THE NORMAL, not in a random direction like the boss's timed chunk:
+ * that one is thrown off a body the player is nowhere near and a full circle is
+ * the only fair spread, while this leaves a spot the player is aiming at and
+ * has to come TOWARD them or the reward for hitting the far flank is a piece of
+ * meat behind the animal. The spread is small for the same reason.
+ */
+function queueChum(spot, c, pips) {
+  const m = c.chum ?? {};
+  const out = spot.r * (m.bornAt ?? 1);
+  const spread = (Math.random() * 2 - 1) * (m.spread ?? 0.4);
+  const cos = Math.cos(spread);
+  const sin = Math.sin(spread);
+  const dx = spot.wnx * cos - spot.wny * sin;
+  const dy = spot.wnx * sin + spot.wny * cos;
+  const speed = m.tossSpeed ?? 12;
+  chumQueue.push({
+    x: spot.wx + spot.wnx * out,
+    y: spot.wy + spot.wny * out,
+    vx: dx * speed,
+    vy: dy * speed,
+    pips: Math.max(0, pips),
+  });
+}
+
+/**
+ * The pieces the damage in a spot has bought, paid out in whole shares.
+ *
+ * A LOOP RATHER THAN A SINGLE PIECE, because one hit can be worth several
+ * shares — a strike off a deep chain lands for a large fraction of the pool at
+ * once, and paying one piece for it would make the biggest hit in the game the
+ * worst-rewarded per point of damage.
+ */
+function ejectChum(spot, c) {
+  const m = c.chum ?? {};
+  if (m.enabled === false) return;
+  const share = Math.max(0.02, m.damageShare ?? 0.34) * spot.pool;
+  const pips = Math.max(0, m.pips ?? 2);
+  if (!(pips > 0)) return;
+  // The guard is a per-CALL ceiling, not a cap on what a spot pays: what is
+  // still owed stays owed and comes out on the next hit. One frame handing out
+  // forty pieces is the only failure mode here worth spending a branch on, and
+  // it would take a hit worth thirteen times the whole pool to reach it.
+  let guard = 8;
+  while (spot.taken - spot.paid >= share && guard-- > 0) {
+    spot.paid += share;
+    queueChum(spot, c, pips);
+  }
+}
+
+/**
+ * Take everything queued since the last call. Returns a NEW array each time —
+ * the caller spawns into a scene while this module keeps running, and handing
+ * out the live queue would have a spawn that queued more (it cannot today, but
+ * nothing here can promise that forever) mutating the list being walked.
+ */
+export function drainHotSpotChum() {
+  if (!chumQueue.length) return [];
+  return chumQueue.splice(0, chumQueue.length);
 }
 
 /** The live spot a point is inside, or null. Exported for the harness. */
@@ -1210,6 +1321,16 @@ function rupture(spot, c) {
       // speed ride on, held under the table's own ceiling.
       scale: Math.min(1.6, g),
     });
+  }
+
+  // AND THE REST OF THE ANIMAL COMES OUT WITH IT. The burst is the moment the
+  // spot is worth the most, so it throws its own pieces rather than only the
+  // ones the damage bought on the way in — see the header note.
+  const m = c.chum ?? {};
+  if (m.enabled !== false) {
+    const pips = Math.max(0, m.rupturePips ?? m.pips ?? 2);
+    const count = Math.max(0, Math.round(m.ruptureCount ?? 2));
+    for (let i = 0; i < count; i++) queueChum(spot, c, pips);
   }
 
   // The replacement is scheduled on the OWNER rather than on the spot, because

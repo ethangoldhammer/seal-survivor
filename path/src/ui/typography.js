@@ -117,7 +117,7 @@ export function initTypography() {
 // off, and the ones with no `google` entry are already on the machine.
 const loadedFonts = new Set();
 
-function ensureFontLoaded(stack) {
+export function ensureFontLoaded(stack) {
   if (!stack || stack === FONT_GLOBAL || loadedFonts.has(stack)) return;
   loadedFonts.add(stack);
   const font = fontForStack(stack);

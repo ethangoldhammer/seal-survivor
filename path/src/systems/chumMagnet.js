@@ -118,10 +118,45 @@ export function magnetRadius(stats, speed) {
   return base * (tuning(magnetState(speed)).radiusMul ?? 1) * airPickupMul();
 }
 
+/**
+ * THE FLOOR THAT MAKES A CLAIMED ORB ARRIVE — the pull, against the seal's own
+ * speed rather than against nothing.
+ *
+ * Everything above answers "how hard does it pull" with a fixed speed or a
+ * multiple of one, and a fixed speed LOSES A RACE. The base pull is 14 u/s and
+ * the seal cruises at 34, so an orb the magnet had already claimed closed at
+ * -20 u/s: it never arrived, and because the claim is latched it never gave up
+ * either. The player saw food fly at them, fall behind, and then trail them
+ * around the arena — the striking multiplier (3.4, chosen precisely to clear
+ * the dash) was the only state in the game where the hoover actually hoovered.
+ *
+ * `gain` is a CLOSING speed, not a pull speed: the gap shrinks by at least that
+ * much per second whatever the seal does, so the arrival time depends on the
+ * reach and nothing else. `min` is the same promise at a standstill, where
+ * there is nothing to outrun and the base pull alone decides how a pile feels.
+ *
+ * Every pickup goes through this, not just chum. A bubble a drowning seal can
+ * outswim is this bug with worse consequences.
+ *
+ * `mul` IS THE STATE'S OWN PULL MULTIPLIER, and it scales the closing speed as
+ * well as the pull. Without it the floor flattens the very tiering it is
+ * protecting: at a 19 u/s cruise the floor is 37 u/s, which is above the base
+ * pull AND above the chain's boosted one, so a live chain would reach further
+ * and pull exactly as hard as no chain at all. Scaling the gain keeps the order
+ * the states are in — every state closes faster than the one below it — and
+ * still leaves the slowest of them unable to be outswum.
+ */
+export function outrunPull(base, speed, mul = 1) {
+  const o = CONFIG.pickups.magnet?.outrun ?? {};
+  if (o.enabled === false) return base;
+  return Math.max(base, o.min ?? 0, (speed || 0) + (o.gain ?? 0) * mul);
+}
+
 /** How fast an orb is dragged in, for the state the seal is currently in. */
 export function magnetSpeed(speed) {
   const base = CONFIG.pickups.magnetSpeed ?? 14;
-  return base * (tuning(magnetState(speed)).speedMul ?? 1);
+  const mul = tuning(magnetState(speed)).speedMul ?? 1;
+  return outrunPull(base * mul, speed, mul);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,9 +182,18 @@ export function foodReach(stats, speed) {
   return base * airPickupMul();
 }
 
-/** How hard it pulls it. */
+/**
+ * How hard it pulls it.
+ *
+ * The quiet magnet goes through outrunPull() as well, and that is the half of
+ * this the chain does NOT own: a cruising seal collects at the base speed, but
+ * it still collects — an orb it has claimed closes on the mouth whether or not
+ * a chain is live. The sweep buys reach and a bigger pull, never the difference
+ * between food arriving and food chasing you.
+ */
 export function foodPull(speed) {
-  return chumSweep() ? magnetSpeed(speed) : (CONFIG.pickups.magnetSpeed ?? 14);
+  if (chumSweep()) return magnetSpeed(speed);
+  return outrunPull(CONFIG.pickups.magnetSpeed ?? 14, speed);
 }
 
 /**

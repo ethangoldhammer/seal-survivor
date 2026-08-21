@@ -544,6 +544,44 @@ ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
 const oneFrame = growOf('--sv-hp-grow');
 check('the track lengthens over frames, it does not jump', oneFrame > 2 && oneFrame < 2.6, oneFrame.toFixed(3));
 
+// THE CEILING HAS TO OUTLAST THE RUN, and this is a check on the STYLESHEET
+// rather than on a frame because the clamp lives in CSS on purpose (see
+// .sv-playerbars-corner — the limit is "how much screen is there").
+//
+// It matters because every run's maximum climbs a little now whether or not it
+// ever takes a health card (CONFIG.player.hpPerLevel compounds per level), so
+// the free growth eats into headroom that used to belong entirely to the
+// health cards. A run reaches the mid-twenties in fifteen minutes
+// (tools/xp-economy-test.mjs).
+//
+// TWO-SIDED ON PURPOSE, because both ways of getting this wrong are silent. A
+// ceiling shorter than the free growth is the instrument going quiet for every
+// run, and a clamped bar looks exactly like a bar. A free growth that fills
+// most of the ceiling on its own is the other failure: the column is then
+// nearly full before any card is taken, which is the upgrade this placement
+// exists to show becoming invisible. A third of the range is the line — the
+// baseline may spend up to that, and the rest stays the cards'. The shipped
+// pair sits at 24% of it and the short-screen one at 27%, since a shorter
+// screen has a shallower ceiling; the line is drawn past both so it is a guard
+// against the curve being opened up rather than a restatement of today's.
+//
+// Every declared pair is checked, not just the shipped one: the short-screen
+// override has its own base AND its own ceiling, and it is the one that gets
+// forgotten.
+const RUN_END_LEVEL = 26;
+const runGrowth = Math.pow(1 + (CONFIG.player.hpPerLevel ?? 0), RUN_END_LEVEL - 1);
+const trackPairs = [...sheetText.matchAll(/--sv-track:\s*([\d.]+)vh;\s*--sv-track-max:\s*([\d.]+)vh/g)]
+  .map((m) => ({ base: Number(m[1]), max: Number(m[2]) }));
+check('levelling alone grows the bar', runGrowth > 1.1,
+  `x${runGrowth.toFixed(2)} by level ${RUN_END_LEVEL}`);
+check('every track declares a ceiling', trackPairs.length >= 2, `${trackPairs.length} pair(s)`);
+check('...and none of them stops growing before the run does',
+  trackPairs.length >= 2 && trackPairs.every((t) => t.max / t.base >= runGrowth),
+  trackPairs.map((t) => `${t.base}→${t.max}vh (x${(t.max / t.base).toFixed(2)})`).join(', '));
+check('...while the free growth leaves the cards most of the track',
+  trackPairs.every((t) => (runGrowth - 1) <= (t.max / t.base - 1) / 3),
+  trackPairs.map((t) => `${((runGrowth - 1) / (t.max / t.base - 1) * 100).toFixed(0)}%`).join(' / ') + ' of the range');
+
 // ---------------------------------------------------------------------------
 section('Death and the next run');
 

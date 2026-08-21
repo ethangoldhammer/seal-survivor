@@ -52,6 +52,12 @@ import {
 // used to live. The board is one consumer of it; the {player} token in
 // callouts.csv, quips.csv and upgrades.csv is the rest.
 import { MAX_NAME_LEN, loadPlayerName, sanitizeName, savePlayerName, expandPlayer } from '../systems/playerName.js';
+// The dice behind the score card's "Next seal" row — the same pool the splash
+// spends, so a name rolled here and a name rolled there come from one table.
+import { randomPlayerName } from '../systems/randomName.js';
+// Death is permanent: a name that has died can never be typed again. See the
+// header in systems/nameLedger.js.
+import { isNameBuried } from '../systems/nameLedger.js';
 import { feedback } from '../systems/feedback.js';
 // THE RECAP'S NUMBERS. The recorder runs on every run, not only on a dev
 // build, so the Weapons and Threats tabs are reading the same ledger the
@@ -714,7 +720,11 @@ const STYLES = `
      min() is the ceiling, in CSS rather than in JS on purpose: the limit is
      "how much screen is there", which is a question the stylesheet is already
      holding the answer to and JS would have to re-measure on every resize.
-     72vh leaves the top of the screen to the boss bar even at full growth. */
+     72vh leaves the top of the screen to the boss bar even at full growth.
+     25vh to 72vh is 2.88x, and the baseline growth every run gets for free
+     (CONFIG.player.hpPerLevel) only reaches 1.45x by the end of a long one —
+     so the clamp stays what it has always been, a guard against a stacked
+     health build, rather than something an ordinary run walks into. */
   .sv-playerbars-corner { --sv-track: 25vh; --sv-track-max: 72vh; }
   /* THE EMPTY TRACK HAS TO BE VISIBLE HERE, which it does not beside the seal.
      Growing the column is only legible if the CEILING can be seen: a track
@@ -949,11 +959,34 @@ const STYLES = `
      interrupting. --sv-chain-now is written per frame by updateToasts from the
      game's own clock, not a CSS animation, for the same reason every other
      motion here is: it has to stop when the game does.
-     The words do NOT change colour. The edge does (see the strip), and giving
-     the type its own hue as well would be the same word said twice — what says
-     NOW here is the box lighting up around a line that has changed. */
+     THE WORDS GO HOT ORANGE AND THE PLATE DOES NOT. The strip is a SIBLING of
+     this span rather than its child, so setting a colour here reaches the type
+     and its glow (the role sheet's text-shadow is in currentColor) and leaves
+     the plate, the drain and the almost-empty wash on the banner's own green.
+     One object, three jobs, and each keeps its own voice.
+     --sv-chain-hot is an R,G,B triple stamped when the banner is built, which
+     is what lets rgb() take it and what keeps the palette in CONFIG.
+     brightness() AND saturate() rather than a cross-fade back to green: the
+     words must not be the chain's colour for half of every flash while they are
+     saying something else. Driving an orange past 1 walks it toward white,
+     which is what heat looks like. */
+  /* ONE GLYPH OF THE PROMPT, when the wave is running. Only ever built while
+     the strike prompt is up — see setBannerWord.
+     inline-block because a transform does nothing at all on an inline box, and
+     that failure is silent: the spans are there, the styles are written, and
+     the line simply does not move.
+     white-space: pre because the space in "STRIKE NOW!" is a character like any
+     other here, and an ordinary space inside an inline-block collapses to
+     nothing — the words run together and it looks like the split ate it.
+     The transform is written per frame from the game's own clock and neither
+     half of it affects layout, so the plate underneath holds still. */
+  .sv-chain-ch { display: inline-block; white-space: pre;
+    will-change: transform; }
   .sv-chain-now .sv-chain-word {
-    filter: drop-shadow(0 0 calc(3px + 9px * var(--sv-chain-now, 0)) currentColor); }
+    color: rgb(var(--sv-chain-hot, 255,138,31));
+    filter: drop-shadow(0 0 calc(3px + 10px * var(--sv-chain-now, 0)) rgb(var(--sv-chain-hot, 255,138,31)))
+      brightness(calc(1 + 0.5 * var(--sv-chain-now, 0)))
+      saturate(calc(1 + 0.5 * var(--sv-chain-now, 0))); }
   /* THE WINDOW, AS A STRIP UNDER THE WORDS.
      The chain lapses on a clock (CONFIG.strike.chainWindow, 2.2s) and the only
      thing that ever drew that clock was a thin arc outside the boost ring —
@@ -1424,6 +1457,32 @@ const STYLES = `
      typed in whatever family is live, which no viewport knows the answer to. */
   .sv-name-row.sv-name-stacked { flex-direction: column; align-items: stretch; }
   .sv-name-row.sv-name-stacked .sv-name-input { max-width: none; }
+
+  /* The next seal's name. Quieter than the leaderboard row above it on
+     purpose: that one is a thing to DO before leaving the screen, this one is
+     an offer. Same field styling so the two read as the same kind of control,
+     and a ghost button instead of a solid one.
+
+     THE LABEL IS ON ITS OWN LINE, and that is not a taste decision. The
+     leaderboard row needs no label because "Submit" says what the field is
+     for; "Roll" does not, so this one has to carry a word. Put that word
+     INSIDE the row and it is a third item competing for a phone's width,
+     which npm run layout measured as the field clipping its own text at
+     393px — 174px of name in a 137px box. Above the row instead, the row is a
+     field and its button, which is the exact shape the leaderboard row already
+     is, and it inherits .sv-name-row's stacking behaviour for free rather than
+     needing a second rule that would drift from it. */
+  .sv-next-wrap { margin: 12px 0 8px; }
+  .sv-next-label { display: block; text-align: center; margin-bottom: 6px;
+                   font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
+                   color: rgba(232,236,243,0.5); }
+  .sv-next-row { margin: 0; }
+  /* Warm rather than red. This is not an error — the player has done nothing
+     wrong by typing the name of a seal they were fond of — it is the game
+     telling them that seal is already buried, which is a fact about the world
+     and not a complaint about their input. */
+  .sv-next-warn { margin-top: 6px; text-align: center; font-size: 12px;
+                  letter-spacing: 0.02em; color: #ffc978; }
   /* THE WIDTH IS NOT WHAT MAKES A FULL NAME VISIBLE — fitNameField is. This
      was sized in pixels against 24 characters of Inter, which held right up
      until the font picker existed: 'Press Start 2P' is a full em per glyph and
@@ -1629,6 +1688,19 @@ const STYLES = `
      eye needs — two 44px targets 8px apart are one 96px target as far as a
      mis-tap is concerned. */
   .sv-touch .sv-trophy-row, .sv-touch .sv-name-row { gap: 12px; }
+  /* THE NEXT-SEAL ROW GETS HEADROOM, not just the minimum. Its field and its
+     Roll button are the only two controls on this card whose height comes out
+     at EXACTLY the 44 above — the field's natural height is under it and the
+     rule pins it there, and .sv-btn-sm is padded tighter than the full-size
+     buttons around it. Everything else on the card clears 44 with a pixel or
+     two to spare.
+     Sitting exactly on the line is not the same as clearing it: the card is a
+     preserve-3d slab under a 1500px perspective, so its contents are measured
+     through a transform and land fractionally under whatever they are set to.
+     npm run layout reported both of them as 43-and-change on one viewport and
+     not on the next run, which is the signature of a threshold with no margin.
+     The turn control two rules up is here for the same reason. */
+  .sv-touch .sv-next-row .sv-name-input, .sv-touch .sv-next-row .sv-btn { min-height: 48px; }
 `;
 
 export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart, onSplash, onMenu }) {
@@ -1762,6 +1834,33 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
               </div>
               <div class="sv-status" id="svLbStatus"></div>
               <div class="sv-leaderboard" id="svLeaderboard"></div>
+              <!-- THE NEXT SEAL. Deliberately its own row and not the name
+                   field above it, which is a DIFFERENT QUESTION wearing the
+                   same widget: svNameRow asks what to post the run that just
+                   ended under, and this asks who swims the next one. Rolling
+                   a new name into the leaderboard field would rename the seal
+                   that actually played the run, on the screen that exists to
+                   record what it did.
+                   Beside Try again because that is the button it belongs to —
+                   nothing here is committed until the run restarts, so a
+                   player who reads it, ignores it and presses the button keeps
+                   the name they had. See commitNextSeal. -->
+              <div class="sv-next-wrap" id="svNextRow">
+                <label class="sv-next-label" for="svNextInput">Next seal</label>
+                <div class="sv-name-row sv-next-row">
+                  <input class="sv-name-input sv-next-input" id="svNextInput" type="text" maxlength="${MAX_NAME_LEN}"
+                         placeholder="Name" autocomplete="off" autocapitalize="off"
+                         spellcheck="false" autocorrect="off" aria-label="Name for your next seal" />
+                  <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svNextRoll" type="button"
+                          aria-label="Roll a new name">Roll</button>
+                </div>
+                <!-- Empty and hidden almost always. It says one thing: that the
+                     name typed above belongs to a seal already on the seabed.
+                     aria-live, because a sighted player sees it appear under
+                     their own cursor and a screen reader otherwise would not
+                     know the field had turned invalid. -->
+                <div class="sv-next-warn sv-hidden" id="svNextWarn" role="status" aria-live="polite"></div>
+              </div>
               <button class="sv-btn" id="svRestartBtn">Try again</button>
               <div class="sv-tip-row" id="svTipRow"></div>
             </div>
@@ -1822,6 +1921,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     // the way back into the game. It was reached only through its click
     // binding until the pad needed to find it by name.
     'svGameOverTitle', 'svRestartBtn',
+    'svNextRow', 'svNextInput', 'svNextRoll', 'svNextWarn',
     'svTrophy', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
     'svShotView', 'svShotImg', 'svShotShare', 'svShotSave', 'svShotStatus', 'svShotClose',
     'svTipRow',
@@ -1876,8 +1976,53 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     // on this click any more, it begins on the far side of the transition (see
     // onRestart in main.js), and revealing the HUD now would leave the dead
     // run's numbers sitting over the corpse for the length of it.
+    // The next seal's name is taken HERE and nowhere else — see the markup and
+    // commitNextSeal. Before hideAllMenus, because that is what takes the card
+    // (and the field this reads) off the screen.
+    commitNextSeal();
     hideAllMenus();
     callbacks.onRestart();
+  });
+
+  // --- the next seal's name ------------------------------------------------
+  bindMenuSounds(el.svNextRoll).addEventListener('click', () => {
+    // The CURRENT field value is handed to the roller, not the saved name:
+    // randomPlayerName takes what to avoid repeating, and a player pressing
+    // Roll twice wants two different names. See systems/randomName.js.
+    el.svNextInput.value = randomPlayerName(el.svNextInput.value);
+    // randomPlayerName never returns one of the dead, so a roll is always a way
+    // OUT of the warning — which is most of why the button is beside the field
+    // rather than somewhere else on the card.
+    setNextSealWarning('');
+    fitNameField(el.svNextInput);
+  });
+  el.svNextInput.addEventListener('keydown', (e) => {
+    // Enter here is "yes, this one" and nothing more — it must not submit the
+    // leaderboard row, and it must not reach the splash's global handlers on
+    // window, which would read it as Start. Same guard as svNameInput's.
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      el.svNextInput.blur();
+    }
+  });
+  el.svNextInput.addEventListener('input', () => {
+    // Sanitised as it is typed, exactly as the leaderboard field is, so what
+    // the player sees is what the next run will actually be called. The caret
+    // is restored for the same reason it is there: a field that jumps to the
+    // end on every keystroke cannot be edited in the middle.
+    const clean = sanitizeName(el.svNextInput.value);
+    if (clean !== el.svNextInput.value) {
+      const caret = el.svNextInput.selectionStart;
+      el.svNextInput.value = clean;
+      el.svNextInput.setSelectionRange?.(caret - 1, caret - 1);
+    }
+    // Checked as they type rather than on submit. The alternative is a player
+    // who commits to a name, presses Try again, and finds themselves playing as
+    // somebody else — and by then the card is gone and there is nothing left on
+    // screen to explain it.
+    setNextSealWarning(isNameBuried(clean) ? `${clean} is already buried` : '');
+    fitNameField(el.svNextInput);
   });
 
   bindMenuSounds(el.svNameSubmit).addEventListener('click', submitPendingRun);
@@ -3195,7 +3340,7 @@ function gameOverAll() {
   //
   // gameOverAll() is a list of elements, not a query.
   return [el.svTrophyShare, el.svTrophySave, el.svSheetShare, el.svSheetSave,
-    el.svTurnOver, el.svNameSubmit, el.svRestartBtn, el.svTipJar,
+    el.svTurnOver, el.svNameSubmit, el.svNextRoll, el.svRestartBtn, el.svTipJar,
     el.svTurnBack,
     // The preview sheet's own three. In this list rather than beside it so the
     // highlight is cleaned up with everything else when the card goes away —
@@ -4281,6 +4426,13 @@ function chainToastAt(x, y, chain) {
   // announced it, which reads as the banner correcting itself.
   chainPin.prompt = 0;
   chainPin.now = 0;
+  // AND THE SWEEP, cut short. A link is the ANSWER to the instruction, and a
+  // count arriving is a better thing to be looking at than the line that asked
+  // for it — this is the one thing allowed to end the one-shot early. `armed`
+  // is left alone: the gate is still true on this frame (the release is what
+  // scored the link), and re-arming here would start a second sweep on top of
+  // the pop.
+  chainPin.run = -1;
 
   if (chainToast && toasts.includes(chainToast)) {
     chainToast.age = 0;
@@ -4288,7 +4440,10 @@ function chainToastAt(x, y, chain) {
     chainToast.y = y;
     chainToast.node.style.color = color;
     chainToast.node.classList.remove('sv-chain-now');
-    chainToast.word.textContent = CHAIN_WORDS;
+    // Through the helper, not a bare textContent: the prompt may have left
+    // per-glyph spans on this node and the array that indexes them has to go
+    // with them. See setBannerWord.
+    setBannerWord(chainToast, CHAIN_WORDS, false);
     chainToast.count.textContent = `×${chain}`;
     chainToast.count.style.display = '';
     return chainToast;
@@ -4301,6 +4456,7 @@ function chainToastAt(x, y, chain) {
   // rgba() with a calc()'d alpha. Stamped when the banner is built rather than
   // per frame: it is a palette entry, and the thing that moves is the alpha.
   node.style.setProperty('--sv-chain-neon', rgbTriple(fc.prompt?.neon ?? 0x7dfcff));
+  node.style.setProperty('--sv-chain-hot', rgbTriple(fc.prompt?.hot ?? 0xff8a1f));
   node.style.setProperty('--sv-chain-glow', `${Math.max(0, fc.prompt?.glow ?? 16)}px`);
 
   // THE WORDS IN A NODE OF THEIR OWN. They are swapped for the strike prompt
@@ -4310,6 +4466,8 @@ function chainToastAt(x, y, chain) {
   const word = document.createElement('span');
   word.className = 'sv-chain-word';
   word.textContent = CHAIN_WORDS;
+  // `chars` is null while the banner is being itself and an array of glyph
+  // spans while the prompt's wave is running. Declared on the record below.
 
   const count = document.createElement('span');
   count.className = 'sv-chain-x';
@@ -4334,6 +4492,8 @@ function chainToastAt(x, y, chain) {
   chainToast.word = word;
   chainToast.count = count;
   chainToast.strip = strip;
+  chainToast.chars = null;
+  chainToast.charText = '';
   return chainToast;
 }
 
@@ -4343,6 +4503,92 @@ function chainToastAt(x, y, chain) {
 // labels and in this file's comments, and it is not a thing to be reworded per
 // device.
 const CHAIN_WORDS = 'FOOD CHAIN!';
+
+/**
+ * PUT WORDS ON THE BANNER, split into glyphs or not.
+ *
+ * ONE FUNCTION FOR BOTH, because the two states have to be able to hand over.
+ * The prompt arrives, the line is split into per-character spans and rippled;
+ * the link lands, the spans go and the plain string comes back. Written in two
+ * places, the failure is a stale `chars` array pointing at spans that a
+ * `textContent =` has already destroyed — which does not throw, it just leaves
+ * the wave writing transforms into detached nodes while the banner sits
+ * perfectly still.
+ *
+ * SPLIT ONLY WHILE THE WAVE IS RUNNING. Eleven spans is nothing to build, but
+ * inline-block boxes are laid out one at a time: kerning pairs and ligatures do
+ * not cross them, so a split line is very slightly wider than the same string
+ * set normally. On a tracked, uppercase face that is invisible — and it is
+ * still a difference the banner should not carry for the 95% of a chain that
+ * has no prompt on it.
+ *
+ * `Array.from` rather than split(''), so a wording with an emoji or a combining
+ * mark in it comes apart at code POINTS. callouts.csv is a file somebody edits.
+ */
+function setBannerWord(t, text, split) {
+  if (!split) {
+    // Cleared first: the assignment below destroys the spans either way, and
+    // an array still pointing at them is the stale-node bug above.
+    t.chars = null;
+    t.charText = '';
+    if (t.word.textContent !== text) t.word.textContent = text;
+    return;
+  }
+  if (t.chars && t.charText === text) return;
+  t.word.textContent = '';
+  t.charText = text;
+  t.chars = Array.from(text).map((ch) => {
+    const span = document.createElement('span');
+    span.className = 'sv-chain-ch';
+    span.textContent = ch;
+    t.word.appendChild(span);
+    return span;
+  });
+}
+
+/**
+ * One frame of the wave — a SINGLE crest of position and size travelling the
+ * length of the line, left to right, once.
+ *
+ * `p` is progress through the sweep, 0..1. The crest is born at -crest (clear
+ * of the first glyph) and dies at n-1+crest (clear of the last), which is what
+ * makes the sweep begin and end on the plain word rather than snapping into and
+ * out of a warp. That property is the whole brief: a repeating ripple has to be
+ * cut off at whatever phase it happens to be at, and a pass that has finished is
+ * already back to normal.
+ *
+ * A RAISED COSINE and not a triangle or a gaussian. It reaches exactly 0 at the
+ * edges of the crest — so glyphs outside it are provably untouched, rather than
+ * carrying a tail nobody budgeted for — AND its slope is 0 there too, so a
+ * letter starts moving from rest. A triangle satisfies the first and not the
+ * second, and the crease shows: the letter's motion begins with a jerk, which
+ * at this size reads as the wave stuttering.
+ *
+ * `em` on the translate, so the ride tracks the Chain banner's type size out of
+ * the Text panel. A px value would look right at 21px and wrong at every other
+ * size the panel can set.
+ */
+function waveBannerWord(t, wave, p) {
+  if (!t.chars) return;
+  const n = t.chars.length;
+  const amp = wave.amp ?? 0.1;
+  const size = wave.size ?? 0.2;
+  // Floored well above zero: a crest narrower than a glyph means only one is
+  // ever moving, which is letters popping in sequence rather than something
+  // passing through them — and at 0 it would be a divide by zero.
+  const crest = Math.max(0.4, wave.crest ?? 2.4);
+  // WHERE THE CREST IS, in glyph units. Linear in `p`, and it has to be: this
+  // is a thing crossing a distance, and any easing on it would make the wave
+  // travel at a speed that does not match the sweep it is reporting.
+  const at = -crest + Math.max(0, Math.min(1, p)) * (n - 1 + 2 * crest);
+  for (let i = 0; i < n; i++) {
+    const d = (at - i) / crest;
+    const k = Math.abs(d) < 1 ? 0.5 * (1 + Math.cos(Math.PI * d)) : 0;
+    // Negative on Y because screen space points down and the crest should
+    // LIFT — the one axis in this file where the obvious sign is the wrong one.
+    t.chars[i].style.transform = `translateY(${(-amp * k).toFixed(4)}em) scale(${(1 + size * k).toFixed(4)})`;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // WHERE THE BANNER HANGS, and how much of the window is left.
@@ -4355,12 +4601,24 @@ const CHAIN_WORDS = 'FOOD CHAIN!';
 // ---------------------------------------------------------------------------
 const chainPin = {
   x: 0, y: 0, left: 0, live: false, flash: 0, clock: 0,
-  // THE PROMPT. `prompt` is the gate — is a release due right now — and `now`
-  // is the flash it drives, 0..1 on the layer's own clock. Two fields rather
-  // than one because the gate is a fact handed in from main.js and the flash is
-  // a picture of it, and collapsing them would make "is the prompt up" a
-  // question with a different answer on every other frame.
-  prompt: 0, now: 0, text: '',
+  // ---- THE PROMPT, AND WHY IT IS FOUR FIELDS ------------------------------
+  //
+  //   prompt  THE GATE, handed in from main.js: is a release due right now.
+  //           strikeLoaded() is true for the WHOLE rest of the hold, so this
+  //           is a level and not an event.
+  //   run     seconds into the one-shot announcement, or -1 for "not running".
+  //           The banner says its piece once and goes back to being the food
+  //           chain; what carries the moment after that is the ring.
+  //   armed   whether a new run may start. Cleared when one does, set again
+  //           only when the gate goes FALSE — which is what makes it one sweep
+  //           per wind-up rather than a loop for as long as a finger is down.
+  //   now     the flash, 0..1, written per frame.
+  //
+  // Four rather than one because they answer four different questions and
+  // collapsing any pair of them re-creates a bug: the gate and the run differ
+  // for most of a long hold (which is the whole feature), and the run and the
+  // flash differ every other frame.
+  prompt: 0, run: -1, armed: true, now: 0, text: '',
 };
 
 /**
@@ -4417,13 +4675,62 @@ function pinChainBanner(camera, pin) {
 }
 
 /**
- * Is the banner carrying the "STRIKE NOW!" line this frame?
+ * Advance the one-shot announcement.
+ *
+ * THE RUN OUTLIVES THE GATE ON PURPOSE. A sweep that started is allowed to
+ * finish even if the player releases halfway through it — the brief is one
+ * clean pass, and a pass cut off at 30% is a line left mid-warp, which is
+ * exactly the snap the one-shot exists to remove. What DOES cut it short is a
+ * LINK: chainToastAt clears the run, because the count arriving is the answer
+ * to the instruction and is a better thing to be looking at than the
+ * instruction.
+ *
+ * The order matters and is not tidy-mindedness. The run is advanced BEFORE the
+ * re-arm is considered, so a gate that goes false on the same frame a run ends
+ * cannot start a second one from the same wind-up.
+ */
+function stepChainPrompt(dt) {
+  if (chainPin.run >= 0) {
+    chainPin.run += dt;
+    if (chainPin.run >= promptTime()) chainPin.run = -1;
+  }
+  // Re-armed by the moment ENDING, which is the release (or the wind-up being
+  // thrown away). Without this the gate — true for the whole hold — would start
+  // a fresh sweep the instant the last one finished, and the banner would loop
+  // through STRIKE NOW! for as long as the button was down.
+  if (!chainPin.prompt) chainPin.armed = true;
+  else if (chainPin.armed && chainToast) {
+    chainPin.run = 0;
+    chainPin.armed = false;
+  }
+}
+
+/** How long the announcement lasts. Floored, because a 0 would divide by it. */
+function promptTime() {
+  return Math.max(0.05, CONFIG.strike?.foodChain?.prompt?.time ?? 0.5);
+}
+
+/**
+ * Has the banner CLAIMED the "STRIKE NOW!" line for this wind-up?
  *
  * Read by main.js immediately after updateToasts to decide whether the ring's
  * own line should stand down. A reader rather than a return value because the
  * answer is also what the NEXT frame's callout gate wants, and a value that has
  * to be caught on exactly one line is a value somebody eventually forgets to
  * catch.
+ *
+ * THE GATE, NOT THE RUN, and the difference decides what happens for the rest
+ * of a long hold. The banner's announcement is one shot — half a second, then
+ * back to the food chain — but the moment it announced is still live, and the
+ * ring's own line popping up the instant the banner finished would be the same
+ * sentence said twice in a row by two different surfaces, which reads as a
+ * glitch rather than as a reminder.
+ *
+ * So the banner keeps the claim for the whole wind-up and simply stops talking.
+ * What carries the moment after that is the RING — the lead-in's traveller
+ * closing on the track, and the perfect latch holding it lit and breathing
+ * (systems/strikeRing.js). That is the instrument saying it geometrically,
+ * continuously, which is what an instrument is for; the words were the event.
  */
 export function chainBannerHasPrompt() {
   return chainPin.prompt > 0;
@@ -4543,14 +4850,31 @@ export function updateToasts(dt, camera = null, pin = null) {
     chainPin.flash = 0;
   }
 
-  // A RELEASE IS DUE. Its own flash, on its own rate, and it can be lit at the
-  // same time as the one above: a chain can be about to lapse AND have a
-  // release due, and those are two different things to do about it. Squared for
-  // the same reason — a blink, not a throb.
+  // A RELEASE IS DUE. Advanced first, because everything below draws it.
   const prompt = CONFIG.strike?.foodChain?.prompt ?? {};
-  if (chainPin.prompt > 0) {
-    const s = Math.sin(chainPin.clock * (prompt.flashHz ?? 7) * Math.PI * 2);
-    chainPin.now = s > 0 ? s * s : 0;
+  stepChainPrompt(dt);
+  const showing = chainPin.run >= 0;
+  // Progress through the one shot, 0..1. The wave's crest position and the
+  // flash's envelope are both this number, so the two cannot end at different
+  // moments — which would leave a neon edge burning around a line that had
+  // already gone back to saying FOOD CHAIN!.
+  const p = showing ? Math.min(1, chainPin.run / promptTime()) : 0;
+  if (showing) {
+    // THE FLASH RIDES AN ENVELOPE. Its own rate, and it can be lit at the same
+    // time as the almost-empty blink above: a chain can be about to lapse AND
+    // have a release due, and those are two different things to do about it.
+    // Squared for the same reason — a blink, not a throb.
+    const pulse = Math.sin(chainPin.clock * (prompt.flashHz ?? 7) * Math.PI * 2);
+    // Fast attack, long release — the same shape the ring's perfect pop uses,
+    // and for the same reason: an instruction has to LAND, and what is left
+    // after that is it getting out of the way. Without the release the neon
+    // would be cut off mid-flash by the run ending, which is a snap on the one
+    // element whose whole job is to be clean.
+    const attack = 0.12;
+    const env = p < attack
+      ? ease('outQuad', p / attack)
+      : 1 - ease('inQuad', (p - attack) / (1 - attack));
+    chainPin.now = (pulse > 0 ? pulse * pulse : 0) * env;
   } else {
     chainPin.now = 0;
   }
@@ -4563,12 +4887,22 @@ export function updateToasts(dt, camera = null, pin = null) {
   // holds the plate still, and this is belt and braces on a surface that is
   // being used as a bar.
   if (chainToast?.word) {
-    const want = chainPin.prompt > 0 ? (chainPin.text || CHAIN_WORDS) : CHAIN_WORDS;
-    if (chainToast.word.textContent !== want) chainToast.word.textContent = want;
-    const showCount = chainPin.prompt <= 0;
-    const wantDisplay = showCount ? '' : 'none';
+    // THE RUN, NOT THE GATE, decides what is on the plate. They are the same
+    // thing for the first half-second of a wind-up and different for the rest
+    // of it, and the difference IS the feature.
+    const prompting = showing;
+    const want = prompting ? (chainPin.text || CHAIN_WORDS) : CHAIN_WORDS;
+    // setBannerWord early-outs when nothing has changed, which is what keeps
+    // this off the layout on the fifty-nine frames a second where the sentence
+    // is the same sentence.
+    setBannerWord(chainToast, want, prompting);
+    const wantDisplay = prompting ? 'none' : '';
     if (chainToast.count.style.display !== wantDisplay) chainToast.count.style.display = wantDisplay;
-    chainToast.node.classList.toggle('sv-chain-now', chainPin.prompt > 0);
+    chainToast.node.classList.toggle('sv-chain-now', prompting);
+    // The ripple, on the same clock as the flash above it and only while the
+    // line is up. Nothing to reset when it stops: the spans go with the
+    // sentence.
+    if (prompting) waveBannerWord(chainToast, prompt.wave ?? {}, p);
   }
 
   for (let i = toasts.length - 1; i >= 0; i--) {
@@ -4815,6 +5149,8 @@ export function clearToasts() {
   chainPin.flash = 0;
   chainPin.prompt = 0;
   chainPin.now = 0;
+  chainPin.run = -1;
+  chainPin.armed = true;
 }
 
 // The run is NOT posted to the board here — the player names it first, and
@@ -5605,6 +5941,11 @@ export function showGameOver(gameState, extra = {}) {
   // A remembered name arrives whole rather than a character at a time, so it
   // never passes through the `input` handler that would size it.
   fitNameField();
+  // The offer for the next run, rolled fresh per death. Deliberately AFTER the
+  // leaderboard field is filled: both call fitNameField, and both now stack
+  // their own row, so the order is about nothing more than reading top to
+  // bottom in the same order the player does.
+  offerNextSeal();
   setStatus(isGlobal() ? 'Enter a name to post your score' : 'Enter a name to save your score');
 
   // Show the standing board right away from local data, then upgrade it to the
@@ -5688,13 +6029,86 @@ export function showGameOver(gameState, extra = {}) {
 const NAME_FONT_MIN_PX = 8;
 let nameRuler = null;
 
+/**
+ * Name the next seal. Called from showGameOver, once per death.
+ *
+ * IT IS NOT AN OFFER, and this is the one place where permadeath changes the
+ * shape of a piece of interface rather than only its wording. The seal that
+ * just died took its name to the seabed with it (systems/nameLedger.js, and
+ * the buryName call on the death path) — so there is no "keep the name I had".
+ * The name in this field IS the next seal unless the player picks another, and
+ * Try again commits it whether they touched the row or not.
+ *
+ * That is the exact opposite of what this did an hour ago. It used to refuse to
+ * write a field the player never looked at, because doing so renamed somebody
+ * on every death — silently, repeatedly, and indistinguishably from the game
+ * losing their name. Under permadeath the same write is not a rename at all: it
+ * is a new seal, which is the thing that actually happened. Keeping the old
+ * guard would mean run after run played by a seal the graveyard already has a
+ * stone for, which is the rule quietly not applying.
+ *
+ * PRE-ROLLED, still, and now for a second reason on top of the first: the field
+ * has to come up holding a name the game will accept, and the one the player
+ * arrived with is guaranteed not to be.
+ */
+function offerNextSeal() {
+  if (!el.svNextInput) return;
+  el.svNextInput.value = randomPlayerName(loadPlayerName());
+  el.svNextRow?.classList.remove('sv-hidden');
+  setNextSealWarning('');
+  fitNameField(el.svNextInput);
+}
+
+/** The line under the field. Empty takes it away rather than leaving a blank
+ *  row, so the card reserves no space for a message that is usually absent. */
+function setNextSealWarning(text) {
+  if (!el.svNextWarn) return;
+  el.svNextWarn.textContent = text;
+  el.svNextWarn.classList.toggle('sv-hidden', !text);
+}
+
+/**
+ * Name the next seal, for real. Called from the Try again handler and nowhere
+ * else — the restart is the moment this stops being a text field and becomes an
+ * identity.
+ *
+ * ALWAYS COMMITS, including a field the player never touched. See
+ * offerNextSeal: the name they arrived with is buried, so there is nothing to
+ * fall back TO.
+ *
+ * TWO WAYS IT CAN BE HANDED SOMETHING UNUSABLE, and neither may end with the
+ * player unable to start a run — this is the button that gets them back into
+ * the game, and a Try again that refuses to try is the worst bug this screen
+ * could have.
+ *
+ *   CLEARED  the field is empty. Roll one.
+ *   BURIED   they typed the name of one of their own dead. The field has been
+ *            saying so underneath them as they typed (see the input handler),
+ *            so this is not a surprise — but it still cannot be written. Roll
+ *            one. The greeting at the top of the next run speaks the name, so
+ *            the substitution shows itself within seconds rather than being
+ *            silent.
+ */
+function commitNextSeal() {
+  const input = el.svNextInput;
+  if (!input) return;
+  let value = sanitizeName(input.value ?? '');
+  if (!value || isNameBuried(value)) value = randomPlayerName(value);
+  savePlayerName(value);
+}
+
 function fitNameField(input = el.svNameInput) {
   if (!input) return;
+  // THE ROW IS THE FIELD'S OWN, not svNameRow. Two rows use this now — the
+  // leaderboard's and the score card's "Next seal" — and a hardcoded row here
+  // meant typing a long name into one of them stacked the OTHER one, which is
+  // a layout bug with nothing in either row's own code to give it away.
+  const row = input.closest?.('.sv-name-row, .sv-next-row') ?? el.svNameRow;
   // Both back to their resting state before anything is measured — a fit
   // measured against the last fit's own size shrinks a little further on every
   // keystroke and never comes back when the name gets shorter.
   input.style.fontSize = '';
-  el.svNameRow?.classList.remove('sv-name-stacked');
+  row?.classList.remove('sv-name-stacked');
   if (!input.value) return;
 
   // Built once and left in the DOM — a ruler that is created and removed per
@@ -5737,7 +6151,7 @@ function fitNameField(input = el.svNameInput) {
   // at any size a player would thank us for — so the row stacks and the field
   // gets the card's whole width before the type gives up anything more.
   if (base * (avail / width) < NAME_FONT_MIN_PX) {
-    el.svNameRow?.classList.add('sv-name-stacked');
+    row?.classList.add('sv-name-stacked');
     avail = room();
     if (!(avail > 0) || !(width > avail)) return;
   }

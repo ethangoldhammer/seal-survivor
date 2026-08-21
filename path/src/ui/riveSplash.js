@@ -74,6 +74,8 @@ import { loadPlayerName, savePlayerName, sanitizeName, MAX_NAME_LEN } from '../s
 // What the dice button spends. Parsed once at module load, out of
 // sealNames.csv — see the note above and path/src/sealNameTable.js.
 import { randomPlayerName } from '../systems/randomName.js';
+// Death is permanent — see systems/nameLedger.js.
+import { isNameBuried } from '../systems/nameLedger.js';
 import { touchPrimary } from '../devices.js';
 // The tip jar, on the one screen a player is not busy. Dependency-free by
 // design, so importing it here does not cost this module the standalone
@@ -696,6 +698,19 @@ export function mountRiveSplash({
       // here rather than at mount so it lands after the state machine has had
       // its defaults — a write before the first advance is one the machine can
       // still overwrite.
+      // A RETURNING PLAYER MAY BE RETURNING AS A DEAD SEAL. The score card names
+      // the next one on the way out of a run (see offerNextSeal in ui/ui.js),
+      // but a player who closes the tab on the game-over screen never gets
+      // there — and the name still in storage belongs to a seal with a
+      // headstone. Rolled fresh here rather than shown and refused later: the
+      // splash is the last surface between that saved name and a run being
+      // played by somebody the ledger says is buried.
+      //
+      // Saved immediately, not left in the field. The field is the only thing
+      // that has changed otherwise, and a player who presses Play without
+      // touching it would start under the buried name again.
+      const remembered = loadPlayerName();
+      if (remembered && isNameBuried(remembered)) savePlayerName(randomPlayerName(remembered));
       nameInput.value = loadPlayerName();
       writeName(nameInput.value);
 

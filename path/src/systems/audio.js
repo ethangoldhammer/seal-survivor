@@ -174,6 +174,15 @@ let compressor = null;
 let makeupGain = null;
 let ceilingShaper = null;
 let irSignature = ''; // regenerate the impulse only when its shape changes
+
+// --- the celebration echo ---------------------------------------------------
+// A feedback delay hanging off the bus, silent for the whole run and opened up
+// for the second the seal is performing. See setSfxEcho.
+let echoDelay = null;
+let echoTone = null;
+let echoFeedback = null;
+let echoWet = null;
+let echoOpen = false;
 let ceilingSignature = ''; // same, for the soft-clip curve
 let compRouted = null; // whether the compressor is currently IN the chain
 
@@ -264,7 +273,78 @@ function buildBus() {
   busFilter.connect(convolver);
   convolver.connect(wetGain).connect(sumGain);
 
+  // --- the echo send --------------------------------------------------------
+  // Parallel to the reverb and landing on `sum` for the same reason: the
+  // dynamics stage has to see it, or the repeats swell past the compressor
+  // every time the dry hit ducks.
+  //
+  // WHAT RAMPS IS THE OUTPUT, not the input. Gating the send instead would
+  // mean the delay line is empty at the moment the celebration starts, so the
+  // echo has nothing to say until the NEXT sound — and the sound worth
+  // echoing is the killing blow, which has already happened. Feeding the line
+  // always and opening the output means the fade-in carries the kill itself,
+  // and the fade-out mutes the tail instead of leaving it ringing into
+  // gameplay.
+  echoDelay = ctx.createDelay(2);
+  echoTone = ctx.createBiquadFilter();
+  echoTone.type = 'lowpass';
+  echoFeedback = ctx.createGain();
+  echoWet = ctx.createGain();
+  echoWet.gain.value = 0;
+  echoOpen = false;
+
+  busFilter.connect(echoDelay);
+  // Damping inside the loop, so each repeat is darker than the one before it.
+  // A bright feedback delay on a bus that already has reverb turns into noise
+  // by the third repeat.
+  echoDelay.connect(echoTone).connect(echoFeedback).connect(echoDelay);
+  echoDelay.connect(echoWet).connect(sumGain);
+
   applyAudioBusSettings();
+}
+
+/**
+ * Open or close the celebration echo.
+ *
+ * Called from systems/celebrate.js on the two frames that matter — the start
+ * of a performance and its teardown — rather than polled, because
+ * `celebrationState.active` is equally true on every frame of one and a ramp
+ * restarted per frame never arrives anywhere.
+ *
+ * The ramp is linear from wherever the gain currently IS, which is what makes
+ * a celebration interrupted by another one (or by the run ending) pick up from
+ * the level it reached instead of jumping.
+ */
+export function setSfxEcho(on) {
+  if (!ctx || !echoWet) return;
+  const e = CONFIG.audio.bus?.echo ?? {};
+  const want = on && e.enabled !== false;
+  if (want === echoOpen) return;
+  echoOpen = want;
+  const wet = want ? Math.max(0, e.wet ?? 0.5) : 0;
+  const seconds = Math.max(0.01, (want ? e.fadeIn : e.fadeOut) ?? 0.4);
+  const now = ctx.currentTime;
+  echoWet.gain.cancelScheduledValues(now);
+  // Pinned to the value it holds right now before the ramp is scheduled.
+  // Without this the ramp starts from whatever the last SCHEDULED value was,
+  // which on an interrupted fade is the target it never reached — and the
+  // gain jumps there before ramping back.
+  echoWet.gain.setValueAtTime(echoWet.gain.value, now);
+  echoWet.gain.linearRampToValueAtTime(wet, now + seconds);
+}
+
+// Whether the echo is currently open. For the Sound tab and the tests — a send
+// that is fading has no other observable state.
+export function sfxEchoOpen() {
+  return echoOpen;
+}
+
+// The bus nodes, for tools/echo-test.mjs. Exposed rather than reached through
+// the module's internals because the thing worth asserting is the SHAPE of the
+// graph — that the echo sums with the dry path ahead of the compressor — and
+// a test that cannot see the nodes can only assert that a function was called.
+export function __busNodes() {
+  return { echoDelay, echoTone, echoFeedback, echoWet, sumGain, busFilter, dryGain, wetGain };
 }
 
 // (Re)wire the tail of the bus. Called whenever the compressor is switched on
@@ -325,6 +405,21 @@ export function applyAudioBusSettings() {
   if (sig !== irSignature) {
     irSignature = sig;
     convolver.buffer = buildImpulse(seconds, decay);
+  }
+
+  // --- the echo -------------------------------------------------------------
+  // Everything except the wet level, which is owned by setSfxEcho: stamping it
+  // back on here would slam the send open the moment any other bus slider
+  // moved, and the Sound tab moves them while a celebration is running.
+  if (echoDelay) {
+    const e = b.echo ?? {};
+    echoDelay.delayTime.value = Math.max(0.001, Math.min(2, e.timeSeconds ?? 0.26));
+    // Under 1, always: at 1 the loop never decays and the bus climbs until it
+    // clips, which does not sound like a broken slider — it sounds like the
+    // game got louder and stayed there.
+    echoFeedback.gain.value = Math.max(0, Math.min(0.95, e.feedback ?? 0.4));
+    echoTone.frequency.value = Math.max(200, e.toneHz ?? 2600);
+    if (e.enabled === false && echoOpen) setSfxEcho(false);
   }
 
   // --- dynamics -------------------------------------------------------------

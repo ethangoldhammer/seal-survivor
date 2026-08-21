@@ -8,6 +8,7 @@ import { pulseDemoFor, panDemoFor, resolvedGlow, describeGlow } from './systems/
 import { updateBeatSync } from './systems/beatSync.js';
 import { reseatDecor } from './systems/decor.js';
 import { scatterSeabed, reseatSeabed } from './systems/seabedScatter.js';
+import { markDeathSite, plantGraves, updateGravesites, reseatGraves, restyleGraves, restoreGraves } from './systems/gravesite.js';
 import { createWorld } from './world.js';
 import { midWater, bounds, seabedTopY } from './arena.js';
 import {
@@ -40,9 +41,9 @@ import { perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary } from 
 import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
-import { createClubVisual, updateClub, resetClub, fireClubThrow } from './systems/club.js';
+import { createClubVisual, updateClub, resetClub, fireClubThrow, clubHitFx, clubTrailMovers } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -81,7 +82,7 @@ import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from 
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
 import { initMusselShells, updateMusselShells, clearMusselShells, spawnMusselShell } from './systems/musselShell.js';
 import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact } from './systems/bossImpact.js';
-import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots, liveHotSpots, hotSpotLit, hotSpotPoint } from './systems/bossHotSpots.js';
+import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots, liveHotSpots, hotSpotLit, hotSpotPoint, drainHotSpotChum } from './systems/bossHotSpots.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
 import { initGore, updateGore, resetGore } from './systems/gore.js';
 import { tickHitShapes, initHitShapeDebug, updateHitShapeDebug } from './systems/hitShape.js';
@@ -145,6 +146,8 @@ import { resetGreetingRun, updateGreeting, greetingState, greetingOnBand } from 
 import { noteDeath } from './systems/lastRun.js';
 import { setTelegraph, updateTelegraph, clearTelegraph } from './systems/telegraph.js';
 import { initCallouts, updateCalloutUi, clearCalloutUi } from './ui/callout.js';
+import { initGraveLabel, updateGraveLabel, clearGraveLabel } from './ui/graveLabel.js';
+import { initGraveBeam, updateGraveBeam, clearGraveBeam } from './systems/graveBeam.js';
 import { initChainDebug, updateChainDebug, toggleChainDebug, dumpChainTrace } from './ui/chainDebug.js';
 import { hidePauseMenu, isPauseOpen, showPauseMenu, updatePauseNav } from './ui/pauseMenu.js';
 import { actionForKey, onSettingsChanged, shakeScale } from './systems/settings.js';
@@ -158,11 +161,14 @@ import { initSfxDebug, updateSfxDebug } from './ui/sfxDebug.js';
 import { initUpgradeDebug } from './ui/upgradeDebug.js';
 import { initAnimDebug } from './ui/animDebug.js';
 import * as playtest from './systems/playtest.js';
-import { causesOfDeath } from './deathCauses.js';
+import { causesOfDeath, primaryCause } from './deathCauses.js';
+import { epitaphLead } from './systems/epitaphLead.js';
 import { sourceFamily } from './systems/playtestAnalysis.js';
 // The caption on the kill-shot polaroid. `playerName` and not the raw stored
 // value — see the note where it is used.
-import { playerName } from './systems/playerName.js';
+import { playerName, savePlayerName } from './systems/playerName.js';
+import { randomPlayerName } from './systems/randomName.js';
+import { buryName, isNameBuried } from './systems/nameLedger.js';
 import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js';
 
 // Restore any saved tuning BEFORE anything reads CONFIG — world/grid/camera
@@ -437,6 +443,18 @@ async function boot() {
   // world.scene rather than the backdrop group, which is disposed and rebuilt
   // on every resize and would take the bed's geometry with it.
   scatterSeabed(world.scene);
+  // The beam injects itself into the grave stones' MATERIALS, which only exist
+  // once their models are loaded — so this belongs here, after the same await
+  // the bed above depends on. Called earlier it finds nothing to attach to and
+  // quietly succeeds, which would leave a beam that never appears and never
+  // says why. See initGraveBeam.
+  initGraveBeam();
+  // The stones from previous sessions. AFTER the world is built, because a
+  // grave's position is stored as a fraction of the arena's half-width and
+  // resolving it needs the live bounds — called earlier, every stone comes back
+  // at a fraction of a stale width. They are planted by the plantGraves call at
+  // the top of the first run, already settled. See systems/graveyardStore.js.
+  restoreGraves();
 
   initPlayer(world.scene);
   player.mesh.position.set(0, midWater(), 0);
@@ -503,6 +521,7 @@ async function boot() {
   // After initUI, which is what builds the root it appends to — and appended
   // last so the band sits over the menus (see ui/callout.js).
   initCallouts(uiRoot());
+  initGraveLabel(uiRoot());
   // The food chain's diagnostic. Always built, never shown until C — the
   // mechanic it describes is four conditions across three files and a tenth of
   // a second, and every one of its failures looks identical from the seat.
@@ -894,7 +913,14 @@ function handleTunerChange(path) {
   // world.resize() called directly, so it does NOT fire the window resize
   // event systems/decor.js listens on — anything standing on the seabed has
   // to be re-seated by hand here or it hangs at the old floor height.
-  if (path === '*' || path.startsWith('arena') || path.startsWith('camera')) { world.resize(); reseatDecor(); reseatSeabed(world.scene); }
+  if (path === '*' || path.startsWith('arena') || path.startsWith('camera')) { world.resize(); reseatDecor(); reseatSeabed(world.scene); reseatGraves(); }
+  // Size, the stones in rotation, the lean and every number the inscription is
+  // cut with are all spent when a stone is PLANTED, so a slider that only wrote
+  // CONFIG would move nothing that is already standing in the water — which
+  // reads as the panel being broken. `label` is the exception: it is read every
+  // frame the caption is up, so rebuilding the yard for it would be six stones
+  // and six canvases rebuilt per slider drag.
+  if (path === '*' || (path.startsWith('gravesite') && !path.startsWith('gravesite.label'))) restyleGraves();
   // Every knob on the bed is a REBUILD — the sampler decides positions, so
   // there is no uniform to write. Seeded, so a bed rebuilt by a slider you did
   // not touch comes back identical rather than reshuffling.
@@ -1100,6 +1126,27 @@ function startGame() {
   // resets that follow (resetParticles in particular) have to land on buffers
   // that already belong to world.scene again.
   closeMainMenu();
+  // NO RUN IS EVER PLAYED BY A SEAL THAT IS ALREADY BURIED. Every surface that
+  // sets a name checks the ledger on its own — the score card's next-seal row,
+  // the splash's field, the dice behind both — and this is the backstop under
+  // all of them, at the one place a run actually begins.
+  //
+  // Worth having even though those checks are correct today: they are three
+  // separate surfaces and there will be a fourth, and the failure they let
+  // through is not visible. A run played under a buried name looks completely
+  // normal until it ends, at which point the graveyard grows a second stone for
+  // a seal it already has one for — and the only evidence is two headstones
+  // with the same name on them, several minutes after the mistake.
+  if (isNameBuried(playerName())) savePlayerName(randomPlayerName(playerName()));
+  // The graveyard comes back with the arena. A no-op in the ordinary case —
+  // the group lives on world.scene and is never taken off it by a restart, and
+  // plantGraves skips anything already standing — so this is here for the two
+  // cases that are not ordinary: a stone whose model had not finished loading
+  // when its run ended (createVisual before preloadAssets resolves is a silent
+  // fallback shape, so gravesite declines to plant one at all), and the group
+  // being detached by anything that rebuilds the scene. Cheap, idempotent, and
+  // the alternative is a death that leaves no marker and never says so.
+  plantGraves(world.scene);
   // The title card is gone. Releases the hero framing rather than dropping it,
   // so the frame glides back to the run's over the first fraction of a second
   // instead of cutting on the exact frame the player pressed Start. A no-op on
@@ -1322,6 +1369,7 @@ function startGame() {
   // Cleared with the rest of the run, or a seal that swims into a new run and
   // dies to something unclassified would be handed the LAST run's punchline.
   lastDamageSource = null;
+  lastDamageBoss = null;
   gameState.deathCauses = null;
   gameState.deathSource = null;
   gameState.kills = 0;
@@ -1376,6 +1424,11 @@ function startGame() {
   // still greeted as a returning player next time. See resetGreetingRun.
   resetGreetingRun();
   clearCalloutUi();
+  // Same for the grave caption. Cut rather than faded: this is the run being
+  // built, and a caption fading out over the opening frames is the last run
+  // leaking into this one.
+  clearGraveLabel();
+  clearGraveBeam();
   // ...and nothing left lit from the last run's tip. The subject is usually
   // gone with the arena anyway; what this is really for is the material a
   // 'paint' highlight swapped in, which belongs back on its object before
@@ -1417,6 +1470,11 @@ function startGame() {
 // by a megalodon and finished off by running out of air died of drowning, and
 // that is the joke to make. It is also the only reading that needs no history.
 let lastDamageSource = null;
+// The boss's own rolled name, when a boss is what did it — "Grimjaw the
+// Famish'd" rather than "a boss". Kept beside the source rather than folded
+// into it: deathCauses.js classifies a SOURCE, and a name is not one. See
+// systems/boss.js for where the name comes from.
+let lastDamageBoss = null;
 
 function killPlayer() {
   player.anim?.trigger('death'); // clamps on its last frame, never hands back
@@ -1432,11 +1490,18 @@ function killPlayer() {
   // `lastDamageSource` between here and the card, and this is still a fact
   // about the run that ended HERE.
   gameState.deathSource = lastDamageSource;
+  // Banked with it, and for exactly the same reason: the run ended HERE, and
+  // nothing between this line and the score card is going to remember which
+  // boss it was.
+  gameState.deathBoss = lastDamageBoss;
   // Banked for the NEXT run's hello, which can name what killed this one —
   // "Last time it was a crab, {player}". The raw source rather than the causes,
   // because the greeting needs both readings of it and deathCauses.js is where
   // that split lives. See systems/lastRun.js.
-  noteDeath(lastDamageSource);
+  // ...and WHO it happened to, for the next run's hello to mourn by name. Read
+  // here, at the moment of death, and not when the greeting spends it: by then
+  // the score card has named a new seal and playerName() is somebody else.
+  noteDeath(lastDamageSource, playerName());
   // updateHUD stops here, and the seal's floating bars are anchored by it —
   // see hidePlayerBars. The rest of the HUD is screen-anchored and can stay.
   hidePlayerBars();
@@ -1503,6 +1568,56 @@ function killPlayer() {
     showGameOver(gameState, { bosses: bossState.defeated });
   };
 
+  // The gravesite goes in between. `toScoreScreen` is handed to the dive and is
+  // called on the far side of it — after the seabed hit and the settle pause —
+  // so by the time this runs the body is lying still on the floor and its
+  // position IS the death site. That is why the marker is filed here and not
+  // from killPlayer: killPlayer fires the instant the health runs out, with the
+  // seal still up in the water where it was bitten, and several seconds of
+  // sinking between there and the floor.
+  //
+  // The name is read NOW, before the score card offers a re-roll: the stone has
+  // to keep the name that actually played the run.
+  //
+  // markDeathSite always calls back, including when it can do nothing at all —
+  // see its header. Nothing else puts the card up.
+  const markThenScore = () => {
+    // THIS SEAL IS DEAD AND ITS NAME GOES WITH IT. Before the score card, so
+    // the "next seal" row it puts up is already rolling against a ledger that
+    // knows about the seal that just died — otherwise the very first name
+    // offered after a death could be the name that death belonged to.
+    buryName(playerName());
+    markDeathSite(world.scene, {
+      x: player.mesh.position.x,
+      z: CONFIG.gravesite?.z ?? -3.2,
+      // playerName() and not loadPlayerName(): a headstone is a sentence about
+      // somebody, so it wants the trimmed, never-blank reading. See its note.
+      name: playerName(),
+      // THE BOSS'S OWN NAME BEATS THE CAUSE, and this is the one place the
+      // stone says something deathCauses.js cannot. That file groups sources
+      // into causes a writer can joke about, and every boss attack collapses
+      // into "a boss" — correct for a quip pool and a waste of the best line on
+      // the stone. A player who was killed by Grimjaw the Famish'd wants
+      // Grimjaw on the headstone, not the category Grimjaw belongs to.
+      //
+      // The bosses with their OWN cause row keep it: the orca and the mosasaur
+      // read as "the orca" in every other surface, and a stone is not the place
+      // to start disagreeing with them... except that it is exactly the place,
+      // because the stone is about ONE death rather than about a species. So
+      // the name wins whenever there is one.
+      cause: gameState.deathBoss || primaryCause(gameState.deathSource)?.label || '',
+      // THE LEAD IS ROLLED HERE AND SPENT ONCE. A stone is carved and then it is
+      // carved — a connector that re-rolled every time the player swam past
+      // would be the one thing on the seabed that changes its mind.
+      //
+      // Rolled against the ARCHETYPE'S cause even for a boss, which is why this
+      // reads primaryCause and not deathBoss: the thing that killed you is a
+      // shark, and "chomped by / Grimjaw the Famish'd" is the sentence. See
+      // path/src/epitaphTable.js.
+      lead: epitaphLead(primaryCause(gameState.deathSource)?.id ?? null),
+    }, toScoreScreen);
+  };
+
   if (CONFIG.death?.enabled === false) {
     toScoreScreen();
     return;
@@ -1514,7 +1629,7 @@ function killPlayer() {
   // because that path cuts straight to the score screen and would leave a wave
   // queued with nothing left running to spawn it.
   summonDeathPile();
-  startDeathDive(toScoreScreen);
+  startDeathDive(markThenScore);
 }
 
 /**
@@ -1558,7 +1673,15 @@ function gainXP(amount, spilled = false) {
     // growth, then re-derive immediately so the new level takes effect now
     // rather than on the next unrelated stat change.
     player.level = gameState.level;
+    // The level also widens the health bar (CONFIG.player.hpPerLevel), and the
+    // new room is HANDED OVER exactly as addUpgrade hands over a +max-health
+    // card's: recomputeStats only clamps hp to the maximum, so without this a
+    // level-up would move the denominator and nothing else — the fill would
+    // shrink at the moment the bar grew, which reads as being hurt by
+    // levelling up.
+    const beforeHp = player.stats.maxHp;
     recomputeStats();
+    player.hp = Math.min(player.stats.maxHp, player.hp + Math.max(0, player.stats.maxHp - beforeHp));
     // Advances to the next uploaded loop when this level crosses a slot
     // boundary, and opens the filter a step further.
     setMusicLevel(gameState.level);
@@ -1815,6 +1938,44 @@ function missileImpactFeedback(assetKey, x, y, dmg, projectile, targetRadius = 0
   return cfg.replacesBulletHit !== false;
 }
 
+// --- WHAT THE CLUB WAS MADE OF ----------------------------------------------
+//
+// The accent burst behind every club event, and there is one helper rather
+// than six inline feedback() calls so that a club event cannot ship without
+// its substance — which is exactly what happened to the whack, the carom, the
+// shockwave and the freeze, all of which threw the same generic spray whatever
+// was swinging.
+//
+// systems/club.js fills a shared record the instant before it calls a hook and
+// `clubHitFx()` reads it back. That is what let all six of these arrive
+// without touching a single hook signature — including `onFreeze`, whose call
+// comes back out of systems/elements.js and could never have carried a club
+// argument without teaching the element system what a club is.
+//
+// `event` overrides the club's own substance, for the two events that are not
+// about the club at all: a keg goes off in embers whichever club set it off,
+// and a body locking solid is frost whichever club iced it.
+//
+// The three multipliers are the CALLER's accent on top of the club's own — how
+// much of the event this particular one is, like the falling scale on a carom
+// chain — and are never the growth itself. That lives in CONFIG.club.fx.
+function clubAccent(x, y, { event = null, amount = 1, size = 1, speed = 1 } = {}) {
+  const f = CONFIG.club.fx ?? {};
+  if (f.enabled === false) return;
+  const fx = clubHitFx();
+  const name = event ?? f.accent?.[fx.asset];
+  if (!name) return;
+  feedback(name, {
+    x,
+    y,
+    dirX: fx.dirX,
+    dirY: fx.dirY,
+    scale: fx.amount * amount,
+    sizeMul: fx.size * size,
+    speedMul: fx.speed * speed,
+  });
+}
+
 // Wraps the shared feedback hook with the name of the ability behind the hit,
 // which is the one thing the hook itself can't work out: by the time damage
 // lands, a garlic tick and a missile look identical to it. Every system's
@@ -1888,6 +2049,37 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at = null) {
       dirX: -(dir?.x ?? 0),
       dirY: -(dir?.y ?? 0),
       scale: Math.min(1.8, 0.6 + dmg / 30),
+    });
+  }
+
+  // A THROWN CLUB LANDING. The one club attack whose impact does NOT come
+  // through systems/club.js — it is an ordinary projectile by the time it
+  // arrives, and combat.js resolves it — so it was the one club attack still
+  // landing as a generic spark. Its debris on top of that spark rather than
+  // instead of it, the same relationship the Glow Up! bursts have with the
+  // pellet.
+  //
+  // KEYED ON THE ASSET through the same table every other club accent uses, so
+  // a club type that learns to be thrown is a row in config and nothing here.
+  // `trailScale` is what the shot carries out of fireClubThrow — how much the
+  // Hurler's stacks bought — and its wake and its debris read the one number
+  // rather than growing apart.
+  const clubShed = CONFIG.club.fx?.enabled !== false
+    && CONFIG.club.fx?.accent?.[projectile?.mesh?.name];
+  if (clubShed) {
+    const grow = projectile.trailScale ?? 1;
+    feedback(clubShed, {
+      x: x ?? e.mesh.position.x,
+      y: y ?? e.mesh.position.y,
+      dirX: projectile.dir?.x ?? 0,
+      dirY: projectile.dir?.y ?? 0,
+      // The club's own travel, so the chips carry on rather than hanging where
+      // it stopped — `clubChips` inherits a quarter of it.
+      vx: (projectile.dir?.x ?? 0) * (projectile.speed ?? 0),
+      vy: (projectile.dir?.y ?? 0) * (projectile.speed ?? 0),
+      scale: grow,
+      sizeMul: grow,
+      speedMul: grow,
     });
   }
 
@@ -2058,6 +2250,16 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
   if (!(dmg > 0)) return;
   playtest.recordPlayerDamage(dmg, source);
   lastDamageSource = source;
+  // AND WHO IT WAS, if it was a boss. Every boss source is either the
+  // archetype key ('bossOrca') or one of its attacks ('boss:boatSalvo'), so the
+  // prefix is the whole test.
+  //
+  // Read HERE and not at death, which is minutes and possibly two more bosses
+  // away: bossState.name is the boss currently in the water, and the one that
+  // took this hit may be long dead by the time the seal is. Banked per hit for
+  // the same reason `lastDamageSource` is — the last thing to touch you is what
+  // the headstone gets to name.
+  lastDamageBoss = source.startsWith('boss') ? (bossState.name || null) : null;
   player.hp -= dmg;
   // Damage in, hit on screen out — see systems/playerDamageFx.js. It
   // banks contact damage (which arrives as a per-frame slice of a rate,
@@ -3188,10 +3390,15 @@ function launchClubThrow(power) {
           x, y, dirX, dirY,
           vx: dirX * speed,
           vy: dirY * speed,
-          // Louder when both fins actually gave up a club — that is the moment
-          // the seal is left empty-handed, and it should be the moment you
-          // hear, rather than every throw sounding the same whether it cost
-          // anything or not.
+          // Louder when both fins actually gave up a club, which is the
+          // heaviest this ability gets, rather than every throw sounding the
+          // same whether it cost anything or not.
+          //
+          // `emptied` can now be 0 — the basic club never leaves its socket
+          // (CONFIG.clubThrow.neverThrown), so a run whose flippers hold
+          // nothing but driftwood throws without spending anything. That still
+          // gets the full event: the clubs left, the player did the thing, and
+          // a silent throw would read as the ability having failed.
           scale: emptied > 1 ? 1.25 : 1,
         });
       },
@@ -3537,6 +3744,123 @@ function dropChumChunk(pos, t, vel = null) {
   return chunk;
 }
 
+// ---------------------------------------------------------------------------
+// AND THE MEAT A WEAK SPOT KICKS LOOSE — see CONFIG.hotSpots.chum and the
+// header of systems/bossHotSpots.js.
+//
+// The other end of the same pickup, and deliberately NOT the same payout: a
+// chunk on a timer above is health the fight hands you, and this is fuel the
+// fight sold you for aiming. It rides the chunk entity because in the water it
+// IS one — a lump of the animal, thrown, sinking, magnetised by the food reach
+// — and it wears the boost colour so the two are never confused at a glance.
+// ---------------------------------------------------------------------------
+function spillHotSpotChum() {
+  const m = CONFIG.hotSpots?.chum ?? {};
+  if (m.enabled === false) return;
+  const queued = drainHotSpotChum();
+  if (!queued.length) return;
+  // THE CEILING COUNTS EVERY CHUNK, health ones included. Three spots being
+  // worked by a fast weapon can carpet the arena otherwise, and the moment the
+  // water is thick with them a pickup stops being a reward for aiming and
+  // becomes something you collect by existing.
+  const cap = Math.max(1, Math.round(m.maxAlive ?? 7));
+  // How much of the BAR one piece is, which is what its size has to say. The
+  // pip count is the run's (Coiled Spring moves it), so a two-pip piece on a
+  // three-pip bar is visibly a bigger deal than the same piece on a five-pip
+  // one — which is exactly what it is.
+  const pips = Math.max(1, pipCount(player.stats));
+  for (const q of queued) {
+    if (chumChunks.length >= cap) break;
+    const t = Math.max(0, Math.min(1, q.pips / pips));
+    const chunk = spawnChumChunk(world.scene, { x: q.x, y: q.y, z: 0 }, {
+      t,
+      pips: q.pips,
+      tint: m.tint ?? 0xffe07a,
+      lifetime: m.lifetime,
+      flashMul: m.flashMul,
+      // Off limits to the food magnet until it has slowed to this — otherwise
+      // the throw is cancelled on its first frame whenever the seal is near,
+      // which for meat off the boss they are shooting is nearly always. See
+      // CONFIG.hotSpots.chum.settleSpeed.
+      settleSpeed: m.settleSpeed,
+      vel: { x: q.vx, y: q.vy },
+    });
+    // AND IT ARRIVES LIT. Forty-odd overdriven particles thrown down the same
+    // line the piece is, a bloom swell and a ring — see
+    // CONFIG.feedback.hotSpotChum. The emission is at the POINT rather than in
+    // the screen's glow channel, and almost nothing is spent on shake or
+    // hit-stop: the crit or the rupture that shook this loose fired on the same
+    // frame and already owns the punch. What it does NOT do is say "here is
+    // something to swim into", which is this event's whole job.
+    //
+    // The DIRECTION is the throw rather than the skin's normal, which is the
+    // same line to within the spread and is the one that is right when it is
+    // not: the spray goes where the meat is going, so the eye that follows it
+    // lands on the chunk rather than on the wound it left.
+    const speed = Math.hypot(q.vx, q.vy) || 1;
+    feedback('hotSpotChum', {
+      x: chunk.mesh.position.x,
+      y: chunk.mesh.position.y,
+      dirX: q.vx / speed,
+      dirY: q.vy / speed,
+      vx: q.vx,
+      vy: q.vy,
+      // Bigger pieces arrive louder, on the same 0..1 reading the chunk's own
+      // size is drawn from — `scale` reaches the burst's COUNT, the shake, the
+      // glow and the ripple through the one field.
+      scale: 0.8 + 0.7 * t,
+      // NO `color` HERE, deliberately. Passing one flattens the emitter's whole
+      // palette to a single hue with a brightness scatter — that channel exists
+      // for DEATHS, where which creature died is the information. This burst's
+      // palette is already the fuel family and it carries a white core, which
+      // is most of what makes it read as hot; a flat fill would take that out
+      // in exchange for saying something the chunk lying there already says.
+    });
+  }
+}
+
+// The streak the piece leaves on the way out. One blob every `trail.every`
+// seconds at wherever it has got to, for as long as it is still travelling —
+// see CONFIG.hotSpots.chum.trail and the emitter it names.
+//
+// HERE RATHER THAN IN updateChunk, which is where it would be if the pickup
+// module owned it. It does not: entities/pickups.js has no emitter and no
+// feedback table, and giving it one so a single pickup can paint itself would
+// put the game's whole FX layer behind an import in the file that owns every
+// orb in the water. This walk is the price, and it is over a list that holds
+// single digits of chunks.
+//
+// READ OFF THE THROW (`vx`/`vy`) and not off how far the chunk moved. The food
+// magnet cancels the throw and moves a claimed chunk by hand, so displacement
+// says "travelling" for the whole reel-in — which would paint a second trail
+// from wherever the player caught it to their mouth, a line that says the meat
+// is being fired at the seal.
+function trailHotSpotChum(dt) {
+  const tr = CONFIG.hotSpots?.chum?.trail ?? {};
+  if (tr.enabled === false || !chumChunks.length) return;
+  const every = Math.max(0.005, tr.every ?? 0.035);
+  // The same threshold that decides whether the magnet may claim it — a piece
+  // trails for exactly as long as it is in flight, and that is one fact rather
+  // than two numbers that can drift apart.
+  const minSpeed = CONFIG.hotSpots?.chum?.settleSpeed ?? 7;
+  for (const c of chumChunks) {
+    if (!(c.pips > 0)) continue;
+    const speed = Math.hypot(c.vx, c.vy);
+    if (speed < minSpeed) continue;
+    c.trailIn = (c.trailIn ?? 0) - dt;
+    if (c.trailIn > 0) continue;
+    c.trailIn = every;
+    feedback('hotSpotChumTrail', {
+      x: c.mesh.position.x,
+      y: c.mesh.position.y,
+      dirX: c.vx / speed,
+      dirY: c.vy / speed,
+      vx: c.vx,
+      vy: c.vy,
+    });
+  }
+}
+
 function updateChumChunkSpawns(dt) {
   updateChumChunkSpawner(dt, {
     // A boss is only a boss for this purpose once it is actually fightable.
@@ -3640,6 +3964,23 @@ function animate(now) {
   const killScale = updateBossKill(rawDt);
   const levelScale = updateLevelUpTime(rawDt);
   const deathScale = updateDeathDive(rawDt);
+  // The graveyard, on `rawDt` and NOT on `realDt` below — this is the whole
+  // reason the argument is named the way it is. Every one of the four scales
+  // above is at its deepest during exactly the sequence the stone is falling
+  // through, so a gravestone advanced on the gameplay delta drops in slow
+  // motion for the better part of a minute while the score card waits on it.
+  // Same trade the boss kill shutter takes: 1.02 seconds of wall clock inside
+  // 0.175 of the water's.
+  //
+  // Above the `running` gate on purpose. The stone falls while the run is
+  // OVER, which is the one state most of the loop below is switched off in.
+  updateGravesites(rawDt);
+  // The beam that crosses a stone as its caption arrives. Wall clock like the
+  // stones, and for a second reason of its own: a level-up card can open in the
+  // middle of a sweep, and a sweep frozen at half brightness for as long as
+  // somebody takes to choose an upgrade is not a beam, it is a stripe painted
+  // on a headstone.
+  updateGraveBeam(rawDt);
   // The stage's slow motion, multiplied in alongside the other two rather than
   // replacing them — it is a dev tool and has no business arbitrating with a
   // death dive it should never be open during. Its repeat timer ticks inside
@@ -4764,28 +5105,53 @@ function animate(now) {
         damageFrom(source ?? 'club')(e, dmg, x, y, dir, projectile, at)
       ),
       onEnemyKilled: onEnemyKilledFeedback,
-      onWhack: (x, y, rate) => feedback('clubWhack', {
-        x, y,
-        // A club turning at speed hits harder-sounding than one drifting round
-        // at the idle rate. Same swing, same damage — this is the weapon
-        // telling you that moving is what powers it.
-        scale: Math.min(1.5, 0.7 + rate * 0.05),
-        sfxOpts: { pitch: Math.min(1.35, 0.9 + rate * 0.03) },
-      }),
+      onWhack: (x, y, rate) => {
+        feedback('clubWhack', {
+          x, y,
+          // A club turning at speed hits harder-sounding than one drifting round
+          // at the idle rate. Same swing, same damage — this is the weapon
+          // telling you that moving is what powers it.
+          scale: Math.min(1.5, 0.7 + rate * 0.05),
+          sfxOpts: { pitch: Math.min(1.35, 0.9 + rate * 0.03) },
+        });
+        // ...and what the wood itself threw off. `clubWhack` is the blow — the
+        // thud, the shake, the ripple — and is the same whichever club landed
+        // it; this is the only channel that says WHICH one, which matters most
+        // in the run this weapon is built for, where four kinds of club are
+        // swinging and orbiting at once.
+        clubAccent(x, y);
+      },
       // Pitch climbs per link and volume falls, the same shape the eel's chain
       // uses: a long carom is an ascending run of clacks receding into the
       // crowd, so how far the body travelled is audible off-screen.
-      onRicochet: (x, y, i) => feedback('clubRicochet', {
-        x, y,
-        scale: Math.max(0.5, 1 - i * 0.12),
-        sfxOpts: { pitch: 1 + i * 0.08 },
-      }),
+      onRicochet: (x, y, i) => {
+        feedback('clubRicochet', {
+          x, y,
+          scale: Math.max(0.5, 1 - i * 0.12),
+          sfxOpts: { pitch: 1 + i * 0.08 },
+        });
+        // The debris of the club that STARTED the chain, carried down it and
+        // thinning per link the same way the sound does — a break shot sheds
+        // its heaviest shower on the first body and a wisp on the fifth.
+        clubAccent(x, y, { amount: Math.max(0.4, 1 - i * 0.15) });
+      },
       // Boom Boom Club. Scaled by how many the blast actually caught, so a keg
       // that went off in a crowd reads heavier than one that popped on a lone
       // crab — and throttled, because with two clubs swinging this can fire
       // several times a second.
       onBlast: (x, y, radius, caught) => {
         feedback('clubBoom', { x, y, scale: Math.min(1.6, 0.7 + caught * 0.15) });
+        // EMBERS WHATEVER SWUNG. The one club accent that overrides the club's
+        // own substance, because this is the keg going off and not the stick
+        // landing — a Cold Snap club carrying Boom Boom Club still detonates in
+        // fire. Sized off the RADIUS, which is the one thing Splash Zone and
+        // the card's own stacks both move: the blast is the only club effect
+        // whose growth is a distance the player can see.
+        clubAccent(x, y, {
+          event: 'clubEmbers',
+          amount: Math.min(2, 0.7 + caught * 0.15),
+          size: Math.min(1.8, radius / Math.max(0.5, CONFIG.clubBoom.radius)),
+        });
         world.grid.ripple(x, y, 2, radius * 2);
       },
       // The setup paying off — a club landing on something the run had already
@@ -4803,13 +5169,33 @@ function animate(now) {
       // the game that draws a circle travelling outward, which is what a
       // pressure wave is.
       onShock: (x, y, radius, caught) => {
-        feedback('clubShock', { x, y, scale: Math.min(1.5, 0.75 + radius * 0.12) });
+        feedback('clubShock', {
+          x, y,
+          scale: Math.min(1.5, 0.75 + radius * 0.12),
+          // The wave is water and its specks grow with the club that cracked
+          // it — a bigger stick displaces more of it.
+          sizeMul: clubHitFx().size,
+        });
+        // AND THE WOOD. The wave is what the water did; this is what came off
+        // the head doing it, thrown along the head's own travel (systems/club.js
+        // points the scratch there for exactly this call). Held under the
+        // whack's shower — a crack in open water should not read as a bigger
+        // event than actually connecting with something.
+        clubAccent(x, y, { amount: 0.7 });
         world.grid.ripple(x, y, 2.6 + Math.min(2, caught * 0.35), radius * 2.4);
       },
       // Cold Snap, but only the moment a body actually LOCKS. The per-hit
       // chill has no event of its own on purpose: it lands on every club hit
       // and would be a second sound under the whack that already played.
-      onFreeze: (x, y) => feedback('clubFreeze', { x, y }),
+      onFreeze: (x, y) => {
+        feedback('clubFreeze', { x, y });
+        // FROST WHATEVER SWUNG, the mirror of the keg above: Cold Snap rides
+        // every club in the run, so a body locking solid under a Boom Boom
+        // Club still shatters into ice. Bigger than the other accents because
+        // this fires only on SATURATION — it is the payoff the card is bought
+        // for, not a per-hit tick.
+        clubAccent(x, y, { event: 'clubFrost', amount: 1.4, size: 1.15 });
+      },
     });
     // Must follow updateEnemies for the same reason Bakalar's net does: a held
     // fish's position is written directly, and enemies.js has already
@@ -5142,9 +5528,40 @@ function animate(now) {
       // strike bar would make the rest of the economy something you wait out.
       // It is a break, not a jackpot.
       (chunk) => {
-        noteTutorialEvent('chumChunk');
         const x = chunk.mesh.position.x;
         const y = chunk.mesh.position.y;
+        // A PIECE OFF A WEAK SPOT IS FUEL, NOT FOOD. Same entity in the water,
+        // different currency: this one pays BOOST PIPS into the strike meter
+        // and heals nothing, which is what the boost colour on it is promising
+        // (CONFIG.hotSpots.chum). Branched here rather than in the pickup so
+        // the chunk stays a thing that is collected and this stays the one
+        // place that decides what collecting it is worth.
+        if (chunk.pips > 0) {
+          // Through addCharge like the bubble and the coral, NOT feedChum: it
+          // fills the bar without booking mouthfuls. A piece worth three pips
+          // routed through the food path would score three FOOD CHAIN links
+          // for one pickup, which would make shooting the light the fastest way
+          // to a deep chain and the eating beside the point.
+          if (addCharge(chunk.pips * pipValue(player.stats), player.stats)) chargeCrossed();
+          // The swallow family's event, not the meat's: this is the blue orb's
+          // promise at a smaller size, and giving it the health chunk's wet
+          // gulp would say "health" over a pickup that pays none. Scaled by
+          // what the piece was worth.
+          //
+          // The colour is the one it is WEARING — the fuel tint, which
+          // assetBaseColor cannot answer for because the asset is the meat.
+          // Same reading the level blob's swallow takes, and the pickup goo is
+          // one shared emitter precisely so the colour is what separates them.
+          feedback('hotSpotChumTaken', {
+            x, y,
+            scale: 0.85 + 0.5 * chunk.t,
+            color: chunk.base,
+          });
+          return;
+        }
+        // The tip is the HEALTH chunk's ("a real deal seal meal") and is spent
+        // by eating one, so a piece of fuel must not mark it off.
+        noteTutorialEvent('chumChunk');
         player.hp = Math.min(player.stats.maxHp, player.hp + player.stats.maxHp * chunk.healFrac);
         feedback('chumChunkEaten', {
           x, y,
@@ -5570,6 +5987,18 @@ function animate(now) {
   // froze behind the upgrade cards would be blank at exactly the moment you
   // want to read what just happened.
   updateChainDebug(player.stats);
+  // The caption over whichever grave the seal is swimming across. `realDt` and
+  // not `rawDt`, unlike the stones themselves: the drop is a cutscene beat that
+  // has to stay out of the death dive's slow motion, but this rides a seal that
+  // is being played, so a hit-stop that freezes the seal freezes its caption
+  // too. `live` is what takes it down for a menu or a death — as a fade, since
+  // the upgrade cards open on top of a frame that is still being drawn.
+  updateGraveLabel(realDt, {
+    camera: world.camera,
+    x: player.mesh.position.x,
+    y: player.mesh.position.y,
+    live: gameState.running,
+  });
   updateCalloutUi(realDt, {
     camera: world.camera,
     playerX: player.mesh.position.x,
@@ -5749,7 +6178,9 @@ function animate(now) {
   // have its visual recycled between two frames, and a tracked list would
   // hold the corpse. See systems/bossEyes.js.
   updateBossEyes(realDt, world.scene, enemies.filter((e) => e.isBoss));
-  updateProjectileTrails(realDt, world.scene, projectiles);
+  // The shots, and the clubs on the ring — which are not projectiles and get
+  // the same ribbon anyway. See clubTrailMovers.
+  updateProjectileTrails(realDt, world.scene, projectiles, clubTrailMovers());
   // The RGB smear the seal drags through the air. Real time, like the trails
   // above and for the same reason: the cloud is weather, and a hit-stop that
   // froze it mid-billow would leave a kink in the paint. Outside the run gate
@@ -5905,6 +6336,15 @@ function animate(now) {
   // flash that freezes during its own hit-stop is the one thing on screen while
   // everything else is held. (The pulse reads neither: it is on the transport.)
   updateBossHotSpots(dt, realDt);
+  // ...and whatever the hits on those spots shook loose. Drained HERE rather
+  // than where the damage landed: hotSpotDamage is called from three systems
+  // deep inside combat, none of which has a scene, and the queue is what keeps
+  // the payout testable without one. See spillHotSpotChum.
+  spillHotSpotChum();
+  // ...and the streak behind whatever is already in flight. After the spill so
+  // a piece born this frame lays its first blob at its birth point rather than
+  // one frame downrange, which is the frame the burst is covering anyway.
+  trailHotSpotChum(dt);
 
   // Surface first: it advances the wave, and bubbles bursting at the water line
   // are solved against wherever the wave ended up this frame, not last frame's.
