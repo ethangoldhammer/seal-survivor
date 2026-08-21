@@ -281,7 +281,12 @@ export function updateCalloutUi(dt, ctx = {}) {
   const onSeal = activeCallout('player', ctx.device, ctx.tokens);
   const world = activeCallout('world', ctx.device, ctx.tokens);
 
-  drawBand(band, ctx.tipFade);
+  // `bandFade` and not `tipFade`: the band is shared. The coach owns it for a
+  // control tip and the hello at the top of a run owns it for the first couple
+  // of seconds (systems/greeting.js), and each has its own dissolve — main.js
+  // hands over whichever belongs to the line that is actually up. The world
+  // surface has only ever had one owner, so it still reads `tipFade`.
+  drawBand(band, ctx.bandFade ?? ctx.tipFade);
   drawOnSeal(onSeal, ctx);
   const worldPose = drawWorld(world, ctx);
 

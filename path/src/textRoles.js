@@ -39,6 +39,42 @@ export const CASE_CSS = {
 // picker sitting alongside the real families.
 export const FONT_GLOBAL = 'global';
 
+// `scan` — THE SHADOW MASK, per role. 0 is off, and it is off everywhere but
+// the menu buttons.
+//
+// The global Retro treatment (CONFIG.typography.retro) lays one scanline sheet
+// over the WHOLE screen at `mix-blend-mode: multiply`, which is a picture tube
+// the game is being watched on. This is a different thing wearing the same
+// stripe: the glyphs THEMSELVES are cut into lines, so the words read as
+// something lit rather than something printed — a phosphor sign behind a
+// shadow mask. Both can be on at once and they compose; neither replaces the
+// other.
+//
+// It is a MASK on the element, so it takes the role's glow with it — which is
+// the half that sells it. A scanline over the letters and an untouched halo
+// around them looks like a decal laid on top of the type.
+//
+// `scanGap` is the period in px (line + gap), so 3 is the tube's own pitch and
+// anything much above 6 stops being a raster and starts being a blind. The
+// lines are in the ELEMENT's space, so they scale with a label that has been
+// shrunk to fit its cell (see `fit`) rather than staying nailed to the screen.
+// At the sizes anything here is set to, that is a difference you have to
+// measure rather than see.
+//
+// `scanGlow` is the halo the treatment brings WITH it, and it is not the same
+// control as `glow` above. The mask cuts the role's own bloom exactly as it
+// cuts the letters, so a role that is scanned and not glowed is simply a dimmer
+// role — the light has to be bright enough that what survives BETWEEN the lines
+// still reads as lit. Kept separate rather than folded into `glow` because it
+// belongs to the treatment: turn `scan` off and this should go with it, while
+// `glow` is what the type does on its own.
+//
+// It is also, bluntly, the only one of the two that can reach a game somebody
+// has already tuned: `glow` is in every saved snapshot and a new default for it
+// would be overwritten on load, while a field the snapshot has never heard of
+// arrives. See tuning-file-edits-lose-the-race — the same reason
+// `dayNight.orbit.parallax` had to become `drift`.
+
 /**
  * size      px at scale 1 — multiplied by CONFIG.typography.scale at render.
  * weight    absolute CSS font-weight. Single-weight display faces ignore it.
@@ -61,18 +97,18 @@ export const TEXT_ROLES = [
   // --- screens: menus, the score card, the pause menu -----------------------
   { key: 'title', label: 'Menu title', selector: '.sv-title', section: 'Screens',
     sample: 'FOOD CHAIN',
-    style: { font: FONT_GLOBAL, size: 30, weight: 700, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 30, weight: 700, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'sub', label: 'Menu body', selector: '.sv-sub', section: 'Screens',
     sample: 'Eat everything smaller than you.',
-    style: { font: FONT_GLOBAL, size: 13, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.6, shadow: 0, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 13, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.6, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'button', label: 'Buttons', selector: '.sv-btn', section: 'Screens',
     sample: 'Try again',
     // Dark on purpose: the button's fill is the pale blue, so this is the one
     // role whose text goes DOWN in value rather than up.
-    style: { font: FONT_GLOBAL, size: 14, weight: 600, tracking: 0.02, case: 'as typed', useInk: false, color: 0x0a0c12, alpha: 1, shadow: 0, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 14, weight: 600, tracking: 0.02, case: 'as typed', useInk: false, color: 0x0a0c12, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'hint', label: 'Hints', selector: '.sv-hint', section: 'Screens',
     sample: 'WASD to swim — space to strike',
-    style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.35, shadow: 0, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.35, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   // The splash's blob menu (systems/gooMenu.js). Its own role rather than
   // `button`: those are pale plates with dark text on them, and these are
   // labels sitting ON a translucent bubble, so they want the opposite treatment
@@ -82,39 +118,55 @@ export const TEXT_ROLES = [
   // whatever mounts the labels sets per button. A hexagon is a narrow thing to
   // put a word in, and "Leader Boards" does not fit one at the size the rest of
   // the row wants to be.
+  // THE MAIN MENU'S BUTTONS. The one role in the game that is lit rather than
+  // printed: it sits on a fresnel film over open water with nothing else on
+  // screen, so it can afford to be the brightest thing in the frame and it has
+  // to be, or it reads as a caption on a button rather than as the button's
+  // own face.
+  //
+  // Off the global ink on purpose — the ink is a legibility grey chosen to sit
+  // on panels, and this wants to be the colour the hexagon goes when it is hot
+  // (CONFIG.splashBust.menu.hot), so the word and the tile it is in are lit by
+  // the same light. Heavier and wider than it was: at 13px/700 inside a cell
+  // this size the type was a label, and the hexagon was the object.
+  //
+  // `glow` past the shadow, and then `scan` cutting both — see the note on
+  // scan above. The halo is what survives the mask between the lines, so the
+  // two are one decision: raising the scan without raising the glow just makes
+  // the word dimmer.
   { key: 'blobButton', label: 'Splash blob button', selector: '.sv-blob-label', section: 'Screens',
     sample: 'LEADER\nBOARDS', fit: true,
-    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.16, case: 'UPPER', useInk: true, color: 0xeaf7ff, alpha: 1, shadow: 6, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.16, case: 'UPPER', useInk: true, color: 0xeaf7ff, alpha: 1, shadow: 6, glow: 0, scan: 0.55, scanGap: 3, scanGlow: 16 } },
   { key: 'board', label: 'Leaderboard row', selector: '.sv-lb-row', section: 'Screens',
     sample: '1   SEAL   184,200',
-    style: { font: FONT_GLOBAL, size: 12, weight: 400, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 12, weight: 400, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'status', label: 'Status line', selector: '.sv-status', section: 'Screens',
     sample: 'Posting your run…',
-    style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0.03, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.5, shadow: 0, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0.03, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.5, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
 
   // --- the HUD: read at a glance, mid-fight --------------------------------
   { key: 'label', label: 'HUD label', selector: '.sv-label', section: 'HUD',
     sample: 'Score',
-    style: { font: FONT_GLOBAL, size: 10, weight: 500, tracking: 0.06, case: 'UPPER', useInk: true, color: 0xe8ecf3, alpha: 0.55, shadow: 0, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 10, weight: 500, tracking: 0.06, case: 'UPPER', useInk: true, color: 0xe8ecf3, alpha: 0.55, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'value', label: 'HUD number', selector: '.sv-value', section: 'HUD',
     sample: '184,200',
-    style: { font: FONT_GLOBAL, size: 20, weight: 600, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 20, weight: 600, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   // Inside the xp track now, not beside it, and the track grows to fit this —
   // so this size is what makes the bar thick. Small on purpose.
   { key: 'level', label: 'Level in xp bar', selector: '.sv-xptop-level', section: 'HUD',
     sample: 'Level 7',
-    style: { font: FONT_GLOBAL, size: 8, weight: 600, tracking: 0.1, case: 'UPPER', useInk: true, color: 0xe8ecf3, alpha: 0.5, shadow: 4, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 8, weight: 600, tracking: 0.1, case: 'UPPER', useInk: true, color: 0xe8ecf3, alpha: 0.5, shadow: 4, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'bossName', label: 'Boss name', selector: '.sv-boss-name', section: 'HUD',
     sample: 'THE OLD MAN OF THE REEF',
-    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.14, case: 'UPPER', useInk: false, color: 0xffd7d7, alpha: 1, shadow: 4, glow: 12 } },
+    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.14, case: 'UPPER', useInk: false, color: 0xffd7d7, alpha: 1, shadow: 4, glow: 12, scan: 0, scanGap: 3, scanGlow: 0 } },
 
   // --- upgrade cards: the only type that resizes itself --------------------
   { key: 'cardName', label: 'Card name', selector: '.sv-card-name', section: 'Upgrade cards',
     sample: 'Barnacle Plating', fit: true,
-    style: { font: FONT_GLOBAL, size: 15, weight: 700, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 4, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 15, weight: 700, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 4, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'cardDesc', label: 'Card text', selector: '.sv-card-desc', section: 'Upgrade cards',
     sample: '+18% armour, and chum sticks to you.', fit: true,
-    style: { font: FONT_GLOBAL, size: 13, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.92, shadow: 4, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 13, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.92, shadow: 4, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
 
   // --- popups: the numbers that fly off the kills --------------------------
   // `motion` names the CONFIG.textMotion block this role flies on. The Text
@@ -122,19 +174,19 @@ export const TEXT_ROLES = [
   // row visible without firing a burst into the game and watching it go past.
   { key: 'score', label: 'Score popup', selector: '.sv-toast', section: 'Popups',
     sample: '+420', motion: 'score',
-    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.02, case: 'as typed', useInk: false, color: 0xffffff, alpha: 1, shadow: 8, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.02, case: 'as typed', useInk: false, color: 0xffffff, alpha: 1, shadow: 8, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   // Rendered on top of the score popup — the node carries BOTH classes — so
   // this must stay after it in the list. typography.js writes the rules in
   // exactly this order, and the two selectors are the same weight.
   { key: 'combo', label: 'Combo popup', selector: '.sv-toast-combo', section: 'Popups',
     sample: '+1,680', motion: 'combo',
-    style: { font: FONT_GLOBAL, size: 15, weight: 700, tracking: 0.02, case: 'as typed', useInk: false, color: 0xffe066, alpha: 1, shadow: 8, glow: 0 } },
+    style: { font: FONT_GLOBAL, size: 15, weight: 700, tracking: 0.02, case: 'as typed', useInk: false, color: 0xffe066, alpha: 1, shadow: 8, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'chain', label: 'Chain banner', selector: '.sv-chain', section: 'Popups',
     sample: 'FOOD CHAIN! ×6', inlineColor: true, motion: 'chain',
     // 900 with the Strike prompt, and heavier than the warning band's 800 on
     // purpose: the food chain is its own voice, and it should be recognisable
     // as one before a word of it has been read.
-    style: { font: FONT_GLOBAL, size: 21, weight: 900, tracking: 0.1, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 10, glow: 16 } },
+    style: { font: FONT_GLOBAL, size: 21, weight: 900, tracking: 0.1, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 10, glow: 16, scan: 0, scanGap: 3, scanGlow: 0 } },
   // AN UPGRADE PAYING OUT — "MANEATER +12%", fired by a `toast` channel on a
   // feedback event (systems/feedback.js). Cool where the chain banner is gold,
   // and well under half its size: both ride the same layer, and a proc reading
@@ -142,7 +194,7 @@ export const TEXT_ROLES = [
   // shouting over the loudest. It is a receipt, and a receipt is read once.
   { key: 'proc', label: 'Upgrade proc', selector: '.sv-proc', section: 'Popups',
     sample: 'MANEATER +12%', motion: 'proc',
-    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.08, case: 'UPPER', useInk: false, color: 0x9fe3ff, alpha: 1, shadow: 8, glow: 10 } },
+    style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.08, case: 'UPPER', useInk: false, color: 0x9fe3ff, alpha: 1, shadow: 8, glow: 10, scan: 0, scanGap: 3, scanGlow: 0 } },
 
   // --- the band: the one line that is not about the score ------------------
   // Screen-anchored rather than flying off a kill, but it is the same node
@@ -154,14 +206,14 @@ export const TEXT_ROLES = [
   // them. Set it to UPPER in the panel if the band should shout.
   { key: 'warn', label: 'Warning band', selector: '.sv-callout', section: 'Popups',
     sample: 'Oxygen low!', motion: 'warn',
-    style: { font: FONT_GLOBAL, size: 24, weight: 800, tracking: 0.1, case: 'as typed', useInk: false, color: 0xff5566, alpha: 1, shadow: 10, glow: 18 } },
+    style: { font: FONT_GLOBAL, size: 24, weight: 800, tracking: 0.1, case: 'as typed', useInk: false, color: 0xff5566, alpha: 1, shadow: 10, glow: 18, scan: 0, scanGap: 3, scanGlow: 0 } },
   // Rendered on top of the warning band — the node carries BOTH classes — so
   // this must stay after it in the list, exactly as the combo popup does. Cold
   // where the warning is hot: a tip is not an alarm, and the colour is the
   // fastest way to tell the two apart before either has been read.
   { key: 'coach', label: 'First-run tip', selector: '.sv-callout-coach', section: 'Popups',
     sample: 'Swim up for air', motion: 'coach',
-    style: { font: FONT_GLOBAL, size: 20, weight: 700, tracking: 0.04, case: 'as typed', useInk: false, color: 0x9fe3ff, alpha: 1, shadow: 10, glow: 12 } },
+    style: { font: FONT_GLOBAL, size: 20, weight: 700, tracking: 0.04, case: 'as typed', useInk: false, color: 0x9fe3ff, alpha: 1, shadow: 10, glow: 12, scan: 0, scanGap: 3, scanGlow: 0 } },
   // A ROLE OF ITS OWN, not a size on the warning band, because it is not on the
   // band at all: it rides just above the boost ring on the seal (callouts.csv,
   // `anchor`). Small on purpose — it sits on the instrument it is about, where
@@ -170,7 +222,7 @@ export const TEXT_ROLES = [
   // it reads as that gauge talking rather than as a fifth emergency.
   { key: 'boostWarn', label: 'Boost warning', selector: '.sv-callout-boost', section: 'Popups',
     sample: 'Boost Empty!', motion: 'boostWarn',
-    style: { font: FONT_GLOBAL, size: 12, weight: 700, tracking: 0.08, case: 'as typed', useInk: false, color: 0xffc65a, alpha: 1, shadow: 6, glow: 8 } },
+    style: { font: FONT_GLOBAL, size: 12, weight: 700, tracking: 0.08, case: 'as typed', useInk: false, color: 0xffc65a, alpha: 1, shadow: 6, glow: 8, scan: 0, scanGap: 3, scanGlow: 0 } },
   // Rendered on top of the boost warning — the node carries BOTH classes — so
   // this must stay after it in the list, exactly as the coach tip does over the
   // band. It is the SAME SLOT on the ring and a completely different message,
@@ -185,7 +237,7 @@ export const TEXT_ROLES = [
   // The colour here is only what the role falls back to before a run starts.
   { key: 'strikeNow', label: 'Strike prompt', selector: '.sv-callout-strike', section: 'Popups',
     sample: 'STRIKE NOW!', inlineColor: true, motion: 'strikeNow',
-    style: { font: FONT_GLOBAL, size: 14, weight: 900, tracking: 0.14, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 6, glow: 14 } },
+    style: { font: FONT_GLOBAL, size: 14, weight: 900, tracking: 0.14, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 6, glow: 14, scan: 0, scanGap: 3, scanGlow: 0 } },
 ];
 
 export const TEXT_ROLE_KEYS = TEXT_ROLES.map((r) => r.key);

@@ -158,6 +158,14 @@ const fragmentShader = /* glsl */ `
   uniform vec4 uTouch[MAX_TOUCH];      // xy = world pos, z = radius, w = level
   uniform vec3 uTouchColor[MAX_TOUCH]; // one hue per finger, by arrival order
   uniform vec2 uTouchGain;             // x = colour gain, y = extra opacity
+  // How much of this lattice is being drawn at all — view.fade, 1 in a run.
+  // The finger light is ADDED to the line's colour rather than multiplied into
+  // it, so it does not go out when uOpacity does: a lattice faded to nothing
+  // still lit a glow blob under the cursor, which on the main menu meant the
+  // arena's coarse grid answering the pointer over a screen composed on the
+  // fine one — the exact two-grids-at-two-sizes read the crossfade exists to
+  // remove. So the glow fades with the lattice it belongs to.
+  uniform float uFade;
 
   varying float vWarp;
   varying vec2 vPos;
@@ -207,8 +215,8 @@ const fragmentShader = /* glsl */ `
     }
 
     gl_FragColor = vec4(
-      color + fingerLight * uTouchGain.x,
-      clamp(alpha + fingerAmt * uTouchGain.y * mask, 0.0, 1.0)
+      color + fingerLight * uTouchGain.x * uFade,
+      clamp(alpha + fingerAmt * uTouchGain.y * mask * uFade, 0.0, 1.0)
     );
   }
 `;
@@ -347,6 +355,7 @@ export function createGrid(scene) {
         uColor: { value: new THREE.Color(CONFIG.grid.color) },
         uHotColor: { value: new THREE.Color(CONFIG.grid.hotColor) },
         uOpacity: { value: CONFIG.grid.opacity },
+        uFade: { value: 1 },
         uWarpGain: { value: CONFIG.grid.warpGain },
         uSurfaceY: { value: bounds.surfaceY },
         uWaveT: { value: waveT },
@@ -514,7 +523,9 @@ export function createGrid(scene) {
     // six times finer than this one, and two hex grids at two sizes on top of
     // each other read as a fault; so this one is held down while that screen is
     // up and brought back as the shot opens out. See mainMenuGrid.
-    material.uniforms.uOpacity.value = CONFIG.grid.opacity * (view.fade ?? 1);
+    const fade = view.fade ?? 1;
+    material.uniforms.uOpacity.value = CONFIG.grid.opacity * fade;
+    material.uniforms.uFade.value = fade;
     material.uniforms.uWarpGain.value = CONFIG.grid.warpGain;
     material.uniforms.uSurfaceY.value = bounds.surfaceY;
     // The live sea state — see the same note in water.js. The grid clips to

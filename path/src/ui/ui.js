@@ -20,13 +20,25 @@ import { touchPrimary, prefersReducedMotion } from '../devices.js';
 // One setting, read live rather than pushed in: where the health and air
 // gauges are drawn. settings.js imports nothing from here, so this is a leaf
 // dependency and not half of a cycle.
-import { barPlacement } from '../systems/settings.js';
+import { barPlacement, boostMeter } from '../systems/settings.js';
+// THE BOOST COLUMN'S MODEL, borrowed rather than rebuilt. systems/strikeRing.js
+// owns the pip springs, the stagger queue and the pops whichever view is on
+// screen; this file only draws them. Neither module imports the other's data —
+// pipAnim() is a read — and neither imports back into here, so this is a leaf
+// dependency like the setting above it.
+import { pipAnim } from '../systems/strikeRing.js';
+import { pipCount } from '../systems/strike.js';
+// THE GRAIN IN THE GAUGES. One field for every meter on screen, shared with
+// the fuel wheel around the seal — see systems/meterNoise.js. The HUD is what
+// advances its clock, because updateHUD is the once-per-live-frame call and
+// two things advancing it would run the drift at double speed.
+import { advanceMeterNoise, meterNoiseFrame, resetMeterNoise } from '../systems/meterNoise.js';
 import { mountRiveSplash } from './riveSplash.js';
 import { tipJarLink } from './tipJar.js';
 import { titlePreviewRequested } from '../systems/titleSeal.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
-import { buildPrintPaper, initSnapshotPrints } from './snapshotPrint.js';
+import { buildPrintPaper, initSnapshotPrints, resyncPrintCards } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import { chainCss } from '../systems/chainColor.js';
 import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform } from './upgradeHive.js';
@@ -578,6 +590,90 @@ const STYLES = `
   .sv-pbar-o2.sv-o2-low { background: linear-gradient(180deg, #ffd166, #ff8a00);
     box-shadow: 0 0 12px rgba(255,160,40,0.9); }
 
+  /* --- THE GRAIN, ON ALL THREE GAUGES ------------------------------------
+     One field of noise, tiled over every track. The field itself, why it is
+     shared with the fuel wheel around the seal, and what each knob does are
+     all in systems/meterNoise.js; this is only how it lands on a bar.
+
+     MULTIPLY, not an overlay of its own colour. What is wanted is the fill
+     being EATEN — the same red, unevenly lit — and multiply is the one blend
+     that can only ever take away, so no setting of it can invent a hue the
+     gauge is not already wearing. It also leaves the empty track alone almost
+     entirely: multiplying a near-black background by anything is still
+     near-black, which is why the container survives at full depth.
+
+     IT IS NOT ON THE FILL. The fill is a full-height element squashed by
+     scaleY(--sv-fill), and a background on it would be squashed with it: the
+     grain would stretch as the bar drained and be four times finer at the
+     bottom of a bite than at the top — a texture that reports the value it is
+     supposed to be decorating. On the track it is the same grain whatever the
+     gauge reads, which is the same reasoning that keeps the glow off the fill.
+
+     ONE SET OF VARIABLES, written to .sv-playerbars once a frame and inherited
+     by all three overlays: three gauges wearing one field is the entire point,
+     and three separate writes are three chances for them to disagree. */
+  .sv-meter-grain { position: absolute; inset: 0; pointer-events: none;
+    border-radius: inherit;
+    background-image: var(--sv-grain-img, none);
+    background-size: var(--sv-grain-size, 54px) var(--sv-grain-size, 54px);
+    background-position: var(--sv-grain-x, 0px) var(--sv-grain-y, 0px);
+    mix-blend-mode: multiply;
+    /* 0 until there is a field to draw — a missing tile has to read as a
+       plain bar, never as a black one. */
+    opacity: var(--sv-grain-depth, 0); }
+
+  /* --- THE BOOST FUEL, AS A COLUMN --------------------------------------
+     settings.hud.boostMeter === 'bar'. The same pips the ring around the seal
+     draws (systems/strikeRing.js), stood on end beside the air gauge — one
+     model, one set of springs, one stagger queue, and only ever one of the two
+     pictures on screen at a time. See pipAnim().
+
+     WHAT DOES NOT MOVE WITH THEM: the drop of goo. Banked power is the thing
+     the seal is holding and it grows out of the animal in both styles, which
+     is why this column is the FUEL only and has no core, no lead-in and no
+     tolerance band. Two quantities, and the one that answers "can I strike at
+     all" is the one that reads fine in a corner.
+
+     Hidden rather than not built — and it is the SHIPPED view now, so what is
+     hidden by default is the other one. The wrap is a sibling of the two
+     gauges so it inherits their placement, their track and their halo for
+     free; a display toggle on a modifier class is the whole difference
+     between the two settings, where building it on demand would mean the
+     column arriving mid-run with no layout and no baseline. */
+  /* Mint, the READY colour — the halo this column raises is "you can strike",
+     which is a different sentence from health's red and air's blue. */
+  .sv-boost-wrap { display: none; --sv-glow-rgb: 157,255,208; }
+  .sv-playerbars-boost .sv-boost-wrap { display: block; }
+  /* column-reverse so pip 0 is at the BOTTOM and the fuel climbs, which is the
+     direction the other two gauges drain in read backwards. The 2px inset is
+     the track's own rim showing round the pips, so a column with one pip lit
+     still reads as a container that could hold more. */
+  .sv-boost-pips { position: absolute; inset: 2px; display: flex;
+    flex-direction: column-reverse; gap: 2px; }
+  /* THE POP IS A SWELL AND A LIFT, exactly as it is on the ring: a pip landing
+     widens and brightens rather than only brightening, because on a 9px cell
+     brightness alone is a twinkle. --sv-pop is written per frame per cell from
+     the same decaying array the shader reads. */
+  .sv-boost-pip { position: relative; flex: 1 1 0; border-radius: 3px;
+    background: rgba(255,255,255,0.07); overflow: hidden;
+    transform: scaleX(calc(1 + 0.2 * var(--sv-pop, 0)));
+    filter: brightness(calc(1 + 1.6 * var(--sv-pop, 0))); }
+  /* SCALED, not sized, like every other fill in this HUD — and for the same
+     reason there is no transition on it: the spring is already the animation
+     (updatePips in systems/strikeRing.js), and a CSS curve chasing a moving
+     value never arrives. --sv-pip-col is the pip's own place on the wheel's
+     colour ramp, stamped when the count or the tuned colours change. */
+  .sv-boost-fill { position: absolute; inset: 0; border-radius: 3px;
+    background: var(--sv-pip-col, #7ad7ff);
+    box-shadow: 0 0 7px var(--sv-pip-col, #7ad7ff);
+    transform: scaleY(var(--sv-pip, 0)); transform-origin: 50% 100%; }
+  /* THE SPEND FLASH. The bar blowing out white as it becomes a strike, which
+     in the ring style is drawn on the wheel itself — the fuel has to be seen
+     being spent wherever the fuel is. Over the pips rather than tinting them,
+     so it whitens a half-full column and an empty one identically. */
+  .sv-boost-spend { position: absolute; inset: 0; border-radius: inherit;
+    background: #fff; opacity: var(--sv-spend, 0); pointer-events: none; }
+
   /* --- THE OTHER PLACEMENT: PINNED TO THE CORNER -------------------------
      settings.hud.barPlacement === 'corner'. The same two columns, the same
      fills and the same trail — only the anchor changes, which is the whole
@@ -635,6 +731,14 @@ const STYLES = `
     height: min(calc(var(--sv-track) * var(--sv-hp-grow, 1)), var(--sv-track-max)); }
   .sv-playerbars-corner #svO2Wrap {
     height: min(calc(var(--sv-track) * var(--sv-o2-grow, 1)), var(--sv-track-max)); }
+  /* AND THE FUEL GROWS TOO, on its own quantity: the number of PIPS, not a
+     maximum. A link cuts the bar into more segments (Coiled Spring, and every
+     chain link after the first), and against a fixed-length column that shows
+     up as thinner pips — the same instrument saying nothing about the fact
+     that a strike now costs more to load. Growing the track keeps a pip the
+     same size and makes the extra one visible as extra. */
+  .sv-playerbars-corner #svBoostWrap {
+    height: min(calc(var(--sv-track) * var(--sv-boost-grow, 1)), var(--sv-track-max)); }
   .sv-playerbars-corner .sv-pbar,
   .sv-playerbars-corner .sv-pbar-ghost { border-radius: 7px; }
 
@@ -655,6 +759,8 @@ const STYLES = `
      the corner already keeps from the edge. Applied to .sv-hud rather than to
      the bars, because the thing that moves is the other block. */
   .sv-hud-barcorner .sv-hud-corner { --sv-bars-w: 47px; }
+  /* ...and 20px wider again with the fuel column standing beside them. */
+  .sv-hud-barcorner.sv-hud-boostbar .sv-hud-corner { --sv-bars-w: 67px; }
   @media (max-width: 700px) {
     .sv-hud-barcorner .sv-hud-corner {
       right: calc(14px + var(--sv-bars-w, 0px) + env(safe-area-inset-right, 0px)); }
@@ -676,7 +782,12 @@ const STYLES = `
   .sv-boss-name { font-size: 13px; font-weight: 700; letter-spacing: 0.14em;
     text-transform: uppercase; color: #ffd7d7; margin-bottom: 5px;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 12px rgba(255,60,60,0.55); }
-  .sv-boss-track { height: 9px; background: rgba(4,6,12,0.62); border-radius: 5px;
+  /* RELATIVE so the grain layer inside it has something to be inset:0 against.
+     Without it the overlay would resolve against .sv-bossbar (which is
+     positioned) and stretch the field across the boss's NAME as well — and
+     since the track clips its own children, the fault would present as the
+     grain simply being missing from the bar. */
+  .sv-boss-track { position: relative; height: 9px; background: rgba(4,6,12,0.62); border-radius: 5px;
     overflow: hidden; box-shadow: 0 0 0 1px rgba(255,86,102,0.45), 0 0 18px rgba(255,40,60,0.22); }
   /* Width is set per frame from the boss's hp, so the transition is a smoothing
      pass over a value that is already correct — short enough that a burst of
@@ -825,6 +936,53 @@ const STYLES = `
      own size, so it tracks whatever the Chain banner role is set to. */
   .sv-chain-x { font-size: 0.76em; margin-left: 7px; font-weight: 700;
     font-variant-numeric: tabular-nums; opacity: 0.9; }
+  /* THE WINDOW, AS A STRIP UNDER THE WORDS.
+     The chain lapses on a clock (CONFIG.strike.chainWindow, 2.2s) and the only
+     thing that ever drew that clock was a thin arc outside the boost ring —
+     on the seal, at the other end of the player's attention from the banner
+     announcing the thing it is counting down. The banner says a chain is
+     running; this says how long you have to keep it.
+     A SLAB, not an outline: it doubles as the plate the type is read off, which
+     is why the track is dark rather than a tinted version of the fill. Over
+     bright water the words used to be carried entirely by their own shadow.
+     em on every axis so the strip is sized by the Chain banner role, exactly
+     like the ×N above it — the Text panel can double the type and the plate
+     follows.
+     z-index -1 puts it behind the words inside the banner's own stacking
+     context. The banner carries a transform, so it already IS a stacking
+     context and the negative index cannot escape it onto the layer below.
+     No backticks anywhere in this block: the whole stylesheet is one template
+     literal and a single one would end it. */
+  .sv-chain-strip { position: absolute; left: -0.5em; right: -0.5em;
+    top: -0.26em; bottom: -0.26em; z-index: -1; border-radius: 3px;
+    background: rgba(6,10,16,0.62); overflow: hidden;
+    /* THE PLATE DOES NOT FADE WITH THE FILL, and the version that did is worth
+       writing down: tying its opacity to --sv-chain-left made the whole
+       indicator dimmest at the moment it was most urgent, so a chain about to
+       lapse showed almost nothing. The plate is the ground the type is read
+       off and the ground does not move. What leaves is the BANNER, on the
+       toast layer's own departure curve. */
+    box-shadow: 0 0 calc(2px + 14px * var(--sv-chain-flash, 0)) currentColor; }
+  /* THE FILL. transform, not width: a width animation relayouts the banner's
+     box every frame and the type inside it reflows by a subpixel, which at this
+     size reads as the words shimmering. transform-origin left, so it drains the
+     way a timer does — the empty part is the time already spent.
+     --sv-chain-left is written per frame by updateToasts. */
+  .sv-chain-fill { position: absolute; inset: 0; transform-origin: left center;
+    transform: scaleX(var(--sv-chain-left, 1));
+    background: currentColor; opacity: 0.5; }
+  /* NEARLY OUT, and it washes the WHOLE plate rather than the remaining fill.
+     That is the entire point of it: at a tenth of the window left there is a
+     sliver of fill three pixels wide, and blinking three pixels is not a
+     warning. The wash is full width, so the thing that flashes is the same size
+     however little time is on it.
+     A pseudo-element rather than a third node — --sv-chain-flash is a custom
+     property and inherits, so it reaches here from the one place per frame that
+     writes it, and nothing has to remember to keep a fourth element in step.
+     It is driven from the game's own clock rather than a CSS animation, for the
+     same reason the popups' motion is: it has to stop when the game does. */
+  .sv-chain-strip::after { content: ''; position: absolute; inset: 0;
+    background: currentColor; opacity: calc(0.42 * var(--sv-chain-flash, 0)); }
   /* AN UPGRADE PAYING OUT — "MANEATER +12%". Same layer and same loop as the
      numbers, and deliberately smaller and cooler than the chain banner: this
      is a receipt, not an announcement. One line per upgrade at a time; a
@@ -1439,19 +1597,37 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     <div class="sv-hud sv-hidden" id="svHud">
       <div class="sv-xptop">
         <div class="sv-xptop-fill" id="svXpBar"></div>
+        <!-- The grain, before the label: every meter in this HUD wears the same
+             field, and the one thing it must not eat into is type. -->
+        <i class="sv-meter-grain"></i>
         <div class="sv-xptop-level"><span class="sv-xptop-word">Level</span><span class="sv-xptop-abbr">Lv</span><span id="svLevel">1</span></div>
       </div>
       <!-- The ghost comes FIRST in each track and the fill second: both are
            inset:0 absolute, so paint order is DOM order and the trail has to
            be behind the value it is trailing. -->
       <div class="sv-playerbars" id="svPlayerBars">
+        <!-- THE GRAIN IS THE LAST CHILD OF EACH TRACK, and has to be: it blends
+             with what is painted UNDER it, so anything added below would be
+             drawn over the grain instead of through it. -->
         <div class="sv-pbar-wrap" id="svHpWrap">
           <div class="sv-pbar-ghost" id="svHpGhost"></div>
           <div class="sv-pbar sv-pbar-hp" id="svHpBar"></div>
+          <i class="sv-meter-grain"></i>
         </div>
         <div class="sv-pbar-wrap" id="svO2Wrap">
           <div class="sv-pbar-ghost" id="svO2Ghost"></div>
           <div class="sv-pbar sv-pbar-o2" id="svO2Bar"></div>
+          <i class="sv-meter-grain"></i>
+        </div>
+        <!-- THE BOOST FUEL, when the player has asked for it as a column
+             (settings.hud.boostMeter === 'bar'). Outboard of the air, so the
+             three gauges read health-air-fuel outward from whatever they are
+             attached to. Empty in the markup: the pips are built from the
+             count, which moves mid-run as links land. -->
+        <div class="sv-pbar-wrap sv-boost-wrap" id="svBoostWrap">
+          <div class="sv-boost-pips" id="svBoostPips"></div>
+          <i class="sv-meter-grain"></i>
+          <div class="sv-boost-spend" id="svBoostSpend"></div>
         </div>
       </div>
       <!-- THE CORNER. Score, time and whatever else is currently true about the
@@ -1488,7 +1664,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
          other two for space. -->
     <div class="sv-bossbar sv-hidden" id="svBossBar">
       <div class="sv-boss-name" id="svBossName"></div>
-      <div class="sv-boss-track"><div class="sv-boss-fill" id="svBossFill"></div></div>
+      <div class="sv-boss-track"><div class="sv-boss-fill" id="svBossFill"></div><i class="sv-meter-grain"></i></div>
     </div>
 
     <div class="sv-center sv-hidden" id="svLevelUpMenu">
@@ -1582,7 +1758,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
 
   for (const id of [
     'svHud', 'svHpBar', 'svO2Bar', 'svXpBar', 'svLevel', 'svTime', 'svScore',
-    'svHpGhost', 'svO2Ghost', 'svHpWrap', 'svO2Wrap',
+    'svHpGhost', 'svO2Ghost', 'svHpWrap', 'svO2Wrap', 'svBoostWrap', 'svBoostPips', 'svBoostSpend',
     'svLevelUpMenu', 'svLevelUpBox', 'svGameOverMenu', 'svCards', 'svGameOverStats',
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
     'svBossBar', 'svBossName', 'svBossFill',
@@ -3151,6 +3327,35 @@ function projectToScreen(camera, worldPos, out) {
   return out;
 }
 
+/**
+ * The inverse: a point in CSS pixels back to the world, on the z = 0 plane the
+ * whole game is played on.
+ *
+ * EXACT rather than approximate, and only because the camera is orthographic
+ * and unrotated (see createWorld) — unprojecting an NDC point gives a ray, and
+ * with no perspective and no tilt every point on that ray shares the x and y
+ * this returns. A rotated or perspective camera would need the ray intersected
+ * with the plane; there is deliberately no such code here, because there is no
+ * such camera.
+ *
+ * It exists for the one tip that stands beside a piece of UI rather than beside
+ * something in the water — the hive in the corner. Everything the callout layer
+ * draws is positioned FROM a world point (see drawWorld in ui/callout.js), so
+ * the honest way to point at a rectangle on the glass is to say where in the
+ * water that rectangle is, rather than to give the tip a second code path.
+ */
+export function screenToWorld(camera, px, py, out = { x: 0, y: 0 }) {
+  PROJECT_V.set(
+    (px / window.innerWidth) * 2 - 1,
+    -((py / window.innerHeight) * 2 - 1),
+    0,
+  );
+  PROJECT_V.unproject(camera);
+  out.x = PROJECT_V.x;
+  out.y = PROJECT_V.y;
+  return out;
+}
+
 const PROJECT_V = new THREE.Vector3();
 const screenPt = { x: 0, y: 0 };
 
@@ -3333,6 +3538,17 @@ export function resetPlayerBars() {
   // health would otherwise spend the whole run claiming to be over-length.
   pbar.baseHp = 0; pbar.baseO2 = 0;
   pbar.hpGrow = 1; pbar.o2Grow = 1;
+  // The fuel column's baseline goes with them, and for the same reason: how
+  // many pips this run STARTED cut into is a fact about one run, and a bar that
+  // kept the last one's would open the next claiming to be already upgraded.
+  boostBar.basePips = 0;
+  boostBar.grow = 1;
+  // The grain's drift goes back to where it starts, so two runs opened a
+  // minute apart are the same picture rather than the same picture at two
+  // arbitrary offsets. The baked field is deliberately NOT thrown away — it is
+  // expensive and nothing about it is per-run.
+  resetMeterNoise();
+  grainTile = null;
   // UNDOING hidePlayerBars, which the last run's death left inline at zero.
   // The seal placement gets away without this because updateHUD rewrites the
   // opacity every frame from the idle test; the corner placement deliberately
@@ -3376,6 +3592,225 @@ function stepTrackLength(player, dt) {
   if (!bars) return;
   bars.style.setProperty('--sv-hp-grow', pbar.hpGrow.toFixed(4));
   bars.style.setProperty('--sv-o2-grow', pbar.o2Grow.toFixed(4));
+}
+
+// ---------------------------------------------------------------------------
+// THE GRAIN — one field of noise across all three gauges.
+//
+// The HUD is where the shared clock is advanced (systems/meterNoise.js reads
+// it from the ring as well), and this is the once-a-frame call that does it.
+// Everything below writes CUSTOM PROPERTIES on the stack and nothing else: the
+// overlays are three inert elements inheriting one set of numbers, so the
+// gauges cannot come apart into three fields at three phases.
+// ---------------------------------------------------------------------------
+let grainTile = null;   // the data URI on the stack now, so the boil is one
+                        // property write per PHASE rather than per frame
+
+function stepMeterGrain(dt) {
+  advanceMeterNoise(dt);
+  // ON THE UI ROOT, and it has to be the root rather than the HUD: the boss bar
+  // is deliberately NOT inside .sv-hud (that is a flex row of corner panels and
+  // a centred banner would fight the other two for space), so the HUD is not
+  // an ancestor of every meter. Every meter on screen wears this field —
+  // health, air, the boost column, the level strip and the boss bar — and
+  // custom properties reach them by inheritance, so they have to be written
+  // somewhere all five are under. Five overlays, one field, one phase, one
+  // offset, one write.
+  const bars = root;
+  if (!bars) return;
+  const frame = meterNoiseFrame();
+  // NOT READY IS A REAL STATE and it has to draw as a plain bar: the field is
+  // switched off, still baking (one phase a frame), or impossible to build at
+  // all in this context. Depth 0 is the gauge as it was before any of this.
+  if (!frame.ready || !frame.tile) {
+    bars.style.setProperty('--sv-grain-depth', '0');
+    return;
+  }
+  const t = frame.tuning;
+  if (frame.tile !== grainTile) {
+    grainTile = frame.tile;
+    bars.style.setProperty('--sv-grain-img', frame.tile);
+  }
+  bars.style.setProperty('--sv-grain-size', `${t.tilePx}px`);
+  // THE DRIFT ARRIVES IN TILES and is spent here in pixels, which is the only
+  // place that conversion can honestly happen: the same offset is handed to
+  // the shader in ring radii a few files away, and a field that slid at two
+  // speeds in its two views would be two fields.
+  bars.style.setProperty('--sv-grain-x', `${(frame.offset.x * t.tilePx).toFixed(2)}px`);
+  bars.style.setProperty('--sv-grain-y', `${(frame.offset.y * t.tilePx).toFixed(2)}px`);
+  bars.style.setProperty('--sv-grain-depth', t.depth.toFixed(3));
+}
+
+// ---------------------------------------------------------------------------
+// THE BOOST COLUMN — the strike fuel, drawn as pips beside the air gauge.
+//
+// The alternative view of systems/strikeRing.js's outer wheel, and deliberately
+// not a second model of it: the fills, the pops and the stagger that turns a
+// gulp of five chum into five separate plops all live in that file and are read
+// here through pipAnim(). Whichever style is on, the same springs are running;
+// only one of them is drawn (see uFuel in the ring's shader).
+//
+// WHAT STAYS ON THE SEAL EITHER WAY: the drop of goo. Fuel and banked power
+// move in opposite directions during a wind-up, and the second one is a thing
+// the animal is holding rather than a number — pulling it into the corner with
+// the pips would leave a wind-up with no read on the animal at all.
+// ---------------------------------------------------------------------------
+const boostBar = {
+  count: 0,      // pips currently BUILT, so a re-segmentation is one rebuild
+  key: '',       // ...and the colours they were built in, which the ` panel moves
+  cells: [],     // { pip, fill } per segment, bottom-first — pip 0 is the floor
+  basePips: 0,   // what this run STARTED cut into. See stepTrackLength.
+  grow: 1,
+};
+
+/** One channel-wise sRGB mix of two 0xRRGGBB ints, as a CSS hex string. */
+function hexMix(a, b, t) {
+  const k = Math.max(0, Math.min(1, t));
+  const out = [16, 8, 0].map((sh) => {
+    const ca = (a >> sh) & 255;
+    const cb = (b >> sh) & 255;
+    return Math.round(ca + (cb - ca) * k);
+  });
+  return `#${out.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * WHAT COLOUR PIP `i` IS, and it quotes the wheel rather than inventing a
+ * ramp: the same mix(mix(colour, ready, t * 0.75), lastPip) the shader's
+ * wheelColor() walks, so switching styles changes the shape of the meter and
+ * not what it is saying. "One from full" keeps its own hue in both.
+ *
+ * Mixed in plain sRGB on purpose — these land in CSS, which is sRGB, where the
+ * shader's .set() converts into the renderer's working space. Same numbers,
+ * two destinations.
+ */
+function pipHex(i, n, ring) {
+  const base = ring.color ?? 0x7ad7ff;
+  const ready = ring.readyColor ?? 0x9dffd0;
+  const last = ring.lastPipColor ?? ready;
+  const t = n > 1 ? i / (n - 1) : 1;
+  return i >= n - 1 ? hexMix(base, last, 1) : hexMix(base, ready, t * 0.75);
+}
+
+/**
+ * Cut the column into `n` segments.
+ *
+ * Called only when the count or the tuned colours actually change — a link
+ * landing mid-run, or somebody dragging a swatch in the ` panel. Rebuilding
+ * per frame would throw away the elements the pops are being written to.
+ */
+function buildBoostPips(n, ring) {
+  const host = el.svBoostPips;
+  if (!host) return;
+  host.innerHTML = '';
+  boostBar.cells = [];
+  for (let i = 0; i < n; i++) {
+    const pip = document.createElement('div');
+    pip.className = 'sv-boost-pip';
+    const fill = document.createElement('i');
+    fill.className = 'sv-boost-fill';
+    fill.style.setProperty('--sv-pip-col', pipHex(i, n, ring));
+    pip.appendChild(fill);
+    host.appendChild(pip);
+    boostBar.cells.push({ pip, fill });
+  }
+  boostBar.count = n;
+}
+
+// Which style the DOM is wearing, latched like the placement below it.
+let boostMeterApplied = null;
+
+/**
+ * Put the fuel where the player has asked for it.
+ *
+ * The class is all this does: the ring reads the same setting itself (see
+ * `fuelHere` in systems/strikeRing.js), so there is no state here that could
+ * drift out of step with what the shader is drawing.
+ *
+ * Element check FIRST, then the latch — the settings handler in main.js can
+ * reach this before initUI has built anything, and latching above that line
+ * would make every later frame agree there was nothing to do.
+ */
+export function applyBoostMeter(mode = boostMeter()) {
+  const bars = el.svPlayerBars;
+  if (!bars) return;
+  if (mode === boostMeterApplied) return;
+  boostMeterApplied = mode;
+  const column = mode === 'bar';
+  bars.classList.toggle('sv-playerbars-boost', column);
+  // The HUD carries this one too: on a phone the score and clock step inboard
+  // of the gauges, and there is a third column to clear now.
+  el.svHud?.classList.toggle('sv-hud-boostbar', column);
+}
+
+/**
+ * One frame of the column. `dt` is the same real-seconds step the gauges get.
+ *
+ * Reads the ring's arrays as they stand, which is one frame behind: main.js
+ * updates the HUD before the ring (the ring is outside the pause gate, with
+ * the rest of the seal's own overlays). 16ms on a spring that takes 200ms to
+ * settle is not a thing anyone can see, and the alternative — reordering the
+ * frame so a HUD read can drive it — would put a display detail in charge of
+ * where a gameplay system runs.
+ */
+function updateBoostBar(player, strikeState, dt) {
+  const wrap = el.svBoostWrap;
+  if (!wrap) return;
+  const ring = CONFIG.strike.ring;
+  const anim = pipAnim();
+  // anim.count is 0 until the ring has run a frame — on the first frame of a
+  // run, and for the whole of a paused menu opened before one. Falling back to
+  // the model's own count means the column is built at the right length
+  // immediately rather than appearing as a single empty pip.
+  const n = Math.max(1, Math.min(anim.fill.length, anim.count || pipCount(player.stats)));
+  const key = `${ring.color}|${ring.readyColor}|${ring.lastPipColor}`;
+  if (n !== boostBar.count || key !== boostBar.key) {
+    boostBar.key = key;
+    buildBoostPips(n, ring);
+  }
+
+  // THE TRUE BAR IS A CEILING OVER THE QUEUE, and this line is the whole
+  // reason the column can be a frame behind the springs and still be honest.
+  //
+  // main.js updates the HUD before the ring, so the arrays read here are last
+  // frame's. On the way UP that is invisible and in fact wanted — the stagger
+  // is deliberately late, one pip at a time. On the way DOWN it is not: holding
+  // burns fuel and a release spends it, and both are things the player just
+  // DID. A column that emptied a frame after the button reads as input lag,
+  // which is the one thing this meter must never do.
+  //
+  // `charge` is current, so capping each pip at what the model says it holds
+  // restates the ring's own asymmetry (gains queue, drains snap) using the
+  // value already in hand — rather than reordering a gameplay system to suit a
+  // read-out, which is what threading the ring before the HUD would amount to.
+  const fuel = Math.max(0, Math.min(1, strikeState?.charge ?? 0));
+  let loudest = 0;
+  for (let i = 0; i < boostBar.cells.length; i++) {
+    const { pip, fill } = boostBar.cells[i];
+    const pop = anim.pop[i] ?? 0;
+    if (pop > loudest) loudest = pop;
+    const held = Math.max(0, Math.min(1, fuel * boostBar.count - i));
+    fill.style.setProperty('--sv-pip', Math.min(anim.fill[i] ?? 0, held).toFixed(3));
+    pip.style.setProperty('--sv-pop', pop.toFixed(3));
+  }
+
+  // THE HALO, on the same channel health and air raise theirs: a pip landing
+  // lifts the whole column (the ring does exactly this with `loudest`), and a
+  // full bar holds a steady lift because "you can strike now" is a state and
+  // not an event.
+  const loaded = fuel > 0.999;
+  wrap.style.setProperty('--sv-glow', Math.min(1, loudest * 0.8 + (loaded ? 0.6 : 0)).toFixed(3));
+  // Normalised exactly as uFlash is, so the two styles fade the spend over the
+  // same window rather than one of them inventing a duration.
+  const flashTime = Math.max(0.01, CONFIG.strike.charge.flashTime ?? 0.2);
+  wrap.style.setProperty('--sv-spend', Math.max(0, Math.min(1, (strikeState?.flash ?? 0) / flashTime)).toFixed(3));
+
+  // The track's LENGTH, in the corner placement only — chased rather than
+  // stamped, at the fills' own rise rate, because a link arriving is a moment
+  // worth seeing. The stylesheet turns the ratio into pixels and clamps it.
+  if (!boostBar.basePips) boostBar.basePips = n;
+  boostBar.grow = chase(boostBar.grow, n / boostBar.basePips, PBAR_SMOOTH.rise, dt);
+  el.svPlayerBars?.style.setProperty('--sv-boost-grow', boostBar.grow.toFixed(4));
 }
 
 // Which placement the DOM is currently wearing, so the class work below runs
@@ -3457,12 +3892,25 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
   // is here to avoid.
   const step = Math.min(0.1, Math.max(0, dt));
   pbar.clock += step;
+  // Before the gauges rather than after: the grain is what they are wearing,
+  // not something laid over the top of a finished frame, and building this
+  // frame's phase here means the ring (which only reads) can never be handed a
+  // set with nothing in it.
+  stepMeterGrain(step);
   stepBar('hp', hpFrac, step, el.svHpBar, el.svHpGhost, el.svHpWrap);
   stepBar('o2', o2Frac, step, el.svO2Bar, el.svO2Ghost, el.svO2Wrap);
 
   const placement = barPlacement();
   applyBarPlacement(placement);
   if (placement === 'corner') stepTrackLength(player, step);
+
+  // The fuel, if it is being drawn here at all. Same shape as the placement
+  // above: apply every frame (it early-outs) so the style is correct without
+  // anything having to remember to wire it up, and only pay for the pips when
+  // the column is the view that is on.
+  const meter = boostMeter();
+  applyBoostMeter(meter);
+  if (meter === 'bar') updateBoostBar(player, strikeState, step);
 
   if (camera && el.svPlayerBars && placement !== 'corner') {
     // Offset in WORLD units, not pixels — a pixel gap would drift as the
@@ -3680,7 +4128,8 @@ function pushToast(node, x, y, kind) {
 }
 
 // The FOOD CHAIN! banner. Announces that the strike chain EXTENDED, with the
-// link count alongside it.
+// link count alongside it — and, since it is now PINNED, how long the chain has
+// left to run.
 //
 // Only ever one on screen. A chain extends faster than a toast can finish
 // rising — six links inside two seconds is an ordinary run — so stacking one
@@ -3688,13 +4137,42 @@ function pushToast(node, x, y, kind) {
 // the screen and no readable number anywhere in it. Instead an extension
 // re-uses the live node: new count, new colour, age wound back to zero, so it
 // re-pops in place. That re-pop IS the feedback for the link.
+//
+// ---------------------------------------------------------------------------
+// IT USED TO RISE OUT OF THE WATER WHERE THE LINK HAPPENED, and that is what
+// changed. Two things were wrong with it and they compounded:
+//
+//   IT MOVED. The link is scored wherever the mouthful was swallowed, so the
+//   banner came up in a different place every time — while the seal it belongs
+//   to was somewhere else, usually travelling. A number that has to be found
+//   before it can be read is a number nobody reads in a fight.
+//
+//   IT LEFT BEFORE THE THING IT ANNOUNCED DID. The banner's life is 1.3s
+//   (CONFIG.textMotion.chain) and the chain window is 2.2s
+//   (strike.chainWindow), so the last 40% of every chain ran with nothing on
+//   screen saying a chain was running at all — and that is exactly the part
+//   where knowing matters, because it is the part where you are about to lose
+//   it.
+//
+// So it holds ABOVE THE SEAL, over the boost ring, and it stays up for as long
+// as the window does. The arrival pop still plays on every link (that is the
+// feedback for the link); what it no longer does is drift off and expire.
+// See pinChainBanner below for where "above the seal" is measured from.
+// ---------------------------------------------------------------------------
 let chainToast = null;
 
-export function spawnChainToast(camera, worldX, worldY, chain) {
-  if (!el.svToastLayer || !camera) return;
-  PROJECT_V.set(worldX, worldY, 0);
-  projectToScreen(camera, PROJECT_V, screenPt);
-  chainToastAt(screenPt.x, screenPt.y, chain);
+/**
+ * A link landed. `chain` is the new depth.
+ *
+ * Takes no position any more: the banner is pinned to the seal, and the point
+ * the mouthful was swallowed at — which is what the world coordinates used to
+ * be — is not where the announcement belongs. Placement is written on the same
+ * frame by updateToasts, before the browser paints, so there is no frame where
+ * this sits at the origin waiting to be told.
+ */
+export function spawnChainToast(chain) {
+  if (!el.svToastLayer) return;
+  chainToastAt(chainPin.x, chainPin.y, chain);
 }
 
 // THE COLOUR WALKS THE HUE WHEEL, one step per link, and comes back to the
@@ -3723,16 +4201,98 @@ function chainToastAt(x, y, chain) {
   const node = document.createElement('div');
   node.className = 'sv-chain';
   node.style.color = color;
+  // The strip FIRST, and as an element rather than as text: `textContent` on
+  // the parent below would wipe any child already in it. It carries no text of
+  // its own — the fill inside it is what moves — and it inherits `color`, which
+  // is what puts the window's bar on the live chain's hue without a second
+  // writer for it.
+  const strip = document.createElement('i');
+  strip.className = 'sv-chain-strip';
+  const fill = document.createElement('i');
+  fill.className = 'sv-chain-fill';
+  strip.appendChild(fill);
+
   node.textContent = 'FOOD CHAIN!';
   const count = document.createElement('span');
   count.className = 'sv-chain-x';
   count.textContent = `×${chain}`;
   node.appendChild(count);
+  node.appendChild(strip);
   el.svToastLayer.appendChild(node);
 
   chainToast = pushToast(node, x, y, 'chain');
   chainToast.count = count;
+  chainToast.strip = strip;
   return chainToast;
+}
+
+// ---------------------------------------------------------------------------
+// WHERE THE BANNER HANGS, and how much of the window is left.
+//
+// Written once a frame by updateToasts from what main.js hands it, and kept
+// here rather than passed around because the SPAWN needs it too: a link that
+// lands before the first update would otherwise place the banner at the origin
+// for one frame. `left` is 0 with no chain running, which is also the whole of
+// "stop pinning it and let it leave".
+// ---------------------------------------------------------------------------
+const chainPin = { x: 0, y: 0, left: 0, live: false, flash: 0, clock: 0 };
+
+/**
+ * Project the anchor and decide whether the banner is being held.
+ *
+ * ABOVE THE BOOST RING, NOT ABOVE THE SEAL, and measured from the ring's own
+ * numbers exactly as the on-seal callout is (see drawOnSeal in ui/callout.js):
+ * the ring is a slider, and a banner anchored to the animal would end up
+ * sitting inside the instrument the moment anyone scaled it up.
+ *
+ * IT CLEARS THE CALLOUT SLOT rather than negotiating with it. "STRIKE NOW!"
+ * and "Boost Empty!" hang off that same anchor, and both are up during exactly
+ * the wind-up a chain is being kept alive through. The clearance is taken from
+ * the live element's own height when it is on screen — so it follows the Text
+ * panel's type sizes — and from nothing at all when it is not, which is most of
+ * the time. Measured rather than reserved: a permanent gap for a line that is
+ * usually absent would float the banner for no reason.
+ *
+ * `worldToScreen` is not used here for the same reason updateHUD does not:
+ * this file owns projectToScreen and the scratch point, and reaching into
+ * ui/callout.js for its copy would be an import cycle between two files that
+ * already share a layer.
+ */
+function pinChainBanner(camera, pin) {
+  chainPin.live = false;
+  chainPin.left = 0;
+  if (!camera || !pin) return;
+
+  const ring = CONFIG.strike?.ring ?? {};
+  const top = pin.y
+    + (ring.offsetY ?? 0)
+    + (ring.radius ?? 1.9) * (ring.scale ?? 1)
+    + (CONFIG.callouts?.ringGap ?? 0.55);
+  PROJECT_V.set(pin.x + (ring.offsetX ?? 0), top, 0);
+  projectToScreen(camera, PROJECT_V, screenPt);
+
+  // The banner is centred on its anchor (translate -50%,-50%, the toast
+  // layer's own transform) rather than hung off it, so half its height plus
+  // the callout's full height is what clears the slot.
+  const slot = calloutSlotHeight();
+  const half = (chainToast?.node?.offsetHeight ?? 0) * 0.5;
+  chainPin.x = screenPt.x;
+  chainPin.y = screenPt.y - slot - half - (slot > 0 ? 6 : 2);
+  chainPin.left = Math.max(0, Math.min(1, pin.left ?? 0));
+  chainPin.live = chainPin.left > 0;
+}
+
+// The on-seal callout's height when it is actually on screen, 0 otherwise.
+//
+// Queried rather than imported: ui/callout.js imports popupPose and
+// worldToScreen from this file, and importing back would close a cycle for one
+// number. The node is cached because the query would otherwise run every frame
+// of every chain; it is created once in initCallouts and never replaced.
+let boostCalloutEl = null;
+function calloutSlotHeight() {
+  if (!boostCalloutEl) boostCalloutEl = root?.querySelector('.sv-callout-boost') ?? null;
+  if (!boostCalloutEl || boostCalloutEl.classList.contains('sv-hidden')) return 0;
+  return boostCalloutEl.offsetHeight;
 }
 
 // --- an upgrade paying out -------------------------------------------------
@@ -3803,7 +4363,39 @@ function removeToast(i) {
   toasts.splice(i, 1);
 }
 
-export function updateToasts(dt) {
+/**
+ * One frame of every popup on the layer.
+ *
+ * `camera` and `pin` are for the FOOD CHAIN! banner alone: `{ x, y, left }` —
+ * where the seal is in world units and how much of the chain window is still to
+ * run (0..1, from chainWindowLeft() in systems/strike.js, which is the one
+ * expression the ring's arc quotes too). Null means no run, no chain, or a
+ * caller that has nothing to pin — the banner then behaves exactly as it did
+ * before, which is what the Text panel's specimen needs.
+ */
+export function updateToasts(dt, camera = null, pin = null) {
+  pinChainBanner(camera, pin);
+  // REAL SECONDS, and it has to be its own clock rather than the age of the
+  // banner: the banner's age is deliberately FROZEN while the window runs (see
+  // below), so a flash driven off it would stop the instant the thing it is
+  // warning about started mattering.
+  chainPin.clock += dt;
+  // ALMOST OUT. Below `flashAt` the strip pulses, and the pulse is written as a
+  // number rather than left to a CSS animation for the same reason the popups'
+  // motion is: it stops when the game does. Squared so the bar sits mostly dark
+  // and snaps bright, which reads as a blink instead of as a throb.
+  const strip = CONFIG.strike?.foodChain?.strip ?? {};
+  const flashAt = strip.flashAt ?? 0.28;
+  if (chainPin.live && chainPin.left <= flashAt && flashAt > 0) {
+    // Faster as it runs out, so the last half-second is unmistakable without
+    // needing a second colour.
+    const urgency = 1 + (1 - chainPin.left / flashAt) * 1.2;
+    const s = Math.sin(chainPin.clock * (strip.flashHz ?? 5.5) * urgency * Math.PI * 2);
+    chainPin.flash = s > 0 ? s * s : 0;
+  } else {
+    chainPin.flash = 0;
+  }
+
   for (let i = toasts.length - 1; i >= 0; i--) {
     const t = toasts[i];
     const m = motionFor(t.kind);
@@ -3812,13 +4404,59 @@ export function updateToasts(dt) {
     // this and guessing at it one kill at a time. It also means shortening the
     // life retires everything currently over that age on the next frame, which
     // is the behaviour you want from a control called "time on screen".
-    const pose = popupPose(t.kind, t.age + dt);
-    t.age += dt;
+    // THE BANNER IS HELD WHILE ITS CHAIN IS ALIVE, and this is the whole of it.
+    //
+    // The age is capped at the last frame BEFORE the departure window opens, so
+    // the arrival plays in full, the banner then sits, and the moment the
+    // window lapses the cap comes off and the departure runs from exactly where
+    // it would have. Nothing about the motion block changes — a pinned banner
+    // leaves on the same curve, over the same 0.55s, as one that timed out.
+    //
+    // Capping the AGE rather than skipping the retirement test is deliberate:
+    // it means `life` is still the thing that ends the banner, so shortening it
+    // in the Text panel still retires everything on screen. A pinned popup that
+    // ignored `life` would be the one popup the control did not reach.
+    const pinned = t === chainToast && chainPin.live;
+    let age = t.age + dt;
+    if (pinned) {
+      // popupPose owns the clamp on `life`, so the hold point is asked of it
+      // rather than re-derived here — two copies of that arithmetic is how a
+      // pinned banner ends up holding a frame into its own fade-out.
+      // Floored at zero as well as capped. `out.time` is a slider and `life`
+      // is a slider, and nothing stops the Text panel putting a 0.9s departure
+      // on a 0.5s life — which makes the hold point negative, and an age that
+      // never advances past zero is a banner frozen at its arrival scale for
+      // the rest of the run. Zero is the honest answer there: hold at the
+      // frame it was born on.
+      age = Math.min(age, Math.max(0, popupPose(t.kind, 0).life - (m.out?.time ?? 0)));
+    }
+    const pose = popupPose(t.kind, age);
+    t.age = age;
     if (t.age >= pose.life) { removeToast(i); continue; }
 
-    t.x += t.vx * dt;
-    t.y += t.vy * dt;
-    t.vy += (m.gravity ?? 0) * dt; // ease the rise so it settles rather than flying off
+    if (pinned) {
+      // Written, not integrated. The seal moves and the camera moves, so the
+      // banner's position is a fact about this frame rather than a velocity —
+      // and the travel is zeroed with it, or the rise would fight the pin and
+      // the banner would sit a few pixels high for as long as it held.
+      t.x = chainPin.x;
+      t.y = chainPin.y;
+      t.vx = 0;
+      t.vy = 0;
+    } else {
+      t.x += t.vx * dt;
+      t.y += t.vy * dt;
+      t.vy += (m.gravity ?? 0) * dt; // ease the rise so it settles rather than flying off
+    }
+
+    // THE WINDOW DRAINING. Written on every frame the banner exists, including
+    // the ones after the chain has already lapsed — the strip empties to zero
+    // and fades out with the banner rather than freezing part-full, which would
+    // be the last thing on screen saying a dead chain still had time on it.
+    if (t.strip) {
+      t.strip.style.setProperty('--sv-chain-left', chainPin.left.toFixed(3));
+      t.strip.style.setProperty('--sv-chain-flash', chainPin.flash.toFixed(3));
+    }
 
     t.node.style.transform = `translate(-50%,-50%) scale(${pose.scale})`;
     t.node.style.left = `${t.x}px`;
@@ -3954,6 +4592,12 @@ export function previewToasts() {
     // than as one wide number.
     t.age = -i * 0.09;
   }
+  // The banner, with its window strip part-run so the plate and the fill are
+  // both visible in the panel. `chainPin` is what the strip reads and nothing
+  // is pinning it here — the specimen has no seal — so the fraction is set
+  // directly, which is also what stops the preview banner being held.
+  chainPin.left = 0.42;
+  chainPin.live = false;
   chainToastAt(cx, cy - 90, 6);
 
   // A proc line, so the Upgrade proc role can be judged next to the numbers it
@@ -3983,6 +4627,13 @@ export function hidePlayerBars() {
 
 export function clearToasts() {
   while (toasts.length) removeToast(0);
+  // The pin goes with them. `live` left true across a restart would hold the
+  // first banner of the next run at the last frame's anchor — which is wherever
+  // the previous seal died — until its first update, and `left` would draw a
+  // strip reporting a chain that ended with the run.
+  chainPin.live = false;
+  chainPin.left = 0;
+  chainPin.flash = 0;
 }
 
 // The run is NOT posted to the board here — the player names it first, and
@@ -4514,6 +5165,31 @@ function renderRunDetail(gameState) {
 let flip = null;
 
 /**
+ * The card has come square — put the kill shots' drawing surfaces back.
+ *
+ * ONE FRAME LATER, AND THAT IS THE LOAD-BEARING PART. The thing being undone
+ * is Rive re-sizing each print's surface off the rotated card (see
+ * resyncSnapshotCards for the whole story), and it does that from a
+ * ResizeObserver — which the browser delivers AFTER the animation-frame
+ * callbacks of the frame that changed the box, not during them. On a normal
+ * turn the landing is half a second past that and the ordering does not
+ * matter; on a reduced-motion swap the face un-hides and the card "lands" in
+ * the same synchronous breath, so a repair made here and now would be
+ * overwritten by the observer a moment later and the card would come back
+ * wrong for exactly the players who asked for less motion.
+ *
+ * Then sizeCard, because the prints going back to their real height changes
+ * how tall the front face is, and the card is still whatever the ruined fan
+ * measured until something says otherwise.
+ */
+function landSnapshotSurfaces() {
+  requestAnimationFrame(() => {
+    resyncPrintCards();
+    sizeCard();
+  });
+}
+
+/**
  * Size the card to the TALLER face and re-bake both worn edges.
  *
  * Both faces are absolutely positioned, so the card has no height of its own.
@@ -4725,6 +5401,7 @@ export function showGameOver(gameState, extra = {}) {
     // clipped the moment they leave its edge — which is the only place they
     // ever are. The centring layer is the whole screen.
     water: el.svGameOverMenu,
+    onLand: landSnapshotSurfaces,
   });
   const token = ++gameOverToken;
   pendingRun = {

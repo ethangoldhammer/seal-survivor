@@ -63,6 +63,18 @@ const BOOM_ROW = '*boom';
 // nobody would type, and every other row is found by its own name.
 const BOOM_TERMS = 'boom explosion smoke shockwave boss going up kill';
 
+// THE GOO, on the same terms and for a stronger reason. A goo group is a
+// SUBSTANCE, not a moment: `blood` is thrown by a kill, by a body coming apart
+// and by a boss losing a weak spot, and `foam` by four different emitters that
+// no single event owns. There is nowhere in a rail of events it could honestly
+// hang, so it gets its own row — and until it had one the only goo surface with
+// any UI in the game was `boom`, inside the explosion's view.
+const GOO_ROW = '*goo';
+const GOO_TERMS = 'goo blood gore foam smoke ichor aura hit pickup slime metaball density fuse surface';
+// The first pill: CONFIG.fx.goo's own surface keys, which every group is a
+// diff against. Not a group name — `*` so it can never collide with one.
+const GOO_SHARED = '*shared';
+
 const STYLES = `
   .sv-wb { position: fixed; inset: 0 0 96px 0; z-index: 31; display: none;
     grid-template-columns: 248px 1fr 272px;
@@ -141,6 +153,11 @@ const STYLES = `
     font-size: 10px; color: #ffc98a; line-height: 1.45; }
   .sv-wb-scope b { color: #ffe0b8; }
   .sv-wb-none { font-size: 10px; color: rgba(232,236,243,0.4); line-height: 1.5; margin-top: 4px; }
+  /* A surface row reading the SHARED value because this group does not
+     override it. Marked on the readout rather than by grey-ing the control:
+     the row is live, and moving it is exactly how a group takes a number of
+     its own. The label keeps its width — a suffix there would ellipsise. */
+  .sv-wb-f.sv-wb-inh .sv-wb-num { color: rgba(122,215,255,0.6); font-style: italic; }
 
   .sv-wb-takes { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
   .sv-wb-take { display: flex; align-items: center; gap: 6px; font-size: 10px; }
@@ -213,6 +230,15 @@ let current = 'kill';
 // sitting while you work, not an authored value, and everything in CONFIG
 // travels with the repo. 7 is a middling boss.
 let boomTestRadius = 7;
+// Which substance the goo view is showing, and which of the emitters feeding it
+// the Burst card is pointed at. Both are where the panel is looking rather than
+// anything authored, so — like boomTestRadius — they never go near CONFIG.
+let gooGroup = null;
+let gooShot = null;
+// Handed in by main.js. Everything else in here is a live config write the game
+// picks up on its next frame; the field's resolution is the one exception, and
+// it needs the post chain resized before it means anything.
+let onTuned = null;
 let libFilter = 'all';
 let library = [];        // { file, src, kb } straight off disk
 let libraryError = '';
@@ -254,6 +280,45 @@ function nonVoiceUsersOfFile(src) {
 }
 
 const changed = () => saveTuningToStorage();
+
+// ---------------------------------------------------------------------------
+// the goo
+//
+// Two different fields are spelled `goo` and they do different work, which is
+// the one thing to hold on to in here: an EVENT's `goo` names a second emitter
+// to fire (systems/feedback.js), and an EMITTER's `goo` names which surface in
+// CONFIG.fx.goo.groups its particles are thresholded against.
+
+const gooGroupNames = () => Object.keys(CONFIG.fx?.goo?.groups ?? {});
+
+/**
+ * Which group an emitter's particles land in, or null for an ordinary spray.
+ *
+ * `goo: true` means the FIRST group — the default surface, which is what the
+ * whole feature was before groups existed. Both spellings are live in the
+ * emitter table, so both are resolved here or the panel reports a substance
+ * that nothing feeds.
+ */
+function gooGroupOf(name) {
+  const g = name ? CONFIG.emitters[name]?.goo : null;
+  if (!g) return null;
+  return g === true ? (gooGroupNames()[0] ?? null) : g;
+}
+
+/** Every emitter that feeds one group, `goo: true` included. */
+const gooEmitters = (group) => Object.keys(CONFIG.emitters)
+  .filter((k) => gooGroupOf(k) === group)
+  .sort();
+
+/**
+ * Every event that fires an emitter, through EITHER slot.
+ *
+ * The spray and the goo are two fields naming one table, so an emitter used as
+ * one event's spray and another's goo is shared exactly as hard as two sprays
+ * are — and the shared-burst warning has to say so.
+ */
+const eventsFiringEmitter = (name) => Object.keys(CONFIG.feedback)
+  .filter((e) => CONFIG.feedback[e].emit === name || CONFIG.feedback[e].goo === name);
 
 // ---------------------------------------------------------------------------
 // controls
@@ -365,6 +430,20 @@ function renderRail() {
   g.addEventListener('click', () => { current = '*global'; render(); });
   list.appendChild(g);
 
+  // The goo sits with Global shaping rather than in a section, because it is
+  // not any one event's business: nine substances, fed by two dozen emitters
+  // and fired by events, by systems and by the splash menu's own buttons.
+  // Matched on a bag of words like the explosion is — its id is a symbol nobody
+  // would type — so a filter that has nothing to do with it hides it.
+  if (!filter || GOO_TERMS.includes(filter)) {
+    const go = document.createElement('div');
+    go.className = 'sv-wb-ev' + (current === GOO_ROW ? ' sv-wb-on-row' : '');
+    go.innerHTML = '<span class="nm" style="font-weight:600">◉ The goo</span>';
+    go.title = 'The density pass every wet burst in the game is thresholded through — one surface per substance, and the emitters that feed each.';
+    go.addEventListener('click', () => { current = GOO_ROW; render(); });
+    list.appendChild(go);
+  }
+
   const all = Object.keys(CONFIG.feedback);
   const placed = new Set(RAIL_SECTIONS.flatMap(([, ids]) => ids).filter((id) => CONFIG.feedback[id]));
   const groups = RAIL_SECTIONS
@@ -413,6 +492,7 @@ function render() {
   // whatever had been showing an hour ago.
   renderLibrary();
   if (current === '*global') return renderGlobal();
+  if (current === GOO_ROW) return renderGoo();
   if (current === BOOM_ROW) return renderBoom();
 
   const event = current;
@@ -444,6 +524,13 @@ function render() {
   if (shared.length) chip(`voice shared with ${shared.join(', ')}`, 'link');
   if (!def.haptic) chip('no rumble authored', 'warn');
   if (def.sfxMinGap) chip(`throttled — ${(def.sfxMinGap * 1000).toFixed(0)} ms min gap`);
+  // The second burst, and which substance it lands in. An emitter in the `goo`
+  // slot that is not in a group is legal and fires as an ordinary second spray
+  // — almost always a mistake, so it is called out rather than shown as goo.
+  if (def.goo) {
+    const grp = gooGroupOf(def.goo);
+    chip(grp ? `goo · ${def.goo} → ${grp}` : `goo · ${def.goo} — not in a group`, grp ? 'link' : 'bad');
+  }
 
   const cols = els.cols;
   cols.replaceChildren();
@@ -705,6 +792,68 @@ function render() {
   emRow.append(emLab, emSel, emTest);
   imp.appendChild(emRow);
 
+  // THE SECOND BURST. feedback() fires `emit` and `goo` off the one call, on the
+  // same `at` and the same death tint — the spray, and the body of liquid under
+  // it (systems/feedback.js). Until this row existed the panel could see half of
+  // what a kill throws: nine events fire a goo burst and not one of them had a
+  // control for it anywhere in the game.
+  const gooRow = document.createElement('div');
+  gooRow.className = 'sv-wb-f';
+  const gooLab = document.createElement('label');
+  gooLab.textContent = 'goo';
+  gooLab.title = 'A second emitter fired on the same event. Its particles are splatted into a density field and thresholded into one fused body instead of being drawn as separate sprites.';
+  const gooSel = document.createElement('select');
+  gooSel.className = 'sv-wb-sel';
+  gooSel.autocomplete = 'off';
+  gooSel.style.flex = '1';
+  const gooNone = document.createElement('option');
+  gooNone.value = '— none —';
+  gooNone.textContent = '— none —';
+  gooSel.appendChild(gooNone);
+  // Grouped rather than filtered: the field takes ANY emitter and only the
+  // flagged ones fuse, so a sprite burst here is legal, occasionally wanted,
+  // and never what you meant to pick by accident.
+  const allEmitters = Object.keys(CONFIG.emitters).sort();
+  for (const [gLabel, ids] of [
+    ['fuses — goo', allEmitters.filter((k) => gooGroupOf(k))],
+    ['sprites', allEmitters.filter((k) => !gooGroupOf(k))],
+  ]) {
+    if (!ids.length) continue;
+    const og = document.createElement('optgroup');
+    og.label = gLabel;
+    for (const id of ids) {
+      const o = document.createElement('option');
+      o.value = id;
+      o.textContent = gooGroupOf(id) ? `${id} → ${gooGroupOf(id)}` : id;
+      og.appendChild(o);
+    }
+    gooSel.appendChild(og);
+  }
+  gooSel.value = def.goo ?? '— none —';
+  gooSel.addEventListener('change', () => {
+    def.goo = gooSel.value === '— none —' ? null : gooSel.value;
+    changed();
+    render();
+  });
+  const gooTest = document.createElement('button');
+  gooTest.className = 'sv-wb-btn';
+  gooTest.textContent = '▶ goo';
+  gooTest.title = 'Throw the goo burst on its own, without the spray over it';
+  gooTest.addEventListener('click', () => { if (def.goo) emit(def.goo, 0, 0); });
+  const gooSurf = document.createElement('button');
+  gooSurf.className = 'sv-wb-btn';
+  gooSurf.textContent = 'surface →';
+  gooSurf.title = 'Open the substance this lands in. It is shared — what you do to it there, you do to everything else made of it.';
+  gooSurf.disabled = !gooGroupOf(def.goo);
+  gooSurf.addEventListener('click', () => {
+    gooGroup = gooGroupOf(def.goo);
+    gooShot = def.goo;
+    current = GOO_ROW;
+    render();
+  });
+  gooRow.append(gooLab, gooSel, gooTest, gooSurf);
+  imp.appendChild(gooRow);
+
   const fireRow = document.createElement('div');
   fireRow.className = 'sv-wb-f';
   const fireLab = document.createElement('label');
@@ -722,7 +871,13 @@ function render() {
   imp.appendChild(fireRow);
 
   // --- BURST ---------------------------------------------------------------
+  // Both bursts get one, and they are not the same kind of thing: a goo
+  // emitter's numbers are the opposite of a spray's — a narrow speed band,
+  // heavy drag, single-digit counts, and sizes that are density radii rather
+  // than drawn ones — which is exactly why editing one against the other's card
+  // was the hole this fills.
   burstCard(cols, def.emit, event);
+  if (def.goo && def.goo !== def.emit) burstCard(cols, def.goo, event);
 }
 
 // ONE BURST CARD, shared by the event view and the boss explosion.
@@ -739,13 +894,24 @@ function render() {
 function burstCard(cols, name, event = null) {
   const edef = name ? CONFIG.emitters[name] : null;
   if (!edef) return;
-  const par = card(cols, 'sv-wb-imp wide', `Burst · ${name}`,
-    'What the particles do. The six under the divider have no control anywhere else in the game.');
-  const users = Object.keys(CONFIG.feedback).filter((e) => CONFIG.feedback[e].emit === name && e !== event);
+  const grp = gooGroupOf(name);
+  const par = card(cols, 'sv-wb-imp wide', grp ? `Burst · ${name} → ${grp}` : `Burst · ${name}`,
+    grp
+      ? 'What the particles do. These are thresholded into the group named above rather than drawn as sprites, so the counts are single digits — each particle is a whole lobe of a body — and CONFIG.fx.spriteDensity does not thin them.'
+      : 'What the particles do. The six under the divider have no control anywhere else in the game.');
+  // BOTH SLOTS. An emitter used as one event's spray and another's goo is shared
+  // exactly as hard as two sprays are, and killGoo really is: `kill` and
+  // `bigKill` throw the same body of blood.
+  const users = eventsFiringEmitter(name).filter((e) => e !== event);
   if (users.length) {
     const w = document.createElement('div');
     w.className = 'sv-wb-scope';
-    w.innerHTML = `Shared burst — <b>${users.join(', ')}</b> throw the same particles. Pick another emitter above to give this event its own.`;
+    // The advice only makes sense with an event selected. From the goo view
+    // there is no "this event" and no picker above it — the same warning worded
+    // as an instruction would be pointing at a control that is not on screen.
+    w.innerHTML = event
+      ? `Shared burst — <b>${users.join(', ')}</b> throw the same particles. Pick another emitter above to give this event its own.`
+      : `Shared burst — thrown by <b>${users.join(', ')}</b>. Everything below is every one of them.`;
     par.appendChild(w);
   }
   const g2 = document.createElement('div');
@@ -798,8 +964,273 @@ function burstCard(cols, name, event = null) {
   par.appendChild(colours);
 }
 
+// A NESTED block on a group — `whitewater`, `medium` — is merged SHALLOW (see
+// gooSurface in entities/particles.js): a group that declares one REPLACES the
+// shared block outright rather than diffing into it. So the first write forks a
+// copy of what was being inherited, or turning one knob quietly drops every
+// other key that block had.
+function forkedBlock(target, shared, key) {
+  if (!target[key]) target[key] = { ...(shared?.[key] ?? {}) };
+  return target[key];
+}
+
+// The aerated surface. Foam is the only group that uses it today, and the one
+// thing worth knowing before touching it is at the top of the card: any
+// strength above zero forces ALPHA blending whatever the group says, because
+// the whole claim of packed foam is that it hides what is behind it.
+function whitewaterCard(cols, target, shared) {
+  const w = { ...(shared?.whitewater ?? {}), ...(target.whitewater ?? {}) };
+  const own = () => forkedBlock(target, shared, 'whitewater');
+  const el = card(cols, 'sv-wb-imp', 'Aerated',
+    'Trapped air, drawn from the density itself — thick means packed and white, thin means a veil the colour of the water behind it. Any strength above 0 forces alpha blending, whatever the surface above says.');
+  const row = (label, k, fb, opts = {}) => slider(el, label, {
+    ...opts,
+    get: () => w[k] ?? fb,
+    set: (v) => { own()[k] = v; w[k] = v; },
+    title: opts.title ?? label,
+  });
+  row('whitewater', 'strength', 0, { max: 1, step: 0.05,
+    title: '0 is the old glow — the group\u2019s plain surface. Above it, the mass is aerated water and blends as alpha.' });
+  row('air packs at', 'packedAt', 0.6, { min: 0.1, max: 3, step: 0.05,
+    title: 'The density at which the foam is fully white. Low is whiter sooner; high leaves more of the mass as a thin veil.' });
+  row('bubble texture', 'bubbles', 0.6, { max: 1.5, step: 0.05 });
+  row('...how fine', 'bubbleScale', 1.1, { min: 0.2, max: 4, step: 0.05,
+    title: 'Cells per world unit.' });
+  row('air rises', 'airRise', 1.4, { max: 6, step: 0.1,
+    title: 'Units per second. 0 paints the bubbles on and the whole thing reads as a texture rather than as something happening in water.' });
+  const swatch = document.createElement('div');
+  swatch.className = 'sv-wb-f';
+  const swLab = document.createElement('label');
+  swLab.textContent = 'foam colour';
+  const sw = document.createElement('input');
+  sw.type = 'color';
+  sw.autocomplete = 'off';
+  sw.value = `#${(w.color ?? 0xffffff).toString(16).padStart(6, '0')}`;
+  sw.style.cssText = 'width:30px;height:22px;padding:0;border:1px solid rgba(255,255,255,0.2);border-radius:5px;background:none;cursor:pointer';
+  sw.addEventListener('input', () => { own().color = parseInt(sw.value.slice(1), 16); changed(); });
+  swatch.append(swLab, sw);
+  el.appendChild(swatch);
+  // On the shared block this is EVERY substance at once, and it is the one
+  // place in here where that is easy to do by accident: no group declares a
+  // whitewater of its own today, so the rows all read as empty and inviting.
+  if (!shared) {
+    const n = document.createElement('div');
+    n.className = 'sv-wb-none';
+    n.textContent = 'Shared: this is every substance in the game. A group that declares its own replaces the whole block rather than diffing into it.';
+    el.appendChild(n);
+  }
+  return el;
+}
+
+// Where the goo sits relative to the ocean and the air. Per group on purpose:
+// blood in the water should recede with depth exactly as foam does, and the
+// boss's explosion is a cel-drawn cloud that hazing would only turn grey.
+function mediumCard(cols, target, shared) {
+  const m = { ...(shared?.medium ?? {}), ...(target.medium ?? {}) };
+  const own = () => forkedBlock(target, shared, 'medium');
+  const el = card(cols, 'sv-wb-imp', 'In the water',
+    'Whether the ocean closes over this substance or it lies on the finished frame. Both are free at 0 \u2014 the shader skips the whole depth solve when neither is asked for.');
+  const row = (label, k, fb, opts = {}) => slider(el, label, {
+    ...opts,
+    get: () => m[k] ?? fb,
+    set: (v) => { own()[k] = v; m[k] = v; },
+    title: opts.title ?? label,
+  });
+  row('the ocean closes over it', 'murk', 0, { max: 1, step: 0.05 });
+  row('...over how far down', 'murkReach', 7, { min: 1, max: 20, step: 0.5, dp: 1,
+    title: 'World units below the wave, not below the camera \u2014 the ramp is measured from the surface the goo broke.' });
+  row('the horizon haze in front', 'fog', 0, { max: 1, step: 0.05 });
+  // On the shared block this is EVERY substance at once, and it is the one
+  // place in here where that is easy to do by accident: no group declares a
+  // medium of its own today, so the rows all read as empty and inviting.
+  if (!shared) {
+    const n = document.createElement('div');
+    n.className = 'sv-wb-none';
+    n.textContent = 'Shared: this is every substance in the game. A group that declares its own replaces the whole block rather than diffing into it.';
+    el.appendChild(n);
+  }
+  return el;
+}
+
 // ---------------------------------------------------------------------------
-// THE BOSS GOING UP — the one view here that is not an event.
+// THE GOO — the second view here that is not an event.
+//
+// A goo group is a SUBSTANCE. Particles flagged `goo: <group>` are splatted as
+// soft density into an offscreen field and that field is thresholded at an
+// isoline, so near neighbours FUSE instead of overlapping as separate discs
+// (entities/particles.js writes it, systems/post.js finds the surface). Nine of
+// them, fed by two dozen emitters, thrown by events, by systems and by the
+// splash menu — which is precisely why none of it could live on an event row.
+//
+// WHAT WAS HERE BEFORE: one group, `boom`, inside the explosion's own view,
+// because that is the effect that happened to need it. Everything else in the
+// pass — the blood a kill leaves, the foam off a breach, a burning hull's
+// smoke, the ichor out of a weak spot — was tuned by editing config.js.
+//
+// THE ONE RULE THIS VIEW IS BUILT AROUND: a group is a DIFF against
+// CONFIG.fx.goo's own keys, so most rows in most groups are showing a number
+// that belongs to everything. Those rows are marked, and nothing is written
+// until a handle moves. See surfaceCard.
+// ---------------------------------------------------------------------------
+
+function renderGoo() {
+  const g = CONFIG.fx?.goo;
+  els.name.textContent = 'The goo';
+  els.via.textContent = 'CONFIG.fx.goo  →  .groups  →  the emitters that feed them';
+  els.chips.replaceChildren();
+  const cols = els.cols;
+  cols.replaceChildren();
+
+  const names = gooGroupNames();
+  if (!g || !names.length) {
+    card(cols, 'sv-wb-imp wide', 'Not in this build',
+      'CONFIG.fx.goo has no groups in it, so there is no substance to tune.');
+    return;
+  }
+  if (gooGroup !== GOO_SHARED && !names.includes(gooGroup)) gooGroup = names[0];
+  const showing = gooGroup === GOO_SHARED ? null : gooGroup;
+  const feeds = showing ? gooEmitters(showing) : [];
+  // The Burst card follows the group. Re-picked rather than remembered across
+  // groups, or it points at an emitter that is made of something else.
+  if (!feeds.includes(gooShot)) gooShot = feeds[0] ?? null;
+
+  const chip = (text, cls = '') => {
+    const c = document.createElement('span');
+    c.className = `sv-wb-chip ${cls}`;
+    c.textContent = text;
+    els.chips.appendChild(c);
+  };
+  if (showing) {
+    chip(`${feeds.length} emitter${feeds.length === 1 ? '' : 's'} feed it`, feeds.length ? '' : 'warn');
+    if (showing === names[0]) chip('`goo: true` lands here', 'link');
+    const own = Object.keys(g.groups[showing] ?? {}).length;
+    chip(own ? `${own} of its own, the rest shared` : 'inherits the shared surface entirely');
+    if (g.enabled === false) chip('the pass is off — these draw as sprites', 'bad');
+  } else {
+    chip(`the block all ${names.length} groups are a diff against`, 'link');
+  }
+
+  // --- WHICH SUBSTANCE -------------------------------------------------------
+  const which = card(cols, 'sv-wb-imp wide', 'Which substance',
+    'One group per substance, and the split is not cosmetic: everything inside a group SUMS, so two sharing one would weld to each other — a kill at the water line would grow a neck into the seal\u2019s foam. Order is composite order; a later group lands on top of an earlier one.');
+  const pills = document.createElement('div');
+  pills.className = 'sv-wb-pills';
+  pills.style.flexWrap = 'wrap';
+  const pill = (key, label, title) => {
+    const el = document.createElement('span');
+    el.className = 'sv-wb-pill' + (gooGroup === key ? ' on' : '');
+    el.textContent = label;
+    el.title = title;
+    el.addEventListener('click', () => { gooGroup = key; gooShot = null; render(); });
+    pills.appendChild(el);
+  };
+  pill(GOO_SHARED, 'shared default',
+    'CONFIG.fx.goo\u2019s own surface keys — what every group inherits where it says nothing itself.');
+  for (const n of names) {
+    const fed = gooEmitters(n);
+    pill(n, n, fed.length ? `fed by ${fed.join(', ')}` : 'nothing in the emitter table feeds this');
+  }
+  which.appendChild(pills);
+  const wNote = document.createElement('div');
+  wNote.className = 'sv-wb-none';
+  wNote.textContent = showing
+    ? (feeds.length
+      ? `${showing} — thrown by ${feeds.join(', ')}.`
+      : `${showing} — nothing in the emitter table lands here. Either a system splats it directly (see registerGooField) or it is dead weight.`)
+    : 'Everything below moves every group that has not overridden it. `blood` declares nothing at all, so this IS blood\u2019s surface.';
+  which.appendChild(wNote);
+
+  // --- THE PASS --------------------------------------------------------------
+  const pass = card(cols, 'sv-wb-imp', 'The pass',
+    'One buffer the groups take turns in, and it only runs on frames with something alive in it. A group nothing is emitting into costs nothing at all.');
+  toggle(pass, 'goo', () => g.enabled, (v) => { g.enabled = v; },
+    'Off, the flagged particles draw as ordinary sprites — the burst is not deleted, it stops fusing. That is the A/B for whether the pass is earning its 0.34 ms.');
+  slider(pass, 'coarseness', {
+    min: 1, max: 6, step: 1, dp: 0,
+    get: () => g.divisor ?? 2,
+    set: (v) => {
+      g.divisor = Math.round(v);
+      // The one row in this panel that is not picked up on the next frame: the
+      // field is sized when the post chain is, so without this it reads as a
+      // dead slider until the window is resized.
+      onTuned?.('fx.goo.divisor');
+    },
+    title: 'Resolution divisor for the density field, and therefore the SOFTNESS of the surface — the isoline is found on a bilinear upsample, so a coarser field is a wobblier, more molten edge. 2 reads as surface tension; much coarser reads as a low-resolution image of goo.',
+  });
+  const pNote = document.createElement('div');
+  pNote.className = 'sv-wb-none';
+  pNote.textContent = 'Shared by every group — it sizes the one buffer they take turns in.';
+  pass.appendChild(pNote);
+
+  // --- THE SURFACE -----------------------------------------------------------
+  // The shared card. `target` is the group's own diff (created on first write,
+  // never on render) or, for the first pill, the block they all diff against.
+  surfaceCard(cols, showing ? (g.groups[showing] ??= {}) : g, {
+    title: showing ? `Its surface · ${showing}` : 'The shared surface',
+    shared: showing ? g : null,
+    sub: showing
+      ? 'What this substance looks like where it is thick, where it ends and how it catches the light. Never a size: a mass is made bigger by scaling the emitter\u2019s size and speed together, below. Rows in italic blue are the shared value — move one and this group takes a copy of its own.'
+      : 'Every group starts from these, and most of them keep most of them. Moving anything here moves every substance in the game that has not overridden it.',
+  });
+
+  // --- THE NESTED BLOCKS -----------------------------------------------------
+  // Not rows on the surface card: they are objects, and a group either has one
+  // or inherits the whole thing. Shown for every group rather than only for the
+  // one using them today — a substance that should sink into the water is a
+  // decision, not a property of being foam.
+  const surfaceTarget = showing ? g.groups[showing] : g;
+  whitewaterCard(cols, surfaceTarget, showing ? g : null);
+  mediumCard(cols, surfaceTarget, showing ? g : null);
+
+  // --- WHAT FEEDS IT ---------------------------------------------------------
+  if (showing) {
+    const feed = card(cols, 'sv-wb-imp', 'What feeds it',
+      'The emitters whose particles are thresholded against this surface. Pick one to put it under the Burst card below, or throw it at the parked seal.');
+    if (!feeds.length) {
+      const none = document.createElement('div');
+      none.className = 'sv-wb-none';
+      none.textContent = 'Nothing. This group is either splatted by a system directly or unused.';
+      feed.appendChild(none);
+    }
+    const list = document.createElement('div');
+    list.className = 'sv-wb-takes';
+    for (const name of feeds) {
+      const row = document.createElement('div');
+      row.className = 'sv-wb-take';
+      const nm = document.createElement('span');
+      nm.className = 'fn';
+      nm.textContent = name;
+      const evs = eventsFiringEmitter(name);
+      nm.title = evs.length
+        ? `fired by ${evs.join(', ')}`
+        : 'no feedback event names it — a system fires this one directly';
+      const pick = document.createElement('button');
+      pick.className = 'sv-wb-btn';
+      pick.textContent = name === gooShot ? 'editing' : 'edit';
+      pick.disabled = name === gooShot;
+      pick.addEventListener('click', () => { gooShot = name; render(); });
+      const fire = document.createElement('button');
+      fire.className = 'sv-wb-btn';
+      fire.textContent = '▶';
+      fire.title = 'Throw this burst on the parked seal';
+      fire.addEventListener('click', () => {
+        const a = stageAnchor();
+        emit(name, a.x, a.y);
+      });
+      row.append(nm, pick, fire);
+      list.appendChild(row);
+    }
+    feed.appendChild(list);
+  }
+
+  // --- THE BURST -------------------------------------------------------------
+  // The ordinary emitter card, on whichever emitter is selected above. The
+  // surface is how the mass LOOKS; this is what is thrown into it.
+  if (gooShot) burstCard(cols, gooShot);
+}
+
+// ---------------------------------------------------------------------------
+// THE BOSS GOING UP — the first view here that was not an event.
 //
 // systems/bossBoom.js fires `bossBoom` itself, dozens of times per explosion,
 // each call with its own size, speed, colour and glow — so there is no
@@ -814,7 +1245,9 @@ function burstCard(cols, name, event = null) {
 // effect you tune by killing bosses.
 // ---------------------------------------------------------------------------
 
-function boomToggle(host, label, get, set, title) {
+// A checkbox row. `get() !== false` rather than a truth test, because most of
+// what this switches is a config flag whose absence means ON.
+function toggle(host, label, get, set, title) {
   const row = document.createElement('div');
   row.className = 'sv-wb-f';
   const lab = document.createElement('label');
@@ -827,6 +1260,59 @@ function boomToggle(host, label, get, set, title) {
   box.addEventListener('change', () => { set(box.checked); changed(); render(); });
   row.append(lab, box);
   host.appendChild(row);
+  return row;
+}
+
+// ---------------------------------------------------------------------------
+// ONE SURFACE CARD, shared by the goo view and the boss explosion.
+//
+// The rows are the keys of CONFIG.fx.goo's surface block, and a GROUP is a DIFF
+// against it — so `target` is what a moved handle writes into and `shared` is
+// what an untouched row is reading.
+//
+// NOTHING IS WRITTEN UNTIL A HANDLE MOVES. A row that painted its displayed
+// value into the group on render would turn every inherited number into an
+// override — a panel silently forking a preset it only meant to show, which is
+// a bug the ` tuner shipped once already. Inherited rows are MARKED instead.
+function surfaceCard(cols, target, { title = 'Its surface', sub = '', shared = null, notes = {} } = {}) {
+  const el = card(cols, 'sv-wb-imp', title, sub);
+  const read = (k, fb) => target[k] ?? shared?.[k] ?? fb;
+  const mark = (row, k) => {
+    if (shared && target[k] === undefined) {
+      row.classList.add('sv-wb-inh');
+      row.title = 'Inherited from the shared surface — moving it gives this group its own.';
+    }
+    return row;
+  };
+  const row = (label, k, fb, opts = {}) => mark(slider(el, label, {
+    ...opts,
+    get: () => read(k, fb),
+    set: (v) => { target[k] = v; },
+    title: notes[k] ?? opts.title ?? label,
+  }), k);
+
+  mark(toggle(el, 'light, not substance', () => !!read('additive', false),
+    (v) => { target.additive = v; },
+    notes.additive ?? 'Additive lays light INTO the water; alpha hides what is behind it — the only way a lobe can be darker than the ocean it is in.'), 'additive');
+  row('opacity', 'opacity', 1, { max: 1, step: 0.02 });
+  row('surface', 'iso', 0.9, { min: 0.15, max: 1.2, step: 0.02,
+    title: 'Where the isoline sits, in accumulated density. A single splat peaks at exactly 1 by construction, so at or above it NOTHING shows unless two lobes overlap — right for a burst thrown from one point, empty for anything spread out.' });
+  row('edge', 'soft', 0.22, { min: 0.02, max: 0.8, step: 0.01,
+    title: 'Half-width of the transition, in density. Small is a hard wet edge and a cel read; large is mist, and stops reading as liquid at all.' });
+  row('rim', 'rim', 0.75, { min: -1.5, max: 1.5, step: 0.05,
+    title: 'The wet edge — a band just inside the surface, brightened. Negative darkens it instead, which is how the cel outline is drawn, and which additive light cannot do.' });
+  row('...how far in', 'rimWidth', 0.7, { min: 0.05, max: 2, step: 0.05,
+    title: 'A band of DENSITY, not a distance. Wide on an additive surface it lights the dip between every pair of lobes, and one mass renders as fifty overlapping circles.' });
+  row('highlight', 'spec', 0.55, { max: 1.5, step: 0.02,
+    title: 'Lit off the density gradient, which points out of the goo and so serves as a normal. Most of what separates "viscous" from "flat silhouette" — and it is WETNESS, so the dry substances set it to 0.' });
+  row('...how tight', 'specPower', 16, { min: 1, max: 64, step: 1, dp: 0 });
+  row('...surface relief', 'normal', 6, { max: 12, step: 0.1, dp: 1,
+    title: 'How steeply the gradient is read as a normal. High is a fat rounded body; low is a flat sheet with a highlight lying on it.' });
+  row('lit from x', 'lightX', -0.5, { min: -1, max: 1, step: 0.05 });
+  row('...and y', 'lightY', 0.85, { min: -1, max: 1, step: 0.05 });
+  row('lobe size', 'radius', 3.4, { min: 1, max: 8, step: 0.1, dp: 1,
+    title: 'Splat diameter, as a multiple of each particle\u2019s own size. THE control that decides whether anything fuses at all — below about 2 a burst is a group of separate droplets. Not a way to make a mass bigger: for that, scale the emitter\u2019s size and speed together.' });
+  return el;
 }
 
 function renderBoom() {
@@ -846,7 +1332,7 @@ function renderBoom() {
   // --- WHEN, AND FIRING IT ---------------------------------------------------
   const when = card(cols, 'sv-wb-imp', 'The moment',
     'It goes off before the trophy photo, not on the killing blow \u2014 the shutter is derived from the kill shot, so retuning the beat moves this with it.');
-  boomToggle(when, 'bosses go up', () => b.enabled, (v) => { b.enabled = v; },
+  toggle(when, 'bosses go up', () => b.enabled, (v) => { b.enabled = v; },
     'Off, a boss dies the way it did before: wreckage and a hole.');
   slider(when, 'before the photo', { max: 1.2, step: 0.02, get: () => b.lead ?? 0.34, set: (v) => { b.lead = v; },
     title: 'Wall seconds. Set a little longer than the waves take to finish, so the cloud is fully open and just beginning to settle in the picture.' });
@@ -898,21 +1384,22 @@ function renderBoom() {
     title: 'The clamp the measured body passes through. Keep the range wide: a ceiling inside the roster band makes every boss go up the same size.' });
 
   // --- THE SURFACE -----------------------------------------------------------
-  const surf = card(cols, 'sv-wb-imp', 'Its surface',
-    'The shared metaball pass (CONFIG.fx.goo.groups.boom). These are the splats\u2019 relationship to each other, never a size \u2014 for bigger, use the cloud\u2019s own size above.');
-  boomToggle(surf, 'light, not substance', () => goo.additive, (v) => { goo.additive = v; },
-    'Additive. Off, the cloud hides the animal it came out of \u2014 which is what it did until the body stopped reading through its own explosion.');
-  slider(surf, 'opacity', { max: 1, step: 0.02, get: () => goo.opacity ?? 1, set: (v) => { goo.opacity = v; } });
-  slider(surf, 'surface', { min: 0.15, max: 1.2, step: 0.02, get: () => goo.iso ?? 0.9, set: (v) => { goo.iso = v; },
-    title: 'Where the isoline sits. A splat peaks at exactly 1 by construction, so at or above it nothing shows unless two lobes overlap.' });
-  slider(surf, 'edge', { min: 0.02, max: 0.8, step: 0.01, get: () => goo.soft ?? 0.22, set: (v) => { goo.soft = v; },
-    title: 'Low is a drawn cel edge, high is mist. This is where the toon read lives now that additive light cannot draw a dark outline.' });
-  slider(surf, 'rim', { min: -1.5, max: 1.5, step: 0.05, get: () => goo.rim ?? 0, set: (v) => { goo.rim = v; },
-    title: 'On an additive surface a negative rim cannot darken anything \u2014 light has no way to be darker than the water.' });
-  slider(surf, '...how far in', { min: 0.05, max: 2, step: 0.05, get: () => goo.rimWidth ?? 0.6, set: (v) => { goo.rimWidth = v; },
-    title: 'A band of DENSITY, not a distance. Wide, it lights the dip between every pair of lobes and the mass renders as fifty overlapping circles.' });
-  slider(surf, 'lobe size', { min: 1, max: 8, step: 0.1, dp: 1, get: () => goo.radius ?? 3.4, set: (v) => { goo.radius = v; },
-    title: 'Splat diameter as a multiple of each particle\u2019s own size. Below about 2 nothing fuses at all.' });
+  // The shared card, pointed at the boom's own group — shared rather than
+  // copied for the reason the Burst card below is: these rows are the only
+  // controls the goo groups have anywhere in the game, and a second set of them
+  // is a set of numbers that quietly stops agreeing with the first. The
+  // tooltips are overridden because each one here is about what ADDITIVE does,
+  // and this is the group that is additive.
+  surfaceCard(cols, goo, {
+    shared: CONFIG.fx.goo,
+    sub: 'The shared metaball pass (CONFIG.fx.goo.groups.boom). These are the splats\u2019 relationship to each other, never a size \u2014 for bigger, use the cloud\u2019s own size above. Every substance in the game is on the goo row of the rail.',
+    notes: {
+      additive: 'Additive. Off, the cloud hides the animal it came out of \u2014 which is what it did until the body stopped reading through its own explosion.',
+      soft: 'Low is a drawn cel edge, high is mist. This is where the toon read lives now that additive light cannot draw a dark outline.',
+      rim: 'On an additive surface a negative rim cannot darken anything \u2014 light has no way to be darker than the water.',
+      rimWidth: 'A band of DENSITY, not a distance. Wide, it lights the dip between every pair of lobes and the mass renders as fifty overlapping circles.',
+    },
+  });
 
   // --- RANDOMNESS ------------------------------------------------------------
   const org = card(cols, 'sv-wb-imp', 'How random it is',
@@ -943,7 +1430,7 @@ function renderBoom() {
   if (sc) {
     const shock = card(cols, 'sv-wb-imp', 'The shockwave',
       'Not goo \u2014 the shared telegraph ring (systems/organicRing.js), because goo would fuse into the cloud it is outrunning. Both rings are gone before the shutter.');
-    boomToggle(shock, 'shockwave', () => sc.enabled, (v) => { sc.enabled = v; });
+    toggle(shock, 'shockwave', () => sc.enabled, (v) => { sc.enabled = v; });
     slider(shock, 'brightness', { max: 8, step: 0.1, dp: 1, get: () => sc.glow ?? 3.2, set: (v) => { sc.glow = v; } });
     slider(shock, 'how white-hot', { max: 1, step: 0.02, get: () => sc.white ?? 0.72, set: (v) => { sc.white = v; },
       title: '0 is the boss\u2019s own colour. The front says FORCE and the slow ring behind it says which animal it was.' });
@@ -1315,7 +1802,14 @@ function renderFeed() {
 
 // ---------------------------------------------------------------------------
 
-export function initWorkbench() {
+/**
+ * @param onChange  the same handler the ` tuner is given, called with a config
+ *                  path for the few edits in here that need something rebuilt
+ *                  rather than just re-read. Optional: everything else in this
+ *                  panel is a live value the game picks up on its next frame.
+ */
+export function initWorkbench(onChange = null) {
+  onTuned = onChange;
   const style = document.createElement('style');
   style.textContent = STYLES;
   document.head.appendChild(style);

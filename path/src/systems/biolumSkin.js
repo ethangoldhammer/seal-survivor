@@ -147,6 +147,10 @@ uniform float uBioBodyDarken;
 // The two are not exclusive; a pigment shell with a few glowing organs is
 // pigment 1 with a low strength.
 uniform float uBioPigment;
+// ...and how much of the model's baked EMISSIVE map survives that pigment. 0 by
+// default, so a hide that replaces the photograph replaces the light it was
+// giving off as well. See the note at the emissivemap_fragment injection.
+uniform float uBioPigmentGlow;
 uniform vec3  uBioColorA;
 uniform vec3  uBioColorB;
 uniform vec3  uBioColorC;
@@ -930,6 +934,11 @@ function freshUniforms() {
     // 0 by default, which is exactly the behaviour that shipped before pigment
     // existed: every preset already tuned keeps painting with light only.
     uBioPigment: { value: 0 },
+    // 0 = under a full hide the model's baked emissive is gone, which is the
+    // resolved default in applyBiolumSkinSettings as well. Either value is a
+    // no-op while uBioPigment is 0 — the mix reads neither arm — so this
+    // matches the config rather than the shader's convenience.
+    uBioPigmentGlow: { value: 0 },
     uBioColorA: { value: new THREE.Color(0x00e5ff) },
     uBioColorB: { value: new THREE.Color(0x7b2dff) },
     uBioColorC: { value: new THREE.Color(0xffd166) },
@@ -1031,6 +1040,20 @@ varying vec3 vBioEdge;`)
       // material with no texture at all, which is the case that matters most
       // here.
       .replace('#include <map_fragment>', `#include <map_fragment>\n${FRAG_SURFACE}`)
+      // THE PHOTOGRAPH'S OTHER HALF, scaled by the same pigment that replaced
+      // its colour. FRAG_SURFACE above can only reach diffuseColor, and several
+      // of the animals wearing a pigment preset also ship an EMISSIVE SIDECAR —
+      // the hammerhead's is its own diffuse map with the brights blown out (see
+      // assets.js) — which applyEmissiveMode lights in white at
+      // CONFIG.glow.maskIntensity, 3.5. So the painted hide was being covered
+      // by a photograph of the animal, added as light after every lighting
+      // chunk, and no amount of pigment could reach it.
+      //
+      // A NO-OP ON AN UNLIT MATERIAL for free: MeshBasicMaterial has no
+      // emissive and so no such chunk, and a replace that finds nothing leaves
+      // the source alone.
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+  totalEmissiveRadiance *= mix(1.0, uBioPigmentGlow, clamp(uBioPigment, 0.0, 1.0));`)
       .replace('#include <dithering_fragment>', `${FRAG_EMIT}\n#include <dithering_fragment>`);
   };
   material.needsUpdate = true;
@@ -1507,6 +1530,12 @@ export function applyBiolumSkinSettings(only = null) {
     // painted after the system that painted it was disabled — an "off" that
     // still owns the animal's colour is the worst of both.
     u.uBioPigment.value = off ? 0 : (cfg.pigment ?? 0);
+    // See the emissivemap_fragment injection: this is how much of the model's
+    // own photographed glow is left standing under the pigment. 0 by default —
+    // the hammerhead's emissive sidecar is its diffuse map with the brights
+    // blown out, lit white at CONFIG.glow.maskIntensity, so a full-pigment hide
+    // was being drawn under a photograph of the animal glowing at 3.5.
+    u.uBioPigmentGlow.value = Math.max(0, cfg.pigmentGlow ?? 0);
     u.uBioScale.value = cfg.scale ?? 0.25;
     u.uBioContrast.value = cfg.contrast ?? 1.4;
     u.uBioCoverage.value = cfg.coverage ?? 0.45;

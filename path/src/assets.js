@@ -695,6 +695,16 @@ export const ASSETS = {
   // its skin rather than by reaching its centre. See CONFIG.oxygen.bubble.
   bubbleOrb: { shape: 'sphere', radius: 0.44, segments: 32, color: 0xbfefff, opacity: 1, unlit: true, shell: 'oxygenBubbleShell' },
   rapidFireOrb: { shape: 'rock', radius: 0.3, color: 0xffe066, unlit: true, rock: { tumble: 1.2, frequency: 1.8, squash: 0.34 } },
+  // THE LEVEL BLOB, which createVisual never builds. Its body is grown per
+  // spawn and its material is its own (systems/levelOrb.js), for the same two
+  // reasons the coral's are — the shape is the point, and the colour lives in
+  // uniforms that a shared material would beat in lockstep. The entry is here
+  // so `levelOrb` is a key assets.csv is allowed to have a row for: that row is
+  // the size multiplier the spawner applies, and an asset with no row spawns at
+  // 1. `radius` is the collect test's fallback and matches the fit the blob
+  // normalises itself to; the colour is never read, because the whole point of
+  // the thing is that it does not have one for longer than a quarter note.
+  levelOrb: { shape: 'sphere', radius: 0.4, segments: 16, color: 0xffffff, unlit: true },
   // Boats read as dark silhouettes against the sky rather than lit objects —
   // they sit on the horizon line, far away in fiction if not in world units,
   // and a flat dark shape sells that distance better than a fully shaded hull

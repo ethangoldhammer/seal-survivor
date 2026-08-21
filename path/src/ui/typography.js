@@ -23,6 +23,12 @@ import { fontForStack } from '../fonts.js';
 // chroma split, a bloom and a scanline overlay tuned to match that shader, so
 // text opts into the same treatment rather than sitting on top of it looking
 // conspicuously modern.
+//
+// That one is GLOBAL and it is a screen the game is watched on. A role can also
+// take the stripe on ITSELF — `scan` in textRoles.js, compiled into a mask in
+// roleCss below — which is a different claim: not "this picture is on a tube"
+// but "these words are lit through a grille". The main menu's buttons are the
+// only role that does.
 
 // Selectors that get the global family and the global ink, so text with no role
 // of its own (the name field, a leaderboard cell, the pause menu's rows) still
@@ -169,6 +175,25 @@ function shadowStack(style, t) {
   // currentColor, so a role's bloom tracks its own colour with nothing to keep
   // in sync — including the chain banner, whose colour is written per frame.
   if (own > 0) parts.push(`0 0 ${own.toFixed(1)}px currentColor`);
+
+  // THE SCAN TREATMENT'S OWN LIGHT — see `scanGlow` in textRoles.js. Only when
+  // the mask is actually on, because it exists to survive the mask: it is the
+  // part of the word that is still lit in the gaps between the lines.
+  //
+  // THREE TERMS, NOT ONE, and that is the difference between "glowing" and
+  // "bright". A single wide blur at high alpha is a fog the letters sit in; a
+  // tight core that keeps its edges, a mid halo, and a wide bloom read as a
+  // filament. The alphas fall off faster than the radii grow so the total light
+  // stays finite as the slider moves.
+  const scanned = (Number(style.scan) || 0) > 0;
+  const lit = scanned ? Number(style.scanGlow) || 0 : 0;
+  if (lit > 0) {
+    parts.push(
+      `0 0 ${(lit * 0.25).toFixed(1)}px currentColor`,
+      `0 0 ${(lit * 0.7).toFixed(1)}px currentColor`,
+      `0 0 ${lit.toFixed(1)}px currentColor`,
+    );
+  }
   return parts.join(', ');
 }
 
@@ -203,6 +228,40 @@ function roleCss(role, t) {
   // and a role that had a shadow a moment ago would otherwise keep the one the
   // previous sheet gave it, since nothing has replaced the declaration.
   decls.push(`text-shadow: ${shadow || 'none'}`);
+
+  // THE PER-ROLE SHADOW MASK — see `scan` in textRoles.js. A repeating gradient
+  // used as a MASK rather than painted over the top, for two reasons that both
+  // decide the look:
+  //
+  //   it takes the glow with it. The role's bloom is a text-shadow, so it is
+  //   part of what the mask cuts — the halo is striped exactly as the letters
+  //   are, which is what makes it read as something LIT through a grille
+  //   instead of a stripe decal lying on the type.
+  //
+  //   it needs no backdrop. An overlay would have to `multiply` against what is
+  //   behind it, and these labels live in a z-indexed layer of their own over a
+  //   canvas — a blend mode there composites against the transparent layer, not
+  //   against the water, so it either does nothing or turns the text grey.
+  //
+  // The gap is dimmed, not cut: a mask alpha of `1 - scan` in the gap means the
+  // slider runs from a hint of raster to a hard grille, and at 1 the missing
+  // lines take the word with them. Written with the -webkit- prefix beside the
+  // standard property, which is still what Safari answers to.
+  const scan = Math.max(0, Math.min(1, Number(s.scan) || 0));
+  if (scan > 0) {
+    // Floored at 2px total: below that the line and the gap land inside one
+    // device pixel and the whole role just goes evenly dim, which looks like a
+    // mistake in the opacity rather than a raster.
+    const gap = Math.max(2, Number(s.scanGap) || 3);
+    const line = Math.max(1, Math.round(gap / 3));
+    const mask = `repeating-linear-gradient(to bottom, #000 0 ${line}px, `
+      + `rgba(0,0,0,${(1 - scan).toFixed(3)}) ${line}px ${gap}px)`;
+    decls.push(`-webkit-mask-image: ${mask}`, `mask-image: ${mask}`);
+  } else {
+    // Same contract as `text-shadow: none` above — the sheet is rebuilt in
+    // place, so a role that has just been turned off has to say so.
+    decls.push('-webkit-mask-image: none', 'mask-image: none');
+  }
 
   return `${role.selector} { ${decls.join('; ')}; }`;
 }

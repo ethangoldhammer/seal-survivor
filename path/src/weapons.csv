@@ -222,3 +222,4 @@ maneater.maxBonus,1.5,0,10,maneater: ceiling on the accumulated bonus
 ironLung.damagePerOxygen,0.002,0,0.05,iron lung: all damage per point of MAX oxygen per stack
 ironLung.maxBonus,3,0,20,iron lung: ceiling on the bonus
 oxygen.max,115,20,300,"the size of one breath, in points. Against a 5/sec deplete rate this is the seconds of dive it buys — 115 = 23s. Base for every Deep Lungs stack and what Iron Lung reads its damage off"
+oxygen.refillRateSurface,52.5,5,120,"how fast a breach refills the tank, per second above the water line — the only way air comes back other than a bubble. Against the 5/sec deplete it is the exchange rate of the whole dive: 52.5 buys 10.5 seconds of dive per second spent in the air, and refills a full 115-point breath in 2.2s. Was a slider, and a snapshot was holding it at 35 where config.js could not reach it"

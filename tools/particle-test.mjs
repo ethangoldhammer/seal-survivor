@@ -223,16 +223,27 @@ check('...resolved from what actually did the damage',
 // the moment anyone re-skins a pickup.
 //
 // The three SWALLOWS resolve through assetBaseColor, which is the same
-// sanctioned resolver the kill uses and is already exempt below. The clam is
-// the odd one out: it is never swallowed, it is not built by createVisual, and
-// it reads none of the Look panel — so its colour comes from its own tuned
-// block. Held to that one call and to that one source, so a hardcoded pink
-// would still fail this.
+// sanctioned resolver the kill uses and is already exempt below. Two pickups
+// are the odd ones out, each for its own reason, and each is held to its own
+// event AND its own source so that a hardcoded tint would still fail this:
+//
+//   THE CLAM   is not built by createVisual and reads none of the Look panel,
+//              so both its moments (the drop and the grab) take their colour
+//              from its own tuned block.
+//   THE BLOB   has no base colour to resolve. It is a different colour four
+//              times a bar (see systems/levelOrb.js), so assetBaseColor would
+//              hand back a tint the object has not worn since the last note —
+//              the one frame of the whole effect that was off the beat. It
+//              reports what it is wearing instead, through levelOrbColor.
 const BOATS = fs.readFileSync(path.join(HERE, '../path/src/systems/boats.js'), 'utf8');
 check('the clam announces itself in its own tuned colour',
   /feedback\('clamDrop'[\s\S]{0,300}?color:\s*CONFIG\.attractorOrb\.look\?\.waveColorNear/.test(BOATS));
+check('...and so does the grab',
+  /feedback\('clamGrab'[\s\S]{0,300}?color:\s*CONFIG\.attractorOrb\.look\?\.waveColorNear/.test(BOATS));
 check('...and every swallow resolves its colour off the asset',
   (MAIN.match(/feedback\('(?:bubblePop|strikeOrbTaken|coralTaken)'[\s\S]{0,300}?color:\s*assetBaseColor\(/g) || []).length === 3);
+check('...and the blob reports the colour it is actually wearing',
+  /feedback\('levelOrbTaken'[\s\S]{0,400}?color:\s*levelOrbColor\(/.test(MAIN));
 
 // Every other feedback() call in the game must NOT. Comments are allowed to
 // discuss it; code isn't.
@@ -272,15 +283,21 @@ for (const file of srcFiles) {
   for (const args of [...callArgs(code, 'feedback'), ...callArgs(code, 'emit')]) {
     if (!/\bcolor:/.test(args)) continue;
     if (file.endsWith('main.js') && /assetBaseColor\(/.test(args)) continue; // the kill, and the three swallows
-    // The clam's arrival, checked properly above. Matched on the EVENT and on
-    // the source of the colour rather than on the file, so boats.js is not a
-    // blanket exemption — a second tinted burst added there is still a failure.
-    if (/feedback\(\s*'clamDrop'/.test(`feedback('clamDrop'${args}`)
+    // The clam's two moments, checked properly above. Matched on the EVENT the
+    // call actually names — `args` opens with it — and on the source of the
+    // colour, rather than on the file: boats.js is not a blanket exemption, so
+    // a third tinted burst added there is still a failure.
+    if (/^\s*'clam(?:Drop|Grab)'/.test(args)
       && /\bcolor:\s*CONFIG\.attractorOrb\.look\?\.waveColorNear/.test(args)) continue;
     // The boss hit mark, checked properly above. Matched on the emitter name
     // rather than on the file, so bossImpact.js is not a blanket exemption —
     // a second tinted burst added there is still a failure.
     if (/emit\(\s*'bossHitGoo'/.test(`emit('bossHitGoo'${args}`) && /\bcolor:\s*opts\.color/.test(args)) continue;
+    // The level blob's swallow, checked properly above. Same shape as the
+    // clam's exemption and for the same reason: matched on the EVENT and on
+    // the SOURCE of the colour, so main.js is not widened by it and a second
+    // hand-tinted burst there is still a failure.
+    if (/^\s*'levelOrbTaken'/.test(args) && /\bcolor:\s*levelOrbColor\(/.test(args)) continue;
     strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }

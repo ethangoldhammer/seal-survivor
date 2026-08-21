@@ -3,7 +3,8 @@ import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
 import { CONFIG, difficultyRamp, xpToughnessMul } from '../config.js';
 import { acquireVisual, releaseVisual } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
-import { bounds, clampBelowSurface } from '../arena.js';
+import { bounds, clampBelowSurface, seabedTopY, SEABED_Z, WATER_FILL_Z } from '../arena.js';
+import { shore, shoreOverscan } from '../systems/wallRocks.js';
 import { nearestFloorPickup, bestChumTarget, refreshChumPiles, pickupAlive, bitePickup } from './pickups.js';
 import { deathState } from '../systems/deathDive.js';
 import { skyLight } from '../systems/daylight.js';
@@ -1642,6 +1643,18 @@ export function clearForBoss(boss = null) {
     // chose to have it in. It already knows how to leave — this only brings
     // its exit forward.
     e.leaving = true;
+    // ...and it stops arriving. The two flags pull in opposite directions —
+    // the entrance drives a body in under its own floor speed and holds it
+    // behind the scenery, the exit needs it to turn round and go — so a fish
+    // caught mid-entrance by the hush would have swum in against its own
+    // steering, still hidden behind the cliff, for as long as the wall's
+    // width. It leaves from where it is.
+    // Its z is left where it is rather than snapped home: the ease back into
+    // the lane runs the moment these clear (see updateEnemies), and a body
+    // still over the rock face would otherwise step out from behind it on a
+    // single frame, which is the pop this all exists to remove.
+    e.entering = false;
+    e.deep = false;
     sent += 1;
   }
   return sent;
@@ -1681,6 +1694,21 @@ function groupAtCap(def, counts = null) {
   return false;
 }
 
+// IS THERE A CHANGEOVER AT ALL? Two switches, either of which turns the whole
+// day/night cast swap off: the clock itself, and the nightlife curves over it.
+//
+// Its own function because the answer has a second caller now — the boss
+// roster's `nightOnly` gate (see bosses.csv and bossMoment in systems/boss.js)
+// — and "is there a night in this game" answered in two places is a pair that
+// can drift. The distinction matters most where it is least visible: with the
+// cycle off, `wearsNightForm()` is false FOREVER, so a night-gated archetype
+// asking only that question would be deleted from the game by a toggle that
+// says nothing about bosses. A world with no night is a permanent noon, and
+// every gate that hangs off darkness stands down rather than latching shut.
+export function nightCycleRuns() {
+  return !!CONFIG.spawn?.nightlife?.enabled && !!CONFIG.dayNight?.enabled;
+}
+
 // How welcome a creature is right now, as a multiplier on its spawn weight.
 // `glowing` picks which of the two curves in CONFIG.spawn.nightlife to walk:
 // the tagged roster fades IN as it gets dark, everything else fades OUT. The
@@ -1704,8 +1732,7 @@ function groupAtCap(def, counts = null) {
 // off, and there'd be no message saying why.
 export function nightlifeWeight(glowing) {
   const cfg = CONFIG.spawn.nightlife;
-  if (!cfg?.enabled) return 1;
-  if (!CONFIG.dayNight?.enabled) return 1;
+  if (!nightCycleRuns()) return 1;
   const curve = (glowing ? cfg.glowing : cfg.daylight) ?? {};
   const day = curve.day ?? (glowing ? 0 : 1);
   const night = curve.night ?? 1;
@@ -1825,31 +1852,99 @@ function pickType(difficulty, playerLevel = 1, lull = false) {
   return pool[pool.length - 1];
 }
 
+// ---------------------------------------------------------------------------
+// THE ENTRANCE
+// ---------------------------------------------------------------------------
+// Nothing appears in open water. Every creature in the game is placed OUTSIDE
+// the picture and swims in — through the rock face at either wall, or up out
+// of the seabed — and for the stretch of that journey where it is over drawn
+// scenery it sits BEHIND the scenery in z.
+//
+// That last part is free, and it is free for one specific reason: the camera
+// is orthographic. Moving a body in z does not move it, resize it or shift it
+// on screen by a pixel; all it changes is what draws in front of what. So a
+// creature can be tucked behind the cliff for the whole crossing and eased
+// back into its swimming lane afterwards with nothing visible happening — the
+// eye sees an animal come out from behind a rock, which is what it is.
+//
+// The alternative, and what this replaced: spawn a body a margin INSIDE the
+// wall and let it fade in over a beat. That is pop-in with a curve on it. The
+// wall is already drawn, already opaque and already exactly where the frame
+// stops; the only thing missing was arriving on the far side of it.
+function entranceCfg() {
+  return CONFIG.spawn?.entrance ?? {};
+}
+
+// The first x, on either side, that no frame can reach. The frame may drift
+// `shoreOverscan()` units past the wall (see clampFocus in world.js), so that
+// is where the picture actually ends — plus the body's own reach, because a
+// creature is placed by its CENTRE and it is the nose that gives it away.
+function offscreenX(radius = 0) {
+  return bounds.right + shoreOverscan() + radius + (entranceCfg().margin ?? 1.5);
+}
+
+// ...and the same line for the floor. Below the seabed's top edge the strip is
+// an opaque plane spanning the whole arena, so a body under it and behind it
+// is hidden twice over: by the floor it is under and by the bottom of the
+// frame, which never travels below bounds.bottom outside a death.
+function offscreenY(radius = 0) {
+  return Math.min(bounds.bottom, seabedTopY()) - radius - (entranceCfg().margin ?? 1.5);
+}
+
 // Sea creatures enter from the sides or from the deep — never from the sky.
 //
 // A CRAWLER IS THE EXCEPTION and has to be asked for by passing its def. The
 // generic point picks a random DEPTH, which for a swimmer is the whole idea
-// and for a crab means arriving in mid-water and falling to the seabed — and
-// arriving INSIDE the arena, where the wall clamp grabs it on frame one so it
-// pops into place instead of walking on. Crabs get the same wing entrance the
-// chum-pile summoner gives them (systems/crabSpawner.js edgeFloorPoint), which
-// is the only reason they read as walking on from off-screen.
+// and for a crab means arriving in mid-water and falling to the seabed. Crabs
+// get the same wing entrance the chum-pile summoner gives them
+// (systems/crabSpawner.js edgeFloorPoint), which is why they read as walking
+// on rather than appearing.
 function edgeSpawnPoint(def = null) {
   const margin = 1.5;
   if (def?.behavior === 'crawl') {
     // OUTSIDE the arena on purpose: spawnOne only skips the horizontal clamp
     // while a body is still beyond the wall, and that is what buys the walk-on.
-    const m = CONFIG.crabSpawn?.spawnMargin ?? 3;
+    // Its own margin is a FLOOR under the shared one rather than a replacement
+    // — the crab tuning predates the drawn shore and is a smaller number than
+    // the shore now needs, and spawnOne pushes every body out to the line in
+    // any case.
+    const m = Math.max(CONFIG.crabSpawn?.spawnMargin ?? 3, shoreOverscan() + margin);
+    const side = Math.random() < 0.5 ? -1 : 1;
     return {
-      x: Math.random() < 0.5 ? bounds.left - m : bounds.right + m,
+      x: side * m,
       y: bounds.bottom + (CONFIG.crabSpawn?.floorHeight ?? 2.5) * 0.5,
+      side,
     };
   }
   const r = Math.random();
   const depth = bounds.bottom + margin + Math.random() * (bounds.surfaceY - bounds.bottom - margin * 2);
-  if (r < 0.45) return { x: bounds.left + margin, y: depth };
-  if (r < 0.9) return { x: bounds.right - margin, y: depth };
-  return { x: bounds.left + Math.random() * bounds.width, y: bounds.bottom + margin };
+  const out = offscreenX();
+  // `side` and `deep` are the ENTRANCE, carried alongside the position rather
+  // than left to be inferred from it. A school is this point plus a random
+  // scatter (see spawnPicked) and the scatter is wider than the margin, so one
+  // fish in a shoal reliably lands a unit INSIDE the wall — where a spawner
+  // reading only the coordinates sees an ordinary creature in open water and
+  // pops it into existence at the edge of frame. Which entrance a spawn is
+  // making is a decision, and decisions survive being scattered.
+  if (r < 0.45) return { x: -out, y: depth, side: -1 };
+  if (r < 0.9) return { x: out, y: depth, side: 1 };
+  // FROM THE DEEP, which is now literally that: the body starts under the
+  // seabed and climbs out of it. `deep` is a request rather than a position —
+  // how far under it has to start depends on how big it is, and that is not
+  // resolved until spawnOne has built the model.
+  //
+  // NOT FOR A CREATURE THAT LIVES ON THE FLOOR. `floorSpawn` puts a body at
+  // bounds.bottom + its radius, which for an oyster is INSIDE the drawn seabed
+  // strip — half buried, which is the pose. A deep entrance hides a body
+  // behind that strip and lets go when it is clear of it, and this one is
+  // never clear of it: it would rise out of the sand it is supposed to be
+  // sitting in, or hold its hiding depth at rest and simply never be seen
+  // again. It comes in from a wing instead, along the floor.
+  if (def?.floorSpawn) {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    return { x: side * out, y: depth, side };
+  }
+  return { x: bounds.left + Math.random() * bounds.width, y: bounds.bottom, deep: true };
 }
 
 // `opts.schoolId` groups a school for the boids; `opts.xpMul` scales what this
@@ -1948,20 +2043,86 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // Scaled by the radius this instance actually spawned at, so it is the same
   // spread relative to the body at any size multiplier — see the note on
   // enemies.walkingCrab.depthSpread for what a hand-typed value costs here.
-  const z = (Math.random() * 2 - 1) * (def.depthSpread ?? 0) * radius;
-  container.position.set(at.x, at.y, z);
+  const laneZ = (Math.random() * 2 - 1) * (def.depthSpread ?? 0) * radius;
+  container.position.set(at.x, at.y, laneZ);
   // Seabed dwellers ignore the edge spawn point's Y and settle on the floor,
   // so they appear where they belong rather than swimming down to it.
   if (def.floorSpawn) container.position.y = bounds.bottom + radius;
 
-  // Spawned off the side of the arena — crabs walk on from the wings. The
-  // shared clamp would yank it inside on the very first frame, leaving
-  // nothing to walk in FROM, so while `entering` is set only the vertical
-  // limits apply. Cleared the moment it is fully inside (see updateEnemies),
-  // after which it is walled in like everything else.
-  const entering = at.x < bounds.left + radius || at.x > bounds.right - radius;
+  // Spawned off the side of the arena — crabs walk on from the wings, and so
+  // does everything else now. The shared clamp would yank it inside on the
+  // very first frame, leaving nothing to walk in FROM, so while `entering` is
+  // set only the vertical limits apply. Cleared the moment it is fully inside
+  // (see updateEnemies), after which it is walled in like everything else.
+  //
+  // MAKING AN ENTRANCE, or merely placed. `side` and `deep` are a spawn saying
+  // which way it is coming in (see edgeSpawnPoint); a spawn that says neither
+  // is one somebody put somewhere on purpose — the debug spawner's row in
+  // front of the player, a perk's escort summoned at the boss's flank — and
+  // those are left exactly where they were asked for. Pushing one out to the
+  // line because it happened to land near a wall would teleport a summoned
+  // turtle off screen, which is the arrival mechanism doing damage to a
+  // deliberate placement.
+  const deep = !!at.deep;
+  const arriving = !deep && at.side != null;
+  // The geometric test is the FALLBACK, for a placement that declared nothing
+  // and simply happens to be past a wall. A declared entrance outranks it, and
+  // has to: the deep entrance rolls its x anywhere across the arena, so one
+  // spawn in fifty landed within a body's width of a wall, was read as a side
+  // entrance by the measurement, lost its `deep` flag to it, and appeared
+  // standing on the seabed in plain sight. Two ways in, and which one a spawn
+  // is taking is not something to deduce from where it starts.
+  let entering = arriving || (!deep && (at.x < bounds.left + radius || at.x > bounds.right - radius));
+  // PUSHED OUT TO THE LINE HERE rather than trusted from the caller, and that
+  // is the whole guarantee. A school is placed as an anchor plus a random
+  // scatter (see spawnPicked), and a scatter of three units either way will
+  // reliably drop one fish inside the frame; every other caller carries its
+  // own margin from its own era. One clamp, at the single point every spawn
+  // passes through, is the difference between "the entrance is off screen"
+  // being a property of the system and being a property of six call sites.
+  //
+  // Outward ONLY: a body already further out keeps its distance, so the shape
+  // of an arriving school is preserved and only its innermost are moved.
+  if (arriving) {
+    container.position.x = at.side * Math.max(Math.abs(container.position.x), offscreenX(radius));
+  }
+  if (deep) container.position.y = Math.min(container.position.y, offscreenY(radius));
   if (entering) clampVertical(container.position, radius);
-  else clampBelowSurface(container.position, radius);
+  else if (!deep) clampBelowSurface(container.position, radius);
+  // BEHIND THE SCENERY, for as long as the crossing takes. Two hiding places,
+  // one per direction of travel: the rock face at the walls and the seabed
+  // strip under the floor. Both are measured rather than typed — see `shore`
+  // in systems/wallRocks.js and SEABED_Z in arena.js — because both are drawn
+  // by code that is free to move them, and a hiding place that has drifted in
+  // front of what it was hiding is a creature swimming through a cliff.
+  //
+  // Not applied when there is no shore built (the tuner can switch the rock
+  // off): with nothing drawn out there, there is nothing to hide behind, and
+  // the entrance is then simply off-screen, which is what it was before.
+  //
+  // SCALED A LITTLE BY THE BODY, because the measured depth is the depth of a
+  // SURFACE and a creature has thickness. `shore.hideZ` puts a body's CENTRE
+  // behind the shallowest rock face on the wall; a megalodon whose flank
+  // stands two units proud of its centre would still have its near side in
+  // front of it. Measured off the rock front profile: the face sits around
+  // z = 0.2 at a typical height and reaches back to -1.55 at its meanest, so
+  // the biggest bodies in the game need most of this and a reef fish needs
+  // none of it. Capped, because everything back here has to stay in front of
+  // the water fill at -5.4.
+  const bodyHide = Math.min(radius * (entranceCfg().hideBySize ?? 0.3), entranceCfg().hideDepthMax ?? 1.5);
+  // ...and never past the sea itself. The floor's hiding place starts a long
+  // way back already (the seabed strip is drawn at -4 against a fill at -5.4),
+  // so the biggest bodies were the ones that ran out of room: measured, a boss
+  // wanted -5.9, which is BEHIND the water. Nothing is visible back there, and
+  // "nothing is visible" is not the same as hidden — it appears out of the
+  // empty column the moment it eases forward again.
+  const floorZ = WATER_FILL_Z + (entranceCfg().fillClearance ?? 0.2);
+  if (deep) {
+    container.position.z = Math.min(laneZ,
+      Math.max(SEABED_Z - (entranceCfg().hideMargin ?? 0.4) - bodyHide, floorZ));
+  } else if (arriving && shore.built) {
+    container.position.z = Math.min(laneZ, Math.max(shore.hideZ - bodyHide, floorZ));
+  }
   scene.add(container);
 
   // Two layers of run scaling, in this order: the species' own linear
@@ -2320,6 +2481,20 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     chumTimer: Math.random() * (def.crawl?.feed?.reacquire ?? 0.4),
     eating: false,
     entering,
+    // Climbing out of the seabed — the vertical twin of `entering`, and it
+    // opens the FLOOR the way that one opens the walls. Separate flags rather
+    // than one "arriving" because they suppress opposite clamps, and a body
+    // that got both would be free to leave the arena in any direction.
+    deep,
+    // The depth lane this individual was rolled into, kept so the entrance has
+    // somewhere to ease back TO. Read only while the body is still hiding; the
+    // moment it is home this is what its z holds anyway.
+    laneZ,
+    // Does the entrance clamp this one to the water while it comes in? False
+    // for a body that is pinned somewhere by its own system — the boat boss
+    // rides the waterline, and clampVertical would hold its hull a full radius
+    // under it for the whole approach (see attachBossBoat).
+    enterClampY: true,
     // Body-level knockback state (crab-vs-crab collisions). `tumble` is a
     // roll offset laid over the locked broadside heading; `tumbleVel` is its
     // angular velocity. Both spring back to zero — see the collision block.
@@ -2485,6 +2660,12 @@ function spawnPicked(scene, difficulty, playerLevel = 1, wave = FLAT_WAVE) {
       spawnOne(scene, key, def, difficulty, {
         x: anchor.x + (Math.random() - 0.5) * spread * 2,
         y: anchor.y + (Math.random() - 0.5) * spread * 2,
+        // The anchor's ENTRANCE, not just its position — see edgeSpawnPoint.
+        // Dropping these was a school that scattered its way back inside the
+        // wall, and a deep one that forgot it was supposed to be buried and
+        // appeared in mid-water at the height of the seabed.
+        side: anchor.side,
+        deep: anchor.deep,
       }, { schoolId: id, xpMul: wave.xpMul });
       made += 1;
     }
@@ -2504,6 +2685,34 @@ function spawnPicked(scene, difficulty, playerLevel = 1, wave = FLAT_WAVE) {
 // next marquee spawn.
 // `opts.ignoreCaps` skips the population limits but NOT the maxAlive ceiling.
 // One caller uses it: the crabs piling onto the corpse (systems/crabSpawner.js).
+/**
+ * Put a body back outside the picture, for a caller that has just made it
+ * bigger.
+ *
+ * The entrance is sized against the radius, and there is exactly one thing in
+ * the game that changes a radius AFTER the spawn: the boss's `sizeMul` (see
+ * applyBossScale in systems/boss.js), which multiplies the model and the
+ * hitbox together and can nearly double both. So the one creature in the game
+ * whose entrance is a moment rather than a detail was the one placed for a
+ * body a third of its final size — measured, the shark boss's nose sat two
+ * units inside the frame on the spawn frame, which is the pop-in this whole
+ * mechanism exists to remove appearing on the only spawn anybody watches.
+ *
+ * A no-op on a creature that has already come in, so it is safe to call after
+ * any resize rather than only after one that happens to be early.
+ */
+export function pushOffPicture(e) {
+  if (!e?.mesh) return;
+  if (e.entering) {
+    const side = e.mesh.position.x < 0 ? -1 : 1;
+    e.mesh.position.x = side * Math.max(Math.abs(e.mesh.position.x), offscreenX(e.radius));
+  }
+  // Both axes, because the entrance is ROLLED: two spawns in three come
+  // through a wall and the third comes up out of the seabed, and a boss that
+  // grew after being buried is a boss whose back is sticking out of the floor.
+  if (e.deep) e.mesh.position.y = Math.min(e.mesh.position.y, offscreenY(e.radius));
+}
+
 // The caps below exist to keep a fight readable, and once the run is over
 // there is no fight — but maxAlive is a memory bound and binds regardless.
 export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(CONFIG.enemies[key]), opts = {}) {
@@ -2605,8 +2814,13 @@ function forageSpawnPoint(boss) {
   const mid = (bounds.left + bounds.right) * 0.5;
   // Strictly the opposite wall, not the further one by distance — a boss sat
   // exactly on the midline would otherwise flip the answer frame to frame.
-  const x = bossX >= mid ? bounds.left + margin : bounds.right - margin;
-  return { x, y: depth };
+  // Past the wall rather than a margin inside it, like every other entrance:
+  // the forage is the one spawn the player is most likely to be watching for,
+  // and a school that blinks into existence at the far wall is the pop-in this
+  // whole mechanism exists to remove.
+  const out = offscreenX();
+  const side = bossX >= mid ? -1 : 1;
+  return { x: side * out, y: depth, side };
 }
 
 /**
@@ -3099,6 +3313,65 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       if (Math.abs(e.knockX) < 0.01) e.knockX = 0;
       if (Math.abs(e.knockY) < 0.01) e.knockY = 0;
     }
+    // THE ENTRANCE, driven on the POSITION rather than on the velocity.
+    //
+    // A nudge into vx would not survive the frame: half the roster re-derives
+    // its velocity from a heading every tick (see the turnRate branch in
+    // steerTo), so a body told to swim in would be told to swim at the player
+    // again before it had moved. And an entrance cannot be left to the
+    // behaviours — a schooling fish placed outside the wall will happily boid
+    // its way further out to sea, and `entering` has opened the wall that would
+    // have turned it back.
+    //
+    // A FLOOR under its own swimming, not a replacement for it: anything
+    // already coming in faster than this keeps its own speed, and the creature
+    // that is doing nothing useful still arrives. That is also what bounds how
+    // long an arrival can take, which is what the boss's entrance is timed
+    // against (see systems/boss.js).
+    //
+    // `leaving` outranks both, and has to: the two pull in opposite directions,
+    // and every clamp below reads them in a fixed order — a body told to go
+    // that was still flagged as arriving would be walked back into the arena
+    // it is trying to leave, and a `deep` one would be held under a floor it
+    // had stopped climbing out of and never removed at all. Dropped here, once,
+    // rather than guarded at each of the four sites that read them.
+    if (e.leaving && (e.entering || e.deep)) {
+      e.entering = false;
+      e.deep = false;
+    }
+    if (e.entering || e.deep) {
+      const drift = entranceCfg().driftSpeed ?? 7;
+      const r = e.radius;
+      if (e.entering) {
+        const inward = e.mesh.position.x < 0 ? 1 : -1;
+        const own = e.vx * inward;
+        if (own < drift) e.mesh.position.x += inward * (drift - own) * dt;
+        // ARRIVED, and the flag only ever clears, so it cannot slip back out
+        // later. Decided HERE rather than down in the clamp chain, which is
+        // where it used to live: that chain's first branch belongs to bodies
+        // with their own physics, so a simulated creature — the sea turtle is
+        // the one — never reached the test at all and stayed flagged as
+        // arriving for the rest of its life, permanently exempt from the wall
+        // it had long since swum through.
+        if (e.mesh.position.x > bounds.left + r && e.mesh.position.x < bounds.right - r) {
+          e.entering = false;
+        }
+      }
+      if (e.deep) {
+        if (e.vy < drift) e.mesh.position.y += (drift - e.vy) * dt;
+        if (e.mesh.position.y > seabedTopY() + r) e.deep = false;
+      }
+    } else if (e.laneZ != null && e.mesh.position.z !== e.laneZ) {
+      // HOME, and easing back into its lane. Invisible while it happens — the
+      // camera is orthographic, so this changes nothing but draw order — and
+      // it happens over a distance rather than instantly so that the one thing
+      // it CAN change, which creature sorts in front of which, does not
+      // resolve as a snap on a single frame.
+      const step = (entranceCfg().emergeSpeed ?? 6) * dt;
+      const gap = e.laneZ - e.mesh.position.z;
+      e.mesh.position.z = Math.abs(gap) <= step ? e.laneZ : e.mesh.position.z + Math.sign(gap) * step;
+    }
+
     // A SIMULATED BODY takes over from here. Its own swimming has already been
     // integrated above, so this hands the result to the body as "where my
     // locomotion left me"; the physics step (systems/rigidBody.js, run once
@@ -3112,8 +3385,12 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       e.body.place(e.mesh.position.x, e.mesh.position.y);
       // The walls open once it has turned for open water, and close again if
       // anything changes its mind — a body that could leave whenever it liked
-      // would be one strike away from being punted out of the arena.
-      e.body.escaping = e.leaving;
+      // would be one strike away from being punted out of the arena. They are
+      // open on the way IN for the same reason: a body placed past the wall
+      // with its own walls shut is one the physics step shoves into the arena
+      // on frame one, which is the pop-in the entrance exists to remove
+      // arriving through the one door that does not go through clampToArena.
+      e.body.escaping = e.leaving || e.entering || e.deep;
       // BOWLING. A body travelling at speed shoves whatever it passes through
       // — no damage, so this can never quietly become a second damage source,
       // but a punted turtle scattering a school on its way to a hull is the
@@ -3126,10 +3403,23 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       // Still walking on from the wings: vertical limits only. Once it is
       // fully inside the walls it becomes a normal, boxed-in creature — and
       // because the flag only ever clears, it can't slip back out later.
-      clampVertical(e.mesh.position, e.radius);
-      if (e.mesh.position.x > bounds.left + e.radius && e.mesh.position.x < bounds.right - e.radius) {
-        e.entering = false;
-      }
+      //
+      // `enterClampY` is off for a body that is pinned somewhere by its own
+      // system. The boat boss rides the waterline, and this clamp holds a
+      // creature a full radius BELOW it — on a hull four units across that is
+      // the boat fighting its whole entrance from underwater, which is the
+      // exact shape of a bug that looks like a design choice.
+      if (e.enterClampY !== false) clampVertical(e.mesh.position, e.radius);
+    } else if (e.deep) {
+      // Climbing out of the seabed: the FLOOR is the limit that has to stay
+      // open, and everything else still binds. Cleared once the whole body is
+      // clear of the strip it was buried under, which is the same "fully out
+      // of the scenery" test the walls use one branch up.
+      const r = e.radius;
+      const ceiling = bounds.surfaceY - r;
+      if (e.mesh.position.y > ceiling) e.mesh.position.y = ceiling;
+      if (e.mesh.position.x < bounds.left + r) e.mesh.position.x = bounds.left + r;
+      if (e.mesh.position.x > bounds.right - r) e.mesh.position.x = bounds.right - r;
     } else if (e.leaving) {
       // ON ITS WAY OUT — the exact mirror of `entering`, and for the same
       // reason: the side walls have to open or there is nowhere to go.

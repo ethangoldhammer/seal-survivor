@@ -57,7 +57,7 @@ import { calloutOnDevice, calloutText } from '../calloutTable.js';
 // ...BUT NOT FOREVER. There is one ceiling over all of it —
 // CONFIG.tutorial.maxShow, twelve seconds — and it exists because "until the
 // thing is gone" has no answer for the subjects that simply stay: a turtle that
-// parks beside the seal, an attractor field running its whole life, a pile of
+// parks beside the seal, a clam's pull running its whole life, a pile of
 // chum on the floor that nobody swims down for. Those lines sat in the water
 // for half a minute, and a sentence long past being read is furniture. Nothing
 // waits for the ceiling — every tip above still ends the moment it is answered
@@ -99,6 +99,15 @@ import { calloutOnDevice, calloutText } from '../calloutTable.js';
 // seal meal" while trying to work out which of four things in the water it
 // means.
 //
+// THE HELLO AT THE TOP OF A RUN IS NOT ONE OF THESE, and the difference is the
+// ledger: every step here fires ONCE EVER and the whole set then goes quiet
+// forever, which is right for a lesson and would mean the game only ever
+// greeted a player on their first afternoon. That line lives in
+// systems/greeting.js, rolls its words from greetings.csv, and borrows this
+// file's surface and its dissolve — it takes the band first and the first
+// control tip below simply waits, because a step that could not be shown is
+// not spent.
+//
 // THIS FILE DECIDES WHICH STEP AND WHEN. The words are callouts.csv, the band
 // is systems/callouts.js, the arrow is ui/callout.js, and everything the steps
 // read about the seal is handed in from the frame loop — so a harness can play
@@ -118,7 +127,7 @@ const STORAGE_KEY = 'sealSurvivor.tips.v1';
 // WHY FIVE AND NOT ONE. They were one tip ("that is a power-up") and it taught
 // nothing: the five pickups do five unrelated things — the blue orb is the
 // boost meter, a bubble is air, the yellow one is fire rate, a chunk is
-// health, an attractor drags the seabed to you — and the only thing a single
+// health, a grabbed clam drags the seabed to you — and the only thing a single
 // sentence can honestly say about all of them is that they glow, which the
 // player can see. What is worth a tip is WHICH ONE THIS IS, and that is five
 // sentences.
@@ -140,12 +149,17 @@ const PICKUP_TIPS = {
   strikeOrb: { swim: true },
   rapidFireOrb: { swim: true },
   chumChunk: { swim: true },
-  // THE ODD ONE, and the reason this is a table rather than a list of names.
-  // An attractor is a FIELD, not a collectable: it rises where the trawler
-  // dropped it and drags every scrap of chum in the arena to the seal. There
-  // is nothing to swim into, so there is nothing that can answer the tip and
-  // it ends on its own clock — the same contract `invincible` has.
-  attractorOrb: { swim: false },
+  // The one pickup that changes the BUILD rather than handing over a resource.
+  // Last in the list because it is the last one a run can meet: it does not
+  // spawn until the player is holding a card for it to deepen (see the spawn
+  // gate in main.js), so a first run reaches it minutes after the other four.
+  levelOrb: { swim: true },
+  // The clam is swum into like the rest of them — it sinks out of the trawler
+  // it came from and waits to be grabbed, and grabbing it is what starts the
+  // pull. It used to be the odd one out here (`swim: false`), back when it was
+  // a field that did its work untouched: the tip said "grab the clam" and
+  // nothing the player did could ever answer it. See updateBoats.
+  attractorOrb: { swim: true },
 };
 
 function pickupSteps() {
@@ -290,6 +304,56 @@ const STEPS = {
     // tip for a player who never goes down at all, because the crabs cleared
     // the pile for them and the moment the line described is over.
     done: (ctx, events) => events.has('floorChum') || !ctx.chumOnSeabed,
+  },
+  // A WEAK SPOT ON THE BOSS, and the only tip in the file about a place on
+  // another animal. Offered the first time one is close enough to be struck —
+  // which is the whole content of the lesson, because the spot is already
+  // plainly visible from across the arena and what a player does not know is
+  // that it is a TARGET rather than a decoration.
+  //
+  // Gated on the strike being taught, like everything that asks for one. NOT
+  // gated on the boss having arrived, because `weakSpotInReach` is already a
+  // stronger version of that: there are no weak spots on anything else.
+  //
+  // WHY REACH AND NOT DISTANCE-TO-THE-BOSS. A megalodon is twenty units long,
+  // so "near the boss" is true while the spot the sentence is about is on the
+  // far flank, out of the water the seal is in and often out of the frame. The
+  // reach test is asked about the SPOT, and the same test picks which spot the
+  // label stands on — see takeSubject in main.js.
+  bossWeakSpot: {
+    ready: (ctx, events, done) => done.has('strike') && !!ctx.weakSpotInReach,
+    // A crit landing. Any weapon's — the lesson is "that patch takes extra
+    // damage", not "ram it": every path through hotSpotDamage fires the same
+    // event, so a player who works it out with the gun has answered the tip as
+    // completely as one who dashes into it.
+    done: (ctx, events) => events.has('bossWeakSpot'),
+  },
+  // THE HIVE — where the run's build lives, and the one tip about a piece of
+  // the interface rather than about the water.
+  //
+  // AFTER THE FIRST PICK, because before it the corner is empty and a label
+  // pointing at nothing is worse than no label. The card also flies into that
+  // corner on the way there (flyCardToHive in ui/ui.js), so by the time this
+  // speaks the player has already seen something land where it is pointing —
+  // the tip names a thing they watched happen rather than introducing one.
+  //
+  // IT IS A FACT, NOT AN INSTRUCTION, so like `invincible` it has no answer.
+  // What ends it is its MOMENT: a window after the pick, and once that lapses
+  // the tip goes (never before it can be read — see the legibility floor). The
+  // alternative, a world tip whose `ready` stays true forever, is a sentence
+  // that can only be ended by the twelve-second ceiling, standing on the corner
+  // long after it has been read. Same reasoning as maxShow itself, applied one
+  // step earlier where it can be about this particular tip.
+  //
+  // The window reopens on EVERY pick, not only the first (see `sinceUpgrade` in
+  // main.js). A step is spent the first time it is actually shown, so this
+  // costs nothing — and it is what stops the tip being lost forever because the
+  // one window it had was spent explaining a bubble.
+  hiveStack: {
+    ready: (ctx) => !!ctx.hiveShown
+      && (ctx.upgradesHeld ?? 0) > 0
+      && (ctx.sinceUpgrade ?? Infinity) <= (CONFIG.tutorial?.hiveWindow ?? 8),
+    done: () => false,
   },
   // A turtle, or the whale. One step and one line for both, because what a
   // player has to learn is the same fact in both cases and it is a fact about
@@ -685,9 +749,9 @@ export function updateTutorial(dt, ctx = {}, live = true) {
     // obeyed, its subject went, its clock ran out) and this one is the coach
     // admitting that a line nobody has answered in twelve seconds is not going
     // to be. It has to outrank all three, and in particular it has to outrank
-    // the world tip's "no clock at all" — a turtle parked beside the seal, an
-    // attractor running its whole life and a pile of chum nobody swims down for
-    // are the exact cases where the subject cannot end anything.
+    // the world tip's "no clock at all" — a turtle parked beside the seal and
+    // a pile of chum nobody swims down for are the exact cases where the
+    // subject cannot end anything.
     //
     // Marked DONE, like every other way a tip ends on time. It had its full
     // reading time and then some; bringing it back next run would be the coach

@@ -359,8 +359,18 @@ const gaps = ladderReport(base, 'hunt 7s, clear 80%');
   // Both ends matter. A run that reached level 30 would pass "levels still
   // arrive" while being a different game — every upgrade taken by minute six
   // and nothing left to want.
-  check('a fifteen-minute run finishes somewhere in the high teens or low twenties',
-    reached.every((l) => l >= 18 && l <= 24), `reached ${reached.join(', ')}`);
+  //
+  // The ceiling was 24 while CONFIG.xp.toughness.exponent was 0.4. Paying a
+  // late creature's toughness back properly (0.6) is worth about two levels
+  // over fifteen minutes, and they are levels 25 and 26 — arriving at minute
+  // thirteen and minute fifteen, off a `endMul` band that is already charging
+  // 50-60 seconds a level by then. That is the tail of a run, not a second
+  // game: 26 levels is 25 picks against the 381 upgrades.csv actually holds.
+  // Steepening `endMul` to hold the old number instead would have bought a
+  // 90-second level at 24 to save a level at 26, which is the wall this file
+  // exists to find, moved rather than removed.
+  check('a fifteen-minute run finishes somewhere in the high teens or mid twenties',
+    reached.every((l) => l >= 18 && l <= 26), `reached ${reached.join(', ')}`);
   check('no single level past 10 takes more than three minutes',
     gaps.filter((x) => x.lv > 10).every((x) => x.gap <= 180),
     gaps.filter((x) => x.lv > 10).map((x) => `${x.lv}:${x.gap.toFixed(0)}s`).join(' ') || 'never got past 10');

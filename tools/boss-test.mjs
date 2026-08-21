@@ -63,6 +63,11 @@ const DT = 1 / 60;
 // Returns how many SECONDS it took, so a caller can check the ceremony is the
 // length it was asked for rather than merely that it ended.
 function finishArrival(gameState, scene) {
+  // The entrance first, and deliberately NOT counted: swimming in from behind
+  // the rock is not part of the ceremony, and folding it into this figure
+  // would make "the ceremony runs for about the seconds it is given" a
+  // measurement of how fast a shark swims.
+  swimIn(gameState, scene);
   let frames = 0;
   while (bossState.arriving && frames++ < 10000) updateBoss(DT, gameState, scene);
   return bossState.arriving ? Infinity : frames * DT;
@@ -77,6 +82,16 @@ function finishArrival(gameState, scene) {
 //
 // Returns the boss, or null if none turned up inside the guard.
 function arrive(gameState, scene) {
+  const e = arriveOnly(gameState, scene);
+  swimIn(gameState, scene);
+  return e;
+}
+
+// The spawn frame and not a tick more — for the one test that asserts on it.
+// Nothing has moved and nothing has been swept, which is what makes "the
+// clear-out deleted nobody" a statement about the arrival rather than about
+// however many seconds of exits the caller happened to tick through.
+function arriveOnly(gameState, scene) {
   const first = updateBoss(DT, gameState, scene);
   if (first) return first;
   let frames = 0;
@@ -85,6 +100,30 @@ function arrive(gameState, scene) {
     if (e) return e;
   }
   return bossState.enemy;
+}
+
+// THE APPROACH — the beat between the spawn and the ceremony, and the reason
+// every test in this file that measures the arrival has to tick the WATER as
+// well as the boss.
+//
+// A boss is no longer placed in open water. Like every other spawn it arrives
+// past the edge of the picture and swims in behind the rock face (see THE
+// ENTRANCE in entities/enemies.js), and nothing announces it — no bar, no
+// riser, no camera — until it is clear of the wall. Only updateEnemies moves
+// creatures, so a harness ticking updateBoss alone would sit out the whole
+// approach guard rail and then measure a ceremony that started six seconds
+// late, which reads as the ceremony being broken rather than as the test
+// forgetting to let the boss swim.
+//
+// Returns how many SECONDS the entrance took, so a caller can check that a
+// body genuinely crossed rather than that the guard rail expired.
+function swimIn(gameState, scene, playerPos = { x: 0, y: -10, z: 0 }) {
+  let frames = 0;
+  while (bossState.approaching && frames++ < 10000) {
+    updateEnemies(DT, scene, playerPos, quiet, quiet);
+    updateBoss(DT, gameState, scene);
+  }
+  return frames * DT;
 }
 
 
@@ -1222,7 +1261,14 @@ section('THE ROSTER — bosses.csv and the shuffle bag');
     const bag = newBossBag();
     const rng = seeded(5);
     const draws = [];
-    for (let i = 0; i < 60; i++) draws.push(nextBoss(roster, bag, 99, rng).id);
+    // AT NIGHT AND PAST THE FIRST BOSS, which is the only moment the whole
+    // roster is legal at once — `nightOnly` holds the anglerfish out of a
+    // daylight bag and `opener` holds everything but the shark and the crab
+    // out of the first slot. Measured with both gates open, because this
+    // block's question is about the BAG, and a bag with two archetypes
+    // withheld would look exactly like a bag that repeats.
+    const night = { first: false, night: true };
+    for (let i = 0; i < 60; i++) draws.push(nextBoss(roster, bag, 99, rng, night).id);
     const n = roster.length;
     let violations = 0;
     for (let i = 0; i + n <= draws.length; i += n) {
@@ -1244,7 +1290,7 @@ section('THE ROSTER — bosses.csv and the shuffle bag');
       const bag = newBossBag();
       const rng = seeded(6);
       const early = [];
-      for (let i = 0; i < 40; i++) early.push(nextBoss(roster, bag, 1, rng).id);
+      for (let i = 0; i < 40; i++) early.push(nextBoss(roster, bag, 1, rng, { night: true }).id);
       const leaked = early.filter((id) => gated.some((g) => g.id === id));
       check('a level-1 run cannot draw a gated archetype', leaked.length === 0,
         leaked.length ? `drew ${[...new Set(leaked)].join(', ')}` : `gated: ${gated.map((g) => `${g.id}@${g.minLevel}`).join(', ')}`);
@@ -1252,6 +1298,88 @@ section('THE ROSTER — bosses.csv and the shuffle bag');
     // ...and nothing eligible at all is a real answer, not a crash.
     check('nothing eligible returns null rather than throwing',
       nextBoss(roster.map((b) => ({ ...b, minLevel: 999 })), newBossBag(), 1, seeded(1)) === null);
+  }
+
+  // -------------------------------------------------------------------------
+  // WHAT THE MOMENT ALLOWS — `opener` and `nightOnly`
+  // -------------------------------------------------------------------------
+  // Two gates that are about NOW rather than about how far the player has got.
+  // Both are asked at the DRAW, and both are checked here against the shipped
+  // file rather than against a fixture: the failure they exist to prevent is a
+  // cell nobody filled in, which no synthetic roster can reproduce.
+  {
+    const openers = roster.filter((b) => b.opener).map((b) => b.id);
+    check('the shipped roster names the archetypes a run may open on',
+      openers.length > 0, openers.join(', ') || 'none — the gate would stand down');
+
+    // Every first boss of a run, over many runs, is one of them. Drawn through
+    // the real function with `first`, since that is the only thing standing
+    // between the player and a hammerhead as their introduction to bosses.
+    const first = [];
+    for (let i = 0; i < 200; i++) {
+      first.push(nextBoss(roster, newBossBag(), 99, seeded(i), { first: true, night: true }).id);
+    }
+    check('a run always opens on one of them', first.every((id) => openers.includes(id)),
+      `${[...new Set(first)].join(', ')} over ${first.length} runs`);
+    check('...and it is not always the same one — both are reachable',
+      new Set(first).size === openers.length, `${new Set(first).size} of ${openers.length} seen`);
+
+    // ...AND THE GATE IS OFF EVERYWHERE ELSE. The rule is about one slot; a
+    // version of it that leaked into every draw would quietly delete most of
+    // the roster from the whole run.
+    const later = [];
+    for (let i = 0; i < 200; i++) {
+      later.push(nextBoss(roster, newBossBag(), 99, seeded(i), { first: false, night: true }).id);
+    }
+    check('...and every other boss still rolls the whole roster',
+      new Set(later).size > openers.length, `${new Set(later).size} distinct archetypes from the second boss on`);
+
+    // The night gate, measured the same way and in both directions — the half
+    // that actually breaks is "it never comes out", and only one of these two
+    // checks can see it.
+    const nightOnly = roster.filter((b) => b.nightOnly).map((b) => b.id);
+    check('the shipped roster has a night archetype to gate', nightOnly.length > 0, nightOnly.join(', '));
+    const byDay = [];
+    for (let i = 0; i < 200; i++) {
+      byDay.push(nextBoss(roster, newBossBag(), 99, seeded(i), { night: false }).id);
+    }
+    check('a daylight run never draws one', byDay.every((id) => !nightOnly.includes(id)),
+      `${byDay.filter((id) => nightOnly.includes(id)).length} leaked over ${byDay.length} draws`);
+    const byNight = new Set();
+    for (let i = 0; i < 200; i++) {
+      const bag = newBossBag();
+      for (let d = 0; d < roster.length; d++) byNight.add(nextBoss(roster, bag, 99, seeded(i * 31 + d), { night: true }).id);
+    }
+    check('...and a dark one does', nightOnly.every((id) => byNight.has(id)),
+      `${nightOnly.filter((id) => byNight.has(id)).join(', ') || 'none'} seen after dark`);
+
+    // A DAYLIGHT DRAW MUST NOT SPEND IT. The gate is applied to the pool, so a
+    // withheld archetype is never marked drawn — otherwise a run that reached
+    // dusk would find the anglerfish already used up by a bag it was never a
+    // candidate in.
+    const bag = newBossBag();
+    for (let i = 0; i < roster.length - nightOnly.length; i++) nextBoss(roster, bag, 99, seeded(i), { night: false });
+    check('...and a daylight bag never spends the night archetype',
+      nightOnly.every((id) => !bag.drawn.includes(id)), `drawn: ${bag.drawn.join(', ')}`);
+
+    // ...AND IT IS WIRED UP. Everything above tests the table; this tests that
+    // systems/boss.js actually asks it the question, through the real arrival.
+    // The gate is worth nothing if `first` is never passed, and a table check
+    // cannot see that — the same failure shape as a perk with no code behind
+    // it.
+    const opened = new Set();
+    for (let i = 0; i < 40; i++) {
+      resetBoss(scene);
+      resetEnemies(scene);
+      const gs = { difficulty: 10, level: CONFIG.boss.everyLevels ?? 5, running: true };
+      const e = arrive(gs, scene);
+      if (e) opened.add(bossState.archetype?.id ?? '?');
+    }
+    check('the real arrival opens a run on an opener too',
+      opened.size > 0 && [...opened].every((id) => openers.includes(id)),
+      `${[...opened].join(', ')} over 40 runs`);
+    resetBoss(scene);
+    resetEnemies(scene);
   }
 }
 
@@ -1531,11 +1659,14 @@ section('THE CLEAR-OUT — a boss fight empties the water');
   // Straight past the threshold rather than waiting for it — the cadence is
   // the section above's job, and this one is about what happens on arrival.
   gameState.level = bossState.nextLevel;
-  // `arrive` sits through the hush by ticking updateBoss and NOTHING else, so
-  // no creature moves and none is swept — the population on the arrival frame
-  // is still `before`, and the "nothing was deleted" check below is measuring
-  // the arrival rather than a hush's worth of exits.
-  const boss = arrive(gameState, scene);
+  // `arriveOnly` sits through the hush by ticking updateBoss and NOTHING else,
+  // so no creature moves and none is swept — the population on the arrival
+  // frame is still `before`, and the "nothing was deleted" check below is
+  // measuring the arrival rather than a hush's worth of exits. It also stops
+  // on the spawn frame rather than walking the boss in, for the same reason:
+  // an entrance is several seconds of updateEnemies, and every one of them is
+  // a frame in which the departing crowd could be swept.
+  const boss = arriveOnly(gameState, scene);
   check('a boss arrived', !!boss, boss ? boss.type : 'none');
   check('...and the water was already told to leave, before it did',
     enemies.filter((e) => e !== boss && !e.def.bossMinion && e.speed > 0.01).every((e) => e.leaving));
@@ -1749,6 +1880,11 @@ section('THE ARRIVAL BAR — what it actually draws');
   resetBoss();
   const gameState = { difficulty: 5, level: 1, running: true };
   forceBoss(scene, gameState, { boss: 'bossShark', perk: null });
+  // ...and let it swim in first. The bar does not exist until the boss is out
+  // from behind the rock (see THE APPROACH in systems/boss.js), so sampling
+  // from the spawn frame collects nothing at all and the checks below read an
+  // empty array rather than a broken fill.
+  swimIn(gameState, scene);
 
   // Sampled the way the HUD reads it — through bossBanner, frame by frame.
   const samples = [];

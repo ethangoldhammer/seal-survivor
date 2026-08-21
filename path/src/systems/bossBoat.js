@@ -163,13 +163,21 @@ export function attachBossBoat(scene, e) {
   resetBossBoat(scene);
   if (!isBoatBoss(e)) return;
   boatState.boat = e;
-  // NOT WALKING IN FROM THE WINGS. `entering` is raised on every spawn and
+  // IT SAILS IN, BUT NOT UNDERWATER. `entering` is raised on every spawn and
   // routes the creature through clampVertical, which pins it a full radius
   // BELOW the waterline until it is inside the side walls — on a hull four
   // units across that is the boat fighting the whole entrance from underwater,
-  // and it is the exact shape of a bug that looks like a design choice. The
-  // boat arrives on station; it does not swim on.
-  e.entering = false;
+  // and it is the exact shape of a bug that looks like a design choice.
+  //
+  // So the vertical half of the entrance is switched off and the horizontal
+  // half is kept. This used to drop the flag outright, back when a spawn was
+  // placed INSIDE the wall and `entering` bought a walk-on that only the crabs
+  // wanted; now every creature in the game is placed past the edge of the
+  // picture (see THE ENTRANCE in entities/enemies.js), so dropping it would
+  // hand the boat to the ordinary wall clamp and snap the hull into the arena
+  // on its first frame — the pop-in the entrance exists to remove, on the one
+  // body in the roster big enough to be unmissable.
+  e.enterClampY = false;
   e.mesh.position.y = bounds.surfaceY + (cfg().draft ?? -0.35);
   e.vx = 0;
   e.vy = 0;

@@ -132,6 +132,30 @@ export const strikeState = {
   // Cleared where the window lapses (updateStrike), so a chain that dies takes
   // the arming with it and the next one has to be earned with another strike.
   armed: false,
+  // ---- THE VERDICT ON THE LAST RELEASE -----------------------------------
+  //
+  // WHAT THE RING PLAYS BACK AFTER THE BUTTON COMES UP. `sweetStrike` above is
+  // the same fact and cannot do this job: it is the stamp a dash IN FLIGHT
+  // carries, so it says nothing about a release that happened a quarter of a
+  // second ago and it is meaningless the instant the dash ends. These three
+  // are a RECEIPT — latched on the release frame, counted down on their own
+  // clock, and read by nothing that decides anything.
+  //
+  //   verdict        +1 on the beat, -1 outside it, 0 nothing to report
+  //   verdictOffset  the SIGNED error, in seconds. Negative = let go early
+  //                  (fuel still in the bar), positive = sat on it. This is
+  //                  the number the code has always recorded for the telemetry
+  //                  and never once shown the player — see noteChain('release')
+  //                  below, where the comment says exactly that.
+  //   verdictFlash   seconds left of it ringing out on the ring.
+  //
+  // Kept here rather than in `lastRelease` because that object is consumed on
+  // read (main.js takes it on the release frame and the depth is wiped), and a
+  // read-out that plays over half a second needs state that survives being
+  // looked at.
+  verdict: 0,
+  verdictOffset: 0,
+  verdictFlash: 0,
   active: false,
   dashTimeLeft: 0,
   dashDuration: 0, // what this dash's length was set to, for the i-frames
@@ -155,6 +179,25 @@ export const strikeState = {
   chainPips: 0,
   chainCount: 0,
   chainTimer: 0,
+  // HOW MANY MORE PIPS OF BAR MAY SCORE THIS CYCLE — the food chain's budget.
+  //
+  // A link is a PIP OF FUEL GOING IN, not a mouthful going down, and a bar only
+  // holds so many. So a chain grows by at most one barful per strike: eat the
+  // bar up from empty and every pip is a link; fill it and the chain HOLDS,
+  // however much food is still in the water, until another charged release
+  // spends the bar and buys the next barful.
+  //
+  // That is what stops the chain being a function of how much chum happened to
+  // be nearby. It was: a magnet sweep over a big pile was thirty links in a
+  // second, which is why the logs have a 313-deep chain in them. Now the pile
+  // is worth exactly one bar, and going deeper means going back and striking
+  // again — the loop the whole system is named after.
+  //
+  // Set at the RELEASE rather than when the charge tops out, which is the same
+  // moment in practice (holding seals the mouth, so nothing can be eaten in
+  // between) and closes a loophole: an unspent budget cannot survive a release
+  // and be spent after a fumbled one.
+  pipBudget: 0,
   // MOUTHFULS EATEN SINCE THE LAST RELEASE. This is what arms the next strike
   // to score a FOOD CHAIN link — see tryStrike and linkPips().
   //
@@ -177,6 +220,32 @@ export const strikeState = {
 // the player with a bar they had no way to fill.
 export function isFeeding() {
   return strikeState.active || strikeState.chainTimer > 0;
+}
+
+/**
+ * HOW MUCH OF THE FOOD CHAIN'S WINDOW IS LEFT, 0..1. 0 means no chain running.
+ *
+ * ONE EXPRESSION, THREE INSTRUMENTS. The arc outside the ring (systems/
+ * strikeRing.js) and the strip under the FOOD CHAIN! banner (ui/ui.js) are two
+ * pictures of this one number, and a third would be along tomorrow. They used
+ * to divide `chainTimer` by `CONFIG.strike.chainWindow` at their own call
+ * sites, which is fine until the window stops being a constant — a card that
+ * lengthened it would have to be found in every file that draws it, and the
+ * one that got missed would drain at a plausible, wrong rate.
+ *
+ * Clamped at 1 rather than trusted: `chainTimer` is SET to the window on a
+ * release, so the frame it opens divides exactly, and anything that ever hands
+ * out a bonus refresh would push a bar past its own end.
+ *
+ * Takes the state to read, defaulting to the run's own, for exactly the reason
+ * releaseOffset does: the look sheet (tools/looks/boost-core.js) poses a
+ * hand-built state to draw the meter without running the charge economy, and a
+ * reader pinned to this module's singleton would draw the LIVE chain on every
+ * panel of it — which is to say an empty arc, forever.
+ */
+export function chainWindowLeft(s = strikeState) {
+  if (!(s?.chainTimer > 0)) return 0;
+  return Math.min(1, s.chainTimer / Math.max(0.05, CONFIG.strike.chainWindow));
 }
 
 function lerp(a, b, t) {
@@ -253,6 +322,31 @@ export function strikeBurst(stats) {
     * lerp(1, b.radiusPowerMul ?? 1.5, strikeState.power)
     * (stats?.aoeMul ?? 1);
   return { damage, radius: reach };
+}
+
+/**
+ * HOW FAR A STRIKE CAN REACH, from where the seal is standing — the length of
+ * the longest dash this stat block can buy, plus the body that does the hitting.
+ *
+ * THE MAXIMUM, not what the meter holds right now, and that is the whole point
+ * of the number. Its one caller is the first-run tip about a boss's weak spot
+ * (systems/tutorial.js), which is a question about whether the spot is
+ * ATTACKABLE — "you could strike that from here if you charged" — and a reach
+ * derived from the live charge would put the tip on screen and take it off
+ * again as the bar filled and emptied underneath it.
+ *
+ * Derived from the same three numbers tryStrike() spends, rather than from a
+ * constant beside them: reach scales the dash's DURATION at constant speed (see
+ * the note there), so travel is speed x duration x the full-charge multiplier.
+ * `hitRadius` is on the end because a dash connects with the seal's body, not
+ * with a point — the same slack hitCreature is given in updateStrike.
+ */
+export function strikeReach(stats = null) {
+  const c = CONFIG.strike.charge ?? {};
+  const speed = stats?.strikeDashSpeed ?? CONFIG.strike.dashSpeed ?? 0;
+  const duration = (stats?.strikeDashDuration ?? CONFIG.strike.dashDuration ?? 0)
+    * (c.reachMulMax ?? 1);
+  return speed * duration + (stats?.hitRadius ?? 0);
 }
 
 /**
@@ -397,6 +491,9 @@ export function resetStrike() {
   strikeState.sweetStrike = false;
   strikeState.armingStrike = false;
   strikeState.armed = false;
+  strikeState.verdict = 0;
+  strikeState.verdictOffset = 0;
+  strikeState.verdictFlash = 0;
   strikeState.charging = false;
   strikeState.power = 0;
   strikeState.flash = 0;
@@ -404,6 +501,7 @@ export function resetStrike() {
   strikeState.dashTimeLeft = 0;
   strikeState.dashDuration = 0;
   strikeState.chainPips = 0;
+  strikeState.pipBudget = 0;
   strikeState.chainCount = 0;
   strikeState.chainTimer = 0;
   strikeState.pipsSinceStrike = 0;
@@ -522,6 +620,15 @@ export function updateCharge(dt, held, stats) {
   if (strikeState.perfectFlash > 0) strikeState.perfectFlash = Math.max(0, strikeState.perfectFlash - dt);
 
   if (strikeState.flash > 0) strikeState.flash = Math.max(0, strikeState.flash - dt);
+  // THE VERDICT RUNS OUT ON ITS OWN, and it is the one countdown here that
+  // outlives the thing it describes: `flash` is the fuel becoming a strike and
+  // is over in 0.28s, while the receipt has to hold long enough to be READ —
+  // it is the only place a player is ever told which side of the beat they let
+  // go on. Zeroed with it, so nothing downstream has to test two fields.
+  if (strikeState.verdictFlash > 0) {
+    strikeState.verdictFlash = Math.max(0, strikeState.verdictFlash - dt);
+    if (strikeState.verdictFlash === 0) strikeState.verdict = 0;
+  }
 }
 
 /** True once, on the frame the wind-up reached a perfect charge. */
@@ -683,10 +790,48 @@ export function tryStrike(aimDir, stats) {
   const arms = sweet || strikeState.perfect;
   strikeState.armingStrike = arms;
 
+  // ---- AND WHAT THIS STRIKE BUYS THE CHAIN -------------------------------
+  //
+  // ONE BARFUL. The chain's payout is pips of fuel going back in (see
+  // noteChainMouthful), and this is the allowance: eat the bar up from empty
+  // and every pip is a link, fill it and the chain holds until another release
+  // buys the next one. A fumbled wind-up buys nothing, so refilling after one
+  // pays nothing — the bar is fuel either way, but it is only CHAIN when a
+  // strike paid for it.
+  //
+  // Funded by the same condition that ARMS rather than by `perfect` alone, and
+  // that is not the same thing: the early half of the sweet spot is sweet
+  // WITHOUT being perfect (measured — 2 of the 5 armable frames at 60fps land
+  // there, and they are the best-timed early releases in the game). Keying the
+  // allowance on `perfect` there would arm a chain and fund it with nothing —
+  // a combo the player opened correctly and could not grow by a single link,
+  // on their best releases. What arms the chain feeds the chain.
+  //
+  // Assigned rather than added: an allowance is per strike and does not bank,
+  // or a player could sit on several barfuls of unspent chain and cash them
+  // into one pile.
+  strikeState.pipBudget = arms ? pipCount(stats) : 0;
+
   // Recorded with the SIGNED offset, which is the one number a player has no
   // way of seeing and the one that decides everything downstream: early and
   // late are different mistakes and look the same from the seat.
-  noteChain('release', { offset: sweetOffset(), sweet, arms, half: sweetHalfWidth(stats) });
+  const offset = sweetOffset();
+  noteChain('release', { offset, sweet, arms, half: sweetHalfWidth(stats) });
+
+  // ...AND NOW SHOWN. The same number, latched onto the state the ring reads,
+  // so the instrument can play back where this release actually landed instead
+  // of only whether it was good. Read BEFORE clearPending() below, which throws
+  // the wind-up's timing away along with its power.
+  //
+  // -Infinity is the "nothing fireable banked" sentinel sweetOffset returns,
+  // and it cannot happen here — the minFire gate at the top of this function
+  // already returned — but it is guarded anyway rather than trusted, because a
+  // non-finite offset would come out of the mapping in strikeRing.js as a NaN
+  // radius, and a NaN vertex takes the WHOLE instrument off the screen rather
+  // than drawing one mark in the wrong place.
+  strikeState.verdict = sweet ? 1 : -1;
+  strikeState.verdictOffset = Number.isFinite(offset) ? offset : 0;
+  strikeState.verdictFlash = Math.max(0, CONFIG.strike.ring?.verdict?.time ?? 0.55);
 
   // Snapshot what this dash was bought with. Damage and reach both read it for
   // the whole dash, so clearing `pending` on the next line can't retroactively
@@ -865,11 +1010,24 @@ function snapToPip(value, stats) {
 // actually filled the bar.
 const pipQueue = [];
 
+/**
+ * HOW MANY PIP BOUNDARIES A FILL CROSSED — the one place that arithmetic lives.
+ *
+ * Read by two things that must never disagree: the pip QUEUE below (the pops on
+ * the ring) and the food chain's payout (see feedChum). They are the same event
+ * seen twice — a pip landing — and two copies of this floor division would be
+ * two definitions of what a link is worth.
+ */
+function pipsCrossed(before, after, stats) {
+  const n = pipCount(stats);
+  return Math.max(0, Math.floor(after * n + 1e-6) - Math.floor(before * n + 1e-6));
+}
+
 function notePips(before, after, stats) {
   const n = pipCount(stats);
   const from = Math.floor(before * n + 1e-6);
-  const to = Math.floor(after * n + 1e-6);
-  const crossed = Math.max(0, to - from);
+  const crossed = pipsCrossed(before, after, stats);
+  const to = from + crossed;
   if (!crossed) return;
 
   for (let i = from; i < to; i++) pipQueue.push({ index: i + 1, total: n });
@@ -900,8 +1058,24 @@ function noteChainMouthful(count = 1) {
     noteChain('miss', { why: 'no window open' });
     return;
   }
-  strikeState.chainPips += count;
+  // THE WINDOW IS HELD OPEN BY EATING, WHETHER OR NOT THE EATING SCORED.
+  //
+  // Above the payout gates on purpose. A full bar pauses the CHAIN, not the
+  // chain's clock: a player finishing a pile with a maxed bar is doing the
+  // right thing and should not watch the combo lapse in their face for it —
+  // the pause is "no more links until you strike", not "you are on a timer
+  // now". Nothing is farmed by holding a chain open, because holding it open
+  // is exactly what pays nothing.
   strikeState.chainTimer = CONFIG.strike.chainWindow;
+
+  // ---- A FULL BAR IS THE PAUSE ------------------------------------------
+  // `count` is PIPS OF FUEL that went in, not mouthfuls that went down (see
+  // feedChum), so a swallow into a bar with no room arrives here as zero and
+  // scores nothing by construction rather than by a rule about it.
+  if (count <= 0) {
+    noteChain('miss', { why: 'bar full — strike again to re-open it' });
+    return;
+  }
 
   // ---- AND THE LINK ITSELF, ONE PER MOUTHFUL ----------------------------
   //
@@ -938,7 +1112,23 @@ function noteChainMouthful(count = 1) {
     noteChain('miss', { why: `${strikeState.pipsSinceStrike} of ${linkPips()} mouthfuls for the first link` });
     return;
   }
-  for (let i = 0; i < count; i++) {
+
+  // ---- AND THE BUDGET IS WHAT IS LEFT OF THE BAR THIS STRIKE BOUGHT ------
+  // A cycle pays at most one barful. Spent down per pip so a fill that crosses
+  // more pips than are left pays only what it can afford — which is the case
+  // a magnet sweep hits, handing over a whole pile in one frame.
+  const payable = Math.min(count, strikeState.pipBudget);
+  if (payable <= 0) {
+    noteChain('miss', { why: 'no charge behind it — strike again to re-open it' });
+    return;
+  }
+  strikeState.pipBudget -= payable;
+  // THE MULTIPLIER PAUSES WITH THE COUNTER, deliberately. They are one chain
+  // told two ways — the banner and the damage — and a multiplier that kept
+  // climbing through the pause would have the number on screen and the damage
+  // being dealt disagreeing for as long as the player kept eating.
+  strikeState.chainPips += payable;
+  for (let i = 0; i < payable; i++) {
     const chain = chainStrike('chumEaten');
     if (chain) {
       lastMouthful.chain = chain;
@@ -1155,13 +1345,20 @@ export function chainXpMul(stats = null) {
  */
 export function feedChum(stats) {
   if (!CONFIG.strike.enabled) return false;
-  // Booked before the fill, and regardless of whether the bar has room — see
-  // noteChainMouthful. A full bar must not be a hole in the chain rule.
-  noteChainMouthful();
+  // THE BAR MOVES FIRST, AND WHAT IT MOVED BY IS WHAT THE CHAIN IS PAID.
+  //
+  // This used to be booked BEFORE the fill and deliberately ignored whether
+  // the bar had room, so that a full bar was not "a hole in the chain rule".
+  // The hole is the rule now: a link is a pip of fuel going in, so a swallow
+  // into a bar that is already full moves nothing and scores nothing, and the
+  // chain holds until a charged release empties the bar and buys the next one.
+  const before = strikeState.charge;
   // Exactly one pip. Not `strikeChumRefill` directly: the pip count is rounded
   // off it, so paying the raw fraction would leave the bar landing a hair
   // short of a boundary and the last pip needing a second orb to close.
-  return fillMeter(pipValue(stats), stats);
+  const filled = fillMeter(pipValue(stats), stats);
+  noteChainMouthful(pipsCrossed(before, strikeState.charge, stats));
+  return filled;
 }
 
 // One link of the FOOD CHAIN. Starts a chain if none is running, extends the
@@ -1226,11 +1423,17 @@ export function chainStrike(source, links = 1) {
  * orbs have now.
  */
 export function restoreCharge(stats = null) {
-  // One pickup, one mouthful against the chain. A blue orb's identity is the
-  // FUEL it hands over — a whole bar of it — not the combo; crediting it a
-  // bar's worth of multiplier would make the orb the best combo tool in the
-  // game and the eating beside the point.
-  noteChainMouthful();
+  // ONE LINK, NOT A BARFUL, and this is the one place the pip rule is
+  // deliberately not applied. A blue orb fills the meter outright, so by the
+  // arithmetic everywhere else it would cross a whole bar of pips and pay a
+  // whole bar of links for a single pickup — which would make the orb the best
+  // combo tool in the game and the eating beside the point. Its identity is the
+  // FUEL; it is credited the one mouthful it looks like.
+  //
+  // Booked BEFORE the fill for the same reason, since afterwards the bar is
+  // full and the crossing is already spent. Still budget-gated inside, so an
+  // orb caught during the pause cannot re-open it.
+  noteChainMouthful(1);
   const filled = fillMeter(1, stats);
   // An orb caught mid-dash is meant to read as "go again, right now" — so it
   // also refreshes the chain window. Without this you could grab the pickup
@@ -1429,7 +1632,7 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // to point a seal travelling at dash speed), which is the whole test for
       // whether a source may crit. Returns `dmg` untouched for anything that
       // is not a boss wearing a spot, the prey cull's minnows included.
-      if (dmg > 0) dmg = hotSpotDamage(e, strikeContact, dmg);
+      if (dmg > 0) dmg = hotSpotDamage(e, strikeContact, dmg, playerPos);
 
       if (dmg > 0) e.hp -= dmg;
       e.flash = CONFIG.fx.hitFlash;

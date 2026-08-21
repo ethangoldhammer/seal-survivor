@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { resolutionScale } from './systems/settings.js';
-import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT } from './arena.js';
+import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT, SEABED_Z, WATER_FILL_Z } from './arena.js';
 import { createGrid } from './systems/grid.js';
 import { createConstellations } from './systems/constellations.js';
 import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime, liveCaustics } from './systems/water.js';
@@ -14,9 +14,9 @@ import { createClouds } from './systems/clouds.js';
 import { createRain, weatherState } from './systems/weather.js';
 import { createLightning } from './systems/lightning.js';
 import { createHorizonGlow } from './systems/horizon.js';
-import { createWallRocks } from './systems/wallRocks.js';
+import { createWallRocks, shoreOverscan } from './systems/wallRocks.js';
 import { refreshFlash, skyLight } from './systems/daylight.js';
-import { updateCineCamera, cineLens, cineEnabled } from './systems/cineCamera.js';
+import { updateCineCamera, cineLens, cineSubject, cineEnabled } from './systems/cineCamera.js';
 
 // How far below the seabed the frame may travel, in world units, and equally
 // how far the seabed strip is extended down to meet it. One constant for both
@@ -221,7 +221,7 @@ export function createWorld(container) {
     // also clears the sun and moon at -5.5, which clip themselves off at the
     // FLAT water line — so a crest standing above that line correctly cuts into
     // the bottom of a setting disc instead of being drawn behind it.
-    waterMesh.position.set(0, waterCY, -5.4);
+    waterMesh.position.set(0, waterCY, WATER_FILL_Z);
     backdrop.add(waterMesh);
 
     // Horizontal depth lines give a sense of scale and vertical motion.
@@ -250,7 +250,7 @@ export function createWorld(container) {
     // Two units deeper than the camera is ever allowed to go, so the bottom
     // edge of the frame lands on seabed rather than on the seam.
     const skirt = FLOOR_OVERSCAN + 2;
-    seabedMesh = plane(w, SEABED_HEIGHT + skirt, CONFIG.colors.seabed, bounds.bottom + SEABED_HEIGHT / 2 - skirt / 2, -4);
+    seabedMesh = plane(w, SEABED_HEIGHT + skirt, CONFIG.colors.seabed, bounds.bottom + SEABED_HEIGHT / 2 - skirt / 2, SEABED_Z);
     backdrop.add(seabedMesh);
 
     // Animated water surface. The segment COUNT follows the width rather than
@@ -582,8 +582,13 @@ export function createWorld(container) {
   // Zero when the shore is off or hasn't been built: with nothing drawn out
   // there, there is nothing to hide behind and the frame stops on the wall
   // exactly as it always did.
+  // Deferred to wallRocks (see shoreOverscan there) rather than computed here,
+  // because the SPAWNER needs the same answer: it is the line past which
+  // nothing can be on screen, and a creature entering from just outside a
+  // frame that could actually reach a little further is pop-in with extra
+  // steps. One function, two readers, no chance of the two disagreeing.
   function sideOverscan() {
-    return Math.max(0, Math.min(CONFIG.camera?.edgeDrift ?? 0, wallRocks.cover ?? 0));
+    return shoreOverscan();
   }
 
   // Where a focus point is allowed to be: a half-frame in from each wall, less
@@ -736,8 +741,14 @@ export function createWorld(container) {
     // The tilt-shift focal point has to be where the seal ACTUALLY ended up,
     // after the focus claim and before the shake — a focus point computed
     // before applyFocus drifts off the seal for the whole death sequence.
+    //
+    // ...and it is the seal in every state but one. `cineSubject` is the boss
+    // reveal saying the shot is of something else; without it the sharp disc
+    // stays on a player who is by then at the edge of frame, and the animal the
+    // whole shot exists for is the blurred thing next to it.
     if (cine && cineLens.active) {
-      const uv = projectAt(targetPos.x, targetPos.y, camera.zoom, camera.position.x, camera.position.y);
+      const on = cineSubject.active ? cineSubject : targetPos;
+      const uv = projectAt(on.x, on.y, camera.zoom, camera.position.x, camera.position.y);
       cineLens.focusX = uv.u;
       cineLens.focusY = uv.v;
     }

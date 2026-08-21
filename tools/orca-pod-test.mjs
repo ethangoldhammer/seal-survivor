@@ -66,7 +66,19 @@ function check(name, cond, detail = '') {
 function fakeEnemy(x, y, radius = 1.4, hp = 1e6) {
   const mesh = new THREE.Object3D();
   mesh.position.set(x, y, 0);
-  return { mesh, radius, hp, vx: 0, vy: 0, flash: 0, hitThisFrame: false };
+  // `def` carries the spawnGroup, which is how the pod tells a shark from
+  // everything else — no group means an ordinary big fish, the third tier.
+  return { mesh, radius, hp, vx: 0, vy: 0, flash: 0, hitThisFrame: false, def: { radius } };
+}
+
+// A SHARK, which is the pod's second tier. Tagged the way enemies.csv tags one
+// — `spawnGroup` carrying 'shark' — rather than by name or by radius, because
+// that is what systems/orca.js reads and a harness that invents its own marker
+// tests a mechanism the game does not have.
+function fakeShark(x, y, radius = 1.2) {
+  const e = fakeEnemy(x, y, radius);
+  e.def.spawnGroup = 'apex shark';
+  return e;
 }
 
 // Enough of a boat for hitsBoat() and damageBoat() — the same shape
@@ -368,6 +380,255 @@ reset();
   const reach = c.leash + s.chargeSpeed * dt + s.chargeSpeed / (c.overrunDrag ?? 2.4);
   check('no orca is dragged past its leash', worst < reach,
     `worst ${worst.toFixed(1)}, leash ${c.leash.toFixed(0)} + ${(reach - c.leash).toFixed(1)} of follow-through`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE NOSE POINTS WHERE IT SWIMS');
+
+// THE QUARTER TURN. `createVisual` re-orients every model so its forward axis
+// lands on world +Y (see assets.js), so a container at rotation.z = 0 is an
+// animal pointing UP the screen. Every other escort in the game writes
+// `atan2(vy, vx) - PI/2` for that reason; this one wrote the bare heading, so
+// each orca was rendered 90 degrees off its own velocity for its whole life —
+// sideways while cruising, and leaving the line tail-first on a run.
+//
+// It is invisible to every other check in this file, because nothing about the
+// pod's POSITIONS was wrong: the charge steered at the target, the leash held,
+// the rotation between states worked. Only the last transform was wrong. So
+// this measures the nose against the displacement the orca ACTUALLY MADE
+// between two frames, rather than against the heading it stored — a facing
+// written off a stale or half-eased angle would agree with itself.
+reset();
+{
+  const seal = new THREE.Vector3(0, -6, 0);
+  player.velocity.set(0, 0);
+  const prey = fakeShark(13, -6);
+  const last = new Map(); // slot -> previous position
+  // MEANS AND A TAIL COUNT, not worst cases. The facing is EASED on purpose —
+  // three tonnes of animal turning takes a moment (`faceLerp`), and the seal in
+  // this harness reverses outright, so there are real frames where an orca is
+  // travelling one way with its head still coming round. A worst-case bound
+  // would be measuring the ease rather than the transform. The bug this exists
+  // to catch is not a lag: it is a CONSTANT quarter turn, which drags the mean
+  // to zero and puts every frame in the tail.
+  let cruiseSum = 0;
+  let cruiseN = 0;
+  let cruiseSideways = 0; // frames more than 60 degrees off travel
+  let worstCharge = 1;
+  let chargeSum = 0;
+  let aimSum = 0; // nose against the direction of the target, mid-charge
+  let chargeFrames = 0;
+  // A run opens with a come-about (`launchTime`), and a head that LEADS the
+  // body through a hard turn is the animal turning, not a bug — measuring the
+  // nose against the travel through it would be asserting the pivot away. The
+  // committed part of the run is what has to be on the line, so the age of each
+  // charge is tracked here and the launch window is measured separately.
+  const chargeAge = new Map(); // slot -> seconds this run has been going
+  let launchFrames = 0;
+  let launchTurningWrongWay = 0;
+
+  for (let i = 0; i < 2400; i++) {
+    // A seal on a real course, so the pod is swimming rather than hovering: a
+    // stationary pod keeps whatever facing it has and would pass this blind.
+    const vx = Math.cos(i * dt * 0.5) * 18;
+    const vy = Math.sin(i * dt * 0.31) * 8;
+    player.velocity.set(vx, vy);
+    seal.x += vx * dt;
+    seal.y += vy * dt;
+    prey.mesh.position.set(seal.x + 13, seal.y + 2, 0);
+    updateOrcaPod(dt, scene, seal, LEVEL, [prey], {});
+
+    for (const m of orcaPodDebug()) {
+      const prev = last.get(m.slot);
+      last.set(m.slot, { x: m.x, y: m.y });
+      if (i < 240 || !prev) continue; // settle
+      const dx = m.x - prev.x;
+      const dy = m.y - prev.y;
+      const len = Math.hypot(dx, dy);
+      // Below a few units a second the facing is deliberately held (see
+      // minSpeedToTurn) and asking which way a drifting body points is asking
+      // about noise.
+      if (len / dt < 4) continue;
+      const dot = (m.noseX * dx + m.noseY * dy) / len;
+      if (m.state === 'charge') {
+        const age = (chargeAge.get(m.slot) ?? 0) + dt;
+        chargeAge.set(m.slot, age);
+        const tx = prey.mesh.position.x - m.x;
+        const ty = prey.mesh.position.y - m.y;
+        const tl = Math.hypot(tx, ty) || 1;
+        const aim = (m.noseX * tx + m.noseY * ty) / tl;
+        if (age < (c.launchTime ?? 0.35) + dt) {
+          // Through the come-about the only thing worth asserting is that the
+          // turn is toward the target rather than away from it.
+          launchFrames++;
+          if (aim < 0) launchTurningWrongWay++;
+        } else {
+          worstCharge = Math.min(worstCharge, dot);
+          chargeSum += dot;
+          chargeFrames++;
+          aimSum += aim;
+        }
+      } else {
+        chargeAge.set(m.slot, 0);
+        cruiseSum += dot;
+        cruiseN++;
+        if (dot < 0.5) cruiseSideways++;
+      }
+    }
+  }
+
+  // A pod a quarter turn out reads 0 on both of these, every frame. This is not
+  // a tolerance — it is the difference between pointing along your travel and
+  // pointing across it.
+  const cruiseMean = cruiseSum / Math.max(1, cruiseN);
+  check('a cruising orca faces its own travel', cruiseMean > 0.8,
+    `mean cos ${cruiseMean.toFixed(3)} (90 degrees out = 0.000)`);
+  check('...and is not swimming sideways while it does',
+    cruiseSideways / Math.max(1, cruiseN) < 0.12,
+    `${((cruiseSideways / Math.max(1, cruiseN)) * 100).toFixed(1)}% of frames past 60 degrees`);
+  check('the charge is a run, not a drift', chargeFrames > 0,
+    `${(chargeFrames * dt).toFixed(1)}s charging`);
+  // Tighter than cruise, and it should be: `chargeFaceLerp` exists so the model
+  // tracks a run almost outright. What is left is the honest lag of a
+  // turn-rate-limited body coming onto its line.
+  const chargeMean = chargeSum / Math.max(1, chargeFrames);
+  check('...and it is pointed down it', chargeMean > 0.95 && worstCharge > 0.8,
+    `mean cos ${chargeMean.toFixed(3)}, worst ${worstCharge.toFixed(3)}`);
+  // And the come-about that opens the run turns TOWARD the thing. Without this
+  // an orca could satisfy everything above by leaving the line backwards and
+  // arcing round late, which is exactly what it used to do.
+  check('a run opens by turning toward its target',
+    launchFrames > 0 && launchTurningWrongWay / launchFrames < 0.25,
+    `${launchTurningWrongWay} of ${launchFrames} launch frames pointed away`);
+  // The model lags the velocity, and the velocity itself is turn-rate limited
+  // toward a LED intercept, so the nose is never exactly on the body it is
+  // charging — it is aimed ahead of it, and for the first moments of a run it
+  // is still coming round out of the line. Averaged over the run this only has
+  // to catch an orca whose head is somewhere else entirely, which is what
+  // stacking two lags on top of the quarter turn produced.
+  const aimMean = aimSum / Math.max(1, chargeFrames);
+  check('an orca aims its head at what it is charging', aimMean > 0.5,
+    `mean cos ${aimMean.toFixed(3)} toward the target`);
+}
+
+// ---------------------------------------------------------------------------
+section('BOATS FIRST, THEN SHARKS');
+
+// The card's whole premise is that this pod looks PAST the fish the rest of the
+// arsenal already handles. That is a tier order, not a distance score, and a
+// tier order is exactly the kind of thing that decays into "nearest big thing"
+// one reasonable-looking edit at a time — which is what it had done.
+reset();
+{
+  const seal = new THREE.Vector3(0, -6, 0);
+  player.velocity.set(0, 0);
+  // The shark is nearly on top of the pod and the boat is most of the hunt
+  // range away. If distance decided this, the shark would win every time.
+  const shark = fakeShark(6, -6);
+  boats.push(fakeBoat(0, 1));
+  boats[0].mesh.position.set(seal.x + 24, 1, 0);
+  const picks = new Set();
+  for (let i = 0; i < 900; i++) {
+    updateOrcaPod(dt, scene, seal, LEVEL, [shark], { onBoatHit: () => {}, onBoatDestroyed: () => {} });
+    for (const m of orcaPodDebug()) if (m.target) picks.add(m.target);
+  }
+  check('a far hull outranks a shark in the pod’s lap',
+    picks.has('boat') && !picks.has('fish'),
+    `picked ${[...picks].join(', ') || 'nothing'}`);
+}
+
+reset();
+{
+  const seal = new THREE.Vector3(0, -6, 0);
+  player.velocity.set(0, 0);
+  // No boat this time: a near turtle-sized fish and a far shark. The shark is
+  // the tier above, so it wins despite being twice as far.
+  const near = fakeEnemy(7, -6, 1.4);
+  const shark = fakeShark(-16, -6);
+  const picks = new Set();
+  for (let i = 0; i < 900; i++) {
+    updateOrcaPod(dt, scene, seal, LEVEL, [near, shark], {});
+    for (const m of orcaPodDebug()) if (m.ref) picks.add(m.ref === shark ? 'shark' : 'other');
+  }
+  check('a shark outranks a nearer fish', picks.has('shark') && !picks.has('other'),
+    `picked ${[...picks].join(', ') || 'nothing'}`);
+}
+
+reset();
+{
+  const seal = new THREE.Vector3(0, -6, 0);
+  player.velocity.set(0, 0);
+  // The third tier is real, though — a pod with a clear surface and no sharks
+  // is not an idle pod. Without this the two checks above are equally happy
+  // with a pod that has simply stopped hunting fish at all.
+  const lone = fakeEnemy(9, -6, 1.4);
+  let out = 0;
+  for (let i = 0; i < 900; i++) {
+    updateOrcaPod(dt, scene, seal, LEVEL, [lone], {});
+    if (orcaPodDebug().some((m) => m.ref === lone)) out++;
+  }
+  check('...and a big fish is still hunted when it is all there is', out > 0,
+    `${(out * dt).toFixed(1)}s on it`);
+}
+
+reset();
+{
+  const seal = new THREE.Vector3(0, -6, 0);
+  player.velocity.set(0, 0);
+  // ...but only inside its own shorter range. The same fish, parked out where
+  // a boat or a shark would still be hunted, is not worth crossing the arena
+  // for — that reach is what separates this pod from every other companion.
+  const far = fakeEnemy(c.huntRange * 0.95, -6, 1.4);
+  let out = 0;
+  for (let i = 0; i < 900; i++) {
+    updateOrcaPod(dt, scene, seal, LEVEL, [far], {});
+    if (orcaPodDebug().some((m) => m.ref === far)) out++;
+  }
+  check('a big fish out at the boat range is left alone', out === 0,
+    `${(out * dt).toFixed(1)}s on a fish ${(c.huntRange * 0.95).toFixed(0)} away, `
+    + `fish reach ${(c.huntRange * (c.fallbackRangeMul ?? 1)).toFixed(0)}`);
+}
+
+// ---------------------------------------------------------------------------
+section('SWIMMING WITH YOU, NOT BOLTED TO YOU');
+
+// The pod inherits most of the seal's velocity and springs the rest, with a
+// dead zone around each station. Both halves are needed and each fails in an
+// opposite, plausible-looking way: no slack and the three sit on their points
+// like a rig, and a velocity fraction pushed too low is the old bug where the
+// pod cannot keep up with the animal it escorts.
+//
+// So this measures the SPREAD of each orca's offset from the seal — not how
+// close it is, which the formation check above already holds. A rigidly
+// parented pod holds one offset to a hair; a pod that has come off its leash
+// holds none.
+reset();
+{
+  const swimmer = makeSwimmer();
+  for (let i = 0; i < 240; i++) {
+    swimmer.step(i * dt);
+    updateOrcaPod(dt, scene, swimmer.pos, LEVEL, [], {});
+  }
+  const spread = new Map(); // slot -> {min, max} offset along the seal's frame
+  for (let i = 0; i < 2400; i++) {
+    swimmer.step((240 + i) * dt);
+    updateOrcaPod(dt, scene, swimmer.pos, LEVEL, [], {});
+    for (const m of orcaPodDebug()) {
+      const d = Math.hypot(m.x - swimmer.pos.x, m.y - swimmer.pos.y);
+      const s = spread.get(m.slot) ?? { min: Infinity, max: -Infinity };
+      s.min = Math.min(s.min, d);
+      s.max = Math.max(s.max, d);
+      spread.set(m.slot, s);
+    }
+  }
+  const swing = Math.max(...[...spread.values()].map((s) => s.max - s.min));
+  const tightest = Math.min(...[...spread.values()].map((s) => s.max - s.min));
+  // A body doing a knot of its own is a body swimming. The floor is the whole
+  // point of the check; the ceiling is there so "loose" cannot quietly become
+  // "not following".
+  check('every orca moves relative to the seal', tightest > 1.5,
+    `tightest swing ${tightest.toFixed(1)} units`);
+  check('...without wandering off', swing < 14, `widest swing ${swing.toFixed(1)} units`);
 }
 
 console.log(failures ? `\n${failures} failure(s)` : '\nall checks passed');

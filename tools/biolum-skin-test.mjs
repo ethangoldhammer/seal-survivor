@@ -40,6 +40,10 @@ import {
   skinRoster, biolumSkinPresetOf, rollBiolumSkinVariant,
 } from '../path/src/systems/biolumSkin.js';
 import { parseSkinCsv, buildSkins, rollSkin, allSkins } from '../path/src/skinTable.js';
+// The other two layers, for the composition check: a `surface` cell can now
+// name all three at once, so they have to survive each other on one material.
+import { attachNoiseShader } from '../path/src/systems/noiseShader.js';
+import { attachToonShade } from '../path/src/systems/toonShade.js';
 import * as THREE_NS from 'three';
 import { CONFIG, TUNER_SCHEMA, withoutInheritedPresetKeys, importTuning } from '../path/src/config.js';
 import { updateBeatSync } from '../path/src/systems/beatSync.js';
@@ -227,6 +231,38 @@ for (const [label, libKey] of [['lit (standard)', 'standard'], ['unlit (basic)',
   check(`${label}: the pigment uniform reached the shader`,
     !!shader.uniforms.uBioPigment && shader.uniforms.uBioPigment.value === 0,
     `default ${shader.uniforms.uBioPigment?.value} — 0 keeps every tuned preset unmoved`);
+
+  // THE PIGMENT ALSO HAS TO REACH THE BAKED EMISSIVE, and this is the check
+  // that would have caught "the hammerhead is stuck with its photo texture".
+  //
+  // FRAG_SURFACE can only write diffuseColor, and several animals wearing a
+  // pigment preset also ship an EMISSIVE SIDECAR — the hammerhead's is its own
+  // colour map with the brights blown out (assets.js) — which applyEmissiveMode
+  // lights in WHITE at CONFIG.glow.maskIntensity, 3.5. So a hide painted at
+  // pigment 1 was being covered by a photograph of the animal added as light
+  // after every lighting chunk, and no value of pigment could reach it. On
+  // screen it read as the pattern being washed out, which is a thing a preset
+  // can plausibly be.
+  //
+  // ON THE LIT MATERIAL ONLY, and that is asserted rather than assumed: an
+  // unlit body has no emissive and so no such chunk, and the replace has to
+  // find nothing and leave the source alone rather than mangle it.
+  {
+    const scale = 'mix(1.0, uBioPigmentGlow, clamp(uBioPigment, 0.0, 1.0))';
+    const lit = libKey === 'standard';
+    check(`${label}: the pigment scales the baked emissive${lit ? '' : ' — nothing to scale'}`,
+      shader.fragmentShader.includes(scale) === lit,
+      lit ? 'totalEmissiveRadiance is multiplied down under a hide'
+        : 'no emissive on an unlit material, and the replace is a clean no-op');
+    // 0, matching CONFIG: a hide that replaces the photograph replaces the
+    // light it was giving off too, unless a preset asks otherwise. Harmless
+    // either way while pigment is 0, since the mix reads neither arm — which is
+    // why the value has to agree with the config rather than with whatever is
+    // convenient in the shader.
+    check(`${label}: ...and its uniform defaults to no photo glow under a hide`,
+      shader.uniforms.uBioPigmentGlow?.value === 0,
+      `${shader.uniforms.uBioPigmentGlow?.value}`);
+  }
   check(`${label}: every pattern branch is present`,
     BIOLUM_PATTERNS.every((_, i) => i === BIOLUM_PATTERNS.length - 1
       || shader.fragmentShader.includes(`uBioPattern == ${i}`)),
@@ -429,6 +465,43 @@ composed.material.onBeforeCompile(sh2, {});
 check('the pre-existing onBeforeCompile still ran', previousRan);
 check('its edit survived', sh2.vertexShader.includes('// PRIOR_EFFECT'));
 check('and the skin was added on top', sh2.vertexShader.includes('aBioPos'));
+
+// ALL THREE LAYERS ON ONE BODY, which the `surface` column can now ask for.
+//
+// It used to be unrepresentable: assets.csv held exactly one of texture/noise/
+// biolum, and the shader lab offered the same three. Now a cell reads
+// `noise:x+toon:x+biolum:y`, so the three injections have to survive each other
+// on one material — and two of them replace the SAME chunk to scale the baked
+// emissive, which is exactly the shape of the bug where one silently wins.
+//
+// Everything below is a substring check, and every one of them would pass if
+// the order were wrong; what they catch is a hook that landed on nothing. Both
+// emissive scales are multiplies, so their order genuinely does not matter.
+{
+  const all = makeBody();
+  all.material = new THREE.MeshStandardMaterial();
+  // Same order as processMaterial in assets.js: noise, then toon, then the skin.
+  attachNoiseShader(all.material, null);
+  attachToonShade(all.material, null);
+  attachBiolumSkin(all.material, all, BASE_ONLY);
+  const sh3 = {
+    uniforms: {},
+    vertexShader: THREE.ShaderLib.standard.vertexShader,
+    fragmentShader: THREE.ShaderLib.standard.fragmentShader,
+  };
+  all.material.onBeforeCompile(sh3, {});
+  const f3 = sh3.fragmentShader;
+  check('all three layers land on one material',
+    f3.includes('uNoiseBase * diffuse') && f3.includes('uToonSteps')
+    && f3.includes('clamp(uBioPigment'),
+    'noise coat, toon bands and biolum pigment');
+  check('...and neither emissive scale eats the other',
+    (f3.match(/totalEmissiveRadiance \*= mix/g) ?? []).length === 2,
+    'both replace the same chunk, so the second must find it after the first');
+  check('...and every uniform all three need is bound',
+    !!sh3.uniforms.uNoisePaint && !!sh3.uniforms.uToonSteps && !!sh3.uniforms.uBioPigment
+    && !!sh3.uniforms.uNoisePaintGlow && !!sh3.uniforms.uBioPigmentGlow);
+}
 
 const twice = makeBody();
 attachBiolumSkin(twice.material, twice, BASE_ONLY);

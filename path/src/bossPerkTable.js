@@ -50,6 +50,21 @@
 //   damage    lunge: a multiplier on contact damage while dashing.
 //             electric: damage per second inside the aura.
 //             the shooters: damage per projectile.
+//   damagePerDifficulty
+//             linear growth on `damage` per difficulty point, resolved ONCE
+//             when the perk is attached — the same shape enemies.csv's
+//             `hpPerDifficulty` and `contactDamagePerDifficulty` have, and for
+//             the same reason. Blank is the default and means a flat perk,
+//             which is what all of these were.
+//
+//             A flat number is not neutral here, it is a curve of its own:
+//             everything else the boss does — its contact, its bite, its
+//             health — rides CONFIG.spawn.ramp, so a perk whose damage never
+//             moves is at its most punishing on the EARLIEST boss that can
+//             roll it and its least on the last. That is backwards, and it is
+//             what this column exists to fix. It does nothing to `lunge`,
+//             whose `damage` is a multiplier on a contact number that already
+//             rides the ramp — doubling the ramp is not the same statement.
 //
 // And one column that is not a number:
 //   attack    WHAT KIND OF HARM this is — see ATTACK_IDS below. It decides what
@@ -125,6 +140,7 @@ const NUMBERS = {
   // table's job is to refuse nonsense, not to have opinions.
   mul: { min: 0 },
   damage: { min: 0 },
+  damagePerDifficulty: { min: 0 },
 };
 
 /** Parse the table into an array of perks, in file order. */

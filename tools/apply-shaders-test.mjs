@@ -49,7 +49,7 @@ const src = await readFile(resolve(HERE, 'apply-shaders.mjs'), 'utf8');
 const dir = await mkdtemp(join(tmpdir(), 'apply-shaders-test-'));
 const mod = join(dir, 'm.mjs');
 await writeFile(mod, src.replace('function spliceHandPresets(', 'export function spliceHandPresets('));
-const { spliceHandPresets } = await import('file://' + mod);
+const { spliceHandPresets, cellFor } = await import('file://' + mod);
 
 const wrap = (block) => `  toonShade: {\n    presets: {\n${block}\n    },\n  },\n`;
 
@@ -117,6 +117,51 @@ console.log('\nRENDERING A CONTROL IS NOT AN EDIT');
     full, { toonShade: { shark: { range: 1.5 } } });
   check('only the moved slider is written', only.changes.length === 1,
     only.changes.join('; ') || 'nothing');
+}
+
+console.log('\nTHE SURFACE CELL');
+{
+  // The `surface` column holds a `+`-joined list of layers now, and this file
+  // is CUMULATIVE — tools/looks/shader-lab.json still carries 26 creatures
+  // recorded under the old one-value shape. Both have to come out as a cell
+  // that path/src/assetTable.js reads back as the same layers, or reapplying an
+  // old record silently strips a creature's banding.
+  const cell = (entry) => cellFor(entry, 'x', []);
+
+  check('the current shape names every layer it has',
+    cell({ layers: { noise: 'shark', toon: 'shark', biolum: null } }) === 'noise:shark+toon:shark',
+    cell({ layers: { noise: 'shark', toon: 'shark', biolum: null } }));
+  check('...in the order assetTable documents, whatever order it was written in',
+    cell({ layers: { biolum: 'hide', toon: 'shark', noise: 'shark' } })
+      === 'noise:shark+toon:shark+biolum:hide');
+  check('a layer with no preset name is the bare kind',
+    cell({ layers: { noise: true } }) === 'noise', cell({ layers: { noise: true } }));
+  check('no layers is "texture", never a blank cell',
+    cell({ layers: {} }) === 'texture', cell({ layers: {} }));
+
+  // THE OLD SHAPE. `noise` meant noise AND toon — which is why every noise row
+  // in assets.csv was rewritten to say both — so an entry recorded before
+  // layers existed must still expand to both.
+  check('a pre-layers "noise" record still carries its bands',
+    cell({ surface: 'noise', assets: { noiseShader: 'shark', toonShade: 'shark' } })
+      === 'noise:shark+toon:shark');
+  check('...even when the entry only recorded the noise name',
+    cell({ surface: 'noise', assets: { noiseShader: 'shark' } }) === 'noise:shark+toon:shark');
+  check('a pre-layers "biolum" record stays biolum alone',
+    cell({ surface: 'biolum', assets: { biolumSkin: 'hide' } }) === 'biolum:hide');
+  check('a pre-layers "texture" record stays texture',
+    cell({ surface: 'texture', assets: {} }) === 'texture');
+
+  // `layers` WINS when both are present, because apply() writes `surface` as a
+  // human-readable summary of the same choice — reading the summary would parse
+  // prose, and prose that says "noise+toon" matches none of the old three.
+  check('the layer map wins over the summary beside it',
+    cell({ surface: 'noise+toon+biolum', layers: { biolum: 'hide' } }) === 'biolum:hide');
+
+  const notes = [];
+  check('an entry naming neither is skipped with a note',
+    cellFor({ surface: 'sparkles' }, 'x', notes) === null && notes.length === 1,
+    notes.join('; '));
 }
 
 await rm(dir, { recursive: true, force: true });

@@ -9,7 +9,10 @@ swim,coach,,First touch swims,Left stick to swim,touch pad,TRUE,band,65,5,,
 aim,coach,,Second touch aims,Right stick to aim,touch pad,TRUE,band,60,5,,
 strike,coach,Hold {strike} or click to charge — let go to strike,Third touch charges a strike,{bumper} to charge a strike,,TRUE,band,50,6,,
 chum,coach,Eat chum to refill your boost.,,,,TRUE,band,45,6,,chum
+bossWeakSpot,coach,Strike the bright spot — it takes critical damage.,,,,TRUE,band,44,6,,hotspot
+hiveStack,coach,Your upgrades live here. Stack more to increase the potency of each effect.,,,,TRUE,band,43,7,,hive
 foodChain,coach,Strike through the chum to keep a FOOD CHAIN going. ,,,,TRUE,band,42,5,,chum
+levelOrb,coach,This upgrades the level of one of your abilities.,,,,TRUE,band,40,6,,pickup
 bubbleOrb,coach,"Pop an air bubble. Free refill, no breach required..",,,,TRUE,band,38,6,,pickup
 strikeOrb,coach,This krill bucket gives you quick boost pips.,,,,TRUE,band,36,6,,pickup
 rapidFireOrb,coach,This tasty morsel doubles your shot rate for a hot sec...,,,,TRUE,band,34,6,,pickup

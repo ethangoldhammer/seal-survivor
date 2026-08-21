@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { baseStats, applyLevelGrowth, applyDamageScaling } from '../stats.js';
-import { applyWithRarity, baseRarity } from '../systems/rarity.js';
+import { applyWithRarity, baseRarity, rarityRank } from '../systems/rarity.js';
 import { createVisual, getAssetSizeMultiplier } from '../assets.js';
 import { bounds, clampToArena, midWater } from '../arena.js';
 import { feedback } from '../systems/feedback.js';
@@ -262,6 +262,48 @@ export function addUpgrade(id, rarity = null) {
     player.stats.maxOxygen,
     player.oxygen + Math.max(0, player.stats.maxOxygen - beforeO2),
   );
+}
+
+/**
+ * The held upgrades that could take ANOTHER stack right now, each with the
+ * count it is on and the best tier it has been taken at.
+ *
+ * The level blob's pool — see applyLevelOrb in main.js. Three things are
+ * deliberately filtered here rather than at the call site, because all three
+ * are properties of the BUILD and this file is where the build lives:
+ *
+ *   at the cap        `maxStacks` is a real ceiling, and a pickup that ignored
+ *                     it would be the one route in the game past a limit every
+ *                     card in the level-up menu respects (see availableUpgrades
+ *                     below, which drops a maxed card from the offer pool for
+ *                     exactly the same reason).
+ *   switched off      an upgrade turned off in upgrades.csv is out of the game.
+ *                     A run that is still holding one from before the row was
+ *                     disabled must not be able to deepen it.
+ *   the tier          the stack is added at the BEST rarity this upgrade has
+ *                     already been taken at, not at the floor. The blob's
+ *                     sentence is "more of what you have", and handing a common
+ *                     stack of a card the player took as an epic would quietly
+ *                     dilute it — recomputeStats replays every pick at its own
+ *                     tier, so a floor-tier stack is worth measurably less than
+ *                     the ones beside it.
+ */
+export function levelableUpgrades() {
+  const counts = new Map();
+  for (const pick of player.upgrades) {
+    const cur = counts.get(pick.id);
+    if (!cur) { counts.set(pick.id, { id: pick.id, count: 1, rarity: pick.rarity }); continue; }
+    cur.count += 1;
+    if (rarityRank(pick.rarity) > rarityRank(cur.rarity)) cur.rarity = pick.rarity;
+  }
+  const out = [];
+  for (const entry of counts.values()) {
+    const u = CONFIG.upgrades.find((x) => x.id === entry.id);
+    if (!u || u.enabled === false) continue;
+    if (u.maxStacks != null && entry.count >= u.maxStacks) continue;
+    out.push(entry);
+  }
+  return out;
 }
 
 export function availableUpgrades() {

@@ -17,8 +17,8 @@ import { CONFIG } from '../config.js';
 //
 // Three pieces, in the order they run:
 //
-//   1. THE STATE MACHINE. Round start, charging, boosting, food chain, and
-//      the three beats of a death (the hit, the fall, the floor). Each state
+//   1. THE STATE MACHINE. Round start, charging, boosting, and the three
+//      beats of a death (the hit, the fall, the floor). Each state
 //      is a SPARSE override on the base parameters, resolved to a full bag
 //      and then blended from wherever the last one had got to — so a state
 //      added to the config picks up every base parameter for free, and a
@@ -133,7 +133,13 @@ const machine = {
 // Highest priority first. A death outranks everything, and inside a death the
 // later beat outranks the earlier one so the machine can only ever move
 // forward through hit -> fall -> floor.
-const PRIORITY = ['mainMenu', 'deathFloor', 'deathFall', 'deathHit', 'foodChain', 'boosting', 'charging', 'roundStart'];
+// The food chain is deliberately absent: it is the one moment frequent enough
+// that owning the frame made the rig pop between a push-in and base for most
+// of a run. It keeps world.punchCamera's kick and nothing here (see main.js).
+// `bossReveal` sits directly under the death beats: it is the one state that
+// looks at something OTHER than the seal, and the only thing that may cut it
+// short is the player dying during it.
+const PRIORITY = ['mainMenu', 'deathFloor', 'deathFall', 'deathHit', 'bossReveal', 'boosting', 'charging', 'roundStart'];
 
 function cfg() {
   return CONFIG.cinecam ?? {};
@@ -204,8 +210,7 @@ function ease(t) {
 // numbers are written over the top of it while the screen is up.
 //
 // A LATCH, not a pulse. The menu is a mode — it is up until somebody presses
-// something — where roundStart and foodChain are moments that expire on their
-// own clock. That is also why it is first in PRIORITY: nothing else in the list
+// something — where roundStart is a moment that expires on its own clock. That is also why it is first in PRIORITY: nothing else in the list
 // can be happening while the game has not started.
 const menuState = { held: false, zoom: 0, offsetX: 0, offsetY: 0 };
 
@@ -268,8 +273,8 @@ function enter(name) {
   const incoming = c.states?.[name] ?? {};
   const leaving = c.states?.[machine.state] ?? {};
   // Entering a state is that state's business; LEAVING one is the departing
-  // state's, because "how long does the food chain punch take to let go" is a
-  // property of the food chain and not of whatever happens to come next.
+  // state's, because "how long does the dash take to let go" is a property of
+  // the dash and not of whatever happens to come next.
   const dur = name === 'base'
     ? (leaving.blendOut ?? c.base?.blendOut ?? 0.6)
     : (incoming.blendIn ?? c.base?.blendIn ?? 0.4);
@@ -303,11 +308,14 @@ function enter(name) {
 }
 
 // --- one-shot states -------------------------------------------------------
-// Round start and the food chain have no condition to test for — they are
-// moments, not modes — so they are pushed in and expire on their own clock.
-// Held in their own latch rather than as `machine.state` directly, because a
-// death can outrank a live food chain and the food chain still has to be able
-// to expire underneath it.
+// Round start has no condition to test for — it is a moment, not a mode — so
+// it is pushed in and expires on its own clock. Held in its own latch rather
+// than as `machine.state` directly, because a death can outrank a live pulse
+// and the pulse still has to be able to expire underneath it.
+//
+// One caller, now that the food chain no longer takes the frame; the mechanism
+// stays because a moment that fires ONCE is exactly what it is for, and that is
+// the line the food chain crossed.
 let pulse = { name: null, left: 0 };
 
 export function cineEvent(name) {
@@ -315,6 +323,81 @@ export function cineEvent(name) {
   const s = cfg().states?.[name];
   if (!s) return;
   pulse = { name, left: s.hold ?? 1 };
+}
+
+// ---------------------------------------------------------------------------
+// THE REVEAL — the one shot that is not of the seal
+// ---------------------------------------------------------------------------
+// Every state above is a way of LOOKING at the player: the goal below is built
+// from ctx.target, and what a state changes is the zoom, the lens and how
+// tightly the rig chases. A boss arriving is the one moment the game has
+// something else to say, so this is the one state that also moves the subject.
+//
+// It is a function rather than a point, and that is load-bearing: the boss is
+// still swimming while the frame travels to it, and a point captured on the
+// frame the reveal fired would have the camera pan to where it used to be —
+// arriving, with great ceremony, at empty water a body-length behind it.
+//
+// A LATCH, like the main menu's framing, and not a pulse like roundStart —
+// which is what it was first, and the reason it changed is worth keeping. The
+// shot plays over the boss's arrival ceremony, and this file runs on the WALL
+// clock while that ceremony runs on the game's (see the dt note on
+// updateCineCamera). The two come apart the moment anything stops the run: an
+// xp spill can open a level-up card in the middle of an arrival, and a shot
+// counting down on its own would end there, over a health bar frozen half
+// full. Held until the thing it is a shot OF says it is done, it cannot.
+//
+// Three ways it ends, so a forgotten release cannot strand the camera on a
+// fight nobody is having: the caller drops it (cineRevealDone, which boss.js
+// does when the ceremony lands, when the boss dies, when the fight is switched
+// off and on a run reset), the subject stops existing (see revealPoint), or the
+// rig is reset.
+let reveal = { held: false, at: null };
+
+// WHERE THE SHARP BIT OF THE PICTURE GOES, published for world.js the same way
+// the rest of the lens is. The tilt-shift focal point is projected from the
+// camera's SUBJECT, and for every other state in this file that is the seal —
+// which is why world.js has always projected the player and never had to ask.
+// A shot of a boss with the sharp disc still parked on a seal at the edge of
+// frame is the whole reveal thrown away, so the one state that moves the
+// subject has to say so.
+export const cineSubject = { active: false, x: 0, y: 0 };
+
+/**
+ * Look at something else. Held until cineRevealDone.
+ *
+ * @param at  () => ({ x, y }) — read every frame, see above. A subject that
+ *            returns null (the boss died mid-shot, or was cleaned up) ends the
+ *            reveal on that frame rather than freezing the frame on a hole in
+ *            the water.
+ */
+export function cineReveal(at) {
+  if (!cineEnabled()) return;
+  if (!cfg().states?.bossReveal || typeof at !== 'function') return;
+  reveal = { held: true, at };
+}
+
+/** Let go — the ceremony landed, or the subject is gone. */
+export function cineRevealDone() {
+  reveal = { held: false, at: null };
+}
+
+/** Is the frame currently off the seal? For the tuner readout and the tests. */
+export function cineRevealing() {
+  return reveal.held && !!reveal.at;
+}
+
+// Where the reveal is pointing this frame, or null if there is nothing to
+// point at. Resolved once per frame and reused, because the subject is a
+// callback into another module and the goal reads it in two places.
+function revealPoint() {
+  if (!cineRevealing()) return null;
+  const p = reveal.at();
+  if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
+    cineRevealDone();
+    return null;
+  }
+  return p;
 }
 
 /** The lens comes out of the water: bead it up and let it dry. */
@@ -339,6 +422,7 @@ export function resetCineCamera() {
   machine.blendDur = 0.0001;
   machine.hold = 0;
   pulse = { name: null, left: 0 };
+  reveal = { held: false, at: null };
   // NOT the menu latch. A reset is "this run is starting from nothing", and the
   // one route that resets the rig while a menu is up is the menu's own Play —
   // where dropping the latch here would cut the frame to the opening shot on
@@ -347,6 +431,7 @@ export function resetCineCamera() {
   cineLens.droplets = 0;
   cineLens.dropAge = 0;
   cineLens.active = false;
+  cineSubject.active = false;
 }
 
 /**
@@ -362,7 +447,6 @@ function pick(signals) {
     deathHit: signals.deathPhase === 'sink',
     // The latch, not a pulse — the menu is a mode. See cineMenu.
     mainMenu: menuState.held,
-    foodChain: pulse.name === 'foodChain' && pulse.left > 0,
     boosting: !!signals.boosting,
     // The BUTTON, not strikeState.charging. Those come apart the moment the
     // bar empties under a held button: `charging` goes false because there is
@@ -374,6 +458,7 @@ function pick(signals) {
     // this is not.
     charging: !!signals.strikeHeld,
     roundStart: pulse.name === 'roundStart' && pulse.left > 0,
+    bossReveal: cineRevealing(),
   };
   for (const name of PRIORITY) {
     if (live[name] && c.states?.[name]) return name;
@@ -413,6 +498,7 @@ export function updateCineCamera(dt, ctx) {
   const c = cfg();
   if (!c.enabled) {
     cineLens.active = false;
+    cineSubject.active = false;
     return null;
   }
   const base = c.base ?? {};
@@ -423,6 +509,11 @@ export function updateCineCamera(dt, ctx) {
     pulse.left -= dt;
     if (pulse.left <= 0) pulse = { name: null, left: 0 };
   }
+  // Resolved BEFORE pick(), because a subject that has gone (a boss killed
+  // during its own reveal, an enemy list cleared by a reset) ends the reveal
+  // inside revealPoint — and the state machine has to see that on this frame
+  // rather than hold a shot of empty water for one more.
+  const subject = revealPoint();
   const want = pick(ctx);
   if (want !== machine.state) enter(want);
 
@@ -491,13 +582,30 @@ export function updateCineCamera(dt, ctx) {
 
   const aimLen = Math.hypot(ctx.aim.x, ctx.aim.y);
   const aimBias = base.aimBias * p.aimBias;
-  // `offset` is the only term here that is not about the seal — see the note on
-  // ABSOLUTE_KEYS. It blends like every other parameter, so it arrives and
-  // leaves on the state's own curve rather than on a timer of its own.
-  const goalX = ctx.target.x + rig.leadX + p.offsetX
-    + (aimLen > 0.001 ? (ctx.aim.x / aimLen) * aimBias : 0);
-  const goalY = ctx.target.y + rig.leadY + p.offsetY
-    + (aimLen > 0.001 ? (ctx.aim.y / aimLen) * aimBias : 0);
+  // WHAT THE FRAME IS OF. The seal, except for the one state that is a shot of
+  // something else — and only while that state actually owns the frame. On the
+  // way back out the machine has already returned to `base`, so the goal is
+  // the player again and the same spring that carried the frame over carries
+  // it home: the pan back is the pan out played in reverse, for free.
+  //
+  // The lead and the aim bias are deliberately NOT re-pointed at the subject.
+  // Both describe the player's swimming and the player's aim, and neither
+  // means anything about a boss; the reveal state zeroes them in config.js in
+  // any case, and this is the second lock on that door.
+  const onSubject = subject && machine.state === 'bossReveal';
+  cineSubject.active = !!onSubject;
+  if (onSubject) {
+    cineSubject.x = subject.x;
+    cineSubject.y = subject.y;
+  }
+  const goalX = onSubject
+    ? subject.x + p.offsetX
+    : ctx.target.x + rig.leadX + p.offsetX
+      + (aimLen > 0.001 ? (ctx.aim.x / aimLen) * aimBias : 0);
+  const goalY = onSubject
+    ? subject.y + p.offsetY
+    : ctx.target.y + rig.leadY + p.offsetY
+      + (aimLen > 0.001 ? (ctx.aim.y / aimLen) * aimBias : 0);
 
   // How far the frame may travel past the arena's walls, and over how much of
   // its last approach it eases in. `edgeEase` is a fraction of the HALF-frame
@@ -645,5 +753,6 @@ export function cineDebug() {
     x: rig.x,
     y: rig.y,
     droplets: cineLens.droplets,
+    revealing: cineRevealing(),
   };
 }

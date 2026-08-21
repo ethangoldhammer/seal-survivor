@@ -75,11 +75,18 @@ check('every link up to chain 40 is a bigger shove than the one before',
 check('...where the clamp this replaced flatlined at chain 5',
   Math.min(g.comboGridWarpMax, 20 * g.comboGridWarp) === Math.min(g.comboGridWarpMax, 40 * g.comboGridWarp),
   'old: chain 20 and chain 40 were the same number');
-// It is drawn on top of the two fixed ripples a link already fires, so it has
-// to be the biggest of the three without being a different order of thing.
-check('it stays the same kind of size as the ripples it lands with',
-  radiusOf(1e6) < CONFIG.feedback.foodChain.ripple.radius * 2,
-  `cap ${g.comboGridRadiusMax} vs foodChain's fixed ${CONFIG.feedback.foodChain.ripple.radius}`);
+// IT STAYS A LOCAL EFFECT — measured against the ARENA, which is the thing
+// that actually matters and the only one in reach that does not move.
+//
+// This check used to compare the cap against CONFIG.feedback.foodChain's own
+// ripple radius, and that was the wrong anchor twice over: it is a tuned value,
+// so the assertion was validating one machine's tuner session rather than the
+// design, and it duly broke when that radius was retuned from 14 to 3 by work
+// that had nothing to do with the grid. A guard on a runaway has to be pinned
+// to something the runaway is measured against.
+check('the shove stays local rather than arena-scale',
+  radiusOf(1e6) <= bounds.width * 0.3,
+  `cap ${g.comboGridRadiusMax} is ${((radiusOf(1e6) / bounds.width) * 100).toFixed(0)}% of the arena`);
 
 console.log(fails ? `\n${fails} FAILED\n` : '\nall good\n');
 process.exit(fails ? 1 : 0);

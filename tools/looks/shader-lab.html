@@ -41,7 +41,10 @@
         letter-spacing: 0; color: #9dc0d2; font-size: 10px; }
       .sect > .body { padding: 7px 9px 9px; display: grid; gap: 6px; }
       .sect.shut > .body { display: none; }
-      .row { display: grid; grid-template-columns: 78px 1fr 50px; gap: 7px; align-items: center; }
+      /* 92px, not 78: the two controls that decide whether a layer mixes with
+         the model's photograph or replaces it need labels that say so, and at
+         78 both of them wrapped to three lines. */
+      .row { display: grid; grid-template-columns: 92px 1fr 50px; gap: 7px; align-items: center; }
       .row label { color: #82a9bc; font-size: 11px; }
       .row output { text-align: right; color: #cfe6f2; font-size: 11px; }
       .row select, .row input[type=text] { background: #0d1a26; border: 1px solid #1e3b52;
@@ -49,7 +52,7 @@
       input[type=range] { width: 100%; }
       /* The "this model cannot band" notice — a full-width amber line above the
          toon sliders, rather than a third column, because it is a sentence. */
-      .warnrow { grid-template-columns: 78px 1fr; }
+      .warnrow { grid-template-columns: 92px 1fr; }
       .warnrow output { grid-column: 2; text-align: left; color: #ffc46b;
         font-size: 10px; line-height: 1.35; }
   .surf { display: grid; grid-template-columns: 16px 1fr; gap: 2px 7px; align-items: center;
@@ -57,6 +60,19 @@
   .surf b { color: #cfe6ff; font-weight: 600; font-size: 11px; }
   .surf i { grid-column: 2; color: #6f92b4; font-style: normal; font-size: 10px; }
   .surf input { grid-row: span 2; }
+  /* The switched-on layers, marked on the row itself: three checkboxes with
+     nothing between them read as a list of options rather than as a statement
+     of what this animal is currently wearing. */
+  .surf:has(input:checked) b { color: #7fe6a0; }
+  .surf:has(input:checked) { background: #0d1f22; border-radius: 3px; }
+
+  /* The old picker's three choices, kept as shortcuts. Deliberately quieter
+     than the record buttons below — these change what you are looking at, they
+     do not write anything. */
+  .combos .cols { flex-wrap: wrap; gap: 4px; }
+  button.combo { background: #10222f; color: #9dc0d2; border: 1px solid #1e3b52;
+    padding: 3px 7px; border-radius: 3px; cursor: pointer; font: inherit; font-size: 10px; }
+  button.combo:hover { background: #1a3a4e; color: #eaf6fc; }
 
       .cols { display: flex; gap: 6px; align-items: center; }
       .cols input[type=color] { width: 34px; height: 22px; padding: 0; border: 1px solid #2b4b5c; }
@@ -67,6 +83,9 @@
       button.act.warn { background: #5c3a17; border-color: #8d6a2b; }
       #status { color: #7fe6a0; font-size: 11px; min-height: 15px; padding: 0 14px; }
       #status.err { color: #ff8b7a; }
+      /* A record that landed but has a caveat — the same amber the "cannot
+         band" notice uses. Red here meant every noted success looked failed. */
+      #status.warn { color: #ffc46b; }
       #notes { color: #6f92b4; font-size: 11px; padding: 2px 14px 12px; white-space: pre-wrap; }
       textarea { width: 100%; height: 120px; background: #0a1520; color: #bcd8ea;
         border: 1px solid #1e3b52; font: 11px/1.4 ui-monospace, monospace; border-radius: 3px; }

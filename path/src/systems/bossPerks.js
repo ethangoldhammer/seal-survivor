@@ -231,8 +231,12 @@ function applyPerkScale(e, mul) {
 /**
  * Give this boss its perk. `perk` is a row from bossPerks.csv, or null for the
  * first boss of the run, which has none.
+ *
+ * `difficulty` is the run's, and it is only read once — see `active.damage`.
+ * It defaults to 0 so a harness that spawns a boss out of a run gets exactly
+ * the number printed in the CSV rather than a curve it has to reproduce.
  */
-export function attachBossPerk(scene, enemy, perk) {
+export function attachBossPerk(scene, enemy, perk, difficulty = 0) {
   resetBossPerks();
   if (!enemy || !perk || !scene) return null;
 
@@ -262,6 +266,20 @@ export function attachBossPerk(scene, enemy, perk) {
     // Fractional lobes of aura fill owed from the last frame, so a rate below
     // one per frame still averages out instead of being rounded to nothing.
     fillCarry: 0,
+    // WHAT ONE HIT OF THIS PERK IS WORTH, with bossPerks.csv's
+    // `damagePerDifficulty` resolved against the run — see the column note in
+    // bossPerkTable.js for why a flat perk is a curve of its own.
+    //
+    // RESOLVED ONCE, HERE, for the same reason spawnOne resolves a creature's
+    // hp and contact at spawn: the number the player is being hit with should
+    // be the one the fight arrived with, not one that creeps up between the
+    // first eye beam and the last while the same animal is on screen.
+    //
+    // `undefined` when the row leaves `damage` blank, so every read below can
+    // keep its own `?? fallback` and a perk that has no damage column is
+    // untouched by this.
+    damage: perk.damage == null && perk.damagePerDifficulty == null ? undefined
+      : (perk.damage ?? 0) + (perk.damagePerDifficulty ?? 0) * Math.max(0, difficulty),
   };
 
   const fx = CONFIG.boss?.perkFx ?? {};
@@ -360,10 +378,19 @@ export function attachBossPerk(scene, enemy, perk) {
  * to light the eyes of the boss that is winding up and NOT of any other boss
  * on screen — without it, a second body would telegraph an attack it is not
  * making, which is worse than no tell at all.
+ *
+ * `damage` is what one hit of it is actually worth in THIS fight, with the
+ * row's `damagePerDifficulty` already resolved. Published for the same reason
+ * krakenState publishes the beak: a number that only exists inside a closure is
+ * one nobody can check, and this one is the difference between the laser the
+ * CSV describes and the laser the player meets.
  */
 export function activeBossPerk() {
   return active
-    ? { id: active.id, stage: active.stage, timer: active.timer, enemy: active.enemy }
+    ? {
+      id: active.id, stage: active.stage, timer: active.timer, enemy: active.enemy,
+      damage: active.damage,
+    }
     : null;
 }
 
@@ -667,6 +694,11 @@ function updateLunge(dt, e, r, dirX, dirY) {
       // Contact damage is multiplied for the dash only, and restored below.
       // Read off the saved base rather than compounding, so a lunge that was
       // interrupted and re-entered can't stack the multiplier.
+      //
+      // THE ROW'S NUMBER, not `active.damage`: this one is a MULTIPLIER on a
+      // contact figure that spawnOne already ramped against the run, so it is
+      // the one `damage` cell in the file that must not be ramped a second
+      // time. See the note on `damagePerDifficulty` in bossPerkTable.js.
       e.contactDamage = baseContactDamage * (p.damage ?? 2);
       // ...and the body counts as the attack while it is doing this — see
       // `ramming` in entities/enemies.js.
@@ -860,7 +892,7 @@ function updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks) {
   if (dist < reach && hooks.onPlayerHit) {
     // Away from the boss, like every other contact shove — being shocked
     // should push you out of the thing shocking you, not into it.
-    hooks.onPlayerHit((p.damage ?? 16) * dt, { x: -dx, y: -dy }, 'bossShock');
+    hooks.onPlayerHit((active.damage ?? 16) * dt, { x: -dx, y: -dy }, 'bossShock');
   }
 }
 
@@ -1261,7 +1293,7 @@ function lightEyeBeam(scene, e, r, gun, muzzleIndex, p) {
     x: 0, y: 0, dirX: 1, dirY: 0, // placed by the first follow(), below
     length: gun.beamLength ?? 120,
     life: Math.max(0.2, p.duration ?? 1.4),
-    damage: p.damage ?? 6,
+    damage: active.damage ?? 6,
     color: gun.color,
     hitsPlayer: true,
     source: `boss:${active.id}`,
@@ -1348,7 +1380,7 @@ function fireVolley(scene, e, r, dirX, dirY, dist) {
       origin,
       dirX: _shotDir.x,
       dirY: _shotDir.y,
-      damage: p.damage ?? 10,
+      damage: active.damage ?? 10,
       speed: p.speed ?? 16,
       life: fuseFor(origin),
       blastRadius: p.radius ?? 3.4,

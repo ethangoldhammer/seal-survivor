@@ -132,7 +132,7 @@ const {
   parseCalloutCsv, checkCalloutIds, calloutText, calloutOnDevice,
 } = await import('../path/src/calloutTable.js');
 const { initCallouts, updateCalloutUi, clearCalloutUi } = await import('../path/src/ui/callout.js');
-const { popupPose } = await import('../path/src/ui/ui.js');
+const { popupPose, worldToScreen, screenToWorld } = await import('../path/src/ui/ui.js');
 const { TEXT_ROLES } = await import('../path/src/textRoles.js');
 const { chainCss } = await import('../path/src/systems/chainColor.js');
 const { strikeState, resetStrike, liveChain } = await import('../path/src/systems/strike.js');
@@ -594,6 +594,11 @@ function makeSubjects(ctx) {
     if (kind === 'pickup') return ctx.inWater.has(id);
     if (kind === 'chum') return ctx.chumInWater;
     if (kind === 'creature') return ctx.unkillableNear;
+    // A weak spot is a thing and can burst mid-sentence, exactly like an orb
+    // being swallowed. The hive is a PLACE — it answers every frame while the
+    // corner is on screen, which is what `hiveShown` stands in for here.
+    if (kind === 'hotspot') return ctx.weakSpotInReach;
+    if (kind === 'hive') return ctx.hiveShown;
     return true;
   };
   return {
@@ -657,6 +662,12 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
     feeding: false,
     chumOnSeabed: false,
     unkillableNear: false,
+    // The boss's weak spots and the upgrade corner. Both off by default, like
+    // every other water condition: a script that means to cover them says so.
+    weakSpotInReach: false,
+    hiveShown: false,
+    upgradesHeld: 0,
+    sinceUpgrade: Infinity,
     // Where whatever the tip is about happens to be. Written by a script that
     // wants to watch the label follow it.
     subjectX: 4,
@@ -779,6 +790,137 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
     seen.map((s) => s.id).filter((id) => id.endsWith('Orb') || id === 'chumChunk')
       .join(' → ') === 'bubbleOrb → strikeOrb → rapidFireOrb → chumChunk',
     seen.map((s) => s.id).join(' → '));
+}
+
+// ---------------------------------------------------------------------------
+section('the boss weak spot, the hive and the level blob');
+// ---------------------------------------------------------------------------
+{
+  // THE WEAK-SPOT TIP IS ABOUT REACH, NOT ABOUT THE BOSS. A spot the seal
+  // cannot get to is a light on the far flank of a twenty-unit animal, and a
+  // sentence telling you to strike it is an instruction you cannot follow.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const seen = coachRun((ctx, t) => {
+    if (t > 2 && t < 2.05) noteTutorialEvent('strike');
+    // A boss is in the water for the whole run; the spot only comes within
+    // reach for a window in the middle of it.
+    ctx.weakSpotInReach = t > 12 && t < 22;
+  }, { seconds: 30 });
+  const first = seen.find((x) => x.id === 'bossWeakSpot');
+  check('the weak-spot tip waits for the spot to be in reach', !!first && first.t >= 12,
+    seen.map((x) => `${x.id}@${x.t}`).join(' → '));
+  check('...and is spent by the run that showed it', tutorialDone().has('bossWeakSpot'));
+}
+{
+  // ...AND IT IS GATED ON THE STRIKE. Nothing is served by telling a player to
+  // strike a weak spot before they have been told what a strike is — so even
+  // with a spot in reach from the first frame, the strike tip goes first.
+  //
+  // The ORDER and not "it never fires": the strike step is spent by its own
+  // clock whether or not anybody presses anything, so a run long enough to
+  // check anything at all is a run where the gate has already opened.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const seen = coachRun((ctx) => { ctx.weakSpotInReach = true; }, { seconds: 20 });
+  const order = seen.map((x) => x.id);
+  check('the strike is taught before the weak spot',
+    order.indexOf('strike') >= 0 && order.indexOf('bossWeakSpot') > order.indexOf('strike'),
+    order.join(' → '));
+}
+{
+  // A CRIT ANSWERS IT, and the tip comes off without waiting for the spot to
+  // burst. Any weapon's crit — the lesson is what the patch IS, not how to
+  // reach it.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  // `charging` answers the strike tip on the frame it appears, which is how
+  // every other block here gets past it — the weak-spot step is gated on it.
+  const ctx = withSubjects({
+    runTime: 99, device: 'kbm', charging: true, weakSpotInReach: true,
+  });
+  const step = () => { updateCallouts(DT, {}, true); updateTutorial(DT, ctx, true); };
+  for (let t = 0; t < 30 && !tutorialDone().has('strike'); t += DT) step();
+  for (let t = 0; t < 30 && tutorialState.active !== 'bossWeakSpot'; t += DT) step();
+  check('the weak-spot tip is up', tutorialState.active === 'bossWeakSpot', `${tutorialState.active}`);
+  noteTutorialEvent('bossWeakSpot');
+  // The spot is deliberately LEFT LIT: this is about the crit ending the tip,
+  // not about the subject going.
+  for (let t = 0; t < 30 && tutorialState.active === 'bossWeakSpot'; t += DT) step();
+  check('...and a crit takes it off', tutorialDone().has('bossWeakSpot'));
+}
+{
+  // THE HIVE TIP NEEDS SOMETHING IN THE CORNER. Before the first pick the
+  // corner is empty, and a label pointing at nothing is worse than no label.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const seen = coachRun((ctx, t) => {
+    // A card taken at t=10 and nothing before it.
+    ctx.hiveShown = t > 10;
+    ctx.upgradesHeld = t > 10 ? 1 : 0;
+    ctx.sinceUpgrade = t > 10 ? t - 10 : Infinity;
+  }, { seconds: 40 });
+  const hive = seen.find((x) => x.id === 'hiveStack');
+  check('the hive tip waits for the first pick', !!hive && hive.t >= 10,
+    seen.map((x) => `${x.id}@${x.t}`).join(' → '));
+  check('...and is spent once it has been shown', tutorialDone().has('hiveStack'));
+}
+{
+  // ...AND IT ENDS WITH ITS MOMENT. The tip has no answer at all, so what takes
+  // it off is the window after the pick lapsing — well before the twelve-second
+  // ceiling, which is the only other thing that could ever end it.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const ctx = withSubjects({
+    runTime: 99, device: 'kbm', hiveShown: true, upgradesHeld: 1, sinceUpgrade: 0,
+  });
+  let t = 0;
+  for (; t < 30 && tutorialState.active !== 'hiveStack'; t += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+    ctx.sinceUpgrade += DT;
+  }
+  check('the hive tip is up', tutorialState.active === 'hiveStack', `${tutorialState.active}`);
+  const upAt = t;
+  for (; t < 60 && tutorialState.active === 'hiveStack'; t += DT) {
+    updateCallouts(DT, {}, true);
+    updateTutorial(DT, ctx, true);
+    ctx.sinceUpgrade += DT;
+  }
+  const lasted = t - upAt;
+  check('...and the window ends it, not the ceiling',
+    lasted < (CONFIG.tutorial.maxShow ?? 12) - 0.5, `${lasted.toFixed(2)}s`);
+  check('...but never before it can be read',
+    lasted >= legibleFor(CALLOUTS.get('hiveStack'), 'kbm') - 0.05, `${lasted.toFixed(2)}s`);
+}
+{
+  // THE LEVEL BLOB IS A PICKUP LIKE THE OTHER FOUR, spent by swimming into its
+  // own kind and by nothing else.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const seen = coachRun((ctx, t) => {
+    if (t > 2 && t < 2.05) noteTutorialEvent('strike');
+    setWater(ctx, 'levelOrb', t > 6 && t < 20);
+    if (t > 14 && t < 14.05) noteTutorialEvent('levelOrb');
+  }, { seconds: 30 });
+  check('the level blob has a tip of its own', seen.some((x) => x.id === 'levelOrb'),
+    seen.map((x) => x.id).join(' → '));
+  check('...taking one spends it', tutorialDone().has('levelOrb'));
+  check('...and it spent nothing else',
+    !['bubbleOrb', 'strikeOrb', 'rapidFireOrb', 'chumChunk'].some((id) => tutorialDone().has(id)),
+    [...tutorialDone()].join(','));
 }
 
 {
@@ -1337,7 +1479,23 @@ section('{player} — one name, every text table');
     // tip, so the animal leaving is now the only thing that ends it, and a run
     // that fades out with one still on screen leaves the last step unspent.
     ctx.unkillableNear = t > 84 && t < 90;
-  }, { device: 'kbm', seconds: 95 });
+    // The level blob, which is the fifth pickup and is deliberately out of the
+    // loop above: it cannot exist until the player is holding a card, so a run
+    // meets it after the first level-up rather than alongside the other four.
+    setWater(ctx, 'levelOrb', t > 92 && t < 100);
+    if (t > 96 && t < 96.05) noteTutorialEvent('levelOrb');
+    // A CARD TAKEN, which is what puts anything in the corner at all. The
+    // window is short by design — see CONFIG.tutorial.hiveWindow — so this is
+    // a pick and then the moment passing, not a flag left on.
+    ctx.hiveShown = t > 102;
+    ctx.upgradesHeld = t > 102 ? 1 : 0;
+    ctx.sinceUpgrade = t > 102 ? t - 102 : Infinity;
+    // A boss, with a weak spot inside striking distance, and a crit landing on
+    // it. Then the spot ruptures — which is what ends the tip for a player who
+    // never hits one.
+    ctx.weakSpotInReach = t > 116 && t < 124;
+    if (t > 120 && t < 120.05) noteTutorialEvent('bossWeakSpot');
+  }, { device: 'kbm', seconds: 130 });
   check('a keyboard player finishes without the two stick steps',
     tutorialComplete('kbm'), [...tutorialDone()].join(','));
   check('...and the same ledger is NOT finished on a phone',
@@ -1604,6 +1762,16 @@ section('the pace — how long a tip stays, and the quiet after it');
       // so a fixed value would either never offer it or never let it finish.
       inWater: new Set(COACH_IDS), feeding: true,
       chumOnSeabed: !done.has('crab'), unkillableNear: true,
+      // The same "follow the ledger" trick the two air steps and the seabed one
+      // use, and for the same reason: the weak-spot tip is READY while a spot
+      // is in reach, and the hive tip is READY inside the window after a pick.
+      // Both are ended by their subject going rather than only by an event, so
+      // a fixed `true` here would leave the loop spinning against a tip that is
+      // behaving exactly as designed.
+      weakSpotInReach: !done.has('bossWeakSpot'),
+      hiveShown: true,
+      upgradesHeld: 1,
+      sinceUpgrade: done.has('hiveStack') ? Infinity : 0,
     });
     updateCallouts(DT, {}, true);
     updateTutorial(DT, ctx, true);
@@ -1636,6 +1804,11 @@ section('the pace — how long a tip stays, and the quiet after it');
     ctx.inWater.clear();
     ctx.chumInWater = false;
     ctx.unkillableNear = false;
+    // ...and the boss's spot bursts, and the pick stops being recent. The two
+    // tips that have no answer at all (the hive's is a fact, like the turtle's)
+    // end on exactly this.
+    ctx.weakSpotInReach = false;
+    ctx.sinceUpgrade = Infinity;
     for (let f = 0; f < 600 && tutorialState.active; f++) {
       updateCallouts(DT, {}, true);
       updateTutorial(DT, ctx, true);
@@ -1966,6 +2139,38 @@ section('drawing it, and where the arrow points');
   camera.updateMatrixWorld(true);
   camera.updateProjectionMatrix();
   const at = (el, prop) => parseFloat(el.style[prop]);
+
+  // --- THE HIVE TIP'S ANCHOR: a rectangle on the glass, said in world units ---
+  //
+  // Every callout is positioned FROM a world point (see drawWorld), so the one
+  // tip about a piece of UI has to convert its corner into one. That conversion
+  // is the whole of the feature and it is arithmetic: if it is wrong the label
+  // stands somewhere else on the screen entirely, which is invisible to every
+  // other check in this file and looks like a tip about nothing.
+  //
+  // A ROUND TRIP, because that is the claim — screenToWorld is the inverse of
+  // the projection the layer already uses, on the z = 0 plane the game is
+  // played on. Asserting a hand-computed world coordinate instead would be
+  // re-deriving the camera's own arithmetic and would agree with a wrong
+  // implementation that made the same mistake.
+  {
+    const back = { x: 0, y: 0 };
+    const fwd = { x: 0, y: 0 };
+    let worst = 0;
+    for (const [px, py] of [[0, 0], [640, 360], [1280, 720], [17, 703], [1263, 9]]) {
+      screenToWorld(camera, px, py, back);
+      worldToScreen(camera, back.x, back.y, fwd);
+      worst = Math.max(worst, Math.abs(fwd.x - px), Math.abs(fwd.y - py));
+    }
+    check('a point on the glass converts to the water and back', worst < 0.01,
+      `worst round trip ${worst.toFixed(4)}px`);
+    // ...AND IT IS NOT THE IDENTITY. A screenToWorld that returned its input
+    // would pass the round trip against a worldToScreen that also did nothing,
+    // and the hive tip would sit in the middle of the ocean.
+    screenToWorld(camera, 0, 0, back);
+    check('...and the two are really different spaces',
+      Math.abs(back.x) > 1 && Math.abs(back.y) > 1, `${back.x.toFixed(2)}, ${back.y.toFixed(2)}`);
+  }
 
   // --- a warning: words, colour class, no arrow ---
   resetCallouts();

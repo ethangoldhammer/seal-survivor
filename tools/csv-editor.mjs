@@ -328,6 +328,14 @@ const DOCS = {
     weight: 'Likelihood relative to the other rows. Blank = 1, 0 is never shown.',
     causes: 'What has to have killed you for this line to fire. BLANK MEANS ANY DEATH. A line written for a cause BEATS the general pool rather than competing with it — die to a crab and only the crab lines are drawn from, so tagging one makes it certain, not merely likelier. Tick several and the line covers all of them.',
   },
+  'greetings.csv': {
+    id: 'A short handle for the row. Never shown to the player \u2014 it exists so a reworded line keeps its identity in a diff.',
+    text: 'The hello itself, one line on the band at the top of a run. `{player}` becomes whatever the player is called \u2014 the name they typed, or "Seal" if they never did. `{cause}` becomes what killed them LAST run, worded as "a shark", "a crab", "running out of air" \u2014 so write it mid-sentence and lowercase: "Last time it was {cause}." A line with `{cause}` in it is simply held back on a run that follows no death, so using it is the only guard you need.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    weight: 'Likelihood relative to the other rows IT IS POOLED WITH. Blank = 1, 0 is never shown.',
+    when: 'Which run this line is for. "first" is somebody who has never played, "again" is a run that follows another one. BLANK MEANS EITHER, which is right for a line that says nothing about history and wrong for almost everything else \u2014 "Welcome to the deep" on the fortieth run and "Back again?" on the first are both perfectly formed sentences and both are wrong.',
+    causes: 'What has to have killed them LAST RUN for this line to fire. BLANK MEANS ANY DEATH, and also a run that ended without one. A line written for a cause BEATS the general pool rather than competing with it \u2014 die to a crab and only the crab lines are drawn from, so tagging one makes it certain, not merely likelier.',
+  },
   'kickers.csv': {
     id: 'A short handle for the row. Never shown to the player — it exists so a reworded label keeps its identity in a diff.',
     text: 'The label the cause of death reads under, on the polaroid: "cause of death: Homing Missile". Write it WITHOUT a trailing space — the gap before the weapon name is added in code, because a trailing space is invisible in this editor and would go missing the first time a row was touched.',
@@ -410,6 +418,7 @@ const BLANK_MEANS = {
   },
   'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up', weaponName: 'renames nothing' },
   'quips.csv': { enabled: 'enabled', weight: '1', causes: 'any death' },
+  'greetings.csv': { enabled: 'enabled', weight: '1', causes: 'any death', when: 'either run' },
   'kickers.csv': { enabled: 'enabled', weight: '1' },
   'sealNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },
   'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
@@ -442,6 +451,12 @@ export const TABLES = [
     file: 'path/src/quips.csv',
     label: 'Death quips',
     blurb: 'The game-over headline. The `id` joins to nothing in code, so new lines are just new rows — add away. `causes` is the one column that does join: leave it blank and the line can answer any death, or tick what has to have killed you. A line written for a cause BEATS the general pool rather than competing with it, so tagging one makes it certain for that death, not merely likelier.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/greetings.csv',
+    label: 'Greetings',
+    blurb: 'The line a run OPENS with \u2014 one rolled sentence on the band with the player\u2019s name in it, every run. The `id` joins to nothing, so new lines are just new rows. `when` picks which run it is for: a first-timer is welcomed, everybody else is greeted as a return. A returning line may also comment on the last death \u2014 tag it with a cause, or drop `{cause}` into the words and let it name whatever it was.',
     addRows: true,
   },
   {
@@ -611,7 +626,9 @@ function columnSpec(file, name, rows) {
   // One quip, several causes. Closed for the same reason the two above are: a
   // cause id the game doesn't know is dropped at parse with a warning, which
   // leaves a line that reads perfectly in the file and can never fire.
-  if (file === 'path/src/quips.csv' && name === 'causes') {
+  // The hello at the top of a run tags the same way, about the run BEFORE this
+  // one — same closed list, same reason.
+  if ((file === 'path/src/quips.csv' || file === 'path/src/greetings.csv') && name === 'causes') {
     return {
       ...base,
       type: 'multi',
@@ -619,6 +636,21 @@ function columnSpec(file, name, rows) {
       labels: Object.fromEntries(DEATH_CAUSES.map((c) => [c.id, `${c.id}  —  ${c.label}`])),
       blankLabel: 'any death',
       source: 'deathCauses.js',
+    };
+  }
+  // Closed, because the third answer is blank and everything else is a typo
+  // that quietly widens a line to both runs \u2014 "Back again?" on somebody's
+  // first dive is the failure, and it reads perfectly in the file.
+  if (file === 'path/src/greetings.csv' && name === 'when') {
+    return {
+      ...base,
+      type: 'enum',
+      options: ['', 'first', 'again'],
+      labels: {
+        '': '\u2014  (either run)',
+        first: 'first  (they have never played)',
+        again: 'again  (a run that follows another)',
+      },
     };
   }
   if (file === 'path/src/bossNames.csv' && name === 'bosses') {

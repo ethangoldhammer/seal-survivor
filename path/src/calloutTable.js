@@ -94,15 +94,21 @@
 //             pointing away from it, and it is now a label that rides the
 //             object and stays until that object is gone.
 //
-//             Three name a THING, and can come up empty — the tip is up because
-//             something is in the water, and it can be eaten or expire
+//             Four name a THING, and can come up empty — the tip is up because
+//             something is there, and it can be eaten, expire or burst
 //             mid-sentence:
 //               chum      the nearest bite
 //               pickup    the nearest power-up of this row's own kind
 //               creature  the nearest animal the tip is about
-//             Two name a PLACE, and are always answerable:
+//               hotspot   a weak spot on the boss, within striking distance.
+//                         Ends when that spot ruptures — see hotSpotLit.
+//             Three name a PLACE, and are always answerable:
 //               surface   the waterline straight above the seal
 //               seabed    the floor straight below it
+//               hive      the upgrade corner. The one subject that is not
+//                         somewhere in the water: it is a rectangle on the
+//                         glass, converted to a world point by the frame loop
+//                         so the label needs no code path of its own.
 //             Blank = a line about no object at all, which is the three control
 //             tips and every warning. Those stay on the band.
 // ============================================================================
@@ -121,7 +127,7 @@ const DEVICE_TEXT_COLUMN = { touch: 'textTouch', pad: 'textPad' };
 
 export const CALLOUT_KINDS = ['warn', 'coach'];
 /** What a line can be ABOUT. See the `subject` column above. */
-export const SUBJECTS = ['chum', 'pickup', 'creature', 'surface', 'seabed'];
+export const SUBJECTS = ['chum', 'pickup', 'creature', 'hotspot', 'surface', 'seabed', 'hive'];
 /** The surfaces a callout can appear on. First entry is the default. */
 export const CALLOUT_ANCHORS = ['band', 'player', 'world'];
 

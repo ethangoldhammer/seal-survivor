@@ -69,7 +69,10 @@ export function resolveCombat(dt, scene, hooks) {
       // check, the feedback hook, the playtest ledger) has to agree about what
       // this shot was worth. `b.damage` itself is left alone: it is the
       // pellet's own damage and is read again by the chain and the pierce.
-      const dealt = hotSpotDamage(e, contact, b.damage);
+      // The PELLET's position as well as the contact — see hotSpotDamage. The
+      // contact is on the collision hull and can be attributed to a different
+      // part of the animal entirely; the bullet is where the shot was.
+      const dealt = hotSpotDamage(e, contact, b.damage, b.mesh.position);
 
       e.hp -= dealt;
       b.hits.add(e);

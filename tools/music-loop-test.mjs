@@ -835,6 +835,201 @@ music.endBossMusic();
 check('an unmatched kill does not disturb the music', playing() === '1', String(playing()));
 CONFIG.music.bossSrc = savedBank;
 
+section('The arrival: the run\'s music rings out over the gap the boss lands in');
+reset();
+CONFIG.music.levelsPerSlot = 1;
+music.play(1);
+run(0.05);
+const fadeFrom = musicGainNode().gain.value;
+check('the score is up before the boss is announced', fadeFrom > 0, String(fadeFrom));
+// Deliberately off the grid, like a real level threshold — the whole point of
+// this path is that it no longer waits for one.
+run(BAR + BAR / 3);
+// THE SHIPPED BAG, not a hand-written one. boss.js hands this block straight
+// to fadeMusicForBoss, and the room's three numbers are spelled
+// `tailSeconds`/`tailDecay`/`tailLevel` there to match the kill's — a rename on
+// either side falls through to hushMusic's defaults, which is the kill's room
+// at the arrival and looks exactly like the settings working.
+const arrivalRoom = CONFIG.boss.arrival.music;
+check('the arrival has a room of its own', !!arrivalRoom && arrivalRoom.tailSeconds > 0,
+  JSON.stringify(arrivalRoom));
+check('...a bigger one than the kill gets, and a slower way in',
+  arrivalRoom.tailSeconds > CONFIG.boss.kill.music.tailSeconds
+    && arrivalRoom.cut > CONFIG.boss.kill.music.cut,
+  `${arrivalRoom.tailSeconds}s room over a ${arrivalRoom.cut}s cut,`
+  + ` against the kill's ${CONFIG.boss.kill.music.tailSeconds}s and ${CONFIG.boss.kill.music.cut}s`);
+const dry = musicGainNode();
+const filt = lastLoop().outputs[0];
+const send = filt.outputs.find((n) => n.outputs?.[0]?.kind === 'convolver');
+const verb = send?.outputs[0];
+const tail = verb?.outputs[0];
+const beforeFade = loops().length;
+check('the room is dark before the arrival', send.gain.value === 0 && tail.gain.value === 0,
+  `send ${send.gain.value}, tail ${tail.gain.value}`);
+check('the handover takes', music.fadeMusicForBoss(arrivalRoom) === true);
+
+// THE ROOM IS FED THE MUSIC, not the mute. The send taps upstream of the dry
+// gain, so what the convolver is given is the loop at full level for as long as
+// the window is open — feed it after the cut and the room rings out silence,
+// which is a bug with no symptom but "the gap sounds empty".
+check('the room is hit with the loop at full level', near(send.gain.value, 1, 1e-6),
+  String(send.gain.value));
+check('...and the transport has not gone yet', dry.gain.value > fadeFrom * 0.9,
+  String(dry.gain.value));
+check('...into a bigger room than the kill gets',
+  verb.buffer?.length === Math.floor(48000 * arrivalRoom.tailSeconds),
+  `${verb.buffer?.length} samples`);
+check('...with the loop still the thing playing into it',
+  loops().length === beforeFade && playing() === '1', String(playing()));
+
+run(0.5);
+check('the window into the room shuts once it has its note',
+  near(send.gain.value, 0, 1e-6), String(send.gain.value));
+const half = dry.gain.at(now - 0.05);
+check('...while the transport is on its way out', half > 0 && half < fadeFrom,
+  `${half.toFixed(3)} of ${fadeFrom.toFixed(3)}`);
+run(0.5);
+check('...and then the music has stopped', near(dry.gain.value, 0, 1e-6), String(dry.gain.value));
+
+// THE GAP. The rest of the ceremony is the riser over a stopped score — and the
+// room the score was playing in, still ringing. That tail is the whole point of
+// the send: a plain fade leaves silence here, and silence with a riser in it
+// reads as the music having dropped out rather than handed over.
+const quietFrom = now;
+run(0.6);
+check('the transport is silent across the gap',
+  near(dry.gain.at(quietFrom + 0.3), 0, 1e-6) && near(dry.gain.value, 0, 1e-6),
+  `${dry.gain.value} across ${((now - quietFrom) * 1000).toFixed(0)}ms`);
+check('...but the room is not',
+  tail.gain.value > 0 && near(tail.gain.value, fadeFrom * arrivalRoom.tailLevel, 1e-6),
+  `tail at ${tail.gain.value.toFixed(3)}, music was ${fadeFrom.toFixed(3)}`);
+check('...and it is louder than the loop it replaced',
+  tail.gain.value > fadeFrom, `${tail.gain.value.toFixed(3)} vs ${fadeFrom.toFixed(3)}`);
+
+// THE SWITCH, ON THE CEREMONY'S OWN FRAME. With nothing sounding there is no
+// phrase to cut, so the bar line the switch used to wait for buys nothing and
+// costs up to 2.265s of silence after the bar has filled — a boss whose music
+// arrives at a different moment every fight.
+const atArrival = now;
+music.startBossMusic();
+run(0.1);
+check('the boss music starts on the arrival frame, not a bar later',
+  playing() === 'boss0', String(playing()));
+const bossStart = lastLoop().started;
+check('...within a frame of it', bossStart - atArrival < 0.05,
+  `${((bossStart - atArrival) * 1000).toFixed(0)}ms after the ceremony landed`);
+
+// AND THE SCORE COMES BACK ON THAT SAMPLE. Read off the gain param's own
+// schedule rather than by stepping the clock, because the question is whether
+// the ramp is anchored to the switch — a return scheduled from `now` would
+// answer this correctly at the end and be audibly early in the middle.
+const gain = musicGainNode().gain;
+check('the score is still silent a frame before the boss loop',
+  near(gain.at(bossStart - 0.02), 0, 1e-6), String(gain.at(bossStart - 0.02)));
+check('...and back up a fraction after it',
+  near(gain.at(bossStart + 0.2), fadeFrom, 1e-6),
+  `${gain.at(bossStart + 0.2).toFixed(3)} of ${fadeFrom.toFixed(3)}`);
+check('...having not crept back across the silence before it',
+  gain.at(quietFrom + 0.3) < fadeFrom * 1e-6 && gain.at(bossStart - 0.1) < fadeFrom * 1e-6,
+  `${gain.at(quietFrom + 0.3)} mid-gap, ${gain.at(bossStart - 0.1)} just before`);
+
+// The rotation still chains. This switch bypasses the queue, and pollQueue is
+// what normally lines up the successor — a fight that played its intro and then
+// fell silent is the exact bug that omission makes.
+run(BAR * 4 + 0.2);
+check('...and the rotation still moves on by itself', playing() === 'boss1', String(playing()));
+music.endBossMusic();
+
+section('A fight that ends during its own entrance still gives the music back');
+// The failure this catches costs a run its score for the REST OF THE RUN, and
+// it is silent in the most literal way: the fade went down, the boss loop never
+// started, and nothing else in the game ever puts the gain back.
+reset();
+music.play(1);
+run(0.05);
+const owed = musicGainNode().gain.value;
+music.fadeMusicForBoss(arrivalRoom);
+run(1.4);
+check('the score is faded out', near(musicGainNode().gain.value, 0, 1e-6));
+music.endBossMusic(); // the boss died, or the fight was switched off, mid-ceremony
+run(0.3);
+check('...and the run gets it back', near(musicGainNode().gain.value, owed, 1e-6),
+  String(musicGainNode().gain.value));
+check('...still on its own loop', playing() === '1', String(playing()));
+
+// The same for a bank that never loaded: the fade is a HANDOVER, and with
+// nothing to hand over to it has to be undone rather than left standing.
+reset();
+const bankForFade = CONFIG.music.bossSrc;
+CONFIG.music.bossSrc = [];
+music.play(1);
+run(0.05);
+music.fadeMusicForBoss(arrivalRoom);
+run(1.4);
+check('a missing bank leaves the score faded out for a moment',
+  near(musicGainNode().gain.value, 0, 1e-6));
+check('...the arrival still reports it could not take the transport',
+  music.startBossMusic() === false);
+run(0.3);
+check('...and the run\'s music comes straight back rather than never',
+  near(musicGainNode().gain.value, owed, 1e-6) && playing() === '1',
+  `${musicGainNode().gain.value} on ${playing()}`);
+CONFIG.music.bossSrc = bankForFade;
+
+// THE SWITCH LANDING ON A CUT STILL IN FLIGHT. boss.js clamps the cut inside
+// the ceremony so this should not happen, but a tuner drag and a shortened
+// entrance are one slider apart — and the failure is a step down to silence on
+// the quietest moment of the fight, which is a click exactly where nothing else
+// is playing to hide it.
+reset();
+music.play(1);
+run(0.05);
+music.fadeMusicForBoss(arrivalRoom);
+run(0.4); // less than half way out
+const midCut = musicGainNode().gain.value;
+check('the transport is still on its way out', midCut > owed * 0.4 && midCut < owed,
+  `${midCut.toFixed(3)} of ${owed.toFixed(3)}`);
+music.startBossMusic();
+const cutIn = lastLoop().started;
+const g = musicGainNode().gain;
+check('...and it finishes into the switch rather than snapping to it',
+  g.at(cutIn - 0.01) < midCut && g.at(cutIn - 0.01) >= 0,
+  `${g.at(cutIn - 0.01).toFixed(4)} a hair before, from ${midCut.toFixed(3)}`);
+check('...arriving at silence exactly when the boss loop starts',
+  near(g.at(cutIn), 0, 1e-6), String(g.at(cutIn)));
+run(0.3);
+check('...and then back up', near(musicGainNode().gain.value, owed, 1e-6),
+  String(musicGainNode().gain.value));
+music.endBossMusic();
+
+// A run restarted mid-ceremony must not open muted.
+reset();
+music.play(1);
+run(0.05);
+music.fadeMusicForBoss(arrivalRoom);
+run(0.6);
+music.play(1); // the player died and started again
+run(0.1);
+check('a run restarted mid-fade opens at full level',
+  near(musicGainNode().gain.value, owed, 1e-6), String(musicGainNode().gain.value));
+
+// ...and switching the handover OFF is the old behaviour exactly: no room, no
+// silence, no latch, and the switch goes back to waiting for a bar line with
+// the run's music playing straight through the entrance.
+reset();
+music.play(1);
+run(0.05);
+check('a disabled handover does nothing at all',
+  music.fadeMusicForBoss({ ...arrivalRoom, enabled: false }) === false);
+run(BAR / 3);
+check('...the score is untouched', near(musicGainNode().gain.value, owed, 1e-6));
+const beforeQuantised = loops().length;
+music.startBossMusic();
+check('...and the switch waits for a bar again', loops().length === beforeQuantised);
+run(BAR);
+check('...arriving on the bar line', playing() === 'boss0', String(playing()));
+music.endBossMusic();
+
 section('The bar grid measures the files, and says which one is wrong');
 const report = Object.fromEntries(music.trackReport().map((r) => [r.name, r]));
 check('a four-bar loop measures as four bars', report.boss0?.bars === 4, `${report.boss0?.bars} bars`);

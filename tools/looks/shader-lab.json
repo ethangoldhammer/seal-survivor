@@ -71,14 +71,23 @@
       }
     },
     "enemyShark": {
-      "surface": "noise",
+      "surface": "noise+toon",
+      "layers": {
+        "noise": "shark",
+        "toon": "shark",
+        "biolum": null
+      },
       "assets": {
         "noiseShader": "shark",
-        "toonShade": "shark"
+        "toonShade": "shark",
+        "biolumSkin": null,
+        "csvSkinColumn": null
       },
       "presets": {
         "sealShader": {
           "shark": {
+            "paint": 0,
+            "paintGlow": 0,
             "strength": 0.83,
             "size": 0.04,
             "contrast": 3.55,
@@ -97,7 +106,8 @@
             "wetGlow": 1,
             "wetTint": 0.5,
             "color": 0,
-            "wetColor": 14676735
+            "wetColor": 14676735,
+            "baseColor": 16777215
           }
         },
         "toonShade": {
@@ -282,14 +292,14 @@
       "presets": {
         "sealShader": {
           "bossHammerhead": {
-            "strength": 1.4,
-            "size": 0.72,
-            "contrast": 4,
-            "wet": 1.6,
-            "wetGloss": 1.3,
+            "strength": 1.32,
+            "size": 0.91,
+            "contrast": 3.55,
+            "wet": 2,
+            "wetGloss": 1.25,
             "wetSteps": 2,
             "wetSoft": 0.5,
-            "wetTight": 24,
+            "wetTight": 33,
             "wetEdge": 0.15,
             "wetRim": 0.9,
             "wetRimPower": 3.4,
@@ -311,7 +321,7 @@
             "low": 0,
             "high": 1,
             "soft": 0,
-            "range": 2.4
+            "range": 1
           }
         }
       }
@@ -674,132 +684,446 @@
           }
         }
       }
+    },
+    "orcaFriendBull": {
+      "surface": "noise",
+      "assets": {
+        "noiseShader": "orcaFriendBull",
+        "toonShade": "orcaFriendBull"
+      },
+      "presets": {
+        "sealShader": {
+          "orcaFriendBull": {
+            "strength": 1.08,
+            "size": 1.41,
+            "contrast": 4,
+            "wet": 1.9,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735
+          }
+        },
+        "toonShade": {
+          "orcaFriendBull": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        }
+      }
+    },
+    "enemyBarracuda": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "barracuda"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "barracuda",
+        "csvSkinColumn": "barracuda"
+      },
+      "presets": {
+        "biolumSkin": {
+          "barracuda": {
+            "pigment": 0.88,
+            "pigmentGlow": 0,
+            "scale": 0.04,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.28,
+            "pattern": "flow",
+            "colorA": 16777215,
+            "colorB": 0,
+            "colorC": 9737364,
+            "shellColor": 1330796
+          }
+        }
+      }
+    },
+    "enemySquid": {
+      "surface": "biolum",
+      "assets": {
+        "biolumSkin": "squidGlow",
+        "csvSkinColumn": "squidGlow"
+      },
+      "presets": {
+        "biolumSkin": {
+          "squidGlow": {
+            "pigment": 1,
+            "scale": 0.13,
+            "contrast": 3.4,
+            "coverage": 0.63,
+            "strength": 0.46,
+            "flow": 0,
+            "pattern": "speckle",
+            "colorA": 3866592,
+            "colorB": 16734056,
+            "colorC": 14221302,
+            "shellColor": 16711680
+          }
+        }
+      }
+    },
+    "enemyPuffer": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "puffer"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "puffer",
+        "csvSkinColumn": "puffer"
+      },
+      "presets": {
+        "biolumSkin": {
+          "puffer": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.53,
+            "contrast": 3.1,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.98,
+            "pattern": "blotches",
+            "colorA": 5182704,
+            "colorB": 8072703,
+            "colorC": 16765286,
+            "shellColor": 16777215
+          }
+        }
+      }
+    },
+    "eelCompanion": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "eelCompanion"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "eelCompanion",
+        "csvSkinColumn": "eelCompanion"
+      },
+      "presets": {
+        "biolumSkin": {
+          "eelCompanion": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.53,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 0.3,
+            "pattern": "blotches",
+            "colorA": 58879,
+            "colorB": 1171306,
+            "colorC": 16765286,
+            "shellColor": 1811200
+          }
+        }
+      }
+    },
+    "whale": {
+      "surface": "toon+biolum",
+      "layers": {
+        "noise": null,
+        "toon": "whale",
+        "biolum": "whale"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "whale",
+        "biolumSkin": "whale",
+        "csvSkinColumn": "whale"
+      },
+      "presets": {
+        "toonShade": {
+          "whale": {
+            "strength": 1,
+            "steps": 4,
+            "gamma": 1.75,
+            "low": 0.17,
+            "high": 0.99,
+            "soft": 0,
+            "range": 1.6
+          }
+        },
+        "biolumSkin": {
+          "whale": {
+            "pigment": 0.08,
+            "pigmentGlow": 0,
+            "scale": 0.05,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 0.88,
+            "pattern": "veins",
+            "colorA": 0,
+            "colorB": 4013373,
+            "colorC": 9737364,
+            "shellColor": 16734750
+          }
+        }
+      }
+    },
+    "fisherman": {
+      "surface": "toon",
+      "layers": {
+        "noise": null,
+        "toon": "fisherman",
+        "biolum": null
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "fisherman",
+        "biolumSkin": null,
+        "csvSkinColumn": null
+      },
+      "presets": {
+        "toonShade": {
+          "fisherman": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1.8
+          }
+        }
+      }
+    },
+    "enemyWalkingCrab": {
+      "surface": "noise+toon+biolum",
+      "layers": {
+        "noise": "walkingCrab",
+        "toon": "walkingCrab",
+        "biolum": "carapace"
+      },
+      "assets": {
+        "noiseShader": "walkingCrab",
+        "toonShade": "walkingCrab",
+        "biolumSkin": "carapace",
+        "csvSkinColumn": "carapace"
+      },
+      "presets": {
+        "sealShader": {
+          "walkingCrab": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.75,
+            "wetGloss": 0.6,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 22,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215
+          }
+        },
+        "toonShade": {
+          "walkingCrab": {
+            "strength": 1,
+            "steps": 2,
+            "gamma": 2.4,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "carapace": {
+            "pigment": 0.48,
+            "pigmentGlow": 0,
+            "scale": 0.3,
+            "contrast": 1.9,
+            "coverage": 0.34,
+            "strength": 0.55,
+            "flow": 0,
+            "pattern": "marble",
+            "colorA": 4863268,
+            "colorB": 8014380,
+            "colorC": 11045475,
+            "shellColor": 11358254
+          }
+        }
+      }
+    },
+    "enemyTuna": {
+      "surface": "noise+toon+biolum",
+      "layers": {
+        "noise": "tuna",
+        "toon": "tuna",
+        "biolum": "tuna"
+      },
+      "assets": {
+        "noiseShader": "tuna",
+        "toonShade": "tuna",
+        "biolumSkin": "tuna",
+        "csvSkinColumn": "tuna"
+      },
+      "presets": {
+        "sealShader": {
+          "tuna": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215
+          }
+        },
+        "toonShade": {
+          "tuna": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "tuna": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.05,
+            "contrast": 0.75,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.18,
+            "pattern": "pulse",
+            "colorA": 16777215,
+            "colorB": 5066061,
+            "colorC": 7237230,
+            "shellColor": 1118738
+          }
+        }
+      }
     }
   },
   "config": {
     "toonShade": {
-      "shark": {
-        "range": 0.95
-      },
-      "bossHammerhead": {
-        "steps": 2,
-        "gamma": 3,
-        "low": 0,
-        "soft": 0,
-        "range": 2.4
-      },
-      "orcaFriendBull": {
-        "steps": 6
-      },
-      "bossAnglerfish": {
-        "range": 2.6,
+      "whale": {
+        "gamma": 1.75,
         "strength": 1,
-        "steps": 4,
-        "low": 0.06,
-        "gamma": 3,
-        "soft": 0.38
+        "range": 1.6,
+        "soft": 0,
+        "high": 0.99,
+        "low": 0.17,
+        "steps": 4
+      },
+      "fisherman": {
+        "range": 1.8
+      },
+      "walkingCrab": {
+        "steps": 2,
+        "gamma": 2.4
       }
     },
     "sealShader": {
-      "bossHammerhead": {
-        "wet": 1.6,
-        "wetGloss": 1.3,
-        "strength": 1.4,
-        "size": 0.72,
-        "contrast": 4
-      },
-      "mosasaur": {
-        "wet": 1.35,
-        "wetGloss": 0.5,
-        "wetSteps": 4,
-        "wetSoft": 0.62,
-        "wetEdge": 0.59,
-        "wetRim": 0.7,
-        "wetRimPower": 2.2,
-        "wetPatch": 0.7,
-        "wetCaustics": 0.5,
-        "wetCausticScale": 1.2,
-        "wetGlow": 0.9
-      },
-      "orcaFriendBull": {
-        "strength": 1.26,
-        "size": 2,
-        "wetSoft": 0.46
-      },
-      "belugaDrone": {
-        "strength": 1.08,
-        "size": 0.28
-      },
-      "bossAnglerfish": {
-        "wet": 1.6,
-        "strength": 1,
-        "wetColor": 8047359,
-        "wetTint": 0.55,
-        "wetGlow": 2
+      "walkingCrab": {
+        "wet": 0.75,
+        "wetGloss": 0.6,
+        "wetTight": 22
       }
     },
     "biolumSkin": {
-      "orcaFriendCow": {
-        "colorA": 0,
-        "colorB": 16777215,
-        "colorC": 0,
-        "shellColor": 0,
-        "pattern": "marble",
-        "scale": 0.13,
-        "strength": 0.72,
-        "coverage": 0.2,
-        "flow": 1.22
-      },
-      "orcaFriendCalf": {
-        "colorA": 0,
-        "colorB": 16777215,
-        "colorC": 0,
-        "shellColor": 4013373,
-        "scale": 0.04,
-        "pattern": "net",
-        "flow": 1.54,
-        "strength": 1.9,
-        "contrast": 2.9
-      },
-      "bakalarBoat": {
-        "colorA": 16711718,
-        "pattern": "lattice",
-        "scale": 0.1
-      },
-      "belugaDrone": {
-        "colorC": 7039851,
-        "colorB": 4868682,
-        "scale": 0.23,
-        "flow": 1.66,
-        "pigment": 1
-      },
-      "boat": {
+      "whale": {
         "pattern": "veins",
+        "colorC": 9737364,
+        "colorB": 4013373,
+        "pigment": 0.08,
         "colorA": 0,
-        "colorB": 9408399,
-        "colorC": 0,
-        "shellColor": 11250603,
-        "flow": 1.24
+        "flow": 0.88,
+        "scale": 0.05
       },
-      "clownFish": {
-        "colorA": 0,
+      "fisherman": {
+        "colorA": 16777215,
         "colorB": 16777215,
-        "colorC": 15422242,
-        "shellColor": 16777215,
-        "pattern": "speckle",
-        "scale": 0.23,
-        "contrast": 3.45,
-        "coverage": 0.42,
-        "flow": 1.08
+        "colorC": 2171169,
+        "shellColor": 0,
+        "scale": 0.16,
+        "pattern": "flow",
+        "pigment": 0.3
+      },
+      "carapace": {
+        "pigment": 0.48,
+        "shellColor": 11358254
+      },
+      "tuna": {
+        "colorA": 16777215,
+        "colorB": 5066061,
+        "colorC": 7237230,
+        "shellColor": 1118738,
+        "scale": 0.05,
+        "pattern": "pulse",
+        "flow": 1.18,
+        "contrast": 0.75
       }
     },
     "creatureOutline": {
       "__flat": {
-        "color": 0,
-        "thickness": 0.32,
-        "glow": 5
+        "thickness": 0.29,
+        "color": 16777215,
+        "glow": 2.15
       }
     }
   },
-  "recorded": "enemyClownFish"
+  "recorded": "enemyTuna"
 }

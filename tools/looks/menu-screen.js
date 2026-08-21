@@ -21,7 +21,10 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { CONFIG } from '../../path/src/config.js';
-import { preloadAssets, applyNoiseSettings } from '../../path/src/assets.js';
+import {
+  preloadAssets, applySavedAssetLooks, applyNoiseSettings, applyToonSettings,
+  applyBiolumSkinSettings,
+} from '../../path/src/assets.js';
 import { createWorld } from '../../path/src/world.js';
 import { createPost } from '../../path/src/systems/post.js';
 import { initPlayer, player, resetPlayer, updateAimRig } from '../../path/src/entities/player.js';
@@ -30,6 +33,8 @@ import { createEyeLights, updateEyeLights } from '../../path/src/systems/eyeLigh
 import {
   mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuGrid,
 } from '../../path/src/systems/mainMenu.js';
+import { updateBiolumSkin } from '../../path/src/systems/biolumSkin.js';
+import { initCreatureOutlines } from '../../path/src/systems/outlines.js';
 import { initParticles, updateParticles, updateParticleScale } from '../../path/src/entities/particles.js';
 import { updateBubbles } from '../../path/src/systems/bubbles.js';
 import { bounds } from '../../path/src/arena.js';
@@ -42,13 +47,24 @@ const pressedEl = document.getElementById('pressed');
 
 await preloadAssets();
 // THE SEAL'S OWN SURFACE, at the numbers the game actually runs.
-// attachNoiseShader seeds its uniforms with build-time defaults when the
-// material is made (during the preload above); this is what pushes
-// CONFIG.sealShader — including everything restored from saved tuning — over
-// the top. main.js does it here, at the same point in the same order. Without
-// it this page is judging a different animal: a fine-speckled seal in the run
-// and a blotchy one on the menu.
+//
+// EVERY ONE OF THESE, IN MAIN.JS'S ORDER. Each shader attaches with its own
+// build-time defaults when the material is made (during the preload above),
+// and each of these is what pushes the real CONFIG — including everything
+// restored from saved tuning — over the top. Without them this page is judging
+// a different animal, and it does it silently: the seal renders, it is lit, it
+// is the right shape, and its surface is whatever the constructors happened to
+// seed rather than the one the run wears. `applyNoiseSettings` alone was here
+// for a while, which left the toon terraces and the wet film on their
+// defaults — a flat grey animal on a screen whose whole job is to show the
+// shipped one.
+applySavedAssetLooks();
 applyNoiseSettings();
+applyToonSettings();
+applyBiolumSkinSettings();
+// Hooks spawns, so it has to run before initPlayer builds the body below or
+// the seal comes up with no rim for the bust crop to re-fit.
+initCreatureOutlines();
 // The game's type system, or the labels come up in the browser's default face:
 // `blobButton` in textRoles.js is what styles them, compiled into a stylesheet
 // here exactly as main.js does at boot.
@@ -108,6 +124,10 @@ function tick(now) {
     updateBubbles(dt, player.aimRig, player.velocity, player.mesh.position.y > bounds.surfaceY);
   }
   updateEyeLights(dt, player.aimRig, { lit: 1, charge: 0 });
+  // The self-lighting creatures' own clock, exactly as main.js ticks it. The
+  // seal is not one of them, but the shader it shares with them reads the same
+  // bus — and a page that never advances it is judging a frozen one.
+  updateBiolumSkin(dt);
 
   if (mainMenuActive()) mainMenu()?.update(dt);
 
@@ -149,4 +169,9 @@ window.addEventListener('keydown', (e) => {
 // Handles for poking at the page from a console — and from the agent's
 // javascript_tool, which is the only way to steer a page in a pane that has no
 // cursor to move.
-window.mainMenuLook = { world, post, player, menu: () => mainMenu(), shoot };
+// CONFIG among them, because this is a DESIGN page: every number the Main-menu
+// groups in the tuner drive is re-read by the menu every frame (refreshFilm in
+// systems/hexMenu.js), so setting one here moves the screen immediately and a
+// value can be tried before it is typed into a slider. Writing a uniform
+// directly would not survive a frame, which is the point.
+window.mainMenuLook = { world, post, player, menu: () => mainMenu(), shoot, CONFIG };

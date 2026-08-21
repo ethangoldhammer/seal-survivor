@@ -64,7 +64,12 @@ function sealMaterial(preset = null) {
 // over a stub carrying the chunk names it splices into. If an injection point
 // is ever renamed out from under it, the replace is a silent no-op and the
 // string comes back without the block — which is the whole point of looking.
-const CHUNKS_FRAG = ['#include <common>', '#include <map_fragment>', '#include <dithering_fragment>'].join('\n');
+// <emissivemap_fragment> is in the list because the paint coat scales the
+// baked emissive as well as the colour map — and a chunk missing from this stub
+// is a replace that silently finds nothing, which is exactly the failure the
+// stub exists to catch.
+const CHUNKS_FRAG = ['#include <common>', '#include <map_fragment>',
+  '#include <emissivemap_fragment>', '#include <dithering_fragment>'].join('\n');
 const CHUNKS_VERT = ['#include <common>', '#include <begin_vertex>', '#include <project_vertex>'].join('\n');
 function injected(material) {
   const shader = { uniforms: {}, vertexShader: CHUNKS_VERT, fragmentShader: CHUNKS_FRAG };
@@ -175,6 +180,66 @@ check('a preset can disagree about one wet field alone',
   && partial.uniforms.uWetGloss.value === CONFIG.sealShader.wetGloss,
   `rim ${partial.uniforms.uWetRim.value}, gloss ${partial.uniforms.uWetGloss.value}`);
 delete CONFIG.sealShader.presets.__partialTest;
+
+// ---------------------------------------------------------------------------
+section('THE PAINT COAT — mixing with the photograph, or replacing it');
+
+// `strength` can only pull the colour toward `color` where the noise field is
+// bright, so on a photographed body the photograph survives in every trough no
+// matter how far it goes. `paint` is the separate control that covers the map,
+// and the two failure modes worth holding are both invisible on screen:
+//
+//   IT MUST DEFAULT TO A NO-OP. Every creature wearing this shader today does
+//   so over a base with no `paint` field of its own, and a default above 0
+//   would repaint the whole roster silently.
+//
+//   IT MUST REACH THE EMISSIVE. Four assets ship an emissive sidecar that IS
+//   their colour map with the brights blown out, lit white at
+//   CONFIG.glow.maskIntensity — so covering only diffuseColor paints a hide and
+//   then draws the photograph back on top of it in light. That was the whole of
+//   "the barracuda is stuck with its photo texture", and the paint slider looked
+//   broken rather than incomplete.
+const coat = injected(sealMaterial('__coatTest'));
+CONFIG.sealShader.presets.__coatTest = {};
+applyNoiseSettings();
+check('a preset that says nothing about the coat leaves the map alone',
+  coat.uniforms.uNoisePaint.value === 0,
+  `paint ${coat.uniforms.uNoisePaint.value}`);
+check('...and its glow untouched, which is a multiply by exactly 1',
+  coat.uniforms.uNoisePaintGlow.value === 0
+  && coat.fragmentShader.includes('mix(1.0, uNoisePaintGlow, clamp(uNoisePaint, 0.0, 1.0))'),
+  'the emissive scale is present and scaled by paint');
+
+CONFIG.sealShader.presets.__coatTest = { paint: 1, baseColor: 0x2b6ea8, paintGlow: 0.25 };
+applyNoiseSettings();
+check('a coat reaches the diffuse', coat.uniforms.uNoisePaint.value === 1);
+check('...in the colour asked for, times the asset tint',
+  coat.uniforms.uNoiseBase.value.getHex() === 0x2b6ea8
+  && coat.fragmentShader.includes('uNoiseBase * diffuse'),
+  coat.uniforms.uNoiseBase.value.getHexString());
+check('...and carries how much of the baked emissive survives it',
+  coat.uniforms.uNoisePaintGlow.value === 0.25);
+
+// The coat is painted BEFORE the polarity test, and that ordering is the one
+// thing about it a screenshot cannot check. The test asks whether `color` is
+// darker than the body it is painting on — and the body it is painting on is
+// the coat, not the photograph underneath. Derived from the map instead,
+// covering a pale texture with a dark coat flips the mask and lights the wrong
+// half of the markings.
+const frag = coat.fragmentShader;
+check('the coat is laid down before the polarity is derived',
+  frag.indexOf('uNoiseBase * diffuse') < frag.indexOf('float noisePolarity'),
+  'else a dark coat over a pale map inverts the markings');
+
+// Same `enabled` fold as the mottling and the film: switching the layer off has
+// to give the model its own texture back, or an asset with the noise disabled
+// comes up as a flat untextured shape and reads as a failed download.
+CONFIG.sealShader.presets.__coatTest = { paint: 1, enabled: false };
+applyNoiseSettings();
+check('switching the layer off puts the photograph back',
+  coat.uniforms.uNoisePaint.value === 0);
+delete CONFIG.sealShader.presets.__coatTest;
+applyNoiseSettings();
 
 console.log(failures ? `\n${failures} check(s) failed.` : '\nAll passed.');
 process.exit(failures ? 1 : 0);

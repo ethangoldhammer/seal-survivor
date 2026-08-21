@@ -129,6 +129,15 @@ for (const id of ['barrels', 'spitfish', 'finfish']) {
   // standing in the line — the whole player bar in under two seconds.
   check('...and its per-tick damage is scaled for a beam, not a shot',
     p.damage <= 8, `${p.damage}/tick ≈ ${(p.damage / (CONFIG.beams.tickEvery)).toFixed(0)}/s in the line`);
+
+  // ...AND IT IS THE ONLY PERK THAT GROWS. Everything else the boss does rides
+  // CONFIG.spawn.ramp, so a flat perk is not neutral — it peaks on the second
+  // boss of the run, the earliest one that can roll a perk, and is a rounding
+  // error by the last. The laser was the worst of them: a flat 5 a tick is
+  // ~42/s in the line, most of a starting bar per burn, on a player with one
+  // or two upgrades. See `damagePerDifficulty` in bossPerkTable.js.
+  check('...and the laser is the perk that waits to be punishing',
+    p.damagePerDifficulty > 0, `${p.damagePerDifficulty ?? 'flat'} per difficulty point`);
 }
 check('turtles knows how many and how far out',
   perkById('turtles')?.count > 0 && perkById('turtles')?.radius > 0);
@@ -348,6 +357,53 @@ for (const id of ['barrels', 'spitfish', 'finfish']) {
   check('...on its own cooldown, not every frame',
     volleys <= seconds / Math.max(0.2, perk.cooldown) + 1.5,
     `${volleys.toFixed(1)} volleys in ${seconds}s at a ${perk.cooldown}s cooldown`);
+}
+
+// ===========================================================================
+section('WHAT A PERK IS WORTH IN THIS FIGHT, NOT IN THE FILE');
+// ===========================================================================
+// The row's `damage` is where the curve STARTS; `damagePerDifficulty` is how it
+// grows. Resolved once, at attach — so this measures the number the fight
+// arrived with, through the same door boss.js uses.
+//
+// MEASURED ON THE EYEBEAM AND ON A FLAT PERK TOGETHER, because the bug this
+// guards against has two halves: a ramp that never reaches the perk that
+// declares one, and a ramp quietly applied to the ten rows that do not.
+{
+  const beamRow = perkById('eyebeam');
+  const flatRow = perkById('spitfish');
+  // The run's difficulty at the levels the bosses actually land on — every
+  // fifth level, timed by tools/xp-economy-test.mjs's ladder.
+  const AT = [
+    ['boss 2 (~2.6m)', 2.6 * 60 * CONFIG.spawn.difficultyPerSecond],
+    ['boss 4 (~6.3m)', 6.3 * 60 * CONFIG.spawn.difficultyPerSecond],
+    ['boss 5 (~9.0m)', 9.0 * 60 * CONFIG.spawn.difficultyPerSecond],
+  ];
+  const worth = (row, difficulty) => {
+    fresh();
+    const b = put('bossShark', { boss: true });
+    attachBossPerk(scene, b, row, difficulty);
+    return activeBossPerk()?.damage ?? 0;
+  };
+
+  const beam = AT.map(([, d]) => worth(beamRow, d));
+  check('the laser opens well under what it used to cost a tick',
+    beam[0] < 5 * 0.7, `${beam[0].toFixed(2)}/tick at the earliest boss that can roll it, against the old flat 5`);
+  check('...and climbs to it rather than starting there',
+    beam[0] < beam[1] && beam[1] < beam[2],
+    AT.map(([label], i) => `${label} ${beam[i].toFixed(2)}`).join(', '));
+  check('...reaching the old number by the late fights',
+    beam[2] >= 5, `${beam[2].toFixed(2)}/tick`);
+
+  const flat = AT.map(([, d]) => worth(flatRow, d));
+  check('a perk with no ramp column is the row, exactly, at every difficulty',
+    flat.every((v) => v === flatRow.damage), `${flat.join(', ')} against a row of ${flatRow.damage}`);
+
+  // The default matters: every harness in tools/ attaches without a difficulty,
+  // and a curve they cannot see is one they cannot hold to a number.
+  check('...and an attach with no difficulty is the row as printed',
+    worth(beamRow, undefined) === beamRow.damage,
+    `${worth(beamRow, undefined)} against a row of ${beamRow.damage}`);
 }
 
 // Two origins means two places the shots come FROM, which is the whole

@@ -33,9 +33,16 @@
  * The causes, in the order the quip editor offers them: the animals first,
  * biggest threat down, then the three deaths that aren't animals.
  *
- * `sources` are the exact strings that reach recordPlayerDamage. `label` is
- * for the picker and for warnings — never shown to a player, who reads the
- * quip itself.
+ * `sources` are the exact strings that reach recordPlayerDamage.
+ *
+ * `label` is the cause AS A NOUN PHRASE WITH ITS ARTICLE — "a shark", "the
+ * orca", "running out of air" — which is what makes it droppable into the
+ * middle of a sentence somebody wrote. It heads the quip editor's picker, it
+ * names a cause in a warning, and it is what the `{cause}` chip becomes: the
+ * hello at the top of a run can comment on the death that ended the last one
+ * (greetings.csv, systems/greeting.js), and that line is spoken to a player.
+ * So these are written to be READ mid-sentence and lowercase — see the note in
+ * greetingTable.js about why nothing capitalises them on the way out.
  *
  * `threat` IS shown to a player: it heads the row on the score screen's
  * Threats tab, which is a list of what took the most health off you. It exists

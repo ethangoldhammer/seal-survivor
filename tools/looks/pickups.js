@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// THE THREE PICKUPS — LOOK DEV
+// THE COMPOSED PICKUPS — LOOK DEV
 //
 //   npm run looks:pickups
 //
@@ -18,6 +18,14 @@
 //                       waves of pink and purple out on the beat.
 //   THE CORAL           grown geometry, no two alike, with a bioluminescent
 //                       pulse travelling out along the branches.
+//   THE LEVEL BLOB      a molten lump that changes colour on every quarter
+//                       note. Two things are being looked at and they are not
+//                       the same question: whether it reads as HOT (a white
+//                       core inside a coloured rim, rather than a flat ball)
+//                       and whether every colour it lands on is still bright.
+//                       The second is measured, because a hue that quietly
+//                       drops under the bloom threshold is a beat on which the
+//                       pickup looks switched off.
 //
 // WHY A PAGE AND NOT A NODE HARNESS. All three carry injected GLSL — the shell
 // film, the goo displacement, the coral's tip wave — and a GLSL error renders
@@ -37,6 +45,7 @@ import { createVisual, applyBubbleShellSettings } from '../../path/src/assets.js
 import { initBubble, updateBubblePhysics, bubbleRadius } from '../../path/src/systems/oxygenBubble.js';
 import { createAttractiveClam, updateAttractiveClam } from '../../path/src/systems/attractiveClam.js';
 import { createCoralOrb, updateCoralOrb } from '../../path/src/systems/coralOrb.js';
+import { createLevelOrb, updateLevelOrb, setLevelOrbScale, nextBlobHue } from '../../path/src/systems/levelOrb.js';
 import { updateBeatSync } from '../../path/src/systems/beatSync.js';
 
 const logEl = document.getElementById('log');
@@ -186,28 +195,78 @@ function grab() {
   return pctx.getImageData(0, 0, probe.width, probe.height).data;
 }
 
+// The same grab, through the SHIPPING post chain instead of raw. The knee is
+// the whole reason this exists: a self-lit object drives every channel past 1
+// and an 8-bit read of a raw render truncates them independently, so a hot
+// orange and a hot blue both come back as flat clipped shapes with no gradient
+// left in them. The composite's soft shoulder is what puts that gradient back,
+// scaling all three channels by ONE factor so the hue survives — so it is the
+// only render that resembles what a player sees. See the shoulder in
+// systems/post.js.
+function grabLit() {
+  draw();
+  pctx.clearRect(0, 0, probe.width, probe.height);
+  pctx.drawImage(gl.domElement, 0, 0);
+  return pctx.getImageData(0, 0, probe.width, probe.height).data;
+}
+
+const REC709 = (r, g, b) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
 // A DIFFERENCE of two renders, with the subject hidden in the second. Any
 // threshold on the image itself measures the water and the body behind it
 // instead; differencing leaves exactly the pixels the subject is responsible
-// for. Returns { pixels, peak } as fractions of the panel and of 255.
-function footprint(obj) {
+// for.
+//
+// Returns, all as fractions of the panel and of 255:
+//   pixels   how much of the panel it covers
+//   peak     its brightest channel anywhere
+//   mean     average max-channel over its own pixels
+//   meanLum  average Rec.709 luminance over its own pixels
+//   ramp     the 90th percentile of that luminance over the 10th — "is there a
+//            GRADIENT here, or is this a flat disc". A separate question from
+//            every number above it, and one none of them can answer: `peak`
+//            saturates on anything meant to bloom, and a mean is the same for a
+//            smooth ramp and for a uniform fill of its own average.
+//
+// `composited` measures through the post chain rather than raw — see grabLit.
+// The MASK is always taken raw, because bloom spreads a halo well past the
+// object and a footprint measured through it is the size of the glow.
+function footprint(obj, { composited = false } = {}) {
   const lit = grab();
   const was = obj.visible;
   obj.visible = false;
   const without = grab();
   obj.visible = was;
+  const read = composited ? grabLit() : lit;
   let n = 0;
   let peak = 0;
+  let sum = 0;
+  let sumLum = 0;
+  const lums = [];
   for (let i = 0; i < lit.length; i += 4) {
     const d = Math.max(
       Math.abs(lit[i] - without[i]),
       Math.abs(lit[i + 1] - without[i + 1]),
       Math.abs(lit[i + 2] - without[i + 2]),
     );
-    if (d > 6) n++;
-    peak = Math.max(peak, lit[i], lit[i + 1], lit[i + 2]);
+    if (d > 6) {
+      n++;
+      sum += Math.max(read[i], read[i + 1], read[i + 2]);
+      const L = REC709(read[i], read[i + 1], read[i + 2]);
+      sumLum += L;
+      lums.push(L);
+    }
+    peak = Math.max(peak, read[i], read[i + 1], read[i + 2]);
   }
-  return { pixels: n / (probe.width * probe.height), peak: peak / 255 };
+  lums.sort((a, b) => a - b);
+  const at = (q) => (lums.length ? lums[Math.min(lums.length - 1, Math.floor(q * lums.length))] : 0);
+  return {
+    pixels: n / (probe.width * probe.height),
+    peak: peak / 255,
+    mean: n ? sum / n / 255 : 0,
+    meanLum: n ? sumLum / n : 0,
+    ramp: at(0.9) / Math.max(1e-4, at(0.1)),
+  };
 }
 
 // Brightness sampled along one horizontal line through the middle, as
@@ -409,6 +468,89 @@ section('The coral, lit <span>— one individual through a bar of the pulse. The
     present(`pulse ${phase.toFixed(1)}`, `wave ${(phase * 100).toFixed(0)}% of the way round the bar`);
   }
   scene.remove(coral);
+}
+
+// ===========================================================================
+// THE LEVEL BLOB
+// ===========================================================================
+section('The level blob <span>— grown like the coral, and lit from the inside. Six seeds; the claim is that it reads as a molten lump rather than as a fourth tinted ball.</span>', 6);
+{
+  const blobs = [];
+  for (const seed of [1, 7, 13, 42, 99, 404]) {
+    const blob = createLevelOrb(mulberry32(seed));
+    // Its own tumble is rolled per individual and would make the six panels
+    // incomparable — this row is about the SHAPES, so they are all faced the
+    // same way. assets.csv sizes it at 2.2 in the game.
+    blob.rotation.set(0, 0, 0);
+    setLevelOrbScale(blob, 2.2);
+    scene.add(blob);
+    // One frame, so the colour uniforms are the ones the shader will read. NOT
+    // a run of them: updateLevelOrb turns the body, and this row is the shape.
+    updateBeatSync(DT);
+    updateLevelOrb(blob, 0, 0);
+    blob.rotation.set(0, 0, 0);
+    const fp = footprint(blob, { composited: true });
+    blobs.push({ seed, pixels: fp.pixels, peak: fp.peak, ramp: fp.ramp });
+    present(`seed ${seed}`, `${(fp.pixels * 100).toFixed(1)}% of the panel · bright end ${fp.ramp.toFixed(1)}x the dark end`);
+    scene.remove(blob);
+  }
+  const cover = blobs.map((b) => b.pixels);
+  const spread = Math.max(...cover) / Math.max(1e-6, Math.min(...cover));
+  check('every blob is the same size on screen', spread < 1.5,
+    `widest covers ${spread.toFixed(2)}x the narrowest`);
+  const dimmest = Math.min(...blobs.map((b) => b.peak));
+  check('...and every one of them has a white-hot core',
+    dimmest > 0.95, `dimmest peak ${dimmest.toFixed(2)}`);
+  // A GRADIENT AND NOT A DISC. The core clips to white by design; if the whole
+  // body clips with it the pickup is a flat lozenge, and every other check in
+  // this block still passes — coverage, size and peak are all identical for a
+  // hot ball and for a solid one. The ramp is the only thing that separates
+  // them, and it has to be measured through the composite: raw, every channel
+  // is already truncated and there is no ramp left to find.
+  const flattest = Math.min(...blobs.map((b) => b.ramp));
+  check('...but the body is a gradient, not a flat disc', flattest > 1.5,
+    `flattest runs ${flattest.toFixed(1)}x from its dark end to its bright one`);
+}
+
+section('The level blob, on the note <span>— six consecutive colours off the real roll. THE POINT OF THE ROW: none of them may be visibly darker than the others, which is what the lum-mode normalisation buys and what a plain random hue does not.</span>', 6);
+{
+  const blob = createLevelOrb(mulberry32(13));
+  blob.rotation.set(0, 0, 0);
+  setLevelOrbScale(blob, 2.2);
+  scene.add(blob);
+  const u = blob.material.userData.__levelBlob;
+  const peaks = [];
+  let hue = 0.05;
+  for (let n = 0; n < 6; n++) {
+    // The hue is driven straight in rather than stepped through six notes: a
+    // real wait would also turn the body and burn a second and a half of page
+    // time per panel, and what this row is about is the COLOUR.
+    hue = nextBlobHue(hue, mulberry32(n * 31 + 3), CONFIG.levelPickup.blob.hueStep);
+    blob.userData.levelOrb.hue = hue;
+    blob.userData.levelOrb.cycle = 0.99;
+    blob.userData.levelOrb.lastCycle = 1;   // forces the note edge on the next tick
+    updateLevelOrb(blob, 0, 0);
+    // ...and the crossfade taken to the end, so the panel is the colour it
+    // ARRIVED at rather than a blend halfway there.
+    u.uLevelMix.value = 1;
+    // Through the composite, because the knee is what a player sees — and
+    // because the raw render answers this question wrongly in a way that looks
+    // right: a saturated blue normalised to a LUMINANCE target has an enormous
+    // blue channel and two small ones, so raw it truncates to something much
+    // darker than the orange beside it and this row would fail on colours that
+    // are in fact identical on screen.
+    const fp = footprint(blob, { composited: true });
+    peaks.push(fp.meanLum);
+    const c = u.uLevelB.value;
+    present(`note ${n + 1}`, `hue ${hue.toFixed(2)} · rgb ${c.r.toFixed(2)} ${c.g.toFixed(2)} ${c.b.toFixed(2)}`);
+  }
+  // On the mean LUMINANCE, not the peak: every one of these clips white in the
+  // core, so a peak comparison reports 1.00x whatever the hues are doing and
+  // would pass over exactly the failure this row exists to catch.
+  const spread = Math.max(...peaks) / Math.max(1e-6, Math.min(...peaks));
+  check('no note is visibly darker than the others', spread < 1.2,
+    `brightest averages ${spread.toFixed(2)}x the dimmest`);
+  scene.remove(blob);
 }
 
 // ===========================================================================

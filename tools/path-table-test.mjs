@@ -257,6 +257,82 @@ section('MODEL SIZES');
   check('a misspelled preset warns and changes nothing', !skins.has('enemyTrout') && skinWarnings === 1,
     `${skinWarnings} warning(s)`);
 
+  // THE SURFACE COLUMN, which holds a `+`-joined list of layers.
+  //
+  // Guarded because a cell here is the WHOLE answer for an asset: a layer the
+  // cell does not name has to be switched off, or moving a creature from
+  // mottling to a pattern leaves the mottling attached underneath and nothing
+  // says so. And a cell with one bad layer in it must change NOTHING — writing
+  // the good halves would leave the creature in a state no cell describes.
+  const read = (surface, skin = '') => {
+    const got = { noise: 'unset', toon: 'unset', skin: 'unset' };
+    let warns = 0;
+    applyAssetTableRow('enemyShark', { surface, skin }, {
+      setSize: () => {},
+      setNoise: (k, v) => { got.noise = v; },
+      setToon: (k, v) => { got.toon = v; },
+      setSkin: (k, v) => { got.skin = v; },
+      knownKey: () => true,
+      knownSkin: (n) => n === 'hide',
+      warn: () => { warns++; },
+    });
+    return { ...got, warns };
+  };
+
+  const one = read('noise:shark');
+  check('a single layer is attached and the others are cleared',
+    one.noise === 'shark' && one.toon === null && one.skin === null,
+    JSON.stringify(one));
+
+  const both = read('noise:shark+toon:shark');
+  check('a "+" cell attaches every layer it names',
+    both.noise === 'shark' && both.toon === 'shark' && both.skin === null,
+    JSON.stringify(both));
+
+  const three = read('noise:shark+toon:shark+biolum:hide');
+  check('...including all three at once, which used to be unrepresentable',
+    three.noise === 'shark' && three.toon === 'shark' && three.skin === 'hide',
+    JSON.stringify(three));
+
+  const bare = read('toon');
+  check('a layer with no preset attaches against the base numbers',
+    bare.toon === true && bare.noise === null, JSON.stringify(bare));
+
+  const tex = read('texture');
+  check('"texture" clears all three', tex.noise === null && tex.toon === null && tex.skin === null,
+    JSON.stringify(tex));
+
+  const clash = read('texture+noise:shark');
+  check('"texture" beside a layer contradicts it, so nothing is written',
+    clash.noise === 'unset' && clash.toon === 'unset' && clash.warns === 1,
+    JSON.stringify(clash));
+
+  const junk = read('noise:shark+sparkle');
+  check('one bad layer voids the WHOLE cell rather than half-applying it',
+    junk.noise === 'unset' && junk.toon === 'unset' && junk.warns === 1,
+    JSON.stringify(junk));
+
+  const dupe = read('noise:shark+noise:megalodon');
+  check('a layer named twice is refused, not last-one-wins',
+    dupe.noise === 'unset' && dupe.warns === 1, JSON.stringify(dupe));
+
+  const blank = read('');
+  check('a blank cell still means "keep whatever the code declares"',
+    blank.noise === 'unset' && blank.toon === 'unset' && blank.skin === 'unset',
+    JSON.stringify(blank));
+
+  // The `skin` cell is where a biolum layer with no preset of its own reads its
+  // name from, and the conflict warning has to know a `+` cell can carry biolum
+  // anywhere in it — not only at the front, which is what a startsWith test saw.
+  const fromSkin = read('noise:shark+biolum', 'hide');
+  check('a bare biolum layer takes its preset from the skin cell, with no conflict warning',
+    fromSkin.skin === 'hide' && fromSkin.noise === 'shark' && fromSkin.warns === 0,
+    JSON.stringify(fromSkin));
+
+  const misspelt = read('biolum:hyde');
+  check('a misspelled pattern warns and leaves the asset as it was',
+    misspelt.skin === 'unset' && misspelt.warns === 1, JSON.stringify(misspelt));
+
   // ...and the panel can no longer put a stale drag back over the file.
   const snap = { enemyWalkingCrab: { sizeMultiplier: 10.46, glow: 2 }, enemyShark: { sizeMultiplier: 9 } };
   const cleaned = withoutAssetTableFields(snap);

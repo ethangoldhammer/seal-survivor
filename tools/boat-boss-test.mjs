@@ -23,6 +23,23 @@ import { updateBoss, updateBossAbilities, resetBoss, bossState, forceBoss } from
 import { boatState } from '../path/src/systems/bossBoat.js';
 import { bounds } from '../path/src/arena.js';
 
+// SEEDED, because most of what is checked below is a dice roll dressed as a
+// bombardment: which pattern comes up, where in the arena a barrel wall leaves
+// its gap, and whether any of it happens to land on a player who is standing
+// still. The last of those is a knife edge — one or two hits over twenty-four
+// seconds — so an unseeded run genuinely does come back with zero every so
+// often, and a check that fails one run in twenty is worse than no check at
+// all in a suite this file is one `&&` of. Fixed seed, same dice every time;
+// change it only with the result in front of you.
+function seeded(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+Math.random = seeded(0xB0A7);
+
 const scene = new THREE.Scene();
 const DT = 1/60;
 let fail = 0;
@@ -35,10 +52,20 @@ check('the boat spawns', !!boss, boss?.type);
 check('...and the boat system picked it up', boatState.boat === boss);
 check('...and it rolled a perk on top', bossState.perk?.id === 'lunge', bossState.perk?.id);
 
-// through the entrance
-let n = 0;
-while (bossState.arriving && n++ < 1000) updateBoss(DT, gs, scene);
+// Through the entrance — BOTH beats of it. The boat is placed past the edge of
+// the picture like every other spawn and sails in behind the rock face (see THE
+// ENTRANCE in entities/enemies.js), and the ceremony only starts once it is
+// clear of the wall. Nothing moves creatures but updateEnemies, so a loop that
+// ticks updateBoss alone sits out the approach entirely and then measures a
+// bombardment that spends its first four seconds arriving.
 const pp = { x: 10, y: bounds.bottom + 8, z: 0 };
+let n = 0;
+while ((bossState.approaching || bossState.arriving) && n++ < 2000) {
+  updateEnemies(DT, scene, pp, () => {}, () => {});
+  updateBoss(DT, gs, scene);
+}
+check('...and it sailed in and finished its entrance',
+  !bossState.approaching && !bossState.arriving, `${(n * DT).toFixed(2)}s`);
 let hits = 0;
 const hooks = { onPlayerHit: () => { hits++; } };
 

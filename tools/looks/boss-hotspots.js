@@ -36,9 +36,10 @@ import {
 import { spawnNamed, resetEnemies } from '../../path/src/entities/enemies.js';
 import { stateForSpeed } from '../../path/src/systems/animation.js';
 import { tickHitShapes, hitShapeSpheres } from '../../path/src/systems/hitShape.js';
+import { updateBeatSync, syncBpm } from '../../path/src/systems/beatSync.js';
 import {
   initBossHotSpots, attachHotSpots, updateBossHotSpots, hotSpotDamage,
-  hotSpotsOf, resetBossHotSpots, releaseHotSpots,
+  hotSpotsOf, resetBossHotSpots, releaseHotSpots, setHotSpotLook,
 } from '../../path/src/systems/bossHotSpots.js';
 
 const logEl = document.getElementById('log');
@@ -199,6 +200,12 @@ function newBoss(heading = 0) {
 function run(frames, cam) {
   for (let i = 0; i < frames; i++) {
     tickHitShapes();
+    // THE MUSICAL CLOCK, or the throb is frozen at phase 0 in every panel. With
+    // no audio context here beatPhase() returns a flat 0 and updateBeatSync
+    // free-runs the transport off CONFIG.music.bpm instead — which is the same
+    // grid the game animates on (it is NOT the 2.265s audio bar grid, and the
+    // two are about 1% apart on purpose; see systems/music.js).
+    updateBeatSync(DT);
     updateBossHotSpots(DT, DT);
     updateParticles(DT);
     post.resize();
@@ -262,7 +269,7 @@ section('One spot <span>— whole, damaged, struck</span>', 3);
 // ---------------------------------------------------------------------------
 {
   const heats = [
-    ['Whole', 0, 'litColor, breathing slowly. Nothing has hit it yet.'],
+    ['Whole', 0, 'The base colour, breathing on the half bar. White by default — the neutral anything tinting it lands on cleanly (setHotSpotLook).'],
     ['Half eaten', 0.5, 'Drifting to hotColor, pulsing faster and chewed deeper at the edge. This IS the warning that it is nearly done — there is no bar.'],
     ['About to go', 0.9, 'Nearly the full shift. The next few pellets burst it.'],
   ];
@@ -295,6 +302,32 @@ section('The hit <span>— does the flash win over a spot that is already warm?<
     // frame it lands on is the one the player's eye is caught by.
     run(2, detailCam);
     present(title, `flashColor over ${Math.round(heat * 100)}% heat. If the three read alike, the flash is not winning and it needs the swell or the lift, not a redder red.`, heat === 0.5);
+  }
+}
+
+// ---------------------------------------------------------------------------
+section('The throb <span>— one cycle per half bar, sampled across it</span>', 4);
+// ---------------------------------------------------------------------------
+// Four frames down one cycle of the pulse, so what the beat lock actually buys
+// is visible as a change in BRIGHTNESS rather than having to be taken on trust.
+// The reach does not move between these panels and that is the point: pulsing
+// the radius would swing the drawn boundary either side of the crit's number
+// twice a bar.
+{
+  const beatSeconds = 60 / Math.max(1, syncBpm());
+  const cycle = beatSeconds * 2; // '1/2' is two beats
+  const quarter = Math.max(1, Math.round((cycle / 4) / DT));
+  const e = newBoss();
+  const spot = hotSpotsOf(e).spots[0];
+  focus(detailCam, spot);
+  for (const [title, note] of [
+    ['Throb 0/4', 'The start of the cycle.'],
+    ['Throb 1/4', 'Peak. The ring is the part that moves — it is already an order of magnitude over the bloom threshold, so the halo swells with it.'],
+    ['Throb 2/4', 'Back through the middle.'],
+    ['Throb 3/4', 'Trough. Never dark: pulseDepth moves the brightness around 1, it does not switch the spot off.'],
+  ]) {
+    run(quarter, detailCam);
+    present(title, `${note} At ${Math.round(syncBpm())}bpm one cycle is ${cycle.toFixed(2)}s.`, title === 'Throb 1/4');
   }
 }
 
@@ -334,6 +367,24 @@ section('The rupture at fight scale <span>— the only frame that decides its si
 }
 
 // ---------------------------------------------------------------------------
+section('Tinted <span>— the base is white so anything can drive it</span>', 3);
+// ---------------------------------------------------------------------------
+{
+  for (const [title, color, note] of [
+    ['Base (white)', null, 'No override. The default every boss wears until something decides otherwise.'],
+    ['Perk tint', 0xffd83a, 'The electric perk\'s own yellow, as bossSparkColor would resolve it — the spots and the aura would then be the same fight.'],
+    ['Element tint', 0x38b6ff, 'A cold override. Nothing wires this yet; setHotSpotLook is the hook and this is what it buys.'],
+  ]) {
+    const e = newBoss();
+    const spot = hotSpotsOf(e).spots[0];
+    if (color != null) setHotSpotLook(e, { color });
+    focus(detailCam, spot);
+    run(20, detailCam);
+    present(title, note, color === null);
+  }
+}
+
+// ---------------------------------------------------------------------------
 section('Glow <span>— a ladder, because bloom thresholds luminance</span>', 4);
 // ---------------------------------------------------------------------------
 {
@@ -344,7 +395,7 @@ section('Glow <span>— a ladder, because bloom thresholds luminance</span>', 4)
     focus(detailCam, spot);
     run(20, detailCam);
     present(`glow ${g}`, g === 2.6
-      ? 'Crosses the bloom threshold and holds an edge. Green is most of luminance, so this blooms where a cold blue at the same number would not — and the halo past the silhouette is the BLOOM, which is the honest way to get one: bright skin throws light.'
+      ? 'Crosses the bloom threshold and holds an edge. The pass thresholds LUMINANCE, so a white base is the brightest a colour can be at a given value — any tint an override applies can only cost it headroom. The halo past the silhouette is the BLOOM, which is the honest way to get one: bright skin throws light.'
       : (g < 2.6 ? 'Under the threshold in the water it sits in — a green patch rather than a light.'
         : 'Saturated to white with the bloom welded across it; the spot stops having a boundary.'),
       g === 2.6);

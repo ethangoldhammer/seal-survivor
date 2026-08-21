@@ -9,7 +9,7 @@
 // suspends requestAnimationFrame, so the loop is frozen there and the seal
 // never leaves the water at all.
 //
-// Six things worth failing over:
+// Seven things worth failing over:
 //
 //   FILES WIN   that weapons.csv is what CONFIG.airborne actually holds, and
 //               that none of it leaks into a saved tuning snapshot. These were
@@ -38,6 +38,13 @@
 //               earned it peaked; reading the live ramp there would refuse to
 //               pay for a jump spent at the apex, which is the single most
 //               expensive thing in the mechanic.
+//
+//   THE BREATH  that air time is also AIR: the tank refills only above the
+//               line, at the rate weapons.csv states, and a run opens on a full
+//               one. The rate is the exchange rate of the whole dive — how many
+//               seconds under the water one second up here buys — and it lived
+//               in a snapshot for long enough that config.js disagreed with the
+//               shipped game by 35%.
 //
 //   THE TRAIL   that the ribbons start on the breach, stop recording at
 //               re-entry, dissolve, and DON'T stripe across the arena from the
@@ -310,6 +317,75 @@ section('THE BANK — the payout survives the descent');
     `below minRamp ${A.slam.minRamp}`);
   check('...and just over the line pays something',
     slamFor({ airPeak: A.slam.minRamp * 1.01 }, 10) !== null);
+}
+
+// ---------------------------------------------------------------------------
+section('THE BREATH — air refills the tank, and a run opens on a full one');
+{
+  const O = CONFIG.oxygen;
+  // Same file-wins check as the airborne rows above, for the one oxygen number
+  // that describes the breach rather than the bubble. It was a slider until
+  // the refill was retuned, and the slider is why config.js said 26 while the
+  // game ran on the 35 in imported-tuning.json — a value nobody could reach
+  // from the file that appears to hold it.
+  const csv = readFileSync(new URL('../path/src/weapons.csv', import.meta.url), 'utf8');
+  const row = csv.split('\n').find((l) => l.startsWith('oxygen.refillRateSurface,'));
+  check('weapons.csv owns the surface refill rate', !!row,
+    row ? `row value ${row.split(',')[1]}` : 'no row — a snapshot can shadow it again');
+  check('...and the row is what CONFIG holds',
+    !!row && near(O.refillRateSurface, Number(row.split(',')[1]), 1e-9),
+    `CONFIG ${O.refillRateSurface}`);
+  const pills = TUNER_SCHEMA.flatMap((g) => g.items ?? []).map((i) => i.path ?? '');
+  check('...with no slider left to disagree with it',
+    !pills.includes('oxygen.refillRateSurface'));
+
+  // A RUN OPENS ON A FULL TANK. resetPlayer clears the upgrades first, so this
+  // is the BASE cap being filled rather than last run's Deep Lungs stack —
+  // measured off the stat block for that reason, not off CONFIG.
+  resetPlayer();
+  check('a new run starts on a full breath',
+    player.oxygen === player.stats.maxOxygen,
+    `${player.oxygen} / ${player.stats.maxOxygen}`);
+
+  // THE RATE THE PLAYER ACTUALLY GETS, integrated through updatePlayer rather
+  // than read off CONFIG — the refill is one branch of a test on `aboveSurface`
+  // and the interesting failure is the branch never running, which reading the
+  // number back would never catch.
+  const holdAt = (y, seconds) => {
+    const from = player.oxygen;
+    for (let i = 0; i < Math.round(seconds / dt); i++) {
+      player.mesh.position.set(0, y, 0);
+      player.velocity.set(0, 0);
+      updatePlayer(dt, noInput);
+    }
+    return (player.oxygen - from) / seconds;
+  };
+
+  // Emptied by a real dive, not by assignment, and deep enough that the second
+  // of air below cannot clip against the cap — a clamped measurement reads as
+  // a refill rate that is merely "less than configured".
+  const drain = holdAt((bounds.bottom + bounds.surfaceY) / 2, 15);
+  check('the tank empties underwater at the configured rate',
+    near(-drain, O.depleteRate, 1e-6), `${(-drain).toFixed(2)}/s`);
+
+  const gain = holdAt(bounds.surfaceY + 3, 1);
+  check('a breach refills it at the rate the file states',
+    near(gain, O.refillRateSurface, 1e-6), `${gain.toFixed(2)}/s`);
+
+  // THE EXCHANGE RATE, which is the number the mechanic is actually tuned on:
+  // one second of air is worth this many seconds under. Stated rather than
+  // asserted at a threshold — the claim worth failing over is that air buys
+  // MORE than it costs, or surfacing is a losing trade and nobody does it.
+  const exchange = O.refillRateSurface / O.depleteRate;
+  check('a second in the air buys more than a second of dive', exchange > 1,
+    `x${exchange.toFixed(1)} — a full ${O.max}-point breath in ${(O.max / O.refillRateSurface).toFixed(1)}s of air`);
+
+  // And the branch really is the water line: below it nothing comes back, or
+  // the whole mechanic is decoration.
+  player.oxygen = O.max * 0.5;
+  const under = holdAt(bounds.surfaceY - 4, 0.5);
+  check('nothing refills below the line', under < 0, `${under.toFixed(2)}/s`);
+  resetPlayer();
 }
 
 // ---------------------------------------------------------------------------

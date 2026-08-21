@@ -31,7 +31,13 @@ let tailSend = null;
 let tailVerb = null;
 let tailOut = null;
 let tailSignature = '';
+// Impulses, by `${seconds}|${decay}`. See the note in hushMusic.
+const tailBuffers = new Map();
 let hushed = false;
+// ...and whether the current silence is an ARRIVAL fade rather than a kill
+// hush. Declared up here with the flag it rides on; what it is for is at
+// fadeMusicForBoss, at the bottom of this file with the rest of the silence.
+let bossFade = false;
 
 const tracks = new Map(); // name -> AudioBuffer
 // name -> { leadIn, loopEnd, bars }, measured once at decode. See measureTrack.
@@ -360,6 +366,46 @@ function ensureChain() {
 
 // The level the music should be at when nothing is ducking it: the authored
 // volume times the player's own (Audio tab), with mute folded into the scale.
+// The impulse for a room of this shape, built once and kept.
+//
+// KEYED, not a single slot. There are two rooms now — the one a boss arrives
+// into and the one it dies into — and they are different shapes on purpose, so
+// a single-slot cache would rebuild an impulse on BOTH ends of every fight
+// instead of on neither.
+//
+// Bounded, because the tuner's sliders can mint a new signature per drag step
+// and nothing else would ever drop them.
+function buildRoom(seconds, decay) {
+  const sig = `${seconds}|${decay}`;
+  let buffer = tailBuffers.get(sig);
+  if (buffer) return buffer;
+  buffer = makeImpulse(seconds, decay);
+  if (!buffer) return null;
+  if (tailBuffers.size >= 4) tailBuffers.delete(tailBuffers.keys().next().value);
+  tailBuffers.set(sig, buffer);
+  return buffer;
+}
+
+/**
+ * Build the arrival's room ahead of time.
+ *
+ * An impulse is two channels of a few hundred thousand random numbers with a
+ * pow() each, and the frame that would otherwise pay for it is the frame the
+ * boss comes out from behind the rock — the camera starts moving, the riser
+ * starts, the bar appears. Called instead from the held breath three seconds
+ * earlier, where the ocean is empty and nothing is being looked at, alongside
+ * the body the warm-up is building for the same reason.
+ *
+ * Safe and free to call every frame: after the first it finds the buffer.
+ */
+export function primeBossRoom(opts = {}) {
+  if (opts.enabled === false || !ensureChain()) return false;
+  return !!buildRoom(
+    Math.max(0.2, opts.tailSeconds ?? opts.seconds ?? 4.5),
+    Math.max(0.1, opts.tailDecay ?? opts.decay ?? 2.4),
+  );
+}
+
 function baseMusicGain() {
   return CONFIG.music.enabled ? CONFIG.music.volume * musicScale() : 0;
 }
@@ -823,22 +869,54 @@ function queueNextBossLoop() {
  * @returns true if the bank is loaded and a switch was queued.
  */
 export function startBossMusic() {
-  if (!CONFIG.music.enabled || !started) return false;
+  if (!CONFIG.music.enabled || !started) {
+    // Nothing can start, so nothing will hand the score back either. Whatever
+    // the arrival faded out is owed to the player now rather than for the rest
+    // of the run — see endBossFade.
+    endBossFade();
+    return false;
+  }
   bossFights += 1;
   // A second boss arriving mid-fight joins the one already playing rather than
   // restarting the rotation.
-  if (bossActive) return true;
+  if (bossActive) { endBossFade(); return true; }
   const bank = bossBank();
   if (bank.length === 0) {
     // Nothing loaded — the run's own music plays on. Deliberately not silence:
     // a missing file should cost the fight its score, not the game its sound.
+    // Which is exactly what an arrival fade left behind it, so it comes back
+    // here: the fade is a handover, and with nothing to hand over to it has to
+    // be undone rather than left standing.
     bossFights = Math.max(0, bossFights - 1);
+    endBossFade();
     return false;
   }
   bossActive = true;
   const floor = bank.length > 1 && CONFIG.music.bossIntro !== false ? 1 : 0;
   if (bossCursor < 0) bossCursor = 0; // the run's first boss, and the only intro
   else if (bossCursor < floor || bossCursor >= bank.length) bossCursor = floor;
+
+  // UNQUANTISED WHEN THE SCORE IS ALREADY SILENT, and quantised when it is not.
+  // The bar line exists to hide a seam — the run's loop being cut mid-phrase —
+  // and an arrival fade has already removed the thing the seam would be in.
+  // Left on 'bar', the switch would land up to 2.265s after the ceremony
+  // resolved, so the boss music would arrive somewhere between "with the riser"
+  // and "two seconds of silence later", differently every fight. This is the
+  // same argument endBossMusic makes for its own unquantised switch, arriving
+  // at the same answer from the other end of the fight.
+  if (bossFade) {
+    const when = ctx.currentTime + 0.02;
+    startSource(bank[bossCursor], when);
+    // ...and the score comes back ON that sample. The boss loop starts at its
+    // own downbeat (see startSource), so what the player hears is the music
+    // returning as a hit rather than fading up into one.
+    endBossFade(when);
+    // Normally pollQueue chains the rotation when it makes a switch; this one
+    // did not go through the queue, so the successor is queued here or a fight
+    // would play its first loop and then stop.
+    queueNextBossLoop();
+    return true;
+  }
   queueTrack(bank[bossCursor], 'bar');
   return true;
 }
@@ -864,6 +942,11 @@ export function startBossMusic() {
  */
 export function endBossMusic({ immediate = true } = {}) {
   bossFights = Math.max(0, bossFights - 1);
+  // BEFORE the early return, because the case it covers is a fight that ended
+  // during its own entrance: the arrival had faded the music out and the boss
+  // loop never started, so `bossActive` is false and everything below is
+  // skipped. Without this the run plays on in silence to the end.
+  endBossFade();
   if (!bossActive || bossFights > 0) return;
   bossActive = false;
   // `bossCursor` is deliberately LEFT WHERE IT IS — it is the run's place in the
@@ -893,6 +976,11 @@ export function resetBossMusic() {
   bossFights = 0;
   bossActive = false;
   bossCursor = -1;
+  // A run reset in the middle of an arrival, which is one keypress away at any
+  // moment: the fade is not this run's business any more, and a new run must
+  // not open muted. play() clears the hush outright a line later; this is the
+  // one that matters for the routes that do not go through play().
+  endBossFade(null, 0);
 }
 
 // Which uploaded loop should be playing at this level. Empty slots are
@@ -1000,7 +1088,7 @@ export function hushMusic(opts = {}) {
   // at.
   const sig = `${seconds}|${decay}`;
   if (sig !== tailSignature || !tailVerb.buffer) {
-    const buffer = makeImpulse(seconds, decay);
+    const buffer = buildRoom(seconds, decay);
     if (!buffer) return false;
     tailVerb.buffer = buffer;
     tailSignature = sig;
@@ -1039,35 +1127,150 @@ export function hushMusic(opts = {}) {
  * @param fade seconds to bring the loop back over. 0 restores it instantly,
  *             which is what a run reset wants.
  */
-export function releaseMusicHush(fade = 0.35) {
+export function releaseMusicHush(fade = 0.35, at = null, tailFade = null) {
   if (!hushed) return;
   hushed = false;
+  bossFade = false;
   if (!ensureChain()) return;
+  // WHERE THE RETURN STARTS FROM. `at` is a ctx time in the near future — the
+  // sample the boss loop's downbeat is scheduled for — and scheduling against
+  // it rather than against now is the difference between the score arriving
+  // WITH the music and arriving a poll's width in front of it, which is up to
+  // 120ms of the run's own loop audible under the first beat of the fight's.
   const now = ctx.currentTime;
+  const from = at != null && at > now ? at : now;
   const base = baseMusicGain();
 
-  musicGain.gain.cancelScheduledValues(now);
-  if (fade > 0) {
+  if (from > now) {
+    // CANCEL, BUT HOLD FIRST. An arrival fade may still be in flight, and it
+    // has to go: a ramp to silence scheduled for AFTER the return would drag
+    // the music back down over the first second of the fight, which is the
+    // stale automation outliving the thing it was for. Cancelling it alone
+    // leaves the param wherever the ramp had got to and then jumps — so the
+    // value is read and re-pinned at the same instant, which is a hold rather
+    // than a cut, and the ramp below finishes the fade into the switch instead
+    // of stepping to it. On a fade that has already landed this is all a no-op
+    // on zero.
     musicGain.gain.setValueAtTime(musicGain.gain.value, now);
-    musicGain.gain.linearRampToValueAtTime(base, now + fade);
+    musicGain.gain.cancelScheduledValues(now + 1e-4);
+    musicGain.gain.linearRampToValueAtTime(0, from);
+    if (fade > 0) musicGain.gain.linearRampToValueAtTime(base, from + fade);
+    else musicGain.gain.setValueAtTime(base, from);
   } else {
-    musicGain.gain.setValueAtTime(base, now);
+    musicGain.gain.cancelScheduledValues(now);
+    if (fade > 0) {
+      musicGain.gain.setValueAtTime(musicGain.gain.value, now);
+      musicGain.gain.linearRampToValueAtTime(base, now + fade);
+    } else {
+      musicGain.gain.setValueAtTime(base, now);
+    }
   }
 
   tailSend.gain.cancelScheduledValues(now);
   tailSend.gain.setValueAtTime(0, now);
+  // Cleared from the same instant the music returns, not from now: with the
+  // switch scheduled a moment ahead, a room that started clearing immediately
+  // would thin out across the last of the gap it exists to fill.
+  const room = tailFade ?? fade * 2;
   tailOut.gain.cancelScheduledValues(now);
-  if (fade > 0) {
+  if (room > 0) {
     tailOut.gain.setValueAtTime(tailOut.gain.value, now);
-    tailOut.gain.linearRampToValueAtTime(0, now + fade * 2);
+    tailOut.gain.linearRampToValueAtTime(tailOut.gain.value, from);
+    tailOut.gain.linearRampToValueAtTime(0, from + room);
   } else {
-    tailOut.gain.setValueAtTime(0, now);
+    tailOut.gain.setValueAtTime(0, from);
   }
 }
 
 /** Is the score currently cut? For the tuner readout and the tests. */
 export function musicHushed() {
   return hushed;
+}
+
+// ---------------------------------------------------------------------------
+// THE FADE — the silence a boss arrives INTO
+// ---------------------------------------------------------------------------
+// The hush above is a stop with a room left ringing; this is the opposite move
+// and the opposite moment. A boss ARRIVING gets a fade: the run's music recedes
+// while the camera turns to look at the animal, the riser climbs alone over the
+// last of the ceremony, and the boss loop lands on the frame the bar fills.
+//
+// A FADE AND NOT A CUT, deliberately, and it is the same reasoning as the kill
+// hush arriving at the opposite answer. There, the point is that the score
+// STOPS — the music is the thing that has just ended. Here the score is being
+// replaced, and the player should not be able to name the moment the old loop
+// left: it thins out under a rising filter sweep and a camera move, and then
+// something else is playing. A cut would be a third event competing with the
+// two the ceremony already has.
+//
+// `bossFade` is the latch that says this fade is OURS and something still owes
+// the player their music back. Every exit from a fight clears it — including
+// the ones where the boss music never got to start, which is the failure that
+// costs a run its score for good rather than for a moment.
+
+/**
+ * Hand the run's music over to an arriving boss.
+ *
+ * THE SAME MOVE THE KILL MAKES, in the other direction and into a bigger room.
+ * The score is thrown into a long reverb and then muted underneath it, so what
+ * carries the gap is the run's own music ringing out — the loop stops, the room
+ * it was playing in does not, and the boss loop lands in the middle of that
+ * tail. A plain fade was the first version of this and it is a different thing
+ * entirely: the music is still PLAYING the whole way down, quieter, still
+ * counting its bars, and what the player hears is a volume knob rather than a
+ * piece of music ending.
+ *
+ * `cut` is longer than the kill's for the same reason the room is bigger: a
+ * kill is an impact and this is a handover, so the transport leaves over most
+ * of a second instead of a fifth of one.
+ *
+ * @param opts the same bag hushMusic takes. `enabled: false` is the old
+ *             behaviour — no tail, no latch, and startBossMusic goes back to
+ *             waiting for a bar line with the run's music playing straight
+ *             through the entrance.
+ * @returns true if there was anything to hand over.
+ */
+export function fadeMusicForBoss(opts = {}) {
+  if (opts.enabled === false) return false;
+  // Mapped rather than forwarded, because the CONFIG block spells the room's
+  // three numbers `tailSeconds`/`tailDecay`/`tailLevel` — the same names the
+  // kill's does, so the two moments read alike in the tuner — and hushMusic
+  // takes them as `seconds`/`decay`/`level`. Forwarded raw they fall through to
+  // the kill's defaults, which is a room the right shape for the wrong moment
+  // and looks exactly like the settings working. bossKill.js maps them too.
+  if (!hushMusic({
+    cut: opts.cut,
+    feed: opts.feed,
+    send: opts.send,
+    seconds: opts.tailSeconds ?? opts.seconds,
+    decay: opts.tailDecay ?? opts.decay,
+    level: opts.tailLevel ?? opts.level,
+  })) return false;
+  // The latch on top of the hush's own, so the arrival owns this silence and
+  // knows it owes the player their music back — see endBossFade.
+  bossFade = true;
+  return true;
+}
+
+/**
+ * Hand the music back if an arrival fade is still up.
+ *
+ * `at` schedules the return for a ctx time rather than for now, which is how
+ * the score comes back on the boss loop's first sample instead of a poll's
+ * width before it.
+ */
+function endBossFade(at = null, fade = null, tailFade = null) {
+  if (!bossFade) return;
+  bossFade = false;
+  releaseMusicHush(
+    fade ?? (CONFIG.music.bossFadeIn ?? 0.08),
+    at,
+    // The room is cleared on its OWN clock, and a slow one: the tail is the
+    // thing that carried the gap, and chopping it on the frame the boss loop
+    // lands would end the handover a beat before the music it was handing to.
+    // It rings into the fight for a moment and then goes.
+    tailFade ?? (CONFIG.music.bossTailFade ?? 1.2),
+  );
 }
 
 /**

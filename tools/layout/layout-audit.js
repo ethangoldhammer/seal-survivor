@@ -337,6 +337,21 @@ async function buildSurface(surface, ui, callout, callouts) {
     // choices on any origin it happens to share.
     const settings = await import('../../path/src/systems/settings.js');
     settings.settings.hud.barPlacement = 'corner';
+    // AND THE THIRD COLUMN, because the worst case for this corner is the
+    // widest the corner ever gets. settings.hud.boostMeter === 'bar' stands
+    // the strike fuel beside the air as a pip column instead of drawing it
+    // around the seal — so the stack the score and the clock step inboard of
+    // on a phone is three tracks wide, not two, and the pip count (and with it
+    // the column's length) climbs as links land.
+    //
+    // Pinned even though it is the default, exactly as barPlacement is above:
+    // this tile keeps measuring what its name says if the default is ever
+    // flipped back, rather than quietly going back to measuring two columns.
+    settings.settings.hud.boostMeter = 'bar';
+    // Half a mouthful's refill is double the pips: the longest fuel column a
+    // run can actually produce, against the same ceiling the other two use.
+    player.stats.strikeChumRefill = (await import('../../path/src/config.js'))
+      .CONFIG.strike.charge.chumRefill / 2;
 
     // THE WORST CASE, which is a seal that has been buying health all run. The
     // corner columns are as long as the maximum they draw, so the frame that

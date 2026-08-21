@@ -63,10 +63,11 @@ import { stateForSpeed } from '../path/src/systems/animation.js';
 import { hitShapeSpheres, tickHitShapes, hitCreature } from '../path/src/systems/hitShape.js';
 import { initParticles, resetParticles } from '../path/src/entities/particles.js';
 import { onFeedback } from '../path/src/systems/feedback.js';
+import { updateBeatSync, divisionSeconds } from '../path/src/systems/beatSync.js';
 import {
   initBossHotSpots, attachHotSpots, updateBossHotSpots, hotSpotDamage,
   hotSpotsOf, resetBossHotSpots, perimeterCandidates, liveHotSpotCount,
-  hotSpotShells,
+  hotSpotShells, spotAt, setHotSpotLook,
 } from '../path/src/systems/bossHotSpots.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -247,11 +248,29 @@ section('1. Placed on the outline of the animal');
   // MEASURED AGAINST THE INSET, not against a flat number. A spot's centre is
   // pulled `insetFrac` of a radius inboard on purpose — the glow is painted on
   // skin, so a centre exactly on the outline wastes half its circle over open
-  // water and the boundary ring is off the body for most of its length. So the
-  // allowance is that inset plus the ruler's own slop (the cloud is sampled
-  // every eighth vertex). Past it the spot has stopped reaching the outline,
-  // which is the thing the whole placement exists for.
-  const allow = (CONFIG.hotSpots.insetFrac ?? 0) + 0.35;
+  // water and the boundary ring is off the body for most of its length.
+  //
+  // THE CONSTANT ON TOP IS THE RULER'S OWN, and it is not sampling slop even
+  // though it was first written as if it were. A point ON a curved surface
+  // still measures some deficit, because the best of 48 directions will always
+  // find flesh a little further out where the body curves away.
+  //
+  // It was 0.35, then 0.5 to stop a failure — and raising it was the wrong move
+  // both times, because the spots it was failing on were genuinely badly
+  // placed: they were the ones a too-small host had forced oversized, which
+  // measured 70% of a radius inside against 13-25% for a spot on a host that
+  // fits. Fixing the placer (see minHostR in pickCandidate) moved the whole
+  // distribution down.
+  //
+  // SO THE THRESHOLD STOPPED BEING A TUNED NUMBER. Chasing the measured spread
+  // with a constant is how a check gets hollowed out one failure at a time.
+  // What the feature actually requires is that the glow still REACHES the
+  // outline, and at a deficit of 1 the spot's own radius is exactly used up
+  // getting back to the edge — so 1 is the geometric limit, not a taste call,
+  // and this sits a margin under it. The observed spread on the megalodon is
+  // 13-60%; the printout carries the worst case so a regression that creeps
+  // toward the limit is visible while still passing.
+  const allow = 0.85;
   const deficits = owner.spots.map((s) => boundaryDeficit(cloud, s.wx, s.wy, s.r) / s.r);
   const buried = deficits.filter((d) => d >= allow).length;
   check('every spot sits on the outline of the mesh', buried === 0,
@@ -319,7 +338,7 @@ section('2. They ride the flesh');
     `${moved.length} of ${owner.spots.length} followed`);
 
   const cloud2 = skinCloud(e);
-  const allow2 = (CONFIG.hotSpots.insetFrac ?? 0) + 0.35;
+  const allow2 = 0.85;
   const after = owner.spots.map((s) => boundaryDeficit(cloud2, s.wx, s.wy, s.r) / s.r);
   check('and they are still on the outline after a turn and a tail-beat',
     after.every((d) => d < allow2),
@@ -481,11 +500,17 @@ section('4. Aimed damage crits, area damage does not');
     Math.abs(dead / control - CONFIG.hotSpots.critMul) < 1e-9,
     `${(dead / control).toFixed(3)}x, CSV says ${CONFIG.hotSpots.critMul}x`);
 
-  // The boundary, from both sides, because it is the number the player is
-  // aiming at and a reach that is generous by a hair is a reach that is a lie
-  // by a hair.
-  const inside = hotSpotDamage(e, { x: s.wx + s.r * 0.95, y: s.wy }, BASE);
-  const outside = hotSpotDamage(e, { x: s.wx + s.r * 1.05, y: s.wy }, BASE);
+  // The boundary, from both sides, MEASURED FROM THE HULL ANCHOR — because
+  // that is the surface a contact lives on and therefore the one the reach is
+  // anchored to (see spotAt). Probing either side of the PAINTED centre tests
+  // a circle the crit does not use: the two are deliberately allowed to differ
+  // by up to `hullMatch` of a radius, so a point a hair outside the light can
+  // be comfortably inside the reach and reporting that as a bug is the ruler
+  // being wrong, not the code.
+  const cx = s.cwx ?? s.wx;
+  const cy = s.cwy ?? s.wy;
+  const inside = hotSpotDamage(e, { x: cx + s.r * 0.95, y: cy }, BASE);
+  const outside = hotSpotDamage(e, { x: cx + s.r * 1.05, y: cy }, BASE);
   check('just inside the edge crits', inside > BASE, `${inside}`);
   check('just outside the edge does not', outside === BASE, `${outside}`);
 
@@ -495,6 +520,64 @@ section('4. Aimed damage crits, area damage does not');
     const fish = spawnNamed(scene, 'fish', 0, undefined, { ignoreCaps: true, overfill: true });
     const plain = fish ? hotSpotDamage(fish, { x: 0, y: 0 }, BASE) : BASE;
     check('a creature with no spots is untouched', plain === BASE, `${plain}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+section('4b. A shot that hits the glow crits, through the real hit test');
+// ---------------------------------------------------------------------------
+// THE END-TO-END CHECK, and the one that caught the bug the two anchors exist
+// for. Every check above feeds hotSpotDamage a point chosen by the harness;
+// the game never does that. It calls hitCreature, which writes its contact on
+// the PADDED SPHERE — `centre + normal * wr * padding` — and hands THAT to the
+// damage path. Measured across the roster those surfaces stand 0.09 to 0.61
+// units apart on the median boss and 2.20 at worst, against a spot radius near
+// 1.4, so a crit test anchored on the skin was being asked about a point up to
+// a whole radius away from it.
+//
+// A synthetic point cannot see that. A shot has to.
+{
+  const e = spawnBoss();
+  const owner = lightUp(e);
+  const spot = owner.spots[0];
+  const BASE = 10;
+
+  // Fire from outside the animal, straight at the painted centre of the spot,
+  // and step the pellet in until the real hit test says it connected — which
+  // is what a bullet does.
+  const outward = { x: spot.wnx, y: spot.wny };
+  let landed = null;
+  for (let t = 6; t > -2; t -= 0.05) {
+    const px = spot.wx + outward.x * t;
+    const py = spot.wy + outward.y * t;
+    if (hitCreature(e, px, py, 0.12, contact)) {
+      landed = { x: contact.x, y: contact.y, from: t };
+      break;
+    }
+  }
+  check('a shot aimed at the glow connects with the body', !!landed,
+    landed ? `contact ${landed.from.toFixed(2)} out along the normal` : 'never connected');
+
+  if (landed) {
+    const gap = Math.hypot(landed.x - spot.wx, landed.y - spot.wy);
+    console.log(`  --   the contact lands ${gap.toFixed(2)} from the painted centre `
+      + `(${(gap / spot.r * 100).toFixed(0)}% of the reach) — this is the standoff the two anchors absorb`);
+    const dealt = hotSpotDamage(e, landed, BASE);
+    check('and it crits', Math.abs(dealt / BASE - CONFIG.hotSpots.critMul) < 1e-9,
+      `${(dealt / BASE).toFixed(2)}x`);
+  }
+
+  // ...and a shot aimed at bare flesh well away from every spot does not.
+  {
+    const far = hitShapeSpheres(e.hitShape)
+      .map((sp) => ({ x: sp.wx, y: sp.wy }))
+      .find((p) => owner.spots.every((o) => Math.hypot(p.x - (o.cwx ?? o.wx), p.y - (o.cwy ?? o.wy)) > o.r * 2.5));
+    if (far && hitCreature(e, far.x, far.y, 0.12, contact)) {
+      const dealt = hotSpotDamage(e, contact, BASE);
+      check('a shot at bare flesh does not', dealt === BASE, `${dealt}`);
+    } else {
+      console.log('  --   no sphere centre this roll is clear of every spot');
+    }
   }
 }
 
@@ -523,10 +606,27 @@ section('5. One bursts, and another opens somewhere else');
     Math.abs(s.pool - e.maxHp * CONFIG.hotSpots.ruptureFraction) < 1e-6,
     `${s.pool.toFixed(1)} of ${e.maxHp.toFixed(1)}`);
 
-  // A ruptured spot pays nothing. Without this a burst spot would still be a
-  // crit zone for as long as its light took to fade.
-  const after = hotSpotDamage(e, where, 10);
-  check('a burst spot no longer crits', after === 10, `${after}`);
+  // A RUPTURED SPOT IS NOT SELECTABLE. Asserted through spotAt rather than by
+  // checking the damage came back unmultiplied, and the difference is not
+  // pedantry: spots are big enough now that two can overlap, so a hit at a
+  // burst spot's centre can legitimately land inside a live one and crit for
+  // it. The damage version of this check failed on exactly that and was
+  // reporting a bug that was not there.
+  const stillPicked = spotAt(owner, where.x, where.y);
+  check('a burst spot is no longer selectable', stillPicked !== s,
+    stillPicked ? 'another live spot covers the point' : 'nothing covers the point');
+  // ...and where nothing else covers it, the hit is worth exactly its own
+  // damage. Probed at a point inside the dead spot and outside every live one;
+  // skipped rather than faked if the roll left no such point.
+  const probe = { x: where.x + s.r * 0.6, y: where.y };
+  const covered = owner.spots.some((o) => o.alive && !o.dead
+    && Math.hypot(probe.x - o.wx, probe.y - o.wy) <= o.r);
+  if (!covered) {
+    const after = hotSpotDamage(e, probe, 10);
+    check('and pays nothing where no live spot covers it', after === 10, `${after}`);
+  } else {
+    console.log('  --   every point in the burst spot is covered by a live one this roll');
+  }
 
   // Wind forward. The light has to go out AND the replacement has to wait.
   for (let i = 0; i < 30; i++) updateBossHotSpots(DT, DT);
@@ -550,7 +650,8 @@ section('5. One bursts, and another opens somewhere else');
     const fresh = live[live.length - 1];
     check('the replacement is on the outline too',
       boundaryDeficit(skinCloud(e), fresh.wx, fresh.wy, fresh.r) / fresh.r
-        < (CONFIG.hotSpots.insetFrac ?? 0) + 0.35);
+        < 0.85,
+      `${(boundaryDeficit(skinCloud(e), fresh.wx, fresh.wy, fresh.r) / fresh.r * 100).toFixed(0)}% of a radius inside`);
     check('and it is not where the old one was',
       Math.hypot(fresh.wx - where.x, fresh.wy - where.y) > fresh.r,
       `${Math.hypot(fresh.wx - where.x, fresh.wy - where.y).toFixed(2)} away`);
@@ -612,6 +713,107 @@ section('5b. Both moments announce themselves as events');
       && CONFIG.sfx.hotSpotBurst.decay < CONFIG.sfx.bossDieFlesh.decay,
     `${CONFIG.sfx.hotSpotBurst.freq[0]}Hz/${CONFIG.sfx.hotSpotBurst.decay}s vs `
       + `${CONFIG.sfx.bossDieFlesh.freq[0]}Hz/${CONFIG.sfx.bossDieFlesh.decay}s`);
+}
+
+// ---------------------------------------------------------------------------
+section('5c. The throb is on the musical grid, and the reach is not');
+// ---------------------------------------------------------------------------
+{
+  const e = spawnBoss();
+  const owner = lightUp(e);
+  const u = hotSpotShells(e)[0].material.userData.__hotUniforms;
+  const spot = owner.spots[0];
+
+  const seconds = divisionSeconds(CONFIG.hotSpots.look.pulseSync);
+  check('the shipped division resolves to a real cycle length',
+    seconds > 0, `${CONFIG.hotSpots.look.pulseSync} = ${seconds.toFixed(3)}s`);
+
+  // Walk one full cycle, sampling the counter. It has to advance, wrap exactly
+  // once, and come back to where it started — a counter that wraps at anything
+  // other than a whole number of the shader's periods shows up as a visible
+  // jump every time it comes round, which is what the `wrap` argument to
+  // advanceCycles is for.
+  const steps = Math.round(seconds / DT);
+  const seen = [];
+  for (let i = 0; i < steps; i++) {
+    updateBeatSync(DT);
+    updateBossHotSpots(DT, DT);
+    seen.push(u.uHotCycle.value);
+  }
+  check('the cycle advances', Math.max(...seen) > 0.5, `peak ${Math.max(...seen).toFixed(3)}`);
+  check('and stays inside [0, 1)', seen.every((v) => v >= 0 && v < 1));
+  let wraps = 0;
+  for (let i = 1; i < seen.length; i++) if (seen[i] < seen[i - 1]) wraps += 1;
+  check('and wraps exactly once across one cycle', wraps === 1, `${wraps} wraps in ${steps} frames`);
+
+  // THE REACH MUST NOT MOVE WITH IT. This is the assertion the whole "pulse
+  // brightness, not size" decision rests on: the drawn boundary is the crit
+  // boundary, so anything that makes it breathe is the light lying about where
+  // the reward is, twice a bar, forever.
+  const radii = new Set();
+  for (let i = 0; i < steps; i++) {
+    updateBeatSync(DT);
+    updateBossHotSpots(DT, DT);
+    radii.add(u.uHotSpot.value[0].w);
+  }
+  check('the painted radius never moves across a cycle', radii.size === 1,
+    `${radii.size} distinct radii, ${[...radii][0]?.toFixed(4)}`);
+  check('…and it is still the crit radius', [...radii][0] === spot.r);
+
+  // Lockstep by default — see the note in CONFIG. Two spots throbbing together
+  // read as the boss pulsing with the track; spread apart they read as two
+  // independent lights, which is the school-of-fish answer to a different
+  // question.
+  const phases = [...u.uHotPhase.value].slice(0, owner.spots.length);
+  check('spots pulse in lockstep at the shipped spread',
+    (CONFIG.hotSpots.look.pulseSpread ?? 0) !== 0 || phases.every((p) => p === 0),
+    `spread ${CONFIG.hotSpots.look.pulseSpread}, phases ${phases.join(', ')}`);
+}
+
+// ---------------------------------------------------------------------------
+section('5d. The colour and the brightness are exposed, per boss');
+// ---------------------------------------------------------------------------
+{
+  const e = spawnBoss();
+  const owner = lightUp(e);
+  const u = hotSpotShells(e)[0].material.userData.__hotUniforms;
+  const l = CONFIG.hotSpots.look;
+
+  updateBossHotSpots(DT, DT);
+  const base = u.uHotLit.value.getHex();
+  check('a boss with no override wears the configured base colour',
+    base === (l.litColor ?? 0xffffff), `#${base.toString(16)}`);
+  // WHITE, and the check is on the DEFAULT rather than on the literal: what
+  // matters is that the base is a neutral anything can tint, not that it is
+  // this exact value forever.
+  const c = new THREE.Color(l.litColor);
+  check('...and that base is neutral', c.r === c.g && c.g === c.b,
+    `#${l.litColor.toString(16)}`);
+
+  check('an unknown creature cannot be given a look', setHotSpotLook({}, { color: 0xff0000 }) === false);
+
+  setHotSpotLook(e, { color: 0x2288ff, brightness: 0.5 });
+  updateBossHotSpots(DT, DT);
+  check('an override REPLACES the colour', u.uHotLit.value.getHex() === 0x2288ff,
+    `#${u.uHotLit.value.getHex().toString(16)}`);
+  // Multiplied, not replaced — so the slider still moves a boss that something
+  // else is driving.
+  check('and MULTIPLIES the brightness',
+    Math.abs(u.uHotGlow.value - (l.glow ?? 2.6) * 0.5) < 1e-6,
+    `${u.uHotGlow.value.toFixed(2)} vs ${((l.glow ?? 2.6) * 0.5).toFixed(2)}`);
+
+  // The heat and strike colours are NOT overridable: a tinted spot still has
+  // to go hot and then red as it is chewed, or the one warning the player gets
+  // disappears the moment anything tints it.
+  check('the heat ramp is untouched by an override',
+    u.uHotHot.value.getHex() === (l.hotColor ?? 0xffc23a)
+      && u.uHotFlash.value.getHex() === (l.flashColor ?? 0xff3a24));
+
+  setHotSpotLook(e, null);
+  updateBossHotSpots(DT, DT);
+  check('and handing it back restores the config',
+    u.uHotLit.value.getHex() === (l.litColor ?? 0xffffff)
+      && Math.abs(u.uHotGlow.value - (l.glow ?? 2.6)) < 1e-6);
 }
 
 // ---------------------------------------------------------------------------

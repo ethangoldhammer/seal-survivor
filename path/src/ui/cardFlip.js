@@ -66,10 +66,19 @@ let live = null;
  * @param water   where the bubble canvas goes — an element the card sits inside
  *                and that is big enough for bubbles to leave the card. The
  *                menu's own centring layer, in practice.
+ * @param onLand  called once per turn, on the frame the card comes square
+ *                again. THE FACE THAT ARRIVED HAS BEEN DISPLAY:NONE UNTIL
+ *                HALFWAY THROUGH THIS TURN, and anything in it that measured
+ *                itself off that un-hiding measured a rotated card — see
+ *                resyncSnapshotCards in ui/snapshotCard.js, which is what this
+ *                exists for. Fired for a reduced-motion swap too, where the
+ *                turn is instant, and fired after a turn that failed and was
+ *                snapped to its far face: "the card has stopped" is the whole
+ *                contract, not "the card animated".
  * @returns { flip, face, reset } — `flip()` turns it over, `face()` says which
  *          way up it is, `reset()` puts it back to the front with no animation.
  */
-export function mountCardFlip({ card, front, back, water }) {
+export function mountCardFlip({ card, front, back, water, onLand }) {
   if (!card || !front || !back) return null;
   releaseCardFlip();
 
@@ -82,6 +91,10 @@ export function mountCardFlip({ card, front, back, water }) {
     bubbles: [],
     canvas: null,
     ctx: null,
+    onLand,
+    // The card arrives square and has not turned, so there is no landing
+    // owed. Cleared by turn(), raised by land().
+    landed: true,
   };
   live = state;
 
@@ -120,6 +133,27 @@ function hardReset(state) {
   turning(state, false);
   applyFaces(state);
   paint(state);
+  // A reset from the back is still a face being un-hidden with no turn around
+  // it, which is the thing onLand is for — so it is owed unconditionally here,
+  // including when the last turn already landed and paid its own.
+  state.landed = false;
+  land(state);
+}
+
+// ONCE PER TURN, and the flag is the whole of it: tick() runs on for as long
+// as there is froth left on the canvas, so "the angle equals the target" is
+// true on a dozen frames after the card has stopped and only the first of them
+// is a landing. Anything that throws in here is the caller's problem and not
+// the turn's — the loop above has already put the card somewhere honest by the
+// time this runs.
+function land(state) {
+  if (state.landed) return;
+  state.landed = true;
+  try {
+    state.onLand?.();
+  } catch (err) {
+    console.warn(`[cardFlip] a landing handler threw — ${err}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -143,12 +177,14 @@ function turning(state, on) {
 function turn(state, to) {
   if (state.target === to) return;
   state.target = to;
+  state.landed = false;
 
   if (prefersReducedMotion() || cfg().enabled === false) {
     state.angle = to;
     turning(state, false);
     applyFaces(state);
     paint(state);
+    land(state);
     return;
   }
 
@@ -184,6 +220,7 @@ function frame(state) {
     state.bubbles.length = 0;
     dropCanvas(state);
     turning(state, false);
+    land(state);
   }
 }
 
@@ -224,7 +261,10 @@ function tick(state) {
   // holding the card in a composited layer for the second the froth takes to
   // clear would leave it promoted at exactly the moment its rasterisation has
   // to be right, which is the frame it comes to rest.
-  if (state.angle === state.target) turning(state, false);
+  if (state.angle === state.target) {
+    turning(state, false);
+    land(state);
+  }
 
   if (state.angle !== state.target || state.bubbles.length) {
     state.raf = requestAnimationFrame(() => frame(state));

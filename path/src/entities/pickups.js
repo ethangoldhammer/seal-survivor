@@ -16,6 +16,7 @@ import {
 import { telegraphMul } from '../systems/telegraph.js';
 import { initBubble, updateBubblePhysics, bubbleRadius, bubbleBirthPoint, growthOf } from '../systems/oxygenBubble.js';
 import { createCoralOrb, updateCoralOrb, disposeCoralOrb } from '../systems/coralOrb.js';
+import { createLevelOrb, updateLevelOrb, disposeLevelOrb, setLevelOrbScale } from '../systems/levelOrb.js';
 
 export { bubbleBirthPoint, bubbleRadius };
 
@@ -89,6 +90,8 @@ export function chumGlowAt(dist, reach, clock = 0, phase = 0) {
 export const strikeOrbs = [];
 export const bubbleOrbs = [];
 export const rapidFireOrbs = [];
+// The one pickup that changes the BUILD — see systems/levelOrb.js.
+export const levelOrbs = [];
 export const chumChunks = [];
 
 export function resetPickups(scene) {
@@ -105,6 +108,11 @@ export function resetPickups(scene) {
     disposeCoralOrb(o.mesh);
   }
   rapidFireOrbs.length = 0;
+  for (const o of levelOrbs) {
+    scene.remove(o.mesh);
+    disposeLevelOrb(o.mesh);
+  }
+  levelOrbs.length = 0;
   for (const c of chumChunks) removeChunk(scene, c);
   chumChunks.length = 0;
 }
@@ -214,8 +222,17 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
   });
 
   // Orbs settle on the seabed and would otherwise pile up all run.
+  //
+  // The oldest one that is NOT already flying to the mouth: the cap exists to
+  // clear forgotten piles off the seabed, and an orb the magnet has claimed is
+  // the opposite of forgotten. Deleting one mid-flight is indistinguishable
+  // from the magnet dropping it, and it happens exactly when the water is
+  // busiest. Falls back to the plain oldest if every orb alive is claimed, so
+  // the cap is still a cap.
   while (pickups.length > CONFIG.pickups.maxAlive) {
-    const oldest = pickups.shift();
+    let k = pickups.findIndex((p) => !p.magnetLatch);
+    if (k === -1) k = 0;
+    const [oldest] = pickups.splice(k, 1);
     orbPool?.release(oldest.mesh);
   }
 }
@@ -269,6 +286,26 @@ export function spawnRapidFireOrb(scene, pos) {
   // replaced. Measured once here rather than per frame — the geometry never
   // changes after it is grown.
   rapidFireOrbs.push({ mesh, life: CONFIG.rapidFirePickup.lifetime, bodyRadius: measuredBodyRadius(mesh) });
+}
+
+// A GROWN BLOB, not a createVisual, for exactly the two reasons the coral is
+// not one: the geometry is rolled per spawn and the colour lives in uniforms
+// that a shared material would beat in lockstep. The `levelOrb` asset entry
+// stays in the table as the row assets.csv sizes it from — see the note there.
+export function spawnLevelOrb(scene, pos) {
+  const mesh = createLevelOrb();
+  mesh.position.copy(pos);
+  // The asset's size multiplier, which createVisual would have applied. Handed
+  // to the module rather than written straight onto the mesh, because the blob
+  // SWELLS on every note and a scale it did not know about would be overwritten
+  // by the first kick — the same trap a setScalar after createVisual falls
+  // into. See setLevelOrbScale.
+  setLevelOrbScale(mesh, getAssetSizeMultiplier('levelOrb') || 1);
+  scene.add(mesh);
+  // MEASURED, like the coral's: this is the other pickup whose body is a
+  // different shape every time, so the authored radius in ASSETS describes a
+  // sphere the blob only approximately is.
+  levelOrbs.push({ mesh, life: CONFIG.levelPickup.lifetime, bodyRadius: measuredBodyRadius(mesh) });
 }
 
 // Half the widest side of whatever this object actually occupies, in world
@@ -438,16 +475,24 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     player.mesh.position.x, player.mesh.position.y,
     chunk.mesh.position.x, chunk.mesh.position.y, speed,
   );
-  const magnetised = reach < foodReach(player.stats, speed);
+  // Latched, exactly as chum is: coming into reach CLAIMS the chunk, and a
+  // claimed chunk travels to the mouth until it is swallowed. The reach behind
+  // it can close — chain over, dash over, seal turned away — without stranding
+  // it, which matters more here than anywhere: this is the rarest pickup in
+  // the game to lose in mid water.
+  const magnetised = reach < foodReach(player.stats, speed) || chunk.magnetLatch;
+  if (magnetised) chunk.magnetLatch = true;
 
   if (magnetised) {
     // Same precedence chum uses: the magnet outranks a throw still in flight,
     // and cancels it, so a chunk the seal has claimed stops arcing away.
     chunk.vx = 0;
     chunk.vy = 0;
-    const pull = foodPull(speed) * dt;
-    chunk.mesh.position.x += (dx / dist) * pull;
-    chunk.mesh.position.y += (dy / dist) * pull;
+    // Clamped to what is left of the gap for the same reason chum's is: the
+    // last step has to land on the seal, not past it.
+    const step = Math.min(foodPull(speed) * dt, dist);
+    chunk.mesh.position.x += (dx / dist) * step;
+    chunk.mesh.position.y += (dy / dist) * step;
   } else if (chunk.vx || chunk.vy) {
     // Kicked out of something. The same toss model chum spilling from a hull
     // uses — drag below the water line, gravity above it — so a chunk thrown
@@ -501,7 +546,11 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     onCollect(chunk);
     return 'collected';
   }
-  if (chunk.life <= 0) return 'expired';
+  // A claimed chunk does not time out on the way in. The lifespan is there so
+  // a chunk nobody came for eventually leaves the water; one that is a tenth
+  // of a second from the mouth is not that, and blinking out in flight is the
+  // same broken promise the latch above exists to stop.
+  if (chunk.life <= 0 && !chunk.magnetLatch) return 'expired';
   return null;
 }
 
@@ -554,7 +603,13 @@ function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect, tick, rawDt) 
   // magnet off and every one of them was being collected from inside its own
   // body. Same widening the chunk and the bubble already do.
   if (dist < CONFIG.pickups.collectRadius + (orb.bodyRadius ?? 0)) {
-    onCollect(orb.mesh.position.x, orb.mesh.position.y);
+    // The ENTRY as a third argument, which the three older handlers ignore. It
+    // is here for the level blob, whose burst takes the colour it happened to
+    // be wearing on the frame it was swallowed — there is no `assetBaseColor`
+    // answer for a thing that changes colour four times a bar. Handed over
+    // while the orb is still in its array (the splice is the caller's, one
+    // frame later in updateOrbArray), so the mesh is still live.
+    onCollect(orb.mesh.position.x, orb.mesh.position.y, orb);
     return 'collected';
   }
   if (orb.life <= 0) return 'expired';
@@ -710,19 +765,37 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
     // Inside a sealed mouth's reach: about to be swallowed, but not yet.
     const waiting = sealed && dist < tellRadius;
 
+    // ONCE CLAIMED, ALWAYS CLAIMED — the reach is a FIRST TOUCH, not a hold.
+    //
+    // An orb that has started travelling to the mouth keeps travelling until
+    // it is swallowed, whatever happens to the reach behind it: the chain
+    // window closing and taking the sweep with it, a dash ending and taking
+    // its corridor, the seal turning away, or a crab getting a claw on it.
+    // All of those used to strand food in mid water with no explanation the
+    // player can see — the orb was flying at them, and then it simply stopped
+    // and sank. The claim is the promise; this latch is what keeps it.
+    const claimed = !sealed && (reach < reachNow || p.magnetLatch);
+    if (claimed) p.magnetLatch = true;
+
     // Chum keeps turning after it settles — a still pile on the seabed is the
     // easiest thing on screen to stop noticing — and turns FASTER while it
     // waits on a release, which is half the telegraph.
     updateTumble(p.mesh, dt * (waiting ? (tell.spinMul ?? 1) : 1));
 
-    if (waiting) {
+    if (waiting || (sealed && p.magnetLatch)) {
       // HELD: not pulled, and not sinking either. An orb advertising "the
       // release is going to take me" has to still be inside the gulp when the
       // release comes, and at the default sink speed a wind-up only a few
       // seconds long drops a mid-water pile clean out of the radius it was
       // telegraphing. Anything already resting on the seabed was going nowhere
       // anyway, so this only ever holds the ones in open water.
-    } else if (!sealed && reach < reachNow) {
+      //
+      // A CLAIMED ORB WAITS OUT THE WIND-UP TOO, wherever it is. Nothing is
+      // dragged into a sealed mouth — that is the whole reason the gate exists
+      // — but it does not go back to sinking either: the claim outlives the
+      // wind-up, and the pull picks up again the moment the mouth opens, if
+      // the release's own gulp has not already taken it.
+    } else if (claimed) {
       // The magnet outranks any throw still in flight, and cancels it — an orb
       // the player swam away from should go back to sinking, not pick its old
       // arc back up.
@@ -732,9 +805,16 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // FASTER THAN THE DASH: at the flat 14 against a 46 u/s dash an orb not
       // directly ahead falls behind at 32 u/s and can never arrive, so a wider
       // striking radius on its own would have collected nothing extra.
-      const pull = foodPull(sealSpeed) * dt;
-      p.mesh.position.x += (dx / dist) * pull;
-      p.mesh.position.y += (dy / dist) * pull;
+      //
+      // Clamped to the distance left, so the last step lands ON the seal
+      // rather than throwing the orb out the far side: at a pull that outruns
+      // a dash the overshoot is bigger than the collect radius, and an orb can
+      // sit flicking through the seal frame after frame without ever being
+      // measured close enough to swallow. The clamp is what turns "pulled at"
+      // into "arrives".
+      const step = Math.min(foodPull(sealSpeed) * dt, dist);
+      p.mesh.position.x += (dx / dist) * step;
+      p.mesh.position.y += (dy / dist) * step;
     } else if (p.hoover) {
       // IN A MOUTH: already moved this frame by whatever is eating it (see
       // bitePickup), and neither sinking nor drifting on its own until it lets
@@ -874,6 +954,15 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       rawDt: opts?.rawDt ?? dt,
     });
   }
+  // The level blob, on the same terms — its colour is on the musical grid, so a
+  // hit-stop must not hold a note.
+  if (opts?.onLevelOrb) {
+    updateOrbArray(dt, scene, player, levelOrbs, 0, opts.onLevelOrb, {
+      tick: updateLevelOrb,
+      dispose: disposeLevelOrb,
+      rawDt: opts?.rawDt ?? dt,
+    });
+  }
 
   // Chunks run whether or not a callback was passed, unlike the three above:
   // an unconsumed chunk still has to sink, still has to expire and still has to
@@ -974,6 +1063,12 @@ export function nearestFloorPickup(x, y, maxDist) {
   let bestD2 = maxDist * maxDist;
   for (const p of pickups) {
     if (p.mesh.position.y > floorY) continue;
+    // Already claimed by the seal's magnet. The floor test used to be the
+    // whole of that rule — an orb on its way up is off the floor within a
+    // frame or two — but a claim made while the orb is still resting on the
+    // seabed is a claim, and sending a crab after food that is leaving is how
+    // a crab ends up walking to nothing.
+    if (p.magnetLatch) continue;
     const dx = p.mesh.position.x - x;
     const dy = p.mesh.position.y - y;
     const d2 = dx * dx + dy * dy;
@@ -1045,6 +1140,8 @@ export function bestChumTarget(x, y, maxDist, distanceBias = 18) {
   const maxD2 = maxDist * maxDist;
   for (const p of pickups) {
     if (!p.onFloor) continue;
+    // Spoken for — same rule as nearestFloorPickup above.
+    if (p.magnetLatch) continue;
     const dx = p.mesh.position.x - x;
     const dy = p.mesh.position.y - y;
     const d2 = dx * dx + dy * dy;
@@ -1111,6 +1208,7 @@ function listFor(kind) {
   if (kind === 'strikeOrb') return strikeOrbs;
   if (kind === 'bubbleOrb') return bubbleOrbs;
   if (kind === 'rapidFireOrb') return rapidFireOrbs;
+  if (kind === 'levelOrb') return levelOrbs;
   if (kind === 'chumChunk') return chumChunks;
   return null;
 }
@@ -1238,6 +1336,14 @@ export function pickupAlive(p) {
 export function bitePickup(scene, p, amount, suck = null) {
   const i = pickups.indexOf(p);
   if (i === -1) return false;
+  // SPOKEN FOR. An orb the player's magnet has claimed is on its way to the
+  // seal and cannot be eaten out from under them — the same precedence the
+  // magnet branch in updatePickups already uses when it outranks `hoover`,
+  // carried through to the part that actually consumes the orb. Without it an
+  // animal chewing fast enough deletes food mid-flight, which is the one way
+  // left for a claimed orb to fail to arrive. The animal keeps mouthing at it
+  // until the seal takes it, which is a fraction of a second at magnet speed.
+  if (p.magnetLatch) return false;
   if (suck) {
     const k = 1 - Math.exp(-(suck.rate ?? 6) * suck.dt);
     p.mesh.position.x += (suck.x - p.mesh.position.x) * k;

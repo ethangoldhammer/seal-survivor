@@ -35,6 +35,25 @@ uniform float uNoiseSize;
 uniform float uNoiseStrength;
 uniform float uNoiseContrast;
 uniform vec3  uNoiseColor;
+// THE PAINT COAT — how much of the model's own baked map survives underneath.
+//
+// uNoiseStrength above can only ever MIX toward uNoiseColor where the field is
+// bright, so a photographed body keeps its photograph in every trough no matter
+// how far that slider goes. On a barracuda at strength 1.22 the result still
+// reads as a photo of a barracuda with some shadows painted on it, which is the
+// one thing this shader was not supposed to be able to look like.
+//
+// So the map is dealt with separately, before the mottling: paint 1 covers it
+// over with a flat coat and the noise then paints the whole hide, paint 0 is
+// exactly what shipped before this existed. Anything between is a hide showing
+// through its own markings. Same shape as biolumSkin's pigment, deliberately —
+// the two are the same question asked of the two painting layers.
+uniform vec3  uNoiseBase;
+uniform float uNoisePaint;
+// ...and how much of the model's baked EMISSIVE map survives that same coat.
+// 0 by default, so covering the photograph covers the light it was giving off
+// too. See the note at the emissivemap_fragment injection.
+uniform float uNoisePaintGlow;
 // THE GLOW (Glow Up!, systems/elements.js). Off — strength 0 — on every
 // material that never asks for it, which is all of them until the seal takes
 // the upgrade. See the note on setNoiseGlow.
@@ -205,6 +224,12 @@ export function attachNoiseShader(material, preset = null) {
     uNoiseStrength: { value: 0.35 },
     uNoiseContrast: { value: 1.0 },
     uNoiseColor: { value: new THREE.Color(0x0a2233) },
+    // Paint 0 = the map is untouched, which is every material that has ever
+    // worn this shader. White base means an unset `baseColor` paints the
+    // asset's own tint rather than a colour nobody chose — see the GLSL.
+    uNoiseBase: { value: new THREE.Color(0xffffff) },
+    uNoisePaint: { value: 0 },
+    uNoisePaintGlow: { value: 0 },
     // Strength 0 = an ordinary animal. Nothing but setNoiseGlow ever raises
     // it, so a material that is never given a glow renders exactly as it did
     // before this existed — the branch in the shader is uniform, so it costs
@@ -282,6 +307,22 @@ export function attachNoiseShader(material, preset = null) {
       // main() so a plain local reaches from one to the other.
       .replace('#include <map_fragment>', `#include <map_fragment>
   float noiseN = clamp(noiseFbm(vNoisePos / max(0.0001, uNoiseSize)) * uNoiseContrast * 0.5 + 0.5, 0.0, 1.0);
+  // THE PAINT COAT, BEFORE the mottling and before the polarity below. See the
+  // note by uNoisePaint: this is the only line here that can take the model's
+  // baked texture off, and the mottling then has a flat hide to work on.
+  //
+  // TIMES the diffuse uniform — the material colour before any map, which is
+  // the field the Models tab's tint swatch writes. So uNoiseBase left white
+  // means "paint it whatever this asset is tinted", and one preset can still
+  // serve a roster of differently-coloured animals, exactly the way
+  // biolumSkin's pigment does.
+  //
+  // ABOVE the polarity test on purpose. That test asks whether uNoiseColor is
+  // darker than the body it is painting on, and the body it is painting on is
+  // this coat — not the photograph underneath it. Derived from the map instead,
+  // covering a pale texture with a dark coat would flip the mask and light the
+  // wrong half of the markings.
+  diffuseColor.rgb = mix(diffuseColor.rgb, uNoiseBase * diffuse, clamp(uNoisePaint, 0.0, 1.0));
   // WHICH END OF THE FIELD IS THE BRIGHT ONE, derived rather than assumed.
   // The noise paints toward uNoiseColor, so where that colour is DARKER than
   // the body (which is what it is for — the seal ships no texture and this is
@@ -291,6 +332,33 @@ export function attachNoiseShader(material, preset = null) {
   float noisePolarity = step(dot(uNoiseColor, NOISE_LUMA), dot(diffuseColor.rgb, NOISE_LUMA));
   float noiseLit = mix(noiseN, 1.0 - noiseN, noisePolarity);
   diffuseColor.rgb = mix(diffuseColor.rgb, uNoiseColor, uNoiseStrength * noiseN);`)
+      // THE PHOTOGRAPH'S OTHER HALF. Covering the colour map is not enough on
+      // the creatures that most need covering, and this is the line that makes
+      // "cover the photo map" mean it.
+      //
+      // Several animals ship an EMISSIVE SIDECAR — the barracuda and both
+      // hammerheads among them — and that sidecar is the diffuse map with its
+      // brights blown out (see the note in assets.js). applyEmissiveMode lights
+      // it at CONFIG.glow.maskIntensity, 3.5, in white. So the model's own
+      // photograph is being ADDED as light after every lighting chunk, and a
+      // layer that only ever touched diffuseColor could not reach it: the
+      // barracuda came out with a fully painted hide and its photographed
+      // scales still glowing on top of it at three and a half times strength.
+      // That is exactly "stuck with the photo texture, and the shaders are
+      // additive on top" — and it looked like the paint slider was broken.
+      //
+      // uNoisePaintGlow is HOW MUCH OF THAT SURVIVES THE COAT, and it defaults
+      // to 0: paint the hide and the photograph goes, light and all. Set it to
+      // 1 for a body that should keep glowing its own map under a coat of
+      // mottling. Scaled by uNoisePaint, so at paint 0 this is a multiply by
+      // exactly 1 and every creature in the game is bit-for-bit unmoved.
+      //
+      // A NO-OP ON AN UNLIT MATERIAL, for free: MeshBasicMaterial has no
+      // emissive and therefore no such chunk, so the replace finds nothing and
+      // leaves the source alone. Same reasoning as the map chunk above, which
+      // survives a material with no texture.
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+  totalEmissiveRadiance *= mix(1.0, uNoisePaintGlow, clamp(uNoisePaint, 0.0, 1.0));`)
       // THE GLOW RIDES THE SAME FIELD. Added at <dithering_fragment>, where
       // the colour is already final, so this is light on top of the animal
       // rather than a change to its pigment — and it lands the same way on a
@@ -527,6 +595,14 @@ export function applyNoiseSettings() {
       ? 0 : (p.strength ?? 0.35);
     u.uNoiseContrast.value = p.contrast ?? 1;
     u.uNoiseColor.value.set(p.color ?? 0x0a2233);
+    // The paint coat rides the same `enabled` switch as the mottling: turning
+    // the layer off has to put the model's own texture back, or an asset whose
+    // noise is disabled comes up as a flat untextured shape and looks like a
+    // failed download rather than a switched-off effect.
+    u.uNoisePaint.value = (cfg.enabled === false || p.enabled === false)
+      ? 0 : Math.max(0, Math.min(1, p.paint ?? 0));
+    u.uNoiseBase.value.set(p.baseColor ?? 0xffffff);
+    u.uNoisePaintGlow.value = Math.max(0, p.paintGlow ?? 0);
 
     // THE WET FILM. Flat keys rather than a `wet: {}` block, and that is not a
     // style choice: the preset fall-through three lines up is a SHALLOW spread,

@@ -19,6 +19,15 @@
 //   THE ROLL       "no two corals are alike" is a claim about a distribution.
 //                  A seeded grower that happens to produce the same tree from
 //                  every seed looks completely normal in a screenshot.
+//   THE GRAB       the clam is the only pickup collected outside
+//                  entities/pickups.js, so none of that module's collection
+//                  tests cover it — and it spent a long time not being
+//                  collectable at all: it rose out of the water from the boat
+//                  that dropped it and ran its field untouched, while the
+//                  coach line told the player to go and grab it. Both halves
+//                  of that failure are silent (a pickup you cannot reach looks
+//                  exactly like a pickup you missed), so the sink, the touch
+//                  and the pull are all asserted here.
 //   THE LEAK       a per-instance geometry and a per-instance material are only
 //                  cheap if they are given back. Nothing else holds a reference
 //                  to either, and WebGL does not free on JS garbage collection,
@@ -39,6 +48,11 @@ import { CONFIG } from '../path/src/config.js';
 import {
   createAttractiveClam, updateAttractiveClam, disposeAttractiveClam,
 } from '../path/src/systems/attractiveClam.js';
+import {
+  spawnAttractorOrb, updateBoats, resetBoats, attractorOrbs,
+} from '../path/src/systems/boats.js';
+import { pickups } from '../path/src/entities/pickups.js';
+import { bounds } from '../path/src/arena.js';
 import {
   growCoral, createCoralOrb, updateCoralOrb, disposeCoralOrb,
 } from '../path/src/systems/coralOrb.js';
@@ -283,6 +297,111 @@ section('The coral — it turns, and its light is on the grid');
   disposeCoralOrb(coral);
   check('disposing releases its own geometry and material',
     coral.geometry.attributes.position === undefined || true, 'disposed');
+}
+
+// ===========================================================================
+// THE GRAB. Driven through updateBoats rather than by calling the collect
+// directly, because the thing that broke was never the collect — it was the
+// clam's POSITION, and only the real loop moves it.
+section('The clam — sinks, waits, and is grabbed');
+{
+  const scene = new THREE.Scene();
+  const wasEnabled = CONFIG.boats.enabled;
+  // No new hulls mid-test: this section is about one clam, and a trawler
+  // arriving would put a second one in the water on a random frame.
+  CONFIG.boats.enabled = false;
+  resetBoats(scene);
+
+  // Dropped where a trawler floats — ON the surface. That is the exact case
+  // that used to strand it.
+  const far = { x: 60, y: -5 };
+  spawnAttractorOrb(scene, new THREE.Vector3(0, bounds.surfaceY, 0));
+  const orb = attractorOrbs[0];
+  check('a trawler drop puts a clam in the water', !!orb, `${attractorOrbs.length} alive`);
+  check('...below the waterline on the very first frame',
+    orb.mesh.position.y < bounds.surfaceY,
+    `y ${orb.mesh.position.y.toFixed(2)} vs surface ${bounds.surfaceY}`);
+
+  // A scrap of chum parked far from everything, to watch for a pull nobody
+  // asked for.
+  const chum = new THREE.Object3D();
+  chum.position.set(-30, -20, 0);
+  pickups.length = 0;
+  pickups.push({ mesh: chum });
+  const chumStart = chum.position.clone();
+
+  // Four seconds with the seal on the far side of the arena — comfortably
+  // longer than the sink takes, so the settle is asserted as a STOP rather
+  // than as a position it happened to be passing through.
+  let peakY = -Infinity;
+  for (let i = 0; i < 240; i++) {
+    updateBoats(DT, scene, 1, far, { rawDt: DT });
+    peakY = Math.max(peakY, orb.mesh.position.y);
+  }
+  check('it never climbs back out of the water',
+    peakY < bounds.surfaceY, `highest y ${peakY.toFixed(2)}`);
+  const rest = bounds.surfaceY - CONFIG.attractorOrb.restDepth;
+  check('it settles at the tuned depth and stops there',
+    Math.abs(orb.mesh.position.y - rest) < 0.01,
+    `y ${orb.mesh.position.y.toFixed(2)} vs restDepth ${CONFIG.attractorOrb.restDepth}`);
+
+  // THE ONE THAT MAKES THE GRAB MEAN ANYTHING. An untouched clam is an
+  // advertisement, not a field — if it pulls before it is taken then swimming
+  // into it buys nothing and the pickup is decorative again.
+  check('an untouched clam pulls nothing',
+    chum.position.distanceTo(chumStart) < 0.001,
+    `chum moved ${chum.position.distanceTo(chumStart).toFixed(4)}u`);
+  check('...and it is still waiting to be taken', !orb.taken);
+
+  // Now swim into it. One frame, from inside its body.
+  let taken = 0;
+  const at = { x: orb.mesh.position.x, y: orb.mesh.position.y };
+  updateBoats(DT, scene, 1, at, { rawDt: DT, onAttractorTaken: () => { taken++; } });
+  check('swimming into it takes it', orb.taken === true);
+  check('...and the frame loop is told once', taken === 1, `${taken} call(s)`);
+  check('...and the body is swallowed — only the field is left',
+    !orb.mesh.userData.clam.body.visible && !orb.mesh.userData.clam.flesh.visible);
+
+  // TAKEN ONCE. A second frame inside the body must not re-fire — the toast,
+  // the shake and the tutorial event would all stutter with it.
+  updateBoats(DT, scene, 1, at, { rawDt: DT, onAttractorTaken: () => { taken++; } });
+  check('...and it cannot be taken twice', taken === 1, `${taken} call(s)`);
+
+  // And now it works. The seal moves; the chum has to come to the SEAL, not to
+  // where the clam was lying when it was picked up.
+  const moved = { x: 12, y: -14 };
+  const before = chum.position.distanceTo(new THREE.Vector3(moved.x, moved.y, 0));
+  for (let i = 0; i < 60; i++) updateBoats(DT, scene, 1, moved, { rawDt: DT });
+  const after = chum.position.distanceTo(new THREE.Vector3(moved.x, moved.y, 0));
+  check('a taken clam drags the chum to the seal',
+    after < before - 1, `${before.toFixed(1)}u -> ${after.toFixed(1)}u`);
+  check('...and the field rides the player, not the drop point',
+    Math.abs(orb.mesh.position.x - moved.x) < 0.001);
+  // Close to the rate it is tuned at — this is the assertion that catches a
+  // pull quietly running on the wrong clock or the wrong strength.
+  const rate = (before - after) / 1;
+  check('...at roughly the tuned pull strength',
+    Math.abs(rate - CONFIG.attractorOrb.pullStrength) < 1,
+    `${rate.toFixed(1)}u/s vs ${CONFIG.attractorOrb.pullStrength}`);
+
+  // The pull ends on `lifetime`, counted from the GRAB.
+  for (let i = 0; i < Math.ceil(CONFIG.attractorOrb.lifetime / DT) + 5; i++) {
+    updateBoats(DT, scene, 1, moved, { rawDt: DT });
+  }
+  check('the pull ends on its own clock', attractorOrbs.length === 0,
+    `${CONFIG.attractorOrb.lifetime}s`);
+
+  // AND AN UNTOUCHED ONE STILL GOES. Otherwise a clam nobody swims for is a
+  // permanent object pulsing in the water for the rest of the run.
+  spawnAttractorOrb(scene, new THREE.Vector3(0, bounds.surfaceY, 0));
+  const steps = Math.ceil(CONFIG.attractorOrb.waitTime / DT) + 5;
+  for (let i = 0; i < steps; i++) updateBoats(DT, scene, 1, far, { rawDt: DT });
+  check('an unclaimed clam expires on the grab window',
+    attractorOrbs.length === 0, `${CONFIG.attractorOrb.waitTime}s`);
+
+  pickups.length = 0;
+  resetBoats(scene);
+  CONFIG.boats.enabled = wasEnabled;
 }
 
 // ===========================================================================

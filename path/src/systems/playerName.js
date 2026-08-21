@@ -199,6 +199,10 @@ export function sanitizeName(raw) {
  *   quips.csv      through THIS function, called at the render site — quips
  *                  have no tokens of their own and needed no machinery to gain
  *                  one.
+ *   greetings.csv  through fillBindings as well, because the hello at the top
+ *                  of a run is handed to the band as a callout row (see
+ *                  systems/greeting.js). It is the table the token was really
+ *                  written for: every line in it says the player's name.
  *
  * A fourth table is the quips line: import this and call it. What must not
  * happen is a fourth place that reads the name and formats it itself, which is

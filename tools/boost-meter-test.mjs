@@ -263,10 +263,30 @@ check('  ...and ten seconds of doing nothing adds none',
 // THE TWO-COUNTER CHAIN — pips drive the MULTIPLIER, bars drive the PRICE.
 // ============================================================================
 
-console.log('\nEVERY MOUTHFUL FEEDS THE MULTIPLIER, NOT JUST A FULL BAR');
+// OPEN A COMBO THE WAY A CHARGED RELEASE DOES, without running the charge
+// economy to get there. Three things, and every check below needs all of them:
+// a WINDOW (isFeeding), an ARMING, and a bar's worth of ALLOWANCE. That last
+// one is what a strike buys — a chain grows by at most one barful per release
+// (see strikeState.pipBudget) — so a combo posed without it looks exactly like
+// a maxed bar and scores nothing.
+function openCombo() {
+  strikeState.active = true;
+  strikeState.armed = true;
+  strikeState.pipBudget = pipCount(stats());
+}
+// ...and what the NEXT release leaves behind: an empty bar and a fresh
+// allowance. Anything wanting more than one bar's worth of multiplier has to
+// go through this, because one bar's worth is now the whole of what a strike
+// can be paid.
+function nextCycle() {
+  strikeState.charge = 0;
+  strikeState.pipBudget = pipCount(stats());
+}
+
+console.log('\nEVERY MOUTHFUL FEEDS THE MULTIPLIER — up to a barful per strike');
 fuelled();
 strikeState.charge = 0;
-strikeState.active = true;          // a live combo, which is what opens the window
+openCombo();
 const per = pipCount(stats());      // 5 pips = one link's worth of multiplier
 feedChum(stats());
 check('one orb moves the multiplier depth off zero', chainLevel(stats()) > 0);
@@ -281,9 +301,11 @@ console.log('\nTHE OLD CONSTANTS STILL MEAN WHAT THEY MEANT');
 // on exactly the multiplier the per-link constants were tuned against, or every
 // one of them would have needed rescaling by hand.
 fuelled();
-strikeState.active = true;
+openCombo();
 strikeState.charge = 0;
-for (let i = 0; i < per * 2; i++) feedChum(stats());   // two links' worth
+for (let i = 0; i < per; i++) feedChum(stats());       // one bar...
+nextCycle();                                          // ...a strike between them...
+for (let i = 0; i < per; i++) feedChum(stats());       // ...and the second bar
 const lvl = chainLevel(stats());
 const offset = CONFIG.strike.chainLevelOffset ?? 1;
 check('two bars of food = level 2', near(lvl, 2, 1e-9));
@@ -299,7 +321,7 @@ console.log('\nONE ORB KEEPS THE CHAIN ALIVE — the reachability fix');
 // strike plus six mouthfuls in 1.1s. This is the check that it is now a single
 // mouthful, which is the difference between a mechanic and a trick.
 fuelled();
-strikeState.active = true;
+openCombo();
 strikeState.charge = 0;
 feedChum(stats());
 strikeState.active = false;         // the dash ends; only the window holds it now
@@ -326,7 +348,7 @@ check('  ...but still refills the bar', strikeState.charge > 0);
 
 console.log('\nA BAR OF FOOD IS A WHOLE LINK OF MULTIPLIER, AND COSTS NOTHING');
 fuelled();
-strikeState.active = true;
+openCombo();
 strikeState.charge = 0;
 check('base price is the base pip count', pipCount(stats()) === per);
 for (let i = 0; i < per; i++) feedChum(stats());   // fills the bar exactly once
@@ -342,7 +364,7 @@ console.log('\nTHE MULTIPLIER DOES NOT FALL BACKWARDS WHEN A LINK LANDS');
 // count that grows with each link would make earning a link visibly slow the
 // seal down — the exact opposite of what a link is for.
 fuelled();
-strikeState.active = true;
+openCombo();
 strikeState.charge = 0;
 for (let i = 0; i < per; i++) feedChum(stats());
 const before = chainLevel(stats());
@@ -1125,8 +1147,13 @@ console.log('\nEATING SINCE THE LAST STRIKE IS WHAT COUNTS — and it resets');
 // and with the gate at one mouthful it is a small exploit to close, but the
 // rule has to be the same one at every setting of `linkMinPips`.
 fuelled();
-for (let i = 0; i < 20; i++) feedChum(stats());   // graze with no window open
-check('grazing banks progress', strikeState.pipsSinceStrike === 20);
+strikeState.charge = 0;                          // ...on an EMPTY bar: the counter
+                                                 // banks PIPS OF FUEL now, not
+                                                 // swallows, so grazing with a full
+                                                 // bar banks nothing at all
+for (let i = 0; i < 20; i++) feedChum(stats());  // graze with no window open
+check('grazing banks progress, up to a barful', strikeState.pipsSinceStrike === per,
+  `${strikeState.pipsSinceStrike} of ${per}`);
 check('  ...but scores nothing, with no strike behind it', liveChain() === 0);
 strike();
 check('  ...and the release spends the hoard', strikeState.pipsSinceStrike === 0);

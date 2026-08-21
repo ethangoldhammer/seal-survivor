@@ -88,6 +88,9 @@ const GROUP_BY_NAME = {
   // Writes the sample assignments for one recording session into the tuning
   // file — an asset job, not a check.
   'sfx:assign': 'Assets',
+  // Cuts a usable one-shot out of a long library bed. An asset job, and
+  // destructive with --write.
+  'sfx:excerpt': 'Assets',
   bones: 'Assets', split: 'Assets', mussels: 'Assets', whale: 'Assets', notes: 'Assets', takes: 'Assets',
   anglerfish: 'Assets', guest: 'Assets', icons: 'Assets', 'icons:sheet': 'Assets',
   emissive: 'Audits', sockets: 'Audits', headsocket: 'Audits', 'chain:window': 'Audits',

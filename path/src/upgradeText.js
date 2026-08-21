@@ -136,7 +136,7 @@ export const STAT_TEXT = {
   clubLevel:          { label: 'club', kind: 'level', unlock: 'a club on each fin tip' },
   clubThrowLevel:     { label: 'thrown club', kind: 'level', unlock: 'hurled homing clubs on a strike' },
   clubBoomLevel:      { label: 'club blast', kind: 'level', unlock: 'every club hit detonates' },
-  clubIceLevel:       { label: 'club ice', kind: 'level', unlock: 'every club hit chills, and freezes when it saturates' },
+  clubIceLevel:       { label: 'club ice', kind: 'level', unlock: 'chill and freeze your opps' },
   // The Bouncer's three. All percentages, because the card is a multiplier on
   // a class rather than a level of anything — there is no "club power 3" to
   // name, only the numbers it moved.

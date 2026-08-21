@@ -116,6 +116,29 @@ export const SCHEMA = {
         labels: { seal: 'Beside the seal', corner: 'Bottom right' },
         hint: 'Where the two gauges are drawn',
       },
+      // WHAT SHAPE THE BOOST FUEL IS, and it is only the FUEL that moves.
+      //
+      //   bar   THE DEFAULT. The pips as a vertical column beside the air
+      //         gauge, so every meter in the game stacks in one place and
+      //         nothing is drawn over the animal you are trying to aim. It
+      //         also inherits the corner placement's one good idea: the
+      //         column GROWS as a link cuts the bar into more pips, which
+      //         around the seal is a fixed circle with thinner segments.
+      //   ring  The pip wheel around the seal (systems/strikeRing.js): the
+      //         count is where your eyes already are, and the fuel, the banked
+      //         power and the chain window are one instrument in one place.
+      //
+      // THE GOO STAYS ON THE SEAL EITHER WAY. Banked power is the thing the
+      // seal is holding, not a quantity in a corner, and the bubble growing
+      // out of the animal is the only cue that a wind-up is worth anything —
+      // see the note at the head of systems/strikeRing.js. This setting moves
+      // the pips and nothing else.
+      {
+        key: 'boostMeter', label: 'Boost meter', type: 'choice',
+        options: ['bar', 'ring'], def: 'bar',
+        labels: { ring: 'Ring on the seal', bar: 'Beside the air' },
+        hint: 'How the strike fuel is drawn',
+      },
     ],
   },
   controls: {
@@ -399,6 +422,25 @@ export function barPlacement() {
   // corrupted snapshot can still hold lands on the shipped placement rather
   // than on whichever branch happens to be first.
   return settings.hud.barPlacement === 'seal' ? 'seal' : 'corner';
+}
+
+/**
+ * Which shape the STRIKE FUEL is drawn in: 'bar' (a pip column beside the air
+ * gauge, which is what ships) or 'ring' (the pip wheel around the seal).
+ *
+ * Same "anything that is not the opt-out is the default" reading as
+ * barPlacement above, for the same reason: a corrupted snapshot must land on
+ * the shipped instrument rather than on whichever branch is written first.
+ * Note that this flipped once — the wheel was the default first — which is
+ * exactly why it is written this way round rather than as an equality against
+ * the value that happens to ship today.
+ *
+ * Read live by BOTH views — ui/ui.js decides whether to draw the column and
+ * systems/strikeRing.js decides whether to draw the wheel — off one function
+ * so the two can never both be on, or both be off, for a frame.
+ */
+export function boostMeter() {
+  return settings.hud.boostMeter === 'ring' ? 'ring' : 'bar';
 }
 
 /**

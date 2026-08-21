@@ -146,8 +146,14 @@ function edgeFloorPoint() {
   // side in a perfectly straight line.
   const fromLeft = pileX > mid ? Math.random() < 0.85 : Math.random() < 0.15;
   return {
-    x: fromLeft ? bounds.left - margin : bounds.right + margin,
+    x: (fromLeft ? -1 : 1) * margin,
     y: bounds.bottom + CONFIG.crabSpawn.floorHeight * 0.5,
+    // WHICH WING, said out loud. `spawnMargin` predates the drawn shore and is
+    // a smaller number than the frame can now travel past the wall, so the x
+    // above is not on its own far enough out to be off screen — spawnOne
+    // pushes an entrance to the line it measures, and it can only do that for
+    // a spawn that says it is one. See edgeSpawnPoint in entities/enemies.js.
+    side: fromLeft ? -1 : 1,
   };
 }
 
@@ -159,8 +165,9 @@ function edgePointNear(x) {
   const mid = (bounds.left + bounds.right) * 0.5;
   const fromLeft = x < mid ? Math.random() < 0.85 : Math.random() < 0.15;
   return {
-    x: fromLeft ? bounds.left - margin : bounds.right + margin,
+    x: (fromLeft ? -1 : 1) * margin,
     y: bounds.bottom + CONFIG.crabSpawn.floorHeight * 0.5,
+    side: fromLeft ? -1 : 1,
   };
 }
 

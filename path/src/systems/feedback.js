@@ -264,11 +264,24 @@ export function feedback(event, at = {}) {
   // the number on screen is never stale. What the gap limits is the RE-POP —
   // whether the line replays its arrival — because a proc firing every frame
   // would otherwise restart its own animation forever and never be readable.
+  //
+  // WHICH CARD, when only the call site knows. `toast` on the def holds ONE
+  // fixed upgrade id, which is exactly right for a passive that always
+  // announces itself and exactly wrong for the level blob — that pickup adds a
+  // stack to a RANDOM held upgrade, so its line has to name whichever one it
+  // actually levelled. `toastUpgrade` on the payload is that override, and it
+  // resolves through the same lookup, so the line still reads whatever
+  // upgrades.csv currently calls the card.
   if (def.toast && toastSink) {
-    const card = CONFIG.upgrades?.find((u) => u.id === def.toast);
+    const id = at.toastUpgrade ?? def.toast;
+    const card = CONFIG.upgrades?.find((u) => u.id === id);
     toastSink({
-      key: event,
-      label: card?.name ?? def.toast,
+      // Keyed on the CARD as well as the event whenever the call site chose it.
+      // ui/ui.js keeps one line per key and only ever updates its VALUE on a
+      // repeat, so two different upgrades sharing one key would put the second
+      // one's level under the first one's name.
+      key: at.toastUpgrade ? `${event}:${id}` : event,
+      label: card?.name ?? id,
       value: at.toastValue ?? null,
       x,
       y,

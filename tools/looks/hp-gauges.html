@@ -9,13 +9,13 @@
       /* Standing in for the arena. What matters for judging a GAUGE is that the
          water is dark and busy enough to lose a thin bar in — which is exactly
          what the old pair of 4px slivers did. */
-      #sea { position: fixed; left: 0; right: 0; top: 0; height: 58%;
+      #sea { position: fixed; left: 0; right: 0; top: 0; height: 44%;
         background: linear-gradient(180deg, #12557a 0%, #07253d 50%, #041420 100%);
         overflow: hidden; }
       .seal { position: absolute; width: 76px; height: 34px; border-radius: 50%;
         background: #33485c; box-shadow: 0 0 26px rgba(10,40,64,0.9);
         transform: translate(-50%, -50%); }
-      #note { position: fixed; left: 16px; top: 12px; z-index: 20; max-width: 520px; }
+      #note { position: fixed; left: 16px; top: 12px; z-index: 20; max-width: min(520px, 52vw); }
       #note h1 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
         color: #7ad7ff; font-weight: 600; margin: 0 0 6px; }
       #note p { color: #8fb3d8; margin: 0 0 6px; }
@@ -25,19 +25,43 @@
 
       /* THE STRIP. Below the water, on a flat ground, because these are
          specimens rather than things in a scene. */
-      #film { position: fixed; left: 0; right: 0; bottom: 0; height: 42%;
+      #film { position: fixed; left: 0; right: 0; bottom: 0; height: 56%;
+        overflow: auto;
         background: #061a2a; border-top: 1px solid #0e3550;
         padding: 14px 16px; box-sizing: border-box; }
       #film h2 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
         color: #7ad7ff; font-weight: 600; margin: 0 0 2px; }
       #film p { color: #6f9cc4; margin: 0 0 12px; font-size: 11px; }
-      #strip { display: flex; align-items: flex-end; gap: 14px; }
+      #strip, #strip2 { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap;
+        row-gap: 12px; }
       .cell { display: flex; flex-direction: column; align-items: center; gap: 7px; }
       /* The clone is a flex row of tracks; in the strip it is just a specimen. */
       .cell .sv-playerbars { position: static !important; }
       .cap { font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
         color: #6f9cc4; white-space: nowrap; }
       .gap { width: 22px; border-left: 1px dashed #17415f; align-self: stretch; }
+      /* A SPECIMEN IS A SCALED PHOTOGRAPH. The corner placement's tracks are a
+         quarter of the VIEWPORT tall, which is most of this panel — so the
+         strip shoots them against a shorter base. Only the base moves: the
+         fills are fractions of the track and the growth ratio is a multiple of
+         it, so every claim the row makes survives the shrink. */
+      .cell .sv-playerbars-corner { --sv-track: 8vh; --sv-track-max: 20vh; }
+      /* THE LIVE PAIR, in the corner placement, would otherwise sit BEHIND the
+         film — the gauges pin themselves to the bottom of the viewport and the
+         bottom of this page is a contact sheet. Lifted to the waterline, which
+         is the only thing about them this page is allowed to move. */
+      .sv-hud .sv-playerbars-corner { bottom: 44% !important; }
+      /* THE TWO SWITCHES. Both settings are taste questions and the only way
+         to answer one is to look at it, so the page carries the pause menu's
+         own choices rather than making somebody edit a file to compare. */
+      #switches { position: fixed; right: 16px; top: 44px; z-index: 20;
+        display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+      .row { display: flex; gap: 6px; align-items: center; }
+      .row span { font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+        color: #5f88ad; }
+      #switches button { background: #0a2c42; color: #8fb3d8; border: 1px solid #14496b;
+        border-radius: 4px; padding: 4px 9px; font: inherit; font-size: 11px; cursor: pointer; }
+      #switches button.on { background: #14496b; color: #cfe6ff; border-color: #2d7ba8; }
       #rebuild { position: fixed; right: 16px; top: 12px; z-index: 20;
         background: #0d3b57; color: #cfe6ff; border: 1px solid #1d5c7f;
         border-radius: 4px; padding: 5px 10px; font: inherit; cursor: pointer; }
@@ -56,11 +80,27 @@
       <p id="facts"></p>
     </div>
     <button id="rebuild">Re-shoot the strip</button>
+    <div id="switches">
+      <div class="row"><span>Gauges</span>
+        <button data-set="barPlacement" data-value="corner">Bottom right</button>
+        <button data-set="barPlacement" data-value="seal">Beside the seal</button></div>
+      <div class="row"><span>Boost</span>
+        <button data-set="boostMeter" data-value="ring">Ring on the seal</button>
+        <button data-set="boostMeter" data-value="bar">Beside the air</button></div>
+    </div>
     <div id="film">
       <h2>One bite, frame by frame</h2>
-      <p>Left of the divider: health draining, with the pale trail marking where it was.
-         Right: air falling past the amber threshold, where the whole track starts to pulse.</p>
+      <p>Left of the first divider: health draining, with the pale trail marking where it was.
+         Middle: air falling past the amber threshold, where the whole track starts to pulse.
+         The fuel column stands outboard of the air in every cell, empty here
+         because nothing is being eaten.</p>
       <div id="strip"></div>
+      <h2 style="margin-top:14px">The boost fuel, landing</h2>
+      <p>A whole bar swallowed on ONE frame. The meter does not draw that — it
+         draws a queue catching up to it, one pip every <b>pipStagger</b>, each
+         with its own spring and its own pop. Then the spend, which is the only
+         thing here allowed to be instant.</p>
+      <div id="strip2"></div>
     </div>
     <script type="module" src="./hp-gauges.js"></script>
   </body>

@@ -82,7 +82,7 @@ import { createHexMenu } from './hexMenu.js';
 import { createGrid } from './grid.js';
 import { setCausticsPunch } from './water.js';
 import { stateForSpeed } from './animation.js';
-import { menuInput } from '../input.js';
+import { menuInput, touchSlots } from '../input.js';
 import { feedback } from './feedback.js';
 
 // The live menu, or null. One at a time by construction — it holds a pose on
@@ -686,6 +686,13 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   let heldButton = -1;
   let heldAt = 0;
   let padHover = -1;
+  // Where the cursor is in NDC, and whether there is one at all — the two
+  // things the lattice's glow needs. Kept beside `cursorWorld` rather than
+  // derived from it, because the slot the grid reads is in NDC on purpose (it
+  // re-unprojects every frame, so a glow stays under the pointer while the
+  // camera moves beneath it). See publishCursor.
+  const cursorNdc = { x: 0, y: 0 };
+  let pointerInside = false;
   // Autopilot until a mouse actually moves. Not decoration: on a phone there is
   // no cursor at all, and without this the seal on the menu is a frozen stare.
   let auto = true;
@@ -701,7 +708,9 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
    */
   function pointTo(clientX, clientY, { look = true, pick = true } = {}) {
     const [vw, vh] = viewport();
-    cursorWorld.set((clientX / vw) * 2 - 1, -(clientY / vh) * 2 + 1, 0).unproject(camera);
+    cursorNdc.x = (clientX / vw) * 2 - 1;
+    cursorNdc.y = -(clientY / vh) * 2 + 1;
+    cursorWorld.set(cursorNdc.x, cursorNdc.y, 0).unproject(camera);
     cursorWorld.z = 0;
     // The body's forward — straight up, plus the measured plumb and the cant.
     if (look) bustAim(rig, cursorWorld, wantAim, Math.PI / 2 + plumb + (cfg.lean ?? 0), cfg.aimSpread);
@@ -711,10 +720,70 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     if (hovered >= 0 && hovered !== was) feedback('uiHover');
   }
 
+  // --- THE CURSOR'S OWN LIGHT ON THE LATTICE --------------------------------
+  //
+  // The hexes light up around the pointer, and bulge away from it, out to
+  // `touchRadius`. That is not written here: it is the game's own halo — the
+  // one a finger leaves on the water in a run (CONFIG.grid.touchGlow, drawn by
+  // systems/grid.js) — and this screen's scaling of it is already resolved by
+  // touchGlowForMenu above. The only thing missing was a POINTER: grid.js
+  // reads `touchSlots` from input.js, and those are filled by `touchstart`
+  // alone, so on a machine with a mouse the composed glow had nothing to
+  // follow and the backdrop simply never answered.
+  //
+  // So the mouse is PUBLISHED as a finger rather than reimplemented as a
+  // second kind of light. Everything in the touchGlow block then reaches both
+  // at once: hover and press are one behaviour with a weight (`charge.grow`
+  // swells the halo while a button is held — see the view handed to
+  // grid.update), the release knock fires when the slot is dropped, and a
+  // number retuned for the phone moves the desktop with it.
+  //
+  // THE LOWEST FREE SLOT, and never one a real finger is holding. A hybrid
+  // machine can have both, and stealing slot 0 from a thumb would move that
+  // thumb's glow to the mouse pointer mid-touch.
+  let mouseSlot = -1;
+  const MOUSE_ID = 'menu-mouse';
+
+  function publishCursor() {
+    // Not the autopilot. It sweeps the head so the animal is alive on a screen
+    // nobody is touching yet — a glow wandering the lattice on its own would
+    // read as the menu being used by somebody else, which is the same
+    // objection that already keeps the autopilot off the button highlight.
+    const live = pointerInside && mainMenuEngaged();
+    if (live && mouseSlot < 0) {
+      mouseSlot = touchSlots.findIndex((sl) => sl.id === null || sl.id === MOUSE_ID);
+    }
+    if (mouseSlot < 0) return;
+    const slot = touchSlots[mouseSlot];
+    // Somebody else took it while the pointer was away — leave it alone.
+    if (slot.id !== null && slot.id !== MOUSE_ID) { mouseSlot = -1; return; }
+    if (!live) {
+      // FREED, not moved off screen: the grid fades the halo out from where the
+      // pointer left, exactly as it does when a finger lifts.
+      slot.id = null;
+      slot.charging = false;
+      mouseSlot = -1;
+      return;
+    }
+    slot.id = MOUSE_ID;
+    slot.x = cursorNdc.x;
+    slot.y = cursorNdc.y;
+    // The swell is the PRESS, not the hover — see the charge terms in
+    // CONFIG.grid.touchGlow, and the `charging` flag handed to grid.update.
+    slot.charging = heldButton >= 0;
+  }
+
+  /** Drop the slot for good. Called from tidy, and by a pointer leaving. */
+  function dropCursor() {
+    pointerInside = false;
+    publishCursor();
+  }
+
   function onMove(e) {
     if (!mainMenuEngaged()) return;
     if (e.pointerType && e.pointerType !== 'mouse') return;
     auto = false;
+    pointerInside = true;
     pointTo(e.clientX, e.clientY);
   }
 
@@ -728,12 +797,37 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     // canvas, which is what makes a button's own text part of the button.
     if (e.target !== world.renderer.domElement) return;
     const mouse = !e.pointerType || e.pointerType === 'mouse';
+    if (mouse) pointerInside = true;
     pointTo(e.clientX, e.clientY, { look: mouse });
-    if (hovered < 0) return;
+    if (hovered < 0) {
+      // OPEN WATER. The lattice does not care what was over it — a screen that
+      // only answers on three small targets teaches you not to touch it — so a
+      // press anywhere puts a knock in the water under the pointer.
+      //
+      // Softer and tighter than a button's (CONFIG.splashBust.menu.waterPunch
+      // / waterRadius, fractions of the button's own impulse), and fired on the
+      // PRESS rather than the release: there is nothing to bank out here, so
+      // waiting for the lift would put the distortion after the gesture.
+      //
+      // BOTH lattices take it, exactly as a button's does — the shove is in the
+      // water rather than on a layer, so it is still spreading through the
+      // arena's grid after the menu's has faded out.
+      waterKnock(cursorWorld.x, cursorWorld.y);
+      return;
+    }
     heldButton = hovered;
     heldAt = performance.now();
     menu.press(heldButton);
     feedback('uiClick');
+  }
+
+  /** The lattice's own punch, at a point on open water. */
+  function waterKnock(x, y) {
+    const strength = (menuCfg.impulseStrength ?? 0.1) * (menuCfg.waterPunch ?? 0.45);
+    const radius = (menuCfg.impulseRadius ?? 5) * (menuCfg.waterRadius ?? 0.7);
+    if (!(strength > 0)) return;
+    withMenuGrid(() => grid.ripple(x, y, strength, radius));
+    world.grid?.ripple(x, y, strength, radius);
   }
 
   function onUp() {
@@ -766,6 +860,10 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   // A pointer that leaves the window mid-press never sends `up`. Without this
   // the button stays held, charging, forever.
   window.addEventListener('pointercancel', onUp);
+  // A cursor that leaves the window has no business still lighting the water.
+  // `blur` as well as `pointerleave`: alt-tabbing away never fires the latter.
+  window.addEventListener('pointerleave', dropCursor);
+  window.addEventListener('blur', dropCursor);
 
   // A slow sweep while nothing is driving the cursor. Two incommensurate rates
   // so the head wanders instead of tracing a loop, and written as a CURSOR
@@ -845,6 +943,12 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     window.removeEventListener('pointerdown', onDown);
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onUp);
+    window.removeEventListener('pointerleave', dropCursor);
+    window.removeEventListener('blur', dropCursor);
+    // The slot back to the pool BEFORE the run starts reading it for fingers.
+    // A menu that tore down holding one would leave a permanent glow on the
+    // arena's lattice at whatever the last cursor position unprojects to.
+    dropCursor();
     labelLayer.remove();
     scene.remove(menu.mesh);
     menu.mesh.geometry.dispose();
@@ -1009,9 +1113,27 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       // The lattice, ticked at the menu's own numbers — and with the seal's
       // wake handed in rather than read from CONFIG, because at this zoom the
       // run's dent is the whole picture (see wakeFor).
+      // The cursor, published as a finger before the lattice is ticked — the
+      // glow is resolved from NDC every frame (the camera is moving under it
+      // through the whole glide), so this has to be current when grid.update
+      // reads the slot rather than only when the pointer last moved.
+      publishCursor();
       withMenuGrid(() => {
         grid.pin(menuPins());
-        grid.update(dt, at, _still, { camera, wake: wakeFor(w) });
+        // `charging` / `charge` are the strike meter's shape in a run and a
+        // BUTTON's here: they are what makes the halo swell and pulse while
+        // something is being held down (CONFIG.grid.touchGlow.charge, scaled
+        // for this screen by touchPunch). Without them a press is the same
+        // light as a hover, and the one gesture the lattice should answer
+        // hardest is the one it cannot see.
+        grid.update(dt, at, _still, {
+          camera,
+          wake: wakeFor(w),
+          charging: heldButton >= 0,
+          charge: heldButton >= 0
+            ? Math.min(1, (performance.now() - heldAt) / 1000 / Math.max(0.01, menuCfg.chargeTime ?? 0.9))
+            : 0,
+        });
       }, w);
       // THE LIGHT IN THE WATER, at this crop. Set here and read by the water
       // material on the NEXT frame's colour pass — one frame of lag on an eased

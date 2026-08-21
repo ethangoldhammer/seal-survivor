@@ -271,7 +271,23 @@ export function buildSnapshotCard({ photo, meta, width = 340, pixelRatio } = {})
   const dpr = pixelRatio ?? Math.min(3, window.devicePixelRatio || 1);
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(w * CARD_ASPECT * dpr);
-  canvas.style.cssText = 'display:block; width:100%; height:auto;';
+  // THE SHAPE IS DECLARED, NOT INHERITED FROM THE BACKING STORE. `height: auto`
+  // on a canvas takes its ratio from the width/height ATTRIBUTES, and those are
+  // not ours alone: Rive re-sizes the drawing surface of every canvas it owns
+  // whenever that canvas goes from display:none back to displayed, and it takes
+  // the new size from getBoundingClientRect. On the score screen that toggle
+  // happens at the halfway point of a card flip, so the rect it reads is the
+  // card's PROJECTION — a print two thirds edge-on — and the surface comes back
+  // a quarter as wide as it is meant to be. With the ratio declared here, the
+  // worst that does is letterbox the drawing for the rest of the turn;
+  // resyncSnapshotCards() puts the surface back when the card lands. Without
+  // it, `height: auto` followed that ruined ratio and blew a 238px print up to
+  // eleven hundred, which pushes the fan, the buttons and the board out of the
+  // bottom of a face that clips — the card comes back "empty".
+  canvas.style.cssText = `display:block; width:100%; height:auto; aspect-ratio:${CARD_W}/${CARD_H};`;
+  // What the surface is MEANT to be, so a resize we did not ask for can be
+  // undone without measuring anything. See resyncSnapshotCards.
+  const surface = { w: canvas.width, h: canvas.height };
 
   const ready = (async () => {
     const { Rive, Layout, Fit, Alignment, decodeImage } = state.rive;
@@ -301,6 +317,14 @@ export function buildSnapshotCard({ photo, meta, width = 340, pixelRatio } = {})
       rive.cleanup();
       return null;
     }
+    // REGISTERED BEFORE THE PHOTOGRAPH, not after it. The image below is a
+    // decode of up to two megabytes and the card is turnable the whole time it
+    // is running — a flip that lands during it would find no entry here and
+    // leave that card's surface as Rive last measured it. The view model is
+    // kept alongside the instance so the write-on can be fired later, from the
+    // flight, without re-reading it off a Rive object the caller has no
+    // business holding.
+    live.set(canvas, { rive, vmi, surface });
     writeMeta(vmi, meta);
 
     let image = null;
@@ -316,10 +340,6 @@ export function buildSnapshotCard({ photo, meta, width = 340, pixelRatio } = {})
 
     const machines = rive.stateMachineNames ?? [];
     if (machines.length) rive.play(machines[0]); else rive.play();
-    // The view model is kept alongside the instance so the write-on can be
-    // fired later, from the flight, without re-reading it off a Rive object
-    // the caller has no business holding.
-    live.set(canvas, { rive, vmi });
     return rive;
   })();
 
@@ -388,6 +408,49 @@ function warnNoWriteOn(err) {
  */
 export function settleSnapshotCard(canvas) {
   live.get(canvas)?.rive?.pause();
+}
+
+/**
+ * Put every live card's drawing surface back to the size it was built at.
+ *
+ * WHY A CARD'S SURFACE MOVES WITHOUT BEING ASKED. Rive observes each canvas it
+ * owns with a ResizeObserver, and on the one transition it cares about — a
+ * canvas going from a zero-sized box back to a real one, which is what
+ * `display: none` coming off looks like — it re-sizes the drawing surface from
+ * `getBoundingClientRect()`.
+ *
+ * On the score screen that transition is the FLIP. ui/cardFlip.js swaps the two
+ * faces at the halfway point of the turn, on purpose and for the pad's sake, so
+ * the frame the front face comes back is a frame on which the card is about
+ * seventy-five degrees over. The rect Rive reads there is the card's projection
+ * — the same trap the worn edge fell into, see sizeCard in ui.js — so every
+ * print in the fan is handed a surface a quarter of its width and, through the
+ * perspective, half again its height. Then it stops: Rive only re-measures on
+ * the NEXT display toggle, so the card stays wrong until it is turned over and
+ * back again, which is the report this fixes.
+ *
+ * NOTHING IS MEASURED HERE, deliberately. The obvious repair is to call Rive's
+ * own `resizeDrawingSurfaceToCanvas()` once the card is square, and it is
+ * wrong for this card: the prints sit in a fan, each one under a rotation of
+ * its own and the selected one under a scale, so their rects are projections
+ * even at rest. The size a card was BUILT at is the only honest answer, and it
+ * is already known.
+ *
+ * Idempotent, and free when nothing has moved.
+ */
+export function resyncSnapshotCards() {
+  for (const [canvas, entry] of live) {
+    const want = entry.surface;
+    if (!want || (canvas.width === want.w && canvas.height === want.h)) continue;
+    canvas.width = want.w;
+    canvas.height = want.h;
+    // Writing either attribute CLEARS the canvas, and a settled card has no
+    // rAF of its own left to redraw it — settleSnapshotCard paused it once the
+    // print parked. So the frame has to be asked for by hand: resizeToCanvas
+    // moves the layout bounds onto the restored surface, drawFrame paints it.
+    entry.rive?.resizeToCanvas?.();
+    entry.rive?.drawFrame?.();
+  }
 }
 
 /** Drop one card's runtime instance. The canvas keeps its last frame. */

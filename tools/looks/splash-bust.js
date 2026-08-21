@@ -32,7 +32,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CONFIG } from '../../path/src/config.js';
-import { preloadAssets, createVisual, applyNoiseSettings } from '../../path/src/assets.js';
+import {
+  preloadAssets, createVisual, applySavedAssetLooks, applyNoiseSettings, applyToonSettings,
+  applyBiolumSkinSettings,
+} from '../../path/src/assets.js';
 import { createAnimationController } from '../../path/src/systems/animation.js';
 import { createAimRig } from '../../path/src/systems/aimRig.js';
 import { createEyeLights, updateEyeLights } from '../../path/src/systems/eyeLights.js';
@@ -259,7 +262,17 @@ await preloadAssets();
 // portrait composed on them was a fine-speckled seal in the run and a blotchy
 // one on the title card. It is a portrait — the surface is most of what there
 // is to look at.
+//
+// AND THE SAME IS TRUE OF EVERY OTHER LAYER OF THE SKIN. The noise is one of
+// four shaders that attach at material-build time with their own defaults, and
+// for a long time it was the only one pushed here — which left the toon
+// terraces and the saved per-asset looks on whatever the constructors seeded,
+// a flatter and paler animal than the run's. main.js runs all of these, in this
+// order, at this point in its boot.
+applySavedAssetLooks();
 applyNoiseSettings();
+applyToonSettings();
+applyBiolumSkinSettings();
 
 // --- the animal -------------------------------------------------------------
 // A holder carrying the cant and the model under it carrying nothing. UPRIGHT

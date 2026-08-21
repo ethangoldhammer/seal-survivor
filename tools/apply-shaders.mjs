@@ -68,15 +68,50 @@ function writeCell(v) {
 }
 
 // The cell each recorded creature wants in the `surface` column.
+//
+// A `+`-JOINED LIST OF LAYERS, in the order assetTable.js documents: noise,
+// toon, biolum. `texture` is the one value that is not a layer — it means none
+// of them — so it is written alone.
+//
+// TWO SHAPES ARE READ HERE, and the older one is not a legacy nicety: every
+// entry already in tools/looks/shader-lab.json was written under it, and this
+// file is cumulative. An entry with a `layers` object is the current lab; an
+// entry with only `surface`/`assets` is one of the 26 recorded before layers
+// existed, and it is expanded exactly the way the old CSV cell was — `noise`
+// meant noise AND toon, which is why every `noise:` row in assets.csv was
+// rewritten to name both.
+export function cellFor(entry, key, notes) {
+  const a = entry.assets ?? {};
+  // The current shape: a plain map of layer -> preset name (or `true` for the
+  // base numbers). Anything absent or falsy is that layer switched off.
+  const layers = entry.layers ?? (
+    entry.surface === 'texture' ? {}
+      : entry.surface === 'noise' ? { noise: a.noiseShader ?? true, toon: a.toonShade ?? a.noiseShader ?? true }
+        : entry.surface === 'biolum' ? { biolum: a.biolumSkin ?? true }
+          : null
+  );
+  if (!layers) {
+    notes?.push(`? ${key}: unknown surface "${entry.surface}" — skipped`);
+    return null;
+  }
+  const parts = [];
+  for (const kind of ['noise', 'toon', 'biolum']) {
+    const v = layers[kind];
+    if (!v) continue;
+    parts.push(typeof v === 'string' ? `${kind}:${v}` : kind);
+  }
+  // NO LAYERS IS `texture`, spelled out rather than left blank. A blank cell
+  // means "the asset keeps whatever it declares in code" — the opposite of what
+  // recording the texture surface is saying, and the difference is invisible in
+  // a spreadsheet until a creature comes up wearing a skin nobody chose.
+  return parts.length ? parts.join('+') : 'texture';
+}
+
 function cellsFor(applied, notes) {
   const cells = new Map();
   for (const [key, entry] of Object.entries(applied)) {
-    const kind = entry.surface;
-    const a = entry.assets ?? {};
-    if (kind === 'texture') cells.set(key, 'texture');
-    else if (kind === 'noise') cells.set(key, a.noiseShader ? `noise:${a.noiseShader}` : 'noise');
-    else if (kind === 'biolum') cells.set(key, a.biolumSkin ? `biolum:${a.biolumSkin}` : 'biolum');
-    else notes.push(`? ${key}: unknown surface "${kind}" — skipped`);
+    const cell = cellFor(entry, key, notes);
+    if (cell) cells.set(key, cell);
   }
   return cells;
 }

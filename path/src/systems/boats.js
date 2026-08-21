@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG, difficultyRamp } from '../config.js';
 import { createVisual, hasModel } from '../assets.js';
-import { bounds } from '../arena.js';
+import { bounds, seabedTopY } from '../arena.js';
 import { pickups, spawnXpOrb } from '../entities/pickups.js';
 import { recordSpawn } from './playtest.js';
 import { primeBoatDebris, spawnBoatDebris, updateBoatDebris, resetBoatDebris, blastDebris } from './boatDebris.js';
@@ -15,8 +15,8 @@ import { feedback } from './feedback.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
-// chum. A TRAWLER (bigger, tougher) also drops an attractor orb, which drags
-// every chum bit that's settled on the sea floor up to the player. That makes
+// chum. A TRAWLER (bigger, tougher) also drops an attractive clam — swim into
+// it and every chum bit settled on the sea floor comes up to you. That makes
 // a big seabed pile worth deliberately farming, and it plays against the
 // crab-spawning system, which punishes exactly the same pile.
 
@@ -243,22 +243,40 @@ function spawnBoat(scene, difficulty) {
 // entry `attractorOrb` is kept as the fallback for anything that still asks
 // assets.js for one (the tuner's Look panel enumerates the table).
 export function spawnAttractorOrb(scene, pos) {
+  const c = CONFIG.attractorOrb;
   const mesh = createAttractiveClam();
-  mesh.scale.setScalar(CONFIG.attractorOrb.scale);
+  mesh.scale.setScalar(c.scale);
   mesh.position.copy(pos);
+  // BELOW THE WATERLINE ON THE FIRST FRAME. The trawler that dropped this is
+  // floating ON the surface, so a clam left at the boat's own y is a pickup
+  // spawned in the air — and the seal cannot go there. It sinks from here.
+  mesh.position.y = Math.min(mesh.position.y, bounds.surfaceY - 1);
   scene.add(mesh);
-  attractorOrbs.push({ mesh, life: CONFIG.attractorOrb.lifetime });
-  // IT ANNOUNCES ITSELF ON ARRIVAL, because there is no other moment it could.
-  // Every other pickup gets its feedback when the seal swallows it; this one is
-  // never swallowed — it works where it lands and expires on its own clock — so
-  // without this the single most powerful thing a trawler drops entered the
-  // water in silence and the player's first clue was their chum moving.
+  attractorOrbs.push({
+    mesh,
+    // The two clocks. `wait` runs while it is in the water waiting to be
+    // grabbed; `life` is the pull, and does not start until it is.
+    wait: c.waitTime ?? 14,
+    life: c.lifetime,
+    taken: false,
+    // The mantle is a unit sphere scaled by `scale` — so this is the clam's
+    // actual world radius, and it is what the grab is measured against rather
+    // than a second number that could drift away from the one you can see.
+    bodyRadius: c.scale * (c.grabRadius ?? 1),
+  });
+  // IT ANNOUNCES ITSELF ON ARRIVAL, because a trawler dies in a lot of noise
+  // and the thing worth swimming for has to come out of that noise louder than
+  // the wreckage does. The grab has its own event on top of this one
+  // (`clamGrab`), the way every other pickup's swallow does.
   //
   // The colour is the wave's, so the burst and the pulses that follow it are
   // plainly the same object.
   feedback('clamDrop', {
-    x: pos.x,
-    y: pos.y,
+    x: mesh.position.x,
+    // Where the clam actually IS, not where the boat was: the burst is the
+    // thing pointing at it, and one fired at the waterline would point a whole
+    // unit above the pickup it is announcing.
+    y: mesh.position.y,
     scale: 1.2,
     color: CONFIG.attractorOrb.look?.waveColorNear ?? 0xff5fd2,
   });
@@ -322,7 +340,7 @@ function updateHullSmoke(dt, b) {
   }
 }
 
-// hooks: { onBoatDestroyed(boat), onChumSpawned(n), rawDt }
+// hooks: { onBoatDestroyed(boat), onChumSpawned(n), onAttractorTaken(orb), rawDt }
 //
 // `hooks.rawDt` is the undilated frame time. It reaches exactly one thing here
 // — the clam's beat-synced wave train — and it is optional, so every existing
@@ -418,32 +436,98 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
   updateBoatDebris(dt, scene);
   updateCrew(dt, scene);
 
-  // Attractor orbs: rise slowly and drag every settled chum bit toward the
-  // player. This deliberately ignores the normal pickup magnet radius —
-  // reaching the whole arena is the entire point.
+  // THE ATTRACTIVE CLAM, WHICH IS TWO THINGS IN A ROW.
+  //
+  //   WAITING   it sinks out of the wreck into the water column and hangs
+  //             there, pumping its waves, until the seal swims into it. It
+  //             pulls nothing yet: the waves are the advertisement, and the
+  //             coach line (`attractorOrb` in callouts.csv) says out loud that
+  //             this one is to be GRABBED.
+  //   WORKING   once grabbed the body is gone — swallowed — and what is left
+  //             follows the seal, dragging every settled scrap of chum in the
+  //             arena into it for `lifetime` seconds. The wave train comes with
+  //             it, so the pulses now leave the PLAYER, which is both where the
+  //             pull is coming from and the only way an invisible field says
+  //             anything at all.
+  //
+  // It used to be neither: it rose at `riseSpeed` from the boat that dropped
+  // it, which put it above the water inside a second, and it did its work
+  // whether or not anyone went near it. So the one pickup the coach tells you
+  // to grab was the one pickup in the game that could not be touched.
+  //
+  // The pull deliberately ignores the normal pickup magnet radius — reaching
+  // the whole arena is the entire point.
+  const clamCfg = CONFIG.attractorOrb;
   for (let i = attractorOrbs.length - 1; i >= 0; i--) {
     const o = attractorOrbs[i];
-    o.life -= dt;
-    o.mesh.position.y += CONFIG.attractorOrb.riseSpeed * dt;
-    // The clam does not SPIN any more. It used to turn at 3 rad/s, which is
-    // what you do to a featureless ball to stop it looking dead — this one has
-    // a front (the crease) and a pulse of its own, and turning it just hid
-    // them. What is left is a slow roll, so it reads as drifting rather than
-    // as being held.
-    o.mesh.rotation.z = Math.sin(o.mesh.position.y * 0.12) * 0.22;
+    if (o.taken) {
+      // Riding the seal. Position only — the clam is not parented to the
+      // player, because the waves are parented to the SCENE and are placed
+      // from `group.position` (see updateAttractiveClam), so a group living in
+      // the player's frame would put every ring in it too.
+      o.life -= dt;
+      o.mesh.position.x = playerPos.x;
+      o.mesh.position.y = playerPos.y;
+
+      for (const p of pickups) {
+        const dx = playerPos.x - p.mesh.position.x;
+        const dy = playerPos.y - p.mesh.position.y;
+        const d = Math.hypot(dx, dy) || 0.0001;
+        p.mesh.position.x += (dx / d) * clamCfg.pullStrength * dt;
+        p.mesh.position.y += (dy / d) * clamCfg.pullStrength * dt;
+      }
+    } else {
+      // Waiting to be grabbed. `wait`, not `life`: the grab window and the
+      // pull are two different clocks and always were — the saved `lifetime`
+      // in the tuning snapshot has meant "how long the field runs" since the
+      // day it was written, and quietly re-spending it as a grab window would
+      // have shortened the effect on every machine that has ever tuned it.
+      o.wait -= dt;
+      // IT SINKS, like the chum it commands. Clamped to a depth the seal
+      // actually swims at: a clam that came to rest on the seabed would want a
+      // full dive to reach, and this is a pickup, not an errand.
+      const rest = Math.max(seabedTopY() + 1.5, bounds.surfaceY - (clamCfg.restDepth ?? 9));
+      o.mesh.position.y = Math.max(rest, o.mesh.position.y - (clamCfg.sinkSpeed ?? 3.2) * dt);
+      // The clam does not SPIN. It used to turn at 3 rad/s, which is what you
+      // do to a featureless ball to stop it looking dead — this one has a
+      // front (the crease) and a pulse of its own, and turning it just hid
+      // them. What is left is a slow roll, so it reads as drifting rather than
+      // as being held.
+      o.mesh.rotation.z = Math.sin(o.mesh.position.y * 0.12) * 0.22;
+
+      // TAKEN BY TOUCHING ITS BODY, not its centre — the same rule the orbs in
+      // entities/pickups.js collect by, and for the same reason: this thing is
+      // `scale` units across, and a bare collectRadius would need the seal's
+      // nose most of the way into the middle of it.
+      const dx = playerPos.x - o.mesh.position.x;
+      const dy = playerPos.y - o.mesh.position.y;
+      if (Math.hypot(dx, dy) < (CONFIG.pickups?.collectRadius ?? 1) + o.bodyRadius) {
+        o.taken = true;
+        // The body is swallowed; the field is what is left. Hidden rather than
+        // removed because the group is what carries the beat clock and the
+        // rings still in flight — disposing it here would take the wave train
+        // out of the water on the frame the pull STARTS.
+        const st = o.mesh.userData.clam;
+        st.body.visible = false;
+        st.flesh.visible = false;
+        st.crease.visible = false;
+        feedback('clamGrab', {
+          x: o.mesh.position.x,
+          y: o.mesh.position.y,
+          scale: 1.3,
+          color: CONFIG.attractorOrb.look?.waveColorNear ?? 0xff5fd2,
+        });
+        hooks.onAttractorTaken?.(o);
+      }
+    }
+
     // rawDt, not dt: the wave train is a musical effect and has no business
     // stuttering because the game froze for 60ms on a hit.
     updateAttractiveClam(o.mesh, dt, scene, rawDt);
 
-    for (const p of pickups) {
-      const dx = playerPos.x - p.mesh.position.x;
-      const dy = playerPos.y - p.mesh.position.y;
-      const d = Math.hypot(dx, dy) || 0.0001;
-      p.mesh.position.x += (dx / d) * CONFIG.attractorOrb.pullStrength * dt;
-      p.mesh.position.y += (dy / d) * CONFIG.attractorOrb.pullStrength * dt;
-    }
-
-    if (o.life <= 0) {
+    // An uncollected clam expires on its own clock, exactly as every other
+    // pickup in the water does.
+    if (o.taken ? o.life <= 0 : o.wait <= 0) {
       scene.remove(o.mesh);
       disposeAttractiveClam(o.mesh);
       attractorOrbs.splice(i, 1);

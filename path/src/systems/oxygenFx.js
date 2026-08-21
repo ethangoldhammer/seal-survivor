@@ -4,7 +4,8 @@ import { setBandpass } from './music.js';
 
 // Everything that happens as the seal runs out of air: the warning beep, the
 // gasping when it surfaces to refill, and the blackout — the screen
-// pixelating and the score narrowing into a band as it fades.
+// falling apart into a failing CRT and the score narrowing into a band as it
+// fades.
 //
 // All of it hangs off ONE value, `oxygenFxState.strain`:
 //
@@ -13,23 +14,23 @@ import { setBandpass } from './music.js';
 //   strain 1   oxygen empty.
 //
 // One shared value rather than each effect deciding for itself when it starts
-// is what keeps the beep, the pixels and the filter arriving as a single
+// is what keeps the beep, the picture and the filter arriving as a single
 // event instead of three independent ones that happen to overlap. It's also
 // what makes easing out honest: recovering past the threshold walks the same
 // number back down, so the screen and the mix clear together.
 //
 // Strain is EASED, not read straight off the oxygen bar. Grabbing a bubble
-// orb is instant, and without the ease the screen would snap from heavily
-// pixelated to clean in a single frame — which reads as a rendering glitch,
-// not as relief.
+// orb is instant, and without the ease the screen would snap from a shredded
+// picture to a clean one in a single frame — which reads as a rendering
+// glitch, not as relief.
 
 export const oxygenFxState = {
   strain: 0,
 };
 
 // Below this, strain is treated as fully clear. Well under the point where
-// any of the three effects is audible or visible — the pixel ramp is still a
-// shader no-op here, and the band-pass crossfade is inaudible.
+// any of the three effects is audible or visible — the CRT ramp is still
+// invisible against the preset here, and the band-pass crossfade is inaudible.
 const SETTLED = 0.002;
 
 let beepTimer = 0;
@@ -186,15 +187,26 @@ export function updateOxygenFx(dt, player, active) {
   lastOxygen = player.oxygen;
 }
 
-// Block size, in device pixels, the post stack should pixelate to right now.
-// Returns 0 when the effect is dormant — the shader's own `uPixel > 1.0` gate
-// means anything at or below 1 is already a no-op, so the ramp starts AT 1
-// and grows from there rather than easing up through a dead zone where
-// nothing visibly happens.
-export function suffocationPixelSize() {
+// How hard the signal is breaking up right now, 0..1 — the eased strain put
+// through `crt.rampCurve`, or 0 when the effect is dormant.
+//
+// The blackout used to PIXELATE the screen. It doesn't any more: chunky blocks
+// read as the renderer giving up rather than as the seal losing consciousness,
+// and they fought the post presets, which already own the pixel knob. What
+// runs instead is the CRT screen filter pushed hard — the picture bulging on
+// the tube, the scan lines opening up and darkening, the colour splitting and
+// the lines starting to tear. The signal going, rather than the resolution.
+//
+// Returned as the ramped SCALAR rather than as the finished uniform values so
+// the numbers themselves live next to the rest of the screen filter, in
+// systems/post.js — see `applySuffocationCrt` there.
+export function suffocationCrt() {
   const strain = oxygenFxState.strain;
   if (strain <= SETTLED) return 0;
   const fx = CONFIG.oxygen.fx ?? {};
-  const curved = Math.pow(strain, Math.max(0.1, fx.pixelCurve ?? 1.8));
-  return 1 + curved * Math.max(0, (fx.pixelMax ?? 18) - 1);
+  if (fx.crt?.enabled === false) return 0;
+  // >1 holds the effect subtle through the early part of the range and saves
+  // the worst of it for the last moments. Linear made 1/8 of a tank look
+  // immediately broken, which spends the whole effect at once.
+  return Math.pow(strain, Math.max(0.1, fx.crt?.rampCurve ?? 1.8));
 }

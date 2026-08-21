@@ -200,6 +200,11 @@ export const NOISE_ALGOS = ['value', 'perlin', 'simplex', 'worley', 'ridged', 'b
 // crossfading the end of the sequence back into its start.
 const Z_PERIODIC = new Set(['value', 'perlin', 'worley', 'ridged', 'billow']);
 
+/** True when `algo` closes its own loop in z and needs no crossfade. */
+export function loopsInZ(algo) {
+  return Z_PERIODIC.has(algo);
+}
+
 function wrap(v, n) {
   return ((v % n) + n) % n;
 }
@@ -375,7 +380,15 @@ const noiseCache = new Map();
 // there are. This is what separates a boil from a flicker: the phases are
 // samples ALONG a smooth path through the field, not independent draws from
 // it. One cell would loop too obviously; more just slows the churn down.
-const Z_PERIOD = 2;
+/**
+ * How far in z one full boil travels before the field repeats.
+ *
+ * Exported because it is not a free parameter: anything building its own run
+ * of phases has to step across exactly this much or the loop it makes will not
+ * close, and a boil that jumps every few seconds reads as a dropped frame
+ * rather than as a mistake in a constant. See systems/meterNoise.js.
+ */
+export const Z_PERIOD = 2;
 
 function clamp01(v) {
   return v < 0 ? 0 : v > 1 ? 1 : v;

@@ -48,7 +48,9 @@
 // ---------------------------------------------------------------------------
 
 import { CONFIG } from '../config.js';
-import { clearForBoss, enemies, holdSpawns, removeEnemy, spawnNamed } from '../entities/enemies.js';
+import {
+  clearForBoss, enemies, holdSpawns, pushOffPicture, removeEnemy, spawnNamed, nightCycleRuns, wearsNightForm,
+} from '../entities/enemies.js';
 import bossNamesCsv from '../bossNames.csv?raw';
 import bossesCsv from '../bosses.csv?raw';
 import bossPerksCsv from '../bossPerks.csv?raw';
@@ -58,7 +60,7 @@ import { parseBossCsv, newBossBag, nextBoss, FALLBACK_BOSS } from '../bossTable.
 import { parseBossPerkCsv, rollBossPerk } from '../bossPerkTable.js';
 import { attachBossPerk, resetBossPerks, updateBossPerks } from './bossPerks.js';
 import { startBossRiser, stopBossRiser } from './bossRiser.js';
-import { startBossMusic, endBossMusic, resetBossMusic } from './music.js';
+import { startBossMusic, endBossMusic, resetBossMusic, fadeMusicForBoss, primeBossRoom } from './music.js';
 import { startBossKill } from './bossKill.js';
 import { attachBossBoat, isBoatBoss, resetBossBoat, updateBossBoat } from './bossBoat.js';
 import { attachKraken, releaseKraken, resetKraken, updateKraken } from './kraken.js';
@@ -67,6 +69,8 @@ import { attachHotSpots, resetBossHotSpots } from './bossHotSpots.js';
 import { beginBossWarmup, cancelBossWarmup, tickBossWarmup } from './bossWarmup.js';
 import { startCelebration } from './celebrate.js';
 import { bossCycleRelief, setBossCycle } from './waves.js';
+import { bounds } from '../arena.js';
+import { cineReveal, cineRevealDone } from './cineCamera.js';
 import { playSfx } from './audio.js';
 import { damageCreditFor } from './playtest.js';
 // Not sourceLabel directly: the ledger's name for a weapon is its BASE name,
@@ -198,6 +202,24 @@ export const bossState = {
   // rather than appear.
   arriving: false,
   arrivalFrac: 0,
+  // THE APPROACH — the beat BEFORE the arrival, and the reason the ceremony no
+  // longer starts on the spawn frame.
+  //
+  // Every creature in the game now enters from outside the picture, hidden
+  // behind the rock face it is swimming through (see THE ENTRANCE in
+  // entities/enemies.js). For a reef fish that is the whole feature. For the
+  // boss it changes when the ceremony can start: a bar that filled, a riser
+  // that climbed and a fight that began while the animal was still behind a
+  // cliff is two seconds of marquee spent on an empty screen.
+  //
+  // So the boss is untouchable and unannounced until it is clear of the rock,
+  // and the ceremony — bar, riser, music, and the camera turning to look at it
+  // — starts on that frame instead. `approachLeft` is the guard rail: a boss
+  // that somehow cannot get in (a body pinned by its own system, a tuner value
+  // that stops it swimming) still gets its fight, a couple of seconds late,
+  // rather than floating outside the wall invulnerable for the rest of the run.
+  approaching: false,
+  approachLeft: 0,
   // The boss's full health, so the HUD can size the bar to the fight. A later
   // boss is not just harder, it is visibly LONGER across the top of the
   // screen — the one piece of the escalation the player can read before the
@@ -216,6 +238,39 @@ export const bossState = {
 // variety lives in which archetype and which perk, both still rolled.
 function bossGap() {
   return Math.max(1, Math.round(CONFIG.boss?.everyLevels ?? 5));
+}
+
+// WHAT THE MOMENT ALLOWS — the two gates in bosses.csv that are about NOW
+// rather than about how far the player has got. Read at the draw, which is the
+// only place either of them means anything.
+//
+//   first   `sent` is how many bosses this run has already put in the water,
+//           and it is incremented after the draw — so 0 here is the run's
+//           first boss, the same reading rollBossPerk takes for "this one has
+//           no perk". A run opens on a shark or a crab: the first boss is the
+//           game teaching you what a boss IS, and that lesson wants the two
+//           bodies whose behaviour needs no explaining.
+//   night   asked of wearsNightForm() rather than of a threshold here, so the
+//           anglerfish joins the bag at the exact moment the glowing roster
+//           takes over the water — one changeover, not two that can drift.
+//           See CONFIG.spawn.nightlife.
+//
+//           ...and TRUE outright when there is no cycle to ask. With the day
+//           switched off `wearsNightForm()` is false forever, so a gate that
+//           read it alone would quietly delete the anglerfish from the roster
+//           of anyone who turned the sky off — a toggle that says nothing
+//           about bosses taking one out of the game. Same stand-down the
+//           nightlife curves themselves take.
+//
+// `forced` is the debug panel having named an archetype, and it stands BOTH
+// gates down — the same escape the level gate already gets a few lines into
+// forceBoss ("raised past the archetype's own gate so a level-2 dev run can
+// look at a boss that unlocks at 15"). A panel that could not summon the
+// anglerfish in daylight would be a panel that cannot show you the one
+// archetype hardest to see by playing.
+function bossMoment(opts = {}) {
+  if (opts.forced) return { first: false, night: true };
+  return { first: bossState.sent === 0, night: !nightCycleRuns() || wearsNightForm() };
 }
 
 /**
@@ -362,6 +417,9 @@ export function resetBoss(scene = null) {
   bossState.perk = null;
   bossState.arriving = false;
   bossState.arrivalFrac = 0;
+  bossState.approaching = false;
+  bossState.approachLeft = 0;
+  cineRevealDone();
   bossState.maxHp = 1;
   bossState.lastLevel = 0;
   bossState.hushing = false;
@@ -429,11 +487,117 @@ function applyBossScale(e, mul) {
 // one frame would remove the creature before this ever saw it. The guard in
 // resolveCombat is what makes that impossible for the one source big enough to
 // do it; the restore is what mops up everything else.
+// Is the whole body inside the walls — clear of the rock it swam in behind?
+//
+// GEOMETRY, not the `entering` flag, and the difference is a whole archetype:
+// the boat boss clears its own flag on the spawn frame because the entrance's
+// vertical clamp would hold its hull underwater (see attachBossBoat), so a
+// gate on the flag would fire the reveal on a boat still out at sea. This asks
+// the question the reveal is actually about — is it in the arena yet — and
+// gets the same answer for every body in the roster.
+function fullyInside(e) {
+  const x = e?.mesh?.position?.x;
+  if (!Number.isFinite(x)) return true;
+  const r = e.radius ?? 0;
+  // `deep` is asked rather than measured, unlike the walls. A boss that came
+  // up out of the seabed is clear of it when the entrance says so, and the
+  // entrance owns that test — measuring the height here would ALSO catch the
+  // crab boss, which lives on the floor by design and would therefore never
+  // be judged to have arrived at all.
+  return !e.deep && x > bounds.left + r && x < bounds.right - r;
+}
+
+// One tick of the approach: the boss is in the water, swimming in, and as far
+// as the rest of the game is concerned not here yet. It cannot be hurt (the
+// same two-lock arrangement tickArrival uses and for the same reason) and it
+// announces nothing.
+//
+// Returns true once the ceremony should start.
+function tickApproach(dt, e) {
+  bossState.approachLeft = Math.max(0, bossState.approachLeft - dt);
+  // The invulnerability, enforced twice — see the note on tickArrival. The
+  // restore is the half that catches damage from the nineteen files that
+  // subtract from hp without asking anyone.
+  if (CONFIG.boss?.arrival?.invulnerable !== false) {
+    e.invuln = Math.max(e.invuln ?? 0, 0.25);
+    e.hp = e.maxHp;
+  }
+  return fullyInside(e) || bossState.approachLeft <= 0;
+}
+
+// THE CEREMONY STARTS. The boss is out from behind the rock and in open water,
+// and everything that announces it fires on this one frame: the bar starts
+// filling, the riser starts climbing, and the camera turns to look at the
+// animal for exactly as long as the other two take.
+//
+// One function rather than the same six lines at the two call sites (the
+// approach ending, and a spawn with no approach to end), because the whole
+// point of the moment is that its parts are simultaneous — and two copies of
+// "simultaneous" is how one of them ends up a frame late.
+function beginArrival(e) {
+  const cfg = CONFIG.boss?.arrival ?? {};
+  bossState.approaching = false;
+  bossState.approachLeft = 0;
+  if (cfg.enabled === false) {
+    bossState.arriving = false;
+    bossState.arrivalFrac = 1;
+    bossState.hpFrac = 1;
+    e.invuln = 0;
+    return;
+  }
+  const seconds = Math.max(0.01, cfg.seconds ?? 2);
+  bossState.arriving = true;
+  bossState.arrivalFrac = 0;
+  bossState.hpFrac = 0;
+  if (cfg.invulnerable !== false) e.invuln = seconds;
+  startBossRiser(seconds);
+  // ...and the frame goes to the boss, for as long as the ceremony runs. The
+  // subject is a FUNCTION because the animal is still swimming — see cineReveal
+  // — and it reads the live reference rather than closing over the creature, so
+  // a boss killed or cleared mid-shot ends the shot instead of leaving the
+  // camera pointed at a body that is no longer in the water.
+  // ...and the frame goes to the boss. HELD rather than timed — see cineReveal
+  // — so that the shot and the ceremony share one clock. The camera runs on the
+  // wall clock and this runs on the game's, and the two come apart the moment
+  // anything stops the run: an xp spill can open a level-up card in the middle
+  // of an arrival, and a shot on its own countdown would end there, over a
+  // health bar frozen half full. tickArrival lets go.
+  //
+  // The subject is a FUNCTION because the animal is still swimming, and it
+  // reads the live reference rather than closing over the creature — so a boss
+  // killed or cleared mid-shot ends the shot rather than leaving the camera
+  // pointed at a body that is no longer in the water.
+  if (CONFIG.boss?.reveal?.enabled !== false) {
+    cineReveal(() => {
+      const b = bossState.enemy;
+      return b?.mesh ? { x: b.mesh.position.x, y: b.mesh.position.y } : null;
+    });
+  }
+  // ...AND THE RUN'S MUSIC GOES WITH IT. The last half-second of the loop is
+  // thrown into a long reverb and the transport is muted under it, so what
+  // carries the rest of the ceremony is the run's own music ringing out over an
+  // empty ocean with the riser climbing through it. The boss loop then lands on
+  // the frame the bar fills — see startBossMusic, which switches unquantised
+  // precisely because this has already removed the seam a bar line was there to
+  // hide. See CONFIG.boss.arrival.music.
+  //
+  // The CUT is clamped inside the ceremony rather than trusted from the config:
+  // a transport still on its way down when the boss music starts would have the
+  // two crossing over each other.
+  const m = cfg.music ?? {};
+  fadeMusicForBoss({ ...m, cut: Math.min(seconds * 0.9, m.cut ?? 0.9) });
+}
+
 function tickArrival(dt, e) {
   const cfg = CONFIG.boss?.arrival ?? {};
   const seconds = Math.max(0.01, cfg.seconds ?? 2);
 
   bossState.arrivalFrac = Math.min(1, bossState.arrivalFrac + dt / seconds);
+  // AND THIS IS THE CLOCK THE SHOT ENDS ON. `share` below 1 hands the seal back
+  // before the fight starts, which is a kindness nobody asked for — but it is
+  // the ceremony's own linear time either way, so a paused run pauses the
+  // camera move with everything else.
+  if (bossState.arrivalFrac >= (CONFIG.boss?.reveal?.share ?? 1)) cineRevealDone();
   // The bar shows the CEREMONY, not the health, for as long as it is running.
   // Feeding it the real hpFrac would draw a full bar for two seconds and then
   // a full bar for the fight, and nothing would ever appear to fill.
@@ -543,6 +707,13 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     }
     bossState.enemy = null;
     bossState.arriving = false;
+    bossState.approaching = false;
+    bossState.approachLeft = 0;
+    // ...and the frame comes back to the seal if it was away. A reveal reads
+    // its subject through `bossState.enemy` and would end itself on the next
+    // frame anyway; ending it here is what keeps that from being one frame of
+    // the camera pointed at a fight that has just been switched off.
+    cineRevealDone();
     // The hush goes with it, and the spawner's claim is released on the same
     // frame rather than left to run down: with the boss switched off there is
     // no longer an arrival for the quiet to be leading up to, and an empty
@@ -580,6 +751,16 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   if (bossState.enemy) {
     if (enemies.includes(bossState.enemy)) {
       const e = bossState.enemy;
+      if (bossState.approaching) {
+        // The frame the boss clears the rock STARTS the ceremony and does not
+        // also advance it. Falling through to tickArrival here would spend the
+        // first frame of the fill on the same frame the bar first appears, so
+        // the bar's opening value would be a frame's worth of an easing curve
+        // rather than empty — small, visible, and exactly the sort of thing
+        // that makes a fill look like it starts from a sliver.
+        if (tickApproach(dt, e)) beginArrival(e);
+        return null;
+      }
       if (bossState.arriving) tickArrival(dt, e);
       else bossState.hpFrac = Math.max(0, Math.min(1, e.hp / Math.max(1, e.maxHp)));
       return null;
@@ -617,6 +798,13 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     bossState.enemy = null;
     bossState.hpFrac = 0;
     bossState.arriving = false;
+    bossState.approaching = false;
+    bossState.approachLeft = 0;
+    // The kill shot owns the frame from here (systems/bossKill.js), so a
+    // reveal still holding the camera would be two shots fighting over one
+    // death. Only reachable with the arrival's invulnerability switched off,
+    // which is a toggle rather than a promise.
+    cineRevealDone();
     bossState.defeated += 1;
     // WHERE THE NEXT CYCLE STARTS FROM. Set before anything else reads it, and
     // set to the level the kill happened at rather than the one the fight
@@ -737,11 +925,19 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
       // arrival, so a run that toggled the boss off and on would burn through
       // the shuffle bag at twice the rate and start repeating archetypes it
       // had never actually sent.
-      bossState.pending ??= nextBoss(ROSTER, bossState.bag, gameState.level ?? 1) ?? FALLBACK_BOSS;
+      bossState.pending ??= nextBoss(ROSTER, bossState.bag, gameState.level ?? 1,
+        Math.random, bossMoment(opts)) ?? FALLBACK_BOSS;
       // ...and now the empty ocean is spent building it. See
       // systems/bossWarmup.js: the body, its textures and its programs, one
       // step per frame, so the arrival frame has nothing left to pay for.
       beginBossWarmup(bossState.pending);
+      // ...and the ROOM the run's music will ring out into when the camera
+      // turns, built here for the same reason the body is: an impulse is two
+      // channels of a few hundred thousand random numbers, and the frame that
+      // would otherwise pay for it is the frame the boss comes out from behind
+      // the rock — the pan, the riser and the bar all at once. See
+      // primeBossRoom.
+      primeBossRoom(CONFIG.boss?.arrival?.music ?? {});
     }
     // One unit of warm-up work per frame of the hush. Deliberately before the
     // countdown's early return, so it runs on every frame of the quiet rather
@@ -769,7 +965,9 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // tuner, and forceBoss, which passes `skipHush`. Those arrive cold, which is
   // the behaviour they had before this existed.
   const level = gameState.level ?? 1;
-  const archetype = bossState.pending ?? nextBoss(ROSTER, bossState.bag, level) ?? FALLBACK_BOSS;
+  const archetype = bossState.pending
+    ?? nextBoss(ROSTER, bossState.bag, level, Math.random, bossMoment(opts))
+    ?? FALLBACK_BOSS;
   bossState.pending = null;
   const key = archetype.enemy;
   if (!CONFIG.enemies[key]) {
@@ -803,6 +1001,10 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   if (!e) return null; // unreachable today; the guard costs nothing
 
   applyBossScale(e, archetype.sizeMul ?? 1);
+  // ...and it goes back outside the picture at its NEW size. The entrance is
+  // measured against the radius and the radius has just changed — see
+  // pushOffPicture, which exists for this one call.
+  pushOffPicture(e);
 
   // Marked BEFORE the clear-out, so the sweep can recognise the boss without
   // being handed it, and so the spawn lockout is live from this same frame
@@ -819,7 +1021,11 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // BEFORE the roll reads it, hence the 0 on the first call. See rollBossPerk.
   const perk = rollBossPerk(PERKS, bossState.sent);
   bossState.sent += 1;
-  attachBossPerk(scene, e, perk);
+  // The run's difficulty goes with it, and it is read once: a perk with a
+  // `damagePerDifficulty` in bossPerks.csv resolves what its hits are worth at
+  // ATTACH, the same moment spawnNamed above resolved this body's hp and
+  // contact. See attachBossPerk.
+  attachBossPerk(scene, e, perk, gameState.difficulty ?? 0);
   // ...and, if this one is a boat, the bombardment it always has. Its own
   // system rather than a perk, because it comes with a body that cannot swim
   // and a station on the surface — see systems/bossBoat.js. The rolled perk
@@ -864,20 +1070,27 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // 15, not four in a row on consecutive frames.
   bossState.nextLevel = Math.max(level + 1, bossState.nextLevel + bossGap());
 
-  // The ceremony. Started here rather than on the next frame so the riser's
-  // sweep is scheduled against exactly the window the bar will fill across.
-  const arrival = cfg.arrival ?? {};
-  if (arrival.enabled !== false) {
-    bossState.arriving = true;
-    bossState.arrivalFrac = 0;
-    bossState.hpFrac = 0;
-    if (arrival.invulnerable !== false) e.invuln = Math.max(0.01, arrival.seconds ?? 2);
-    startBossRiser(arrival.seconds ?? 2);
-  } else {
-    bossState.arriving = false;
-    bossState.arrivalFrac = 1;
-    bossState.hpFrac = 1;
-  }
+  // THE APPROACH, and then the ceremony. The creature is in the water on this
+  // frame but it is not on screen — spawnNamed placed it past the edge of the
+  // picture, behind the rock face, like every other spawn in the game — so
+  // what starts here is the swim in. Everything that ANNOUNCES the boss waits
+  // for it to come out from behind the cliff (see beginArrival), because a bar
+  // that fills over an empty screen is the marquee moment of the run spent on
+  // nothing.
+  //
+  // A boss that is somehow already inside skips straight through on this same
+  // frame rather than waiting a tick: the tuner can switch the rock face off,
+  // and a forced spawn can land anywhere.
+  bossState.arriving = false;
+  bossState.arrivalFrac = 0;
+  bossState.hpFrac = 0;
+  bossState.approaching = true;
+  // Long enough for the slowest body in the roster to cross at the entrance's
+  // own floor speed, and no longer — this is a guard rail, not a timer, and
+  // every frame of it that is actually spent waiting is a frame the player
+  // spends looking at an empty ocean.
+  bossState.approachLeft = Math.max(0.1, cfg.approachSeconds ?? 6);
+  if (tickApproach(0, e)) beginArrival(e);
 
   return e;
 }
@@ -904,6 +1117,21 @@ export function updateBossAbilities(dt, scene, playerPos, hooks) {
   // inside the run gate; unlike it, this one MOVES the animal, so it matters
   // that it runs after the perks — see the yield in systems/bossAngler.js.
   updateBossAngler(dt, scene, playerPos, hooks);
+}
+
+/**
+ * Is the boss in the water but not yet in the fight?
+ *
+ * True across BOTH beats of the entrance — the swim in from behind the rock
+ * and the ceremony that follows it. Callers ask because those two are one
+ * continuous stretch to a player: the creature exists, the water is empty, and
+ * nothing has started. Anything that treats "there is a boss" as "the fight is
+ * on" wants this instead, or it fires early — the chum spawner paying out a
+ * fight that has not begun, a warning callout blinking off and on again as the
+ * approach hands over to the arrival inside one frame.
+ */
+export function bossEntering() {
+  return !!bossState.enemy && (bossState.approaching || bossState.arriving);
 }
 
 // ---------------------------------------------------------------------------
@@ -1022,7 +1250,8 @@ export function forceBoss(scene, gameState, opts = {}) {
   const at = Math.max(level, chosen?.minLevel ?? 0);
   bossState.nextLevel = 0;
 
-  const e = updateBoss(1 / 60, { ...gameState, level: at, running: true }, scene, { skipHush: true });
+  const e = updateBoss(1 / 60, { ...gameState, level: at, running: true }, scene,
+    { skipHush: true, forced: !!chosen });
 
   bossState.bag = savedBag;
   bossState.pending = savedPending;
@@ -1040,7 +1269,7 @@ export function forceBoss(scene, gameState, opts = {}) {
   const want = perk ? (PERKS.find((p) => p.id === perk) ?? null) : null;
   if (perk !== undefined && (bossState.perk?.id ?? null) !== (want?.id ?? null)) {
     bossState.perk = want;
-    attachBossPerk(scene, e, want);
+    attachBossPerk(scene, e, want, gameState.difficulty ?? 0);
     bossState.name = rollBossName(NAME_PARTS, {
       boss: bossState.archetype?.id ?? null,
       perk: want?.id ?? null,
@@ -1064,6 +1293,11 @@ export function forceBoss(scene, gameState, opts = {}) {
  */
 export function bossBanner() {
   if (!bossState.enemy) return null;
+  // NOT WHILE IT IS STILL SWIMMING IN. The bar appears with the reveal, on the
+  // frame the animal comes out from behind the rock — a name and an empty red
+  // bar across the top of an empty ocean announces a boss the player cannot
+  // see yet, and spends the whole surprise on the HUD.
+  if (bossState.approaching) return null;
   return {
     name: bossState.name,
     frac: bossState.hpFrac,

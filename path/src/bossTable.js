@@ -21,6 +21,30 @@
 //             0 means "from the first boss". This is the difficulty curve: the
 //             shark is what a run meets first, and everything else is an
 //             escalation that has to be earned.
+//   opener    TRUE means this archetype may be a run's FIRST boss. Blank is
+//             FALSE, and the gate only applies to that one slot — from the
+//             second boss on, everything eligible rolls as it always did.
+//
+//             THIS IS AN ORDINAL, NOT A LEVEL, and that is the whole reason it
+//             is a column rather than a bigger `minLevel`. Bosses arrive every
+//             fifth level and the first is due at 5, so "never opens a run"
+//             spelled in levels is `minLevel 6` — a number that means nothing
+//             on its own and that silently stops meaning it the moment
+//             CONFIG.boss.everyLevels moves. Four rows in this file carried
+//             notes claiming they were held out of the first slot while their
+//             cells said exactly 5, which let every one of them open a run.
+//
+//             A file with NO opener marked is not a run with no boss: the gate
+//             stands down and every eligible archetype may open, which is what
+//             the roster did before this column existed.
+//   nightOnly TRUE means the archetype is only in the bag while the water is
+//             DARK. Blank is FALSE — available whatever the sky is doing.
+//
+//             Darkness is asked of `wearsNightForm()` (entities/enemies.js),
+//             the same changeover the glowing roster and the dual-form
+//             costumes already ride, so a night boss arrives with the cast it
+//             belongs to instead of on a threshold of its own that could drift
+//             from theirs.
 //   weight    how likely it is RELATIVE TO THE OTHER ELIGIBLE ARCHETYPES.
 //             Blank means 1; 0 takes it out without disabling the row.
 //   ownNames  TRUE means this archetype draws ONLY from name parts that name
@@ -41,6 +65,10 @@ const FILE = 'bosses.csv';
 // feature quietly switching itself off with no symptom but silence.
 export const FALLBACK_BOSS = Object.freeze({
   id: 'bossShark', enemy: 'bossShark', sizeMul: 1.6, weight: 1, minLevel: 0, ownNames: false,
+  // It is the archetype a run is meant to open on, so the emergency one says
+  // so too — otherwise the fallback would be a boss that is not allowed to be
+  // the first boss, in the exact situation where it is the only boss there is.
+  opener: true, nightOnly: false,
 });
 
 /**
@@ -77,6 +105,11 @@ export function parseBossCsv(text, enemies = null, warn = console.warn) {
     const ownNames = row.ownNames == null || String(row.ownNames).trim() === ''
       ? false
       : parseBool(row.ownNames, LABEL, id, 'ownNames', warn);
+    // Same blank-is-FALSE rule as `ownNames`, and for the same reason: a row
+    // that says nothing is a row making no claim, and both of these are claims.
+    const flag = (field) => (row[field] == null || String(row[field]).trim() === ''
+      ? false
+      : parseBool(row[field], LABEL, id, field, warn));
 
     out.push({
       id,
@@ -86,6 +119,8 @@ export function parseBossCsv(text, enemies = null, warn = console.warn) {
       sizeMul: sizeMul > 0 ? sizeMul : 1,
       weight: weight == null ? 1 : weight,
       minLevel: minLevel == null ? 0 : minLevel,
+      opener: flag('opener'),
+      nightOnly: flag('nightOnly'),
       ownNames,
     });
   }
@@ -97,9 +132,29 @@ export function parseBossCsv(text, enemies = null, warn = console.warn) {
   return out;
 }
 
-/** Which archetypes the player has unlocked at this level. */
-export function eligibleBosses(roster, level) {
-  return roster.filter((b) => (level ?? 1) >= b.minLevel && b.weight > 0);
+/**
+ * Which archetypes may arrive right now.
+ *
+ * `level` is the difficulty curve — the one gate that is about how far the
+ * player has got. `when` is about the MOMENT, and both of its keys are
+ * deliberately handed in rather than read here: this module is parsed by
+ * harnesses with no run and no sky behind them.
+ *
+ *   when.first   is this the first boss of the run? Only `opener` rows may
+ *                take that slot. Left out (or false) and the gate does not
+ *                apply, which is every boss after the first.
+ *   when.night   is the water dark? `nightOnly` rows are out until it is.
+ */
+export function eligibleBosses(roster, level, when = {}) {
+  const pool = roster.filter((b) => (level ?? 1) >= b.minLevel && b.weight > 0
+    && (!b.nightOnly || when.night === true));
+  if (!when.first) return pool;
+  // THE ESCAPE HATCH, and it is a real case rather than defensive padding: a
+  // file with no `opener` marked anywhere means the rule was never asked for,
+  // and refusing to send a first boss would switch the whole feature off with
+  // no symptom but an ocean that stays quiet at level 5.
+  const openers = pool.filter((b) => b.opener);
+  return openers.length ? openers : pool;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,9 +188,15 @@ export function newBossBag() {
 /**
  * Draw the next archetype. Returns null only when nothing is eligible yet,
  * which at level 1 with a roster gated behind minLevel is a real answer.
+ *
+ * `when` is eligibleBosses's — `{ first, night }`. It is applied to the DRAW
+ * and not to the bag: an archetype the moment has ruled out is simply not in
+ * the pool this time and is not marked drawn, so it is still there on the next
+ * one. That is what keeps a night boss from being spent on a daylight fight it
+ * was never a candidate for.
  */
-export function nextBoss(roster, bag, level, random = Math.random) {
-  const eligible = eligibleBosses(roster, level);
+export function nextBoss(roster, bag, level, random = Math.random, when = {}) {
+  const eligible = eligibleBosses(roster, level, when);
   if (!eligible.length) return null;
 
   // Anything already drawn this bag is out. An archetype that became eligible

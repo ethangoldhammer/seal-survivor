@@ -7,6 +7,7 @@ import { nearestFloatingCrew, crewPosition, crewRadius, eatCrew } from './crew.j
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { targeting, companionDamage, applyCompanionScale } from './scaling.js';
 import { markWeight } from './marks.js';
+import { inSpawnGroup } from '../enemyTable.js';
 import { player } from '../entities/player.js';
 
 // Orca Family — a pod of three that swims with the seal and peels off, one at
@@ -18,10 +19,14 @@ import { player } from '../entities/player.js';
 // up, and spending time where the fish aren't. Every other companion targets
 // whatever is nearest, which in practice always means fish.
 //
-// So this pod deliberately looks PAST fish. Boat first, every time, out to
-// `huntRange`; fish only when there is no boat left to hunt, and even then
-// only fish above `fallbackMinRadius`, so it never degenerates into a third
-// seal team mopping up minnows.
+// So this pod deliberately looks PAST fish. Targets are picked in TIERS rather
+// than scored against each other (see acquire): a hull anywhere in `huntRange`
+// beats everything, then SHARKS — the whole `shark` spawn group out of
+// enemies.csv — then, in a shorter range of its own, anything else above
+// `fallbackMinRadius`. Boats and sharks are the two things in the water that
+// three tonnes of orca is the right answer to; the third tier exists so a pod
+// with a clear surface and no sharks left is not idle, not so it can degenerate
+// into a third seal team mopping up minnows.
 //
 // The pod is fixed at `count` and stacks make them hit harder and hunt more
 // often, rather than adding orcas. Splitting three across three levels would
@@ -39,9 +44,13 @@ import { player } from '../entities/player.js';
 //      — a third of the seal's top speed. A pod that physically cannot match
 //      the animal it is escorting is always being dragged, so it never sat in
 //      formation; it trailed, caught up, overshot and swung past. The spring is
-//      solved in the SEAL'S FRAME now: the pod inherits the player's velocity
-//      outright and `cruiseSpeed` limits only the closing speed on top of it,
-//      which is what "swimming with you" actually is.
+//      solved in the SEAL'S FRAME now: the pod inherits `velocityFollow` of the
+//      player's velocity and `cruiseSpeed` limits only the closing speed on top
+//      of it, which is what "swimming with you" actually is. The fraction and
+//      the `formationSlack` dead zone around each station are what keep it
+//      SWIMMING with you rather than welded to you — solving the spring exactly,
+//      every frame, from a velocity inherited whole is a rigid parent with extra
+//      steps, and it read as one.
 //   2. A CHARGE COULD NEVER END IN A MISS. The only way out of `charge` was
 //      landing the hit or the target dying, and the run is turn-rate limited —
 //      at `chargeSpeed` over `turnRate` the tightest circle an orca can fly was
@@ -130,6 +139,10 @@ function newMember(root, visual, anim, slot, pos) {
     // getting FURTHER away by more than `overshootSlack` has missed — which is
     // a thing the old two-state loop could not represent, so it kept turning.
     closest: Infinity,
+    // The speed the current run is making. A charge opens at the speed the orca
+    // was already swimming and eases up to `chargeSpeed` — see the break-off
+    // note in the charge branch.
+    chargeSpeedNow: 0,
     overrun: 0, // seconds left of the follow-through after a run ends
     // --- facing (see faceTravel) ---
     heading: 0,      // the EASED heading, which is what root.rotation.z shows
@@ -177,9 +190,21 @@ export function orcaPodDebug() {
     slot: m.slot,
     state: m.state,
     target: m.target?.kind ?? null,
+    // WHICH one, not just what kind. Targets are picked in tiers now (boat,
+    // then shark, then anything else big) and a tier order is not visible from
+    // the kind alone — a shark and a turtle are both 'fish'. The reference is
+    // handed out rather than an id because the harness already holds the
+    // objects it built.
+    ref: m.target?.ref ?? null,
     x: m.pos.x,
     y: m.pos.y,
     speed: Math.hypot(m.vel.x, m.vel.y),
+    // The heading the MODEL is showing, in world terms: the direction the nose
+    // points, which is the only way to see the quarter-turn that had the whole
+    // pod swimming sideways. `createVisual` puts a model's forward on world +Y,
+    // so the nose of a container at rotation.z is (-sin, cos).
+    noseX: -Math.sin(m.root.rotation.z),
+    noseY: Math.cos(m.root.rotation.z),
   }));
 }
 
@@ -229,9 +254,18 @@ function formationPoint(m, playerPos, out) {
   const lane = m.slot - (pod.length - 1) / 2;
   const fx = Math.cos(leadAngle);
   const fy = Math.sin(leadAngle);
-  const along = c.formationOffset[0] + Math.sin(clock * 0.6 + m.slot) * 0.5;
+  // THE STATION ITSELF WANDERS. Two incommensurate sines per axis rather than
+  // one, at rates that do not divide into each other, so the three never fall
+  // into step and the line never reads as a rigid bracket rigged off the seal.
+  // Amplitude is a config number now (it was a hardcoded half unit, which on a
+  // pod spaced 2.6 apart was invisible) — this is most of what "swims freely"
+  // is, because the orca is chasing a point that is itself drifting.
+  const w = c.wanderAmp ?? 0.5;
+  const ws = c.wanderSpeed ?? 1;
+  const along = c.formationOffset[0]
+    + (Math.sin(clock * 0.61 * ws + m.slot * 2.1) + Math.sin(clock * 0.27 * ws + m.slot)) * w * 0.6;
   const across = c.formationOffset[1] + lane * c.formationSpacing
-    + Math.sin(clock * 0.9 + m.slot * 1.7) * 0.35;
+    + (Math.sin(clock * 0.43 * ws + m.slot * 1.7) + Math.sin(clock * 0.19 * ws + m.slot * 3.3)) * w * 0.6;
   return out.set(
     playerPos.x + fx * along - fy * across,
     playerPos.y + fy * along + fx * across,
@@ -284,18 +318,32 @@ function acquire(m, enemiesList) {
   const c = CONFIG.orca;
   // Splash Zone's gentle half: how far the pod will travel to find a boat.
   const range2 = targeting(c.huntRange) ** 2;
-  let best = null;
-  let bestD2 = range2;
 
-  const body = nearestFloatingCrew(m.pos.x, m.pos.y, c.huntRange);
+  // A BODY IN THE WATER, but only one already at the orca's feet.
+  //
+  // This used to be checked at the FULL hunt range, ahead of everything, which
+  // quietly inverted the card: one sinking sheds several bodies, so for as long
+  // as any of them floated the pod was a cleanup crew and the boat that made
+  // them — and every other boat on the surface — went unhunted. `crewRange` is
+  // deliberately short. Mopping up the crew of a hull you just broke is the
+  // moment; swimming thirty units for a corpse instead of a boat is not.
+  const body = nearestFloatingCrew(m.pos.x, m.pos.y, targeting(c.crewRange ?? 12));
   if (body) return { kind: 'human', ref: body };
 
+  // TIER ONE: BOATS, and there is no scoring against anything else here on
+  // purpose. A hull anywhere in the hunt range outranks a shark on top of the
+  // orca, because "the pod that goes for the boats" is the entire promise of
+  // the card and the reason it looks past what the rest of the arsenal already
+  // handles. Nearest-weighted only WITHIN the tier.
+  //
   // A hull the seal has RAMMED is the one the pod goes for, even with a nearer
   // boat in reach — the mark is the player pointing (see systems/marks.js), and
   // the pod is the heaviest thing they can point at. Weighted rather than
   // sorted into its own pass so an unmarked boat right on top of an orca can
   // still win, which is what stops the pod swimming past a hull to reach a
   // mark on the far side of the arena.
+  let best = null;
+  let bestD2 = range2;
   for (const b of boats) {
     const dx = b.mesh.position.x - m.pos.x;
     const dy = b.mesh.position.y - m.pos.y;
@@ -305,6 +353,35 @@ function acquire(m, enemiesList) {
   }
   if (best) return best;
 
+  // TIER TWO: SHARKS — the whole `shark` spawn group out of enemies.csv, which
+  // is the shark, the great white, the hammerhead, the abyss shark and both
+  // megs. Read off the group rather than off a name list or a radius so the
+  // tier follows the CSV: a shark added there is one of these without touching
+  // this file, and the megs stay in even though a radius test would already
+  // have caught them.
+  //
+  // Its own tier, above every other fish, because it is the natural pairing
+  // with the boats: those are the two things in the water big enough for three
+  // tonnes of orca to be the right answer to, and it is what the pod is for
+  // once the surface is clear.
+  bestD2 = range2;
+  for (const e of enemiesList) {
+    if (!inSpawnGroup(e.def, c.sharkGroup ?? 'shark')) continue;
+    const dx = e.mesh.position.x - m.pos.x;
+    const dy = e.mesh.position.y - m.pos.y;
+    const w = markWeight(e);
+    const d2 = (dx * dx + dy * dy) * w * w;
+    if (d2 < bestD2) { bestD2 = d2; best = { kind: 'fish', ref: e }; }
+  }
+  if (best) return best;
+
+  // TIER THREE: anything else big enough to be worth the trip, and in a
+  // SHORTER range than the two tiers above it — a pod will cross the arena for
+  // a hull or a shark and will not for a turtle. Without the separate range
+  // this tier silently competes with the others at the same reach, which is how
+  // "hunts boats" turned into "hunts whatever is nearest that is big".
+  const fallback2 = targeting(c.huntRange * (c.fallbackRangeMul ?? 1)) ** 2;
+  bestD2 = fallback2;
   for (const e of enemiesList) {
     if (e.radius < c.fallbackMinRadius) continue;
     const dx = e.mesh.position.x - m.pos.x;
@@ -358,14 +435,30 @@ function faceTravel(m, dt) {
   const c = CONFIG.orca;
   const speed = Math.hypot(m.vel.x, m.vel.y);
 
-  if (speed > (c.minSpeedToTurn ?? 0.4)) {
+  // A CRUISING ORCA AND A CHARGING ONE TURN AT DIFFERENT RATES, and it is the
+  // charge that needs saying. `faceLerp` is deliberately unhurried — it exists
+  // to stop station-keeping drift snapping the body around — but a run is
+  // ALREADY turn-rate limited in the velocity (see the charge branch), so
+  // easing the model toward that on top of it is two lags stacked. At 5 e-folds
+  // a second against a turnRate of 8.5 the body pointed a long way off the line
+  // it was actually swimming, which is the "it doesn't aim its head at the
+  // thing" read: the orca was aiming, its MODEL just hadn't caught up. During a
+  // run and its follow-through the model tracks the velocity nearly outright.
+  //
+  // Same reason the speed gate is cruise-only: a charge is never slow, and a
+  // gate that could hold the facing mid-run is a gate that can point an orca
+  // backwards down its own charge.
+  const cruising = m.state === 'cruise';
+  const lerp = cruising ? (c.faceLerp ?? 6) : (c.chargeFaceLerp ?? 16);
+
+  if (!cruising || speed > (c.minSpeedToTurn ?? 0.4)) {
     const target = Math.atan2(m.vel.y, m.vel.x);
     // The short way round, so crossing the -pi/pi seam doesn't send it the
     // long way about.
     let delta = target - m.heading;
     while (delta > Math.PI) delta -= TAU;
     while (delta < -Math.PI) delta += TAU;
-    m.heading += delta * (1 - Math.exp(-(c.faceLerp ?? 6) * dt));
+    m.heading += delta * (1 - Math.exp(-lerp * dt));
 
     // Which way the model needs to be facing, decided off the SMOOTHED
     // heading rather than off the raw velocity — the smoothing is what makes
@@ -414,7 +507,23 @@ function faceTravel(m, dt) {
     if (m.mirrorT >= 1) m.mirrorAngle = ((m.mirrorTo % TAU) + TAU) % TAU;
   }
 
-  m.root.rotation.z = m.heading;
+  // MINUS A QUARTER TURN, which is the whole reason the pod swam sideways.
+  //
+  // `createVisual` re-orients every model so its `forward` axis lands on world
+  // +Y (see the header of assets.js) — a container at rotation.z = 0 is an
+  // animal pointing UP the screen, not right. Every other escort writes
+  // `atan2(vy, vx) - PI/2` for that reason: systems/sealTeam.js, beluga.js,
+  // dumbo.js, eel.js, octoGrab.js. This one wrote the bare heading, so each
+  // orca was rendered 90 degrees off its own velocity for its whole life —
+  // which reads as swimming sideways when cruising and as lunging out of the
+  // line tail-first when it charges, because the run leaves along a heading the
+  // body is not pointed down.
+  //
+  // Nothing else in this file was wrong about direction: the charge already
+  // steered at the target, and `m.heading` was already the eased travel
+  // direction. The bug was entirely in the last step, between a correct heading
+  // and the transform that shows it.
+  m.root.rotation.z = m.heading - Math.PI / 2;
   m.visual.rotation.y = m.mirrorAngle;
   if (m.anim) m.anim.update(dt, stateForSpeed(speed), false);
 }
@@ -466,13 +575,46 @@ export function updateOrcaPod(dt, scene, playerPos, level, enemiesList, hooks = 
       // the orca's speed through the water. A pod escorting a seal at 30 is
       // doing 30 plus whatever it needs to hold station — capping the total at
       // `cruiseSpeed` is what left them permanently trailing and catching up.
+      //
+      // ...but only LOOSELY, which is the second half and the one that was
+      // missing. Two things made the pod read as three bodies bolted to the
+      // seal rather than three animals swimming with it:
+      //
+      //   the seal's velocity was inherited WHOLE, so any flick of the stick
+      //   was on the pod in the same frame — no animal accelerates like that,
+      //   and a body that matches you exactly is a body parented to you.
+      //   `velocityFollow` keeps most of it (the pod still has to be able to
+      //   keep up; a fraction that is too small is the old "permanently being
+      //   dragged" bug wearing a config key) and leaves the rest to the spring,
+      //   so the pod leans into your turns a beat late, like something with
+      //   mass;
+      //
+      //   and the spring pulled at FULL strength however close to station the
+      //   orca already was, so it was always being corrected. `formationSlack`
+      //   is a dead zone around the station point: inside it nothing pulls at
+      //   all and the orca simply swims, and the pull then fades in over the
+      //   next slack-width rather than switching on. The pod holds a loose
+      //   cloud around its stations instead of sitting on them.
+      const follow = c.velocityFollow ?? 1;
+      const bvx = pvx * follow;
+      const bvy = pvy * follow;
+      const ex = point.x - m.pos.x;
+      const ey = point.y - m.pos.y;
+      const err = Math.hypot(ex, ey);
+      const slack = c.formationSlack ?? 0;
+      // 0 inside the slack, ramping to 1 a slack-width outside it. Smoothstepped
+      // so the spring arrives as a lean rather than as a kick at the boundary —
+      // a hard edge here is a pod that visibly twitches every time it drifts
+      // through the same radius.
+      const raw = slack > 0 ? Math.min(1, Math.max(0, (err - slack) / slack)) : 1;
+      const pull = raw * raw * (3 - 2 * raw);
       const damping = Math.exp(-(c.formationDamping ?? 6) * dt);
-      let rvx = (m.vel.x - pvx + (point.x - m.pos.x) * c.formationFollow * dt) * damping;
-      let rvy = (m.vel.y - pvy + (point.y - m.pos.y) * c.formationFollow * dt) * damping;
+      let rvx = (m.vel.x - bvx + ex * c.formationFollow * pull * dt) * damping;
+      let rvy = (m.vel.y - bvy + ey * c.formationFollow * pull * dt) * damping;
       const rs = Math.hypot(rvx, rvy);
       if (rs > c.cruiseSpeed) { rvx *= c.cruiseSpeed / rs; rvy *= c.cruiseSpeed / rs; }
-      m.vel.x = pvx + rvx;
-      m.vel.y = pvy + rvy;
+      m.vel.x = bvx + rvx;
+      m.vel.y = bvy + rvy;
 
       // A ceiling on the total anyway, so a seal that gets launched (a strike,
       // a breach) doesn't hand the pod a speed no animal should swim at.
@@ -490,6 +632,10 @@ export function updateOrcaPod(dt, scene, playerPos, level, enemiesList, hooks = 
           m.state = 'charge';
           m.chargeTimer = c.chargeMaxTime ?? 2.6;
           m.closest = Infinity;
+          // Opens at the speed it was cruising at — no jump on the frame the
+          // card's animal decides to hunt. A floor so a pod sitting still with
+          // a motionless seal still has something to steer with.
+          m.chargeSpeedNow = Math.max(c.launchSpeed ?? 4, Math.hypot(m.vel.x, m.vel.y));
           breakTimer = c.breakStagger ?? 1.4;
           hooks.onBreakOff?.(m.pos.x, m.pos.y);
         }
@@ -523,15 +669,41 @@ export function updateOrcaPod(dt, scene, playerPos, level, enemiesList, hooks = 
         0,
       ).normalize();
 
-      // Turn-rate limited rather than steering instantly, so a charge reads as
-      // a committed run the target could in principle swim out of.
+      // THE BREAK-OFF, which is where "it lunges backwards" came from.
+      //
+      // A cruising orca is carrying the SEAL'S velocity — that is what holding
+      // station means — so at the instant it takes a target it is usually
+      // travelling some way other than at it, and quite possibly straight away
+      // from it. The run then started from that heading at full `chargeSpeed`
+      // and turned at `turnRate`, which is an animal accelerating to twenty-two
+      // units a second in the wrong direction and arcing back: an orca that
+      // leaves the line tail-first and swims most of its run sideways to the
+      // thing it is charging.
+      //
+      // An animal does not do that. It comes about FIRST — hard, and slowly,
+      // because a body turns tighter the slower it is going — and then puts
+      // its speed down the line once the line exists. So a run opens with a
+      // `launchTime` window in which it may turn at `launchTurnRate` and its
+      // speed EASES up from whatever it was cruising at, rather than starting
+      // at the top. After the window it is the committed, turn-rate-limited run
+      // it always was, and the tests that hold that (the turning circle, the
+      // overshoot, the leash) are about that part.
+      const elapsed = Math.max(0, (c.chargeMaxTime ?? 2.6) - m.chargeTimer);
+      const launch = Math.min(1, elapsed / Math.max(0.01, c.launchTime ?? 0.35));
+      const rate = (c.launchTurnRate ?? c.turnRate) * (1 - launch) + c.turnRate * launch;
+
       const want = Math.atan2(_to.y, _to.x);
       const have = Math.atan2(m.vel.y, m.vel.x);
       const delta = Math.atan2(Math.sin(want - have), Math.cos(want - have));
-      const turn = Math.max(-c.turnRate * dt, Math.min(c.turnRate * dt, delta));
+      const turn = Math.max(-rate * dt, Math.min(rate * dt, delta));
       const heading = (Math.hypot(m.vel.x, m.vel.y) > 0.2 ? have : want) + turn;
-      m.vel.x = Math.cos(heading) * s.chargeSpeed;
-      m.vel.y = Math.sin(heading) * s.chargeSpeed;
+      // The speed the run is actually making, eased toward the charge speed at
+      // `chargeAccel` e-folds a second. Held on the member rather than derived
+      // from the velocity, which is about to be overwritten by this line.
+      m.chargeSpeedNow += (s.chargeSpeed - m.chargeSpeedNow)
+        * (1 - Math.exp(-(c.chargeAccel ?? 7) * dt));
+      m.vel.x = Math.cos(heading) * m.chargeSpeedNow;
+      m.vel.y = Math.sin(heading) * m.chargeSpeedNow;
 
       const landed = m.target.kind === 'boat'
         ? hitsBoat(m.target.ref, m.pos.x, m.pos.y, c.hitRadius)
@@ -587,8 +759,18 @@ export function updateOrcaPod(dt, scene, playerPos, level, enemiesList, hooks = 
         // follow-through, which carries it clear of whatever it just failed to
         // catch before it is allowed to look for a target again.
         m.chargeTimer -= dt;
-        if (dist < m.closest) m.closest = dist;
-        const overshot = dist > m.closest + (c.overshootSlack ?? 1.4);
+        // NOT WHILE IT IS STILL COMING ABOUT. The overshoot test asks whether a
+        // run has started losing ground, and during the launch window the
+        // answer is yes by construction: the orca is turning at low speed and
+        // the distance to anything ahead of it grows. Reading `closest` through
+        // that window aborted a run in the first tenth of a second whenever the
+        // target was moving away at all — the pod broke off, gave up, and
+        // rejoined, over and over, without ever committing to the chase it had
+        // just left the line for.
+        if (launch >= 1) {
+          if (dist < m.closest) m.closest = dist;
+        }
+        const overshot = launch >= 1 && dist > m.closest + (c.overshootSlack ?? 1.4);
         // The leash is measured to the SEAL, not to the target: a pod is an
         // escort, and a chase that drags one of them across the arena has
         // stopped being one whatever the target is doing.

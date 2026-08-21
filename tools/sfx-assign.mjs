@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // ---------------------------------------------------------------------------
-// One-shot: wire the August 2026 voice session into the bank.
+// Wire a recording session into the bank: the mapping from delivered file
+// names to the events they belong to.
 //
-// The 74 files under public/sfx named EG_*, EliArf_* and EliDadSeal_* are a
-// recording session, and this is the mapping from those names to the events
-// they belong to. Kept as a script rather than done by hand because the target
+// Two sessions so far — the EG_/EliArf_/EliDadSeal_ voice recordings, and a
+// batch of commercial library effects. Kept as a script rather than done by
+// hand because the target
 // is imported-tuning.json — 222KB of the tuner's saved state, where a hand
 // edit is a merge conflict waiting to happen and a typo is a silent revert to
 // the synth.
@@ -18,11 +19,32 @@
 //
 // ADD, NOT REPLACE. Every voice below keeps the takes it already had — this
 // appends. `playerHit` ends up with eleven.
+//
+// IT REFUSES TO RUN WHILE THE GAME IS UP, and that guard is the whole lesson
+// of the run that made it necessary. This is not idempotent against a HUMAN:
+// re-running it is a no-op only if nothing has moved since, and the F menu is
+// where things move. Somebody spent an hour reassigning takes — pulling all
+// eight EatChum files off `chumEaten`, putting two of them on `strikeChain`,
+// swapping `chumFull` for a different sound — and a second run of this script
+// put every one of those back, because "the file is already in the list" is
+// the only question it knows how to ask. It cannot tell a take it has never
+// added from a take somebody deliberately removed.
+//
+// A live dev server also means the tuning file has a second writer: the game
+// rewrites the whole snapshot from its own state whenever it saves, so a write
+// from here can be flattened a second later, or can flatten a save that was
+// about to happen. Both directions lose work.
+//
+// So: close the game, run this, then start the game. --force is there because
+// a rule with no override gets worked around, not because it is ever a good
+// idea.
 // ---------------------------------------------------------------------------
 
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+
+import { survey } from './servers.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -84,7 +106,87 @@ const ASSIGN = {
   // "Mouth windfall" — the chum meter crossing to full, which fired silently
   // until this session gave it something to say.
   chumFull:       ['EG_Mouthwindfall', 'EG_MouthWindfall_02'],
+
+  // =========================================================================
+  // THE LIBRARY BATCH — commercial effects, August 2026.
+  //
+  // Ten of the delivered files were byte-identical renames of others in the
+  // same drop (Razor_01 IS the kitchen-knife file, Whale_01 IS the spooky
+  // beast call, and so on). Only the short game-domain name of each pair is in
+  // public/sfx: the same bytes twice would ship twice, decode twice, and give
+  // one take double the odds in pickSample.
+  //
+  // Not here on purpose:
+  //   FF_AS_fish_splash_*   four tiers of one sound, held back until they can
+  //                         be auditioned against a fight. They ship and are
+  //                         in the F menu library, wired to nothing.
+  //   Electricity_01        61s of unbroken hum, never quieter than -7 dBFS in
+  //                         any half second of it. There is no one-shot inside
+  //                         a drone, so it is a library file and not a voice.
+  // =========================================================================
+
+  // --- everything electric --------------------------------------------------
+  // Three systems, none of which had a sample. Electricity_02 was a 64s bed
+  // cut down by tools/sfx-excerpt.mjs; the rest arrived short.
+  eelBolt:        ['Electricity_02'],
+  eelChain:       ['Electricity_03'],
+  elementArc:     ['Electricity_03'],
+  // The shock element lands on every hit a shock weapon makes, so it takes the
+  // shortest file in the batch — a 0.57s tick, not a 1.5s crackle.
+  elementHit:     ['shs_cyber_button_ui_spark_electric_1'],
+  // A 9.8s explosion with a smooth decay all the way to -67 dBFS. Long for a
+  // voice slot, and affordable only because the ice club is rare.
+  clubShock:      ['FF_ES_fx_explosion_lightning'],
+
+  // --- beams and blades -----------------------------------------------------
+  bakalarHaul:    ['Laser_01'],
+  pearlShot:      ['JAFUNK_fx_lazer_mid_tide'],
+  razorClamLaunch: ['Razor_01'],
+  // The razor's hit has no event of its own; `hit` is where a bullet and a
+  // beam both land, which is where the clam's damage lands too.
+  hit:            ['Razor_Hit_01'],
+  strikeChain:    ['Chain_01'],
+
+  // --- big animals ----------------------------------------------------------
+  whaleCall:      ['Whale_01'],
+  // Boss voices are per MATERIAL, not per creature (see bossVoice in
+  // systems/feedback.js) — the mosasaur is voiceDefault, which is flesh.
+  bossDieFlesh:   ['Mosasaurus_01'],
+  bossHitFlesh:   ['BRS_Flesh_Splat_Beefy_Hit'],
+  bite:           ['ESM_PG_cinematic_fx_creature_sea_monsters_shark_predator_attack_thump_03'],
+  kill:           ['ESM_MG3_fx_foley_slime_smash_squish_splat_01c',
+                   'ESM_MG3_fx_foley_slime_smash_squish_splat_03c'],
+
+  // --- water and reward -----------------------------------------------------
+  bubblePop:      ['DS_SCB_foley_one_shot_water_droplet_echo', 'DS_SCB_foley_one_shot_water_droplet_high'],
+  levelUp:        ['ESM_PG_cinematic_fx_magic_collect_kick_thump_shimmer_glisten_05',
+                   'ESM_PG_cinematic_fx_magic_item_award_hit_chime_ding_positive_shimmer_04'],
+
+  // --- the ships ------------------------------------------------------------
+  // boatExplosion and debrisBreak are voices of their own as of this batch —
+  // they used to borrow `bigKill` and `kill`, which was fine while both were
+  // synth and is not once a cannon is involved. See CONFIG.sfx.
+  boatExplosion:  ['ESM_PG_cinematic_fx_weapons_warefare_cannon_ship_impact_explosion_wood_03'],
+  debrisBreak:    ['ESM_PG_cinematic_fx_foley_ship_shipwrecking_moving_stone_impact_debris_creak_02'],
+  // No cannon event exists to fire a shot of its own, and the mussel volley is
+  // the nearest thing the game has to artillery.
+  missileLaunch:  ['ESM_PG_cinematic_fx_weapons_warefare_cannon_shot_ship_clanking_metal_03'],
+  missileImpact:  ['ESM_PG_fx_water_splash_weapon_cannon_impact_near_air_projectile_whoosh_02'],
 };
+
+if (!process.argv.includes('--force')) {
+  const live = (await survey()).filter((p) => p.role === 'dev');
+  if (live.length) {
+    console.error('\n  REFUSING — the game is running:\n');
+    for (const p of live) console.error(`    pid ${p.pid} on port ${p.ports.join(', ')} (up ${Math.round(p.age / 60)}m)`);
+    console.error('\n  A dev server rewrites imported-tuning.json from its own state, and this'
+      + '\n  script cannot tell a take you removed in the F menu from one it has never'
+      + '\n  added — so a run now can both lose your edits and undo them.'
+      + '\n\n  Stop the game (npm run servers), run this, then start it again.'
+      + '\n  --force overrides, and you will want a copy of the tuning file first.\n');
+    process.exit(1);
+  }
+}
 
 const tuning = JSON.parse(readFileSync(TUNING, 'utf8'));
 tuning.sfx ??= {};
@@ -118,6 +220,8 @@ if (problems.length) {
   process.exit(1);
 }
 
+// Kept, not cleaned up. It is the only route back if this run turns out to
+// have re-added something that was removed on purpose.
 copyFileSync(TUNING, `${TUNING}.pre-assign`);
 writeFileSync(TUNING, `${JSON.stringify(tuning, null, 2)}\n`);
 console.log(`  ${added} take(s) added across ${Object.keys(ASSIGN).length} voices`);

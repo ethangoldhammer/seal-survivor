@@ -847,6 +847,26 @@ export function hiveTileRect(id) {
 }
 
 /**
+ * The whole corner as one rectangle, or null when there is nothing in it.
+ *
+ * WHAT IT IS FOR: the first-run tip that points the hive out (`hiveStack` in
+ * systems/tutorial.js) stands beside the block rather than beside any one
+ * hexagon. Which tile is "the" tile changes on every pick, and a label that
+ * hopped from one hexagon to another as the corner filled would be describing
+ * the newest upgrade instead of the readout.
+ *
+ * The HOST and not the root: the root is a fixed-position wrapper with no size
+ * of its own, and the host is the box upgradeHive stamps to fit the tiles (see
+ * rebuild). A hidden hive answers null, which is what stops a tip being offered
+ * about a readout that is switched off.
+ */
+export function hiveRect() {
+  if (!state.host || !state.root || state.root.classList.contains('sv-hidden')) return null;
+  const r = state.host.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 ? r : null;
+}
+
+/**
  * Hide a tile while something else stands in for it.
  *
  * `visibility`, not `display`: the tile has to keep its box so the corner does

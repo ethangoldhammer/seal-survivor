@@ -34,6 +34,22 @@ export const bounds = {
 // being written once in the backdrop and once in whatever stands on it.
 export const SEABED_HEIGHT = 1.2;
 
+// The depth the seabed strip is DRAWN at. world.js builds the plane there; the
+// spawner reads it to know how far back a creature has to be to be behind the
+// floor rather than standing on it (see the deep entrance in entities/
+// enemies.js). One constant rather than a -4 written in each, because the two
+// are the same fact and a creature hiding at the wrong side of the floor is
+// invisible in exactly the way a bug is.
+export const SEABED_Z = -4;
+
+// ...and the depth the water fill is drawn at. It spans the whole column, so
+// it is the FLOOR under every hiding depth the entrance uses: a body behind
+// this is not concealed by scenery, it is behind the sea itself, and it would
+// appear out of nothing on the way forward into its lane. Declared next to the
+// seabed for the same reason — world.js draws it, the spawner has to stay in
+// front of it, and one number is the only way those two can agree.
+export const WATER_FILL_Z = -5.4;
+
 // World Y of the seabed surface — where a plant's roots or a crab's feet go.
 // A function, not a constant: bounds.bottom moves on every resize.
 export function seabedTopY() {

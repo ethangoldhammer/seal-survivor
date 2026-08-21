@@ -95,7 +95,13 @@ export function applyAssetTableRow(key, row, { setSize, setSkin, setNoise, setTo
   if (claimed) {
     const skinCell = String(row.skin ?? '').trim();
     const surfaceCell = String(row.surface ?? '').trim();
-    if (skinCell && !surfaceCell.toLowerCase().startsWith('biolum')) {
+    // A `biolum` layer ANYWHERE in the cell, not just at the front of it. The
+    // cell holds a `+`-joined list now, so a startsWith test called
+    // "noise:shark+biolum:hide" a conflict and told the reader to clear a skin
+    // cell that the biolum layer is deliberately reading its preset from.
+    const wearsBiolum = surfaceCell.toLowerCase().split('+')
+      .some((p) => p.trim().split(':')[0].trim() === 'biolum');
+    if (skinCell && !wearsBiolum) {
       warn(`[${LABEL}] "${key}" sets surface="${surfaceCell}" and skin="${skinCell}" — `
         + 'the surface column wins and the skin cell is ignored. Clear one of them.');
     }
@@ -116,64 +122,112 @@ export function applyAssetTableRow(key, row, { setSize, setSkin, setNoise, setTo
   setSize?.(key, n);
 }
 
-// THE SURFACE COLUMN — which of the three treatments this species wears.
+// THE SURFACE COLUMN — which treatments this species wears.
 //
 // Written by the shader lab (npm run looks:shaderlab, then tools/apply-shaders.mjs).
-// One cell, because the three are a CHOICE and not three layers: a body painted
-// with Perlin noise AND a biolum pattern carries two unrelated fields and reads
-// as double-textured, which is the note systems/noiseShader.js makes about the
-// seal. Encoding it as one value is what makes that unrepresentable.
 //
-//   texture            the model's own baked map; clears both procedural fields
-//   noise[:preset]     Perlin mottling, banded by the toon step
-//   biolum[:preset]    a biolumSkin pattern at full pigment, replacing the map
-//   (blank)            the asset keeps whatever it declares in code
+//   texture                     the model's own baked map; clears all three
+//   noise[:preset]              Perlin mottling
+//   toon[:preset]               banded (cel) lighting
+//   biolum[:preset]             a biolumSkin pattern
+//   a+b+c                       any combination of the three above
+//   (blank)                     the asset keeps whatever it declares in code
+//
+// THREE LAYERS, NOT ONE CHOICE, and that is a reversal worth explaining. This
+// column used to hold exactly one value, on the argument that a body wearing
+// both a noise field and a biolum pattern carries two unrelated paints and
+// reads as double-textured. That argument is true of those two SPECIFIC layers
+// at full strength and false of everything else the exclusivity ruled out —
+// most obviously banded lighting, which is not paint at all and which a painted
+// animal wants as much as a photographed one. Locking it to `noise` meant an
+// asset could not be banded without also being mottled, and a biolum creature
+// could not be banded at all.
+//
+// So the constraint moved to where it is actually true. Each layer decides for
+// itself how much of what is underneath survives — `paint` on the noise,
+// `pigment` on the biolum — and two paints at once is now a look you can dial
+// and look at rather than one the file format forbids. The lab is where that
+// judgement gets made.
+//
+// `noise:x` NO LONGER TURNS THE BANDS ON. It used to set both, which is why
+// every `noise:` row in assets.csv was rewritten to the explicit `noise:x+toon:x`
+// when this landed — one cell now names exactly the layers it means, and the
+// row says so on its face instead of carrying a second effect by convention.
 //
 // IT WINS OVER THE `skin` COLUMN, and says so when they disagree. `skin` also
 // assigns a biolum preset, so leaving both live would give one field two writers
 // and make which-one-won depend on the order this file happens to run them in —
 // the exact class of bug the tuning file taught us to design out.
 const SURFACE_OFF = new Set(['', 'none', 'off']);
+const SURFACE_LAYERS = new Set(['noise', 'toon', 'biolum']);
 
 function applySurface(key, row, setters, warn) {
   const { setSkin, setNoise, setToon, knownSkin } = setters;
   const raw = String(row.surface ?? '').trim();
   if (SURFACE_OFF.has(raw.toLowerCase())) return false;
 
-  const [kindRaw, presetRaw] = raw.split(':');
-  const kind = kindRaw.trim().toLowerCase();
-  const preset = (presetRaw ?? '').trim() || null;
+  // WHAT THE CELL ASKED FOR, gathered before anything is written. A cell with a
+  // bad layer in it must change NOTHING — writing the good halves and warning
+  // about the rest leaves the creature in a state no cell describes, which is
+  // the hardest kind of wrong to track back to a typo in a spreadsheet.
+  const want = { noise: undefined, toon: undefined, biolum: undefined };
+  for (const partRaw of raw.split('+')) {
+    const part = partRaw.trim();
+    if (!part) continue;
+    const [kindRaw, presetRaw] = part.split(':');
+    const kind = kindRaw.trim().toLowerCase();
+    const preset = (presetRaw ?? '').trim() || null;
 
-  if (kind === 'texture') {
-    setSkin?.(key, null);
-    setNoise?.(key, null);
-    setToon?.(key, null);
-    return true;
-  }
-  if (kind === 'noise') {
-    setSkin?.(key, null);   // exclusive: the pattern comes off
-    setNoise?.(key, preset ?? true);
-    setToon?.(key, preset ?? true);
-    return true;
-  }
-  if (kind === 'biolum') {
-    // A biolum surface with no preset falls back to the `skin` cell, which is
-    // where every existing assignment already lives — so adopting this column
-    // does not mean retyping the roster.
-    const name = preset ?? (String(row.skin ?? '').trim() || null);
-    if (name && knownSkin && !knownSkin(name)) {
-      warn(`[${LABEL}] "${key}" asks for surface="${raw}", but "${name}" is not a `
-        + 'preset in CONFIG.biolumSkin.presets — left as it was.');
+    // `texture` is the whole cell, not a layer: it means all three off. Written
+    // beside a layer it contradicts it, so that is refused rather than resolved.
+    if (kind === 'texture') {
+      if (raw.includes('+')) {
+        warn(`[${LABEL}] "${key}" has surface="${raw}" — "texture" means no layers at all, `
+          + 'so it cannot be combined with one. Drop it, or drop the others.');
+        return false;
+      }
+      setSkin?.(key, null);
+      setNoise?.(key, null);
+      setToon?.(key, null);
       return true;
     }
-    setNoise?.(key, null);
-    setToon?.(key, null);
-    setSkin?.(key, name);
-    return true;
+    if (!SURFACE_LAYERS.has(kind)) {
+      warn(`[${LABEL}] "${key}" has surface="${raw}", and "${kind}" is not texture, noise, `
+        + 'toon or biolum — the whole cell is ignored. Set it in the shader lab '
+        + '(npm run looks:shaderlab).');
+      return false;
+    }
+    if (want[kind] !== undefined) {
+      warn(`[${LABEL}] "${key}" names "${kind}" twice in surface="${raw}" — the whole cell `
+        + 'is ignored. One layer, one preset.');
+      return false;
+    }
+    if (kind === 'biolum') {
+      // A biolum layer with no preset falls back to the `skin` cell, which is
+      // where every existing assignment already lives — so adopting this column
+      // does not mean retyping the roster.
+      const name = preset ?? (String(row.skin ?? '').trim() || null);
+      if (name && knownSkin && !knownSkin(name)) {
+        warn(`[${LABEL}] "${key}" asks for surface="${raw}", but "${name}" is not a `
+          + 'preset in CONFIG.biolumSkin.presets — left as it was.');
+        return true;
+      }
+      want.biolum = name;
+    } else {
+      // `true` rather than a name means "attach, and read the base numbers",
+      // which is what an unnamed layer has always meant here.
+      want[kind] = preset ?? true;
+    }
   }
-  warn(`[${LABEL}] "${key}" has surface="${raw}", which is not texture, noise or `
-    + 'biolum — ignored. Set it in the shader lab (npm run looks:shaderlab).');
-  return false;
+
+  // EVERY LAYER WRITTEN, INCLUDING THE ONES THE CELL LEFT OUT. A cell is the
+  // whole answer for this asset, so a layer it does not name is off — otherwise
+  // moving a creature from `noise:x+toon:x` to `biolum:y` would leave the
+  // mottling attached underneath the new pattern and nothing would say so.
+  setNoise?.(key, want.noise ?? null);
+  setToon?.(key, want.toon ?? null);
+  setSkin?.(key, want.biolum ?? null);
+  return true;
 }
 
 function applySkin(key, row, setSkin, knownSkin, warn) {

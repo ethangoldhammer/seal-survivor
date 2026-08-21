@@ -1,0 +1,206 @@
+#!/usr/bin/env node
+// ---------------------------------------------------------------------------
+// Writes a page that COMPILES the level blob's injected GLSL
+// (systems/levelOrb.js, makeBlobMaterial) against a real driver and prints the
+// driver's own log.
+//
+// Same reason as the other *-shader-check pages, and the same failure mode: a
+// GLSL error does not throw, does not warn in Node, and renders NOTHING. This
+// is the only asset wearing this shader, so a broken one is a pickup that is
+// simply not on screen — which looks exactly like a spawn bug, and every Node
+// harness in the repo (tools/level-orb-test.mjs included) passes cheerfully
+// while it happens.
+//
+// THE CONTEXT MUST BE WEBGL2, because that is what three 0.183 requires and so
+// what the game runs on. It matters: this is GLSL ES 1.00, where the derivative
+// functions are an extension rather than core — so anything reaching for fwidth
+// to sharpen the core would fail on a real driver while a naive WebGL1 check
+// reported errors players could never hit.
+//
+// BOTH HALVES, AND THEN A LINK. The blob is a pair — the vertex chunk publishes
+// vLevelN and vLevelP, the fragment chunk consumes them — and a varying declared
+// differently on the two sides compiles cleanly on both and fails only at LINK
+// time. Compiling the fragment alone would miss exactly the mistake this pairing
+// is most likely to make.
+//
+// AND ONE THING THIS FILE CAN CATCH THAT THE DRIVER CANNOT: MeshBasicMaterial
+// only runs three's normal chunks under USE_ENVMAP or USE_SKINNING, so
+// `objectNormal` does not exist here and the injection reads the `normal`
+// attribute directly. If a future edit reaches for objectNormal it compiles
+// fine in this page (which declares the attribute itself) and fails in the
+// game — so the injected text is asserted below as well as compiled.
+//
+//   node --import ./tools/vite-loader.mjs tools/level-blob-shader-check.mjs [outDir]
+//   → serve that directory over http and open it (file:// will not execute)
+// ---------------------------------------------------------------------------
+
+import './dom-stub.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createLevelOrb } from '../path/src/systems/levelOrb.js';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const OUT_DIR = process.argv[2] ? path.resolve(process.argv[2]) : path.resolve(HERE, '..');
+
+// THE MATERIAL INJECTS ITSELF — nothing is scraped out of the module as text.
+// Whatever comes back IS what the driver would be asked to compile, by
+// construction. See the note in tools/chrome-shader-check.mjs about the two
+// ways a scraped version got this wrong.
+const mat = createLevelOrb().material;
+if (typeof mat.onBeforeCompile !== 'function') {
+  console.error('the level blob has no onBeforeCompile — the heat never attached');
+  process.exit(1);
+}
+
+const MARK = '//@@main@@';
+const probe = {
+  uniforms: {},
+  vertexShader: `#include <common>\n${MARK}\n#include <begin_vertex>\n`,
+  fragmentShader: `#include <common>\n${MARK}\nvec4 diffuseColor = vec4( diffuse, opacity );\n`,
+};
+mat.onBeforeCompile(probe);
+
+// PROOF THE INJECTION LANDED. Both hooks are plain string replacements against
+// three's own chunk text, so a three upgrade that rewords either one turns this
+// into an unmodified MeshBasicMaterial — no error, no warning, and a plain
+// white ball where the pickup should be. Node cannot see that either, but it
+// CAN see that the replacement did nothing.
+if (!probe.fragmentShader.includes('uLevelMix')) {
+  console.error('the fragment injection did not land — three\'s <common> hook has changed wording.');
+  process.exit(1);
+}
+if (probe.fragmentShader.includes('vec4 diffuseColor = vec4( diffuse, opacity );')) {
+  console.error('the diffuseColor replacement did not land — the blob body is not in the shader.');
+  process.exit(1);
+}
+if (!probe.vertexShader.includes('vLevelN = normalize')) {
+  console.error('the vertex injection did not land — three\'s <begin_vertex> hook has moved.');
+  process.exit(1);
+}
+// See the header: objectNormal is NOT declared in a MeshBasicMaterial, and a
+// page that declares the attribute itself would compile a reference to it.
+if (probe.vertexShader.includes('objectNormal')) {
+  console.error('the vertex chunk reads objectNormal, which MeshBasicMaterial does not declare'
+    + '\n(three only runs <beginnormal_vertex> under USE_ENVMAP or USE_SKINNING).'
+    + '\nRead the `normal` attribute instead — this page cannot catch it for you.');
+  process.exit(1);
+}
+
+const split = (src, what) => {
+  const i = src.indexOf(MARK);
+  if (i < 0) { console.error(`lost the ${what} sentinel`); process.exit(1); }
+  return [src.slice(0, i), src.slice(i + MARK.length)];
+};
+
+// three's prelude, cut to what these two chunks actually reference, and kept
+// explicit rather than borrowed from the renderer — the point of this page is
+// to be told what the DRIVER thinks, and a prelude generated by the same
+// library that generated the shader can hide a mismatch between them.
+const [vGlobal, vBody] = split(probe.vertexShader.replace('#include <common>', ''), 'vertex');
+const vertex = `precision highp float;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat3 normalMatrix;
+attribute vec3 position;
+attribute vec3 normal;
+${vGlobal}
+void main() {
+  // Stands in for three's <begin_vertex>, which is all the blob chunk needs
+  // from it: the local named transformed, in scope.
+  vec3 transformed = vec3(position);
+${vBody.replace('#include <begin_vertex>', '')}
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
+}
+`;
+
+const [fGlobal, fBody] = split(probe.fragmentShader.replace('#include <common>', ''), 'fragment');
+const fragment = `precision highp float;
+${fGlobal}
+void main() {
+  // Declared here because three declares both for real in every material this
+  // injects into. Leaving them out would fail the check on a line the game
+  // compiles perfectly.
+  vec3 diffuse = vec3(1.0);
+  float opacity = 1.0;
+${fBody}
+  gl_FragColor = diffuseColor;
+}
+`;
+
+const html = `<!doctype html><meta charset="utf-8"><title>level blob shader check</title>
+<body style="font:13px ui-monospace,monospace;background:#111;color:#ddd;padding:16px">
+<pre id="out">compiling...</pre>
+<script>
+const SRC = ${JSON.stringify({ vertex, fragment })};
+const gl = document.createElement('canvas').getContext('webgl2');
+const lines = [];
+let bad = 0;
+
+function show(label, source, log) {
+  lines.push('FAIL ' + label);
+  for (const l of log.trim().split('\\n')) lines.push('       ' + l);
+  // A GLSL error is a line number and nothing else, so show the source there.
+  const body = source.split('\\n');
+  const seen = new Set();
+  for (const m of log.matchAll(/ERROR: \\d+:(\\d+)/g)) {
+    const n = +m[1];
+    if (seen.has(n)) continue;
+    seen.add(n);
+    lines.push('');
+    for (let i = Math.max(0, n - 3); i < Math.min(body.length, n + 2); i++) {
+      lines.push((i === n - 1 ? '  >> ' : '     ') + String(i + 1).padStart(4) + '  ' + body[i]);
+    }
+  }
+}
+
+function compile(label, type, source) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, source);
+  gl.compileShader(s);
+  if (gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    lines.push('ok   ' + label);
+    return s;
+  }
+  bad++;
+  show(label, source, gl.getShaderInfoLog(s) || '');
+  return null;
+}
+
+if (!gl) {
+  lines.push('no webgl2 context — nothing was checked, and the game needs one');
+  bad++;
+} else {
+  const v = compile('the blob VERTEX chunk compiles', gl.VERTEX_SHADER, SRC.vertex);
+  const f = compile('the blob FRAGMENT chunk compiles', gl.FRAGMENT_SHADER, SRC.fragment);
+  if (v && f) {
+    // LINKED, not just compiled — see the header. This is the only step that
+    // can see a varying the two halves disagree about.
+    const p = gl.createProgram();
+    gl.attachShader(p, v);
+    gl.attachShader(p, f);
+    gl.linkProgram(p);
+    if (gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      lines.push('ok   the two halves link — vLevelN and vLevelP agree');
+      lines.push('');
+      lines.push('     the level blob is the only asset wearing this shader,');
+      lines.push('     so this is the whole of it.');
+    } else {
+      bad++;
+      lines.push('FAIL the two halves do NOT link');
+      for (const l of (gl.getProgramInfoLog(p) || '').trim().split('\\n')) lines.push('       ' + l);
+    }
+  }
+}
+
+lines.push('');
+lines.push(bad === 0 ? 'ALL GOOD' : bad + ' PROBLEM(S)');
+document.getElementById('out').textContent = lines.join('\\n');
+document.title = bad === 0 ? 'level blob shader ok' : 'level blob shader FAILED';
+<\/script>
+`;
+
+const out = path.join(OUT_DIR, '.level-blob-shader-check.html');
+fs.writeFileSync(out, html);
+console.log(`wrote ${out}`);
+console.log('serve that directory over http and open it — file:// will not execute.');

@@ -156,8 +156,27 @@ const fragmentShader = /* glsl */ `
     for (int i = 0; i < MAX_CELLS; i++) { if (i == which) { hot = uHot[i]; on = uOn[i]; } }
     if (on <= 0.001) discard;
     vec3 col = mix(uColor, uHotColor, hot);
-    vec3 lit = col * (1.0 + fres * uRimBoost + spec * 3.0);
-    gl_FragColor = vec4(lit, a * mix(uCoreAlpha, uRimAlpha, fres) * uOpacity * on);
+
+    // THE HIGHLIGHT IS THE LIGHT'S COLOUR, NOT THE FILM'S — which is the one
+    // line that decides whether this reads as a bubble or as a blue tile with a
+    // bright patch. A specular is a reflection of the source; tinting it by the
+    // surface is what a DIFFUSE term does. It used to be inside the same
+    // multiply as the rim, so the sheen came out the colour of the water and
+    // the tile had no glass in it anywhere.
+    //
+    // It also costs nothing and buys the bloom. The bright pass thresholds
+    // LUMINANCE, where blue is worth about 7% — so a cold rim at three times
+    // its own colour still sits under the line and the button never flares. A
+    // white highlight crosses it on its own.
+    vec3 lit = col * (1.0 + fres * uRimBoost) + vec3(spec * 3.0);
+
+    // ...AND IT IS A SURFACE, SO IT IS ALSO OPACITY. The film is 84% clear
+    // facing you, so brightening a colour nobody can see through was most of
+    // why the buttons read as weak: the highlight was there and the thing
+    // carrying it was not. A real bubble's catchlight is the one patch of it
+    // you cannot see through.
+    float alpha = mix(uCoreAlpha, uRimAlpha, fres) + spec;
+    gl_FragColor = vec4(lit, a * clamp(alpha, 0.0, 1.0) * uOpacity * on);
   }
 `;
 
@@ -273,10 +292,60 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
     uSpecPower: { value: cfg.specPower ?? 16 },
     uNormal: { value: cfg.normal ?? 1.6 },
     uOpacity: { value: cfg.opacity ?? 1 },
-    uLight: { value: new THREE.Vector2(-0.5, 0.8) },
+    // Where the catchlight sits, in the tile's own frame — up and to the left
+    // by default, which is where every lit thing in this game is lit from.
+    // A knob rather than a constant because it is the first thing you move once
+    // the highlight is white enough to see.
+    uLight: { value: new THREE.Vector2(cfg.lightX ?? -0.5, cfg.lightY ?? 0.8) },
     uColor: { value: new THREE.Color(cfg.color ?? 0x2f6f96) },
     uHotColor: { value: new THREE.Color(cfg.hot ?? 0x9fe8ff) },
   };
+
+  /**
+   * THE FILM, RE-READ EVERY FRAME.
+   *
+   * Everything above is seeded once at construction, which is fine for a screen
+   * nobody is editing and useless for one somebody is: these are the numbers
+   * the Main-menu group in the tuner drives, and a panel whose sliders move
+   * nothing until the menu is next mounted is a panel that lies about what it
+   * is editing. Same reasoning, and the same wording, as touchGlowForMenu in
+   * systems/mainMenu.js.
+   *
+   * Ten scalar writes and two colour sets on a single-draw material — this is
+   * cheaper than the branch that would decide whether to do it.
+   *
+   * WHAT IS NOT HERE, on purpose: `latticeSpacing`, `colStep` and `cellFill`.
+   * Those are the LAYOUT — the quad's size, the cell centres and the row's own
+   * width are all derived from them, and the crop the whole screen is composed
+   * on is measured against the result (see composeHeld in mainMenu.js). Moving
+   * one live would need the menu rebuilt and the shot re-framed, so they stay
+   * mount-time and a change to them lands on the next visit to the screen.
+   * `bevel` IS live, because it is a fraction of a radius that has not moved.
+   */
+  function refreshFilm() {
+    uniforms.uBevel.value = radius * (cfg.bevel ?? 0.32);
+    uniforms.uPower.value = shade('power', 2.6);
+    uniforms.uCoreAlpha.value = shade('coreAlpha', 0.16);
+    uniforms.uRimAlpha.value = shade('rimAlpha', 0.85);
+    uniforms.uRimBoost.value = shade('rimBoost', 1.05);
+    uniforms.uSheen.value = shade('sheen', 0.15);
+    uniforms.uSpecPower.value = cfg.specPower ?? 16;
+    uniforms.uNormal.value = cfg.normal ?? 1.6;
+    uniforms.uOpacity.value = cfg.opacity ?? 1;
+    uniforms.uLight.value.set(cfg.lightX ?? -0.5, cfg.lightY ?? 0.8);
+    uniforms.uColor.value.set(cfg.color ?? 0x2f6f96);
+    uniforms.uHotColor.value.set(cfg.hot ?? 0x9fe8ff);
+    // The goo twin's colour follows the hot colour the same way it does at
+    // build time, or retuning the tile leaves the rim it squirts behind.
+    gooUniforms.uColor.value.set(cfg.gooColor ?? cfg.hot ?? 0x9fe8ff);
+    // Mirrors of the construction values, not new arithmetic — the goo group's
+    // isoline is what the density pass will threshold at, and a rim written
+    // against a different one would be painted at a different width from the
+    // droplets it is meant to fuse with.
+    gooUniforms.uIso.value = (CONFIG.fx?.goo?.groups?.[cfg.source ?? 'aura']?.iso) ?? 0.32;
+    gooUniforms.uBridge.value = cfg.gooBridge ?? 0.35;
+    gooUniforms.uFill.value = cfg.gooFill ?? 0;
+  }
 
   // One quad over the whole row, sized off the lattice rather than guessed:
   // the cells are `colStep * step` apart and a cell is `width` across.
@@ -562,6 +631,7 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
     },
 
     update(dt, hovered = -1, cursor = null) {
+      refreshFilm();
       const t = 1 - Math.exp(-(cfg.easeRate ?? 9) * dt);
       const grow = cfg.hoverScale ?? 1.06;
 

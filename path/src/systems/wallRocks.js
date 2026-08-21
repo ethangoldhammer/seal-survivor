@@ -97,7 +97,41 @@ function boulderShape(seed, detail, roughness) {
 // a spike, and both sweeps report the same 1.84.
 const COVER_STEP = 0.25;
 
-function measureCover(geo) {
+// THE PUBLISHED SHORE — what the rest of the game is allowed to know about a
+// wall it cannot import. Published rather than pushed, the same arrangement
+// cineLens uses: the geometry belongs to this file, the decisions taken off it
+// belong to the caller, and neither should reach into the other.
+//
+// Two numbers, both MEASURED off the built stack (see measureShore), both zero
+// until one exists — with no shore drawn there is nothing to hide behind, and
+// every reader below correctly falls back to the behaviour it had before the
+// wall was ever built.
+export const shore = {
+  // Units of drawn face past each wall, at the face's thinnest point.
+  cover: 0,
+  // Is there a stack at all? `hideZ` of zero is a legitimate measurement, so
+  // the readers cannot use it as their own "no shore" sentinel.
+  built: false,
+  // The z a body has to sit BEHIND to be hidden by that face — the frontmost
+  // rock surface at whichever height the stack reaches furthest toward the
+  // camera, less a margin. The camera is orthographic, so a body moved in z
+  // does not move, resize or shift on screen by so much as a pixel: all that
+  // changes is what draws in front of what. That is the whole trick the
+  // entrance is built on — a creature spawned back here is behind the cliff,
+  // and easing forward into its swimming lane afterwards is invisible.
+  hideZ: 0,
+};
+
+// How far past the wall the frame may drift, which is the smaller of what the
+// tuner asks for and what the rock can actually cover. world.js's clampFocus
+// spends it and the spawner reads it to know where "off screen" starts — one
+// function rather than the same `Math.min` written in both files, because the
+// two must not be able to disagree about where the edge of the picture is.
+export function shoreOverscan() {
+  return Math.max(0, Math.min(CONFIG.camera?.edgeDrift ?? 0, shore.cover));
+}
+
+function measureShore(geo) {
   // The band that has to stay hidden: from the top of the seabed (below it the
   // floor strip is opaque and overscans the arena on its own) up to the
   // highest the water ever reaches. Above that line there is nothing behind
@@ -108,21 +142,34 @@ function measureCover(geo) {
   const n = Math.max(2, Math.ceil((hi - lo) / COVER_STEP) + 1);
   const right = new Float64Array(n).fill(-Infinity);
   const left = new Float64Array(n).fill(-Infinity);
+  // The frontmost rock surface at each height, per wall — the other half of
+  // the sweep, and the one the entrance is measured from.
+  const rightZ = new Float64Array(n).fill(-Infinity);
+  const leftZ = new Float64Array(n).fill(-Infinity);
 
   const pos = geo.attributes.position;
   const ax = [0, 0, 0];
   const ay = [0, 0, 0];
   for (let t = 0; t + 2 < pos.count; t += 3) {
     let yLo = Infinity, yHi = -Infinity;
+    // The triangle's own frontmost corner, used for the whole triangle. It
+    // OVERSTATES how far forward the surface reaches at any given scanline,
+    // which is the safe direction to be wrong in: the answer is a depth
+    // something has to get behind, so overstating the face only ever buries
+    // the hider deeper than it strictly needed to go.
+    let zHi = -Infinity;
     for (let k = 0; k < 3; k++) {
       ax[k] = pos.getX(t + k);
       ay[k] = pos.getY(t + k);
+      const z = pos.getZ(t + k);
       if (ay[k] < yLo) yLo = ay[k];
       if (ay[k] > yHi) yHi = ay[k];
+      if (z > zHi) zHi = z;
     }
     // Which wall this triangle belongs to. The two stacks never meet, so one
     // corner's sign decides it.
     const outward = ax[0] > 0 ? right : left;
+    const front = ax[0] > 0 ? rightZ : leftZ;
     const i0 = Math.max(0, Math.ceil((yLo - lo) / COVER_STEP));
     const i1 = Math.min(n - 1, Math.floor((yHi - lo) / COVER_STEP));
     for (let i = i0; i <= i1; i++) {
@@ -141,15 +188,33 @@ function measureCover(geo) {
         }
       }
       if (far > outward[i]) outward[i] = far;
+      // Only from triangles that are actually ON the face. A boulder's back
+      // half spans the same scanlines and reaches nowhere near the wall, and
+      // letting it into this figure would be measuring the depth of rock the
+      // camera never sees.
+      if (far > 0 && zHi > front[i]) front[i] = zHi;
     }
   }
 
   let worst = Infinity;
+  // The SHALLOWEST covering face over the whole band. A body behind this one
+  // number is behind the rock at every height, so the entrance needs a single
+  // depth rather than a lookup — and the height a creature enters at is rolled
+  // long before anything asks how deep the wall is there.
+  let front = Infinity;
   for (let i = 0; i < n; i++) {
     worst = Math.min(worst, Math.max(0, right[i] === -Infinity ? 0 : right[i]));
     worst = Math.min(worst, Math.max(0, left[i] === -Infinity ? 0 : left[i]));
+    // A scanline with no face on it is a hole, and `worst` has already gone to
+    // zero for it. Skipped rather than folded in as -Infinity, which would
+    // otherwise put the hiding depth at negative infinity off one gap.
+    if (rightZ[i] > -Infinity) front = Math.min(front, rightZ[i]);
+    if (leftZ[i] > -Infinity) front = Math.min(front, leftZ[i]);
   }
-  return Number.isFinite(worst) ? worst : 0;
+  return {
+    cover: Number.isFinite(worst) ? worst : 0,
+    front: Number.isFinite(front) ? front : 0,
+  };
 }
 
 export function createWallRocks(scene) {
@@ -166,6 +231,9 @@ export function createWallRocks(scene) {
 
   function dispose() {
     cover = 0;
+    shore.cover = 0;
+    shore.hideZ = 0;
+    shore.built = false;
     if (!mesh) return;
     group.remove(mesh);
     mesh.geometry.dispose();
@@ -269,7 +337,17 @@ export function createWallRocks(scene) {
     }
     material.color.set(cfg.color ?? 0x0d2230);
 
-    cover = measureCover(merged);
+    const measured = measureShore(merged);
+    cover = measured.cover;
+    shore.cover = measured.cover;
+    // A margin past the frontmost face, so a body whose own thickness carries
+    // it a little toward the camera is still behind the rock rather than
+    // shaving it. Small, because everything back here has to stay in FRONT of
+    // the backdrop planes (the surface line sits at -3, the fog at -3.2): a
+    // hider pushed past those would be occluded by the sky instead, and would
+    // then pop into existence the moment it eased forward again.
+    shore.hideZ = measured.front - (cfg.hideMargin ?? 0.6);
+    shore.built = true;
 
     mesh = new THREE.Mesh(merged, material);
     // Behind the swimming plane, in front of the seabed backdrop at -4.4, so

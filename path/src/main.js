@@ -12,7 +12,7 @@ import { midWater, bounds, seabedTopY } from './arena.js';
 import {
   initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput,
 } from './input.js';
-import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, applyRecoil, applyPlayerKnockback, rebuildShipBody } from './entities/player.js';
+import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody } from './entities/player.js';
 import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
@@ -20,14 +20,15 @@ import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, 
 import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
-import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossState, capBossDamage } from './systems/boss.js';
+import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, bossState, capBossDamage } from './systems/boss.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnLevelOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks } from './entities/pickups.js';
+import { levelOrbColor } from './systems/levelOrb.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
-import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink } from './systems/feedback.js';
+import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
 import { initAudio, unlockAudio, prefetchSamples, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
@@ -40,7 +41,7 @@ import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -79,7 +80,7 @@ import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from 
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
 import { initMusselShells, updateMusselShells, clearMusselShells, spawnMusselShell } from './systems/musselShell.js';
 import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact } from './systems/bossImpact.js';
-import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots } from './systems/bossHotSpots.js';
+import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots, liveHotSpots, hotSpotLit, hotSpotPoint } from './systems/bossHotSpots.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
 import { initGore, updateGore, resetGore } from './systems/gore.js';
 import { tickHitShapes, initHitShapeDebug, updateHitShapeDebug } from './systems/hitShape.js';
@@ -132,10 +133,15 @@ import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, 
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
-import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, showHud, showRestartTransition, hideRestartTransition, uiRoot } from './ui/ui.js';
-import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive } from './ui/upgradeHive.js';
+import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld } from './ui/ui.js';
+import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple } from './ui/upgradeHive.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
+// THE HELLO at the top of a run, which is not a tip: it fires every run and
+// its words are rolled rather than written into callouts.csv. See
+// systems/greeting.js.
+import { resetGreetingRun, updateGreeting, greetingState, greetingOnBand } from './systems/greeting.js';
+import { noteDeath } from './systems/lastRun.js';
 import { setTelegraph, updateTelegraph, clearTelegraph } from './systems/telegraph.js';
 import { initCallouts, updateCalloutUi, clearCalloutUi } from './ui/callout.js';
 import { initChainDebug, updateChainDebug, toggleChainDebug, dumpChainTrace } from './ui/chainDebug.js';
@@ -209,6 +215,15 @@ initFeedback(world.grid);
 // Node harness that fires an event keeps working (the channel is simply inert
 // with no sink, which is the right behaviour headless).
 setToastSink((t) => spawnProcToast(world.camera, t));
+// A CRIT ON A BOSS'S WEAK SPOT, watched rather than reported. The first-run tip
+// about weak spots is answered by hitting one, and the only place that knows a
+// hit landed on a spot is hotSpotDamage — three call sites deep inside combat,
+// the strike and the club, none of which should learn about the tutorial to say
+// so. `hotSpotHit` is already fired there for the goo and the sound, so the
+// event IS the notification and this is one line rather than a fourth hook.
+onFeedback((event) => {
+  if (event === 'hotSpotHit') noteTutorialEvent('bossWeakSpot');
+});
 // The hulls warp the same lattice the seal does — see the note in
 // systems/boatWake.js for why the grid is handed over rather than threaded
 // through systems/boats.js and systems/bossBoat.js.
@@ -267,6 +282,13 @@ let rapidFireTimer = 0; // seconds remaining on an active rapid-fire pickup
 let chargeHapticTimer = 0; // counts down between wind-up rumble pulses
 let bubbleSpawnTimer = 0;
 let rapidFireSpawnTimer = 0;
+let levelOrbSpawnTimer = 0;
+// SECONDS SINCE THE LAST CARD WAS TAKEN, and Infinity until the first one is.
+// The first-run tip that points out the hive is offered in the window after a
+// pick and lapses out of it — see the `hiveStack` step in systems/tutorial.js
+// for why that window exists rather than the tip simply sitting there until the
+// twelve-second ceiling takes it.
+let sinceUpgrade = Infinity;
 // Chum chunks keep their clocks in systems/chumChunkSpawner.js rather than in
 // three loose timers here — see the note at the top of that file for why the
 // ambient timer, the boss budget and the pity chunk have to be readable in one
@@ -525,7 +547,10 @@ async function boot() {
   // AFTER the stage panel: the workbench subscribes to the stage's open/close
   // so one key drives both, and the subscription has to exist before anything
   // can open it.
-  if (DEV_UI) initWorkbench();
+  // Handed the tuner's change handler for one row: the goo field's
+  // resolution, which is sized with the post chain rather than read per
+  // frame. Everything else the workbench writes is live.
+  if (DEV_UI) initWorkbench(handleTunerChange);
   // The run clock is handed over rather than imported: `gameState` is a local
   // in here, and the panel only wants it to timestamp the playtest record.
   // The second getter is for the panel's boss spawner — it needs somewhere to
@@ -689,6 +714,10 @@ function handleSettingsChange(path) {
   // Without this the player toggles the setting and the menu appears to have
   // done nothing until they resume.
   if (all || path === 'hud.barPlacement') applyBarPlacement();
+  // Same reasoning for the fuel: the row is nudged from a paused menu, on a
+  // frame updateHUD is not running. The RING half needs nothing here — it
+  // reads the setting itself, every frame it draws.
+  if (all || path === 'hud.boostMeter') applyBoostMeter();
 }
 
 function bindGlobalKeys() {
@@ -879,6 +908,11 @@ function handleTunerChange(path) {
   // world.updateColors, called from world.updateSurface — nothing to do here.
   if (path === '*' || path.startsWith('fx.maxParticles')) initParticles(world.scene);
   if (path === '*' || path.startsWith('post')) post.applyPreset(CONFIG.post.preset);
+  // The goo's density field is sized inside post.resize, not read per frame,
+  // so its divisor is the one control on the F panel's goo view that does
+  // nothing at all until this runs. setSize early-outs on an unchanged size,
+  // so dragging the handle costs nothing on the frames it does not move.
+  if (path === '*' || path.startsWith('fx.goo.divisor')) post.resize();
   // Which glow source is live is a property of every loaded MATERIAL, not of
   // the frame, so flipping the config value alone changes nothing until the
   // materials are re-pointed. Covers '*' too: a tuning reset can turn this
@@ -1308,6 +1342,8 @@ function startGame() {
   rapidFireTimer = 0;
   bubbleSpawnTimer = randomBetween(CONFIG.oxygen.bubbleSpawnMin, CONFIG.oxygen.bubbleSpawnMax);
   rapidFireSpawnTimer = randomBetween(CONFIG.rapidFirePickup.spawnMin, CONFIG.rapidFirePickup.spawnMax);
+  levelOrbSpawnTimer = randomBetween(CONFIG.levelPickup.spawnMin, CONFIG.levelPickup.spawnMax);
+  sinceUpgrade = Infinity;
   resetChumChunkSpawner();
   starfishCooldown = 0;
   seagullCooldown = 0;
@@ -1322,6 +1358,11 @@ function startGame() {
   // systems/tutorial.js. Only the tip currently talking is dropped.
   resetCallouts();
   resetTutorialRun();
+  // ...and this run's hello is rolled HERE, at the start, rather than when it
+  // is spoken a second later: rolling it is also what banks this run as one
+  // that happened, so a player who quits during the opening camera move is
+  // still greeted as a returning player next time. See resetGreetingRun.
+  resetGreetingRun();
   clearCalloutUi();
   // ...and nothing left lit from the last run's tip. The subject is usually
   // gone with the arena anyway; what this is really for is the material a
@@ -1379,6 +1420,11 @@ function killPlayer() {
   // `lastDamageSource` between here and the card, and this is still a fact
   // about the run that ended HERE.
   gameState.deathSource = lastDamageSource;
+  // Banked for the NEXT run's hello, which can name what killed this one —
+  // "Last time it was a crab, {player}". The raw source rather than the causes,
+  // because the greeting needs both readings of it and deathCauses.js is where
+  // that split lives. See systems/lastRun.js.
+  noteDeath(lastDamageSource);
   // updateHUD stops here, and the seal's floating bars are anchored by it —
   // see hidePlayerBars. The rest of the HUD is screen-anchored and can stay.
   hidePlayerBars();
@@ -1608,6 +1654,11 @@ function applyLevelChoice(choice) {
   // no-ops when the folded set has not changed, so calling it on every pick is
   // the cheap path, not a rebuild per level.
   setHiveUpgrades(player.upgrades);
+  // The window the hive tip is offered in opens here — see `sinceUpgrade`. On
+  // every pick and not only the first, because the tip is spent the first time
+  // it is shown anyway and a ledger check here would be this file keeping a
+  // second copy of the coach's.
+  sinceUpgrade = 0;
   // Timestamped, so the report can charge an ability only for the time it was
   // actually held — a pick taken at minute nine hasn't had a run to prove
   // itself and shouldn't be ranked as if it had.
@@ -1624,6 +1675,44 @@ function applyLevelChoice(choice) {
     // playable and isn't.
     endLevelUpTime();
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE LEVEL BLOB PAYING OUT — one more stack of something already held.
+//
+// WHY IT IS A STACK AND NOT A CARD. A new upgrade is a DECISION, and a decision
+// belongs on the level-up screen with three of them side by side and the world
+// stopped. Handing one over mid-fight, at random, at a moment the player was
+// looking somewhere else, would be the only thing in the game that changes a
+// build without being chosen. Deepening something the player already chose is
+// not that: it says yes to a decision they already made.
+//
+// WHICH ONE IS UNIFORM over what CAN be deepened — see levelableUpgrades in
+// entities/player.js, which is where the cap, the disabled rows and the tier
+// are decided. Not weighted toward the shallow end, deliberately: a bias toward
+// whatever is on one stack would quietly turn the blob into a card-spreader,
+// which is the same "the game chose for you" problem one step removed.
+//
+// It pays nothing at all when there is nothing to deepen. That is reachable —
+// the spawn gate is checked at spawn and the blob then floats for `lifetime`,
+// during which the last levelable card can hit its cap — and the honest answer
+// is a silent no-op rather than a consolation prize the player did not ask for.
+// Returns what it levelled, or null, so the caller can stay quiet.
+function applyLevelOrb() {
+  const pool = levelableUpgrades();
+  if (!pool.length) return null;
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  // At the best tier this card has already been taken at, not at the floor —
+  // see the note in levelableUpgrades.
+  addUpgrade(pick.id, pick.rarity);
+  setHiveUpgrades(player.upgrades);
+  // The same arrival beat a card flying into the corner ends on (see
+  // flyCardToHive in ui/ui.js): the tile slams and the rest of the hive ripples
+  // out from it. Fired here rather than left to the pulse a firing ability
+  // makes, because this is the corner GAINING something and it should read the
+  // way the other way of gaining something reads.
+  slamAndRipple(pick.id);
+  return { id: pick.id, level: pick.count + 1 };
 }
 
 // Splash hits (currently just the seagull bomb) are recorded here instead
@@ -2265,14 +2354,22 @@ function onChainHit(chain, source) {
       // how deep the chain is, readable without looking at the banner.
       sfxOpts: { pitch: 1 + depth * 0.07 },
     });
-    spawnChainToast(world.camera, x, y, chain);
+    // NO POSITION. The banner is pinned above the seal (ui/ui.js) and holds
+    // for as long as the chain window does, so the point the mouthful was
+    // swallowed at — which is what `x, y` used to place it at — is not where
+    // the announcement goes. The two coordinates are still what the JUICE
+    // above is fired at, which is a different question: the ripple and the
+    // burst belong to the food, the banner belongs to the animal.
+    spawnChainToast(chain);
     if (ceremony) {
       lastChainCeremony = gameState.time;
       world.punchCamera((fc.punch ?? 0.045) + (fc.punchPerChain ?? 0.012) * depth);
-      // The punch above is the fixed camera's version of this and stays exactly
-      // as it was — both fire, and on the cinematic rig the punch rides on top
-      // of the state's push-in the same way it rides on top of a death.
-      cineEvent('foodChain');
+      // THE PUNCH IS THE WHOLE CAMERA RESPONSE. There used to be a cinecam
+      // state here too — a 1.62 push-in held for over a second — and a chain
+      // ceremony fires often enough that the rig spent most of a good run
+      // travelling between that and base, which read as constant popping. A
+      // moment that repeats this often cannot own the frame; it gets the kick
+      // and the banner, and the lens stays where the player left it.
     }
   }
 
@@ -2362,7 +2459,10 @@ function onChainHit(chain, source) {
 // is the only pickup the pickups module has never owned. This is the one place
 // that already imports both.
 function pickupInWater(kind) {
-  if (kind === 'attractorOrb') return attractorOrbs.length > 0;
+  // `!taken` on purpose: a clam already swallowed is riding the seal and there
+  // is nothing left to swim into, so a tip that fired for one would be telling
+  // the player to go and get something they are wearing.
+  if (kind === 'attractorOrb') return attractorOrbs.some((o) => !o.taken);
   return pickupTypeInWater(kind);
 }
 
@@ -2391,6 +2491,35 @@ function takeSubject(kind, id) {
   const x = player.mesh.position.x;
   const y = player.mesh.position.y;
   if (kind === 'surface' || kind === 'seabed') return { kind };
+  // A PLACE ON THE GLASS rather than one in the water — the only subject in the
+  // table that is not somewhere the seal could swim. It answers every frame
+  // while the corner has anything in it, so like the two above it there is
+  // nothing here to go stale.
+  if (kind === 'hive') return hiveRect() ? { kind } : null;
+  if (kind === 'hotspot') {
+    // ONE SPECIFIC SPOT, held by reference like every other subject: a weak
+    // spot ruptures and another opens somewhere else on the animal seconds
+    // later, and re-asking for "the nearest one" every frame would walk the
+    // label round the boss without anything having happened.
+    //
+    // The nearest one IN STRIKE RANGE, which is the same test the step's own
+    // `ready` uses one level up. Two answers to "which spot is this tip about"
+    // is how a label ends up standing on a different hole from the one the
+    // sentence was offered for.
+    const boss = bossState.enemy;
+    if (!boss) return null;
+    const reach = strikeReach(player.stats);
+    let best = null;
+    let bestD = reach;
+    for (const spot of liveHotSpots(boss)) {
+      const at = hotSpotPoint(spot);
+      // Its own radius counts as reach: a big spot is strikeable from further
+      // out than a small one, the same reasoning the unkillable tip uses.
+      const d = Math.hypot(at.x - x, at.y - y) - (at.r ?? 0);
+      if (d < bestD) { bestD = d; best = { kind, enemy: boss, spot }; }
+    }
+    return best;
+  }
   if (kind === 'chum') {
     const handle = chumEntry(x, y);
     return handle ? { kind, handle } : null;
@@ -2399,7 +2528,9 @@ function takeSubject(kind, id) {
     // The row's own id names the type — one string end to end, see the note on
     // PICKUP_TIPS. The attractor is the one that lives somewhere else.
     if (id === 'attractorOrb') {
-      const orb = attractorOrbs[0] ?? null;
+      // The one still in the water, for the same reason pickupInWater skips a
+      // taken one — the arrow has to point at something the player can reach.
+      const orb = attractorOrbs.find((o) => !o.taken) ?? null;
       return orb ? { kind, id, entry: orb, list: attractorOrbs } : null;
     }
     const entry = pickupEntry(id, x, y);
@@ -2455,6 +2586,35 @@ function subjectAt(handle) {
   const x = player.mesh.position.x;
   const y = player.mesh.position.y;
   if (handle.kind === 'surface') return { x, y: bounds.surfaceY };
+  if (handle.kind === 'hive') {
+    const r = hiveRect();
+    if (!r) return null;
+    // THE TOP EDGE, in world units. The label is drawn a fixed gap ABOVE
+    // whatever world point it is given (see drawWorld in ui/callout.js), so
+    // anchoring on the middle of the block would put the sentence across the
+    // tiles it is pointing at. Converted rather than special-cased: the callout
+    // layer positions everything from a world point, and a second code path for
+    // "a tip about a piece of chrome" would be a whole surface's worth of
+    // clamping and dissolve logic written twice. See screenToWorld.
+    //
+    // NO MESH, deliberately — there is nothing in the scene to light up, and
+    // the tile the coach would want to pulse is a div. The hive does its own
+    // announcing on a pick (see slamAndRipple).
+    return screenToWorld(world.camera, r.left + r.width / 2, r.top);
+  }
+  if (handle.kind === 'hotspot') {
+    // Gone the moment it ruptures, which is what ends the tip: the light goes
+    // out and the crit zone with it, and a label left standing on unlit flesh
+    // would be pointing at a place that no longer does anything.
+    if (!hotSpotLit(handle.enemy, handle.spot)) return null;
+    const at = hotSpotPoint(handle.spot);
+    // No mesh handed back, for the same reason a creature's is not: the boss
+    // wears a skin, an outline and a shell of its own (systems/bossHotSpots.js
+    // paints the spot INTO the animal's geometry), and the highlight system
+    // would either refuse it or break it. The spot is already the brightest
+    // thing on the animal — it does not need the coach's help to be found.
+    return { x: at.x, y: at.y };
+  }
   if (handle.kind === 'seabed') {
     // The pile, if there is one on the floor, and otherwise the floor itself
     // under the seal. Both are right for the tip this serves ("loose chum sinks
@@ -3367,11 +3527,12 @@ function dropChumChunk(pos, t, vel = null) {
 
 function updateChumChunkSpawns(dt) {
   updateChumChunkSpawner(dt, {
-    // A boss is only a boss for this purpose once it is actually fightable —
-    // `arriving` is the entrance, where the creature is untouchable and the
-    // health bar is still filling, and kicking a chunk out of it there would
-    // have the fight paying out before it had started.
-    boss: (bossState.enemy && !bossState.arriving) ? bossState.enemy : null,
+    // A boss is only a boss for this purpose once it is actually fightable.
+    // `bossEntering` covers both beats of the arrival — the swim in from
+    // behind the rock and the ceremony after it — where the creature is
+    // untouchable and the health bar is still filling. Kicking a chunk out of
+    // it there would have the fight paying out before it had started.
+    boss: (bossState.enemy && !bossEntering()) ? bossState.enemy : null,
     hpFrac: player.hp / Math.max(1, player.stats.maxHp),
     onAmbient: (t) => dropChumChunk(randomArenaPoint(), t),
     onBoss: (t) => {
@@ -3564,6 +3725,10 @@ function animate(now) {
     seagullCooldown -= dt;
     simClock += dt;
     if (rapidFireTimer > 0) rapidFireTimer -= dt;
+    // How long ago the last card was taken. Left at Infinity until the first
+    // one, and never reset by anything else — the hive tip's window is about a
+    // PICK, not about a level or a menu opening.
+    if (Number.isFinite(sinceUpgrade)) sinceUpgrade += dt;
 
     // Every live chain link makes the seal faster — thrust, top speed, the
     // dash itself and the dash's turn rate all read this. Pushed in as a plain
@@ -3771,6 +3936,18 @@ function animate(now) {
       rapidFireSpawnTimer = randomBetween(CONFIG.rapidFirePickup.spawnMin, CONFIG.rapidFirePickup.spawnMax);
       spawnRapidFireOrb(world.scene, randomArenaPoint());
     }
+    // THE LEVEL BLOB. Its timer runs from the start of the run like the others,
+    // but the spawn itself waits for there to be something to level: the whole
+    // payload is "one of the cards you are holding", and the first minute of a
+    // run holds none. The timer is NOT re-rolled when the gate refuses — that
+    // would push the first blob out by a full interval past the first pick,
+    // which on a slow opening is most of a run — so the blob arrives on the
+    // next frame after the player takes anything.
+    levelOrbSpawnTimer -= dt;
+    if (levelOrbSpawnTimer <= 0 && CONFIG.levelPickup.enabled && levelableUpgrades().length) {
+      levelOrbSpawnTimer = randomBetween(CONFIG.levelPickup.spawnMin, CONFIG.levelPickup.spawnMax);
+      spawnLevelOrb(world.scene, randomArenaPoint());
+    }
     updateChumChunkSpawns(dt);
 
     updateCrabSpawner(dt, world.scene, gameState.difficulty);
@@ -3842,6 +4019,10 @@ function animate(now) {
     });
     updateBoats(dt, world.scene, gameState.difficulty, player.mesh.position, {
       onBoatDestroyed,
+      // The clam being swallowed. It answers the coach's `attractorOrb` tip the
+      // same way swimming into any other pickup answers its own — that tip used
+      // to have no answer at all, because the clam could not be collected.
+      onAttractorTaken: () => noteTutorialEvent('attractorOrb'),
       // For the attractive clam's beat-synced waves only — everything else in
       // there runs on the water's dilated clock. See updateAttractiveClam.
       rawDt,
@@ -4974,6 +5155,33 @@ function animate(now) {
         // For the coral's beat-synced light. Everything else in there runs on
         // the water's dilated clock.
         rawDt,
+        // THE LEVEL BLOB GOING DOWN. In `opts` rather than as a ninth
+        // positional argument: the four above it are already at the edge of
+        // what a call site can be read at a glance, and every harness that
+        // calls updatePickups with four handlers keeps working untouched.
+        onLevelOrb: (x, y, orb) => {
+          noteTutorialEvent('levelOrb');
+          const got = applyLevelOrb();
+          feedback('levelOrbTaken', {
+            x, y,
+            // The colour it was actually wearing on this frame. There is no
+            // assetBaseColor answer for a thing that changes colour four times
+            // a bar, and a burst in a fixed tint would be the one part of the
+            // effect that was off the beat.
+            color: levelOrbColor(orb?.mesh),
+            // The card it levelled, named through the same lookup every other
+            // toast uses — so this line reads whatever upgrades.csv calls it.
+            // Absent when there was nothing left to deepen, which falls back to
+            // the event's own wording rather than naming a card that did not
+            // change.
+            toastUpgrade: got?.id,
+            toastValue: got ? `Lv ${got.level}` : null,
+          });
+          // Same top-up as the bubble and the coral. Small: this pickup's
+          // payout is the stack, and paying the meter as well would make the
+          // rarest thing in the water also the best boost refill in it.
+          if (addCharge(CONFIG.strike.orbPipRefill?.rapidFire ?? 0.35, player.stats)) chargeCrossed();
+        },
         // A BREATH DESTROYED. Pays nothing — that is the risk the bubble now
         // carries, and the reason it is worth swimming for one early rather
         // than letting it come to you.
@@ -5088,7 +5296,16 @@ function animate(now) {
   // Toasts run on REAL time, outside the pause gate, so the numbers from the
   // kills that triggered a level-up finish rising instead of hanging frozen
   // behind the upgrade screen.
-  updateToasts(realDt);
+  // The FOOD CHAIN! banner rides the seal and draws the chain window draining,
+  // so the layer is handed the camera and the two facts it needs. Null the
+  // moment the run is not live: pinning a banner to a dead seal would hold it
+  // wherever the body went down, and the strip would keep reporting time on a
+  // chain that ended with the run. `chainWindowLeft()` is the same expression
+  // the arc outside the boost ring quotes.
+  const chainPin = gameState.running && !deathState.active
+    ? { x: player.mesh.position.x, y: player.mesh.position.y, left: chainWindowLeft() }
+    : null;
+  updateToasts(realDt, world.camera, chainPin);
 
   // ---------------------------------------------------------------------------
   // THE WARNING BAND AND THE FIRST-RUN TIPS — systems/callouts.js.
@@ -5134,10 +5351,12 @@ function animate(now) {
     feedback('boostEmpty', { x: player.mesh.position.x, y: player.mesh.position.y });
   }
   updateCallouts(realDt, {
-    // The held breath before a boss and the ceremony after it are one
-    // continuous stretch (boss.js hands off between them inside a single
-    // frame), so this is one crossing and therefore one "Warning!".
-    boss: bossState.hushing || bossState.arriving,
+    // The held breath before a boss, the swim in, and the ceremony after it
+    // are one continuous stretch (boss.js hands off between them inside a
+    // single frame), so this is one crossing and therefore one "Warning!".
+    // Miss the middle beat and the line blinks off and back on again in the
+    // gap, which reads as two warnings for one boss.
+    boss: bossState.hushing || bossEntering(),
     health: hpFrac < (calloutCfg.healthLow ?? 0.3),
     oxygen: oxygenLow,
     // TWO DIFFERENT THINGS AN EMPTY METER CAN MEAN, and they want opposite
@@ -5166,6 +5385,14 @@ function animate(now) {
     strikeNow: strikeLoaded() && input.strikeHeld,
     boost: boostDenied,
   }, bandLive && !gameState.paused);
+
+  // THE HELLO, before the coach and on the same liveness gate. It takes the
+  // band first (CONFIG.greeting.priority is above every coach row), and the
+  // first tip below then finds the band busy — which does NOT spend the step,
+  // so the tip arrives the moment the greeting has finished leaving. See the
+  // note in systems/greeting.js about why that handover is a priority rather
+  // than a delay in two places.
+  updateGreeting(realDt, bandLive && !gameState.paused);
 
   updateTutorial(realDt, {
     runTime: gameState.time,
@@ -5239,6 +5466,31 @@ function animate(now) {
       }
       return false;
     },
+    // A WEAK SPOT THE SEAL COULD ACTUALLY HIT FROM HERE. A getter for the same
+    // reason the three above are: it walks a boss's spot list, and the question
+    // is only ever asked on a first run.
+    //
+    // "In strike distance" is the longest dash this stat block can buy — see
+    // strikeReach. Not the reach the meter holds right now, which would put the
+    // tip on screen and take it off again as the bar filled underneath it.
+    get weakSpotInReach() {
+      const boss = bossState.enemy;
+      if (!boss || bossEntering()) return false;
+      const reach = strikeReach(player.stats);
+      for (const spot of liveHotSpots(boss)) {
+        const at = hotSpotPoint(spot);
+        const d = Math.hypot(at.x - player.mesh.position.x, at.y - player.mesh.position.y);
+        if (d - (at.r ?? 0) <= reach) return true;
+      }
+      return false;
+    },
+    // THE HIVE, and the moment it is worth explaining. Two facts rather than
+    // one: the corner has to be on screen with something in it, and the pick
+    // that put it there has to be recent — see the `hiveStack` step for why the
+    // window is what ends the tip.
+    upgradesHeld: player.upgrades.length,
+    sinceUpgrade,
+    get hiveShown() { return !!hiveRect(); },
     // How a tip finds the thing it is about, and how it keeps hold of it. Both
     // by reference — see takeSubject above.
     takeSubject,
@@ -5307,13 +5559,21 @@ function animate(now) {
     // different one was collected.
     tipAnchor: tutorialState.anchor,
     tipFade: tutorialState.fade,
+    // WHICH DISSOLVE THE BAND IS ON, and it is a separate question from the
+    // one above because two systems can be leaving at once: the greeting owns
+    // the band at the top of a run while the coach's own fade is still whatever
+    // the last world tip left it at. Asked as "who is holding the band" rather
+    // than as a max() of the two — a max would apply the hello's dissolve to a
+    // world tip that started while it was going, and draw a brand new sentence
+    // already half eaten away.
+    bandFade: greetingOnBand() ? greetingState.fade : tutorialState.fade,
   });
 
-  // Suffocation — the beep, the surface gasps, and the pixelate/band-pass
+  // Suffocation — the beep, the surface gasps, and the CRT/band-pass
   // blackout. Outside the pause gate on purpose, and told whether the run is
   // live rather than gated on it: on death, on a menu, and behind the upgrade
   // screen it has to keep ticking so the effect EASES back out. Gated, the
-  // screen would simply freeze mid-pixelation on the game-over card. Real
+  // screen would simply freeze mid-breakup on the game-over card. Real
   // time for the same reason toasts use it — a hit-stop shouldn't stall a
   // warning beep.
   updateOxygenFx(realDt, player, gameState.running && !gameState.paused);
@@ -5519,11 +5779,6 @@ function animate(now) {
   // screen while everything else is held, and holding it too reads as a stall.
   // This is also what drags each wound along with the bone it is stuck to.
   updateBossImpacts(realDt);
-  // BOTH CLOCKS. The breathing and the relight wait belong to the fight and
-  // slow down with it; the hit flash does not, for the same reason the impacts
-  // above take real time — a flash that freezes during its own hit-stop is the
-  // one thing on screen while everything else is held.
-  updateBossHotSpots(dt, realDt);
   // The wreckage of the last boss, and the one effect here that runs on the
   // GAMEPLAY clock rather than the wall one: it is part of the world the kill
   // shot is slowing down, and chunks hanging almost still in the dilated water
@@ -5594,6 +5849,18 @@ function animate(now) {
   // (the yacht's rolls of cash). Same clock, same raw dt, and after
   // updateBeatSync for the same reason everything above it is.
   updateEmissivePulse(rawDt);
+  // The boss's weak spots, and they are HERE rather than up with the impact
+  // effects for one reason: their throb is on the musical grid, so they are one
+  // of the beat-synced things the comment on updateBeatSync above is about.
+  // Run before it they would read a transport a frame stale — nothing anyone
+  // could see on a half-bar pulse, but the contract in this block is that the
+  // clock is carried to now first and there is no reason to be the exception.
+  //
+  // BOTH CLOCKS. The relight wait belongs to the fight and slows down with it;
+  // the hit flash does not, for the same reason the impacts take real time — a
+  // flash that freezes during its own hit-stop is the one thing on screen while
+  // everything else is held. (The pulse reads neither: it is on the transport.)
+  updateBossHotSpots(dt, realDt);
 
   // Surface first: it advances the wave, and bubbles bursting at the water line
   // are solved against wherever the wave ended up this frame, not last frame's.

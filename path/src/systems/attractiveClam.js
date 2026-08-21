@@ -8,6 +8,12 @@ import { telegraphMul } from './telegraph.js';
 // THE ATTRACTIVE CLAM — what the trawler drops, and what drags every settled
 // scrap of chum on the seabed across the arena and into the seal's mouth.
 //
+// IT IS GRABBED, not merely dropped: it sinks into the water and waits, and
+// the pull does not start until the seal swims into it (see updateBoats). The
+// waves below are what makes that a choice the player can see — an uncollected
+// clam pulsing on the far side of the arena is an invitation, and after the
+// grab the same train follows the seal and shows the field working.
+//
 // It was a 0.4-unit sphere. The single most powerful pickup in the game, the
 // one that empties the whole floor at once, was rendered as the same primitive
 // ball as everything else with a different tint on it — so the moment it

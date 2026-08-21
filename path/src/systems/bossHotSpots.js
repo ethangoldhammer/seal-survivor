@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { hitShapeSpheres, worldToShapeLocal, shapeLocalToWorld } from './hitShape.js';
 import { feedback } from './feedback.js';
+import { advanceCycles, phaseOffset } from './beatSync.js';
 
 // ---------------------------------------------------------------------------
 // WEAK SPOTS ON A BOSS
@@ -106,6 +107,12 @@ const SKIN_VERT = /* glsl */ `
 const SKIN_FRAG_PARS = /* glsl */ `
   uniform vec4 uHotSpot[${MAX_SPOTS}];   // xyz world centre, w world radius
   uniform vec4 uHotMood[${MAX_SPOTS}];   // x alive 0..1, y flash, z heat, w seed
+  // THE PHASE OFFSET IS ITS OWN ARRAY, and it does not share aMood.w with the
+  // seed even though both are one float per spot. The seed drives the chewed
+  // edge; the phase drives the throb — and at the shipped spread of 0 (every
+  // spot in lockstep with the music) a shared slot would hand every spot on
+  // every boss in the game the identical gnawed outline.
+  uniform float uHotPhase[${MAX_SPOTS}];
   uniform float uHotTime;
   uniform float uHotGlow;
   uniform float uHotJag;
@@ -117,7 +124,7 @@ const SKIN_FRAG_PARS = /* glsl */ `
   uniform float uHotRingW;
   uniform float uHotSpill;
   uniform float uHotSpillGain;
-  uniform float uHotPulse;
+  uniform float uHotCycle;
   uniform float uHotPulseDepth;
   uniform float uHotFlashSwell;
   uniform vec3 uHotLit;
@@ -135,7 +142,7 @@ const SKIN_FRAG_PARS = /* glsl */ `
                mix(hotHash(i + vec2(0.0, 1.0)), hotHash(i + vec2(1.0, 1.0)), f.x), f.y);
   }
 
-  vec3 hotSpotLight(vec4 s, vec4 m) {
+  vec3 hotSpotLight(vec4 s, vec4 m, float phase) {
     if (m.x <= 0.0 || s.w <= 0.0) return vec3(0.0);
 
     // r = 1.0 IS THE CRIT BOUNDARY. Everything below is built around that one
@@ -149,8 +156,27 @@ const SKIN_FRAG_PARS = /* glsl */ `
     // uses several times a second — a small lie, told constantly, about the
     // one thing on a boss the player is aiming at. Pulsing the light says the
     // same "this is alive" and says nothing false.
-    float rate = uHotPulse * mix(1.0, 3.2, m.z);
-    float breathe = 1.0 + uHotPulseDepth * sin(uHotTime * rate + m.w * 43.0);
+    //
+    // ON THE MUSICAL GRID. uHotCycle is a beat-synced counter in [0,1) from
+    // systems/beatSync.js, one half bar per cycle by default — so every boss in
+    // the water throbs with the track rather than each on its own rad/sec.
+    // The phase argument is the per-spot offset, already quantised in JS by
+    // beatSync's phaseOffset, so an offset spot still lands ON a beat. It
+    // ships at 0 — lockstep — which is the OPPOSITE call from a school of
+    // fish, and deliberately: a school spread over a bar reads as a section,
+    // while two weak spots on one animal throbbing together read as the boss
+    // pulsing with the track, which is the whole point of putting it on the
+    // grid at all.
+    //
+    // HEAT DOUBLES THE RATE BY CROSSFADING TO THE SECOND HARMONIC, which is the
+    // one way to speed a throb up without leaving the grid: sin(2t) over the
+    // same cycle is the next division down, and it wraps cleanly at the same
+    // point (both are whole periods of the counter — see the note on wrap in
+    // advanceCycles). Multiplying the rate instead would put a damaged spot at
+    // an arbitrary tempo of its own, which is the whole thing this replaced.
+    float theta = (uHotCycle + phase) * 6.28318530718;
+    float wave = mix(sin(theta), sin(theta * 2.0), m.z);
+    float breathe = 1.0 + uHotPulseDepth * wave;
 
     // THE RING. The loudest thing in the effect and the reason the spot reads
     // as a TARGET rather than as a smudge: a hard bright band sitting on the
@@ -207,10 +233,10 @@ const SKIN_FRAG_PARS = /* glsl */ `
 // guard the loop would need.
 const SKIN_FRAG = /* glsl */ `
   {
-    vec3 hot = hotSpotLight(uHotSpot[0], uHotMood[0])
-             + hotSpotLight(uHotSpot[1], uHotMood[1])
-             + hotSpotLight(uHotSpot[2], uHotMood[2])
-             + hotSpotLight(uHotSpot[3], uHotMood[3]);
+    vec3 hot = hotSpotLight(uHotSpot[0], uHotMood[0], uHotPhase[0])
+             + hotSpotLight(uHotSpot[1], uHotMood[1], uHotPhase[1])
+             + hotSpotLight(uHotSpot[2], uHotMood[2], uHotPhase[2])
+             + hotSpotLight(uHotSpot[3], uHotMood[3], uHotPhase[3]);
     // NOTHING NEAR A SPOT DRAWS AT ALL. The shell covers the whole animal, so
     // without this every boss pays a full-body additive pass writing black —
     // and on a body already carrying an outline shell that is the third draw
@@ -223,6 +249,16 @@ const SKIN_FRAG = /* glsl */ `
 // ---------------------------------------------------------------------------
 
 let clock = 0;
+
+// THE MUSICAL CYCLE, advanced once a frame for every boss in the water rather
+// than once per boss. The transport position is the same answer for all of
+// them, and two bosses throbbing on their own copies of it is two bosses that
+// can drift apart — which is the one thing a beat-locked effect must not do.
+//
+// Wrapped at 1, which is a whole number of periods for BOTH harmonics the
+// shader reads (sin(t) and sin(2t)); a wrap that is not shows up as a visible
+// jump every time the counter comes round. See advanceCycles.
+let pulseCycle = 0;
 
 // The bodies wearing spots. One entry per boss: its shape, its spots, its
 // shells and the one uniform block they share.
@@ -243,6 +279,7 @@ function freshUniforms() {
   const l = look();
   const spots = [];
   const moods = [];
+  const phases = new Float32Array(MAX_SPOTS);
   for (let i = 0; i < MAX_SPOTS; i++) {
     spots.push(new THREE.Vector4(0, 0, 0, 0));
     moods.push(new THREE.Vector4(0, 0, 0, 0));
@@ -250,6 +287,7 @@ function freshUniforms() {
   return {
     uHotSpot: { value: spots },
     uHotMood: { value: moods },
+    uHotPhase: { value: phases },
     uHotTime: { value: 0 },
     uHotGlow: { value: l.glow ?? 2.6 },
     uHotJag: { value: l.jag ?? 0.34 },
@@ -261,10 +299,10 @@ function freshUniforms() {
     uHotRingW: { value: l.ringWidth ?? 0.16 },
     uHotSpill: { value: l.spill ?? 0.5 },
     uHotSpillGain: { value: l.spillGain ?? 0.55 },
-    uHotPulse: { value: l.pulse ?? 3.4 },
-    uHotPulseDepth: { value: l.pulseDepth ?? 0.11 },
+    uHotCycle: { value: 0 },
+    uHotPulseDepth: { value: l.pulseDepth ?? 0.55 },
     uHotFlashSwell: { value: l.flashSwell ?? 0.35 },
-    uHotLit: { value: new THREE.Color(l.litColor ?? 0x4dff7a) },
+    uHotLit: { value: new THREE.Color(l.litColor ?? 0xffffff) },
     uHotHot: { value: new THREE.Color(l.hotColor ?? 0xffc23a) },
     uHotFlash: { value: new THREE.Color(l.flashColor ?? 0xff3a24) },
   };
@@ -459,17 +497,37 @@ export function perimeterCandidates(shape, rays = 24) {
 // Pick one candidate, biased toward the big parts of the animal and away from
 // the spots already placed.
 //
-// THE BIAS IS NOT DECORATION. Without it the pick is uniform over candidates,
-// and a small sphere on a fin tip contributes as many candidates as the torso
-// while being a tenth of the flesh — so most spots would land on extremities,
-// which are the parts that move fastest, are thinnest, and are hardest to
-// hit. Weighting by the host sphere's radius puts them on the animal.
-function pickCandidate(cands, taken, minGap) {
+// THE BIAS IS NOT DECORATION, and it needs to be STEEP. Without it the pick is
+// uniform over candidates, and a small sphere on a fin tip contributes as many
+// candidate angles as the torso while being a tenth of the flesh — so most
+// spots land on extremities, which are the parts that move fastest, are
+// thinnest and are hardest to hit.
+//
+// Linear weighting was enough while spots were small and stopped being enough
+// the moment they got big: a spot wider than the body part it sits on has its
+// boundary ring hanging over open water, where nothing paints it, so the whole
+// thing renders as a flat glowing snout instead of as a marked zone with an
+// edge. Cubed, the torso wins decisively over the fluke and the ring lands on
+// flesh all the way round. The right lever for that is WHERE a spot goes, not
+// how big it is — shrinking them to fit a fin tip is fixing the wrong end.
+function pickCandidate(cands, taken, minGap, bias = 1, minHostR = 0) {
   let total = 0;
   const weights = new Array(cands.length);
   for (let i = 0; i < cands.length; i++) {
     const c = cands[i];
-    let w = c.hostR;
+    let w = Math.pow(c.hostR, bias);
+    // A HOST TOO SMALL TO CARRY THE SPOT. `minRadius` is a floor applied after
+    // `hostCap`, so on a small body part it wins and the spot comes out bigger
+    // than the thing it is sitting on — which is the same failure the bias
+    // above exists to avoid, arriving by a different route. Measured on the
+    // megalodon, those are exactly the spots that sit furthest inside the
+    // outline (70% of a radius, against 33% for one on a host that fits) and
+    // the ones whose boundary ring falls in open water.
+    //
+    // Crushed rather than rejected, like the spacing rule: on a small enough
+    // animal there may be no host that fits, and a hard filter there means the
+    // spots silently never appear.
+    if (c.hostR < minHostR) w *= 0.02;
     for (const t of taken) {
       const dx = c.wx - t.wx;
       const dy = c.wy - t.wy;
@@ -597,14 +655,30 @@ function supportOnSkin(sx, sy, sz, nx, ny, tol) {
 // a failure: a fitted sphere claiming body where the mesh has none is exactly
 // the place a spot must not go, and one fewer spot beats a crit zone over open
 // water.
-function snapToSkin(pick, tolFrac) {
-  const tol = Math.max(0.15, pick.hostR * tolFrac);
+function snapToSkin(pick, tolFrac, spotR) {
+  // THE TUBE IS CAPPED AGAINST THE SPOT, not only scaled off the host.
+  //
+  // As a pure fraction of the host sphere it is fine on a fitted bone sphere
+  // and absurd on a whole-body stand-in: the boat's circle is 4.2 units, so a
+  // 0.35 tube is 1.5 wide and the fallback widens it to 3.7 — wide enough for
+  // the support search to land the painted point several units to the SIDE of
+  // the ray it was cast along. The collision anchor stays on the ray, so the
+  // two drift apart in ANGLE, and a shot at the glow then writes its contact
+  // somewhere else on the hull entirely. Measured on the boat: 223% of a
+  // radius away, i.e. a dead-centre shot that does not crit.
+  //
+  // Bounding it by the spot's own size keeps the two anchors describing the
+  // same place, which is the only reason either of them exists.
+  const tol = Math.min(
+    Math.max(0.15, pick.hostR * tolFrac),
+    Math.max(0.2, spotR * 0.6),
+  );
   // Widened once before giving up. At the sampled density a thin fin can have
   // nothing inside a tight tube while being perfectly real flesh, and dropping
   // the spot for that would quietly bias every boss's spots away from its
   // extremities.
   const hit = supportOnSkin(pick.sx, pick.sy, pick.sz, pick.nx, pick.ny, tol)
-    ?? supportOnSkin(pick.sx, pick.sy, pick.sz, pick.nx, pick.ny, tol * 2.5);
+    ?? supportOnSkin(pick.sx, pick.sy, pick.sz, pick.nx, pick.ny, tol * 1.8);
   if (!hit) return -1;
   const moved = Math.hypot(hit.x - pick.wx, hit.y - pick.wy, hit.z - pick.wz);
   pick.wx = hit.x;
@@ -637,14 +711,36 @@ function spotRadius(bodyR, hostR) {
   return Math.max(c.minRadius ?? 0.6, Math.min(c.maxRadius ?? 3.2, capped));
 }
 
-function lightSpot(owner, cands) {
+// Try until one sticks. A single pick that fails its hull-match test is not a
+// reason to leave the boss a spot short — it is a reason to look somewhere
+// else on the animal, which is what the weighted roll is for.
+function lightSpot(owner, cands, tries = 12) {
+  for (let i = 0; i < tries; i++) {
+    const spot = tryLightSpot(owner, cands);
+    if (spot) return spot;
+  }
+  return null;
+}
+
+function tryLightSpot(owner, cands) {
   const c = cfg();
   const e = owner.e;
   const taken = owner.spots.filter((s) => s && s.alive && !s.dead);
   // In multiples of the animal's own size, so "not on top of each other" means
   // the same thing on a megalodon and on a crab.
-  const pick = pickCandidate(cands, taken, (c.minGapFrac ?? 0.7) * (e.radius ?? 1));
+  const pick = pickCandidate(cands, taken, (c.minGapFrac ?? 0.7) * (e.radius ?? 1),
+    c.hostBias ?? 3,
+    // The smallest host that can carry a spot without the floor overriding the
+    // cap — i.e. the host at which the two agree.
+    (c.minRadius ?? 0.6) / Math.max(0.05, c.hostCap ?? 0.8));
   if (!pick) return null;
+
+  // WHERE THE CANDIDATE SAT ON THE COLLISION HULL, taken before the snap moves
+  // it onto the flesh. This is the point every contact in the game is written
+  // against, and it is the one the crit reach is anchored to below.
+  const hullX = pick.wx;
+  const hullY = pick.wy;
+  const hullZ = pick.wz;
 
   // ONTO THE SKIN. After the pick rather than before it, so the cost is one
   // nearest-vertex search per placement instead of one per candidate — and so
@@ -654,8 +750,29 @@ function lightSpot(owner, cands) {
   // A candidate with no flesh within reach is dropped rather than used: that
   // is a fitted sphere claiming body where there is none, and a spot there
   // would be a crit zone over open water.
-  const moved = snapToSkin(pick, c.snapTube ?? 0.35);
+  const r0 = spotRadius(e.radius, pick.hostR);
+  const moved = snapToSkin(pick, c.snapTube ?? 0.35, r0);
   if (moved < 0) return null;
+
+  // ONLY WHERE THE HULL AND THE SKIN AGREE, and this is the invariant the
+  // whole feature rests on rather than a tidiness rule.
+  //
+  // The glow is painted on the flesh and every shot is resolved against the
+  // INFLATED collision hull, so a bullet aimed at a spot registers its hit
+  // wherever the hull stopped it — which on a body the hull fits badly is
+  // nowhere near the light. Measured with tools/boss-hitbox-audit.mjs, a
+  // dead-centre shot paid out on 25% of tries at the squid (hull covers 64% of
+  // its flesh) and 42% at the yacht (five spheres over a long flat hull),
+  // against 100% at the orca. No amount of anchoring fixes that: the two
+  // surfaces are genuinely in different places there.
+  //
+  // What CAN be fixed is where the light goes. `moved` is exactly how far apart
+  // the two surfaces were at this candidate, so refusing the ones where they
+  // disagree puts every spot somewhere the player's aim and the game's answer
+  // are the same place. On a boss whose hull fits badly that means fewer
+  // eligible places, not a broken spot — which is the right trade, because a
+  // weak spot that does not pay out is worse than one somewhere else.
+  if (moved > r0 * (c.hullMatch ?? 0.6)) return null;
 
   // PULLED SLIGHTLY INBOARD OF THE EDGE IT WAS FOUND ON.
   //
@@ -669,24 +786,47 @@ function lightSpot(owner, cands) {
   //
   // The crit centre moves with it, which is the right way round: the reach is
   // unchanged and it now covers body rather than water.
-  const r0 = spotRadius(e.radius, pick.hostR);
   const inset = r0 * (c.insetFrac ?? 0.4);
   pick.wx -= pick.nx * inset;
   pick.wy -= pick.ny * inset;
 
   if (!worldToShapeLocal(owner.shape, pick.index, pick.wx, pick.wy, pick.wz, _p)) return null;
 
+  // THE COLLISION-SPACE ANCHOR, kept beside the mesh one.
+  //
+  // These are the same place on two different surfaces, and they have to be
+  // both. Every hit in the game reports its contact point on the PADDED SPHERE
+  // (hitShapeTest writes `centre + normal * wr * padding`), never on the mesh —
+  // so a crit test that measured from the painted centre would be comparing a
+  // point on the collision hull against a point on the skin. Measured by
+  // tools/boss-hitbox-audit.mjs those surfaces stand apart by 0.09 to 0.61
+  // units on the median boss and up to 2.20 at worst, against a spot radius
+  // around 1.4: on the hammerhead a dead-centre shot would land at 40% of the
+  // reach before it had missed by anything, and the worst case exceeds the spot
+  // entirely. The glow would be telling the truth about where to aim and the
+  // crit would be judged from somewhere else.
+  //
+  // So the light is anchored on the skin and the reach is anchored on the hull,
+  // both in the SAME sphere's bone space, both riding the same matrix, and both
+  // still sized by the one radius. That is what "the glowing area is mirrored
+  // in the collision shape" has to mean when the two surfaces are not the same
+  // surface.
+  const collide = { x: 0, y: 0, z: 0 };
+  if (!worldToShapeLocal(owner.shape, pick.index, hullX, hullY, hullZ, collide)) return null;
+
   const spot = {
     shape: owner.shape,
     owner,
     index: pick.index,
     lx: _p.x, ly: _p.y, lz: _p.z,
+    cx: collide.x, cy: collide.y, cz: collide.z,
     // Where it is RIGHT NOW as well as where it is anchored. The world pair is
     // rewritten every frame from the anchor, but it has to exist before the
     // first update or the spacing rule above compares against undefined — and
     // NaN fails every distance test silently, so three spots would open on top
     // of each other on the frame a boss arrives and never again.
     wx: pick.wx, wy: pick.wy, wz: pick.wz,
+    cwx: hullX, cwy: hullY,
     wnx: pick.nx, wny: pick.ny,
     r: r0,
     // Which way the body faces here, kept in the SPHERE's frame as well, so
@@ -709,6 +849,54 @@ function lightSpot(owner, cands) {
   return spot;
 }
 
+// A STAND-IN SHAPE FOR A BOSS THAT COLLIDES AS A CIRCLE.
+//
+// `hitShape` is opt-in per creature and two bosses deliberately decline it: the
+// crab, and the boat — whose def says in as many words that a circle you can
+// see the edges of is the fairer target for a fight that is mostly about where
+// you are standing. That is a design call about COLLISION and this feature has
+// no business reversing it. But "every boss has a weak spot" and "every boss
+// has a fitted hitbox" are different requirements, and only the second one is
+// contentious.
+//
+// So a boss with no measured shape gets a synthetic one — a single sphere on
+// its own circle, which is exactly the shape it already collides as. Everything
+// downstream runs unchanged: hitShape.js's rigid branch refreshes any sphere
+// whose `bone` is null straight off its object's world matrix, so the anchors,
+// the snap to real vertices and the two-surface split all work with no second
+// code path to keep in step.
+//
+// Centred on `e.mesh` rather than on the visual, and radius divided by the
+// padding, so the sphere lands EXACTLY where hitCreature's circle fallback
+// writes its contacts — `e.mesh.position + normal * e.radius`, with no
+// padding applied. A stand-in that sat anywhere else would put the collision
+// anchor somewhere no contact is ever reported.
+function synthShape(e) {
+  const pad = CONFIG.hitShape?.padding ?? 1;
+  const sphere = {
+    mesh: e.mesh,
+    bone: null,
+    pre: null,
+    cx: 0, cy: 0, cz: 0,
+    r: Math.max(0.1, (e.radius ?? 1) / Math.max(0.01, pad)),
+    wx: 0, wy: 0, wz: 0, wr: 0,
+    m: new THREE.Matrix4(),
+  };
+  return {
+    key: `${e.assetKey ?? e.def?.asset ?? 'boss'}__hotSpotStandIn`,
+    visual: e.visual,
+    spheres: [sphere],
+    bound: 0,
+    stamp: -1,
+    alive: true,
+    recipe: null,
+    // Not a hitbox. Nothing may test collisions against this, and the flag is
+    // what lets the update tell a stand-in whose owner has left the world from
+    // a real shape that was released back to the pool.
+    synthetic: true,
+  };
+}
+
 /**
  * Give a boss its weak spots. Called from systems/boss.js the same way the
  * perk, the boat and the kraken's ink are attached.
@@ -724,8 +912,11 @@ export function attachHotSpots(scene, e) {
   if (!e || !e.isBoss) return null;
   const c = cfg();
   if (c.enabled === false) return null;
-  if (!e.hitShape) return null; // no measured body, no silhouette to sit on
   if (!e.visual) return null;   // nothing to paint
+  // A measured body where there is one, and its own collision circle where
+  // there is not — see synthShape. EVERY boss gets spots; none of them has to
+  // change how it collides to earn them.
+  const shape = e.hitShape ?? synthShape(e);
 
   // A body arriving out of the pool may still be wearing the last boss's
   // shells if that boss died on a frame nothing swept. Clearing here as well
@@ -733,7 +924,12 @@ export function attachHotSpots(scene, e) {
   // stale glow nobody can explain.
   releaseHotSpots(e);
 
-  const lo = Math.max(0, Math.round(c.countMin ?? 1));
+  // AT LEAST ONE, ALWAYS. The floor is here and not only in the CSV's `min`
+  // column because a boss with no weak spot is a boss missing a mechanic the
+  // player has been taught to look for on every other one — and a zero rolled
+  // out of a spreadsheet is indistinguishable, in the water, from the feature
+  // being broken.
+  const lo = Math.max(1, Math.round(c.countMin ?? 1));
   let hi = Math.max(lo, Math.round(c.countMax ?? 3));
   if (hi > MAX_SPOTS) {
     // Loudly. Silently dropping the spots past the end of the uniform array
@@ -747,12 +943,17 @@ export function attachHotSpots(scene, e) {
   const u = freshUniforms();
   const owner = {
     e,
-    shape: e.hitShape,
+    shape,
     want,
     spots: [],
     relightIn: 0,
     placed: false,
     visible: false,
+    // THE OVERRIDE SLOTS. Null and 1 mean "wear what CONFIG says", which is
+    // what every boss does until something decides otherwise — see
+    // setHotSpotLook.
+    tint: null,
+    gain: 1,
     u,
     shells: buildShells(e.visual, u),
   };
@@ -801,12 +1002,20 @@ export function releaseHotSpots(e) {
  *                      hit missed every spot, which is every hit on every
  *                      creature in the game that is not a boss.
  */
-export function hotSpotDamage(e, at, dmg) {
+export function hotSpotDamage(e, at, dmg, where = null) {
   if (!at || !(dmg > 0)) return dmg;
   const owner = owners.get(e);
   if (!owner || !owner.placed) return dmg;
 
-  const spot = spotAt(owner, at.x, at.y);
+  // `where` is the caller's own position for the thing that did the damage,
+  // when it has one. It is NOT better than the contact and must not be treated
+  // as if it were: a bullet stops the moment it enters the collision hull, so
+  // its position is a point on the hull too, just a slightly different one.
+  // Both are tested the same way, against the hull anchor. The argument stays
+  // because a swept weapon's own position is the more stable of the two when
+  // the contact gets attributed to a neighbouring sphere.
+  const probe = where ?? at;
+  const spot = spotAt(owner, probe.x, probe.y);
   if (!spot) return dmg;
 
   const c = cfg();
@@ -822,9 +1031,18 @@ export function hotSpotDamage(e, at, dmg) {
   spot.taken += out;
   spot.flash = 1;
 
-  // A little of it comes out on every hit. Small and thrown along the skin's
-  // normal, so a spot you are chewing on visibly leaks before it goes.
-  bleed(spot, c, 1);
+  // HOW CLOSE IT NOW IS TO GOING, read AFTER the damage lands so the hit that
+  // pushes a spot over the line is the one that sounds like it.
+  const heat = Math.min(1, spot.taken / Math.max(1, spot.pool));
+
+  // A little of it comes out on every hit, and MORE of it the closer the spot
+  // is to bursting. This is the same warning the colour shift and the doubling
+  // throb give, in the two channels a player who is looking somewhere else
+  // still gets: the leak grows and the hit gets louder. Without it every crit
+  // on a spot sounds and looks identical from the first to the last, and the
+  // rupture arrives with no run-up.
+  const ramp = (c.rampMin ?? 0.45) + heat * ((c.rampMax ?? 1.9) - (c.rampMin ?? 0.45));
+  bleed(spot, c, ramp);
 
   if (spot.taken >= spot.pool) rupture(spot, c);
   return out;
@@ -835,13 +1053,24 @@ export function spotAt(owner, x, y) {
   if (!owner) return null;
   for (const s of owner.spots) {
     if (!s.alive || s.dead) continue;
-    const dx = x - s.wx;
-    const dy = y - s.wy;
-    // THE DRAWN RADIUS, exactly. The glow's boundary and the crit's reach are
-    // one number read from one place — the moment they become two numbers in
-    // two files, one of them gets retuned and the other does not, and the
-    // symptom is a weak spot that stops paying out with nothing in the diff
-    // that looks like it could have caused it.
+    // AGAINST THE HULL ANCHOR, because that is the surface the question is
+    // asked on.
+    //
+    // Four versions of this were wrong before this one, and the reason each
+    // failed is the same fact seen from a different side: shots are resolved
+    // against the INFLATED collision hull, never against the flesh. A bullet
+    // stops when it enters the hull; the contact is written on the hull; so
+    // both of the things a caller can hand this function live on the hull.
+    // Testing either against a point on the SKIN asks where the shot was on a
+    // surface the shot never reached — which is why measuring the painted
+    // centre paid out on 25% of dead-centre shots at the squid.
+    //
+    // So the reach is anchored on the hull, and `hullMatch` in lightSpot is
+    // what keeps the painted light within a fraction of a radius of it. The
+    // glow and the crit zone are then the same zone because the placement
+    // refused every position where they would not have been.
+    const dx = x - (s.cwx ?? s.wx);
+    const dy = y - (s.cwy ?? s.wy);
     if (dx * dx + dy * dy <= s.r * s.r) return s;
   }
   return null;
@@ -850,6 +1079,78 @@ export function spotAt(owner, x, y) {
 /** The owner record for a creature, for the harness and for boss.js. */
 export function hotSpotsOf(e) {
   return owners.get(e) ?? null;
+}
+
+/**
+ * Every spot currently LIT on one creature, newest placement last.
+ *
+ * A live spot and a placed one are not the same thing: a ruptured spot is still
+ * in `owner.spots` while its relight timer runs, dark, with no crit zone. Both
+ * halves of the filter are load-bearing, and the caller that needs them is the
+ * first-run tip about weak spots — a label standing on a hole that has already
+ * burst would be pointing at unlit flesh.
+ *
+ * An empty array for every creature in the game that is not a boss, and for a
+ * boss whose opening set has not been placed yet.
+ */
+export function liveHotSpots(e) {
+  const owner = owners.get(e);
+  if (!owner || !owner.placed) return [];
+  return owner.spots.filter((s) => s.alive && !s.dead);
+}
+
+/** Is that exact spot still lit? The tip's cue that its subject is gone. */
+export function hotSpotLit(e, spot) {
+  return !!spot && liveHotSpots(e).indexOf(spot) !== -1;
+}
+
+/**
+ * Where a spot is, in world units — THE HULL ANCHOR, which is the surface every
+ * shot is resolved against.
+ *
+ * Exported so nothing outside this file has to decide between `cwx` and `wx`.
+ * They are two different points on purpose (the crit zone sits on the collision
+ * hull, the painted light is snapped onto the flesh), and the four wrong
+ * versions of spotAt() are all the story anybody needs about picking the other
+ * one — see the note there.
+ */
+export function hotSpotPoint(spot) {
+  if (!spot) return null;
+  return { x: spot.cwx ?? spot.wx, y: spot.cwy ?? spot.wy, r: spot.r };
+}
+
+/**
+ * Override one boss's weak-spot look.
+ *
+ * THE COLOUR AND THE BRIGHTNESS ARE DELIBERATELY EXPOSED, and the default is
+ * deliberately WHITE — a neutral that reads on every hide in the game and that
+ * anything tinting it lands on cleanly. Green was the first answer and it was
+ * a decision made in the wrong place: it committed every boss in the game to
+ * one palette from inside the effect, where nothing that knows anything about
+ * the fight can reach it.
+ *
+ * What might drive it, none of which this module should decide:
+ *   the boss's PERK    `bossSparkColor(perk)` in systems/bossLook.js already
+ *                      resolves a perk to its attack colour out of the one
+ *                      threat palette, so an electric boss's spots could match
+ *                      its aura without either end learning about the other.
+ *   the run's ELEMENT  `elementColor` in systems/elements.js.
+ *   the ARCHETYPE      a column in bossLooks.csv, the way the hide is painted.
+ *
+ * Per boss rather than global, because "which boss is this" is the question
+ * every one of those is answering.
+ *
+ * @param e     the creature
+ * @param opts  { color, brightness } — color REPLACES CONFIG's `litColor`,
+ *              brightness MULTIPLIES CONFIG's `glow`. Pass null, or omit a
+ *              field, to hand that half back to the config.
+ */
+export function setHotSpotLook(e, opts = null) {
+  const owner = owners.get(e);
+  if (!owner) return false;
+  owner.tint = opts?.color ?? null;
+  owner.gain = opts?.brightness ?? 1;
+  return true;
 }
 
 // A little of it comes out on every crit.
@@ -868,6 +1169,10 @@ function bleed(spot, c, scale) {
   // hook carries: no sound, no shake, no ripple, no haptics, and no row in the
   // Feel Workbench for anybody to tune them from. A burst fired inline is a
   // burst that exists outside the one table the game's feel is edited in.
+  // `scale` reaches the burst's COUNT, the shake, the glow, the ripple and the
+  // sound's gain through one field — which is exactly why the ramp is passed
+  // here rather than applied to the emitter alone. The whole feedback event
+  // gets louder as the spot gets closer to going.
   feedback('hotSpotHit', {
     x: spot.wx + spot.wnx * out,
     y: spot.wy + spot.wny * out,
@@ -930,6 +1235,19 @@ export function updateBossHotSpots(dt, realDt = dt) {
 
   const c = cfg();
   const l = look();
+
+  // Raw-ish time, like every other beat-synced shader in the game: a throb on
+  // the musical grid has no business slowing down because the frame did.
+  pulseCycle = advanceCycles(
+    pulseCycle,
+    l.pulseSync ?? '1/2',
+    // The free-running fallback, in cycles per second. `pulse` is authored in
+    // radians a second like the rest of the config's oscillators, so it is
+    // divided here rather than being a second unit nobody can compare.
+    (l.pulse ?? 3.4) / (Math.PI * 2),
+    realDt,
+    1,
+  );
   const openRate = 1 / Math.max(0.02, l.openSeconds ?? 0.45);
   const closeRate = 1 / Math.max(0.02, l.closeSeconds ?? 0.22);
   const flashRate = 1 / Math.max(0.02, l.flashSeconds ?? 0.16);
@@ -938,7 +1256,14 @@ export function updateBossHotSpots(dt, realDt = dt) {
     // A boss whose shape went back to the pool takes its spots — and its
     // shells — with it. Same rule the impact smears follow, and for the same
     // reason: a glow with nothing to be a glow ON is a light in open water.
-    if (!owner.shape?.alive) { releaseHotSpots(e); continue; }
+    //
+    // A STAND-IN HAS NO POOL TO GO BACK TO, so `alive` on one never falls and
+    // the creature leaving the world is the only signal there is. removeEnemy
+    // takes the body out of the scene graph, which is the moment to notice.
+    const gone = owner.shape?.synthetic
+      ? !owner.e.mesh?.parent
+      : !owner.shape?.alive;
+    if (gone) { releaseHotSpots(e); continue; }
 
     // --- what is owed -----------------------------------------------------
     const live = owner.spots.filter((s) => s.alive && !s.dead);
@@ -954,7 +1279,13 @@ export function updateBossHotSpots(dt, realDt = dt) {
         // three times on the frame a boss arrives.
         if (cands.length && sampleSkin(owner.e.visual)) {
           while (owed-- > 0 && lightSpot(owner, cands)) { /* placed */ }
-          owner.placed = true;
+          // ONLY ONCE SOMETHING ACTUALLY LIT. Setting this unconditionally
+          // hands a boss that placed nothing — every candidate crushed, or the
+          // snap finding no flesh along any ray — over to the relight path,
+          // which then makes it wait out the full gap before trying again. A
+          // boss can arrive with no weak spot for four seconds that way, which
+          // reads as the feature being broken on that one animal.
+          if (owner.spots.length) owner.placed = true;
         }
       } else {
         owner.relightIn -= dt;
@@ -975,7 +1306,11 @@ export function updateBossHotSpots(dt, realDt = dt) {
     // already in the water instead of only the next one.
     const u = owner.u;
     u.uHotTime.value = clock;
-    u.uHotGlow.value = l.glow ?? 2.6;
+    // The tuned brightness, times whatever this individual has been given. A
+    // multiplier rather than a replacement so the slider still means something
+    // when something else is driving it: turn the glow down and every boss
+    // dims, including the ones wearing an override.
+    u.uHotGlow.value = (l.glow ?? 2.6) * (owner.gain ?? 1);
     u.uHotJag.value = l.jag ?? 0.34;
     u.uHotJagRate.value = l.jagRate ?? 1.4;
     u.uHotCore.value = l.core ?? 3.2;
@@ -985,10 +1320,15 @@ export function updateBossHotSpots(dt, realDt = dt) {
     u.uHotRingW.value = Math.max(0.01, l.ringWidth ?? 0.16);
     u.uHotSpill.value = Math.max(0.001, l.spill ?? 0.5);
     u.uHotSpillGain.value = l.spillGain ?? 0.55;
-    u.uHotPulse.value = l.pulse ?? 3.4;
-    u.uHotPulseDepth.value = l.pulseDepth ?? 0.11;
+    u.uHotCycle.value = pulseCycle;
+    u.uHotPulseDepth.value = l.pulseDepth ?? 0.55;
     u.uHotFlashSwell.value = l.flashSwell ?? 0.35;
-    _col.set(l.litColor ?? 0x4dff7a); u.uHotLit.value.copy(_col);
+    // The whole colour is the one an override REPLACES, not multiplies. A
+    // multiply cannot brighten — an override of pure blue over a white default
+    // would come out blue, and over a green default it would come out black —
+    // so the two ways of expressing "this boss's spots are blue" would give
+    // different answers depending on a config value the caller cannot see.
+    _col.set(owner.tint ?? l.litColor ?? 0xffffff); u.uHotLit.value.copy(_col);
     _col.set(l.hotColor ?? 0xffc23a); u.uHotHot.value.copy(_col);
     _col.set(l.flashColor ?? 0xff3a24); u.uHotFlash.value.copy(_col);
 
@@ -1011,6 +1351,12 @@ export function updateBossHotSpots(dt, realDt = dt) {
       if (!shapeLocalToWorld(s.shape, s.index, s.lx, s.ly, s.lz, _p)) { s.dead = true; continue; }
       s.wx = _p.x;
       s.wy = _p.y;
+      // ...and the collision-space twin, through the same transform, so the
+      // reach rides the animal exactly as the light does.
+      if (shapeLocalToWorld(s.shape, s.index, s.cx, s.cy, s.cz, _p)) {
+        s.cwx = _p.x;
+        s.cwy = _p.y;
+      }
       // NO LIFT TOWARD THE CAMERA. The old quad needed one to sit off the
       // skin; this IS the skin, and nudging the centre forward would pull the
       // brightest part of the patch off the flesh nearest the camera and onto
@@ -1044,7 +1390,11 @@ export function updateBossHotSpots(dt, realDt = dt) {
       const s = i < owner.spots.length ? owner.spots[i] : null;
       const sv = u.uHotSpot.value[i];
       const mv = u.uHotMood.value[i];
-      if (!s) { sv.set(0, 0, 0, 0); mv.set(0, 0, 0, 0); continue; }
+      if (!s) { sv.set(0, 0, 0, 0); mv.set(0, 0, 0, 0); u.uHotPhase.value[i] = 0; continue; }
+      // Quantised through the shared helper rather than used raw, so a spot
+      // given an offset still lands ON a division instead of a random fraction
+      // of one — which would undo the grid the pulse was just put on.
+      u.uHotPhase.value[i] = phaseOffset(s.seed, l.pulseSpread ?? 0, l.pulseSteps ?? 2);
       sv.set(s.wx, s.wy, s.wz, s.r);
       mv.set(
         s.fade,

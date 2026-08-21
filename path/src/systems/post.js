@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { FILTER_OPTIONS, bloomEnabled, setSetting, screenFilter } from './settings.js';
 import { feedbackState } from './feedback.js';
-import { suffocationPixelSize } from './oxygenFx.js';
+import { suffocationCrt } from './oxygenFx.js';
 import { cineLens } from './cineCamera.js';
 import { gooLayer, activeGooGroups, gooGroupInfo, setGooDivisor } from '../entities/particles.js';
 import { bounds, WAVE, sea, waveTimeNow } from '../arena.js';
@@ -890,6 +890,56 @@ export function createPost(renderer) {
   // is written every frame, zeros included, for the same reason updatePunch
   // writes its zoom unconditionally: switching the camera off mid-blend has to
   // clear the lens, not leave it frozen at whatever it was.
+  // THE BLACKOUT. `amount` is oxygenFx's 0..1 ramp; at 1 the seal is out of
+  // air. Every number here is ADDED to whatever the active preset just wrote
+  // rather than replacing it, which is what lets the same effect read on `crt`
+  // (already curved and scanned, so this pushes it past breaking point) and on
+  // `off` (nothing there at all, so this IS the whole picture). It also means
+  // a player who has switched the screen filter off still sees themselves
+  // drown.
+  //
+  // Deliberately NOT the pixel knob any more. Blocks read as the renderer
+  // giving up rather than as the seal losing consciousness, and they collided
+  // with the presets that already pixelate — see systems/oxygenFx.js.
+  function applySuffocationCrt(amount) {
+    const c = CONFIG.oxygen?.fx?.crt ?? {};
+    const u = finalUniforms;
+    const k = Math.max(0, Math.min(1, amount));
+
+    // The tube bulging. The single biggest read of the three, because it moves
+    // the whole frame rather than tinting it — and the shader blacks out
+    // anything the curve pushes off the edge, so the picture pulls away from
+    // the corners into a porthole as it goes.
+    u.uCurve.value += (c.curve ?? 0.4) * k;
+
+    // Scan lines: darker AND fatter. Darkening alone just dims the screen —
+    // it is the count coming DOWN that turns a fine texture into visible bars
+    // rolling over the picture, which is the thing that reads as a signal
+    // failing rather than as a brightness slider.
+    //
+    // The count is a LERP toward `scanCount`, not an add, because it is a
+    // frequency: the preset's own value is the starting point, and `off`
+    // leaves it at 0 (which makes the shader's sin() constant and draws no
+    // lines at all), so a dormant preset borrows `scanCountBase` to have
+    // somewhere to come down FROM.
+    u.uScan.value += (c.scan ?? 0.38) * k;
+    const from = u.uScanCount.value > 1 ? u.uScanCount.value : (c.scanCountBase ?? 700);
+    u.uScanCount.value = from + ((c.scanCount ?? 110) - from) * k;
+
+    // The signal itself coming apart: colour separating, lines tearing
+    // sideways, snow, and the shadow mask beating against the coarser lines.
+    u.uChroma.value += (c.chroma ?? 4) * k;
+    u.uJitter.value += (c.jitter ?? 0.008) * k;
+    u.uNoise.value += (c.noise ?? 0.05) * k;
+    u.uBleed.value = Math.min(1, u.uBleed.value + (c.bleed ?? 0.3) * k);
+    u.uMask.value = Math.min(1, u.uMask.value + (c.mask ?? 0.1) * k);
+
+    // Tunnel vision, closing in with everything else. Capped, because the
+    // vignette is a straight multiply against the picture and past about 1.2
+    // it takes the middle of the screen with it.
+    u.uVignette.value = Math.min(1.2, u.uVignette.value + (c.vignette ?? 0.22) * k);
+  }
+
   function applyCineLens() {
     const u = finalUniforms;
     const c = CONFIG.cinecam ?? {};
@@ -1230,9 +1280,9 @@ export function createPost(renderer) {
     // passthrough render) when BOTH are off, for zero extra cost.
     //
     // Suffocation counts as a third reason to run: the blackout has to be
-    // able to pixelate the screen on its own, or turning the CRT preset off
+    // able to break the picture up on its own, or turning the CRT preset off
     // would silently take drowning's only visual with it.
-    const suffocation = suffocationPixelSize();
+    const suffocation = suffocationCrt();
     // A fourth reason to run, and the cinematic camera's lens is the only
     // thing that can claim it — with that camera off, `cineLens.active` is
     // false and this whole clause is a boolean read.
@@ -1248,7 +1298,7 @@ export function createPost(renderer) {
     // above. Merged by name so a group with both does not render twice.
     const goo = activeGooGroups();
     for (const g of fieldGroups()) if (!goo.some((x) => x.name === g.name)) goo.push(g);
-    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 1 || cine || goo.length > 0;
+    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 0 || cine || goo.length > 0;
     if (!postActive) {
       renderer.setRenderTarget(null);
       renderer.render(sceneToRender, sceneCamera);
@@ -1260,10 +1310,9 @@ export function createPost(renderer) {
     // itself is toggled off.
     applyPreset(CONFIG.post.enabled ? activePreset() : 'off');
 
-    // Whichever is chunkier wins, rather than adding: vhs and vga already
-    // pixelate a little, and summing would mean the blackout hits harder on
-    // those presets than on crt for no reason anyone chose.
-    if (suffocation > finalUniforms.uPixel.value) finalUniforms.uPixel.value = suffocation;
+    // After applyPreset, because it reads what the preset just wrote and adds
+    // to it.
+    if (suffocation > 0) applySuffocationCrt(suffocation);
 
     // After applyPreset, which rewrites uVignette from the preset every frame
     // and would otherwise stamp on the camera state's contribution.

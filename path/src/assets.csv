@@ -11,51 +11,53 @@ clubBoom,1,,,Boom Boom Club - same model as club - keep equal
 clubIce,1,,biolum:clubIce,Cold Snap club - same model as club - keep equal
 clubThrow,1,,biolum:hide,Hurler thrown club - same model as club - keep equal
 dumboOcto,1.9,,,
-eelCompanion,1.5,,,
+eelCompanion,1.5,,biolum:eelCompanion,
 enemyAbyssShark,2.62,,biolum:abyssHunter,night variant of enemyGreatWhite - keep these two equal
 enemyAnglerfish,2.5,,,"3.4 fit x this = 8.5 on screen, between the dolphin (7.2) and the shark (10.1) - a chunky ambusher, not an apex body. Registered only: no enemies.csv row and no spawning.csv entry, so nothing places it in a wave yet."
-enemyBarracuda,1.78,,,
-enemyBossAnglerfish,2.5,,noise:bossAnglerfish,"The boss body. Equal to enemyAnglerfish on purpose - same model file, same size; what separates them is the clip mapping (see assets.js). bosses.csv sizeMul is where the boss step goes, as it does for every other archetype."
+enemyBarracuda,1.78,,biolum:barracuda,
+enemyBossAnglerfish,2.5,,noise:bossAnglerfish+toon:bossAnglerfish,"The boss body. Equal to enemyAnglerfish on purpose - same model file, same size; what separates them is the clip mapping (see assets.js). bosses.csv sizeMul is where the boss step goes, as it does for every other archetype."
 enemyBossCrab,2.3,,biolum:kingCrab,the king crab boss - same animal as enemyWalkingCrab so it takes the same size; the boss step is bosses.csv sizeMul on top
-enemyBossHammerhead,3.6,,noise:bossHammerhead,"The hammerhead boss. 4.0 fit x this = 14.4 here, and bossHammerhead's 1.6 takes it to 23.0 - the smallest boss body in the game, which is the point of it. Out of family with the other numbers in this column for exactly that reason; measured by tools/boss-scale-check.mjs. A DIFFERENT ASSET from enemyHammerhead below, which is why this one is 3.6 against that one's 2.62 - the boss carries its whole step here, the wave animal is in family with the other sharks."
+enemyBossHammerhead,3.6,,noise:bossHammerhead+toon:bossHammerhead,"The hammerhead boss. 4.0 fit x this = 14.4 here, and bossHammerhead's 1.6 takes it to 23.0 - the smallest boss body in the game, which is the point of it. Out of family with the other numbers in this column for exactly that reason; measured by tools/boss-scale-check.mjs. A DIFFERENT ASSET from enemyHammerhead below, which is why this one is 3.6 against that one's 2.62 - the boss carries its whole step here, the wave animal is in family with the other sharks."
 enemyDolphin,2.4,,,"3 fit x this = 7.2 on screen, between the otter's 4.8 and the shark's 10.1 - which is where its authored radius (0.85, against the shark's 1.2) always said it belonged. It had NO ROW until now, so it spawned at 1: a 3.0-unit dolphin, smaller on screen than a barracuda (4.27) while carrying four times its hp. The hitbox follows the visual, so its collision radius goes 0.85 -> 2.04 - still just inside the octopus's grab (CONFIG.octoGrab.maxTargetRadius 2.2) and now above the orca pod's fallbackMinRadius, which is where an animal this size belongs on both counts."
 enemyEmberCrab,2.3,,,same animal as enemyWalkingCrab - keep these two equal
 enemyGiantSquid,2,,biolum:hide,The kraken. 7.4 fit x this = 14.8 long - the family the other apex bodies are in. Measured by tools/boss-scale-check.mjs
-enemyGreatWhite,2.62,,noise:greatWhite,
+enemyGreatWhite,2.62,,noise:greatWhite+toon:greatWhite,
 enemyHammerhead,2.62,,biolum:hammerhead,"The wave hammerhead - NOT enemyBossHammerhead, which is its own asset at 3.6. Equal to enemyGreatWhite on purpose: the two fits (4.0 and 4.2) are what separate them, as they are in life. It had NO ROW until now, so it spawned at 1 - a 4.0-unit shark swimming beside the shark's 10.1 and the great white's 11.0, a third the length of the animals it shares a family, a hp bracket and a spawn cap with. The hitbox follows the visual, so this also takes its collision radius from 1.3 to 3.4, into the 3.19-3.67 band its authored radius of 1.3 always implied - and out of reach of the octopus's grab (maxTargetRadius 2.2), like every other shark."
 enemyLanternRay,3.1,,,night variant of enemyStingray - keep these two equal
-enemyMegalodon,2.3,,noise:megalodon,
-enemyMightyMeg,2,,noise:mightyMeg,
-enemyMosasaur,2.3,,noise:mosasaur,"The mosasaur boss. Same multiplier as the megalodon on purpose - the two fit values (7.4 and 7.0) are what separate them, so this column stays comparable between the two biggest bodies. 7.4 x 2.3 = 17.0 on screen, and bossMosasaur's 1.6 takes it to 27.2. Measured by tools/boss-scale-check.mjs"
+enemyMegalodon,2.3,,noise:megalodon+toon:megalodon,
+enemyMightyMeg,2,,noise:mightyMeg+toon:mightyMeg,
+enemyMosasaur,2.3,,noise:mosasaur+toon:mosasaur,"The mosasaur boss. Same multiplier as the megalodon on purpose - the two fit values (7.4 and 7.0) are what separate them, so this column stays comparable between the two biggest bodies. 7.4 x 2.3 = 17.0 on screen, and bossMosasaur's 1.6 takes it to 27.2. Measured by tools/boss-scale-check.mjs"
 enemyOrcaBull,2.8,,biolum:orcaHide,The boss orca bull. Cut from the family file by tools/orca-split.mjs.
 enemyOrcaCow,2.8,,biolum:orcaHide,The boss orca cow. bossOrca rolls between this and the bull per arrival.
 enemyOyster,2.9,,,
 enemySeaTurtle,3.08,,,
-enemyShark,2.66,,noise:shark,
-enemySquid,1,squidGlow,,"Added for the SKIN, not the size. size=1 is what this asset already had - it has never carried a row, and an asset with no row spawns at 1 - so this changes nothing about how big the squid is or how big it is to hit. Left deliberately: the hitbox is derived from the visual scale, so retuning it here would be a balance edit smuggled in with a look. Its 2.8 fit against enemyShark's 2.66x2.5 is a separate question, worth asking on its own."
+enemyShark,2.66,,noise:shark+toon:shark,
+enemySquid,1,squidGlow,biolum:squidGlow,"Added for the SKIN, not the size. size=1 is what this asset already had - it has never carried a row, and an asset with no row spawns at 1 - so this changes nothing about how big the squid is or how big it is to hit. Left deliberately: the hitbox is derived from the visual scale, so retuning it here would be a balance edit smuggled in with a look. Its 2.8 fit against enemyShark's 2.66x2.5 is a separate question, worth asking on its own."
 enemyStingray,3.1,,,
-enemyWalkingCrab,2.3,,,matched to enemyEmberCrab; 2.3 reproduces the old crab's on-screen height on the new rig
+enemyTuna,1,tuna,noise:tuna+toon:tuna+biolum:tuna,"Added for the SURFACE, not the size. enemyTuna has never carried a row, and an asset with no row spawns at 1 - so size=1 is exactly what it is already, and this changes nothing about how big the tuna is or how big it is to hit. Its night variant enemyGlowTuna has no row either and is therefore also 1: keep these two equal, or the school changes size at dusk. The night one wears lantern rather than these three layers, on purpose."
+enemyWalkingCrab,2.3,,noise:walkingCrab+toon:walkingCrab+biolum:carapace,matched to enemyEmberCrab; 2.3 reproduces the old crab's on-screen height on the new rig
 harp,1,,,"the orbiting harp - fit is 1.6 world units against the seal's 2.6, so this column is the multiple of a deliberately under-sized instrument"
-missile,2,,noise:mussel,"The homing mussel. SIZE 2 IS NOT A CHOICE - it is what this asset already had, and assets.js's fit (0.58) is the oval it replaced measured exactly, so the model swap carried no size change. The surface is the new part: the shell is lit now and wears the Perlin-and-banding pair. Shares the mussel preset with musselOpen on purpose - they are one animal in two states."
+levelOrb,2.2,,,"The level blob. Grown per spawn by systems/levelOrb.js rather than built by createVisual, so this row and the entry in assets.js exist for the SIZE alone - the blob normalises its own geometry to levelPickup.blob.fit first, and this is the multiplier on top. Sized between the coral (2.4) and the strike orb (1.18): it has to read as the biggest prize in the water without being wider than the circle that collects it."
+missile,2,,noise:mussel+toon:mussel,"The homing mussel. SIZE 2 IS NOT A CHOICE - it is what this asset already had, and assets.js's fit (0.58) is the oval it replaced measured exactly, so the model swap carried no size change. The surface is the new part: the shell is lit now and wears the Perlin-and-banding pair. Shares the mussel preset with musselOpen on purpose - they are one animal in two states."
 moneyRoll1,1,,,"the yacht's explosive — a banded roll of hundreds. Size is 1 on purpose: the sizing that matters is `fit` in assets.js, set to the length of the oval barrel this replaces, so the swap is a look change and not a balance one."
 moneyRoll2,1,,,spare roll from the same pack. Unused by the yacht's two guns; here so a row exists before anybody reaches for it — an asset with no row spawns at 1 silently.
 moneyRoll3,1,,,the yacht's seeker — the shorter fit of the four
 moneyRoll4,1,,,"spare roll, seeker size. See moneyRoll2."
 musicNote,1,,,the harp's note
-musselOpen,2,,noise:mussel,"The mussel's detonation state. Equal to missile on purpose - the two are the same animal and the pop is the shell OPENING, not the shell growing, so any difference here would read as the wrong thing. Same preset too: one surface, two states."
+musselOpen,2,,noise:mussel+toon:mussel,"The mussel's detonation state. Equal to missile on purpose - the two are the same animal and the pop is the shell OPENING, not the shell growing, so any difference here would read as the wrong thing. Same preset too: one surface, two states."
 octoGrabber,1.34,,biolum:octoGrabber,
-orcaFriendBull,1,,,"The pod leader — Orca Family, slot 0."
+orcaFriendBull,1,,noise:orcaFriendBull+toon:orcaFriendBull,"The pod leader — Orca Family, slot 0."
 orcaFriendCalf,1,,biolum:orcaFriendCalf,"Orca Family, slot 2. Smallest of the three."
 orcaFriendCow,1,,biolum:orcaFriendCow,"Orca Family, slot 1."
 rapidFireOrb,2.4,,,
 razorBlade,1,,,
 seagull,9.54,,,
-sealTeam,2.72,,noise:sealTeam,
-ship,2.36,,noise:ship,
+sealTeam,2.72,,noise:sealTeam+toon:sealTeam,
+ship,2.36,,noise:ship+toon:ship,
 shrapnel,2.52,,,
 shrimp,2.36,,,
 starfish,6.2,,,
 strikeOrb,1.18,,,
 trapBubble,5.02,,,
 trawler,0.84,,,
-whale,2.6,,,"The bowhead sweeper. 12 fit x this = 31.2 world units of animal in an 80-wide frame - bigger than the mosasaur boss at 27.2, which is the largest thing in the game otherwise. Deliberately out of family with the boss column: the sweep reads as relief rather than as another arrival only if the silhouette is unmistakable at a glance. Its gulp reach is NOT derived from this - see whale.mouthRadius in spawning.csv."
+whale,2.6,,toon:whale+biolum:whale,"The bowhead sweeper. 12 fit x this = 31.2 world units of animal in an 80-wide frame - bigger than the mosasaur boss at 27.2, which is the largest thing in the game otherwise. Deliberately out of family with the boss column: the sweep reads as relief rather than as another arrival only if the silhouette is unmistakable at a glance. Its gulp reach is NOT derived from this - see whale.mouthRadius in spawning.csv."

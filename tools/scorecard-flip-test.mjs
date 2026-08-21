@@ -673,6 +673,97 @@ section('THE PRINT, HELD UP');
   check('...and so does starting another run', hidden(view));
 }
 
+// ---------------------------------------------------------------------------
+section('THE FACE THAT COMES BACK');
+// ---------------------------------------------------------------------------
+// THE AWAY FACE IS display:none FOR HALF A TURN, and the half-turn it comes
+// back on is a half-turn where the card is still about seventy-five degrees
+// over. Anything inside that face which measures ITSELF off being un-hidden
+// measures a rotated card: Rive does exactly that — it watches every canvas it
+// owns and re-sizes the drawing surface from getBoundingClientRect the moment
+// a zero-sized box becomes a real one — so every kill shot in the fan came
+// back a quarter of its width and half again its height, and stayed that way,
+// because Rive only re-measures on the NEXT display toggle. What the player
+// saw was the front of the card returning with the prints, the buttons and the
+// board gone from it. See resyncSnapshotCards.
+//
+// None of that is reachable from here: there is no Rive in Node and no layout
+// in jsdom. What IS reachable, and what the repair hangs off, is the promise
+// the turn makes — one landing per turn, on every path a turn can end by.
+{
+  const { mountCardFlip, releaseCardFlip } = await import('../path/src/ui/cardFlip.js');
+  const { CONFIG } = await import('../path/src/config.js');
+  const front = document.createElement('div');
+  const back = document.createElement('div');
+  const card = document.createElement('div');
+  const water = document.createElement('div');
+  card.append(front, back);
+  water.appendChild(card);
+  document.body.appendChild(water);
+
+  let landings = 0;
+  // The face that arrived, as it was on the frame the landing fired. A repair
+  // that runs while the card is still edge-on is a repair against the same
+  // projection that caused this.
+  let angleAtLanding = null;
+  const mount = mountCardFlip({
+    card, front, back, water,
+    onLand: () => { landings++; angleAtLanding = card.style.getPropertyValue('--sv-flip'); },
+  });
+  check('a card that has not turned owes no landing', landings === 0, `${landings}`);
+
+  mount.flip();
+  check('...and none while it is still turning', landings === 0, `${landings}`);
+  await settle();
+  // settle() watches the ANGLE and the froth outlives it, so tick() runs on for
+  // about a second after the card has stopped. Every one of those frames has
+  // angle === target, and only the first of them is a landing.
+  await new Promise((r) => setTimeout(r, 60));
+  check('a turn lands exactly once', landings === 1, `${landings}`);
+  check('...with the card square, not mid-projection',
+    angleAtLanding === '180deg', angleAtLanding);
+
+  mount.flip();
+  await settle();
+  await new Promise((r) => setTimeout(r, 60));
+  check('and so does the turn back — the one the prints are on',
+    landings === 2, `${landings}`);
+  check('...square again', angleAtLanding === '0deg', angleAtLanding);
+
+  // THE INSTANT SWAP LANDS TOO. A player who asked for less motion gets no
+  // rotation and no bubbles, but they get the same display:none coming off the
+  // same face — so they get the same ruined surfaces, and they are the ones who
+  // would never see it recover.
+  const wasEnabled = CONFIG.death.flip.enabled;
+  CONFIG.death.flip.enabled = false;
+  mount.flip();
+  check('a swap with the animation off still lands', landings === 3, `${landings}`);
+  mount.flip();
+  check('...both ways', landings === 4, `${landings}`);
+  CONFIG.death.flip.enabled = wasEnabled;
+
+  // A HANDLER THAT THROWS CANNOT TAKE THE TURN WITH IT. The loop is the only
+  // route back into the game; whatever the caller does with its landing is not
+  // the card's problem.
+  releaseCardFlip();
+  const angry = mountCardFlip({
+    card, front, back, water, onLand: () => { throw new Error('nope'); },
+  });
+  CONFIG.death.flip.enabled = false;
+  let threw = false;
+  try { angry.flip(); } catch { threw = true; }
+  CONFIG.death.flip.enabled = wasEnabled;
+  check('a landing handler that throws does not stop the card', !threw);
+  check('...and the card is on the face it was heading for',
+    angry.face() === 'back', angry.face());
+
+  releaseCardFlip();
+  water.remove();
+  // ui.js's own card was displaced by the two mounts above — there is one turn
+  // at a time by design. Put the screen back for anything that follows.
+  ui.showGameOver(gameState);
+}
+
 console.warn = realWarn;
 console.log(failures ? `\n${failures} FAILED` : '\nPASS — all checks');
 process.exit(failures ? 1 : 0);

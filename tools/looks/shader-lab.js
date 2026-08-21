@@ -10,22 +10,37 @@
 // procedural-skins panel and CONFIG.sealShader. Tuning either against the other
 // meant alt-tabbing between a slider and a memory of the last look.
 //
-// ONE SURFACE AT A TIME, picked at the top of the panel:
+// THREE LAYERS, EACH ON ITS OWN SWITCH, at the top of the panel:
 //
-//   texture   the model's own baked map, untouched
-//   noise     noiseShader — Perlin mottling, quantised by toonShade's bands
-//   biolum    biolumSkin — a pattern at full pigment, replacing the map
+//   noise     noiseShader — Perlin mottling
+//   toon      toonShade — banded (cel) lighting
+//   biolum    biolumSkin — a painted/glowing pattern
 //
-// The three are exclusive rather than stacked: a body carrying both a noise
-// field and a biolum pattern wears two unrelated paints and reads as
-// double-textured. toonShade still injects into MeshStandardMaterial rather
-// than swapping in a MeshToonMaterial the way the icon renderer does — a swap
-// would drop the emissive map, the noise injection, and the roughness
-// CONFIG.bloom is tuned against.
+// ...and under each of them, the control that decides how much of the model's
+// own baked map survives: `paint` on the noise, `pigment` on the biolum. That
+// pair is the whole answer to "mix or replace" — 0 lets the photograph through
+// and reads as markings ON a real animal, 1 covers it and the layer paints the
+// hide outright, and everything between is a hide showing through its own
+// texture.
+//
+// IT USED TO BE ONE EXCLUSIVE CHOICE, and switching cost a CSV edit for
+// anything the three named combinations did not cover. Two things were wrong
+// with that. Banded lighting was welded to the noise, so a painted creature
+// could not be banded at all and a photographed one could not be banded without
+// also being mottled — and `pigment` was PINNED to 1 whenever the biolum choice
+// was selected, so the slider read 0.30 while the GPU got 1 and no blend
+// between a pattern and a texture was reachable from this page. Both are gone:
+// nothing is forced now, every layer composes, and assets.csv holds a
+// `+`-joined list (see path/src/assetTable.js).
+//
+// toonShade still injects into MeshStandardMaterial rather than swapping in a
+// MeshToonMaterial the way the icon renderer does — a swap would drop the
+// emissive map, the noise injection, and the roughness CONFIG.bloom is tuned
+// against.
 //
 // WHAT IT WRITES, and it is two different things:
 //
-//   `record`  the chosen surface for one creature, into
+//   `record`  the chosen layers for one creature, into
 //             tools/looks/shader-lab.json. `npm run shaders:apply` is what
 //             then writes it into the `surface` column of assets.csv.
 //   `save`    the preset numbers, into the same file, for pasting into
@@ -72,7 +87,15 @@ scene.add(rim);
 
 const camera = new THREE.PerspectiveCamera(34, 1, 0.05, 400);
 
-const status = (m, err) => { $('status').textContent = m; $('status').className = err ? 'err' : ''; };
+// THREE STATES, NOT TWO. `true` is a failure and stays red; 'warn' is a record
+// that LANDED and has something to say about it — most often that a dev server
+// is up, so the numbers are in config.js but saved tuning will still shadow
+// them. Those two were the same colour, which meant the single most common
+// successful outcome of the record button read as the button not working.
+const status = (m, level) => {
+  $('status').textContent = m;
+  $('status').className = level === true ? 'err' : (typeof level === 'string' ? level : '');
+};
 
 await preloadAssets();
 
@@ -118,6 +141,18 @@ let bounds = null;
 // How many of the subject's materials actually took the banding. 0 on an unlit
 // model, which is a real limit rather than a bug — see the count in build().
 let toonable = 0;
+// Does this body have a baked colour texture at all? Read once per build, off
+// the ORIGINAL materials rather than off the clones — see build(). Both
+// "replace the map" controls (`paint`, `pigment`) are inert without one, and
+// the assets that ship no map are exactly the ones the noise shader was written
+// for, so the panel says so instead of leaving two dead sliders on screen.
+let subjectHasMap = false;
+// Does this body have a BAKED EMISSIVE map lit above zero? Separate from the
+// colour map, because it is a separate photograph being added as light after
+// every lighting chunk — and it is the reason a fully painted barracuda still
+// looked photographed. Neither paint nor pigment can be judged without knowing
+// it is there, and nothing on the page said so.
+let subjectHasGlowMap = false;
 // THE RIM, OFF BY DEFAULT, and a VIEW switch rather than a setting.
 //
 // Two different systems put a shell on a body here — CONFIG.creatureOutline
@@ -143,51 +178,95 @@ const view = { yaw: 0.5, pitch: 0.35, zoom: 1 };
 // derived from the asset so two sharks can share one and an orca can differ.
 const target = { toon: 'shark', noise: 'shark', bio: null };
 
-// WHICH SURFACE IS PAINTING. Exactly one, ever.
+// WHICH LAYERS ARE PAINTING. Any of them, independently.
 //
-//   texture   the model's own baked map, untouched
-//   noise     procedural Perlin mottling, banded by the toon step
-//   biolum    a biolumSkin pattern at full pigment, replacing the map
+//   noise     procedural Perlin mottling (systems/noiseShader.js)
+//   toon      banded lighting (systems/toonShade.js)
+//   biolum    a biolumSkin pattern — paint, light, or both
 //
-// EXCLUSIVE BY DESIGN, and it took a bad render to make that obvious. Left free
-// to stack, the noise field and a biolum pattern paint two unrelated fields on
-// one body and the animal reads as double-textured — which is exactly the note
-// noiseShader.js's own header makes about attaching a biolum skin to the seal.
-// They are three answers to one question, not three layers.
+// NOT EXCLUSIVE, and the reversal is the point of this rewrite. The old page
+// offered three named combinations and nothing else, on the argument that a
+// noise field and a biolum pattern at once read as double-textured. That is
+// true of those two at full strength and false of every other pairing the rule
+// swept up with them — banded lighting most of all, which is not paint and
+// which a painted animal wants as badly as a photographed one.
+//
+// So the judgement moved onto the sliders that can actually express it: `paint`
+// and `pigment` decide how much of what is underneath each layer survives, and
+// two paints stacked into mud is now something you can see happen and back out
+// of rather than something the tool refuses to draw.
 //
 // Held per ASSET, because that is the unit the game opts in — `noiseShader:` /
 // `biolumSkin:` / `toonShade:` are per-asset fields in ASSETS.
-const surfaces = new Map();   // assetKey -> 'texture' | 'noise' | 'biolum'
+// The hints are rendered as HTML, so no code-font backticks in them — they come
+// out as literal characters beside the label rather than as markup.
+const LAYERS = [
+  ['noise', 'noise', 'Perlin mottling — its coat can cover the map'],
+  ['toon', 'toon', 'banded lighting — no paint of its own'],
+  ['biolum', 'biolum', 'pattern — its pigment can cover the map'],
+];
+// The three named looks that used to be the whole of the picker, kept as
+// one-click starting points rather than as the only reachable states.
+const COMBOS = [
+  ['photo', {}],
+  ['noise+toon', { noise: true, toon: true }],
+  ['biolum', { biolum: true }],
+  ['biolum+toon', { biolum: true, toon: true }],
+  ['all three', { noise: true, toon: true, biolum: true }],
+];
+const layers = new Map();     // assetKey -> { noise, toon, biolum } booleans
 const presetNames = new Map();// assetKey -> { noise, toon, bio } — see defaultPresetFor
 const applied = {};           // assetKey -> what `record` pinned, for shader-lab.json
-const SURFACES = [
-  ['texture', 'photo texture', "the model's own baked map"],
-  ['noise', 'noise + toon', 'procedural mottling, banded'],
-  ['biolum', 'biolum pattern', 'pigment replaces the map'],
-];
-const surfaceOf = (k) => surfaces.get(k) ?? 'texture';
+const layersOf = (k) => layers.get(k) ?? { noise: false, toon: false, biolum: false };
+const layerOn = (k, which) => !!layersOf(k)[which];
+// The same wording the CSV cell uses, so a status line, a roster tooltip and
+// path/src/assets.csv all say the creature is wearing the same thing. `texture`
+// for none of them, because that is what an empty list MEANS in that column —
+// not "unset", which is what a blank cell means.
+const describeLayers = (on) =>
+  LAYERS.filter(([w]) => on[w]).map(([w]) => w).join('+') || 'texture';
+
+// The exact `surface` cell `record` will put in assets.csv for the subject.
+//
+// Mirrors cellFor in tools/apply-shaders.mjs on purpose and is only ever shown,
+// never sent: the tool that writes the file derives its own cell from the same
+// layers, so the two cannot disagree about what lands. Quoting a cell in the
+// panel is worth the twelve lines — the whole complaint this rewrite answers
+// was that changing a look meant knowing what to type into that column.
+function surfaceCell() {
+  const on = layersOf(subjectKey);
+  const named = { noise: target.noise, toon: target.toon, biolum: target.bio };
+  const parts = LAYERS.filter(([w]) => on[w])
+    .map(([w]) => (named[w] ? `${w}:${named[w]}` : w));
+  return parts.join('+') || 'texture';
+}
 
 // SEEDED FROM THE ROSTER FIRST — what the GAME does today.
 //
-// ASSETS is the authority on which surface a creature is actually wearing: the
+// ASSETS is the authority on which layers a creature is actually wearing: the
 // `surface` column of assets.csv is applied onto these fields at load, and some
-// assets declare it in code and have no CSV row at all. The seed below is the
+// assets declare them in code and have no CSV row at all. The seed below is the
 // only thing that can see the second kind.
 //
-// WITHOUT THIS THE SEAL OPENED ON `texture`. `ship` — the player, and the asset
-// this whole shader was written for — carries `noiseShader: true` by hand in
+// WITHOUT THIS THE SEAL OPENED BARE. `ship` — the player, and the asset this
+// whole shader was written for — carries `noiseShader: true` by hand in
 // assets.js and has never been through `record`, so nothing in shader-lab.json
-// mentions it. Selecting it showed the texture surface, no noise panel and no
-// wet panel, over a model that renders in the run with both. The page was
-// reporting its own record file as if it were the game, and for every
-// hand-authored asset those are different things.
+// mentions it. Selecting it showed no noise panel and no wet panel, over a
+// model that renders in the run with both. The page was reporting its own
+// record file as if it were the game, and for every hand-authored asset those
+// are different things.
 //
-// EXCLUSIVE, in the same priority the game resolves them: biolum replaces the
-// map outright, so it wins over a noise field if some def ever declares both.
+// ALL THREE READ SEPARATELY now. The old seed asked one question and answered
+// it exclusively, so an asset declaring `noiseShader` AND `toonShade` — which
+// is every shark in the file — came up as "noise" with the bands invisible in
+// the UI even though they were on the animal.
 for (const [key, def] of Object.entries(ASSETS)) {
   if (!def.model) continue;
-  if (typeof def.biolumSkin === 'string') surfaces.set(key, 'biolum');
-  else if (def.noiseShader) surfaces.set(key, 'noise');
+  layers.set(key, {
+    noise: !!def.noiseShader,
+    toon: !!def.toonShade,
+    biolum: !!def.biolumSkin,
+  });
 }
 
 // ...THEN WHAT THIS PAGE RECORDED, which wins because it is the newer intent:
@@ -200,34 +279,67 @@ for (const [key, def] of Object.entries(ASSETS)) {
 // creature and silently dropped every choice made before it. Four recorded
 // creatures became one, and since the writing step looked like it had worked,
 // the loss showed up much later as "apply isn't really working".
+// AN ENTRY IS READ IN EITHER SHAPE. `layers` is what this page writes now;
+// `surface` is what the 26 creatures already in the file were recorded under,
+// and it expands the way the old CSV cell did — `noise` meant noise AND toon.
+// Dropping the old shape would quietly reopen every one of those on the wrong
+// switches, which is the same "the page reports its own record file as if it
+// were the game" failure the seed above exists to prevent.
+function layersFromEntry(entry) {
+  if (entry?.layers) {
+    return {
+      noise: !!entry.layers.noise,
+      toon: !!entry.layers.toon,
+      biolum: !!entry.layers.biolum,
+    };
+  }
+  const kind = entry?.surface;
+  if (kind === 'noise') return { noise: true, toon: true, biolum: false };
+  if (kind === 'biolum') return { noise: false, toon: false, biolum: true };
+  if (kind === 'texture') return { noise: false, toon: false, biolum: false };
+  return null;
+}
+
 try {
   const saved = await (await fetch('/shader/shader-lab.json')).json();
   for (const [key, entry] of Object.entries(saved.applied ?? {})) {
     applied[key] = entry;
-    if (entry.surface) surfaces.set(key, entry.surface);
+    const seeded = layersFromEntry(entry);
+    if (seeded) layers.set(key, seeded);
   }
 } catch {
   // No file yet, or no server behind the page. Neither is worth a warning: this
   // is the normal first run.
 }
 
-// Force the layers to agree with the choice.
+// Force the shaders to agree with which layers are switched on.
 //
 // APPLIED AS A MASK AT COMMIT TIME, NEVER STORED. The first version wrote the
 // zeros into `edited` and read them back as the layer's "remembered" strength —
-// so selecting `noise` restored the 0 that selecting `texture` had just saved,
-// and the noise surface silently stayed off. `edited` holds what a human
+// so switching noise back on restored the 0 that switching it off had just
+// saved, and the layer silently stayed dead. `edited` holds what a human
 // actually dialled; this only decides which of it reaches the GPU.
-function surfaceMask(kind) {
+//
+// ONLY EVER ZEROS NOW, and that is the fix for the pigment slider. The old mask
+// also wrote `pigment: 1` onto the chosen biolum preset, so the one control
+// that decides whether a pattern blends with the photo texture or replaces it
+// was pinned at replace: the slider moved, the readout changed, the uniform
+// stayed at 1. A mask that can only turn a layer OFF cannot lie about what an
+// on layer is set to.
+function layerMask(on) {
   return {
     // `wet` as well as `strength`, or the preview lies about the choice: the
     // film is a separate layer on the same root, so zeroing the mottling alone
-    // left a gloss on an animal whose surface column says `texture` — and in
-    // the game a texture surface never attaches this shader at all, so there is
-    // nothing there to be glossy.
-    sealShader: kind === 'noise' ? null : { strength: 0, wet: 0 },
-    toonShade: kind === 'noise' ? null : { strength: 0 },
-    biolumSkin: kind === 'biolum' ? { pigment: 1 } : { pigment: 0, strength: 0 },
+    // left a gloss on an animal wearing no noise at all — and in the game an
+    // asset with no noise layer never attaches this shader, so there is nothing
+    // there to be glossy. `paint` for the same reason: it is the coat that
+    // hides the model's own map, and a switched-off layer must give it back.
+    sealShader: on.noise ? null : { strength: 0, wet: 0, paint: 0 },
+    toonShade: on.toon ? null : { strength: 0 },
+    // Paint AND light, both. `pigment` is the pattern as a hide and `strength`
+    // is it as emission; a mask that dropped either would leave half a switched
+    // off pattern on the body.
+    biolumSkin: on.biolum ? null : { pigment: 0, strength: 0, shellGlow: 0 },
   };
 }
 
@@ -276,6 +388,18 @@ const TOON = [
 ];
 
 const NOISE = [
+  // FIRST, because it is the question the rest of this section is an answer to:
+  // is this layer marking up the model's photograph, or is it painting the
+  // animal? At 0 the baked map shows through every trough in the field no
+  // matter where `strength` goes — which is what "the barracuda is stuck with
+  // its photo texture" was. At 1 the map is covered and the mottling below is
+  // the whole hide.
+  { key: 'paint', label: 'cover the photo map', min: 0, max: 1, step: 0.02, def: 0 },
+  // ...and the same question asked of the model's baked EMISSIVE map, which on
+  // the barracuda and both hammerheads is that same photograph lit white at
+  // CONFIG.glow.maskIntensity. Covering the colour and leaving this at 1 paints
+  // a hide and then draws the photograph back on top of it in light.
+  { key: 'paintGlow', label: 'keep its photo glow', min: 0, max: 1, step: 0.02, def: 0 },
   { key: 'strength', label: 'strength', min: 0, max: 1.5, step: 0.02, def: 0.35 },
   { key: 'size', label: 'size', min: 0.02, max: 2, step: 0.01, def: 0.4 },
   { key: 'contrast', label: 'contrast', min: 0.2, max: 4, step: 0.05, def: 1 },
@@ -312,7 +436,16 @@ const WET = [
 ];
 
 const BIO = [
-  { key: 'pigment', label: 'pigment', min: 0, max: 1, step: 0.02, def: 1 },
+  // The biolum half of the same question `paint` asks of the noise: how much of
+  // the model's baked map survives under the pattern. 0 is a glow over a
+  // photograph, 1 is a painted hide. `def` mirrors CONFIG.biolumSkin.base, which
+  // is 0 — it was 1 here, which would have shown a full-pigment slider over an
+  // additive-only preset the day anyone deleted that base field.
+  { key: 'pigment', label: 'pigment (covers the map)', min: 0, max: 1, step: 0.02, def: 0 },
+  // The biolum half of `paintGlow` above, and the reason the hammerhead read as
+  // "stuck with the photo texture" at pigment 1: its emissive sidecar was still
+  // adding its own photograph as light over the painted hide.
+  { key: 'pigmentGlow', label: 'keep its photo glow', min: 0, max: 1, step: 0.02, def: 0 },
   { key: 'scale', label: 'feature size', min: 0.04, max: 1.2, step: 0.01, def: 0.25 },
   { key: 'contrast', label: 'contrast', min: 0.2, max: 4, step: 0.05, def: 1.6 },
   { key: 'coverage', label: 'coverage', min: 0, max: 1, step: 0.02, def: 0.45 },
@@ -425,8 +558,8 @@ function commit() {
     }
   }
 
-  // 3. ...then the surface mask over the top, so exactly one layer paints.
-  const mask = surfaceMask(surfaceOf(subjectKey));
+  // 3. ...then the layer mask over the top, so a switched-off layer is off.
+  const mask = layerMask(layersOf(subjectKey));
   const maskInto = (root, name, fields) => {
     if (!fields || !name) return;
     const bag = ((CONFIG[root] ??= {}).presets ??= {});
@@ -553,6 +686,8 @@ function build(assetKey) {
   // onBeforeCompile, so cloning after an attach silently throws the shader away.
   let count = 0;
   toonable = 0;
+  subjectHasMap = false;
+  subjectHasGlowMap = false;
   visual.traverse((o) => {
     if (!o.isMesh && !o.isSkinnedMesh) return;
     if (o.userData.__isOutline) return;
@@ -591,10 +726,39 @@ function build(assetKey) {
       // reads texture.matrix — which throws once per frame, from inside the
       // renderer, pointing at three rather than at here.
       const orig = m.userData.__originalMap;
-      if (orig === null) c.map = null;
-      else if (orig?.isTexture) c.map = orig;
-      // else: a descriptor, not a texture. Leave the clone's own map alone —
-      // it is the one the asset is actually wearing.
+      if (orig?.isTexture) c.map = orig;
+      // else: a descriptor, or null. Leave the clone's own map alone — it is
+      // the one the asset is actually wearing.
+      //
+      // NULL USED TO MEAN "TAKE THE MAP OFF", and that was wrong about what
+      // this field is. `__originalMap` is stashed by processMaterial BEFORE the
+      // sidecar assignment two lines below it, so on any asset whose diffuse
+      // comes from a `texture: { map: ... }` sidecar it is null while the
+      // material is fully textured — and the hammerhead, which assets.js calls
+      // the one model in the roster that needs an explicit diffuse map, is
+      // exactly that. The lab deleted it on every build and then reported "NO
+      // baked map", so the one control the page exists to judge (how much of
+      // the photograph the pigment covers) was being judged against a body with
+      // no photograph on it.
+      //
+      // Nothing nulls a material's map any more either, which is what the old
+      // branch was written to undo — the pigment replacement is a mix inside
+      // the shader now (uBioPigment), not an assignment.
+      //
+      // Asked AFTER the restore above and of the clone, which is the material
+      // the panel's sliders will actually be pointed at. Asking the original
+      // instead would answer for a body whose map a pigment attach had already
+      // nulled, and the page would claim there is no photograph to cover on
+      // exactly the creatures wearing one.
+      if (c.map) subjectHasMap = true;
+      // The MASK, not the live slot: applyEmissiveMode swaps `emissiveMap` in
+      // and out on the global CONFIG.glow.emissiveMaps toggle, so reading the
+      // slot answers "is the toggle on right now" rather than "does this animal
+      // ship one". Intensity counts too — a mask multiplied by zero is not
+      // competing with anything.
+      if ((c.userData.__emissiveMask || c.emissiveMap) && (c.emissiveIntensity ?? 0) > 0) {
+        subjectHasGlowMap = true;
+      }
       if ('__originalColor' in m.userData && m.userData.__originalColor != null) {
         c.color.setHex(m.userData.__originalColor);
       }
@@ -657,6 +821,9 @@ function build(assetKey) {
   $('notes').textContent =
     `${assetKey} — ${ASSETS[assetKey].model}\n`
     + `${count} material(s) painted · long axis ${axis} · `
+    + `${subjectHasMap ? 'has a baked map' : 'NO baked map'}`
+    + `${subjectHasGlowMap ? ' + a baked emissive' : ''} · `
+    + `layers ${describeLayers(layersOf(assetKey))} · `
     + `toon preset "${target.toon}" · noise preset "${target.noise}" · pattern preset "${target.bio}"`;
   draw();
 }
@@ -761,59 +928,130 @@ function buildPanels() {
   const p = $('panels');
   p.innerHTML = '';
 
-  // The choice, first — everything below it is the settings FOR that choice.
+  // The switches, first — everything below is the settings for whatever is on.
   const pick = document.createElement('div');
   pick.className = 'sect';
-  pick.innerHTML = `<h3><span>surface</span><span class="en">${subjectKey}</span></h3><div class="body"></div>`;
+  pick.innerHTML = `<h3><span>layers</span><span class="en">${subjectKey}</span></h3><div class="body"></div>`;
   const pb = pick.querySelector('.body');
-  for (const [val, label, hint] of SURFACES) {
+
+  // ONE CLICK PER LAYER, and the preset it writes to on the same line.
+  //
+  // The preset field used to live below the picker and drive TWO slots at once —
+  // typing a noise preset also renamed the toon one, because the two were welded
+  // together by the old exclusive choice. They are separate layers with separate
+  // preset bags in CONFIG, so they get separate fields: a shark can wear the
+  // family's bands over its own mottling, which is not expressible otherwise.
+  const slotOf = { noise: 'noise', toon: 'toon', biolum: 'bio' };
+  for (const [which, label, hint] of LAYERS) {
+    const on = layerOn(subjectKey, which);
     const row = document.createElement('label');
     row.className = 'surf';
-    row.innerHTML = `<input type="radio" name="surface" value="${val}"
-      ${surfaceOf(subjectKey) === val ? 'checked' : ''}><b>${label}</b><i>${hint}</i>`;
-    row.querySelector('input').addEventListener('change', () => {
-      surfaces.set(subjectKey, val);
+    row.innerHTML = `<input type="checkbox" ${on ? 'checked' : ''}><b>${label}</b><i>${hint}</i>`;
+    row.querySelector('input').addEventListener('change', (e) => {
+      layers.set(subjectKey, { ...layersOf(subjectKey), [which]: e.target.checked });
       enforceSurface();
       buildPanels();
       draw();
-      status(`${subjectKey}: ${label}`);
+      renderList();
+      status(`${subjectKey}: ${describeLayers(layersOf(subjectKey))}`);
     });
     pb.appendChild(row);
-  }
 
-  // WHICH PRESET THIS SPECIES WRITES TO, on the surface panel rather than buried,
-  // because it is the difference between tuning one animal and tuning a family.
-  // Two species pointed at one name share it deliberately and can see that they
-  // do; the old behaviour shared it by accident and showed nothing.
-  const kindNow = surfaceOf(subjectKey);
-  if (kindNow !== 'texture') {
-    const slot = kindNow === 'biolum' ? 'bio' : 'noise';
+    if (!on) continue;
+    const slot = slotOf[which];
     const pr = document.createElement('div');
     pr.className = 'row';
-    pr.innerHTML = `<label>preset</label><input type="text" value="${target[slot]}"><output></output>`;
+    pr.innerHTML = `<label>${label} preset</label><input type="text" value="${target[slot]}"><output></output>`;
     const inp = pr.querySelector('input');
-    const commitName = () => {
+    inp.addEventListener('change', () => {
       const name = inp.value.trim();
       if (!name || name === target[slot]) return;
-      if (slot === 'bio') target.bio = name;
-      else { target.noise = name; target.toon = name; }
+      target[slot] = name;
       presetNames.set(subjectKey, { ...target });
-      commit(); buildPanels(); draw();
+      // REBUILT, because the preset name decides which material each layer
+      // answers to and that is baked in at attach time — pushing uniforms at
+      // the old bag would leave the sliders writing somewhere the animal is not
+      // reading from.
+      build(subjectKey);
       const shared = [...presetNames.entries()]
-        .filter(([k, v]) => k !== subjectKey && (slot === 'bio' ? v.bio : v.noise) === name)
+        .filter(([k, v]) => k !== subjectKey && v[slot] === name)
         .map(([k]) => k);
       status(shared.length
-        ? `preset "${name}" — SHARED with ${shared.join(', ')}; editing it moves them too`
-        : `preset "${name}" — used by ${subjectKey} alone`);
-    };
-    inp.addEventListener('change', commitName);
+        ? `${label} preset "${name}" — SHARED with ${shared.join(', ')}; editing it moves them too`
+        : `${label} preset "${name}" — used by ${subjectKey} alone`);
+    });
     pb.appendChild(pr);
   }
 
+  // The three named looks the picker used to be, as shortcuts. Every one of
+  // them is now just a set of the switches above, which is the point: they are
+  // a fast start rather than the only reachable states.
+  const quick = document.createElement('div');
+  quick.className = 'row combos';
+  quick.innerHTML = '<label>quick</label><div class="cols"></div><output></output>';
+  const cols = quick.querySelector('.cols');
+  for (const [label, set] of COMBOS) {
+    const b = document.createElement('button');
+    b.className = 'combo';
+    b.textContent = label;
+    b.addEventListener('click', () => {
+      layers.set(subjectKey, { noise: !!set.noise, toon: !!set.toon, biolum: !!set.biolum });
+      enforceSurface(); buildPanels(); draw(); renderList();
+      status(`${subjectKey}: ${describeLayers(layersOf(subjectKey))}`);
+    });
+    cols.appendChild(b);
+  }
+  pb.appendChild(quick);
+
+  // WHETHER THERE IS A PHOTOGRAPH UNDER ANY OF THIS. `paint` and `pigment` are
+  // both "how much of the model's own map survives", and on a model that ships
+  // no map at all they have nothing to cover — the seal is exactly that, which
+  // is what noiseShader was written for. Without this line the two sliders look
+  // broken on precisely the assets they are least needed on.
+  if (!subjectHasMap) {
+    const warn = document.createElement('div');
+    warn.className = 'row warnrow';
+    warn.innerHTML = '<label>no map</label><output>'
+      + 'this model ships no baked colour texture, so <b>cover the photo map</b> '
+      + 'and <b>pigment</b> have nothing to replace — both layers paint the flat '
+      + 'base colour either way.'
+      + '</output>';
+    pb.appendChild(warn);
+  }
+
+  // THE PHOTOGRAPH THAT IS NOT ON THE DIFFUSE. Four animals ship an emissive
+  // sidecar (the barracuda, both hammerheads, the great white) and it is their
+  // own colour map with the brights blown out, lit in white at
+  // CONFIG.glow.maskIntensity. Until the two "keep its photo glow" sliders
+  // existed nothing on the diffuse side could reach it, and the symptom was a
+  // fully painted animal that still read as photographed — with every paint
+  // control on this page apparently doing nothing.
+  if (subjectHasGlowMap) {
+    const warn = document.createElement('div');
+    warn.className = 'row warnrow';
+    warn.innerHTML = '<label>photo glow</label><output>'
+      + 'this model ships a baked <b>emissive</b> map — its own photograph, added '
+      + 'as light on top of everything below. Turn <b>keep its photo glow</b> down '
+      + 'on whichever layer is covering the map, or the paint sits under it.'
+      + '</output>';
+    pb.appendChild(warn);
+  }
+
+  // THE CELL THIS WOULD WRITE, spelled out. Not decoration: "I don't want to
+  // edit the CSV to change from toon to biolum" is the note this page is
+  // answering, and showing the cell is how it stops being a thing you have to
+  // know. It is also the one line that makes a shared preset name visible as a
+  // shared preset name before you press record.
+  const cellRow = document.createElement('div');
+  cellRow.className = 'row warnrow';
+  cellRow.innerHTML = `<label>assets.csv</label><output class="cell">surface = ${surfaceCell()}</output>`;
+  cellRow.querySelector('output').style.color = '#7fa8c8';
+  pb.appendChild(cellRow);
+
   p.appendChild(pick);
 
-  const kind = surfaceOf(subjectKey);
-  if (kind === 'noise') {
+  const on = layersOf(subjectKey);
+  if (on.toon) {
     const toonSect = section('toon', 'toonShade', target.toon, TOON);
     // SAY SO WHEN THE BANDING CANNOT LAND, rather than presenting seven live
     // sliders over a body that will never respond to any of them. An unlit model
@@ -833,13 +1071,18 @@ function buildPanels() {
     p.appendChild(toonSect);
   }
 
-  if (kind === 'noise') p.appendChild(section('noise', 'sealShader', target.noise, NOISE, (body, name) => {
+  if (on.noise) p.appendChild(section('noise', 'sealShader', target.noise, NOISE, (body, name) => {
+    // The coat's colour, beside the mottling's. Two pickers rather than one
+    // because they are the two ends of what this layer paints: `base` is the
+    // hide it lays down over the photograph and `tint` is what the field pulls
+    // it toward. White base means "the asset's own tint" — see the GLSL.
+    colorRow(body, 'sealShader', name, 'baseColor', 'coat colour', 0xffffff);
     colorRow(body, 'sealShader', name, 'color', 'tint', 0x0a2233);
   }));
 
   // THE WET FILM, on the same root and the same preset as the noise above, in a
   // section of its own — see the note on WET.
-  if (kind === 'noise') {
+  if (on.noise) {
     const wetSect = section('wet', 'sealShader', target.noise, WET, (body, name) => {
       colorRow(body, 'sealShader', name, 'wetColor', 'sheen', 0xdff2ff);
     });
@@ -861,7 +1104,7 @@ function buildPanels() {
       warn.innerHTML = `<label>not live</label><output>`
         + `the game reads ${wearing === true ? 'the BASE numbers' : `"${wearing ?? 'no noise surface'}"`} `
         + `for ${subjectKey}, not the preset "${target.noise}" these sliders write. `
-        + `<b>record</b> writes the assets.csv row that points it here. `
+        + `<b>record</b> writes the assets.csv row (surface="${surfaceCell()}") that points it here. `
         + `For the player's own seal, the tuner's "Seal wetness" panel edits the base directly.`
         + `</output>`;
       wetSect.querySelector('.body').prepend(warn);
@@ -869,7 +1112,7 @@ function buildPanels() {
     p.appendChild(wetSect);
   }
 
-  if (kind === 'biolum') p.appendChild(section('pattern', 'biolumSkin', target.bio, BIO, (body, name) => {
+  if (on.biolum) p.appendChild(section('pattern', 'biolumSkin', target.bio, BIO, (body, name) => {
     const row = document.createElement('div');
     row.className = 'row';
     row.innerHTML = `<label>pattern</label><select></select><output></output>`;
@@ -999,27 +1242,47 @@ function dumpJson() {
     : '// nothing edited yet — move a slider';
 }
 
-// Pin the current surface and its numbers to THIS asset.
+// Pin the current layers and their numbers to THIS asset.
 //
 // What the game needs is two different things and they land in two different
 // places, so this writes both rather than pretending one covers it:
 //
-//   the ASSIGNMENT   which surface enemyOrcaBull wears — an ASSETS field
-//                    (`noiseShader:` / `biolumSkin:` / `toonShade:`), or the
-//                    `skin` column of assets.csv for the biolum case
-//   the NUMBERS      the preset block those fields point AT, under CONFIG
+//   the ASSIGNMENT   which layers enemyOrcaBull wears and under what preset
+//                    names — the `surface` column of assets.csv, as a
+//                    `+`-joined list (see path/src/assetTable.js)
+//   the NUMBERS      the preset blocks those names point AT, under CONFIG
+//
+// `layers` REPLACES `surface` in the entry, and both are still read on the way
+// back in — see layersFromEntry and cellFor in tools/apply-shaders.mjs. The 26
+// creatures recorded before this existed are in the file under the old key and
+// must keep opening on the switches they were recorded with.
 //
 // Written to disk for a human to move across, NOT applied to the running game:
 // this page is a vite build with no dev server behind it and it must never
 // reach imported-tuning.json. See SERVERS.md.
 async function apply() {
-  const kind = surfaceOf(subjectKey);
-  const assignment = {
-    texture: { note: 'no procedural surface — remove any noiseShader/biolumSkin field' },
-    noise: { noiseShader: target.noise, toonShade: target.toon },
-    biolum: { biolumSkin: target.bio, csvSkinColumn: target.bio },
-  }[kind];
-  applied[subjectKey] = { surface: kind, assets: assignment, presets: presetsFor(kind) };
+  const on = layersOf(subjectKey);
+  const layerNames = {
+    noise: on.noise ? target.noise : null,
+    toon: on.toon ? target.toon : null,
+    biolum: on.biolum ? target.bio : null,
+  };
+  applied[subjectKey] = {
+    // `surface` kept as a HUMAN-READABLE summary of the same thing, so a diff of
+    // shader-lab.json still reads as English. Nothing parses it any more —
+    // layersFromEntry prefers `layers` whenever it is there — so the two cannot
+    // drift into disagreeing about what was recorded.
+    surface: describeLayers(on),
+    layers: layerNames,
+    assets: {
+      noiseShader: layerNames.noise,
+      toonShade: layerNames.toon,
+      biolumSkin: layerNames.biolum,
+      csvSkinColumn: layerNames.biolum,
+    },
+    presets: presetsFor(on),
+  };
+  let r;
   try {
     const res = await fetch('/shader/shader-lab.json', {
       method: 'POST',
@@ -1035,27 +1298,39 @@ async function apply() {
     // The server writes assets.csv and config.js as part of the same request and
     // reports what it did, so the button can say the change LANDED rather than
     // naming a command to run next.
-    const r = await res.json().catch(() => ({}));
-    if (r.error) { status(`saved, but the write failed: ${r.error}`, true); return; }
-    const bits = [];
-    if (r.rows?.length) bits.push(`assets.csv ${r.rows.length} row(s)`);
-    if (r.presets?.length) bits.push(`config.js +${r.presets.join(', ')}`);
-    // A note is the interesting case — an asset with no CSV row, a comment left
-    // arguing for a number that just moved, or a dev server up whose saved
-    // tuning still shadows what was written. `~` lines are the per-field diff
-    // and belong in the terminal rather than in a one-line status.
-    const warn = (r.notes ?? []).filter((n) => n.startsWith('!') || n.startsWith('?'));
-    status(warn.length
-      ? `${subjectKey} → ${kind}. ${bits.join(', ') || 'no change'} — ${warn.join(' · ')}`
-      : `${subjectKey} → ${kind} — ${bits.join(', ') || 'already up to date'}. Reload the game to see it.`,
-    warn.length > 0);
-    renderList();
+    r = await res.json().catch(() => ({}));
   } catch (err) {
     status('record failed: ' + err.message, true);
+    return;
   }
+
+  // PAST THIS LINE THE WRITE HAS LANDED. Nothing below may report a failure,
+  // and that is why it is outside the try rather than inside it: composing the
+  // status used to sit in the same block as the fetch, so a ReferenceError in
+  // the success message printed "record failed" over a record that had just
+  // written both files. Someone reads that and tunes it all again.
+  if (r.error) { status(`saved, but the write failed: ${r.error}`, true); return; }
+  const bits = [];
+  if (r.rows?.length) bits.push(`assets.csv ${r.rows.length} row(s)`);
+  if (r.presets?.length) bits.push(`config.js +${r.presets.join(', ')}`);
+  // A note is the interesting case — an asset with no CSV row, a comment left
+  // arguing for a number that just moved, or a dev server up whose saved
+  // tuning still shadows what was written. `~` lines are the per-field diff
+  // and belong in the terminal rather than in a one-line status.
+  const warn = (r.notes ?? []).filter((n) => n.startsWith('!') || n.startsWith('?'));
+  // The LAYER LIST, not a surface kind. There is no single `kind` any more —
+  // a creature wears any combination of noise/toon/biolum — and this is the
+  // same summary `applied[subjectKey].surface` is written with above, so the
+  // status and the recorded document cannot describe the record differently.
+  const wearing = describeLayers(on);
+  status(warn.length
+    ? `${subjectKey} → ${wearing}. ${bits.join(', ') || 'no change'} — ${warn.join(' · ')}`
+    : `${subjectKey} → ${wearing} — ${bits.join(', ') || 'already up to date'}. Reload the game to see it.`,
+  warn.length ? 'warn' : '');
+  renderList();
 }
 
-// Only the presets the chosen surface actually uses, so a saved `biolum` choice
+// Only the presets the switched-on layers actually use, so a recorded pattern
 // does not carry a noise block nobody will read.
 // THE WHOLE PRESET, not just the sliders that were moved.
 //
@@ -1070,46 +1345,55 @@ async function apply() {
 // default. Rendering is not editing — see the note on the tuner row — but this
 // is a deliberate act of recording, which is when the effective value IS the
 // value you mean.
-function presetsFor(kind) {
+function presetsFor(on) {
   const gather = (title, root, name, specs) => {
     if (!name) return {};
     const fields = {};
     for (const spec of specs) fields[spec.key] = valOf(title, root, name, spec);
     return { [root]: { [name]: fields } };
   };
-  if (kind === 'noise') {
-    // NOISE AND WET ARE THE SAME PRESET, so the two lists have to be MERGED
-    // rather than spread side by side — `{...a, ...b}` on two objects that both
-    // carry a `sealShader` key keeps only the second, and the recorded preset
-    // would come out holding the film and none of the mottling under it.
-    const noise = gather('noise', 'sealShader', target.noise, NOISE);
-    const wet = gather('wet', 'sealShader', target.noise, WET);
-    if (noise.sealShader && wet.sealShader) {
-      Object.assign(noise.sealShader[target.noise], wet.sealShader[target.noise]);
-      // `color` and `wetColor` are colour pickers rather than sliders, so they
-      // are in neither list — and a recorded look without them is a recorded
-      // look with the wrong colours.
-      for (const [k, d] of [['color', 0x0a2233], ['wetColor', 0xdff2ff]]) {
-        noise.sealShader[target.noise][k] = valOf(k, 'sealShader', target.noise, { key: k, def: d });
+  // MERGED PER ROOT, not spread side by side. `{...a, ...b}` on two objects that
+  // both carry a `sealShader` key keeps only the second — which is how the wet
+  // film once got recorded with none of the mottling under it. Three layers
+  // that can now be on at once make that a live hazard on every root rather
+  // than only on the one pair, so the merge is done here for all of them.
+  const out = {};
+  const fold = (part) => {
+    for (const [root, bag] of Object.entries(part)) {
+      for (const [name, fields] of Object.entries(bag)) {
+        ((out[root] ??= {})[name] ??= {});
+        Object.assign(out[root][name], fields);
       }
     }
-    return { ...noise, ...gather('toon', 'toonShade', target.toon, TOON) };
+  };
+
+  if (on.noise) {
+    // NOISE AND WET ARE THE SAME PRESET — both are CONFIG.sealShader.
+    fold(gather('noise', 'sealShader', target.noise, NOISE));
+    fold(gather('wet', 'sealShader', target.noise, WET));
+    // The colour pickers are in neither list, and a recorded look without them
+    // is a recorded look with the wrong colours. `baseColor` joins them: it is
+    // what `paint` lays down, so recording a covered map without it would write
+    // a preset that covers the photograph with a colour nobody chose.
+    for (const [k, d] of [['color', 0x0a2233], ['wetColor', 0xdff2ff], ['baseColor', 0xffffff]]) {
+      out.sealShader[target.noise][k] = valOf(k, 'sealShader', target.noise, { key: k, def: d });
+    }
   }
-  if (kind === 'biolum') {
-    // `pattern` is a select rather than a slider, so it is not in BIO — and it
-    // is the one field that decides what the surface even looks like.
-    const out = gather('pattern', 'biolumSkin', target.bio, BIO);
+  if (on.toon) fold(gather('toon', 'toonShade', target.toon, TOON));
+  if (on.biolum) {
+    fold(gather('pattern', 'biolumSkin', target.bio, BIO));
     const bag = out.biolumSkin?.[target.bio];
     if (bag) {
+      // `pattern` is a select rather than a slider, so it is not in BIO — and it
+      // is the one field that decides what the layer even looks like.
       bag.pattern = valOf('pattern', 'biolumSkin', target.bio, { key: 'pattern', def: 'blotches' });
       for (const [k, d] of [['colorA', 0x6b5636], ['colorB', 0x9c855a],
         ['colorC', 0xd8c79a], ['shellColor', 0x101820]]) {
         bag[k] = valOf(k, 'biolumSkin', target.bio, { key: k, def: d });
       }
     }
-    return out;
   }
-  return {};
+  return out;
 }
 
 function editedBlock() {
@@ -1172,9 +1456,18 @@ function buildList() {
       holder.appendChild(h);
       for (const k of hit) {
         const b = document.createElement('button');
-        const mark = applied[k] ? ({ texture: '·', noise: '~', biolum: '*' })[applied[k].surface] : '';
-        b.textContent = k.replace(/^enemy/, '') + (mark ? ' ' + mark : '');
-        b.title = applied[k] ? `${k} — applied: ${applied[k].surface}` : k;
+        // ONE GLYPH PER LAYER, derived from the switches rather than looked up
+        // from a table of the three names the picker used to offer. That table
+        // returned undefined for every combination outside it, so a creature
+        // recorded as anything else came up with no mark at all and read as
+        // never recorded.
+        const on = layersOf(k);
+        const mark = LAYERS.filter(([w]) => on[w])
+          .map(([w]) => ({ noise: '~', toon: '=', biolum: '*' })[w]).join('') || '·';
+        b.textContent = k.replace(/^enemy/, '') + (applied[k] ? ' ' + mark : '');
+        b.title = applied[k]
+          ? `${k} — recorded: ${describeLayers(layersOf(k))}`
+          : `${k} — ${describeLayers(on)} (from the roster; not recorded here)`;
         if (k === subjectKey) b.className = 'on';
         b.addEventListener('click', () => { build(k); render(search.value.trim().toLowerCase()); });
         holder.appendChild(b);

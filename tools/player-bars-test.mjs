@@ -575,5 +575,353 @@ check('the HUD flag is gone with it', !$('#svHud').classList.contains('sv-hud-ba
 check('the per-frame anchor is writing again', !!bars.style.left && !!bars.style.top,
   `left="${bars.style.left}" top="${bars.style.top}"`);
 
+// ---------------------------------------------------------------------------
+// THE THIRD COLUMN — the boost fuel, when the player has asked for it here
+// instead of around the seal (settings.hud.boostMeter).
+//
+// The pips are NOT a second model. systems/strikeRing.js owns the springs, the
+// stagger queue and the pops whichever view is on; this column reads them
+// through pipAnim(). So the claims worth pinning are the ones that would break
+// if that ever stopped being true — a column that fills instantly is a column
+// that grew its own arithmetic — plus the one that says the two views can
+// never both be drawn.
+// ---------------------------------------------------------------------------
+section('The boost fuel, as a column');
+
+const RING = await import('../path/src/systems/strikeRing.js');
+const STRIKE = await import('../path/src/systems/strike.js');
+const CFG = (await import('../path/src/config.js')).CONFIG;
+
+// The ring's mesh has to exist before its uniforms can be read, and it is the
+// real one: a stand-in would be testing the stand-in.
+const ringMesh = RING.createStrikeRing();
+const U = ringMesh.material.uniforms;
+const strike = { charge: 0, pending: 0, flash: 0, chainTimer: 0, perfectFlash: 0 };
+
+/** Frames of BOTH models, in the order main.js runs them. */
+function runFuel(seconds, hz = 60) {
+  const dt = 1 / hz;
+  for (let t = 0; t < seconds - 1e-9; t += dt) {
+    ui.updateHUD(gameState, player, strike, 0, camera, dt);
+    RING.updateStrikeRing(dt, player.mesh.position, strike, true, player.stats);
+  }
+}
+const pipEls = () => [...document.querySelectorAll('#svBoostPips .sv-boost-pip')];
+const pipFills = () => [...document.querySelectorAll('#svBoostPips .sv-boost-fill')]
+  .map((f) => Number(f.style.getPropertyValue('--sv-pip')));
+const litPips = () => pipFills().filter((v) => v > 0.9).length;
+
+// THE SHIPPED DEFAULT IS THE COLUMN, asserted on its own line for the same
+// reason the placement's is above: a flip of the default should fail here,
+// with the reason beside it, rather than as a scatter of geometry failures
+// below. It HAS flipped once — the wheel shipped first — so this line is
+// load-bearing rather than ceremonial.
+check('the shipped default is the column', S.boostMeter() === 'bar', S.boostMeter());
+
+// THE OPT-OUT FIRST, because the two claims that matter are a pair and the
+// wheel is the half that is easy to leave broken now that nobody sees it by
+// default: with the ring chosen, the wheel draws the fuel and the column is
+// not on screen at all.
+S.setSetting('hud.boostMeter', 'ring');
+strike.charge = 1;
+runFuel(0.6);
+check('choosing the ring puts the fuel back on the wheel', U.uFuel.value === 1);
+check('...and the column is not on screen',
+  getComputedStyle($('#svBoostWrap')).display === 'none',
+  getComputedStyle($('#svBoostWrap')).display);
+
+// The switch, from a paused menu — which is the path that has no frame to
+// apply it on, so the settings handler is what makes it visible.
+S.setSetting('hud.boostMeter', 'bar');
+ui.applyBoostMeter();
+check('switching hands the fuel to the column',
+  $('.sv-playerbars').classList.contains('sv-playerbars-boost'));
+
+// EMPTY FIRST, and the reset matters: the wheel has been full for the frames
+// above, so a column built now would start life full and the stagger below
+// would have nothing to catch up to.
+RING.resetStrikeRing();
+strike.charge = 0;
+runFuel(0.4);
+check('the column is drawn once the setting asks for it',
+  getComputedStyle($('#svBoostWrap')).display !== 'none');
+check('...and the wheel has gone quiet', U.uFuel.value === 0);
+const pips = STRIKE.pipCount(player.stats);
+check('one cell per pip', pipEls().length === pips, `${pipEls().length} of ${pips}`);
+check('it starts empty', litPips() === 0, `${litPips()} lit`);
+
+// THE STAGGER, which is the whole reason the column reads the ring's arrays
+// rather than the bar value. A whole meter swallowed on ONE frame arrives one
+// pip at a time; a column that did its own arithmetic would be full on the
+// next frame and this is the check that would catch it.
+strike.charge = 1;
+runFuel(1 / 60);
+check('a whole bar swallowed at once does not arrive at once', litPips() < pips,
+  `${litPips()} of ${pips} lit on the first frame`);
+runFuel(0.08);
+// COUNTED AS STARTED, not as finished: a pip is released on its own spring and
+// takes a moment to climb, so waiting for 0.9 measures the spring rather than
+// the queue. What the stagger claims is that at 80ms SOME of the bar is on its
+// way and the rest has not been released at all.
+const moving = pipFills().filter((v) => v > 0.02).length;
+check('a pip is on its way at 80ms', moving > 0, `${moving} of ${pips} moving`);
+check('...and the rest are still queued', moving < pips, `${moving} of ${pips}`);
+runFuel(0.5);
+const late = litPips();
+check('the pips land one at a time', moving < late, `${moving} moving at 80ms, ${late} full at 600ms`);
+check('...and they all get there', late === pips, `${late} of ${pips}`);
+
+// THE DRAIN IS NOT ALLOWED TO LAG. Holding burns fuel and the release spends
+// it, and both are things the player DID — a queue on the way down reads as
+// input lag. Snap, on the frame it happens.
+strike.charge = 0;
+strike.flash = CFG.strike.charge.flashTime;
+runFuel(1 / 60);
+check('spending the bar empties the column on the same frame', litPips() === 0, `${litPips()} still lit`);
+check('...and the spend flashes it white',
+  Number($('#svBoostWrap').style.getPropertyValue('--sv-spend')) > 0.5,
+  $('#svBoostWrap').style.getPropertyValue('--sv-spend'));
+
+// THE SAME REGRESSION GUARD THE TWO GAUGES CARRY. The spring is already the
+// animation; a CSS transition chasing it is a second curve that never arrives.
+const pipStyle = getComputedStyle($('#svBoostPips .sv-boost-fill'));
+const pipDur = `${pipStyle.transitionDuration || ''} ${pipStyle.transition || ''}`;
+check('the pip fill carries no CSS transition', !/[1-9]/.test(pipDur), pipDur.trim() || '(none)');
+check('the pip fill is scaled from its bottom edge',
+  (pipStyle.transformOrigin || '').includes('100%')
+  || /\d/.test(pipStyle.transformOrigin || ''), pipStyle.transformOrigin || '(none)');
+
+// THE COLOURS QUOTE THE WHEEL. Same ramp the shader walks, so switching styles
+// changes the shape of the meter and not what it is saying — and the last pip
+// keeps its own hue, which is what makes "one from full" readable in both.
+const lastCol = document.querySelector('#svBoostPips .sv-boost-pip:last-child .sv-boost-fill')
+  .style.getPropertyValue('--sv-pip-col');
+const wantLast = `#${(CFG.strike.ring.lastPipColor ?? CFG.strike.ring.readyColor).toString(16).padStart(6, '0')}`;
+check('the last pip wears the last-pip colour', lastCol.toLowerCase() === wantLast.toLowerCase(),
+  `${lastCol} vs ${wantLast}`);
+
+// A LINK RE-SEGMENTS THE BAR, and in the corner placement that has somewhere to
+// go: the track grows with the pip COUNT, so the extra segment reads as extra
+// rather than as every segment getting thinner.
+S.setSetting('hud.barPlacement', 'corner');
+const before = pipEls().length;
+player.stats.strikeChumRefill = CFG.strike.charge.chumRefill / 2;
+runFuel(1.2);
+check('a link cuts the column into more pips', pipEls().length > before,
+  `${before} → ${pipEls().length}`);
+check('...and the track grows with them',
+  Number($('.sv-playerbars').style.getPropertyValue('--sv-boost-grow')) > 1.2,
+  $('.sv-playerbars').style.getPropertyValue('--sv-boost-grow'));
+
+// ---------------------------------------------------------------------------
+// THE GRAIN — one field of noise across all three gauges.
+//
+// What is checkable here is the WIRING, which is most of what can go wrong:
+// that the field reaches the DOM at all, that all three tracks are reading one
+// set of numbers rather than three, that it moves, and that switching it off
+// leaves a plain bar rather than a black one. What it LOOKS like is
+// npm run looks:gauges.
+// ---------------------------------------------------------------------------
+section('The grain in the gauges');
+
+// READ OFF THE UI ROOT, not off the bar stack and not off the HUD: the field is
+// worn by every meter on screen — the two gauges, the boost column, the level
+// strip and the boss bar — and the boss bar is deliberately outside .sv-hud, so
+// the root is the only ancestor all five inherit from.
+const hud = ui.uiRoot();
+const grainOf = (prop) => hud.style.getPropertyValue(prop);
+CFG.hud.meterNoise.enabled = true;
+// One phase is baked per frame on purpose (a whole set at once is a visible
+// hitch on the first frame of a run), so this runs enough frames to be past
+// the first of them.
+runFuel(0.3);
+
+const overlays = [...ui.uiRoot().querySelectorAll('.sv-meter-grain')];
+// Five meters: health, air, the boost column, the level strip, the boss bar.
+check('every meter carries a grain layer', overlays.length === 5, `${overlays.length} of 5`);
+// ONE SET OF VARIABLES ON THE STACK, inherited. Three gauges wearing one field
+// is the whole point, and three separate writes are three chances to disagree.
+check('...and they all read one shared field',
+  overlays.every((o) => !o.style.getPropertyValue('--sv-grain-img')),
+  'no overlay carries its own tile');
+check('the field reached the DOM', grainOf('--sv-grain-img').startsWith('url(data:image'),
+  grainOf('--sv-grain-img').slice(0, 26));
+check('...at the tuned size', grainOf('--sv-grain-size') === `${CFG.hud.meterNoise.tilePx}px`,
+  grainOf('--sv-grain-size'));
+check('...and the tuned depth',
+  Math.abs(Number(grainOf('--sv-grain-depth')) - CFG.hud.meterNoise.depth) < 1e-6,
+  grainOf('--sv-grain-depth'));
+
+// IT MULTIPLIES. Any other blend can invent a colour the gauge is not wearing,
+// and this one can only ever take light away — which is what makes a full-depth
+// grain safe on a gauge whose colour IS its meaning.
+const blend = getComputedStyle(overlays[0]).mixBlendMode;
+check('the grain can only take light away', blend === 'multiply', blend || '(none)');
+
+// MOVEMENT. Drift is the field sliding; the offset is written in pixels here
+// and handed to the ring in ring radii, off one clock, so the two views of the
+// boost meter cannot be at two phases of one field.
+CFG.hud.meterNoise.driftY = -0.5;
+// parseFloat, not Number: these are CSS LENGTHS and carry their unit, which
+// is exactly what makes them usable in the sheet without a calc().
+const before0 = parseFloat(grainOf('--sv-grain-y'));
+runFuel(0.25);
+const after0 = parseFloat(grainOf('--sv-grain-y'));
+check('the field drifts', Math.abs(after0 - before0) > 0.5, `${before0} → ${after0}`);
+
+// --- THE BOIL IS ON THE BEAT ------------------------------------------------
+// The field takes ONE PHASE STEP per cycle of `boilSync`, off the same musical
+// transport every synced shader in the game reads. What makes this worth a
+// harness rather than an eyeball is that being slightly off the grid looks
+// completely fine — that is the entire complaint systems/beatSync.js opens
+// with — so "it churns" is not evidence of anything.
+const BEAT = await import('../path/src/systems/beatSync.js');
+const NOISE = await import('../path/src/systems/meterNoise.js');
+
+// The harness has to carry the beat clock itself, exactly as main.js does
+// ahead of every synced FX. Without this the transport sits at 0 and a
+// quantised boil is frozen — which is correct behaviour and a useless test.
+function runBeat(seconds, hz = 60) {
+  const dt = 1 / hz;
+  for (let t = 0; t < seconds - 1e-9; t += dt) {
+    BEAT.updateBeatSync(dt);
+    ui.updateHUD(gameState, player, strike, 0, camera, dt);
+    // The ring too, in main.js's order — the offset claim at the end of this
+    // section is about the two views agreeing, and a harness that only ran one
+    // of them would be comparing a live number against a stale one.
+    RING.updateStrikeRing(dt, player.mesh.position, strike, true, player.stats);
+  }
+}
+const phaseNow = () => NOISE.meterNoiseFrame().phase;
+const phases = CFG.hud.meterNoise.phases;
+
+/**
+ * Sit on a step boundary before timing anything.
+ *
+ * A quantised phase is derived ABSOLUTELY from the transport, so "run 0.4 of a
+ * step and expect no change" is only true if you did not start 0.7 of the way
+ * through one. Without this the checks below pass or fail on where the clock
+ * happened to be when the file got here, which is the definition of a flake.
+ */
+function alignToStep(hz = 60) {
+  const from = phaseNow();
+  for (let i = 0; i < hz * 8; i++) {
+    runBeat(1 / hz, hz);
+    if (phaseNow() !== from) return true;
+  }
+  return false;
+}
+
+/**
+ * How many times the field actually stepped across `seconds`.
+ *
+ * ONE FRAME IS SPENT FIRST, and it is not a fudge. A quantised cycle is
+ * re-derived from the transport absolutely, so the frame after the division
+ * changes lands wherever the NEW grid says it should be — one instantaneous
+ * step, which is correct behaviour for a clock that is locked to the music
+ * rather than integrated. Counting it would make every rate here read one
+ * step fast.
+ */
+function countSteps(seconds, hz = 60) {
+  const dt = 1 / hz;
+  runBeat(dt, hz);
+  let last = phaseNow();
+  let steps = 0;
+  for (let t = 0; t < seconds - 1e-9; t += dt) {
+    runBeat(dt, hz);
+    const now = phaseNow();
+    if (now !== last) steps++;
+    last = now;
+  }
+  return steps;
+}
+
+CFG.hud.meterNoise.boilSync = '1/8';
+const eighth = BEAT.divisionSeconds('1/8');
+check('an eighth is a real duration', eighth > 0.05 && eighth < 2, `${eighth.toFixed(3)}s`);
+// Long enough for every phase to be baked, so the modulo below is over the
+// whole set rather than over however much of it existed.
+runBeat(1.5);
+
+check('the clock reaches a step at all', alignToStep());
+const p0 = phaseNow();
+runBeat(eighth * 0.4);
+check('the grain holds between steps', phaseNow() === p0, `phase ${p0} → ${phaseNow()}`);
+runBeat(eighth * 0.75);
+const p1 = phaseNow();
+check('...and steps once an eighth goes by', (p1 - p0 + phases) % phases === 1,
+  `phase ${p0} → ${p1}`);
+// AND THE TILE ON THE STACK IS THE ONE THE FIELD SAYS IS CURRENT. The phase
+// index stepping is the model; what the player sees is the data URI in
+// --sv-grain-img, written only on the frames the phase actually moves.
+//
+// Checked as an EQUALITY rather than as "the tile changed", which cannot work
+// here: jsdom's toDataURL is stubbed to one empty string (see the rig at the
+// top of this file), so every phase bakes to a tile that compares equal and a
+// difference test would fail on a perfectly working cache. What is provable
+// without a real canvas is that the two agree — a cache that never invalidated
+// would drift from the phase within one step and be caught on the next line.
+alignToStep();
+check('the tile on the stack is the current phase',
+  grainOf('--sv-grain-img') === NOISE.meterNoiseFrame().tile,
+  `phase ${phaseNow()}`);
+
+// ...and the loop closes on the grid: a whole set of steps comes back round.
+alignToStep();
+const p1b = phaseNow();
+runBeat(eighth * phases);
+check('the loop closes on the beat', phaseNow() === p1b, `phase ${p1b} → ${phaseNow()}`);
+
+// A slower division is genuinely slower, and this is the check that says the
+// picker is wired to the grid rather than to a name. COUNTED over a window
+// rather than watched across one boundary: where the transport happens to be
+// is not something a test gets to assume, and a rate is what the setting
+// actually means.
+const WINDOW = 4;
+CFG.hud.meterNoise.boilSync = '1/8';
+const fast = countSteps(WINDOW);
+CFG.hud.meterNoise.boilSync = '1 bar';
+const bar = BEAT.divisionSeconds('1 bar');
+const slow = countSteps(WINDOW);
+check('an eighth-note boil steps once per eighth',
+  Math.abs(fast - WINDOW / eighth) <= 1, `${fast} steps in ${WINDOW}s, expected ~${(WINDOW / eighth).toFixed(1)}`);
+check('...and a bar-long one steps once per bar',
+  Math.abs(slow - WINDOW / bar) <= 1, `${slow} steps in ${WINDOW}s, expected ~${(WINDOW / bar).toFixed(1)}`);
+
+// ...and 'free' goes back to the rate in seconds, which is how this shipped
+// before any of it was on a grid.
+CFG.hud.meterNoise.boilSync = 'free';
+const wasBoil = CFG.hud.meterNoise.boil;
+CFG.hud.meterNoise.boil = 1;
+const p3 = phaseNow();
+runBeat(1 / phases + 1 / 30);
+check('free runs on its own rate again', phaseNow() !== p3, `phase ${p3} → ${phaseNow()}`);
+CFG.hud.meterNoise.boilSync = '1/8';
+CFG.hud.meterNoise.boil = wasBoil;
+
+// ONE FIELD, ONE PHASE, TWO VIEWS. The gauges read the offset in pixels and
+// the ring reads it in ring radii, off one clock — so the only way to prove
+// they cannot come apart is to read both after the same frame.
+runBeat(1 / 60);
+const inTiles = NOISE.meterNoiseOffset();
+const uni = ringMesh.material.uniforms;
+const cssY = parseFloat(grainOf('--sv-grain-y')) / CFG.hud.meterNoise.tilePx;
+check('the ring and the gauges are at one offset',
+  Math.abs(uni.uNoiseOffset.value.y - inTiles.y) < 1e-6 && Math.abs(cssY - inTiles.y) < 1e-3,
+  `ring ${uni.uNoiseOffset.value.y.toFixed(4)} · css ${cssY.toFixed(4)} · clock ${inTiles.y.toFixed(4)}`);
+
+// ...and off is OFF, which has to be a plain bar and never a black one.
+CFG.hud.meterNoise.enabled = false;
+runFuel(1 / 60);
+check('switching it off leaves a plain bar', Number(grainOf('--sv-grain-depth')) === 0,
+  grainOf('--sv-grain-depth'));
+CFG.hud.meterNoise.enabled = true;
+
+// ...and back to what ships, so nothing after this inherits a changed run.
+delete player.stats.strikeChumRefill;
+S.setSetting('hud.boostMeter', 'bar');
+S.setSetting('hud.barPlacement', 'seal');
+RING.resetStrikeRing();
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

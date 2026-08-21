@@ -3,6 +3,7 @@ import { cssEase } from '../ease.js';
 import {
   initSnapshotCards, snapshotCardsLive, buildSnapshotCard,
   settleSnapshotCard, releaseAllSnapshotCards, cardTextFor, playCardWriteOn,
+  resyncSnapshotCards,
 } from './snapshotCard.js';
 
 // ---------------------------------------------------------------------------
@@ -323,6 +324,16 @@ export function pileIsHidden() {
  */
 export function initSnapshotPrints() {
   return initSnapshotCards();
+}
+
+/**
+ * Every print's drawing surface back to the size it was built at — see
+ * resyncSnapshotCards, which is where the whole story is. Re-exported through
+ * this file for the same reason initSnapshotPrints is: ui.js owns the paper
+ * and this module owns the renderer behind it.
+ */
+export function resyncPrintCards() {
+  return resyncSnapshotCards();
 }
 
 // How wide the print is on screen. In vw with a floor and a ceiling rather
