@@ -270,6 +270,21 @@ export function resetBakalar(scene = null) {
   spawnTimer = randomBetween(CONFIG.bakalar.spawnMin, CONFIG.bakalar.spawnMax);
 }
 
+/**
+ * What one voicemail bomb hits for at this level, Big Rigz included.
+ *
+ * Exported because the perfect strike's companion stack
+ * (systems/companionStrike.js) has to ask what the boat lends WITHOUT a boat,
+ * a net or a bomb in the water — and because bombStats() below cannot be the
+ * answer: it also rolls a radius through aoe(), and a caller that only wants
+ * the number should not be made to build the rest.
+ */
+export function bombDamage(level) {
+  const c = CONFIG.bakalar.bomb;
+  const lv = Math.max(1, level);
+  return companionDamage(c.damage + c.damagePerLevel * (lv - 1));
+}
+
 function bombStats(level) {
   const c = CONFIG.bakalar.bomb;
   const lv = Math.max(1, level);
@@ -280,7 +295,7 @@ function bombStats(level) {
     // works; the bomb is the moment you watch. Widening the net as well
     // would quietly turn one card into a second Bakalar upgrade.
     radius: aoe(c.radius + c.radiusPerLevel * (lv - 1)),
-    damage: companionDamage(c.damage + c.damagePerLevel * (lv - 1)),
+    damage: bombDamage(lv),
   };
 }
 
@@ -382,6 +397,26 @@ function updateBombs(dt, scene, enemiesList, hooks) {
       const a = Math.random() * Math.PI * 2;
       const d = Math.random() * c.chumSpread;
       hooks.onChum?.(x + Math.cos(a) * d, y + Math.sin(a) * d);
+    }
+
+    // AND THE REST OF THE CATCH GOES EVERYWHERE. The spray above is the
+    // blast's own — a circle of guts where the net was, which is chum you were
+    // already swimming toward. This is a netful of fish going up at the
+    // surface and coming down across the whole arena, and it is deliberately
+    // NOT a wider `chumSpread`: what it buys is a reason to be somewhere else.
+    // The floor gets re-seeded with food, the strike meter is the thing that
+    // food feeds, and a boat sailing the top of the screen therefore matters
+    // to a player who was nowhere near it.
+    //
+    // Placed with the arena's own bounds rather than by flinging further from
+    // the blast, because "further" from a bomb dropped at the left wall is
+    // mostly off-screen. Every bit lands somewhere reachable.
+    const wide = Math.round((c.arenaChum ?? 0) + kills * (c.arenaChumPerKill ?? 0));
+    for (let n = 0; n < wide; n++) {
+      hooks.onChum?.(
+        bounds.left + Math.random() * (bounds.right - bounds.left),
+        bounds.bottom + Math.random() * (bounds.surfaceY - bounds.bottom),
+      );
     }
 
     scene.remove(b.mesh);

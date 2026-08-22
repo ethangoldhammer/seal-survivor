@@ -761,10 +761,31 @@ function finSocketRecovering() {
   return false;
 }
 
-/** How many clubs are riding the ring right now. */
+/**
+ * How many clubs are riding the ring right now.
+ *
+ * Counts SOCKETS, armed or not, and that is deliberate: the ring's spacing is
+ * built off this number (see updateClub), and a ring that closed up every time
+ * one of its clubs was in the air would have the remaining ones visibly
+ * shuffle round and back again on every throw.
+ */
 export function clubsOrbiting() {
   let n = 0;
   for (const club of clubs) if (club.mount === 'orbit') n++;
+  return n;
+}
+
+/**
+ * ...and how many of them are actually THERE to be thrown.
+ *
+ * The other half of the pair above. A perfect strike empties the ring (see
+ * disarmClubs), so the count that decides how many clubs leave has to exclude
+ * the sockets that are still waiting on a respawn — otherwise a second perfect
+ * strike inside `respawnTime` would throw the same clubs again, for free.
+ */
+export function clubsRingArmed() {
+  let n = 0;
+  for (const club of clubs) if (club.mount === 'orbit' && club.armed) n++;
   return n;
 }
 
@@ -783,27 +804,49 @@ export function clubsOrbiting() {
  * and spins up instead (CONFIG.club.twirl), so the seal is never left swimming
  * empty-handed through the one window it is closing on things.
  *
- * THE RING IS NOT THROWN. The cost of this card is the weapon leaving your
- * HANDS, and the orbiting clubs are not in them — they are a second thing the
- * run bought, on their own cards, and emptying them here would mean a Hurler
- * pick silently deleting somebody else's Cold Snap stacks for two seconds.
+ * THE RING IS NOT THROWN — UNLESS THE CHARGE WAS PERFECT. The cost of this
+ * card is the weapon leaving your HANDS, and the orbiting clubs are not in
+ * them: they are a second thing the run bought, on their own cards, and
+ * emptying them on every throw would mean a Hurler pick silently deleting
+ * somebody else's Cold Snap stacks twice a second.
+ *
+ * A PERFECT CHARGE buys them anyway, and that exception is the point of the
+ * exception. The ring is the most decorative thing a club run owns — it spins,
+ * it chips at whatever drifts into it, and it is never something the player
+ * DOES. Hanging it off the one input the game asks you to be precise about
+ * turns the whole ring into a resource you spend, and it makes a perfect
+ * release visibly worth more than a merely full one: the clubs in your fins
+ * leave on any throw, and everything circling you leaves on a perfect one.
+ *
+ * `includeRing` and not a read of the strike's state, for the reason the rest
+ * of this file gives about `motion` — the weapon is handed what it needs and
+ * owns no opinion about where the number came from, which is what keeps it
+ * drivable from a harness with no strike and no player in it.
+ *
+ * AND THE RING THROWS EVERYTHING, driftwood included. `isThrowable` keeps the
+ * basic club in the FIN because a seal should never be left swimming
+ * empty-handed; a club orbiting three metres away was never in a hand, so the
+ * rule that protects the hands has nothing to say about it.
  */
-export function disarmClubs() {
+export function disarmClubs(includeRing = false) {
   const c = CONFIG.club;
   let taken = 0;
   for (const club of clubs) {
-    if (!club.armed || club.mount !== 'fin') continue;
-    // THE BASIC CLUB STAYS IN THE HAND. See isThrowable — and note this is
-    // checked per SOCKET rather than per run: a seal holding a Driftwood Club
-    // and a Cold Snap throws the Cold Snap and keeps swinging the driftwood,
-    // which is the whole shape of the change. What the kept club does with the
+    if (!club.armed) continue;
+    if (club.mount === 'orbit' ? !includeRing : club.mount !== 'fin') continue;
+    // THE BASIC CLUB STAYS IN THE HAND, and only in the hand. Checked per
+    // SOCKET rather than per run — a seal holding a Driftwood Club and a Cold
+    // Snap throws the Cold Snap and keeps swinging the driftwood, which is the
+    // whole shape of that rule — and skipped entirely for the ring, because
+    // the thing it protects is a seal left swimming empty-handed and a club
+    // three metres away was never in a hand. What the kept club does with the
     // dash is the twirl in updateClub.
-    if (!isThrowable(club.mesh.userData.clubAsset ?? 'club')) continue;
+    if (club.mount === 'fin' && !isThrowable(club.mesh.userData.clubAsset ?? 'club')) continue;
     club.armed = false;
     club.respawnLeft = c.respawnTime;
     club.mesh.visible = false;
     // Drop the re-hit locks with the club. They belong to a weapon that is no
-    // longer in this hand, and a club that comes back should connect on the
+    // longer in this socket, and a club that comes back should connect on the
     // first swing rather than honouring a cooldown from before it left.
     club.cooldowns.clear();
     taken++;
@@ -1986,11 +2029,23 @@ export function clubThrowReady(power, level) {
  *                  walk across the flippers and only main.js owns that rig
  * @param hooks     { onThrow(i, x, y, dirX, dirY, speed) }
  */
-export function fireClubThrow(scene, power, level, clubLevel, velocity, originFor, hooks = {}, riders = {}) {
+export function fireClubThrow(scene, power, level, clubLevel, velocity, originFor, hooks = {}, riders = {}, opts = {}) {
   if (!clubThrowReady(power, level)) return 0;
 
   const c = CONFIG.clubThrow;
-  const count = projectileCount(clubThrowCount(power, level), player.stats);
+  // A PERFECT CHARGE THROWS THE RING TOO. Counted BEFORE disarmClubs runs, or
+  // there is nothing left on the ring to count — and counted as ARMED sockets
+  // rather than as sockets, so a second perfect release inside `respawnTime`
+  // throws the fins' clubs and nothing else. See disarmClubs for why the ring
+  // is the perfect charge's to spend and not the ordinary throw's.
+  const perfect = !!opts.perfect;
+  const fromRing = perfect ? clubsRingArmed() : 0;
+  // Added on top of the charge's own count rather than folded into
+  // clubThrowCount, which stays a pure (power, level) -> clubs function for the
+  // card text and the tuner readout. These are REAL clubs coming off the ring:
+  // the number is what was actually there, so Clone Warz does not double them
+  // and a ring of two throws two.
+  const count = projectileCount(clubThrowCount(power, level), player.stats) + fromRing;
   const damage = abilityDamage(clubDamage(Math.max(1, clubLevel)) * c.damageMul * clubPower());
   // THE SAME TWO RIDERS THE FIN CLUBS CARRY. The blast rides as splashDamage,
   // which every explosive in the game already goes through (main.js queues it
@@ -2003,7 +2058,7 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
   // sockets are already empty on the frame the throw is seen — a fin that
   // still had its club for one more frame would read as the seal throwing a
   // copy, which is exactly the impression this whole mechanic exists to avoid.
-  const emptied = disarmClubs();
+  const emptied = disarmClubs(perfect);
 
   // THE THROW'S SPEED IS THE SEAL'S SPEED. Clamped at both ends: a throw from a
   // standing start still has to leave the flipper, and a dash at full tilt must

@@ -82,6 +82,7 @@ function newBucket(t) {
     hpFracSum: 0,
     lowHpSamples: 0,
     aliveSum: 0,
+    drawSum: 0,
     maxHpSum: 0,
     level: 1,
     stacks: {},
@@ -439,6 +440,7 @@ export function tick(dt, snap) {
   bucket.hpFracSum += frac;
   if (frac < LOW_HP_FRAC) bucket.lowHpSamples += 1;
   bucket.aliveSum += snap.alive ?? 0;
+  bucket.drawSum += snap.draws ?? 0;
   bucket.maxHpSum += maxHp;
   bucket.level = snap.level;
 

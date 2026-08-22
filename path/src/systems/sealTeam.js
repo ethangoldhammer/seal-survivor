@@ -159,6 +159,33 @@ export function rebuildSealTeam(scene) {
   }
 }
 
+/**
+ * HOW BIG THE SQUAD IS at this level, with Entourage's escorts on top.
+ *
+ * Lifted out of updateSealTeam — which still spells the same expression at the
+ * top of its own frame — because a second caller now needs the answer WITHOUT
+ * a scene, a frame or a live squad: the perfect strike's companion stack
+ * (systems/companionStrike.js) has to know how many escorts a stat block is
+ * worth before it can ask what they lend. Two copies of the cap rule would
+ * drift the first time either was tuned, and the drift would be invisible —
+ * both numbers are plausible.
+ *
+ * `extra` is Entourage, passed apart from the level for the reason
+ * updateSealTeam gives: `level` also buys damage and decides the evolve, and
+ * neither is what that card is selling.
+ */
+export function sealTeamSize(level, extra = 0) {
+  if (!(level > 0)) return 0;
+  const bonus = Math.max(0, Math.floor(extra));
+  return Math.min(level + bonus, CONFIG.sealTeam.maxSeals + bonus);
+}
+
+/** What ONE escort's ram hits for at this level, Big Rigz included. */
+export function sealTeamDamage(level) {
+  const cfg = CONFIG.sealTeam;
+  return companionDamage(cfg.contactDamage + cfg.damagePerLevel * Math.max(0, level - 1));
+}
+
 function endLunge(t, cfg) {
   t.lungeTarget = null;
   t.lungeTimer = 0;
@@ -276,8 +303,7 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {},
   // can buy — it is the same 6 as the card's own maxStacks — so leaving it
   // fixed would make Entourage a dead pick for exactly the run that most wants
   // it, which is the run that maxed the squad.
-  const bonus = Math.max(0, Math.floor(extra));
-  const want = level > 0 ? Math.min(level + bonus, CONFIG.sealTeam.maxSeals + bonus) : 0;
+  const want = sealTeamSize(level, extra);
   resize(scene, want, playerPos);
   if (want === 0) return;
 
@@ -293,7 +319,7 @@ export function updateSealTeam(dt, scene, playerPos, level, enemies, hooks = {},
   }
 
   const cfg = CONFIG.sealTeam;
-  const damage = companionDamage(cfg.contactDamage + cfg.damagePerLevel * Math.max(0, level - 1));
+  const damage = sealTeamDamage(level);
   // Big Rigz: the escorts grow, and the ram radius grows with them. Applied
   // to BOTH or the card is a lie — a seal twice the size that still has to
   // touch you with its old hitbox looks like it is swimming through fish.

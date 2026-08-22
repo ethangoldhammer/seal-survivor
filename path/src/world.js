@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { resolutionScale } from './systems/settings.js';
+import { createAdaptiveScale } from './systems/adaptiveScale.js';
 import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT, SEABED_Z, WATER_FILL_Z } from './arena.js';
 import { createGrid } from './systems/grid.js';
 import { createConstellations } from './systems/constellations.js';
@@ -39,6 +40,7 @@ export function createWorld(container) {
   const camera = new THREE.OrthographicCamera();
   camera.position.set(0, 0, 40);
 
+  const adaptive = createAdaptiveScale();
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
 
@@ -54,9 +56,36 @@ export function createWorld(container) {
   // than 2x, and a player on a machine that cannot hold the frame rate can ask
   // for less than that — but not for more, which would be a request for pixels
   // the panel may not have.
+  //
+  // AND a third term the player never sets: the adaptive controller, which is
+  // how a machine that cannot hold the frame rate stops being asked to. It
+  // only ever scales DOWN from what the two authored terms already agreed on,
+  // so it can take pixels away and can never hand back more than the player
+  // asked for. See systems/adaptiveScale.js for why pixels are the thing to
+  // give back on the machines the production runs actually come from.
   function renderScale() {
-    const cap = (CONFIG.render?.pixelRatio ?? 2) * resolutionScale();
+    const cap = (CONFIG.render?.pixelRatio ?? 2) * resolutionScale() * adaptive.value;
     return Math.max(0.25, Math.min(window.devicePixelRatio || 1, cap));
+  }
+
+  /**
+   * One frame's unclamped wall time. Reapplies the scale only on the frames
+   * the controller actually moved it — setPixelRatio reallocates post.js's
+   * render targets, so calling it every frame would cost more than it saves.
+   */
+  function tickAdaptiveScale(frameMs, live) {
+    if (adaptive.tick(frameMs, live)) applyRenderScale();
+  }
+
+  /** What the adaptive term settled on, for the readout and the run record. */
+  function adaptiveScale() {
+    return adaptive.value;
+  }
+
+  /** A new run starts at the resolution the player asked for. */
+  function resetAdaptiveScale() {
+    adaptive.reset();
+    applyRenderScale();
   }
 
   // setPixelRatio re-runs setSize against the size three already has, with
@@ -766,5 +795,5 @@ export function createWorld(container) {
   // frame in world units, and that is a fact about this asymmetric frustum
   // that nothing outside this file can work out for itself. See applyFraming
   // in systems/bossKill.js, which frames the seal and the boss it just killed.
-  return { scene, camera, renderer, resize, applyRenderScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, halfExtents, updateSurface, updateColors, updateLighting, grid, constellations, wallRocks, rain, lightning, setLightningHandler };
+  return { scene, camera, renderer, resize, applyRenderScale, tickAdaptiveScale, adaptiveScale, resetAdaptiveScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, halfExtents, updateSurface, updateColors, updateLighting, grid, constellations, wallRocks, rain, lightning, setLightningHandler };
 }

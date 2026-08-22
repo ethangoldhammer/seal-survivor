@@ -36,6 +36,16 @@ export function spawnProjectile(scene, {
   chain = false, chainRange = 0, chainLock = 0, chainSpeedGain = 1,
   jet = false, jetInterval = [0.2, 0.4], jetSpeed = [10, 18], jetTurn = 2.4, jetDrag = 2,
   spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false, burst = null,
+  // WHICH BANG THIS SHOT'S SPLASH PLAYS, by feedback event name, or null for
+  // the queue's default. A description, exactly like `burst` and `chill`
+  // below: projectiles.js never fires it — main.js does, when it resolves the
+  // splash — and this file has no idea what a feedback event is.
+  //
+  // It exists because every splash in the game used to borrow `bigKill`, the
+  // event a CREATURE DYING fires. That is right for a pearl and wrong for a
+  // mussel barrage, where eight of them go off in a second and the player is
+  // told eight things died whether or not anything did.
+  splashFx = null,
   // HOW FAR THE BODY IS CANTED OUT OF THE SCREEN PLANE, in radians about x,
   // set once at spawn and never touched again.
   //
@@ -141,6 +151,7 @@ export function spawnProjectile(scene, {
     orient, // face the direction of travel each frame
     splashDamage, // AoE dealt to OTHER nearby enemies on the first hit (see main.js)
     splashRadius,
+    splashFx,     // ...and which event announces it. See the argument note above.
     // Payload description for something that breaks apart where it lands —
     // the oyster's pearl. Read by main.js's impact handler, which hands it to
     // systems/oyster.js; projectiles.js itself never acts on it, because a

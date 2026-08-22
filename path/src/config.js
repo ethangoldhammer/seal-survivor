@@ -3554,6 +3554,77 @@ export const CONFIG = {
       // through" is a legitimate thing to want, and the contact path (the
       // shove, the mark, the shrapnel, the element) runs either way.
       contactShare: 0,
+
+      // --- THE COMPANIONS JOIN A PERFECT STRIKE --------------------------------
+      // A perfect charge bought exactly two things before this: a multiplier on
+      // a boss weak spot, and the flash that announced it. Everything else the
+      // meter does, a merely FULL bar does identically — which made the top of
+      // the bar a ceiling you held against rather than a target you hit.
+      //
+      // On a perfect release every companion the run owns now hits WITH you.
+      // Their damage is summed and folded into the release burst, so the pop at
+      // the seal is the whole entourage landing on one frame. See
+      // systems/companionStrike.js for who counts and why the control
+      // companions (the beluga, the dumbo, the grabber) lend nothing.
+      companionStack: {
+        enabled: true,
+        // What share of each companion's own hit it lends. Well under 1 on
+        // purpose: this is the entourage joining in, not the entourage firing
+        // twice, and a full share would make the strike the best delivery
+        // mechanism for every companion in the game.
+        share: 0.25,
+        // THE CEILING, in strike-damages. A late run with six escorts, a maxed
+        // pod and Big Rigz sums to several hundred, and a bonus unbounded
+        // relative to the thing it is a bonus TO stops being a payoff and
+        // becomes the whole weapon. Stated as a multiple rather than as a flat
+        // number so it keeps meaning the same thing as the strike line levels:
+        // at 2 the companions may at most triple a perfect strike.
+        maxMul: 2,
+      },
+
+      // ...EXCEPT ON A WEAK SPOT, WHICH IS THE ONE THING A RAM IS A WEAPON
+      // AGAINST.
+      //
+      // `contactShare` above is 0 and stays 0: a seal is not a weapon, it is a
+      // battering ram, and everything it kills it kills with the blast it left
+      // behind at the release point. But that blast goes off where the button
+      // came up, which on a strike aimed at a boss is a body-length of water
+      // AWAY from the boss — so before this the single most deliberate thing a
+      // player can do in the game (fill the bar, hold to the top, release on
+      // the beat, and steer a dashing seal into a glowing green mark on a
+      // moving animal) dealt LITERALLY ZERO, and could not even fire the crit:
+      // hotSpotDamage sits behind an `if (dmg > 0)` and was never reached.
+      //
+      // A weak spot is the exception because it is the one target on a boss
+      // that a ram can be AIMED at, which is the same test every other crit
+      // source in the game has to pass — see the note on hotSpotDamage. So the
+      // ram carries `share` of the strike's full damage into a spot, and
+      // nothing at all into the flesh a millimetre either side of it.
+      //
+      // `perfectMul` is what the PERFECT CHARGE finally buys. It has been a
+      // readout since the strike shipped — the meter pops, the seal is told,
+      // and nothing read it (see `perfect` in systems/strike.js, which said in
+      // as many words that the tell ships first and the payoff comes later).
+      // This is later.
+      //
+      // WHAT GATES IT is `armingStrike`, not `sweetStrike` — a perfect charge
+      // OR an on-beat release, the same either/or that already decides whether
+      // a strike arms a food chain. A player who banked a full bar and steered
+      // it into the mark has done the hard part, and refusing them the payoff
+      // over 40ms of release timing is the exact frustration this fixes. On the
+      // beat WITHOUT a perfect charge still bites, just without the multiplier.
+      //
+      // Sized against the fight rather than against the strike: at the shipped
+      // 40 nominal, a perfect full-charge ram is 40 x 2.2 (charge) x 2 x 2.2
+      // (critMul) = ~390, which is about one rupture pool on a first boss —
+      // one perfect strike very nearly pops a weak spot on its own, and inside
+      // a live food chain it does. weapons.csv owns both, because the moment
+      // it pays for anything it is a balance number and not a look.
+      weakSpot: {
+        enabled: true,
+        share: 1,
+        perfectMul: 2,
+      },
       cardDamage: 5,   // strike damage added per strike-family card
       powerShare: 3,   // slices Killer Instinct pays at once
 
@@ -3561,7 +3632,8 @@ export const CONFIG = {
       // Shrapnel's fragments and Glow Up!'s elemental half, both of which fire
       // per body on contact and are authored as a fraction of "a strike".
       // Neither can ride the burst (they happen somewhere else, to something
-      // specific) and neither can ride the ram, which deals nothing. It is also
+      // specific) and neither can ride the ram, which deals nothing anywhere a
+      // boss is not wearing a weak spot. It is also
       // the field the tuner has been writing since the strike shipped, so a
       // shared number would have the slider fighting the rebalance.
       damage: 40,
@@ -4962,8 +5034,18 @@ export const CONFIG = {
       baseFireRate: 2.3, // seconds between runs at level 1
       fireRatePerLevel: 0.85, // multiplier per level (compounds, faster each level)
       damage: 87, // direct hit on the crab it lands on
-      splashDamage: 41, // AoE to anything else nearby on impact
-      splashRadius: 5.2,
+      // THE BLAST IS THE RUN. A gull picks the densest KNOT of crabs it can
+      // find, crosses the sky to get there and commits to a stoop it cannot
+      // pull out of — and then it used to kill the one crab it happened to
+      // land on and chip the two beside it. The whole approach is a promise
+      // about a pile, and the payoff has to be about the pile too.
+      //
+      // Wide enough to cover a whole cluster (`clusterRadius` is 7) rather
+      // than its centre, and hard enough that the direct hit above is a bonus
+      // for landing well rather than the thing that does the work. weapons.csv
+      // owns both — see the rows there.
+      splashDamage: 96, // AoE to anything else nearby on impact
+      splashRadius: 12,
       life: 14, // seconds before an unresolved run gives up and leaves
 
       // --- target selection ---
@@ -5500,6 +5582,21 @@ export const CONFIG = {
         chumScatter: 4,
         chumXp: 3, // per bit — a netted catch blown open is a real payday
         chumSpread: 5.5, // how far the chum is flung from the blast centre
+        // ...AND THE REST OF IT GOES EVERYWHERE. The three numbers above are
+        // the blast's OWN spray: a tight circle of guts where the net was,
+        // which is the only place this bomb has ever paid into.
+        //
+        // These two are the rest of the catch, flung clean across the arena,
+        // and they are a different KIND of payout rather than more of the same
+        // one — which is why they are their own fields and not a bigger
+        // `chumSpread`. Chum by the blast is chum you were already swimming
+        // toward; chum on the far wall is a REASON TO LEAVE, and the strike
+        // meter it feeds is the one resource worth crossing the arena for. A
+        // boat sailing the top of the screen re-seeds the whole floor with
+        // food, so the sailing means something to a player who was nowhere
+        // near the net.
+        arenaChum: 10,         // flung arena-wide on every blast, catch or no catch
+        arenaChumPerKill: 1.2, // ...and this much again per fish the blast finished
         size: 0.72, // visual radius of the falling bomb
         color: 0xffd27a,
         blinkSpeed: 9, // how fast it flashes once armed
@@ -6113,6 +6210,25 @@ export const CONFIG = {
       // harder per shell and flies faster and shorter.
       damage: 22,
       damagePerLevel: 7,
+      // AND THE SHELL GOES OFF. A mussel used to be a homing dart that poked
+      // one fish and vanished, which made a full-charge barrage — the loudest,
+      // most expensive thing the strike can buy — a rattle of small numbers
+      // spread over eight targets. Nothing about it read as the payoff for a
+      // full commitment.
+      //
+      // Every shell detonates now. It is the same splash queue every explosive
+      // in the game goes through (main.js), so it breaks wreckage and takes
+      // crew off decks exactly like a pearl or a seagull bomb, and a barrage
+      // laid down the length of a dash is a line of blasts rather than a line
+      // of pinpricks.
+      //
+      // The splash is worth MORE than the direct hit on purpose. A homing
+      // shell almost always finds a body, so the direct damage is the reliable
+      // half and the blast is what the barrage is actually for: the shot that
+      // hits one fish in a school should be felt by the school.
+      splashDamage: 34,
+      splashDamagePerLevel: 12,
+      splashRadius: 4.6,
       speed: 19,
       life: 2.6,
       radius: 0.24,
@@ -12721,6 +12837,20 @@ export const CONFIG = {
       // one entry per passive upgrade that pays out during play, carrying that
       // card's own label. See the other candidates listed on CONFIG.upgrades.
       maneaterProc: { emit: 'procGain', shake: 0,   hitstop: 0,     glow: 0.55, ripple: null,                            sfx: 'procGain', haptic: [{ duration: 18, magnitude: 0.3 }], sfxMinGap: 0.12, toast: 'maneater', toastMinGap: 1 },
+      // THE ENTOURAGE JOINING A PERFECT STRIKE. The same class of event as the
+      // proc above and for the same reason: the companions' damage arrives
+      // inside the burst's own number, which is to say nowhere the player can
+      // see it, and an ability that pays out invisibly is an ability players
+      // report as broken.
+      //
+      // The `toast` is written text rather than an upgrade id — this is not one
+      // card, it is however many of them the run happens to hold — and the
+      // VALUE is the count of bodies that came in, which is the number the
+      // moment is about. No shake and no hitstop of its own: it fires on the
+      // same frame as `strikeBurst`, which already carries both.
+      companionStrike: { emit: 'procGain', shake: 0, hitstop: 0, glow: 0.7, ripple: null,
+                         sfx: 'procGain', haptic: [{ duration: 22, magnitude: 0.4 }], sfxMinGap: 0.12,
+                         toast: 'All hands!', toastMinGap: 0.8 },
       // A man taken off a deck. Light and wet rather than explosive — he is not
       // an enemy and killing him is not an achievement; it should read as
       // something knocked into the sea.
@@ -13425,6 +13555,24 @@ export const CONFIG = {
       // from the player, so it's the sound that carries it, not the rumble.
       seagullDive: { emit: null, shake: 0.02, hitstop: 0, glow: 0.15, sfx: 'seagullDive',
                      haptic: [{ duration: 20, magnitude: 0.3 }], sfxMinGap: 0.08 },
+      // ...AND THE BIRD ARRIVING. This was `bigKill` — the event a creature
+      // DYING fires — which meant a gull that cleared a whole pile of crabs
+      // sounded exactly like one shrimp expiring. It is the biggest thing that
+      // happens on the seabed, it is announced a second in advance by the
+      // stoop above, and it is now the only event that has both a stronger
+      // ripple than the boat and a hitstop, because the whole approach was
+      // built to make the player watch this land.
+      seagullBlast: { emit: 'bigExplosion', goo: 'killGoo', shake: 0.85, hitstop: 0.08, glow: 1.5,
+                      ripple: { strength: 5.5, radius: 26 }, sfx: 'seagullBlast', haptic: [38, 28, 55] },
+      // A MUSSEL GOING OFF. Eight or twenty of these land inside a second, so
+      // it is deliberately the quiet member of the explosion family: the shake
+      // and the ripple are a third of `bigKill`'s and there is NO hitstop at
+      // all. A barrage that stopped the clock once per shell would turn the
+      // loudest moment the strike can buy into a slideshow, and `sfxMinGap`
+      // stops twenty overlapping booms from summing into mud.
+      musselBlast: { emit: 'bigExplosion', shake: 0.22, hitstop: 0, glow: 0.7,
+                     ripple: { strength: 2.4, radius: 11 }, sfx: 'musselBlast',
+                     haptic: [{ duration: 22, magnitude: 0.45 }], sfxMinGap: 0.05 },
       // The body reaching the seabed at the end of the death dive. No hitstop —
       // the whole sequence is already dilated, and stopping the clock inside slow
       // motion does nothing you can see. The shake is the low, soft kind you'd
@@ -16814,6 +16962,14 @@ export const CONFIG = {
 
       bakalarBombDrop:  { src: null, type: 'blip', wave: 'square', freq: [300, 150], decay: 0.18, gain: 0.13, pitchVary: 0.10 },
       bakalarBombBlast: { src: null, type: 'boom', freq: [130, 34], decay: 0.85, gain: 0.38, noise: 0.55, filter: 520, pitchVary: 0.05, filterVary: 0.20 },
+      // The gull landing. Pitched under `bigKill` and given a long decay: it
+      // goes off on the SEABED, and a blast that far down should arrive as a
+      // thud through the floor rather than as a crack in the water.
+      seagullBlast:     { src: null, type: 'boom', freq: [140, 28], decay: 0.78, gain: 0.46, noise: 0.65, filter: 760, pitchVary: 0.08, filterVary: 0.18 },
+      // One shell of a barrage. Short and bright rather than deep — twenty of
+      // these overlap, and anything with a long tail turns the flight into one
+      // continuous rumble with no individual bangs in it.
+      musselBlast:      { src: null, type: 'boom', freq: [260, 60], decay: 0.30, gain: 0.30, noise: 0.60, filter: 1800, pitchVary: 0.14, filterVary: 0.20 },
     },
 
     // ---------------------------------------------------------------------------
@@ -23624,6 +23780,44 @@ export const CONFIG = {
   // before the creatures do.
   render: {
     pixelRatio: 2,
+
+    // GIVING PIXELS BACK, on a machine that cannot afford them.
+    //
+    // The production runs are nearly all one machine class — a 6.0-6.4
+    // megapixel laptop — and on it the loop executes about 6ms of a 19ms
+    // frame. Two thirds of a missed frame with the tab not running at all is
+    // not a CPU problem, and the only thing left to give back is pixels. See
+    // the long note at tickAdaptiveScale in world.js.
+    //
+    // This only ever scales DOWN from whatever `pixelRatio` and the player's
+    // Resolution setting already agreed on. It cannot hand out pixels the
+    // player did not ask for, and off it does nothing at all.
+    adaptive: {
+      enabled: true,
+      // The frame time a frame is allowed to take before it counts as missed.
+      // 18 rather than 16.67: a frame landing a whisker over vsync is normal
+      // and a controller that treats it as failure never stops cutting.
+      targetMs: 18,
+      // Act on the SHARE of recent frames over budget, never the mean — one
+      // 300ms stall in two clean seconds drags any mean over any threshold,
+      // and dropping the whole game's resolution because a boss arrived is the
+      // overreaction this exists to avoid.
+      dropAbove: 0.35,
+      raiseBelow: 0.05,
+      // Asymmetric on purpose: raising the resolution is what makes it slow
+      // again, so pain is acted on in a second and recovery takes five.
+      dropAfter: 2,
+      raiseAfter: 10,
+      step: 0.1,
+      // Below this the rim lights and the grid lines crawl — see the sweep
+      // note on `pixelRatio` above. 0.6 of a 2.0 cap is still 1.2x on a retina
+      // panel, which is well short of ugly and is 36% of the pixels.
+      floor: 0.6,
+      // Every round trip is a visible resolution change. A machine that keeps
+      // failing at a level is left there rather than walked up and down it for
+      // the rest of the run.
+      maxDrops: 4,
+    },
   },
 
   bloom: {
@@ -28924,6 +29118,8 @@ export const TUNER_SCHEMA = [
       { path: 'bakalar.bomb.chumPerKill', min: 0, max: 10, step: 1, label: 'chum per kill' },
       { path: 'bakalar.bomb.chumScatter', min: 0, max: 20, step: 1, label: 'chum scattered regardless' },
       { path: 'bakalar.bomb.chumSpread', min: 0.5, max: 20, step: 0.5, label: 'chum spread' },
+      { path: 'bakalar.bomb.arenaChum', min: 0, max: 40, step: 1, label: 'chum flung arena-wide' },
+      { path: 'bakalar.bomb.arenaChumPerKill', min: 0, max: 6, step: 0.1, label: '...and per kill' },
       { path: 'bakalar.bomb.size', min: 0.1, max: 3, step: 0.02, label: 'bomb size' },
       { path: 'bakalar.bomb.color', type: 'color', label: 'bomb light color' },
       { path: 'bakalar.bomb.blinkSpeed', min: 1, max: 30, step: 0.5, label: 'blink speed' },

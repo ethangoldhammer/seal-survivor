@@ -3,7 +3,7 @@ import { CONFIG } from '../config.js';
 import { spawnProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 import { projectileCount } from '../stats.js';
-import { abilityDamage } from './scaling.js';
+import { abilityDamage, aoe } from './scaling.js';
 import { strikeState, pipCount } from './strike.js';
 
 // MUSSEL BARRAGE — the flight of homing mussels a strike released at or above
@@ -72,10 +72,31 @@ export function barrageShells(level, power, stats = null) {
   return projectileCount(barrageCount(level) + pips, stats);
 }
 
-/** What one shell hits for at this level. */
+/** What one shell hits for at this level, on the body it lands on. */
 export function barrageDamage(level) {
   const c = CONFIG.musselVolley;
   return c.damage + c.damagePerLevel * (Math.max(1, level) - 1);
+}
+
+/**
+ * ...and what the shell does to everything ELSE when it goes off.
+ *
+ * Its own function beside barrageDamage rather than a field read at the launch
+ * because the two are read in different places and mean different things — the
+ * direct hit is what the seeker earned, the blast is what the barrage is
+ * actually for — and because the card text and the harness both need to be
+ * able to ask for the blast without spawning one.
+ *
+ * `radius` goes through aoe() and the damage does not, which is what Splash
+ * Zone has always meant: it widens blasts, it does not make them hit harder.
+ */
+export function barrageSplash(level) {
+  const c = CONFIG.musselVolley;
+  const lv = Math.max(1, level) - 1;
+  return {
+    damage: abilityDamage((c.splashDamage ?? 0) + (c.splashDamagePerLevel ?? 0) * lv),
+    radius: aoe(c.splashRadius ?? 0),
+  };
 }
 
 /**
@@ -171,6 +192,7 @@ export function fireMusselBarrage(scene, power, level, dashDir, originFor, hooks
   // barrageReady above.
   const count = barrageShells(level, power, player.stats);
   const damage = abilityDamage(barrageDamage(level));
+  const splash = barrageSplash(level);
   const heading = Math.atan2(dashDir.y, dashDir.x);
   const gap = shellGap(count, strikeState.dashDuration ?? 0);
 
@@ -194,6 +216,11 @@ export function fireMusselBarrage(scene, power, level, dashDir, originFor, hooks
       dirY: Math.sin(angle),
       speed: c.speed * (1 + (Math.random() * 2 - 1) * c.speedJitter),
       damage,
+      // Snapshotted with the shell, like its damage, rather than re-read when
+      // it lands: a barrage's blast is a property of the release that bought
+      // it, and a level taken mid-flight must not resize a shell already in
+      // the water.
+      splash,
       scene,
       originFor,
       hooks,
@@ -255,6 +282,13 @@ function launch(shell) {
     life: c.life,
     radius: c.radius,
     pierce: 0,
+    splashDamage: shell.splash?.damage ?? 0,
+    splashRadius: shell.splash?.radius ?? 0,
+    // ITS OWN BANG. Without this the blast borrowed `bigKill` — the event a
+    // creature DYING fires — so a barrage read as eight things dying whether
+    // or not anything did, and the loudest moment the strike can buy sounded
+    // like the ordinary one. See CONFIG.feedback.musselBlast.
+    splashFx: 'musselBlast',
     asset: 'missile',
     // Its own source tag, not 'missile': the playtest report has to be able
     // to say whether the barrage earned its pick, and folding it into the

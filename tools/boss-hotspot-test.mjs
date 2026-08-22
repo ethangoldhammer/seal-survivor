@@ -69,7 +69,7 @@ import {
   hotSpotsOf, resetBossHotSpots, perimeterCandidates, liveHotSpotCount,
   hotSpotShells, spotAt, setHotSpotLook, drainHotSpotChum,
 } from '../path/src/systems/bossHotSpots.js';
-import { pipCount } from '../path/src/systems/strike.js';
+import { pipCount, strikeState, updateStrike, resetStrike } from '../path/src/systems/strike.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DT = 1 / 60;
@@ -580,6 +580,119 @@ section('4b. A shot that hits the glow crits, through the real hit test');
       console.log('  --   no sphere centre this roll is clear of every spot');
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+section('4c. A strike aimed into a spot is the one bite a ram has');
+// ---------------------------------------------------------------------------
+// EVERYTHING ABOVE HANDS hotSpotDamage A NUMBER. This section asks whether the
+// strike ever produces one, which for most of the mechanic's life it did not:
+// `contactShare` is 0, so a ram computed dmg = 0, and the crit sits behind an
+// `if (dmg > 0)` — a dash steered dead into a glowing mark on a boss dealt
+// literally nothing and could not even reach the code that would have doubled
+// it. So the assertion here is not "the crit works", it is that the number
+// arriving at the crit is the strike's own damage rather than zero.
+//
+// Driven through updateStrike rather than by calling the arithmetic, because
+// the thing that was broken was the ROUTE, and a harness that re-implements
+// the route cannot see a break in it.
+{
+  const stats = {
+    strikeDamage: CONFIG.strike.damage, hitRadius: 0.6,
+    strikeDashSpeed: 46, strikeDashDuration: 0.22, strikeChargeTime: 1,
+  };
+
+  // Park a dashing seal on top of a chosen point and run one frame of the ram.
+  // `power` 1 is a full bank; `perfect`/`sweet` are the two stamps tryStrike
+  // takes at release, set here directly because what is under test is what a
+  // dash in flight is WORTH, not how it came to be stamped.
+  function ram(e, at, { perfect, sweet }) {
+    resetStrike();
+    strikeState.active = true;
+    strikeState.dashTimeLeft = 1;
+    strikeState.dashDuration = 1;
+    strikeState.dashDir = { x: 1, y: 0 };
+    strikeState.power = 1;
+    strikeState.sweetStrike = sweet;
+    strikeState.perfectStrike = perfect;
+    // A perfect charge OR an on-beat release — the same either/or that arms a
+    // food chain, and the gate the weak-spot bite is hung on.
+    strikeState.armingStrike = perfect || sweet;
+    let dealt = 0;
+    updateStrike(DT, scene, { x: at.x, y: at.y }, stats, [e], {
+      onEnemyDamaged: (_e, d) => { dealt += d; },
+    });
+    return dealt;
+  }
+
+  // A FRESH BOSS PER CASE. A ram fills the spot's rupture pool and shoves the
+  // body, so measuring a second case on the same animal would be measuring a
+  // spot that is part-spent and a boss that has moved.
+  function fresh() {
+    const e = spawnBoss();
+    const owner = lightUp(e);
+    const s = owner.spots[0];
+    return { e, at: { x: s.cwx ?? s.wx, y: s.cwy ?? s.wy } };
+  }
+
+  // THE CONTROL, and it is the behaviour being preserved rather than the bug:
+  // a dash into ordinary flesh must still deal nothing at all. The whole
+  // exception is the spot.
+  {
+    const { e, at } = fresh();
+    const owner = hotSpotsOf(e);
+    const far = hitShapeSpheres(e.hitShape)
+      .map((sp) => ({ x: sp.wx, y: sp.wy }))
+      .find((p) => owner.spots.every((o) => Math.hypot(p.x - (o.cwx ?? o.wx), p.y - (o.cwy ?? o.wy)) > o.r * 2.5));
+    if (far) {
+      check('a perfect ram into bare flesh still deals nothing — the seal is not a weapon',
+        ram(e, far, { perfect: true, sweet: true }) === 0, `${ram(e, far, { perfect: true, sweet: true })}`);
+    } else {
+      console.log('  --   no sphere centre this roll is clear of every spot');
+    }
+  }
+
+  const onBeat = (() => { const { e, at } = fresh(); return ram(e, at, { perfect: false, sweet: true }); })();
+  const perfect = (() => { const { e, at } = fresh(); return ram(e, at, { perfect: true, sweet: true }); })();
+  const chargeOnly = (() => { const { e, at } = fresh(); return ram(e, at, { perfect: true, sweet: false }); })();
+  const neither = (() => { const { e, at } = fresh(); return ram(e, at, { perfect: false, sweet: false }); })();
+
+  const w = CONFIG.strike.weakSpot;
+  // What the route should produce, spelled out from the CSV rather than from a
+  // constant here: strike damage x the full-charge curve x the share x the
+  // perfect multiplier x critMul.
+  const charge = CONFIG.strike.charge.damageMulMax;
+  const want = CONFIG.strike.damage * charge * w.share * CONFIG.hotSpots.critMul;
+
+  check('an on-beat ram into a spot lands the strike\'s whole damage, critted',
+    Math.abs(onBeat - want) < 1e-6, `${onBeat.toFixed(1)} vs ${want.toFixed(1)}`);
+  check('...and it is not zero, which is what a ram was worth before this',
+    onBeat > 0, `${onBeat.toFixed(1)}`);
+  check('a PERFECT charge multiplies it',
+    Math.abs(perfect - want * w.perfectMul) < 1e-6,
+    `${perfect.toFixed(1)} vs ${(want * w.perfectMul).toFixed(1)} (x${w.perfectMul})`);
+  // The point of the arming gate, and the frustration it removes: a full bar
+  // steered into the mark pays whatever the release timing did.
+  check('a perfect charge released OFF the beat still bites — the bank is enough',
+    Math.abs(chargeOnly - want * w.perfectMul) < 1e-6,
+    `${chargeOnly.toFixed(1)}`);
+  check('...but a mistimed release with nothing banked is still just a shove',
+    neither === 0, `${neither}`);
+
+  // MASSIVE, MEASURED AGAINST THE FIGHT rather than against itself. The number
+  // a player is asking for when they aim a strike at a weak spot is one they
+  // can see land on the bar, and the two things it has to beat are the whole
+  // release burst (what the strike is worth when it is NOT aimed at a spot)
+  // and the pool that ruptures one.
+  {
+    const burst = CONFIG.strike.damage * charge; // strikeBurst at full charge, no chain
+    console.log(`  --   a perfect weak-spot ram is ${perfect.toFixed(0)} against a `
+      + `${burst.toFixed(0)} release burst and a ${(1500 * CONFIG.hotSpots.ruptureFraction).toFixed(0)}-odd rupture pool`);
+    check('a perfect weak-spot ram is worth several unaimed strikes',
+      perfect > burst * 3, `x${(perfect / burst).toFixed(1)} the burst`);
+  }
+
+  resetStrike();
 }
 
 // ---------------------------------------------------------------------------

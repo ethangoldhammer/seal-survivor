@@ -46,6 +46,7 @@ import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow, clubHitFx, clubTrailMovers } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
+import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
 import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
@@ -1132,6 +1133,11 @@ function restartRun() {
 }
 
 function startGame() {
+  // Back to the resolution the player asked for. A run that ended on a machine
+  // mid-struggle must not hand the next one a cut it never earned — and the
+  // next run may be a different window size, a different scene, or simply the
+  // player having closed whatever else was eating the GPU.
+  world.resetAdaptiveScale();
   // The menu is gone, and with it the scene it was drawing: the particle system
   // goes back to the arena here, the seal's rim comes off the bust. FIRST in
   // this function, because everything below is the run being built and the
@@ -1606,9 +1612,14 @@ function killPlayer() {
   const perfRecord = {
     perf: perfSummary(),
     render: {
-      draws: world.renderer.info.render.calls,
+      draws: drawsLastFrame,
       mpix: +((world.renderer.domElement.width * world.renderer.domElement.height) / 1e6).toFixed(2),
       scale: +world.renderer.getPixelRatio().toFixed(2),
+      // What the adaptive controller settled on. A run that spent its life at
+      // 0.6 is a machine that could not hold the frame rate at any point, and
+      // that is a different reading of the same frame times than a run that
+      // never dropped at all.
+      autoScale: +world.adaptiveScale().toFixed(2),
       enemies: enemies.length,
     },
   };
@@ -2219,6 +2230,10 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at = null) {
       radius: projectile.splashRadius,
       exclude: e,
       source: projectile.source ?? 'splash',
+      // The shot's own bang, if it brought one. Everything that doesn't falls
+      // through to `bigKill` in processPendingSplashes, which is where every
+      // splash in the game used to land whether or not anything died.
+      feedback: projectile.splashFx ?? undefined,
     });
   }
 }
@@ -2275,7 +2290,21 @@ function processPendingSplashes() {
     // fired `lightningStrike` the moment the bolt was drawn; stacking bigKill
     // on top of it doubles the shake and adds the hit-stop that entry
     // deliberately does not have.
-    if (s.feedback !== false) feedback('bigKill', { x: s.x, y: s.y, scale: 1.3 });
+    //
+    // A STRING NAMES ITS OWN EVENT instead, which is the middle case the
+    // false/undefined pair never had: a mussel going off is neither silent nor
+    // a creature dying, and borrowing `bigKill` told the player eight things
+    // had died every time a barrage landed. See the note on `splashFx` in
+    // entities/projectiles.js.
+    //
+    // The name is hoisted rather than written inline, and that is not style:
+    // the feedback audit in tools/upgrade-test.mjs finds every event the source
+    // fires by scanning for a literal inside a feedback() call, and a ternary
+    // in the argument slot hands it whichever string it saw first.
+    if (s.feedback !== false) {
+      const blastFx = typeof s.feedback === 'string' ? s.feedback : 'bigKill';
+      feedback(blastFx, { x: s.x, y: s.y, scale: s.feedbackScale ?? 1.3 });
+    }
   }
   pendingSplashes.length = 0;
 
@@ -3486,6 +3515,12 @@ function launchClubThrow(power) {
       },
     },
     { boom: player.stats.clubBoomLevel, ice: player.stats.clubIceLevel },
+    // A PERFECT CHARGE HURLS THE RING AS WELL. `perfectStrike` and not
+    // `perfect` — the latch is cleared by the release, and what a payoff has
+    // to read is the dash IN FLIGHT, which is exactly the distinction the note
+    // on strikeState.perfect draws. See disarmClubs in systems/club.js for why
+    // the orbiters are the perfect release's to spend and nobody else's.
+    { perfect: strikeState.perfectStrike },
   );
 }
 
@@ -3975,6 +4010,10 @@ function updateChumChunkSpawns(dt) {
 const CROWD_MARK = 100;
 const SWARM_MARK = 60;
 
+// The whole of last frame's draw calls, summed across every pass post.js
+// made. Read at the top of the frame before anything resets it.
+let drawsLastFrame = 0;
+
 let lastTime = performance.now();
 
 function animate(now) {
@@ -3983,7 +4022,14 @@ function animate(now) {
   // autoReset off (see world.js), so these have accumulated across every pass
   // post.js made — the scene, the bright pass, the blur ping-pong and the
   // composite — rather than reporting only the last one.
-  const drawsLastFrame = world.renderer.info.render.calls;
+  // Module-scoped rather than local, because it was a local and therefore
+  // dead: nothing read it, and the run record built its `draws` field from
+  // `info.render.calls` at DEATH instead — which is mid-frame, after post.js
+  // has already zeroed and re-filled the counter for one of its dozen passes.
+  // Every run on disk recorded `draws: 1`, the composite's single fullscreen
+  // triangle, and `npm run perf` printed it as fact. See the autoReset note in
+  // world.js; this is exactly the trap it warns about.
+  drawsLastFrame = world.renderer.info.render.calls;
   world.renderer.info.reset();
 
   // Handed the STAMP, not rawDt, and deliberately before the clamp below —
@@ -4033,6 +4079,14 @@ function animate(now) {
     if (enemies.length >= CROWD_MARK) perfMark('crowd');
     if (projectiles.length >= SWARM_MARK) perfMark('swarm');
   }
+
+  // GIVE PIXELS BACK IF THIS MACHINE IS DROWNING IN THEM. Fed the unclamped
+  // wall time, same as the recorder, and gated on the run actually being live:
+  // a menu, a loading screen or a tab returning from the background all
+  // produce frames the GPU had nothing to do with, and reading those as the
+  // machine struggling would cut the resolution of a game that is running
+  // perfectly well. See tickAdaptiveScale in world.js.
+  world.tickAdaptiveScale(stamp - lastTime, gameState.running && !gameState.paused);
 
   // THE WHOLE FRAME'S JS, wrapping every phase below rather than sitting
   // beside them. The leaf phases cannot tell untimed work from the tab not
@@ -4438,8 +4492,15 @@ function animate(now) {
       // this fires from inside a loop over `enemies`, so removing OTHER
       // entries right now would shift the array under the running loop.
       onImpact: (x, y, damage, radius) => {
-        pendingSplashes.push({ x, y, damage, radius, exclude: null, source: 'seagull' });
-        feedback('bigKill', { x, y, scale: 1.1 });
+        // `feedback: false` on the splash and the event fired here instead, so
+        // one arrival is announced ONCE. It used to be announced twice — a
+        // `bigKill` from this hook and a second `bigKill` from the splash queue
+        // resolving the same blast a few lines later — which doubled the shake
+        // and stacked two hit-stops on the same frame.
+        pendingSplashes.push({ x, y, damage, radius, exclude: null, source: 'seagull', feedback: false });
+        // Sized off the blast it actually made, so a run under Splash Zone
+        // reads as big as it hits.
+        feedback('seagullBlast', { x, y, scale: Math.min(2.2, 0.8 + radius / 10) });
       },
     });
 
@@ -4667,7 +4728,24 @@ function animate(now) {
         // carried them — which is the whole promise of the mechanic.
         {
           const burst = strikeBurst(player.stats);
+          // THE ENTOURAGE, ON A PERFECT RELEASE ONLY. Folded into the burst
+          // rather than spawned as separate hits at each companion, because the
+          // companions are scattered across the arena and six numbers in six
+          // places is not a read — see systems/companionStrike.js. Zero on any
+          // release that wasn't perfect, and zero for a run with no companions,
+          // so the ordinary strike is untouched.
+          //
+          // Measured against `burst.damage` for its ceiling and added AFTER, so
+          // the cap is on the bonus and the strike's own damage is never capped
+          // by a rule about its friends.
+          //
+          // Asked INSIDE the gate, not before it: strikeBurst() returns zero
+          // damage for a release off the beat, and a companion share measured
+          // against a zero strike has no ceiling to be capped by. The
+          // companions join a strike that BIT; they do not carry one that
+          // missed.
           if (burst.damage > 0 && burst.radius > 0) {
+            const lent = companionStrikeBonus(player.stats, strikeState.perfectStrike, burst.damage);
             const bx = player.mesh.position.x;
             const by = player.mesh.position.y;
             pendingSplashes.push({
@@ -4676,7 +4754,12 @@ function animate(now) {
               // only, not radius: reach is what the player is aiming with, and
               // a blast that silently grew every time they were high up would
               // make the one number they aim by unpredictable.
-              damage: burst.damage * airDamageMul(),
+              //
+              // The companions' share rides it too: they hit on the same frame
+              // and through the same blast, and a bonus that ignored air time
+              // would make a breach strike quietly worse the more friends you
+              // had.
+              damage: (burst.damage + lent) * airDamageMul(),
               radius: burst.radius,
               exclude: null,
               source: 'strike',
@@ -4687,8 +4770,24 @@ function animate(now) {
             });
             feedback('strikeBurst', {
               x: bx, y: by,
-              scale: 0.6 + strikeState.power * 0.9,
+              // Bigger when the entourage came in, and sized off what they
+              // actually lent rather than off how many there are: a blast that
+              // hits three times as hard has to LOOK like it, and a run with
+              // one escort should not get the same flash as a run with nine
+              // bodies behind it.
+              scale: (0.6 + strikeState.power * 0.9) * (1 + Math.min(1, lent / Math.max(1, burst.damage)) * 0.5),
             });
+            // AND IT SAYS SO. An invisible passive is an invisible passive —
+            // the companions' damage arrives inside a number the player never
+            // sees, so without this the card is a strictly better strike with
+            // nothing on screen to explain why. See CONFIG.feedback for the
+            // toast channel.
+            if (lent > 0) {
+              feedback('companionStrike', {
+                x: bx, y: by,
+                toastValue: companionStrikeCount(player.stats),
+              });
+            }
             // Bodies caught in it are thrown OUTWARD, which is the difference
             // between a detonation and damage happening in a circle. Separate
             // from the ram's shove, which runs along the dash instead.
@@ -5766,6 +5865,10 @@ function animate(now) {
       level: gameState.level,
       score: gameState.score,
       alive: enemies.length,
+      // Alongside `alive`, because the question the buckets exist to answer is
+      // whether the cost grows with the CROWD — and a draw count sampled only
+      // at death cannot be plotted against anything.
+      draws: drawsLastFrame,
     });
 
     // rawDt, not dt: the hp/air gauges are the player's read-out and must not
@@ -6660,7 +6763,7 @@ function animate(now) {
   const pw = perfWindow();
   perfPhase('camera', performance.now() - _tcamera);
   setTunerMeta(
-    `${Math.round(1 / Math.max(realDt, 0.0001))} fps · worst ${pw.worstMs.toFixed(0)}ms · ${pw.hitches} drops · ${info.calls} draws · ${mpix.toFixed(1)} Mpix · ${enemies.length} enemies · ${projectiles.length} shots · ${particleCount()} bits · ${flightVoiceCount()} voices`
+    `${Math.round(1 / Math.max(realDt, 0.0001))} fps · worst ${pw.worstMs.toFixed(0)}ms · ${pw.hitches} drops · ${info.calls} draws · ${mpix.toFixed(1)} Mpix${world.adaptiveScale() < 1 ? ` (auto ${world.adaptiveScale().toFixed(1)}x)` : ''} · ${enemies.length} enemies · ${projectiles.length} shots · ${particleCount()} bits · ${flightVoiceCount()} voices`
   );
   const _trender = performance.now();
   post.render(world.scene, world.camera, realDt);

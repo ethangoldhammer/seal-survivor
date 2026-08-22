@@ -50,8 +50,8 @@ razorClam.pierceMax,9,0,30,razor clam pierce ceiling
 seagullBomb.baseFireRate,2.3,0.5,10,seagull seconds between runs at level 1
 seagullBomb.fireRatePerLevel,0.85,0.5,1,seagull fire rate mult per level
 seagullBomb.damage,87,1,150,seagull direct hit damage
-seagullBomb.splashDamage,41,0,80,seagull splash damage
-seagullBomb.splashRadius,6.2,0.5,10,seagull splash radius
+seagullBomb.splashDamage,96,0,200,seagull splash damage — the run IS the blast; the direct hit is only whichever crab happened to be under it
+seagullBomb.splashRadius,12,0.5,20,seagull splash radius — wide enough to clear the whole pile it dived on, not just its centre
 eel.fireRate,2,0.2,4,eel seconds between zaps
 eel.baseDamage,32,1,80,eel damage per hop
 eel.damagePerLevel,7,0,30,eel damage per level
@@ -165,6 +165,11 @@ clubIce.freezeFor,1,0,5,cold snap freeze on saturation
 clubIce.freezeForPerLevel,0.2,0,1,cold snap freeze per level
 strike.damage,40,1,200,strike nominal damage — what Bone Shrapnel and Glow Up! measure against
 strike.cardDamage,5,0,30,strike damage added per strike-family card
+strike.weakSpot.share,1,0,3,"strike: how much of the strike's full damage a RAM lands on a boss WEAK SPOT — the one place contactShare does not apply. 0 turns the mechanic off and gives the dash back to the shove; 1 means aiming a dash into the mark is worth a whole strike, before critMul"
+strike.companionStack.enabled,1,,,"perfect strike: the companions hit with you. Off, and a perfect charge is worth only the weak-spot multiplier below — which is what it was worth before this existed"
+strike.companionStack.share,0.25,0,1,"perfect strike: what share of its OWN hit each companion lends to the release burst. Summed over bodies not cards — three orcas and six escorts is nine contributions — so this is well under 1 on purpose"
+strike.companionStack.maxMul,2,0,6,"perfect strike: the ceiling on that bonus, in strike-damages. 2 = the companions may at most triple a perfect strike. 0 removes the cap, which makes a late companion build unbounded relative to the strike it is scaling"
+strike.weakSpot.perfectMul,2,1,6,"strike: what a PERFECT CHARGE multiplies that weak-spot bite by — the first thing the perfect latch has ever bought. On the beat without a perfect charge still bites, at 1x. At 2 a perfect full-charge ram is ~390 after hotSpots.critMul, about one rupture pool on a first boss"
 strike.chainDamageMul,1.11,1,1.5,strike food-chain damage mult per link — COMPOUNDS over links AND over Killer Instinct stacks
 strike.chainWindow,2.2,0.4,4,food chain: seconds without a mouthful before the chain lapses. THE number that decides whether a chain can be kept up — at 1.1 a link needed a strike every 1.5s (npm run sim:chain)
 strike.charge.perfectAt,1,0.5,1,perfect charge: the fraction of a full bank that counts as perfectly loaded. The meter pops here and mechanics will be hung off it — below 1 the top of the bar becomes a window a player can hit early rather than a ceiling they hold against

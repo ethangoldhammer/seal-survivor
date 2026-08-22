@@ -3,7 +3,7 @@ import { removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { applyElementalHit } from './elements.js';
 import { markTarget } from './marks.js';
 import { hitCreature } from './hitShape.js';
-import { hotSpotDamage } from './bossHotSpots.js';
+import { hotSpotDamage, hotSpotUnder } from './bossHotSpots.js';
 import { noteChain, tickChainTrace } from './chainTrace.js';
 
 // Where the dash last connected on a body. Shared and consumed immediately —
@@ -69,19 +69,20 @@ export const strikeState = {
   flash: 0,        // >0 = the bar is flashing, just spent (see strikeRing.js)
   // THE PERFECT CHARGE — the wind-up fully banked, `perfectAt` of the bar.
   //
-  // Today this is a READOUT and nothing else: the meter's core pops on the
-  // frame it lands (systems/strikeRing.js) so the moment has a shape the
-  // player can learn, and `perfectCrossed()` below hands the edge to main.js
-  // for the sound and the shake. NOTHING IN THE DASH READS IT YET — power is
-  // still a continuous 0..1 and a perfect strike is exactly as strong as the
-  // arithmetic says. That is deliberate: the tell ships first so the timing is
-  // already familiar by the time it buys anything.
+  // The tell shipped first and on purpose: the meter's core pops on the frame
+  // it lands (systems/strikeRing.js), `perfectCrossed()` below hands the edge
+  // to main.js for the sound and the shake, and for a long while that was ALL
+  // of it — power stayed a continuous 0..1 and a perfect strike was exactly as
+  // strong as the arithmetic said. By the time it bought anything the timing
+  // was already familiar.
   //
-  // WHERE THE MECHANIC GOES. `perfect` is a latch that survives until the
-  // power is spent or thrown away, so a payoff can read it in tryStrike (a
-  // damage or reach bonus, a free link, a wider gulp) without caring which
-  // frame it landed on. `perfectAt` is in weapons.csv because the moment it
-  // pays for anything it is a balance number, not a look.
+  // WHAT IT BUYS NOW. A ram that lands on a boss's WEAK SPOT deals the strike's
+  // whole damage there — nothing anywhere else on the body — and a perfect
+  // charge multiplies it (CONFIG.strike.weakSpot.perfectMul). `perfect` is a
+  // latch that survives until the power is spent or thrown away, so the payoff
+  // reads the stamp tryStrike takes rather than caring which frame it landed
+  // on; see `perfectStrike` below. `perfectAt` is in weapons.csv because the
+  // moment it pays for anything it is a balance number, not a look.
   perfect: false,  // the wind-up reached a full bank, and hasn't been spent
   perfectFlash: 0, // seconds left of the pop that announced it
   perfectStrike: false, // ...and whether the dash IN FLIGHT was bought with one
@@ -1584,8 +1585,9 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // scoring its own link, the depth this reads is whatever the FOOD is
       // paying for, and an expired chain has to count as no chain.
       const mul = chainDamageMul(stats);
-      // A ram deals nothing at the shipped `contactShare` of 0 — the strike's
-      // damage went off where it was released. The flash and the pop still
+      // A ram deals nothing to ORDINARY FLESH at the shipped `contactShare` of
+      // 0 — the strike's damage went off where it was released, and the one
+      // exception is the weak spot below. The flash and the pop still
       // fire: something the size of a seal just hit this creature at dash
       // speed, and a body that visibly gets knocked across the screen without
       // so much as flinching reads as a missed collision rather than as a
@@ -1626,12 +1628,39 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
         dmg = Math.max(dmg, e.hp);
       }
 
-      // A WEAK SPOT, IF THE RAM FOUND ONE. Before the subtraction, so
-      // everything downstream — the death check, the hook, the ledger — agrees
-      // about what this dash was worth. A ram is aimed (the player chose where
-      // to point a seal travelling at dash speed), which is the whole test for
-      // whether a source may crit. Returns `dmg` untouched for anything that
-      // is not a boss wearing a spot, the prey cull's minnows included.
+      // ---- A WEAK SPOT, IF THE RAM FOUND ONE -----------------------------
+      //
+      // THE ONE THING A RAM IS A WEAPON AGAINST. Everywhere else on the animal
+      // `contactShare` is 0 and a dash is a shove; on a lit spot it lands the
+      // strike's whole damage, and a PERFECT charge multiplies it. See
+      // CONFIG.strike.weakSpot for why the exception is exactly here and
+      // nowhere wider.
+      //
+      // Asked with the SAME probe the crit below uses, through the same
+      // function, because these are one question: what this dash commits to
+      // and what it is then multiplied by must never be able to disagree about
+      // where the spot is.
+      //
+      // `armingStrike` and not `sweet`: a perfect charge is enough on its own,
+      // the same either/or that arms a food chain. So a player who banked a
+      // full bar and steered it into the mark is paid whatever their release
+      // timing did.
+      const spot = hotSpotUnder(e, strikeContact, playerPos);
+      const weak = CONFIG.strike.weakSpot ?? {};
+      if (spot && strikeState.armingStrike && weak.enabled !== false) {
+        // max() rather than a replacement, so a run that HAS bought the ram a
+        // contact share never loses damage by aiming well.
+        dmg = Math.max(dmg, stats.strikeDamage * powerDamageMul() * mul
+          * (weak.share ?? 1)
+          * (strikeState.perfectStrike ? (weak.perfectMul ?? 1) : 1));
+      }
+
+      // Before the subtraction, so everything downstream — the death check,
+      // the hook, the ledger — agrees about what this dash was worth. A ram is
+      // aimed (the player chose where to point a seal travelling at dash
+      // speed), which is the whole test for whether a source may crit. Returns
+      // `dmg` untouched for anything that is not a boss wearing a spot, the
+      // prey cull's minnows included.
       if (dmg > 0) dmg = hotSpotDamage(e, strikeContact, dmg, playerPos);
 
       if (dmg > 0) e.hp -= dmg;

@@ -1471,6 +1471,54 @@ section('THE RING — everything past the second club orbits you');
   check('...and leaves the ring alone', clubsOrbiting() === ringBefore,
     `${ringBefore} -> ${clubsOrbiting()} orbiting`);
 
+  // ...UNLESS THE CHARGE WAS PERFECT, which is the exception the whole ring
+  // now hangs off. Checked against clubsRingArmed() and not clubsOrbiting():
+  // the SOCKETS stay (the ring's spacing is built off them, so it must not
+  // close up while a club is in the air) and what empties is what is in them.
+  {
+    const { clubsRingArmed } = await import('../path/src/systems/club.js');
+    freshRun();
+    const rigP = rigWithFins(2);
+    swing(0.3, { level: 1, ice: 4, throwLevel: 1, rig: rigP, velocity: { x: 9, y: 0 } });
+    const ringArmed = clubsRingArmed();
+    const sockets = clubsOrbiting();
+    check('the ring has clubs to give', ringArmed > 0, `${ringArmed} armed of ${sockets} socket(s)`);
+
+    const plain = fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, () => playerPos.clone(), {}, {}, {});
+    check('an ordinary release still leaves them there', clubsRingArmed() === ringArmed,
+      `${ringArmed} -> ${clubsRingArmed()} armed`);
+
+    freshRun();
+    const rigQ = rigWithFins(2);
+    swing(0.3, { level: 1, ice: 4, throwLevel: 1, rig: rigQ, velocity: { x: 9, y: 0 } });
+    const armed2 = clubsRingArmed();
+    const perfect = fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, () => playerPos.clone(), {}, {},
+      { perfect: true });
+    check('a PERFECT release hurls the ring', clubsRingArmed() === 0,
+      `${armed2} -> ${clubsRingArmed()} armed`);
+    check('...without collapsing the ring\'s spacing', clubsOrbiting() === sockets,
+      `${sockets} socket(s) still on the ring`);
+    check('...and every one of them is a club in the water',
+      perfect === plain + armed2, `${plain} ordinary + ${armed2} ring = ${perfect} thrown`);
+
+    // AND IT IS SPENT. The Hurler's own cost gate already refuses a second
+    // release while a fin is waiting on its club, so a perfect one inside the
+    // window throws nothing at all — the ring cannot be re-thrown before it
+    // comes back, which is what stops a perfect charge being free.
+    const again = fireClubThrow(scene, 1, 1, 1, { x: 20, y: 0 }, () => playerPos.clone(), {}, {},
+      { perfect: true });
+    check('a second perfect release inside the window is refused outright', again === 0,
+      `${again} thrown while the sockets recover`);
+
+    // ...and it comes back, on the same clock a fin club does.
+    for (let i = 0; i < Math.ceil((CONFIG.club.respawnTime + 0.1) / dt); i++) {
+      updateClub(dt, scene, playerPos, { club: 1, ice: 4, throw: 1 }, enemies,
+        { rig: rigQ, velocity: { x: 0, y: 0 } }, {});
+    }
+    check('the ring refills after the cooldown', clubsRingArmed() === armed2,
+      `${clubsRingArmed()} of ${armed2} back after ${CONFIG.club.respawnTime}s`);
+  }
+
   // --- Clone Warz and Entourage --------------------------------------------
   //
   // Both add to the ring, and both are spent ONCE for the whole ring rather

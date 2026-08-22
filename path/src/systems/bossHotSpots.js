@@ -1025,6 +1025,25 @@ export function releaseHotSpots(e) {
 // ---------------------------------------------------------------------------
 
 /**
+ * WHETHER A HIT WOULD CRIT, asked without dealing any damage.
+ *
+ * The caller that needs this is the strike (systems/strike.js): a dash deals
+ * nothing to ordinary flesh and its full bite to a weak spot, so "is there a
+ * spot under this contact" has to be answerable one line BEFORE the damage
+ * exists. Everything else asks the question and pays for it in the same call.
+ *
+ * hotSpotDamage is built on this rather than beside it, and that is the whole
+ * point of it being a function. Two copies of "which spot is under this
+ * contact" — one deciding what a strike commits to, one deciding whether it
+ * crits — is the failure that has already happened once in this codebase with
+ * the crab's claw: a reach retuned at one end, both ends still passing their
+ * own tests, and a weapon that silently stopped connecting. One reach, asked
+ * twice.
+ *
+ * @returns the spot, or null for every creature in the game that is not a boss
+ *          wearing a lit one.
+ */
+/**
  * Did this hit land on a weak spot, and what is the damage worth?
  *
  * Called by the damage sources that AIM — bullets, the club's swing, the
@@ -1041,10 +1060,10 @@ export function releaseHotSpots(e) {
  *                      hit missed every spot, which is every hit on every
  *                      creature in the game that is not a boss.
  */
-export function hotSpotDamage(e, at, dmg, where = null) {
-  if (!at || !(dmg > 0)) return dmg;
+export function hotSpotUnder(e, at, where = null) {
+  if (!at) return null;
   const owner = owners.get(e);
-  if (!owner || !owner.placed) return dmg;
+  if (!owner || !owner.placed) return null;
 
   // `where` is the caller's own position for the thing that did the damage,
   // when it has one. It is NOT better than the contact and must not be treated
@@ -1054,7 +1073,12 @@ export function hotSpotDamage(e, at, dmg, where = null) {
   // because a swept weapon's own position is the more stable of the two when
   // the contact gets attributed to a neighbouring sphere.
   const probe = where ?? at;
-  const spot = spotAt(owner, probe.x, probe.y);
+  return spotAt(owner, probe.x, probe.y);
+}
+
+export function hotSpotDamage(e, at, dmg, where = null) {
+  if (!at || !(dmg > 0)) return dmg;
+  const spot = hotSpotUnder(e, at, where);
   if (!spot) return dmg;
 
   const c = cfg();
