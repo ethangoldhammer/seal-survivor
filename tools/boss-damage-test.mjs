@@ -148,12 +148,20 @@ section('AN AIMED ATTACK STILL LANDS THROUGH THE CHEWING');
   resetBossDamageCap();
   let chewed = 0;
   for (let f = 0; f < FPS; f++) chewed += capBossDamage(raw * DT, 'bossShark', HP, f * DT, 'contact');
-  const shell = capBossDamage(40, 'boss:boatRain', HP, (FPS - 1) * DT, 'attack');
+  const AIMED = 40;
+  const shell = capBossDamage(AIMED, 'boss:boatRain', HP, (FPS - 1) * DT, 'attack');
   check('a shell lands while the player is being chewed on',
-    shell > 0, `${shell.toFixed(1)} of 40 offered, after ${chewed.toFixed(1)} of contact that second`);
+    shell > 0, `${shell.toFixed(1)} of ${AIMED} offered, after ${chewed.toFixed(1)} of contact that second`);
+  // AGAINST WHICHEVER IS SMALLER, the ceiling or the offer. The per-hit
+  // ceiling is a share of the player's bar, so it moves with player.maxHp —
+  // and an attack aimed for less than that ceiling is not being clipped at
+  // all, it is landing in full. Comparing the landed damage against a bare
+  // `HP * cap.perHit` turns a RAISE to maxHp into a failure here, which is a
+  // test reporting the shell as throttled at the moment it stopped being
+  // throttled. Same idiom as the bite DPS below.
   check('...and it is most of what was aimed, not a token',
-    shell >= HP * cap.perHit - 1e-6,
-    `${shell.toFixed(1)}, per-hit ceiling ${(HP * cap.perHit).toFixed(1)}`);
+    shell >= Math.min(AIMED, HP * cap.perHit) - 1e-6,
+    `${shell.toFixed(1)} of ${AIMED} aimed, per-hit ceiling ${(HP * cap.perHit).toFixed(1)}`);
   const room = HP * cap.perSecond - HP * cap.contactPerSecond;
   check('the fight keeps at least half the bar per second for aimed damage',
     room >= HP * 0.5, `${room.toFixed(1)} of the ${(HP * cap.perSecond).toFixed(1)} budget`);

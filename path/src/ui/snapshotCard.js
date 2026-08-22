@@ -419,21 +419,23 @@ export function settleSnapshotCard(canvas) {
  * `display: none` coming off looks like — it re-sizes the drawing surface from
  * `getBoundingClientRect()`.
  *
- * On the score screen that transition is the FLIP. ui/cardFlip.js swaps the two
- * faces at the halfway point of the turn, on purpose and for the pad's sake, so
- * the frame the front face comes back is a frame on which the card is about
- * seventy-five degrees over. The rect Rive reads there is the card's projection
- * — the same trap the worn edge fell into, see sizeCard in ui.js — so every
- * print in the fan is handed a surface a quarter of its width and, through the
- * perspective, half again its height. Then it stops: Rive only re-measures on
- * the NEXT display toggle, so the card stays wrong until it is turned over and
- * back again, which is the report this fixes.
+ * On the score screen that transition happens on every death: every print is
+ * built while the menu is still hidden and un-hidden with it. The rect Rive
+ * reads on that frame is a PROJECTION — the card arrives through a reveal that
+ * scales it, the same trap the worn edge fell into, see sizeCard in ui.js — so
+ * a print is handed a surface a fraction of the size it was built at. Then it
+ * stops: Rive only re-measures on the NEXT display toggle, so it stays wrong
+ * for as long as the screen is up, which is the report this fixes.
+ *
+ * (It used to be the card's FLIP that produced the bad rect, at the halfway
+ * point of the turn where the card is seventy-five degrees over. The score card
+ * has one face now; the repair outlived the turn because the display toggle
+ * did.)
  *
  * NOTHING IS MEASURED HERE, deliberately. The obvious repair is to call Rive's
  * own `resizeDrawingSurfaceToCanvas()` once the card is square, and it is
- * wrong for this card: the prints sit in a fan, each one under a rotation of
- * its own and the selected one under a scale, so their rects are projections
- * even at rest. The size a card was BUILT at is the only honest answer, and it
+ * wrong for this card: the picked print sits under a scale of its own, so its
+ * rect is a projection even at rest. The size a card was BUILT at is the only honest answer, and it
  * is already known.
  *
  * Idempotent, and free when nothing has moved.

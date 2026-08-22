@@ -7,6 +7,7 @@ import { bounds, clampBelowSurface, seabedTopY, SEABED_Z, WATER_FILL_Z } from '.
 import { shore, shoreOverscan } from '../systems/wallRocks.js';
 import { nearestFloorPickup, bestChumTarget, refreshChumPiles, pickupAlive, bitePickup } from './pickups.js';
 import { deathState } from '../systems/deathDive.js';
+import { graveKeepOut, graveHasLanded } from '../systems/gravesite.js';
 import { skyLight } from '../systems/daylight.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createHeadLook } from '../systems/headLook.js';
@@ -1266,7 +1267,12 @@ const BEHAVIORS = {
     // They stop STEERING at `settleRange` and coast: past that point the
     // contacts own the arrangement, and crabs still driving at a single point
     // underneath each other would fight the collision response forever.
-    if (g.corpse && deathState.active) {
+    // ...UNTIL THE STONE IS DOWN. A headstone lands on exactly the spot they
+    // are heaped on (systems/gravesite.js), throws them off it, and the last
+    // thing the player watches is the name being cut — which was being cut
+    // behind a crab that had walked straight back on. The pile is the death;
+    // the grave is what comes after it, and they do not overlap.
+    if (g.corpse && deathState.active && !graveHasLanded()) {
       e.chumTarget = null;
       e.eating = false;
       if (ctx.dist > e.radius * (g.corpse.settleRange ?? 1.6)) {
@@ -1278,6 +1284,26 @@ const BEHAVIORS = {
       return;
     }
 
+    // KEEP OFF THE GRAVE. Above the wander and the feeding and below the
+    // player: a crab with nothing to do walks out of the stone's footprint and
+    // stays out, and a crab coming for YOU ignores it — see the note on
+    // CONFIG.gravesite.keepOut for why that asymmetry is deliberate rather than
+    // an oversight. Nothing here reads the death dive: a stone stands on this
+    // floor for every run after the one that earned it, and this is as true on
+    // minute one of the next run as it is thirty seconds after a death.
+    // TWO RADII, and the wider one is not decoration. With a single edge a crab
+    // walks out, is released the moment it crosses it, wanders half a step back
+    // in on its next roll and is pushed out again — it paces the boundary of
+    // the exclusion for as long as it is down there, which reads worse than the
+    // heap it replaced. Once it is leaving it keeps going until it is `clear`
+    // of the stone, and only then goes back to being a crab.
+    const ko = CONFIG.gravesite?.keepOut ?? {};
+    const shy = ko.radius ?? 5;
+    const off = ko.enabled === false
+      ? null
+      : graveKeepOut(e.mesh.position.x, e.graveShy ? shy * (ko.clear ?? 1.5) : shy);
+    e.graveShy = off != null;
+
     // The player getting close to the seabed is a distinct trigger from
     // ordinary proximity — crabs "rush" with a wider aggro radius and a
     // burst of speed, rather than just noticing you a little sooner.
@@ -1285,7 +1311,33 @@ const BEHAVIORS = {
     const aggro = rushing ? (g.rushAggroRadius ?? 999) : (g.aggroRadius ?? 14);
     const speedMul = rushing ? (g.rushSpeedMul ?? 1.8) : 1;
 
-    if (ctx.dist < aggro) {
+    // OUT FROM UNDER THE STONE. Above the feeding and the wander, and above the
+    // player too — but only a DEAD one. A living player outranks a headstone:
+    // otherwise someone stood on a grave could not be reached and a decoration
+    // would have quietly become a mechanic. A corpse is not something to come
+    // for, and by this point it has a stone standing on it.
+    //
+    // The shortest way off, and a crab standing exactly on the middle picks a
+    // side rather than freezing — the sign of nothing is not a direction.
+    // WHETHER THE SEAL IS STILL WORTH WALKING AT. A living one inside the aggro
+    // radius always is. A dead one stops being one the moment its headstone is
+    // on the bed: the pile is over (see the corpse branch above), and without
+    // this the crabs walk out of the keep-out, are picked straight back up by
+    // the corpse's own aggro — which is arena-wide while the body is on the
+    // floor — and pace the boundary of the exclusion for the rest of the
+    // sequence, which reads worse than the heap did.
+    const chasing = ctx.dist < aggro
+      && !(deathState.active && !!g.corpse && graveHasLanded());
+
+    if (off != null && !chasing) {
+      e.chumTarget = null;
+      e.eating = false;
+      const away = off === 0 ? (e.orbitDir ?? 1) : Math.sign(off);
+      steerTo(e, away, 0, dt, 6, ko.speedMul ?? 1.5);
+      return;
+    }
+
+    if (chasing) {
       // You outrank the food. The orb keeps whatever damage it has taken —
       // an interrupted pile stays visibly chewed rather than healing back.
       e.chumTarget = null;
@@ -2060,6 +2112,16 @@ function edgeSpawnPoint(def = null) {
   const r = Math.random();
   const depth = bounds.bottom + margin + Math.random() * (bounds.surfaceY - bounds.bottom - margin * 2);
   const out = offscreenX();
+  // ALWAYS FROM THE DEEP, for a creature whose whole proposition is that it
+  // came up out of the dark. `deepSpawn` is asked for on the def rather than
+  // rolled, so an anglerfish cannot arrive by swimming in along the surface
+  // past the player it is supposed to be waiting under — a third of its
+  // arrivals did, and an ambusher that announces itself from the wings has
+  // given away the only thing it had. Checked before the roll below, which is
+  // the same deep entrance offered to everything at 1 in 10.
+  if (def?.deepSpawn && !def?.floorSpawn) {
+    return { x: bounds.left + Math.random() * bounds.width, y: bounds.bottom, deep: true };
+  }
   // `side` and `deep` are the ENTRANCE, carried alongside the position rather
   // than left to be inferred from it. A school is this point plus a random
   // scatter (see spawnPicked) and the scatter is wider than the margin, so one
@@ -2086,6 +2148,20 @@ function edgeSpawnPoint(def = null) {
     return { x: side * out, y: depth, side };
   }
   return { x: bounds.left + Math.random() * bounds.width, y: bounds.bottom, deep: true };
+}
+
+/**
+ * The entrance picker, for tools/boss-angler-test.mjs.
+ *
+ * Exported because `deepSpawn` is the difference between an ambush predator
+ * that comes up out of the dark and one that swims in past you from the side of
+ * the screen, and there is no other way to see which: the roll is random, the
+ * un-flagged path already takes the deep branch one time in ten, and a spawn
+ * that has already happened has thrown away which door it came through. The
+ * only honest check is many rolls of the picker itself.
+ */
+export function __spawnPointForTest(def) {
+  return edgeSpawnPoint(def);
 }
 
 // `opts.schoolId` groups a school for the boids; `opts.xpMul` scales what this
@@ -3243,6 +3319,74 @@ const phaseCursor = [];
 // own clamp in main.js and for the same reason.
 const MAX_ANIM_DT = 0.05;
 
+// --- what a creature is steering at ----------------------------------------
+//
+// The player's position, until the player is dead.
+//
+// Every hunter, chaser, orbiter and school in the game aims at one point, and
+// that point does not stop existing when the run ends: the whole death dive was
+// watched through a knot of animals converging on the corpse and grinding
+// against each other's separation radius.
+//
+// What relaxes is the TARGET, not the speed. As `deathState.pursuit` falls from
+// 1 to 0 (systems/deathDive.js, CONFIG.death.disperse) each creature's aim
+// slides off the body and onto a point `lead` units in front of its own nose,
+// so it carries on the way it was already going and the knot opens out. Doing
+// it here rather than in each behaviour is what makes it uniform: chase, orbit,
+// keepDistance, swarm and hunt all steer at ctx.dirX/dirY, and every radius
+// gate in them — aggro, orbit distance, the bite reach — releases on its own
+// as the distance grows, with nothing to add to any of them.
+//
+// The BEARING is banked per creature on the frame it lets go, not recomputed:
+// read live off the velocity it would curve as the body curves, which is a
+// dog chasing its own tail rather than an animal losing interest.
+const _quarry = new THREE.Vector3();
+function quarryFor(e, playerPos) {
+  const hold = deathState.active ? (deathState.pursuit ?? 1) : 1;
+  if (hold >= 1) {
+    // Cleared here rather than at spawn: this runs for every creature every
+    // frame of a live run, so it is the one place guaranteed to see a body
+    // that was recycled out of the pool carrying a stale bearing.
+    if (e.disperseAngle != null) e.disperseAngle = null;
+    return playerPos;
+  }
+  // The crabs' pile-on is authored and is the last thing you watch — see
+  // BEHAVIORS.crawl and CONFIG.death.disperse.keepPile. The exemption lasts
+  // exactly as long as the pile does: once the headstone is on the bed they
+  // have no business on that spot either, and they let go with everything else.
+  if (e.def.crawl?.corpse && (CONFIG.death.disperse?.keepPile ?? true) && !graveHasLanded()) return playerPos;
+
+  if (e.disperseAngle == null) {
+    // The way it happens to be going, or — for something barely moving —
+    // straight away from the body, which is the only other honest answer.
+    const sp = Math.hypot(e.vx, e.vy);
+    let hx = sp > 0.05 ? e.vx / sp : 0;
+    let hy = sp > 0.05 ? e.vy / sp : 0;
+    // ...leaned outward. Half of these are pointed AT the seal at the moment
+    // they let go — they were coming for it — and a bearing of "carry on"
+    // sends them straight through the body and out the far side, which keeps
+    // the knot for as long as it takes them to cross it. A share of the
+    // outward radial peels those off without turning the whole thing into
+    // twelve animals fleeing a corpse, which is a different (and much worse)
+    // read: at 0.35 something already leaving barely bends.
+    const ox = e.mesh.position.x - playerPos.x;
+    const oy = e.mesh.position.y - playerPos.y;
+    const od = Math.hypot(ox, oy) || 1;
+    const out = CONFIG.death.disperse?.outward ?? 0.35;
+    hx += (ox / od) * out;
+    hy += (oy / od) * out;
+    if (Math.hypot(hx, hy) < 1e-4) { hx = ox / od; hy = oy / od; }
+    e.disperseAngle = Math.atan2(hy, hx);
+  }
+  const lead = (CONFIG.death.disperse?.lead ?? 44) * (1 - hold);
+  _quarry.set(
+    playerPos.x + (e.mesh.position.x + Math.cos(e.disperseAngle) * lead - playerPos.x) * (1 - hold),
+    playerPos.y + (e.mesh.position.y + Math.sin(e.disperseAngle) * lead - playerPos.y) * (1 - hold),
+    0,
+  );
+  return _quarry;
+}
+
 export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, onPlayerBitten) {
   // Advanced once per frame, and the phase every creature's animation stride
   // is measured against. See the LOD note further down.
@@ -3277,8 +3421,13 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
   refreshApexCrowd(dt, playerPos);
 
   for (const e of enemies) {
-    const dx = playerPos.x - e.mesh.position.x;
-    const dy = playerPos.y - e.mesh.position.y;
+    // Not `playerPos` while the water is letting go of a corpse — see quarryFor.
+    // `ctx.playerPos` stays the REAL body: it is read by the things that want to
+    // know where the seal actually is (the crabs' floor rush, the pile-on's own
+    // branch), as against the things that want to know where to swim.
+    const at = quarryFor(e, playerPos);
+    const dx = at.x - e.mesh.position.x;
+    const dy = at.y - e.mesh.position.y;
     const dist = Math.hypot(dx, dy) || 0.0001;
     const ctx = {
       dist, dirX: dx / dist, dirY: dy / dist,
@@ -3683,7 +3832,16 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
         e.gaitDir = Math.sign(e.vx) * (e.def.gaitTravel ?? 1);
         e.anim?.setPlaybackDirection(e.gaitDir);
       }
-    } else if (e.def.faceMotion) {
+    // `faceLocked` is a system saying it is writing the heading itself this
+    // frame — the same handoff `perkDrive` makes for the velocity, and needed
+    // for the same reason. The speed gate below used to be the whole handoff,
+    // which works only while "a system is driving" and "the body is moving" are
+    // the same thing. They are not: systems/bossAngler.js holds the anglerfish
+    // on the seabed and settles it there at several units a second, so both
+    // writers were live on the same frames — one aiming the head at the seal,
+    // this one aiming it at the fish's own descent — and the body snapped
+    // between the two every frame.
+    } else if (e.def.faceMotion && !e.faceLocked) {
       if (Math.hypot(e.vx, e.vy) > 0.05) {
         const heading = Math.atan2(e.vy, e.vx) - Math.PI / 2;
         // With a body, the heading is the REST pose the physics roll is laid

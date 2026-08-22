@@ -1,0 +1,15 @@
+{
+  "appId": "com.ethangoldhammer.sealsurvivor",
+  "appName": "Seal Survivor",
+  "webDir": "dist",
+  "backgroundColor": "#05060a",
+  "zoomEnabled": false,
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": false,
+    "allowsLinkPreview": false,
+    "backgroundColor": "#05060a",
+    "preferredContentMode": "mobile",
+    "webContentsDebuggingEnabled": true
+  }
+}

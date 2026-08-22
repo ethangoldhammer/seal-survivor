@@ -83,6 +83,22 @@ let hitchNeither = 0;
 let programsAdded = 0;
 let texturesAdded = 0;
 
+// THE HIGH-WATER MARKS, which answer a different question from the two above
+// and are the reason a memory kill was undiagnosable from this record.
+//
+// `texturesAdded` counts CREATIONS. It cannot tell a leak from a churn: a
+// system that makes a texture and disposes it every second, and one that makes
+// a texture every second and keeps them all, report the identical number and
+// have completely different endings. The LIVE count separates them — flat
+// while `added` climbs is churn, climbing with it is a leak.
+//
+// This matters more than it looks on iOS specifically, where the app is killed
+// for memory (a JetsamEvent) and `performance.memory` does not exist, so
+// heapPeakMB is 0 on every run WebKit ever files. These two are the only
+// growth signal a Safari run carries at all.
+let texturesPeak = 0;
+let programsPeak = 0;
+
 // --- WHICH shader, and whether it had been built before ---------------------
 //
 // `programsAdded` says forty programs were linked and stops there, which is the
@@ -357,6 +373,8 @@ export function perfRunStart(stamp = performance.now(), programs = 0, textures =
   hitchNeither = 0;
   programsAdded = 0;
   texturesAdded = 0;
+  texturesPeak = textures;
+  programsPeak = programs;
   // Seeded from the live set rather than from -1: everything the warm-up built
   // is already there, and counting it as "built during the run" would put the
   // whole boot compile at the top of every report. Same reasoning as the
@@ -401,6 +419,9 @@ export function perfFrame(stamp, programs = lastPrograms, textures = lastTexture
   lastTextures = textures;
   programsAdded += newPrograms;
   texturesAdded += newTextures;
+  // The LEVEL, not the delta — see the note above texturesPeak.
+  if (textures > texturesPeak) texturesPeak = textures;
+  if (programs > programsPeak) programsPeak = programs;
 
   // Only a collection returns memory. Anything above the noise floor is one —
   // a megabyte, so a shrinking retained set doesn't read as a collection.
@@ -511,6 +532,10 @@ export function perfSummary() {
     // warm-up that missed 40 programs, however they were distributed.
     programsAdded,
     texturesAdded,
+    // ...against how many were ALIVE at once at the worst moment. Read as a
+    // pair: added far above peak is churn, the two rising together is a leak.
+    texturesPeak,
+    programsPeak,
     // And the split that says which kind of problem those programs are. See
     // the note above programBuilds: `programRebuilds` above zero is a shader
     // being thrown away and rebuilt, which no warm-up can fix.
@@ -622,6 +647,7 @@ export function perfRunReport(label = 'run', extra = '') {
     `       hitches (>${HITCH_MS}ms): ${s.hitches}  ·  spikes (>${SPIKE_MS}ms): ${s.spikes}`,
     `       of those: ${s.hitchCompile} shader link · ${s.hitchUpload} texture upload · ${s.hitchGC} collection · ${s.hitchNeither} none of those`,
     `       built this run: ${s.programsAdded} programs (${s.programKeys} distinct, ${s.programRebuilds} rebuilt), ${s.texturesAdded} textures`
+    + `\n       alive at peak: ${s.programsPeak} programs, ${s.texturesPeak} textures`
       + (s.heapPeakMB > 0 ? `  ·  heap peak ${s.heapPeakMB.toFixed(0)}MB, ${s.heapFreedMB.toFixed(0)}MB collected` : ''),
   ];
   // Only when something actually rebuilt. A clean run should print nothing

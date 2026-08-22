@@ -112,6 +112,20 @@ export const TEXT_ROLES = [
   { key: 'title', label: 'Menu title', selector: '.sv-title', section: 'Screens',
     sample: 'FOOD CHAIN',
     style: { font: FONT_GLOBAL, size: 30, weight: 700, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // THE SCORE CARD'S QUIP IS ITS OWN ROLE, and the reason is the lockup rather
+  // than taste. `title` is a banner centred over a narrow menu; this one shares
+  // a line with a 46px score on a card twice that wide, and at the banner's
+  // size the longest quip in quips.csv ("Get ready to learn yoga, buddy!")
+  // wrapped to FOUR lines of the pixel face and pushed the readout off a
+  // laptop. Sized for the lockup instead, and still a row in the Text panel —
+  // the alternative was a hard-coded px in ui.js that beat the panel silently,
+  // on the one line of type in the game that is the game's own voice.
+  //
+  // The selector is two classes deep on purpose: it has to win against
+  // `title`'s own rule, which is in the same sheet and matches the same node.
+  { key: 'quip', label: 'Score card quip', selector: '.sv-ldg-head .sv-title', section: 'Screens',
+    sample: "You're the Chum Now, Dog",
+    style: { font: FONT_GLOBAL, size: 22, weight: 700, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'sub', label: 'Menu body', selector: '.sv-sub', section: 'Screens',
     sample: 'Eat everything smaller than you.',
     style: { font: FONT_GLOBAL, size: 13, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.6, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },

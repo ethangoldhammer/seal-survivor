@@ -279,6 +279,105 @@ for (const s of [sizes[0], sizes[sizes.length - 1]]) {
 }
 
 // ===========================================================================
+section('The meat a weak spot kicks loose');
+// ---------------------------------------------------------------------------
+// It has to be findable in a boss fight, which is the busiest, brightest,
+// most crowded second the game ever renders — so "is it visible" is not a
+// question a screenshot answers. Three measurements, and the first two are
+// only interesting because the colour is RED.
+//
+// Red carries 0.213 of Rec.709 luminance against a yellow's 0.875, and the
+// bright pass thresholds luminance. So the SAME glow that made the old boost
+// yellow blaze leaves this red under the line and unlit — which is why
+// `glowMul` exists and why it is asserted here rather than eyeballed.
+{
+  const m = CONFIG.hotSpots.chum;
+  resetPickups(scene);
+  parked();
+  // A two-pip piece on the default five-pip bar, exactly as spillHotSpotChum
+  // builds it — `t` is the pip value against the bar, and the size multiplier
+  // rides on top of that.
+  const t = (m.pips ?? 2) / 5;
+  const piece = atOneAngle(() => spawnChumChunk(scene, new THREE.Vector3(300, 0, 0), {
+    t, pips: m.pips, tint: m.tint, glowMul: m.glowMul, sizeMul: m.sizeMul,
+    lifetime: m.lifetime, flashMul: m.flashMul,
+  }));
+  // The control: an ordinary chunk at the median of its own roll, which is
+  // what else is in the water.
+  const plain = atOneAngle(() => spawnChumChunk(scene, new THREE.Vector3(320, 0, 0), { t: 0.21 }));
+
+  check('it is red, not the boost yellow it used to be',
+    piece.base.r > 0.9 && piece.base.g < 0.35 && piece.base.r > piece.base.g * 2.5,
+    `#${piece.base.getHexString()}`);
+
+  const pieceRest = chunkBrightness(0, 0, 0, m.flashMul, m.glowMul);
+  const plainRest = chunkBrightness(0, 0, 0);
+  const lit = brightOut(piece.base, pieceRest);
+  const unhelped = brightOut(piece.base, plainRest);
+  console.log(`  --   resting luminance ${lit.lum.toFixed(2)} with glowMul x${m.glowMul}, `
+    + `${unhelped.lum.toFixed(2)} without — threshold ${CONFIG.bloom.threshold}`);
+  check('...and it glows AT REST, not only on the frame it lands',
+    lit.out > 0, `bloom ${lit.out.toFixed(2)} at luminance ${lit.lum.toFixed(2)}`);
+  // THE CHECK THAT EARNS THE FIELD. Without it this whole change is a red
+  // pebble: same glow as every other chunk, under the bright pass, invisible.
+  check('...which the shared chunk glow could not have done on its own',
+    unhelped.out <= 0 || lit.out > unhelped.out * 2,
+    `${unhelped.lum.toFixed(2)} vs ${CONFIG.bloom.threshold} unaided`);
+  // AGAINST THE THING IT REPLACED, which is the only scale that means
+  // anything here. The boost yellow was legible and nobody argued with it, so
+  // the red has to reach the bright pass at least as hard — and it takes 2.4x
+  // the glow to do it. That factor is the whole cost of the hue, and this is
+  // the assertion that keeps it honest if anyone retunes either end.
+  const wasYellow = brightOut(new THREE.Color(0xffe07a), plainRest);
+  console.log(`  --   halo ${lit.out.toFixed(2)} against the old boost yellow's ${wasYellow.out.toFixed(2)}`);
+  check('...and it haloes at least as hard as the yellow it replaced',
+    lit.out >= wasYellow.out, `${lit.out.toFixed(2)} vs ${wasYellow.out.toFixed(2)}`);
+
+  // THE COMPOSITE, verbatim from systems/post.js. It normalises on the PEAK
+  // channel and scales all three by one factor, so hue survives — that is the
+  // property that lets a saturated red be pushed past 1 without going white,
+  // and the reason a red CAN bloom here at all. Asserted because the natural
+  // worry looking at a luminance of 1.0 is exactly that it clips to white.
+  const knee = CONFIG.bloom.knee ?? 0;
+  const shoulder = (c, mul) => {
+    const v = [c.r * mul, c.g * mul, c.b * mul];
+    const peak = Math.max(...v);
+    if (!(knee > 0) || peak <= knee) return v.map((x) => Math.min(1, x));
+    const range = Math.max(1e-4, 1 - knee);
+    const rolled = knee + range * (1 - Math.exp(-(peak - knee) / range));
+    return v.map((x) => Math.min(1, x * rolled / peak));
+  };
+  const onScreen = shoulder(piece.base, pieceRest);
+  // Encoded back to sRGB before printing. Everything above is LINEAR, and a
+  // linear triple written out as 0-255 reads as a far darker colour than what
+  // reaches the screen — a line that lies in exactly the direction that would
+  // hide a problem.
+  const srgb = (x) => Math.round(255 * (x <= 0.0031308 ? x * 12.92 : 1.055 * x ** (1 / 2.4) - 0.055));
+  console.log(`  --   renders as rgb ${onScreen.map(srgb).join(',')}`);
+  check('...and the shoulder keeps it red rather than washing it to white',
+    onScreen[0] > 0.9 && onScreen[1] < 0.4,
+    `green ${srgb(onScreen[1])} of a red ${srgb(onScreen[0])}`);
+
+  check('it is visibly bigger than an ordinary chunk',
+    piece.mesh.scale.x > plain.mesh.scale.x * 1.5,
+    `x${(piece.mesh.scale.x / plain.mesh.scale.x).toFixed(2)} the median chunk`);
+  // ...and the reach to take one follows the body, or the piece the player can
+  // see from across the arena is one they have to swim into the middle of.
+  check('...and the reach to collect it grew with it',
+    piece.radius > plain.radius * 1.5,
+    `${piece.radius.toFixed(2)} vs ${plain.radius.toFixed(2)}`);
+
+  // The arrival is still a SPIKE over that raised body — the two multipliers
+  // are separate fields precisely so a glowing piece still visibly flashes.
+  const born2 = chunkBrightness(CONFIG.chumChunk.flash.seconds, 0, 0, m.flashMul, m.glowMul);
+  check('...and it still arrives as a flash over its own glow',
+    born2 > pieceRest * 1.5, `${born2.toFixed(2)} -> ${pieceRest.toFixed(2)}`);
+
+  resetPickups(scene);
+  parked();
+}
+
+// ===========================================================================
 section('In the water');
 
 resetPickups(scene);

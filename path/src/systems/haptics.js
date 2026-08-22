@@ -58,7 +58,7 @@ function actuator() {
 // Richer, for designing a specific feel:
 //   haptic: { duration: 45, magnitude: 0.8, delay: 0 }
 //   haptic: [{ duration: 30, magnitude: 1 }, { duration: 45, magnitude: 0.5, delay: 25 }]
-function toPulses(spec) {
+export function toPulses(spec) {
   if (typeof spec === 'number') return [{ duration: spec, magnitude: null, delay: 0 }];
 
   if (!Array.isArray(spec)) {

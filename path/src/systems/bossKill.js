@@ -208,6 +208,26 @@ function applyFraming() {
   const minZoom = c.minZoom ?? 1;
   const pad = Math.max(0, c.framePad ?? 1.8);
 
+  // THE PICTURE IS NOT THE FRAME, and fitting to the frame is what let the
+  // polaroid come out with half a boss in it.
+  //
+  // What the player watches is the whole widescreen frame; what the print
+  // keeps is a SQUARE cut out of the middle of it (see squareCrop in
+  // systems/bossShot.js), which on a 16:9 screen throws away 44% of the width.
+  // So a body that fits the shot with room to spare can sit comfortably
+  // outside the photograph — and every check that ever went looking said the
+  // framing was correct, because against the frame it was.
+  //
+  // The square's half-extent is min(halfW, halfH) on BOTH axes: the crop's side
+  // is the short side of the canvas, and an orthographic frame has the same
+  // world-units-per-pixel across and down. Fitting to that is what makes "in
+  // the picture" mean the picture.
+  const s = cfg().snapshot ?? {};
+  const cropping = c.framePicture !== false && s.enabled !== false && framing.halfH > 0;
+  const lim = cropping ? Math.min(framing.halfW, framing.halfH) : 0;
+  const limW = cropping ? lim : framing.halfW;
+  const limH = cropping ? lim : framing.halfH;
+
   // Both subjects have to be inside the half-frame measured FROM THE POINT THE
   // CAMERA IS ACTUALLY AIMED AT, which is not the midpoint between them — the
   // bias moved it. Measuring the fit off the separation instead is right at
@@ -222,8 +242,8 @@ function applyFraming() {
       Math.abs(framing.sy - fy) + framing.sr + pad,
     );
     return Math.min(
-      framing.halfW / Math.max(needW, 1e-3),
-      framing.halfH / Math.max(needH, 1e-3),
+      limW / Math.max(needW, 1e-3),
+      limH / Math.max(needH, 1e-3),
     );
   };
 
@@ -250,9 +270,21 @@ function applyFraming() {
     fit = fitAt(fx, fy);
   }
 
-  bossKillState.camZoom = Math.max(minZoom, Math.min(bossKillState.camZoom, fit));
+  const zoom = Math.max(minZoom, Math.min(bossKillState.camZoom, fit));
+  bossKillState.camZoom = zoom;
   bossKillState.cam.x = fx;
-  bossKillState.cam.y = fy;
+  // AND THE CROP'S OWN OFFSET, handed back to the aim so the two agree.
+  //
+  // squareBiasY cuts the square high or low in the frame rather than through
+  // the middle of it. Left out of here, the fit above would be measured about a
+  // square that is not where the crop actually lands, and the correction would
+  // be worth exactly the bias — the far animal clipped off the top of a print
+  // biased downward. A no-op at the shipped 0, which is why it went unnoticed
+  // while the bias was only ever moved in the tuner.
+  const cropBias = Math.max(-1, Math.min(1, s.squareBiasY ?? 0));
+  bossKillState.cam.y = cropping
+    ? fy + (cropBias * (framing.halfH - lim)) / Math.max(zoom, 1e-3)
+    : fy;
 }
 
 let clock = 0;

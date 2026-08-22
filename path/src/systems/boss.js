@@ -66,6 +66,7 @@ import { attachBossBoat, isBoatBoss, resetBossBoat, updateBossBoat } from './bos
 import { attachKraken, releaseKraken, resetKraken, updateKraken } from './kraken.js';
 import { attachAngler, releaseAngler, resetAngler, updateBossAngler } from './bossAngler.js';
 import { attachHotSpots, resetBossHotSpots } from './bossHotSpots.js';
+import { hideOutlineOn } from './outlines.js';
 import { beginBossWarmup, cancelBossWarmup, tickBossWarmup } from './bossWarmup.js';
 import { startCelebration } from './celebrate.js';
 import { bossCycleRelief, setBossCycle } from './waves.js';
@@ -1012,6 +1013,12 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // landing on top of the arrival is exactly the frame the water should be
   // emptying.
   e.isBoss = true;
+  // ...and the wildlife threat rim comes straight back off, unless
+  // CONFIG.creatureOutline.bosses says otherwise. Only `bossShark` was ever
+  // wearing one — it borrows the wildlife megalodon's asset, and the switches
+  // are keyed by asset, so this is the only place the two can be told apart.
+  // See the note on that flag, and hideOutlineOn for why it is per instance.
+  if (CONFIG.creatureOutline?.bosses !== true) hideOutlineOn(e.visual);
   // Everything that is not an escort turns for the wall. See clearForBoss:
   // they swim out, they do not vanish, and nothing is credited as a kill.
   clearForBoss(e);

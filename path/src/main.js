@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } from './config.js';
-import { preloadAssets, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool } from './assets.js';
+import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { updateEmissivePulse } from './systems/emissivePulse.js';
@@ -14,7 +14,7 @@ import { midWater, bounds, seabedTopY } from './arena.js';
 import {
   initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput,
 } from './input.js';
-import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody } from './entities/player.js';
+import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody, snarePlayer } from './entities/player.js';
 import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
@@ -373,6 +373,11 @@ async function boot() {
   // last third. Not a measurement — the split is a judgement about which half
   // feels longer, and the warm-up's own share is smoothed inside that third.
   const ASSET_SHARE = 0.66;
+  // BEFORE the models are fetched, and it has to be: this is what decides
+  // whether each one is loaded from public/models or its GPU-compressed twin,
+  // and it cannot answer until it has a GL context to ask which compressed
+  // formats exist. See initModelTranscoder in assets.js.
+  initModelTranscoder(world.renderer);
   await preloadAssets((p) => loading.setProgress(p * ASSET_SHARE));
   // The harp's note glyphs. NOT an ASSETS entry, so preloadAssets never sees
   // them: systems/noteStorm.js wants the raw geometries to instance, and the
@@ -3984,7 +3989,9 @@ function dropChumChunk(pos, t, vel = null) {
 // chunk on a timer above is health the fight hands you, and this is fuel the
 // fight sold you for aiming. It rides the chunk entity because in the water it
 // IS one — a lump of the animal, thrown, sinking, magnetised by the food reach
-// — and it wears the boost colour so the two are never confused at a glance.
+// — and it is told apart from an ambient chunk by being bigger, redder and
+// visibly lit rather than by wearing a different currency\'s colour. It used to
+// wear the boost yellow; see CONFIG.hotSpots.chum.tint for why that lost.
 // ---------------------------------------------------------------------------
 function spillHotSpotChum() {
   const m = CONFIG.hotSpots?.chum ?? {};
@@ -4007,7 +4014,13 @@ function spillHotSpotChum() {
     const chunk = spawnChumChunk(world.scene, { x: q.x, y: q.y, z: 0 }, {
       t,
       pips: q.pips,
-      tint: m.tint ?? 0xffe07a,
+      tint: m.tint ?? 0xff2a14,
+      // The two that make a RED piece read at all: red carries a third of a
+      // yellow's luminance, so the shared chunk glow leaves it under the bright
+      // pass, and the size is what says this one came out of something rather
+      // than off the ambient timer. Both in CONFIG.hotSpots.chum.
+      glowMul: m.glowMul,
+      sizeMul: m.sizeMul,
       lifetime: m.lifetime,
       flashMul: m.flashMul,
       // Off limits to the food magnet until it has slowed to this — otherwise
@@ -4215,6 +4228,7 @@ function animate(now) {
   // A new frame, so every measured hitbox is stale again. Combat asks a boss's
   // shape where it is once per projectile in range and this is what makes all
   // but the first of those a stamp comparison — see systems/hitShape.js.
+  const _tpre = performance.now();
   tickHitShapes();
 
   // The death dive is the one thing that runs on the WALL clock, because it's
@@ -4344,6 +4358,7 @@ function animate(now) {
   // already ended. Starting every staged frame from a full pool means the
   // drowning tick and every ordinary hit land on a seal that can absorb them.
   holdStageSafe(player);
+  perfPhase('pre', performance.now() - _tpre);
 
   // `stageSimulates()` is the stage's "world only" switch, and it is in the
   // gate rather than being a pause of its own: gameState.paused belongs to the
@@ -4363,6 +4378,7 @@ function animate(now) {
       gameState.difficulty = gameState.time * CONFIG.spawn.difficultyPerSecond;
     }
     // What a dropped orb is worth right now — see CONFIG.xp.dropRamp.
+    const _tworld = performance.now();
     setChumDifficulty(gameState.difficulty);
     shootCooldown -= dt;
     missileCooldown -= dt;
@@ -5062,7 +5078,9 @@ function animate(now) {
         }
       }
     }
+    perfPhase('world', performance.now() - _tworld);
 
+    const _tshots = performance.now();
     updateProjectiles(
       dt, world.scene, enemies,
       // `source` because this callback fires for ANY projectile with bounces
@@ -5144,6 +5162,15 @@ function animate(now) {
       // through an aura should be a dash through an aura, not the one attack
       // in the game that ignores the seal's only defensive window.
       onPlayerHit: (dmg, dir, source, channel) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source, channel); },
+      // THE ANGLERFISH'S RADIAL GETTING HOLD OF THE SEAL — systems/bossAngler.js.
+      //
+      // NOT behind the i-frame check above, and that is the one difference
+      // between this hook and that one. Invulnerability is a promise about
+      // DAMAGE; a snare deals none, and refusing it during a dash would mean
+      // the one moment a player is most likely to be crossing the circle is the
+      // one moment the circle does nothing. The dash still carries them out of
+      // it, which is the counterplay working rather than being skipped.
+      onPlayerSnare: (seconds, mul, thaw) => snarePlayer(seconds, mul, thaw),
     });
 
     // WHAT THE SCHOOLS SEE COMING. Small fish break away from a strike — the
@@ -5171,6 +5198,7 @@ function animate(now) {
       });
     }
 
+    perfPhase('shots', performance.now() - _tshots);
     const _tenemies = performance.now();
     updateEnemies(dt, world.scene, player.mesh.position, (x, y) => {
       feedback('chumEaten', { x, y, scale: 0.8 });
@@ -5194,6 +5222,7 @@ function animate(now) {
     // they are in the same place, and where the result reaches the meshes.
     // Last on purpose — running it earlier would resolve collisions against
     // positions the owners then overwrite.
+    const _tbodies = performance.now();
     stepBodies(dt, {
       // A hull taking a real hit from a real body: the punted turtle arriving,
       // or the hull that turtle just shoved arriving at the next one. The
@@ -5210,6 +5239,7 @@ function animate(now) {
         feedback('bodyImpact', { x: hit.x, y: hit.y, scale: Math.min(1.6, 0.5 + hit.speed / 24) });
       },
     });
+    perfPhase('bodies', performance.now() - _tbodies);
 
     const _tcombat = performance.now();
     resolveCombat(dt, world.scene, {
@@ -5283,6 +5313,7 @@ function animate(now) {
       },
     });
     perfPhase('combat', performance.now() - _tcombat);
+    const _tabilities = performance.now();
     processPendingSplashes(); // safe now that resolveCombat's own loop has finished
 
     // Elemental statuses — venom and infection ticking, chill thawing, the
@@ -5974,6 +6005,7 @@ function animate(now) {
         },
       },
     );
+    perfPhase('abilities', performance.now() - _tabilities);
     // Straight after the orbs, because it is the same currency arriving a beat
     // late: whatever the last mouthful was too big to pay at once.
     updateXpSpill(dt);
@@ -6539,7 +6571,7 @@ function animate(now) {
   // list rather than a list this file keeps: a boss can die, be removed and
   // have its visual recycled between two frames, and a tracked list would
   // hold the corpse. See systems/bossEyes.js.
-  updateBossEyes(realDt, world.scene, enemies.filter((e) => e.isBoss));
+  updateBossEyes(realDt, world.scene, enemies.filter((e) => e.isBoss), player.mesh.position);
   // The shots, and the clubs on the ring — which are not projectiles and get
   // the same ribbon anyway. See clubTrailMovers.
   updateProjectileTrails(realDt, world.scene, projectiles, clubTrailMovers());
@@ -6926,6 +6958,18 @@ function animate(now) {
       level: gameState.level,
       score: gameState.score,
       time: gameState.time,
+      // WHAT THE PRINT IS NOT ALLOWED TO CUT OFF. The polaroid keeps a square
+      // out of the middle of this frame, so "on screen" and "in the picture"
+      // are two different questions — see squareCrop in systems/bossShot.js,
+      // which pans its window to hold these.
+      //
+      // Measured HERE and nowhere else, on the frame that was just drawn, with
+      // the camera that drew it: this is the one place that can answer where
+      // the two animals actually ended up, after the push-in was clamped
+      // against the arena wall and the shake moved it again. Every reading
+      // taken from the framing the shot ASKED for is a reading of a camera
+      // position that may never have happened.
+      focus: snapshotFocus(),
     };
     // And out it comes. Only on a grab that actually produced an image — a
     // tainted canvas or a lost context returns false, and a print of nothing
@@ -6943,4 +6987,51 @@ function animate(now) {
     }
   }
   perfFrameJs(performance.now() - _tframe);
+}
+
+// WHERE THE TWO ANIMALS LANDED, in the frame that has just been drawn.
+//
+// The polaroid's picture is a square cut out of a widescreen frame, so being on
+// screen is not the same as being in the photograph — see squareCrop in
+// systems/bossShot.js, which slides its window to hold whatever this returns.
+//
+// PROJECTED, not derived. systems/bossKill.js works out a framing and hands it
+// to world.focusCamera, but what arrives on screen is that framing eased by a
+// weight, clamped to the arena, and then shaken; a print cropped from the
+// REQUEST would be right in open water and wrong in exactly the fights that
+// end against a wall. Running the same camera the renderer just used is the
+// only reading that cannot disagree with the picture.
+//
+// Normalised to the frame rather than measured in pixels, because the crop's
+// source is the drawing buffer — whose size is the window times the device
+// ratio times the adaptive render scale, and can change between two frames.
+const SHOT_V = new THREE.Vector3();
+
+function snapshotFocus() {
+  const cam = world.camera;
+  const half = world.halfExtents(cam.zoom);
+  if (!(half.w > 0 && half.h > 0)) return null;
+  const pts = [];
+  const add = (x, y, r) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    SHOT_V.set(x, y, 0).project(cam);
+    pts.push({
+      u: SHOT_V.x * 0.5 + 0.5,
+      // NDC counts up and a bitmap counts down. The one flip in here, and the
+      // one that would be invisible on a centred crop and wrong on every
+      // biased one.
+      v: -SHOT_V.y * 0.5 + 0.5,
+      ru: Math.max(0, r) / (2 * half.w),
+      rv: Math.max(0, r) / (2 * half.h),
+    });
+  };
+  // The seal at its hit radius rather than as a point: the print should hold
+  // the animal, not its origin.
+  if (player.mesh) add(player.mesh.position.x, player.mesh.position.y, player.stats?.hitRadius ?? 0);
+  // And the body it just killed, at the radius the shot framed it by — null
+  // once the corpse has burst, which is the case where the picture is of a
+  // seal in an empty ocean and there is nothing else to hold.
+  const body = bossCorpseFocus();
+  if (body) add(body.x, body.y, body.r ?? 0);
+  return pts.length ? pts : null;
 }

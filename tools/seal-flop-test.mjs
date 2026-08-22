@@ -64,6 +64,7 @@ import {
 import { ASSETS, installModel } from '../path/src/assets.js';
 import { createAnimationController } from '../path/src/systems/animation.js';
 import { onFeedback } from '../path/src/systems/feedback.js';
+import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
 import {
   deathState, startDeathDive, updateDeathDive, resetDeathDive,
 } from '../path/src/systems/deathDive.js';
@@ -349,6 +350,84 @@ section('A DEATH ON THE FLOOR — the sequence that has nothing to fall through'
   check('it still finishes', run.finished > 0, `${run.finished.toFixed(2)}s`);
   check('and it still makes a sound when it lands', run.events.length >= 1,
     `${run.events.length} contacts`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE WATER LETS GO — nothing keeps converging on the corpse');
+{
+  // Twelve hunters, ringed around the body at a spread of distances, all of
+  // them well inside their own aggro radius. Driven through the real
+  // updateEnemies against the real death dive, twice: once with the dispersal
+  // on and once with it off, so the bar is the game's own behaviour rather than
+  // a number pulled out of the air.
+  const D = CONFIG.death.disperse;
+  const floor = bounds.bottom + (player.stats?.hitRadius ?? 1);
+
+  const swarmRun = (enabled) => {
+    reseed();
+    D.enabled = enabled;
+    resetDeathDive();
+    resetPlayer();
+    resetEnemies(scene);
+    player.mesh.position.set(0, floor + 14, 0);
+    player.velocity.set(0, 0);
+    // A spread of the things that actually converge: the pure chasers, a
+    // school (which drifts at you through `towardPlayer`), and the hunters,
+    // whose aggro radius is the gate this is supposed to release.
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      const kind = ['barracuda', 'fish', 'shark', 'squid'][i % 4];
+      spawnNamed(scene, kind, 0, {
+        x: player.mesh.position.x + Math.cos(a) * 12,
+        y: player.mesh.position.y + Math.sin(a) * 6,
+      }, { ignoreCaps: true });
+    }
+    const started = enemies.length;
+
+    let t = 0;
+    startDeathDive(() => {});
+    while (deathState.phase !== 'done' && t < 30) {
+      const scale = updateDeathDive(DT);
+      updateEnemies(DT * scale, scene, player.mesh.position, () => {}, () => {});
+      t += DT;
+    }
+    // Read at the end of the sequence — the frame the score card would appear,
+    // which is the frame the player has been looking at the whole time.
+    //
+    // "ON the body", not "nearby": four units is about a seal, and the
+    // complaint this fixes is a heap of animals sitting on one point rather
+    // than animals in the neighbourhood. Measured at fourteen it counts
+    // everything merely passing through the shot, which is what a released
+    // ocean is supposed to look like.
+    const at = player.mesh.position;
+    const near = enemies.filter((e) => Math.hypot(
+      e.mesh.position.x - at.x, e.mesh.position.y - at.y,
+    ) < 4).length;
+    const mean = enemies.reduce((sum, e) => sum + Math.hypot(
+      e.mesh.position.x - at.x, e.mesh.position.y - at.y,
+    ), 0) / Math.max(1, enemies.length);
+    return { near, mean, started, left: enemies.length };
+  };
+
+  const chasing = swarmRun(false);
+  const loose = swarmRun(true);
+  D.enabled = true;
+  note(`pursuing: ${chasing.near}/${chasing.left} on the body, mean ${chasing.mean.toFixed(1)} units`);
+  note(`released: ${loose.near}/${loose.left} on the body, mean ${loose.mean.toFixed(1)} units`);
+
+  check('every creature was there to begin with', chasing.started === 12, `${chasing.started}`);
+  check('pursuit is what packs them in — this test proves nothing otherwise',
+    chasing.near >= 4, `${chasing.near} of ${chasing.left} sitting on the corpse`);
+  check('letting go empties the knot', loose.near <= chasing.near / 3,
+    `${loose.near} against ${chasing.near}`);
+  check('...and they end up further out on average', loose.mean > chasing.mean * 1.5,
+    `${loose.mean.toFixed(1)} against ${chasing.mean.toFixed(1)} units`);
+  check('pursuit is fully released by the end', deathState.pursuit === 0 || !deathState.active,
+    `${deathState.pursuit}`);
+
+  // The one thing that must NOT relax.
+  check('the crabs are exempt by config', D.keepPile === true);
+  resetEnemies(scene);
 }
 
 // ---------------------------------------------------------------------------

@@ -81,6 +81,12 @@ import { touchPrimary } from '../devices.js';
 // design, so importing it here does not cost this module the standalone
 // property the header above is built on — see ui/tipJar.js.
 import { mountSplashTipJar } from './tipJar.js';
+import { parseTipCsv } from '../tipTable.js';
+import tipsCsv from '../tips.csv?raw';
+
+// The same tiers the other two jars show. Parsed here rather than passed in
+// because this module is written to know nothing about ui.js — see its header.
+const TIP_TIERS = parseTipCsv(tipsCsv);
 // ?url so Vite emits the .riv as a hashed asset and hands back a path. The
 // alternative — base64 in a JS module, the way levelUpImages.js does it —
 // would push 644KB of binary through the module graph on every reload.
@@ -276,7 +282,7 @@ export function mountRiveSplash({
   //
   // It takes its own pointer events and stops them dead (see mountSplashTipJar)
   // so a tap on the jar is not also a tap on the card underneath it.
-  const tipJar = mountSplashTipJar(wrap);
+  const tipJar = mountSplashTipJar(wrap, { tiers: TIP_TIERS });
 
   parent.appendChild(wrap);
 

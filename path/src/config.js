@@ -2032,7 +2032,14 @@ export const CONFIG = {
     },
 
     player: {
-      maxHp: 100,
+      // STARTING HEALTH, and weapons.csv owns it — it is the survivability
+      // half of the same economy oxygen.max is the dive half of, read against
+      // the toughness ramp over a whole run rather than judged by eye.
+      //
+      // It had no slider AND no CSV row, which meant the 100 sitting in
+      // imported-tuning.json was its only real home and nothing typed here
+      // could move it. The row is what makes this line true again.
+      maxHp: 115,
       // BASELINE HEALTH GROWTH, compounding per level — the health half of
       // what CONFIG.weapon.damagePerLevel does for the gun. Everything the
       // water throws at you compounds (see CONFIG.spawn.ramp: toughness is a
@@ -2217,6 +2224,23 @@ export const CONFIG = {
       thickness: 0.12,
       glow: 2.4,
       opacity: 1,
+      // A BOSS NEVER WEARS THIS RIM. Not a per-species switch, because it
+      // cannot be one: `bossShark` is built from `enemyMegalodon` — the same
+      // asset key as the wildlife megalodon — and the switches below are keyed
+      // by asset, so no combination of them can rim one and not the other.
+      //
+      // It was also only ever true of one boss. Every other archetype's asset
+      // (enemyBossHammerhead, enemyBossCrab, enemyMosasaur, bossYacht,
+      // enemyBossAnglerfish) is absent from the list entirely, so the shark was
+      // the odd one out rather than the rule. A boss already announces itself
+      // with a threat circle, an aura and a near-black hide; the wildlife rim
+      // on top of that is the "one of the big ones is here" read spent on the
+      // one body nobody was going to miss.
+      //
+      // Applied per INSTANCE at spawn — see hideOutlineOn in systems/outlines.js
+      // for why that is the only lever that works here, and for the pooling
+      // ordering that keeps the next wildlife megalodon rimmed.
+      bosses: false,
       // Per-species switches, keyed by ASSET key (the model), not by the species
       // name in `enemies` — the outline hangs off the model, and two species
       // sharing one asset share one rim.
@@ -2225,38 +2249,51 @@ export const CONFIG = {
       // is on or off, so flicking one in the T-menu shows up immediately on the
       // creatures already swimming rather than only on the next wave. Keys NOT
       // listed at all never build anything.
+      //
+      // EVERY ONE OF THEM SHIPS OFF, and that is deliberate as of this change.
+      // The list used to encode a judgement — "the apex family is on, and the
+      // turtle, because its model has no textures" — which is a roster decision
+      // taken in a text file, sight unseen, and it drifted: the abyss shark was
+      // simply never listed, `enemyOrca` outlined nothing for months after the
+      // orca was split into three bodies, and the saved snapshot disagreed with
+      // this file about the turtle. The rim is a LOOK, and looks are chosen in
+      // the shader lab against the actual animal (npm run looks:shaderlab —
+      // the `outline` section writes both these switches and the four numbers
+      // above straight back here). Nothing wearing a rim by default is the
+      // honest starting point for that; the keys stay listed so the shells are
+      // there the moment one is switched on.
       on: {
-        // The apex family — on by default. These are the bodies you need to see
-        // coming, and the ones the cap already limits to 8 at a time.
-        enemyShark: true,
-        enemyGreatWhite: true,
-        enemyMegalodon: true,
-        enemyMightyMeg: true,
-        enemyOrca: true,
-        enemyDolphin: true,
-        // `enemyOrca` above is a DEAD KEY and is left only because saved tuning
-        // still carries it. The orca was split into three bodies by
-        // tools/orca-split.mjs and the single-asset key went with it, so that
-        // switch has been outlining nothing; these two are the live ones.
-        enemyOrcaBull: true,
-        enemyOrcaCow: true,
-        // The abyss shark was simply never listed, and a key that is not here
-        // never builds shells at all — so the darkest, latest apex in the game
-        // was also the only one with no rim to find it by.
-        enemyAbyssShark: true,
-        // Everything else large enough for a rim to read on. Off by default:
-        // these are not the threats the outline exists to call out, and several
-        // of them can be on screen in numbers.
+        // The apex family. The bodies the rim was built for — the ones you
+        // need to see coming, and the ones groupMaxAlive already limits to 8 at
+        // a time, so switching the row on is bounded.
+        enemyShark: false,
+        enemyGreatWhite: false,
+        enemyMegalodon: false,
+        enemyMightyMeg: false,
+        enemyOrca: false,
+        enemyDolphin: false,
+        // `enemyOrca` above is a DEAD KEY. The orca was split into three bodies
+        // by tools/orca-split.mjs and the single-asset key went with it, so
+        // that switch outlines nothing whatever it is set to; these two are the
+        // live ones. Left listed only because saved tuning still carries it.
+        enemyOrcaBull: false,
+        enemyOrcaCow: false,
+        // Listed so it CAN be switched on — a key that is not here never builds
+        // shells at all, which is how the darkest, latest apex in the game
+        // spent months as the only one with no rim available to it.
+        enemyAbyssShark: false,
+        // Everything else big enough for a rim to read on. Several of these can
+        // be on screen in numbers, so they are the rows to think twice about:
+        // the draw-call note above is per mesh per body.
         enemyOtter: false,
         enemyStingray: false,
         enemyWalkingCrab: false,
-        // ON, unlike its neighbours here, and for a reason that is about the
-        // MODEL rather than about threat. seaturtle.glb ships no textures at
-        // all — not one image, in the repo copy or in the source download —
-        // so it renders as one flat colour and the only way to read its shape
-        // is the rim. It is also the one creature you are meant to find and
-        // play with rather than avoid.
-        enemySeaTurtle: true,
+        // THE ONE WITH A REASON THAT IS NOT ABOUT THREAT. seaturtle.glb ships no
+        // textures at all — not one image, in the repo copy or in the source
+        // download — so it renders as one flat colour and the rim is the only
+        // thing that gives it a shape. If any single row here earns switching
+        // on, it is this one.
+        enemySeaTurtle: false,
     },
     },
 
@@ -2289,14 +2326,17 @@ export const CONFIG = {
       opacity: 1,
       // Keyed by ASSET key, exactly as creatureOutline.on is. A key not listed
       // never builds shells.
+      // ALL OFF, exactly as creatureOutline.on is and for the same reason —
+      // see the note there. The keys stay listed so the shells still build and
+      // the lab can light any of them up on the allies already swimming.
       on: {
-        sealTeam: true,
-        orcaFriendBull: true,
-        orcaFriendCow: true,
-        orcaFriendCalf: true,
-        dumboOcto: true,
-        belugaDrone: true,
-        eelCompanion: true,
+        sealTeam: false,
+        orcaFriendBull: false,
+        orcaFriendCow: false,
+        orcaFriendCalf: false,
+        dumboOcto: false,
+        belugaDrone: false,
+        eelCompanion: false,
       },
     },
 
@@ -3976,10 +4016,12 @@ export const CONFIG = {
       windowFromDashEnd: true,
       chainDamageMul: 1.11, // damage multiplier added per chain step (weapons.csv owns it)
       // The CEILING on that, and the reason it exists: comboSpeedMul is capped
-      // at comboSpeedMax and the score multiplier at points.comboMaxMultiplier,
-      // but the damage exponent had no cap at all. That was invisible while
-      // chains were hard to reach; simulated against the chum rates in the real
-      // run logs (npm run sim:chain) it reaches x49 and keeps climbing. 4 is a
+      // at comboSpeedMax and the xp multiplier at xp.chain.max — the score
+      // multiplier is uncapped now and is the deliberate exception, because it
+      // is the only one nothing acts with — but the damage exponent had no cap
+      // at all, which was invisible while chains were hard to reach. Simulated
+      // against the chum rates in the real run logs (npm run sim:chain) it
+      // reaches x49 and keeps climbing. 4 is a
       // little over what the 12-pip price ceiling implies, so a deep chain is
       // still well worth chasing.
       chainDamageMax: 4,
@@ -8260,6 +8302,14 @@ export const CONFIG = {
           // Clear water left around both, in arena units, so neither is jammed
           // against an edge of the shot.
           framePad: 1.8,
+          // FIT THEM TO THE PHOTOGRAPH, not to the screen. The print keeps a
+          // square cut out of the middle of a widescreen frame — 44% of the
+          // width gone on a 16:9 monitor — so a fit measured against the frame
+          // is a promise about something the player never keeps. With this on,
+          // the pair has to fit the SQUARE, which is what makes the trophy
+          // reliably contain the thing it is a trophy for. Off restores the
+          // old, wider fit for anyone tuning the live shot on its own terms.
+          framePicture: true,
           // The fit is never allowed to open the frame out PAST the ordinary
           // view — a boss that died at the far wall would otherwise zoom the
           // camera out beyond the water plane to keep it in shot.
@@ -8404,7 +8454,16 @@ export const CONFIG = {
           // top of the frame, 1 the bottom. Centred is right for most kills —
           // the kill shot has already pushed the camera in on the seal — but a
           // boss that dies high in the water column reads better pulled up.
+          //
+          // A STARTING POINT rather than the final cut: the window slides off
+          // this far enough to hold the seal and the body wherever they
+          // actually landed (see squareCrop), so this is what the crop is on
+          // every kill that did not need rescuing — which is most of them.
           squareBiasY: 0,
+          // The margin kept around each of them inside the print, as a share of
+          // the picture's side. An animal exactly on the edge is technically in
+          // the photograph and reads as a mistake.
+          focusPad: 0.06,
           // WHAT ACTUALLY LEAVES THE GAME when the player shares or saves a
           // kill shot. True hands over the Rive polaroid; false goes back to
           // the captioned composite this file draws.
@@ -9234,6 +9293,35 @@ export const CONFIG = {
       // scaled by each rig's own inherited fit scale on top of this.
       radius: 0.22,
       haloRadius: 1.3,
+
+      // -----------------------------------------------------------------------
+      // TRACKING — the eyes follow the seal round the arena
+      // -----------------------------------------------------------------------
+      // THE GLOWING BEAD IS THE PUPIL. That is the whole mechanism, and it is
+      // worth stating because the obvious reading — "rotate the eyeball" — does
+      // nothing on these models: the anglerfish's eye mesh is a smooth shaded
+      // sphere with no iris painted on it (its 6% x 6% UV island is a plain
+      // gradient), so rolling it about its own centre is invisible. What IS
+      // visible is that each socket sits OFF its bone — 1.2 file units out
+      // along the bone's own axis, which is where systems/bossEyes.js hangs the
+      // bead — so turning the bone swings the lit bead across the face of the
+      // eyeball. A dark eye with a bright dot sliding across it reads as a
+      // pupil tracking you, which is the thing being asked for, and it costs
+      // one quaternion per eye per frame.
+      //
+      // IT IS DELIBERATELY SMALL. The bead's arc is about a quarter of a world
+      // unit on the anglerfish boss, so at the swivel below it travels roughly
+      // a fifth of the eyeball's width. Any more and the bead leaves the
+      // eyeball entirely and reads as a firefly parked on the animal's cheek.
+      track: {
+        enabled: true,
+        // Radians the eye may turn off the pose the animation left it in.
+        maxSwivel: 0.55,
+        // How fast it gets there. Slow — an eye that snapped onto the seal
+        // every time they crossed the midline would strobe, and the whole
+        // reason this reads at all is that it is a slow, deliberate follow.
+        lerp: 4,
+      },
     },
 
     // -------------------------------------------------------------------------
@@ -9288,11 +9376,213 @@ export const CONFIG = {
       windupTurnRate: 2.4,
       // Where it goes between ambushes. It relocates rather than sitting in one
       // place all fight: a trap in a known spot is not a trap after the first
-      // one. `stationSwing` is how far off the line it just lunged down the new
-      // station sits, in radians.
+      // one.
+      //
+      // HOW FAR TO ONE SIDE, and only that — the height is the seabed and is
+      // not a choice (see floorLift below). This used to carry a `stationSwing`
+      // as well, the angle off the line it had just lunged down, because the
+      // station was a point on a ring around the player. Half of that ring was
+      // ABOVE the seal, and an anglerfish that spent a third of its fight
+      // waiting near the surface had given up the only thing the bottom was
+      // doing for it.
       stationRange: 13,
-      stationSwing: 0.9,
       repositionSpeed: 4.2,
+      // HOW FAR OFF THE SCENERY IT WILL WAIT, as a share of its own radius on
+      // top of that radius — so 0.35 is a body and a third clear of the rock.
+      // A share rather than a distance because the body is the thing being
+      // kept out of the wall, and bosses.csv is free to scale it.
+      //
+      // This is the number that stops the one boss in the roster that holds
+      // still from holding still INSIDE the cliff. The entrance hands over the
+      // moment the body is fully inside the wall, and every other archetype
+      // immediately swims at the seal and leaves; this one lurks, so without a
+      // margin it lurks exactly where it arrived — half buried in the rock and
+      // out of reach until the player swims into the wall to find it. It also
+      // clamps the recovery's station, which is picked as a ring around the
+      // PLAYER and therefore lands out at sea whenever the seal is near a wall.
+      // See clampStation in systems/bossAngler.js.
+      wallMargin: 0.35,
+
+      // -----------------------------------------------------------------------
+      // HOLDING THE BOTTOM
+      // -----------------------------------------------------------------------
+      // An ambush predator that waits in open water is a pinata. This one sits
+      // on the floor between attacks, which is what makes the arena vertical:
+      // the safe place is the surface, the fish is at the bottom, and a run is
+      // spent deciding how far down you are willing to go.
+      //
+      // `floorLift` IS MEASURED OFF THE SAME LINE THE ARENA CLAMP USES —
+      // bounds.bottom + the body's own radius — and NOT off seabedTopY(). The
+      // clamp in entities/enemies.js will not let any creature below
+      // bounds.bottom + radius, and this body's radius is 7.9 world units
+      // against a 1.2-unit seabed strip: a hover measured off the sand would
+      // sit six units UNDER the clamp, the fish would rest at the clamp
+      // instead, and the number here would describe nothing. Measured off the
+      // clamp, "on the bottom" means the same thing to both.
+      //
+      // Small on purpose. This is not a hover height, it is the gap that keeps
+      // the body off its own floor limit — at 0 the animal spends every frame
+      // being clamped, which costs it the little vertical give that makes the
+      // hold read as a fish resting rather than as a prop.
+      floorLift: 0.6,
+      // How fast it settles onto that line (world units/second) and how hard it
+      // pulls toward it. The ease is what stops the descent being a drop: a
+      // body that fell to the floor at full cruise every time it finished an
+      // attack would read as dying rather than as sinking.
+      floorSink: 3.4,
+      floorEase: 1.8,
+
+      // -----------------------------------------------------------------------
+      // THE LURE — the two things it can do without leaving the bottom
+      // -----------------------------------------------------------------------
+      // The lunge above answers a player who comes to it. These answer a player
+      // who does not, which the lunge alone could not: an ambusher pinned to
+      // the seabed with a single melee attack is a boss you beat by floating
+      // out of reach and shooting down at it for a minute.
+      //
+      // WHICH ONE IT USES IS THE DISTANCE, and that is the whole lesson of the
+      // fight. Inside `triggerRange` it lunges. Inside `pulseRadius` (times
+      // `pulsePick`, the slack that stops it choosing a radial you are already
+      // standing outside of) the lure throbs and the water around it seizes.
+      // Beyond that, the beam. Three ranges, three answers, and a player learns
+      // them by standing in the wrong one.
+      //
+      // `lureRange` is the outer edge of it caring at all. Past this the animal
+      // holds station in the dark and the fight simply does not happen, which
+      // is the same proposition the lurk has always made: you can always leave.
+      //
+      // IT HAS TO BE SMALLER THAN THE ARENA OR IT IS NOT A RANGE. The playfield
+      // is 80 wide and 40 deep, so a fish on the floor is within 46 units of
+      // almost every point a seal can occupy — set there, "stay out of its
+      // reach" stopped being an option the player had and the boss simply
+      // attacked forever. 34 leaves the far half of the water genuinely out of
+      // its reach, which is what keeps the lurk a proposition rather than a
+      // pause. The beam's band is what is left between pulseRadius*pulsePick
+      // (15) and this.
+      lureRange: 34,
+      // The tell, and it is LONGER than the lunge's wind-up (0.85). It has to
+      // be: the lunge is a body moving, which a player reads instantly and from
+      // anywhere on screen, while a lure attack announces itself with a light
+      // on an animal that may be forty units away. The extra 0.4s is what buys
+      // the reaction at range.
+      //
+      // MUST EQUAL CONFIG.emissiveCues.charge.attack, exactly as `windup` must
+      // equal windup's — the light has to peak on the frame the thing fires.
+      // tools/boss-angler-test.mjs asserts both.
+      chargeTime: 1.25,
+      // The beat after either lure attack, before the recovery proper. The
+      // animal is stuck in its own follow-through, and this is the window a
+      // player gets to close the distance for free.
+      dischargeTime: 0.55,
+      // THE GAP BEFORE THE NEXT LURE ATTACK, armed by ANY attack including the
+      // lunge, and never gating the lunge itself — see the note in
+      // systems/bossAngler.js for why it runs one way only.
+      //
+      // 5.6 is not a comfort number, it is what buys the LURK back. A lure
+      // cycle costs 3.4s of stages (charge 1.25, discharge 0.55, recovery 1.6)
+      // and a lunge cycle 2.8s, so this is the only thing standing between the
+      // fight and an animal that is always mid-attack. At 2.6 the lurk was
+      // shorter than the 0.7s ramp its own light takes to reach the throb —
+      // which is to say the boss whose entire identity is that it WAITS never
+      // visibly waited, and the tell that teaches the player to read it never
+      // finished arriving. Whatever else moves here, this has to stay well
+      // above (recoverTime + dischargeTime + the lurk hold's attack).
+      attackGap: 5.6,
+
+      // WHICH NODE THE LIGHT COMES OUT OF. Both lure attacks are born at the
+      // esca, not at the middle of the fish — an animal whose whole silhouette
+      // is a long rod with a bulb on the end, firing out of its belly, is one
+      // the player cannot read at all.
+      //
+      // `Top_Bone_02` is the tip of the illicium: the rig calls the rod
+      // Top_Bone_00 -> 01 -> 02 and gives no bone any name resembling "lure",
+      // "esca" or "illicium" (`npm run bones -- public/models/anglerfish.glb`
+      // prints all 295, and none of them do). Found by geometry instead —
+      // measured at 2.79 units out from the body centre in the visual's frame,
+      // forward of and above the mouth, which is exactly where the bulb is.
+      //
+      // Read by world position each frame like the eye sockets are, so the
+      // animation and the whole scale chain are already in it — the rod is
+      // being posed every frame and its rest offset is nowhere near where it
+      // currently is. A miss falls back to the body centre, which is wrong but
+      // visible; naming a bone that does not exist should not put the attack
+      // at the origin of the world.
+      lureNode: 'Top_Bone_02',
+
+      // --- THE RADIAL, the one that holds you ---------------------------------
+      // World units from the LURE, not from the body — the esca is the thing
+      // that lights up, and a field that came out of the animal's middle would
+      // be pointing at the wrong part of it. See lureAt in
+      // systems/bossAngler.js.
+      //
+      // BIG ENOUGH TO HAVE A BAND OF ITS OWN. The three ranges have to be three
+      // ranges: below `triggerRange` (11) the animal bites instead, and above
+      // `pulseRadius * pulsePick` it beams. At 13 the radial owned 11..14.9 —
+      // four units of water, on a body twelve units long, which is to say the
+      // middle answer of the three barely existed and the fight was really just
+      // bite-or-zap. 18 gives it 11..20.7, which a player can find and learn.
+      //
+      // It is a big circle and that is fine: it is telegraphed for 1.25s with a
+      // ring drawn at exactly this radius, and a seal at its own top speed
+      // crosses forty units in that time. The reach is generous because the
+      // dodge is generous.
+      pulseRadius: 18,
+      // The slack on the pick. Above 1 so a player hovering just outside the
+      // radius still draws the radial rather than the beam: getting the choice
+      // wrong by half a body length should be a near miss, not a different
+      // attack.
+      pulsePick: 1.15,
+      // A MULTIPLE OF THE BOSS'S OWN CONTACT DAMAGE, never a flat number. The
+      // roster's damage rides two ramps (spawn.ramp.damage and each creature's
+      // own) and a hand-typed number here would be a fixed handful of points
+      // against a player whose health has quadrupled — an attack that quietly
+      // stops mattering by minute eight. Expressed against contact so it moves
+      // with everything else the animal does.
+      //
+      // Low, deliberately: the radial is not how this boss kills you. It is how
+      // it stops you leaving, and what kills you is whatever else is in the
+      // water while you cannot swim.
+      pulseDamage: 0.35,
+      // The hold. `pulseSnareMul` is the fraction of its own swimming the seal
+      // keeps — 0.12 is caught, not frozen solid, and it is not 0 on purpose:
+      // a player who cannot move AT ALL does not read the freeze as a mechanic
+      // they might have dodged, they read it as the controller having
+      // disconnected. Something still answers the stick.
+      pulseSnare: 1.05,
+      pulseSnareMul: 0.12,
+      // The last stretch of the hold walks the seal back to full speed rather
+      // than releasing on one frame — see snarePlayer in entities/player.js for
+      // why a snap release reads as a hitch rather than as a grip letting go.
+      pulseSnareThaw: 0.35,
+
+      // --- THE BEAM, the one that hurts ---------------------------------------
+      // Also a multiple of contact damage, and the big one. This is the attack
+      // that punishes standing off at range, so it has to be worth more than
+      // the damage a player trades away for the safety of being out there.
+      //
+      // It cannot one-shot whatever it is set to: every point of it goes
+      // through main.js's onPlayerHit and is trimmed by capBossDamage, which
+      // holds any single hit to a fraction of the bar (CONFIG.boss.damageCap
+      // .perHit) and a whole second of boss damage to another. The number here
+      // is what the beam is WORTH; the cap is what a run can actually lose.
+      beamDamage: 1.35,
+      // How long the line burns and how often it may bite the same target. The
+      // pair is what decides the cost of standing in it: at 0.85 and 0.3 a
+      // player who reacts eats one tick and one who does not eats three.
+      beamLife: 0.85,
+      beamTick: 0.3,
+      // Wide enough to be a hazard rather than a hairline, narrow enough that a
+      // body length of movement clears it.
+      beamWidth: 1.1,
+      // Long enough to cross the arena from the floor at any angle — the beam
+      // is a line, and one that stops short of the wall is a line with an
+      // invisible edge no player can learn.
+      beamLength: 150,
+      // The near-white core inside the electric colour. The line's own colour
+      // comes from the shared threat palette (threatColor('electric') in
+      // systems/organicRing.js), so the boss's beam and the player's Voltaic
+      // shots cannot drift apart — there is one number and both ends read it.
+      beamCore: 0xdff8ff,
     },
 
     perkFx: {
@@ -10445,6 +10735,14 @@ export const CONFIG = {
       // do — a moving trap is just a slow chaser.
       bossAnglerfish: {
         ambushBoss: true,
+        // IT COMES UP OUT OF THE DARK, every time. `deepSpawn` forces the deep
+        // entrance in edgeSpawnPoint (entities/enemies.js) rather than taking
+        // the 1-in-10 chance of it that everything else gets — so this animal
+        // is never seen swimming in along the surface from a wing, which is
+        // where two arrivals in three used to come from. The entrance is the
+        // first thing the player learns about a boss and for this one it is
+        // half the character: it was already down there.
+        deepSpawn: true,
         separates: true,
         asset: 'enemyBossAnglerfish', behavior: 'hunt', faceMotion: true,
         // A BONE HULL, like the kraken's and the mosasaur's. The field is only
@@ -12670,6 +12968,43 @@ export const CONFIG = {
       // that has to punch above it, which is what makes the moment of contact
       // read as brighter than the beam itself.
       beamCut:   { emit: 'sparks',      shake: 0.045, hitstop: 0,    glow: 0.7,  ripple: { strength: 0.9, radius: 5 },   sfx: 'hit',      haptic: [{ duration: 24, magnitude: 0.55 }], sfxMinGap: 0.11 },
+      // --- THE ANGLERFISH'S LURE (systems/bossAngler.js) ---------------------
+      // Three events for one mechanic, because the player has to be able to
+      // tell three different things apart: the fish is charging, the water
+      // seized, and the beam fired.
+      //
+      // THE SOUNDS ARE THE ELEMENT BANK'S, NOT NEW VOICES, and that is the
+      // point rather than a shortcut. This game already has one vocabulary for
+      // "electricity" and one for "held in ice" — the player's own Voltaic and
+      // Chill upgrades — and the boss doing the same two things should sound
+      // like the same two things. A bespoke pair of blips would teach the
+      // player that the boss's electricity is a different substance from
+      // theirs, which is a lie the threat palette (CONFIG.fx.attackTypes) is
+      // built specifically to avoid telling in the other direction.
+      //
+      // The charge is nearly silent: it fires once at the top of a 1.25s tell,
+      // and the thing carrying that tell is the light on the animal. A sound
+      // big enough to be the telegraph would be a sound playing over an event
+      // that has not happened yet.
+      anglerCharge: { emit: null, shake: 0, hitstop: 0, glow: 0.3, sfx: 'elementHit', sfxMinGap: 0.3 },
+      // THE RADIAL LANDING. Ripples wide because the reach is wide — the number
+      // here is read against CONFIG.boss.angler.pulseRadius, so the water moves
+      // roughly where the ring the player was just looking at was drawn.
+      anglerPulse: { emit: 'elementChill', shake: 0.14, hitstop: 0, glow: 0.85, ripple: { strength: 2.6, radius: 18 },
+                     sfx: 'elementFreeze', haptic: [{ duration: 26, magnitude: 0.45 }], sfxMinGap: 0.1 },
+      // THE SEAL CAUGHT IN IT. Separate from `anglerPulse` because they are not
+      // the same event: the pulse happens wherever the fish is, and this
+      // happens to YOU. It is the one of the three with a hitstop — a beat of
+      // held frames is the only way "you cannot move" registers before the
+      // player has had time to try and fail to move.
+      anglerSnare: { emit: 'breathBubbles', shake: 0.1, hitstop: 0.05, glow: 0.6, ripple: { strength: 1.4, radius: 6 },
+                     sfx: 'clubFreeze', haptic: [{ duration: 40, magnitude: 0.6 }], sfxMinGap: 0.2 },
+      // THE BEAM FIRING, once at the muzzle. Every subsequent bite of it is
+      // `beamCut` above, fired by systems/beams.js like any other beam in the
+      // game — so a player who stands in this one and a player who stands in
+      // the seal's own laser hear the same thing happening to them.
+      anglerBeam: { emit: 'sparks', shake: 0.16, hitstop: 0, glow: 1.0, ripple: { strength: 2.0, radius: 9 },
+                     sfx: 'elementArc', haptic: [{ duration: 20, magnitude: 0.5 }], sfxMinGap: 0.1 },
       bulletHit: { emit: 'sparks',      shake: 0.03, hitstop: 0,     glow: 0.25, ripple: { strength: 0.8, radius: 4 },   sfx: 'hit',      haptic: [10], sfxMinGap: 0.09 },
       // Was unthrottled, which is fine when kills are occasional and is not when
       // a volley clears a school: several kills land inside one frame and play
@@ -14576,6 +14911,52 @@ export const CONFIG = {
         },
       },
 
+      // --- THE WATER LOSES INTEREST --------------------------------------------
+      // Nothing hunts a corpse. Every hunter, chaser and orbiter in the game
+      // steers at the player's position, and that position does not stop
+      // existing when the run ends — so the whole descent used to be watched
+      // through a knot of animals converging on one point and grinding against
+      // each other's separation radius. Which is also the least interesting
+      // thing the ocean can be doing behind the shot of your own death.
+      //
+      // What relaxes is not their SPEED but their TARGET: over `relax` seconds
+      // each animal's aim slides off the body and onto a point out in front of
+      // its own nose, so it simply carries on the way it was going and the
+      // knot opens out. Radius gates come with it for free — a hunter whose
+      // quarry is suddenly 40 units away is outside its aggro radius and drops
+      // into its ordinary cruise. See quarryFor in entities/enemies.js.
+      //
+      // They keep hunting each OTHER the whole time (systems/predation.js is
+      // untouched by this), which is the point: the sea stops being about you.
+      disperse: {
+        enabled: true,
+        // WALL-CLOCK seconds after the blow before they start letting go, and
+        // how long that takes. The delay exists so the moment of the kill still
+        // reads — everything that just ate you is still on top of you for a
+        // beat — and the ease is long enough that nothing visibly turns on a
+        // frame.
+        delay: 0.7,
+        relax: 2.4,
+        // How far ahead of itself a fully released animal steers, world units.
+        // This is also what puts it outside its own aggro radius, so it wants
+        // to be bigger than the widest of those rather than merely big enough
+        // to look like a direction.
+        lead: 44,
+        // How much of that bearing is bent away from the body, 0..1. Half the
+        // animals in the water are pointed AT the seal on the frame they let
+        // go, and "carry on" sends those straight through it — the knot lasts
+        // exactly as long as they take to cross. At 0.35 a head-on approach
+        // peels off and something already leaving barely bends; at 1 it is
+        // twelve creatures fleeing a corpse, which reads as a shockwave.
+        outward: 0.35,
+        // THE CRABS ARE EXEMPT, and they are the exception that proves the
+        // rule: their pile-on is authored (CONFIG.enemies.walkingCrab.crawl
+        // .corpse), it is the last thing you watch, and it already solves the
+        // swarm problem its own way — they stop steering at `settleRange` and
+        // let the collisions stack them into a heap.
+        keepPile: true,
+      },
+
       // --- the shot ------------------------------------------------------------
       // The frame leaves the wide arena view, closes in on the body and rides it
       // down. Both times are WALL-CLOCK: the push is a separate movement laid
@@ -14694,7 +15075,18 @@ export const CONFIG = {
       lean: 0.05,
       // World units to push below the bed, so the base beds in rather than
       // resting on the surface like a sticker.
-      sink: 0.05,
+      //
+      // RENAMED FROM `sink`, AND THE OLD NAME MUST NOT COME BACK as a `??`
+      // fallback. imported-tuning.json is a snapshot of the whole CONFIG, not a
+      // patch, so it pins `gravesite.sink: 0.05` on every machine that has ever
+      // opened the tuner — and a re-defaulted `sink` here would reach nobody.
+      // Same move, and the same reason, as dayNight.pass.orbit.drift.
+      //
+      // 0.22 rather than the 0.05 it shipped at: at the resting zoom that was
+      // about one pixel of bed, which is under the width of the seam itself, so
+      // the stone read as standing ON the floor line with daylight under it.
+      // A few pixels is what makes it look planted.
+      bedDepth: 0.22,
 
       // --- the inscription's rectangle on the face ------------------------------
       // Fractions of the stone's own measured bounding box, not world units —
@@ -14857,6 +15249,48 @@ export const CONFIG = {
         power: 1.4,
         shake: 1.6,
     },
+
+      // --- THE CRABS CLEAR OUT ---------------------------------------------------
+      // A death ends with a heap of crabs on the body
+      // (CONFIG.enemies.walkingCrab.crawl.corpse) and a headstone dropping onto
+      // exactly that spot. The stone throws them off it — see `impact` above —
+      // and then, until this existed, the survivors turned round and walked
+      // straight back onto the grave, because the corpse they were piling on is
+      // still there under it. The last thing the player watches is the stone
+      // being carved, and it was being carved behind a crab.
+      //
+      // So the pile ENDS on the landing: the moment the stone is on the bed the
+      // pile-on branch stops, the exemption that kept crabs out of the death
+      // dive's dispersal is dropped with it (see quarryFor in
+      // entities/enemies.js), and they wander off with everything else.
+      //
+      // And they keep off it afterwards. A stone stands on the seabed for every
+      // run after the one that earned it, and crabs are the only thing in the
+      // game that walks along that floor.
+      //
+      // IT IS NOT A SAFE ZONE, and that is the one rule here that is not about
+      // the look: this steers a crab that has nothing to do — wandering,
+      // feeding, filing off after a death. A crab that is coming for the PLAYER
+      // ignores it entirely, or a player who stood on a grave could not be
+      // reached, and a decoration would have become a mechanic.
+      keepOut: {
+        enabled: true,
+        // Half-width of the exclusion, world units, measured on x alone — the
+        // crabs live on one line and a radial test on a floor-bound creature is
+        // a circle it can only ever cross the middle of. The headstone is about
+        // 1.8 units wide, so this is the stone plus a walking-room margin
+        // rather than a crater.
+        radius: 5,
+        // How briskly they leave, as a multiple of the crawl speed. Above 1
+        // because the moment this matters most is a crab standing where a
+        // five-second inscription is about to be cut.
+        speedMul: 1.5,
+        // ...and how far past `radius` one that is already leaving carries on,
+        // as a multiple of it. This is hysteresis, not padding: released exactly
+        // at the edge, a crab wanders a step back in on its next roll and is
+        // pushed out again, and spends the whole scene pacing the boundary.
+        clear: 1.5,
+      },
 
       // --- the beam --------------------------------------------------------------
       // A shaft of caustic light that crosses the stone as the caption arrives,
@@ -17105,6 +17539,34 @@ export const CONFIG = {
       minDuration: 20, // ms — anything shorter never spins up at all
       maxDuration: 1000,
 
+      // THE TAPTIC ENGINE — the iPhone build's only haptic device. See the
+      // header of systems/taptic.js for why an authored pulse cannot be
+      // replayed there and has to be collapsed to one of three weights.
+      //
+      // Inert everywhere else: the whole path is behind
+      // Capacitor.isNativePlatform(), so these do nothing in a browser.
+      taptic: {
+        enabled: true,
+        // Where the shared magnitude curve above lands on the three taps the
+        // hardware offers. Everything below mediumAt is a Light tap.
+        mediumAt: 0.34,
+        heavyAt: 0.66,
+        // Below this, don't tap at all. Higher than the pad's `floor` on
+        // purpose — a weak rumble fades into a bed, but the weakest possible
+        // tap is still a distinct poke, so the bar for interrupting the player
+        // has to be set by importance rather than by what the hardware can
+        // physically render.
+        floor: 0.2,
+        // The engine can only re-tap, never hold, so a burst of fire has to be
+        // thinned or it rattles. 60ms ~ 16 taps a second, which is a texture
+        // rather than a fault.
+        minGapMs: 60,
+        // ...but an event this much stronger than what is currently playing
+        // ignores the spacing. Without it a kill inside a burst is dropped,
+        // which silences the channel at the only moment it matters.
+        cutThrough: 0.25,
+      },
+
       // MIXING — sum overlapping events instead of letting the loudest replace
       // the rest. See the long note above the mixer in systems/haptics.js for
       // why this can't be done on the pad and has to be done in software.
@@ -18742,7 +19204,12 @@ export const CONFIG = {
     predatorMultiplier: 6, // ...for everything else (sharks, crabs, etc.)
     schoolWipeBonus: 150, // awarded once, to whichever kill empties a school
     comboMultiplierPerChain: 0.5, // +50% per chain step beyond the first
-    comboMaxMultiplier: 5,
+    // NO `comboMaxMultiplier`. There was one, at 5, and it is gone on purpose
+    // rather than raised — see comboMultiplierFor in systems/scoring.js. The
+    // score is the one chain multiplier with nothing downstream of it that has
+    // to survive being large, and a ceiling there flattens the deepest chain
+    // of a run into the same number as an ordinary good one. The damage,
+    // speed and xp multipliers all still have theirs.
   },
 
   // Keeps big creatures from occupying the same space. Only enemies flagged
@@ -19203,12 +19670,58 @@ export const CONFIG = {
       // weapon can otherwise carpet the arena, and a pickup you cannot avoid
       // stops being a reward for aiming.
       maxAlive: 7,
-      // The tell that it is FUEL and not food. The boost colour (see
-      // CONFIG.hud.boostColor) rather than the meat's red-to-amber ramp, so
-      // the two pickups are never confused at a glance — and it is a colour,
-      // judged by eye, which is one of the two numbers in this block that are
-      // tuner sliders rather than behaviour.csv rows.
-      tint: 0xffe07a,
+      // MEAT OFF THE WOUND, and it is the wound's own colour. This used to be
+      // the boost yellow (CONFIG.hud.boostColor) on the argument that the piece
+      // is FUEL and the tell should say so — and in the water it read as a pale
+      // yellow pebble, which is neither the boost bar nor a piece of a boss. A
+      // spot ruptures in `look.flashColor`; the meat it throws is the same red,
+      // so the burst and the thing the burst delivered are one event instead of
+      // two objects that happen to arrive together.
+      //
+      // WHAT MAKES A RED GLOW, since red is the hard case, and the numbers are
+      // in LINEAR space because that is where the bright pass runs — a hex read
+      // off a colour picker is sRGB and will mislead you by a factor of three
+      // here. The pass thresholds Rec.709 luminance at 0.58 live. This red
+      // carries 0.230 of it; the old yellow carried 0.758. So at the chunk's
+      // shared `glow` of 1.5 the yellow landed at 1.14 and blazed, and the same
+      // 1.5 puts this at 0.34 — under the line, no halo at all. That gap is the
+      // whole reason a straight swap of the hex looked like a dull pebble.
+      // `glowMul` below is what buys it back. Raising CONFIG.bloom.threshold is
+      // the natural mistake and the wrong knob: it decides which pixels get a
+      // halo, not how bright anything is.
+      //
+      // The composite's soft shoulder scales all three channels by one factor
+      // (systems/post.js), so pushing a saturated red past 1 costs nothing in
+      // hue — it renders as a full-brightness red with a red halo rather than
+      // sliding to white. That is the one property this whole arrangement
+      // rests on.
+      tint: 0xff2a14,
+      // HOW MUCH GLOW IT WEARS AT REST, over the chunk's shared
+      // CONFIG.chumChunk.glow, and it is SIZED AGAINST THE YELLOW IT REPLACED
+      // rather than picked: 3.6 puts the red at 1.24 luminance against the
+      // yellow's 1.14, so the halo is a touch louder than the thing everyone
+      // already agreed was legible. 2.5 is the floor — below it the piece
+      // crosses the threshold by so little that the smoothstep hands back
+      // almost nothing and it reads as flat paint.
+      //
+      // The body itself does NOT get brighter with this past the first stop.
+      // The composite normalises on the peak channel, so a saturated red is
+      // already at full value on screen; everything above that goes into the
+      // halo. That is the correct place for it — a glow is light AROUND a
+      // thing.
+      //
+      // A permanently brighter body used to be argued against here, on the
+      // grounds that it says "this is a bigger one" in the language the size
+      // and the tint already speak. That holds between two chunks of the SAME
+      // currency and this is not one: an ambient chunk is health the fight
+      // handed you and this is meat you opened a boss for, and it is supposed
+      // to out-shout everything else in the water on the frame it lands.
+      glowMul: 3.6,
+      // ...AND HOW BIG, over the size its pip value already buys it (see the
+      // `t` in spillHotSpotChum). At 1.6 a two-pip piece off a five-pip bar
+      // comes out about twice an ordinary chunk — the size is doing the same
+      // job the glow is, which is saying that this one came from somewhere.
+      sizeMul: 1.6,
       // HOW HARD IT ARRIVES, over the chunk's shared arrival flash
       // (CONFIG.chumChunk.flash.boost). A piece thrown out of a wound comes in
       // white-hot: the burst that throws it (feedback `hotSpotChum`) is the
@@ -21888,7 +22401,7 @@ export const CONFIG = {
     // dive, which is judged over a run and against the deplete rate, not by
     // eye. It is also the base every Deep Lungs stack adds to and what Iron
     // Lung reads its damage off, so it is an economy number twice over.
-    max: 115,
+    max: 132,
     depleteRate: 4, // per second while underwater
     // WHAT A BREACH IS WORTH, and weapons.csv owns it for the same reason
     // `max` above is there: it is one half of an exchange rate — seconds of
@@ -23775,6 +24288,29 @@ export const CONFIG = {
     // thing in the game. The commit frame is meant to be exactly that.
     commit:  { from: 14.0, to: 19.0, attack: 0.04, hold: 0.06, release: 0.18, curve: 'outQuad' },
     hurt:    { from: 1, to: 11.0, attack: 0.03, hold: 0.04, release: 0.22, curve: 'outQuad' },
+    // THE LURE ATTACKS' TELL, and it is a different shape from `windup` on
+    // purpose even though it does the same job.
+    //
+    // `windup` says A BODY IS ABOUT TO ARRIVE, and it is read alongside an
+    // animal visibly coiling three body lengths away — `inCubic` works there
+    // because the movement carries the early part of the message and the light
+    // only has to say "now".
+    //
+    // This one may be the ONLY thing the player can see. The animal is on the
+    // seabed, possibly forty units off, and it does not move at all: if the
+    // light does not carry the whole message there is no message. So it starts
+    // rising immediately (`outQuad`, fast at first) and keeps climbing for the
+    // full charge, which reads as a thing filling up rather than as a thing
+    // that suddenly happens. `attack` matches CONFIG.boss.angler.chargeTime, so
+    // the peak lands on the frame the attack leaves the lure.
+    charge:  { from: 3.2, to: 16.0, attack: 1.25, hold: 0, release: 0.06, curve: 'outQuad' },
+    // THE DISCHARGE. Brighter than `commit` (19.0, the brightest frame in the
+    // game) because this is the same event for a different attack and the two
+    // must not rank against each other — a lunge and a beam are equally the
+    // moment the animal spends everything it was holding. Over almost at once:
+    // by the time it is legible the beam is already lit, and what the player
+    // should be reading then is the line, not the fish.
+    zap:     { from: 16.0, to: 19.0, attack: 0.03, hold: 0.05, release: 0.2, curve: 'outQuad' },
   },
 
   // ---------------------------------------------------------------------------
@@ -23823,7 +24359,27 @@ export const CONFIG = {
     // Resolution setting already agreed on. It cannot hand out pixels the
     // player did not ask for, and off it does nothing at all.
     adaptive: {
-      enabled: true,
+      // OFF, because it was measured and it did not work.
+      //
+      // The reasoning that built it: production frames run only ~6ms of JS in
+      // a ~19ms frame, so two thirds of every missed frame was the tab not
+      // executing — read as a GPU too busy to keep up. Shipped, it cut a live
+      // machine from 6.45 to 3.25 megapixels (autoScale 0.6, ratio 2.0 -> 1.35)
+      // and the time the loop spent not executing was **13.63ms against
+      // 13.1-15.9ms at full resolution**. Half the pixels, no change at all.
+      //
+      // The flaw was reading a per-FRAME average as blocking. Median frame is
+      // 17-19ms on a 60Hz panel and JS is 6ms, so ~11ms of that gap is just
+      // vsync idle — a game hitting its frame rate and waiting, which is what
+      // healthy looks like. The hitches are JS-bound: those frames run 11-28ms
+      // of JS, two to five times an ordinary one. See
+      // `jsMsPerHitch` in the run records, which is the column that says so.
+      //
+      // Kept rather than deleted: the controller is correct and tested
+      // (npm run test:autoscale), and a genuinely fill-rate-bound machine is a
+      // real thing this would help. It is simply not what is wrong here, and
+      // it must not ship costing half the pixels for nothing.
+      enabled: false,
       // The frame time a frame is allowed to take before it counts as missed.
       // 18 rather than 16.67: a frame landing a whisker over vsync is normal
       // and a controller that treats it as failure never stops cutting.
@@ -25329,6 +25885,38 @@ const SYNCED_FX = [
   // the WHOLE effect rather than a texture on top of one: a colour change a
   // sixteenth off the beat does not read as slightly late, it reads as random.
   ['level blob — colour', () => CONFIG.levelPickup?.blob ?? {}, ['colorSync']],
+  // TWO PIECES OF UI on the grid, and they are here for the same reason the
+  // yacht's ordnance is: the question this list answers is "what is on the
+  // beat", not "what is a shader parked on the water". The meters' noise boils
+  // a sixteenth at a time behind the player's own numbers, and the weak spot
+  // throbs on the half — the two places a wrong division would be read as the
+  // GAME stuttering rather than as an effect being slightly late.
+  ['HUD meters — boil', () => CONFIG.hud?.meterNoise ?? {}, ['boilSync']],
+  ['boss weak spot — throb', () => CONFIG.hotSpots?.look ?? {}, ['pulseSync']],
+  // THE PRESETS THAT INHERIT THE BASE DIVISIONS WHOLESALE. Every row below
+  // names no division of its own, so each one reports `biolumSkin.base`'s
+  // numbers — which is precisely why they cannot be left out. They also
+  // inherit base's `pulseAmp`, and that is 0.25, not 0: this is not the
+  // "configured but silent" case the crab row above argues for, it is a real
+  // breath already running on the shared grid, worn by most of the roster.
+  // Moving one number on `biolumSkin.base` moves every line below it at once,
+  // and this block is the only place that is visible.
+  ['cold snap club', () => resolveBiolumCfg('biolumSkin.presets.clubIce'), ['pulseSync', 'flickerSync']],
+  ['octopus grabber — skin', () => resolveBiolumCfg('biolumSkin.presets.octoGrabber'), ['pulseSync', 'flickerSync']],
+  ['hammerhead', () => resolveBiolumCfg('biolumSkin.presets.hammerhead'), ['pulseSync', 'flickerSync']],
+  ['boss yacht — hull', () => resolveBiolumCfg('biolumSkin.presets.bossYacht'), ['pulseSync', 'flickerSync']],
+  ['orca escort — cow', () => resolveBiolumCfg('biolumSkin.presets.orcaFriendCow'), ['pulseSync', 'flickerSync']],
+  ['orca escort — calf', () => resolveBiolumCfg('biolumSkin.presets.orcaFriendCalf'), ['pulseSync', 'flickerSync']],
+  ['bakalar\u2019s boat — hull', () => resolveBiolumCfg('biolumSkin.presets.bakalarBoat'), ['pulseSync', 'flickerSync']],
+  ['boat — hull', () => resolveBiolumCfg('biolumSkin.presets.boat'), ['pulseSync', 'flickerSync']],
+  ['boss boat — hull', () => resolveBiolumCfg('biolumSkin.presets.bossBoat'), ['pulseSync', 'flickerSync']],
+  ['clownfish', () => resolveBiolumCfg('biolumSkin.presets.clownFish'), ['pulseSync', 'flickerSync']],
+  ['barracuda', () => resolveBiolumCfg('biolumSkin.presets.barracuda'), ['pulseSync', 'flickerSync']],
+  ['puffer', () => resolveBiolumCfg('biolumSkin.presets.puffer'), ['pulseSync', 'flickerSync']],
+  ['tuna', () => resolveBiolumCfg('biolumSkin.presets.tuna'), ['pulseSync', 'flickerSync']],
+  ['eel companion', () => resolveBiolumCfg('biolumSkin.presets.eelCompanion'), ['pulseSync', 'flickerSync']],
+  ['whale', () => resolveBiolumCfg('biolumSkin.presets.whale'), ['pulseSync', 'flickerSync']],
+  ['harp note', () => resolveBiolumCfg('biolumSkin.presets.musicNote'), ['pulseSync', 'flickerSync']],
 ];
 
 // The generic version of the bioluminescence timing rows, for the effects that
@@ -27427,7 +28015,6 @@ export const TUNER_SCHEMA = [
       { path: 'points.predatorMultiplier', min: 0, max: 20, step: 0.5 },
       { path: 'points.schoolWipeBonus', min: 0, max: 1000, step: 10 },
       { path: 'points.comboMultiplierPerChain', min: 0, max: 2, step: 0.05 },
-      { path: 'points.comboMaxMultiplier', min: 1, max: 15, step: 0.5 },
     ],
   },
   {
@@ -28278,6 +28865,9 @@ export const TUNER_SCHEMA = [
       { path: 'creatureOutline.thickness', min: 0, max: 0.6, step: 0.005, label: 'outline thickness' },
       { path: 'creatureOutline.glow', min: 0, max: 8, step: 0.1, label: 'outline glow' },
       { path: 'creatureOutline.opacity', min: 0, max: 1, step: 0.05, label: 'outline opacity' },
+      // Above the per-species rows on purpose: it overrides all of them for one
+      // kind of body, so reading it after the list would be reading it too late.
+      { path: 'creatureOutline.bosses', type: 'bool', label: 'bosses wear it too' },
       // One switch per species. Built from the config block rather than typed
       // out, so adding a creature to `creatureOutline.on` gives it a row here
       // for free — and the two can't drift apart, which is exactly how a
@@ -29579,6 +30169,8 @@ export const TUNER_SCHEMA = [
       // is FUEL and not food, and a tell is judged by eye against the health
       // chunk's red-to-amber ramp with both in the water.
       { path: 'hotSpots.chum.tint', type: 'color', label: 'meat it kicks loose — colour' },
+      { path: 'hotSpots.chum.glowMul', min: 0, max: 6, step: 0.1, label: '…resting glow (x the chunk glow) — red needs this to bloom' },
+      { path: 'hotSpots.chum.sizeMul', min: 0.5, max: 4, step: 0.05, label: '…how big (x the size its pips buy)' },
       { path: 'hotSpots.chum.flashMul', min: 0, max: 5, step: 0.1, label: '…how hot it arrives (x the chunk flash)' },
       { path: 'hotSpots.chum.trail.enabled', type: 'bool', label: '…goo trail behind it' },
       { path: 'hotSpots.chum.trail.every', min: 0.01, max: 0.3, step: 0.005, label: '…a blob every (s)' },
@@ -29855,7 +30447,7 @@ export const TUNER_SCHEMA = [
       { path: 'gravesite.scale', min: 0.5, max: 8, step: 0.1, label: 'stone size (whole set)' },
       { path: 'gravesite.z', min: -6, max: 0, step: 0.1, label: 'depth (behind the action)' },
       { path: 'gravesite.lean', min: 0, max: 0.4, step: 0.01, label: 'cant (rad)' },
-      { path: 'gravesite.sink', min: 0, max: 0.6, step: 0.01, label: 'bedded into the floor' },
+      { path: 'gravesite.bedDepth', min: 0, max: 0.6, step: 0.01, label: 'bedded into the floor' },
       { path: 'gravesite.label.enabled', type: 'bool', label: 'name the grave you swim over' },
       { path: 'gravesite.label.radius', min: 1, max: 20, step: 0.5, label: 'how close counts (units)' },
       { path: 'gravesite.label.gap', min: 0, max: 120, step: 2, label: 'label height above stone (px)' },
@@ -29895,6 +30487,10 @@ export const TUNER_SCHEMA = [
       { path: 'gravesite.impact.killRadius', min: 0, max: 30, step: 0.5, label: 'impact: crush radius' },
       { path: 'gravesite.impact.power', min: 0, max: 4, step: 0.05, label: 'impact: shove power' },
       { path: 'gravesite.impact.shake', min: 0, max: 4, step: 0.1, label: 'impact: shake' },
+      { path: 'gravesite.keepOut.enabled', type: 'bool', label: 'crabs keep off the grave' },
+      { path: 'gravesite.keepOut.radius', min: 0, max: 20, step: 0.5, label: 'keep-out half-width' },
+      { path: 'gravesite.keepOut.speedMul', min: 0.5, max: 3, step: 0.1, label: 'how briskly they leave (x)' },
+      { path: 'gravesite.keepOut.clear', min: 1, max: 3, step: 0.05, label: 'how far clear they walk (x)' },
       { path: 'gravesite.drop.siltPuffs', min: 1, max: 8, step: 1, label: 'silt bursts on impact' },
       { path: 'gravesite.drop.siltSpread', min: 0, max: 3, step: 0.05, label: 'silt spread (units)' },
       { path: 'gravesite.drop.siltSpeed', min: 0.2, max: 3, step: 0.05, label: 'silt thrown (x)' },
@@ -30012,6 +30608,13 @@ export const TUNER_SCHEMA = [
       { path: 'death.flop.limbKick', min: 0, max: 30, step: 0.5, label: 'limb shove per bounce' },
       { path: 'death.flop.tailKick', min: 0, max: 30, step: 0.5, label: 'tail shove per bounce' },
       { path: 'death.flop.tailLooseness', min: 0.5, max: 5, step: 0.1, label: 'tail looser when dead (x)' },
+      // ...and the ocean letting go of the body.
+      { path: 'death.disperse.enabled', type: 'bool', label: 'the water loses interest' },
+      { path: 'death.disperse.delay', min: 0, max: 4, step: 0.1, label: 'seconds before they let go' },
+      { path: 'death.disperse.relax', min: 0.1, max: 8, step: 0.1, label: 'seconds to let go over' },
+      { path: 'death.disperse.lead', min: 5, max: 120, step: 1, label: 'how far ahead they steer' },
+      { path: 'death.disperse.outward', min: 0, max: 1, step: 0.05, label: 'how far they lean away' },
+      { path: 'death.disperse.keepPile', type: 'bool', label: 'crabs still pile on' },
       { path: 'death.settleDrag', min: 0.5, max: 1, step: 0.01, label: 'settle drag' },
       { path: 'death.settleTurn', min: 0.5, max: 20, step: 0.5, label: 'roll flat rate' },
       { path: 'death.settle', min: 0, max: 6, step: 0.1, label: 'pause before score screen (s)' },
@@ -30493,7 +31096,7 @@ const PATH_TABLES = [
     roots: ['weapon', 'missile', 'bounce', 'shrimpRing', 'scallop', 'oyster', 'razorClam', 'seagullBomb',
       'eel', 'sealTeam', 'beluga', 'club', 'clubStacks', 'clubThrow', 'clubBoom', 'clubIce', 'strike',
       'airborne', 'octoGrab', 'harp', 'homingShot', 'maneater', 'ironLung', 'oxygen',
-      'starfish', 'laserEyes', 'biolum'],
+      'starfish', 'laserEyes', 'biolum', 'player'],
     forbid: (id) => {
       // The beams' geometry at the FACE — which socket they leave and what
       // colour they are — is judged by eye on the seal's head, not against the
@@ -30520,6 +31123,17 @@ const PATH_TABLES = [
       ]);
       if (id.startsWith('biolum.') && !BIOLUM_OWNED.has(id)) {
         return 'weapons.csv owns Glow Up!\'s shared curve only — the glow, the day ramp, the tints and the per-element look are tuner sliders';
+      }
+      // FENCED TO THE HEALTH ECONOMY. `player` is mostly the feel of driving
+      // the seal — thrust, friction, the turnaround roll — and every one of
+      // those is judged by eye with a hand on the keys. What is here is the
+      // survivability pair, which is read against the toughness ramp over a
+      // run exactly the way oxygen.max is. Both arrived the same way as the
+      // laser above: no slider and no CSV row, so a saved snapshot was the
+      // only place the number lived.
+      const PLAYER_OWNED = new Set(['player.maxHp', 'player.hpPerLevel']);
+      if (id.startsWith('player.') && !PLAYER_OWNED.has(id)) {
+        return 'weapons.csv owns the seal\'s health economy only — thrust, friction and the turnaround are tuner sliders';
       }
       return null;
     },
@@ -30550,7 +31164,8 @@ const PATH_TABLES = [
     roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies', 'hotSpots', 'kraken'],
     forbid: (id) => {
       if (id.startsWith('hotSpots.look.') || id.startsWith('hotSpots.chum.trail.')
-        || id === 'hotSpots.chum.tint' || id === 'hotSpots.chum.flashMul') {
+        || id === 'hotSpots.chum.tint' || id === 'hotSpots.chum.flashMul'
+        || id === 'hotSpots.chum.glowMul' || id === 'hotSpots.chum.sizeMul') {
         return 'behaviour.csv owns the weak spots\' throughput only — the colours, the glow and the pulse are tuner sliders';
       }
       return enemyCsvOwns(id);

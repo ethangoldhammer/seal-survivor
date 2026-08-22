@@ -61,7 +61,12 @@ const VIEWPORTS = [
 // which is the frame that can run off the top and the only one the CSS ceiling
 // has to catch. Both are needed: the growth is the feature, so the short
 // version cannot stand in for the long one or the other way round.
-const SURFACES = ['HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card'];
+// 'settings' and 'paused' are the SAME PANEL on its two routes, and they are
+// both here because the routes differ in the one row that broke: the footer is
+// two buttons from the main menu and three during a run, and it is the third
+// that ran off the side of the panel. A surface list holding only one of them
+// would have measured the route that fits.
+const SURFACES = ['HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card', 'settings', 'paused'];
 
 // THE FURNITURE A CALLOUT MAY NOT COVER. The same list ui/callout.js clears
 // itself of, restated here ON PURPOSE rather than imported: this is the check,
@@ -245,6 +250,8 @@ function describe(f) {
   if (f.type === 'clipped') return `${f.what} — clipped, content ${f.contentW}px in a ${f.boxW}px box`;
   if (f.type === 'threw') return `surface failed to build — ${f.what}`;
   if (f.type === 'callout-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;
+  if (f.type === 'out-of-panel') return `${f.what} — ${f.by}px outside the menu panel it belongs to`;
+  if (f.type === 'clipped-below') return `${f.what} — cut off at the bottom, content ${f.contentH}px in a ${f.boxH}px box`;
   return `${f.what} — ${f.type} by ${f.by}px`;
 }
 
@@ -272,6 +279,16 @@ async function runFrame(surface) {
       onResume: noop, onPauseRestart: noop,
     });
     callout.initCallouts(ui.uiRoot());
+
+    // THE TYPE THE GAME ACTUALLY SHIPS. Every rule in ui.js is sized in px
+    // against a font the player can change: `family` and `scale` live in the
+    // tuning file, and the shipped one is a pixel face at most of an em per
+    // glyph — words half again as wide as the Inter the stylesheet was written
+    // against. main.js calls this at boot; nothing here did, so every tile was
+    // measured in the FALLBACK font and every surface that fits in Inter and
+    // not in the real face passed. That is exactly how a pause footer that ran
+    // off the side of its own panel got past this tool.
+    (await import('../../path/src/ui/typography.js')).initTypography();
 
     // The hand this device is held in. initUI sets .sv-touch from the real
     // media query, and an iframe inherits `pointer: coarse` from the machine
@@ -313,6 +330,15 @@ async function buildSurface(surface, ui, callout, callouts) {
     mesh: { position: { x: 0, y: 0, z: 0 } },
   };
 
+  if (surface === 'settings' || surface === 'paused') {
+    // Through the real entry point rather than by un-hiding the markup: the
+    // body is rebuilt on the way in (buildBody reads the live settings) and a
+    // panel that was only revealed would be measured with whatever rows it was
+    // born with. `standalone` is the route — see the flag's note in pauseMenu.
+    const pause = await import('../../path/src/ui/pauseMenu.js');
+    pause.showPauseMenu({ standalone: surface === 'settings' });
+    return;
+  }
   if (surface === 'cards') {
     ui.previewScreen('cards');
     return;
@@ -393,8 +419,18 @@ async function buildSurface(surface, ui, callout, callouts) {
     // and its rect is wherever the animation happens to be, which is the same
     // unmeasurable thing PER_FRAME exists to keep out of this tool. Two of
     // them, because the corner fans and the second sits lower than the first.
+    //
+    // A REAL PICTURE, not an empty src. A broken <img> lays out its ALT TEXT
+    // inside the frame and computes `overflow-x: clip`, which is a clipped
+    // element by every rule below — 8 findings, one per viewport, describing
+    // a caption that no player will ever see: in a run the print carries a
+    // data URL grabbed off the renderer and the alt is never drawn. A 1x1 GIF
+    // stretched to the frame is the same LAYOUT as a real print and none of
+    // that. See the note at the head of this file about measuring the thing
+    // the game builds rather than the stand-in.
+    const PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
     for (let i = 0; i < 2; i++) {
-      const paper = print.buildPrintPaper('', { name: 'Grimgullet', level: 14, time: 421 }, 132);
+      const paper = print.buildPrintPaper(PIXEL, { name: 'Grimgullet', level: 14, time: 421 }, 132);
       paper.style.cssText = 'position:absolute; left:16px; '
         + `top:${40 + i * 18}px; width:132px;`;
       ui.uiRoot().appendChild(paper);
@@ -492,6 +528,34 @@ function measure() {
     const truncatesOnPurpose = style.textOverflow === 'ellipsis';
     if (clips && !truncatesOnPurpose && node.scrollWidth > node.clientWidth + 1 && node.clientWidth > 0) {
       once('clipped', { contentW: node.scrollWidth, boxW: node.clientWidth });
+    }
+    // ...AND THE SAME QUESTION DOWNWARDS, which this could not ask. Every check
+    // here was about width, so a box that cuts the bottom off its own contents
+    // reported clean: the upgrade cards shave the last line of twenty of their
+    // hundred-odd texts, and nothing said so. Only where the overflow is
+    // HIDDEN — a box with `auto` or `scroll` is taller than its contents on
+    // purpose and everything in it is one flick away, which is the same
+    // distinction scrollableAncestor draws above.
+    const hidesY = style.overflowY === 'hidden' || style.overflowY === 'clip';
+    if (hidesY && node.scrollHeight > node.clientHeight + 1 && node.clientHeight > 0) {
+      once('clipped-below', { contentH: node.scrollHeight, boxH: node.clientHeight });
+    }
+
+    // OUT OF ITS OWN PANEL, which is the failure this could not see. Every
+    // check above asks whether an element fits the SCREEN, and a button that
+    // has slid out of the menu it belongs to fits the screen perfectly — it is
+    // just sitting on the panel's edge with the water behind it. That is what
+    // "Defaults" was doing in the pause footer: a row of flex:1 buttons cannot
+    // shrink below its own words, so the last one hung off the side.
+    //
+    // Against the menu's BORDER box rather than its padding box, deliberately:
+    // .sv-pm-body is inset -2px on purpose so its scrollbar clears the rows,
+    // and a padding-box rule would report that as a bug on every tile.
+    const panel = node.parentElement?.closest('.sv-menu');
+    if (panel && !scrollableAncestor(node)) {
+      const p = panel.getBoundingClientRect();
+      const by = Math.round(Math.max(r.right - p.right, p.left - r.left, r.bottom - p.bottom, p.top - r.top));
+      if (by > 1) once('out-of-panel', { by });
     }
 
     // Tap targets, which only matter where there is a thumb.

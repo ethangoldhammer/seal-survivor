@@ -84,3 +84,9 @@ hive-stacks.html
 dist-razor-look
 dist-pickup-look
 dist-club-look
+
+# The seeded design canvas (npm-less: tools from the /design skill). The
+# .dc.html artboards and canvas.json ARE the source and are tracked; this is
+# the 2.2MB published page they get seeded into, which is regenerated on every
+# publish — same rule as the look-page builds above.
+design/gameover-canvas/seal-survivor-game-over.html

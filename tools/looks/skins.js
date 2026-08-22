@@ -95,12 +95,13 @@ check('the pigment family is reachable from CONFIG', PIGMENT.length > 0, PIGMENT
 
 // WHO IS WORTH ASKING ABOUT: the model assets carrying the most embedded
 // texture, plus a couple of small fish to check the presets at the other end of
-// the size range. Every one of them ships a jpeg inside its .glb today and none
-// of them has a skin.
+// the size range. None of them has a skin. Most ship a jpeg inside their .glb;
+// the dolphin ships no image at all, which is the strongest case on the page —
+// there is nothing for a skin to displace, only a flat colour to replace.
 const SUBJECTS = [
   ['enemyGreatWhite', 'Great white', 'greatwhite.glb — 0.26MB in 3 images'],
   ['enemyMegalodon', 'Megalodon', 'megalodon.glb — 1.72MB in 7 images'],
-  ['enemyDolphin', 'Dolphin', 'porpoise.jpg, a loose 77KB side-car'],
+  ['enemyDolphin', 'Dolphin', 'dolphin.glb — 0.13MB, no images at all'],
   ['enemyMosasaur', 'Mosasaur', 'mosasaurus.glb — 0.56MB in 3 images'],
   ['enemySeaTurtle', 'Sea turtle', 'seaturtle.glb'],
   ['enemyTuna', 'Tuna', 'fish.glb — 0.23MB in 2 images'],

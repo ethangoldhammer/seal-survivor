@@ -309,8 +309,25 @@ for (let i = 0; i < per; i++) feedChum(stats());       // ...and the second bar
 const lvl = chainLevel(stats());
 const offset = CONFIG.strike.chainLevelOffset ?? 1;
 check('two bars of food = level 2', near(lvl, 2, 1e-9));
-check('  ...so the damage exponent is 1, exactly as link 2 always was',
-  near(chainDamageMul({ strikeChainMul: 2 }), 2 ** (2 - offset), 1e-9));
+// THE DAMAGE EXPONENT HAS LEFT THIS COUNTER, deliberately. It reads the
+// BANNER's whole-link count now (liveChain) instead of the pip depth — see the
+// note over chainDamageMul in systems/strike.js — so the same two bars of food
+// are ten links here and not level 2, and the multiplier is five times deeper
+// than the pips say. This check used to assert the pip-based exponent and is
+// the line that would have quietly gone on passing through the change.
+//
+// Asserted against the CAP as well, because at this depth the cap is the only
+// thing still deciding the answer: 2^(10-1) is 512 and chainDamageMax lands it
+// at 4. Tuning the per-link step moves nothing here, which is exactly what
+// that note says to expect.
+const banner = liveChain();
+const wantDamage = Math.min(CONFIG.strike.chainDamageMax ?? Infinity,
+  2 ** Math.max(0, banner - offset));
+check(`  ...so the damage exponent follows the banner (${banner} links), not the pip depth (${lvl})`,
+  near(chainDamageMul({ strikeChainMul: 2 }), wantDamage, 1e-9));
+// The two counters must actually differ, or the check above is satisfied by a
+// silent revert to chainLevel and proves nothing.
+check('  ...and the two counters really have diverged', banner > lvl);
 const speedAt2 = comboSpeedMul();
 check('  ...and the speed bonus matches one link of comboSpeedPerLevel',
   near(speedAt2, Math.min(CONFIG.strike.comboSpeedMax,

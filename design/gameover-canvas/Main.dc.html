@@ -1,0 +1,634 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+  <style>
+    /* ========================================================================
+       AS IT SHIPS TODAY — direction C, in the game.
+       Rebuilt from path/src/ui/ui.js after the ledger landed, with the live
+       tuning applied: 'Press Start 2P' at scale 1.15, retro chroma and
+       scanlines on. Every size below is the resolved role value (tuned px
+       times 1.15) or the literal px ui.js writes. Three things moved on the
+       way in from the direction artboard, and each moved because a real
+       screen said so — noted at the rule that changed.
+       ==================================================================== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 940px; height: 1120px; overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+    a { color: #7ad7ff; text-decoration: none; }
+    a:hover { color: #cfeeff; }
+    :root { --sv-scan: 0.18; --sv-flicker: 0.12; }
+    /* shadowStack() with retroChromaShift 0.4 and retroGlow 2.3. */
+    .role { text-shadow: -0.4px 0 rgba(255,60,60,0.55), 0.4px 0 rgba(60,160,255,0.55),
+      0 0 13.8px rgba(150,220,255,1); }
+
+    .sv-center { position: absolute; inset: 0; display: flex;
+      align-items: center; justify-content: center; }
+
+    /* ONE FACE, ONE SCROLL, AND A BAR THAT STICKS TO IT. The bar started as a
+       flex sibling of a scrolling middle, which is the tidier diagram and does
+       not survive a phone: head, roll and bar are all flex:none, so the card's
+       minimum height is the sum of the three. npm run layout measured 940px of
+       content in a 782px box with the bar 133px off the bottom — the bar
+       unpinned by the layout that existed to pin it.
+       The two overflow axes are set separately and last: a shorthand
+       overflow:hidden further down this rule silently un-scrolls the card, and
+       the audit then reads it as clipped and every child as off-bottom. */
+    .sv-ledger { position: relative; display: flex; flex-direction: column;
+      width: 800px; max-width: 90vw; max-height: 92vh;
+      /* THE EMULSION as a background layer rather than a pseudo-element: an
+         absolute inset:0 covers the whole SCROLL height, so the gloss stretches
+         over content that is not on screen. background-attachment defaults to
+         scroll, which on a scroll container means painted against the border
+         box and not scrolled with the contents. */
+      background:
+        linear-gradient(105deg, transparent 60%, rgba(255,255,255,0.007) 78%,
+          rgba(190,230,255,0.072) 94%, rgba(255,255,255,0.009) 110%, transparent 128%),
+        #07090d;
+      border: 1px solid rgba(255,255,255,0.14); border-radius: 14px;
+      color: #e8ecf3; text-align: center;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset;
+      overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+
+    /* --- THE HEAD -------------------------------------------------------- */
+    .sv-ldg-head { flex: none; padding: 26px 30px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .sv-ldg-headtop { display: flex; align-items: flex-end; gap: 24px; text-align: left; }
+    /* THE QUIP IS ITS OWN TEXT ROLE NOW — see textRoles.js. At the menu
+       title's tuned 30px it wrapped to FOUR lines of the pixel face beside the
+       score and pushed the readout off a laptop. 22px x 1.15 sizes it for the
+       lockup, and it is still a row in the Text panel rather than a px in
+       ui.js that would beat the panel silently. */
+    .sv-title { flex: 1; min-width: 0; font-size: 25.3px; letter-spacing: 0.04em;
+      line-height: 1.4; color: #ffffff; text-wrap: pretty; }
+    .sv-ldg-hero { flex: none; text-align: right; }
+    .sv-ldg-hero b { display: block; font-size: 46px; line-height: 1;
+      letter-spacing: 0.01em; color: #e8ecf3; font-variant-numeric: tabular-nums; }
+    /* THE SCORE AS A PLACE, not only a figure — filled by renderBoard, which is
+       the only thing that knows it. Before a submit it says so. */
+    .sv-ldg-rank { display: block; font-size: 10px; letter-spacing: 0.14em;
+      text-transform: uppercase; color: rgba(122,215,255,0.85); margin-top: 7px; }
+    .sv-ldg-figs { display: flex; flex-wrap: wrap; gap: 10px 26px; margin-top: 18px;
+      text-align: left; }
+    .sv-fig { display: flex; align-items: baseline; gap: 8px; min-width: 0;
+      font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: rgba(232,236,243,0.45); }
+    .sv-fig b { font-size: 17px; letter-spacing: 0.01em; color: #e8ecf3;
+      text-transform: none; font-variant-numeric: tabular-nums; }
+
+    /* --- THE ROLL, AS A RAIL --------------------------------------------- */
+    .sv-trophy { flex: none; display: flex; flex-direction: column; gap: 6px;
+      padding: 12px 30px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    /* THE VERBS ARE ON THE HEADING. Four of "Share this one" at the tuned
+       button size is 920px of label against the 740px the heading has, so they
+       wrapped to two lines and the band came out taller than the readout under
+       it. wireTrophy drops the two Save buttons wherever the OS has a share
+       sheet of its own — two controls on a phone, four on a desktop. */
+    .sv-strip-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .sv-strip-label { flex: none; font-size: 9px; letter-spacing: 0.12em;
+      text-transform: uppercase; color: rgba(232,236,243,0.35); white-space: nowrap; }
+    .sv-trophy .sv-status { margin: 0 0 0 4px; min-height: 0; text-align: left; }
+    /* A HORIZONTAL SCROLL AND NOT A WRAP: eight prints on a phone is a rail you
+       push, not four rows of paper. No tilt and no overlap — both were the
+       fan's way of saying "there are several of these" in the width of one, and
+       a rail says it by being a rail. */
+    .sv-fan { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+      min-width: 0; overflow-x: auto; padding: 6px 2px; }
+    .sv-fan-slot { position: relative; flex: none; background: none; border: 0;
+      padding: 0; cursor: pointer; filter: drop-shadow(0 6px 16px rgba(0,0,0,0.5));
+      transition: transform 0.18s cubic-bezier(0.2,0.9,0.3,1), filter 0.18s ease; }
+    .sv-fan-slot:hover { transform: translateY(-4px) scale(1.03); }
+    .sv-fan-sel, .sv-fan-sel:hover { transform: translateY(-5px) scale(1.05);
+      filter: drop-shadow(0 10px 22px rgba(0,0,0,0.6)); }
+    .sv-fan-sel .sv-print-paper { outline: 2px solid #7ad7ff; }
+    .sv-trophy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      justify-content: flex-end; margin-left: auto; }
+    /* snapshotPrint.js's paper at the rail's 108px and its derived pad/chin.
+       Smaller than the fan's 190: a print in the fan was the centrepiece and
+       had to carry the boss's name; a print on the rail is a thing you TAP,
+       and the sheet it opens is the size of the window. */
+    .sv-print { width: 108px; --sv-pad: 4px; --sv-chin: 9px; }
+    .sv-print-paper { background: #eef2f3; padding: var(--sv-pad) var(--sv-pad) 0;
+      box-shadow: 0 18px 46px rgba(0,0,0,0.55), 0 2px 6px rgba(0,0,0,0.4); }
+    .sv-print-frame { position: relative; overflow: hidden; background: #05070d; line-height: 0; }
+    .sv-print-frame svg { display: block; width: 100%; height: auto; }
+    .sv-print-chin { display: flex; justify-content: space-between; align-items: baseline;
+      gap: 6px; color: #232b33; font-size: var(--sv-chin); letter-spacing: 0.02em;
+      padding: calc(var(--sv-pad) * 0.62) 2px calc(var(--sv-pad) * 1.5); }
+    .sv-print-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sv-print-stat { opacity: 0.55; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+    /* --- THE READOUT ----------------------------------------------------- */
+    .sv-ldg-body { flex: none; padding: 20px 30px 24px; display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px; align-content: start; }
+    .sv-ldg-col { display: flex; flex-direction: column; gap: 20px; min-width: 0; text-align: left; }
+    .sv-ldg-sec { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+      color: rgba(232,236,243,0.35); margin-bottom: 8px;
+      display: flex; align-items: baseline; gap: 10px; }
+    .sv-ldg-sec em { font-style: normal; margin-left: auto; font-size: 9px;
+      color: rgba(232,236,243,0.45); font-variant-numeric: tabular-nums; }
+
+    /* The two number columns are sized against the PIXEL FACE, not Inter:
+       "Damage" is ~62px of label in a 58px cell, so the two headings ran into
+       each other as one word. Shortened and widened. */
+    .sv-brk-head { display: grid; grid-template-columns: 1fr 64px 46px; gap: 8px;
+      padding: 0 8px 6px; font-size: 9.5px; letter-spacing: 0.14em;
+      text-transform: uppercase; color: rgba(232,236,243,0.35); }
+    .sv-brk-head span + span { text-align: right; }
+    .sv-brk { display: flex; flex-direction: column; gap: 1px; }
+    .sv-brk-row { position: relative; display: grid; grid-template-columns: 1fr 64px 46px;
+      gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+    .sv-brk-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+    .sv-brk-row::before { content: ""; position: absolute; inset: 0; border-radius: 6px;
+      width: var(--sv-share, 0%);
+      background: linear-gradient(90deg, rgba(122,215,255,0.30), rgba(122,215,255,0.06)); }
+    .sv-brk-row.sv-brk-in::before {
+      background: linear-gradient(90deg, rgba(255,120,120,0.28), rgba(255,120,120,0.05)); }
+    .sv-brk-row > * { position: relative; }
+    .sv-brk-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sv-brk-picks { font-size: 10px; margin-left: 6px; color: rgba(232,236,243,0.40); }
+    .sv-brk-a { text-align: right; font-variant-numeric: tabular-nums; }
+    .sv-brk-b { text-align: right; font-size: 11px; color: rgba(232,236,243,0.45);
+      font-variant-numeric: tabular-nums; }
+    .sv-brk-tag { display: inline-block; margin-left: 6px; padding: 1px 4px;
+      border: 1px solid rgba(255,120,120,0.4); border-radius: 3px; color: #ff7878;
+      font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .sv-brk-foot { margin-top: 10px; padding-top: 9px; display: flex; gap: 12px;
+      justify-content: space-between; font-size: 11px;
+      border-top: 1px solid rgba(255,255,255,0.08); color: rgba(232,236,243,0.45); }
+    .sv-brk-foot b { color: #e8ecf3; font-variant-numeric: tabular-nums; }
+
+    /* THE BOARD SPANS BOTH COLUMNS. It is the one block here made of NAMES
+       rather than figures, and half the card is not enough of them: at the
+       shipped pixel face a 355px column leaves about seven glyphs for a name,
+       so it came out as a column of ellipses. Full width it is 461px and
+       nothing clips. Last, because the head already answers where the run
+       stands — the board is the detail behind that line. */
+    .sv-leaderboard { grid-column: 1 / -1; text-align: left; }
+    .sv-lb-switch { display: flex; margin-left: auto; }
+    .sv-lb-sw { background: none; border: 1px solid rgba(255,255,255,0.12); cursor: pointer;
+      font: inherit; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: rgba(232,236,243,0.45); padding: 4px 7px; }
+    .sv-lb-sw:first-child { border-radius: 4px 0 0 4px; }
+    .sv-lb-sw:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+    .sv-lb-sw:hover { color: #cfeeff; }
+    .sv-lb-sw-on { background: rgba(122,215,255,0.14);
+      border-color: rgba(122,215,255,0.4); color: #7ad7ff; }
+    .sv-lb-row, .sv-lb-head { display: grid;
+      grid-template-columns: 3ch minmax(0, 1fr) auto 3ch 4ch;
+      align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; }
+    .sv-lb-head { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: rgba(232,236,243,0.35); }
+    .sv-lb-head span:nth-child(n+3) { text-align: right; }
+    .sv-lb-row { font-size: 13.8px; color: #ffffff; }
+    .sv-lb-rows .sv-lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+    .sv-lb-rows .sv-lb-row.sv-lb-mine { background: rgba(122,215,255,0.14);
+      border: 1px solid rgba(122,215,255,0.4); }
+    .sv-lb-rank { color: rgba(232,236,243,0.5); font-variant-numeric: tabular-nums; }
+    .sv-lb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sv-lb-score { text-align: right; font-variant-numeric: tabular-nums; }
+    .sv-lb-lv, .sv-lb-time { color: rgba(232,236,243,0.5); font-size: 11px;
+      text-align: right; font-variant-numeric: tabular-nums; }
+    /* ON A PHONE THE BOARD IS RANK, NAME AND SCORE. Five columns on a 393px
+       screen is two columns of digits taking a third of the width from the one
+       column anybody reads, and level and time are the two nobody came for —
+       the shipped rule drops them under max-width 700px, along with their two
+       header cells. Not visible on this artboard, which is a desktop width. */
+
+    /* --- THE BAR. Pinned, and the readout scrolls under it. The shadow is
+           what says so: without it the bar reads as the end of the content
+           rather than as a thing the content is passing beneath. ---------- */
+    .sv-ldg-bar { flex: none; position: sticky; bottom: 0; z-index: 5;
+      padding: 14px 30px 16px; background: #0a0e15;
+      border-top: 1px solid rgba(255,255,255,0.10);
+      box-shadow: 0 -18px 30px rgba(3,6,10,0.7); }
+    .sv-name-row { display: flex; gap: 8px; justify-content: center; }
+    .sv-name-input { flex: 1; min-width: 0; max-width: 300px;
+      background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 9px 12px; color: #e8ecf3; font: inherit;
+      font-size: 14px; letter-spacing: 0.04em; text-transform: uppercase; text-align: center; }
+    .sv-name-input:focus { outline: none; border-color: #7ad7ff; background: rgba(122,215,255,0.08); }
+    .sv-btn { background: #7ad7ff; color: #0a0c12; border: none; border-radius: 8px;
+      padding: 10px 22px; font: inherit; font-size: 16.1px; letter-spacing: 0.02em;
+      cursor: pointer; white-space: nowrap; }
+    .sv-btn:hover { background: #9fe3ff; }
+    /* .sv-btn-sm only changes PADDING in the live build: the role sheet is
+       appended after ui.js, so .sv-btn's 16.1px beats .sv-btn-sm's 13px. */
+    .sv-btn-sm { padding: 9px 16px; }
+    .sv-btn-ghost { background: rgba(122,215,255,0.12); color: #cfeeff;
+      border: 1px solid rgba(122,215,255,0.35); }
+    .sv-btn-ghost:hover { background: rgba(122,215,255,0.22); }
+    /* TRY AGAIN GETS THE WHOLE LINE, under the roller. It is the one control
+       on this screen that has to work and the last question the bar asks, so
+       it is the widest target on it — and the bar is pinned, so the line it
+       costs is a line the readout gives up once rather than one the player has
+       to scroll past every time. */
+    .sv-ldg-go { display: block; width: 100%; margin-top: 12px; }
+    .sv-status { font-size: 12.65px; letter-spacing: 0.03em;
+      color: rgba(255,255,255,0.5); min-height: 15px; margin: 6px 0 0; }
+    .sv-next-wrap { margin: 10px 0 0; }
+    .sv-next-label { display: block; text-align: center; margin-bottom: 6px;
+      font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
+      color: rgba(232,236,243,0.5); }
+    .sv-tip-row { display: flex; justify-content: center; margin-top: 10px; }
+    .sv-tip { display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+      border-radius: 999px; padding: 7px 14px; font-size: 12px; letter-spacing: 0.05em;
+      color: rgba(232,236,243,0.72); background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.16);
+      transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease; }
+    .sv-tip:hover { color: #ffd9a0; background: rgba(255,190,110,0.14);
+      border-color: rgba(255,190,110,0.45); }
+    .sv-tip-cup { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor;
+      stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* THE PRINT HELD UP — a sheet over the whole menu, not inside the card. */
+    .sv-shot-view { position: absolute; inset: 0; z-index: 8; display: flex;
+      flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+      padding: 3vh 4vw; background: rgba(3,6,10,0.93); }
+    .sv-shot-img { width: 420px; --sv-pad: 16px; --sv-chin: 19px;
+      box-shadow: 0 26px 60px rgba(0,0,0,0.7); }
+    .sv-shot-row { display: flex; gap: 8px; justify-content: center; }
+    .sv-shot-close { position: absolute; top: 12px; right: 14px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+      color: #e8ecf3; font: inherit; width: 34px; height: 34px;
+      border-radius: 50%; cursor: pointer; }
+    .sv-shot-close:hover { background: rgba(255,255,255,0.16); }
+
+    /* THE TUBE. applyTypography()'s global overlay. */
+    .sv-retro-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 25;
+      background: repeating-linear-gradient(to bottom,
+        rgba(0,0,0,var(--sv-scan)) 0px, rgba(0,0,0,var(--sv-scan)) 1px,
+        transparent 1px, transparent 3px);
+      mix-blend-mode: multiply; animation: sv-flicker 0.15s steps(2) infinite; }
+    @keyframes sv-flicker {
+      0% { opacity: calc(1 - var(--sv-flicker)); }
+      100% { opacity: 1; }
+    }
+  </style>
+</helmet>
+
+<div class="sv-center">
+  <div class="sv-ledger">
+
+    <div class="sv-ldg-head">
+      <div class="sv-ldg-headtop">
+        <div class="sv-title role">You&#39;re the Chum Now, Dog</div>
+        <div class="sv-ldg-hero">
+          <b>12,480</b>
+          <span class="sv-ldg-rank role">{{ standing }}</span>
+        </div>
+      </div>
+      <!-- KILLED BY is in the figures now. It used to be readable only on the
+           back of the card, under a table, on a face the player had to know to
+           turn over — and a run ends with one question before any of the
+           numbers. -->
+      <div class="sv-ldg-figs">
+        <span class="sv-fig">Time <b>3:24</b></span>
+        <span class="sv-fig">Level <b>7</b></span>
+        <span class="sv-fig">Kills <b>148</b></span>
+        <span class="sv-fig">Bosses <b>{{ count }}</b></span>
+        <span class="sv-fig">Killed by <b>a great white</b></span>
+      </div>
+    </div>
+
+    <sc-if value="{{ hasShots }}" hint-placeholder-val="{{ true }}">
+      <div class="sv-trophy">
+        <div class="sv-strip-head">
+          <span class="sv-strip-label">Polaroids:</span>
+          <div class="sv-status role"></div>
+          <div class="sv-trophy-row">
+            <button class="sv-btn sv-btn-sm role">Share</button>
+            <button class="sv-btn sv-btn-sm role">Save</button>
+            <button class="sv-btn sv-btn-sm sv-btn-ghost role">Share all</button>
+            <button class="sv-btn sv-btn-sm sv-btn-ghost role">Save all</button>
+          </div>
+        </div>
+        <div class="sv-fan">
+          <sc-for list="{{ shots }}" as="shot" hint-placeholder-count="3">
+            <button class="sv-fan-slot {{shot.cls}}" style="{{shot.slotStyle}}" onClick="{{ shot.pick }}">
+              <div class="sv-print">
+                <div class="sv-print-paper">
+                  <div class="sv-print-frame">
+                    <svg viewBox="0 0 240 180" xmlns="http://www.w3.org/2000/svg">
+                      <defs>
+                        <linearGradient id="w{{$index}}" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0" stop-color="#12506e"></stop>
+                          <stop offset="1" stop-color="#04101c"></stop>
+                        </linearGradient>
+                      </defs>
+                      <rect width="240" height="180" fill="url(#w{{$index}})"></rect>
+                      <path d="M0 128 Q60 112 120 126 T240 120 L240 180 L0 180 Z" fill="#02090f" opacity="0.8"></path>
+                      <path d="{{shot.silhouette}}" fill="#020a10" opacity="0.92"></path>
+                      <circle cx="120" cy="58" r="44" fill="#7ad7ff" opacity="0.07"></circle>
+                    </svg>
+                  </div>
+                  <div class="sv-print-chin">
+                    <span class="sv-print-name">{{shot.name}}</span>
+                    <span class="sv-print-stat">{{shot.stat}}</span>
+                  </div>
+                </div>
+              </div>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <div class="sv-ldg-body">
+      <!-- WHAT YOU DID, AND WHAT WAS DONE TO YOU — both were on the back. -->
+      <div class="sv-ldg-col">
+        <div>
+          <div class="sv-ldg-sec">Weapons <em>104.6k dealt</em></div>
+          <div class="sv-brk-head"><span></span><span>Dmg</span><span>Kills</span></div>
+          <div class="sv-brk">
+            <div class="sv-brk-row" style="--sv-share: 100%">
+              <span class="sv-brk-name">Pocket Full of Stones<span class="sv-brk-picks">&#215;4</span><span class="sv-brk-tag">Final blow</span></span>
+              <span class="sv-brk-a">48.2k</span><span class="sv-brk-b">71</span>
+            </div>
+            <div class="sv-brk-row" style="--sv-share: 62%">
+              <span class="sv-brk-name">Homing Mussels<span class="sv-brk-picks">&#215;2</span></span>
+              <span class="sv-brk-a">29.9k</span><span class="sv-brk-b">38</span>
+            </div>
+            <div class="sv-brk-row" style="--sv-share: 41%">
+              <span class="sv-brk-name">Baby Beluga Bubble Blaster<span class="sv-brk-picks">&#215;3</span></span>
+              <span class="sv-brk-a">19.7k</span><span class="sv-brk-b">26</span>
+            </div>
+            <div class="sv-brk-row" style="--sv-share: 14%">
+              <span class="sv-brk-name">C.H.U.M.</span>
+              <span class="sv-brk-a">6.8k</span><span class="sv-brk-b">13</span>
+            </div>
+          </div>
+          <div class="sv-brk-foot">
+            <span>Total dealt <b>104.6k</b></span>
+            <span>Caught, held or frozen <b>34</b></span>
+          </div>
+        </div>
+
+        <div>
+          <div class="sv-ldg-sec">What hurt you <em>759 taken</em></div>
+          <div class="sv-brk-head"><span></span><span>Dmg</span><span>Share</span></div>
+          <div class="sv-brk">
+            <div class="sv-brk-row sv-brk-in" style="--sv-share: 100%">
+              <span class="sv-brk-name">Sharks</span><span class="sv-brk-a">412</span><span class="sv-brk-b">54%</span>
+            </div>
+            <div class="sv-brk-row sv-brk-in" style="--sv-share: 46%">
+              <span class="sv-brk-name">Crabs</span><span class="sv-brk-a">190</span><span class="sv-brk-b">25%</span>
+            </div>
+            <div class="sv-brk-row sv-brk-in" style="--sv-share: 38%">
+              <span class="sv-brk-name">Drowning</span><span class="sv-brk-a">157</span><span class="sv-brk-b">21%</span>
+            </div>
+          </div>
+          <div class="sv-brk-foot">
+            <span>Total taken <b>759</b></span>
+            <span>Killed by <b>a great white</b></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- THE BUILD, which no version of this screen has shown. The weapons
+           table is sorted by damage and drops everything that deals none, so
+           half a build — Yoga, Mammal Mode, every stat card — was invisible on
+           the screen that exists to record the run. Sorted by stacks, not by
+           damage: this is the question "what did I build", and a list that
+           reorders itself by how well it went answers the one the table
+           beside it already answers. -->
+      <div class="sv-ldg-col">
+        <div>
+          <div class="sv-ldg-sec">The build <em>11 picks</em></div>
+          <div class="sv-brk">
+            <div class="sv-brk-row" style="--sv-share: 100%">
+              <span class="sv-brk-name">Pocket Full of Stones</span><span class="sv-brk-a">&#215;4</span><span class="sv-brk-b"></span>
+            </div>
+            <div class="sv-brk-row" style="--sv-share: 75%">
+              <span class="sv-brk-name">Baby Beluga Bubble Blaster</span><span class="sv-brk-a">&#215;3</span><span class="sv-brk-b"></span>
+            </div>
+            <div class="sv-brk-row" style="--sv-share: 50%">
+              <span class="sv-brk-name">Homing Mussels</span><span class="sv-brk-a">&#215;2</span><span class="sv-brk-b"></span>
+            </div>
+            <div class="sv-brk-row" style="--sv-share: 25%">
+              <span class="sv-brk-name">Speedy Seal</span><span class="sv-brk-a">&#215;1</span><span class="sv-brk-b"></span>
+            </div>
+            <div class="sv-brk-row" style="--sv-share: 25%">
+              <span class="sv-brk-name">Yoga</span><span class="sv-brk-a">&#215;1</span><span class="sv-brk-b"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sv-leaderboard">
+        <div class="sv-ldg-sec">
+          Leaderboard
+          <span class="sv-lb-switch">
+            <button type="button" class="sv-lb-sw {{ globalCls }}" onClick="{{ showGlobal }}">Global</button>
+            <button type="button" class="sv-lb-sw {{ deviceCls }}" onClick="{{ showDevice }}">Device</button>
+          </span>
+        </div>
+        <div class="sv-lb-head">
+          <span>#</span><span>Name</span><span>Score</span><span>Lv</span><span>Time</span>
+        </div>
+        <div class="sv-lb-rows">
+          <sc-for list="{{ board }}" as="r" hint-placeholder-count="6">
+            <div class="sv-lb-row {{r.cls}} role">
+              <span class="sv-lb-rank">{{r.rank}}</span>
+              <span class="sv-lb-name">{{r.name}}</span>
+              <span class="sv-lb-score">{{r.score}}</span>
+              <span class="sv-lb-lv">{{r.lv}}</span>
+              <span class="sv-lb-time">{{r.time}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div class="sv-ldg-bar">
+      <div class="sv-name-row">
+        <input class="sv-name-input" type="text" maxlength="32" value="SEAL"
+               aria-label="Name for the leaderboard">
+        <button class="sv-btn sv-btn-sm role">Submit</button>
+      </div>
+      <div class="sv-status role">Enter a name to post your score</div>
+      <!-- THE NEXT SEAL is a DIFFERENT QUESTION wearing the same widget: the
+           row above asks what to post the run that just ended under, and this
+           asks who swims the next one. In the bar because that is where Try
+           again is, and nothing here is committed until the run restarts. -->
+      <div class="sv-next-wrap">
+        <label class="sv-next-label">Next seal</label>
+        <div class="sv-name-row">
+          <input class="sv-name-input" type="text" maxlength="32" value="BRINY GUS"
+                 aria-label="Name for your next seal">
+          <button class="sv-btn sv-btn-sm sv-btn-ghost role">Roll</button>
+        </div>
+      </div>
+      <!-- THE WAY OUT, LAST, and OUTSIDE both rows above it.
+           The order is the order the questions are asked in: post the run that
+           ended, name the seal that swims next, then go — so the button is the
+           thing your eye lands on last and the thing your thumb is already
+           near.
+           Outside them because #svNameRow is hidden as a UNIT twice — by
+           previewScreen, and by submitPendingRun the moment a score is posted.
+           Try again spent one build inside it, and posting your run deleted the
+           only way back into the water, on every device, with the button still
+           in the DOM measuring nothing. -->
+      <button class="sv-btn sv-ldg-go role">Try again</button>
+      <div class="sv-tip-row">
+        <a class="sv-tip" href="#">
+          <svg class="sv-tip-cup" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 8h13v7a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Z"></path>
+            <path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17"></path>
+            <path d="M8 2.5c0 1.2-1 1.5-1 2.5M12 2.5c0 1.2-1 1.5-1 2.5" style="opacity: 0.55"></path>
+          </svg>
+          Tip jar
+        </a>
+      </div>
+    </div>
+
+  </div>
+
+  <sc-if value="{{ heldUp }}" hint-placeholder-val="{{ false }}">
+    <div class="sv-shot-view">
+      <div class="sv-print sv-shot-img">
+        <div class="sv-print-paper">
+          <div class="sv-print-frame">
+            <svg viewBox="0 0 240 180" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="wbig" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#12506e"></stop>
+                  <stop offset="1" stop-color="#04101c"></stop>
+                </linearGradient>
+              </defs>
+              <rect width="240" height="180" fill="url(#wbig)"></rect>
+              <path d="M0 128 Q60 112 120 126 T240 120 L240 180 L0 180 Z" fill="#02090f" opacity="0.8"></path>
+              <path d="{{ heldSilhouette }}" fill="#020a10" opacity="0.92"></path>
+              <circle cx="120" cy="58" r="44" fill="#7ad7ff" opacity="0.07"></circle>
+            </svg>
+          </div>
+          <div class="sv-print-chin">
+            <span class="sv-print-name">{{ heldName }}</span>
+            <span class="sv-print-stat">{{ heldStat }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="sv-shot-row">
+        <button class="sv-btn sv-btn-sm role">Share this one</button>
+        <button class="sv-btn sv-btn-sm role">Save this one</button>
+      </div>
+      <button class="sv-shot-close" onClick="{{ closeShot }}" aria-label="Close the preview">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+        </svg>
+      </button>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ retro }}" hint-placeholder-val="{{ true }}">
+    <div class="sv-retro-overlay"></div>
+  </sc-if>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{
+  "bosses": {"editor": "int", "default": 3, "min": 0, "max": 6, "section": "Run"},
+  "board": {"editor": "enum", "default": "global", "options": ["global", "device"], "section": "Run"},
+  "posted": {"editor": "boolean", "default": false, "section": "Run"},
+  "retro": {"editor": "boolean", "default": true, "section": "Look"},
+  "$preview": {"width": 940, "height": 1120}
+}'>
+// THE SHIPPED SCREEN, driven by the four things that actually change what is on
+// it: how many bosses went down (the rail is hidden at zero — an empty rail on
+// a run that never met one reads as a broken image), which of the two boards is
+// up, whether the score has been posted yet, and the Text panel's retro switch.
+const SHARK = 'M30 96 q40 -34 96 -30 q34 2 58 16 l26 -22 l-6 30 l24 14 l-28 8 q-30 20 -74 18 q-58 -2 -96 -34 z';
+const ORCA  = 'M24 100 q46 -30 104 -24 q30 3 52 15 l20 -26 l-2 32 l26 12 l-30 10 q-34 18 -80 14 q-54 -6 -90 -33 z';
+const CRAB  = 'M40 132 q18 -34 80 -34 q62 0 80 34 l-24 0 q-16 -18 -56 -18 q-40 0 -56 18 z';
+const SQUID = 'M120 44 q42 0 42 42 q0 16 -8 26 q10 26 -6 44 q-6 -20 -14 -22 q2 24 -14 34 q-6 -22 -12 -24 q-4 26 -22 30 q4 -26 -4 -30 q-10 18 -26 16 q14 -18 12 -34 q-8 -12 -8 -30 q0 -52 60 -52 z';
+const MOSA  = 'M22 98 q44 -36 100 -28 q36 5 60 20 l24 -24 l-4 32 l22 14 l-30 8 q-32 16 -76 12 q-56 -8 -96 -34 z';
+// The chin is stamped at the KILL, not at the death — meta.level and meta.time
+// are the shot's own, so a roll reads as a sequence rather than one instant.
+const KILLS = [
+  { name: 'Bloody Jaw', stat: 'LV 3 - 0:58', silhouette: SHARK },
+  { name: 'Grim Fluke', stat: 'LV 5 - 1:47', silhouette: ORCA },
+  { name: 'Sharp Chompers', stat: 'LV 6 - 2:31', silhouette: CRAB },
+  { name: 'Blackfin', stat: 'LV 7 - 3:02', silhouette: SQUID },
+  { name: 'The Honorable Tide', stat: 'LV 7 - 3:15', silhouette: MOSA },
+  { name: 'Big Willy Style', stat: 'LV 7 - 3:21', silhouette: SHARK },
+];
+const GLOBAL = [
+  ['1', 'PODMOTHER', '18,420', '9', '4:41'],
+  ['2', 'SEAL', '12,480', '7', '3:24'],
+  ['3', 'HAULOUT HANK', '11,905', '7', '3:02'],
+  ['4', 'CLAMMY DAVIS JR.', '9,340', '6', '2:48'],
+  ['5', 'TWO-FLIPPER GIPPER', '7,110', '5', '2:15'],
+  ['6', 'SELKIE DADDY', '5,240', '4', '1:52'],
+];
+const DEVICE = [
+  ['1', 'SEAL', '12,480', '7', '3:24'],
+  ['2', 'BRINY GUS', '9,905', '6', '3:00'],
+  ['3', 'FLIP FLOP', '8,120', '6', '2:41'],
+  ['4', 'CHONKER TONY', '6,450', '5', '2:12'],
+];
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { picked: null, heldUp: false, board: null };
+  }
+
+  which() {
+    return this.state.board ?? this.props.board ?? 'global';
+  }
+
+  renderVals() {
+    const n = Math.max(0, Math.min(6, this.props.bosses ?? 3));
+    // The newest kill is picked to start with, and the rail reads left to
+    // right in the order the run happened.
+    const picked = this.state.picked ?? Math.max(0, n - 1);
+    const shots = KILLS.slice(0, n).map((k, i) => ({
+      ...k,
+      cls: i === picked ? 'sv-fan-sel' : '',
+      slotStyle: `z-index: ${i === picked ? n + 1 : i + 1}`,
+      pick: () => this.setState({ picked: i, heldUp: true }),
+    }));
+    const held = KILLS[Math.min(picked, Math.max(0, n - 1))] ?? KILLS[0];
+    const which = this.which();
+    const src = which === 'device' ? DEVICE : GLOBAL;
+    // BEFORE A SUBMIT THE STANDING IS A CONDITIONAL, and saying so matters —
+    // the score is not on the board yet, and a flat "2nd" would be the card
+    // claiming a place the player has not taken.
+    const at = src.findIndex((r) => 12480 > Number(r[2].replace(/,/g, '')));
+    const rank = at < 0 ? src.length + 1 : at + 1;
+    const ord = rank === 1 ? '1st' : rank === 2 ? '2nd' : rank === 3 ? '3rd' : `${rank}th`;
+    return {
+      count: n,
+      hasShots: n > 0,
+      shots,
+      standing: this.props.posted
+        ? `${ord} of ${src.length}`
+        : `Would be ${ord} of ${src.length}`,
+      board: src.map((r) => ({
+        rank: r[0], name: r[1], score: r[2], lv: r[3], time: r[4],
+        cls: r[1] === 'SEAL' ? 'sv-lb-mine' : '',
+      })),
+      globalCls: which === 'global' ? 'sv-lb-sw-on' : '',
+      deviceCls: which === 'device' ? 'sv-lb-sw-on' : '',
+      showGlobal: () => this.setState({ board: 'global' }),
+      showDevice: () => this.setState({ board: 'device' }),
+      heldUp: this.state.heldUp && n > 0,
+      heldName: held.name,
+      heldStat: held.stat,
+      heldSilhouette: held.silhouette,
+      closeShot: () => this.setState({ heldUp: false }),
+      retro: this.props.retro ?? true,
+    };
+  }
+}
+</script>
+</body>
+</html>

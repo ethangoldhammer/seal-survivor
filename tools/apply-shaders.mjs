@@ -656,6 +656,131 @@ async function writePresets(presetsByRoot, { dry, edits = {} }, notes) {
   return names.filter((n) => !already.includes(n));
 }
 
+// --- the flat roots: the two rims -------------------------------------------
+//
+// CONFIG.creatureOutline and CONFIG.companionOutline are not preset families.
+// They are ONE block each, sitting at the top of CONFIG, with four shared
+// numbers and an `on` list of asset keys — so every rule above, which is built
+// around `root.presets.name`, misses them entirely.
+//
+// That was not a decision, it was a gap, and it had a symptom: the lab's
+// outline section wrote its edits into the document (`doc.config
+// .creatureOutline.__flat`) and nothing ever read them back out. presetsFromDoc
+// starts from a hardcoded three roots and drops anything else on the floor, so
+// a rim dialled in the lab looked right until the tab closed and then was gone,
+// with no error and nothing in the report to say so.
+//
+// The blocks are always hand-authored — both have paragraphs of reasoning
+// around them — so there is no generated-block fallback here and there should
+// not be one. A root this cannot find is reported, not invented.
+const FLAT_ROOTS = ['creatureOutline', 'companionOutline'];
+
+// Splice `fields` into one already-located `{...}`, returning the edits to
+// apply and appending a line per change. Fields the block does not declare are
+// ADDED; fields it does are replaced in place with the comments left standing.
+//
+// Shared by the root's own numbers and by its `on` list, which are the same
+// problem at two depths — and `on` is the one that needs the addition path,
+// since putting a rim on a species that never had one means a key that is not
+// there yet.
+function spliceFields(text, masked, block, fields, label, changes, stale) {
+  const edits = [];
+  const spans = fieldSpans(masked, block);
+  const additions = [];
+  for (const [key, value] of Object.entries(fields)) {
+    const want = fieldLiteral(key, value);
+    const span = spans.get(key);
+    if (!span) { additions.push([key, want]); continue; }
+    const had = text.slice(span[0], span[1]).trim();
+    if (sameLiteral(had, want)) continue;
+    edits.push([span[0], span[1], want]);
+    changes.push(`${label}.${key}: ${had} -> ${want}`);
+    // Same reason as the preset path: half these switches have a paragraph
+    // above them arguing for the exact value being replaced, and this tool
+    // cannot rewrite prose.
+    if (commentAbove(text, span[0])) stale.push(`${label}.${key}`);
+  }
+  if (additions.length) {
+    // Byte-for-byte the anchoring the preset path uses — see the note there for
+    // the syntax error that taught it. Both these blocks are multi-line today,
+    // but nothing says they must stay that way.
+    const body = text.slice(block[0] + 1, block[1]);
+    const tail = body.length - body.replace(/\s+$/, '').length;
+    const at = block[1] - tail;
+    const sep = /,\s*$/.test(body) ? '' : ',';
+    const add = body.includes('\n')
+      ? '\n' + additions.map(([k, v]) => {
+        const indent = (body.match(/\n(\s+)\S/) || [null, '        '])[1];
+        return `${indent}${k}: ${v},`;
+      }).join('\n')
+      : ' ' + additions.map(([k, v]) => `${k}: ${v}`).join(', ');
+    edits.push([at, at, sep + add]);
+    for (const [k, v] of additions) changes.push(`${label}.${k}: (absent) -> ${v}`);
+  }
+  return edits;
+}
+
+/**
+ * Write the lab's rim edits into config.js. Returns the leaf paths it wrote —
+ * `creatureOutline.thickness`, `companionOutline.on.dumboOcto` — which is what
+ * the snapshot clear below needs to hand ownership back.
+ *
+ * ONLY WHAT A CONTROL ACTUALLY MOVED, for the reason spliceHandPresets spells
+ * out at length: the lab renders every spec key resolved, and a resolved value
+ * is not a declared one. Here the edit buffer IS the whole input — `__flat` and
+ * `__on` hold nothing but clicks — so that property comes for free rather than
+ * needing to be filtered back in.
+ */
+async function writeFlatRoots(edits, { dry }, notes) {
+  const roots = FLAT_ROOTS.filter((r) => edits[r]?.__flat || edits[r]?.__on);
+  if (!roots.length) return [];
+  const text = await readFile(CONFIG_JS, 'utf8');
+  const masked = maskCode(text);
+  // Same limit as the preset path: never match inside the generated block.
+  const generated = text.indexOf(MARK_START);
+  const limit = generated > -1 ? generated : text.length;
+
+  const changes = [];
+  const stale = [];
+  const written = [];
+  const allEdits = [];
+  for (const root of roots) {
+    const block = braceBlock(masked, root, 0, limit);
+    if (!block) {
+      notes.push(`! ${root}: config.js has no \`${root}: {\` block to write into — skipped`);
+      continue;
+    }
+    const flat = edits[root].__flat ?? {};
+    if (Object.keys(flat).length) {
+      allEdits.push(...spliceFields(text, masked, block, flat, root, changes, stale));
+      for (const k of Object.keys(flat)) written.push(`${root}.${k}`);
+    }
+    const on = edits[root].__on ?? {};
+    if (Object.keys(on).length) {
+      // Inside the root's own braces, so the `on` of the OTHER rim — or of any
+      // of the dozens of other blocks in this file — cannot be found instead.
+      const onBlock = braceBlock(masked, 'on', block[0], block[1]);
+      if (!onBlock) {
+        notes.push(`! ${root}.on: no \`on: {\` inside ${root} — the switches were not written`);
+      } else {
+        allEdits.push(...spliceFields(text, masked, onBlock, on, `${root}.on`, changes, stale));
+        for (const k of Object.keys(on)) written.push(`${root}.on.${k}`);
+      }
+    }
+  }
+  for (const one of changes) notes.push(`~ ${one}`);
+  for (const one of stale) notes.push(`! ${one}: the comment above it argues for the value that was just replaced — reword it`);
+  if (!allEdits.length) return [];
+  // Right to left, so one splice cannot move the next one's target — the edits
+  // were all collected against the ORIGINAL offsets.
+  let next = text;
+  for (const [start, end, str] of allEdits.sort((a, b) => b[0] - a[0])) {
+    next = next.slice(0, start) + str + next.slice(end);
+  }
+  if (next !== text && !dry) await writeFile(CONFIG_JS, next);
+  return written;
+}
+
 // --- the third gate: the saved snapshot -------------------------------------
 //
 // A value in imported-tuning.json BEATS the config.js default it shadows, so a
@@ -675,8 +800,27 @@ async function writePresets(presetsByRoot, { dry, edits = {} }, notes) {
 // same survey the panel prints.
 const TUNING = join(PROJECT, 'path/src/imported-tuning.json');
 
-async function clearTuning(handled, { dry }, notes) {
-  if (!handled.size) return [];
+// `handled` mixes two shapes and both are dotted paths, so they are told apart
+// by what they FIND rather than by counting dots:
+//
+//   root.name            a preset  -> delete doc[root].presets[name]
+//   root.field           a leaf    -> delete doc[root][field]
+//   root.on.assetKey     a leaf    -> delete doc[root].on[assetKey]
+//
+// The leaf shape arrives from writeFlatRoots (the two rims), where there is no
+// preset to delete and the thing shadowing config.js is a single boolean or
+// number sitting at the top of the snapshot. Deleting exactly that key and
+// nothing around it matters more here than it does for a preset: `on` is a
+// roster the player has been editing in the T-menu, and dropping the whole
+// container to clear one species would revert every other switch in it.
+// Is the game up? If it is, nothing may touch the snapshot: it rewrites that
+// file wholesale from whatever it booted with, so a delete made now is undone
+// by the next autosave from that tab — silently, and minutes later.
+//
+// Its own function because there are two writers to guard now, and a guard that
+// only one of them remembers is worse than none: the one that forgot is the one
+// that looks like it worked.
+async function devServerBlocking(what, notes) {
   let running = [];
   try {
     const { survey } = await import('./servers.mjs');
@@ -684,19 +828,37 @@ async function clearTuning(handled, { dry }, notes) {
   } catch {
     // No survey (not macOS, lsof missing). Say so rather than assume it is safe.
     notes.push('? could not check for a running dev server — if the game is open, reload it before trusting this');
+    return false;
   }
-  if (running.length) {
-    notes.push(`! the game is running on port ${running[0].ports.join(', ')} — saved tuning still shadows `
-      + `${[...handled].join(', ')}. Stop it (npm run servers, then stop <port>) and re-run, or the game will boot the old numbers.`);
-    return [];
-  }
+  if (!running.length) return false;
+  notes.push(`! the game is running on port ${running[0].ports.join(', ')} — saved tuning still shadows `
+    + `${[...what].join(', ')}. Stop it (npm run servers, then stop <port>) and re-run, or the game will boot the old numbers.`);
+  return true;
+}
+
+async function clearTuning(handled, { dry }, notes) {
+  if (!handled.size) return [];
+  if (await devServerBlocking(handled, notes)) return [];
 
   const raw = await readFile(TUNING, 'utf8');
   const doc = JSON.parse(raw);
   const dropped = [];
   for (const id of handled) {
-    const [root, name] = id.split('.');
+    const parts = id.split('.');
+    const root = parts[0];
+    // The leaf shape first, and it has to be first: `creatureOutline.thickness`
+    // would otherwise be looked for as a preset named "thickness", find nothing,
+    // and be reported as cleared when the number that shadows config.js was
+    // still sitting there.
+    if (FLAT_ROOTS.includes(root)) {
+      const leaf = parts.pop();
+      let bag = doc[root];
+      for (const step of parts.slice(1)) bag = bag?.[step];
+      if (bag && leaf in bag) { delete bag[leaf]; dropped.push(id); }
+      continue;
+    }
     const bag = doc[root]?.presets;
+    const name = parts[1];
     if (bag && name in bag) { delete bag[name]; dropped.push(id); }
   }
   // Two-space JSON with a trailing newline is byte-for-byte what the game
@@ -756,11 +918,74 @@ export async function applyRecorded(doc, { dry = false, only = doc.recorded, bat
   }
   const rows = await writeCsv(applied, { dry }, notes);
   const presets = await writePresets(presetsFromDoc(doc, only), { dry, edits: doc.config ?? {} }, notes);
+  // THE RIMS, and NOT scoped to `only`. Every other write here is per creature,
+  // because a surface preset belongs to the species wearing it. These two roots
+  // are the opposite: one shared look and one roster, edited from whichever
+  // creature happened to be open, and there is only ever one copy of them in
+  // the document. Scoping them to the recorded subject would drop the switch
+  // you just ticked whenever you ticked it on a different animal than the one
+  // you then hit record on.
+  const flat = await writeFlatRoots(doc.config ?? {}, { dry }, notes);
   // Ownership last, and only for what actually got written: clearing the
   // snapshot for a preset this run did not touch would silently revert somebody
   // else's tuning to a config default.
-  await clearTuning(new Set(presets), { dry }, notes);
-  return { rows, presets, notes };
+  await clearTuning(new Set([...presets, ...flat]), { dry }, notes);
+  return { rows, presets: [...presets, ...flat], notes };
+}
+
+/**
+ * Hand BOTH rims back to config.js: every `creatureOutline` / `companionOutline`
+ * key the snapshot is holding is deleted, so what boots is what this file says.
+ *
+ * A ONE-TIME CHORE WITH ITS OWN COMMAND, rather than something record does on
+ * the side. The snapshot carries a full copy of both rosters the moment the game
+ * has saved once, and a copy outranks config.js — so the day the rims stopped
+ * being a decision taken in a text file and started being one taken in the lab,
+ * every one of those copies became a stale opinion with a veto. Editing them
+ * instead of deleting them is not an option: the live game rewrites that whole
+ * file from what it booted with, so a tool that wrote values there loses the
+ * race with any open tab. Deleting hands ownership back.
+ *
+ * Same refusal as clearTuning for the same reason — with the game up, whatever
+ * this writes is overwritten by the next autosave from that tab.
+ */
+export async function clearRimTuning({ dry = false } = {}) {
+  const notes = [];
+  const raw = await readFile(TUNING, 'utf8');
+  const doc = JSON.parse(raw);
+  const ids = [];
+  for (const root of FLAT_ROOTS) {
+    const bag = doc[root];
+    if (!bag || typeof bag !== 'object') continue;
+    for (const k of Object.keys(bag)) {
+      if (k === 'on') { for (const a of Object.keys(bag.on ?? {})) ids.push(`${root}.on.${a}`); continue; }
+      ids.push(`${root}.${k}`);
+    }
+  }
+  if (!ids.length) return { dropped: [], notes: ['imported-tuning.json holds no rim keys — config.js already owns both rims'] };
+  if (await devServerBlocking(ids, notes)) return { dropped: [], notes };
+
+  // Deleted from THIS doc and written once. Deliberately not delegated to
+  // clearTuning: that function re-reads the file, deletes from its own copy and
+  // writes — so writing `doc` afterwards would put every key it had just
+  // removed straight back. Two writers, one file, and the second one wins.
+  const dropped = [];
+  for (const root of FLAT_ROOTS) {
+    const bag = doc[root];
+    if (!bag || typeof bag !== 'object') continue;
+    for (const k of Object.keys(bag)) {
+      if (k !== 'on') { delete bag[k]; dropped.push(`${root}.${k}`); continue; }
+      for (const a of Object.keys(bag.on ?? {})) { delete bag.on[a]; dropped.push(`${root}.on.${a}`); }
+    }
+    // The container itself, once it is empty. An empty `creatureOutline: {}`
+    // left behind is harmless to the merge but it is a lie in a diff — it reads
+    // as "the snapshot has an opinion here" to the next person looking.
+    if (bag.on && !Object.keys(bag.on).length) delete bag.on;
+    if (!Object.keys(bag).length) delete doc[root];
+  }
+  if (dropped.length && !dry) await writeFile(TUNING, JSON.stringify(doc, null, 2) + '\n');
+  for (const id of dropped) notes.push(`- ${id}: cleared — config.js owns it now`);
+  return { dropped, notes };
 }
 
 // --- CLI --------------------------------------------------------------------
@@ -772,6 +997,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // the oldest copy wins — see entriesOf. The default is therefore a report.
   const all = argv.includes('--all');
   const dry = argv.includes('--dry') || !all;
+
+  // `--rims` is its own errand and exits: it reads no record and writes no
+  // config.js, it only takes the snapshot's copy of the two rim blocks away so
+  // config.js can be believed. Run it once after moving the rims into the lab's
+  // hands; run it again any time the snapshot has re-grown an opinion.
+  // It writes on its own, without --all, because it cannot revert anybody's
+  // work — deleting a shadow is what makes the file underneath visible.
+  if (argv.includes('--rims')) {
+    const { dropped, notes } = await clearRimTuning({ dry: argv.includes('--dry') });
+    console.log(dropped.length
+      ? `${argv.includes('--dry') ? 'WOULD clear' : 'cleared'} ${dropped.length} rim key(s) from imported-tuning.json:`
+      : 'nothing to clear.');
+    for (const n of notes) console.log(`  ${n}`);
+    process.exit(0);
+  }
+
   const fromArg = argv.indexOf('--from');
   const SRC = fromArg > -1 ? resolve(argv[fromArg + 1]) : DEFAULT_SRC;
 

@@ -622,6 +622,14 @@ function deviceProfile() {
     // rather than the user-agent string: it's the property that actually
     // predicts the frame budget, and it isn't a fingerprint.
     touch: !!(nav?.maxTouchPoints > 0),
+    // THE NATIVE SHELL, which `touch` cannot tell you and which is a different
+    // game to run. The iOS app and mobile Safari on the same phone report an
+    // identical device profile — same cores, same dpr, same 402x874, same
+    // touch — so without this every run from the app is fused to every run
+    // from the website and neither can be read on its own. They are not the
+    // same machine in the way that matters: the app is a WKWebView with its
+    // own memory limit, and it is the one being killed for exceeding it.
+    native: !!globalThis.window?.Capacitor?.isNativePlatform?.(),
   };
 }
 

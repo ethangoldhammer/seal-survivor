@@ -273,5 +273,110 @@ section('WHO ACTUALLY SHOVES');
     `${CONFIG.enemies.bossHammerhead?.playerKnockback} of ${K.maxSpeed}`);
 }
 
+// ---------------------------------------------------------------------------
+section('BEING HELD — the other thing that moves the seal without asking');
+// ---------------------------------------------------------------------------
+// The anglerfish's radial (systems/bossAngler.js) does not shove the seal, it
+// takes its swimming away for about a second. It lives here rather than in the
+// boss's own harness because it is a claim about the SEAL: the boss only asks,
+// and everything that could go wrong is on this side of the hook.
+//
+// IT IS THE OPPOSITE OBJECT TO A SHOVE in every respect, which is why it could
+// not be one:
+//
+//   A SHOVE IS A POSITION and deliberately outside the speed clamp. A snare is
+//   a multiplier ON the clamp, because the whole point is to make the seal's
+//   own movement smaller.
+//
+//   A SHOVE IS NOT A HOLD — the test above exists to keep it from becoming one.
+//   This IS a hold, and the check that matters is the opposite: that a player
+//   swimming at full stick makes measurably less ground than they would free.
+//
+//   AND THEY MUST STILL COMPOSE. A held seal is still thrown by what hits it —
+//   otherwise the snare quietly becomes immunity to being moved, which is the
+//   reverse of what it is for.
+{
+  const { snarePlayer, playerSnared } = await import('../path/src/entities/player.js');
+  const A = CONFIG.boss.angler;
+
+  /** Swim flat out for `seconds` and report the ground made. */
+  const swim = (seconds, snare = null) => {
+    atRest();
+    if (snare) snarePlayer(...snare);
+    const from = player.mesh.position.clone();
+    for (let i = 0; i < Math.round(seconds / dt); i++) updatePlayer(dt, pushInput(1, 0));
+    return player.mesh.position.distanceTo(from);
+  };
+
+  const free = swim(A.pulseSnare);
+  const held = swim(A.pulseSnare, [A.pulseSnare, A.pulseSnareMul, A.pulseSnareThaw]);
+  check('a held seal makes far less ground than a free one',
+    held < free * 0.5, `${held.toFixed(1)} units against ${free.toFixed(1)} free`);
+  check('...but it is not frozen solid — something still answers the stick',
+    held > 0.5, `${held.toFixed(2)} units in ${A.pulseSnare}s`);
+  note(`the shipped hold leaves ${(held / free * 100).toFixed(0)}% of the seal's own reach, `
+    + `on a multiplier of ${A.pulseSnareMul}`);
+
+  // IT BITES ON A SEAL ALREADY MOVING, which is the case a thrust-only snare
+  // gets wrong: the seal coasts out of the trap on momentum it already had.
+  atRest();
+  for (let i = 0; i < Math.round(1.5 / dt); i++) updatePlayer(dt, pushInput(1, 0));
+  const cruising = player.velocity.length();
+  snarePlayer(A.pulseSnare, A.pulseSnareMul, A.pulseSnareThaw);
+  updatePlayer(dt, pushInput(1, 0));
+  check('it takes the momentum out of a seal at full speed on the first frame',
+    player.velocity.length() < cruising * 0.5,
+    `${cruising.toFixed(1)} u/s -> ${player.velocity.length().toFixed(1)} u/s`);
+
+  // AND IT LETS GO. A hold that never fully expires is a run that ends.
+  for (let i = 0; i < Math.round((A.pulseSnare + 0.5) / dt); i++) updatePlayer(dt, noInput);
+  check('it expires on its own', !playerSnared(), `${player.snareTimer.toFixed(3)}s left`);
+  const after = swim(A.pulseSnare);
+  check('...and the seal swims exactly as it did before',
+    Math.abs(after - free) < free * 0.02, `${after.toFixed(2)} against a free ${free.toFixed(2)}`);
+
+  // THE RELEASE IS A RAMP, not the timer hitting zero — a hold that snapped
+  // back to full speed on one frame reads as the game hitching rather than as
+  // the grip letting go. Sampled across the thaw window.
+  atRest();
+  snarePlayer(A.pulseSnare, A.pulseSnareMul, A.pulseSnareThaw);
+  const speeds = [];
+  for (let i = 0; i < Math.round(A.pulseSnare / dt); i++) {
+    updatePlayer(dt, pushInput(1, 0));
+    speeds.push(player.velocity.length());
+  }
+  const biggestJump = Math.max(...speeds.slice(1).map((v, i) => v - speeds[i]));
+  check('the grip eases off rather than releasing on one frame',
+    biggestJump < player.stats.maxSpeed * 0.25,
+    `worst single-frame gain ${biggestJump.toFixed(2)} u/s on a ${player.stats.maxSpeed.toFixed(0)} u/s ceiling`);
+
+  // STRONGEST AND LONGEST WIN. Two overlapping sources must not let the weaker
+  // one, arriving second, undo the stronger — the shape that produces is a
+  // freeze a glancing second hit cancels.
+  atRest();
+  snarePlayer(2, 0.05, 0.1);
+  snarePlayer(0.2, 0.9, 0.1);
+  check('a weaker snare landing on top does not weaken the hold',
+    player.snareMul === 0.05, `${player.snareMul}`);
+  check('...nor shorten it', player.snareTimer >= 2 - 1e-9, `${player.snareTimer}s`);
+
+  // AND A SHOVE STILL SHOVES. The snare scales the seal, not the water.
+  atRest();
+  snarePlayer(A.pulseSnare, 0, A.pulseSnareThaw);
+  const from = player.mesh.position.clone();
+  applyPlayerKnockback(1, 0, SPEED);
+  for (let i = 0; i < Math.round(0.5 / dt); i++) updatePlayer(dt, noInput);
+  check('a seal held solid is still thrown by what hits it',
+    player.mesh.position.distanceTo(from) > 1,
+    `${player.mesh.position.distanceTo(from).toFixed(2)} units while frozen`);
+
+  // A NEW RUN STARTS FREE. resetPlayer clears it, or a run that ended held
+  // opens the next one held, with nothing on screen to explain why.
+  snarePlayer(5, 0, 0.1);
+  resetPlayer();
+  check('a new run starts free of it', !playerSnared() && player.snareMul === 1,
+    `${player.snareTimer}s at x${player.snareMul}`);
+}
+
 console.log(failures ? `\n${failures} FAILED\n` : '\nall good\n');
 process.exit(failures ? 1 : 0);

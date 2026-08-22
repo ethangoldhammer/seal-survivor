@@ -663,7 +663,20 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     fitLabels(held.pxPerUnit);
   }
   composeHeld();
-  const onResize = () => composeHeld();
+  // A ROTATION CAN CHANGE THE MENU'S SHAPE, not just its framing: hexMenu
+  // stacks the buttons into a column on a portrait screen and lays them in a
+  // row on a wide one. Re-laying out only when that decision actually flips
+  // keeps the geometry rebuild off every resize event while a window is being
+  // dragged, and leaves a mid-drag tile where the player is holding it.
+  let stacked = menu.wantsStack?.() ?? false;
+  const onResize = () => {
+    const next = menu.wantsStack?.() ?? false;
+    if (next !== stacked) {
+      stacked = next;
+      menu.layout(bust);
+    }
+    composeHeld();
+  };
   window.addEventListener('resize', onResize);
   // ONE MORE PASS WHEN THE FACE ARRIVES. initTypography loads the family the
   // `blobButton` role names, and a label measured before it lands was measured

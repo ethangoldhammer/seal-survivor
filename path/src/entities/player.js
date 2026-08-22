@@ -111,6 +111,20 @@ export const player = {
   // CONFIG.strike.charge.gulp and updatePickups). Pushed in by main.js each
   // frame for the same reason as chargePose above.
   chumSealed: false,
+  // --- BEING HELD -----------------------------------------------------------
+  // Seconds left of a snare, and what fraction of the seal's own swimming
+  // survives it. 1 is free; 0 is held solid. Written by snarePlayer(), read by
+  // updatePlayer, and by nothing else — a system that wants to slow the seal
+  // asks for a snare rather than reaching into `stats`, because stats are
+  // rebuilt from the upgrade list on every level-up and a multiplier parked in
+  // there would be silently wiped by the next card.
+  //
+  // Plain fields on the player for the same reason dashTimer and comboSpeedMul
+  // are: entities/ does not import from systems/, so the state lives here and
+  // whatever imposes it comes to it.
+  snareTimer: 0,
+  snareMul: 1,
+  snareThaw: 0.3,
   // Body twist toward the camera when the aim goes behind, and the clock for
   // the wind-up tremble. Both live on the same body transform as the mirror
   // and the barrel roll, composed together in updatePlayer.
@@ -371,6 +385,9 @@ export function resetPlayer() {
   player.dashTimer = 0;
   player.comboSpeedMul = 1;
   player.chumSealed = false;
+  // A run that ended held does not start held.
+  player.snareTimer = 0;
+  player.snareMul = 1;
   // The controller is reused across runs, and 'death' is a one-shot that
   // never expires by design — so without this the seal stays clamped in its
   // death pose for every subsequent run.
@@ -394,6 +411,65 @@ export function resetPlayer() {
   player.oxygen = player.stats.maxOxygen;
 }
 
+// ---------------------------------------------------------------------------
+// THE SNARE — something has hold of the seal
+// ---------------------------------------------------------------------------
+// A window in which the seal's own swimming is worth a fraction of what it
+// normally is. `mul` 0 is held solid, 0.15 is wading, 1 is nothing at all.
+//
+// IT SCALES THE SEAL, NOT THE WATER. Thrust and the speed ceiling both, because
+// scaling only one of them does not work in either direction: cutting thrust
+// alone leaves a seal already at top speed coasting out of the trap on
+// momentum, and cutting the ceiling alone leaves it pinned at a low speed it
+// still reaches instantly, which reads as swimming through treacle rather than
+// as being caught.
+//
+// KNOCKBACK IS DELIBERATELY OUTSIDE IT. A shove is integrated after the clamp
+// (see updatePlayer) and a held seal should still be thrown by what hits it —
+// otherwise the snare quietly becomes immunity to being moved, which is the
+// opposite of what it is for.
+//
+// STRONGEST AND LONGEST WIN rather than the newest. Two overlapping sources
+// would otherwise let the weaker one, arriving second, cancel the stronger —
+// and the shape that produces is a freeze that a glancing second hit undoes.
+export function snarePlayer(seconds, mul = 0, thaw = 0.3) {
+  if (!(seconds > 0)) return;
+  // Expired: start from free rather than from whatever the last one left, or a
+  // long-dead weak snare would floor every later one at its own multiplier.
+  if (player.snareTimer <= 0) player.snareMul = 1;
+  player.snareTimer = Math.max(player.snareTimer, seconds);
+  player.snareMul = Math.min(player.snareMul, Math.max(0, mul));
+  player.snareThaw = Math.max(0, thaw);
+}
+
+/** Is the seal held right now? For the readouts and the harness. */
+export function playerSnared() {
+  return player.snareTimer > 0;
+}
+
+// What fraction of its own swimming the seal has this frame, and the only
+// place the clock is advanced.
+//
+// THE RELEASE IS A RAMP, not the timer hitting zero. A hold that ends on one
+// frame snaps the seal from a twelfth of its speed to all of it, which reads
+// as the game hitching rather than as the grip letting go — so the last
+// `snareThaw` seconds of every snare walk the multiplier back to 1. The hold
+// itself is still exactly as long as it was asked to be; the thaw is spent
+// inside it, which is why a snare shorter than its own thaw is simply a shove
+// that fades rather than an error.
+function snareFactor(dt) {
+  if (player.snareTimer <= 0) return 1;
+  player.snareTimer -= dt;
+  if (player.snareTimer <= 0) {
+    player.snareTimer = 0;
+    player.snareMul = 1;
+    return 1;
+  }
+  const thaw = player.snareThaw ?? 0;
+  const out = thaw > 0 && player.snareTimer < thaw ? 1 - player.snareTimer / thaw : 0;
+  return player.snareMul + (1 - player.snareMul) * out;
+}
+
 export function updatePlayer(dt, input) {
   const s = player.stats;
   const pos = player.mesh.position;
@@ -403,10 +479,13 @@ export function updatePlayer(dt, input) {
   if (player.dashTimer > 0) player.dashTimer -= dt;
   const dashing = player.dashTimer > 0;
   const combo = player.comboSpeedMul || 1;
+  // Advanced exactly once a frame, here, because it is a clock as well as a
+  // multiplier — reading it twice would run the hold out at double speed.
+  const snare = snareFactor(dt);
 
   if (CONFIG.player.thrustEnabled) {
-    player.velocity.x += input.move.x * s.thrust * combo * dt;
-    player.velocity.y += input.move.y * s.thrust * combo * dt;
+    player.velocity.x += input.move.x * s.thrust * combo * snare * dt;
+    player.velocity.y += input.move.y * s.thrust * combo * snare * dt;
   }
 
   // Steering mid-dash. A strike used to be a straight line you waited out —
@@ -484,7 +563,12 @@ export function updatePlayer(dt, input) {
   // Still clamped, just against the dash's own ceiling, so nothing runs away.
   // Both ceilings ride the combo multiplier: every live chain link makes the
   // seal faster, in the dash AND in the swimming between dashes.
-  const ceiling = (dashing ? Math.max(s.maxSpeed, s.strikeDashSpeed) : s.maxSpeed) * combo;
+  //
+  // AND BY THE SNARE, which is what makes a hold bite on a seal already moving:
+  // the clamp runs every frame, so a ceiling cut to a twelfth takes the
+  // momentum out on the frame the snare lands rather than waiting for drag to
+  // bleed it off over the second the hold was supposed to last.
+  const ceiling = (dashing ? Math.max(s.maxSpeed, s.strikeDashSpeed) : s.maxSpeed) * combo * snare;
   const speed = player.velocity.length();
   if (speed > ceiling) player.velocity.multiplyScalar(ceiling / speed);
 

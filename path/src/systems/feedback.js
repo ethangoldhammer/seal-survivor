@@ -2,6 +2,7 @@ import { CONFIG } from '../config.js';
 import { emit } from '../entities/particles.js';
 import { playSfx, vibrate, noteSfx, sfxBand } from './audio.js';
 import { playHaptic } from './haptics.js';
+import { taptic } from './taptic.js';
 
 // Every juicy thing in the game goes through here. One call site per event, and
 // what that event does — particles, shake, hit-stop, grid ripple, sound, buzz —
@@ -289,11 +290,14 @@ export function feedback(event, at = {}) {
     });
   }
   if (def.haptic) {
-    // Controller rumble and phone buzz are different hardware reached through
-    // different APIs — send the same authored pattern to both, and whichever
-    // the player actually has responds.
+    // Controller rumble, phone buzz and the Taptic Engine are three pieces of
+    // hardware reached through three unrelated APIs — send the same authored
+    // pattern to all of them, and whichever the player actually has responds.
+    // Only one ever can: a pad has no Vibration API, WebKit has no Vibration
+    // API, and Capacitor's bridge only exists inside the native shell.
     playHaptic(def.haptic, Math.min(1.6, scale));
     vibrate(def.haptic);
+    taptic(def.haptic, Math.min(1.6, scale));
   }
 }
 

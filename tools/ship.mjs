@@ -18,6 +18,11 @@
 //                  evidence rather than look like every other commit.
 //   --branch <b>   ship a branch other than SealSurvivor-Main (no deploy)
 //   --file <path>  read the commit message from a file instead of the args
+//   --ios          after the push, archive and upload the SAME build to
+//                  TestFlight (npm run ship:all). See tools/ship-ios.mjs — it
+//                  needs an App Store Connect key, and it runs LAST on purpose:
+//                  the web deploy takes two minutes and the iOS one takes ten,
+//                  so a failure at Apple's end never holds back the site.
 // ============================================================================
 
 import { execFileSync, execSync } from 'node:child_process';
@@ -57,6 +62,7 @@ const YES = has('--yes');
 const SKIP = has('--no-verify');
 const BRANCH = valueOf('--branch') ?? PROD_BRANCH;
 const FILE = valueOf('--file');
+const IOS = has('--ios');
 
 // The message is every bare argument joined — so quoting is optional and
 // `npm run ship -- fixed the crab` does what it looks like it does. `--file`
@@ -137,6 +143,15 @@ if (SKIP) {
 say();
 
 if (DRY) {
+  if (IOS) {
+    say();
+    const { shipIos, ShipIosError } = await import('./ship-ios.mjs');
+    try { await shipIos({ dry: true }); }
+    catch (err) {
+      if (!(err instanceof ShipIosError)) throw err;
+      die(err.message, err.hint);
+    }
+  }
   say(`${c.green}✓ dry run — everything passed, nothing committed.${c.off}`);
   process.exit(0);
 }
@@ -150,6 +165,7 @@ if (!YES) {
   say(deploys
     ? `  ${c.yellow}which auto-deploys to ${LIVE_URL}${c.off}`
     : `  ${c.dim}(no deploy — only ${PROD_BRANCH} publishes)${c.off}`);
+  if (IOS) say(`  ${c.yellow}then archive and upload that build to TestFlight${c.off}`);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = (await rl.question('\nGo? [y/N] ')).trim().toLowerCase();
   rl.close();
@@ -177,4 +193,22 @@ say(`\n${c.green}✓ pushed${c.off}`);
 if (deploys) {
   say(`  deploy running  ${c.dim}${ACTIONS_URL}${c.off}`);
   say(`  live in ~2 min  ${c.dim}${LIVE_URL}${c.off}`);
+}
+
+// The iOS build reuses the dist/ the gates just produced, so the app and the
+// site are the same bytes rather than two builds that happen to be adjacent.
+// --no-verify skips that build, and then there is nothing to reuse.
+if (IOS) {
+  say();
+  const { shipIos, ShipIosError } = await import('./ship-ios.mjs');
+  try {
+    await shipIos({ skipBuild: !SKIP, yes: true });
+  } catch (err) {
+    if (!(err instanceof ShipIosError)) throw err;
+    say(`\n${c.red}✗ iOS: ${err.message}${c.off}`);
+    if (err.hint) say(`${c.dim}  ${err.hint}${c.off}`);
+    say(`${c.dim}  The web deploy is unaffected — it is already running.${c.off}`);
+    say(`${c.dim}  Retry just this half with: npm run ship:ios${c.off}`);
+    process.exit(1);
+  }
 }

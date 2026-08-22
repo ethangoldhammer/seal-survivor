@@ -83,8 +83,14 @@ export function initBossBarRive(parent) {
   // the artboard's own 1920x307 aspect so Fit.Contain has nothing to letterbox.
   // pointer-events off: it sits over the water the player is aiming into.
   const width = c.width ?? 'min(1040px, 88vw)';
+  // THE INSET IS ADDED, NOT SUBSTITUTED FOR THE TUNED TOP. `c.top` is a
+  // composition choice about how far under the top edge the bar hangs; the
+  // inset is how far down the top edge actually is once the page draws under
+  // the Dynamic Island (index.html carries viewport-fit=cover). Sizes down to
+  // 0 on anything without a notch, so this is not a phone special case — it is
+  // the same 14px everywhere the top edge is the top edge.
   state.wrap.style.cssText =
-    `position:absolute; top:${c.top ?? 14}px; left:50%; transform:translateX(-50%);` +
+    `position:absolute; top:calc(${c.top ?? 14}px + env(safe-area-inset-top, 0px)); left:50%; transform:translateX(-50%);` +
     `width:${width}; aspect-ratio:1920 / 307; pointer-events:none;`;
 
   state.canvas = document.createElement('canvas');

@@ -2,6 +2,7 @@ import { CONFIG } from '../config.js';
 import { musicScale } from './settings.js';
 import { bounds, depthFraction } from '../arena.js';
 import { getAudioContext, makeImpulse } from './audio.js';
+import { fetchAudioBytes } from './fetchAudio.js';
 
 // A loop player that changes tracks ON THE BEAT rather than the instant
 // something happens in game. When you level up, the next loop is QUEUED — it
@@ -462,9 +463,7 @@ export async function preloadDefaultTracks() {
     const name = String(i + 1);
     if (!src || tracks.has(name)) continue;
     try {
-      const res = await fetch(src);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      tracks.set(name, await ctx.decodeAudioData(await res.arrayBuffer()));
+      tracks.set(name, await ctx.decodeAudioData(await fetchAudioBytes(src)));
     } catch (err) {
       console.warn(`[music] could not load default loop "${src}" —`, err?.message ?? err);
       continue;
@@ -485,9 +484,7 @@ export async function preloadDefaultTracks() {
     const name = BOSS_PREFIX + i;
     if (!src || tracks.has(name)) continue;
     try {
-      const res = await fetch(src);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      tracks.set(name, await ctx.decodeAudioData(await res.arrayBuffer()));
+      tracks.set(name, await ctx.decodeAudioData(await fetchAudioBytes(src)));
     } catch (err) {
       console.warn(`[music] could not load boss loop "${src}" —`, err?.message ?? err);
       continue;

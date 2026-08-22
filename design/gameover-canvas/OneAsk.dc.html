@@ -1,0 +1,351 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+  <style>
+    /* ========================================================================
+       A — ONE ASK.  Axis: radical subtraction.
+       The shipped card asks five things at once and puts the only one that
+       matters (get back in the water) below all of them. Here the death, the
+       score and the one button are the whole card; everything else is offered
+       as three quiet drawers, one open at a time.
+       Same tokens as the shipped screen — nothing new is invented.
+       ==================================================================== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 760px; height: 1120px; overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+    a { color: #7ad7ff; text-decoration: none; }
+    a:hover { color: #cfeeff; }
+    :root { --sv-scan: 0.18; --sv-flicker: 0.12; }
+    .role { text-shadow: -0.4px 0 rgba(255,60,60,0.55), 0.4px 0 rgba(60,160,255,0.55),
+      0 0 13.8px rgba(150,220,255,1); }
+
+    .stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .card { width: 580px; max-width: 90vw; height: 880px; max-height: 92vh;
+      background: #07090d; border: 1px solid rgba(255,255,255,0.14); border-radius: 14px;
+      color: #e8ecf3; overflow: hidden; position: relative;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset;
+      display: flex; flex-direction: column; }
+    .card::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 3;
+      background: linear-gradient(105deg, transparent 60%, rgba(255,255,255,0.015) 78%,
+        rgba(190,230,255,0.16) 94%, rgba(255,255,255,0.02) 110%, transparent 128%);
+      opacity: 0.45; }
+
+    /* --- THE LOCKUP. Quip and score are one thing, not two blocks. --------- */
+    .lockup { padding: 34px 32px 26px; text-align: center;
+      display: flex; flex-direction: column; align-items: center; gap: 18px; }
+    .quip { font-size: 28px; letter-spacing: 0.04em; line-height: 1.4; color: #ffffff;
+      text-wrap: balance; }
+    .hero { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+    .hero b { font-size: 64px; line-height: 1; letter-spacing: 0.01em; color: #e8ecf3;
+      font-variant-numeric: tabular-nums; }
+    /* THE SCORE IS NOW A PLACE, NOT A NUMBER. The shipped card shows a figure
+       and a board separately and leaves the player to find themselves in it. */
+    .rank { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: rgba(122,215,255,0.85); }
+    .stat-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 4px; width: 100%; }
+    .stat { display: flex; flex-direction: column; align-items: center; gap: 4px;
+      min-width: 0; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: rgba(232,236,243,0.45); }
+    .stat b { font-size: 19px; letter-spacing: 0.01em; color: #e8ecf3;
+      text-transform: none; font-variant-numeric: tabular-nums; }
+
+    /* --- THE ONE ASK ------------------------------------------------------ */
+    .ask { padding: 0 32px; display: flex; flex-direction: column; gap: 10px; }
+    .again { width: 100%; background: #7ad7ff; color: #0a0c12; border: none;
+      border-radius: 10px; padding: 20px 22px; font-family: inherit; font-size: 20px;
+      letter-spacing: 0.06em; cursor: pointer; text-transform: uppercase; }
+    .again:hover { background: #9fe3ff; }
+    /* THE NEXT SEAL RIDES THE BUTTON. It is a fact about the run you are
+       about to start, so it belongs to the thing that starts it — not to a
+       labelled form four rows above, wearing the same widget as a different
+       question. */
+    .as-row { display: flex; align-items: center; justify-content: center; gap: 8px;
+      font-size: 11px; letter-spacing: 0.06em; color: rgba(232,236,243,0.5); }
+    .as-name { background: none; border: 0; border-bottom: 1px dashed rgba(232,236,243,0.3);
+      color: #e8ecf3; font-family: inherit; font-size: 11px; letter-spacing: 0.06em;
+      text-transform: uppercase; text-align: center; width: 15ch; padding: 3px 0; }
+    .as-name:focus { outline: none; border-bottom-color: #7ad7ff; }
+    .roll { background: none; border: 0; cursor: pointer; color: #7ad7ff;
+      font-family: inherit; font-size: 11px; letter-spacing: 0.06em; padding: 4px;
+      display: inline-flex; align-items: center; gap: 5px; }
+    .roll:hover { color: #cfeeff; }
+
+    /* --- THE DRAWERS ------------------------------------------------------ */
+    .drawers { margin-top: 22px; flex: 1; min-height: 0; display: flex; flex-direction: column;
+      border-top: 1px solid rgba(255,255,255,0.08); }
+    .drawer { border-bottom: 1px solid rgba(255,255,255,0.08); display: flex;
+      flex-direction: column; min-height: 0; }
+    .drawer-open { flex: 1; min-height: 0; }
+    .drawer-head { display: flex; align-items: center; gap: 12px; width: 100%;
+      background: none; border: 0; cursor: pointer; font-family: inherit;
+      padding: 16px 32px; color: rgba(232,236,243,0.72); text-align: left;
+      transition: background 0.15s ease, color 0.15s ease; }
+    .drawer-head:hover { background: rgba(122,215,255,0.06); color: #cfeeff; }
+    .drawer-head[data-open="1"] { color: #7ad7ff; background: rgba(122,215,255,0.06); }
+    .drawer-title { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .drawer-note { margin-left: auto; font-size: 10px; letter-spacing: 0.06em;
+      color: rgba(232,236,243,0.4); }
+    .chev { flex: none; transition: transform 0.2s ease; }
+    .drawer-head[data-open="1"] .chev { transform: rotate(90deg); }
+    .drawer-body { padding: 4px 32px 22px; overflow-y: auto; min-height: 0; text-align: left; }
+
+    /* post-score drawer */
+    .name-row { display: flex; gap: 8px; margin-bottom: 12px; }
+    .name-input { flex: 1; min-width: 0; background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; padding: 9px 12px;
+      color: #e8ecf3; font-family: inherit; font-size: 14px; letter-spacing: 0.04em;
+      text-transform: uppercase; text-align: center; }
+    .name-input:focus { outline: none; border-color: #7ad7ff; background: rgba(122,215,255,0.08); }
+    .btn-sm { background: #7ad7ff; color: #0a0c12; border: 0; border-radius: 8px;
+      padding: 9px 16px; font-family: inherit; font-size: 13px; letter-spacing: 0.02em;
+      cursor: pointer; }
+    .btn-sm:hover { background: #9fe3ff; }
+    .btn-ghost { background: rgba(122,215,255,0.12); color: #cfeeff;
+      border: 1px solid rgba(122,215,255,0.35); }
+    .btn-ghost:hover { background: rgba(122,215,255,0.22); }
+    .lb-head, .lb-row { display: grid; grid-template-columns: 3ch minmax(0, 1fr) auto 3ch 4ch;
+      align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; }
+    .lb-head { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: rgba(232,236,243,0.35); }
+    .lb-head span:nth-child(n+3) { text-align: right; }
+    .lb-row { font-size: 13.8px; color: #ffffff; }
+    .lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+    .lb-row.lb-mine { background: rgba(122,215,255,0.14); border: 1px solid rgba(122,215,255,0.4); }
+    .lb-rank { color: rgba(232,236,243,0.5); font-variant-numeric: tabular-nums; }
+    .lb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lb-score { font-variant-numeric: tabular-nums; text-align: right; }
+    .lb-lv, .lb-time { color: rgba(232,236,243,0.5); font-size: 11px;
+      font-variant-numeric: tabular-nums; text-align: right; }
+
+    /* shots drawer */
+    .fan { display: flex; justify-content: center; padding: 8px 0 14px; }
+    .fan-slot { position: relative; background: none; border: 0; padding: 0; cursor: pointer;
+      transform-origin: 50% 60%; transform: rotate(var(--rot, 0deg));
+      filter: drop-shadow(0 8px 20px rgba(0,0,0,0.5));
+      transition: transform 0.18s cubic-bezier(0.2,0.9,0.3,1); }
+    .fan-slot:hover { transform: rotate(0deg) translateY(-8px) scale(1.04); }
+    .print { width: 168px; background: #eef2f3; padding: 6px 6px 0;
+      box-shadow: 0 18px 46px rgba(0,0,0,0.55); }
+    .print svg { display: block; width: 100%; height: auto; }
+    .print-chin { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+      color: #232b33; padding: 5px 2px 11px; font-size: 9px; letter-spacing: 0.02em; }
+    .print-stat { opacity: 0.55; font-variant-numeric: tabular-nums; }
+    .shot-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
+    /* run drawer */
+    .brk-head { display: grid; grid-template-columns: 1fr 58px 34px; gap: 8px;
+      padding: 0 8px 6px; font-size: 9.5px; letter-spacing: 0.14em;
+      text-transform: uppercase; color: rgba(232,236,243,0.35); }
+    .brk-head span + span { text-align: right; }
+    .brk-row { position: relative; display: grid; grid-template-columns: 1fr 58px 34px;
+      gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+    .brk-row::before { content: ""; position: absolute; inset: 0; border-radius: 6px;
+      width: var(--share, 0%);
+      background: linear-gradient(90deg, rgba(122,215,255,0.30), rgba(122,215,255,0.06)); }
+    .brk-in::before { background: linear-gradient(90deg, rgba(255,120,120,0.28), rgba(255,120,120,0.05)); }
+    .brk-row > * { position: relative; }
+    .brk-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .brk-picks { font-size: 10px; margin-left: 6px; color: rgba(232,236,243,0.40); }
+    .brk-a { text-align: right; font-variant-numeric: tabular-nums; }
+    .brk-b { text-align: right; font-size: 11px; color: rgba(232,236,243,0.45);
+      font-variant-numeric: tabular-nums; }
+    .brk-foot { margin-top: 10px; padding-top: 9px; display: flex; gap: 12px;
+      justify-content: space-between; font-size: 11px;
+      border-top: 1px solid rgba(255,255,255,0.08); color: rgba(232,236,243,0.45); }
+    .brk-foot b { color: #e8ecf3; font-variant-numeric: tabular-nums; }
+
+    .foot { padding: 14px 32px 18px; display: flex; justify-content: center; }
+    .tip { display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+      border-radius: 999px; padding: 7px 14px; font-size: 12px; letter-spacing: 0.05em;
+      color: rgba(232,236,243,0.72); background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.16); transition: color 0.15s ease, background 0.15s ease; }
+    .tip:hover { color: #ffd9a0; background: rgba(255,190,110,0.14); border-color: rgba(255,190,110,0.45); }
+    .tip-cup { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor;
+      stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+    .retro { position: absolute; inset: 0; pointer-events: none; z-index: 25;
+      background: repeating-linear-gradient(to bottom, rgba(0,0,0,var(--sv-scan)) 0px,
+        rgba(0,0,0,var(--sv-scan)) 1px, transparent 1px, transparent 3px);
+      mix-blend-mode: multiply; animation: flick 0.15s steps(2) infinite; }
+    @keyframes flick { 0% { opacity: calc(1 - var(--sv-flicker)); } 100% { opacity: 1; } }
+  </style>
+</helmet>
+
+<div class="stage">
+  <div class="card">
+
+    <div class="lockup">
+      <div class="quip role">You&#39;re the Chum Now, Dog</div>
+      <div class="hero">
+        <b>12,480</b>
+        <span class="rank role">2nd of 100 &#183; 5,940 off first place</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat"><b>3:24</b>Time</span>
+        <span class="stat"><b>7</b>Level</span>
+        <span class="stat"><b>148</b>Kills</span>
+        <span class="stat"><b>2</b>Bosses</span>
+      </div>
+    </div>
+
+    <div class="ask">
+      <button class="again role">Dive again</button>
+      <div class="as-row">
+        as
+        <input class="as-name" type="text" value="BRINY GUS" maxlength="32" aria-label="Name for your next seal" />
+        <button class="roll" type="button" aria-label="Roll a new name"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M10 5A4 4 0 1 0 9.2 8.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10.4 1.6V5H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> roll</button>
+      </div>
+    </div>
+
+    <div class="drawers">
+      <div class="drawer {{postCls}}">
+        <button class="drawer-head" data-open="{{postAttr}}" onClick="{{ postToggle }}">
+          <svg class="chev" width="8" height="10" viewBox="0 0 8 10" fill="none" aria-hidden="true"><path d="M2 1l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="drawer-title">Post this score</span>
+          <span class="drawer-note">2nd of 100</span>
+        </button>
+        <sc-if value="{{ postOpen }}" hint-placeholder-val="{{ true }}">
+        <div class="drawer-body" style="flex: 1; min-height: 0">
+          <div class="name-row">
+            <input class="name-input" type="text" value="SEAL" maxlength="32" aria-label="Name for the leaderboard" />
+            <button class="btn-sm role">Post it</button>
+          </div>
+          <div class="lb-head"><span>#</span><span>Name</span><span>Score</span><span>Lv</span><span>Time</span></div>
+          <div class="lb-row role"><span class="lb-rank">1</span><span class="lb-name">PODMOTHER</span><span class="lb-score">18,420</span><span class="lb-lv">9</span><span class="lb-time">4:41</span></div>
+          <div class="lb-row lb-mine role"><span class="lb-rank">2</span><span class="lb-name">SEAL</span><span class="lb-score">12,480</span><span class="lb-lv">7</span><span class="lb-time">3:24</span></div>
+          <div class="lb-row role"><span class="lb-rank">3</span><span class="lb-name">HAULOUT HANK</span><span class="lb-score">11,905</span><span class="lb-lv">7</span><span class="lb-time">3:02</span></div>
+          <div class="lb-row role"><span class="lb-rank">4</span><span class="lb-name">CLAMMY DAVIS JR.</span><span class="lb-score">9,340</span><span class="lb-lv">6</span><span class="lb-time">2:48</span></div>
+          <div class="lb-row role"><span class="lb-rank">5</span><span class="lb-name">ANON</span><span class="lb-score">7,110</span><span class="lb-lv">5</span><span class="lb-time">2:15</span></div>
+        </div>
+        </sc-if>
+      </div>
+      <div class="drawer {{shotsCls}}">
+        <button class="drawer-head" data-open="{{shotsAttr}}" onClick="{{ shotsToggle }}">
+          <svg class="chev" width="8" height="10" viewBox="0 0 8 10" fill="none" aria-hidden="true"><path d="M2 1l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="drawer-title">Your kill shots</span>
+          <span class="drawer-note">2 prints</span>
+        </button>
+        <sc-if value="{{ shotsOpen }}" hint-placeholder-val="{{ true }}">
+        <div class="drawer-body" style="flex: 1; min-height: 0">
+          <div class="fan">
+            <button class="fan-slot" style="--rot: -6.5deg; z-index: 1" onClick="{{ noop }}">
+              <div class="print">
+                <svg viewBox="0 0 240 180" xmlns="http://www.w3.org/2000/svg">
+                  <defs><linearGradient id="a1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12506e"/><stop offset="1" stop-color="#04101c"/></linearGradient></defs>
+                  <rect width="240" height="180" fill="url(#a1)"/>
+                  <path d="M0 128 Q60 112 120 126 T240 120 L240 180 L0 180 Z" fill="#02090f" opacity="0.8"/>
+                  <path d="M30 96 q40 -34 96 -30 q34 2 58 16 l26 -22 l-6 30 l24 14 l-28 8 q-30 20 -74 18 q-58 -2 -96 -34 z" fill="#020a10" opacity="0.92"/>
+                </svg>
+                <div class="print-chin"><span>Bloody Jaw</span><span class="print-stat">LV 3 &#183; 0:58</span></div>
+              </div>
+            </button>
+            <button class="fan-slot" style="--rot: 6.5deg; z-index: 2; margin-left: -57px" onClick="{{ noop }}">
+              <div class="print">
+                <svg viewBox="0 0 240 180" xmlns="http://www.w3.org/2000/svg">
+                  <defs><linearGradient id="a2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12506e"/><stop offset="1" stop-color="#04101c"/></linearGradient></defs>
+                  <rect width="240" height="180" fill="url(#a2)"/>
+                  <path d="M0 128 Q60 112 120 126 T240 120 L240 180 L0 180 Z" fill="#02090f" opacity="0.8"/>
+                  <path d="M24 100 q46 -30 104 -24 q30 3 52 15 l20 -26 l-2 32 l26 12 l-30 10 q-34 18 -80 14 q-54 -6 -90 -33 z" fill="#020a10" opacity="0.92"/>
+                </svg>
+                <div class="print-chin"><span>Grim Fluke</span><span class="print-stat">LV 5 &#183; 1:47</span></div>
+              </div>
+            </button>
+          </div>
+          <div class="shot-row">
+            <button class="btn-sm role">Share</button>
+            <button class="btn-sm btn-ghost role">Save both</button>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+      <div class="drawer {{runCls}}">
+        <button class="drawer-head" data-open="{{runAttr}}" onClick="{{ runToggle }}">
+          <svg class="chev" width="8" height="10" viewBox="0 0 8 10" fill="none" aria-hidden="true"><path d="M2 1l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="drawer-title">The run</span>
+          <span class="drawer-note">104.6k dealt</span>
+        </button>
+        <sc-if value="{{ runOpen }}" hint-placeholder-val="{{ true }}">
+        <div class="drawer-body" style="flex: 1; min-height: 0">
+          <div class="brk-head"><span>Weapon</span><span>Damage</span><span>Kills</span></div>
+          <div class="brk-row" style="--share: 100%"><span class="brk-name">Pocket Full of Stones<span class="brk-picks">&#215;4</span></span><span class="brk-a">48.2k</span><span class="brk-b">71</span></div>
+          <div class="brk-row" style="--share: 62%"><span class="brk-name">Homing Mussels<span class="brk-picks">&#215;2</span></span><span class="brk-a">29.9k</span><span class="brk-b">38</span></div>
+          <div class="brk-row" style="--share: 41%"><span class="brk-name">Baby Beluga Bubble Blaster<span class="brk-picks">&#215;3</span></span><span class="brk-a">19.7k</span><span class="brk-b">26</span></div>
+          <div class="brk-row" style="--share: 14%"><span class="brk-name">C.H.U.M.</span><span class="brk-a">6.8k</span><span class="brk-b">13</span></div>
+          <div class="brk-foot"><span>Total dealt <b>104.6k</b></span><span>Held or frozen <b>34</b></span></div>
+
+          <div style="padding-top: 16px">
+            <div class="brk-head"><span>What hurt you</span><span>Damage</span><span>Share</span></div>
+            <div class="brk-row brk-in" style="--share: 100%"><span class="brk-name">Sharks</span><span class="brk-a">412</span><span class="brk-b">54%</span></div>
+            <div class="brk-row brk-in" style="--share: 46%"><span class="brk-name">Crabs</span><span class="brk-a">190</span><span class="brk-b">25%</span></div>
+            <div class="brk-row brk-in" style="--share: 38%"><span class="brk-name">Drowning</span><span class="brk-a">157</span><span class="brk-b">21%</span></div>
+            <div class="brk-foot"><span>Total taken <b>759</b></span><span>Killed by <b>a great white</b></span></div>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <div class="foot">
+      <a class="tip" href="#">
+        <svg class="tip-cup" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 8h13v7a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Z" />
+          <path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17" />
+          <path d="M8 2.5c0 1.2-1 1.5-1 2.5M12 2.5c0 1.2-1 1.5-1 2.5" style="opacity: 0.55" />
+        </svg>
+        Tip jar
+      </a>
+    </div>
+
+    <sc-if value="{{ retro }}" hint-placeholder-val="{{ true }}">
+      <div class="retro"></div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{
+  "open": {"editor": "enum", "default": "post", "options": ["post", "shots", "run", "none"], "section": "State"},
+  "retro": {"editor": "boolean", "default": true, "section": "Look"},
+  "$preview": {"width": 760, "height": 1120}
+}'>
+// ONE DRAWER AT A TIME, and closing the open one is allowed. Three drawers
+// open at once is the shipped card again with extra clicks.
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { open: null };
+  }
+
+  current() {
+    return this.state.open ?? this.props.open ?? 'post';
+  }
+
+  renderVals() {
+    const open = this.current();
+    // Keys only — the heads are literal in the template, so a title here would
+    // be a second source of truth for the same six strings.
+    const rows = [{ key: 'post' }, { key: 'shots' }, { key: 'run' }];
+    return {
+      ...Object.fromEntries(rows.flatMap((r) => [
+        [`${r.key}Cls`, open === r.key ? 'drawer-open' : ''],
+        [`${r.key}Attr`, open === r.key ? '1' : '0'],
+        [`${r.key}Open`, open === r.key],
+        [`${r.key}Toggle`, () => this.setState({ open: open === r.key ? 'none' : r.key })],
+      ])),
+      retro: this.props.retro ?? true,
+      noop: () => {},
+    };
+  }
+}
+</script>
+</body>
+</html>

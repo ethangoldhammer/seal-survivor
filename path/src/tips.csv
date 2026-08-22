@@ -1,0 +1,5 @@
+id,price,label,desc,tag,enabled,order,notes
+sealname,1,Name a seal,"One name, in the roller every player rolls from.",SEAL,,1,"The entry tier. One name, one dollar — priced so it reads as a joke you can afford rather than a purchase."
+sealseven,5,Name seven seals,Seven names. Put a whole pod in there.,SEAL,,2,"Five for seven rather than five for five: the discount is the point, and seven is funnier than five."
+bossname,5,Name a boss,"Prefix and root, on the thing that kills you.",BOSS,,3,"Same price as seven seals on purpose. A boss name is rarer and louder, and pricing the loud thing the same as the bulk thing lets the player pick by taste instead of by cost."
+realname,100,Your actual name,"Your real, on-the-passport name, as a seal.",SEAL,,4,"The joke tier, and the only one that is really about the money. A hundred dollars to be legally a seal."

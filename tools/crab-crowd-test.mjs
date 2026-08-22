@@ -30,6 +30,21 @@ import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/en
 import { pickups, spawnXpOrb, updatePickups, resetPickups } from '../path/src/entities/pickups.js';
 import { deathState } from '../path/src/systems/deathDive.js';
 import { summonDeathPile, updateDeathPile, resetCrabSpawner } from '../path/src/systems/crabSpawner.js';
+import { recordGrave, plantGraves, updateGravesites, clearGraves, graveHasLanded, graveKeepOut } from '../path/src/systems/gravesite.js';
+import { installModel } from '../path/src/assets.js';
+
+// SEEDED, and it has to be. Half of what this file measures is a Monte Carlo:
+// where crabs wander, which orb a shark picks, how a pile happens to fall out.
+// Unseeded it failed about one run in four on the shark's "connects more often
+// than it whiffs" check — a real threshold measuring a real behaviour, against
+// dice that were free to roll a bad twenty seconds. Held still, so a failure
+// here means the behaviour moved. (Never fix one of these by lowering the bar:
+// see the note on that check.) The seed is installed before anything spawns.
+let seed = 0xc4ab5eed;
+Math.random = () => {
+  seed = (seed * 1664525 + 1013904223) >>> 0;
+  return seed / 4294967296;
+};
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -387,6 +402,125 @@ summonDeathPile();
 for (let i = 0; i < Math.ceil(window / dt) + 10; i++) updateDeathPile(dt, scene, 0, { x: 0, y: FLOOR + 1 });
 check('the pile respects its own ceiling', enemies.length <= CONFIG.crabSpawn.deathPile.maxCrabs,
   `${enemies.length} crabs, ceiling ${CONFIG.crabSpawn.deathPile.maxCrabs} (was ${held2})`);
+
+// ---------------------------------------------------------------------------
+section('THE GRAVE — the pile breaks up when the stone lands');
+// ---------------------------------------------------------------------------
+// The heap is the death; the headstone is what comes after it. Until this
+// existed the two overlapped: the stone dropped onto the spot the crabs were
+// piled on, threw them off it, and they turned round and walked back — so the
+// name was cut behind a crab, which is the last thing the player watches.
+reset();
+clearGraves();
+deathState.active = true;
+{
+  const body = makePlayer(0, FLOOR + 1.2);
+  const pile = [];
+  for (let i = 0; i < 8; i++) pile.push(crabAt((i % 2 ? 1 : -1) * (6 + i * 2), FLOOR + 1));
+
+  // Piling on, exactly as the section above measures.
+  for (let i = 0; i < 60 * 10; i++) {
+    updateEnemies(dt, scene, body.mesh.position, () => {}, () => {});
+    for (const e of pile) e.mesh.position.z = 0;
+  }
+  const KO = CONFIG.gravesite.keepOut;
+  const onSite = () => pile.filter((e) => Math.abs(e.mesh.position.x) < KO.radius).length;
+  const heaped = onSite();
+  check('the crabs are on the body to begin with', heaped >= 5,
+    `${heaped} of ${pile.length} inside the stone's footprint`);
+  check('...and no stone has landed yet', !graveHasLanded());
+
+  // A stand-in stone under the real asset key. plantGraves REFUSES to stand a
+  // grave whose model has not loaded — the procedural fallback for these keys
+  // is a cone, and a traffic cone with a name cut into it reads as a joke — so
+  // without this the yard stays empty and every check below passes for the
+  // wrong reason. Same stand-in tools/gravesite-test.mjs uses.
+  {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 0.3), new THREE.MeshBasicMaterial());
+    const root = new THREE.Object3D();
+    root.add(box);
+    installModel('headstone', root);
+  }
+
+  // The stone. Driven on the WALL clock like main.js drives it, and only far
+  // enough to be on the bed — the point of the test is that the crabs go while
+  // the inscription is still being cut, not after the whole sequence.
+  recordGrave({ x: 0, z: 0, name: 'Tester', cause: 'a crab' });
+  plantGraves(scene);
+  let landed = false;
+  for (let i = 0; i < 60 * 6 && !landed; i++) {
+    updateGravesites(dt);
+    landed = graveHasLanded();
+  }
+  check('the stone reaches the seabed', landed);
+  check('the keep-out reads it from that frame', graveKeepOut(0, KO.radius) !== null,
+    'not from the frame it finishes being carved');
+
+  // No impact shove here — that is main.js's graveImpact, and this is the
+  // steering half. If the crabs leave without being thrown, they left because
+  // they decided to.
+  //
+  // OCCUPANCY OVER THE WINDOW, not a snapshot of the last frame. The keep-out
+  // is not a wall: a crab may wander back toward the stone and be turned at its
+  // edge, which is the behaviour working. Read on one frame that is a coin
+  // toss — it failed on 2 seeds in 5 while the crabs were plainly clearing off.
+  // What the scene actually needs is that almost nobody is standing on the
+  // grave almost none of the time.
+  // Two seconds to walk out from under it — a crab in the middle of a heap has
+  // several body lengths to cover and is not meant to teleport — and then the
+  // measurement.
+  const walkOff = 60 * 2;
+  const frames = 60 * 6;
+  let occupied = 0;
+  let counted = 0;
+  for (let i = 0; i < walkOff + frames; i++) {
+    updateEnemies(dt, scene, body.mesh.position, () => {}, () => {});
+    for (const e of pile) e.mesh.position.z = 0;
+    if (i >= walkOff) { occupied += onSite(); counted += pile.length; }
+  }
+  const share = occupied / counted;
+  check('they clear the grave and stay off it', share < 0.06,
+    `${(share * 100).toFixed(1)}% of crab-frames on the stone over the next ${(frames / 60).toFixed(0)}s, from ${((heaped / pile.length) * 100).toFixed(0)}%`);
+  const mean = pile.reduce((sum, e) => sum + Math.abs(e.mesh.position.x), 0) / pile.length;
+  check('...and end up out in the open', mean > KO.radius * 1.5,
+    `mean ${mean.toFixed(1)} units out, keep-out ${KO.radius}`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE GRAVE IS NOT A SAFE ZONE');
+// ---------------------------------------------------------------------------
+// The keep-out steers a crab with nothing to do. A crab coming for the PLAYER
+// ignores it — otherwise a player who parked on a headstone could not be
+// reached, and a decoration would have quietly become a mechanic.
+deathState.active = false;
+reset();
+{
+  const standing = makePlayer(0, FLOOR + 1.2); // on top of the grave
+  const hunter = crabAt(12, FLOOR + 1);
+  for (let i = 0; i < 60 * 8; i++) {
+    updateEnemies(dt, scene, standing.mesh.position, () => {}, () => {});
+    hunter.mesh.position.z = 0;
+  }
+  check('a crab still comes for a player stood on the grave',
+    Math.abs(hunter.mesh.position.x) < CONFIG.gravesite.keepOut.radius,
+    `${hunter.mesh.position.x.toFixed(1)} units out`);
+}
+
+// ...and one with nothing to do walks off it. Same stone, no player anywhere
+// near the floor.
+reset();
+{
+  const away = makePlayer(0, bounds.top - 2);
+  const idler = crabAt(1.5, FLOOR + 1);
+  for (let i = 0; i < 60 * 8; i++) {
+    updateEnemies(dt, scene, away.mesh.position, () => {}, () => {});
+    idler.mesh.position.z = 0;
+  }
+  check('an idle crab leaves the footprint',
+    Math.abs(idler.mesh.position.x) > CONFIG.gravesite.keepOut.radius,
+    `${idler.mesh.position.x.toFixed(1)} units out`);
+}
+clearGraves();
 
 deathState.active = false;
 console.log(failures === 0 ? '\nPASS — all checks' : `\nFAIL — ${failures} check(s)`);

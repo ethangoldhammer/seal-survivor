@@ -55,6 +55,7 @@ import { CONFIG } from '../path/src/config.js';
 import { bounds, updateBounds, clampToArena, seabedTopY, maxWaveExcursion } from '../path/src/arena.js';
 import { skyPlaneMetrics } from '../path/src/systems/sky.js';
 import { createWallRocks } from '../path/src/systems/wallRocks.js';
+import { ASSETS, getAssetSizeMultiplier } from '../path/src/assets.js';
 import { updateCineCamera, resetCineCamera } from '../path/src/systems/cineCamera.js';
 import { dayState, resetDayCycle, advanceClock, updateDayCycle } from '../path/src/systems/daylight.js';
 import { player, updatePlayer, recomputeStats, resetPlayer } from '../path/src/entities/player.js';
@@ -353,17 +354,30 @@ function faces() {
   return { rIn, lIn, minY, maxY };
 }
 
-// The seal's CENTRE stops at bounds.right - hitRadius and its body reaches the
-// wall. Both directions are a visible bug: set the face back and the seal
-// bounces off open water short of the rock, bite deeper than its body and the
-// seal disappears into the cliff.
-const body = bounds.right - CONFIG.player.hitRadius;
+// WHERE THE SEAL ACTUALLY STOPS. clampToArena holds its CENTRE at
+// bounds.right - hitRadius, and the animal reaches half its drawn length past
+// that — `fit` world units at the assets.csv size multiplier, which is three
+// times the hit circle. This test used to call bounds.right "the seal body",
+// i.e. it assumed hitRadius WAS the half-length, and so certified a shore
+// whose face sat two units inside the animal: swim nose-first into a wall and
+// most of the head was in the rock.
+//
+// Both directions are still a visible bug — set the face back and the seal
+// bounces off open water short of the rock, bite deep and it disappears into
+// the cliff — they are just measured against the nose now rather than against
+// a circle the player cannot see.
+const sealReach = (ASSETS.ship.fit * (getAssetSizeMultiplier('ship') || 1)) / 2;
+const nose = bounds.right - CONFIG.player.hitRadius + sealReach;
+// What a boulder is allowed to take off the tip, which is the same spread the
+// face has always been given so it is not a drawn straight line.
+const bite = Math.min(0.7, CONFIG.player.hitRadius * 0.7);
 const f = faces();
-check('no boulder intrudes past the seal body', f.rIn >= body - 1e-6,
-  `innermost rock ${f.rIn.toFixed(2)}, seal body reaches ${body.toFixed(2)}`);
-check('...and the face sits on the wall, not set back from it',
-  f.rIn <= bounds.right + 1e-6 && f.rIn > bounds.right - 1.2,
-  `face ${f.rIn.toFixed(2)} vs wall ${bounds.right.toFixed(2)}`);
+check('no boulder intrudes meaningfully past the seal body',
+  f.rIn >= nose - bite - 1e-6,
+  `innermost rock ${f.rIn.toFixed(2)}, the seal's nose reaches ${nose.toFixed(2)} (hit circle ${CONFIG.player.hitRadius}, drawn half-length ${sealReach.toFixed(2)})`);
+check('...and the face sits on the nose, not set back from it',
+  f.rIn <= nose + 1e-6 && f.rIn > nose - 1.2,
+  `face ${f.rIn.toFixed(2)} vs the seal's nose at ${nose.toFixed(2)} (wall ${bounds.right.toFixed(2)})`);
 check('both walls get one', Math.abs(Math.abs(f.lIn) - f.rIn) < 6,
   `left ${f.lIn.toFixed(1)}, right ${f.rIn.toFixed(1)}`);
 check('the stack is bedded in the seabed, not floating on it', f.minY < seabedTopY(),
@@ -601,9 +615,12 @@ check('a rebuild gives back the identical shore',
 CONFIG.arena.widthScale = 3;
 updateBounds(LANDSCAPE);
 rocks.build();
-check('and it follows the wall when the arena widens',
-  Math.abs(faces().rIn - bounds.right) < 1.2,
-  `wall +/-${bounds.right.toFixed(1)}, face ${faces().rIn.toFixed(1)}`);
+{
+  const wideNose = bounds.right - CONFIG.player.hitRadius + sealReach;
+  check('and it follows the wall when the arena widens',
+    Math.abs(faces().rIn - wideNose) < 1.2,
+    `wall +/-${bounds.right.toFixed(1)}, seal stops at ${wideNose.toFixed(1)}, face ${faces().rIn.toFixed(1)}`);
+}
 check('one draw call, whatever the count', rocks.stats().draws === 1,
   `${rocks.stats().verts.toLocaleString()} verts in ${rocks.stats().draws}`);
 

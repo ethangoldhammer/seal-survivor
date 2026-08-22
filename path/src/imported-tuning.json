@@ -3,7 +3,7 @@
   "assetLooks": {
     "enemyShark": {
       "emissive": 7302509,
-      "glow": 2.75,
+      "glow": 1,
       "tint": null,
       "roughness": 0.5,
       "repeatX": 1,
@@ -22,7 +22,7 @@
     },
     "enemyMegalodon": {
       "emissive": 12237498,
-      "glow": 3,
+      "glow": 0.5,
       "tint": null,
       "roughness": 0.5,
       "repeatX": 1,
@@ -1333,7 +1333,6 @@
     }
   },
   "player": {
-    "maxHp": 100,
     "hpPerLevel": 0.015,
     "thrustEnabled": true,
     "thrust": 19,
@@ -1352,8 +1351,8 @@
   },
   "playerOutline": {
     "enabled": true,
-    "color": 543884,
-    "thickness": 0.025,
+    "color": 11382189,
+    "thickness": 0.07,
     "glow": 2.8,
     "opacity": 0.9,
     "inner": {
@@ -1367,7 +1366,7 @@
       "color": 16722456,
       "time": 0.24,
       "minTime": 0.18,
-      "glowAdd": 6.7,
+      "glowAdd": 10.3,
       "thicknessAdd": 0.185
     }
   },
@@ -1376,6 +1375,7 @@
     "thickness": 0.12,
     "glow": 2.4,
     "opacity": 1,
+    "bosses": false,
     "on": {
       "enemyShark": true,
       "enemyGreatWhite": true,
@@ -1647,6 +1647,9 @@
       "knock": 0.55
     },
     "contactShare": 0,
+    "weakSpot": {
+      "enabled": true
+    },
     "powerShare": 3,
     "knockback": {
       "enabled": true,
@@ -2096,6 +2099,8 @@
       "chumScatter": 4,
       "chumXp": 3,
       "chumSpread": 9.5,
+      "arenaChum": 10,
+      "arenaChumPerKill": 1.2,
       "size": 0.72,
       "color": 16765562,
       "blinkSpeed": 9
@@ -2272,6 +2277,9 @@
     "speedJitter": 0.22,
     "damage": 22,
     "damagePerLevel": 7,
+    "splashDamage": 34,
+    "splashDamagePerLevel": 12,
+    "splashRadius": 4.6,
     "speed": 19,
     "life": 2.6,
     "radius": 0.24,
@@ -2664,6 +2672,7 @@
         "frameBoth": true,
         "subjectBias": 0.42,
         "framePad": 1.8,
+        "framePicture": true,
         "minZoom": 1,
         "pushTime": 0.45,
         "frameTime": 0.18,
@@ -2708,6 +2717,7 @@
         },
         "squareSize": 620,
         "squareBiasY": 0,
+        "focusPad": 0.06,
         "shareCard": true,
         "cardWidth": 1600,
         "keep": 8,
@@ -6605,6 +6615,23 @@
       "toast": "maneater",
       "toastMinGap": 1
     },
+    "companionStrike": {
+      "emit": "procGain",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.7,
+      "ripple": null,
+      "sfx": "procGain",
+      "haptic": [
+        {
+          "duration": 22,
+          "magnitude": 0.4
+        }
+      ],
+      "sfxMinGap": 0.12,
+      "toast": "All hands!",
+      "toastMinGap": 0.8
+    },
     "crewHit": {
       "emit": "splash",
       "shake": 0.06,
@@ -7988,6 +8015,41 @@
       ],
       "sfxMinGap": 0.08
     },
+    "seagullBlast": {
+      "emit": "bigExplosion",
+      "goo": "killGoo",
+      "shake": 0.85,
+      "hitstop": 0.08,
+      "glow": 1.5,
+      "ripple": {
+        "strength": 5.5,
+        "radius": 26
+      },
+      "sfx": "seagullBlast",
+      "haptic": [
+        38,
+        28,
+        55
+      ]
+    },
+    "musselBlast": {
+      "emit": "bigExplosion",
+      "shake": 0.22,
+      "hitstop": 0,
+      "glow": 0.7,
+      "ripple": {
+        "strength": 2.4,
+        "radius": 11
+      },
+      "sfx": "musselBlast",
+      "haptic": [
+        {
+          "duration": 22,
+          "magnitude": 0.45
+        }
+      ],
+      "sfxMinGap": 0.05
+    },
     "seabedImpact": {
       "emit": "silt",
       "shake": 0.35,
@@ -8379,6 +8441,14 @@
         "fill": 0.13
       }
     },
+    "disperse": {
+      "enabled": true,
+      "delay": 0.7,
+      "relax": 2.4,
+      "lead": 44,
+      "outward": 0.35,
+      "keepPile": true
+    },
     "camera": {
       "enabled": true,
       "zoom": 2.5,
@@ -8406,7 +8476,7 @@
     "scale": 3,
     "z": -3.2,
     "lean": 0.05,
-    "sink": 0.05,
+    "bedDepth": 0.22,
     "faceWidth": 0.72,
     "faceHeight": 0.44,
     "faceRise": 0.12,
@@ -8450,6 +8520,19 @@
       "nameSize": 17,
       "causeSize": 12,
       "color": 14275268
+    },
+    "impact": {
+      "enabled": true,
+      "radius": 22,
+      "killRadius": 7,
+      "power": 1.4,
+      "shake": 1.6
+    },
+    "keepOut": {
+      "enabled": true,
+      "radius": 5,
+      "speedMul": 1.5,
+      "clear": 1.5
     },
     "beam": {
       "enabled": true,
@@ -10462,6 +10545,34 @@
         "/sfx/ESM_PG_cinematic_fx_weapons_warefare_cannon_ship_impact_explosion_wood_03.mp3"
       ]
     },
+    "seagullBlast": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        140,
+        28
+      ],
+      "decay": 0.78,
+      "gain": 0.46,
+      "noise": 0.65,
+      "filter": 760,
+      "pitchVary": 0.08,
+      "filterVary": 0.18
+    },
+    "musselBlast": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        260,
+        60
+      ],
+      "decay": 0.3,
+      "gain": 0.3,
+      "noise": 0.6,
+      "filter": 1800,
+      "pitchVary": 0.14,
+      "filterVary": 0.2
+    },
     "oxygenWarn2": {
       "src": null,
       "type": "blip",
@@ -10562,6 +10673,14 @@
     "weakRatio": 1,
     "minDuration": 20,
     "maxDuration": 1000,
+    "taptic": {
+      "enabled": true,
+      "mediumAt": 0.34,
+      "heavyAt": 0.66,
+      "floor": 0.2,
+      "minGapMs": 60,
+      "cutThrough": 0.25
+    },
     "mixing": {
       "enabled": true,
       "sumMode": "soft",
@@ -11470,8 +11589,7 @@
     "preyMultiplier": 2.2,
     "predatorMultiplier": 6,
     "schoolWipeBonus": 150,
-    "comboMultiplierPerChain": 0.5,
-    "comboMaxMultiplier": 15
+    "comboMultiplierPerChain": 0.5
   },
   "enemySeparation": {
     "gap": 2.2,
@@ -11540,7 +11658,9 @@
         "enabled": true,
         "every": 0.015
       },
-      "tint": 16769146,
+      "tint": 16722452,
+      "glowMul": 3.6,
+      "sizeMul": 1.6,
       "flashMul": 2.2
     },
     "look": {
@@ -11792,6 +11912,21 @@
     "title": {
       "font": "global",
       "size": 30,
+      "weight": 700,
+      "tracking": 0.04,
+      "case": "as typed",
+      "useInk": true,
+      "color": 15265011,
+      "alpha": 1,
+      "shadow": 0,
+      "glow": 0,
+      "scan": 0,
+      "scanGap": 3,
+      "scanGlow": 0
+    },
+    "quip": {
+      "font": "global",
+      "size": 22,
       "weight": 700,
       "tracking": 0.04,
       "case": "as typed",
@@ -13228,7 +13363,18 @@
     }
   },
   "render": {
-    "pixelRatio": 2.25
+    "pixelRatio": 2,
+    "adaptive": {
+      "enabled": true,
+      "targetMs": 18,
+      "dropAbove": 0.35,
+      "raiseBelow": 0.05,
+      "dropAfter": 2,
+      "raiseAfter": 10,
+      "step": 0.1,
+      "floor": 0.6,
+      "maxDrops": 4
+    }
   },
   "bloom": {
     "enabled": true,
@@ -13773,5 +13919,5 @@
       "msPerPx": 0.9
     }
   },
-  "_savedAt": 1787359422150
+  "_savedAt": 1787424784244
 }

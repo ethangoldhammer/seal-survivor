@@ -1295,22 +1295,46 @@ export function chainLevel(stats = null) {
  * The chain's damage multiplier — one place, so the three call sites that used
  * to spell out the same `Math.pow` can't drift apart.
  *
- * The `- 1` offset is inherited and deliberate: the first bar's worth of food
- * opens the chain and pays no damage bonus, exactly as link 1 never did. It is
- * a config value now so the "your first mouthful already hits harder" version
- * is one number away.
+ * READS THE BANNER'S NUMBER, `liveChain()`, not the fractional pip depth. The
+ * two disagree by the whole pip count — five mouthfuls to a bar means a chain
+ * reading x10 on screen was worth level 2 here — so the number the player is
+ * shown and the damage they deal used to be five links out of step, and the
+ * banner is the only one of the two they can see. Points do the same (see
+ * comboMultiplierFor in systems/scoring.js). XP DELIBERATELY DOES NOT: it is
+ * banked forever where these are spent inside the window, so chainXpMul stays
+ * on the slower counter — see the note there.
+ *
+ * Consequence worth knowing before retuning: every source of a link now moves
+ * this, not just eating. A breach with Porpoising or a school emptied in one
+ * strike raises the banner (extendChain) without putting a pip in the bar, and
+ * damage now follows the banner.
+ *
+ * The `- 1` offset is inherited and deliberate: the first link opens the chain
+ * and pays no damage bonus, exactly as link 1 never did. It is a config value
+ * so the "your first mouthful already hits harder" version is one number away.
+ * Same units on both counters — `chainLevel` is fractional LINKS — so one
+ * offset still means the same thing to this and to the xp multiplier.
  */
 export function chainDamageMul(stats) {
   const offset = CONFIG.strike.chainLevelOffset ?? 1;
-  const raw = Math.pow(stats?.strikeChainMul ?? 1, Math.max(0, chainLevel(stats) - offset));
-  // CAPPED, like its two siblings. comboSpeedMul stops at comboSpeedMax and the
-  // score multiplier at comboMaxMultiplier; this one was an unbounded
-  // exponential, which nobody noticed while chains were rare.
+  const raw = Math.pow(stats?.strikeChainMul ?? 1, Math.max(0, liveChain() - offset));
+  // CAPPED, like its two remaining siblings. comboSpeedMul stops at
+  // comboSpeedMax and chainXpMul at xp.chain.max; the score multiplier is the
+  // one that is deliberately unbounded, because nothing is played with it.
+  // This one was an unbounded exponential, which nobody noticed while chains
+  // were rare — and an exponent IS the difference: a big score is a big
+  // number, a big damage multiplier is every fight in the run being over.
   //
   // They are not rare any more. Simulated against the chum rates in the real
   // run logs (npm run sim:chain), a busy stretch reaches chain level ~38 —
   // x49 strike damage, climbing with no ceiling at all. The cap is the missing
   // third of a set, not a nerf to a deliberate design.
+  //
+  // IT IS ALSO THE DIAL THAT MATTERS NOW. Reading the banner instead of the
+  // pip depth reaches any given exponent five times sooner: at the shipped
+  // 1.11 per link, `chainDamageMax` 4 lands at x14 on the banner where it used
+  // to take about seventy mouthfuls. The ceiling is what a deep chain is worth
+  // — tune it, not the per-link step, which is the shallow end's feel.
   return Math.min(CONFIG.strike.chainDamageMax ?? Infinity, raw);
 }
 
@@ -1322,9 +1346,15 @@ export function chainDamageMul(stats) {
  * spent on one creature and the chain that earned it dies with the window;
  * xp is banked forever, so an exponential here would mean one exceptional chain
  * decided the rest of the run. Linear-and-capped makes a deep chain worth
- * hunting for without making it worth restarting a run over. Same shape and the
- * same offset as the score multiplier in systems/scoring.js, which is the
- * closest relative it has.
+ * hunting for without making it worth restarting a run over.
+ *
+ * AND IT IS THE ONE MULTIPLIER LEFT ON `chainLevel`. Points and damage read
+ * the banner's whole-link count now, which is five times faster on the shipped
+ * pip count and moves on breaches and school wipes as well as on food. That
+ * acceleration is fine for two things spent inside the window and dead with it;
+ * on the xp ladder it would be five times the permanent income, compounding
+ * into every rung after it. The slower counter is the clamp, deliberately:
+ * chum eaten, nothing else, at a bar's granularity.
  *
  * Returns 1 with no chain running, so the call site needs no branch of its own.
  */

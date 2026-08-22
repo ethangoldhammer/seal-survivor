@@ -115,7 +115,20 @@ import { hdrInto, lumInto, glowSprite } from './beams.js';
 
 // Which anchors this reads, and in which order the meshes are built. Names
 // match ASSETS.ship.aimRig.anchors.
-const SOCKETS = ['eyeL', 'eyeR'];
+// THE TWO KEYS EVERY RIG MUST PUBLISH. Not a naming convention — a CONTRACT:
+// updateEyeLights refuses to light a pair unless the rig it is handed offers a
+// socket and a normal under each of these exact names, and createEyeLights
+// builds its orbs from the same list. A rig that publishes its sockets under
+// any other key is not "named differently", it is invisible.
+//
+// Exported for systems/bossEyes.js, which builds its sockets from a model
+// rather than from an aim rig and has no other way to know. It shipped naming
+// them `eye0`/`eye1` — positional, reasonable, and it meant every boss in the
+// game had eyes that could never turn on. Nothing threw: the gate simply held
+// `lit` at 0 for the whole run, and the flash and wind-up clocks below run
+// BEFORE it, so a harness that asserted on those passed the whole time.
+export const EYE_SOCKETS = ['eyeL', 'eyeR'];
+const SOCKETS = EYE_SOCKETS;
 
 // ONE PAIR OF EYES. There is a set of these per animal that has them — the
 // seal, and every boss whose rig offers sockets (systems/bossEyes.js) — so

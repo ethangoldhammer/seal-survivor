@@ -121,8 +121,14 @@ const STYLES = `
      line-height is stated here because a two-line band needs one and the role
      sheet (ui/typography.js) does not write it; balance splits the two lines
      evenly instead of leaving one word alone on the second. */
+  /* --sv-band-edge is written per frame by drawBand: the depth of any chrome
+     that runs the WHOLE height of the screen from one edge (on a phone the xp
+     meter is a strip up the left side). A centred band cannot get out of that
+     one's way vertically at any position, so it gets out of the way sideways
+     instead — see edgeInset. Zero on a desktop, where nothing does that. */
   .sv-callout { position: absolute; left: 50%; text-align: center;
-    white-space: normal; width: max-content; max-width: min(720px, 88vw); line-height: 1.25;
+    white-space: normal; width: max-content;
+    max-width: min(720px, calc(88vw - 2 * var(--sv-band-edge, 0px))); line-height: 1.25;
     text-wrap: balance; overflow-wrap: break-word;
     font-size: 24px; font-weight: 800; letter-spacing: 0.1em; color: #ff5566;
     text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 18px currentColor;
@@ -378,6 +384,34 @@ function chromeRects(layer) {
 }
 
 /**
+ * How far in from the left or the right the screen is spoken for by chrome that
+ * runs its whole height — the depth a centred box has to give up on BOTH sides
+ * to clear it.
+ *
+ * Both edges from one number, deliberately: the band is centred, so narrowing
+ * it by the strip on the left moves its right edge in by the same amount
+ * whether anything is there or not. Two insets would need an off-centre anchor,
+ * and a tutorial line that sits left of centre on a phone and centred on a
+ * desktop is a different design, not a fix.
+ *
+ * Only chrome that touches the top of the viewport AND the bottom counts. That
+ * is the exact condition under which there is no vertical escape — anything
+ * shorter is something keepOffChrome can move past, and narrowing the line for
+ * it would cost width the line has no reason to lose.
+ */
+function edgeInset(rects, gap) {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  let inset = 0;
+  for (const r of rects) {
+    if (r.top > 1 || r.bottom < H - 1) continue;
+    if (r.left <= 1) inset = Math.max(inset, r.right + gap);
+    if (r.right >= W - 1) inset = Math.max(inset, W - r.left + gap);
+  }
+  return inset;
+}
+
+/**
  * Move `top` until a box of `height` centred on the screen's width does not sit
  * on any of the chrome it overlaps horizontally. Returns the new top.
  *
@@ -415,9 +449,30 @@ function keepOffChrome(top, height, width, centreX, rects, gap) {
       // against screen halves, so a tall print down the side of a short screen
       // is escaped by the shorter move instead of by a rule about where things
       // usually are.
+      //
+      // ...BUT ONLY IF THAT WAY EXISTS. The nearer escape from a boss bar at
+      // the top of a phone is upward, and above a bar that starts 14px down
+      // there is nowhere to go: the move went negative, the clamp at the end of
+      // this function pulled it back to `gap`, and the band landed on the bar
+      // it had just been moved off — 28px of overlap on both phone widths,
+      // which is what npm run layout was reporting. A direction that leaves the
+      // screen is not an escape, so it is not offered; the other one is taken
+      // even when it is the longer move, and only when NEITHER fits does this
+      // fall back to the nearer of two bad answers and let the clamp decide.
       const down = r.bottom + gap;
       const up = r.top - gap - height;
-      y = (Math.abs(down - y) <= Math.abs(up - y)) ? down : up;
+      const downFits = down <= H - height - gap;
+      const upFits = up >= gap;
+      if (downFits && upFits) y = (Math.abs(down - y) <= Math.abs(up - y)) ? down : up;
+      else if (downFits) y = down;
+      else if (upFits) y = up;
+      // NEITHER WAY IS OUT, so this piece is not something to move for. A
+      // full-height strip up the side of a phone overlaps every position a
+      // centred band can hold — and "move to the nearest one anyway" sent the
+      // line to the top of the screen and parked it on the boss bar, trading
+      // 5px of overlap with the strip for 295px with the bar. Staying put is
+      // the honest answer; the sideways escape is edgeInset's job.
+      else continue;
       moved = true;
     }
     if (!moved) break;
@@ -598,13 +653,18 @@ function drawBand(callout, fade) {
   // measured rect would be a fraction of its size on the frame it appears —
   // so the line would clear the boss bar comfortably at scale 0.2 and then
   // grow straight back into it.
+  const gap = CONFIG.callouts?.uiGap ?? 10;
+  // Gathered once and used twice — the sideways clearance first, because it
+  // changes the box, and then the vertical placement, which has to measure the
+  // box AFTER it has been narrowed or it places a line of the wrong height.
+  const rects = chromeRects(bandEl);
+  bandEl.style.setProperty('--sv-band-edge', `${edgeInset(rects, gap)}px`);
   const h = bandEl.offsetHeight;
   const w = bandEl.offsetWidth;
-  const gap = CONFIG.callouts?.uiGap ?? 10;
   // `lift` is part of the arrival, not part of where it lives, so it is added
   // AFTER the clamp: folding it in would let a line drift back onto the HUD
   // for the few frames the curve is lifting it.
-  const top = keepOffChrome(y - h / 2, h, w, window.innerWidth / 2, chromeRects(bandEl), gap);
+  const top = keepOffChrome(y - h / 2, h, w, window.innerWidth / 2, rects, gap);
   bandEl.style.top = `${top + h / 2 + pose.lift}px`;
   bandEl.style.transform = `translate(-50%, -50%) scale(${pose.scale})`;
   bandEl.style.opacity = `${pose.alpha}`;

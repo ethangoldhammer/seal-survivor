@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { encodeQr } from '../qr.js';
+import { nativeShareAvailable, nativeShareImage } from './nativeShare.js';
 import kickersCsv from '../kickers.csv?raw';
 import { parseKickerCsv, pickKicker } from '../kickerTable.js';
 // The polaroid. Safe to import from a Node harness — snapshotCard.js pulls the
@@ -81,6 +82,9 @@ function formatTime(seconds) {
  * @param meta   { name, cause, player, level, score, time } for the caption.
  *               `kicker` may be supplied to pin the label; left out, one is
  *               rolled from kickers.csv and kept on the shot.
+ *               `focus` is what the polaroid's square must hold — the seal and
+ *               the body, projected onto this frame by main.js. Left out, the
+ *               crop is the plain centred cut it has always been.
  */
 export function captureBossShot(canvas, meta = {}) {
   if (cfg().enabled === false || !canvas) return false;
@@ -106,7 +110,7 @@ export function captureBossShot(canvas, meta = {}) {
     // Kept as a CANVAS, like the thumbnail beside it, not as a data URL. It is
     // ~1.5MB of bitmap either way, and a canvas can be handed straight to
     // decodeImage without base64ing two megabytes to immediately undo it.
-    const square = squareCrop(canvas);
+    const square = squareCrop(canvas, meta.focus);
     made.stampQr();
     const shot = {
       url: out.toDataURL('image/png'),
@@ -375,19 +379,31 @@ function drawQrPlan(g, plan, x, y) {
 // already in the middle of the frame. It costs about 44% of the width, which
 // is why the bias below exists for the fights where it reads badly.
 //
+// BUT CENTRED IS NOT A GUARANTEE, and the print is the one image in the game
+// that has to make one. The push-in is a per-frame lerp toward a focus point
+// that world.js CLAMPS to the arena — so a boss killed against a wall is
+// photographed by a camera that never reached the framing the shot asked for,
+// and the shake, the blend weight and the corpse's own drift all move the
+// picture a little further. Each of those is small; the crop is what turns
+// small into "the boss is an inch outside the photograph".
+//
+// So the window is PANNED to hold what the shot was framing. `focus` is the
+// seal and the body in normalised frame coordinates, projected on the frame
+// they were actually drawn in (see main.js), which is the only reading immune
+// to every one of the drifts above. The pan is minimal — a crop that already
+// holds them does not move at all, so the centred cut stays the cut for the
+// kills where it was right, and only a shot that would have clipped is
+// rescued.
+//
 // Sized to the zone rather than to the source: 620 is what the artboard asks
 // for, the in-run print never shows it wider than about 530 device pixels, and
 // every extra hundred pixels here is another megabyte held per boss, eight
 // times over, for the life of the tab.
-function squareCrop(src) {
+function squareCrop(src, focus) {
   const size = Math.max(64, Math.round(cfg().squareSize ?? 620));
-  const side = Math.min(src.width, src.height);
-  if (!(side > 0)) return null;
-  // -1 pulls the crop to the top of the frame, 1 to the bottom, 0 is centred.
-  const bias = Math.max(-1, Math.min(1, cfg().squareBiasY ?? 0));
-  const room = src.height - side;
-  const sx = Math.round((src.width - side) / 2);
-  const sy = Math.round((room / 2) * (1 + bias));
+  const win = snapshotWindow(src.width, src.height, focus);
+  if (!win) return null;
+  const { sx, sy, side } = win;
   const out = document.createElement('canvas');
   out.width = out.height = size;
   const g = out.getContext('2d');
@@ -399,6 +415,89 @@ function squareCrop(src) {
   g.fillRect(0, 0, size, size);
   g.drawImage(src, sx, sy, side, side, 0, 0, size, size);
   return out;
+}
+
+/**
+ * WHICH SQUARE OF THE FRAME THE PRINT KEEPS: { sx, sy, side } in source
+ * pixels, or null for a frame with no area.
+ *
+ * Split out of squareCrop and exported so the geometry can be checked without
+ * a canvas — this is the part with an answer that can be wrong, and the rest
+ * of that function is a drawImage. See tools/boss-shot-test.mjs.
+ */
+export function snapshotWindow(width, height, focus) {
+  const side = Math.min(width, height);
+  if (!(side > 0)) return null;
+  // -1 pulls the crop to the top of the frame, 1 to the bottom, 0 is centred.
+  const bias = Math.max(-1, Math.min(1, cfg().squareBiasY ?? 0));
+  const room = height - side;
+  let sx = Math.round((width - side) / 2);
+  let sy = Math.round((room / 2) * (1 + bias));
+  const span = focusSpan(focus, width, height, side);
+  if (span) {
+    sx = holdWindow(span.lo.x, span.hi.x, side, width, sx);
+    sy = holdWindow(span.lo.y, span.hi.y, side, height, sy);
+  }
+  return { sx, sy, side };
+}
+
+/**
+ * The box the picture must hold, in source pixels: every focus point, its own
+ * radius, and a margin so nothing is jammed against the edge of the print.
+ *
+ * @param focus [{ u, v, ru, rv }] — the centre in 0..1 of the frame and the
+ *              radius as a fraction of the frame's width and height. Given in
+ *              NORMALISED units rather than pixels because the frame this is
+ *              measured against is the drawing buffer, whose size follows the
+ *              device pixel ratio and the adaptive render scale: a caller that
+ *              handed over pixels would be handing over last frame's.
+ * @returns null when there is nothing to hold, which is every path that did
+ *          not come from a kill shot — the crop is then exactly what it was.
+ */
+function focusSpan(focus, width, height, side) {
+  if (!Array.isArray(focus) || !focus.length) return null;
+  const pad = Math.max(0, Math.min(0.45, cfg().focusPad ?? 0.06)) * side;
+  const lo = { x: Infinity, y: Infinity };
+  const hi = { x: -Infinity, y: -Infinity };
+  let any = false;
+  for (const p of focus) {
+    if (!p || !Number.isFinite(p.u) || !Number.isFinite(p.v)) continue;
+    const cx = p.u * width;
+    const cy = p.v * height;
+    const rx = Math.max(0, p.ru ?? 0) * width;
+    const ry = Math.max(0, p.rv ?? 0) * height;
+    lo.x = Math.min(lo.x, cx - rx - pad);
+    hi.x = Math.max(hi.x, cx + rx + pad);
+    lo.y = Math.min(lo.y, cy - ry - pad);
+    hi.y = Math.max(hi.y, cy + ry + pad);
+    any = true;
+  }
+  return any ? { lo, hi } : null;
+}
+
+/**
+ * Where to start a window of `side` pixels on one axis so that [lo, hi] is
+ * inside it, moving as little as possible from `at`.
+ *
+ * THE LEAST MOVE IS THE POINT. Re-centring on the pair whenever a focus point
+ * exists would throw away the composition the shot worked out — the lean
+ * toward the seal, the squareBiasY on a boss that died high in the water — on
+ * every kill, including the great majority where the default cut already held
+ * both. So this only ever slides the window far enough to catch what was
+ * hanging outside it.
+ *
+ * A span WIDER than the window cannot be held by any offset (a seal at one
+ * wall and a megalodon dead at the other, where the fit in bossKill.js has
+ * already hit its own floor and cannot open out any further). Centring on the
+ * span is what loses the least of both, and it is the one case where the
+ * default cut is abandoned rather than nudged.
+ */
+function holdWindow(lo, hi, side, extent, at) {
+  const most = Math.max(0, extent - side);
+  const start = hi - lo <= side
+    ? Math.min(Math.max(at, hi - side), lo)
+    : (lo + hi) / 2 - side / 2;
+  return Math.round(Math.max(0, Math.min(most, start)));
 }
 
 // A cell-sized copy of the picture, kept for the contact sheet. Drawn once,
@@ -884,6 +983,10 @@ export async function warmRunSheet(run = {}) {
  * wireTrophy in ui/ui.js.
  */
 export function canShareImages() {
+  // The native shell always can, and does not answer this question through
+  // navigator — see systems/nativeShare.js. Asked first because the probe
+  // below would say no on a WKWebView and hide the button that works.
+  if (nativeShareAvailable()) return true;
   if (typeof navigator === 'undefined' || !navigator.canShare || !navigator.share) return false;
   try {
     const probe = new File([new Blob([''], { type: 'image/png' })], 'probe.png', { type: 'image/png' });
@@ -898,6 +1001,13 @@ export function canShareImages() {
 // already — the second copy is where the AbortError check goes missing — it is
 // written here once and handed what to send.
 async function handOver(blob, url, name, title, text) {
+  // The native sheet first, and it is not a fallback for the web one — inside
+  // the shell the web one is the unreliable route, not the other way round. A
+  // null means this is a browser (or the bridge is missing), which is the only
+  // case that should reach the navigator path below.
+  const native = await nativeShareImage(blob, name, title, text);
+  if (native) return native;
+
   const file = blob ? new File([blob], name, { type: 'image/png' }) : null;
   if (file && navigator.canShare?.({ files: [file] })) {
     try {

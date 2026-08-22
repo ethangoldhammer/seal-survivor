@@ -2,6 +2,7 @@ import { CONFIG } from '../config.js';
 import { setSetting, settings, sfxScale } from './settings.js';
 import { depthFraction } from '../arena.js';
 import { isTypingTarget } from '../ui/typing.js';
+import { fetchAudioBytes } from './fetchAudio.js';
 
 // Sound is synthesised from the specs in CONFIG.sfx, so the game ships with no
 // audio files at all. Point an entry at real files and those are used instead;
@@ -678,9 +679,7 @@ function bytesFor(src) {
   let pending = rawBytes.get(src);
   if (!pending) {
     pending = (async () => {
-      const res = await fetch(src);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.arrayBuffer();
+      return await fetchAudioBytes(src);
     })().catch((err) => {
       console.warn(`[audio] could not fetch ${src} —`, err?.message ?? err);
       return null;

@@ -99,6 +99,88 @@ const STYLES = `
 
   /* Touch targets. Same 44px rule the rest of the UI's controls follow. */
   .sv-touch .sv-tip { min-height: 44px; padding-left: 18px; padding-right: 18px; }
+
+  /* --- WHAT A TIP BUYS ------------------------------------------------------
+     A sheet over whatever screen the jar was pressed on, rather than a panel
+     inside it. The jar is on three surfaces — the splash, the pause menu and
+     the score card — and two of them cannot share a stylesheet with the third;
+     a panel that lived in any one of their layouts would be a second layout to
+     keep alive in the other two. Over the top, it is the same object
+     everywhere, and it is the only thing on the screen while it is up. */
+  .sv-tip-sheet { position: fixed; inset: 0; z-index: 30; display: flex;
+    align-items: center; justify-content: center; padding: 4vh 4vw;
+    background: rgba(3,6,10,0.93); pointer-events: all;
+    /* THE FONT HAS TO BE ASKED FOR. The sheet is mounted on the BODY so it can
+       sit over every surface the jar appears on — which puts it outside
+       .sv-ui, and ui/typography.js scopes the family to .sv-ui and its descendants.
+       Left alone the panel came up in the browser's default mono while the
+       card behind it was in the tuned pixel face, which reads as a dialog from
+       a different program. --sv-font is written to the document element, so it
+       is reachable from here; the fallback is ui.js's own. */
+    font-family: var(--sv-font, 'Inter', system-ui, sans-serif); }
+  .sv-tip-panel { position: relative; width: 560px; max-width: 100%;
+    max-height: 92vh; overflow-y: auto; overscroll-behavior: contain;
+    background: #07090d; border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 14px; padding: 26px 26px 20px; color: #e8ecf3;
+    box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset; }
+  .sv-tip-title { font-size: 18px; font-weight: 700; letter-spacing: 0.03em;
+    line-height: 1.35; margin-bottom: 10px; }
+  .sv-tip-blurb { font-size: 12px; line-height: 1.7; letter-spacing: 0.02em;
+    color: rgba(232,236,243,0.6); margin-bottom: 18px; }
+  .sv-tip-tiers { display: flex; flex-direction: column; gap: 8px; }
+  /* EVERY TIER IS A REAL LINK, for the reason the jar itself is one — see the
+     header. The panel is a menu of destinations, not a form: the click that
+     opens Ko-fi is a click on an <a href>, which is the only kind that
+     survives a popup blocker on the phone most of this game is played on. */
+  .sv-tip-tier { display: flex; align-items: center; gap: 14px;
+    text-decoration: none; color: inherit; cursor: pointer;
+    padding: 12px 14px; border-radius: 10px;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);
+    transition: background 0.15s ease, border-color 0.15s ease; }
+  .sv-tip-tier:hover, .sv-tip-tier:focus-visible {
+    background: rgba(255,190,110,0.12); border-color: rgba(255,190,110,0.45);
+    outline: none; }
+  .sv-tip-price { flex: none; min-width: 4ch; font-size: 20px; font-weight: 700;
+    letter-spacing: 0.01em; color: #ffd9a0; font-variant-numeric: tabular-nums; }
+  .sv-tip-what { min-width: 0; flex: 1; text-align: left; }
+  /* BOTH ARE BLOCKS. As inline spans the description ran on from the label as
+     one sentence — "Name a seal One name of your choosing" — and the margin
+     that was supposed to separate them did nothing, because vertical margins
+     do not apply to an inline box. */
+  .sv-tip-label { display: block; font-size: 13px; font-weight: 600;
+    letter-spacing: 0.02em; line-height: 1.4; }
+  .sv-tip-desc { display: block; font-size: 11px; line-height: 1.5;
+    letter-spacing: 0.02em; color: rgba(232,236,243,0.55); margin-top: 4px; }
+  .sv-tip-go { flex: none; font-size: 11px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: rgba(232,236,243,0.4); white-space: nowrap; }
+  .sv-tip-tier:hover .sv-tip-go, .sv-tip-tier:focus-visible .sv-tip-go { color: #ffd9a0; }
+  /* THE INSTRUCTION IS THE WHOLE MECHANISM. Nothing in the game records what
+     was bought — Ko-fi's message field is the record, and this line is what
+     makes those messages sortable on the other end. It is deliberately the
+     last thing in the panel and deliberately not small print: a tip that
+     arrives with no name in it is a refund and an apology. */
+  .sv-tip-how { margin-top: 18px; padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    font-size: 11px; line-height: 1.7; letter-spacing: 0.02em;
+    color: rgba(232,236,243,0.55); }
+  .sv-tip-how b { color: #ffd9a0; font-weight: 700; }
+  .sv-tip-close { position: absolute; top: 12px; right: 14px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+    color: #e8ecf3; font: inherit; width: 34px; height: 34px;
+    border-radius: 50%; cursor: pointer; }
+  .sv-tip-close:hover { background: rgba(255,255,255,0.16); }
+  .sv-tip-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .sv-touch .sv-tip-close { width: 44px; height: 44px; }
+  .sv-touch .sv-tip-tier { min-height: 60px; }
+
+  @media (max-width: 700px) {
+    .sv-tip-panel { padding: 20px 16px 16px; }
+    /* The price and the label stay on one line; the "Ko-fi" chevron is the
+       one thing that can go, and it is the one thing the whole row already
+       says by being a link. */
+    .sv-tip-go { display: none; }
+  }
 `;
 
 let stylesInjected = false;
@@ -128,7 +210,7 @@ function ensureStyles() {
  * @param onClick    optional, called on click BEFORE navigation. Must not
  *                   preventDefault — the navigation is the point.
  */
-export function tipJarLink({ className = '', label = 'Tip jar', id = '', onHover, onClick } = {}) {
+export function tipJarLink({ className = '', label = 'Tip jar', id = '', onHover, onClick, tiers } = {}) {
   ensureStyles();
 
   const a = document.createElement('a');
@@ -146,7 +228,160 @@ export function tipJarLink({ className = '', label = 'Tip jar', id = '', onHover
 
   if (onHover) a.addEventListener('pointerenter', onHover);
   if (onClick) a.addEventListener('click', onClick);
+
+  // THE JAR BECOMES A MENU when it is given tiers, and STAYS A REAL LINK.
+  //
+  // Only a plain left click is taken. A middle click, a cmd/ctrl click, a
+  // shift click, "open in new tab" from the context menu — none of those reach
+  // a click handler the same way, and the ones that do are exactly the
+  // gestures a person uses when they have already decided where they are
+  // going. Swallowing those to show them a menu would be the link quietly
+  // becoming a button, which is the thing the header of this file is about.
+  if (tiers?.length) {
+    a.addEventListener('click', (e) => {
+      if (e.defaultPrevented || e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      openTipSheet({ tiers, onHover, onClick });
+    });
+  }
   return a;
+}
+
+const CLOSE = `
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+    <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+  </svg>`;
+
+/** Escapes a cell on its way into the panel. Every one of these comes out of
+ *  tips.csv, which is ours — but it is a spreadsheet, and a spreadsheet is
+ *  exactly the kind of file that one day contains an ampersand. */
+function esc(str) {
+  return String(str).replace(/[&<>"]/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
+  ));
+}
+
+/** The sheet, while it is up. One at a time, held here so a second press
+ *  re-uses it rather than stacking a second scrim over the first. */
+let sheet = null;
+
+/** True while the tier panel is up — the screen underneath must not act. */
+export function tipSheetOpen() {
+  return !!sheet;
+}
+
+/** Put it away. Safe to call when nothing is open, which is what makes it
+ *  usable from a screen's own tear-down without a guard at every call site. */
+export function closeTipSheet() {
+  sheet?.remove();
+  sheet = null;
+}
+
+/**
+ * WHAT A TIP BUYS — the tiers, over whatever screen the jar was pressed on.
+ *
+ * NOTHING HERE TAKES A PAYMENT OR RECORDS ONE. The panel quotes prices and
+ * hands off to Ko-fi, which is the only place a number is ever actually agreed
+ * to; the game has no idea whether anybody paid and deliberately does not try
+ * to find out. What arrives on the other end is a Ko-fi message with a name in
+ * it, and the row goes into sealNames.csv or bossNames.csv by hand — which is
+ * the same review a name in this game needs anyway, whoever sent it.
+ *
+ * That is why the panel's last line is an instruction rather than a form. A
+ * form would imply the game is listening.
+ *
+ * @param tiers    rows from tipTable.js. An empty list means no panel at all —
+ *                 the caller falls back to letting the jar's own href run.
+ * @param onHover  optional, called on pointerenter of a tier, for the blip.
+ * @param onClick  optional, called when a tier is pressed, BEFORE navigation.
+ */
+export function openTipSheet({ tiers = [], onHover, onClick } = {}) {
+  ensureStyles();
+  closeTipSheet();
+  if (!tiers.length) return null;
+
+  // The tags actually in use, said in the order the tiers are in. Built from
+  // the rows rather than written out, so a new kind of name is askable for by
+  // adding a row — see the note on `tag` in tipTable.js.
+  const tags = [...new Set(tiers.map((t) => t.tag).filter(Boolean))];
+
+  sheet = document.createElement('div');
+  sheet.className = 'sv-tip-sheet';
+  // THE TOUCH CLASS HAS TO BE CARRIED OVER. Every 44px rule in this game keys
+  // on `.sv-touch`, which initUI puts on `.sv-ui` from the real media query —
+  // and this sheet is mounted on the BODY so it can sit over every surface the
+  // jar appears on, which puts it outside that ancestor. Left alone the close
+  // button came up at 34px on a phone: under the minimum, on a modal, with
+  // nothing able to report it (the panel is not one of the audit's surfaces).
+  // Copied rather than re-read from a media query, because `pointer: coarse`
+  // answers about the machine rather than the device being stood in for — see
+  // the note in tools/layout/layout-audit.js.
+  if (document.querySelector('.sv-ui.sv-touch')) sheet.classList.add('sv-touch');
+  sheet.innerHTML = `
+    <div class="sv-tip-panel" role="dialog" aria-modal="true" aria-label="What a tip buys">
+      <div class="sv-tip-title">Put a name in the water</div>
+      <div class="sv-tip-blurb">Every seal and every boss in this game is named
+        from a list. You can be on it.</div>
+      <div class="sv-tip-tiers">
+        ${tiers.map((t) => `
+          <a class="sv-tip-tier" href="${esc(TIP_JAR_URL)}" target="_blank"
+             rel="noopener noreferrer" data-tier="${esc(t.id)}">
+            <span class="sv-tip-price">$${t.price}</span>
+            <span class="sv-tip-what">
+              <span class="sv-tip-label">${esc(t.label)}</span>
+              ${t.desc ? `<span class="sv-tip-desc">${esc(t.desc)}</span>` : ''}
+            </span>
+            <span class="sv-tip-go">Ko-fi &rsaquo;</span>
+          </a>`).join('')}
+      </div>
+      <div class="sv-tip-how">
+        Tip the amount on Ko-fi and <b>write the name in the message</b>${
+          tags.length ? `, starting with <b>${tags.map(esc).join('</b> or <b>')}</b>` : ''
+        }. That message is the whole record — a tip with no name in it is just a
+        tip, and I will have no idea what you wanted.
+      </div>
+      <button type="button" class="sv-tip-close" aria-label="Close">${CLOSE}</button>
+    </div>`;
+
+  // THE BACKDROP CLOSES IT, the panel does not. Without the target check a
+  // press anywhere inside — including on a tier — closes the sheet on its way
+  // through, which on a phone is a link that opens Ko-fi and a panel that
+  // vanishes behind it for no reason the player can see.
+  sheet.addEventListener('click', (e) => {
+    if (e.target === sheet) closeTipSheet();
+  });
+  // AND NOTHING REACHES THE SCREEN UNDERNEATH. Two of the three surfaces this
+  // can open over listen for a pointer on their own background — the splash
+  // starts the run on one, and the score card used to turn the card over — so
+  // the whole gesture is stopped here rather than only the click.
+  for (const type of ['pointerdown', 'pointerup', 'pointermove']) {
+    sheet.addEventListener(type, (e) => e.stopPropagation());
+  }
+
+  sheet.querySelector('.sv-tip-close').addEventListener('click', closeTipSheet);
+  for (const tier of sheet.querySelectorAll('.sv-tip-tier')) {
+    if (onHover) tier.addEventListener('pointerenter', onHover);
+    // NOT preventDefault, and never: the navigation is the point, and it has
+    // to ride this exact click. The sheet is left up on purpose — Ko-fi opens
+    // in a tab of its own, and coming back to a screen that has forgotten what
+    // you were doing is worse than coming back to the list you left.
+    if (onClick) tier.addEventListener('click', onClick);
+  }
+
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    closeTipSheet();
+    window.removeEventListener('keydown', onKey, true);
+  };
+  // Capture, so Escape puts the sheet down before the screen underneath reads
+  // it as "close the pause menu" and leaves the scrim over a running game.
+  window.addEventListener('keydown', onKey, true);
+
+  document.body.appendChild(sheet);
+  sheet.querySelector('.sv-tip-close').focus({ preventScroll: true });
+  return sheet;
 }
 
 /**

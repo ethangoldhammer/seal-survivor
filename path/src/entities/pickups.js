@@ -394,7 +394,13 @@ export function spawnChumChunk(scene, pos, opts = {}) {
   // multiplyScalar, NOT setScalar: the asset carries its own size from
   // assets.csv and assigning over it would silently delete that row's effect.
   // This is a multiple of however big a chunk is authored to be.
-  mesh.scale.multiplyScalar((c.scaleMin ?? 1) + ((c.scaleMax ?? 2.4) - (c.scaleMin ?? 1)) * t);
+  // ...times whatever the caller wants on top of that. `opts.sizeMul` is for a
+  // piece that is not competing on the heal ramp at all — see the weak spot's
+  // meat in CONFIG.hotSpots.chum — where the roll above is only setting the
+  // size against its OWN currency and the piece still has to out-read every
+  // ambient chunk in the water.
+  mesh.scale.multiplyScalar(((c.scaleMin ?? 1) + ((c.scaleMax ?? 2.4) - (c.scaleMin ?? 1)) * t)
+    * Math.max(0.01, opts.sizeMul ?? 1));
 
   // ITS OWN MATERIAL. Primitive assets share one material across every
   // instance, so writing tint or glow to the shared one would repaint every
@@ -446,6 +452,12 @@ export function spawnChumChunk(scene, pos, opts = {}) {
     // How hard that arrival burns, over the shared one. A piece thrown out of a
     // wound arrives lit rather than merely present — see CONFIG.hotSpots.chum.
     flashMul: opts.flashMul ?? 1,
+    // ...and how bright it sits once that flash has gone. Separate from
+    // `flashMul` above on purpose: one is the arrival and this is the body. A
+    // piece off a weak spot needs it because its colour is a saturated RED,
+    // which carries a third of the Rec.709 luminance a yellow does and does not
+    // reach the bright pass on the shared glow alone. See CONFIG.hotSpots.chum.
+    glowMul: opts.glowMul ?? 1,
     // Above this it is still IN FLIGHT: it may not be claimed by the food
     // magnet, and whoever threw it may draw a trail behind it. 0 disables the
     // whole idea, which is what every chunk that is dropped rather than fired
@@ -471,21 +483,25 @@ function removeChunk(scene, chunk) {
 // rolled. Exported and pure for the same reason chumGlowAt is: the arrival
 // flash has to be plainly brighter than the resting glow and has to actually
 // reach it, and both of those are visible in the numbers alone.
-export function chunkBrightness(flashLeft, clock, phase = 0, flashMul = 1) {
+export function chunkBrightness(flashLeft, clock, phase = 0, flashMul = 1, glowMul = 1) {
   const c = CONFIG.chumChunk ?? {};
   const glow = c.glow ?? 1.5;
   const pulse = 1 + (c.pulseDepth ?? 0) * Math.sin(clock * (c.pulseHz ?? 0.8) * Math.PI * 2 + phase);
-  let mul = glow * pulse;
+  // `glowMul` scales the RESTING body and not the flash, which is the opposite
+  // split from `flashMul` below and is why they are two arguments. A colour
+  // that cannot reach the bright pass on its own needs the help every frame,
+  // not for the second after it lands.
+  let mul = glow * pulse * Math.max(0, glowMul);
   const seconds = c.flash?.seconds ?? 0;
   if (flashLeft > 0 && seconds > 0) {
     // Exponential, so the afterglow drops off fast enough to still read as a
     // flash but never hits the resting value with a visible corner on it.
     const k = Math.max(0, Math.min(1, flashLeft / seconds));
-    // `flashMul` is the ARRIVAL only, deliberately — a piece kicked out of a
-    // weak spot comes in white-hot and settles to the same resting glow every
-    // other chunk wears. Multiplying the whole return instead would give one
-    // pickup a permanently brighter body, which says "this is a bigger one"
-    // in the language the size and the tint already speak.
+    // `flashMul` is the ARRIVAL only, deliberately, and `glowMul` above is the
+    // body — two knobs because a piece can want either without the other. The
+    // arrival is a spike over whatever the body is already doing, so folding
+    // them into one multiplier would make a glowing piece\'s flash scale with
+    // its glow and stop reading as a flash at all.
     mul += (c.flash?.boost ?? 0) * k * k * Math.max(0, flashMul);
   }
   return Math.max(0, mul);
@@ -597,7 +613,7 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     // resting pulse. Multiplying keeps all three legible — a chunk that rolled
     // dark red still goes bright RED rather than being repainted.
     chunk.mesh.material.color.copy(chunk.base)
-      .multiplyScalar(chunkBrightness(chunk.flash, orbClock, chunk.phase, chunk.flashMul)
+      .multiplyScalar(chunkBrightness(chunk.flash, orbClock, chunk.phase, chunk.flashMul, chunk.glowMul)
         * telegraphMul(chunk.mesh));
   }
 

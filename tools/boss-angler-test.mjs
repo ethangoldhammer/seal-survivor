@@ -64,6 +64,23 @@ import './dom-stub.mjs';
 // createImageBitmap. Without this stub the parse promise never settles and the
 // script exits with "unsettled top-level await" and no error at all.
 globalThis.createImageBitmap = async () => ({ width: 1, height: 1, close() {} });
+// The beam is a real beam — systems/beams.js, the same object the seal's Laser
+// Eyes light — and it paints its taper profile and glow sprite onto a 2D
+// canvas the first time one is spawned. dom-stub returns null for getContext,
+// so give it just enough to draw into; nothing here reads the pixels back, and
+// a stub that returned nothing would fail inside three.js with an error about
+// createImageData rather than about the fight. Same shim as
+// tools/beam-churn-test.mjs, and for the same reason.
+document.createElement = (tag) => ({
+  tagName: tag, width: 0, height: 0, style: {},
+  getContext: () => ({
+    createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+    putImageData: () => {}, fillRect: () => {}, clearRect: () => {},
+    createRadialGradient: () => ({ addColorStop: () => {} }),
+    createLinearGradient: () => ({ addColorStop: () => {} }),
+    set fillStyle(_v) {}, get fillStyle() { return '#000'; },
+  }),
+});
 import * as THREE from 'three';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -72,12 +89,20 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { execFileSync } from 'node:child_process';
 
 import { CONFIG } from '../path/src/config.js';
-import { installModel, createVisual, ASSETS } from '../path/src/assets.js';
+import { installModel, createVisual, ASSETS, getAssetSizeMultiplier } from '../path/src/assets.js';
 import { createAnimationController } from '../path/src/systems/animation.js';
 import { attachEmissiveCues, cueLevel, cueDuration } from '../path/src/systems/emissivePulse.js';
 import {
   attachAngler, releaseAngler, updateBossAngler, anglerStage, anglerState, isAnglerBoss,
 } from '../path/src/systems/bossAngler.js';
+import { bounds, seabedTopY } from '../path/src/arena.js';
+import { beams, resetBeams } from '../path/src/systems/beams.js';
+// The SHIPPING roster row, parsed from the shipping csv the same way
+// systems/boss.js parses it — the boss's sizeMul is a third of what its radius
+// actually is in a fight, and a stub carrying only the enemies.csv radius is a
+// stub a third the size of the animal. See the note on makeBoss.
+import bossesCsv from '../path/src/bosses.csv?raw';
+import { parseBossCsv } from '../path/src/bossTable.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DT = 1 / 60;
@@ -117,13 +142,51 @@ if (!existsSync(modelPath)) {
 // like nothing the game ever builds, while the shipped fight read undefined,
 // computed NaN, and put an invisible boss in the water. A stub may be smaller
 // than the real thing; it may not be a different shape.
+// THE RADIUS IS THREE NUMBERS MULTIPLIED, and a stub that carries only the
+// first is a body a third of the size of the one the fight steers. enemies.csv
+// says 2.1, assets.csv scales the model by 2.5, and bosses.csv scales THAT by
+// 1.5 at spawn (applyBossScale in systems/boss.js) — 7.875 world units.
+//
+// It matters here rather than being decoration: everything about holding the
+// bottom is measured off the radius, because the arena clamp that decides how
+// low a body may go is (bounds.bottom + radius). A stub with no radius at all
+// rests six units lower than the animal can, and every assertion about the
+// floor would have been made against a fish sunk into the scenery.
+const BOSS_ROW = parseBossCsv(bossesCsv, CONFIG.enemies, () => {})
+  .find((r) => r.id === 'bossAnglerfish');
+const BOSS_RADIUS = CONFIG.enemies.bossAnglerfish.radius
+  * getAssetSizeMultiplier(KEY) * (BOSS_ROW?.sizeMul ?? 1);
+// Where a body of that radius is allowed to rest — the same expression
+// systems/bossAngler.js's floorY uses, spelled out here rather than exported,
+// so a change to one has to be made deliberately in the other.
+const floorLine = () => bounds.bottom + BOSS_RADIUS + CONFIG.boss.angler.floorLift;
+
+// A CONTAINER WITH THE MODEL INSIDE IT, which is what spawnOne builds and is
+// NOT what this stub used to be. `e.mesh` is a Group and `e.visual` is its
+// child, and the two carry different halves of the pose: the container holds
+// `rotation.z`, the heading, and the model holds `rotation.y`, the side the
+// animal is facing — a half roll about its own forward axis.
+//
+// Collapsing them into one object, as this did, composes those two rotations in
+// the wrong ORDER. Three.js reads an Euler as Rx*Ry*Rz, so one object applies
+// the roll AFTER the heading (turning the world, not the fish) where two apply
+// it before. The visible difference is the whole question this file now asks:
+// nested, a fish facing left is upright; collapsed, the same numbers put it
+// exactly upside down. A stub may be smaller than the real thing; it may not be
+// a different shape.
 function makeBoss(scene) {
   const visual = createVisual(KEY);
-  scene.add(visual);
+  const container = new THREE.Group();
+  container.add(visual);
+  scene.add(container);
   const def = CONFIG.enemies.bossAnglerfish;
   const e = {
-    def, mesh: visual, vx: 0, vy: 0, dead: false,
+    def, mesh: container, vx: 0, vy: 0, dead: false,
     hp: def.hp, maxHp: def.hp,
+    radius: BOSS_RADIUS,
+    // The MODEL, not the container — the lure and the eye bones are found by
+    // name under this one, and it is the object that carries the side roll.
+    visual,
     contactDamage: def.contactDamage, animState: null, perkDrive: false,
     anim: createAnimationController(visual),
   };
@@ -142,7 +205,9 @@ const player = { x: 0, y: 0 };
 section('THE STATES THIS FIGHT ASKS FOR EXIST ON THIS MODEL');
 // ---------------------------------------------------------------------------
 {
-  const clips = boss.mesh.userData.clips ?? [];
+  // Off the MODEL, not the container — the clips ride on what createVisual
+  // returned, and `e.mesh` is the Group wrapped round it.
+  const clips = boss.visual.userData.clips ?? [];
   const map = ASSETS[KEY].animations ?? {};
   check('the model installed with its takes', clips.length === 7, `${clips.length} clips`);
   // Exactly the states systems/bossAngler.js sets or triggers.
@@ -394,12 +459,15 @@ section('A HIT BITES THE LURE BRIGHT');
 // ---------------------------------------------------------------------------
 {
   releaseAngler();
-  at(boss, 0, 0);
+  at(boss, 0, floorLine());
   boss.hp = 1000; boss.maxHp = 1000;
   attachAngler(scene, boss);
-  // Out of range, so the fight stays in the lurk and the only thing that can
-  // move the light is the damage.
-  player.x = CONFIG.boss.angler.triggerRange * 3; player.y = 0;
+  // Out of range of BOTH cadences, so the fight stays in the lurk and the only
+  // thing that can move the light is the damage. `lureRange` and not
+  // triggerRange: inside the lure's reach the animal charges, and a charge is a
+  // 16x envelope climbing over the top of exactly the flash being measured —
+  // which reads here as the hit having dimmed the lure.
+  player.x = CONFIG.boss.angler.lureRange + 10; player.y = floorLine();
   for (let i = 0; i < 120; i++) updateBossAngler(DT, scene, player, {});
   const calm = anglerStage().emissive;
   boss.hp -= 1000 * (CONFIG.boss.angler.hurtDamage * 3);
@@ -532,12 +600,19 @@ section('IT HOLDS STATION, AND IT LOOKS AT YOU WHILE IT DOES');
 // distance is a chaser with extra steps.
 {
   releaseAngler();
-  at(boss, 0, 0); boss.vx = 0; boss.vy = 0;
+  // ON THE FLOOR, which is where this animal waits — see holdFloor. Started at
+  // the origin (the waterline) it would spend the whole measurement sinking
+  // 31 units to its resting line, and every check below would read that as the
+  // ambusher swimming somewhere.
+  at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
   boss.hp = boss.maxHp;
   attachAngler(scene, boss);
-  // Well outside triggerRange, so it lurks indefinitely and the only thing
-  // being measured is what it does while waiting.
-  player.x = CONFIG.boss.angler.triggerRange * 2.5; player.y = 0;
+  // OUTSIDE `lureRange`, not merely outside triggerRange — the fight has two
+  // ranges now and only the outer one means "it will not start". Inside the
+  // lure's reach it does not lurk indefinitely, it charges, which is the whole
+  // point of the two attacks below and would look exactly like this test
+  // failing.
+  player.x = CONFIG.boss.angler.lureRange + 10; player.y = floorLine();
   const start = boss.mesh.position.clone();
   let drift = 0;
   for (let i = 0; i < 60 * 10; i++) {
@@ -560,7 +635,7 @@ section('IT HOLDS STATION, AND IT LOOKS AT YOU WHILE IT DOES');
     while (d < -Math.PI) d += Math.PI * 2;
     return Math.abs(d);
   };
-  player.x = -CONFIG.boss.angler.triggerRange * 2.5; player.y = CONFIG.boss.angler.triggerRange;
+  player.x = -(CONFIG.boss.angler.lureRange + 10); player.y = floorLine() + 12;
   const before = facingErr();
   for (let i = 0; i < 60 * 6; i++) { updateBossAngler(DT, scene, player, {}); step(boss, DT); }
   const after = facingErr();
@@ -568,17 +643,904 @@ section('IT HOLDS STATION, AND IT LOOKS AT YOU WHILE IT DOES');
     after < 0.12, `${(before * 180 / Math.PI).toFixed(0)}° off -> ${(after * 180 / Math.PI).toFixed(1)}°`);
   check('...without translating to do it',
     start.distanceTo(boss.mesh.position) < 0.5, `${start.distanceTo(boss.mesh.position).toFixed(3)} units`);
-  // And the turn is RATE-limited, not a snap — that is what makes circling work.
-  at(boss, 0, 0);
-  boss.mesh.rotation.z = 0;
-  player.x = 0; player.y = -CONFIG.boss.angler.triggerRange * 2.5;
-  const e0 = facingErr();
-  updateBossAngler(DT, scene, player, {});
-  const stepped = Math.abs(e0 - facingErr());
-  check('the aim is rate-limited rather than snapping',
-    stepped <= CONFIG.boss.angler.lurkTurnRate * DT * 1.05 + 1e-6,
-    `${(stepped / DT).toFixed(2)} rad/s against a ${CONFIG.boss.angler.lurkTurnRate} cap`);
+  // AND THE TURN IS RATE-LIMITED, not a snap — that is what makes circling work.
+  //
+  // MEASURED AS A DURATION rather than as one frame's step, and the difference
+  // is the mechanism rather than the taste. `rotation.z` is no longer a value
+  // that is eased toward a target: it is COMPOSED, every frame, from an eased
+  // pitch and an eased side (see faceToward — the two have to be one manoeuvre
+  // or the body spends the turn upside down). So a single frame's change in the
+  // heading is not the rate limit and never was a direct reading of it; writing
+  // rotation.z by hand and stepping once now measures the composition
+  // re-deriving itself from state the write did not touch, which reads as an
+  // enormous instantaneous rate on a fish that is turning perfectly smoothly.
+  //
+  // What the check was always about survives intact: a HALF TURN takes about
+  // PI / lurkTurnRate seconds, which is 3.5 at the shipped 0.9 — long enough
+  // that a player can swim round behind it, which is the whole counterplay.
+  // Per-frame smoothness is asserted properly, against a derived ceiling, in
+  // IT IS NEVER UPSIDE DOWN below.
   releaseAngler();
+  at(boss, 0, floorLine());
+  boss.mesh.rotation.set(0, 0, 0);
+  boss.visual.rotation.set(0, 0, 0);
+  delete boss.visual.userData.__face;
+  delete boss.__facePitch;
+  attachAngler(scene, boss);
+  // Straight out to one side and out of the lure's reach, so what is being
+  // timed is a lurk turn rather than a wind-up's — the two have different rates
+  // on purpose and timing one against the other would pass on a boss that had
+  // stopped lurking entirely.
+  const out = CONFIG.boss.angler.lureRange + 10;
+  player.x = out; player.y = floorLine();
+  for (let i = 0; i < 60 * 8; i++) updateBossAngler(DT, scene, player, {});
+  check('it has settled looking one way', facingErr() < 0.05,
+    `${(facingErr() * 180 / Math.PI).toFixed(1)} degrees off`);
+  // ...and now the seal is on the other side. A full reversal.
+  player.x = -out;
+  let took = null;
+  for (let i = 0; i < 60 * 15 && took == null; i++) {
+    updateBossAngler(DT, scene, player, {});
+    if (facingErr() < 0.05) took = (i + 1) * DT;
+  }
+  const half = Math.PI / CONFIG.boss.angler.lurkTurnRate;
+  check('a reversal takes about a half turn at the lurk rate',
+    took != null && Math.abs(took - half) < half * 0.35,
+    `${took == null ? 'never got there' : `${took.toFixed(2)}s`} against ${half.toFixed(2)}s`);
+  check('...which is slow enough to swim round behind it', took > 1.5,
+    `${took?.toFixed(2)}s`);
+  releaseAngler();
+}
+
+// ---------------------------------------------------------------------------
+section('IT DOES NOT WAIT INSIDE THE WALL');
+// ---------------------------------------------------------------------------
+// The one bug the "holds station" section cannot catch, because holding
+// station is exactly what it does wrong.
+//
+// WHERE THE ANIMAL COMES FROM. `deepSpawn` is set on this def, so an
+// anglerfish always rises out of the seabed rather than swimming in from a
+// wing — and the deep entrance rolls its x flat across the whole arena
+// (edgeSpawnPoint in entities/enemies.js), with nothing keeping it off a wall.
+// On a body of radius ~7.9 in a 185-unit arena that is better than one arrival
+// in ten surfacing with its flank already inside the drawn rock.
+//
+// WHY IT THEN STAYS THERE. Every other archetype swims at the seal the moment
+// it arrives, so a bad start position costs it a second. This one lurks, and
+// the lurk is a dead stop — so it held that position for the whole fight, half
+// buried in the cliff, unreachable until the player swam into the wall to find
+// it. Measured before the fix: 100% of sixty seconds against the wall with the
+// seal parked in mid-ocean. The recovery's station is the same bug with a
+// different cause — it is a ring around the PLAYER, so with the seal near a
+// wall most of it is out past the rock, and the fish drove at a point the
+// arena clamp would never let it reach.
+//
+// Driven through the REAL integrator — updateEnemies and updateBoss — because
+// the clamp that pins it lives in entities/enemies.js and a stand-in stepped
+// by hand has no walls at all. The body is PUT on the wall rather than the
+// dice being wrestled into putting it there: the fix is about what the animal
+// does once it is against the rock, and how it got there is the other half of
+// the story, asserted separately just below.
+// ---------------------------------------------------------------------------
+{
+  const { bounds, updateBounds } = await import('../path/src/arena.js');
+  const { createWallRocks } = await import('../path/src/systems/wallRocks.js');
+  const { resetEnemies, updateEnemies } = await import('../path/src/entities/enemies.js');
+  const { forceBoss, resetBoss, updateBoss, updateBossAbilities, bossState } =
+    await import('../path/src/systems/boss.js');
+
+  updateBounds(16 / 9);
+  const liveScene = new THREE.Scene();
+  createWallRocks(liveScene).build();
+  const quiet = () => {};
+
+  function arrive(playerX) {
+    resetEnemies(liveScene);
+    resetBoss(liveScene);
+    releaseAngler();
+    const gameState = { difficulty: 5, level: 12, running: true };
+    const who = { x: playerX, y: -12, z: 0 };
+    const boss = forceBoss(liveScene, gameState, { boss: 'bossAnglerfish', perk: null });
+    // Read BEFORE the approach: `deep` is the entrance and the entrance clears
+    // it the moment the body is out of the seabed, so asking afterwards asks a
+    // question about the past and gets today's answer.
+    const cameFromTheDeep = !!boss?.deep;
+    let t = 0;
+    while (boss && bossState.approaching && t < 20) {
+      updateEnemies(DT, liveScene, who, quiet, quiet);
+      updateBoss(DT, gameState, liveScene);
+      t += DT;
+    }
+    return { boss, who, gameState, cameFromTheDeep };
+  }
+
+  function fight({ boss, who, gameState }, seconds) {
+    const wall = bounds.right - boss.radius;
+    let inWall = 0;
+    let frames = 0;
+    for (let i = 0; i < 60 * seconds; i++) {
+      updateEnemies(DT, liveScene, who, quiet, quiet);
+      updateBoss(DT, gameState, liveScene);
+      updateBossAbilities(DT, liveScene, who, {});
+      if (Math.abs(boss.mesh.position.x) > wall - 0.25) inWall++;
+      frames++;
+    }
+    return {
+      wall,
+      x: boss.mesh.position.x,
+      inWall: inWall / frames,
+      clear: Math.abs(Math.abs(boss.mesh.position.x) - wall),
+    };
+  }
+
+  // THE SOURCE, asserted rather than described: the entrance really can put
+  // this body inside the wall. If deepSpawn is ever taken off the def, or the
+  // deep roll learns to keep clear of a wall, this stops being true and the
+  // note above stops being the reason — which is worth being told about.
+  {
+    const run = arrive(0);
+    // WHICH ENTRANCE is reported rather than asserted, because both of them
+    // land it here: `deepSpawn` rolls the x flat across the arena with nothing
+    // keeping it off a wall, and a wing entrance hands over at exactly
+    // bounds.right - radius. Pinning the test to one of them would fail the
+    // day the def changes, over a difference that does not matter to the bug.
+    console.log(`    entrance: ${run.cameFromTheDeep ? 'up out of the seabed (deepSpawn)' : 'in from a wall'}`);
+    const half = bounds.right;
+    const r = run.boss?.radius ?? 0;
+    check('the entrance can leave this body inside the rock',
+      r > 0 && r / half > 0.05,
+      `radius ${r.toFixed(1)} against a half-arena of ${half.toFixed(1)} — ${(100 * r / half).toFixed(0)}% of a flat roll lands a flank in the wall`);
+  }
+
+  for (const side of [1, -1]) {
+    const w = side > 0 ? 'right' : 'left';
+    const run = arrive(0);
+    if (!run.boss) { check('a boss was put in the water', false); continue; }
+    // Exactly where the arena clamp holds a body that has been driven into the
+    // wall — the position the bug left it in, reached the way the bug reached
+    // it rather than an arbitrary teleport.
+    run.boss.mesh.position.x = side * (bounds.right - run.boss.radius);
+    const r = fight(run, 60);
+    check(`parked in the ${w} wall with the seal in open water, it does not stay there`,
+      r.inWall < 0.05, `${(r.inWall * 100).toFixed(0)}% of 60s against the wall`);
+    check('...it backs out into water it can be fought in',
+      r.clear > run.boss.radius * 0.3,
+      `${r.clear.toFixed(1)} units off the wall, on a body of radius ${run.boss.radius.toFixed(1)}`);
+    check('...and it is still lurking rather than having wandered off hunting',
+      anglerStage().stage === 'lurk' || anglerStage().cycles > 0, anglerStage().stage);
+  }
+
+  // AND WITH THE SEAL IN THE CORNER, which is the station half: the recovery
+  // picks a point at `stationRange` from the PLAYER, so with the seal at a wall
+  // most of that ring is out past the rock and the fish drove at a target the
+  // arena clamp would never let it reach.
+  //
+  // A LOOSE THRESHOLD ON PURPOSE. The fish comes over and fights, and a lunge
+  // at a seal in the corner ends with the animal legitimately against the wall
+  // for the run, the snap and the follow-through — a tight bound here would be
+  // a test of the cadence's timings rather than of the station. What it is
+  // catching is the pre-fix reading, which was 100%: the animal never left.
+  for (const px of [1, -1]) {
+    const run = arrive(px * (bounds.right - 6));
+    if (!run.boss) continue;
+    const r = fight(run, 45);
+    check(`with the seal against the ${px > 0 ? 'right' : 'left'} wall, it still spends the fight in open water`,
+      r.inWall < 0.5, `${(r.inWall * 100).toFixed(0)}% of 45s at the wall`);
+  }
+
+  releaseAngler();
+  resetEnemies(liveScene);
+  resetBoss(liveScene);
+}
+
+// ---------------------------------------------------------------------------
+section('IT COMES UP OUT OF THE DEEP');
+// ---------------------------------------------------------------------------
+// The entrance is the first thing a player learns about a boss, and for this
+// one it is half the character. Rolled, two arrivals in three came in along a
+// wing at a random depth — an ambush predator announcing itself from the side
+// of the screen, which gives away the only thing it had.
+//
+// ASSERTED OVER MANY ROLLS, not once. edgeSpawnPoint is random and a single
+// call landing on `deep` proves nothing: the un-flagged path already takes that
+// branch one time in ten, so a test that rolled once would pass on the bug.
+{
+  const { __spawnPointForTest } = await import('../path/src/entities/enemies.js');
+  if (typeof __spawnPointForTest !== 'function') {
+    check('entities/enemies.js exposes its spawn point picker for this test', false,
+      'no __spawnPointForTest export');
+  } else {
+    const def = CONFIG.enemies.bossAnglerfish;
+    check('the def asks for the deep entrance', def.deepSpawn === true, String(def.deepSpawn));
+    let deep = 0;
+    for (let i = 0; i < 400; i++) if (__spawnPointForTest(def).deep) deep++;
+    check('every roll comes from the deep', deep === 400, `${deep}/400`);
+    // ...and the control: an ordinary swimmer still gets the mixed entrance, so
+    // what is being measured is the flag rather than the picker having been
+    // hard-wired.
+    let otherDeep = 0;
+    const other = CONFIG.enemies.bossShark ?? CONFIG.enemies.bossOrca;
+    for (let i = 0; i < 400; i++) if (__spawnPointForTest(other).deep) otherDeep++;
+    check('...and a boss without the flag still mostly comes in from a wing',
+      otherDeep > 0 && otherDeep < 200, `${otherDeep}/400 deep`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+section('IT HOLDS THE BOTTOM');
+// ---------------------------------------------------------------------------
+// The floor is what makes the arena vertical: the surface is safe, the trap is
+// the seabed, and a run is spent deciding how far down to go. Two claims, and
+// the second is the one that breaks quietly — an animal that sinks and then
+// bounces is one whose hold is fighting the wall-escape latch, and every frame
+// of that looks deliberate.
+{
+  releaseAngler();
+  at(boss, 0, bounds.surfaceY - boss.radius);
+  boss.vx = 0; boss.vy = 0; boss.hp = boss.maxHp;
+  boss.deep = false; boss.entering = false;
+  attachAngler(scene, boss);
+  // Out of both ranges, so nothing but the hold is moving the body.
+  player.x = CONFIG.boss.angler.lureRange + 12; player.y = bounds.surfaceY - 2;
+  const want = floorLine();
+  let settledAt = null;
+  for (let i = 0; i < 60 * 20; i++) {
+    updateBossAngler(DT, scene, player, {});
+    step(boss, DT);
+    if (settledAt == null && Math.abs(boss.mesh.position.y - want) < 0.3) settledAt = i * DT;
+  }
+  check('a fish dropped at the surface settles onto the floor', settledAt != null,
+    settledAt != null ? `${settledAt.toFixed(1)}s to reach ${want.toFixed(1)}` : `stuck at y=${boss.mesh.position.y.toFixed(1)}`);
+  check('...and is still there twenty seconds later',
+    Math.abs(boss.mesh.position.y - want) < 0.6,
+    `y=${boss.mesh.position.y.toFixed(2)} vs a floor line of ${want.toFixed(2)}`);
+  // NOT BOBBING. Sampled over the last five seconds, well after the settle, so
+  // what is measured is the resting state rather than the approach to it.
+  let lo = Infinity; let hi = -Infinity;
+  for (let i = 0; i < 60 * 5; i++) {
+    updateBossAngler(DT, scene, player, {});
+    step(boss, DT);
+    lo = Math.min(lo, boss.mesh.position.y);
+    hi = Math.max(hi, boss.mesh.position.y);
+  }
+  check('...and it rests rather than bobbing between the hold and the escape',
+    hi - lo < 0.5, `${(hi - lo).toFixed(3)} units of swing over 5s`);
+  // The floor line is genuinely low: the body is sitting on the seabed and not
+  // hovering in midwater with the number merely agreeing with itself.
+  check('the floor line really is on the bottom',
+    want < seabedTopY() + boss.radius + 1,
+    `y=${want.toFixed(1)}, seabed top ${seabedTopY().toFixed(1)}, radius ${boss.radius.toFixed(1)}`);
+  releaseAngler();
+}
+
+// ---------------------------------------------------------------------------
+section('THE LURE PICKS ITS ATTACK BY DISTANCE, AND SAYS SO FIRST');
+// ---------------------------------------------------------------------------
+// Three ranges, three answers: bite, hold, zap. It is the whole lesson of the
+// fight, and the thing that would break it is a random pick — the same position
+// meaning two things is the one thing a fight built out of reading the animal
+// cannot afford.
+{
+  const C2 = () => CONFIG.boss.angler;
+  check('CONFIG.boss.angler.chargeTime equals CONFIG.emissiveCues.charge.attack',
+    Math.abs(C2().chargeTime - CONFIG.emissiveCues.charge.attack) < 1e-6,
+    `${C2().chargeTime}s vs ${CONFIG.emissiveCues.charge.attack}s`);
+  check('the charge is a longer tell than the lunge wind-up',
+    C2().chargeTime > C2().windup, `${C2().chargeTime}s vs ${C2().windup}s`);
+  check('the beam has a band of its own to live in',
+    C2().pulseRadius * C2().pulsePick < C2().lureRange,
+    `radial out to ${(C2().pulseRadius * C2().pulsePick).toFixed(1)}, lure range ${C2().lureRange}`);
+  check('the lure gap outlasts the stages it has to cover',
+    C2().attackGap > C2().recoverTime + C2().dischargeTime + CONFIG.emissiveCues.lurk.attack,
+    `${C2().attackGap}s against ${(C2().recoverTime + C2().dischargeTime + CONFIG.emissiveCues.lurk.attack).toFixed(2)}s of stages`);
+
+  // Drive it for real at three ranges and see what it actually throws.
+  const runAt = (dist, seconds = 26) => {
+    releaseAngler();
+    resetBeams(scene);
+    at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
+    boss.hp = boss.maxHp; boss.deep = false; boss.entering = false;
+    boss.contactDamage = CONFIG.enemies.bossAnglerfish.contactDamage;
+    attachAngler(scene, boss);
+    const snares = [];
+    const hits = [];
+    const hooks = {
+      onPlayerSnare: (sec, mul, thaw) => snares.push({ sec, mul, thaw }),
+      onPlayerHit: (dmg, dir, source) => hits.push({ dmg, source }),
+    };
+    // The seal is PINNED at the range being tested — it does not swim, so the
+    // only thing deciding which attack comes out is the distance.
+    for (let i = 0; i < 60 * seconds; i++) {
+      player.x = boss.mesh.position.x + dist; player.y = boss.mesh.position.y;
+      updateBossAngler(DT, scene, player, hooks);
+      step(boss, DT);
+    }
+    return { fired: { ...anglerState.fired }, snares, hits };
+  };
+
+  const close = runAt(CONFIG.boss.angler.triggerRange * 0.7);
+  check('inside the bite range it lunges rather than reaching for the lure',
+    close.fired.lunge > 0 && close.fired.beam === 0,
+    `lunge x${close.fired.lunge}, pulse x${close.fired.pulse}, beam x${close.fired.beam}`);
+
+  // THE MIDDLE OF THE HOLD BAND, derived rather than typed. The band is
+  // `triggerRange`..`pulseRadius * pulsePick` and it is only nine units wide —
+  // a hand-picked number would be a test that silently starts measuring the
+  // lunge the next time either end of it moves.
+  const mid = runAt(
+    (CONFIG.boss.angler.triggerRange + CONFIG.boss.angler.pulseRadius * CONFIG.boss.angler.pulsePick) / 2,
+  );
+  check('too far to bite but inside the radial, it holds you',
+    mid.fired.pulse > 0 && mid.fired.beam === 0,
+    `lunge x${mid.fired.lunge}, pulse x${mid.fired.pulse}, beam x${mid.fired.beam}`);
+  check('...and the seal caught in it is actually snared', mid.snares.length > 0,
+    `${mid.snares.length} snares`);
+  check('...for about as long as the config says',
+    mid.snares.every((s) => Math.abs(s.sec - CONFIG.boss.angler.pulseSnare) < 1e-6),
+    mid.snares.map((s) => s.sec).join(', '));
+  check('...and the hold leaves the seal SOME of its own swimming',
+    mid.snares.every((s) => s.mul > 0 && s.mul < 0.5),
+    `mul ${mid.snares[0]?.mul}`);
+  check('...and the radial deals its damage under its own source name',
+    mid.hits.some((h) => h.source === 'boss:anglerPulse'),
+    mid.hits.map((h) => h.source).join(', ') || 'no hits');
+  check('...which starts with "boss", so the damage ceilings apply to it',
+    mid.hits.every((h) => String(h.source).startsWith('boss')),
+    mid.hits.map((h) => h.source).join(', ') || 'no hits');
+
+  const far = runAt(CONFIG.boss.angler.lureRange * 0.85);
+  check('out past the radial it uses the beam',
+    far.fired.beam > 0 && far.fired.pulse === 0,
+    `lunge x${far.fired.lunge}, pulse x${far.fired.pulse}, beam x${far.fired.beam}`);
+
+  const gone = runAt(CONFIG.boss.angler.lureRange + 12);
+  check('past the lure range it does nothing at all — you can always leave',
+    gone.fired.beam === 0 && gone.fired.pulse === 0 && gone.fired.lunge === 0,
+    `lunge x${gone.fired.lunge}, pulse x${gone.fired.pulse}, beam x${gone.fired.beam}`);
+  releaseAngler();
+  resetBeams(scene);
+}
+
+// ---------------------------------------------------------------------------
+section('THE RADIAL ONLY REACHES AS FAR AS IT SAYS IT DOES');
+// ---------------------------------------------------------------------------
+// The ring is drawn AT pulseRadius. A hold that reached further than the circle
+// would be the boss cheating; one that reached less would be a tell that lies
+// in the other direction, which is worse — the player learns the wrong edge and
+// then gets caught at it.
+{
+  // A seal that stands just inside the reach and one that steps just outside
+  // it, on runs identical in every other respect.
+  const probe = (frac) => {
+    releaseAngler();
+    at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
+    boss.hp = boss.maxHp; boss.deep = false; boss.entering = false;
+    attachAngler(scene, boss);
+    let snared = 0;
+    const hooks = { onPlayerSnare: () => { snared++; }, onPlayerHit: () => {} };
+    // Charged from inside the pick band so the RADIAL is what gets loaded, then
+    // the seal is moved to the range being probed before it lands. That is the
+    // honest test: the attack is chosen from where you were and lands on where
+    // you are, and both halves have to be true.
+    let fired = false;
+    for (let i = 0; i < 60 * 20 && !fired; i++) {
+      const d = anglerState.stage === 'charge'
+        ? CONFIG.boss.angler.pulseRadius * frac
+        : (CONFIG.boss.angler.triggerRange
+           + CONFIG.boss.angler.pulseRadius * CONFIG.boss.angler.pulsePick) / 2;
+      player.x = boss.mesh.position.x + d; player.y = boss.mesh.position.y;
+      updateBossAngler(DT, scene, player, hooks);
+      step(boss, DT);
+      if (anglerState.fired.pulse > 0) fired = true;
+    }
+    return { fired, snared };
+  };
+  const inside = probe(0.7);
+  check('a seal inside the circle is caught', inside.fired && inside.snared > 0,
+    `fired ${inside.fired}, ${inside.snared} snares`);
+  const outside = probe(1.4);
+  check('a seal outside it is not', outside.fired && outside.snared === 0,
+    `fired ${outside.fired}, ${outside.snared} snares`);
+  releaseAngler();
+}
+
+// ---------------------------------------------------------------------------
+section('THE BEAM LEAVES THE LURE, AND DOES NOT FOLLOW YOU');
+// ---------------------------------------------------------------------------
+// The lunge's rule, for the lunge's reason. A homing beam is not a fight, it is
+// a tax on having been seen — and a beam born at the animal's middle is one the
+// player cannot connect to the light that was charging at them.
+{
+  releaseAngler();
+  resetBeams(scene);
+  at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
+  boss.hp = boss.maxHp; boss.deep = false; boss.entering = false;
+  attachAngler(scene, boss);
+  const range = CONFIG.boss.angler.lureRange * 0.8;
+  player.x = range; player.y = floorLine();
+  let lit = null;
+  for (let i = 0; i < 60 * 20 && !lit; i++) {
+    updateBossAngler(DT, scene, player, { onPlayerHit: () => {}, onPlayerSnare: () => {} });
+    step(boss, DT);
+    if (beams.length) lit = beams[beams.length - 1];
+  }
+  check('a beam was lit', !!lit, lit ? `${beams.length} live` : 'none in 20s');
+  if (lit) {
+    check('it hits the player and not the wildlife',
+      lit.hitsPlayer === true && lit.hitsEnemies === false,
+      `hitsPlayer=${lit.hitsPlayer} hitsEnemies=${lit.hitsEnemies}`);
+    check('its source is a boss source, so the damage ceilings apply',
+      String(lit.source).startsWith('boss'), lit.source);
+    check('it is worth a multiple of what this body hits for',
+      Math.abs(lit.damage - CONFIG.enemies.bossAnglerfish.contactDamage * CONFIG.boss.angler.beamDamage) < 1e-6,
+      `${lit.damage} vs contact ${CONFIG.enemies.bossAnglerfish.contactDamage}`);
+    check('it has a per-target cooldown, so it is not sixty hits a second',
+      lit.tickEvery >= 0.1, `${lit.tickEvery}s between bites`);
+    // WHERE IT CAME OUT OF. The lure hangs off the front of the animal, so this
+    // is a real distance rather than a rounding error — and the fallback if the
+    // node is missing is the body centre, which is exactly what a zero here
+    // would mean.
+    const offBody = Math.hypot(lit.x - boss.mesh.position.x, lit.y - boss.mesh.position.y);
+    check('it leaves the lure rather than the middle of the fish',
+      offBody > 0.5, `${offBody.toFixed(2)} units off the body centre`);
+    check('the boss found the lure node named in config',
+      !!boss.__lureNode, CONFIG.boss.angler.lureNode);
+    // ...and it does not steer. TELEPORT the seal square across the line.
+    check('the beam is fired without a follow, so it cannot sweep onto you',
+      lit.follow == null, String(lit.follow));
+    const d0 = { x: lit.dirX, y: lit.dirY };
+    player.x = -range; player.y = floorLine() + 20;
+    for (let i = 0; i < 20 && beams.includes(lit); i++) {
+      updateBossAngler(DT, scene, player, { onPlayerHit: () => {}, onPlayerSnare: () => {} });
+      step(boss, DT);
+    }
+    check('...and it really did not move after the player jumped',
+      Math.abs(lit.dirX - d0.x) < 1e-6 && Math.abs(lit.dirY - d0.y) < 1e-6,
+      `(${d0.x.toFixed(3)}, ${d0.y.toFixed(3)}) -> (${lit.dirX.toFixed(3)}, ${lit.dirY.toFixed(3)})`);
+  }
+  releaseAngler();
+  resetBeams(scene);
+}
+
+// ---------------------------------------------------------------------------
+section('THE TELEGRAPH IS PUT AWAY');
+// ---------------------------------------------------------------------------
+// The ring is a live scene object with a material of its own. A boss that dies
+// mid-charge, or a perk that takes the body off it, would otherwise leave the
+// circle burning in the water for the rest of the run — and the material leaked
+// with it. Worse than a leak: a ring over an attack that was cancelled is a lie
+// the player reads correctly and is punished for believing.
+{
+  const ringsIn = () => {
+    let n = 0;
+    scene.traverse((o) => { if (o?.userData?.organicRing) n++; });
+    return n;
+  };
+  releaseAngler();
+  const before = ringsIn();
+  at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
+  boss.hp = boss.maxHp; boss.deep = false; boss.entering = false;
+  attachAngler(scene, boss);
+  player.x = CONFIG.boss.angler.lureRange * 0.8; player.y = floorLine();
+  for (let i = 0; i < 60 * 20 && anglerState.stage !== 'charge'; i++) {
+    updateBossAngler(DT, scene, player, { onPlayerHit: () => {}, onPlayerSnare: () => {} });
+    step(boss, DT);
+  }
+  check('a charge puts a telegraph in the water', anglerState.stage === 'charge' && ringsIn() === before + 1,
+    `stage ${anglerState.stage}, ${ringsIn()} rings`);
+  check('...and anglerStage() reports it, so it is visible from outside a fight',
+    anglerStage().tell === true && anglerStage().attack != null,
+    `tell=${anglerStage().tell} attack=${anglerStage().attack}`);
+  // The worst moment: killed mid-charge, ring still up.
+  releaseAngler();
+  check('releasing mid-charge takes the telegraph with it', ringsIn() === before,
+    `${ringsIn()} rings against ${before} before the fight`);
+  check('...and the state that drove it', anglerState.ring === null && anglerState.attack === null,
+    `ring=${anglerState.ring} attack=${anglerState.attack}`);
+  resetBeams(scene);
+}
+
+// ---------------------------------------------------------------------------
+section('IT TURNS ITS HEAD, AND IT TURNS ON ITS NOSE');
+// ---------------------------------------------------------------------------
+// The head-look matters more on this boss than on any of the chasers. A shark's
+// body is always swinging through a turn and the head only has to lead it; this
+// animal holds station on the seabed, so the head is the only thing that can
+// say it has seen you.
+//
+// EVERY CLAIM HERE IS MEASURED THROUGH THE REAL RIG, because a lookRig is four
+// values that are all plausible and all silently wrong if guessed: a bone name
+// that does not resolve logs one warning and never looks again, a tipAxis
+// pointing down the animal aims the cone gate at its own flank, and a tipLength
+// in the wrong units puts the "snout" somewhere inside the skull.
+{
+  const { createHeadLook } = await import('../path/src/systems/headLook.js');
+  const def = ASSETS[KEY];
+
+  check('the boss asset declares a head-look rig', !!def.lookRig?.head,
+    def.lookRig ? Object.keys(def.lookRig).join(', ') : 'none');
+
+  const rigDef = def.lookRig.head;
+  const probe = createVisual(KEY);
+  const holder = new THREE.Group();
+  holder.add(probe);
+  holder.updateMatrixWorld(true);
+
+  for (const name of rigDef.bones) {
+    check(`"${name}" resolves on the model`, !!probe.getObjectByName(name), name);
+  }
+
+  // tipAxis: the named local axis has to be the one pointing the way the animal
+  // travels. createVisual leaves the body nose-up — forward is world +Y — so
+  // the winning axis is the one whose dot with (0, 1, 0) is 1.
+  const bone = probe.getObjectByName(rigDef.bones[0]);
+  const bq = new THREE.Quaternion();
+  bone.getWorldQuaternion(bq);
+  const AX = { '+X': [1, 0, 0], '+Y': [0, 1, 0], '+Z': [0, 0, 1] };
+  const dotFor = (a) => new THREE.Vector3(...AX[a]).applyQuaternion(bq).dot(new THREE.Vector3(0, 1, 0));
+  check('tipAxis is the axis that actually points forward',
+    Math.abs(dotFor(rigDef.tipAxis)) > 0.99,
+    Object.keys(AX).map((a) => `${a} ${dotFor(a).toFixed(3)}`).join('  '));
+
+  // tipLength is in RAW FILE UNITS — the fit is applied to the wrapper and never
+  // reaches the bone transforms — so it has to be checked against the bone's own
+  // world scale. Landing it at the snout is what the cone gate measures against.
+  const bw = new THREE.Vector3();
+  bone.getWorldPosition(bw);
+  const bs = new THREE.Vector3();
+  bone.getWorldScale(bs);
+  const box = new THREE.Box3().setFromObject(probe);
+  const reach = rigDef.tipLength * bs.x;
+  const toSnout = box.max.y - bw.y;
+  check('tipLength reaches the front of the drawn body',
+    Math.abs(reach - toSnout) < toSnout * 0.1,
+    `${reach.toFixed(2)} world units against ${toSnout.toFixed(2)} to the snout `
+    + `(${rigDef.tipLength} raw x a bone scale of ${bs.x.toFixed(4)})`);
+
+  // ...AND IT ACTUALLY TURNS. Everything above could be right and the look
+  // still do nothing — the chain builds from `userData.lookRig`, which is set
+  // by createVisual, and a def whose rig never reached the instance resolves,
+  // measures and warns exactly as a working one does.
+  const look = createHeadLook(probe);
+  check('a head-look chain builds from it', !!look, look ? 'built' : 'null');
+  if (look) {
+    // OFF TO ONE SIDE, and inside the front cone. createVisual leaves the body
+    // nose-up, so a target at (0, 40) is straight ahead and a head-look that
+    // did nothing at all would pass — which is what the first version of this
+    // check measured, and it read 0.1 degrees on a working rig. Behind the
+    // animal is the opposite mistake: past `backCone` the gate gives up on
+    // purpose and the same working rig reads 2.4 degrees.
+    const before = bone.quaternion.clone();
+    const target = new THREE.Vector3(30, 30, 0);
+    for (let i = 0; i < 120; i++) look.update(DT, target, { boss: true });
+    const turned = before.angleTo(bone.quaternion);
+    check('...and it moves the head off the pose the clip left',
+      turned > 0.02, `${(turned * 180 / Math.PI).toFixed(1)} degrees`);
+    // A LEAN, NOT A STARE. maxBend is the safety limit that stops the chain
+    // being broken by over-rotation, and on this animal the "head" is 70% of
+    // the body — so the cap is the only thing between a look and the whole
+    // front of the fish folding round.
+    check('...but no further than maxBend allows',
+      turned <= CONFIG.enemyLook.maxBend * 1.05 + 1e-6,
+      `${turned.toFixed(3)} rad against a ${CONFIG.enemyLook.maxBend} cap`);
+    // The other way, to prove it is tracking rather than leaning at a constant.
+    const atUp = bone.quaternion.clone();
+    for (let i = 0; i < 240; i++) look.update(DT, new THREE.Vector3(-30, 30, 0), { boss: true });
+    check('...and it follows a target that moves',
+      atUp.angleTo(bone.quaternion) > 0.02,
+      `${(atUp.angleTo(bone.quaternion) * 180 / Math.PI).toFixed(1)} degrees between the two`);
+  }
+
+  // THE PIVOT. It swivels on the spot to keep the seal in front of it, which is
+  // the one creature in the game where where-it-rotates-about is visible — at
+  // the roster's usual 0.15 the tail swings through most of a body length and
+  // the turn reads as the animal sliding sideways.
+  //
+  // Measured off the built body rather than read off the def, because `pivot`
+  // is a request and the thing that matters is where the origin ENDED UP: it is
+  // applied before the fit scale and only along the travel axis, and a forward
+  // axis declared wrong would move it along the animal's width instead with the
+  // number in the def still saying 0.04.
+  const length = box.max.y - box.min.y;
+  const fromNose = (box.max.y) / length;
+  check('the body turns about the front of its head',
+    fromNose < 0.08, `origin sits ${(fromNose * 100).toFixed(1)}% back from the nose`);
+  check('...without the origin leaving the body altogether',
+    box.max.y > 0 && box.min.y < 0,
+    `body spans ${box.min.y.toFixed(2)} .. ${box.max.y.toFixed(2)} about the origin`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE TELL REACHES THE EYES');
+// ---------------------------------------------------------------------------
+// `e.telegraph` is how a boss with no PERK says it is winding something up.
+// Both of this animal's tells are the animal rather than a rolled power, so the
+// perk check in systems/bossEyes.js cannot see either of them — and a fight
+// built entirely out of reading the creature had eyes that stayed dark through
+// every telegraphed moment of it.
+{
+  const stagesSeen = new Map();
+  releaseAngler();
+  at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
+  boss.hp = boss.maxHp; boss.deep = false; boss.entering = false;
+  boss.telegraph = 0;
+  attachAngler(scene, boss);
+  const hooks = { onPlayerHit: () => {}, onPlayerSnare: () => {} };
+  // Close enough to lunge, so the run covers the wind-up as well as the charge.
+  for (let i = 0; i < 60 * 40; i++) {
+    player.x = boss.mesh.position.x + CONFIG.boss.angler.triggerRange * 0.7;
+    player.y = boss.mesh.position.y;
+    updateBossAngler(DT, scene, player, hooks);
+    step(boss, DT);
+    const st = anglerStage().stage;
+    const cur = stagesSeen.get(st) ?? { lo: Infinity, hi: -Infinity, n: 0 };
+    cur.lo = Math.min(cur.lo, boss.telegraph ?? 0);
+    cur.hi = Math.max(cur.hi, boss.telegraph ?? 0);
+    cur.n++;
+    stagesSeen.set(st, cur);
+  }
+  const g = (n) => stagesSeen.get(n) ?? { lo: 0, hi: 0, n: 0 };
+  check('the wind-up publishes a tell', g('windup').hi > 0.9,
+    `peaks at ${g('windup').hi.toFixed(2)} over ${g('windup').n} frames`);
+  check('...that BUILDS rather than being a flag', g('windup').lo < 0.2,
+    `runs ${g('windup').lo.toFixed(2)} .. ${g('windup').hi.toFixed(2)}`);
+  // AND NOTHING ELSE DOES. A tell left set is a boss announcing an attack that
+  // is never coming, for the rest of the fight — which is the exact failure the
+  // single clear at the top of the stage machine exists to make impossible.
+  for (const st of ['lurk', 'lunge', 'snap', 'recover', 'discharge']) {
+    if (!g(st).n) continue;
+    check(`the ${st} says nothing`, g(st).hi === 0, `peaks at ${g(st).hi.toFixed(2)}`);
+  }
+  // The other tell, at the other range.
+  releaseAngler();
+  at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
+  boss.hp = boss.maxHp; boss.telegraph = 0;
+  attachAngler(scene, boss);
+  let chargePeak = 0;
+  for (let i = 0; i < 60 * 30; i++) {
+    player.x = boss.mesh.position.x + CONFIG.boss.angler.lureRange * 0.8;
+    player.y = boss.mesh.position.y;
+    updateBossAngler(DT, scene, player, hooks);
+    step(boss, DT);
+    if (anglerStage().stage === 'charge') chargePeak = Math.max(chargePeak, boss.telegraph ?? 0);
+  }
+  check('the lure charge publishes one too', chargePeak > 0.9, `peaks at ${chargePeak.toFixed(2)}`);
+  releaseAngler();
+  check('a boss released mid-tell hands its eyes back dark', (boss.telegraph ?? 0) === 0,
+    String(boss.telegraph));
+  resetBeams(scene);
+}
+
+// ---------------------------------------------------------------------------
+section('IT IS NEVER UPSIDE DOWN');
+// ---------------------------------------------------------------------------
+// THE BUG THIS EXISTS TO CATCH SHIPPED, and it was a whole animal swimming on
+// its back for most of every fight.
+//
+// A side-on body needs TWO rotations: `rotation.z` on the container points the
+// nose, and `rotation.y` on the model rolls it about its own forward axis so
+// the belly stays down. `faceMotion` in entities/enemies.js writes both.
+// systems/bossAngler.js took the facing off faceMotion below its 0.05 u/s gate
+// — correctly, since the ambush is a dead stop — and reproduced only the first
+// of the two. Aiming a nose that points right at something on the LEFT is 180
+// degrees in the plane of the screen, and 180 degrees in that plane is exactly
+// upside down.
+//
+// Then it went wrong a second way once the roll was added: the roll is eased
+// over CONFIG.facing.time (0.4s) and the heading at `turnRate` (3.5s for the
+// same half turn at the lurk), so the body finished rolling three seconds
+// before the nose arrived and spent the gap inverted anyway.
+//
+// EVERYTHING BELOW IS MEASURED OFF THE DORSAL AXIS IN WORLD SPACE, which is the
+// only statement of the bug a reader can check against the screen. Asserting on
+// rotation.y — or on which branch was taken — passes while the animal is on its
+// back, since the wrong pose is precisely the one those cannot see.
+{
+  // WHICH LOCAL AXIS IS THE DORSAL, measured off the rig rather than typed. The
+  // fins are the honest source: the dorsal is the direction from the ventral
+  // fin to the dorsal one, and a hardcoded guess here would be a test that
+  // agrees with itself and with nothing else.
+  const ref = createVisual(KEY);
+  const holder = new THREE.Group();
+  holder.add(ref);
+  holder.updateMatrixWorld(true);
+  const upFin = new THREE.Vector3();
+  const lowFin = new THREE.Vector3();
+  ref.getObjectByName('UpFin_Bone_01').getWorldPosition(upFin);
+  ref.getObjectByName('LowFin_Bone_01').getWorldPosition(lowFin);
+  // ...AND THEN ORTHOGONALISED AGAINST THE BODY'S LONG AXIS. The two fins sit
+  // at different points ALONG the fish as well as on opposite sides of it, so
+  // the raw line between them leans 9.3 degrees toward the tail. Used as-is it
+  // reads that lean as a permanent tilt: every measurement below came out 9.3
+  // degrees off vertical on a body that was provably upright, which looks
+  // exactly like a small real bug and is not one. The dorsal is perpendicular
+  // to the long axis by definition; the fore/aft part is just where the fins
+  // happen to be.
+  //
+  // Forward is world +Y in the rest pose — createVisual leaves every creature
+  // nose-up, and the tipAxis measurement in the section above confirms it
+  // independently (the head bone's +X maps to (0, 1, 0), dot 1.000).
+  const FWD = new THREE.Vector3(0, 1, 0);
+  const raw = upFin.clone().sub(lowFin).normalize();
+  const DORSAL = raw.clone().addScaledVector(FWD, -raw.dot(FWD)).normalize();
+  check('the dorsal axis is measurable off the fins', DORSAL.lengthSq() > 0.99,
+    `(${DORSAL.toArray().map((n) => n.toFixed(3)).join(', ')}), `
+    + `${(Math.acos(Math.abs(raw.dot(DORSAL))) * 180 / Math.PI).toFixed(1)} degrees of fore/aft lean removed`);
+
+  const rot = new THREE.Matrix4();
+  const dor = new THREE.Vector3();
+  // Degrees the back is off vertical. 0 is upright; 180 is belly-up.
+  const tilt = () => {
+    boss.mesh.updateMatrixWorld(true);
+    rot.extractRotation(boss.visual.matrixWorld);
+    dor.copy(DORSAL).applyMatrix4(rot);
+    return Math.acos(THREE.MathUtils.clamp(dor.y, -1, 1)) * 180 / Math.PI;
+  };
+
+  const settle = (px) => {
+    releaseAngler();
+    boss.mesh.position.set(0, floorLine(), 0);
+    boss.mesh.rotation.set(0, 0, 0);
+    boss.visual.rotation.set(0, 0, 0);
+    // The facing state lives on the VISUAL and visuals are pooled, so a run
+    // that did not clear it would measure the last one's turn.
+    delete boss.visual.userData.__face;
+    delete boss.__facePitch;
+    boss.vx = 0; boss.vy = 0; boss.hp = boss.maxHp;
+    boss.deep = false; boss.entering = false;
+    attachAngler(scene, boss);
+    const p = { x: px, y: floorLine() };
+    for (let i = 0; i < 60 * 8; i++) {
+      updateBossAngler(DT, scene, p, { onPlayerHit: () => {}, onPlayerSnare: () => {} });
+      step(boss, DT);
+    }
+    return tilt();
+  };
+
+  const far = CONFIG.boss.angler.lureRange + 12;
+  check('holding station with the seal to its right, it is upright',
+    settle(far) < 1, `dorsal ${settle(far).toFixed(1)} degrees off vertical`);
+  // THE ONE THAT SHIPPED BROKEN. Same body, same stage, seal on the other side.
+  check('...and with the seal to its LEFT, it is still upright',
+    settle(-far) < 1, `dorsal ${settle(-far).toFixed(1)} degrees off vertical`);
+
+  // --- AND THROUGH A WHOLE FIGHT -------------------------------------------
+  // The settled poses above are the easy half: both are static, and a body that
+  // only inverts DURING a turn passes them. So the seal is walked all the way
+  // round the animal, through every bearing and every attack range, and the
+  // dorsal is sampled on every frame.
+  releaseAngler();
+  boss.mesh.position.set(0, floorLine(), 0);
+  boss.mesh.rotation.set(0, 0, 0);
+  boss.visual.rotation.set(0, 0, 0);
+  delete boss.visual.userData.__face;
+  delete boss.__facePitch;
+  boss.vx = 0; boss.vy = 0; boss.hp = boss.maxHp;
+  boss.deep = false; boss.entering = false;
+  attachAngler(scene, boss);
+  const hooks = { onPlayerHit: () => {}, onPlayerSnare: () => {} };
+  const p = { x: 0, y: floorLine() };
+  let worst = 0; let worstAt = '';
+  let prev = null; let worstJump = 0; let handoff = 0; let lastStage = null;
+  const jumps = [];
+  for (let i = 0; i < 60 * 90; i++) {
+    const t = i / 60;
+    // Slow enough that every bearing is actually visited, and wide enough to
+    // cross all three attack ranges.
+    p.x = Math.cos(t * 0.35) * 26;
+    p.y = floorLine() + Math.sin(t * 0.21) * 10;
+    updateBossAngler(DT, scene, p, hooks);
+    step(boss, DT);
+    const now = tilt();
+    const st = anglerStage().stage;
+    if (now > worst) { worst = now; worstAt = st; }
+    if (prev != null) {
+      const jump = Math.abs(now - prev);
+      jumps.push(jump);
+      if (jump > worstJump) worstJump = jump;
+      if (lastStage !== st) { handoff = Math.max(handoff, jump); lastStage = st; }
+    }
+    prev = now;
+  }
+  // 90 DEGREES IS THE CEILING AND IT IS NOT A FUDGE. A turnaround is a half
+  // roll about the animal's own forward axis (systems/facing.js), so halfway
+  // through it the back genuinely does point at the camera — that is every
+  // creature in this game turning round, and it is 90 degrees exactly. Past it
+  // the belly has started to come up, which nothing should ever do.
+  check('across a whole fight the back never passes the camera',
+    worst <= 91, `worst ${worst.toFixed(1)} degrees, in the ${worstAt}`);
+  check('...which is the half roll every creature does, not an inversion',
+    worst > 45, `worst ${worst.toFixed(1)} degrees — under this it is not rolling at all`);
+
+  // --- AND IT DOES NOT SNAP -------------------------------------------------
+  // A snap is a DISCONTINUITY, not a fast turn, so the two have to be told
+  // apart: the wind-up turns at 2.4 rad/s by design and the frames inside it
+  // are legitimately quick. What must not happen is one frame moving further
+  // than a full turn's worth.
+  jumps.sort((a, b) => a - b);
+  const p99 = jumps[Math.floor(jumps.length * 0.99)];
+  // THE CEILING IS DERIVED, not picked. The dorsal's tilt is a function of two
+  // eased angles, so its rate cannot exceed the sum of theirs:
+  //
+  //   the pitch  is rate-limited outright at `turnRate` — 1x
+  //   the roll   covers PI in PI/turnRate seconds, so its AVERAGE rate is
+  //              `turnRate`, and CONFIG.facing.curve is an inOutCubic whose
+  //              slope peaks at 3x its own average through the middle — 3x
+  //
+  // 4 x turnRate x dt, at the fastest rate the fight ever asks for. Anything
+  // over it is a frame that moved further than a turn could carry it, which is
+  // the definition of a snap and the only thing being asked here — the wind-up
+  // legitimately turns at 2.4 rad/s and its frames are quick.
+  const fastest = CONFIG.boss.angler.windupTurnRate ?? 2.4;
+  const ceiling = 4 * fastest * DT * 180 / Math.PI;
+  check('no frame jumps further than the fastest turn could carry it',
+    worstJump <= ceiling, `worst ${worstJump.toFixed(2)} degrees against a ${ceiling.toFixed(2)} ceiling`);
+  check('...and the typical frame is nothing at all', p99 < ceiling * 0.6,
+    `median ${jumps[Math.floor(jumps.length / 2)].toFixed(3)}, p99 ${p99.toFixed(2)} degrees`);
+  // THE HANDOFF FRAMES SPECIFICALLY, and what is asked of them is that they are
+  // not OUTLIERS. Every stage change is a moment the facing may change owner —
+  // into and out of the lunge, where `faceMotion` takes the wheel back — and an
+  // owner that re-seeds rather than continues produces a jolt on one frame in a
+  // hundred, which a median or a p99 over the whole fight would never show.
+  check('changing stage does not jolt the body', handoff <= ceiling,
+    `worst ${handoff.toFixed(2)} degrees on a handoff frame, against ${ceiling.toFixed(2)}`);
+
+  releaseAngler();
+  check('release hands the facing back to entities/enemies.js',
+    boss.faceLocked === false, String(boss.faceLocked));
+  resetBeams(scene);
+}
+
+// ---------------------------------------------------------------------------
+section('THE HEAD-LOOK STILL SOLVES ONCE THE BODY IS ROLLED');
+// ---------------------------------------------------------------------------
+// The roll that keeps the animal upright is a rotation of the object the look
+// chain hangs off. It solves in world space, so it should be untouched — but
+// "should be" is how a rig ends up aiming its head at the mirror image of its
+// target, and the symptom is a boss that tracks you perfectly on one side of
+// the arena and stares away from you on the other.
+{
+  const { createHeadLook } = await import('../path/src/systems/headLook.js');
+  const look = createHeadLook(boss.visual);
+  const bone = boss.visual.getObjectByName('Head_Bone_00');
+  const tip = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const fwd = new THREE.Vector3();
+  const want = new THREE.Vector3();
+  // Degrees between where the head points and where the target is, flattened
+  // onto the arena plane.
+  const aimErr = (target) => {
+    boss.mesh.updateMatrixWorld(true);
+    bone.getWorldPosition(tip);
+    bone.getWorldQuaternion(q);
+    fwd.set(1, 0, 0).applyQuaternion(q).setZ(0).normalize(); // tipAxis '+X'
+    want.copy(target).sub(tip).setZ(0).normalize();
+    return Math.acos(THREE.MathUtils.clamp(fwd.dot(want), -1, 1)) * 180 / Math.PI;
+  };
+
+  const results = [];
+  for (const [label, roll, side] of [['unrolled', 0, 1], ['rolled', Math.PI, -1]]) {
+    look.reset?.();
+    bone.quaternion.set(0, 0, 0, 1);
+    boss.mesh.position.set(0, floorLine(), 0);
+    boss.mesh.rotation.set(0, 0, side > 0 ? -Math.PI / 2 : Math.PI / 2);
+    boss.visual.rotation.set(0, roll, 0);
+    const target = new THREE.Vector3(side * 30, floorLine() + 14, 0);
+    const before = aimErr(target);
+    for (let i = 0; i < 180; i++) look.update(DT, target, { boss: true });
+    results.push({ label, before, after: aimErr(target) });
+  }
+  for (const r of results) {
+    check(`${r.label}, the head turns toward the target`, r.after < r.before - 1,
+      `${r.before.toFixed(1)} -> ${r.after.toFixed(1)} degrees off`);
+  }
+  // ...AND BY THE SAME AMOUNT. A mirror that broke the solve would still
+  // "improve" if it happened to land nearer by luck; what says it is unaffected
+  // is that both sides correct identically.
+  check('...and the roll changes nothing about how well it does',
+    Math.abs((results[0].before - results[0].after) - (results[1].before - results[1].after)) < 0.5,
+    `${(results[0].before - results[0].after).toFixed(1)} vs `
+    + `${(results[1].before - results[1].after).toFixed(1)} degrees of correction`);
 }
 
 console.log(failures ? `\n${failures} FAILED\n` : '\nall good\n');

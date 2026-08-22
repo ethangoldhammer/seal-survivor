@@ -1,5 +1,5 @@
 import { CONFIG } from '../config.js';
-import { chainLevel } from './strike.js';
+import { liveChain } from './strike.js';
 
 // Called at the moment of a kill, BEFORE the enemy is removed from the
 // `enemies` array — so a school-wipe can be detected by checking whether any
@@ -22,16 +22,29 @@ export function computeKillPoints(e, allEnemies, comboMultiplier = 1) {
 // Reads the strike system's current chain state — a chain in progress
 // multiplies points on top of whatever the strike system already does to
 // damage, so a big combo run is worth disproportionately more.
-// Reads the PIP depth rather than the bar counter, like every other chain
-// multiplier does now — see chainLevel() in systems/strike.js. The score
-// climbs with each mouthful instead of stepping once a bar, and
-// `comboMultiplierPerChain` still means exactly what it meant per link,
-// because the level it multiplies is fractional.
+//
+// READS THE NUMBER ON THE BANNER — `liveChain()`, whole links — because that
+// number is spelled `x10` above the seal's head and there is no reading of
+// that which is not a promise about the score. It used to read the fractional
+// PIP depth instead, which is the same quantity divided by the mouthfuls in a
+// bar: a chain announcing x10 paid x1.5, and the first five links on screen
+// paid nothing at all. `comboMultiplierPerChain` still means per link; it is
+// the same unit, counted at the grain the player is shown.
+//
+// The damage multiplier moved with it (chainDamageMul in systems/strike.js).
+// The XP multiplier deliberately did NOT — see chainXpMul.
 export function comboMultiplierFor(strikeState) {
   if (!strikeState || strikeState.chainTimer <= 0) return 1;
-  const level = chainLevel();
+  const level = liveChain();
   const offset = CONFIG.strike.chainLevelOffset ?? 1;
   if (level <= offset) return 1;
+  // UNCAPPED, and the only one of the four that is. The other three multiply
+  // something the player then acts with — damage spent on a creature, speed
+  // they have to steer at, xp that compounds into every rung of the ladder —
+  // so each has a ceiling to keep the run playable. Score multiplies a number
+  // on a scoreboard. Nothing downstream of it has to survive being large, and
+  // a cap there does the one thing a scoreboard must never do: it makes the
+  // best chain anyone has ever held score the same as a merely good one.
   const extra = (level - offset) * CONFIG.points.comboMultiplierPerChain;
-  return 1 + Math.min(CONFIG.points.comboMaxMultiplier - 1, extra);
+  return 1 + extra;
 }

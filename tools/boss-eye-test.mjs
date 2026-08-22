@@ -257,5 +257,206 @@ section('THE EYES THEMSELVES');
   resetBossEyes();
 }
 
+// ---------------------------------------------------------------------------
+section('THE EYES ARE ACTUALLY VISIBLE');
+// ---------------------------------------------------------------------------
+// THE BUG THIS EXISTS TO CATCH SHIPPED, and it was invisible for the same
+// reason every bug in this file is: nothing threw.
+//
+// systems/bossEyes.js published its sockets as `eye0`/`eye1` — positional, on
+// the reasoning that a one-node rig has no left or right. updateEyeLights gates
+// on `SOCKETS.every(...)`, which asks for `eyeL` and `eyeR` BY NAME. It found
+// neither, so `has` was false, so the lit target was 0, so both beads were held
+// at `visible = false` for the entire run — on every boss in the game, for as
+// long as boss eyes have existed.
+//
+// The section above passed the whole time. `pair.hurt` and `pair.charge` are
+// clocks run BEFORE the visibility gate, deliberately (a flash left mid-decay
+// while the eyes were hidden must not still be burning when they come back), so
+// a harness that measured the flash measured a number that was working
+// perfectly on a pair of invisible meshes.
+//
+// So this asks the only question that could have caught it: after a second of
+// being alive and in front of the player, is there anything on screen.
+{
+  const { Group, Object3D, Scene, Vector3 } = await import('three');
+  const { updateBossEyes, resetBossEyes, bossEyePairs } =
+    await import('../path/src/systems/bossEyes.js');
+  const { EYE_SOCKETS, eyeLightState } = await import('../path/src/systems/eyeLights.js');
+
+  function body(type, names) {
+    const visual = new Group();
+    for (const n of names) {
+      const o = new Object3D();
+      o.name = n;
+      // Off the origin, or the socket normal has no side to be on and the two
+      // eyes fade together — and, more to the point here, the tracker has no
+      // offset direction to tip and declines to move anything.
+      o.position.set(0, 0, names.indexOf(n) === 0 ? -1 : 1);
+      visual.add(o);
+    }
+    return { type, visual, mesh: visual, hp: 100, maxHp: 100, isBoss: true, flash: 0 };
+  }
+
+  const scene = new Scene();
+  const sockets = CONFIG.boss.perkFx.eyeSockets;
+  const names = (id) => (sockets[id] ?? []).map((e) => (typeof e === 'string' ? e : e.bone));
+  const angler = body('bossAnglerfish', names('bossAnglerfish'));
+  const player = new Vector3(12, 0, 0);
+  for (let i = 0; i < 60; i++) updateBossEyes(1 / 60, scene, [angler], player);
+
+  const entry = bossEyePairs().get(angler);
+  check('the boss got a pair at all', !!entry);
+  check('...published under the names updateEyeLights actually requires',
+    EYE_SOCKETS.every((n) => !!entry?.rig?.sockets?.[n]),
+    Object.keys(entry?.rig?.sockets ?? {}).join(', '));
+  const st = eyeLightState(entry.pair);
+  check('...and it is LIT after a second in front of the player', st.lit > 0.9,
+    `lit ${st.lit.toFixed(3)}`);
+  // AT LEAST ONE BEAD ON SCREEN, not both, and the difference is the near/far
+  // fade doing its job. The eyes are on the sides of a head seen from the side,
+  // so one of them is always pointing away from the lens and is correctly faded
+  // out — asserting on both would be asserting that the fade is broken.
+  check('...with a bead actually on screen',
+    entry.pair.eyes.some((e) => e.bead.visible && e.bead.material.opacity > 0),
+    entry.pair.eyes.map((e) => `${e.name} visible=${e.bead.visible} op=${e.bead.material.opacity.toFixed(2)}`).join(' | '));
+
+  // A ONE-NODE RIG still has to fill both keys — the megalodon's file names a
+  // single midline `eye`, and "both eyes share it" has to mean two beads at one
+  // point rather than a pair that never lights.
+  const shark = body('bossShark', names('bossShark'));
+  for (let i = 0; i < 60; i++) updateBossEyes(1 / 60, scene, [angler, shark], player);
+  const sEntry = bossEyePairs().get(shark);
+  check('a one-node rig lights too', eyeLightState(sEntry.pair).lit > 0.9,
+    `lit ${eyeLightState(sEntry.pair).lit.toFixed(3)} on ${sEntry.sockets.length} socket(s)`);
+  check('...and it is aimed once, not once per key', sEntry.tracked.length === 1,
+    `${sEntry.tracked.length} tracked`);
+
+  // --- THE TELL -------------------------------------------------------------
+  // `e.telegraph` is the channel a boss with no PERK uses to say it is winding
+  // something up — the anglerfish's ambush and its lure are the animal rather
+  // than a rolled power, so the perk check in bossEyes cannot see them and the
+  // eyes stayed dark through every telegraphed moment of that fight.
+  check('a boss saying nothing has cold eyes', eyeLightState(entry.pair).charge < 0.05,
+    `charge ${eyeLightState(entry.pair).charge.toFixed(3)}`);
+  angler.telegraph = 1;
+  for (let i = 0; i < 60; i++) updateBossEyes(1 / 60, scene, [angler], player);
+  check('a boss writing e.telegraph lights up', eyeLightState(entry.pair).charge > 0.8,
+    `charge ${eyeLightState(entry.pair).charge.toFixed(3)}`);
+  angler.telegraph = 0;
+  for (let i = 0; i < 60; i++) updateBossEyes(1 / 60, scene, [angler], player);
+  check('...and goes cold again when the tell ends',
+    eyeLightState(entry.pair).charge < 0.05,
+    `charge ${eyeLightState(entry.pair).charge.toFixed(3)}`);
+
+  resetBossEyes();
+}
+
+// ---------------------------------------------------------------------------
+section('THE EYES FOLLOW THE SEAL');
+// ---------------------------------------------------------------------------
+// The bead is the pupil — see the note in systems/bossEyes.js. What is measured
+// is therefore where the bead ENDS UP IN WORLD SPACE, not what angle a bone
+// holds: a rotation applied in the wrong space turns the eye by exactly the
+// right amount in the wrong direction, which no assertion on the angle can see.
+{
+  const { Group, Object3D, Scene, Vector3 } = await import('three');
+  const { updateBossEyes, resetBossEyes, bossEyePairs } =
+    await import('../path/src/systems/bossEyes.js');
+
+  // A rig shaped like the real one: two bones on the midline, each with its
+  // socket offset OUT ALONG THE VIEW AXIS. That last part is the whole reason
+  // the tracker cannot rotate about world Z — on this game's side-on camera the
+  // eyes point at the lens, and a rotation about Z is a rotation about the
+  // offset itself, which moves the bead not one pixel.
+  function rig() {
+    const visual = new Group();
+    for (const n of ['Leye_Bone_00', 'Reye_Bone_00']) {
+      const o = new Object3D();
+      o.name = n;
+      o.position.set(0, 0, n[0] === 'L' ? -0.6 : 0.6);
+      visual.add(o);
+    }
+    return { type: 'bossAnglerfish', visual, mesh: visual, hp: 100, maxHp: 100, isBoss: true, flash: 0 };
+  }
+  const scene = new Scene();
+  const e = rig();
+  const beadAt = (entry, i) => {
+    const v = new Vector3();
+    entry.pair.eyes[i].bead.getWorldPosition(v);
+    return v;
+  };
+
+  const settle = (px, py, frames = 240) => {
+    const p = new Vector3(px, py, 0);
+    for (let i = 0; i < frames; i++) updateBossEyes(1 / 60, scene, [e], p);
+    return bossEyePairs().get(e);
+  };
+
+  const right = settle(30, 0);
+  const atRight = [beadAt(right, 0), beadAt(right, 1)];
+  const left = settle(-30, 0);
+  const atLeft = [beadAt(left, 0), beadAt(left, 1)];
+
+  check('the bead moves when the seal crosses the arena',
+    atRight[0].distanceTo(atLeft[0]) > 0.02,
+    `${atRight[0].distanceTo(atLeft[0]).toFixed(4)} world units of travel`);
+  check('...and it moves TOWARD the seal, not away from it',
+    atRight[0].x > atLeft[0].x && atRight[1].x > atLeft[1].x,
+    `x ${atLeft[0].x.toFixed(3)} -> ${atRight[0].x.toFixed(3)}`);
+  // BOTH EYES, same direction. Getting the parent-space conversion wrong sends
+  // the two opposite ways, because their offsets point opposite ways — an
+  // animal looking at you with one eye and away with the other.
+  check('...both of them, the same way',
+    Math.sign(atRight[0].x - atLeft[0].x) === Math.sign(atRight[1].x - atLeft[1].x),
+    `L ${(atRight[0].x - atLeft[0].x).toFixed(3)}, R ${(atRight[1].x - atLeft[1].x).toFixed(3)}`);
+
+  const up = settle(0, 30);
+  const atUp = beadAt(up, 0);
+  const down = settle(0, -30);
+  check('...vertically too', atUp.y > beadAt(down, 0).y,
+    `y ${beadAt(down, 0).y.toFixed(3)} -> ${atUp.y.toFixed(3)}`);
+
+  // IT DOES NOT RATCHET. The mixer does not necessarily rewrite a bone every
+  // frame — a clip holding a key skips it — so a delta composed onto whatever
+  // is on the bone compounds its own last write, and the eye winds round until
+  // it leaves the head. Nothing here writes the bones at all, which is the
+  // worst case: every frame is a frame the animation skipped.
+  // SETTLED FIRST, and for longer than it takes. The follow is an exponential
+  // ease, so a short settle leaves a few percent of the last move still running
+  // and the creep that produces is indistinguishable from the ratchet being
+  // looked for — which is how this check first "found" a 0.03-unit wind that
+  // was nothing but an unconverged lerp.
+  const held = settle(30, 0, 600);
+  const a = beadAt(held, 0).clone();
+  for (let i = 0; i < 600; i++) updateBossEyes(1 / 60, scene, [e], new Vector3(30, 0, 0));
+  check('ten seconds of holding still does not wind the eye round',
+    beadAt(held, 0).distanceTo(a) < 0.001,
+    `drifted ${beadAt(held, 0).distanceTo(a).toFixed(6)} in 10s`);
+
+  // IT IS A ROTATION, so the bead's distance from its own bone cannot change.
+  // This is the check that a swivel has not turned into a translation — which
+  // is what a delta composed in the wrong space produces once the bone's own
+  // pose is anything but identity, and it looks like an eye slowly leaving the
+  // head rather than like a maths error.
+  const boneW = new Vector3();
+  e.visual.getObjectByName('Leye_Bone_00').getWorldPosition(boneW);
+  const arm = beadAt(held, 0).distanceTo(boneW);
+  const restArm = new Vector3().fromArray(
+    (CONFIG.boss.perkFx.eyeSockets.bossAnglerfish[0].offset ?? [0, 0, 0]),
+  ).length();
+  check('the bead swings on a fixed arm — it turns, it does not slide',
+    Math.abs(arm - restArm) < 1e-4, `${arm.toFixed(5)} against a socket arm of ${restArm.toFixed(5)}`);
+
+  // ...and the arc is bounded by the swivel it was given. r * sin(theta) each
+  // way, so the full left-to-right sweep is 2 r sin(theta) — past that the bead
+  // has left the eyeball and reads as a firefly parked on the animal's cheek.
+  const swing = atRight[0].distanceTo(atLeft[0]);
+  const bound = 2 * restArm * Math.sin(CONFIG.boss.eyes.track.maxSwivel);
+  check('...no further than the configured swivel allows',
+    swing <= bound * 1.02, `${swing.toFixed(4)} against a ${bound.toFixed(4)} ceiling`);
+  resetBossEyes();
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`);
 process.exit(failures === 0 ? 0 : 1);

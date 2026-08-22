@@ -298,7 +298,10 @@ function seat(rec) {
   object.position.y = 0;
   object.updateMatrixWorld(true);
   const baseOffset = new THREE.Box3().setFromObject(object).min.y;
-  rec.seatY = seabedTopY() - baseOffset - (cfg().sink ?? 0.05);
+  // `bedDepth`, not `sink` — the old name is pinned at 0.05 in every saved
+  // tuning snapshot, so reading it back would hand that number straight over
+  // the new default. See the note in config.js.
+  rec.seatY = seabedTopY() - baseOffset - (cfg().bedDepth ?? 0.22);
   object.position.y = rec.seatY;
   // Where the top of the stone ends up, banked HERE because this is the one
   // place that has already paid for the world matrix and a bounding box. The
@@ -666,6 +669,56 @@ export function nearestGrave(x, radius) {
     baseY: best.baseY ?? best.object.position.y,
     distance: bestD,
   };
+}
+
+/**
+ * IS THERE A STONE ON THE BED HERE — and how far off the middle of it is `x`?
+ *
+ * The crabs' question, asked every frame by every crawler
+ * (entities/enemies.js). Two things make it different from nearestGrave above,
+ * which is the label's:
+ *
+ *   IT COUNTS A STONE FROM THE FRAME IT LANDS, not from the frame it has
+ *   finished being carved. The whole point is that the pile-on ends and the
+ *   crabs clear off while the inscription is being cut — waiting for 'done'
+ *   would mean waiting out the etch and the glance, which is the exact stretch
+ *   that had a crab standing in it.
+ *
+ *   IT MEASURES ON X ALONE. A crab lives on the floor; there is no vertical
+ *   half to this question, and a radial test on a floor-bound creature only
+ *   ever measures the chord it walks through.
+ *
+ * @returns the signed x offset from the nearest such stone (negative = the
+ *          asker is to its left), or null if there is none within `radius`.
+ */
+export function graveKeepOut(x, radius) {
+  if (!(radius > 0)) return null;
+  let best = null;
+  let bestD = radius;
+  for (const rec of graves) {
+    if (!rec.object || rec.phase === 'pending' || rec.phase === 'falling') continue;
+    const off = x - rec.object.position.x;
+    const d = Math.abs(off);
+    if (d > bestD) continue;
+    bestD = d;
+    best = off;
+  }
+  return best;
+}
+
+/**
+ * Has the stone for the death currently being watched reached the seabed?
+ *
+ * Read by the crabs' pile-on, which is the one behaviour keyed to a death that
+ * is still in progress: it runs from the moment the body settles until this
+ * turns true. The NEWEST grave, because that is the one this death made — an
+ * older stone standing across the arena says nothing about whether the body
+ * under this heap has been marked yet.
+ */
+export function graveHasLanded() {
+  const rec = graves[graves.length - 1];
+  if (!rec || !rec.object) return false;
+  return rec.phase !== 'pending' && rec.phase !== 'falling';
 }
 
 /**

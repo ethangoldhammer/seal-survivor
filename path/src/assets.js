@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
+import { KTX2_MODELS } from './ktx2Models.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { CONFIG, registerSkinWearers } from './config.js';
 import { applyAssetTable } from './assetTable.js';
@@ -3437,7 +3439,27 @@ export const ASSETS = {
   enemyBossAnglerfish: {
     model: '/models/anglerfish.glb',
     fit: 3.4,
-    pivot: 0.15,
+    // TURNS ABOUT THE FRONT OF ITS HEAD, not the 0.15 every other swimmer here
+    // uses. `pivot` is measured from the nose, so 0.04 puts the origin a third
+    // of a world unit back from the snout instead of 1.3.
+    //
+    // It is the one creature in the game the difference is visible on. Every
+    // other swimmer turns while travelling, so the body is sweeping through an
+    // arc anyway and where exactly it rotates about is lost in the motion. This
+    // one holds station and swivels on the spot to keep the seal in front of
+    // it — and at 0.15 that read as the whole animal sliding sideways, because
+    // a body eight units long rotating about a point 1.3 units back swings its
+    // tail through most of a body length. Pivoting at the snout makes the same
+    // turn read as an anchored head with the body trailing round behind it,
+    // which is what an ambush predator holding a spot actually looks like.
+    //
+    // Not 0: the pivot moves along the travel axis only (the other two keep the
+    // centre of mass), so this is horizontal and does not touch how the body
+    // sits on the seabed — but a rotation about the literal tip of the jaw puts
+    // the whole animal outside its own origin, and everything that measures a
+    // creature against `radius` starts describing a body that is entirely on
+    // one side of the point it is measuring from.
+    pivot: 0.04,
     forward: '+Z', up: '+Y',
     animations: {
       idle: 'trap',
@@ -3445,6 +3467,39 @@ export const ASSETS = {
       boost: 'swim2',
       bark: 'swim_start',
       bite: 'bite',
+    },
+    // THE HEAD-LOOK. The one boss in the roster that spends most of the fight at
+    // a dead stop, so this matters more here than on any of the chasers: a
+    // shark's body is always swinging through a turn and the head only has to
+    // lead it, while this animal holds station on the seabed and the head is
+    // the ONLY thing that can say it has seen you.
+    //
+    // ONE BONE, and it is the whole head. `Head_Bone_00` hangs off Center_Dummy
+    // under the root, with the spine and tail on the other branch — measured by
+    // skinning (rotate it and see where the vertices actually go, since bone
+    // names and hierarchy both lie), it drives 70.7% of the sampled body
+    // against Spine_Bone_00's 13.2%. That sounds like far too much until you
+    // look at the animal: a footballfish IS mostly head, and 70% of it is the
+    // skull, the jaw, the eyes and the illicium. Rotating it is the head
+    // turning. There is nothing smaller to use — the next bones down
+    // (Mouth_Bone_01 -> Mouth_Bone_00 -> UpperJaw_Bone_01) are the GAPE, which
+    // the `trap` clip is already cranking, and a look layered onto those would
+    // aim the jaw rather than the head and fight the tell it was helping.
+    //
+    // `maxBend` (CONFIG.enemyLook, 0.18 rad) is what keeps that honest: at ten
+    // degrees the snout travels ~0.8 world units on an 8.5-unit body. A lean,
+    // as it is on every other rig here.
+    //
+    // tipAxis '+X', measured like the hammerhead's: local +X on `Head_Bone_00`
+    // maps to world (0, 1, 0), dot 1.000 with the model's forward, against
+    // 0.000 for both other axes. tipLength 26.29 is RAW FILE UNITS — the bone's
+    // world scale is 0.1369, and 26.29 x 0.1369 is the 3.60 world units from
+    // the bone to the snout. It is a big number because this file's units are
+    // big (its bones sit at 8.93, 16.00); the hammerhead's 1.6 is the same
+    // measurement in a smaller file. Head_Bone_00 has no BONE child to take a
+    // bind length from, so this is measured to the front of the drawn body.
+    lookRig: {
+      head: { bones: ['Head_Bone_00'], tipAxis: '+X', tipLength: 26.29 },
     },
     shape: 'icosahedron', radius: 0.55, color: 0x2b3a44, unlit: true,
   },
@@ -3786,18 +3841,77 @@ const fbxManager = new THREE.LoadingManager();
   }
 }
 
+// ============================================================================
+// GPU-COMPRESSED TEXTURES. See the header of tools/ktx2-models.mjs for the
+// measurement this is answering: the roster's maps are 27MB on disk and 405MB
+// in VRAM, and only the second number is a problem. A .ktx2 stays compressed on
+// the GPU — ASTC 4x4 on any iPhone, 8 bits a texel against RGBA8's 32.
+//
+// ONE LOADER FOR THE WHOLE APP, even though loaderFor() mints a fresh
+// GLTFLoader per call. KTX2Loader owns a pool of transcoder workers and a WASM
+// module; one per model would be 31 copies of both, and the pool would never be
+// reused across the models that most want it.
+//
+// detectSupport() NEEDS THE RENDERER and there is nothing sensible to guess:
+// which compressed format to transcode INTO is a property of the GL context's
+// extensions, and without the call KTX2Loader throws on the first .ktx2 rather
+// than picking a default. So this stays null until main.js hands the renderer
+// over, and until then resolveModelUrl declines to use the compressed twin —
+// which is also what keeps every Node harness on the original files.
+let ktx2Loader = null;
+
+/** Called once from main.js, after the renderer exists and before preloadAssets. */
+export function initModelTranscoder(renderer) {
+  if (ktx2Loader || !renderer) return;
+  try {
+    ktx2Loader = new KTX2Loader()
+      .setTranscoderPath('/basis/')
+      .detectSupport(renderer);
+  } catch (err) {
+    // A context without any compressed-texture extension at all, or a missing
+    // transcoder. Neither is fatal — every model still exists uncompressed.
+    ktx2Loader = null;
+    console.warn('[assets] no KTX2 support, loading uncompressed models —', err?.message ?? err);
+  }
+}
+
+/**
+ * The URL to actually fetch for a model. The compressed twin when there is one
+ * and the GPU can take it, the original otherwise.
+ *
+ * Exported for the harnesses, which assert on which of the two a given
+ * environment resolves to — Node has no renderer, so it must always be the
+ * original, and a test that quietly started reading public/models-ktx2 would be
+ * testing files no Node loader can parse.
+ */
+export function resolveModelUrl(url) {
+  if (!ktx2Loader || typeof url !== 'string') return url;
+  const name = url.startsWith('/models/') ? url.slice('/models/'.length) : null;
+  return name && KTX2_MODELS.has(name) ? `/models-ktx2/${name}` : url;
+}
+
 // Pick a loader from the file extension so the registry stays format-agnostic.
 // .glb/.gltf resolve to `gltf.scene`; .fbx returns the Object3D directly.
+// A GLTFLoader with the shared transcoder attached, where there is one. Every
+// .glb goes through this, not only the compressed ones — attaching the loader
+// costs nothing on a file with no KTX2 in it, and the alternative is deciding
+// per URL whether this particular parse might need it.
+function gltfLoader() {
+  const loader = new GLTFLoader();
+  if (ktx2Loader) loader.setKTX2Loader(ktx2Loader);
+  return loader;
+}
+
 function loaderFor(url) {
   if (url.startsWith('data:model/gltf-binary') || url.startsWith('data:model/gltf+json')) {
-    return { kind: 'gltf', loader: new GLTFLoader(), unwrap: (r) => r.scene };
+    return { kind: 'gltf', loader: gltfLoader(), unwrap: (r) => r.scene };
   }
   if (url.startsWith('data:application/octet-stream')) {
     return { kind: 'fbx', loader: new FBXLoader(fbxManager), unwrap: (r) => r };
   }
   const ext = url.split('?')[0].split('.').pop().toLowerCase();
   if (ext === 'fbx') return { kind: 'fbx', loader: new FBXLoader(fbxManager), unwrap: (r) => r };
-  if (ext === 'glb' || ext === 'gltf') return { kind: 'gltf', loader: new GLTFLoader(), unwrap: (r) => r.scene };
+  if (ext === 'glb' || ext === 'gltf') return { kind: 'gltf', loader: gltfLoader(), unwrap: (r) => r.scene };
   return null;
 }
 
@@ -3989,13 +4103,18 @@ export async function preloadAssets(onProgress) {
     }),
     ...entries.map(async ([key, def]) => {
       try {
-        const picked = loaderFor(def.model);
-        if (!picked) throw new Error(`no loader for ${def.model}`);
+        // Resolved ONCE and used for both the loader choice and the cache key.
+        // Picking the loader off `def.model` and then fetching the resolved URL
+        // would be harmless today (both are .glb) but it is the same-file-two-
+        // names bug that loadSharedModel exists to prevent, waiting to happen.
+        const url = resolveModelUrl(def.model);
+        const picked = loaderFor(url);
+        if (!picked) throw new Error(`no loader for ${url}`);
         // Parsed at most once per URL however many entries name it; this is
         // always our own instance of it. Clips are shared as-is: an
         // AnimationClip is inert data that the per-entry AnimationMixer reads
         // and never writes, and buildSubclips already clones before slicing.
-        const parsed = await loadSharedModel(picked, def.model);
+        const parsed = await loadSharedModel(picked, url);
         const source = instantiateParsedModel(parsed.source);
         const clips = parsed.animations;
         // Which way up a loaded-by-hand texture goes is a per-FORMAT decision,

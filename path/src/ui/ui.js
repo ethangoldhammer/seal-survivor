@@ -3,13 +3,14 @@ import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { wornEdgeMask } from './wornEdge.js';
-import { mountCardFlip, releaseCardFlip, cardFlipMoving } from './cardFlip.js';
 import { drawUpgrades } from '../upgradeTable.js';
 import { expandDesc, measure, phraseAll, sentenceCase } from '../upgradeText.js';
 import { rollElementFor, elementCardName, elementCardDesc } from '../systems/elements.js';
 import { rollRarity, rarityById, rarityRank } from '../systems/rarity.js';
 import quipsCsv from '../quips.csv?raw';
+import tipsCsv from '../tips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
+import { parseTipCsv } from '../tipTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { feedMouse, menuInput, resetMenuInput } from '../input.js';
 // The splash and the score card's turn are pure motion with no way to opt out
@@ -34,12 +35,13 @@ import { pipCount } from '../systems/strike.js';
 // two things advancing it would run the drift at double speed.
 import { advanceMeterNoise, meterNoiseFrame, resetMeterNoise } from '../systems/meterNoise.js';
 import { mountRiveSplash } from './riveSplash.js';
-import { tipJarLink } from './tipJar.js';
+import { tipJarLink, tipSheetOpen, closeTipSheet } from './tipJar.js';
 import { titlePreviewRequested } from '../systems/titleSeal.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
 import { buildPrintPaper, initSnapshotPrints, resyncPrintCards } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
+import { TYPOGRAPHY_EVENT } from './typography.js';
 import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform } from './upgradeHive.js';
 import {
   BOARD_SIZE,
@@ -84,6 +86,8 @@ const el = {};
 // page is up (a dev-server edit reloads it), and parsing on the frame the
 // player dies is work for nothing.
 const QUIPS = parseQuipCsv(quipsCsv);
+// What a tip buys, for the jar's own panel — see tipTable.js.
+const TIP_TIERS = parseTipCsv(tipsCsv);
 
 // Menus answer back. Every clickable thing in the UI goes through here rather
 // than binding its own sounds, so a control added later is silent only if
@@ -902,7 +906,11 @@ const STYLES = `
      value here is only what a bar that has not been updated yet falls back to. The
      max-width is the guard that keeps a hand-edited hp number from producing a
      bar wider than the window. */
-  .sv-bossbar { z-index: 3; position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
+  /* The safe-area inset is ADDED to the tuned top, not swapped in for it — see
+     the note on the same calc in ui/bossBarRive.js, which has to agree with
+     this one or the coded fallback and the Rive bar land in two places. It is
+     zero on any screen without a notch. */
+  .sv-bossbar { z-index: 3; position: absolute; top: calc(26px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
     width: min(560px, 62vw); max-width: 92vw; pointer-events: none; text-align: center;
     transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
   .sv-boss-name { font-size: 13px; font-weight: 700; letter-spacing: 0.14em;
@@ -939,23 +947,45 @@ const STYLES = `
      (systems/bossShot.js keeps them, ui/snapshotPrint.js builds the paper).
      The prints overlap by a third, so eight of them still fit the card on a
      phone; picking one lifts it square out of the fan. */
-  .sv-trophy { margin: 4px 0 12px; display: flex; flex-direction: column; gap: 9px; align-items: center; }
-  .sv-fan { display: flex; justify-content: center; align-items: center; flex-wrap: nowrap;
-    padding: 14px 0 10px; max-width: 100%; }
-  .sv-fan-slot { position: relative; background: none; border: 0; padding: 0; margin: 0;
-    cursor: pointer; pointer-events: all; transform-origin: 50% 60%;
-    transform: rotate(var(--rot, 0deg));
-    filter: drop-shadow(0 8px 20px rgba(0,0,0,0.5));
+  /* --- THE ROLL, AS A RAIL ------------------------------------------------
+     A fan is a centrepiece and this is a row of things you can open. The fan
+     was 190px of paper in the middle of the card with four full-size buttons
+     under it, which is the single largest block on the old front face and the
+     reason everything else was below the fold. As a strip it is a band across
+     the top of the readout: the prints are still the real thing, still open to
+     the light on a tap, and they cost one row instead of a third of the card.
+
+     A HORIZONTAL SCROLL AND NOT A WRAP. Eight prints on a phone is a rail you
+     push, not four rows of paper; and the strip is the only thing on this card
+     allowed to scroll sideways. */
+  .sv-trophy { flex: none; display: flex; flex-direction: column; gap: 6px;
+    padding: 12px 30px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .sv-strip-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .sv-strip-label { flex: none; font-size: 9px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: rgba(232,236,243,0.35); white-space: nowrap; }
+  /* The share status is EMPTY except for the few seconds after a press, and a
+     row reserved for it under the rail is a row the readout does not get. It
+     sits on the heading line instead, after the label, where its own
+     min-height is already covered by the buttons beside it. */
+  .sv-trophy .sv-status { margin-bottom: 0; margin-left: 4px; min-height: 0;
+    text-align: left; }
+  .sv-fan { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+    min-width: 0; overflow-x: auto; overscroll-behavior-x: contain;
+    padding: 6px 2px; }
+  /* NO TILT AND NO OVERLAP. Both were the fan's way of saying "there are
+     several of these" in the width of one; a rail says it by being a rail, and
+     a rotated print in a row of upright ones reads as a mistake. */
+  .sv-fan-slot { position: relative; flex: none; background: none; border: 0;
+    padding: 0; margin: 0; cursor: pointer; pointer-events: all;
+    filter: drop-shadow(0 6px 16px rgba(0,0,0,0.5));
     transition: transform 0.18s cubic-bezier(0.2,0.9,0.3,1), filter 0.18s ease; }
-  /* Lifted SQUARE to the frame, not merely raised: the fan's job is to show
-     that there are several, and the pick's job is to show one properly. */
   .sv-fan-slot:hover, .sv-fan-slot:focus-visible {
-    transform: rotate(0deg) translateY(-8px) scale(1.04); outline: none; }
-  .sv-fan-sel, .sv-fan-sel:hover {
-    transform: rotate(0deg) translateY(-11px) scale(1.08);
-    filter: drop-shadow(0 12px 26px rgba(0,0,0,0.6)); }
+    transform: translateY(-4px) scale(1.03); outline: none; }
+  .sv-fan-sel, .sv-fan-sel:hover { transform: translateY(-5px) scale(1.05);
+    filter: drop-shadow(0 10px 22px rgba(0,0,0,0.6)); }
   .sv-fan-sel .sv-print-paper { outline: 2px solid #7ad7ff; outline-offset: 0; }
-  .sv-trophy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .sv-trophy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    justify-content: flex-end; margin-left: auto; }
   /* The two whole-run buttons read as secondary to the two that act on the
      print the player just picked. */
   .sv-btn-ghost { background: rgba(122,215,255,0.12); color: #cfeeff;
@@ -1209,7 +1239,7 @@ const STYLES = `
      Every menu is a .sv-center, so they all move together — level-up, the
      score card, Options, the leaderboard. The z-index also makes this a
      stacking context, which is why the numbers INSIDE a menu (.sv-card-fx at
-     5, .sv-flip-bubbles at 6, .sv-shot-view at 8) are local and needed no
+     5, .sv-toast-layer at 6, .sv-shot-view at 8) are local and needed no
      change when this one did. */
   .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; z-index: 8; }
   .sv-menu { background: rgba(12,14,22,0.88); border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 28px 32px; text-align: center; color: #e8ecf3; max-width: 90vw; }
@@ -1367,107 +1397,126 @@ const STYLES = `
   .sv-card-fx.sv-fx-on { opacity: 1; }
   .sv-hint { font-size: 11px; color: rgba(232,236,243,0.35); margin-top: 14px; letter-spacing: 0.04em; }
 
-  /* --- THE TURN ------------------------------------------------------------
-     The card is a slab of glossy black emulsion with a face on each side: the
-     run in front, what the recorder saw behind. See ui/cardFlip.js, which owns
-     the angle and writes --sv-flip, --sv-grazing and --sv-sheen while it moves.
+  /* No backticks anywhere in this stylesheet: it is a template literal, and one
+     in a comment ends the string mid-sentence with the error landing on the
+     next word. */
 
-     A TAB WOULD HAVE BEEN CHEAPER and this is not that. The score screen is
-     already a set of photographs dropped on a table; turning one over to read
-     the numbers on the back is the same object rather than a second interface
-     bolted to it.
+  /* --- THE LEDGER ---------------------------------------------------------
+     ONE FACE. This was a card with two sides and a flip, and the flip was the
+     thing that cost the most: half the run's own record was behind a gesture
+     nobody had to make, and every control on the screen — including the way
+     back into the water — lived inside a face that scrolled. So the back's two
+     tables come round to the front, the card widens to hold them in two
+     columns, and the controls come OUT of the scroll into a bar pinned to the
+     bottom that the readout passes under.
 
-     BOTH FACES ARE ABSOLUTE, so the card has no height of its own — showGameOver
-     measures the taller of the two and writes it inline. Without that the card
-     takes the front's height and overflow:hidden silently clips the last
-     control off the bottom of the back, with no other symptom.
+     Wider than the old card and not by taste: two columns of a run's ledger in
+     the game's own pixel face need the width, and at 580 the names in them
+     ellipsed to about eight glyphs. 90vw still caps it on a phone, where the
+     columns stack (see the media block below).
 
-     No backticks anywhere in this stylesheet: it is a template literal, and one
-     in a comment ends the string a hundred lines early. */
-  .sv-flip-stage { perspective: 1500px; position: relative; }
-  /* NOT .sv-card — that is the upgrade menu's hexagon, three hundred lines up,
-     and a second rule under the same name set every one of them 460px wide and
-     handed them a rotateY that beat their own hover scale. npm run layout found
-     it as three pixels of overflow on one viewport, which is the whole argument
-     for running it: a cascade collision does not announce itself, it just makes
-     an unrelated screen slightly wrong. */
-  .sv-flip-card {
-    position: relative; transform-style: preserve-3d;
-    transform: rotateY(var(--sv-flip, 0deg));
-    max-height: 92vh; max-width: 90vw; width: 580px;
-  }
-  /* WILL-CHANGE ONLY WHILE IT IS TURNING, and this is a fix rather than a
-     micro-optimisation. will-change:transform promotes the card to a
-     composited layer and KEEPS it there, and the card is not a strip of text —
-     it is a 580x940 slab holding the whole leaderboard and one live canvas per
-     kill shot. Left promoted for the minutes somebody sits on this screen, that
-     layer's rasterisation goes stale and comes back blank: the polaroids and
-     the card itself render as empty rectangles after a few turns, with the box
-     still there. Added by ui/cardFlip.js when a turn starts and taken off when
-     it lands, which also forces the browser to re-rasterise the card at its
-     resting size on the frame it stops moving. */
-  .sv-flip-turning { will-change: transform; }
-  /* The container box. .sv-menu's own look moved out here, because the thing
-     that is a panel now is the FACE and not the card.
-
-     NO backface-visibility HERE, and its absence is load-bearing. It was
-     doing nothing the away face's own .sv-hidden was not already doing —
-     ui/cardFlip.js applies that class for real at the halfway point of the
-     turn (the pad's cursor depends on it, see gameOverControls) and
-     .sv-hidden is display:none, so the far face is not rendered at all
-     rather than merely turned away. What it DID do was force each face onto a
-     permanent render surface of its own, every kill-shot canvas rasterised
-     inside it, which is half of why this card went blank after a few turns.
-     See .sv-flip-turning above for the other half. */
-  .sv-face {
-    position: absolute; inset: 0; overflow: hidden;
-    background: var(--sv-emulsion, #07090d);
+     THE CARD SCROLLS AND THE BAR STICKS TO IT. The bar was a flex sibling of a
+     scrolling middle, which is the tidier diagram and does not survive a phone:
+     the head, the roll and the bar are all flex:none, so the card's minimum
+     height is the sum of the three, and on a 393px screen the quip alone wraps
+     to three lines of the pixel face. npm run layout measured the result at
+     940px of content in a 782px box with the bar 133px off the bottom — the bar
+     unpinned by exactly the layout that existed to pin it.
+     One scroll for the whole card, and the bar made sticky instead.
+     It cannot be pushed out by its siblings because it is not competing with
+     them for height, and it is pinned to the bottom of the card at every size
+     rather than only at the sizes where the sum happened to fit. */
+  .sv-ledger {
+    position: relative; display: flex; flex-direction: column;
+    width: 800px; max-width: 90vw; max-height: 92vh;
+    /* THE EMULSION, KEPT — as a background layer rather than a pseudo-element.
+       One broad specular sweep: a slab of gloss on a card lying on a table. It
+       was an absolutely-positioned ::after at z-index 3, which stops working
+       the moment the card is the thing that scrolls — inset:0 then covers the
+       whole SCROLL height, so the gloss stretches over content that is not on
+       screen and a card scrolled to the bottom shows none of it. Sticky with a
+       100vh box fixes the stretch and adds 100vh of empty scroll (measured:
+       734px of card reporting a scrollHeight of 1534).
+       A background layer has neither problem. background-attachment: scroll
+       is the default and, on a scroll container, means exactly this: painted
+       against the BORDER BOX and not scrolled with the contents. The one thing
+       it gives up is being drawn over the type, and over an emulsion this dark
+       at a peak of 0.16 alpha that was never what the sweep was doing. */
+    background:
+      linear-gradient(105deg,
+        transparent 60%,
+        rgba(255,255,255,0.007) 78%,
+        rgba(190,230,255,0.072) 94%,
+        rgba(255,255,255,0.009) 110%,
+        transparent 128%),
+      var(--sv-emulsion, #07090d);
     border: 1px solid rgba(255,255,255,0.14); border-radius: 14px;
     color: #e8ecf3; text-align: center;
+    /* THE TWO AXES SEPARATELY, and after nothing that could reset them. A
+       shorthand overflow:hidden further down this rule silently un-scrolled the
+       card: npm run layout then read it as clipped-below rather than as a
+       scroll box, and every child inside it as off-bottom, which is what a
+       genuinely broken screen looks like. */
+    overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
     box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset;
   }
-  .sv-face-back { transform: rotateY(180deg); }
-  /* The scroll lives INSIDE the face, not on the card: a phone on its side
-     cannot show either face whole, and a scroll on the card would move the
-     rotation's own transform origin. */
-  .sv-face-inner { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 28px 32px; }
-  /* THE EMULSION. One broad specular sweep, positioned from the flip angle and
-     strongest when the card is tipped — a slab of gloss catches the light when
-     it is edge-on and goes flat when it is square to you. Both custom
-     properties come from ui/cardFlip.js; the fallbacks are the resting pose, so
-     a card that never flips is still lit. */
-  .sv-face::after {
-    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 3;
-    background: linear-gradient(105deg,
-      transparent calc(var(--sv-sheen, 94%) - 34%),
-      rgba(255,255,255,0.015) calc(var(--sv-sheen, 94%) - 16%),
-      rgba(190,230,255,0.16) var(--sv-sheen, 94%),
-      rgba(255,255,255,0.02) calc(var(--sv-sheen, 94%) + 16%),
-      transparent calc(var(--sv-sheen, 94%) + 34%));
-    opacity: calc(0.45 + 0.55 * var(--sv-grazing, 0));
-  }
-  /* The bubbles off the leading edge, on ui/cardFlip.js's own canvas. Above the
-     card rather than behind it: they are coming off the edge nearest the
-     viewer. Alive only during a turn — the element is removed after it lands. */
-  .sv-flip-bubbles { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+  /* --- THE HEAD. The quip and the score on ONE line, so the death and the
+         number are read together instead of stacked ninety pixels apart with a
+         four-column grid between them. ------------------------------------- */
+  .sv-ldg-head { flex: none; padding: 26px 30px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .sv-ldg-headtop { display: flex; align-items: flex-end; gap: 24px; text-align: left; }
+  /* Size and colour come from the quip text role — see textRoles.js for why
+     the score card's line is not the menu title. What is here is the shape it
+     takes in the lockup. */
+  .sv-ldg-head .sv-title { flex: 1; min-width: 0; margin-bottom: 0;
+    line-height: 1.4; text-wrap: pretty; }
+  .sv-ldg-hero { flex: none; text-align: right; margin-bottom: 0; }
+  .sv-ldg-hero b { display: block; font-size: 46px; line-height: 1;
+    letter-spacing: 0.01em; color: #e8ecf3; font-variant-numeric: tabular-nums; }
+  /* THE SCORE AS A PLACE, not only a figure. The board is right there in the
+     second column and the player still had to find themselves in it. */
+  .sv-ldg-rank { display: block; font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: rgba(122,215,255,0.85); margin-top: 7px; }
+  .sv-ldg-figs { display: flex; flex-wrap: wrap; gap: 10px 26px; margin-top: 18px;
+    text-align: left; }
+  .sv-fig { display: flex; align-items: baseline; gap: 8px; min-width: 0;
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: rgba(232,236,243,0.45); }
+  .sv-fig b { font-size: 17px; letter-spacing: 0.01em; color: #e8ecf3;
+    text-transform: none; font-variant-numeric: tabular-nums; }
 
-  /* The control that turns it. Deliberately not a .sv-btn: it is a label on the
-     card, in the way a caption is, rather than a fifth button competing with
-     Try again. */
-  .sv-turn {
-    pointer-events: all; background: none; border: 0; cursor: pointer; font: inherit;
-    color: #7ad7ff; font-size: 11px; font-weight: 600; letter-spacing: 0.13em;
-    text-transform: uppercase; padding: 10px 6px;
-    display: inline-flex; align-items: center; gap: 7px;
-  }
-  .sv-turn:hover { color: #cfeeff; }
-  .sv-turn:focus-visible, .sv-turn.sv-nav-sel { outline: 2px solid #fff; outline-offset: 1px; border-radius: 4px; }
-  .sv-turn svg { flex: none; }
+  /* --- THE READOUT. Two columns, one scroll, and the only scroll on the
+         card. align-content:start so a short right column does not stretch its
+         rows down the card to meet a long left one. ----------------------- */
+  .sv-ldg-body { flex: none; padding: 20px 30px 24px; display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px; align-content: start; }
+  .sv-ldg-col { display: flex; flex-direction: column; gap: 20px; min-width: 0; text-align: left; }
+  /* Across both columns — see the note in the markup about names and ellipses. */
+  .sv-ldg-body > .sv-leaderboard { grid-column: 1 / -1; }
+  .sv-ldg-sec { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: rgba(232,236,243,0.35); margin-bottom: 8px;
+    display: flex; align-items: baseline; gap: 10px; }
+  .sv-ldg-sec em { font-style: normal; margin-left: auto; font-size: 9px;
+    color: rgba(232,236,243,0.45); font-variant-numeric: tabular-nums; }
 
-  .sv-back-title {
-    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
-    color: rgba(232,236,243,0.45); margin-bottom: 12px;
-  }
+  /* --- THE BAR. Pinned, and the readout scrolls under it. The shadow is what
+         says so: without it the bar reads as the end of the content rather
+         than as a thing the content is passing beneath. ------------------- */
+  .sv-ldg-bar { flex: none; position: sticky; bottom: 0; z-index: 5;
+    padding: 14px 30px 16px;
+    background: #0a0e15; border-top: 1px solid rgba(255,255,255,0.10);
+    box-shadow: 0 -18px 30px rgba(3,6,10,0.7); }
+  .sv-ldg-bar .sv-name-row { margin: 0; }
+  .sv-ldg-bar .sv-status { margin: 6px 0 0; margin-bottom: 0; }
+  .sv-ldg-bar .sv-next-wrap { margin: 10px 0 0; }
+  .sv-ldg-bar .sv-tip-row { margin-top: 10px; }
+  /* TRY AGAIN GETS THE WHOLE LINE, under the roller. It is the one control on
+     this screen that has to work and the last question the bar asks, so it is
+     the widest target on it — and the bar is pinned, so the line it costs is a
+     line the readout gives up once rather than one the player has to scroll
+     past every time. */
+  .sv-ldg-go { display: block; width: 100%; margin-top: 12px; }
 
   /* --- THE BREAKDOWN ROWS ---------------------------------------------------
      Weapons and threats are the same grid deliberately: they are the same
@@ -1480,11 +1529,11 @@ const STYLES = `
      behind the row, width set inline from the share, and it costs nothing.
      The children need position: relative or the bar paints over them. */
   .sv-brk { display: flex; flex-direction: column; gap: 1px; }
-  .sv-brk-head { display: grid; grid-template-columns: 1fr 58px 34px; gap: 8px;
+  .sv-brk-head { display: grid; grid-template-columns: 1fr 64px 46px; gap: 8px;
     padding: 0 8px 6px; font-size: 9.5px; letter-spacing: 0.14em;
     text-transform: uppercase; color: rgba(232,236,243,0.35); }
   .sv-brk-head span + span { text-align: right; }
-  .sv-brk-row { position: relative; display: grid; grid-template-columns: 1fr 58px 34px;
+  .sv-brk-row { position: relative; display: grid; grid-template-columns: 1fr 64px 46px;
     gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
   .sv-brk-row:nth-child(even) { background: rgba(255,255,255,0.03); }
   .sv-brk-row::before { content: ""; position: absolute; inset: 0; border-radius: 6px;
@@ -1516,7 +1565,28 @@ const STYLES = `
   .sv-brk-foot b { color: #e8ecf3; font-variant-numeric: tabular-nums; }
   .sv-brk-empty { font-size: 12px; color: rgba(232,236,243,0.4); padding: 10px 8px; }
 
-  .sv-leaderboard { margin: 14px 0; max-height: 220px; overflow-y: auto; text-align: left; }
+  /* NO MARGIN AND NO CAP. Both were the old card's: the panel sat between a
+     name row and a button on one scrolling face, so it needed the space around
+     it and a ceiling to stop it pushing Try again off the bottom. In a column
+     of its own it is one of two blocks, the readout is what scrolls, and a cap
+     here would put a second scrollbar inside the first. */
+  .sv-leaderboard { text-align: left; }
+  /* The heading IS the switch — see renderBoard. */
+  .sv-lb-switch { display: flex; gap: 0; margin-left: auto; }
+  .sv-lb-sw { background: none; border: 1px solid rgba(255,255,255,0.12); cursor: pointer;
+    font: inherit; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: rgba(232,236,243,0.45); padding: 4px 7px; pointer-events: all; }
+  .sv-lb-sw:first-child { border-radius: 4px 0 0 4px; }
+  .sv-lb-sw:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+  .sv-lb-sw:hover:not(:disabled) { color: #cfeeff; }
+  /* Disabled until the global board answers, which on a slow connection is
+     seconds after the screen opens. Dimmed rather than hidden: a control that
+     appears late is a control that moves the heading under the player's
+     cursor, and this one is two words wide. */
+  .sv-lb-sw:disabled { opacity: 0.4; cursor: default; }
+  .sv-lb-sw-on { background: rgba(122,215,255,0.14);
+    border-color: rgba(122,215,255,0.4); color: #7ad7ff; }
+  .sv-lb-sw:focus-visible, .sv-lb-sw.sv-nav-sel { outline: 2px solid #fff; outline-offset: 2px; }
   /* ONE GRID FOR THE HEADER AND THE ROWS, so the columns are the same columns
      on both. A flex row plus a flex header is two independent layouts that
      agree only while nobody touches either of them. */
@@ -1738,8 +1808,17 @@ const STYLES = `
      carries a transform or a filter, so fixed here resolves against the
      viewport, which is the frame this bar is actually about. */
   @media (max-width: 700px) {
+    /* A FIXED NARROW TRACK, sized by the rule rather than by its own label.
+       An auto width let the "Lv 1" plate decide, which made the strip as wide
+       as the widest line of type in it — about 28px, a thumb's width of screen
+       edge spent on a gauge that only has to read as a LEVEL, and the widest
+       thing down the left of the arena.
+       10px is the bar; the label is let OUT of it rather than being what sets
+       its size. That is what the visible overflow is for, and dropping the clip
+       is safe here: the fill is inset:0 and SCALED, so it can never leave the
+       box on its own — the only thing the clip was holding in is the label. */
     .sv-xptop { position: fixed; top: 0; bottom: 0; left: 0; right: auto;
-      width: auto; min-width: 8px; height: auto; min-height: 0; }
+      width: 10px; min-width: 0; height: auto; min-height: 0; overflow: visible; }
     .sv-xptop-fill { transform: scaleY(var(--sv-xp, 0)); transform-origin: 50% 100%; }
     /* A vertical bar takes a vertical label: "Lv" over the number, stacked, so
        the strip stays as narrow as one short word instead of as long as a line
@@ -1779,8 +1858,32 @@ const STYLES = `
        so the coded fallback and the real one arrive in the same place. The
        WIDTH is not set here on purpose — updateBossBar writes it inline per
        boss, which beats any rule, so the phone widening lives in
-       bossBarWidth() instead. */
-    .sv-bossbar { top: 14px; }
+       bossBarWidth() instead.
+
+       THE DYNAMIC ISLAND IS WHY THIS IS A CALC. 14px from the top of the
+       viewport puts a boss's name UNDER the island on every recent iPhone —
+       the page draws edge to edge (viewport-fit=cover in index.html), so the
+       top of the viewport is the top of the GLASS, not the top of the usable
+       screen. The inset is ~59px there and 0 on a laptop. */
+    .sv-bossbar { top: calc(14px + env(safe-area-inset-top, 0px)); }
+
+    /* --- THE HIVE OUTRANKS THE HUD ON A PHONE ---------------------------
+       The two rungs swap, and only here. On a phone the xp meter becomes a
+       strip down the whole LEFT EDGE, and the hive's default corner is
+       bottom-left (upgradeHive.js) — so the one place they were guaranteed to
+       meet is the one corner the hive lives in, with the meter painting over
+       the bottom tiles.
+       It has to be done by moving the HUD rather than the hive, because the
+       meter is a CHILD of .sv-hud: a z-index on the strip itself cannot lift
+       the hive out of the stacking context its parent creates, however large
+       it is. Swapping the two rungs is also why this is not "hive: 2" alone —
+       that would TIE with the HUD and leave the answer to DOM order, which is
+       exactly the accident the ladder note above this file's .sv-hive rule was
+       written about.
+       Everything above them is untouched: the boss bar (3), toasts (6), menus
+       (8) and transitions (10) all still clear both. */
+    .sv-hive { z-index: 2; }
+    .sv-hud { z-index: 1; }
   }
 
   /* --- THE UPGRADE CARDS, STACKED ----------------------------------------
@@ -1830,12 +1933,55 @@ const STYLES = `
      A scroll rather than a squeeze, for the reason the block above gives: the
      alternative is deciding which part of their own run the player on the
      smallest phone is not allowed to see. */
-  /* The scroll lives on .sv-face-inner at every size now, because the card is
-     two absolutely-positioned faces and the taller of them decides the height —
-     see the .sv-card block. What is left here is the CAP: below this the card
-     is allowed to be shorter than its content and let the face scroll. */
-  @media (max-height: 720px) {
-    #svGameOverMenu .sv-flip-card { max-height: 92vh; }
+  /* THE CARD IS THE FRAME NOW. It was two absolutely-positioned faces with no
+     height of its own, measured per death by hand; it is a flex column with a
+     92vh cap in its own rule, and .sv-ldg-body is the part that gives. Nothing
+     is left to say at this breakpoint.
+
+     WHAT IS left is the phone. Two columns of a ledger do not fit a 393px
+     screen and must not be allowed to try: a minmax(0, 1fr) column shrinks to
+     nothing rather than wrap, so the readout would come out as two strips of
+     ellipses. One column, and the head's lockup unstacks with it — a 46px
+     score beside a wrapping quip is most of the width on a phone. */
+  /* A PHONE ON ITS SIDE is 393px tall, and the head alone — a quip that wraps
+     to three lines of the pixel face, a 46px score and five figures — is most
+     of it. The card scrolls, so nothing is lost; what this buys back is the
+     padding, which at that height is the difference between two visible rows
+     of the readout and none. */
+  @media (max-height: 560px) {
+    .sv-ldg-head { padding: 14px 20px 12px; }
+    .sv-ldg-head .sv-title { line-height: 1.2; }
+    .sv-ldg-figs { margin-top: 10px; gap: 6px 18px; }
+    .sv-trophy { padding: 8px 20px 6px; }
+    .sv-ldg-body { padding: 12px 20px 16px; }
+    .sv-ldg-bar { padding: 10px 20px 12px; }
+  }
+
+  @media (max-width: 700px) {
+    .sv-ledger { max-width: 94vw; }
+    .sv-ldg-head { padding: 20px 18px 16px; }
+    .sv-ldg-headtop { flex-direction: column; align-items: stretch; gap: 12px; }
+    .sv-ldg-hero { text-align: left; }
+    .sv-ldg-figs { gap: 8px 18px; }
+    .sv-ldg-body { grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 16px 18px 20px; }
+    /* THE ROLL'S VERBS AS A BLOCK, not a ragged right-aligned wrap. At 393px
+       four buttons at the tuned size come out as three rows of one and two,
+       stepped to the right — which is the tallest and least readable thing the
+       band can be. Left-aligned with tighter side padding they land as a tidy
+       2x2 under the label, and on a phone with a share sheet of its own there
+       are only two of them anyway (see wireTrophy). The FONT is not touched:
+       it is the tuner's, and padding is the part this rule owns. */
+    .sv-trophy { padding: 10px 18px; }
+    .sv-trophy-row { justify-content: flex-start; margin-left: 0; }
+    .sv-trophy-row .sv-btn-sm { padding-left: 10px; padding-right: 10px; }
+    .sv-ldg-bar { padding: 12px 18px 14px; }
+    /* THE BOARD DROPS TO RANK, NAME AND SCORE. Five columns on a 393px screen
+       is two columns of digits taking a third of the width from the one column
+       anybody reads — and level and time are the two nobody came for. The
+       header's own cells go with them; they are bare spans, so they are named
+       by position rather than by class. */
+    .sv-lb-row, .sv-lb-head { grid-template-columns: 3ch minmax(0, 1fr) auto; }
+    .sv-lb-lv, .sv-lb-time, .sv-lb-head span:nth-child(n+4) { display: none; }
   }
 
   /* --- TAP TARGETS -------------------------------------------------------
@@ -1849,11 +1995,10 @@ const STYLES = `
   .sv-touch .sv-btn, .sv-touch .sv-name-input {
     min-height: 44px; padding-top: 11px; padding-bottom: 11px; }
   .sv-touch .sv-btn-sm { min-width: 44px; padding-left: 18px; padding-right: 18px; }
-  /* The turn control is not a .sv-btn — it is a label on the card rather than a
-     fifth button — so it inherits none of the rule above and came out under the
-     minimum, which npm run layout reports. Worth stating because it is the one
-     control on this card that a player has to find twice. */
-  .sv-touch .sv-turn { min-height: 44px; padding-top: 14px; padding-bottom: 14px; }
+  /* The leaderboard's local/global switch, which is not a .sv-btn and so was
+     not covered — 69x22, and it only appears once a global board has answered,
+     which is why it comes and goes from the audit's report. */
+  .sv-touch .sv-lb-sw { min-height: 44px; }
   /* A row of buttons that wraps needs the gap a thumb needs, not the gap an
      eye needs — two 44px targets 8px apart are one 96px target as far as a
      mis-tap is concerned. */
@@ -1879,6 +2024,18 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   const style = document.createElement('style');
   style.textContent = STYLES;
   document.head.appendChild(style);
+
+  // RE-MEASURE WHEN THE TYPE CHANGES. Two things on this screen are sized by
+  // measuring text — the upgrade cards' auto-fit and the score card's name
+  // fields — and both keep whatever fit they were built with. The Text panel
+  // rewrites the role sheet live, so a menu that is already open ends up
+  // holding text in a face it was never measured against, and the overflow is
+  // cut off rather than reported. Registered once, before anything is built:
+  // both handlers are no-ops on a surface that is not up.
+  document.addEventListener(TYPOGRAPHY_EVENT, () => {
+    refitNames();
+    for (const card of el.svCards?.querySelectorAll('.sv-card') ?? []) fitCardText(card);
+  });
 
   root = document.createElement('div');
   root.className = 'sv-ui';
@@ -1968,92 +2125,116 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     </div>
 
     <div class="sv-center sv-hidden" id="svGameOverMenu">
-      <div class="sv-flip-stage" id="svFlipStage">
-        <div class="sv-flip-card" id="svCard">
+      <!-- THE LEDGER. One face: what the run did, what did it to you, where it
+           stands and what you built, in two columns over a bar that does not
+           scroll. This was a card with a front and a back and a flip between
+           them — see the note on .sv-ledger for what that cost. -->
+      <div class="sv-ledger" id="svCard">
 
-          <!-- THE FRONT. The screen the game has always ended on. -->
-          <div class="sv-face sv-face-front" id="svFaceFront">
-            <div class="sv-face-inner">
-              <div class="sv-title" id="svGameOverTitle">You Died!</div>
-              <div class="sv-sub" id="svGameOverStats"></div>
-              <!-- THE ROLL. Every kill shot from the run, fanned out like prints
-                   dropped on a table — the same paper the player watched come out
-                   of the camera during the fight (ui/snapshotPrint.js builds
-                   both). Hidden unless a boss actually went down: an empty rack
-                   on the score screen of a run that never met one reads as a
-                   broken image. See systems/bossShot.js. -->
-              <div class="sv-trophy sv-hidden" id="svTrophy">
-                <div class="sv-fan" id="svFan"></div>
-                <div class="sv-trophy-row">
-                  <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share this one</button>
-                  <button class="sv-btn sv-btn-sm" id="svTrophySave">Save this one</button>
-                  <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetShare">Share all</button>
-                  <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetSave">Save all</button>
-                </div>
-                <div class="sv-status" id="svTrophyStatus"></div>
-              </div>
-              <button class="sv-turn" id="svTurnOver">
-                Turn it over
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M1 5h8M6 2l3 3-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </button>
-              <div class="sv-name-row" id="svNameRow">
-                <input class="sv-name-input" id="svNameInput" type="text" maxlength="${MAX_NAME_LEN}"
-                       placeholder="Your name" autocomplete="off" autocapitalize="characters"
-                       spellcheck="false" aria-label="Name for the leaderboard" />
-                <button class="sv-btn sv-btn-sm" id="svNameSubmit">Submit</button>
-              </div>
-              <div class="sv-status" id="svLbStatus"></div>
-              <div class="sv-leaderboard" id="svLeaderboard"></div>
-              <!-- THE NEXT SEAL. Deliberately its own row and not the name
-                   field above it, which is a DIFFERENT QUESTION wearing the
-                   same widget: svNameRow asks what to post the run that just
-                   ended under, and this asks who swims the next one. Rolling
-                   a new name into the leaderboard field would rename the seal
-                   that actually played the run, on the screen that exists to
-                   record what it did.
-                   Beside Try again because that is the button it belongs to —
-                   nothing here is committed until the run restarts, so a
-                   player who reads it, ignores it and presses the button keeps
-                   the name they had. See commitNextSeal. -->
-              <div class="sv-next-wrap" id="svNextRow">
-                <label class="sv-next-label" for="svNextInput">Next seal</label>
-                <div class="sv-name-row sv-next-row">
-                  <input class="sv-name-input sv-next-input" id="svNextInput" type="text" maxlength="${MAX_NAME_LEN}"
-                         placeholder="Name" autocomplete="off" autocapitalize="off"
-                         spellcheck="false" autocorrect="off" aria-label="Name for your next seal" />
-                  <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svNextRoll" type="button"
-                          aria-label="Roll a new name">Roll</button>
-                </div>
-                <!-- Empty and hidden almost always. It says one thing: that the
-                     name typed above belongs to a seal already on the seabed.
-                     aria-live, because a sighted player sees it appear under
-                     their own cursor and a screen reader otherwise would not
-                     know the field had turned invalid. -->
-                <div class="sv-next-warn sv-hidden" id="svNextWarn" role="status" aria-live="polite"></div>
-              </div>
-              <button class="sv-btn" id="svRestartBtn">Try again</button>
-              <div class="sv-tip-row" id="svTipRow"></div>
-            </div>
+        <div class="sv-ldg-head">
+          <div class="sv-ldg-headtop">
+            <div class="sv-title" id="svGameOverTitle">You Died!</div>
+            <!-- Score, and where it stands. Filled by showGameOver. -->
+            <div class="sv-ldg-hero" id="svGameOverStats"></div>
           </div>
-
-          <!-- THE BACK. What the playtest recorder saw, filled per death by
-               renderRunDetail. Starts hidden with .sv-hidden and not merely
-               rotated away: backface-visibility hides a face from the eye and
-               from nothing else, and the pad's cursor filters on that class —
-               see ui/cardFlip.js. -->
-          <div class="sv-face sv-face-back sv-hidden" id="svFaceBack">
-            <div class="sv-face-inner">
-              <div class="sv-back-title" id="svBackTitle">The run</div>
-              <div id="svPanelWeapons"></div>
-              <div id="svPanelThreats" style="padding-top:14px"></div>
-              <button class="sv-turn" id="svTurnBack">
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M9 5H1M4 2L1 5l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Turn back
-              </button>
-            </div>
-          </div>
-
+          <div class="sv-ldg-figs" id="svGameOverFigs"></div>
         </div>
+
+        <!-- THE ROLL, as a rail across the top of the readout. Every kill shot
+             from the run — the same paper the player watched come out of the
+             camera during the fight (ui/snapshotPrint.js builds both). Hidden
+             unless a boss actually went down: an empty rail on a run that never
+             met one reads as a broken image. See systems/bossShot.js. -->
+        <div class="sv-trophy sv-hidden" id="svTrophy">
+          <!-- THE VERBS ARE ON THE HEADING, not under the prints. Centred below
+               the roll they were the largest block on the old card; on the
+               heading line they read as what you can do with the row, which is
+               what they are. wireTrophy drops the two Save buttons wherever the
+               OS has a share sheet of its own, so this is two controls on a
+               phone and four on a desktop. -->
+          <div class="sv-strip-head">
+            <span class="sv-strip-label">Kill shots</span>
+            <div class="sv-status" id="svTrophyStatus"></div>
+            <div class="sv-trophy-row">
+              <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share</button>
+              <button class="sv-btn sv-btn-sm" id="svTrophySave">Save</button>
+              <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetShare">Share all</button>
+              <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetSave">Save all</button>
+            </div>
+          </div>
+          <div class="sv-fan" id="svFan"></div>
+        </div>
+
+        <div class="sv-ldg-body">
+          <!-- WHAT YOU DID, AND WHAT WAS DONE TO YOU. Both were on the back of
+               the card, filled per death by renderRunDetail. -->
+          <div class="sv-ldg-col">
+            <div id="svPanelWeapons"></div>
+            <div id="svPanelThreats"></div>
+          </div>
+          <!-- WHAT YOU BUILT — which no version of this screen has shown. -->
+          <div class="sv-ldg-col">
+            <div id="svPanelBuild"></div>
+          </div>
+          <!-- WHERE IT STANDS, ACROSS BOTH COLUMNS. A leaderboard is the one
+               block here made of NAMES rather than figures, and half the card
+               is not enough of them: at the shipped pixel face a 355px column
+               leaves about seven glyphs for a name, so the board came out as a
+               column of ellipses. Full width it gets four times that. It is
+               last because the head already answers where the run stands — the
+               board is the detail behind that line, not the line itself. -->
+          <div class="sv-leaderboard" id="svLeaderboard"></div>
+        </div>
+
+        <!-- THE BAR. Everything a player can DO, out of the scroll. -->
+        <div class="sv-ldg-bar">
+          <div class="sv-name-row" id="svNameRow">
+            <input class="sv-name-input" id="svNameInput" type="text" maxlength="${MAX_NAME_LEN}"
+                   placeholder="Your name" autocomplete="off" autocapitalize="characters"
+                   spellcheck="false" aria-label="Name for the leaderboard" />
+            <button class="sv-btn sv-btn-sm" id="svNameSubmit">Submit</button>
+          </div>
+          <div class="sv-status" id="svLbStatus"></div>
+          <!-- THE NEXT SEAL. Deliberately its own row and not the name field
+               above it, which is a DIFFERENT QUESTION wearing the same widget:
+               svNameRow asks what to post the run that just ended under, and
+               this asks who swims the next one. Rolling a new name into the
+               leaderboard field would rename the seal that actually played the
+               run, on the screen that exists to record what it did.
+               In the bar because that is where Try again is, and nothing here
+               is committed until the run restarts — a player who reads it,
+               ignores it and presses the button keeps the name they had. See
+               commitNextSeal. -->
+          <div class="sv-next-wrap" id="svNextRow">
+            <label class="sv-next-label" for="svNextInput">Next seal</label>
+            <div class="sv-name-row sv-next-row">
+              <input class="sv-name-input sv-next-input" id="svNextInput" type="text" maxlength="${MAX_NAME_LEN}"
+                     placeholder="Name" autocomplete="off" autocapitalize="off"
+                     spellcheck="false" autocorrect="off" aria-label="Name for your next seal" />
+              <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svNextRoll" type="button"
+                      aria-label="Roll a new name">Roll</button>
+            </div>
+            <!-- Empty and hidden almost always. It says one thing: that the
+                 name typed above belongs to a seal already on the seabed.
+                 aria-live, because a sighted player sees it appear under their
+                 own cursor and a screen reader otherwise would not know the
+                 field had turned invalid. -->
+            <div class="sv-next-warn sv-hidden" id="svNextWarn" role="status" aria-live="polite"></div>
+          </div>
+          <!-- THE WAY OUT, LAST, and OUTSIDE both rows above it.
+               The order is the order the questions are asked in: post the run
+               that ended, name the seal that swims next, then go — so the
+               button is the thing your eye lands on last and the thing your
+               thumb is already near.
+               Outside them because #svNameRow is HIDDEN AS A UNIT twice — by
+               previewScreen, and by submitPendingRun the moment a score is
+               posted. Try again spent one build inside it, and posting your run
+               deleted the only way back into the water, on every device, with
+               the button still in the DOM measuring nothing. -->
+          <button class="sv-btn sv-ldg-go" id="svRestartBtn">Try again</button>
+          <div class="sv-tip-row" id="svTipRow"></div>
+        </div>
+
       </div>
 
       <!-- THE PRINT HELD UP TO THE LIGHT. A sheet over the whole menu rather
@@ -2084,8 +2265,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     'svCorner',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
     'svFan', 'svSheetShare', 'svSheetSave',
-    'svFlipStage', 'svCard', 'svFaceFront', 'svFaceBack',
-    'svTurnOver', 'svTurnBack', 'svBackTitle',
+    'svCard', 'svGameOverFigs', 'svPanelBuild',
     'svPanelWeapons', 'svPanelThreats',
     // Try again is the one control on the score card that has to work — it is
     // the way back into the game. It was reached only through its click
@@ -2105,6 +2285,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   // gameOverAll() is a list of elements, not a query.
   el.svTipJar = tipJarLink({
     id: 'svTipJar',
+    tiers: TIP_TIERS,
     onHover: () => feedback('uiHover'),
     onClick: () => feedback('uiClick'),
   });
@@ -2140,7 +2321,6 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   // The two turn controls. Bound here rather than from showGameOver: they are
   // part of the card's markup and never change, unlike the trophy row, which
   // only exists on a run that met a boss.
-  bindTurn();
   bindMenuSounds(document.getElementById('svRestartBtn')).addEventListener('click', () => {
     // No showHud() here, unlike the start button: the next run doesn't begin
     // on this click any more, it begins on the far side of the transition (see
@@ -2543,17 +2723,16 @@ export function hideAllMenus() {
   setMenuLocked(false);
   el.svLevelUpMenu.classList.add('sv-hidden');
   el.svGameOverMenu.classList.add('sv-hidden');
-  // The turn goes with the card. Its loop keeps running while there are
-  // bubbles left, and a run that restarts mid-flip would otherwise leave a
-  // canvas and a rAF alive over the new run — see releaseCardFlip.
-  releaseCardFlip();
-  // And the print that was being held up. It is a sheet over the MENU rather
+  // And the tip tiers, which are a sheet on the BODY rather than a child of
+  // the menu — hiding the menu does not take them with it, so a restart would
+  // leave the panel over a running game.
+  closeTipSheet();
+  // The print that was being held up. It is a sheet over the MENU rather
   // than a child of the card, so hiding the menu takes it off screen — but it
   // would still be holding a decoded 1600x2000 bitmap and would still be the
   // thing the pad's cursor was routed to, into the next run.
   closeShotView();
   unwatchCardSize();
-  flip = null;
   levelUpCards = [];
 }
 
@@ -3404,7 +3583,17 @@ export function showLevelUp() {
   // Reveal first: the cards have no layout while the menu is display:none, so
   // measuring before this point reads zeroes.
   el.svLevelUpMenu.classList.remove('sv-hidden');
-  for (const card of el.svCards.querySelectorAll('.sv-card')) fitCardText(card);
+  const fitAll = () => {
+    for (const card of el.svCards.querySelectorAll('.sv-card')) fitCardText(card);
+  };
+  fitAll();
+  // ...AND AGAIN WHEN THE TYPE ARRIVES, for the reason showGameOver gives about
+  // its name fields: the family is a webfont, so a hand dealt before it lands
+  // is fitted against the fallback and is a little too big the moment the real
+  // face swaps in — measured at 2px past the box, which the content clips in
+  // silence. Only reachable on a level-up in the first seconds of a run, which
+  // is exactly where the first one is.
+  document.fonts?.ready?.then(fitAll);
 
   // Gamepad navigation. The cards, not the slots — everything downstream
   // (selection class, focus, the arrow-key geometry) acts on the card itself.
@@ -3497,32 +3686,75 @@ function stepSelection(dx, dy) {
 // case.
 let overIndex = -1;
 
+/**
+ * Put the pad's cursor away.
+ *
+ * CALLED WHEN THE CARD OPENS as well as when it goes away, and the pair is the
+ * point: "nothing is highlighted until the player asks" was enforced only on
+ * the way out, so it held for as long as every open was preceded by a close. It
+ * is — hideAllMenus runs between runs — which is exactly what makes the other
+ * path worth closing rather than reasoning about, because the day it is not,
+ * the card opens with a button already chosen for a mouse player who never
+ * asked and nothing says why.
+ */
+function resetGameOverNav() {
+  if (overIndex < 0) return;
+  for (const c of gameOverStops()) c.classList.remove('sv-nav-sel');
+  overIndex = -1;
+}
+
 // Every control on the card, reachable or not. The clean-up below has to work
 // from THIS list rather than the filtered one: once the card is hidden every
 // button on it is inside a hidden block, so a highlight cleared through the
 // filter would be a highlight never cleared at all.
+//
+// ONE FACE, so this is one list in reading order down the card: the roll's
+// buttons, then the bar, then the sheet's own three. There is no longer a half
+// of it that is turned away — what the filter still has to do is drop the roll
+// when no boss went down (the whole block carries .sv-hidden), the three share
+// buttons behind the first when they are folded, and everything behind a
+// print that is being held up.
+//
+// gameOverAll() is a list of elements, not a query.
 function gameOverAll() {
-  // BOTH FACES, in reading order, because the card can be either way up and
-  // the filter below is what decides which half is live. Every control on the
-  // face that is currently away sits inside a .sv-hidden face — applied for
-  // real by ui/cardFlip.js at the halfway point of the turn, and not merely
-  // rotated out of sight, precisely so this filter keeps working.
-  //
-  // gameOverAll() is a list of elements, not a query.
   return [el.svTrophyShare, el.svTrophySave, el.svSheetShare, el.svSheetSave,
-    el.svTurnOver, el.svNameSubmit, el.svNextRoll, el.svRestartBtn, el.svTipJar,
-    el.svTurnBack,
+    el.svNameSubmit, el.svRestartBtn, el.svNextRoll, el.svTipJar,
     // The preview sheet's own three. In this list rather than beside it so the
     // highlight is cleaned up with everything else when the card goes away —
     // see the note above about working from the unfiltered list.
     el.svShotShare, el.svShotSave, el.svShotClose].filter(Boolean);
 }
 
+/**
+ * Every control on the card INCLUDING the two the leaderboard heading builds.
+ *
+ * Queried rather than held: renderBoard rebuilds them on every render, and the
+ * global board arriving is a render — a handle taken when the screen opened
+ * would be pointing at a button that is no longer in the document, which is a
+ * cursor stop that has silently vanished.
+ */
+function gameOverStops() {
+  const all = gameOverAll();
+  const sw = el.svLeaderboard ? [...el.svLeaderboard.querySelectorAll('.sv-lb-sw')] : [];
+  if (!sw.length) return all;
+  // In reading order: the board's own controls belong with the board, which is
+  // above the bar and below the roll.
+  const bar = all.findIndex((c) => c === el.svNameSubmit);
+  return bar < 0 ? [...all, ...sw] : [...all.slice(0, bar), ...sw, ...all.slice(bar)];
+}
+
 function gameOverControls() {
   // A disabled button and one inside a hidden block are both unreachable for a
   // mouse, so neither may be a stop for the pad either — a cursor that lands
   // on something invisible is a cursor that has vanished.
-  const live = gameOverAll().filter((c) => !c.disabled && !c.closest('.sv-hidden'));
+  const live = gameOverStops().filter((c) => !c.disabled && !c.closest('.sv-hidden'));
+  // WHILE THE TIP TIERS ARE UP, NOTHING ON THE CARD IS REACHABLE. The panel is
+  // a fixed sheet over the whole screen with its own close button and its own
+  // Escape (see ui/tipJar.js), and every control on the card is still in the
+  // layout behind it — so without this the cursor walks onto buttons under a
+  // scrim and a confirm presses one nobody can see. It is drawn from OUTSIDE
+  // the menu, so the .sv-hidden filter above cannot see it.
+  if (tipSheetOpen()) return [];
   // WHILE A PRINT IS HELD UP, THE SHEET OWNS THE PAD. Everything on the card is
   // still in the layout and still passes the filter above — the sheet is drawn
   // over it rather than replacing it — so without this the cursor walks onto
@@ -3544,7 +3776,7 @@ function selectGameOver(i, controls) {
   // them leave it while a print is held up — and a highlight cleared only
   // within the new list is a button still lit behind a backdrop, which is also
   // the first thing `#svGameOverMenu .sv-nav-sel` finds.
-  for (const c of gameOverAll()) c.classList.toggle('sv-nav-sel', c === controls[overIndex]);
+  for (const c of gameOverStops()) c.classList.toggle('sv-nav-sel', c === controls[overIndex]);
   controls[overIndex].focus({ preventScroll: true });
 }
 
@@ -3554,20 +3786,9 @@ function updateGameOverNav() {
     // The highlight has to go with the card, not just the index behind it: a
     // class left on a button is a card that reopens with something already
     // chosen, which is the whole thing this cursor is written to avoid.
-    if (overIndex >= 0) {
-      for (const c of gameOverAll()) c.classList.remove('sv-nav-sel');
-      overIndex = -1;
-    }
+    resetGameOverNav();
     return false;
   }
-  // THE CARD OWNS THE PAD WHILE IT IS TURNING. Half of the controls are
-  // rotating out of view and the other half have not arrived, so a cursor step
-  // lands somewhere that is about to be somewhere else and a confirm presses a
-  // button the player can no longer see. It is a quarter of a second, and
-  // returning true keeps the score screen owning the pad through it rather
-  // than handing it to whatever is under this one.
-  if (cardFlipMoving()) return true;
-
   const controls = gameOverControls();
   if (!controls.length) return true;
 
@@ -3650,7 +3871,15 @@ export function updateMenuNav() {
 // lines, step the type down until every line holds whole words and the whole
 // block clears the box vertically. Both sizes shrink together (one --sv-fit
 // per card) so the name/description hierarchy survives the scaling.
-const FIT_MIN = 0.5;
+// The floor, and it is only ever REACHED on a small card: at 210px (a desktop
+// hand) the deepest fit any of the 106 card texts asks for is 0.6, so this
+// costs nothing there. It was 0.5, which on a phone whose cards come out
+// 140-160px left seventeen of those texts hard against the floor and still
+// overflowing — up to 23px, most of a line, cut off by the content box's own
+// overflow:hidden with nothing to say so. Measured across every name and
+// description at stacks 1, 2 and 5: at 0.42 nothing clips at any card size the
+// layout can produce, and going lower buys nothing.
+const FIT_MIN = 0.42;
 const FIT_STEP = 0.04;
 
 function fitCardText(card) {
@@ -3667,8 +3896,17 @@ function fitCardText(card) {
 // A word wider than its box overflows it, which shows up as scrollWidth
 // exceeding clientWidth — that's the mid-word break we're avoiding, since
 // nothing in the CSS is allowed to split the word instead.
+//
+// NO TOLERANCE ON THE HEIGHT. It used to allow a pixel, which sounds like
+// rounding and is not: the box is overflow:hidden, so that pixel is the bottom
+// row of the last line, shaved off every text the loop stopped one step early
+// on — twenty of the hundred and six on a desktop card, and in a pixel font a
+// missing bottom row is a visibly broken letter rather than a subtlety. The
+// width test keeps its pixel, where it really is sub-pixel text measurement:
+// a line is only too wide when a whole WORD does not fit, which is never a
+// question of one pixel.
 function overflowsBox(content, lines) {
-  if (content.scrollHeight > content.clientHeight + 1) return true;
+  if (content.scrollHeight > content.clientHeight) return true;
   return lines.some((line) => line.scrollWidth > line.clientWidth + 1);
 }
 
@@ -5351,15 +5589,6 @@ let selectedShot = 0;
 // The recap the sheet is composed from, banked when the screen is shown.
 let recapRun = null;
 
-function fanTilt(i, total) {
-  // A fan, not a stack: the spread is centred so the middle print is square to
-  // the frame and the ends lean away from it. One print gets no tilt at all —
-  // a lone photograph at an angle reads as a mistake rather than as a fan.
-  if (total <= 1) return 0;
-  const spread = Math.min(9, 26 / total);
-  return (i - (total - 1) / 2) * spread;
-}
-
 function showTrophy() {
   const shots = bossShots();
   // A print from the LAST run must not still be held up over this one's card.
@@ -5375,19 +5604,25 @@ function showTrophy() {
   }
 
   selectedShot = shots.length - 1;
-  // Narrower the more there are, so eight prints still fit the card on a
-  // phone. The fan overlaps them by a third, so the rack is about half the
-  // width the same prints would need in a row.
-  const width = Math.max(96, Math.round(Math.min(190, 620 / Math.max(2, shots.length))));
+  // ONE WIDTH, WHATEVER THE COUNT. The fan shrank its prints as the roll grew,
+  // because eight of them had to fit the width of the card at once; the rail
+  // scrolls, so a long run makes it longer rather than making every print in it
+  // smaller.
+  //
+  // SMALLER THAN THE FAN'S, and deliberately. A print in the fan was the
+  // centrepiece of the screen and had to carry the boss's name on its chin; a
+  // print on the rail is a thing you TAP to see properly, and the sheet it
+  // opens is the size of the window. What the rail owes is a recognisable
+  // picture and a row that does not out-weigh the ledger under it.
+  const width = 108;
   shots.forEach((shot, i) => {
     const slot = document.createElement('button');
     slot.type = 'button';
     slot.className = 'sv-fan-slot';
-    slot.style.setProperty('--rot', `${fanTilt(i, shots.length).toFixed(2)}deg`);
-    // Later kills sit on top of earlier ones, so the fan reads left to right
-    // in the order the run happened.
+    // Later kills sit to the right of earlier ones, so the rail reads left to
+    // right in the order the run happened. z-index still matters: a picked
+    // print lifts and scales, and it has to lift OVER its neighbours.
     slot.style.zIndex = String(i + 1);
-    if (i > 0) slot.style.marginLeft = `${-Math.round(width * 0.34)}px`;
     slot.setAttribute('aria-label', shot.name ? `Kill shot: ${shot.name}` : `Kill shot ${i + 1}`);
     slot.appendChild(buildPrintPaper(shot.url, shot, width));
     // A tap PICKS IT AND HOLDS IT UP. Picking alone was the whole gesture, and
@@ -5520,12 +5755,12 @@ function wireShotView() {
 
   // THE SHEET'S OWN BACKDROP CLOSES IT.
   //
-  // AND NOTHING IN HERE REACHES THE MENU UNDERNEATH. That one turns the card
-  // over on any click outside the card (see bindTurn), and this sheet is inside
-  // it — so without the stop, putting a photograph down would flip the card
-  // behind it, and so would pressing Share. Stopped for the whole sheet rather
-  // than for the backdrop alone, because every one of its controls is a click
-  // outside the card as far as the menu can tell.
+  // STOPPED FOR THE WHOLE SHEET rather than for the backdrop alone. Nothing
+  // under this listens for a click any more — the menu's turn-the-card-over
+  // handler went with the flip — but every control on this sheet is a click
+  // outside the card as far as anything above it can tell, so the stop stays:
+  // it is what makes the sheet a sheet rather than a decoration over a live
+  // screen.
   el.svShotView?.addEventListener('click', (e) => {
     e.stopPropagation();
     if (e.target === el.svShotView) closeShotView();
@@ -5582,8 +5817,11 @@ function wireTrophy() {
     el.svSheetSave = null;
     // "Share" is now the only verb on the row, so it no longer needs to be
     // distinguished from saving — these say which PICTURE they act on.
-    if (el.svTrophyShare) el.svTrophyShare.textContent = 'Share this print';
-    if (el.svSheetShare) el.svSheetShare.textContent = 'Share the whole run';
+    // Two buttons rather than four wherever the OS has a sheet of its own, so
+    // there is room to say which is which. Still short: this row sits beside a
+    // label on one line of a card, not centred under a fan.
+    if (el.svTrophyShare) el.svTrophyShare.textContent = 'Share this one';
+    if (el.svSheetShare) el.svSheetShare.textContent = 'Share all';
   }
 
   el.svTrophyShare?.addEventListener('click', async () => {
@@ -5717,16 +5955,11 @@ function brkEmpty(panel, message) {
 function renderRunDetail(gameState) {
   const weapons = el.svPanelWeapons;
   const threats = el.svPanelThreats;
+  const build = el.svPanelBuild;
   if (!weapons || !threats) return;
   weapons.replaceChildren();
   threats.replaceChildren();
-  if (el.svBackTitle) {
-    // What the back is the back OF. The front carries the quip and the five
-    // figures; a face with two tables and no heading could be anybody's run.
-    el.svBackTitle.textContent =
-      `${formatTime(gameState.time)} \u00B7 Level ${gameState.level ?? 1}`;
-  }
-
+  build?.replaceChildren();
   let a = null;
   try {
     const run = lastFinishedRun();
@@ -5757,9 +5990,11 @@ function renderRunDetail(gameState) {
   const finisher = bossShot()?.causeSource ?? '';
 
   if (!dealt.length) {
+    weapons.appendChild(brkSection('Weapons', ''));
     brkEmpty(weapons, 'Nothing was damaged this run.');
   } else {
-    weapons.appendChild(brkHead('Weapon', 'Damage', 'Kills'));
+    weapons.appendChild(brkSection('Weapons', `${compactDamage(a.totalDamage)} dealt`));
+    weapons.appendChild(brkHead('', 'Dmg', 'Kills'));
     const list = document.createElement('div');
     list.className = 'sv-brk';
     for (const r of dealt) {
@@ -5816,9 +6051,11 @@ function renderRunDetail(gameState) {
   const rows = [...byCause.values()].sort((x, y) => y.damage - x.damage);
 
   if (!rows.length) {
+    threats.appendChild(brkSection('What hurt you', ''));
     brkEmpty(threats, 'Nothing laid a finger on you.');
   } else {
-    threats.appendChild(brkHead('What hurt you', 'Damage', 'Share'));
+    threats.appendChild(brkSection('What hurt you', `${compactDamage(taken)} taken`));
+    threats.appendChild(brkHead('', 'Dmg', 'Share'));
     const list = document.createElement('div');
     list.className = 'sv-brk';
     const worst = rows[0].damage;
@@ -5843,31 +6080,92 @@ function renderRunDetail(gameState) {
     if (killer) foot.push(['Killed by', killer.threat]);
     threats.appendChild(brkFoot(foot));
   }
+
+  // --- THE BUILD ----------------------------------------------------------
+  // WHAT THE PLAYER TOOK, which no version of this screen has ever shown. The
+  // weapons table above is sorted by damage and drops everything that deals
+  // none, so half a build — Yoga, Mammal Mode, the Grabber, every stat card —
+  // was invisible on the screen that exists to record the run. That was
+  // defensible on a card with two faces and no room; the ledger has a second
+  // column.
+  //
+  // SORTED BY STACKS AND THEN BY NAME, not by damage: this is the question
+  // "what did I build", and a list that reorders itself by how well it went
+  // answers a different one the table beside it already answers. The name is
+  // the build-aware one for the same reason it is in the weapons table — it is
+  // what the player was offered on the card they took.
+  if (build) {
+    const taken = a.abilities.filter((r) => (r.stacks ?? 0) > 0);
+    if (!taken.length) {
+      build.appendChild(brkSection('The build', ''));
+      brkEmpty(build, 'No upgrades this run.');
+    } else {
+      const picks = taken.reduce((n, r) => n + r.stacks, 0);
+      build.appendChild(brkSection('The build', `${picks} ${picks === 1 ? 'pick' : 'picks'}`));
+      const list = document.createElement('div');
+      list.className = 'sv-brk';
+      const most = Math.max(...taken.map((r) => r.stacks));
+      for (const r of [...taken].sort((x, y) => y.stacks - x.stacks
+        || weaponName(x.source).localeCompare(weaponName(y.source)))) {
+        list.appendChild(brkRow({
+          name: weaponName(r.source),
+          a: `×${r.stacks}`,
+          b: '',
+          // The bar reads as "how much of this build is this card", which is
+          // what a stack count means and what damage does not.
+          share: most > 0 ? (r.stacks / most) * 100 : 0,
+        }));
+      }
+      build.appendChild(list);
+    }
+  }
+}
+
+/**
+ * A section heading for a column of the readout: a label, and the one figure
+ * that sums the rows under it.
+ *
+ * The old back face had none — it was one face with two tables on it and a
+ * title above both. In two columns each block has to say what it is, because
+ * the thing above it is no longer the thing it belongs to.
+ */
+function brkSection(label, note) {
+  const head = document.createElement('div');
+  head.className = 'sv-ldg-sec';
+  head.append(label);
+  if (note) {
+    const em = document.createElement('em');
+    em.textContent = note;
+    head.appendChild(em);
+  }
+  return head;
 }
 
 // The live turn, while the card is up. Re-mounted per death rather than kept:
 // the card's height changes with what the run produced (a trophy row or not, a
 // board that arrived or not), and the flip has to be measured against the card
 // it is actually turning.
-let flip = null;
 
 /**
- * The card has come square — put the kill shots' drawing surfaces back.
+ * The card has arrived — put the kill shots' drawing surfaces back.
  *
- * ONE FRAME LATER, AND THAT IS THE LOAD-BEARING PART. The thing being undone
- * is Rive re-sizing each print's surface off the rotated card (see
- * resyncSnapshotCards for the whole story), and it does that from a
- * ResizeObserver — which the browser delivers AFTER the animation-frame
- * callbacks of the frame that changed the box, not during them. On a normal
- * turn the landing is half a second past that and the ordering does not
- * matter; on a reduced-motion swap the face un-hides and the card "lands" in
- * the same synchronous breath, so a repair made here and now would be
- * overwritten by the observer a moment later and the card would come back
- * wrong for exactly the players who asked for less motion.
+ * WHY THEY MOVE AT ALL. Rive watches every canvas it owns and, on the one
+ * transition it cares about — a zero-sized box becoming a real one, which is
+ * what display:none coming off looks like — re-sizes the drawing surface from
+ * getBoundingClientRect(). Every print on this screen is built while the menu
+ * is still hidden and then un-hidden with it, so that transition happens on
+ * every death; and the rect it reads is a PROJECTION, because the card arrives
+ * through a reveal that scales it and the picked print sits under a scale of
+ * its own even at rest. See resyncSnapshotCards for the whole story.
  *
- * Then sizeCard, because the prints going back to their real height changes
- * how tall the front face is, and the card is still whatever the ruined fan
- * measured until something says otherwise.
+ * ONE FRAME LATER, AND THAT IS THE LOAD-BEARING PART. Rive does that resize
+ * from a ResizeObserver, which the browser delivers AFTER the animation-frame
+ * callbacks of the frame that changed the box — so a repair made in the same
+ * breath as the un-hide is overwritten by the observer a moment later.
+ *
+ * This used to hang off the card's flip landing, which is where the bad rect
+ * came from when the card had two faces. The flip is gone; the transition it
+ * was repairing is not.
  */
 function landSnapshotSurfaces() {
   requestAnimationFrame(() => {
@@ -5877,76 +6175,48 @@ function landSnapshotSurfaces() {
 }
 
 /**
- * Size the card to the TALLER face and re-bake both worn edges.
+ * Re-bake the card's worn edge at the size it is.
  *
- * Both faces are absolutely positioned, so the card has no height of its own.
- * Measuring means briefly putting each face back in flow — the alternative is
- * trusting the front, and the back carries two tables the front does not, so
- * the card comes out short and the face's own overflow silently clips the last
- * control off the bottom of it. Nothing else reports that.
+ * NO HEIGHT IS WRITTEN ANY MORE. The card was two absolutely-positioned faces
+ * and therefore had no height of its own, so this measured the taller of them
+ * and wrote it inline on every content change. The ledger is a flex column with
+ * a 92vh cap and a scrolling middle, so the browser owns its height — and a
+ * height written here would fight the cap and stop the bar being pinned.
+ *
+ * The bake stays, and so does the reason it is called on a watcher: the border
+ * is eaten by the same noise field the menus dissolve through, baked per size
+ * and cached, and the card's WIDTH still moves — a window dragged narrower, a
+ * phone rotated. A null mask means the bake failed; the card then shows with a
+ * clean edge, which is the look this replaced — never an empty mask, which
+ * would hide the whole card and with it the way back into the game.
+ *
+ * MEASURED OFF THE LAYOUT BOX, NOT getBoundingClientRect, and that is still
+ * load-bearing even without the flip: offsetWidth and offsetHeight are the
+ * border box and ignore transforms, and the reveal this card arrives through
+ * scales it. A rect read mid-reveal bakes the wear at the wrong width and
+ * stretches it back over the full card, which shreds it into vertical strands.
+ *
+ * NO ZERO-WIDTH GUARD HERE, deliberately: wornEdgeMask already returns null
+ * below nine pixels, which lands on the clean-edge path above. A guard that
+ * returned early instead would take the whole bake out of reach of the jsdom
+ * harness, where every box is zero — and that harness is the only thing
+ * testing the failed-bake path at all.
  */
 function sizeCard() {
   const card = el.svCard;
   if (!card) return;
-  let tallest = 0;
-  for (const face of [el.svFaceFront, el.svFaceBack]) {
-    if (!face) continue;
-    // The class has to come off to measure a face that is currently the hidden
-    // one — display:none measures 0, and the back is hidden for the whole of
-    // the frame this runs on.
-    const wasHidden = face.classList.contains('sv-hidden');
-    face.classList.remove('sv-hidden');
-    face.style.position = 'relative';
-    tallest = Math.max(tallest, face.scrollHeight);
-    face.style.position = '';
-    if (wasHidden) face.classList.add('sv-hidden');
-  }
-  // Written only on a change — see watchCardSize for why that matters, and
-  // because a height re-written every observer callback is a style recalc for
-  // nothing on a screen that is sat on for minutes.
-  const want = tallest > 0 ? `${tallest}px` : '';
-  if (want && card.style.height !== want) card.style.height = want;
-
-  // The border, eaten by the same noise field the menus dissolve through. Baked
-  // per size and cached, so a resize costs one bake and a redraw costs nothing.
-  // A null mask means the bake failed; the card then shows with a clean edge,
-  // which is the look this replaced — never an empty mask, which would hide the
-  // whole card and with it the way back into the game.
-  //
-  // MEASURED OFF THE LAYOUT BOX, NOT getBoundingClientRect. That method returns
-  // the card's PROJECTION, and this card spends a second at a time rotated:
-  // mid-turn its client rect is a few pixels wide and at 90 degrees it is zero.
-  // Any content arriving during a turn — the trophy fan's prints, or the global
-  // board replacing the local one, both of which land seconds after the card
-  // opens and are exactly what watchCardSize exists to catch — re-baked the wear
-  // at that width and stretched it back over the full face, which shreds the
-  // card into vertical strands and takes the leaderboard with it. offsetWidth
-  // and offsetHeight are the border box and ignore transforms entirely.
-  //
-  // NO ZERO-WIDTH GUARD HERE, deliberately: wornEdgeMask already returns null
-  // below nine pixels, which lands on the clean-edge path above. A guard that
-  // returned early instead would take the whole bake out of reach of the jsdom
-  // harness, where every box is zero — and that harness is the only thing
-  // testing the failed-bake path at all.
-  const boxW = card.offsetWidth;
-  const boxH = card.offsetHeight;
   const wear = CONFIG.death?.flip?.wear ?? {};
   const style = wear.style ?? 'houseField';
-  for (const [i, face] of [el.svFaceFront, el.svFaceBack].entries()) {
-    if (!face) continue;
-    const mask = style === 'clean' ? null : wornEdgeMask({
-      w: boxW,
-      h: boxH || tallest,
-      radius: wear.radius ?? 14,
-      depth: wear.depth ?? 9,
-      style,
-      // Two faces, two seeds: the same card worn identically on both sides
-      // reads as a texture rather than as an object.
-      seed: i,
-    });
-    applyMask(face, mask ?? 'none', '100% 100%', '0 0', 'no-repeat');
-    if (!mask) clearMask(face);
-  }
+  const mask = style === 'clean' ? null : wornEdgeMask({
+    w: card.offsetWidth,
+    h: card.offsetHeight,
+    radius: wear.radius ?? 14,
+    depth: wear.depth ?? 9,
+    style,
+    seed: 0,
+  });
+  applyMask(card, mask ?? 'none', '100% 100%', '0 0', 'no-repeat');
+  if (!mask) clearMask(card);
 }
 
 // The two faces, watched so the card keeps following whichever is taller. Held
@@ -5955,39 +6225,38 @@ function sizeCard() {
 let cardWatch = null;
 
 /**
- * Re-size the card whenever a face's CONTENT changes.
+ * Re-bake and re-fit whenever the readout's CONTENT changes.
  *
  * A MUTATION OBSERVER AND NOT A RESIZE ONE, which is the whole point of this
- * comment. `.sv-face-inner` is `height: 100%` of a face that is `inset: 0` of
- * the card, so its box is exactly the card's height and CANNOT grow when
- * content is added to it — a ResizeObserver on it fires on a viewport change
- * and never once on the thing this exists to catch. It looks completely
- * correct and does nothing.
- *
- * What it has to catch is real and happens on every run: the trophy fan builds
- * its prints asynchronously, and the global leaderboard replaces the local one
- * whenever the network answers. Both are DOM insertions, minutes apart from
- * each other on a slow connection, into a card that was measured once.
+ * comment. What it has to catch is real and happens on every run: the roll
+ * builds its prints asynchronously, and the global leaderboard replaces the
+ * local one whenever the network answers. Both are DOM insertions, minutes
+ * apart from each other on a slow connection, into a card that was measured
+ * once — and both change how the name fields have to be sized.
  *
  * NOT COALESCED THROUGH requestAnimationFrame, and that is a correction rather
  * than a preference. Batching through a frame looks tidier and introduces a way
  * to wedge: the "one is already queued" flag latches, and a frame that never
  * arrives — a backgrounded tab, which is exactly where somebody leaves a score
- * screen — leaves it latched forever, so every later insertion is dropped and
- * the card is stuck at whatever height it had when the tab lost focus.
+ * screen — leaves it latched forever, so every later insertion is dropped.
  *
  * There is nothing to gain by it either. A MutationObserver callback is already
- * batched: the fan inserting eight prints in a loop produces ONE call, not
+ * batched: the roll inserting eight prints in a loop produces ONE call, not
  * eight. Measuring here forces one synchronous layout per batch, on a menu,
  * which is free at this cadence.
  */
 function watchCardSize() {
   unwatchCardSize();
-  const inners = [el.svFaceFront, el.svFaceBack]
-    .map((f) => f?.querySelector('.sv-face-inner')).filter(Boolean);
+  // The scrolling readout and the roll's rail: the two places content lands
+  // after the screen has opened.
+  const inners = [el.svCard?.querySelector('.sv-ldg-body'), el.svFan].filter(Boolean);
   if (!inners.length) return;
 
-  const soon = () => sizeCard();
+  // The name fields ride the same trigger as the card's height: both are
+  // answers to "the content changed shape", and the field's answer goes stale
+  // for exactly the reasons the card's does — a row arriving, a rotation, a
+  // window dragged narrower.
+  const soon = () => { sizeCard(); refitNames(); };
   cardWatch = { mo: null, soon };
   if (typeof MutationObserver === 'function') {
     cardWatch.mo = new MutationObserver(soon);
@@ -6006,43 +6275,6 @@ function unwatchCardSize() {
   cardWatch = null;
 }
 
-// Bound once, at build time, like every other control on this card. The faces
-// are re-filled per death; the two turn controls never change.
-function bindTurn() {
-  for (const id of ['svTurnOver', 'svTurnBack']) {
-    const button = el[id];
-    if (!button) continue;
-    // bindMenuSounds already voices the press. A second feedback() call here
-    // would both double the blip and invent an event name nothing declares,
-    // which the event audit reads as a typo.
-    bindMenuSounds(button).addEventListener('click', () => flip?.flip());
-  }
-
-  // THE WATER AROUND THE CARD TURNS IT OVER TOO.
-  //
-  // "Turn it over" is a caption in the card's own type — small, low contrast,
-  // and deliberately not a fifth button competing with Try again — which makes
-  // it the right size for a label and the wrong size for a target. The card is
-  // an object on a table and the rest of the screen is the table, so clicking
-  // the table turns the object over: a whole screen's worth of hit area for a
-  // gesture that has no cost, because the way back is the same gesture.
-  //
-  // The card itself is exempt, or every press on Try again would flip on its
-  // way through — a click on a control inside the card bubbles up to here as
-  // well as firing its own handler.
-  el.svGameOverMenu?.addEventListener('click', (e) => {
-    // The preview sheet is drawn over this and handles its own backdrop; a tap
-    // there puts the photograph down and must not also turn the card behind it.
-    if (shotViewOpen()) return;
-    if (e.target?.closest?.('#svCard')) return;
-    // Somebody who has just dragged across the leaderboard to copy a name is
-    // finishing a selection, not asking for anything.
-    if (window.getSelection?.()?.toString()) return;
-    feedback('uiClick');
-    flip?.flip();
-  });
-}
-
 export function showGameOver(gameState, extra = {}) {
   el.svHud.classList.add('sv-hidden');
   // Rolled per death, not once per session — the line is the first thing read
@@ -6055,41 +6287,37 @@ export function showGameOver(gameState, extra = {}) {
   // rather than on the whole table. textContent, not innerHTML, so a typed
   // name is text no matter what is in it — sanitizeName strips the dangerous
   // characters on the way in as well, and neither guard is the only one.
+  resetGameOverNav();
   el.svGameOverTitle.textContent = expandPlayer(pickQuip(QUIPS, Math.random, gameState.deathCauses));
   const score = Math.floor(gameState.score ?? 0);
-  // THE SCORECARD. The same five figures the shared image carries (see
-  // drawScorecard in systems/bossShot.js), so a player looking at the picture
-  // they posted and a player looking at this screen are reading the same run.
   const bosses = extra.bosses ?? bossShots().length;
-  // Score on its own line at display size, the other four as one even row under
-  // it — see .sv-scorecard for why the flat row of five had to go.
-  const rest = [
+  // SCORE, AND WHERE IT STANDS. The figure alone was the whole hero for a long
+  // time, with the board underneath it and nothing joining the two — so the
+  // player had to find their own row to learn whether the number was any good.
+  // The standing is filled in by renderBoard, which is the only thing that
+  // knows it; this is the number and a placeholder for the line under it.
+  el.svGameOverStats.innerHTML =
+    `<b>${score.toLocaleString()}</b>` +
+    `<span class="sv-ldg-rank" id="svLdgRank">Score</span>`;
+  el.svLdgRank = document.getElementById('svLdgRank');
+
+  // THE OTHER FOUR FIGURES, plus the killer — which used to be readable only on
+  // the back of the card, under a table, on a screen the player had to know to
+  // turn over. A run ends with one question before any of the numbers, and it
+  // is what got you.
+  const killer = primaryCause(gameState.deathSource);
+  const figs = [
     ['Time', formatTime(gameState.time)],
     ['Level', gameState.level],
     ['Kills', gameState.kills],
     ['Bosses', bosses],
-  ].map(([k, v]) => `<span class="sv-stat"><b>${v}</b>${k}</span>`).join('');
-  el.svGameOverStats.innerHTML =
-    `<div class="sv-scorecard">` +
-    `<div class="sv-score-hero"><b>${score.toLocaleString()}</b><span>Score</span></div>` +
-    `<div class="sv-stat-row">${rest}</div>` +
-    `</div>`;
+  ];
+  if (killer) figs.push(['Killed by', killer.threat]);
+  el.svGameOverFigs.innerHTML = figs
+    .map(([k, v]) => `<span class="sv-fig">${k} <b>${escapeHtml(String(v))}</b></span>`)
+    .join('');
 
-  // ALWAYS FRONT SIDE UP. Which way the card was left is not a preference — a
-  // player who read the weapons after one death is not asking to skip the
-  // photographs after the next one, and the roll of prints is what this screen
-  // leads with.
   renderRunDetail(gameState);
-  flip = mountCardFlip({
-    card: el.svCard,
-    front: el.svFaceFront,
-    back: el.svFaceBack,
-    // The bubbles need somewhere bigger than the card to live, or they are
-    // clipped the moment they leave its edge — which is the only place they
-    // ever are. The centring layer is the whole screen.
-    water: el.svGameOverMenu,
-    onLand: landSnapshotSurfaces,
-  });
   const token = ++gameOverToken;
   pendingRun = {
     score,
@@ -6102,7 +6330,7 @@ export function showGameOver(gameState, extra = {}) {
   // read when a button is pressed: by then the next run may have started (the
   // score screen is live while the water carries on behind it), and a sheet
   // captioned with somebody else's score is worse than no sheet.
-  recapRun = { ...pendingRun, bosses: extra.bosses ?? bossShots().length };
+  recapRun = { ...pendingRun, bosses };
 
   el.svNameRow.classList.remove('sv-hidden');
   el.svNameSubmit.disabled = false;
@@ -6123,12 +6351,25 @@ export function showGameOver(gameState, extra = {}) {
   // panel blank for as long as the request takes.
   showTrophy();
 
-  renderBoard(loadLeaderboard(), { global: false });
+  // Show the standing board right away from local data, then ADD the global one
+  // when it arrives rather than replacing the panel with it — the switch is
+  // what moves between them now, and it stays where the player put it.
+  boards = { device: loadLeaderboard(), global: null };
+  boardResult = null;
+  boardPicked = false;
+  showBoard('device');
   if (isGlobal()) {
     fetchGlobalBoard().then((list) => {
       // Drop it if this screen has been replaced, or if the player already
       // submitted — the board that came back from submitting is newer.
-      if (list && token === gameOverToken && pendingRun) renderBoard(list, { global: true });
+      if (!list || token !== gameOverToken || !pendingRun) return;
+      boards.global = list;
+      // MOVED TO IT, ONCE. The global board is the one this game is played
+      // against and it is what the panel would have shown anyway; what is new
+      // is that the local one is still there and the panel says which is up.
+      // Only while the player has not chosen for themselves — see boardPicked.
+      if (!boardPicked) showBoard('global');
+      else showBoard(boardShown);
     });
   }
 
@@ -6162,6 +6403,39 @@ export function showGameOver(gameState, extra = {}) {
   // A card sized once is a card that is the wrong height a second later.
   sizeCard();
   watchCardSize();
+  // AND THE NAME FIELDS, HERE AND NOT WHERE THEY ARE FILLED. Both are sized by
+  // measuring what is in them against the box they have (see fitNameField),
+  // and both are filled well above this line — while the menu is still
+  // display:none and every box measures zero. The fit taken there is a fit
+  // against nothing.
+  //
+  // It used to be covered by accident: watchCardSize's observer caught the
+  // global board replacing the local one and re-fitted on the way through. A
+  // run with no network answer never got that, and the field kept the size it
+  // was given while hidden — npm run layout caught it as 228px of a rolled
+  // name in a 197px box, intermittently, because whether it overflows depends
+  // on which name was rolled.
+  refitNames();
+  // The prints were built while all of this was display:none. See above.
+  landSnapshotSurfaces();
+
+  // AND THE TWO NAME FIELDS, for the same reason and one line later. Both are
+  // filled above, where the card is still display:none — and fitNameField
+  // measures the room inside the field to decide the type size, so on a hidden
+  // card it reads 0, hits its own `avail > 0` guard and returns having done
+  // nothing. On a desktop that is invisible: the resting size fits a short
+  // name in a 300px field. On an iPhone the same field is 154px and the name
+  // it was given ran 74px past the end of it.
+  refitNames();
+  // ...AND AGAIN WHEN THE TYPE ARRIVES. The UI family is a webfont
+  // (ui/typography.js fetches whatever the picker is set to), so the first fit
+  // is measured in the FALLBACK: the Roll button beside the field is narrower
+  // in it, which makes the field wider, which makes the fit generous. When the
+  // real face lands the button grows, the field loses the difference and the
+  // name that just fitted no longer does. It is a race, so it is intermittent —
+  // npm run layout caught it on one sweep out of two, with a different random
+  // name each time.
+  document.fonts?.ready?.then(refitNames);
 
   // Focus lands on the field so a name can be typed without clicking first,
   // but only with a real keyboard — on touch, focusing would throw up the
@@ -6267,6 +6541,22 @@ function commitNextSeal() {
   savePlayerName(value);
 }
 
+/** Both fields on the score card, re-measured. Cheap enough to call on any
+ *  event that could have changed their width — one ruler measurement each. */
+function refitNames() {
+  fitNameField();
+  fitNameField(el.svNextInput);
+  // AND THE CARD, because a fit can change the card's HEIGHT. When a name is
+  // too long to sit beside its button the row stacks (.sv-name-stacked), which
+  // is a whole extra line on the front face — and stacking is a CLASS change,
+  // while watchCardSize's observer only watches childList. So the face grew,
+  // nothing re-measured it, and the card went on clipping its own last 38px:
+  // the leaderboard bar, the next-seal row and the tip jar, all cut off with
+  // the card reporting a tidy height. Intermittent, because whether it stacks
+  // depends on the name that was rolled.
+  sizeCard();
+}
+
 function fitNameField(input = el.svNameInput) {
   if (!input) return;
   // THE ROW IS THE FIELD'S OWN, not svNameRow. Two rows use this now — the
@@ -6274,6 +6564,17 @@ function fitNameField(input = el.svNameInput) {
   // meant typing a long name into one of them stacked the OTHER one, which is
   // a layout bug with nothing in either row's own code to give it away.
   const row = input.closest?.('.sv-name-row, .sv-next-row') ?? el.svNameRow;
+  // NOTHING TO MEASURE AGAINST IS NOT THE SAME AS "SHOULD BE RESTING", and the
+  // order of these two lines is the whole difference. The reset below used to
+  // come first, so a call made at a moment when the field cannot be measured —
+  // a hidden face mid-relayout, the card still display:none, jsdom — cleared a
+  // good fit and then returned at the guard below, leaving the name at full
+  // size in a field it does not fit. Harmless while this was called once; the
+  // moment it was also called from the card's size watcher and from
+  // document.fonts.ready, the last unlucky caller won and the fit was never
+  // there at all. A call that cannot measure now does nothing whatsoever.
+  if (!(input.clientWidth > 0)) return;
+
   // Both back to their resting state before anything is measured — a fit
   // measured against the last fit's own size shrinks a little further on every
   // keystroke and never comes back when the name gets shorter.
@@ -6349,7 +6650,9 @@ async function submitPendingRun() {
   const result = await submitScore({ ...run, name });
 
   el.svNameRow.classList.add('sv-hidden');
-  renderBoard(result.list, { global: result.global, result });
+  boardResult = result;
+  boards[result.global ? 'global' : 'device'] = result.list;
+  showBoard(result.global ? 'global' : 'device');
 
   if (result.error) {
     setStatus(`Couldn't reach the global board — saved on this device as ${name}`, true);
@@ -6374,17 +6677,107 @@ function setStatus(text, isError = false) {
  *              the moment a column is added — and the board a player checks
  *              before a run has to be the same board they are put on after it.
  */
-function renderBoard(list, { global, result = null } = {}, into = el.svLeaderboard) {
-  const heading = global ? 'Global leaderboard' : 'Leaderboard (this device)';
-  if (!into) return;
+// ---------------------------------------------------------------------------
+// THE TWO BOARDS
+// ---------------------------------------------------------------------------
+// The card used to show the local board and then silently replace it with the
+// global one when the network answered — same panel, same shape, different
+// hundred names, with nothing to say it had happened. A player who saw their
+// own name at the top and looked back to find it gone was reading two
+// different boards and was never told there were two.
+//
+// So both are KEPT and the panel says which it is showing. `device` is on disk
+// and always there; `global` arrives, or does not. Held at module scope
+// because the switch re-renders from them long after showGameOver has returned.
+let boards = { device: [], global: null };
+let boardShown = 'device';
+// Set the moment the player presses one of the two heading buttons. The global
+// board can arrive seconds after the screen opens — on a slow connection, after
+// somebody has already read the local one and chosen to stay on it — and a
+// panel that swapped itself out from under that choice is the exact behaviour
+// the switch exists to end.
+let boardPicked = false;
+// Set once a submit comes back, so the row can be marked and scrolled to. Held
+// beside the boards for the same reason they are.
+let boardResult = null;
 
-  if (!list?.length) {
-    into.innerHTML =
-      `<div class="sv-label" style="margin-bottom:6px;">${heading}</div>` +
-      `<div class="sv-lb-empty">No scores yet — be the first.</div>`;
+/** Where a score would sit in a list, 0-based. */
+function standingIn(score, list) {
+  if (!list?.length) return -1;
+  const n = Number(score) || 0;
+  const at = list.findIndex((e) => n > (Number(e.score) || 0));
+  return at < 0 ? list.length : at;
+}
+
+const ORDINALS = ['th', 'st', 'nd', 'rd'];
+
+/** 1 -> 1st, 2 -> 2nd, 13 -> 13th, 22 -> 22nd. */
+function ordinal(n) {
+  const v = Math.abs(Math.round(n)) % 100;
+  return `${n}${ORDINALS[(v - 20) % 10] ?? ORDINALS[v] ?? ORDINALS[0]}`;
+}
+
+/**
+ * The line under the score: where the run stands, on the board being shown.
+ *
+ * BEFORE A SUBMIT IT IS A CONDITIONAL, and saying so matters — the score is not
+ * on the board yet and a flat "2nd" would be the card claiming a place the
+ * player has not taken. After one, the rank came back with the write and is a
+ * fact.
+ */
+function renderStanding() {
+  const rank = el.svLdgRank;
+  if (!rank) return;
+  const list = boards[boardShown];
+  const score = pendingRun?.score ?? recapRun?.score;
+  if (!list?.length || score == null) { rank.textContent = 'Score'; return; }
+  if (boardResult?.madeList && boardResult.global === (boardShown === 'global')) {
+    rank.textContent = `${ordinal(boardResult.rank)} of ${list.length}`;
     return;
   }
+  const at = standingIn(score, list);
+  rank.textContent = at < list.length
+    ? `Would be ${ordinal(at + 1)} of ${list.length}`
+    : `Not on the board yet`;
+}
 
+/**
+ * Show one of the two boards on the score card, and remember which.
+ *
+ * Re-entered by the switch, so it takes nothing but the side: everything it
+ * needs is in `boards`. The main menu's copy of the panel does not come through
+ * here — it has one board and no switch (see renderBoard's `into`).
+ */
+function showBoard(side) {
+  boardShown = boards[side]?.length || side === 'global' ? side : 'device';
+  renderBoard(boards[boardShown], {
+    global: boardShown === 'global',
+    result: boardResult?.global === (boardShown === 'global') ? boardResult : null,
+    withSwitch: true,
+  });
+  renderStanding();
+}
+
+function renderBoard(list, { global, result = null, withSwitch = false } = {}, into = el.svLeaderboard) {
+  if (!into) return;
+  // THE HEADING IS THE SWITCH on the score card, and a plain label everywhere
+  // else. Two buttons that both say what you are looking at and offer the other
+  // one, which is a smaller thing than a label plus a control and reads as one.
+  const label = global ? 'Global leaderboard' : 'Leaderboard (this device)';
+  const head = withSwitch
+    ? `<div class="sv-ldg-sec">Leaderboard<span class="sv-lb-switch">` +
+      `<button type="button" id="svBoardGlobal" class="sv-lb-sw${global ? ' sv-lb-sw-on' : ''}"` +
+      ` data-board="global"${boards.global ? '' : ' disabled'}>Global</button>` +
+      `<button type="button" id="svBoardDevice" class="sv-lb-sw${global ? '' : ' sv-lb-sw-on'}"` +
+      ` data-board="device">Device</button>` +
+      `</span></div>`
+    : `<div class="sv-label" style="margin-bottom:6px;">${label}</div>`;
+
+  if (!list?.length) {
+    into.innerHTML = head + `<div class="sv-lb-empty">No scores yet — be the first.</div>`;
+    if (withSwitch) wireBoardSwitch(into);
+    return;
+  }
   const rows = list
     .map((e, i) => {
       const mine = result?.madeList && i === result.rank - 1;
@@ -6403,7 +6796,7 @@ function renderBoard(list, { global, result = null } = {}, into = el.svLeaderboa
   // the stripe. Unpositioned on purpose — the scroll below measures offsets
   // against the list, and a positioned wrapper would become the offset parent.
   into.innerHTML =
-    `<div class="sv-label" style="margin-bottom:6px;">${heading}</div>` +
+    head +
     `<div class="sv-lb-head">` +
       `<span>#</span><span>Name</span><span>Score</span><span>Lv</span><span>Time</span>` +
     `</div>` +
@@ -6428,6 +6821,23 @@ function renderBoard(list, { global, result = null } = {}, into = el.svLeaderboa
         mine.offsetTop - into.offsetTop - (into.clientHeight - mine.offsetHeight) / 2,
       );
     }
+  }
+
+  if (withSwitch) wireBoardSwitch(into);
+}
+
+/**
+ * Wire the two heading buttons. Called on every render because the buttons are
+ * rebuilt by every render — there is nothing stable here to bind once, and a
+ * listener attached to an element that innerHTML has since replaced is a
+ * control that looks live and is not.
+ */
+function wireBoardSwitch(into) {
+  for (const button of into.querySelectorAll('.sv-lb-sw')) {
+    bindMenuSounds(button).addEventListener('click', () => {
+      boardPicked = true;
+      showBoard(button.dataset.board);
+    });
   }
 }
 

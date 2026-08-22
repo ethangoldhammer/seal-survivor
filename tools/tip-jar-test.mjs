@@ -116,5 +116,119 @@ section('THE SPLASH COPY — the gesture stops at the jar');
   check('...but a tap on the splash itself still does', wrapSaw === 1, String(wrapSaw));
 }
 
+// ---------------------------------------------------------------------------
+section('WHAT A TIP BUYS — the tiers');
+// ---------------------------------------------------------------------------
+// The panel quotes prices and hands off to Ko-fi. Nothing in the game takes a
+// payment or records one, which is exactly why the two things that CAN go
+// wrong here are both about the hand-off:
+//
+//   A LINK THAT STOPPED BEING ONE. The jar becomes a menu when it is given
+//   tiers, and the tiers themselves have to stay real anchors — a click that
+//   ends in window.open several frames from the gesture is the call that
+//   silently does nothing on the phone most of this game is played on.
+//   A PANEL WITH NO INSTRUCTION. Ko-fi's message field IS the record. A tier
+//   that opens Ko-fi without telling the player to write their name in the
+//   message is a tip that arrives meaning nothing, and a refund.
+{
+  const { parseTipCsv } = await import('../path/src/tipTable.js');
+  const { openTipSheet, closeTipSheet, tipSheetOpen } = await import('../path/src/ui/tipJar.js');
+  const { readFileSync } = await import('node:fs');
+  const csv = readFileSync(new URL('../path/src/tips.csv', import.meta.url), 'utf8');
+
+  const warnings = [];
+  const tiers = parseTipCsv(csv, (m) => warnings.push(m));
+  check('tips.csv parses into tiers', tiers.length > 0, `${tiers.length} tier(s)`);
+  check('...with nothing to complain about', warnings.length === 0, warnings.join(' | '));
+  // Every one of these is a number somebody is agreeing to pay. A blank or a
+  // zero on this panel is worse than a missing tier.
+  check('every tier quotes a real price',
+    tiers.every((t) => Number.isInteger(t.price) && t.price >= 1),
+    tiers.map((t) => `$${t.price}`).join(' '));
+  check('...and says what it buys', tiers.every((t) => t.label && t.desc));
+  check('...and what to write on the tip', tiers.every((t) => t.tag));
+
+  closeTipSheet();
+  check('nothing is up to begin with', !tipSheetOpen());
+  const sheet = openTipSheet({ tiers });
+  check('the panel opens', tipSheetOpen() && !!sheet);
+
+  const rows = [...sheet.querySelectorAll('.sv-tip-tier')];
+  check('...with a row per tier', rows.length === tiers.length, `${rows.length}`);
+  check('every tier is a real anchor', rows.every((r) => r.tagName === 'A'),
+    rows.map((r) => r.tagName).join(' '));
+  check('...pointing at the one Ko-fi page',
+    rows.every((r) => r.getAttribute('href') === TIP_JAR_URL), TIP_JAR_URL);
+  check('...away from the run, with no opener back',
+    rows.every((r) => r.target === '_blank' && /noopener/.test(r.rel) && /noreferrer/.test(r.rel)));
+  check('...and the price is on the row', rows.every((r, i) =>
+    r.querySelector('.sv-tip-price').textContent === `$${tiers[i].price}`),
+    rows.map((r) => r.querySelector('.sv-tip-price').textContent).join(' '));
+
+  // THE INSTRUCTION IS THE MECHANISM. Every tag in the table has to appear in
+  // it, or a tier is askable for and unsortable on arrival.
+  const how = sheet.querySelector('.sv-tip-how').textContent;
+  check('the panel says to write the name in the message', /message/i.test(how));
+  for (const tag of new Set(tiers.map((t) => t.tag))) {
+    check(`...and names the ${tag} tag`, how.includes(tag), how.replace(/\s+/g, ' ').trim());
+  }
+
+  // A press on a tier must NOT be swallowed — the navigation is the point.
+  let defaulted = true;
+  rows[0].addEventListener('click', (e) => { defaulted = !e.defaultPrevented; });
+  rows[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  check('a press on a tier is left to navigate', defaulted);
+
+  // The backdrop puts it down; the panel does not. Without the target check a
+  // press on a tier closes the sheet on its way out, which on a phone is a
+  // panel vanishing behind the tab it just opened for no visible reason.
+  sheet.querySelector('.sv-tip-panel')
+    .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  check('a press inside the panel does not close it', tipSheetOpen());
+  sheet.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  check('...but the backdrop does', !tipSheetOpen());
+
+  // AND THE JAR STILL BEHAVES LIKE A LINK. A modified click is somebody who
+  // has already decided where they are going; swallowing it to show a menu is
+  // the link quietly becoming a button.
+  const jar = tipJarLink({ tiers });
+  document.body.appendChild(jar);
+  const plain = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  jar.dispatchEvent(plain);
+  check('a plain click on the jar opens the menu instead of navigating',
+    plain.defaultPrevented && tipSheetOpen());
+  closeTipSheet();
+  const cmd = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0, metaKey: true });
+  jar.dispatchEvent(cmd);
+  check('...but a cmd-click still goes straight to Ko-fi',
+    !cmd.defaultPrevented && !tipSheetOpen());
+  jar.remove();
+
+  // THE 44px FLOOR REACHES THE PANEL. Every touch rule in this game keys on
+  // `.sv-touch`, which lives on `.sv-ui` — and this sheet is on the body, so
+  // the class has to be carried over or the rules match nothing. The close
+  // button came up at 34px on a phone, on a modal, with nothing able to say so:
+  // the panel is not one of npm run layout's surfaces.
+  closeTipSheet();
+  const ui = document.createElement('div');
+  ui.className = 'sv-ui sv-touch';
+  document.body.appendChild(ui);
+  const touched = openTipSheet({ tiers });
+  check('a touch screen carries its class onto the sheet',
+    touched.classList.contains('sv-touch'), touched.className);
+  ui.remove();
+  closeTipSheet();
+  const mouse = openTipSheet({ tiers });
+  check('...and a mouse does not', !mouse.classList.contains('sv-touch'), mouse.className);
+  closeTipSheet();
+
+  // A jar with no tiers is the jar it always was.
+  const bare = tipJarLink();
+  const bareClick = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  bare.dispatchEvent(bareClick);
+  check('a jar with no tiers is still a plain link',
+    !bareClick.defaultPrevented && !tipSheetOpen());
+}
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}`);
 process.exit(failures ? 1 : 0);

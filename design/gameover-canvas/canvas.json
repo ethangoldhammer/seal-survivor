@@ -1,0 +1,76 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 940,
+      "h": 1120,
+      "title": "As it ships today"
+    },
+    {
+      "file": "OneAsk.dc.html",
+      "x": 1020,
+      "y": 0,
+      "w": 760,
+      "h": 1120,
+      "title": "A · One Ask"
+    },
+    {
+      "file": "ContactSheet.dc.html",
+      "x": 1860,
+      "y": 0,
+      "w": 760,
+      "h": 1120,
+      "title": "B · Contact Sheet"
+    },
+    {
+      "file": "Ledger.dc.html",
+      "x": 2700,
+      "y": 0,
+      "w": 760,
+      "h": 1120,
+      "title": "C · The Ledger"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "baseline",
+      "x": 0,
+      "y": -300,
+      "w": 940,
+      "text": "AS IT SHIPS TODAY — direction C, in the game.\n\nRebuilt from path/src/ui/ui.js after the ledger landed, with the live tuning applied: Press Start 2P at scale 1.15, retro chroma and scanlines on. The flip is gone — there is no back face, no bubbles and no gloss angle. Both of the old back's tables are here, the roll is a rail, and Submit / Try again sit in a bar the readout scrolls under.\n\nThree things moved between the direction artboard and the shipped screen, each because a real screen said so. The quip became its own text role (at the menu title's tuned size it wrapped to four lines beside the score and pushed the readout off a laptop). The board spans both columns (at half width its name column was about seven glyphs of the pixel face, so every name ellipsed). And the roll's four verbs moved onto the heading line and got shorter — four of \"Share this one\" is 920px of label in 740px of room.\n\nTwo things are new rather than moved: THE BUILD (every upgrade with its stack count — the weapons table drops anything that deals no damage, so half a build was invisible on the screen that exists to record the run), and the board's Global/Device switch, which no longer swaps itself out from under a player who chose one.\n\nSet Bosses to 0 to see a run that met none. Posted flips the standing line from \"would be 2nd\" to \"2nd\"."
+    },
+    {
+      "id": "dir-a",
+      "x": 1020,
+      "y": -300,
+      "w": 760,
+      "text": "A · ONE ASK — axis: radical subtraction.\n\nThe death, the score and one button are the whole card. The score becomes a place rather than a figure (\"2nd of 100, 5,940 off first place\"), and the next seal's name rides the button that starts its run instead of sitting in a labelled form beside the leaderboard field. Posting, the prints and the run breakdown become three drawers, one open at a time.\n\nTradeoff: the board and the share prompt lose their standing visibility. Expect fewer submits and fewer shares — this direction is betting that a faster loop is worth more than either."
+    },
+    {
+      "id": "dir-b",
+      "x": 1860,
+      "y": -300,
+      "w": 760,
+      "text": "B · CONTACT SHEET — axis: the kill shots are the screen.\n\nThe game already photographs every boss it kills and develops the print in front of the player, then buries the roll in a 190px rack mid-card. Here the card is the sheet: the run is the film leader, the quip is the grease-pencil slug, and a click opens one frame. This is the version somebody sends a friend.\n\nTradeoff: it is a photo screen, so a run that met no boss has nothing to show. The unexposed frames are the answer here, but a bossless run is a common run — look at Bosses 0 before you buy the direction. Raise it to 4 or 6 for a long one."
+    },
+    {
+      "id": "dir-c",
+      "x": 2700,
+      "y": -300,
+      "w": 760,
+      "text": "C · THE LEDGER — axis: no flip, and the actions never scroll away. THIS IS THE ONE THAT SHIPPED; the artboard on the far left is what it actually became.\n\nBoth faces become one readout on a wider card, and Post / Dive again sit in a bar pinned to the bottom that the readout scrolls under. The board says which board it is instead of silently swapping the global list in when the network answers, and the upgrade picks get a column of their own.\n\nTradeoff, as argued at the time: it is dense, and it spends the flip — which was real theatre with its own bubbles and gloss — to buy that. Kept here as the direction rather than the result, so the case it made is still readable beside A and B."
+    },
+    {
+      "id": "shared",
+      "x": 0,
+      "y": 1180,
+      "w": 960,
+      "text": "All four use only tokens already in the game: #7ad7ff and its ghost tints, the #07090d emulsion, #e8ecf3 ink, 14/8/6px radii, the face's border and shadow, the damage red #ff7878, and the tip jar's warm hover. No new colours, no second type family.\n\nOne thing that will not port back: type on the role selectors (.sv-title, .sv-sub, .sv-btn, .sv-lb-row, .sv-status, .sv-label) is owned by the in-game Text panel via CONFIG.textStyles, so sizes and colours edited here are edits to the fallback layer. Layout, spacing and structure port normally — see design/readme.md."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

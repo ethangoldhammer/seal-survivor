@@ -292,6 +292,22 @@ export function buildRoleCss() {
 
 // Called at boot and again whenever anything in the Text panel changes, so
 // edits land live rather than needing a reload.
+/**
+ * Anything sized by MEASURING text has to be re-measured when the type
+ * changes, and this is how it hears about it. A DOM event rather than an
+ * import, deliberately: ui/ui.js already imports this module, and the fits
+ * that need to run live there (the upgrade cards, the score card's name
+ * fields), so calling them from here would be a cycle.
+ *
+ * The Text panel rewrites this sheet on every keystroke of a drag, and a menu
+ * that is already open keeps whatever fit it was born with — an upgrade card
+ * dealt in Inter and then shown in a pixel face is a card whose text no longer
+ * fits the hexagon it is in, with the content box quietly cutting off the
+ * overflow. Nothing else in the app notices a font change, which is why this
+ * had no symptom anybody could trace back to the tuner.
+ */
+export const TYPOGRAPHY_EVENT = 'sv-typography';
+
 export function applyTypography() {
   const t = CONFIG.typography ?? {};
   const root = document.documentElement.style;
@@ -312,4 +328,7 @@ export function applyTypography() {
   document.body.classList.toggle('sv-retro', !!t.retro);
   const overlay = document.getElementById('svRetroOverlay');
   if (overlay) overlay.style.display = t.retro ? '' : 'none';
+
+  // Last, so every listener measures against the sheet that is now live.
+  document.dispatchEvent(new CustomEvent(TYPOGRAPHY_EVENT));
 }

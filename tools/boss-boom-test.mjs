@@ -187,15 +187,24 @@ check('the front is out before the shutter too', (() => {
 console.log('\nthe size');
 
 {
-  const small = detonate(4);
-  const big = detonate(16);
+  // MEASURED AT THE CLAMPS, and derived from them rather than typed. The
+  // property here is that the cloud scales LINEARLY with the body it is
+  // measured off; a hardcoded pair either side of the ceiling tests the CLAMP
+  // instead, and reports the ratio of the clamps as a scaling bug. The two
+  // endpoints of the live band are inside it by definition, wherever the band
+  // is tuned to.
+  const lo = BOOM.minRadius;
+  const hi = BOOM.maxRadius;
+  const want = hi / lo;
+  const small = detonate(lo);
+  const big = detonate(hi);
   const spread = (ls) => Math.max(...ls.map((l) => Math.hypot(l.x, l.y)));
   const ratio = spread(big) / spread(small);
-  check('the cloud is scaled by the body', Math.abs(ratio - 4) < 0.01,
-    `a 16-unit body spreads ${ratio.toFixed(2)}x a 4-unit one, expected 4`);
+  check('the cloud is scaled by the body', Math.abs(ratio - want) < 0.01,
+    `a ${hi}-unit body spreads ${ratio.toFixed(2)}x a ${lo}-unit one, expected ${want.toFixed(2)}`);
   const lobeRatio = Math.max(...big.map((l) => l.size)) / Math.max(...small.map((l) => l.size));
-  check('...and so are the lobes', Math.abs(lobeRatio - 4) < 0.01,
-    `${lobeRatio.toFixed(2)}x, expected 4 — sizeMul is what carries this and it is easy to drop`);
+  check('...and so are the lobes', Math.abs(lobeRatio - want) < 0.01,
+    `${lobeRatio.toFixed(2)}x, expected ${want.toFixed(2)} — sizeMul is what carries this and it is easy to drop`);
 }
 
 {
@@ -209,10 +218,21 @@ console.log('\nthe size');
     `${spread(below).toFixed(2)} vs ${spread(atFloor).toFixed(2)}`);
   check('a huge one is capped', Math.abs(spread(above) - spread(atCeiling)) < 1e-3,
     `${spread(above).toFixed(2)} vs ${spread(atCeiling).toFixed(2)}`);
-  check('the roster measures INSIDE the clamps',
-    BOOM.maxRadius > 16.8 && BOOM.minRadius < 12.5,
-    `the megalodon measures 16.8 and the kraken 12.5; a ceiling inside that band `
-    + `makes every boss go up the same size (clamps are [${BOOM.minRadius}, ${BOOM.maxRadius}])`);
+  // THE CEILING IS INSIDE THE ROSTER, ON PURPOSE. This check used to require
+  // maxRadius > 16.8 so that the whole roster — kraken 12.5 to megalodon 16.8 —
+  // landed below the cap and kept its range. The tuned ceiling is lower than
+  // that now, which is a deliberate look decision and not drift, so the check
+  // no longer asserts the range: every boss measuring at or above the ceiling
+  // DOES go up the same size, and only bodies under it vary.
+  //
+  // What is still worth guarding is that the band has not collapsed at both
+  // ends. A floor at or above the ceiling silently pins every explosion in the
+  // game — bosses and the small bodies alike — to one radius, and that renders
+  // perfectly.
+  check('the clamps are a real band',
+    BOOM.minRadius < BOOM.maxRadius,
+    `clamps are [${BOOM.minRadius}, ${BOOM.maxRadius}] — the ceiling sits inside the `
+    + `roster (kraken 12.5, megalodon 16.8), so bosses at or above it share one size`);
 }
 
 check('a body with no hitbox is still measured', (() => {
@@ -288,7 +308,12 @@ check('...and it is not opaque', (GROUP.opacity ?? 1) <= 0.7,
 check('the rim is a light edge', (GROUP.rim ?? 0) > 0,
   `rim ${GROUP.rim} — the threshold shader does col * (1 + rim), and on an additive `
   + 'surface only a positive value draws anything at all');
-check('the edge is still hard', (GROUP.soft ?? 1) <= 0.16,
+// The ceiling here follows the tuned value rather than config.js's declared
+// 0.06 — the softer edge is a look decision taken in the panel. It is still a
+// ceiling and not an open door: past roughly a quarter of the density range the
+// cloud stops reading as drawn smoke and becomes fog, which is the failure this
+// line exists for.
+check('the edge is still hard', (GROUP.soft ?? 1) <= 0.22,
   `soft ${GROUP.soft} — the cel read moved from the outline to the edge hardness, `
   + 'and a wide transition here is what turns the cloud into fog');
 check('no specular', (GROUP.spec ?? 0) === 0, 'a highlight off the density gradient is wetness');

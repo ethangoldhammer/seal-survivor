@@ -393,6 +393,33 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
   const gooScene = new THREE.Scene();
   gooScene.add(gooMesh);
 
+  /**
+   * Re-cut the plane to cover wherever layout() actually put the cells, with a
+   * full cell of margin on every side — the bevel, the rim and the goo all
+   * bleed outside a tile's own hexagon, and a quad cut to the centres' box
+   * alone shears that bleed off in a straight line.
+   *
+   * `vLocal` is `position.xy`, so the plane's size changes the AREA the shader
+   * covers and nothing about the mapping — the cell centres it reads are world
+   * units either way. That is what makes this safe to redo on a resize.
+   *
+   * Both meshes share the one geometry, so both are reassigned and the old one
+   * is disposed: a rotation every few seconds would otherwise leak a buffer per
+   * turn.
+   */
+  function resizeQuad(centres) {
+    const xs = centres.map((c) => c.x);
+    const ys = centres.map((c) => c.y);
+    const w = (Math.max(...xs) - Math.min(...xs)) + m.width * 2;
+    const h = (Math.max(...ys) - Math.min(...ys)) + m.height * 2;
+    const p = mesh.geometry.parameters;
+    if (p && Math.abs(p.width - w) < 1e-4 && Math.abs(p.height - h) < 1e-4) return;
+    const next = new THREE.PlaneGeometry(w, h);
+    mesh.geometry.dispose();
+    mesh.geometry = next;
+    gooMesh.geometry = next;
+  }
+
   const state = items.slice(0, count).map((item, i) => ({
     label: item.label ?? String(item),
     onPress: item.onPress ?? null,
@@ -445,7 +472,40 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
      * buttons in ADJACENT columns would zigzag. Two columns apart is the
      * closest they can be and still share a row.
      */
-    layout(box) {
+    /**
+     * Does this viewport want the column rather than the row? Measured on the
+     * WINDOW and not on the frame, because the frame is composed from what this
+     * returns — asking the other way round is a loop.
+     *
+     * The threshold is an aspect, not a width. A phone held upright is ~0.46
+     * and a laptop is ~1.7, so anything under about three-quarters is a screen
+     * with height to spare and no width, which is exactly the trade a column
+     * makes.
+     */
+    wantsStack() {
+      if (cfg.stack === true || cfg.stack === false) return cfg.stack;
+      const w = globalThis.innerWidth ?? 0;
+      const h = globalThis.innerHeight ?? 0;
+      if (!w || !h) return false;
+      return w / h < (cfg.stackBelowAspect ?? 0.75);
+    },
+
+    /**
+     * A ROW ON A WIDE SCREEN, A COLUMN ON A TALL ONE.
+     *
+     * The row cannot be rescued by framing on a phone held upright, and it is
+     * worth being precise about why, because "just zoom out" is the obvious
+     * answer and it is wrong. At 375x812 the aspect is 0.46, so every unit of
+     * width the buttons need costs 2.2 units of HEIGHT. Three cells span ~3.5
+     * units across, which forces a frame ~10 tall around a bust that is 1.6 —
+     * the animal the screen is built around ends up a sixth of it. Shrinking
+     * the lattice instead puts "LEADERBOARD" inside 58px of hexagon.
+     *
+     * A column is one cell wide and spends the height the shape already has.
+     * FIRST ITEM LOWEST: `hexCenter` puts +row upward, and the first item is
+     * Play — which wants to be nearest the crown, and nearest the thumb.
+     */
+    layout(box, opts = {}) {
       const wantX = (box.min.x + box.max.x) / 2 + (cfg.offsetX ?? 0);
       const wantY = box.max.y + (cfg.rise ?? 0.62);
       const anchor = hexCellAt(wantX, wantY, m);
@@ -458,23 +518,41 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
         console.warn('[hexMenu] no lattice cell for the wanted position — is the bust box empty?');
         return this;
       }
-      // Centred on the anchor: for three buttons at a step of 2 that is
-      // columns -2, 0, +2 relative to it.
-      const first = anchor.col - Math.round(((count - 1) * step) / 2) * 1;
+      const stacked = opts.stack ?? this.wantsStack();
       const centres = [];
-      for (let i = 0; i < count; i++) {
-        const col = first + i * step;
-        // Same visual row for every button. `hexCenter` adds the half-row
-        // offset for odd columns, so the ROW INDEX has to come back down by one
-        // whenever the parity flips — with an even `colStep` it never does, and
-        // this is here for the case where someone sets it odd on purpose.
-        const row = anchor.row + ((col & 1) === (anchor.col & 1) ? 0 : 0);
-        const c = hexCenter(col, row, m);
-        state[i].cell = { col, row };
-        centres.push(c);
+      if (stacked) {
+        // One column, climbing away from the crown. No parity correction to
+        // make and none possible — every cell shares `anchor.col`, so they
+        // share its half-row offset too and the column is exactly straight.
+        for (let i = 0; i < count; i++) {
+          const row = anchor.row + i;
+          state[i].cell = { col: anchor.col, row };
+          centres.push(hexCenter(anchor.col, row, m));
+        }
+      } else {
+        // Centred on the anchor: for three buttons at a step of 2 that is
+        // columns -2, 0, +2 relative to it.
+        const first = anchor.col - Math.round(((count - 1) * step) / 2) * 1;
+        for (let i = 0; i < count; i++) {
+          const col = first + i * step;
+          // Same visual row for every button. `hexCenter` adds the half-row
+          // offset for odd columns, so the ROW INDEX has to come back down by
+          // one whenever the parity flips — with an even `colStep` it never
+          // does, and this is here for the case where someone sets it odd on
+          // purpose.
+          const row = anchor.row + ((col & 1) === (anchor.col & 1) ? 0 : 0);
+          state[i].cell = { col, row };
+          centres.push(hexCenter(col, row, m));
+        }
       }
-      const midX = (centres[0].x + centres[centres.length - 1].x) / 2;
-      const midY = centres[0].y;
+      // THE QUAD IS SIZED FROM THE CENTRES, not from the row's arithmetic. The
+      // construction-time `spanX` assumes one row and would leave a column's
+      // upper cells outside the plane the shader draws on — which does not
+      // error, it just clips the buttons off at the quad's edge and looks like
+      // the lattice ate them.
+      resizeQuad(centres);
+      const midX = (Math.min(...centres.map((c) => c.x)) + Math.max(...centres.map((c) => c.x))) / 2;
+      const midY = (Math.min(...centres.map((c) => c.y)) + Math.max(...centres.map((c) => c.y))) / 2;
       mesh.position.set(midX, midY, cfg.z ?? 1);
       gooMesh.position.copy(mesh.position);
       for (let i = 0; i < count; i++) {

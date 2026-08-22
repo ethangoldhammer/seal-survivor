@@ -30,6 +30,11 @@ import { feedback } from '../systems/feedback.js';
 import { menuInput, resetMenuInput } from '../input.js';
 import { isTextEntry } from './typing.js';
 import { tipJarLink } from './tipJar.js';
+import { parseTipCsv } from '../tipTable.js';
+import tipsCsv from '../tips.csv?raw';
+
+// What a tip buys — the same tiers the score card's jar shows.
+const TIP_TIERS = parseTipCsv(tipsCsv);
 import { revealPile, releasePile } from './snapshotPrint.js';
 import {
   ACTIONS,
@@ -48,8 +53,35 @@ const STYLES = `
      tab: the three tabs hold different numbers of rows, and a menu that
      changes size when you switch tabs makes the tab strip move out from under
      the cursor you are using to switch with. */
-  .sv-pm { text-align: left; width: min(520px, 92vw); }
-  .sv-pm-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  /* A COLUMN WITH A CEILING, so the one row that can give does the giving. The
+     panel is taller than an iPhone SE and the short-screen scroll block in
+     ui.js only fires below 560px of height — a phone held sideways — so at
+     667px there was nothing catching it and the title ran off the top while
+     the note ran off the bottom. Capped at 92vh here, and the body below is
+     the only child allowed to shrink: the head, the tab strip, the footer and
+     the note are each the size of what they hold, and a menu that answers a
+     short screen by squeezing its own controls is a menu you cannot use.
+     A flex item's default floor is its own CONTENT, which is what stopped this
+     working at all until the body was given a floor of its own — but not 0.
+     A phone held sideways is 393px tall and this panel's head, tabs, footer,
+     tip jar and note come to 354 of it, so an unfloored body shrank to an
+     EIGHT PIXEL slit holding 270px of settings: a menu that fits perfectly,
+     passes every check in npm run layout (nothing can overflow a box that
+     size) and cannot be used. The floor is about two rows, and when the column
+     no longer fits under it the panel itself scrolls — the short-screen block
+     in ui.js already gives .sv-menu overflow-y at exactly these heights. */
+  .sv-pm { text-align: left; width: min(520px, 92vw);
+    display: flex; flex-direction: column; max-height: 92vh; }
+  /* IT WRAPS, and the hint is what wraps. Title and hint side by side is a
+     desktop shape: at 375px the title alone is most of the panel in the tuned
+     pixel face, and the hint — two key names and a pad instruction — was
+     leaving the panel by 52px. Given a line of its own it has the full width
+     to wrap into. min-width: 0 because a flex item will not shrink below its
+     own longest word, and anywhere for the one token ("LB/RB") that is
+     longer than a narrow panel however it is broken. */
+  .sv-pm-head { display: flex; flex-wrap: wrap; align-items: baseline;
+    justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .sv-pm-head .sv-hint { min-width: 0; overflow-wrap: anywhere; }
   .sv-pm-tabs { display: flex; gap: 6px; margin-bottom: 4px; }
   .sv-pm-tab { pointer-events: all; flex: 1; background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 4px;
@@ -65,7 +97,11 @@ const STYLES = `
   /* Fixed height so the panel never resizes between tabs. Overflow scrolls
      rather than clipping — a long Controls tab on a short window has to stay
      reachable, and the pad cursor scrolls it into view (see selectRow). */
-  .sv-pm-body { height: 268px; overflow-y: auto; overflow-x: hidden; padding: 4px 2px; margin: 0 -2px; }
+  /* flex: 0 1 auto against that height: 268px is what it IS on any screen
+     with the room for it — the same height on every tab, which is the whole
+     point of the rule — and the most it may be on one without. */
+  .sv-pm-body { height: 268px; flex: 0 1 auto; min-height: 96px;
+    overflow-y: auto; overflow-x: hidden; padding: 4px 2px; margin: 0 -2px; }
 
   .sv-pm-row { display: flex; align-items: center; gap: 12px; padding: 9px 10px;
     border-radius: 8px; border: 1px solid transparent; }
@@ -93,8 +129,41 @@ const STYLES = `
 
   .sv-pm-sub { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
     color: rgba(232,236,243,0.35); font-weight: 600; margin: 12px 10px 4px; }
-  .sv-pm-foot { display: flex; gap: 8px; margin-top: 16px; }
-  .sv-pm-foot .sv-btn { flex: 1; }
+  /* IT WRAPS. A flex item cannot shrink below the widest unbreakable word it
+     carries, so a row of flex:1 buttons that runs out of room does not get
+     narrower — the last one hangs off the right-hand edge of the panel, which
+     is where "Defaults" ended up. It is not a phone-only problem either: the
+     labels are typed text in whatever the Text panel's font is, and the tuned
+     one (Press Start 2P) is most of an em per glyph, so "Defaults" is half
+     again as wide there as it is in Inter.
+     flex-wrap costs nothing while they fit — line breaking measures each
+     button at its min-content width, which is exactly the width below which it
+     would have overflowed — and drops the one that no longer does onto a line
+     of its own, where flex:1 grows it to the full width of the panel. */
+  .sv-pm-foot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  /* THE SAME BUTTONS, WITH A NARROWER FLOOR. A flex item's automatic minimum
+     is its content plus its padding, and .sv-btn is padded 22px a side for a
+     button that stands on its own — in a row of three that padding is 132px of
+     floor buying nothing, because flex:1 has already grown every button to a
+     third of the panel and the label is centred in it either way. Trimming it
+     here is invisible at any width where the row fits and is the difference
+     between fitting and not at the width where it didn't: measured in the
+     shipped font, the three labels cleared the row by 6px. */
+  .sv-pm-foot .sv-btn { flex: 1; padding-left: 12px; padding-right: 12px; }
+  /* THUMBS. The 44px rule in ui.js names .sv-btn and .sv-name-input, so none of
+     this panel's own controls were covered by it: the tabs came out 30px, the
+     choice and rebind buttons 26px, and the sliders were a FOUR pixel hit
+     area — a control you have to hit within two pixels of its centre line.
+     Only where there is a thumb, for the reason ui.js gives: a 44px row on a
+     desktop is a different design, not a safer one.
+     The slider keeps its 4px TRACK and gets its height from padding instead of
+     from the track — the box a finger has to land in grows, the line it draws
+     does not. box-sizing is stated because the padding has to come out of the
+     44, not add to it. */
+  .sv-touch .sv-pm-tab { min-height: 44px; }
+  .sv-touch .sv-pm-choice, .sv-touch .sv-pm-key { min-height: 44px; }
+  .sv-touch .sv-pm-range { box-sizing: border-box; height: 44px; padding: 20px 0; }
+
   .sv-btn-ghost { background: rgba(255,255,255,0.07); color: #e8ecf3;
     border: 1px solid rgba(255,255,255,0.16); }
   .sv-btn-ghost:hover { background: rgba(255,255,255,0.14); }
@@ -325,6 +394,7 @@ function buildFooter() {
 
 function buildTipJar() {
   tipEl.appendChild(tipJarLink({
+    tiers: TIP_TIERS,
     onHover: () => feedback('uiHover'),
     // Not preventDefault-ing anything: the sound is the same one every other
     // control on this panel makes, and the navigation is what was asked for.

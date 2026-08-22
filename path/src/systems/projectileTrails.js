@@ -14,6 +14,41 @@ import { elementColor, elementTrailMix, elementFlightParticles } from './element
 
 const trails = new Map(); // projectile object -> trail record
 
+// ONE MATERIAL FOR EVERY TRAIL, and it must be shared rather than copied.
+//
+// This used to be a `new THREE.MeshBasicMaterial` per trail, disposed when the
+// trail retired. That reads as tidy and is the opposite: three refcounts
+// PROGRAMS by cache key, so disposing the last material holding a key releases
+// the linked program, and the next shot — identical in every parameter —
+// links the same shader again from source. Create, build, dispose, release,
+// create, rebuild, for as long as the run goes on.
+//
+// It is not a small effect. `npm run playtest` measures it directly:
+// perfLog counts a build per key, and a 580s run shows ONE key at 138 builds
+// with a sibling at 125, out of 7034 programs from 99 distinct keys. That is
+// the unbounded case the note above programBuilds in systems/perfLog.js was
+// written to tell apart from a cold warm-up, and it costs a compile hitch each
+// time plus whatever the driver holds onto.
+//
+// SAFE TO SHARE, WHICH IS NOT TRUE OF EVERY MATERIAL HERE — see the note about
+// primitive assets sharing one material, where fading one bubble faded all of
+// them. Nothing about a trail's appearance lives on the material: colour and
+// fade are written into `geo.attributes.color` per vertex (vertexColors is on),
+// and width is geometry. Two trails of different colours already differ only in
+// their buffers, so there is nothing left for a per-instance material to carry.
+let sharedMat = null;
+
+function trailMaterial() {
+  sharedMat ??= new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  return sharedMat;
+}
+
 function makeTrail(scene, cfg) {
   const maxPts = Math.max(2, Math.round(cfg.points));
   const positions = new Float32Array(maxPts * 2 * 3);
@@ -28,14 +63,7 @@ function makeTrail(scene, cfg) {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setIndex(indices);
 
-  const mat = new THREE.MeshBasicMaterial({
-    vertexColors: true,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
+  const mesh = new THREE.Mesh(geo, trailMaterial());
   mesh.frustumCulled = false;
   scene.add(mesh);
   return { mesh, geo, history: [], maxPts, emitDebt: 0, extents: null, extentsKey: null };
@@ -285,8 +313,10 @@ export function updateProjectileTrails(dt, scene, projectiles, extra = null) {
   for (const [p, t] of trails) {
     if (live.has(p)) continue;
     scene.remove(t.mesh);
+    // The GEOMETRY is this trail's own and goes with it. The MATERIAL is
+    // everyone's — disposing it here is what was releasing the program and
+    // making the next shot rebuild the identical shader. See trailMaterial().
     t.geo.dispose();
-    t.mesh.material.dispose();
     trails.delete(p);
   }
 }
@@ -295,7 +325,12 @@ export function clearProjectileTrails(scene) {
   for (const [, t] of trails) {
     scene.remove(t.mesh);
     t.geo.dispose();
-    t.mesh.material.dispose();
   }
   trails.clear();
+  // The shared material outlives individual trails but not the system. Dropped
+  // here, at the one point where nothing is left holding it, so a run that ends
+  // does not leave a program linked for a scene that no longer exists — and so
+  // the next run builds it once rather than inheriting a stale one.
+  sharedMat?.dispose();
+  sharedMat = null;
 }

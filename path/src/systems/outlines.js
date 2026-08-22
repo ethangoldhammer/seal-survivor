@@ -390,6 +390,32 @@ export function applyCreatureOutlines() {
   for (const key of creatureMaterials.keys()) applyCreatureOutline(key);
 }
 
+/**
+ * Take the threat rim off ONE BODY, leaving every other instance of its
+ * species wearing it. Used for bosses — see CONFIG.creatureOutline.bosses.
+ *
+ * PER-INSTANCE `visible`, which is the only lever that can do this. Everything
+ * else here writes the SHARED material (that sharing is what makes the tuner
+ * switches work on creatures already swimming), and `bossShark` is built from
+ * `enemyMegalodon` — the same asset key as the wildlife megalodon. A material
+ * flag would take the rim off both, and the wildlife one is meant to keep it.
+ *
+ * POOL-SAFE, and not by luck. acquireVisual calls captureRest immediately
+ * after createVisual, so the snapshot a recycled body is restored from records
+ * the shells as VISIBLE — this flag is written after that and is wiped by
+ * resetVisual on the way back out. Without that ordering the next wildlife
+ * megalodon out of the pool would come up bare, which is a bug that only
+ * appears after a boss has died.
+ */
+export function hideOutlineOn(visual) {
+  if (!visual) return 0;
+  let n = 0;
+  visual.traverse((o) => {
+    if (o.userData?.__isOutline) { o.visible = false; n++; }
+  });
+  return n;
+}
+
 function applyCreatureOutline(key) {
   const cfg = CONFIG.creatureOutline ?? {};
   const material = creatureMaterials.get(key);

@@ -581,9 +581,19 @@ check('...each one named', fan.children[1].querySelector('.sv-print-name').textC
 check('...developed, not still coming out of the camera',
   !fan.children[0].querySelector('.sv-print').classList.contains('sv-print-wet')
   && !fan.children[0].querySelector('.sv-print').classList.contains('sv-print-flight'));
-check('...fanned rather than stacked',
-  fan.children[0].style.getPropertyValue('--rot') !== fan.children[2].style.getPropertyValue('--rot'),
-  `${fan.children[0].style.getPropertyValue('--rot')} .. ${fan.children[2].style.getPropertyValue('--rot')}`);
+// A RAIL, NOT A FAN. The roll used to be a spread of tilted, overlapping
+// prints in the middle of the card; it is a row across the top of the ledger
+// now, so what this asserts is that nothing tilts them and nothing pulls them
+// back over each other — either one returning is the fan coming back.
+check('...laid out as a rail rather than fanned',
+  [...fan.children].every((c) => !c.style.getPropertyValue('--rot') && !c.style.marginLeft),
+  `${fan.children[0].style.getPropertyValue('--rot') || 'no tilt'} / ${fan.children[1].style.marginLeft || 'no overlap'}`);
+// ...and they still read left to right in the order the run happened, which is
+// what the z-index carried when they overlapped and what it still has to carry
+// when a picked print lifts over its neighbours.
+check('...newest kill last, and able to lift over its neighbours',
+  Number(fan.children[2].style.zIndex) > Number(fan.children[0].style.zIndex),
+  `${fan.children[0].style.zIndex} .. ${fan.children[2].style.zIndex}`);
 check('...with the newest kill picked to start with',
   fan.children[2].classList.contains('sv-fan-sel'));
 
@@ -611,7 +621,14 @@ check('...and picking another changes which one', downloads === 1 && lastDownloa
   lastDownloadName);
 
 // THE SCORECARD, on screen and in the image, from the same five figures.
-const statLine = document.getElementById('svGameOverStats').textContent;
+//
+// TWO ELEMENTS NOW, and that is the ledger's head rather than a split in the
+// data: the score is the lockup beside the quip (svGameOverStats) and the other
+// four are the row of figures under it (svGameOverFigs). Read together, because
+// what this is checking is that the screen carries the same five numbers the
+// shared image does — see drawScorecard in systems/bossShot.js.
+const statLine = document.getElementById('svGameOverStats').textContent
+  + ' ' + document.getElementById('svGameOverFigs').textContent;
 for (const bit of ['45,300', '12:34', '210', '3']) {
   check(`the scorecard carries ${bit}`, statLine.includes(bit), statLine);
 }
@@ -845,6 +862,17 @@ function insideFrame(f, pt, r = 0) {
     && Math.abs(pt.y - f.y) + r <= half.h / f.zoom + 1e-6;
 }
 
+// AND INSIDE THE PICTURE, which is the smaller question and the one that
+// actually decides what the player keeps. The print is a SQUARE cut out of the
+// middle of the frame — its side is the frame's short edge — so on this 46x26
+// half-frame it throws away 44% of the width. Every check above passed while
+// the boss was sitting in that discarded strip.
+const picture = Math.min(half.w, half.h);
+function insidePicture(f, pt, r = 0) {
+  return Math.abs(pt.x - f.x) + r <= picture / f.zoom + 1e-6
+    && Math.abs(pt.y - f.y) + r <= picture / f.zoom + 1e-6;
+}
+
 // A boss killed at arm's length, and one killed across the arena.
 for (const [label, seal, boss] of [
   ['nose to nose', { x: 0, y: 0 }, { x: 5, y: 1, r: 4 }],
@@ -856,11 +884,33 @@ for (const [label, seal, boss] of [
     `frame ${f.x.toFixed(1)},${f.y.toFixed(1)} at zoom ${f.zoom.toFixed(2)}`);
   check(`${label}: ...and so is the boss`, insideFrame(f, boss, boss.r),
     `boss ${boss.x},${boss.y} r${boss.r}`);
+  check(`${label}: the seal is in the PRINT`, insidePicture(f, seal),
+    `frame ${f.x.toFixed(1)},${f.y.toFixed(1)} at zoom ${f.zoom.toFixed(2)}, square half ${picture}`);
+  check(`${label}: ...and so is the boss, with none of it in the strip that gets cut`,
+    insidePicture(f, boss, boss.r),
+    `boss ${boss.x},${boss.y} r${boss.r} at zoom ${f.zoom.toFixed(2)}`);
   check(`${label}: ...the frame never opens past the ordinary view`,
     f.zoom >= K.cam.minZoom - 1e-9, `zoom ${f.zoom.toFixed(2)}`);
   check(`${label}: ...and never pushes further than the shot asked for`,
     f.zoom <= K.cam.zoom + 1e-9, `zoom ${f.zoom.toFixed(2)}`);
 }
+
+// AND THE FIT IS ACTUALLY THE TIGHTER ONE. Both of the above would also pass
+// on a build that fits to the frame, for any pair close enough together — so
+// the assertion that the print is what is being fitted to is the one that
+// would have caught the old behaviour: a boss out at 30 units sits inside a
+// 46-unit half-frame at a zoom the 26-unit square cannot hold.
+const wide = { x: 30, y: 0, r: 4 };
+K.cam.framePicture = false;
+const toFrame = frameAtShutter({ x: 0, y: 0 }, wide);
+K.cam.framePicture = true;
+const toPrint = frameAtShutter({ x: 0, y: 0 }, wide);
+check('fitting to the print pulls back further than fitting to the frame',
+  toPrint.zoom < toFrame.zoom - 1e-6,
+  `print ${toPrint.zoom.toFixed(2)} vs frame ${toFrame.zoom.toFixed(2)}`);
+check('...which is the difference between the boss being in the photograph',
+  insidePicture(toPrint, wide, wide.r) && !insidePicture(toFrame, wide, wide.r),
+  `print ${insidePicture(toPrint, wide, wide.r)}, frame-fit ${insidePicture(toFrame, wide, wide.r)}`);
 
 // The frame leans toward the seal, which is the subject. A midpoint would be a
 // picture of a corpse with a seal in the corner.
@@ -879,6 +929,13 @@ check('...which is what gets both of them into the picture after all',
   && insideFrame(wall, { x: 30, y: 0 })
   && insideFrame(wall, { x: -20, y: -4 }, 18),
   `zoom ${wall.zoom.toFixed(2)}`);
+// A 68-unit spread will not go into a 52-unit square at any allowed zoom — the
+// frame is already at minZoom, and opening further runs it off the water plane
+// onto the bare scene background. This is the ONE case the print cannot hold
+// both, and what it does instead is centre on the pair rather than quietly
+// keeping whichever animal happened to be near the middle: see holdWindow.
+check('a spread wider than the print itself still opens the frame all the way',
+  wall.zoom === K.cam.minZoom, `zoom ${wall.zoom.toFixed(2)}`);
 
 // With nothing to frame — the hold switched off, a boss that left no body —
 // the shot is exactly what it always was.
@@ -889,6 +946,94 @@ KILL.updateBossKill(DT);
 check('with no body to frame the shot points at the seal, as it always did',
   KILL.bossKillState.cam.x === 7 && KILL.bossKillState.cam.y === -3);
 KILL.resetBossKill();
+
+// ---------------------------------------------------------------------------
+section('THE CROP — which square of the frame the print keeps');
+// ---------------------------------------------------------------------------
+// The second half of the same promise, and the half that survives everything
+// the fit above cannot see: world.js clamps the push-in against the arena
+// wall, the frame is a per-frame lerp toward it rather than a cut, and the
+// shake moves it again after that. So the window is placed off where the two
+// animals were actually DRAWN — normalised coordinates projected on the frame
+// that was grabbed — rather than off the framing the shot asked for.
+const FRAME = { w: 1920, h: 1080 };
+const win = (focus) => SHOT.snapshotWindow(FRAME.w, FRAME.h, focus);
+const holds = (w, p) => {
+  const cx = p.u * FRAME.w;
+  const cy = p.v * FRAME.h;
+  const rx = (p.ru ?? 0) * FRAME.w;
+  const ry = (p.rv ?? 0) * FRAME.h;
+  return cx - rx >= w.sx - 1e-6 && cx + rx <= w.sx + w.side + 1e-6
+    && cy - ry >= w.sy - 1e-6 && cy + ry <= w.sy + w.side + 1e-6;
+};
+
+const centred = win(null);
+check('with nothing to hold, the cut is the centred one it always was',
+  centred.side === 1080 && centred.sx === 420 && centred.sy === 0,
+  `${centred.sx},${centred.sy} ${centred.side}px`);
+
+// A pair already in the middle must not move the window at all — the lean
+// toward the seal and the bias are composition, and re-centring on every kill
+// would throw both away on the shots that never needed rescuing.
+const easy = [{ u: 0.47, v: 0.5, ru: 0.01, rv: 0.02 }, { u: 0.55, v: 0.46, ru: 0.03, rv: 0.05 }];
+const same = win(easy);
+check('a pair already inside the square does not move it',
+  same.sx === centred.sx && same.sy === centred.sy, `${same.sx},${same.sy}`);
+
+// The one that was going wrong: the boss out in the strip the crop throws away.
+// At u = 0.85 it is 1632px across a 1920px frame, and the centred window ends
+// at 1500.
+const clipped = [{ u: 0.5, v: 0.5, ru: 0, rv: 0 }, { u: 0.85, v: 0.5, ru: 0.02, rv: 0.036 }];
+check('the boss out near the edge is outside the centred cut',
+  !holds(centred, clipped[1]), `window ${centred.sx}..${centred.sx + centred.side}`);
+const panned = win(clipped);
+check('...so the window slides across to hold it', holds(panned, clipped[1]),
+  `window ${panned.sx}..${panned.sx + panned.side}`);
+check('...without dropping the seal on the way', holds(panned, clipped[0]));
+check('...and no further than it had to', panned.sx > centred.sx && panned.sx <= FRAME.w - panned.side,
+  `sx ${panned.sx} from ${centred.sx}, max ${FRAME.w - panned.side}`);
+
+// It cannot leave the frame: a window hanging off the edge is a band of empty
+// backdrop down the side of the print.
+const offscreen = win([{ u: 0.99, v: 0.5, ru: 0.2, rv: 0.36 }]);
+check('the window never runs off the edge of the frame',
+  offscreen.sx >= 0 && offscreen.sx + offscreen.side <= FRAME.w
+  && offscreen.sy >= 0 && offscreen.sy + offscreen.side <= FRAME.h,
+  `${offscreen.sx},${offscreen.sy} +${offscreen.side}`);
+
+// Wider than the square: nothing holds both, so it centres on the pair rather
+// than keeping whichever one was nearer the middle.
+const split = win([{ u: 0.04, v: 0.5 }, { u: 0.96, v: 0.5 }]);
+check('a spread wider than the square centres on the pair',
+  Math.abs(split.sx + split.side / 2 - FRAME.w / 2) < 1.5,
+  `centre ${split.sx + split.side / 2} of ${FRAME.w / 2}`);
+
+// AND THE OTHER AXIS. On a landscape frame the square already spans the full
+// height, so there is no vertical slide to get wrong — which is exactly why
+// this is checked on a PHONE, where the crop takes the height instead and
+// every one of the above cases turns ninety degrees.
+const TALL = { w: 430, h: 932 };
+const tallWin = (focus) => SHOT.snapshotWindow(TALL.w, TALL.h, focus);
+const tallHolds = (w, p) => p.v * TALL.h >= w.sy - 1e-6 && p.v * TALL.h <= w.sy + w.side + 1e-6;
+const tallCentred = tallWin(null);
+check('on a phone the square is cut from the height', tallCentred.side === 430 && tallCentred.sy === 251,
+  `sy ${tallCentred.sy} +${tallCentred.side}`);
+// A boss killed up at the surface with the seal under it: both above the
+// centred window's top edge.
+const surface = [{ u: 0.5, v: 0.12 }, { u: 0.5, v: 0.3 }];
+check('...and a kill at the surface falls outside that cut', !tallHolds(tallCentred, surface[0]));
+const lifted = tallWin(surface);
+check('...so the window slides up to hold both',
+  tallHolds(lifted, surface[0]) && tallHolds(lifted, surface[1]) && lifted.sy >= 0,
+  `sy ${lifted.sy} +${lifted.side}`);
+check('...and stays inside the frame it was cut from',
+  lifted.sy + lifted.side <= TALL.h, `sy ${lifted.sy}`);
+
+// Junk in, the old cut out. A focus point from a frame where the projection
+// went wrong must not move the window to NaN and take the whole print with it.
+const junk = win([{ u: NaN, v: 0.5 }, { u: undefined, v: undefined }]);
+check('an unprojectable point is ignored rather than believed',
+  junk.sx === centred.sx && junk.sy === centred.sy, `${junk.sx},${junk.sy}`);
 
 // ---------------------------------------------------------------------------
 section('THE PRINT — the photograph coming out of the camera');

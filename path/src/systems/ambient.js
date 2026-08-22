@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { getAudioContext, getSfxBus, isAudioLive, noteSfx } from './audio.js';
+import { fetchAudioBytes } from './fetchAudio.js';
 
 // The ambient bed: a handful of clips, one audible at a time, each looping
 // until the next one is faded in UNDER it.
@@ -99,9 +100,7 @@ export async function preloadAmbient() {
   await Promise.all(list.map(async (src) => {
     if (buffers.has(src)) return;
     try {
-      const res = await fetch(src);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      buffers.set(src, await ctx.decodeAudioData(await res.arrayBuffer()));
+      buffers.set(src, await ctx.decodeAudioData(await fetchAudioBytes(src)));
     } catch (err) {
       console.warn(`[ambient] could not load "${src}" —`, err?.message ?? err);
     }

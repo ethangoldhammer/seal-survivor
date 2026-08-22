@@ -108,11 +108,13 @@ initSnapshotCards().finally(open);
 open();
 
 document.getElementById('btnShow').addEventListener('click', open);
+// THE CARD DOES NOT TURN ANY MORE — it is one readout with a pinned bar. What
+// is worth driving from here instead is the SCROLL, because that is where the
+// layout can now go wrong: the bar has to stay put and the readout has to pass
+// under it.
 document.getElementById('btnFlip').addEventListener('click', () => {
-  document.getElementById(
-    document.getElementById('svFaceFront').classList.contains('sv-hidden')
-      ? 'svTurnBack' : 'svTurnOver',
-  ).click();
+  const card = document.getElementById('svCard');
+  card.scrollTop = card.scrollTop > 0 ? 0 : card.scrollHeight;
 });
 document.getElementById('btnMeasure').addEventListener('click', () => say(measure()));
 // The SAME board on the main menu's own surface — renderBoard paints both, so a
@@ -137,15 +139,24 @@ document.getElementById('btnBoard').addEventListener('click', () => {
 function measure() {
   const card = document.getElementById('svCard');
   const lb = document.getElementById('svLeaderboard');
-  const front = document.getElementById('svFaceFront');
+  const bar = card.querySelector('.sv-ldg-bar');
   const cardBox = card.getBoundingClientRect();
+  const barBox = bar?.getBoundingClientRect();
   const lbBox = lb.getBoundingClientRect();
   const rows = [...lb.querySelectorAll('.sv-lb-row')];
   const widest = rows.reduce((m, r) => Math.max(m, r.scrollWidth), 0);
   return JSON.stringify({
-    face: front.classList.contains('sv-hidden') ? 'back' : 'front',
     card: { w: Math.round(cardBox.width), h: Math.round(cardBox.height) },
+    // Nothing should write one — the card is a flex column with a 92vh cap.
     inlineH: card.style.height,
+    scroll: { top: card.scrollTop, h: card.scrollHeight, box: card.clientHeight },
+    // THE BAR HAS TO STAY PUT. Its bottom sitting on the card's bottom at any
+    // scroll position is the whole claim of this layout; anywhere else and Try
+    // again has gone back below the fold.
+    bar: barBox ? {
+      pinned: Math.abs(barBox.bottom - cardBox.bottom) < 2,
+      h: Math.round(barBox.height),
+    } : null,
     board: {
       rows: rows.length,
       w: Math.round(lbBox.width), h: Math.round(lbBox.height),
@@ -157,6 +168,8 @@ function measure() {
   }, null, 1);
 }
 window.__measure = measure;
-window.__flip = () => document.getElementById(
-  document.getElementById('svFaceFront').classList.contains('sv-hidden') ? 'svTurnBack' : 'svTurnOver',
-).click();
+window.__scroll = (to) => {
+  const card = document.getElementById('svCard');
+  card.scrollTop = to === 'top' ? 0 : card.scrollHeight;
+  return card.scrollTop;
+};

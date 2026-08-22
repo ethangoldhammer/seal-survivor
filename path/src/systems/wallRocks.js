@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { ImprovedNoise } from 'three/examples/jsm/math/ImprovedNoise.js';
 import { CONFIG } from '../config.js';
+import { ASSETS, getAssetSizeMultiplier } from '../assets.js';
 import { bounds, seabedTopY, maxWaveExcursion } from '../arena.js';
 
 // The walls, made visible.
@@ -272,14 +273,36 @@ export function createWallRocks(scene) {
     const scl = new THREE.Vector3();
     const at = new THREE.Vector3();
 
-    // How far a boulder may bite past the wall, and how far it may hang back.
-    // The seal's CENTRE stops at bounds.right - hitRadius and its body reaches
-    // the wall itself, so the face wants to sit on the wall: hang back and the
-    // seal bounces off open water short of the rock, bite deeper than its
-    // radius and the seal disappears into the cliff. Both are small, and the
-    // spread between them is what keeps the face from being a drawn straight
-    // line. Clamped against the live hitRadius rather than a written constant.
+    // How far a boulder may bite past the seal's NOSE, and how far it may hang
+    // back from it. Hang back and the seal bounces off open water short of the
+    // rock; bite deep and the animal disappears into the cliff. Both are small,
+    // and the spread between them is what keeps the face from being a drawn
+    // straight line. Clamped against the live hitRadius rather than a written
+    // constant.
     const reach = Math.min(0.7, (CONFIG.player?.hitRadius ?? 1) * 0.7);
+    // WHERE THE SEAL ACTUALLY STOPS, which is not where it stops.
+    //
+    // clampToArena holds the seal's CENTRE at bounds.right - hitRadius, and
+    // this file used to put the face on bounds.right — correct if hitRadius
+    // were the animal's half-length. It is not, and not by a little: the hit
+    // circle is 1.0 and the drawn seal is `fit` 2.6 world units at a size
+    // multiplier of 2.36, so it reaches 3.07 units from its own centre. The
+    // face therefore landed two units INSIDE the body, and a seal swum
+    // nose-first into a wall buried two thirds of its head in the rock — which
+    // is what "the player gets stuck in the wall" looks like from outside.
+    //
+    // Measured off the asset rather than written down, for the reason
+    // SEAL_REAR_EXTENT_PER_SIZE exists in entities/player.js: `fit` and the
+    // assets.csv size column are both live numbers, and a constant here would
+    // be a wall in the wrong place the next time either moves. The worst case
+    // is the one that matters — the long axis, pointed at the wall, which is
+    // exactly the pose a player swimming into it is in.
+    const seal = ASSETS.ship;
+    const sealReach = ((seal?.fit ?? 0) * (getAssetSizeMultiplier('ship') || 1)) / 2;
+    // ...and never INSIDE the old line: an asset table that has lost its fit
+    // would otherwise pull the whole shore in on top of the seal, which is a
+    // worse failure than the one this fixes.
+    const nose = bounds.right + Math.max(0, sealReach - (CONFIG.player?.hitRadius ?? 1));
 
     for (const side of [-1, 1]) {
       for (let i = 0; i < count; i++) {
@@ -315,8 +338,8 @@ export function createWallRocks(scene) {
         g.applyMatrix4(m);
         g.computeBoundingBox();
 
-        // Where this boulder's face should sit: on the wall, give or take.
-        const faceX = bounds.right - rand() * reach;
+        // Where this boulder's face should sit: on the seal's nose, give or take.
+        const faceX = nose - rand() * reach;
         const bb = g.boundingBox;
         g.translate(side > 0 ? faceX - bb.min.x : -faceX - bb.max.x, 0, 0);
         parts.push(g);

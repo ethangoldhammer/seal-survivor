@@ -86,6 +86,14 @@ export const deathState = {
   // movement over the top of the dilation, not to crawl with it.
   camZoom: 1,
   camWeight: 0,
+  // HOW MUCH OF A TARGET THE BODY STILL IS, 1 down to 0 — read by
+  // entities/enemies.js, which builds every creature's steering context from
+  // it. 1 while anything is still coming for you, 0 once the water has lost
+  // interest entirely. Published rather than pushed for the same reason the
+  // camera numbers above are: this module has no business reaching into the
+  // enemy list, and enemies.js already reads `active` off here for the crabs'
+  // pile-on. See CONFIG.death.disperse.
+  pursuit: 1,
 };
 
 const vel = new THREE.Vector2();
@@ -185,6 +193,7 @@ export function startDeathDive(finish) {
   deathState.timeScale = 1;
   deathState.camZoom = 1;
   deathState.camWeight = 0;
+  deathState.pursuit = 1;
   deathState.elapsed = 0;
   elapsed = 0;
   settleClock = 0;
@@ -349,6 +358,17 @@ export function updateDeathDive(rawDt) {
     // seal drifts around a frame that hasn't committed to it yet.
     deathState.camWeight = smoothstep(elapsed / Math.max(0.01, cam.frameTime ?? 1.2));
   }
+
+  // THE WATER LETTING GO. Wall-clock like the lens above and for the same
+  // reason: it is a movement laid over the dilation rather than one the water
+  // is carrying, and on the slowest part of the ramp a dilated ease would still
+  // be at 1 when the body reached the seabed. Held at full pursuit for `delay`
+  // so the kill still reads — whatever just ate you stays on you for a beat —
+  // and smoothstepped from there. See CONFIG.death.disperse.
+  const dis = c.disperse ?? {};
+  deathState.pursuit = dis.enabled === false
+    ? 1
+    : 1 - smoothstep((elapsed - (dis.delay ?? 0.7)) / Math.max(0.01, dis.relax ?? 2.4));
 
   // The skeleton, on its own clock — and ahead of the 'done' return, so the
   // limbs go on settling under the score card rather than freezing on the frame
@@ -706,6 +726,7 @@ export function resetDeathDive() {
   deathState.timeScale = 1;
   deathState.camZoom = 1;
   deathState.camWeight = 0;
+  deathState.pursuit = 1;
   vel.set(0, 0);
   spin = 0;
   roll = 0;

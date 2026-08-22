@@ -139,6 +139,8 @@ function describe(f) {
   if (f.type === 'clipped') return `${f.what} — clipped, content ${f.contentW}px in a ${f.boxW}px box`;
   if (f.type === 'threw') return `surface failed to build — ${f.what}`;
   if (f.type === 'callout-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;
+  if (f.type === 'out-of-panel') return `${f.what} — ${f.by}px outside the menu panel it belongs to`;
+  if (f.type === 'clipped-below') return `${f.what} — cut off at the bottom, content ${f.contentH}px in a ${f.boxH}px box`;
   return `${f.what} — ${f.type} by ${f.by}px`;
 }
 

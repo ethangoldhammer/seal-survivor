@@ -1,0 +1,377 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&amp;display=swap">
+  <style>
+    /* ========================================================================
+       C — THE LEDGER.  Axis: no flip, and the actions never scroll away.
+       The shipped card hides half its content behind a turn and puts every
+       control inside a scrolling face, so Try again is below the fold on a
+       laptop and behind a flip on the back. Here both faces are one readout on
+       a wider card, and the two things you can do sit in a bar pinned to the
+       bottom that the readout scrolls under.
+       Same tokens as the shipped screen — the card just stops being a card
+       with two sides and becomes a page with a footer.
+       ==================================================================== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 900px; height: 1120px; overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+    a { color: #7ad7ff; text-decoration: none; }
+    a:hover { color: #cfeeff; }
+    :root { --sv-scan: 0.18; --sv-flicker: 0.12; }
+    .role { text-shadow: -0.4px 0 rgba(255,60,60,0.55), 0.4px 0 rgba(60,160,255,0.55),
+      0 0 13.8px rgba(150,220,255,1); }
+
+    .stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .card { width: 800px; max-width: 90vw; height: 1000px; max-height: 92vh;
+      background: #07090d; border: 1px solid rgba(255,255,255,0.14); border-radius: 14px;
+      color: #e8ecf3; overflow: hidden; position: relative;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset;
+      display: flex; flex-direction: column; }
+    .card::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 6;
+      background: linear-gradient(105deg, transparent 60%, rgba(255,255,255,0.015) 78%,
+        rgba(190,230,255,0.16) 94%, rgba(255,255,255,0.02) 110%, transparent 128%);
+      opacity: 0.45; }
+
+    /* --- THE HEAD. Quip and score share one line, so the death and the number
+           are read together instead of stacked 90px apart. ------------------ */
+    .head { padding: 26px 30px 20px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .head-top { display: flex; align-items: flex-end; gap: 24px; }
+    .quip { flex: 1; min-width: 0; font-size: 20px; line-height: 1.45;
+      letter-spacing: 0.04em; color: #ffffff; text-wrap: pretty; }
+    .hero { text-align: right; flex: none; }
+    .hero b { display: block; font-size: 46px; line-height: 1; letter-spacing: 0.01em;
+      color: #e8ecf3; font-variant-numeric: tabular-nums; }
+    .hero span { display: block; font-size: 10px; letter-spacing: 0.14em;
+      text-transform: uppercase; color: rgba(122,215,255,0.85); margin-top: 7px; }
+    .figures { display: flex; gap: 26px; margin-top: 18px; flex-wrap: wrap; }
+    .fig { display: flex; align-items: baseline; gap: 8px; font-size: 10px;
+      letter-spacing: 0.12em; text-transform: uppercase; color: rgba(232,236,243,0.45); }
+    .fig b { font-size: 17px; letter-spacing: 0.01em; color: #e8ecf3;
+      text-transform: none; font-variant-numeric: tabular-nums; }
+
+    /* --- THE FILMSTRIP. The roll as a rail rather than a fan: it is a row of
+           things you can open, not a centrepiece. ------------------------- */
+    .strip { display: flex; gap: 8px; padding: 14px 30px;
+      border-bottom: 1px solid rgba(255,255,255,0.08); overflow-x: auto; }
+    .thumb { flex: none; background: none; border: 1px solid rgba(255,255,255,0.10);
+      padding: 0; cursor: pointer; line-height: 0; position: relative;
+      transition: border-color 0.15s ease, transform 0.15s ease; }
+    .thumb:hover { border-color: rgba(122,215,255,0.6); transform: translateY(-2px); }
+    .thumb-sel { border-color: #7ad7ff; }
+    .thumb svg { display: block; width: 104px; height: auto; }
+    .strip-label { flex: none; align-self: center; font-size: 9px; letter-spacing: 0.12em;
+      text-transform: uppercase; color: rgba(232,236,243,0.35); margin-right: 4px;
+      white-space: nowrap; }
+    .strip-act { flex: none; align-self: center; margin-left: auto; background: none;
+      border: 0; cursor: pointer; font-family: inherit; color: #7ad7ff; font-size: 10px;
+      letter-spacing: 0.1em; text-transform: uppercase; padding: 6px 2px; white-space: nowrap; }
+    .strip-act:hover { color: #cfeeff; }
+
+    /* --- THE READOUT. Two columns, one scroll. ------------------------ */
+    .body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 30px 24px;
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px;
+      align-content: start; }
+    .col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+    .sec-title { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+      color: rgba(232,236,243,0.35); margin-bottom: 8px;
+      display: flex; align-items: baseline; gap: 10px; }
+    .sec-title em { font-style: normal; margin-left: auto; color: rgba(232,236,243,0.45);
+      font-size: 9px; font-variant-numeric: tabular-nums; }
+
+    .brk-row { position: relative; display: grid; grid-template-columns: 1fr 52px;
+      gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+    .brk-row::before { content: ""; position: absolute; inset: 0; border-radius: 6px;
+      width: var(--share, 0%);
+      background: linear-gradient(90deg, rgba(122,215,255,0.30), rgba(122,215,255,0.06)); }
+    .brk-in::before { background: linear-gradient(90deg, rgba(255,120,120,0.28), rgba(255,120,120,0.05)); }
+    .brk-row > * { position: relative; }
+    .brk-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .brk-picks { font-size: 10px; margin-left: 6px; color: rgba(232,236,243,0.40); }
+    .brk-a { text-align: right; font-variant-numeric: tabular-nums; }
+    .brk-tag { display: inline-block; margin-left: 6px; padding: 1px 4px;
+      border: 1px solid rgba(255,120,120,0.4); border-radius: 3px; color: #ff7878;
+      font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .brk-foot { margin-top: 9px; padding-top: 8px; font-size: 10px;
+      border-top: 1px solid rgba(255,255,255,0.08); color: rgba(232,236,243,0.45);
+      display: flex; justify-content: space-between; gap: 10px; }
+    .brk-foot b { color: #e8ecf3; font-variant-numeric: tabular-nums; }
+
+    /* the board */
+    .board-switch { display: flex; gap: 2px; margin-left: auto; }
+    .sw { background: none; border: 1px solid rgba(255,255,255,0.12); cursor: pointer;
+      font-family: inherit; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: rgba(232,236,243,0.45); padding: 4px 7px; }
+    .sw:first-child { border-radius: 4px 0 0 4px; }
+    .sw:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+    .sw:hover { color: #cfeeff; }
+    .sw-on { background: rgba(122,215,255,0.14); border-color: rgba(122,215,255,0.4); color: #7ad7ff; }
+    .lb-row { display: grid; grid-template-columns: 3ch minmax(0, 1fr) auto 4ch;
+      align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px;
+      font-size: 12px; color: #ffffff; }
+    .lb-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+    .lb-row.lb-mine { background: rgba(122,215,255,0.14); border: 1px solid rgba(122,215,255,0.4); }
+    .lb-rank { color: rgba(232,236,243,0.5); font-variant-numeric: tabular-nums; }
+    .lb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lb-score { text-align: right; font-variant-numeric: tabular-nums; }
+    .lb-time { text-align: right; font-size: 10px; color: rgba(232,236,243,0.5);
+      font-variant-numeric: tabular-nums; }
+
+    /* --- THE BAR. Pinned, and the readout scrolls under it. -------------- */
+    .bar { flex: none; border-top: 1px solid rgba(255,255,255,0.10);
+      background: #0a0e15; padding: 16px 30px 18px;
+      box-shadow: 0 -18px 30px rgba(3,6,10,0.7);
+      display: flex; flex-direction: column; gap: 12px; z-index: 5; }
+    .bar-row { display: flex; gap: 10px; align-items: center; }
+    .name-input { flex: 1; min-width: 0; background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; padding: 10px 12px;
+      color: #e8ecf3; font-family: inherit; font-size: 13px; letter-spacing: 0.04em;
+      text-transform: uppercase; text-align: center; }
+    .name-input:focus { outline: none; border-color: #7ad7ff; background: rgba(122,215,255,0.08); }
+    .btn { background: #7ad7ff; color: #0a0c12; border: 0; border-radius: 8px;
+      padding: 10px 18px; font-family: inherit; font-size: 13px; letter-spacing: 0.02em;
+      cursor: pointer; white-space: nowrap; }
+    .btn:hover { background: #9fe3ff; }
+    .btn-ghost { background: rgba(122,215,255,0.12); color: #cfeeff;
+      border: 1px solid rgba(122,215,255,0.35); }
+    .btn-ghost:hover { background: rgba(122,215,255,0.22); }
+    .btn-go { flex: 1; padding: 16px 18px; font-size: 16px; letter-spacing: 0.06em;
+      text-transform: uppercase; }
+    .as-row { display: flex; align-items: center; justify-content: center; gap: 8px;
+      font-size: 10px; letter-spacing: 0.06em; color: rgba(232,236,243,0.45); }
+    .as-name { background: none; border: 0; border-bottom: 1px dashed rgba(232,236,243,0.3);
+      color: #e8ecf3; font-family: inherit; font-size: 10px; letter-spacing: 0.06em;
+      text-transform: uppercase; text-align: center; width: 14ch; padding: 3px 0; }
+    .as-name:focus { outline: none; border-bottom-color: #7ad7ff; }
+    .roll { background: none; border: 0; cursor: pointer; color: #7ad7ff;
+      font-family: inherit; font-size: 10px; letter-spacing: 0.06em; padding: 4px;
+      display: inline-flex; align-items: center; gap: 5px; }
+    .roll:hover { color: #cfeeff; }
+    .tip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+      cursor: pointer; border-radius: 999px; padding: 5px 11px; font-size: 10px;
+      letter-spacing: 0.05em; color: rgba(232,236,243,0.6);
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.16);
+      transition: color 0.15s ease, background 0.15s ease; }
+    .tip:hover { color: #ffd9a0; background: rgba(255,190,110,0.14); border-color: rgba(255,190,110,0.45); }
+    .tip-cup { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor;
+      stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+    .retro { position: absolute; inset: 0; pointer-events: none; z-index: 25;
+      background: repeating-linear-gradient(to bottom, rgba(0,0,0,var(--sv-scan)) 0px,
+        rgba(0,0,0,var(--sv-scan)) 1px, transparent 1px, transparent 3px);
+      mix-blend-mode: multiply; animation: flick 0.15s steps(2) infinite; }
+    @keyframes flick { 0% { opacity: calc(1 - var(--sv-flicker)); } 100% { opacity: 1; } }
+  </style>
+</helmet>
+
+<div class="stage">
+  <div class="card">
+
+    <div class="head">
+      <div class="head-top">
+        <div class="quip role">You're the Chum Now, Dog</div>
+        <div class="hero">
+          <b>12,480</b>
+          <span class="role">2nd of 100</span>
+        </div>
+      </div>
+      <div class="figures">
+        <span class="fig">Time <b>3:24</b></span>
+        <span class="fig">Level <b>7</b></span>
+        <span class="fig">Kills <b>148</b></span>
+        <span class="fig">Bosses <b>2</b></span>
+        <span class="fig">Killed by <b>a great white</b></span>
+      </div>
+    </div>
+
+    <div class="strip">
+      <span class="strip-label">Polaroids:</span>
+      <sc-for list="{{ shots }}" as="s" hint-placeholder-count="2">
+        <button class="thumb {{s.cls}}" onClick="{{ s.pick }}" aria-label="{{s.name}}">
+          <svg viewBox="0 0 240 180" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="t{{$index}}" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#12506e"></stop><stop offset="1" stop-color="#04101c"></stop>
+              </linearGradient>
+            </defs>
+            <rect width="240" height="180" fill="url(#t{{$index}})"></rect>
+            <path d="M0 128 Q60 112 120 126 T240 120 L240 180 L0 180 Z" fill="#02090f" opacity="0.8"></path>
+            <path d="{{s.silhouette}}" fill="#020a10" opacity="0.92"></path>
+          </svg>
+        </button>
+      </sc-for>
+      <button class="strip-act" onClick="{{ noop }}">Share {{ shareLabel }}</button>
+    </div>
+
+    <div class="body">
+      <div class="col">
+        <div>
+          <div class="sec-title">Weapons <em>104.6k dealt</em></div>
+          <div class="brk-row" style="--share: 100%">
+            <span class="brk-name">Pocket Full of Stones<span class="brk-picks">×4</span><span class="brk-tag">Final blow</span></span>
+            <span class="brk-a">48.2k</span>
+          </div>
+          <div class="brk-row" style="--share: 62%">
+            <span class="brk-name">Homing Mussels<span class="brk-picks">×2</span></span>
+            <span class="brk-a">29.9k</span>
+          </div>
+          <div class="brk-row" style="--share: 41%">
+            <span class="brk-name">Baby Beluga Bubble Blaster<span class="brk-picks">×3</span></span>
+            <span class="brk-a">19.7k</span>
+          </div>
+          <div class="brk-row" style="--share: 14%">
+            <span class="brk-name">C.H.U.M.</span>
+            <span class="brk-a">6.8k</span>
+          </div>
+          <div class="brk-foot">
+            <span>Held or frozen <b>34</b></span>
+            <span>Best chain <b>×19</b></span>
+          </div>
+        </div>
+
+        <div>
+          <div class="sec-title">What hurt you <em>759 taken</em></div>
+          <div class="brk-row brk-in" style="--share: 100%">
+            <span class="brk-name">Sharks</span><span class="brk-a">412</span>
+          </div>
+          <div class="brk-row brk-in" style="--share: 46%">
+            <span class="brk-name">Crabs</span><span class="brk-a">190</span>
+          </div>
+          <div class="brk-row brk-in" style="--share: 38%">
+            <span class="brk-name">Drowning</span><span class="brk-a">157</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="col">
+        <div>
+          <div class="sec-title">Upgrades taken <em>11 picks</em></div>
+          <div class="brk-row" style="--share: 0%"><span class="brk-name">Pocket Full of Stones<span class="brk-picks">×4</span></span><span class="brk-a">LV 2</span></div>
+          <div class="brk-row" style="--share: 0%"><span class="brk-name">Homing Mussels<span class="brk-picks">×2</span></span><span class="brk-a">LV 3</span></div>
+          <div class="brk-row" style="--share: 0%"><span class="brk-name">Baby Beluga Bubble Blaster<span class="brk-picks">×3</span></span><span class="brk-a">LV 4</span></div>
+          <div class="brk-row" style="--share: 0%"><span class="brk-name">Speedy Seal</span><span class="brk-a">LV 6</span></div>
+          <div class="brk-row" style="--share: 0%"><span class="brk-name">Yoga</span><span class="brk-a">LV 7</span></div>
+        </div><div style="width: 366px; height: 423px">
+          <div class="sec-title">
+            Leaderboard
+            <span class="board-switch">
+              <button class="sw {{ globalCls }}" onClick="{{ showGlobal }}">Global</button>
+              <button class="sw {{ localCls }}" onClick="{{ showLocal }}">Device</button>
+            </span>
+          </div>
+          <sc-for list="{{ boardRows }}" as="r" hint-placeholder-count="8">
+            <div class="lb-row {{r.cls}} role">
+              <span class="lb-rank">{{r.rank}}</span>
+              <span class="lb-name">{{r.name}}</span>
+              <span class="lb-score">{{r.score}}</span>
+              <span class="lb-time">{{r.time}}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        
+      </div>
+    </div>
+
+    <div class="bar">
+      <div class="bar-row">
+        <input class="name-input" type="text" value="SEAL" maxlength="32" aria-label="Name for the leaderboard">
+        <button class="btn btn-ghost role">Post score</button>
+        <button class="btn btn-go role">Dive again</button>
+      </div>
+      <div class="as-row">
+        next seal
+        <input class="as-name" type="text" value="BRINY GUS" maxlength="32" aria-label="Name for your next seal">
+        <button class="roll" type="button" aria-label="Roll a new name"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M10 5A4 4 0 1 0 9.2 8.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path><path d="M10.4 1.6V5H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg> roll</button>
+        <a class="tip" href="#">
+          <svg class="tip-cup" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 8h13v7a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Z"></path>
+            <path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17"></path>
+            <path d="M8 2.5c0 1.2-1 1.5-1 2.5M12 2.5c0 1.2-1 1.5-1 2.5" style="opacity: 0.55"></path>
+          </svg>
+          Tip jar
+        </a>
+      </div>
+    </div>
+
+    <sc-if value="{{ retro }}" hint-placeholder-val="{{ true }}">
+      <div class="retro"></div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{
+  "board": {"editor": "enum", "default": "global", "options": ["global", "device"], "section": "State"},
+  "retro": {"editor": "boolean", "default": true, "section": "Look"},
+  "$preview": {"width": 900, "height": 1120}
+}'>
+// TWO BOARDS, ONE COLUMN. The shipped screen swaps the global list in over the
+// local one when the network answers and never says which you are looking at.
+const SHARK = 'M30 96 q40 -34 96 -30 q34 2 58 16 l26 -22 l-6 30 l24 14 l-28 8 q-30 20 -74 18 q-58 -2 -96 -34 z';
+const ORCA  = 'M24 100 q46 -30 104 -24 q30 3 52 15 l20 -26 l-2 32 l26 12 l-30 10 q-34 18 -80 14 q-54 -6 -90 -33 z';
+const GLOBAL = [
+  ['1', 'PODMOTHER', '18,420', '4:41'],
+  ['2', 'SEAL', '12,480', '3:24'],
+  ['3', 'HAULOUT HANK', '11,905', '3:02'],
+  ['4', 'CLAMMY DAVIS JR.', '9,340', '2:48'],
+  ['5', 'ANON', '7,110', '2:15'],
+  ['6', 'BIG CHUNGUS', '6,880', '2:09'],
+  ['7', 'SELKIE DADDY', '5,240', '1:52'],
+  ['8', 'TWO-FLIPPER GIPPER', '4,905', '1:41'],
+];
+const LOCAL = [
+  ['1', 'SEAL', '12,480', '3:24'],
+  ['2', 'BRINY GUS', '9,905', '3:00'],
+  ['3', 'FLIP FLOP', '8,120', '2:41'],
+  ['4', 'CHONKER TONY', '6,450', '2:12'],
+  ['5', 'SQUISH MARGE', '4,300', '1:44'],
+];
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { board: null, picked: 0 };
+  }
+
+  which() {
+    return this.state.board ?? this.props.board ?? 'global';
+  }
+
+  renderVals() {
+    const which = this.which();
+    const src = which === 'device' ? LOCAL : GLOBAL;
+    const shots = [
+      { name: 'Bloody Jaw', silhouette: SHARK },
+      { name: 'Grim Fluke', silhouette: ORCA },
+    ].map((s, i) => ({
+      ...s,
+      cls: i === this.state.picked ? 'thumb-sel' : '',
+      pick: () => this.setState({ picked: i }),
+    }));
+    return {
+      shots,
+      shareLabel: this.state.picked === 0 ? 'Bloody Jaw' : 'Grim Fluke',
+      boardRows: src.map(([rank, name, score, time]) => ({
+        rank, name, score, time,
+        cls: name === 'SEAL' ? 'lb-mine' : '',
+      })),
+      globalCls: which === 'global' ? 'sw-on' : '',
+      localCls: which === 'device' ? 'sw-on' : '',
+      showGlobal: () => this.setState({ board: 'global' }),
+      showLocal: () => this.setState({ board: 'device' }),
+      retro: this.props.retro ?? true,
+      noop: () => {},
+    };
+  }
+}
+</script>
+</body>
+</html>

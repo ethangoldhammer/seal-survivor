@@ -428,12 +428,14 @@ section('The score card on a pad');
   check('the card opens with nothing highlighted', lit().length === 0,
     lit().map((c) => c.id).join(', '));
 
-  // Whatever is actually reachable, in DOM order — the trophy row only exists
-  // if a boss went down this run, so the first stop is not a fixed button. The
-  // card turns over now, so this is the FRONT face's list; the back's own
-  // control is inside a .sv-hidden face while the front is up.
+  // Whatever is actually reachable, in DOM order — the roll only exists if a
+  // boss went down this run, so the first stop is not a fixed button. One face
+  // now: the card is a ledger and there is no half of it turned away, so this
+  // is every stop on it. The board's two heading buttons are in the list and
+  // are rebuilt on every render, which is why they are named rather than held.
   const reachable = ['svTrophyShare', 'svTrophySave', 'svSheetShare', 'svSheetSave',
-    'svTurnOver', 'svNameSubmit', 'svNextRoll', 'svRestartBtn']
+    'svBoardGlobal', 'svBoardDevice',
+    'svNameSubmit', 'svRestartBtn', 'svNextRoll']
     .map((id) => document.getElementById(id))
     .filter((c) => c && !c.disabled && !c.closest('.sv-hidden'));
   check('the card has controls to reach', reachable.length >= 2,

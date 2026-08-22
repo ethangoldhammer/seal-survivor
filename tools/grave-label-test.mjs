@@ -126,12 +126,12 @@ const { menuInput } = await import('../path/src/input.js');
 // THE TURN TAKES TIME, and every check about which face is live has to wait for
 // it. Polled rather than slept: the rate is a config number and a fixed sleep
 // would start failing the day somebody tunes it.
-const { cardFlipMoving } = await import('../path/src/ui/cardFlip.js');
+// Nothing on the score card animates on a clock any more — the flip is gone —
+// but the screen still does work in promises. A settle is a drain of the
+// microtask queue plus a few macrotasks, not a wait on an angle.
 const settle = async () => {
-  for (let i = 0; i < 600 && cardFlipMoving(); i++) {
-    await new Promise((r) => setTimeout(r, 5));
-  }
-  return !cardFlipMoving();
+  for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+  return true;
 };
 
 

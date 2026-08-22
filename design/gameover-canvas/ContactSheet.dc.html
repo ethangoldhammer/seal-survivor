@@ -1,0 +1,316 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+  <style>
+    /* ========================================================================
+       B — CONTACT SHEET.  Axis: the kill shots ARE the screen.
+       The game already photographs every boss it kills and develops the print
+       in front of the player. On the shipped card that roll is a 190px rack
+       buried between the scorecard and the name field. Here the card IS the
+       sheet: the run is the film leader, the quip is the grease-pencil slug,
+       and the score screen becomes the thing a player wants to send someone.
+       Tokens are the shipped ones; the grease pencil is the damage red the
+       polaroid chin already says DEFEATED in.
+       ==================================================================== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 760px; height: 1120px; overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+    a { color: #7ad7ff; text-decoration: none; }
+    a:hover { color: #cfeeff; }
+    :root { --sv-scan: 0.18; --sv-flicker: 0.12; }
+    .role { text-shadow: -0.4px 0 rgba(255,60,60,0.55), 0.4px 0 rgba(60,160,255,0.55),
+      0 0 13.8px rgba(150,220,255,1); }
+
+    .stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .card { width: 580px; max-width: 90vw; height: 980px; max-height: 92vh;
+      background: #07090d; border: 1px solid rgba(255,255,255,0.14); border-radius: 14px;
+      color: #e8ecf3; overflow: hidden; position: relative;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset;
+      display: flex; flex-direction: column; }
+    .card::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 4;
+      background: linear-gradient(105deg, transparent 60%, rgba(255,255,255,0.015) 78%,
+        rgba(190,230,255,0.16) 94%, rgba(255,255,255,0.02) 110%, transparent 128%);
+      opacity: 0.45; }
+
+    /* --- THE FILM LEADER. The run, written down the edge of the stock the way
+           an exposure record is: frame number, then the exposure data. -------- */
+    .leader { position: relative; background: #0c1017;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      padding: 20px 34px 18px; display: flex; align-items: flex-end; gap: 18px; }
+    .sprockets { position: absolute; left: 0; right: 0; display: flex; gap: 12px;
+      padding: 0 10px; }
+    .sprockets-top { top: 5px; }
+    .sprockets-bot { bottom: 5px; }
+    .sprocket { width: 14px; height: 9px; border-radius: 2px;
+      background: #05070d; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset; }
+    .frame-no { font-size: 46px; line-height: 0.9; letter-spacing: 0.01em; color: #e8ecf3;
+      font-variant-numeric: tabular-nums; }
+    .frame-no small { display: block; font-size: 10px; letter-spacing: 0.16em;
+      text-transform: uppercase; color: rgba(232,236,243,0.45); margin-top: 6px; }
+    .exposure { margin-left: auto; display: grid; grid-template-columns: repeat(2, auto);
+      gap: 6px 20px; text-align: right; }
+    .exp { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: rgba(232,236,243,0.45); white-space: nowrap; }
+    .exp b { color: #e8ecf3; font-size: 13px; margin-left: 8px;
+      font-variant-numeric: tabular-nums; }
+
+    /* --- THE SLUG. Written across the sheet in grease pencil, the way a
+           picture editor marks a roll. Not a headline in a box. ------------- */
+    .slug { position: relative; padding: 22px 34px 6px; }
+    .slug span { display: inline-block; transform: rotate(-1.4deg);
+      font-size: 21px; line-height: 1.4; letter-spacing: 0.03em; color: #ff9d8a;
+      text-shadow: 0 0 18px rgba(255,120,120,0.35); }
+
+    /* --- THE SHEET ------------------------------------------------------- */
+    .sheet { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 34px 20px;
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;
+      align-content: start; }
+    .cell { position: relative; background: none; border: 0; padding: 0; cursor: pointer;
+      display: flex; flex-direction: column; gap: 6px; text-align: left;
+      transition: transform 0.15s ease; }
+    .cell:hover { transform: translateY(-3px); }
+    .cell-img { position: relative; background: #05070d; overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.10); line-height: 0; }
+    .cell-img svg { display: block; width: 100%; height: auto; }
+    /* The grease-pencil ring: how a contact sheet says "this is the one". */
+    .ring { position: absolute; inset: 4px; border: 2.5px solid #ff7878; border-radius: 50%;
+      opacity: 0; transform: rotate(-4deg) scale(0.96); pointer-events: none;
+      transition: opacity 0.15s ease, transform 0.15s ease; }
+    .cell-sel .ring { opacity: 0.9; transform: rotate(-4deg) scale(1); }
+    .cell-cap { display: flex; justify-content: space-between; gap: 8px;
+      font-size: 9px; letter-spacing: 0.06em; color: rgba(232,236,243,0.5); }
+    .cell-cap b { color: #e8ecf3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* AN UNEXPOSED FRAME, not an apology. A run that met no boss shows the
+       sheet it would have filled — which is an invitation, where the shipped
+       card simply hides the rack and leaves a gap. */
+    .blank { display: flex; align-items: center; justify-content: center;
+      aspect-ratio: 4 / 3; border: 1px dashed rgba(255,255,255,0.10);
+      background: repeating-linear-gradient(135deg, rgba(255,255,255,0.014) 0 6px, transparent 6px 12px);
+      font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: rgba(232,236,243,0.22); }
+
+    /* --- THE STRIP under the sheet: everything else, on one line each. ---- */
+    .strip { border-top: 1px solid rgba(255,255,255,0.08); padding: 16px 34px 18px;
+      display: flex; flex-direction: column; gap: 12px; }
+    .post-row { display: flex; gap: 8px; align-items: center; }
+    .post-label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: rgba(232,236,243,0.4); white-space: nowrap; }
+    .name-input { flex: 1; min-width: 0; background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; padding: 9px 12px;
+      color: #e8ecf3; font-family: inherit; font-size: 13px; letter-spacing: 0.04em;
+      text-transform: uppercase; text-align: center; }
+    .name-input:focus { outline: none; border-color: #7ad7ff; background: rgba(122,215,255,0.08); }
+    .btn { background: #7ad7ff; color: #0a0c12; border: 0; border-radius: 8px;
+      padding: 9px 16px; font-family: inherit; font-size: 13px; letter-spacing: 0.02em;
+      cursor: pointer; white-space: nowrap; }
+    .btn:hover { background: #9fe3ff; }
+    .btn-ghost { background: rgba(122,215,255,0.12); color: #cfeeff;
+      border: 1px solid rgba(122,215,255,0.35); }
+    .btn-ghost:hover { background: rgba(122,215,255,0.22); }
+    .act-row { display: flex; gap: 8px; }
+    .act-row .btn { flex: 1; padding: 15px 16px; font-size: 15px; letter-spacing: 0.06em;
+      text-transform: uppercase; }
+    .quiet-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .quiet { background: none; border: 0; cursor: pointer; font-family: inherit;
+      color: #7ad7ff; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+      padding: 6px 0; }
+    .quiet:hover { color: #cfeeff; }
+    .tip { display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+      border-radius: 999px; padding: 6px 12px; font-size: 10px; letter-spacing: 0.05em;
+      color: rgba(232,236,243,0.6); background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.16); transition: color 0.15s ease, background 0.15s ease; }
+    .tip:hover { color: #ffd9a0; background: rgba(255,190,110,0.14); border-color: rgba(255,190,110,0.45); }
+    .tip-cup { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor;
+      stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* --- ONE FRAME, HELD UP ---------------------------------------------- */
+    .single { position: absolute; inset: 0; z-index: 8; display: flex;
+      flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+      padding: 28px; background: rgba(3,6,10,0.94); }
+    .single-img { width: 100%; max-width: 440px; background: #05070d; line-height: 0;
+      border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 26px 60px rgba(0,0,0,0.7); }
+    .single-img svg { display: block; width: 100%; height: auto; }
+    .single-cap { display: flex; justify-content: space-between; width: 100%;
+      max-width: 440px; font-size: 11px; letter-spacing: 0.06em; color: rgba(232,236,243,0.5); }
+    .single-cap b { color: #e8ecf3; }
+    .single-row { display: flex; gap: 8px; }
+    .close { position: absolute; top: 14px; right: 16px; background: rgba(255,255,255,0.08);
+      display: flex; align-items: center; justify-content: center;
+      border: 1px solid rgba(255,255,255,0.18); color: #e8ecf3; font-family: inherit;
+      font-size: 15px; line-height: 1; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; }
+    .close:hover { background: rgba(255,255,255,0.16); }
+
+    .retro { position: absolute; inset: 0; pointer-events: none; z-index: 25;
+      background: repeating-linear-gradient(to bottom, rgba(0,0,0,var(--sv-scan)) 0px,
+        rgba(0,0,0,var(--sv-scan)) 1px, transparent 1px, transparent 3px);
+      mix-blend-mode: multiply; animation: flick 0.15s steps(2) infinite; }
+    @keyframes flick { 0% { opacity: calc(1 - var(--sv-flicker)); } 100% { opacity: 1; } }
+  </style>
+</helmet>
+
+<div class="stage">
+  <div class="card">
+
+    <div class="leader">
+      <div class="sprockets sprockets-top">
+        <sc-for list="{{ sprockets }}" as="s" hint-placeholder-count="18">
+          <span class="sprocket"></span>
+        </sc-for>
+      </div>
+      <div class="frame-no">12,480<small>Score</small></div>
+      <div class="exposure">
+        <span class="exp">Time <b>3:24</b></span>
+        <span class="exp">Level <b>7</b></span>
+        <span class="exp">Kills <b>148</b></span>
+        <span class="exp">Bosses <b>{{ count }}</b></span>
+      </div>
+      <div class="sprockets sprockets-bot">
+        <sc-for list="{{ sprockets }}" as="s" hint-placeholder-count="18">
+          <span class="sprocket"></span>
+        </sc-for>
+      </div>
+    </div>
+
+    <div class="slug"><span>You&#39;re the Chum Now, Dog</span></div>
+
+    <div class="sheet">
+      <sc-for list="{{ cells }}" as="c" hint-placeholder-count="4">
+        <button class="cell {{c.cls}}" onClick="{{ c.open }}">
+          <div class="cell-img">
+            <svg viewBox="0 0 240 180" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="g{{$index}}" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#12506e"/><stop offset="1" stop-color="#04101c"/>
+                </linearGradient>
+              </defs>
+              <rect width="240" height="180" fill="url(#g{{$index}})"/>
+              <path d="M0 128 Q60 112 120 126 T240 120 L240 180 L0 180 Z" fill="#02090f" opacity="0.8"/>
+              <path d="{{c.silhouette}}" fill="#020a10" opacity="0.92"/>
+              <circle cx="120" cy="58" r="44" fill="#7ad7ff" opacity="0.07"/>
+            </svg>
+            <span class="ring"></span>
+          </div>
+          <span class="cell-cap"><b>{{c.name}}</b><span>{{c.at}}</span></span>
+        </button>
+      </sc-for>
+      <sc-for list="{{ blanks }}" as="b" hint-placeholder-count="2">
+        <div class="blank">Unexposed</div>
+      </sc-for>
+    </div>
+
+    <div class="strip">
+      <div class="post-row">
+        <span class="post-label">Post as</span>
+        <input class="name-input" type="text" value="SEAL" maxlength="32" aria-label="Name for the leaderboard" />
+        <button class="btn role">Post</button>
+      </div>
+      <div class="act-row">
+        <button class="btn btn-ghost role">Share sheet</button>
+        <button class="btn role">Dive again</button>
+      </div>
+      <div class="quiet-row">
+        <button class="quiet" onClick="{{ noop }}">Leaderboard &#183; you&#39;re 2nd</button>
+        <button class="quiet" onClick="{{ noop }}">The run &#183; 104.6k dealt</button>
+        <a class="tip" href="#">
+          <svg class="tip-cup" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 8h13v7a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Z" />
+            <path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17" />
+            <path d="M8 2.5c0 1.2-1 1.5-1 2.5M12 2.5c0 1.2-1 1.5-1 2.5" style="opacity: 0.55" />
+          </svg>
+          Tip jar
+        </a>
+      </div>
+    </div>
+
+    <sc-if value="{{ single }}" hint-placeholder-val="{{ false }}">
+      <div class="single">
+        <div class="single-img">
+          <svg viewBox="0 0 240 180" xmlns="http://www.w3.org/2000/svg">
+            <defs><linearGradient id="gbig" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12506e"/><stop offset="1" stop-color="#04101c"/></linearGradient></defs>
+            <rect width="240" height="180" fill="url(#gbig)"/>
+            <path d="M0 128 Q60 112 120 126 T240 120 L240 180 L0 180 Z" fill="#02090f" opacity="0.8"/>
+            <path d="{{ singleSilhouette }}" fill="#020a10" opacity="0.92"/>
+            <circle cx="120" cy="58" r="44" fill="#7ad7ff" opacity="0.07"/>
+          </svg>
+        </div>
+        <div class="single-cap"><b>{{ singleName }}</b><span>{{ singleAt }}</span></div>
+        <div class="single-row">
+          <button class="btn role">Share this frame</button>
+          <button class="btn btn-ghost role">Save it</button>
+        </div>
+        <button class="close" onClick="{{ closeSingle }}" aria-label="Back to the sheet"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ retro }}" hint-placeholder-val="{{ true }}">
+      <div class="retro"></div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{
+  "bosses": {"editor": "int", "default": 2, "min": 0, "max": 6, "section": "Run"},
+  "retro": {"editor": "boolean", "default": true, "section": "Look"},
+  "$preview": {"width": 760, "height": 1120}
+}'>
+// THE SHEET IS SIZED IN PAIRS. Four frames is a good run; zero is the state the
+// shipped card hides, and the one this direction has to answer for — so the
+// sheet keeps its grid and shows what was never exposed.
+const SHARK = 'M30 96 q40 -34 96 -30 q34 2 58 16 l26 -22 l-6 30 l24 14 l-28 8 q-30 20 -74 18 q-58 -2 -96 -34 z';
+const ORCA  = 'M24 100 q46 -30 104 -24 q30 3 52 15 l20 -26 l-2 32 l26 12 l-30 10 q-34 18 -80 14 q-54 -6 -90 -33 z';
+const CRAB  = 'M40 132 q18 -34 80 -34 q62 0 80 34 l-24 0 q-16 -18 -56 -18 q-40 0 -56 18 z';
+const SQUID = 'M120 44 q42 0 42 42 q0 16 -8 26 q10 26 -6 44 q-6 -20 -14 -22 q2 24 -14 34 q-6 -22 -12 -24 q-4 26 -22 30 q4 -26 -4 -30 q-10 18 -26 16 q14 -18 12 -34 q-8 -12 -8 -30 q0 -52 60 -52 z';
+const MOSA  = 'M22 98 q44 -36 100 -28 q36 5 60 20 l24 -24 l-4 32 l22 14 l-30 8 q-32 16 -76 12 q-56 -8 -96 -34 z';
+const KILLS = [
+  { name: 'Bloody Jaw', at: '0:58', silhouette: SHARK },
+  { name: 'Grim Fluke', at: '1:47', silhouette: ORCA },
+  { name: 'Sharp Chompers', at: '2:31', silhouette: CRAB },
+  { name: 'Blackfin', at: '3:02', silhouette: SQUID },
+  { name: 'The Honorable Tide', at: '3:15', silhouette: MOSA },
+  { name: 'Big Willy Style', at: '3:21', silhouette: SHARK },
+];
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { picked: 0, single: false };
+  }
+
+  renderVals() {
+    const n = Math.max(0, Math.min(6, this.props.bosses ?? 2));
+    const cells = KILLS.slice(0, n).map((k, i) => ({
+      ...k,
+      cls: i === this.state.picked ? 'cell-sel' : '',
+      open: () => this.setState({ picked: i, single: true }),
+    }));
+    // The grid never collapses to one column: a sheet with an odd number of
+    // frames keeps the empty half, because that is what a sheet looks like.
+    const pad = n === 0 ? 4 : (n % 2 === 1 ? 1 : 0);
+    const held = KILLS[Math.min(this.state.picked, Math.max(0, n - 1))] ?? KILLS[0];
+    return {
+      sprockets: Array.from({ length: 18 }, (_, i) => i),
+      count: n,
+      cells,
+      blanks: Array.from({ length: pad }, (_, i) => i),
+      single: this.state.single && n > 0,
+      singleName: held.name,
+      singleAt: `Frame ${Math.min(this.state.picked, Math.max(0, n - 1)) + 1} of ${n} · ${held.at}`,
+      singleSilhouette: held.silhouette,
+      retro: this.props.retro ?? true,
+      closeSingle: () => this.setState({ single: false }),
+      noop: () => {},
+    };
+  }
+}
+</script>
+</body>
+</html>

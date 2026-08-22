@@ -131,7 +131,14 @@ const rest = models.filter((k) => !primary.includes(k)).sort();
 // CONFIG stores and the unit a species opts into, so editing per-asset here
 // would produce numbers with nowhere to live.
 // ---------------------------------------------------------------------------
-const edited = { toonShade: {}, sealShader: {}, biolumSkin: {}, creatureOutline: {} };
+const edited = {
+  toonShade: {}, sealShader: {}, biolumSkin: {},
+  // The two rim roots. FLAT — neither has presets, so their edits live under
+  // `__flat` (the four shared numbers) and `__on` (the per-species switches).
+  // Both are written through to config.js by tools/apply-shaders.mjs; see
+  // writeFlatRoots there.
+  creatureOutline: {}, companionOutline: {},
+};
 let subject = null;          // the live visual in the scene
 let subjectKey = null;
 let axis = null;             // the biolum body axis for the current subject
@@ -156,16 +163,15 @@ let subjectHasGlowMap = false;
 // THE RIM, OFF BY DEFAULT, and a VIEW switch rather than a setting.
 //
 // Two different systems put a shell on a body here — CONFIG.creatureOutline
-// (#ff7a3d, ten sharks and orcas) and CONFIG.companionOutline (#ffd27a, the
-// seal team and the six allies) — and the panel below only drives the first.
-// So on any companion the sliders are inert and a yellow rim sits over the
-// surface with nothing in the tool able to switch it off, which is exactly the
-// wrong way round for a page whose job is authoring what is UNDER it.
+// (#ff7a3d, the threats) and CONFIG.companionOutline (#ffd27a, the seal team
+// and the allies). The panel below drives WHICHEVER of the two this subject
+// belongs to, so the sliders are never inert; this switch is about getting the
+// rim out of the way while you judge the surface UNDER it, which is a different
+// question from whether the animal should wear one.
 //
 // Hidden by making the shell meshes invisible, not by touching either config:
-// the rim is per-species roster data, and a view preference that wrote to
-// CONFIG could be picked up by `record` and shipped as a roster change nobody
-// asked for.
+// a view preference that wrote to CONFIG could be picked up by `record` and
+// shipped as a roster change nobody asked for.
 let showRim = false;
 function applyRimVisibility() {
   subject?.traverse((o) => {
@@ -499,6 +505,29 @@ function setVal(cfgRoot, presetName, k, v) {
   edited[cfgRoot][presetName === null ? '__flat' : presetName][k] = v;
 }
 
+// A per-species rim switch, recorded so `record` carries it. Kept apart from
+// `__flat` because the two land in different places in config.js — the four
+// numbers sit at the root, these sit inside its `on` block — and because they
+// are different KINDS of decision: one is what the rim looks like, shared by
+// every species wearing it, the other is who wears it.
+function setSwitch(cfgRoot, key, v) {
+  ((edited[cfgRoot] ??= {}).__on ??= {})[key] = v;
+}
+
+// Which rim this body actually wears. attachOutline in systems/outlines.js
+// dispatches on exactly this test — present in creatureOutline.on means it is a
+// threat, anything else falls through to the companion rim — so asking the same
+// question here is what keeps the panel pointed at the shells on screen.
+//
+// A body in NEITHER list wears nothing and has no shells built. It still gets a
+// root (the creature one, matching the dispatch's own fallthrough being the
+// companion side only for keys it already knows), so the switch below has
+// somewhere to write when you add it to a roster.
+function outlineRootFor(key) {
+  if (key && CONFIG.companionOutline?.on && key in CONFIG.companionOutline.on) return 'companionOutline';
+  return 'creatureOutline';
+}
+
 // THE PRESETS AS CONFIG.JS AUTHORED THEM, captured before anything is committed
 // and never written to again. Every rebuild starts here, so no amount of masking
 // and un-masking can drift the values a human never touched. Deep-cloned because
@@ -554,6 +583,11 @@ function commit() {
     const c = (CONFIG[root] ??= {});
     for (const [name, fields] of Object.entries(presets)) {
       if (name === '__flat') { Object.assign(c, fields); continue; }
+      // The per-species switches, merged INTO `on` rather than replacing it:
+      // this bag only ever holds the keys somebody clicked, and assigning it
+      // whole would delete every other species from the roster on the first
+      // click. `??=` on the container so a root with no list yet grows one.
+      if (name === '__on') { Object.assign(c.on ??= {}, fields); continue; }
       rebuildPreset(root, name);
     }
   }
@@ -1134,7 +1168,12 @@ function buildPanels() {
     }
   }));
 
-  p.appendChild(section('outline', 'creatureOutline', null, OUTLINE, (body) => {
+  // WHICH ROOT, decided per subject — see outlineRootFor. The section used to
+  // be hard-wired to creatureOutline and print a warning on any companion
+  // saying the sliders below did not control it, which is a tool describing its
+  // own gap rather than closing it.
+  const rimRoot = outlineRootFor(subjectKey);
+  p.appendChild(section('outline', rimRoot, null, OUTLINE, (body) => {
     // The view switch first, because it is the one that decides whether any of
     // the rest of this section is visible on the model at all.
     const see = document.createElement('div');
@@ -1150,37 +1189,62 @@ function buildPanels() {
     });
     body.appendChild(see);
 
-    // WHOSE RIM IS THIS. A companion wears one from a different config root
-    // that this section cannot reach, and without saying so the sliders read as
-    // broken — they move, the readouts change, the model does not.
-    if (CONFIG.companionOutline?.on?.[subjectKey]) {
-      const warn = document.createElement('div');
-      warn.className = 'row warnrow';
-      warn.innerHTML = '<label>companion</label><output>'
-        + 'this one wears the COMPANION rim (CONFIG.companionOutline, the yellow one), '
-        + 'which the sliders below do not control — they are creatureOutline. '
-        + 'Use "show rim" above to get it out of the way.'
-        + '</output>';
-      body.appendChild(warn);
-    }
-    colorRow(body, 'creatureOutline', null, 'color', 'colour', 0xff7a3d);
+    // WHOSE RIM IS THIS. Said out loud, because the four sliders above are ONE
+    // SHARED SET per root: moving them here moves every threat, or every ally,
+    // together. That is the system as built, not a limitation of the panel, and
+    // it is the difference between a tweak and a roster-wide decision.
+    const which = document.createElement('div');
+    which.className = 'row warnrow';
+    which.innerHTML = `<label>${rimRoot === 'companionOutline' ? 'ally rim' : 'threat rim'}</label><output>`
+      + `editing CONFIG.${rimRoot} — the four numbers above are SHARED by every `
+      + `${rimRoot === 'companionOutline' ? 'ally' : 'creature'} wearing this rim. `
+      + 'The switch below is this species alone.'
+      + '</output>';
+    body.appendChild(which);
+
+    colorRow(body, rimRoot, null, 'color', 'colour',
+      rimRoot === 'companionOutline' ? 0xffd27a : 0xff7a3d);
+
     // The per-species switch, which IS per species even though the look is not.
     const row = document.createElement('div');
     row.className = 'row';
-    const on = CONFIG.creatureOutline?.on ?? {};
+    const on = CONFIG[rimRoot]?.on ?? {};
+    // NOT DISABLED WHEN UNLISTED any more. A key that is not in `on` builds no
+    // shells at all, so it used to be unreachable from here — which meant the
+    // one tool that can see the animal could not put a rim on anything that did
+    // not already have one. Ticking it now adds the key; the shells appear on
+    // the next spawn, which in this page is the next subject rebuild.
     const listed = subjectKey in on;
-    row.innerHTML = `<label>on ${listed ? '' : '(unlisted)'}</label>
-      <input type="checkbox" ${on[subjectKey] ? 'checked' : ''} ${listed ? '' : 'disabled'}>
-      <output>${listed ? '' : 'not in .on'}</output>`;
+    row.innerHTML = `<label>on</label>
+      <input type="checkbox" ${on[subjectKey] ? 'checked' : ''}>
+      <output>${listed ? '' : 'not in .on yet — ticking adds it'}</output>`;
     const box = row.querySelector('input');
     box.addEventListener('change', () => {
-      // Written straight into CONFIG rather than into `edited`: this is a
-      // per-species switch, not part of the shared look block the textarea
-      // emits, and rolling it into that block would paste a roster change in
-      // with a colour change.
-      CONFIG.creatureOutline.on[subjectKey] = box.checked;
+      // Into `edited` as well as CONFIG, which is the whole of this change:
+      // written only to CONFIG it moved the model in front of you and then died
+      // with the tab, because `record` reads the edit buffer. It goes in its own
+      // `__on` bag rather than the shared look block — see setSwitch.
+      setSwitch(rimRoot, subjectKey, box.checked);
+      // SWITCHING A RIM ON HAS TO SHOW YOU THE RIM. `showRim` starts off so the
+      // surface can be judged bare, and leaving it off here means the one click
+      // whose entire subject is the rim changes nothing on screen — which reads
+      // as the switch being broken.
+      if (box.checked && !showRim) {
+        showRim = true;
+        see.querySelector('input').checked = true;
+        see.querySelector('output').textContent = '';
+        applyRimVisibility();
+      }
       commit(); draw();
-      status(`${subjectKey} rim ${box.checked ? 'on' : 'off'} — switch is per species, the look below is shared`);
+      const grew = !listed;
+      row.querySelector('output').textContent = grew ? 'rebuild to see it' : '';
+      // A key that was not in `on` had no shells built for it, and this page
+      // builds them at subject-build time (initCreatureOutlines' spawn hook).
+      // So the first tick on a new species needs the body rebuilt before the
+      // rim exists — said rather than silently doing nothing.
+      status(grew
+        ? `${subjectKey}: added to ${rimRoot}.on — reselect it to build the shells, then record`
+        : `${subjectKey}: ${rimRoot}.on ${box.checked ? 'on' : 'off'} — hit record to keep it`);
     });
     body.appendChild(row);
   }));
