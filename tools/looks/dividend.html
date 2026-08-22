@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>The boss dividend — the hive coming to the middle</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden;
+        background: radial-gradient(120% 90% at 50% 10%, #14384f 0%, #030a11 100%);
+        color: #dff0ff; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #hud { position: fixed; left: 12px; top: 10px; z-index: 20; max-width: 44ch;
+        text-shadow: 0 1px 3px rgba(0,0,0,.55); }
+      #hud h1 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+        margin: 0 0 6px; color: #9fdcff; font-weight: 600; }
+      #hud p { margin: 0 0 6px; color: #b9d6ee; }
+      #hud button { font: inherit; margin: 0 4px 4px 0; padding: 4px 8px;
+        background: #0d2233; color: #dff0ff; border: 1px solid #2c5b78;
+        border-radius: 4px; cursor: pointer; }
+      #say { color: #ffe08a; white-space: pre-wrap; }
+      /* The HUD is ABOVE the ceremony's own scrim (z-index 7) so the controls
+         stay reachable while the menu is up. In the game there is nothing over
+         the scrim at all — that is the point of it. */
+    </style>
+    <!-- The pane suspends rAF — see menu-screen.html for the whole story. The
+         fade-in on the banner and the scrim is armed inside a rAF, so without
+         this the chrome is built and never becomes visible. -->
+    <script>
+      if (!/[?&]raf=native/.test(location.search)) {
+        window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
+        window.cancelAnimationFrame = (id) => clearTimeout(id);
+      }
+    </script>
+  </head>
+  <body>
+    <div id="hud">
+      <h1>Boss dividend — ui/hiveReward.js</h1>
+      <p>The real hive, the real ceremony. Point at a hexagon to see the glow,
+         click one to slam a stack onto it. The corner flies home when the
+         payout is spent.</p>
+      <button id="btnOne">1 stack (boss 1)</button>
+      <button id="btnThree">3 stacks (boss 3)</button>
+      <button id="btnDeep">deep build</button>
+      <button id="btnHome">send it home</button>
+      <p id="say">…</p>
+    </div>
+    <script type="module" src="./dividend.js"></script>
+  </body>
+</html>

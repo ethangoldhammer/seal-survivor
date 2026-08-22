@@ -8170,6 +8170,36 @@ export const CONFIG = {
       },
 
       // ---------------------------------------------------------------------
+      // THE DIVIDEND — what beating a boss pays, see ui/hiveReward.js
+      // ---------------------------------------------------------------------
+      // Once the kill shot lets go, the hive comes off the corner and into the
+      // middle of the screen and the player deepens something they already
+      // hold, one stack per click.
+      //
+      // IT SCALES WITH THE KILL COUNT AND NOT WITH THE LEVEL: the first boss
+      // pays one stack, the second two, the third three. A flat payout would be
+      // worth less every time it landed — the fifth boss arrives into a build
+      // that is already deep, where one more pick of anything is a rounding
+      // error — and the ramp is what keeps a kill feeling like the biggest
+      // thing the run does at every point in the run.
+      //
+      // A GAMEPLAY NUMBER, so it is here and NOT in CONFIG.upgradeHive, whose
+      // whole block is look-and-feel and carries a slider. What the ceremony
+      // looks like is tunable; what it pays is not.
+      dividend: {
+        enabled: true,
+        // Multiplied by the number of bosses killed so far, so 1 is the
+        // 1/2/3/4 ramp. Rounded down, so a half still ramps — 0.5 pays nothing
+        // for the first boss and then 1, 1, 2, 2, 3.
+        stacksPerBoss: 1,
+        // A ceiling on one payout, because the ramp has no natural end and a
+        // run that reaches the eighth boss would otherwise be handed eight
+        // picks at once — which is not a choice, it is a chore with a menu
+        // around it. 0 means no cap.
+        maxStacks: 6,
+      },
+
+      // ---------------------------------------------------------------------
       // THE KILL SHOT — see systems/bossKill.js
       // ---------------------------------------------------------------------
       // The two seconds after a boss dies: the ocean drops into slow motion,
@@ -24930,6 +24960,41 @@ export const CONFIG = {
         alpha: 0.5,       // at a tower deep enough to be at full strength
         spread: 1.34,     // how far past the tile it reaches, x the box
         lift: 3,          // px higher than the tile, so the contact edge is dark
+      },
+    },
+
+    // THE BOSS DIVIDEND, as a piece of staging — the corner picking itself up
+    // and flying to the middle of the screen to be spent. See ui/hiveReward.js.
+    //
+    // LOOK ONLY, like the rest of this block. How many stacks a kill actually
+    // pays is CONFIG.boss.dividend, because that is a gameplay number and this
+    // is a camera move.
+    reward: {
+      enabled: true,
+      title: 'Boss down',
+      // How much bigger the hive gets. A CEILING rather than a promise: it is
+      // clamped by what fits the viewport, since a twenty-pick build on a phone
+      // blown up 2.4x would put half its own tiles off-screen, and the tile you
+      // want might be one of them.
+      scale: 2.4,
+      pad: 40,          // px kept clear of every edge
+      // Px between the bottom of the banner and the top of the hive. The
+      // banner's own height is MEASURED rather than declared here — it is the
+      // game's menu type at whatever size the typography panel is set to, so a
+      // number in this file would be a stale copy of a value the tuner moves.
+      gap: 26,
+      // A nudge inside the band under the banner, if the composition wants one.
+      // Zero by default: the band already has the headline out of the way, and
+      // a bias on top of that is just an off-centre menu.
+      bias: 0,
+      seconds: 0.55,
+      ease: 'outCubic',
+      scrim: 0.6,       // how far the water goes down behind it
+      glow: {
+        // The halo behind an offered tile, as a multiple of the tile's box. It
+        // is a sibling and not a filter — a hexagon's clip-path eats its own
+        // drop-shadow, see the CSS.
+        spread: 1.85,
       },
     },
 

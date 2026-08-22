@@ -458,6 +458,110 @@ const STYLES = `
     .sv-hive-tile.sv-hive-firing { animation: sv-hive-glow 300ms ease-out !important; }
   }
 
+  /* --- THE BOSS DIVIDEND — the corner comes to the middle -----------------
+     See ui/hiveReward.js. The same tiles, picked up and carried: nothing here
+     builds a second hive, it moves the one that has been in the corner all run.
+
+     TWO STATES, AND THE DIFFERENCE MATTERS. 'on' is the ceremony — it is a
+     menu, so it takes the pointer and it clears the HUD. 'out' is the flight
+     home, which the run is already live underneath: the pointer goes back to
+     the seal on that frame (the mouse steers), but transform-origin has to
+     survive the whole trip or the transform being animated changes meaning
+     halfway through it and the hive corkscrews into the corner. */
+  .sv-hive[data-reward] { transform-origin: 0 0; will-change: transform; }
+  /* Over the HUD and the toasts, under nothing — a level-up card cannot be open
+     at the same time (see canPause: the ramp this rides on locks both out). */
+  .sv-hive[data-reward="on"] { z-index: 8; pointer-events: auto; }
+  /* Only the tiles answer, and only the ones that can still take a pick. The
+     hexagon's own clip-path decides the hit area, so the gaps between tiles are
+     dead space rather than a grid of invisible squares. */
+  .sv-hive[data-reward="on"] .sv-hive-tile[data-reward="open"] { cursor: pointer; }
+  /* A capped stack is still readable — it is part of the build — but it is
+     visibly not on offer. Desaturated rather than dimmed to nothing: greying a
+     tile out entirely reads as an error state. */
+  .sv-hive[data-reward="on"] .sv-hive-tile[data-reward="capped"] {
+    filter: saturate(0.35) brightness(0.62); }
+  /* THE LIT TILE. Brightness only — no transform. The pile behind a tile is a
+     set of SIBLINGS (see .sv-hive-shim), so a tile that scaled on hover would
+     slide off its own stack, and rebuild()'s FLIP animates this same property
+     the instant a pick lands. The size cue is the halo below instead. */
+  .sv-hive[data-reward="on"] .sv-hive-tile.sv-hive-hot {
+    filter: brightness(var(--sv-hive-hot-lift, 1.55)) saturate(1.15); }
+
+  /* THE GLOW IS A SIBLING, NOT A FILTER ON THE TILE.
+     'filter' is applied BEFORE 'clip-path', so a drop-shadow on a hexagonal
+     tile is drawn and then cut away by that tile's own outline — the halo is
+     painted and invisible, with nothing failing anywhere. Same trap the contact
+     shadow under a tower is built around, and the same answer: a radial
+     gradient, which needs no filter and cannot be clipped.
+
+     IT IS A RING, AND IT IS PAINTED OVER THE LATTICE. Behind its own tile is
+     the obvious place and it does not work: a hexagon in a cluster is ringed by
+     neighbours, and every tile the corner paints after it covers the half of the
+     glow on that side — so it leaks out of one corner of the hive and nowhere
+     else. hiveReward appends it last instead, and the transparent middle is what
+     keeps it from washing out the icon underneath: the hole reaches past the
+     hexagon's own points, so the only thing it paints on its own tile is the air
+     around it.
+
+     NO z-index. Being last in the host is already the top of the pile, and a
+     z-index here would lift every halo in the hive — including the invisible
+     ones — over every tile and every pile in it. */
+  .sv-hive-halo { position: absolute; pointer-events: none; opacity: 0;
+    transition: opacity 140ms ease-out;
+    background: radial-gradient(closest-side circle at 50% 50%,
+      /* THE HOLE HAS TO CLEAR THE HEXAGON'S POINTS. At the default spread the
+         drawn hexagon is 48% of the halo's radius across — a hole any tighter
+         and the glow starts inside the tile, which fogs the icon it is meant to
+         be pointing at. */
+      rgba(0,0,0,0) 0 48%,
+      color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) 78%, transparent) 58%,
+      color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) 30%, transparent) 74%,
+      rgba(0,0,0,0) 100%); }
+  .sv-hive-halo.sv-hive-hot { opacity: 1;
+    animation: sv-hive-breathe var(--sv-hive-breathe, 1.15s) ease-in-out infinite; }
+  /* It breathes rather than sitting still, because a static glow on a static
+     tile in a stopped world reads as a highlight the page was rendered with. */
+  @keyframes sv-hive-breathe {
+    0%, 100% { transform: scale(0.94); opacity: 0.75; }
+    50%      { transform: scale(1.06); opacity: 1; }
+  }
+
+  /* The water goes down behind it, so the tiles are the brightest thing on the
+     screen. Under the hive and over everything else; it also swallows clicks
+     that miss a hexagon, which is what stops a stray shot going out through the
+     menu. */
+  .sv-hive-reward-scrim { position: fixed; inset: 0; z-index: 7;
+    pointer-events: auto; background: rgba(2,10,16,var(--sv-reward-scrim, 0.6));
+    opacity: 0; transition: opacity 320ms ease-out; }
+  .sv-hive-reward-scrim.sv-in { opacity: 1; }
+
+  /* THE HEADLINE USES THE MENU'S OWN TEXT ROLES (.sv-title / .sv-sub) and sets
+     no type of its own. Family, size, weight, tracking, case and glow for those
+     two are owned by textRoles.js and written by ui/typography.js in a sheet
+     appended AFTER this one — anything here that named a size would beat it by
+     specificity, and the tuner's Screens rows would move every menu title in the
+     game except this one. Only the layout is local. */
+  .sv-hive-reward { position: fixed; left: 50%; top: 13%; z-index: 9;
+    transform: translate(-50%, -10px); pointer-events: none; text-align: center;
+    color: #e8ecf3;
+    opacity: 0; transition: opacity 320ms ease-out, transform 320ms ease-out; }
+  .sv-hive-reward.sv-in { opacity: 1; transform: translate(-50%, 0); }
+  /* The menu roles are authored for a boxed panel; this floats over the water,
+     so it drops their trailing margin and gains a shadow to sit on. */
+  .sv-hive-reward .sv-title { margin-bottom: 4px;
+    text-shadow: 0 2px 14px rgba(0,0,0,0.85); }
+  .sv-hive-reward .sv-sub { margin-bottom: 0;
+    text-shadow: 0 1px 8px rgba(0,0,0,0.8); }
+  /* A tabular figure, so the count stepping 3 -> 2 -> 1 does not shuffle the
+     words either side of it. */
+  .sv-hive-reward-count { font-weight: 700; color: #ffe9a8;
+    font-variant-numeric: tabular-nums; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sv-hive-halo.sv-hive-hot { animation: none; transform: scale(1); }
+  }
+
   /* XP spans the full width at the very top — it's the run-long progress
      bar, so it reads as a frame around the screen rather than a widget. */
   /* THE LEVEL NUMBER RIDES INSIDE THE TRACK, centred. It used to sit under the

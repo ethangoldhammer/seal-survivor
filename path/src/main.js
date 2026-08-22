@@ -141,6 +141,7 @@ import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple } from './ui/upgradeHive.js';
+import { startHiveReward, hiveRewardActive, updateHiveRewardNav, resetHiveReward, bossDividendStacks } from './ui/hiveReward.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
 // THE HELLO at the top of a run, which is not a tip: it fires every run and
@@ -283,6 +284,15 @@ const gameState = {
 };
 
 let pendingLevels = 0;
+// --- THE BOSS DIVIDEND ------------------------------------------------------
+// Stacks owed for bosses already killed, and how many kills have been paid for.
+// Two counters rather than one because they answer different questions: the
+// second is what stops the same kill being billed on every frame after it, and
+// the first is what survives a wait — the payout is held until the kill shot has
+// let go of the clock and any level the same kill earned has been spent, which
+// can be several seconds after the boss actually died.
+let pendingBossStacks = 0;
+let bossesPaid = 0;
 // XP HELD BACK from a single oversized mouthful, and the seconds left to pay it
 // in over. See CONFIG.xp.spill and updateXpSpill.
 let xpSpill = 0;
@@ -1408,6 +1418,12 @@ function startGame() {
   gameState.xp = 0;
   gameState.xpToNext = CONFIG.xp.first;
   pendingLevels = 0;
+  // The dividend goes with it. `bossesPaid` in particular: without the reset the
+  // next run's first boss is compared against the last run's count and pays
+  // nothing at all.
+  pendingBossStacks = 0;
+  bossesPaid = 0;
+  resetHiveReward();
   // Held xp belongs to the run that earned it and to nothing else.
   xpSpill = 0;
   xpSpillLeft = 0;
@@ -1903,6 +1919,105 @@ function applyLevelChoice(choice) {
     // playable and isn't.
     endLevelUpTime();
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE BOSS DIVIDEND — the hive comes to the middle and the player deepens it.
+//
+// A boss used to pay in punctuation only: the kill shot, the print, and then the
+// water coming back. The fight that a whole five-level cycle is built around
+// handed over nothing the build could feel. This is the payout, and it is
+// deliberately a payout of DEPTH rather than of breadth — a new card is a
+// decision and belongs on the level-up screen; a boss says yes, harder, to
+// decisions already made.
+//
+// ONE STACK FOR THE FIRST BOSS, TWO FOR THE SECOND, and up from there. See
+// CONFIG.boss.dividend for why it ramps rather than paying flat.
+//
+// WHEN IT OPENS is most of the work here. Four things have to be out of the way
+// and each of them is several seconds long: the kill shot owns the clock and the
+// camera, the level the kill probably granted owns the screen, the run has to
+// still be alive, and nothing else may already be holding the water still. So
+// the payout is BANKED on the frame the boss dies and spent on the first frame
+// the run is clear — which on a normal kill is about three seconds later, with
+// the cards already taken.
+// ---------------------------------------------------------------------------
+
+function updateBossDividend() {
+  if (CONFIG.boss?.dividend?.enabled === false) return;
+  // BILLED ONCE PER KILL, by comparing against a count rather than by listening
+  // for an event: systems/boss.js publishes `defeated` and knows nothing about
+  // the hive, which is the right way round — a boss should not have to import a
+  // menu. `bossesPaid` is what stops this branch from being true on every frame
+  // for the rest of the run.
+  if (bossState.defeated > bossesPaid) {
+    bossesPaid = bossState.defeated;
+    // The ramp lives with the ceremony rather than here, so it can be checked
+    // with real numbers instead of by beating four bosses — see
+    // bossDividendStacks.
+    pendingBossStacks += bossDividendStacks(bossesPaid);
+  }
+  if (!pendingBossStacks) return;
+  // The queue, in order of who owns the screen. `levelUpState.active` covers
+  // both the level-up cards AND this menu — the dividend rides the same ramp —
+  // so `hiveRewardActive` is not redundant with it: the ramp ends the moment the
+  // last stack is taken, while the hive is still flying home.
+  if (!gameState.running || gameState.paused) return;
+  if (bossKillState.active || levelUpState.active || hiveRewardActive()) return;
+  if (pendingLevels > 0) return;
+  const stacks = pendingBossStacks;
+  pendingBossStacks = 0;
+  openBossDividend(stacks);
+}
+
+function openBossDividend(stacks) {
+  // THE SAME RAMP THE LEVEL-UP SCREEN RIDES, and for the same three reasons: it
+  // is what drops the ocean into slow motion behind the menu, it is what
+  // `canPause` reads to keep a second menu off the top of this one, and it is
+  // what hands the world back on its own curve afterwards. What is NOT reused is
+  // the salute — the seal has just finished a kill shot, and a level-up pose on
+  // top of that is two celebrations for one event.
+  gameState.paused = true;
+  duckForUpgrade();
+  startLevelUpTime(() => {
+    const opened = startHiveReward({
+      stacks,
+      // ASKED FRESH ON EVERY TILE, EVERY TIME. levelableUpgrades() is where the
+      // caps, the disabled rows and the best tier a card was taken at all live
+      // (entities/player.js), and a stack taken during the ceremony can push its
+      // own card to its cap — so the answer changes underneath the menu.
+      canStack: (id) => levelableUpgrades().some((u) => u.id === id),
+      onStack: (id) => {
+        const entry = levelableUpgrades().find((u) => u.id === id);
+        // Raced with its own cap, which the ceremony re-asks about but a click
+        // arriving on the same frame as a rebuild could still slip past.
+        if (!entry) return false;
+        // At the BEST TIER this card has already been taken at, exactly as the
+        // level blob pays — see the note in levelableUpgrades. A stack dealt at
+        // the floor would quietly dilute a Legendary.
+        addUpgrade(entry.id, entry.rarity);
+        setHiveUpgrades(player.upgrades);
+        // Timestamped like a card pick, so the balance report charges the
+        // ability for the time it actually held rather than treating a boss
+        // stack as free depth it never had to earn.
+        playtest.recordUpgrade(entry.id, gameState.time);
+        return true;
+      },
+      onDone: () => {
+        gameState.paused = false;
+        sweepOpen();
+        endLevelUpTime();
+      },
+    });
+    // Nothing to spend it on — every card held is capped, or the hive is
+    // switched off. The run must come straight back rather than sit paused
+    // behind a menu that never opened.
+    if (!opened) {
+      gameState.paused = false;
+      sweepOpen();
+      endLevelUpTime();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -4214,7 +4329,11 @@ function animate(now) {
   // Same ordering requirement. Outside the pause gate on purpose: the level-up
   // menu is only ever open WHILE paused, so gating this on !paused would mean
   // the pad could never drive it. No-op when no menu is up.
-  updateMenuNav();
+  // THE DIVIDEND FIRST, and it returns true whenever it is up, so the level-up
+  // row never sees the same frame's input. Both are menus driven off the same
+  // poll and both would answer a confirm — the boss reward is the one that is
+  // actually on screen, since the ramp it rides on locks a level-up out.
+  if (!updateHiveRewardNav()) updateMenuNav();
   // The pause menu's own cursor, on the same poll and for the same reason.
   updatePauseNav();
 
@@ -4965,6 +5084,10 @@ function animate(now) {
     // trigger, it only fires while the run is actually running, and it stops
     // with everything else when the level-up cards are up.
     updateBoss(dt, gameState, world.scene);
+    // What that kill PAYS, once the shot is over. Immediately after updateBoss
+    // because that is the call that files a death — anywhere else in the frame
+    // and the payout is a frame behind the fact it is reading.
+    updateBossDividend();
     // ...and then whatever that boss's perk does. Must sit between updateBoss
     // and updateEnemies: a perk writes the velocity the integrator inside
     // updateEnemies will step, so running it afterwards would land a frame

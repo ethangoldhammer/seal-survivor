@@ -1052,3 +1052,20 @@ export function setHiveStack(mode) {
   state.held = '';
   if (state.lastPicks) setHiveUpgrades(state.lastPicks);
 }
+
+/**
+ * The two boxes and the tile map, for ui/hiveReward.js.
+ *
+ * The reward ceremony PICKS THE HIVE UP AND CARRIES IT — it transforms the root,
+ * hangs a halo behind individual tiles and listens on the host — so it needs the
+ * actual elements rather than a rectangle. It is the only caller, and it is
+ * deliberately a live view: `rebuild()` throws the whole tile map away on every
+ * stack taken during the ceremony, so a snapshot handed over once would be
+ * pointing at detached nodes by the second pick.
+ *
+ * Everything else in the game asks this module for a MEASUREMENT (hiveTileRect,
+ * hiveRect) rather than for the DOM, and should keep doing so.
+ */
+export function hiveParts() {
+  return { root: state.root, host: state.host, tiles: state.tiles };
+}
