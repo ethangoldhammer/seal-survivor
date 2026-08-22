@@ -229,8 +229,16 @@ export const TEXT_ROLES = [
   // this must stay after it in the list, exactly as the combo popup does. Cold
   // where the warning is hot: a tip is not an alarm, and the colour is the
   // fastest way to tell the two apart before either has been read.
+  //
+  // `compact` — this is the one voice that gets SMALLER in a hand. A first-run
+  // tip is read once and then never again, and on a phone it is read over the
+  // top of the fight it is explaining; at the desktop size it is the loudest
+  // thing on a 375px screen, which puts the tutorial where the game should be.
+  // The factor is --sv-tipScale, set per breakpoint in ui.js. Nothing else in
+  // the game shrinks this way on purpose: a warning that got quieter on the
+  // screen it matters most on would be exactly backwards.
   { key: 'coach', label: 'First-run tip', selector: '.sv-callout-coach', section: 'Popups',
-    sample: 'Swim up for air', motion: 'coach',
+    sample: 'Swim up for air', motion: 'coach', compact: true,
     style: { font: FONT_GLOBAL, size: 20, weight: 700, tracking: 0.04, case: 'as typed', useInk: false, color: 0x9fe3ff, alpha: 1, shadow: 10, glow: 12, scan: 0, scanGap: 3, scanGlow: 0 } },
   // A ROLE OF ITS OWN, not a size on the warning band, because it is not on the
   // band at all: it rides just above the boost ring on the seal (callouts.csv,

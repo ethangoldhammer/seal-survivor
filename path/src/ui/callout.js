@@ -29,35 +29,38 @@ import { applyTipDissolve, clearTipDissolve, initTipDissolve, warmTipDissolve } 
 //           one look, so nothing has to be matched up. It holds its place for
 //           as long as the thing is there and then dissolves (ui/tipDissolve
 //           .js) — the departure is the player having collected the thing,
-//           which is why it is an event and not a fade on a timer.
+//           which is why it is an event and not a fade on a timer. And it is
+//           a label on the WATER, not on the glass: when the subject leaves
+//           the frame the words stop following and simply stay where they
+//           were standing. See the park in drawWorld.
 //
 // A WORLD TIP IS TWO NODES, and the split is a rule about writers. The outer
 // box carries the position and the arrival curve; the inner one is owned
 // outright by the dissolve. Both writing `transform` — the pose scale and the
 // drift of the water — is the bug where one of the two silently never lands.
 //
-// THE ARROW ONLY EXISTS WHEN THE LABEL CANNOT BE SEEN. It used to be up
-// whenever a tip with a target was, which was right when the words lived in the
-// middle of the screen — the arrow was the only thing joining the sentence to
-// the thing. Now the sentence is ON the thing, so an arrow pointing at a label
-// the player is already reading is one glyph too many. What is left is the case
-// the label cannot answer: a subject off the edge of the frame, where the tip
-// is clamped to the border and the arrow says which way to go.
+// THE ARROW HUGS ITS SUBJECT. It has been two other things before this one: a
+// long pointer from the seal toward something out in the water, and then — once
+// the words moved out of the middle of the screen and onto the thing itself —
+// the same long pointer kept only for a subject off the edge of the frame.
+// Both were about DIRECTION, and direction is what a first-run tip least needs:
+// the sentence already says what the thing does, and the only question left is
+// WHICH of the four similar orbs on screen it is talking about.
 //
-// THE ARROW IS AIMED IN SCREEN SPACE, from the seal's projected position toward
-// the target's. Doing it in world space and rotating the result is the obvious
-// alternative and it is wrong here: the camera rolls and zooms (see
-// cineCamera.js), so a world-space bearing drawn onto a screen-space overlay
-// would drift off the thing it is pointing at exactly during a strike, which is
-// when the arrow is up. Projecting both ends means the arrow is correct by
+// So the arrow is a MARK now. It sits a couple of dozen pixels off the subject
+// with its nose in it, on the side the sentence is on, so the words, the glyph
+// and the thing are one line of reading. It is drawn only while the subject is
+// on the glass — an arrow at the border pointing at water nobody can see is the
+// long-range pointer again, and the tip's words holding their place is the
+// whole of the answer in that case (see drawWorld).
+//
+// THE ARROW IS PLACED IN SCREEN SPACE, off the subject's projected position and
+// along the direction of the tip's own box. Doing it in world space and
+// rotating the result is the obvious alternative and it is wrong here: the
+// camera rolls and zooms (see cineCamera.js), so a world-space offset drawn
+// onto a screen-space overlay would slide off the thing it is marking exactly
+// during a strike. Both ends are projected, so the mark is correct by
 // construction whatever the lens is doing.
-//
-// A TARGET BEHIND THE CAMERA is the one case projection cannot answer — the
-// projected point flips to the far side of the screen and the arrow points
-// backwards. It cannot happen for either target we have (chum is in the same
-// plane as the seal, the surface is straight up from it), so rather than carry
-// a guard that is never exercised, the arrow simply holds its last bearing when
-// the two projected points land on top of each other.
 //
 // LAYERED ABOVE THE MENUS, unlike the toast layer. A callout that was up when
 // the cards opened has to play out where it can be read, and a band that a menu
@@ -84,6 +87,10 @@ import { applyTipDissolve, clearTipDissolve, initTipDissolve, warmTipDissolve } 
 // ---------------------------------------------------------------------------
 
 const STYLES = `
+  /* Above the HUD, BELOW THE MENUS (.sv-center is 8 — see the ladder note in
+     ui/ui.js). A coach line is the run talking; the cards are the run asking,
+     and a tip that was still up when the level-up menu opened used to finish
+     its hold on top of them. Do not raise this past 7. */
   .sv-callout-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 6; }
 
   /* Type here is the FALLBACK, same as the rest of ui.js: every font value is
@@ -140,10 +147,25 @@ const STYLES = `
      can sit in a gap in the water instead of a wide line that will always be
      over something. The type is the coach role either way — same voice, same
      size; only the place changed. */
+  /* THE ONE PLACE THE TIP'S OWN SIZE IS WRITTEN, unlike every other line in
+     this file: the world tip has no text role of its own (it shares the coach
+     VOICE, but the role sheet's selector is .sv-callout-coach and this node
+     does not wear that class), so what is here is real and not a fallback.
+     It carries --sv-tipScale by hand for that reason, so it shrinks in a hand
+     exactly as the band's coach lines do — without it, this node was the only
+     piece of tutorial text on the screen still at its desktop size on a phone.
+     NOT --sv-scale, deliberately: this size has never been under the Text
+     panel's global multiplier, and quietly putting it there would resize every
+     world tip on a desktop as a side effect of a phone fix.
+     The max-width goes the other way on a small screen — see the note by the
+     breakpoint in ui.js: at this size the constraint is the number of
+     CHARACTERS per line, and a narrow column of a wide pixel font is a stack
+     of two-word lines. */
   .sv-callout-world { position: absolute; left: 0; top: 0; text-align: center;
     white-space: normal; width: max-content; max-width: min(340px, 62vw); line-height: 1.25;
     text-wrap: balance; overflow-wrap: break-word;
-    font-size: 20px; font-weight: 700; letter-spacing: 0.04em; color: #9fe3ff;
+    font-size: calc(20px * var(--sv-tipScale, 1));
+    font-weight: 700; letter-spacing: 0.04em; color: #9fe3ff;
     text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 18px currentColor;
     pointer-events: none; will-change: transform, opacity, filter; }
   /* The node the dissolve owns. It is display:block because a filter and a mask
@@ -174,10 +196,18 @@ let arrowAngle = 0;
 let arrowHasAim = false;
 let bobClock = 0;
 
-const screenPt = { x: 0, y: 0 };
+// WHERE THE WORLD TIP LAST STOOD WITH BOTH FEET ON THE GLASS, and the words it
+// stood there for. The tip follows its subject only while it fits on the
+// screen; once the subject leaves, this is what it holds. See drawWorld.
+let worldPark = null;
+let worldParkFor = '';
+
 const targetPt = { x: 0, y: 0 };
 const anchorPt = { x: 0, y: 0 };
-const orbitPt = { x: 0, y: 0 };
+// The centre of the world tip's box as it was last drawn, in screen pixels.
+// The arrow reads it to work out which SIDE of the subject the sentence is on,
+// so the glyph parks between the two rather than anywhere else on the ring.
+const labelPt = { x: 0, y: 0 };
 
 export function initCallouts(root) {
   const style = document.createElement('style');
@@ -244,6 +274,8 @@ export function clearCalloutUi() {
   clearTipDissolve(worldInkEl);
   arrowEl.classList.add('sv-hidden');
   arrowHasAim = false;
+  worldPark = null;
+  worldParkFor = '';
 }
 
 /**
@@ -417,9 +449,18 @@ function drawWorld(callout, ctx) {
       worldEl.classList.add('sv-hidden');
       clearTipDissolve(worldInkEl);
     }
+    // A parked position belongs to ONE sentence. Left behind, the next tip
+    // would open in the last one's spot — beside nothing — and only slide onto
+    // its own subject if that subject happened to be on screen.
+    worldPark = null;
+    worldParkFor = '';
     return null;
   }
   if (worldInkEl.textContent !== callout.text) worldInkEl.textContent = callout.text;
+  if (worldParkFor !== callout.text) {
+    worldPark = null;
+    worldParkFor = callout.text;
+  }
 
   worldToScreen(ctx.camera, ctx.tipAnchor.x, ctx.tipAnchor.y, anchorPt);
 
@@ -435,16 +476,57 @@ function drawWorld(callout, ctx) {
   // one place it must never be. Bubbles rise, so this flip is the common case
   // rather than an edge one.
   const wantAbove = anchorPt.y - gap - h > uiGap;
-  const top = wantAbove ? anchorPt.y - gap - h : anchorPt.y + gap;
+  const wantTop = wantAbove ? anchorPt.y - gap - h : anchorPt.y + gap;
+  const wantLeft = anchorPt.x - box / 2;
 
-  // CLAMPED TO THE FRAME, which is what lets the tip survive its subject
-  // drifting off the edge: the words stay at the border in the direction of the
-  // thing, and the arrow (drawn only in this case) says which way. Sliding it
-  // is strictly better than hiding it — the sentence is the content, and half
-  // of it against an edge is readable where none of it is not.
-  const left = clamp(anchorPt.x - box / 2, uiGap, Math.max(uiGap, window.innerWidth - box - uiGap));
-  const clamped = clamp(top, uiGap, Math.max(uiGap, window.innerHeight - h - uiGap));
-  const y = keepOffChrome(clamped, h, box, left + box / 2, chromeRects(worldEl), uiGap);
+  // IT FOLLOWS ITS SUBJECT WHILE BOTH FIT, AND THEN IT STAYS PUT.
+  //
+  // This used to be a clamp: the box was pushed back inside the frame every
+  // frame, so a player swimming away from the thing dragged the sentence with
+  // them and it lived out its stay pinned to the edge of the screen, sliding
+  // up and down the border as the camera moved. That reads as a piece of UI
+  // that has attached itself to you — the opposite of a label standing beside
+  // something in the water — and it is at its worst on a phone, where the
+  // border is a thumb's width from the middle.
+  //
+  // So the clamp is now a PARK. While the whole box is on the glass it rides
+  // its subject as before; the first frame it would not fit, it freezes where
+  // it last stood and holds there. Swim back and it picks its subject up again.
+  //
+  // The tip is allowed to leave the screen with the thing it is about — that
+  // is what the words following the object MEANS — and the one case that would
+  // be a bug is the sentence vanishing the instant somebody swims off, which
+  // is exactly what parking prevents: the last position is always a position
+  // that fitted.
+  const maxLeft = Math.max(uiGap, window.innerWidth - box - uiGap);
+  const maxTop = Math.max(uiGap, window.innerHeight - h - uiGap);
+  const fits = wantLeft >= uiGap && wantLeft <= maxLeft && wantTop >= uiGap && wantTop <= maxTop;
+
+  let left;
+  let top;
+  let above;
+  if (fits) {
+    left = wantLeft;
+    top = wantTop;
+    above = wantAbove;
+    worldPark = { left, top, above };
+  } else if (worldPark) {
+    ({ left, top, above } = worldPark);
+  } else {
+    // NEVER STOOD ANYWHERE YET — the tip opened on a subject already off the
+    // edge. Clamped once, and parked at that, so it is readable from its first
+    // frame and still never slides.
+    left = clamp(wantLeft, uiGap, maxLeft);
+    top = clamp(wantTop, uiGap, maxTop);
+    above = wantAbove;
+    worldPark = { left, top, above };
+  }
+  // The HUD is still checked every frame, parked or not: the boss bar arrives
+  // mid-fight, and a sentence standing still under one is no more readable for
+  // having held its ground.
+  const y = keepOffChrome(top, h, box, left + box / 2, chromeRects(worldEl), uiGap);
+  labelPt.x = left + box / 2;
+  labelPt.y = y + h / 2;
 
   // Infinity, for the reason spelled out in drawBand: a pinned tip has no life,
   // so the motion block's departure window must never open. Its exit is the
@@ -452,11 +534,14 @@ function drawWorld(callout, ctx) {
   const pose = popupPose(callout.motion, callout.age, Infinity);
   worldEl.style.left = `${left}px`;
   worldEl.style.top = `${y + pose.lift}px`;
-  // No -50% here, unlike the band: the left edge is already the clamped one,
-  // and centring on top of a clamp would push the box back off the screen the
-  // clamp just rescued it from.
+  // No -50% here, unlike the band: the left edge is already the resolved one,
+  // and centring on top of it would move the box away from the position the
+  // park and the chrome pass between them just settled on.
   worldEl.style.transform = `scale(${pose.scale})`;
-  worldEl.style.transformOrigin = wantAbove ? 'center bottom' : 'center top';
+  // `above` and not `wantAbove`: a parked tip grows out of the side it was
+  // actually standing on, not the side its subject is on now that the subject
+  // is somewhere off the screen.
+  worldEl.style.transformOrigin = above ? 'center bottom' : 'center top';
   worldEl.style.opacity = `${pose.alpha}`;
   applyBloom(worldEl, pose.bloom);
   worldEl.classList.remove('sv-hidden');
@@ -622,23 +707,31 @@ function applyBloom(node, px) {
 
 function drawArrow(dt, callout, worldPose, ctx) {
   const target = callout && ctx.tipAnchor ? ctx.tipAnchor : null;
-  if (!target || !ctx.camera || !onScreenNeedsArrow(ctx, target)) {
+  if (!target || !ctx.camera || !worldPose || !subjectInFrame(ctx, target)) {
     arrowEl.classList.add('sv-hidden');
     arrowHasAim = false;
     return;
   }
 
   const a = CONFIG.callouts?.arrow ?? {};
-  worldToScreen(ctx.camera, ctx.playerX ?? 0, ctx.playerY ?? 0, screenPt);
   worldToScreen(ctx.camera, target.x, target.y, targetPt);
 
-  const dx = targetPt.x - screenPt.x;
-  const dy = targetPt.y - screenPt.y;
-  // Under a pixel apart is the seal sitting on the thing it is being pointed
-  // at: there is no bearing to be had, so the arrow keeps the last one rather
-  // than snapping to whatever atan2 makes of the noise.
-  if (dx * dx + dy * dy > 1) {
-    const want = Math.atan2(dy, dx);
+  // WHICH SIDE THE WORDS ARE ON. The arrow stands between the sentence and its
+  // subject — that is what makes the two read as one object rather than as a
+  // label and a separate mark that happen to be near each other — so the whole
+  // of its placement is this one direction, taken from the box the tip was
+  // drawn in on this same frame.
+  const dx = labelPt.x - targetPt.x;
+  const dy = labelPt.y - targetPt.y;
+  // Under a pixel apart is a label sitting exactly on top of its subject, which
+  // the world tip's own gap makes very nearly impossible; there is no side to
+  // be had, so the arrow keeps the one it had rather than snapping to whatever
+  // atan2 makes of the noise. With no previous aim at all it points DOWN at the
+  // thing, which is where a tip stands by default.
+  if (dx * dx + dy * dy > 1 || !arrowHasAim) {
+    // The aim points FROM the arrow INTO the subject, so it is the way back
+    // down the side vector.
+    const want = (dx * dx + dy * dy > 1) ? Math.atan2(-dy, -dx) : Math.PI / 2;
     if (!arrowHasAim) {
       arrowAngle = want;
       arrowHasAim = true;
@@ -652,12 +745,19 @@ function drawArrow(dt, callout, worldPose, ctx) {
     }
   }
 
-  const pose = worldPose ?? popupPose(callout.motion, callout.age, callout.hold);
+  const pose = worldPose;
+  // The bob runs along the aim, so the glyph nudges at the thing and backs off
+  // again rather than sliding around it.
   const bob = Math.sin(bobClock * (a.bobSpeed ?? 2.4) * Math.PI * 2) * (a.bobDistance ?? 9) * 0.5;
-  const dist = orbitRadiusPx(ctx) + bob;
+  const dist = Math.max(1, (a.hug ?? 26) + bob);
   const size = a.size ?? 28;
-  const px = screenPt.x + Math.cos(arrowAngle) * dist;
-  const py = screenPt.y + Math.sin(arrowAngle) * dist;
+  // Backwards along the aim from the subject, so the glyph's CENTRE is `hug`
+  // pixels off the thing on the side the sentence is on — which puts its nose
+  // about half a glyph nearer than that and its tail still short of the words.
+  // Centre and not nose because the box is what is positioned, and a nose
+  // offset would have to be re-derived every time the size slider moved.
+  const px = targetPt.x - Math.cos(arrowAngle) * dist;
+  const py = targetPt.y - Math.sin(arrowAngle) * dist;
 
   arrowEl.style.width = `${size}px`;
   arrowEl.style.height = `${size}px`;
@@ -675,54 +775,24 @@ function drawArrow(dt, callout, worldPose, ctx) {
 }
 
 /**
- * How far off the seal the arrow orbits, IN PIXELS, worked out from a world
- * distance so it clears the seal's own furniture at any zoom and at any setting
- * of that furniture (see CONFIG.callouts.arrow.gap).
+ * Is the subject somewhere the arrow can hug it?
  *
- * The conversion is done by projecting a point that far above the seal and
- * measuring, rather than by reaching into the camera for a units-per-pixel
- * factor. That is not the long way round — it is the only way that survives a
- * camera which is not a plain unrotated orthographic one, and this HUD already
- * runs under a lens that zooms and rolls.
+ * The arrow marks the THING, from a few pixels off it, so the only question is
+ * whether the thing is on the glass at all. A subject that has left the frame
+ * gets no arrow: the glyph would sit against the border pointing at water the
+ * player cannot see, which is the long-range pointer this used to be and the
+ * one behaviour it is not for. The tip's own words hold their place in that
+ * case (see drawWorld) and that is the whole of the answer.
+ *
+ * Half a glyph of margin so the mark is never drawn hanging over the edge.
+ *
+ * A DEGENERATE PROJECTION answers "on screen" and draws an arrow beside a
+ * label that is also in the middle of the screen — wrong, but wrong in one
+ * place, which beats a mark parked at the border pointing nowhere.
  */
-function orbitRadiusPx(ctx) {
-  const a = CONFIG.callouts?.arrow ?? {};
-  const ring = CONFIG.strike?.ring ?? {};
-  const furniture = Math.max(
-    CONFIG.hud?.playerBarOffset ?? 0,
-    (ring.radius ?? 0) * (ring.scale ?? 1),
-  );
-  const world = furniture + (a.gap ?? 2);
-  // Its own scratch point, not the one the aim is using: this runs AFTER the
-  // bearing has been taken today, and a shared buffer would make that ordering
-  // load-bearing for no reason.
-  worldToScreen(ctx.camera, ctx.playerX ?? 0, (ctx.playerY ?? 0) + world, orbitPt);
-  const dx = orbitPt.x - screenPt.x;
-  const dy = orbitPt.y - screenPt.y;
-  // A degenerate projection (a camera looking down the plane) would collapse
-  // this to zero and park the arrow inside the seal. The floor is the size of
-  // the glyph, so the worst case is an arrow touching the animal rather than
-  // one hidden inside it.
-  return Math.max(a.size ?? 28, Math.hypot(dx, dy));
-}
-
-/**
- * Does the subject need an arrow — is it OUTSIDE the frame?
- *
- * The margin is generous (a tenth of the smaller side) rather than the literal
- * edge, because a subject a few pixels inside the border has its label clamped
- * hard against that border and reads exactly like one that is outside it. The
- * arrow is for "the thing I am describing is not where you are looking", and
- * the honest boundary for that is a bit inside the glass.
- *
- * A DEGENERATE PROJECTION answers "no arrow" by falling out of the comparison
- * naturally: an anchor that projects to the middle of the screen is on screen,
- * which is the safe way to be wrong — a spurious arrow spinning under a tip
- * that is plainly visible is worse than a missing one.
- */
-function onScreenNeedsArrow(ctx, target) {
+function subjectInFrame(ctx, target) {
   worldToScreen(ctx.camera, target.x, target.y, targetPt);
-  const margin = Math.min(window.innerWidth, window.innerHeight) * 0.1;
-  return targetPt.x < margin || targetPt.x > window.innerWidth - margin
-    || targetPt.y < margin || targetPt.y > window.innerHeight - margin;
+  const m = (CONFIG.callouts?.arrow?.size ?? 28) / 2;
+  return targetPt.x >= m && targetPt.x <= window.innerWidth - m
+    && targetPt.y >= m && targetPt.y <= window.innerHeight - m;
 }

@@ -40,7 +40,7 @@ import { CONFIG } from '../path/src/config.js';
 import { installModel } from '../path/src/assets.js';
 import {
   markDeathSite, recordGrave, plantGraves, updateGravesites,
-  graveList, clearGraves, reseatGraves, restoreGraves,
+  graveList, clearGraves, reseatGraves, restoreGraves, setGraveImpact,
 } from '../path/src/systems/gravesite.js';
 import { updateBounds, bounds } from '../path/src/arena.js';
 import { initGraveBeam, updateGraveBeam, graveBeamState } from '../path/src/systems/graveBeam.js';
@@ -269,6 +269,47 @@ console.log('\nstones from a previous session');
     !!graveList().length && graveList().every((g) => g.phase === 'done'));
   void spy;
 
+  clearGraves();
+}
+
+// --- the impact -------------------------------------------------------------
+// The stone hits the seabed and everything standing there finds out. The SHOVE
+// itself is main.js's (it needs the enemy list); what gravesite.js owes is the
+// event — once, on the frame of contact, at the right place, and never able to
+// take the sequence down.
+console.log('\nthe landing hits the water');
+{
+  clearGraves();
+  const hits = [];
+  setGraveImpact((x, y) => hits.push({ x, y }));
+  const rec = markDeathSite(scene, { x: 17, z: -3.2, name: 'BOOM', cause: 'a shark' }, () => {});
+
+  // Nothing on the way down — the blast is the LANDING, not the drop.
+  for (let i = 0; i < 5; i += 1) { updateGravesites(1 / 60); updateGraveBeam(1 / 60); }
+  check('nothing fires while the stone is still falling', hits.length === 0,
+    `${hits.length} already`);
+
+  settleYard();
+  check('it fires exactly once', hits.length === 1, `${hits.length} times`);
+  check('at the stone, not at the origin', Math.abs(hits[0].x - 17) < 0.01, `x = ${hits[0]?.x}`);
+  // The y is what a blast radius is measured from, and the graveyard lives at
+  // about -38.8 — an impulse centred on world zero would go off in mid-water,
+  // forty units above the stone, which is the same class of mistake the beam's
+  // rake made and is just as invisible.
+  check('and at the seabed, not at world zero', hits[0].y < -10, `y = ${hits[0]?.y?.toFixed(1)}`);
+
+  // A THROWING HOOK MUST NOT STRAND THE PLAYER. The stone still has a name to
+  // carve and a score card to release on the far side of this, and the impulse
+  // is the one part of the sequence that reaches into combat.
+  clearGraves();
+  let carded = false;
+  setGraveImpact(() => { throw new Error('the water exploded'); });
+  markDeathSite(scene, { x: 0, z: -3.2, name: 'THROWS', cause: 'a crab' }, () => { carded = true; });
+  const took = settleYard();
+  check('an impulse that throws does not strand the run', took !== null && carded,
+    carded ? `finished in ${took?.toFixed(2)}s` : 'the score card never arrived');
+
+  setGraveImpact(null);
   clearGraves();
 }
 

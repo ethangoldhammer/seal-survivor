@@ -306,6 +306,198 @@ for (const stoneKey of STONES) {
   scene.remove(stone.object);
 }
 
+/**
+ * Where the headstone's ARCH ends and its rectangular face begins, as a
+ * fraction of the stone's height from the top.
+ *
+ * MEASURED OFF THE SILHOUETTE, not read off a crop with a ruler. The number
+ * decides where the inscription sits, and eyeballing it from a screenshot means
+ * re-eyeballing it the first time `fit` or `scale` moves — while a measurement
+ * simply comes out different and correct.
+ *
+ * The water is pulled for the render because the test is ALPHA: the page's
+ * renderer is built with alpha:true, so background is transparent and stone is
+ * not, which makes the silhouette exact rather than a colour threshold that
+ * would have to guess at wet grey against deep blue.
+ */
+function measureArch(object) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  scene.remove(water);
+  const cam = frame(size.y * 1.12, new THREE.Vector3(centre.x, centre.y, 0));
+  gl.render(scene, cam);
+  const img = readPixels();
+  scene.add(water);
+
+  const rows = [];
+  for (let y = 0; y < img.height; y += 1) {
+    let lo = -1;
+    let hi = -1;
+    for (let x = 0; x < img.width; x += 1) {
+      if (img.data[(y * img.width + x) * 4 + 3] > 128) {
+        if (lo < 0) lo = x;
+        hi = x;
+      }
+    }
+    rows.push(lo < 0 ? 0 : hi - lo + 1);
+  }
+  const widest = Math.max(...rows);
+  if (widest <= 0) return null;
+  const top = rows.findIndex((wd) => wd > 0);
+  let bottom = rows.length - 1;
+  while (bottom > top && rows[bottom] === 0) bottom -= 1;
+  // The first row at (nearly) full width IS the shoulder — above it the stone
+  // is still curving in. 0.97 rather than 1.0 because the edge is antialiased
+  // and the widest row is a pixel or two wider than the ones under it.
+  const shoulder = rows.findIndex((wd) => wd >= widest * 0.97);
+  if (shoulder < 0 || bottom <= top) return null;
+  return (shoulder - top) / (bottom - top);
+}
+
+// --- OPTIONS ----------------------------------------------------------------
+// THE WHOLE FRONT IS WRITEABLE NOW, and that opens choices a third-of-a-stone
+// panel did not have. The point of this block is that they are choices: each
+// cell is the SAME seal and the SAME death, laid out a different way, so the
+// decision is made by looking rather than by reading numbers.
+//
+// Every one of these is a `faces.headstone` entry. Whichever wins gets copied
+// into CONFIG.gravesite.faces in config.js and nothing else has to change.
+section('options — the same seal, laid out five ways', 3);
+{
+  // The arch, measured before anything is laid out on it.
+  const probe = buildStone('headstone', { name: 'X', cause: 'x', lead: 'x' });
+  scene.add(probe.object);
+  const arch = measureArch(probe.object);
+  scene.remove(probe.object);
+  check('the headstone\'s shoulder is measurable', arch !== null && arch > 0.05 && arch < 0.6,
+    arch === null ? 'no silhouette' : `arch ends ${(arch * 100).toFixed(0)}% down the stone`);
+
+  // THE RECTANGULAR FACE, expressed as a panel. Everything below the shoulder,
+  // less a margin at the foot so the last line is not sitting on the ground.
+  // Derived from the measurement rather than typed, so the panel follows the
+  // model if the stone is ever re-fitted.
+  const FOOT = 0.06;
+  const faceH = Math.max(0.2, 1 - (arch ?? 0.28) - FOOT);
+  // `rise` is measured UP from the stone's centre, and the panel's own centre
+  // sits halfway down what is left below the shoulder — so this is negative,
+  // which is the whole point of the change.
+  const faceRise = 0.5 - ((arch ?? 0.28) + faceH / 2);
+  log(`  rectangular face: height ${faceH.toFixed(2)}, rise ${faceRise.toFixed(2)}`);
+
+  const OPTIONS = [
+    ['as shipped',
+      { width: 0.88, height: 0.52, rise: 0.11, namePx: 0.26, nameLines: 1 },
+      'the panel before this pass — one line, upper third of the stone'],
+    ['full front, one line',
+      { width: 0.94, height: 0.86, rise: 0.02, namePx: 0.18, nameLines: 1, baseline: 0.30 },
+      'all the room, name still on one line — width is the limit'],
+    ['stacked',
+      { width: 0.94, height: 0.86, rise: 0.02, namePx: 0.30, nameLines: 2, baseline: 0.28 },
+      'first over last: the name is limited by HEIGHT now, so it doubles'],
+    ['stacked, name dominant',
+      { width: 0.94, height: 0.88, rise: 0.0, namePx: 0.38, nameLines: 2, baseline: 0.26, causeScale: 0.30 },
+      'the seal is the monument; the death is a footnote under it'],
+    ['stacked, centred block',
+      { width: 0.92, height: 0.86, rise: 0.0, namePx: 0.30, nameLines: 2, baseline: 0.36 },
+      'the whole inscription sits in the middle of the face'],
+    // --- the one that was picked, shifted onto the flat -----------------------
+    ['dominant, on the flat',
+      { width: 0.94, height: faceH, rise: faceRise, namePx: 0.34, nameLines: 2, baseline: 0.30, causeScale: 0.34 },
+      'name dominant, panel confined to the rectangular face below the shoulder'],
+    ['...a little higher',
+      { width: 0.94, height: faceH + 0.06, rise: faceRise + 0.03, namePx: 0.34, nameLines: 2, baseline: 0.30, causeScale: 0.34 },
+      'same, tucked a touch further up into the shoulder'],
+    ['...and lower',
+      { width: 0.94, height: faceH, rise: faceRise - 0.04, namePx: 0.34, nameLines: 2, baseline: 0.32, causeScale: 0.34 },
+      'same, sat further down toward the foot'],
+  ];
+
+  const saved = { ...CONFIG.gravesite.faces.headstone };
+  for (const [label, face, note] of OPTIONS) {
+    CONFIG.gravesite.faces.headstone = { ...saved, ...face };
+    const stone = buildStone('headstone',
+      { name: 'FAT TONY', cause: 'a shark', lead: 'eaten by' });
+    scene.add(stone.object);
+    const cam = frame(stone.size.x * 1.35,
+      new THREE.Vector3(0, seabedTopY() + stone.size.y / 2, 0));
+    gl.render(scene, cam);
+    present(label, note);
+    scene.remove(stone.object);
+  }
+
+  // THE TWO NAMES THAT BREAK A STACKED LAYOUT, on whichever option is current.
+  // A one-word name has nothing to stack and must not come out at half size
+  // waiting for a second line; a long hand-written one has to stay inside the
+  // stone. Both are real rows in sealNames.csv.
+  CONFIG.gravesite.faces.headstone = { ...saved };
+  for (const who of ['RUMPSHAKER', 'SIR FLOPS-A-LOT']) {
+    const stone = buildStone('headstone', { name: who, cause: 'a crab', lead: 'clawed by' });
+    scene.add(stone.object);
+    const cam = frame(stone.size.x * 1.35,
+      new THREE.Vector3(0, seabedTopY() + stone.size.y / 2, 0));
+    gl.render(scene, cam);
+    present(who, who.includes(' ') ? 'hyphens are one word — three lines' : 'one word: nothing to stack');
+    const ink = new THREE.Box3().setFromObject(stone.ink);
+    const body = new THREE.Box3().setFromObject(stone.object);
+    check(`"${who}" stays on the stone`,
+      ink.min.x > body.min.x && ink.max.x < body.max.x,
+      `ink ${(ink.max.x - ink.min.x).toFixed(2)} vs stone ${(body.max.x - body.min.x).toFixed(2)}`);
+    scene.remove(stone.object);
+  }
+  CONFIG.gravesite.faces.headstone = saved;
+}
+
+// --- NOTHING RUNS OFF THE EDGE ----------------------------------------------
+// THE CHECK THAT CATCHES CLIPPED TYPE, and no bounds test can.
+//
+// The inscription is a canvas on a quad. The quad is always inside the stone —
+// its size comes from the stone's own box — so every geometric check passes
+// while the TEXT inside the canvas is running off it. That is exactly how the
+// lead shipped reading "ITTEN CLEAN THROUGH B": the line was drawn at a fixed
+// size with no width check, and the only symptom was the picture.
+//
+// So this reads the built canvas and looks for ink touching a border. It is the
+// longest lead and the longest cause the game can produce, on the layout that
+// is actually shipped.
+section('the longest lines the game can produce', 3);
+{
+  const worst = [
+    ['longest lead', 'FAT TONY', 'a shark', 'minced by the propeller of'],
+    ['longest cause', 'FAT TONY', LONG_BOSS, 'slain by'],
+    ['both at once', 'SIR FLOPS-A-LOT', LONG_BOSS, 'bitten clean through by'],
+  ];
+  for (const [label, name, cause, lead] of worst) {
+    const stone = buildStone('headstone', { name, cause, lead });
+    scene.add(stone.object);
+    const cam = frame(stone.size.x * 1.35,
+      new THREE.Vector3(0, seabedTopY() + stone.size.y / 2, 0));
+    gl.render(scene, cam);
+    present(label, `"${lead}" over "${cause}"`);
+
+    // Read the inscription's OWN canvas, not the screen — the border test has
+    // to be against the texture's edge, which is what the text is being clipped
+    // by. One pixel in from each side, because the outermost column of an
+    // antialiased glyph is allowed to be faint.
+    const img = stone.ink.material.map?.image;
+    let bled = 0;
+    if (img && img.getContext) {
+      const g2 = img.getContext('2d');
+      const px = g2.getImageData(0, 0, img.width, img.height).data;
+      const inked = (x, y) => px[(y * img.width + x) * 4 + 3] > 40;
+      for (let y = 0; y < img.height; y += 1) {
+        if (inked(1, y) || inked(img.width - 2, y)) bled += 1;
+      }
+      for (let x = 0; x < img.width; x += 1) {
+        if (inked(x, 1) || inked(x, img.height - 2)) bled += 1;
+      }
+    }
+    check(`${label}: no ink touches the edge of the panel`, bled === 0,
+      bled ? `${bled} pixel rows/columns of type run off the stone` : '');
+    scene.remove(stone.object);
+  }
+}
+
 // --- the beam ---------------------------------------------------------------
 
 section('the beam crossing a headstone', 4);

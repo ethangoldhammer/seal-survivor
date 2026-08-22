@@ -404,6 +404,43 @@ export const ASSETS = {
       axis: 'y',
       wagChain: ['animT2', 'animT3', 'animT4', 'animT5', 'animT6', 'animT7', 'animT8', 'animT9'],
       headChain: ['Animneck', 'Animhead'],
+      // THE RAGDOLL, AND IT SLEEPS FOR THE WHOLE RUN.
+      //
+      // `asleep` is the whole of that: systems/animation.js mutes these chains
+      // as it builds them and puts them back to sleep on every reset, so they
+      // neither solve nor store an impulse until systems/deathDive.js cuts the
+      // skeleton loose with setLimp(). A living seal is EXACTLY what it was
+      // before they existed — which is the point: the flippers and the neck are
+      // control surfaces while the animal is using them, and they are rope the
+      // moment it stops.
+      //
+      // Declared here rather than muted by the player's own setup because a
+      // controller is built in half a dozen places — the run, the tuner, the
+      // title card, the look pages, every headless harness — and a rule each of
+      // those has to remember is a rule that reaches about half of them.
+      //
+      // ONE ROLE for all five, because the role is the unit muting is keyed on
+      // and there is only ever one thing to say about them. Role scaling is not
+      // applied while limp either (see setLimp), so nothing here needs a
+      // roleLooseness entry — CONFIG.death.flop carries the spring they solve
+      // with.
+      //
+      // The front flippers and the neck are the aim rig's chains, verbatim: they
+      // are overwritten by the IK every frame of the run and only ever reach the
+      // screen once the dive has stopped feeding it an aim. The rear flippers are
+      // nobody else's — they are keyed by the clips and by nothing else, which is
+      // why they are the two chains that read most clearly as dead weight.
+      //
+      // The TAIL is deliberately absent. systems/aimRig.js keeps solving its own
+      // spring through the whole descent (see the `limp` flag there), and a
+      // second solver writing those bones after it would simply be thrown away.
+      springChains: [
+        { role: 'sealFlop', asleep: true, bones: ['uparm_L_012', 'arm_L_013', 'hand_L_014'] },
+        { role: 'sealFlop', asleep: true, bones: ['uparm_R_016', 'arm_R_017', 'hand_R_018'] },
+        { role: 'sealFlop', asleep: true, bones: ['leg_L_021', 'foot_L_022'] },
+        { role: 'sealFlop', asleep: true, bones: ['leg_R_024', 'foot_R_025'] },
+        { role: 'sealFlop', asleep: true, bones: ['neck01_05', 'neck02_06', 'head_07'] },
+      ],
     },
     // Bones systems/aimRig.js drives or reads. Every bone in this rig runs its
     // length along its own +Y (each child sits at a pure +Y offset from its

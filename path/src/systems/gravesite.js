@@ -541,6 +541,26 @@ function fireEtched(rec) {
  * patch of floor and two different clouds would read as two different materials
  * rather than as one seabed being hit twice.
  */
+// What the landing does to the water around it. Set by main.js at boot.
+//
+// A HOOK RATHER THAN AN IMPORT, and the reason is the dependency: the impulse
+// needs the live enemy list, applyKnockback, removeEnemy and the gore — which
+// is the gameplay half of the game, and this module is about standing a stone
+// on the floor. Reaching into entities/enemies.js from here would make the
+// graveyard a combat system, and every harness that plants a stone would start
+// pulling the enemy roster in behind it.
+let impactHook = null;
+
+/**
+ * Register what a landing stone does to whatever is standing under it.
+ * Called once, from boot. `null` clears it, which is what a look page wants.
+ *
+ * @param {Function|null} fn called with (x, y) in world units
+ */
+export function setGraveImpact(fn) {
+  impactHook = typeof fn === 'function' ? fn : null;
+}
+
 function land(rec) {
   const c = cfg().drop ?? {};
   rec.phase = 'settling';
@@ -551,6 +571,23 @@ function land(rec) {
   rec.baseLean = (cfg().lean ?? 0.05) * (rec.baseLean >= 0 ? 1 : -1);
   rec.clock = 0;
   rec.spin = 0;
+
+  // THE BLAST. A stone the size of a person hitting the seabed at speed is not
+  // a polite event, and everything standing where it landed should know about
+  // it. Fired from HERE rather than from the drop's start or the settle's end:
+  // this is the frame of contact, and the silt below goes out on the same one
+  // so the shove and the cloud are one impact rather than two effects that
+  // happen to be close together.
+  //
+  // Never allowed to take the sequence down. The stone still has a name to
+  // carve and a score card to release on the far side of it, and an exception
+  // thrown by the gameplay half would strand the player on the seabed — the
+  // exact failure markDeathSite's whole contract exists to prevent.
+  try {
+    impactHook?.(rec.x, rec.baseY ?? rec.object.position.y);
+  } catch (err) {
+    console.warn('[gravesite] the landing impulse threw', err);
+  }
 
   // Fired wide rather than at a point: the stone is a couple of units across
   // and a single burst at its centre reads as a puff coming out from under it.

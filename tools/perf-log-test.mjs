@@ -22,7 +22,7 @@
 // ---------------------------------------------------------------------------
 
 import {
-  perfRunStart, perfFrame, perfSummary, perfWindow, perfStop,
+  perfRunStart, perfFrame, perfSummary, perfWindow, perfStop, perfMark, perfPhase, perfFrameJs,
 } from '../path/src/systems/perfLog.js';
 
 let failures = 0;
@@ -278,6 +278,204 @@ check('a dropped frame still reports its build',
   `${s.frames} frames, ${s.programRebuilds} rebuilt`);
 
 // ===========================================================================
+section('Phases — where inside the frame the time went');
+
+// The recorder is handed each frame's phases DURING that frame and folds them
+// in when the next perfFrame lands, so a phase reported here belongs to the
+// frame whose duration is reported alongside it.
+{
+  let t = 1000;
+  perfRunStart(t);
+  // Ten ordinary frames, then one hitch. The hitch is the only frame where
+  // `render` is expensive — which is the whole thing the split has to be able
+  // to say, and the thing a per-frame average alone cannot.
+  for (let i = 0; i < 10; i++) {
+    perfPhase('render', 4);
+    perfPhase('enemies', 1);
+    t += 16;
+    perfFrame(t);
+  }
+  perfPhase('render', 180);
+  perfPhase('enemies', 1);
+  t += 200;
+  perfFrame(t);
+
+  s = perfSummary();
+  const render = s.phases.find((p) => p.name === 'render');
+  const enemies = s.phases.find((p) => p.name === 'enemies');
+  check('phases are reported biggest first', s.phases[0].name === 'render',
+    s.phases.map((p) => p.name).join(' > '));
+  check('a phase averages over every frame',
+    Math.abs(render.msPerFrame - (10 * 4 + 180) / 11) < 0.01,
+    `${render.msPerFrame.toFixed(2)}ms/frame`);
+  // THE COLUMN THAT DECIDES WHAT TO DO. Both phases cost the same on an
+  // ordinary frame's scale; only one of them is what a hitch is made of.
+  check('and separately over the HITCH frames', Math.abs(render.msPerHitch - 180) < 0.01,
+    `${render.msPerHitch.toFixed(1)}ms per hitch`);
+  check('a steady phase is not blamed for the hitch', Math.abs(enemies.msPerHitch - 1) < 0.01,
+    `${enemies.msPerHitch.toFixed(1)}ms per hitch`);
+  check('the worst frame carries its own split',
+    s.worst[0].split?.[0]?.name === 'render' && Math.round(s.worst[0].split[0].ms) === 180,
+    JSON.stringify(s.worst[0].split));
+  // A phase must not leak across frames. If the per-frame accumulator were not
+  // cleared, every frame would report the running total and the split would
+  // climb through the run regardless of what happened.
+  check('phase time does not leak into the next frame',
+    Math.abs(enemies.msPerFrame - 1) < 0.01, `${enemies.msPerFrame.toFixed(2)}ms/frame`);
+}
+
+// ===========================================================================
+section('JS total vs the leaf phases — is the loop even running?');
+
+// The split that decides the direction of an investigation. Whatever the leaf
+// phases do not account for is EITHER code nothing wraps yet OR the tab not
+// executing at all, and against the leaves alone those look identical.
+{
+  // A frame that is 30ms long but only runs 5ms of JS is BLOCKED, not busy.
+  let t = 1000;
+  perfRunStart(t);
+  for (let i = 0; i < 60; i++) {
+    perfPhase('render', 3);
+    perfFrameJs(5);
+    t += 30;
+    perfFrame(t);
+  }
+  s = perfSummary();
+  check('the JS total is kept apart from the leaf phases',
+    !s.phases.some((p) => p.name === 'js') && s.jsMsPerFrame === 5,
+    `${s.phases.length} leaves, js ${s.jsMsPerFrame}ms`);
+  check('a blocked frame shows almost all its time outside the loop',
+    Math.abs((s.meanMs - s.jsMsPerFrame) - 25) < 0.01,
+    `${(s.meanMs - s.jsMsPerFrame).toFixed(1)}ms not running`);
+  check('and very little untimed JS',
+    Math.abs((s.jsMsPerFrame - 3) - 2) < 0.01, `${(s.jsMsPerFrame - 3).toFixed(1)}ms untimed`);
+
+  // The opposite case: a frame that really is busy, in code no phase wraps.
+  t = 5000;
+  perfRunStart(t);
+  for (let i = 0; i < 60; i++) {
+    perfPhase('render', 3);
+    perfFrameJs(29);   // 29ms of JS, only 3 of it accounted for
+    t += 30;
+    perfFrame(t);
+  }
+  s = perfSummary();
+  check('a busy frame shows the time as untimed JS instead',
+    Math.abs(s.jsMsPerFrame - 3 - 26) < 0.01, `${(s.jsMsPerFrame - 3).toFixed(1)}ms untimed`);
+  check('and almost nothing outside the loop',
+    Math.abs((s.meanMs - s.jsMsPerFrame) - 1) < 0.01,
+    `${(s.meanMs - s.jsMsPerFrame).toFixed(1)}ms not running`);
+
+  // Per-hitch, which is the column that actually decides it: a run can idle on
+  // its good frames and be JS-bound on its bad ones, and the average blends
+  // the two into something that describes neither.
+  t = 9000;
+  perfRunStart(t);
+  for (let i = 0; i < 40; i++) { perfPhase('render', 3); perfFrameJs(4); t += 16; perfFrame(t); }
+  perfPhase('render', 4); perfFrameJs(200); t += 210; perfFrame(t);
+  s = perfSummary();
+  check('the hitch column is not diluted by the quiet frames',
+    Math.abs(s.jsMsPerHitch - 200) < 0.01, `${s.jsMsPerHitch.toFixed(0)}ms of JS on the hitch`);
+
+  // And it must not leak between frames, exactly as the leaf phases must not.
+  t = 12000;
+  perfRunStart(t);
+  for (let i = 0; i < 10; i++) { perfFrameJs(5); t += 16; perfFrame(t); }
+  s = perfSummary();
+  check('the JS total does not accumulate across frames',
+    Math.abs(s.jsMsPerFrame - 5) < 0.01, `${s.jsMsPerFrame.toFixed(2)}ms/frame`);
+}
+
+// ===========================================================================
+section('Marks — which moments the bad frames land in');
+
+// A mark that is hot for most of the run collects most of the hitches by doing
+// nothing at all, so the tally is not the answer and `lift` is: the hitch rate
+// while hot, against the run's own rate.
+{
+  let t = 1000;
+  perfRunStart(t);
+  // 200 quiet frames with `calm` hot throughout, then 60 frames with `storm`
+  // hot of which a third stutter. `calm` holds no hitches; `storm` holds all
+  // of them while being a small minority of the run.
+  for (let i = 0; i < 200; i++) {
+    perfMark('calm');
+    t += 16;
+    perfFrame(t);
+  }
+  for (let i = 0; i < 60; i++) {
+    perfMark('storm');
+    t += (i % 3 === 0) ? 50 : 16;
+    perfFrame(t);
+  }
+  s = perfSummary();
+  const storm = s.marks.find((m) => m.name === 'storm');
+  const calm = s.marks.find((m) => m.name === 'calm');
+  check('every hitch is inside the mark that caused it', storm.hitches === s.hitches,
+    `${storm.hitches} of ${s.hitches}`);
+  check('and the mark is a small share of the run', storm.shareOfRun < 0.3,
+    `${(storm.shareOfRun * 100).toFixed(0)}% of frames`);
+  check('so it lifts well above the run rate', storm.lift > 3,
+    `${storm.lift.toFixed(1)}x`);
+  check('a quiet mark reads BELOW the run rate, which is also an answer',
+    calm.lift < 0.5, `${calm.lift.toFixed(2)}x`);
+  check('marks are sorted worst first', s.marks[0].name === 'storm',
+    s.marks.map((m) => m.name).join(' > '));
+
+  // THE LINGER. A cost does not all land on the frame that announced it — the
+  // first draw is a frame later, its textures another. A mark set once has to
+  // still be hot when the stall it caused arrives.
+  // Observed through the WORST-FRAME record rather than the mark table: one
+  // fire is deliberately under MARK_MIN_FRAMES (see the note there), so the
+  // table would not carry it — but the frame's own tag list is what a reader
+  // actually looks at when they want to know what a 300ms frame was.
+  perfRunStart(2000);
+  let u = 2000;
+  perfMark('arrive');           // fired once, on the frame the boss appears...
+  for (let i = 0; i < 5; i++) { u += 16; perfFrame(u); }   // 80ms of quiet
+  u += 300; perfFrame(u);       // ...and the stall lands at 0.38s, inside 0.4
+  s = perfSummary();
+  check('a mark set once is still hot when the stall it caused arrives',
+    s.worst[0].ms === 300 && s.worst[0].marks?.includes('arrive'),
+    `${s.worst[0].ms}ms tagged {${(s.worst[0].marks ?? []).join(',')}}`);
+
+  // And it goes cold afterwards, or every mark in a run would be hot forever
+  // and the tags would name the whole roster on every frame.
+  perfRunStart(3000);
+  let v = 3000;
+  perfMark('stale');
+  for (let i = 0; i < 40; i++) { v += 16; perfFrame(v); }  // 640ms — past 0.4
+  v += 300; perfFrame(v);
+  s = perfSummary();
+  check('and cold again well after it, so a tag means something',
+    !(s.worst[0].marks ?? []).includes('stale'),
+    `tagged {${(s.worst[0].marks ?? []).join(',') || 'nothing'}}`);
+}
+
+// ===========================================================================
+section('A new run forgets the last one');
+
+{
+  perfRunStart(1000);
+  let t = 1000;
+  // Set every frame, as main.js sets them and as MARK_MIN_FRAMES requires —
+  // a mark fired once is hot for less than the reporting floor.
+  for (let i = 0; i < 50; i++) { perfMark('ghost'); perfPhase('ghost-phase', 5); t += 16; perfFrame(t); }
+  check('the first run has them', perfSummary().marks.some((m) => m.name === 'ghost'),
+    perfSummary().marks.map((m) => m.name).join(',') || 'none');
+
+  perfRunStart(5000);
+  t = 5000;
+  for (let i = 0; i < 50; i++) { t += 16; perfFrame(t); }
+  s = perfSummary();
+  // A mark or a phase carried into the next run would attribute one run's
+  // stalls to another run's moments, which is worse than not recording it.
+  check('a new run carries neither mark nor phase over',
+    s.marks.length === 0 && s.phases.length === 0,
+    `${s.marks.length} marks, ${s.phases.length} phases`);
+}
+
+// ===========================================================================
 section('Not recording');
 
 perfStop();
@@ -285,6 +483,16 @@ const before = perfSummary().frames;
 perfFrame(999999);
 check('a stopped recorder ignores frames', perfSummary().frames === before,
   `${perfSummary().frames} vs ${before}`);
+
+// Marks fire from the menu and the loading screen too. Before a run starts
+// they must cost nothing and land nowhere, or the first run of a session
+// inherits whatever the menu was doing.
+const marksBefore = perfSummary().marks.length;
+perfMark('menu');
+perfPhase('menu-phase', 10);
+perfFrameJs(999);
+check('and ignores marks and phases', perfSummary().marks.length === marksBefore,
+  `${perfSummary().marks.length} vs ${marksBefore}`);
 
 console.log(`\n${failures ? `${failures} FAILURE(S)` : 'all checks passed'}`);
 process.exit(failures ? 1 : 0);

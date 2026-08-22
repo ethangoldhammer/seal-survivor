@@ -3233,7 +3233,20 @@ export function animateEnemiesIdle(dt) {
 // .bite), so the one place that knows a snap was aimed at the player has to be
 // able to say so. Optional, like its neighbours — a harness that passes four
 // arguments simply gets no bite feedback.
+// The animation LOD's counters — see the note at e.anim.update below.
+// `animFrame` is the clock every stride is measured against; `phaseCursor`
+// hands out slots within a stride, one running count per tier, which is what
+// keeps a tier's members from all landing on the same frame.
+let animFrame = 0;
+const phaseCursor = [];
+// The most time a single pose may be asked to advance. Matches the game loop's
+// own clamp in main.js and for the same reason.
+const MAX_ANIM_DT = 0.05;
+
 export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, onPlayerBitten) {
+  // Advanced once per frame, and the phase every creature's animation stride
+  // is measured against. See the LOD note further down.
+  animFrame++;
   clock += dt;
 
   // Pile sizes for the whole frame, so every scavenging crab reads one shared
@@ -3740,8 +3753,102 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       // during the lunge wind-up, which is the one frame the player must be
       // able to read. Nothing sets it by default, so every other creature
       // takes the speed-derived state exactly as before.
-      e.anim.update(dt, e.animState ?? stateForSpeed(speed), e.hitThisFrame);
-      e.hitThisFrame = false;
+      // HOW OFTEN THIS BODY IS POSED.
+      //
+      // Every creature in the water used to be posed on every frame — mixer,
+      // procedural wag and bone springs — regardless of how big it was on
+      // screen. At a full house that is `spawn.maxAlive` (220) skeletons
+      // solved sixty times a second, and the recorded runs say the cost of it
+      // is real: frame rate falls with population on a phone at 1.4 megapixels
+      // exactly as steeply as on a laptop at 6.0, which is only possible if
+      // what grows is per-CREATURE and not per-pixel.
+      //
+      // The arena is 80 units across in an orthographic camera, so a reef fish
+      // a unit wide is around 2% of the screen — thirty-odd pixels. Thirty
+      // pixels does not need sixty poses a second, and this is the whole idea:
+      // pose the small bodies less often and hand them the time that has
+      // passed since they were last posed, so the clip still plays at its
+      // authored SPEED and only its temporal resolution drops.
+      //
+      // Three things are exempt, and each of them is a moment the player is
+      // meant to be reading:
+      //   a BOSS         the thing the fight is about, and the only body on
+      //                  screen big enough for 20Hz to be visible as stepping.
+      //   a ONE-SHOT     a death, a bite, a flinch. A performance with a
+      //                  beginning and an end reads as a glitch if it steps.
+      //   a HIT          the frame a creature is struck. The flinch has to
+      //                  start on the frame the pellet landed or the feedback
+      //                  detaches from the shot that caused it.
+      //
+      // `e.radius` AND NOT `def.radius * sizeMul`, which is the trap here and
+      // gets the answer backwards on exactly the bodies that matter.
+      //
+      // `sizeMul` is only the run's growth times this individual's size roll —
+      // the asset's own fit is deliberately factored out of it (see the note
+      // where it is stored). `spawnScale` is the one that carries the fit, and
+      // some of those are large: the turtle's asset alone is 3.08x. Since
+      // `e.radius` is `def.radius * spawnScale`, it is the only field that
+      // describes how big this body actually IS on screen — which is why
+      // every collision test in the file reads it too.
+      //
+      // Tiering on `def.radius * sizeMul` instead would have put the turtle at
+      // about 1.0 rather than 3.08 and quietly dropped the pose rate on the
+      // big, slow, highly readable animals while leaving the schooling fish
+      // alone. Precisely the wrong way round.
+      const lod = CONFIG.animation.lod;
+      let stride = 1;
+      if (lod?.enabled && !e.isBoss) {
+        const size = e.radius ?? 0;
+        if (size < (lod.tinyRadius ?? 0)) stride = lod.tinyStride ?? 1;
+        else if (size < (lod.smallRadius ?? 0)) stride = lod.smallStride ?? 1;
+      }
+
+      // WHICH of a stride's frames this body takes, and the reason it is not
+      // simply the spawn order.
+      //
+      // A running counter looks like it spreads the roster and does not: the
+      // spawn index decides the SPECIES as well as the slot, so a tier whose
+      // members happen to land on one residue class all pose on the same
+      // frame. Three frames of nothing followed by one that poses the whole
+      // school is the same total work delivered as a periodic 3x spike —
+      // exactly the hitching this exists to remove, wearing the costume of a
+      // fix. A round-robin PER TIER cannot alias that way: each tier hands out
+      // its own slots in turn, so its members are spread evenly across its own
+      // stride no matter what order they spawned in or what else spawned
+      // alongside them.
+      //
+      // Keyed on the size tier and not on the stride actually used this frame,
+      // because the exemptions below force the stride to 1 on scattered frames
+      // and re-rolling the slot every time one fired would leave the schedule
+      // permanently churning.
+      if (e.animTier !== stride) {
+        e.animTier = stride;
+        e.animPhase = stride > 1 ? (phaseCursor[stride] = (phaseCursor[stride] ?? 0) + 1) % stride : 0;
+      }
+
+      const due = stride <= 1 || (animFrame + e.animPhase) % stride === 0;
+      // The three exemptions, each of them a moment the player is reading. A
+      // forced pose does NOT consume the scheduled one — the body simply gets
+      // both, which costs a frame of work and keeps the stagger intact.
+      const forced = e.hitThisFrame || e.anim.isPlayingOneShot();
+
+      e.animDt = (e.animDt ?? 0) + dt;
+      if (due || forced) {
+        // Clamped exactly as the game loop clamps its own delta. The springs
+        // are semi-implicit Euler and stable to about dt = 0.2s at the
+        // stiffness they run at (90), so three frames is a wide margin — but a
+        // tab returning from the background must not hand them half a second.
+        e.anim.update(
+          Math.min(e.animDt, MAX_ANIM_DT),
+          e.animState ?? stateForSpeed(speed),
+          e.hitThisFrame,
+        );
+        e.animDt = 0;
+        // Only on a frame that actually posed, so a hit landing on a skipped
+        // frame is still delivered on the next one — though `forced` above
+        // means that frame is always this one.
+        e.hitThisFrame = false;
+      }
     }
 
     // Head-look last, so it layers over the finished pose — the mixer clip,

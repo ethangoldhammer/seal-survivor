@@ -219,9 +219,35 @@ export function makeEpitaph({ name, cause, lead: leadIn = '', width, height, typ
   const mid = h * (c.baseline ?? 0.42);
 
   // --- the name -------------------------------------------------------------
-  const namePx = fitFont(ctx, name, family, c.nameWeight ?? 700, (c.namePx ?? 0.2) * h, inner);
+  // STACKED, when it will take one. "FAT TONY" set on one line across a stone
+  // is limited by the stone's WIDTH; broken into "FAT" over "TONY" it is
+  // limited by the height, and a headstone is taller than it is wide — so the
+  // same name comes out roughly twice the size for free.
+  //
+  // Which is the whole reason the panel is the whole front now. A rect that
+  // covered a third of the stone had no height to spend, so stacking bought
+  // nothing and the name had to stay small.
+  //
+  // fitLines does the work and needs no special case for a one-word name: it
+  // wraps what it can and hands back a single line when there is nothing to
+  // break. "Rumpshaker" and "Sir Flops-A-Lot" are both handled by asking the
+  // same question.
+  const nameLines = Math.max(1, Math.floor(c.nameLines ?? 2));
+  const nameSet = fitLines(ctx, name, family, c.nameWeight ?? 700, (c.namePx ?? 0.2) * h, inner, nameLines);
+  const namePx = nameSet.px;
+  const nameStep = namePx * (c.nameLineGap ?? 1.02);
   ctx.font = `${c.nameWeight ?? 700} ${namePx}px ${family}`;
-  carveLine(ctx, name, w / 2, mid, depth, colors);
+  // The block is centred on `mid` rather than started at it, so adding a second
+  // line grows the name in both directions instead of pushing the cause down
+  // off the stone.
+  const nameTop = mid - (nameSet.lines.length - 1) * nameStep * 0.5;
+  nameSet.lines.forEach((line, i) => {
+    carveLine(ctx, line, w / 2, nameTop + i * nameStep, depth, colors);
+  });
+  // Where the rest of the inscription starts from — the BOTTOM of the name
+  // block, not the middle of it. A cause positioned from `mid` would be written
+  // straight through the second line of a stacked name.
+  const nameBottom = nameTop + (nameSet.lines.length - 1) * nameStep;
 
   // --- the cause ------------------------------------------------------------
   // Two lines, and they are one sentence: "taken by / a shark". The template is
@@ -237,10 +263,28 @@ export function makeEpitaph({ name, cause, lead: leadIn = '', width, height, typ
   const causePx = Math.max(8, namePx * (c.causeScale ?? 0.42));
   const gap = causePx * (c.lineGap ?? 1.35);
 
-  ctx.font = `${c.causeWeight ?? 400} ${causePx}px ${family}`;
+  // THE LEAD IS FITTED TOO, and it went years without being. It was drawn at a
+  // fixed size with no width check at all, which was invisible while every lead
+  // was "taken by" or "lost to" — three syllables that fit anything. epitaphs.csv
+  // has "bitten clean through by" and "minced by the propeller of" in it now,
+  // and on a stone whose name is deliberately dominant those are wider than the
+  // panel: the line rendered CLIPPED AT BOTH ENDS, reading "ITTEN CLEAN THROUGH
+  // B" with nothing anywhere reporting it.
+  //
+  // The same wrap-then-shrink the name and the cause use, so the three lines of
+  // an inscription are now fitted by one function and cannot disagree about what
+  // fits.
+  const leadY = nameBottom + namePx * 0.78;
+  const leadSet = fitLines(ctx, lead, family, c.causeWeight ?? 400, causePx, inner,
+    Math.max(1, Math.floor(c.leadLines ?? 2)));
+  const leadStep = leadSet.px * (c.causeLineGap ?? 1.15);
+  ctx.font = `${c.causeWeight ?? 400} ${leadSet.px}px ${family}`;
   ctx.globalAlpha = c.leadAlpha ?? 0.72;
-  carveLine(ctx, lead, w / 2, mid + namePx * 0.78, depth * 0.7, colors);
+  leadSet.lines.forEach((line, i) => {
+    carveLine(ctx, line, w / 2, leadY + i * leadStep, depth * 0.7, colors);
+  });
   ctx.globalAlpha = 1;
+  const leadBottom = leadY + (leadSet.lines.length - 1) * leadStep;
 
   // WRAPPED, NOT JUST SHRUNK, and the reason is bosses. A cause used to be
   // "a shark" or "running out of air" — four words at the outside, and shrinking
@@ -253,7 +297,9 @@ export function makeEpitaph({ name, cause, lead: leadIn = '', width, height, typ
   // once it has run out of lines — which is the order a person setting type
   // would do it in.
   const causeText = cause || 'the sea';
-  const causeTop = mid + namePx * 0.78 + gap;
+  // Off the BOTTOM of the lead, not off its first line — a two-line lead would
+  // otherwise be written straight through by the cause underneath it.
+  const causeTop = leadBottom + gap;
   // What is left of the panel underneath. The block must not run off the bottom
   // of the stone, so the line count is bounded by the room as well as by the
   // setting — a five-line cause on a plaque would be five lines hanging in the

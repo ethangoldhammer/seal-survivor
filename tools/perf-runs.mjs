@@ -70,8 +70,71 @@ for (const r of withPerf.slice(-want)) {
       + (p.heapPeakMB ? `  ·  heap peak ${p.heapPeakMB.toFixed(0)}MB, ${p.heapFreedMB.toFixed(0)}MB collected` : ''));
   }
 
+  // WHERE THE FRAME TIME WENT. Two columns and they answer different
+  // questions: `per frame` is the steady cost (a phase at 60% of the run is
+  // simply the expensive one, and the place to spend an optimisation), while
+  // `per hitch` is what that phase cost on the frames that stuttered (a phase
+  // at 4% of the run and 15ms per hitch is SPIKY, which is a different bug and
+  // a different fix).
+  if (p.phases?.length) {
+    const named = p.phases.reduce((a, q) => a + q.msPerFrame, 0);
+    const frameMs = p.meanMs ?? 0;
+    // THE THREE-WAY SPLIT, and the reason `jsMsPerFrame` is recorded apart
+    // from the leaf phases rather than as one of them: what the leaves do not
+    // account for is either code nothing wraps yet, or the loop not executing
+    // at all — waiting on vsync, or blocked in the driver behind the GPU.
+    // Opposite diagnoses, opposite fixes, and indistinguishable without this.
+    const js = p.jsMsPerFrame ?? 0;
+    console.log(`  per frame: ${p.phases.map((q) => `${q.name} ${q.msPerFrame.toFixed(2)}ms`).join(' · ')}`
+      + (js ? ` · untimed JS ${Math.max(0, js - named).toFixed(2)}ms · not running ${Math.max(0, frameMs - js).toFixed(2)}ms`
+        : ` · unmeasured ${Math.max(0, frameMs - named).toFixed(2)}ms`));
+    if (p.hitches > 0) {
+      const namedH = p.phases.reduce((a, q) => a + q.msPerHitch, 0);
+      const jsH = p.jsMsPerHitch ?? 0;
+      console.log(`  per hitch: ${p.phases.map((q) => `${q.name} ${q.msPerHitch.toFixed(1)}ms`).join(' · ')}`
+        + (jsH ? ` · untimed JS ${Math.max(0, jsH - namedH).toFixed(1)}ms` : ''));
+    }
+    if (js && p.seconds > 45) {
+      // Which of the two it is, said in words. The per-HITCH column is the one
+      // that decides it: a run can idle happily on its good frames and still
+      // be JS-bound on the bad ones, and the per-frame average blends those.
+      const namedH = p.phases.reduce((a, q) => a + q.msPerHitch, 0);
+      const jsH = p.jsMsPerHitch ?? 0;
+      const untimedH = Math.max(0, jsH - namedH);
+      if (jsH > 0 && untimedH > namedH) {
+        console.log(`  -> on a hitch frame, ${untimedH.toFixed(0)}ms of JS is in code no phase wraps,`);
+        console.log(`     against ${namedH.toFixed(0)}ms in the ones that do. Bisect the loop further —`);
+        console.log(`     the work is real and it is not where the phases are looking.`);
+      } else if (jsH > 0 && jsH < 8) {
+        console.log(`  -> a hitch frame runs only ${jsH.toFixed(0)}ms of JS, so the stall is NOT this loop:`);
+        console.log(`     the tab is blocked outside it — vsync, the compositor, or a GPU behind.`);
+        console.log(`     No amount of cutting JS work will move it.`);
+      }
+    }
+  }
+
+  // WHICH MOMENTS THE BAD FRAMES LAND IN. `lift` is hitches-per-frame while
+  // the mark was hot against the run's own rate — a mark hot for most of the
+  // run collects most of the hitches by doing nothing, so the tally on its own
+  // says only how common the mark is.
+  if (p.marks?.length) {
+    const skewed = p.marks.filter((m) => m.lift >= 1.5 || m.lift <= 0.67);
+    for (const m of skewed) {
+      console.log(`  while "${m.name}" (${(m.shareOfRun * 100).toFixed(0)}% of frames):`
+        + ` ${m.hitches} of ${p.hitches} hitches — ${m.lift.toFixed(1)}x the run's rate`);
+    }
+    if (!skewed.length) {
+      console.log(`  marks: ${p.marks.map((m) => `${m.name} ${m.lift.toFixed(1)}x`).join(' · ')}`
+        + ` — none of them skews, so the hitches are not tied to any of these moments.`);
+    }
+  }
+
   if (p.worst?.length) {
-    console.log(`  worst frames: ${p.worst.map((w) => `${w.ms.toFixed(0)}ms @ ${clock(w.at)}${w.why ? ` (${w.why})` : ''}`).join(' · ')}`);
+    console.log(`  worst frames: ${p.worst.map((w) => {
+      const parts = w.split?.length ? ` [${w.split.map((q) => `${q.name} ${q.ms.toFixed(0)}`).join(' ')}]` : '';
+      const tags = w.marks?.length ? ` {${w.marks.join(',')}}` : '';
+      return `${w.ms.toFixed(0)}ms @ ${clock(w.at)}${w.why ? ` (${w.why})` : ''}${parts}${tags}`;
+    }).join(' · ')}`);
 
     // Where in the run they fell, which is the diagnosis. Early-and-clustered
     // is a different bug from spread-out, and the eye is bad at telling a list
@@ -92,7 +155,8 @@ for (const r of withPerf.slice(-want)) {
       } else if (p.hitchNeither / p.hitches >= 0.5) {
         console.log(`  -> ${p.hitchNeither} of ${p.hitches} hitches are none of the four: not a link, not an`);
         console.log(`     upload, and the heap did not drop. That is real work on those frames —`);
-        console.log(`     a profile is the next tool, not another counter.`);
+        console.log(`     read the per-hitch phase split and the mark lifts above, which say`);
+        console.log(`     which part of the frame and which moment of the run that work was in.`);
       } else {
         console.log(`  -> mixed: ${firstDraw} first-draw, ${p.hitchNeither} other. Both are worth a look.`);
       }

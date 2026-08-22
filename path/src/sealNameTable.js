@@ -143,6 +143,42 @@ export function parseSealNameCsv(text, warn = console.warn) {
     out[slot].push({ id, text: partText, weight: w == null ? 1 : w });
   }
 
+  // TWO ROWS SAYING THE SAME WORD, which the id check above cannot see. A
+  // duplicate `id` is caught by parseIdTable and one of the rows disappears
+  // loudly; a duplicate TEXT under two different ids is completely silent, and
+  // all it does is make that word twice as likely as the author intended. It
+  // reads as a tuning decision nobody made. Three of them had accumulated in
+  // the shipped file before anything looked.
+  //
+  // A WARNING AND NOT A DROP. Deliberate repetition is a legitimate way to
+  // weight a pool — it is just a worse way than the `weight` column — and
+  // silently deleting a row somebody typed is the wrong end of that argument.
+  for (const slot of SEAL_NAME_SLOTS) {
+    const seen = new Map();
+    for (const part of out[slot]) {
+      const key = part.text.toLowerCase();
+      const first = seen.get(key);
+      if (first) {
+        warn(`[${LABEL}] "${part.id}" and "${first}" are both ${slot} "${part.text}" — `
+          + 'the word is twice as likely as one row makes it look. Delete one, or say so with `weight`.');
+      } else {
+        seen.set(key, part.id);
+      }
+    }
+  }
+
+  // ...and the cross-slot case, which is its own bug rather than a weighting
+  // one. A word in BOTH pools can be drawn for both halves of the same name,
+  // and "Schlup Schlup" is not a seal, it is a stutter. Only this pair matters:
+  // `full` never shares a name with a part.
+  const nicks = new Set(out.nickname.map((n) => n.text.toLowerCase()));
+  for (const adj of out.adjective) {
+    if (nicks.has(adj.text.toLowerCase())) {
+      warn(`[${LABEL}] "${adj.text}" is both an adjective and a nickname — `
+        + `one roll in a few thousand is "${adj.text} ${adj.text}". Keep it in one slot.`);
+    }
+  }
+
   // A nickname alone is a name; an adjective alone is not, which is why the
   // nickname pool is the one that has to exist. A file of nothing but `full`
   // rows is a legitimate way to run this — every roll is a name somebody wrote.

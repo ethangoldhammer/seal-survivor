@@ -38,8 +38,12 @@ import { sweepGrave } from '../systems/graveBeam.js';
 // that file's header spends a paragraph refusing to make.
 //
 // IT NEVER BLOCKS THE FIGHT. The layer takes no pointer events and sits under
-// the menus, unlike the callout layer — a caption about a seal that died four
-// runs ago has no business finishing on top of the upgrade cards.
+// the menus — a caption about a seal that died four runs ago has no business
+// finishing on top of the upgrade cards. That used to be a DOM-order accident:
+// this layer and the menus were both z-index 4 and it won only because it is
+// appended first. The menus are 8 now and every feedback layer is genuinely
+// under them, the callout and toast layers included (see the ladder note in
+// ui/ui.js).
 // ============================================================================
 
 const CSS = `

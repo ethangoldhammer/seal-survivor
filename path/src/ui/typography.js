@@ -210,7 +210,15 @@ function roleCss(role, t) {
   // everything else (ui.js, fitCardText) — a factor, not a replacement, so a
   // card whose text fits is at exactly the size this row says.
   const fit = role.fit ? ' * var(--sv-fit, 1)' : '';
-  decls.push(`font-size: calc(${Number(s.size) || 0}px * var(--sv-scale)${fit})`);
+  // --sv-tipScale is the SMALL-SCREEN shrink for the coaching voice, and it is
+  // a variable rather than a media query in this sheet for one reason: these
+  // rules are rebuilt live from the Text panel, and a phone rule inside them
+  // would have to be re-emitted (and kept in step with the layout audit's own
+  // breakpoints) on every keystroke. The breakpoints live with every other
+  // viewport rule in ui.js, and the size a role asks for is still the size it
+  // gets on a desktop, where the variable is unset and the term is 1.
+  const compact = role.compact ? ' * var(--sv-tipScale, 1)' : '';
+  decls.push(`font-size: calc(${Number(s.size) || 0}px * var(--sv-scale)${fit}${compact})`);
   decls.push(`font-weight: ${Number(s.weight) || 400}`);
   decls.push(`letter-spacing: ${Number(s.tracking) || 0}em`);
   decls.push(`text-transform: ${CASE_CSS[s.case] ?? 'none'}`);

@@ -484,7 +484,7 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   // UNDER EVERY PANEL THIS SCREEN OPENS. These labels belong to the buttons —
   // they are the hexagons' own text, drawn in the DOM only because the type
   // system lives there — so anything the buttons OPEN is in front of them:
-  // Options and the Leaderboard are `.sv-center` surfaces at z-index 4 (see
+  // Options and the Leaderboard are `.sv-center` surfaces at z-index 8 (see
   // ui/ui.js), and at 6 the words "Play" and "Leaderboard" floated over the
   // panel that had just been asked for. Below those, above nothing that is up
   // while the menu is: the HUD is hidden here and the hive is not built yet.

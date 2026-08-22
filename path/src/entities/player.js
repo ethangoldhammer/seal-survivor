@@ -21,6 +21,19 @@ const _xAxis = new THREE.Vector3(1, 0, 0); // swings the nose toward the camera
 const _spinQ = new THREE.Quaternion();
 const _zAxis = new THREE.Vector3(0, 0, 1); // the seal's lateral axis — the somersault's
 
+// THE RAGDOLL'S ROLE, and the reason a living seal is unaffected by it.
+//
+// ASSETS.ship.rig.springChains declares five loose chains — both front
+// flippers, both rear flippers and the neck — all wearing this one role and all
+// marked `asleep`, which systems/animation.js honours by muting them as it
+// builds them and again on every reset. A muted chain neither solves nor stores
+// an impulse, so nothing about a living seal changed when they were added.
+// systems/deathDive.js is the only thing that ever wakes them, via setLimp().
+//
+// Named here because this file is the seal's, and the harnesses that check the
+// arrangement have somewhere honest to read the string from.
+export const FLOP_ROLE = 'sealFlop';
+
 export const player = {
   mesh: null, // container — carries the aim rotation
   body: null, // visual — carries the left/right flip
@@ -926,6 +939,10 @@ export function applyRecoil(dir) {
 export function updateAimRig(dt, aim, engaged, charge = 0, limp = false) {
   player.aimRig?.update(dt, aim, {
     engaged,
+    // Passed through as well as consumed below: the tail is the one chain the
+    // rig keeps solving through the death dive, and a dead animal's tail is
+    // looser than a swimming one's. See CONFIG.death.flop.tailLooseness.
+    limp,
     // 0..1 of a strike being wound up — coils the head back and lifts the
     // tail. Passed in rather than read off strikeState, for the same reason
     // dashTimer and comboSpeedMul are: entities/ doesn't import from systems/.

@@ -32,6 +32,43 @@ import { buildChain, applyChain, coneGate, tipWorld } from './ikChain.js';
 // they aim at the player's cursor, the glance-to-camera behaviour, and the
 // emit points weapons fire from.
 
+// THE DEAD SEAL'S TAIL.
+//
+// CONFIG.tail describes a tail on an animal that is using it. The dive keeps
+// this spring solving all the way to the seabed (see the `limp` note in
+// entities/player.js), so a corpse trailed a tail with a swimmer's stiffness
+// in it — the one chain on the body that was still holding itself up.
+//
+// Derived rather than declared: `tailLooseness` divides the stiffness and the
+// damping and multiplies the permitted lag, which is exactly what
+// springCfgFor in systems/animation.js does for a role. Damping moves with the
+// SQUARE ROOT of the stiffness for the same reason it does there — the two
+// have to stay in the same ratio or a looser chain also becomes an undamped
+// one and rings instead of hanging.
+//
+// Cached on the values it was built from, since this is read once a frame and
+// the tuner mutates CONFIG in place.
+let limpTailCfg = null;
+let limpTailStamp = '';
+function tailCfgFor(cfg, limp) {
+  const loose = limp ? (CONFIG.death?.flop?.tailLooseness ?? 1) : 1;
+  if (!(loose > 0) || loose === 1) return cfg;
+  const stamp = `${cfg.stiffness}|${cfg.damping}|${cfg.maxLag}|${cfg.tipLooseness}|${loose}`;
+  if (limpTailStamp !== stamp) {
+    limpTailStamp = stamp;
+    limpTailCfg = {
+      ...cfg,
+      stiffness: cfg.stiffness / loose,
+      damping: cfg.damping / Math.sqrt(loose),
+      maxLag: cfg.maxLag * loose,
+      // Toward 1 rather than past it: the tip may hang almost freely, but a
+      // looseness of 1 is a chain with no spring left in it at all.
+      tipLooseness: Math.min(0.95, cfg.tipLooseness * loose),
+    };
+  }
+  return limpTailCfg;
+}
+
 // Scratch that stays here: the two aim directions this rig reasons about.
 const _aim = new THREE.Vector3();
 const _headAim = new THREE.Vector3();
@@ -161,7 +198,7 @@ export function createAimRig(instance) {
     // clip outright, which is what lets an authored one-shot (the roll, the
     // death) play exactly as it was animated. `charge` is 0..1 of a strike
     // being wound up, which shivers the look target — see below.
-    update(dt, aim, { engaged = false, suppressed = false, charge = 0 } = {}) {
+    update(dt, aim, { engaged = false, suppressed = false, charge = 0, limp = false } = {}) {
       const finCfg = CONFIG.fins;
       const headCfg = CONFIG.head;
       const hasAim = aim && aim.lengthSq() > 1e-6;
@@ -259,7 +296,7 @@ export function createAimRig(instance) {
           if (lift > 0) tailSpring.impulse(_up.set(0, 1, 0), lift, tailCfg.impulseTipBias ?? 1);
         }
 
-        tailSpring.update(dt, tailCfg, tailWeight);
+        tailSpring.update(dt, tailCfgFor(tailCfg, limp), tailWeight);
         tail.bones[0].updateWorldMatrix(false, true);
         tipWorld(tail, tail.point, 1);
       }

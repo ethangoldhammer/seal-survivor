@@ -7,7 +7,7 @@ backagain,{departed} walked so that {player} could run,TRUE,2,again,
 watermissed,{departed} swam so that {player} could breach,TRUE,1,again,shark
 onemore,{departed} flipped so that {player} could flop,TRUE,1,again,
 lastrun,"{departed} got {cause}, {player}. Chin up.",TRUE,2,again,
-notoday,{cause} got you? {player} I won't get {cause}'d again.,TRUE,2,again,
+notoday,{cause} got you? {departed} I won't get {cause}'d again.,TRUE,2,again,
 fixthat,"Last run: {departed} got {cause}. Let's fix that, {player}.",TRUE,1,again,
 sharkmemory,{departed} waddled so that {player} could frolic,TRUE,1,again,shark
 sharkweek,"Still shark week, {player}. Mind the teeth.",TRUE,1,again,shark
@@ -21,9 +21,9 @@ departedgone,"{departed} is down there somewhere. Don't join them, {player}.",TR
 departedcause,"{departed} was lost to {cause}. Stake woke, {player}.",TRUE,2,again,
 departednow,"{departed} didn't make it. You're {player} now.",TRUE,2,again,
 departedstone,"There's a fresh stone down there with {departed} on it, {player}.",TRUE,1,again,
-departedshark,"{departed} got chummed. Do better, {player}.",TRUE,1,again,shark
+departedshark,"{departed} got chummed. Swim good, {player}.",TRUE,1,again,shark
 departeddrown,"I think we're going to need a bigger seal. You're up, {player}.",TRUE,1,again,shark boat drowning
-departedcrab,"{departed} got pinched. Mind your flippers, {player}.",TRUE,1,again,crab
+departedcrab,"{departed} got pinched. Mind the snap, {player}.",TRUE,1,again,crab
 departedcrabCopy,"{departed} got crabs. Mind the snap, {player}.",TRUE,1,again,crab
 departedboss,"{departed} couldn't take the heat. You're cooked, {player}.",TRUE,1,again,boss
 stillhere,{departed} got fished. {player} don't take that mess. ,TRUE,2,again,sailfish puffer fish

@@ -152,6 +152,186 @@ let hitchGC = 0;
 let heapFreed = 0;   // total bytes reclaimed across the run
 let heapPeak = 0;
 
+// --- WHAT THE FRAME WAS DOING ----------------------------------------------
+//
+// The three counters above answer "what one-off cost did this frame pay", and
+// for four runs in five the answer is "none of them" — which is true, useless,
+// and where the investigation has stopped every time. A frame that linked no
+// shader, uploaded no texture and collected no garbage was simply BUSY, and
+// nothing recorded says with what.
+//
+// Two things are needed to say it, and they are different questions:
+//
+//   a PHASE   how long a named span of the frame took. Mechanical, always on,
+//             and it splits the one number everybody argues about (25ms) into
+//             the four that decide what to do (enemies 1ms, combat 0.4ms,
+//             particles 2ms, render 20ms -> stop optimising the simulation).
+//   a MARK    what the game was DOING. A boss arriving, cards on screen, a
+//             wave landing. Phases say where the time went inside the frame;
+//             marks say which moments of a run the bad frames cluster in, and
+//             no amount of phase timing can answer that.
+//
+// THE MARK RATE IS THE POINT, NOT THE COUNT. A mark that is hot for half the
+// run collects half the hitches by doing nothing at all, so a raw tally
+// re-discovers how common the mark is and calls it a cause. What identifies a
+// culprit is hitches-per-frame WHILE HOT against the run's own baseline: a
+// mark hot for 2% of frames and holding 30% of the hitches is a 15x lift and
+// that is the number worth acting on.
+//
+// A mark LINGERS. The cost of a boss arriving does not all land on the frame
+// that spawned it — the first draw is one frame later, the textures another —
+// so a mark set once stays hot for a beat afterwards and catches the stall it
+// caused rather than only the frame that announced it.
+const MARK_LINGER = 0.4; // seconds a mark stays hot after it is set
+
+const markIndex = new Map(); // name -> slot
+const markName = [];
+const markHotUntil = [];  // runClock at which this mark goes cold
+const markFrames = [];    // frames recorded while hot
+const markHitches = [];   // of those, frames over HITCH_MS
+const markHits = [];      // times perfMark was called
+
+// Phases, in the order they were first named. Flat, not a stack: a phase
+// opened inside another double-counts, which is visible in the report (the
+// parts sum to more than the frame) rather than silently wrong.
+// The WHOLE frame's JS, recorded apart from the leaf phases above rather than
+// as one of them — it contains them, and a total sitting in the same list as
+// its own parts makes every share in the report add up to nonsense.
+//
+// It exists to split the one number the leaf phases cannot: a frame is
+// stamp-to-stamp, so whatever the parts do not account for is EITHER untimed
+// JS in a system nothing wraps OR the tab not running at all — waiting on
+// vsync, or blocked in the driver on a GPU that is behind. Those are opposite
+// diagnoses with opposite fixes, and against the leaf phases alone they look
+// identical. With this, `frameMs - js` is the time the loop was not executing
+// and `js - sum(leaves)` is the code nothing measures yet.
+let jsFrameMs = 0;
+let jsTotalMs = 0;
+let jsHitchMs = 0;
+
+const phaseIndex = new Map();
+const phaseName = [];
+const phaseFrameMs = [];  // this frame's accumulation, zeroed every frame
+const phaseTotalMs = [];  // across the run
+const phaseHitchMs = [];  // across hitch frames only
+
+/**
+ * Name what the game is doing. Cheap enough to call every frame from a system
+ * that is merely ACTIVE (`perfMark('cards')` while the level-up screen is up)
+ * as well as once from a system that just DID something
+ * (`perfMark('boss-arrive')`), and the linger above is what makes those two
+ * usages behave the same way.
+ *
+ * Silent before a run starts, so a mark fired by the menu costs nothing and
+ * lands nowhere.
+ */
+export function perfMark(name) {
+  if (!recording) return;
+  let i = markIndex.get(name);
+  if (i === undefined) {
+    i = markName.length;
+    markIndex.set(name, i);
+    markName.push(name);
+    markHotUntil.push(0);
+    markFrames.push(0);
+    markHitches.push(0);
+    markHits.push(0);
+  }
+  markHotUntil[i] = runClock + MARK_LINGER;
+  markHits[i]++;
+}
+
+/**
+ * Add `ms` to a named span of THIS frame. The caller keeps its own start
+ * stamp, which is what makes this nest-safe and free of any open/close state
+ * that a thrown exception could leave dangling:
+ *
+ *   const t0 = performance.now();
+ *   updateEnemies(...);
+ *   perfPhase('enemies', performance.now() - t0);
+ */
+export function perfPhase(name, ms) {
+  if (!recording) return;
+  let i = phaseIndex.get(name);
+  if (i === undefined) {
+    i = phaseName.length;
+    phaseIndex.set(name, i);
+    phaseName.push(name);
+    phaseFrameMs.push(0);
+    phaseTotalMs.push(0);
+    phaseHitchMs.push(0);
+  }
+  phaseFrameMs[i] += ms;
+}
+
+/**
+ * The whole of this frame's JS, from the top of the game loop to the bottom.
+ * One call a frame, and it must WRAP every leaf phase rather than sit beside
+ * them — see the note above jsFrameMs for the split it exists to make.
+ */
+export function perfFrameJs(ms) {
+  if (!recording) return;
+  jsFrameMs += ms;
+}
+
+/** The marks hot right now, for the worst-frames list. */
+function hotMarks() {
+  const out = [];
+  for (let i = 0; i < markName.length; i++) {
+    if (markHotUntil[i] > runClock) out.push(markName[i]);
+  }
+  return out;
+}
+
+/** This frame's phase split, biggest first, for the worst-frames list. */
+function frameSplit() {
+  const out = [];
+  for (let i = 0; i < phaseName.length; i++) {
+    if (phaseFrameMs[i] >= 1) out.push({ name: phaseName[i], ms: phaseFrameMs[i] });
+  }
+  out.sort((a, b) => b.ms - a.ms);
+  return out.slice(0, 4);
+}
+
+/**
+ * Fold this frame's phases and marks into the run, then clear the per-frame
+ * accumulators. Called from perfFrame once the frame's duration and hitch
+ * status are known, because both aggregations need them.
+ */
+function noteFrameContext(ms, isHitch) {
+  jsTotalMs += jsFrameMs;
+  if (isHitch) jsHitchMs += jsFrameMs;
+  jsFrameMs = 0;
+  for (let i = 0; i < phaseName.length; i++) {
+    phaseTotalMs[i] += phaseFrameMs[i];
+    if (isHitch) phaseHitchMs[i] += phaseFrameMs[i];
+    phaseFrameMs[i] = 0;
+  }
+  for (let i = 0; i < markName.length; i++) {
+    if (markHotUntil[i] <= runClock) continue;
+    markFrames[i]++;
+    if (isHitch) markHitches[i]++;
+  }
+}
+
+/** Zero everything the marks and phases hold. */
+function resetContext() {
+  jsFrameMs = 0;
+  jsTotalMs = 0;
+  jsHitchMs = 0;
+  markIndex.clear();
+  markName.length = 0;
+  markHotUntil.length = 0;
+  markFrames.length = 0;
+  markHitches.length = 0;
+  markHits.length = 0;
+  phaseIndex.clear();
+  phaseName.length = 0;
+  phaseFrameMs.length = 0;
+  phaseTotalMs.length = 0;
+  phaseHitchMs.length = 0;
+}
+
 /**
  * Begin recording. Called when a run starts, not at boot — boot is a loading
  * screen and a shader warm-up, and folding those into a run's distribution
@@ -189,6 +369,7 @@ export function perfRunStart(stamp = performance.now(), programs = 0, textures =
   hitchGC = 0;
   heapFreed = 0;
   heapPeak = heap;
+  resetContext();
   recording = true;
 }
 
@@ -261,11 +442,22 @@ export function perfFrame(stamp, programs = lastPrograms, textures = lastTexture
   }
   if (ms >= SPIKE_MS) spikes++;
 
+  // The split and the hot marks BEFORE noteFrameContext, which zeroes the
+  // per-frame accumulators it has just folded into the run. Only computed for
+  // a frame that could make the list, so the sort and the allocation are paid
+  // on the rare frames that qualify rather than sixty times a second.
+  const contended = worst.length < WORST_KEPT || ms > worst[worst.length - 1].ms;
+  const split = contended ? frameSplit() : null;
+  const marks = contended ? hotMarks() : null;
+
+  // After the hitch decision (it needs `why`) and before the worst-frames push.
+  noteFrameContext(ms, ms >= HITCH_MS);
+
   if (ms > worstMs) worstMs = ms;
   // Kept sorted and short, so this is a handful of comparisons on the rare
   // frames that qualify and a single one on every other.
-  if (worst.length < WORST_KEPT || ms > worst[worst.length - 1].ms) {
-    worst.push({ ms, at: runClock, why });
+  if (contended) {
+    worst.push({ ms, at: runClock, why, split, marks });
     worst.sort((a, b) => b.ms - a.ms);
     if (worst.length > WORST_KEPT) worst.length = WORST_KEPT;
   }
@@ -325,8 +517,69 @@ export function perfSummary() {
     programRebuilds,
     programKeys: programBuilds.size,
     topPrograms: topPrograms(),
+    // Where the frame time went, and which moments the bad frames landed in.
+    // See the note above MARK_LINGER for why `lift` is the column to read and
+    // `hitches` on its own is not.
+    phases: phaseSplit(),
+    // The frame's JS as a whole. See jsFrameMs: with this, the time the loop
+    // did not run at all is separable from the code no phase wraps yet.
+    jsMsPerFrame: frames ? jsTotalMs / frames : 0,
+    jsMsPerHitch: hitches ? jsHitchMs / hitches : 0,
+    marks: markLift(),
     worst: worst.slice(),
   };
+}
+
+// Per-phase totals as a share of the run, plus the share of HITCH time each
+// phase accounts for. The two together are the whole point: a phase at 4% of
+// the run and 70% of the hitch time is a spiky phase, and a phase at 60% of
+// both is simply the expensive one. They are different problems.
+function phaseSplit() {
+  const out = [];
+  for (let i = 0; i < phaseName.length; i++) {
+    out.push({
+      name: phaseName[i],
+      msPerFrame: frames ? phaseTotalMs[i] / frames : 0,
+      shareOfRun: totalMs ? phaseTotalMs[i] / totalMs : 0,
+      msPerHitch: hitches ? phaseHitchMs[i] / hitches : 0,
+    });
+  }
+  return out.sort((a, b) => b.msPerFrame - a.msPerFrame);
+}
+
+// A mark's hitch rate against the run's own. `lift` above 1 means bad frames
+// are over-represented while this mark is hot; below 1 means the mark is
+// SAFER than the run average, which is just as much an answer.
+//
+// Marks that were never hot for enough frames to mean anything are dropped —
+// one hitch in three frames is a 20x lift and complete noise.
+//
+// WHICH SETS THE CONTRACT FOR perfMark: call it every frame for as long as the
+// thing it names is true. The linger is 0.4s, so a mark fired exactly once is
+// hot for about 24 frames at 60Hz and 12 at 30Hz — under this floor either
+// way, and it would silently never be reported. Fire-once is supported (the
+// linger exists precisely so a one-shot still catches the stall it caused),
+// but it is not enough on its own to clear the reporting bar, and a moment
+// worth attributing lasts longer than one frame anyway. main.js reads all of
+// its marks off game state once a frame for this reason.
+const MARK_MIN_FRAMES = 30;
+
+function markLift() {
+  const baseline = frames ? hitches / frames : 0;
+  const out = [];
+  for (let i = 0; i < markName.length; i++) {
+    if (markFrames[i] < MARK_MIN_FRAMES) continue;
+    const rate = markHitches[i] / markFrames[i];
+    out.push({
+      name: markName[i],
+      hits: markHits[i],
+      frames: markFrames[i],
+      hitches: markHitches[i],
+      shareOfRun: frames ? markFrames[i] / frames : 0,
+      lift: baseline > 0 ? rate / baseline : 0,
+    });
+  }
+  return out.sort((a, b) => b.lift - a.lift);
 }
 
 // The keys built most often, worst first. Trimmed hard: a three cache key runs
@@ -376,8 +629,34 @@ export function perfRunReport(label = 'run', extra = '') {
   for (const p of s.topPrograms) {
     lines.push(`       rebuilt ${p.builds}x: ${p.key}`);
   }
+  // The frame's own breakdown. Prints whenever anything was timed, because a
+  // phase table with `render` at 80% is the answer to "should I optimise the
+  // simulation" and that question gets asked on every run, not only bad ones.
+  if (s.phases.length) {
+    const leaf = s.phases.reduce((a, p) => a + p.msPerFrame, 0);
+    lines.push(`       per frame: ${s.phases.map((p) => `${p.name} ${p.msPerFrame.toFixed(2)}ms`).join(' · ')}`
+      + (s.jsMsPerFrame ? ` · untimed JS ${Math.max(0, s.jsMsPerFrame - leaf).toFixed(2)}ms`
+        + ` · not running ${Math.max(0, s.meanMs - s.jsMsPerFrame).toFixed(2)}ms` : ''));
+    if (s.hitches) {
+      const leafH = s.phases.reduce((a, p) => a + p.msPerHitch, 0);
+      lines.push(`       per hitch: ${s.phases.map((p) => `${p.name} ${p.msPerHitch.toFixed(1)}ms`).join(' · ')}`
+        + (s.jsMsPerHitch ? ` · untimed JS ${Math.max(0, s.jsMsPerHitch - leafH).toFixed(1)}ms` : ''));
+    }
+  }
+  for (const m of s.marks) {
+    // Only the marks that actually skew. A lift near 1 is a mark that happens
+    // to be hot sometimes and tells you nothing, and printing all of them
+    // would bury the one that does.
+    if (m.lift < 1.5 && m.lift > 0.67) continue;
+    lines.push(`       while "${m.name}" (${(m.shareOfRun * 100).toFixed(0)}% of frames, ${m.hits} fired):`
+      + ` ${m.hitches} hitches — ${m.lift.toFixed(1)}x the run's rate`);
+  }
   if (s.worst.length) {
-    lines.push(`       worst frames: ${s.worst.map((w) => `${w.ms.toFixed(0)}ms @ ${clock(w.at)}${w.why ? ` (${w.why})` : ''}`).join(' · ')}`);
+    lines.push(`       worst frames: ${s.worst.map((w) => {
+      const parts = w.split?.length ? ` [${w.split.map((p) => `${p.name} ${p.ms.toFixed(0)}`).join(' ')}]` : '';
+      const tags = w.marks?.length ? ` {${w.marks.join(',')}}` : '';
+      return `${w.ms.toFixed(0)}ms @ ${clock(w.at)}${w.why ? ` (${w.why})` : ''}${parts}${tags}`;
+    }).join(' · ')}`);
   }
   // p99 is the number to watch across a change, not the mean: a fix that
   // removes stalls barely moves the average and halves this.

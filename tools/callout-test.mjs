@@ -2254,75 +2254,134 @@ section('drawing it, and where the arrow points');
       at(world, 'top') > subjectY, `top ${at(world, 'top').toFixed(0)} vs subject ${subjectY.toFixed(0)}`);
   }
   {
-    // OFF THE EDGE. The words stay, clamped to the frame — half a sentence
-    // against a border is readable and no sentence at all is not — and the
-    // arrow appears, which is the only case it exists for now.
-    updateCalloutUi(0.016, {
-      camera, playerX: 0, playerY: 0, tipAnchor: { x: 60, y: 0 }, tipFade: 0,
-    });
-    const boxW = world.offsetWidth || 0;
-    check('a subject off the edge keeps its words on screen',
-      at(world, 'left') + boxW <= window.innerWidth + 1 && at(world, 'left') >= 0,
-      `left ${at(world, 'left').toFixed(0)} of ${window.innerWidth}`);
-    check('...and grows an arrow', !arrow.className.includes('sv-hidden'));
-    const ax = at(arrow, 'left') + CONFIG.callouts.arrow.size / 2;
-    check('...pointing the way the thing is', ax > sealX + 20, `x ${ax.toFixed(0)}`);
-  }
-  {
-    // ...AND NOT OTHERWISE. An arrow pointing at a label the player is already
-    // reading is one glyph too many, and it was the whole of the old design.
+    // THE ARROW HUGS THE THING. Not a pointer from the seal any more: it stands
+    // a couple of dozen pixels off the subject with its nose in it, on the side
+    // the words are on, so the sentence, the mark and the object are one look.
+    //
+    // The distance is asserted against the config rather than against a pixel
+    // literal, because the whole claim is "close to the thing" and a hardcoded
+    // number would keep passing after somebody tuned the gap out to arm's
+    // length.
     updateCalloutUi(0.016, {
       camera, playerX: 0, playerY: 0, tipAnchor: { x: 4, y: 2 }, tipFade: 0,
-    });
-    check('a subject in plain sight needs no arrow', arrow.className.includes('sv-hidden'),
-      arrow.className);
-  }
-  {
-    // THE ARROW STILL MEANS UP for a tip about the surface — the case the whole
-    // aiming path was written for, now reached through the anchor. The seal is
-    // at the origin; a waterline far above it is off the top of the frame.
-    resetCallouts();
-    clearCalloutUi();
-    pushCallout(CALLOUTS.get('surface'));
-    updateCalloutUi(0.016, {
-      camera, playerX: 0, playerY: 0, tipAnchor: { x: 0, y: 60 }, tipFade: 0,
     });
     const size = CONFIG.callouts.arrow.size;
     const ax = at(arrow, 'left') + size / 2;
     const ay = at(arrow, 'top') + size / 2;
-    check('the surface arrow is drawn', !arrow.className.includes('sv-hidden'));
-    check('...above the seal, not below it', ay < sealY - 20,
-      `arrow y ${ay.toFixed(0)} vs seal ${sealY}`);
-    check('...and straight up, not off to one side', Math.abs(ax - sealX) < 6,
-      `arrow x ${ax.toFixed(0)} vs seal ${sealX}`);
-    // CLEAR OF THE SEAL'S FURNITURE, derived the way the code derives it rather
-    // than compared to a pixel literal — moving the bars or the ring moves the
-    // arrow with them, and a hardcoded number here would pass while the arrow
-    // sat on top of the bars.
-    const ring = CONFIG.strike.ring;
-    const furniture = Math.max(CONFIG.hud.playerBarOffset, ring.radius * (ring.scale ?? 1));
-    const wantPx = (furniture + CONFIG.callouts.arrow.gap) * perUnitY;
-    check('...clear of the bars AND the ring, whatever they are set to',
-      Math.abs((sealY - ay) - wantPx) < CONFIG.callouts.arrow.bobDistance,
-      `${(sealY - ay).toFixed(0)}px vs ${wantPx.toFixed(0)}px (furniture ${furniture})`);
+    const tx = sealX + 4 * perUnitX;
+    const ty = sealY - 2 * perUnitY;
+    check('a subject in plain sight is marked', !arrow.className.includes('sv-hidden'),
+      arrow.className);
+    const off = Math.hypot(ax - tx, ay - ty);
+    check('...by an arrow hugging it', Math.abs(off - CONFIG.callouts.arrow.hug)
+      <= CONFIG.callouts.arrow.bobDistance, `${off.toFixed(0)}px off the subject`);
+    // ON THE SIDE THE WORDS ARE ON, which is what makes the pair read as one
+    // object. The tip stands above its subject here, so the arrow is above it
+    // too — between the two, not on the far side pointing back through it.
+    check('...on the words\' side of it', ay < ty, `arrow ${ay.toFixed(0)} vs subject ${ty.toFixed(0)}`);
+    check('...and standing off it, not on it', off > size / 4, `${off.toFixed(0)}px`);
   }
   {
-    // ...and DOWN for the seabed, which is one line away from it in the code
-    // and is the exact bug that would survive every other check in this file.
+    // OFF THE EDGE. THE WORDS HOLD THE POSITION THEY LAST STOOD IN. They used
+    // to be clamped to the frame, which meant a player swimming away dragged
+    // the sentence to the border and it lived out its stay pinned there — the
+    // tip stopped being a label in the water and became a piece of HUD stuck to
+    // the edge of the screen.
+    //
+    // Two claims, and the second is the one that keeps this honest: it does not
+    // MOVE, and it does not DISAPPEAR. Either alone is satisfiable by a bug.
+    const wasLeft = at(world, 'left');
+    const wasTop = at(world, 'top');
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 60, y: 0 }, tipFade: 0,
+    });
+    check('a subject off the edge leaves its words exactly where they were',
+      Math.abs(at(world, 'left') - wasLeft) < 0.5 && Math.abs(at(world, 'top') - wasTop) < 0.5,
+      `${at(world, 'left').toFixed(0)},${at(world, 'top').toFixed(0)} `
+      + `vs ${wasLeft.toFixed(0)},${wasTop.toFixed(0)}`);
+    check('...and still on screen', !world.className.includes('sv-hidden'), world.className);
+    // ...AND IT DOES NOT SLIDE ALONG THE BORDER EITHER. A second frame with the
+    // subject further out is the shape the old clamp had: it kept re-solving
+    // against the anchor every frame, so the box crept while the player swam.
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 400, y: -90 }, tipFade: 0,
+    });
+    check('...and does not creep as the subject gets further away',
+      Math.abs(at(world, 'left') - wasLeft) < 0.5 && Math.abs(at(world, 'top') - wasTop) < 0.5,
+      `${at(world, 'left').toFixed(0)},${at(world, 'top').toFixed(0)}`);
+    // NO ARROW OUT THERE. An arrow at the border pointing at water the player
+    // cannot see is the long-range pointer this stopped being.
+    check('...and grows no arrow for a subject nobody can see',
+      arrow.className.includes('sv-hidden'), arrow.className);
+  }
+  {
+    // AND IT PICKS ITS SUBJECT BACK UP. Parking is for the frames the thing is
+    // gone from; swimming back has to hand the label to it again, or the tip
+    // spends the rest of its stay beside nothing.
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: -8, y: 3 }, tipFade: 0,
+    });
+    const boxW = world.offsetWidth || 0;
+    const cx = at(world, 'left') + boxW / 2;
+    const wantX = sealX - 8 * perUnitX;
+    check('a subject back on screen takes its words back',
+      Math.abs(cx - wantX) < 8, `${cx.toFixed(0)}px vs ${wantX.toFixed(0)}px`);
+  }
+  {
+    // THE MARK FOLLOWS THE WORDS ROUND THE SUBJECT, and this is the one part of
+    // the aiming that can be wrong rather than merely ugly. A tip whose subject
+    // is near the top of the frame flips BELOW it — there is no room above — and
+    // the arrow has to flip with it. An arrow left on the old side is drawn
+    // through the object it is marking, from the far side, pointing away from
+    // the sentence that sent it.
+    //
+    // A waterline near the top of the screen rather than far above it: the
+    // surface tip is the case this path was written for, and now the arrow only
+    // exists while the thing is on the glass.
+    //
+    // clearCalloutUi first so the bearing SNAPS rather than easing round from
+    // whatever the last block left it at — the ease is a look, and testing it
+    // here would be testing turnRate instead of the side.
+    resetCallouts();
+    clearCalloutUi();
+    pushCallout(CALLOUTS.get('surface'));
+    updateCalloutUi(0.016, {
+      camera, playerX: 0, playerY: 0, tipAnchor: { x: 0, y: 19 }, tipFade: 0,
+    });
+    const size = CONFIG.callouts.arrow.size;
+    const ax = at(arrow, 'left') + size / 2;
+    const ay = at(arrow, 'top') + size / 2;
+    const ty = sealY - 19 * perUnitY;
+    check('the surface arrow is drawn', !arrow.className.includes('sv-hidden'));
+    check('...under its subject, the side the words flipped to', ay > ty,
+      `arrow y ${ay.toFixed(0)} vs subject ${ty.toFixed(0)}`);
+    check('...still hugging it', Math.abs(Math.hypot(ax - sealX, ay - ty)
+      - CONFIG.callouts.arrow.hug) <= CONFIG.callouts.arrow.bobDistance,
+      `${Math.hypot(ax - sealX, ay - ty).toFixed(0)}px off the waterline`);
+    // AND ITS NOSE IS IN THE THING. The glyph points up at rest, so the aim is
+    // the rotation less a quarter turn; from below its subject that is upward,
+    // which in screen space is an angle of about -π/2.
+    const rot = parseFloat(/rotate\(([-0-9.]+)rad\)/.exec(arrow.style.transform)?.[1] ?? 'NaN');
+    const aim = rot - Math.PI / 2;
+    check('...and points at it, not away from it', Math.abs(Math.sin(aim) + 1) < 0.2,
+      `aim ${aim.toFixed(2)}rad`);
+  }
+  {
+    // ...AND THERE IS NO MARK AT ALL FOR A SUBJECT OFF THE SCREEN. The seabed
+    // is the case that used to draw a long pointer down past the seal. The
+    // words about it still stand where they were (checked above); an arrow at
+    // the border aimed at floor nobody can see is a direction, and direction is
+    // the one thing a label standing on its subject does not need to give.
     resetCallouts();
     clearCalloutUi();
     pushCallout(CALLOUTS.get('crab'));
     updateCalloutUi(0.016, {
       camera, playerX: 0, playerY: 0, tipAnchor: { x: 0, y: -60 }, tipFade: 0,
     });
-    const size = CONFIG.callouts.arrow.size;
-    const ax = at(arrow, 'left') + size / 2;
-    const ay = at(arrow, 'top') + size / 2;
-    check('the seabed arrow is drawn', !arrow.className.includes('sv-hidden'));
-    check('...below the seal, not above it', ay > sealY + 20,
-      `arrow y ${ay.toFixed(0)} vs seal ${sealY}`);
-    check('...and straight down, not off to one side', Math.abs(ax - sealX) < 6,
-      `arrow x ${ax.toFixed(0)} vs seal ${sealX}`);
+    check('a subject below the floor of the frame is not marked',
+      arrow.className.includes('sv-hidden'), arrow.className);
+    check('...but its words are still up', !world.className.includes('sv-hidden'),
+      world.className);
   }
   {
     // A TIP WITH NOWHERE TO STAND DRAWS NOTHING. The anchor going null means the

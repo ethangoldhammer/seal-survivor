@@ -1521,6 +1521,9 @@
     "shock": {
       "enabled": true
     },
+    "twirl": {
+      "counterRotate": true
+    },
     "orbit": {
       "depth": 1.4,
       "bob": 0.2,
@@ -1563,6 +1566,9 @@
     "maxSpeed": 40,
     "arc": 0.7,
     "spread": 0.09,
+    "neverThrown": [
+      "club"
+    ],
     "homingDelay": 0.22,
     "turnRate": 5.5,
     "acquireRadius": 30,
@@ -5598,6 +5604,37 @@
       "glow": 4.2,
       "turbulence": 0.5
     },
+    "hotSpotChumTrail": {
+      "count": 1,
+      "speed": [
+        0.3,
+        1.6
+      ],
+      "size": [
+        0.36,
+        0.56
+      ],
+      "life": [
+        0.3,
+        0.6
+      ],
+      "colors": [
+        16771752,
+        16766089,
+        16775138
+      ],
+      "cone": 0,
+      "drag": 6,
+      "gravity": [
+        0,
+        -0.4
+      ],
+      "inherit": 0.08,
+      "glow": 2.2,
+      "goo": "ichor",
+      "killAtSurface": false,
+      "turbulence": 0.35
+    },
     "auraField": {
       "count": 1,
       "speed": [
@@ -6723,6 +6760,14 @@
         12
       ],
       "sfxMinGap": 0.22
+    },
+    "hotSpotChumTrail": {
+      "emit": "hotSpotChumTrail",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "sfx": null,
+      "haptic": null
     },
     "breach": {
       "emit": "splash",
@@ -7960,6 +8005,24 @@
         }
       ]
     },
+    "seabedBounce": {
+      "emit": "silt",
+      "shake": 0.12,
+      "hitstop": 0,
+      "glow": 0.06,
+      "ripple": {
+        "strength": 1.1,
+        "radius": 11
+      },
+      "sfx": "seabedFlop",
+      "sfxMinGap": 0.05,
+      "haptic": [
+        {
+          "duration": 40,
+          "magnitude": 0.3
+        }
+      ]
+    },
     "whaleArrive": {
       "emit": null,
       "shake": 0.22,
@@ -8251,11 +8314,43 @@
     "rollDamp": 0.5,
     "craneRelax": 3,
     "tailKick": 9,
-    "bounce": 0.26,
     "settleDrag": 0.86,
     "settleTurn": 14,
     "settle": 2.5,
     "fadeIn": 0.9,
+    "flop": {
+      "enabled": true,
+      "limpDelay": 0.45,
+      "clock": 0.75,
+      "stiffness": 7,
+      "damping": 2.6,
+      "tipLooseness": 0.9,
+      "maxLag": 1.7,
+      "softness": 0.5,
+      "snapAngle": 3,
+      "sag": 16,
+      "sagBias": 0.3,
+      "flow": 1.4,
+      "tipBias": 0.5,
+      "blow": 9,
+      "tailLooseness": 2.4,
+      "spinMul": 1.5,
+      "rollMul": 1.3,
+      "wobble": 0.22,
+      "wobbleHz": 0.55,
+      "wobbleDamp": 0.35,
+      "restitution": 0.5,
+      "bounceDecay": 0.75,
+      "bounceMin": 2,
+      "maxBounces": 5,
+      "bounceDrag": 0.985,
+      "skid": 0.45,
+      "spinKick": 3.2,
+      "rollKick": 2.4,
+      "tailKick": 7,
+      "limbKick": 7,
+      "settleMax": 6
+    },
     "flip": {
       "enabled": true,
       "rate": 8.5,
@@ -8306,9 +8401,7 @@
     "enabled": true,
     "max": 6,
     "stones": [
-      "headstone",
-      "plaque",
-      "tomb"
+      "headstone"
     ],
     "scale": 3,
     "z": -3.2,
@@ -8318,6 +8411,34 @@
     "faceHeight": 0.44,
     "faceRise": 0.12,
     "faceLift": 0.02,
+    "faces": {
+      "headstone": {
+        "scale": 1,
+        "width": 0.94,
+        "height": 0.74,
+        "rise": -0.07,
+        "nameLines": 2,
+        "namePx": 0.34,
+        "baseline": 0.3,
+        "causeScale": 0.34
+      },
+      "plaque": {
+        "scale": 2,
+        "width": 0.74,
+        "height": 0.5,
+        "rise": 0.1,
+        "namePx": 0.2,
+        "baseline": 0.3
+      },
+      "tomb": {
+        "scale": 1.45,
+        "width": 0.5,
+        "height": 0.52,
+        "rise": 0.16,
+        "namePx": 0.2,
+        "baseline": 0.28
+      }
+    },
     "label": {
       "enabled": true,
       "radius": 7,
@@ -8329,6 +8450,26 @@
       "nameSize": 17,
       "causeSize": 12,
       "color": 14275268
+    },
+    "beam": {
+      "enabled": true,
+      "width": 1.7,
+      "span": 9,
+      "time": 2,
+      "strength": 1.05,
+      "scale": 6.5,
+      "crawl": 0.45,
+      "tilt": 0.35,
+      "floor": 0.18,
+      "wisp": 0.75,
+      "wispScale": 0.55,
+      "wispSpeed": 0.35,
+      "shaft": true,
+      "shaftStrength": 0.5,
+      "shaftWidth": 1.7,
+      "shaftReach": 26,
+      "color": 12577279,
+      "reversed": true
     },
     "drop": {
       "height": 14,
@@ -8342,7 +8483,9 @@
       "siltSpread": 0.6,
       "siltSpeed": 1.15,
       "etchDelay": 0.25,
-      "etchTime": 1.4
+      "etchTime": 1.4,
+      "glanceDelay": 0.05,
+      "glanceTail": 0.45
     },
     "etch": {
       "font": "'Cinzel', Georgia, serif",
@@ -8354,10 +8497,14 @@
       "causeScale": 0.42,
       "causeWeight": 400,
       "lineGap": 1.35,
+      "causeLines": 3,
+      "leadLines": 2,
+      "causeLineGap": 1.15,
       "lead": "taken by",
       "leadAlpha": 0.72,
       "depth": 0.006,
       "ink": 1709844,
+      "inkAlpha": 0.88,
       "lip": 14208960,
       "lipAlpha": 0.55,
       "shadow": 0,
@@ -8460,6 +8607,13 @@
     "hit": {
       "amplitude": 0.66,
       "duration": 0.2
+    },
+    "lod": {
+      "enabled": true,
+      "tinyRadius": 0.6,
+      "tinyStride": 3,
+      "smallRadius": 2.5,
+      "smallStride": 2
     },
     "spring": {
       "enabled": true,
@@ -9392,6 +9546,20 @@
         "/sfx/Seal_56.mp3",
         "/sfx/Seal_48.mp3"
       ]
+    },
+    "seabedFlop": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        150,
+        52
+      ],
+      "decay": 0.4,
+      "gain": 0.26,
+      "noise": 0.92,
+      "filter": 700,
+      "pitchVary": 0.12,
+      "filterVary": 0.2
     },
     "strike": {
       "srcs": [
@@ -11147,6 +11315,7 @@
       },
       "orcaFriendCalf": {
         "pigment": 1,
+        "pigmentGlow": 0,
         "scale": 0.04,
         "contrast": 2.9,
         "strength": 1.9,
@@ -11209,8 +11378,9 @@
       },
       "whale": {
         "pigment": 0.08,
-        "pigmentGlow": 0,
+        "pigmentGlow": 0.22,
         "scale": 0.05,
+        "strength": 2.78,
         "flow": 0.88,
         "pattern": "veins",
         "colorA": 0,
@@ -11227,6 +11397,27 @@
         "colorB": 5066061,
         "colorC": 7237230,
         "shellColor": 1118738
+      },
+      "bossBoat": {
+        "pigmentGlow": 0,
+        "scale": 0.07,
+        "strength": 2.88,
+        "pattern": "lattice",
+        "colorA": 16777215,
+        "colorB": 5526612,
+        "colorC": 10395294,
+        "shellColor": 0
+      },
+      "musicNote": {
+        "pigment": 0.96,
+        "pigmentGlow": 0,
+        "scale": 0.06,
+        "strength": 2.12,
+        "flow": 1.88,
+        "colorA": 16777215,
+        "colorB": 9868950,
+        "colorC": 199548,
+        "shellColor": 0
       }
     }
   },
@@ -11345,6 +11536,10 @@
     "pool": 12,
     "goo": true,
     "chum": {
+      "trail": {
+        "enabled": true,
+        "every": 0.015
+      },
       "tint": 16769146,
       "flashMul": 2.2
     },
@@ -12078,7 +12273,7 @@
     "healthLow": 0.2,
     "boostEmpty": 0.02,
     "arrow": {
-      "gap": 2,
+      "hug": 26,
       "size": 28,
       "color": 10478591,
       "alpha": 0.9,
@@ -13033,7 +13228,7 @@
     }
   },
   "render": {
-    "pixelRatio": 1.5
+    "pixelRatio": 2.25
   },
   "bloom": {
     "enabled": true,
@@ -13512,6 +13707,24 @@
         "high": 1,
         "soft": 0,
         "range": 1
+      },
+      "bossBarrel": {
+        "strength": 1,
+        "steps": 5,
+        "gamma": 1,
+        "low": 0.28,
+        "high": 1.21,
+        "soft": 0.1,
+        "range": 1.25
+      },
+      "bossBoat": {
+        "strength": 1,
+        "steps": 4,
+        "gamma": 1,
+        "low": 0.51,
+        "high": 1,
+        "soft": 0,
+        "range": 1
       }
     }
   },
@@ -13560,5 +13773,5 @@
       "msPerPx": 0.9
     }
   },
-  "_savedAt": 1787335761318
+  "_savedAt": 1787359422150
 }

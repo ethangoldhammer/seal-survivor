@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { player } from '../entities/player.js';
+import { stateForSpeed } from './animation.js';
 import { feedback } from './feedback.js';
 import { setSfxRateScale, openBusFilter } from './audio.js';
 import { setMusicRateScale } from './music.js';
@@ -25,6 +26,21 @@ import { setAmbientRateScale } from './ambient.js';
 //      fins and head go limp because main.js stops feeding the rig an aim (see
 //      the death branch there); the tail keeps its spring, so it trails and
 //      flops off the body's own motion for free.
+//
+//      AND THE SKELETON GOES WITH IT. A beat after the killing blow the mixer
+//      is cut off entirely (anim.setLimp) and the seal's five ragdoll chains —
+//      both front flippers, both rear flippers, the neck — are woken for the
+//      first and only time in the run. Gravity and the water going past are fed
+//      into them every frame, so the limbs hang and stream instead of holding a
+//      pose. Same machinery, same reasoning and mostly the same numbers as
+//      systems/bossRagdoll.js, which does this for a dead boss; CONFIG.death
+//      .flop carries the seal's copy.
+//
+//      THE SEABED IS NOT THE END OF IT EITHER. The body bounces — restitution
+//      spent contact by contact, a skid and a tumble kick off each one, a shove
+//      into the limbs and the tail, and its own lighter piece of feedback every
+//      time it comes down. The score card waits for the body to be genuinely
+//      DOWN rather than for a fixed pause from the first contact.
 //   3. THE SOUND. The audio rate follows the time scale — the music drags down
 //      like a tape stop and one-shots play back long and low with it. Slow
 //      motion you can only see is half the effect.
@@ -39,7 +55,10 @@ import { setAmbientRateScale } from './ambient.js';
 // muffling and the push-in back to normal, and only then starts it.
 
 const TAU = Math.PI * 2;
+const DOWN = new THREE.Vector3(0, -1, 0);
 const _tailDir = new THREE.Vector3();
+const _blow = new THREE.Vector3();
+const _flow = new THREE.Vector3();
 const _rollQ = new THREE.Quaternion();
 const _craneQ = new THREE.Quaternion();
 const _yAxis = new THREE.Vector3(0, 1, 0); // the art's forward — the roll axis
@@ -89,6 +108,28 @@ let restartFrom = { scale: 1, zoom: 1, weight: 0 };
 // grab the track that has been sitting at pitch and yank it down to `minRate`
 // again before letting it go.
 let musicReleased = false;
+// --- the flop ---------------------------------------------------------------
+// Contacts with the seabed so far, and whether the body is down for good. The
+// settle pause counts from `resting`, not from the first contact: a corpse
+// still pattering across the sand when the score card fades up is the whole
+// effect happening behind a menu.
+let bounces = 0;
+let resting = false;
+// Wall-clock since the FIRST contact, against CONFIG.death.flop.settleMax. The
+// ceiling that guarantees the card arrives even if the numbers are tuned into a
+// body that never stops.
+let bounceClock = 0;
+// The skeleton. 'waiting' until limpDelay is up, then 'live' if this body
+// actually had chains to cut loose and 'none' if it did not — a model with no
+// rig (or a Node harness with no model at all) must not be asked again every
+// frame for the rest of the descent.
+let limpState = 'waiting';
+// Dilated seconds since death, driving the loll — and the last loll angle
+// written, since it is applied to rotation.z as a DELTA. That angle is
+// accumulated by the tumble, so a sine written straight onto it would be the
+// two of them fighting over one number.
+let flopClock = 0;
+let lollPrev = 0;
 
 function smoothstep(t) {
   const x = Math.max(0, Math.min(1, t));
@@ -97,6 +138,34 @@ function smoothstep(t) {
 
 function cfg() {
   return CONFIG.death ?? {};
+}
+
+function flop() {
+  return CONFIG.death?.flop ?? {};
+}
+
+// The spring the loose chains solve with while the body is limp. Rebuilt only
+// when the tuner has actually moved one of them — this is read once a frame and
+// the values are global, so the whole thing is one shared object between
+// rebuilds. Same arrangement as limpSpring in systems/bossRagdoll.js and
+// springCfgFor in systems/animation.js.
+let limpCfg = null;
+let limpStamp = '';
+function limpSpring() {
+  const f = flop();
+  const stamp = `${f.stiffness}|${f.damping}|${f.tipLooseness}|${f.maxLag}|${f.softness}|${f.snapAngle}`;
+  if (limpStamp !== stamp) {
+    limpStamp = stamp;
+    limpCfg = {
+      stiffness: f.stiffness ?? 7,
+      damping: f.damping ?? 2.6,
+      tipLooseness: Math.min(0.98, f.tipLooseness ?? 0.9),
+      maxLag: f.maxLag ?? 1.7,
+      softness: f.softness ?? 0.5,
+      snapAngle: f.snapAngle ?? 3.0,
+    };
+  }
+  return limpCfg;
 }
 
 // Where the body comes to rest. The same hitRadius clampToArena uses, so the
@@ -121,8 +190,15 @@ export function startDeathDive(finish) {
   settleClock = 0;
   swayClock = 0;
   musicReleased = false;
+  bounces = 0;
+  resting = false;
+  bounceClock = 0;
+  limpState = 'waiting';
+  flopClock = 0;
+  lollPrev = 0;
 
   const c = cfg();
+  const f = flop();
   // Whatever the seal was doing carries on, damped — a death mid-dash should
   // still travel. The upward kick is what sells the limpness: the body rises
   // a moment against its own momentum before the water takes it down.
@@ -149,8 +225,11 @@ export function startDeathDive(finish) {
   const speed = player.velocity.length();
   const heat = Math.min(1, speed / Math.max(1, player.stats?.maxSpeed ?? 30));
   const dir = Math.random() < 0.5 ? -1 : 1;
-  spin = dir * (c.spin ?? 2.4) * (0.35 + heat);
-  roll = dir * (c.bodyRoll ?? 1.6) * (0.35 + heat);
+  // The multipliers are the flop's, and they are multipliers rather than new
+  // absolutes so the two sliders that were already tuned still mean what they
+  // meant — this loosens what is there instead of replacing it.
+  spin = dir * (c.spin ?? 2.4) * (0.35 + heat) * (f.spinMul ?? 1);
+  roll = dir * (c.bodyRoll ?? 1.6) * (0.35 + heat) * (f.rollMul ?? 1);
 
   // One shove into the tail spring on the way out. It has nothing driving it
   // any more — no swim cycle, no aim — so without a kick to carry it starts
@@ -271,9 +350,17 @@ export function updateDeathDive(rawDt) {
     deathState.camWeight = smoothstep(elapsed / Math.max(0.01, cam.frameTime ?? 1.2));
   }
 
+  // The skeleton, on its own clock — and ahead of the 'done' return, so the
+  // limbs go on settling under the score card rather than freezing on the frame
+  // it appears. main.js hands the controller over for the whole dive: see the
+  // note beside its own anim.update call.
+  updateRagdoll(rawDt, rawDt * scale);
+
   if (deathState.phase === 'done') return scale;
 
   const dt = rawDt * scale;
+  flopClock += dt;
+  const f = flop();
   const rest = floorY();
   const pos = player.mesh.position;
 
@@ -303,35 +390,64 @@ export function updateDeathDive(rawDt) {
       land(Math.abs(vel.y));
     }
   } else {
-    // Settling. The bounce off the seabed plays out under heavy damping, and
-    // the clock that ends the run is the wall one — see the note at the top.
-    settleClock += rawDt;
+    // Settling — which is now several contacts rather than one. The clock that
+    // ends the run is still the wall one; see the note at the top.
+    bounceClock += rawDt;
+    // AND IT COUNTS FROM THE MOMENT THE BODY IS DOWN, not from the first
+    // contact. A pause started at the landing is spent watching the bouncing it
+    // was meant to follow, and the card then fades up over a corpse still
+    // moving. `settleMax` below is the ceiling that keeps this honest.
+    if (resting) settleClock += rawDt;
     // Gravity still applies, or the bounce off the floor would carry the body
     // up and leave it hanging there — a corpse that has to come to rest has to
     // come back DOWN first. Same depth-scaled gravity as the fall, so a body
     // that arrived fast doesn't hang at the top of its bounce.
     vel.y -= (c.sinkGravity ?? 24) * sinkScale * dt;
-    vel.multiplyScalar(Math.pow(c.settleDrag ?? 0.86, dt * 60));
+    // THE WATER BETWEEN CONTACTS, THE SAND ONCE IT IS DOWN. `settleDrag` is
+    // 0.86 per 1/60s, which over a single dilated second is a factor of 1e-4:
+    // it eats a bounce whole, and it is the reason the old restitution had to
+    // stay tiny to read as anything at all. It still ends the movement once the
+    // body is resting, which is what it is good at.
+    vel.multiplyScalar(Math.pow(resting ? (c.settleDrag ?? 0.86) : (f.bounceDrag ?? 0.985), dt * 60));
     pos.x += vel.x * dt;
     pos.y += vel.y * dt;
+    // The walls apply down here too now: a skid off a contact can carry the
+    // body into one, and a corpse halfway inside a boulder reads as a bug
+    // rather than as a joke.
+    const radius = player.stats?.hitRadius ?? 1;
+    if (pos.x < bounds.left + radius) { pos.x = bounds.left + radius; vel.x = Math.abs(vel.x) * 0.4; }
+    if (pos.x > bounds.right - radius) { pos.x = bounds.right - radius; vel.x = -Math.abs(vel.x) * 0.4; }
     if (pos.y <= rest) {
       pos.y = rest;
-      // Every subsequent contact is softer than the last, so a fast landing
-      // patters to a stop instead of one bounce and a dead stop.
-      vel.y = Math.abs(vel.y) * (c.bounce ?? 0.22) * 0.5;
-      // Below this it's a hop you can't see, and letting it run leaves the
-      // body resting a hair off the floor when the card appears.
-      if (vel.y < 1.5) vel.y = 0;
+      // ONCE IT IS DOWN, THE FLOOR IS JUST THE FLOOR. Gravity still runs while
+      // the body lies there — it has to, or a corpse would hang at the top of
+      // its last bounce — so without this every frame of the settle pause is
+      // another contact: another silt puff, another thud, another spin kick.
+      // Count the EDGE, not the frames the body spends touching the sand.
+      if (resting) { if (vel.y < 0) vel.y = 0; }
+      else contact(Math.abs(vel.y));
     }
-    // Roll the body flat. The art's forward is +Y, so a seal lying on the
-    // floor is a quarter turn either way — whichever it's already nearest,
-    // so it slumps the short way instead of rotating through upright.
-    const z = player.mesh.rotation.z;
-    const quarter = Math.PI / 2;
-    const target = Math.round((z - quarter) / Math.PI) * Math.PI + quarter;
-    player.mesh.rotation.z += (target - z) * (1 - Math.exp(-(c.settleTurn ?? 5) * dt));
+    // ...and the ceiling. Wall-clock, counted from the first contact: whatever
+    // the restitution is tuned to, the body is put down after this and the
+    // pause that ends the run starts.
+    if (!resting && bounceClock >= (f.settleMax ?? 6)) {
+      resting = true;
+      vel.y = 0;
+    }
+    // Roll the body flat, ONCE IT IS DOWN. The art's forward is +Y, so a seal
+    // lying on the floor is a quarter turn either way — whichever it's already
+    // nearest, so it slumps the short way instead of rotating through upright.
+    // Gated on `resting` because a body still bouncing is meant to be tumbling:
+    // running this through the bounces turns the flop into a corpse gliding
+    // politely into position between hops.
+    if (resting) {
+      const z = player.mesh.rotation.z;
+      const quarter = Math.PI / 2;
+      const target = Math.round((z - quarter) / Math.PI) * Math.PI + quarter;
+      player.mesh.rotation.z += (target - z) * (1 - Math.exp(-(c.settleTurn ?? 5) * dt));
+    }
 
-    if (settleClock >= (c.settle ?? 0.5)) {
+    if (resting && settleClock >= (c.settle ?? 0.5)) {
       deathState.phase = 'done';
       // The track is still playing — it isn't stopped by the death any more —
       // so hand its rate back before the card appears, or it sits at `minRate`
@@ -347,7 +463,23 @@ export function updateDeathDive(rawDt) {
   // Tumble and barrel roll, both damping out. The roll is composed on its own
   // rather than through updatePlayer's transform: the crane and the wind-up
   // shudder are poses a live seal holds, and a dead one holds nothing.
-  if (deathState.phase === 'sink') player.mesh.rotation.z += spin * dt;
+  //
+  // The tumble carries on through the BOUNCING as well as the fall — each
+  // contact kicks it (see contact()), and a body that stopped turning the
+  // moment it first touched the sand would take those kicks and sit on them.
+  if (deathState.phase === 'sink' || !resting) player.mesh.rotation.z += spin * dt;
+
+  // THE LOLL. A limp body does not turn at one rate: it swings about the axis
+  // it is falling along and the swing dies out. Applied as the DELTA of a
+  // decaying sine rather than as an angle, because rotation.z is accumulated by
+  // the tumble above and two writers on one number is two writers on one
+  // number. `lollPrev` is updated even on the frames the delta is not applied,
+  // so coming to rest cannot leave a step in the angle.
+  const lollAmp = (f.wobble ?? 0) * Math.exp(-(f.wobbleDamp ?? 0.35) * flopClock);
+  const loll = lollAmp * Math.sin(flopClock * (f.wobbleHz ?? 0.55) * TAU);
+  if (!resting) player.mesh.rotation.z += loll - lollPrev;
+  lollPrev = loll;
+
   spin *= Math.exp(-(c.spinDamp ?? 0.7) * dt);
   roll *= Math.exp(-(c.rollDamp ?? 0.5) * dt);
   player.rollAngle += roll * dt;
@@ -370,24 +502,157 @@ export function updateDeathDive(rawDt) {
 }
 
 function land(impactSpeed) {
-  const c = cfg();
   deathState.phase = 'settle';
   settleClock = 0;
-  vel.x *= 0.3;
-  vel.y = impactSpeed * (c.bounce ?? 0.22);
-  spin *= 0.35;
+  bounceClock = 0;
+  contact(impactSpeed);
+}
 
-  // The silt puff, scaled by how hard it arrived — a corpse that fell from
-  // the surface lands heavier than one that died a metre off the floor.
-  feedback('seabedImpact', {
+/**
+ * ONE CONTACT WITH THE SEABED — the arrival and every bounce after it, through
+ * the same code, because they are the same event with a different amount of
+ * energy left in it.
+ *
+ * Everything here scales by how hard this particular contact was, so a corpse
+ * that fell from the surface arrives heavy and leaves in a heap while one that
+ * died a metre off the floor barely stirs the silt.
+ *
+ * @param impactSpeed downward speed at the moment of contact, world units/s.
+ */
+function contact(impactSpeed) {
+  const c = cfg();
+  const f = flop();
+  const first = bounces === 0;
+  bounces++;
+
+  // Restitution, spent contact by contact. The decay is what turns a bounce
+  // into a patter: without it a body either bounces forever at one height or
+  // stops dead on the second one.
+  const decay = Math.pow(f.bounceDecay ?? 0.75, bounces - 1);
+  const back = impactSpeed * (f.restitution ?? 0.5) * decay;
+  // Down for good — out of bounces, or the next one is a hop nobody can see.
+  // Letting a sub-visible hop run leaves the body resting a hair off the floor
+  // when the card appears, which was true of the old settle too.
+  const spent = f.enabled === false
+    || bounces > (f.maxBounces ?? 5)
+    || back < (f.bounceMin ?? 2);
+  vel.y = spent ? 0 : back;
+  if (spent) resting = true;
+
+  // How hard, as a fraction of the fastest this body could have been going. The
+  // one number every kick below is scaled by.
+  const hard = Math.min(1.5, impactSpeed / Math.max(1, (c.sinkSpeedMax ?? 20) * sinkScale));
+  const kick = spent ? 0.3 : 1;
+
+  // THE SKID. Along whatever way it was already drifting, so the body scoots
+  // rather than hopping on the spot — and it keeps most of the drift it had, or
+  // a contact would read as the sand grabbing it.
+  const way = Math.sign(vel.x) || (Math.random() < 0.5 ? -1 : 1);
+  vel.x = vel.x * 0.6 + way * impactSpeed * (f.skid ?? 0.45) * kick;
+
+  // THE TUMBLE, alternating, so the body rocks over its contacts instead of
+  // winding up in one direction like a wheel.
+  const turn = bounces % 2 ? 1 : -1;
+  spin += turn * (f.spinKick ?? 3.2) * hard * kick;
+  roll += turn * (f.rollKick ?? 2.4) * hard * kick;
+
+  // THE LIMBS. The floor pushing back up through them — the tail through the
+  // aim rig's own spring, which is the one chain that keeps solving through the
+  // dive, and everything else through the chains the ragdoll woke. Both are
+  // silent no-ops on a body that has no rig, so neither needs a guard.
+  _tailDir.set(0, 1, 0);
+  player.aimRig?.tailImpulse(_tailDir, (f.tailKick ?? 7) * (0.6 + hard));
+  if (limpState === 'live') {
+    _blow.set(0, 1, 0);
+    player.anim?.impulse?.(_blow, (f.limbKick ?? 7) * (0.6 + hard), f.tipBias ?? 0.5);
+  }
+
+  // AND THE FX, EVERY TIME. The first contact is the body ARRIVING and keeps
+  // the event it always had; the rest are it failing to stay put, and get their
+  // own lighter one — pitched up and shortened a little further on each, so a
+  // run of them reads as one thing losing energy rather than as four thuds.
+  const at = {
     x: player.mesh.position.x,
     y: player.mesh.position.y,
     scale: Math.min(1.6, 0.5 + impactSpeed / Math.max(1, c.sinkSpeedMax ?? 20)),
-  });
-  // The tail catches up with the body a beat after it stops, which is what
-  // makes the landing read as weight rather than as a stop.
-  _tailDir.set(0, 1, 0);
-  player.aimRig?.tailImpulse(_tailDir, (c.tailKick ?? 9) * 0.6);
+  };
+  if (first) {
+    feedback('seabedImpact', at);
+  } else {
+    at.scale *= decay;
+    at.sfxOpts = { pitch: 1 + 0.12 * (bounces - 1), decayMul: decay };
+    feedback('seabedBounce', at);
+  }
+}
+
+/**
+ * THE SKELETON, on a clock of its own.
+ *
+ * Three things, in order: cut the chains loose once the delay is up, feed them
+ * gravity and the water going past, and advance the controller. That last call
+ * is normally main.js's — it hands it over for the length of the dive (see the
+ * note beside it), because the mix between the wall clock and the water's is
+ * the whole reason this exists and main.js has only one of the two.
+ *
+ * At CONFIG.death.slowMo the water runs at a ninth of real time, and a chain
+ * solved on that clock has barely moved by the time the body is on the seabed —
+ * the ragdoll would be perfect, and absent from every death anyone watched.
+ * Straight wall-clock is the other failure: limbs whipping at full speed under
+ * a body falling in slow motion. `flop.clock` is the mix, and the same argument
+ * is spelled out at length in systems/bossRagdoll.js.
+ *
+ * @param rawDt     wall seconds.
+ * @param dilatedDt the water's seconds.
+ */
+function updateRagdoll(rawDt, dilatedDt) {
+  const anim = player.anim;
+  if (!anim) return;
+  const f = flop();
+  const mix = Math.max(0, Math.min(1, f.clock ?? 0.75));
+  const rdt = dilatedDt + (rawDt - dilatedDt) * mix;
+
+  if (limpState === 'waiting' && f.enabled !== false && elapsed >= (f.limpDelay ?? 0.45)) {
+    // setLimp freezes the pose the seal is holding RIGHT NOW as the only thing
+    // its springs are pulled back toward, and stops the mixer. The delay is so
+    // that pose is the death clip's slump rather than the stroke it was
+    // mid-way through when it was killed.
+    //
+    // It returns false for a body with no chains to go limp with — which is
+    // every model that isn't the seal, and the seal itself in any headless
+    // harness, where no GLB is ever loaded. Recorded rather than retried: the
+    // dive still runs, it simply has no skeleton in it.
+    limpState = anim.setLimp?.(limpSpring()) ? 'live' : 'none';
+    if (limpState === 'live') {
+      // The blow that killed it, into the chains, along the way the body is
+      // travelling — one shove, on the frame they come loose.
+      const sp = vel.length();
+      if (sp > 1e-3) {
+        _blow.set(vel.x / sp, vel.y / sp, 0);
+        anim.impulse(_blow, f.blow ?? 9, f.tipBias ?? 0.5);
+      }
+    }
+  }
+
+  if (limpState === 'live') {
+    // GRAVITY, every frame, as an impulse rather than as a force in the solver:
+    // the spring only knows about velocities, and this is the whole of what a
+    // hanging chain needs. Tips first — a chain that sags evenly reads as a
+    // banana and one that sags hardest at the far end reads as weight.
+    anim.impulse(DOWN, (f.sag ?? 16) * rdt, f.sagBias ?? 0.3);
+    // ...and the water going past, which is what makes the limbs stream while
+    // the body is falling and let go when it stops. The strength IS the body's
+    // speed, so this costs nothing to switch off — it does that itself.
+    const sp = vel.length();
+    if (sp > 0.05) {
+      _flow.set(-vel.x / sp, -vel.y / sp, 0);
+      anim.impulse(_flow, (f.flow ?? 1.4) * sp * rdt, f.tipBias ?? 0.5);
+    }
+  }
+
+  // State and hit are ignored while limp — see setLimp in systems/animation.js.
+  // Before it goes limp this is what advances the death clip, which is the same
+  // call main.js was making, with the same state.
+  anim.update(rdt, stateForSpeed(0, player.aboveSurface), false);
 }
 
 /**
@@ -429,6 +694,12 @@ export function beginRestartTransition(onReady) {
 // Back to a live clock and a live mix. Called from startGame, so a run that's
 // restarted from the score screen doesn't inherit the last one's dilation.
 export function resetDeathDive() {
+  // THE SKELETON GOES BACK FIRST. The controller is reused across runs, and a
+  // body left limp would ignore the mixer for the whole of the next one — the
+  // same leak systems/bossRagdoll.js guards against on a pooled boss. Handing it
+  // back also puts the `asleep` chains (FLOP_ROLE) back to sleep, so the next
+  // seal swims with the flippers it has always had.
+  player.anim?.setLimp?.(null);
   deathState.active = false;
   deathState.phase = 'none';
   deathState.elapsed = 0;
@@ -445,6 +716,12 @@ export function resetDeathDive() {
   restartClock = 0;
   onFinish = null;
   musicReleased = false;
+  bounces = 0;
+  resting = false;
+  bounceClock = 0;
+  limpState = 'waiting';
+  flopClock = 0;
+  lollPrev = 0;
   setMusicRateScale(1, 0);
   setSfxRateScale(1);
   setAmbientRateScale(1, 0);

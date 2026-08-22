@@ -207,6 +207,27 @@ section('The role sheet');
   // every role rule — put it last and it would win over all fifteen of them.
   check('the base font rule comes before every role', css.indexOf('.sv-ui *') < iScore);
 
+  // THE PHONE FACTOR, on the coaching voice and on nothing else. A first-run
+  // tip shrinks on a small screen (--sv-tipScale, set per breakpoint in
+  // ui/ui.js); every other role keeps the size the Text panel says at every
+  // width. Both halves are asserted: the term arriving on the wrong roles
+  // would quietly shrink the warnings and the score on the screen where they
+  // matter most, and there is no width in this harness at which that shows up.
+  //
+  // Named off the role list rather than hardcoded, so a second `compact` role
+  // is covered the day somebody adds one.
+  {
+    const compact = TEXT_ROLES.filter((r) => r.compact);
+    const rule = (r) => css.split('\n').find((l) => l.startsWith(`${r.selector} {`)) ?? '';
+    check('the coaching voice is the compact one', compact.some((r) => r.key === 'coach'),
+      compact.map((r) => r.key).join(', ') || '(none)');
+    check('...and every compact role carries the small-screen factor',
+      compact.every((r) => rule(r).includes('var(--sv-tipScale, 1)')),
+      compact.map((r) => rule(r)).join(' | '));
+    const leaked = TEXT_ROLES.filter((r) => !r.compact && rule(r).includes('--sv-tipScale'));
+    check('...and no other role does', leaked.length === 0, leaked.map((r) => r.key).join(', '));
+  }
+
   // TWO WRITERS. The chain banner's colour is inline, per frame.
   const chainRule = css.split('\n').find((l) => l.startsWith('.sv-chain {'));
   check('the chain banner emits no colour of its own',

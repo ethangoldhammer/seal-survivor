@@ -13431,6 +13431,15 @@ export const CONFIG = {
       // feel through the floor rather than the crack of an impact.
       seabedImpact: { emit: 'silt', shake: 0.35, hitstop: 0, glow: 0.15, ripple: { strength: 2.6, radius: 16 },
                       sfx: 'seabedThud', haptic: [{ duration: 90, magnitude: 0.5 }] },
+      // EVERY CONTACT AFTER THE FIRST. The body bounces now (CONFIG.death.flop),
+      // and a corpse that pattered across the seabed in silence read as the sand
+      // being made of glass. Its own event rather than a quieter `seabedImpact`
+      // because it is a different sound and a different weight: the first
+      // landing is the body ARRIVING, and these are it not staying put. The
+      // caller scales all of it by how hard the contact was and pitches the
+      // sound up a little each time — see bounceOff in systems/deathDive.js.
+      seabedBounce: { emit: 'silt', shake: 0.12, hitstop: 0, glow: 0.06, ripple: { strength: 1.1, radius: 11 },
+                      sfx: 'seabedFlop', sfxMinGap: 0.05, haptic: [{ duration: 40, magnitude: 0.3 }] },
 
       // --- THE BOWHEAD SWEEP (systems/whale.js) -----------------------------
       // A long, low announcement rather than a jolt. The whale is not a threat
@@ -14210,12 +14219,12 @@ export const CONFIG = {
       tailKick: 9, // shove into the tail spring, so the limp tail has something to trail
 
       // --- the landing ---------------------------------------------------------
-      // Restitution off the seabed. Low, and it has to stay low: the settle
-      // pause below is wall clock, and at these time scales it buys about a
-      // second of dilated time — anything springier than this is still in the
-      // air when the score card goes up.
-      bounce: 0.08,
-      settleDrag: 0.86, // velocity kept per 1/60s once it's down
+      // RESTITUTION LIVES IN `flop` NOW — see the note there for why it had to
+      // change its name to change its value. `bounce` is gone from this file
+      // rather than left at a value nothing reads: pruneUnknownKeys drops it
+      // from every saved snapshot on the next load, with one console line, and
+      // a number still sitting here would read as live.
+      settleDrag: 0.86, // velocity kept per 1/60s once the body is DOWN
       // How fast it rolls flat, e-folds per second. Fast, because the pause
       // below is dilated time as far as this is concerned: it has to be SETTLED
       // and lying there, not still turning as the card fades in over it.
@@ -14226,6 +14235,109 @@ export const CONFIG = {
       // scene it just spent four seconds staging.
       settle: 2.5,
       fadeIn: 0.9, // seconds the score card takes to fade up (see ui.js)
+
+      // --- THE FLOP ------------------------------------------------------------
+      // The block above describes a rigid body with a spin on it. A dead seal is
+      // not one, and this is the rest of the sequence: the SKELETON cut loose so
+      // the flippers and the neck hang and swing off the body's own motion, and
+      // a landing that patters across the seabed instead of arriving once.
+      //
+      // ITS OWN NAMES, deliberately. `bounce`, `spin`, `spinDamp` and
+      // `settleDrag` above are all in every saved imported-tuning.json anyone has
+      // ever made, and saved tuning beats config.js in the merge — a re-defaulted
+      // restitution up there would reach nobody who has ever opened the tuner.
+      // Same move, for the same reason, as `orbit.parallax` -> `orbit.drift`.
+      // Nothing here falls back to the old key: a fallback hands the pinned
+      // number straight back and the change ships half-applied.
+      //
+      // See systems/deathDive.js, which owns all of it.
+      flop: {
+        enabled: true,
+
+        // --- the skeleton ------------------------------------------------------
+        // The seal's ragdoll chains (`springChains` in assets.js) sleep for the
+        // whole run and are woken by nothing but this. WALL-CLOCK seconds after
+        // the killing blow before the mixer is cut off and the pose the seal is
+        // holding at that moment becomes the only thing its springs are pulled
+        // back toward — long enough for the death clip to have started slumping
+        // into it, short enough that the fall is still almost all flop.
+        limpDelay: 0.45,
+        // How much of the WALL clock the springs run on, 0 = the water's dilated
+        // seconds, 1 = real time. The same problem systems/bossRagdoll.js has and
+        // the same answer: at slowMo 0.11 a chain on the water's clock barely
+        // moves through the one part of the sequence it exists for, and at a flat
+        // 1 it is the only thing on screen running at full speed.
+        clock: 0.75,
+        // The spring the loose chains solve with while limp. Looser and laggier
+        // than anything a live animal wears — see CONFIG.animation.spring for
+        // what these mean and CONFIG.boss.ragdoll for the boss's copy.
+        stiffness: 7,
+        damping: 2.6,
+        tipLooseness: 0.9, // the tip of a flipper hangs further behind than its root
+        maxLag: 1.7, // radians a bone may fall behind its frozen pose
+        softness: 0.5,
+        snapAngle: 3.0,
+        // Gravity, fed into the chains every frame as a downward impulse — this
+        // is what makes them HANG rather than merely lag. Tips first, or a chain
+        // that sags evenly reads as a banana.
+        sag: 16,
+        sagBias: 0.3,
+        // ...and the water going past. Strength is the body's own speed, so the
+        // limbs stream while it is falling and settle when it stops.
+        flow: 1.4,
+        tipBias: 0.5,
+        // The killing blow, into the chains, on the frame they come loose.
+        blow: 9,
+        // How much looser the TAIL is than in life while the body is limp. The
+        // tail is the one chain the aim rig keeps solving through the dive (see
+        // systems/aimRig.js), so it cannot use the numbers above — this divides
+        // CONFIG.tail's stiffness and damping and multiplies its permitted lag,
+        // exactly as animation.spring.roleLooseness does for a role.
+        tailLooseness: 2.4,
+
+        // --- the fall ----------------------------------------------------------
+        // On top of `spin` and `bodyRoll` above, which are pinned. A limp body
+        // does not turn at one rate: it lolls.
+        spinMul: 1.5,
+        rollMul: 1.3,
+        // A slow, decaying loll about the view axis, in RADIANS of amplitude —
+        // added as a delta so it rides on top of the tumble rather than fighting
+        // it for ownership of the angle.
+        wobble: 0.22,
+        wobbleHz: 0.55,
+        wobbleDamp: 0.35, // e-folds per second of DILATED time
+
+        // --- the landing -------------------------------------------------------
+        // What `bounce` should have been. Restitution off the seabed, spent by
+        // `bounceDecay` on each successive contact so the body patters to a stop.
+        restitution: 0.5,
+        bounceDecay: 0.75,
+        // Below this rebound speed (world units/s) it is a hop nobody can see,
+        // and the body is down for good.
+        bounceMin: 2,
+        maxBounces: 5,
+        // Drag while it is between contacts. The water, not the sand:
+        // `settleDrag` above is 0.86 per 1/60s, which over one dilated second is
+        // a factor of 1e-4 — it eats a bounce whole, which is exactly why the
+        // restitution up there had to stay tiny to look like anything.
+        bounceDrag: 0.985,
+        // Sideways scoot off each contact, as a fraction of the vertical speed
+        // it arrived with, in the direction it was already drifting. A corpse
+        // that lands square and stops is a box; one that skids is an animal.
+        skid: 0.45,
+        // Rad/s of tumble and barrel roll added by each contact, alternating
+        // direction, scaled by how hard it hit. This is the silly part.
+        spinKick: 3.2,
+        rollKick: 2.4,
+        // Shove into the tail spring and into the loose chains per contact.
+        tailKick: 7,
+        limbKick: 7,
+        // WALL-CLOCK ceiling on the whole settle phase, counted from the first
+        // contact. `settle` above is the pause AFTER the body has come to rest,
+        // and with a bouncing corpse there has to be something that guarantees
+        // the score card arrives even if the body is still ticking over.
+        settleMax: 6,
+      },
 
       // --- THE TURN ------------------------------------------------------------
       // The score card is a slab of glossy black emulsion with a face on each
@@ -14457,7 +14569,42 @@ export const CONFIG = {
         // edge of the stone: there is no ornament on this model to protect, and
         // a name a player has to lean in for is a name they will not read at
         // all during a fight.
-        headstone: { scale: 1, width: 0.88, height: 0.52, rise: 0.11, namePx: 0.26 },
+        // THE WHOLE FRONT. There is no ornament on this model to protect and no
+        // recessed tray to stay inside — it is a plain slab, and the panel it
+        // was given covered about a third of it for no reason except that the
+        // number was inherited from the stones that DO have a frame.
+        //
+        // The height is what actually mattered. A short rect has nothing to
+        // spend on a second line, so stacking the name bought nothing and it
+        // had to stay small; with the full face the name is limited by the
+        // stone's height rather than its width, and a headstone is taller than
+        // it is wide.
+        // ON THE FLAT, and the numbers are measured rather than chosen.
+        //
+        // The model is an arched slab: it curves in over the top fifth and is a
+        // plain rectangle below that. A panel covering the WHOLE front runs the
+        // first line of the name up into the shoulder, where the stone is
+        // narrowing away from it on both sides — the letters fit, and they look
+        // like they were placed by somebody who never saw the stone.
+        //
+        // So the panel is the rectangular face and nothing else. The shoulder
+        // is at 20% of the height, measured off the silhouette by measureArch()
+        // in tools/looks/graves.js (npm run looks:graves prints it); 6% is left
+        // at the foot so the last line is not sitting on the ground. That gives
+        // height 0.74, and a `rise` of -0.07 because rise is measured UP from
+        // the stone's centre and this panel's centre is below it.
+        //
+        // Re-run the look page if the stone is ever re-fitted — the arch is a
+        // property of the mesh, and these two numbers follow it.
+        headstone: {
+          scale: 1, width: 0.94, height: 0.74, rise: -0.07,
+          // Stacked: "FAT" over "TONY" rather than "FAT TONY" across. Roughly
+          // twice the size for the same name — see the note in makeEpitaph.
+          // 1 puts it back on one line; nothing else needs changing.
+          nameLines: 2, namePx: 0.34, baseline: 0.30,
+          // The name is the monument and the death is the footnote under it.
+          causeScale: 0.34,
+    },
         // A slanted slab with a long recessed tray in the top face. Wide and
         // shallow, and sitting above the stone's own centre because the lower
         // half is the base it stands on.
@@ -14515,6 +14662,22 @@ export const CONFIG = {
         // writes over the water is a SYSTEM talking and is warm or cyan and
         // bloomed to say so; this is a thing in the water being read.
         color: 0xd9d2c4,
+    },
+
+      // --- the impact ------------------------------------------------------------
+      impact: {
+        enabled: true,
+        // TWO RADII, because "knocked away" and "destroyed" are different
+        // distances. Inside killRadius the stone lands ON you; out to `radius`
+        // it is a shockwave through the water and you are thrown clear.
+        radius: 22,
+        killRadius: 7,
+        // Fed to applyKnockback, which is the strike's own shove — so 1 here is
+        // a fully charged ram and the falloff takes it down from there. It is
+        // divided by the creature's size inside that function, so a minnow
+        // cartwheels and a megalodon leans.
+        power: 1.4,
+        shake: 1.6,
     },
 
       // --- the beam --------------------------------------------------------------
@@ -14625,6 +14788,18 @@ export const CONFIG = {
         settleHz: 22,   // how fast it rocks
         settleTilt: 0.05, // radians of rock at its widest, before the decay
         settleTime: 0.9,  // wall-clock seconds before the etching starts
+        // --- what the landing does to the water ---------------------------------
+        // A stone the size of a person hitting the seabed at speed is not a
+        // polite event. systems/gravesite.js fires it on the frame of contact,
+        // on the same frame as the silt, so the shove and the cloud are one
+        // impact rather than two effects that happen to be close together.
+        // main.js owns what it actually does — see graveImpact.
+        //
+        // IT SCORES NOTHING. The run is over by the time a stone lands, so
+        // anything credited here would add kills to a finished run and change
+        // the number on a card the player is two seconds from reading.
+
+        // --- the drop ------------------------------------------------------------
         // The silt. Fired as a few bursts spread across the stone's width
         // rather than one at its centre, which reads as a puff coming out from
         // under it. The emitter is CONFIG.emitters.silt — the SAME one the dead
@@ -14678,6 +14853,11 @@ export const CONFIG = {
         // characters — see fitLines in systems/epitaph.js for why it wraps
         // first and shrinks second.
         causeLines: 3,
+        // The lead wraps too. "minced by the propeller of" is twenty-six
+        // characters and does not fit one line on a stone whose name is
+        // dominant — see the note in makeEpitaph, which is where it was found
+        // rendering clipped at both ends.
+        leadLines: 2,
         causeLineGap: 1.15,
         // The sentence the cause lands in. deathCauses.js writes its labels to
         // be dropped into any sentence, and eighteen of them have to land in
@@ -14855,6 +15035,47 @@ export const CONFIG = {
       // disabled without touching the code that triggers it.
       oneShots: { strike: true, bite: true, hit: true, bark: true, celebrate: true, death: true },
       hit: { amplitude: 0.4, duration: 0.22 }, // brief flinch pulse on taking damage
+
+      lod: {
+        // POSE RATE BY SIZE ON SCREEN. See the long note at e.anim.update in
+        // entities/enemies.js for why this exists; the short version is that
+        // the recorded runs lose frame rate with POPULATION at the same rate
+        // on a 1.4-megapixel phone as on a 6.0-megapixel laptop, so the cost
+        // that grows through a run is per-creature and not per-pixel.
+        //
+        // Off restores the old behaviour exactly — every body posed every
+        // frame — which is what to reach for first if something looks like it
+        // is stepping.
+        enabled: true,
+        // Radii in WORLD units, against the arena's 80-unit width, and they
+        // are visual sizes (`def.radius` x the asset's own multiplier from
+        // assets.csv) rather than collision radii — see the note at the call
+        // site for why the multiplier has to be in there.
+        //
+        // BOTH CUTS SIT IN A GAP IN THE ROSTER, which is why these are not
+        // round numbers. Measured at a full house (220 alive, difficulty 12):
+        //
+        //   0.30 - 0.42   204 bodies   every schooling fish in the game
+        //   ---- 0.6 ----               nothing lives here
+        //   0.80 - 1.00    19 bodies   barracuda, sailfish
+        //   1.74 - 2.17     3 bodies   oyster, stingray
+        //   ---- 2.5 ----               nothing lives here
+        //   3.08 - 5.06     7 bodies   turtle, shark, meg, megalodon
+        //
+        // So no species is split across two rates by a threshold that happens
+        // to fall through the middle of it, and a retune moves whole animals
+        // rather than half a school. Re-measure before moving either number:
+        // the gaps are a fact about the current roster, not a law.
+        //
+        // At those cuts a full house poses 204/3 + 9/2 + 7 = about 80 bodies a
+        // frame instead of 220. The saving is in the COUNT, not the depth —
+        // the deepest stride is 3 (20Hz), and it only ever applies to a body
+        // around seventeen pixels across.
+        tinyRadius: 0.6,
+        tinyStride: 3,
+        smallRadius: 2.5,
+        smallStride: 2,
+      },
 
       // Damped-spring secondary motion layered over whatever wrote the pose,
       // for any creature whose asset names a `rig` bone chain. Two jobs:
@@ -16240,6 +16461,12 @@ export const CONFIG = {
       // scale like everything else, so it arrives even lower and longer than
       // this: these numbers describe it at full speed.
       seabedThud: { src: null, type: 'boom',  freq: [110, 34],  decay: 0.85, gain: 0.4,  noise: 0.85, filter: 480, pitchVary: 0.05, filterVary: 0.15 },
+      // The same sand, hit by a body that is no longer arriving — shorter, higher
+      // and quieter than the thud above, with the noise doing even more of the
+      // work. Each successive bounce pitches this further up and shortens it
+      // (`sfxOpts.pitch` / `decayMul` at the call site), so a run of contacts
+      // reads as one thing losing energy rather than as four copies of a thud.
+      seabedFlop: { src: null, type: 'boom',  freq: [150, 52],  decay: 0.4,  gain: 0.26, noise: 0.92, filter: 700, pitchVary: 0.12, filterVary: 0.2 },
       // THE DASH. Note the name: the dash fires the `strike` event (see
       // CONFIG.feedback.strike and the call site in main.js), NOT `boost` —
       // `boost` is the weapon's recoil plume and always has been, despite what
@@ -19961,35 +20188,39 @@ export const CONFIG = {
     // literally zero — a sliver of boost you cannot spend is still empty.
     boostEmpty: 0.02,
 
-    // THE ARROW. Points from just off the seal toward whatever the row named:
-    // the nearest bite in the water, or straight up out of it.
+    // THE ARROW. A mark ON the thing the tip is about, sitting just off it with
+    // its nose in it, on the side the words are on. It is not a pointer from
+    // the seal any more — see the header of ui/callout.js for why that went.
     arrow: {
-      // HOW FAR PAST THE SEAL'S OWN FURNITURE the arrow orbits, in world units.
+      // HOW CLOSE THE GLYPH SITS TO THE SUBJECT, in pixels, centre to centre —
+      // so the nose is about half a glyph nearer than this number.
       //
-      // A GAP RATHER THAN A RADIUS, and world units rather than pixels, because
-      // there are already two things parked above the seal — the health and
-      // oxygen bars at CONFIG.hud.playerBarOffset, and the boost ring — and the
-      // surface arrow points straight up through exactly where they sit. A
-      // fixed pixel radius cannot clear both: it was 95px, which cleared the
-      // bars at their default 2.6 units and landed squarely on them once they
-      // were tuned out to 5.2. Measured past whichever of the two reaches
-      // further, it is correct at every setting of either and at every zoom,
-      // which is the same reason the boost line is measured off the ring.
-      gap: 2,
-      // The glyph itself stays in PIXELS. It is an overlay mark rather than a
-      // thing in the water, and it should read at the same size as the type it
-      // arrived with however far the camera has pulled back.
+      // PIXELS AND NOT WORLD UNITS, unlike everything else parked on an object
+      // in this file, and unlike the gap this replaced (which measured past the
+      // seal's own bars and ring in world units, because it orbited the seal).
+      // This one is about the glyph not overlapping the thing it is marking,
+      // and the glyph is a fixed pixel size — in world units it would be
+      // touching the subject at one zoom and a body-length away at another.
+      //
+      // Under `world.gap` below on purpose: the words stand at that distance,
+      // and the arrow's whole job is to be BETWEEN them and the subject.
+      hug: 26,
+      // The glyph itself stays in PIXELS for the same reason. It is an overlay
+      // mark rather than a thing in the water, and it should read at the same
+      // size as the type it arrived with however far the camera has pulled
+      // back.
       size: 28,
       color: 0x9fe3ff,
       alpha: 0.9,
       glow: 14,
-      // The bob along its own aim, so a stationary arrow still reads as
-      // pushing in a direction.
+      // The bob along its own aim, so a still arrow reads as nudging at the
+      // thing rather than as a decal on the water.
       bobDistance: 9,
       bobSpeed: 2.4,
-      // How fast the arrow swings to a new bearing, as an exponential rate.
-      // A chum arrow re-targets when a nearer pile appears, and a snap would
-      // read as a second arrow rather than as this one changing its mind.
+      // How fast the arrow swings round to a new side, as an exponential rate.
+      // The side it stands on is the side the words are on, and the words flip
+      // above and below their subject as it nears the top of the frame — a
+      // snap would read as a second arrow rather than as this one moving.
       turnRate: 9,
     },
     // THE WORLD TIP — a first-run line standing beside the thing it is about.
@@ -25440,14 +25671,14 @@ function textPanelGroups() {
     section: 'Popups',
     panel: 'text',
     items: [
-      { path: 'callouts.arrow.gap', min: 0, max: 8, step: 0.1, label: 'clearance past the bars/ring (world units)' },
+      { path: 'callouts.arrow.hug', min: 0, max: 80, step: 1, label: 'how close it sits to the thing (px)' },
       { path: 'callouts.arrow.size', min: 8, max: 80, step: 1, label: 'size (px)' },
       { path: 'callouts.arrow.color', type: 'color', label: 'colour' },
       { path: 'callouts.arrow.alpha', min: 0, max: 1, step: 0.05, label: 'opacity' },
       { path: 'callouts.arrow.glow', min: 0, max: 40, step: 1, label: 'glow (px)' },
       { path: 'callouts.arrow.bobDistance', min: 0, max: 40, step: 1, label: 'bob along its aim (px)' },
       { path: 'callouts.arrow.bobSpeed', min: 0, max: 8, step: 0.1, label: 'bob speed' },
-      { path: 'callouts.arrow.turnRate', min: 1, max: 30, step: 0.5, label: 'how fast it swings to a new target' },
+      { path: 'callouts.arrow.turnRate', min: 1, max: 30, step: 0.5, label: 'how fast it swings round its subject' },
     ],
   }, {
     // THE FIRST-RUN TIP BESIDE ITS SUBJECT — where it stands, and how it goes.
@@ -25497,6 +25728,8 @@ for (const [root, presets] of Object.entries({
     "fisherman": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1.8 },
     "walkingCrab": { strength: 1, steps: 2, gamma: 2.4, low: 0.28, high: 1, soft: 0, range: 1 },
     "tuna": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "bossBarrel": { strength: 1, steps: 5, gamma: 1, low: 0.28, high: 1.21, soft: 0.1, range: 1.25 },
+    "bossBoat": { strength: 1, steps: 4, gamma: 1, low: 0.51, high: 1, soft: 0, range: 1 },
   },
   sealShader: {
     "mightyMeg": { strength: 0, size: 0.04, contrast: 3.55 },
@@ -25519,15 +25752,17 @@ for (const [root, presets] of Object.entries({
     "hammerhead": { pigment: 1, scale: 0.07, contrast: 3.35, coverage: 0.45, strength: 1.8, flow: 0.94, pattern: 'blotches', colorA: 0x000000, colorB: 0x3a1778, colorC: 0xe6e6e6, shellColor: 0x1a1919 },
     "bossYacht": { pigment: 1, scale: 0.34, contrast: 1.5, coverage: 0.08, strength: 1.8, flow: 0.48, pattern: 'veins', colorA: 0x00e5ff, colorB: 0x000000, colorC: 0x2f2e2d, shellColor: 0xffffff },
     "orcaFriendCow": { pigment: 1, scale: 0.13, contrast: 1.6, coverage: 0.2, strength: 0.72, flow: 1.22, pattern: 'marble', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x000000 },
-    "orcaFriendCalf": { pigment: 1, scale: 0.04, contrast: 2.9, coverage: 0.45, strength: 1.9, flow: 1.54, pattern: 'net', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x3d3d3d },
+    "orcaFriendCalf": { pigment: 1, pigmentGlow: 0, scale: 0.04, contrast: 2.9, coverage: 0.45, strength: 1.9, flow: 1.54, pattern: 'net', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x3d3d3d },
     "bakalarBoat": { pigment: 1, scale: 0.1, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.3, pattern: 'lattice', colorA: 0xff0026, colorB: 0x7b2dff, colorC: 0xffd166, shellColor: 0xff5a1e },
     "boat": { pigment: 1, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.24, pattern: 'veins', colorA: 0x000000, colorB: 0x8f8f8f, colorC: 0x000000, shellColor: 0xababab },
     "clownFish": { pigment: 1, scale: 0.23, contrast: 3.45, coverage: 0.42, strength: 1.8, flow: 1.08, pattern: 'speckle', colorA: 0x000000, colorB: 0xffffff, colorC: 0xeb5322, shellColor: 0xffffff },
     "barracuda": { pigment: 0.88, pigmentGlow: 0, scale: 0.04, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.28, pattern: 'flow', colorA: 0xffffff, colorB: 0x000000, colorC: 0x949494, shellColor: 0x144e6c },
     "puffer": { pigment: 0, pigmentGlow: 0, scale: 0.53, contrast: 3.1, coverage: 0.45, strength: 1.8, flow: 1.98, pattern: 'blotches', colorA: 0x4f14f0, colorB: 0x7b2dff, colorC: 0xffd166, shellColor: 0xffffff },
     "eelCompanion": { pigment: 0, pigmentGlow: 0, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.3, pattern: 'blotches', colorA: 0x00e5ff, colorB: 0x11df6a, colorC: 0xffd166, shellColor: 0x1ba300 },
-    "whale": { pigment: 0.08, pigmentGlow: 0, scale: 0.05, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.88, pattern: 'veins', colorA: 0x000000, colorB: 0x3d3d3d, colorC: 0x949494, shellColor: 0xff5a1e },
+    "whale": { pigment: 0.08, pigmentGlow: 0.22, scale: 0.05, contrast: 1.6, coverage: 0.45, strength: 2.78, flow: 0.88, pattern: 'veins', colorA: 0x000000, colorB: 0x3d3d3d, colorC: 0x949494, shellColor: 0xff5a1e },
     "tuna": { pigment: 0, pigmentGlow: 0, scale: 0.05, contrast: 0.75, coverage: 0.45, strength: 1.8, flow: 1.18, pattern: 'pulse', colorA: 0xffffff, colorB: 0x4d4d4d, colorC: 0x6e6e6e, shellColor: 0x111212 },
+    "bossBoat": { pigment: 0, pigmentGlow: 0, scale: 0.07, contrast: 1.6, coverage: 0.45, strength: 2.88, flow: 0.3, pattern: 'lattice', colorA: 0xffffff, colorB: 0x545454, colorC: 0x9e9e9e, shellColor: 0x000000 },
+    "musicNote": { pigment: 0.96, pigmentGlow: 0, scale: 0.06, contrast: 1.6, coverage: 0.45, strength: 2.12, flow: 1.88, pattern: 'blotches', colorA: 0xffffff, colorB: 0x969696, colorC: 0x030b7c, shellColor: 0x000000 },
   },
 })) {
   const bag = ((CONFIG[root] ??= {}).presets ??= {});
@@ -29394,6 +29629,11 @@ export const TUNER_SCHEMA = [
       { path: 'gravesite.drop.settleTilt', min: 0, max: 0.3, step: 0.01, label: 'rock width (rad)' },
       { path: 'gravesite.drop.settleHz', min: 2, max: 40, step: 1, label: 'rock rate (hz)' },
       { path: 'gravesite.drop.settleRate', min: 1, max: 30, step: 0.5, label: 'rock decay' },
+      { path: 'gravesite.impact.enabled', type: 'bool', label: 'landing knocks creatures away' },
+      { path: 'gravesite.impact.radius', min: 0, max: 60, step: 1, label: 'impact: shove radius' },
+      { path: 'gravesite.impact.killRadius', min: 0, max: 30, step: 0.5, label: 'impact: crush radius' },
+      { path: 'gravesite.impact.power', min: 0, max: 4, step: 0.05, label: 'impact: shove power' },
+      { path: 'gravesite.impact.shake', min: 0, max: 4, step: 0.1, label: 'impact: shake' },
       { path: 'gravesite.drop.siltPuffs', min: 1, max: 8, step: 1, label: 'silt bursts on impact' },
       { path: 'gravesite.drop.siltSpread', min: 0, max: 3, step: 0.05, label: 'silt spread (units)' },
       { path: 'gravesite.drop.siltSpeed', min: 0.2, max: 3, step: 0.05, label: 'silt thrown (x)' },
@@ -29438,6 +29678,8 @@ export const TUNER_SCHEMA = [
       { path: 'gravesite.faces.plaque.scale', min: 0.3, max: 4, step: 0.05, label: 'plaque size (x the set)' },
       { path: 'gravesite.faces.tomb.scale', min: 0.3, max: 4, step: 0.05, label: 'tomb size (x the set)' },
       { path: 'gravesite.faces.headstone.namePx', min: 0.06, max: 0.5, step: 0.01, label: 'headstone panel: name size' },
+      { path: 'gravesite.faces.headstone.nameLines', min: 1, max: 3, step: 1, label: 'headstone: name lines (2 stacks it)' },
+      { path: 'gravesite.faces.headstone.baseline', min: 0.15, max: 0.7, step: 0.01, label: 'headstone panel: text height' },
       { path: 'gravesite.faces.headstone.width', min: 0.2, max: 1, step: 0.01, label: 'headstone panel: width' },
       { path: 'gravesite.faces.headstone.height', min: 0.1, max: 0.9, step: 0.01, label: 'headstone panel: height' },
       { path: 'gravesite.faces.headstone.rise', min: -0.3, max: 0.45, step: 0.01, label: 'headstone panel: rise' },
@@ -29476,7 +29718,39 @@ export const TUNER_SCHEMA = [
       { path: 'death.bodyRoll', min: 0, max: 8, step: 0.1, label: 'barrel roll' },
       { path: 'death.rollDamp', min: 0, max: 4, step: 0.05, label: 'barrel roll damping' },
       { path: 'death.tailKick', min: 0, max: 30, step: 0.5, label: 'tail shove' },
-      { path: 'death.bounce', min: 0, max: 1, step: 0.02, label: 'seabed bounce' },
+      // THE FLOP. The seabed half of it first. There is no `death.bounce` pill
+      // any more: nothing reads that key since the restitution moved into
+      // `flop` (see the rename note there), and a slider pointing at a path
+      // nothing reads is a control that visibly does nothing.
+      { path: 'death.flop.enabled', type: 'bool', label: 'ragdoll flop on death' },
+      { path: 'death.flop.restitution', min: 0, max: 1, step: 0.02, label: 'seabed restitution' },
+      { path: 'death.flop.bounceDecay', min: 0.2, max: 0.95, step: 0.02, label: 'bounce spent per contact' },
+      { path: 'death.flop.maxBounces', min: 0, max: 10, step: 1, label: 'most bounces' },
+      { path: 'death.flop.bounceMin', min: 0.5, max: 12, step: 0.5, label: 'smallest bounce worth having' },
+      { path: 'death.flop.bounceDrag', min: 0.9, max: 1, step: 0.002, label: 'drag between bounces' },
+      { path: 'death.flop.skid', min: 0, max: 1.5, step: 0.05, label: 'sideways skid per bounce' },
+      { path: 'death.flop.spinKick', min: 0, max: 10, step: 0.2, label: 'tumble kick per bounce' },
+      { path: 'death.flop.rollKick', min: 0, max: 10, step: 0.2, label: 'barrel roll kick per bounce' },
+      { path: 'death.flop.settleMax', min: 1, max: 12, step: 0.5, label: 'bounce time ceiling (s)' },
+      // ...and the body.
+      { path: 'death.flop.spinMul', min: 0.5, max: 4, step: 0.1, label: 'tumble (x)' },
+      { path: 'death.flop.rollMul', min: 0.5, max: 4, step: 0.1, label: 'barrel roll (x)' },
+      { path: 'death.flop.wobble', min: 0, max: 1, step: 0.02, label: 'limp loll (rad)' },
+      { path: 'death.flop.wobbleHz', min: 0.05, max: 3, step: 0.05, label: 'loll rate (hz)' },
+      { path: 'death.flop.wobbleDamp', min: 0, max: 3, step: 0.05, label: 'loll damping' },
+      // ...and the skeleton.
+      { path: 'death.flop.limpDelay', min: 0, max: 3, step: 0.05, label: 'seconds before it goes limp' },
+      { path: 'death.flop.clock', min: 0, max: 1, step: 0.05, label: 'ragdoll on the wall clock' },
+      { path: 'death.flop.stiffness', min: 1, max: 60, step: 1, label: 'limp stiffness' },
+      { path: 'death.flop.damping', min: 0.5, max: 12, step: 0.1, label: 'limp damping' },
+      { path: 'death.flop.tipLooseness', min: 0, max: 0.95, step: 0.02, label: 'limp tip looser than root' },
+      { path: 'death.flop.maxLag', min: 0, max: 3, step: 0.05, label: 'limp max lag (rad)' },
+      { path: 'death.flop.sag', min: 0, max: 60, step: 1, label: 'limb sag (gravity)' },
+      { path: 'death.flop.flow', min: 0, max: 6, step: 0.1, label: 'limbs streaming in the water' },
+      { path: 'death.flop.blow', min: 0, max: 30, step: 0.5, label: 'killing blow into the limbs' },
+      { path: 'death.flop.limbKick', min: 0, max: 30, step: 0.5, label: 'limb shove per bounce' },
+      { path: 'death.flop.tailKick', min: 0, max: 30, step: 0.5, label: 'tail shove per bounce' },
+      { path: 'death.flop.tailLooseness', min: 0.5, max: 5, step: 0.1, label: 'tail looser when dead (x)' },
       { path: 'death.settleDrag', min: 0.5, max: 1, step: 0.01, label: 'settle drag' },
       { path: 'death.settleTurn', min: 0.5, max: 20, step: 0.5, label: 'roll flat rate' },
       { path: 'death.settle', min: 0, max: 6, step: 0.1, label: 'pause before score screen (s)' },
@@ -29493,6 +29767,7 @@ export const TUNER_SCHEMA = [
       { path: 'death.restart.time', min: 0, max: 3, step: 0.05, label: 'try-again glide back (s)' },
       { path: 'death.restart.filterGlide', min: 0.05, max: 1, step: 0.01, label: 'filter sweep (x glide)' },
       { path: 'feedback.seabedImpact.shake', min: 0, max: 2, step: 0.05, label: 'landing shake' },
+      { path: 'feedback.seabedBounce.shake', min: 0, max: 2, step: 0.05, label: 'bounce shake' },
       { path: 'emitters.silt.count', min: 0, max: 200, step: 5, label: 'silt bits' },
     ],
   },

@@ -4,6 +4,7 @@ import {
   isWorldFrozen, setWorldFrozen, onFreezeChanged,
 } from '../systems/stage.js';
 import { resetEnemies } from '../entities/enemies.js';
+import { holdReloads, onStalePage } from '../systems/reloadHold.js';
 import { isTextEntry } from './typing.js';
 
 // The Stage bar — F.
@@ -51,6 +52,12 @@ const STYLES = `
   .sv-stage-btn.sv-stage-stale { border-color: rgba(255,179,71,0.55); color: #ffb347;
     background: rgba(255,179,71,0.12); }
   .sv-stage-btn.sv-stage-stale:hover { border-color: #ffb347; color: #ffd9a0; }
+  /* Fixed, and outside the bar — see the note where it is built. Top-RIGHT so
+     it never lands on the freeze badge's top-centre when both are up, and
+     never under the stage bar along the bottom. */
+  .sv-stale { position: fixed; top: 10px; right: 12px; z-index: 33; display: none;
+    background: rgba(6,10,18,0.86); backdrop-filter: blur(8px); }
+  .sv-stale.sv-stale-on { display: block; }
 
   /* THE FREEZE BADGE. Small, top-centre, and unmissable — a held world with no
      menu over it is indistinguishable from a hung one, and the key that clears
@@ -76,34 +83,24 @@ let getScene = null;
 let freezeEl = null;
 
 // --- holding the page still -------------------------------------------------
-// Nothing in this app accepts a hot update, so any edit anywhere falls through
-// to a full page reload — which throws away the run, the cleared arena and
-// every slider position the moment something else in the repo is saved. With
-// another agent editing the tree at the same time that is constant.
+// The latch is shared now — systems/reloadHold.js owns it, because the bar is
+// no longer the only thing that needs the page to sit still. A recorded run
+// holds it too, for its whole length, which is what stops an edit somewhere
+// else in the tree from reloading a playtest out from under itself. See the
+// note at the top of that file for why the holders are counted rather than
+// toggled, and why the browser cannot cancel a Vite reload on its own.
 //
-// The latch itself lives in the dev server (see reloadHold in vite.config.js),
-// because the browser cannot win this one: Vite awaits its
-// `vite:beforeFullReload` listeners through Promise.allSettled, so the usual
-// advice — throw from a listener to cancel — is swallowed and the page reloads
-// regardless. All this side does is ask, and report what piled up.
-//
-// import.meta.hot is undefined in a production build and in the test harness,
-// so every one of these is a no-op outside `npm run dev`.
-
-function holdReloads(on) {
-  import.meta.hot?.send('stage:hold', { hold: !!on });
-  if (!on && staleEl) staleEl.style.display = 'none';
-}
+// All this side does is render what piled up.
 
 function bindReloadHold() {
-  import.meta.hot?.on('stage:pending', ({ count, files }) => {
+  onStalePage(({ count, files }) => {
     if (!staleEl) return;
-    if (!count) { staleEl.style.display = 'none'; return; }
-    staleEl.style.display = '';
+    staleEl.classList.toggle('sv-stale-on', count > 0);
+    if (!count) return;
     staleEl.textContent = `↻ ${count} file${count === 1 ? '' : 's'} changed — reload`;
     // Which files, on hover. Enough to tell "someone else is working" from
     // "that was my own edit and I want it now".
-    staleEl.title = `Held while the stage is open:\n${(files ?? []).join('\n')}\n\nClick to reload and lose the staged run.`;
+    staleEl.title = `Held while the stage is open or a run is recording:\n${(files ?? []).join('\n')}\n\nClick to reload and lose the run in progress.`;
   });
 }
 
@@ -277,13 +274,19 @@ export function initStagePanel(sceneGetter) {
 
   // Stale-page notice. Hidden until something actually changes underneath us,
   // because a permanent "0 files changed" is noise.
+  //
+  // A SIBLING of the bar rather than a child, for the same reason the freeze
+  // badge below is: a recorded run holds reloads with the bar SHUT, so the one
+  // moment this most needs to be readable is the moment a notice inside the
+  // panel would be display:none. It was a child when the bar was the only
+  // holder, and that is the only reason it worked.
   staleEl = document.createElement('button');
-  staleEl.className = 'sv-stage-btn sv-stage-stale';
-  staleEl.style.display = 'none';
+  staleEl.className = 'sv-stage-btn sv-stage-stale sv-stale';
   staleEl.addEventListener('click', () => window.location.reload());
 
-  panel.append(simWrap, safeWrap, clearBtn, closeBtn, staleEl, statusEl);
+  panel.append(simWrap, safeWrap, clearBtn, closeBtn, statusEl);
   document.body.appendChild(panel);
+  document.body.appendChild(staleEl);
 
   freezeEl = document.createElement('div');
   freezeEl.className = 'sv-freeze';
@@ -306,7 +309,7 @@ export function initStagePanel(sceneGetter) {
       simBox.checked = stageState.sim;
       safeBox.checked = stageState.safe;
     }
-    holdReloads(on);
+    holdReloads('stage', on);
     // So the reload button above lands you back HERE rather than in an
     // ordinary run — which would spawn, level and kill you, throwing away the
     // exact setup the reload was meant to preserve.

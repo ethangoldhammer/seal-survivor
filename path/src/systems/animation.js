@@ -122,9 +122,21 @@ function springCfgFor(cfg, role) {
 // `rig.springChains` entries come in two forms: a bare array of bone names
 // (role defaults to 'tail', which is unscaled, so every chain written before
 // roles existed keeps behaving exactly as it did), or { bones, role }.
+//
+// `asleep: true` declares a chain that exists but does not run: it is muted the
+// moment it is built and stays muted through every reset, so it neither solves
+// nor stores an impulse until something explicitly wakes it. setLimp() is the
+// one thing that does — a body cut loose has nobody posing it, and every chain
+// on it is rope.
+//
+// It is declared on the RIG rather than muted by the caller because the callers
+// are the problem: the seal's ragdoll chains have to be dormant in the game, in
+// the tuner, on the title card, in the look pages and in every harness that
+// builds a controller by hand, and a mute that each of those has to remember is
+// a mute that reaches about half of them. See ASSETS.ship.rig.springChains.
 function chainSpec(entry) {
-  if (Array.isArray(entry)) return { names: entry, role: 'tail' };
-  return { names: entry?.bones ?? [], role: entry?.role ?? 'tail' };
+  if (Array.isArray(entry)) return { names: entry, role: 'tail', asleep: false };
+  return { names: entry?.bones ?? [], role: entry?.role ?? 'tail', asleep: entry?.asleep === true };
 }
 
 
@@ -318,10 +330,16 @@ export function createAnimationController(instance) {
   // role is how one creature gets its own without touching the rest of the
   // roster. See CONFIG.animation.spring.roleLooseness.
   if (wagBones.length) addSpring(wagBones, rig?.wagRole ?? 'tail');
+  // Roles declared `asleep` — see chainSpec. Collected as the chains are built
+  // so a role that resolved to no bones at all never enters the set.
+  const asleepRoles = new Set();
   for (const entry of rig?.springChains ?? []) {
-    const { names, role } = chainSpec(entry);
+    const { names, role, asleep } = chainSpec(entry);
     const bones = names.map((name) => instance.getObjectByName(name)).filter(Boolean);
-    if (bones.length) addSpring(bones, role);
+    if (bones.length) {
+      addSpring(bones, role);
+      if (asleep) asleepRoles.add(role);
+    }
   }
   if (rig?.springChains?.length && springs.length === 0) {
     console.warn('[animation] rig.springChains named no bones that exist on this model — it will not react to impacts.');
@@ -348,9 +366,45 @@ export function createAnimationController(instance) {
   // So the rest pose of every sprung bone is captured here, before anything has
   // written to the skeleton, and restored at the top of each frame. A bone the
   // clip does key is then immediately overwritten by the mixer, which is why
-  // this can run unconditionally instead of working out who owns what.
+  // this needs no notion of who owns what — with ONE exception, below.
   const springBones = [...new Set(springs.flatMap(({ solver }) => solver.bones))];
   const springRest = springBones.map((b) => b.quaternion.clone());
+
+  // THE EXCEPTION IS A MUTED CHAIN, and it is not a nicety.
+  //
+  // The restore above exists to stop an impulse ratcheting a bone nothing else
+  // drives. A muted chain cannot take an impulse and does not solve, so there is
+  // nothing to ratchet — and restoring its bones anyway is not free: it hands
+  // the bind pose to every OTHER system that writes them. The seal's aim rig is
+  // the case. Its flipper tip (`hand_L_014`) is keyed by the idle clips and NOT
+  // by the swim clip, so before the ragdoll chains existed the IK carried on
+  // from where it left that bone last frame; restoring it re-based the solve on
+  // the bind pose every frame, which measurably changed how the flippers aim on
+  // a LIVING seal. A dormant chain has to be worth exactly nothing.
+  //
+  // So the restore runs over the bones of AWAKE chains only, and the list is
+  // rebuilt whenever the mute set moves rather than filtered per frame — this
+  // is a hot path with hundreds of creatures in it, and mutes change a few
+  // times a run.
+  //
+  // Which roles could bend each bone, worked out ONCE here rather than on every
+  // rebuild: the crabs mute and unmute a claw on every pinch, and walking ten
+  // chains' bone lists per toggle per crab is the kind of cost that only shows
+  // up in a fight.
+  const boneRoles = springBones.map(
+    (bone) => [...new Set(springs.filter(({ solver }) => solver.bones.includes(bone)).map(({ role }) => role))],
+  );
+  let restBones = [];
+  let restPose = [];
+  function refreshRest() {
+    restBones = [];
+    restPose = [];
+    for (let i = 0; i < springBones.length; i++) {
+      if (!boneRoles[i].some((role) => !mutedRoles.has(role))) continue;
+      restBones.push(springBones[i]);
+      restPose.push(springRest[i]);
+    }
+  }
 
   // LIMP. Null while the creature is alive; a { pose, cfg } record once
   // something has cut the skeleton loose — see systems/bossRagdoll.js, which is
@@ -364,8 +418,16 @@ export function createAnimationController(instance) {
   // it died in — not the bind pose, which is a shape the animal was never in.
   let limp = null;
 
-  // SPRING CHAINS SOMETHING ELSE HAS TAKEN OVER, by role. See muteSpring.
-  const mutedRoles = new Set();
+  // SPRING CHAINS SOMETHING ELSE HAS TAKEN OVER, by role. See muteSpring — and
+  // it opens holding every `asleep` role, which is the state anything that
+  // clears it has to come back to rather than to empty.
+  const mutedRoles = new Set(asleepRoles);
+  const restoreMutes = () => {
+    mutedRoles.clear();
+    for (const role of asleepRoles) mutedRoles.add(role);
+    refreshRest();
+  };
+  refreshRest();
 
   const warnedMissing = new Set();
   let current = null; // the action currently faded in
@@ -683,7 +745,7 @@ export function createAnimationController(instance) {
       // is not, and a mackerel spawning with a megalodon's death whip still in
       // its springs is the same leak wearing a smaller body.
       limp = null;
-      mutedRoles.clear();
+      restoreMutes();
       for (const { solver } of springs) solver.reset();
       // Stop every action outright rather than crossfading: fading from a
       // clamped death pose leaves it bleeding into the first moments of the
@@ -718,8 +780,9 @@ export function createAnimationController(instance) {
       }
       // Before the pose driver, not after: whatever writes this frame's pose —
       // mixer or sine — is meant to win over the rest pose wherever it has an
-      // opinion. See springRest.
-      for (let i = 0; i < springBones.length; i++) springBones[i].quaternion.copy(springRest[i]);
+      // opinion. See springRest, and the note there on why this is the AWAKE
+      // chains' bones rather than every sprung bone.
+      for (let i = 0; i < restBones.length; i++) restBones[i].quaternion.copy(restPose[i]);
       writePose(dt, state, hitThisFrame);
       // The spring layers over WHATEVER wrote the pose — a clip, the sine
       // fallback, or nothing at all — so an impulse lands the same way no
@@ -799,6 +862,7 @@ export function createAnimationController(instance) {
       } else {
         mutedRoles.delete(role);
       }
+      refreshRest();
     },
 
     /**
@@ -817,12 +881,30 @@ export function createAnimationController(instance) {
       // a crab mid-pinch is the case — is not going to run again to hand it
       // back, and a corpse with one limb that will not swing reads as the
       // ragdoll having missed it. See muteSpring.
+      // ...and this is the one thing that wakes an `asleep` chain, which is the
+      // other half of the same rule: dormant until the body is let go of.
       mutedRoles.clear();
+      refreshRest();
       if (!springCfg || !springs.length) {
         limp = null;
+        // Handing the skeleton back puts the dormant chains back to sleep. A
+        // corpse-then-reused body that came back with its ragdoll awake is the
+        // same leak in a different direction.
+        restoreMutes();
         return false;
       }
       limp = { pose: springBones.map((b) => b.quaternion.clone()), cfg: springCfg };
+      // PRIMED BEFORE ANYTHING SHOVES IT. A spring that has never solved snaps
+      // its state onto its target and DROPS WHATEVER VELOCITY IT IS HOLDING on
+      // the first frame it does (see `primed` in systems/boneSpring.js) — and
+      // that frame is the one right after this call, so the killing blow every
+      // caller lands here would be thrown away. Harmless on a chain that has
+      // been solving all along, and load-bearing for one that has not: an
+      // `asleep` chain is never primed by definition, which is every chain in
+      // the seal's ragdoll. A dt of nothing, because this is not a step — it is
+      // the solver being shown where it starts.
+      const live = CONFIG.animation.spring;
+      for (const { solver } of springs) solver.update(1e-6, springCfg, live.weight);
       return true;
     },
 

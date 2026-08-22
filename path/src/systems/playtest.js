@@ -1,4 +1,5 @@
 import { sourceFamily } from './playtestAnalysis.js';
+import { holdReloads } from './reloadHold.js';
 // ---------------------------------------------------------------------------
 // PLAYTEST RECORDER
 //
@@ -153,6 +154,11 @@ export function beginRun(config = {}) {
   };
   bucket = newBucket(0);
   stacks = {};
+  // Ask the dev server to stop reloading the page for the length of the run.
+  // A full reload mid-run does not truncate the record, it ERASES it — nothing
+  // is written until endRun — so an edit anywhere in the tree used to cost a
+  // whole playtest silently. No-op outside `npm run dev`.
+  holdReloads('run', true);
 }
 
 /**
@@ -459,7 +465,13 @@ function closeBucket(now) {
 
 /**
  * Finish and file the run. Returns it, so the caller can hand it straight to
- * the overlay. `reason` is 'death' | 'quit' | 'restart'.
+ * the overlay. `reason` is 'death' | 'quit' | 'restart' | 'interrupted'.
+ *
+ * 'interrupted' is not a way the PLAYER ended a run — it is the page going
+ * away underneath one (see the pagehide note below). It is a separate word
+ * from the rest because the analysis splits on this field: median survival
+ * counts deaths only, so a reload filed as a death would be recorded as
+ * dying at the moment somebody saved a file.
  */
 export function endRun(reason = 'death', extra = null) {
   if (!run) return null;
@@ -489,8 +501,41 @@ export function endRun(reason = 'death', extra = null) {
   const finished = run;
   run = null;
   bucket = null;
+  holdReloads('run', false);
   persist(finished);
   return finished;
+}
+
+// A run that never reaches endRun is not a short run — it is NO run. The page
+// reloaded, the module was torn down with `run` still in memory, and nothing
+// was written to localStorage, to runs.jsonl or to the collector. That is why
+// every one of the 301 runs on disk reads 'death': an interrupted one has
+// never been recorded, so the ones that "cut off mid-run" leave no gap to find
+// them by, and there is no way to tell a reload from a crash after the fact.
+//
+// So: close the books on the way out. `post` already sets keepalive, which is
+// exactly the flag that lets the request outlive the page teardown, and
+// localStorage is synchronous — both survive pagehide.
+//
+// WHY pagehide AND NOT visibilitychange: hidden fires on every tab switch and
+// every phone lock, and ending a run because someone looked at their email
+// would be worse than losing it. pagehide is the last event before the page
+// actually goes away.
+//
+// The reason is its own word rather than 'death' on purpose. The analysis
+// already splits on endReason — median survival counts deaths only, and the
+// flood and lethality checks read `endReason === 'death'` — so an interrupted
+// run flows into the ability ledger, where its damage over its stack-minutes
+// is real data, without ever being averaged in as a survival time.
+//
+// It is also the diagnostic. A cut-off that comes back marked 'interrupted'
+// was a clean unload: Vite, a refresh, a closed tab. One that is STILL missing
+// was a hard crash the page never got to report — and those are two different
+// bugs that currently look identical.
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    if (run) endRun('interrupted');
+  });
 }
 
 // ---------------------------------------------------------------------------

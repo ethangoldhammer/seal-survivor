@@ -123,6 +123,7 @@ async function writeCsv(applied, { dry }, notes) {
   const header = parseLine(lines[0]);
   const iId = header.indexOf('id');
   const iSurface = header.indexOf('surface');
+  const iNotes = header.indexOf('notes');
   if (iSurface < 0) throw new Error('assets.csv has no `surface` column — add it to the header first.');
 
   const cells = cellsFor(applied, notes);
@@ -143,14 +144,74 @@ async function writeCsv(applied, { dry }, notes) {
     lines[i] = row.map(writeCell).join(',');
   }
 
-  // An asset the lab named but the CSV has no row for. REPORTED, not appended:
-  // a row here carries a size as well, and inventing one would silently give the
-  // creature a size multiplier nobody chose.
-  for (const key of missing) {
-    notes.push(`! ${key}: no row in assets.csv — add one, then re-run (surface would be "${cells.get(key)}")`);
+  // An asset the lab named but the CSV has no row for. APPENDED — and the
+  // reason it used to be merely reported is worth writing down, because it was
+  // a real objection with an answer nobody had checked:
+  //
+  //   "a row here carries a size as well, and inventing one would silently give
+  //    the creature a size multiplier nobody chose"
+  //
+  // TRUE OF A NUMBER, NOT TRUE OF A BLANK. assetTable.js reads an empty size
+  // cell as 1 and says so where it does it — "blank means leave it at 1, which
+  // is what an asset with no row gets". So a row with a blank size is not a
+  // decision about size at all; it is the same silence the missing row was,
+  // written down. Nothing resizes, and the surface lands.
+  //
+  // That is also why the size is left BLANK rather than set to `1`. The two
+  // behave identically today, but a literal 1 reads as a multiplier somebody
+  // chose, and the next person to tune this creature has no way to tell it
+  // apart from one that was measured.
+  //
+  // The `skin` column is left blank for the same one-writer-per-field reason
+  // assetTable.js gives: when `surface` names a biolum layer it carries its own
+  // preset, and a skin cell beside it is a second place the same fact could be
+  // written and later disagree.
+  const added = [];
+  for (const key of [...missing].sort(byId)) {
+    const want = cells.get(key);
+    const row = new Array(header.length).fill('');
+    row[iId] = key;
+    row[iSurface] = want;
+    if (iNotes >= 0) {
+      row[iNotes] = 'Row added by the shader lab, to carry the surface. Size left BLANK on '
+        + 'purpose: blank is exactly what an asset with no row already gets, so this row '
+        + 'changed what the creature wears and nothing about how big it is or how big it is '
+        + 'to hit. Put a number here only if you mean to resize it.';
+    }
+    lines.splice(insertionPoint(lines, iId, key), 0, row.map(writeCell).join(','));
+    added.push(key);
+    changed.push(`${key}: (no row) -> ${want}`);
+    notes.push(`+ ${key}: added a row to assets.csv — surface "${want}", size left blank (unchanged).`);
   }
   if (changed.length && !dry) await writeFile(CSV, lines.join(eol));
   return changed;
+}
+
+// Plain `<` rather than localeCompare, and the same comparison in both places
+// that need one: the sortedness test below and the insert have to agree, or a
+// file this calls sorted gets a row put somewhere it does not belong.
+const byId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+// WHERE A NEW ROW GOES. assets.csv is kept in id order, and a row appended to
+// the end of a sorted file is a diff nobody can read and a merge conflict for
+// the next person to add one.
+//
+// But only if the file REALLY is sorted. If someone has been appending by hand,
+// an "alphabetical" insert lands in an arbitrary place that looks deliberate —
+// so in that case go to the end, which is at least where the rest arrived.
+function insertionPoint(lines, iId, key) {
+  const ids = [];
+  const at = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;   // blank lines, and the trailing newline
+    ids.push(parseLine(lines[i])[iId] ?? '');
+    at.push(i);
+  }
+  if (!ids.length) return lines.length;
+  const sorted = ids.every((v, i) => i === 0 || byId(ids[i - 1], v) <= 0);
+  if (!sorted) return at[at.length - 1] + 1;
+  for (let i = 0; i < ids.length; i++) if (byId(ids[i], key) > 0) return at[i];
+  return at[at.length - 1] + 1;
 }
 
 // --- the numbers, into config.js -------------------------------------------

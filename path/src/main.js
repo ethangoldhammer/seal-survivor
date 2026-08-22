@@ -8,7 +8,7 @@ import { pulseDemoFor, panDemoFor, resolvedGlow, describeGlow } from './systems/
 import { updateBeatSync } from './systems/beatSync.js';
 import { reseatDecor } from './systems/decor.js';
 import { scatterSeabed, reseatSeabed } from './systems/seabedScatter.js';
-import { markDeathSite, plantGraves, updateGravesites, reseatGraves, restyleGraves, restoreGraves } from './systems/gravesite.js';
+import { markDeathSite, plantGraves, updateGravesites, reseatGraves, restyleGraves, restoreGraves, setGraveImpact } from './systems/gravesite.js';
 import { createWorld } from './world.js';
 import { midWater, bounds, seabedTopY } from './arena.js';
 import {
@@ -37,7 +37,10 @@ import { createPost } from './systems/post.js';
 import { loadNoteGlyphs } from './systems/noteStorm.js';
 import { warmShaders, warmPipeline } from './systems/shaderWarmup.js';
 import { installBossWarmup } from './systems/bossWarmup.js';
-import { perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary } from './systems/perfLog.js';
+import {
+  perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary, perfPhase, perfMark,
+  perfFrameJs,
+} from './systems/perfLog.js';
 import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
@@ -169,6 +172,10 @@ import { sourceFamily } from './systems/playtestAnalysis.js';
 import { playerName, savePlayerName } from './systems/playerName.js';
 import { randomPlayerName } from './systems/randomName.js';
 import { buryName, isNameBuried } from './systems/nameLedger.js';
+// Imported for its side effect: the module installs window.__dead, the door
+// that carries the ledger and the graveyard out to a tool on another origin.
+// See its header — nothing in the game reads what it exports.
+import './systems/nameExport.js';
 import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js';
 
 // Restore any saved tuning BEFORE anything reads CONFIG — world/grid/camera
@@ -455,6 +462,11 @@ async function boot() {
   // at a fraction of a stale width. They are planted by the plantGraves call at
   // the top of the first run, already settled. See systems/graveyardStore.js.
   restoreGraves();
+  // WHAT A LANDING STONE DOES TO THE WATER. Wired here rather than inside
+  // systems/gravesite.js because it needs the live enemy list, applyKnockback
+  // and removeEnemy — the gameplay half of the game — and that module's job is
+  // standing a stone on the floor. See setGraveImpact.
+  setGraveImpact(graveImpact);
 
   initPlayer(world.scene);
   player.mesh.position.set(0, midWater(), 0);
@@ -1475,6 +1487,76 @@ let lastDamageSource = null;
 // into it: deathCauses.js classifies a SOURCE, and a name is not one. See
 // systems/boss.js for where the name comes from.
 let lastDamageBoss = null;
+
+/**
+ * A gravestone hits the seabed, and everything standing there finds out.
+ *
+ * TWO RADII, because "knocked away" and "destroyed" are different distances.
+ * Inside `killRadius` the stone lands ON you and there is nothing to discuss;
+ * out to `radius` it is a shockwave through the water and you are thrown clear
+ * of it. The falloff between them is what makes the edge of the blast read as
+ * an edge rather than as a circle things stop happening in.
+ *
+ * IT SCORES NOTHING, and that is the one rule here that is not about feel. The
+ * run is already over — killPlayer has banked the causes, the recorder has
+ * filed the run, and the score card is a couple of seconds away — so anything
+ * this kills that went through onEnemyKilledFeedback would add kills to a run
+ * that had finished, put XP orbs in the water for a seal that is dead, and
+ * change the number on a card the player is about to read. The creature is
+ * removed and torn up; nothing is credited.
+ *
+ * applyKnockback rather than a nudge to vx/vy: a turn-limited hunter assigns
+ * its own velocity outright every frame (see steerTo), so anything written
+ * there is erased before it can move a shark an inch. That function adds the
+ * impulse at the integrator instead, where it lands identically on a drifting
+ * fish, a flocking school and a shark.
+ */
+function graveImpact(x, y) {
+  const c = CONFIG.gravesite?.impact ?? {};
+  if (c.enabled === false) return;
+  const shove = Math.max(0, c.radius ?? 22);
+  const kill = Math.max(0, c.killRadius ?? 7);
+  if (shove <= 0) return;
+
+  // Backwards, because the kill branch removes entries as it goes.
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (!e?.mesh) continue;
+    const dx = e.mesh.position.x - x;
+    const dy = e.mesh.position.y - y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > shove * shove) continue;
+    const d = Math.sqrt(d2) || 1e-4;
+
+    // A BOSS IS SHOVED, NEVER DESTROYED. A stone landing on the thing that
+    // just killed you and deleting it would be the game settling the score on
+    // the player's behalf, seconds after it refused to. It gets thrown around
+    // like everything else.
+    const spared = e.isBoss || e.invincible;
+
+    if (!spared && d2 <= kill * kill) {
+      // `kill` is the same event every other creature death in the game fires,
+      // so one crushed under a headstone pops exactly like one crushed by
+      // anything else. Deliberately NOT onEnemyKilledFeedback, which is the
+      // SCORING path — see the note above about crediting a finished run.
+      feedback('kill', { x: e.mesh.position.x, y: e.mesh.position.y, scale: 1.1 });
+      removeEnemy(world.scene, i);
+      continue;
+    }
+
+    // Linear in DISTANCE, not in distance squared. Squared falls off so fast
+    // that everything past a third of the radius is barely touched, which
+    // reads as a small blast with a large and mysterious outer edge.
+    const falloff = 1 - (d - kill) / Math.max(1e-4, shove - kill);
+    applyKnockback(e, dx / d, dy / d, (c.power ?? 1) * Math.min(1, Math.max(0, falloff)));
+  }
+
+  // One event for the whole thing, at the point of contact. `bigKill` is the
+  // shake-and-boom the splash system already uses, so a stone landing sounds
+  // like the other large things that happen in this water rather than
+  // introducing a vocabulary of its own.
+  if (c.feedback !== false) feedback('bigKill', { x, y, scale: c.shake ?? 1.6 });
+}
 
 function killPlayer() {
   player.anim?.trigger('death'); // clamps on its last frame, never hands back
@@ -3885,6 +3967,14 @@ function updateChumChunkSpawns(dt) {
   });
 }
 
+// WHEN THE WATER COUNTS AS FULL, and when the screen counts as busy. Both are
+// set at roughly the point the recorded runs start losing frame rate rather
+// than at a round number: `spawn.maxAlive` is 220 and the per-bucket curve is
+// flat to about 80 alive and falling by 100, so a mark that only lit at 200
+// would sit cold through most of the decline it exists to catch.
+const CROWD_MARK = 100;
+const SWARM_MARK = 60;
+
 let lastTime = performance.now();
 
 function animate(now) {
@@ -3917,6 +4007,39 @@ function animate(now) {
     heapUsed(),
     world.renderer.info.programs,
   );
+  // WHAT THE GAME IS DOING, for the frame that just ended. Four runs in five
+  // report most of their hitches as "none of those" — not a shader link, not a
+  // texture upload, not a collection — which says the frame was busy and
+  // nothing more. These name the moment so the report can say which moments
+  // the bad frames cluster in; see the note above MARK_LINGER in perfLog.js
+  // for why the number that matters is the RATE while a mark is hot and not
+  // the tally.
+  //
+  // Read as state every frame rather than fired as events from inside each
+  // system: a mark is meant to describe a stretch of the run ("a boss was on
+  // screen"), the linger already covers the one-shot case, and one block here
+  // is far easier to keep honest than eight call sites scattered through
+  // systems that have nothing else to do with performance.
+  //
+  // `crowd` and `swarm` are the two hypotheses worth testing directly. The
+  // recorded runs say frame rate falls with population and with upgrade
+  // stacks TOGETHER — more than either alone — and these are what turn that
+  // correlation across runs into an attribution within one.
+  if (gameState.running) {
+    if (levelUpState.active) perfMark('cards');
+    if (deathState.active) perfMark('dying');
+    if (bossState.arriving) perfMark('boss-arrive');
+    else if (bossState.enemy) perfMark('boss');
+    if (enemies.length >= CROWD_MARK) perfMark('crowd');
+    if (projectiles.length >= SWARM_MARK) perfMark('swarm');
+  }
+
+  // THE WHOLE FRAME'S JS, wrapping every phase below rather than sitting
+  // beside them. The leaf phases cannot tell untimed work from the tab not
+  // running at all — see the note above jsFrameMs in perfLog.js — and those
+  // two have opposite fixes.
+  const _tframe = performance.now();
+
   const rawDt = Math.min((stamp - lastTime) / 1000, 0.05);
   lastTime = stamp;
 
@@ -4826,6 +4949,7 @@ function animate(now) {
       });
     }
 
+    const _tenemies = performance.now();
     updateEnemies(dt, world.scene, player.mesh.position, (x, y) => {
       feedback('chumEaten', { x, y, scale: 0.8 });
     }, (x, y, e) => {
@@ -4840,6 +4964,7 @@ function animate(now) {
       feedback('bite', { x, y, vx: e.vx, vy: e.vy });
       onPlayerBite(e);
     });
+    perfPhase('enemies', performance.now() - _tenemies);
 
     // THE PHYSICS FRAME. Everything that owns a body (the boats above, the sea
     // turtle in the pass just now) has already moved itself, so this is where
@@ -4864,6 +4989,7 @@ function animate(now) {
       },
     });
 
+    const _tcombat = performance.now();
     resolveCombat(dt, world.scene, {
       // Bullets, mussels, ricochets, starfish and shrapnel all land here; the
       // projectile carries the tag that tells them apart.
@@ -4934,6 +5060,7 @@ function animate(now) {
         if (e.charmTimer > 0) feedback('harpCharm', { x, y, scale: 1.2 });
       },
     });
+    perfPhase('combat', performance.now() - _tcombat);
     processPendingSplashes(); // safe now that resolveCombat's own loop has finished
 
     // Elemental statuses — venom and infection ticking, chill thawing, the
@@ -5659,11 +5786,13 @@ function animate(now) {
     // that writes it is in the branch above: without this the schools would
     // spend the whole descent fleeing the last strike a dead seal wound up.
     setStrikeThreat(null);
+    const _tenemies = performance.now();
     updateEnemies(dt, world.scene, player.mesh.position, (x, y) => {
       feedback('chumEaten', { x, y, scale: 0.8 });
     }, (x, y, e) => {
       feedback('chumHoover', { x, y, vx: -e.vx, vy: -e.vy, scale: 0.7 });
     });
+    perfPhase('enemies', performance.now() - _tenemies);
     // The one thing that still SPAWNS after the run is over. Same dilated dt as
     // the rest of the descent, so the arrivals slow with it instead of marching
     // in at full speed under a slow-motion corpse.
@@ -5757,6 +5886,7 @@ function animate(now) {
       promptText: resolveCalloutText(CALLOUTS.get('strikeNow'), inputDevice(), inputTokens()),
     }
     : null;
+  const _tfx = performance.now();
   updateToasts(realDt, world.camera, chainPin);
   // WHETHER IT TOOK IT. Asked rather than assumed: the banner only carries the
   // line while it is actually on screen, and "is there a chain running" is not
@@ -6058,7 +6188,13 @@ function animate(now) {
   // with it. Ticking here means a state is always live from the first frame,
   // rather than appearing dead until something else happens to rebuild it.
   if (!gameState.running || gameState.paused) {
-    if (CONFIG.animation.enabled) {
+    // NOT DURING THE DEATH DIVE, which drives the controller itself. Once the
+    // seal is dead its skeleton is a ragdoll on a clock that is neither this
+    // one nor the water's but a mix of the two (CONFIG.death.flop.clock), and
+    // advancing the springs here as well would integrate every one of them
+    // twice a frame — a corpse that flops at double speed and settles at half
+    // the damping it was tuned with. See updateRagdoll in systems/deathDive.js.
+    if (CONFIG.animation.enabled && !deathState.active) {
       const idleState = stateForSpeed(0, player.aboveSurface);
       player.anim?.update(realDt, idleState, false);
     }
@@ -6361,15 +6497,19 @@ function animate(now) {
     }
     lightningStrikes.length = 0;
   }
+  perfPhase('fx', performance.now() - _tfx);
   // The rest of the landing. On `realDt` and immediately before the particles
   // it fires, because the two are one clock: the stage table schedules bursts
   // against how far the cavity's own arc has run, and the cavity is solved on
   // this one. See systems/reentrySplash.js.
   updateReentrySplash(realDt);
+  const _tparticles = performance.now();
   updateParticles(realDt);
+  perfPhase('particles', performance.now() - _tparticles);
   // The camera is what turns a finger on the glass into a point in the water,
   // and the strike meter is what makes a charging finger grow — see updateTouch
   // in systems/grid.js. Both are handed in rather than imported there.
+  const _tcamera = performance.now();
   world.grid.update(realDt, player.mesh.position, player.velocity, {
     camera: world.camera,
     charging: strikeState.charging,
@@ -6518,10 +6658,13 @@ function animate(now) {
   // while sweeping a slider — `fps` says whether it is fast, `worst` says
   // whether it is smooth, and they move independently.
   const pw = perfWindow();
+  perfPhase('camera', performance.now() - _tcamera);
   setTunerMeta(
     `${Math.round(1 / Math.max(realDt, 0.0001))} fps · worst ${pw.worstMs.toFixed(0)}ms · ${pw.hitches} drops · ${info.calls} draws · ${mpix.toFixed(1)} Mpix · ${enemies.length} enemies · ${projectiles.length} shots · ${particleCount()} bits · ${flightVoiceCount()} voices`
   );
+  const _trender = performance.now();
   post.render(world.scene, world.camera, realDt);
+  perfPhase('render', performance.now() - _trender);
 
   // THE TROPHY, and it has to be here — on the line after the draw, inside the
   // same frame. The renderer runs without `preserveDrawingBuffer` (see
@@ -6573,4 +6716,5 @@ function animate(now) {
       showSnapshotPrint(kept?.url, kept ?? meta);
     }
   }
+  perfFrameJs(performance.now() - _tframe);
 }

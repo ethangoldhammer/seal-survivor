@@ -192,9 +192,16 @@ const STYLES = `
      z-index at all, which is exactly that bug: a corner of hexes sitting on top
      of the run's own menus.
 
-     The ladder, lowest first: hive, HUD, boss bar, menus, toasts, transitions.
-     A menu is a thing you are being asked to act on; the hive is a readout of
-     what you already hold, and it has no business over the top of one. */
+     THE LADDER, LOWEST FIRST: hive, HUD, boss bar, grave labels, toasts and
+     callouts, menus, the flying card, transitions. A menu is a thing you are being asked to act
+     on; everything below it is the run REPORTING — a readout of what you
+     already hold, a number off a kill, a coach line, the FOOD CHAIN! banner —
+     and none of that has any business over the top of one.
+
+     The banner is why the menus moved up rather than the feedback moving down.
+     Toasts sit above the HUD on purpose (a score pop belongs over the score it
+     is adding to), so the fix could not be to drop them under it; the menus had
+     to clear the whole feedback family instead. See .sv-center. */
   .sv-hive { pointer-events: none; position: fixed; z-index: 1; }
   .sv-hive[data-corner="bl"] { left: 14px; bottom: 14px; }
   .sv-hive[data-corner="br"] { right: 14px; bottom: 14px; }
@@ -355,7 +362,13 @@ const STYLES = `
      corner there and shrink by this much" — with a centred origin the scale
      pulls the card away from the point being translated to and the landing
      misses by half the difference in size. */
-  .sv-hive-flier { position: fixed; pointer-events: none; z-index: 7;
+     ABOVE THE MENU IT CAME OUT OF. The flight starts on the frame the card is
+     picked and the other two cards are still dithering OUT underneath it, so
+     this has to clear .sv-center (8) — at 7 the chosen card flew away BEHIND
+     the two it was chosen over. It is the menu's own object in transit, not
+     something the run is narrating, which is why it goes over the menu rather
+     than under it with the toasts. */
+  .sv-hive-flier { position: fixed; pointer-events: none; z-index: 9;
     transform-origin: 0 0; will-change: transform, opacity; }
   /* The words do not survive the trip: the tile has no room for them, and text
      scaled to 28% is a grey smear. Gone well before the landing so what arrives
@@ -1081,7 +1094,20 @@ const STYLES = `
     font-variant-numeric: tabular-nums; }
   .sv-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(232,236,243,0.55); font-weight: 500; }
   .sv-value { font-size: 15px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
-  .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; z-index: 4; }
+  /* EVERY MENU, ABOVE EVERYTHING THE RUN IS SAYING. This was z-index 4, which
+     put it under the toast layer and the callout layer (both 6) — so the FOOD
+     CHAIN! banner, a coach line or a score pop that was still alive when the
+     level-up cards arrived finished its life on top of them. The cards are the
+     only thing on screen you are being asked to act on; nothing the fight is
+     narrating gets to sit in front of that. 8 clears the whole family in one
+     number rather than nudging each of them down. See the ladder note above.
+
+     Every menu is a .sv-center, so they all move together — level-up, the
+     score card, Options, the leaderboard. The z-index also makes this a
+     stacking context, which is why the numbers INSIDE a menu (.sv-card-fx at
+     5, .sv-flip-bubbles at 6, .sv-shot-view at 8) are local and needed no
+     change when this one did. */
+  .sv-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: all; z-index: 8; }
   .sv-menu { background: rgba(12,14,22,0.88); border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 28px 32px; text-align: center; color: #e8ecf3; max-width: 90vw; }
   .sv-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
   .sv-sub { font-size: 13px; color: rgba(232,236,243,0.6); margin-bottom: 18px; line-height: 1.6; }
@@ -1505,6 +1531,11 @@ const STYLES = `
   .sv-btn:disabled { opacity: 0.5; cursor: default; }
   .sv-status { font-size: 11px; color: rgba(232,236,243,0.5); min-height: 15px; margin-bottom: 8px; letter-spacing: 0.03em; }
   .sv-status-err { color: #ffab6f; }
+  /* Score pops, proc toasts and the FOOD CHAIN! banner. ABOVE the HUD (a
+     number belongs over the score it is adding to) and BELOW the menus at 8 —
+     do not raise this past them. The banner outlives the frame the level-up
+     cards arrive on, and at 6 against menus at 4 it spent the rest of its life
+     sitting on top of the cards. See the ladder note above .sv-hive. */
   .sv-toast-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 6; }
   .sv-hidden { display: none !important; }
 
@@ -1520,8 +1551,9 @@ const STYLES = `
      the mix and the lens glide back to normal (systems/deathDive.js). It is a
      plain wash of the background colour for now: THIS is the element the
      transition graphic goes in — give it a child and the timing around it
-     doesn't need to change. Above the menus, below nothing. */
-  .sv-transition { position: absolute; inset: 0; pointer-events: none; z-index: 5;
+     doesn't need to change. Above the menus, below nothing — it has to cover
+     the score card it is wiping away, so it moves whenever .sv-center does. */
+  .sv-transition { position: absolute; inset: 0; pointer-events: none; z-index: 10;
     background: #05060a; opacity: 0; transition: opacity var(--sv-trans, 0.9s) ease; }
   .sv-transition.sv-trans-in { opacity: 1; }
 
@@ -1553,6 +1585,40 @@ const STYLES = `
      Every rule below was written against a finding from that audit. The numbers
      in the comments are what it measured before the rule existed.
      ========================================================================= */
+
+  /* --- THE COACH IS NOT THE GAME -----------------------------------------
+     The first-run tips shrink on a phone, and they are the only voice that
+     does. Two things stack up to make them the biggest thing on a small
+     screen, and neither is visible on a desktop:
+
+       the type is a PIXEL FONT at roughly one em per glyph (see the note on
+       --sv-scale and Inter elsewhere), so a 20px tip is 20px PER CHARACTER
+       wide — a sentence of fifty of them is a thousand pixels of text on a
+       375px screen, and
+
+       every one of them is text the player has to read PAST to keep playing.
+       A tip is a caption on the fight, not an event in it.
+
+     So the coach's own scale factor comes down in two steps rather than one:
+     a pad and a phone are not the same screen, and 0.55 on a pad would be a
+     small line in a lot of empty water. Everything reads it — the band's
+     control tips through the First-run tip role (the compact flag in
+     textRoles.js) and the tips out in the water through .sv-callout-world.
+     No backticks anywhere in this block: the whole sheet is a template literal
+     and one would end it.
+
+     THE WIDTH GOES THE OTHER WAY at the same time. The world tip is capped at
+     62vw so a label can stand in a gap in the water beside its subject, which
+     is right at desktop size and wrong at eleven characters a line: on a phone
+     the same cap turned a sentence into a five-line brick. Smaller type buys
+     the room back, and 84vw of it wraps into two or three honest lines. */
+  @media (max-width: 700px) {
+    :root { --sv-tipScale: 0.68; }
+    .sv-callout-world { max-width: 84vw; }
+  }
+  @media (max-width: 430px) {
+    :root { --sv-tipScale: 0.55; }
+  }
 
   /* --- THE LEVEL METER, UP THE LEFT EDGE ---------------------------------
      A run-long progress bar wants the longest edge it can have, and on a phone

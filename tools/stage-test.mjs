@@ -494,8 +494,16 @@ const assetResult = hold.handleHotUpdate({ file: resolvePath(process.cwd(), 'pub
 check('nor does an uploaded asset',
   Array.isArray(assetResult) && sent.at(-1).data.count === before);
 
+// Releasing does not un-swallow anything. Those updates were dropped and are
+// never coming back, so the page is STILL stale the moment the latch lifts —
+// and this is the report the badge lives on now that a run holds the latch
+// with the bar shut. Answering 0 here would have the notice going dark over a
+// page running code nobody had edited in ten minutes.
 handlers['stage:hold']({ hold: false }, client);
-check('releasing clears the backlog', sent.at(-1).data.count === 0);
+check('releasing still reports what was swallowed', sent.at(-1).data.count === 2,
+  'the page does not become fresh by stopping holding it still');
+check('and names those files, so the notice can say which',
+  sent.at(-1).data.files.includes('a.js') && sent.at(-1).data.files.includes('b.js'));
 check('and updates flow again',
   hold.handleHotUpdate({ file: '/src/a.js', server: fakeServer }) === undefined);
 
@@ -503,6 +511,9 @@ check('and updates flow again',
 // while the latch is on, so the server holds for a client that is gone and
 // every later edit vanishes with nothing on screen to explain it.
 handlers['stage:hold']({ hold: true }, client);
+check('but the backlog itself was cleared, so the next hold starts fresh',
+  sent.at(-1).data.count === 0,
+  'otherwise a run inherits the staleness of the one before it, forever');
 hold.handleHotUpdate({ file: '/src/c.js', server: fakeServer });
 handlers.connection();
 check('a fresh page connection drops the latch',

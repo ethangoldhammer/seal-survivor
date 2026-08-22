@@ -51,6 +51,22 @@ const mod = join(dir, 'm.mjs');
 await writeFile(mod, src.replace('function spliceHandPresets(', 'export function spliceHandPresets('));
 const { spliceHandPresets, cellFor } = await import('file://' + mod);
 
+// A SECOND copy, pointed at a scratch CSV. writeCsv writes the real
+// path/src/assets.csv, so testing it against the live file is not an option —
+// and neither is skipping it, because appending a row to that file is the part
+// of this tool that edits the roster.
+const CSV_FIXTURE = join(dir, 'assets.csv');
+const csvMod = join(dir, 'csv.mjs');
+await writeFile(csvMod, src
+  .replace(/const CSV = .*;/, `const CSV = ${JSON.stringify(CSV_FIXTURE)};`)
+  .replace('async function writeCsv(', 'export async function writeCsv('));
+const { writeCsv } = await import('file://' + csvMod);
+
+const HEADER = 'id,size,skin,surface,notes';
+const seed = (rows) => writeFile(CSV_FIXTURE, [HEADER, ...rows].join('\n') + '\n');
+const readCsv = async () => (await readFile(CSV_FIXTURE, 'utf8')).split('\n').filter((l) => l.trim());
+const rowFor = async (id) => (await readCsv()).find((l) => l.startsWith(id + ','));
+
 const wrap = (block) => `  toonShade: {\n    presets: {\n${block}\n    },\n  },\n`;
 
 // The three shapes a hand-authored preset block comes in. All three are real:
@@ -162,6 +178,71 @@ console.log('\nTHE SURFACE CELL');
   check('an entry naming neither is skipped with a note',
     cellFor({ surface: 'sparkles' }, 'x', notes) === null && notes.length === 1,
     notes.join('; '));
+}
+
+// --- a recorded asset with no CSV row gets one ------------------------------
+//
+// This used to be a refusal — "no row in assets.csv, add one, then re-run" —
+// on the grounds that a row carries a size and inventing one would resize the
+// creature. The answer is that a BLANK size cell is not an invented size: it
+// is what a missing row already means. These checks are what hold that.
+{
+  console.log('\nA RECORDED ASSET WITH NO ROW IN assets.csv');
+
+  const applied = {
+    enemyTuna: { layers: { noise: 'tuna', toon: 'tuna', biolum: 'tuna' } },
+    aaaFirst: { layers: { biolum: 'hide' } },
+  };
+
+  await seed(['enemyShark,2.66,,noise:shark,', 'enemyStingray,3.1,,,', 'zzzLast,1,,,']);
+  const notes = [];
+  const changed = await writeCsv(applied, { dry: false }, notes);
+
+  check('the row is created rather than refused',
+    !notes.some((n) => n.startsWith('!')), notes.join(' · '));
+  check('and it is reported as a change',
+    changed.length === 2, changed.join(' · '));
+
+  const tuna = await rowFor('enemyTuna');
+  check('the surface it was recorded with lands in the row',
+    /^enemyTuna,,,noise:tuna\+toon:tuna\+biolum:tuna,/.test(tuna ?? ''), tuna);
+
+  const cells = (tuna ?? '').split(',');
+  check('the SIZE cell is blank — a missing row already means 1, so nothing resizes',
+    cells[1] === '', `size cell = "${cells[1]}"`);
+  check('the SKIN cell is blank — the surface carries its own preset',
+    cells[2] === '', `skin cell = "${cells[2]}"`);
+  check('the row carries a note saying why the size is blank',
+    /blank/i.test(tuna ?? ''));
+
+  const ids = (await readCsv()).slice(1).map((l) => l.split(',')[0]);
+  check('the file is still sorted by id — the row is inserted, not appended',
+    ids.every((v, i) => i === 0 || ids[i - 1] <= v), ids.join(', '));
+  check('...including one that sorts to the very front', ids[0] === 'aaaFirst', ids[0]);
+
+  // The lab re-records the same creature constantly. A second pass must be a
+  // no-op, not a duplicate row.
+  const notes2 = [];
+  const again = await writeCsv(applied, { dry: false }, notes2);
+  check('re-recording the same choice changes nothing',
+    again.length === 0, again.join(' · '));
+  check('and does not add a second row',
+    (await readCsv()).filter((l) => l.startsWith('enemyTuna,')).length === 1);
+
+  // --dry has to stay honest now that this writes more than one cell.
+  await seed(['enemyShark,2.66,,noise:shark,']);
+  const before = await readFile(CSV_FIXTURE, 'utf8');
+  await writeCsv(applied, { dry: true }, []);
+  check('--dry adds nothing to the file',
+    (await readFile(CSV_FIXTURE, 'utf8')) === before);
+
+  // A file somebody has been appending to by hand is not sorted, and pretending
+  // it is puts the new row in an arbitrary place that looks deliberate.
+  await seed(['zzzLast,1,,,', 'enemyShark,2.66,,noise:shark,']);
+  await writeCsv({ enemyTuna: applied.enemyTuna }, { dry: false }, []);
+  const unsorted = (await readCsv()).slice(1).map((l) => l.split(',')[0]);
+  check('an unsorted file gets the row at the end instead',
+    unsorted[unsorted.length - 1] === 'enemyTuna', unsorted.join(', '));
 }
 
 await rm(dir, { recursive: true, force: true });

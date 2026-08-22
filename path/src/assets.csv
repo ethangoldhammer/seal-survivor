@@ -1,7 +1,7 @@
 id,size,skin,surface,notes
 attractorOrb,2.06,,,
 belugaDrone,3.1,,,
-bossBarrel,1,,,"the exploding barrel every boss but the yacht throws (the yacht overrides it with moneyRoll1). Size is 1 on purpose: the sizing that matters is `fit` in assets.js, set to the length of the oval primitive this replaces, so the model swap is a look change and not a balance one."
+bossBarrel,1,,toon:bossBarrel,"the exploding barrel every boss but the yacht throws (the yacht overrides it with moneyRoll1). Size is 1 on purpose: the sizing that matters is `fit` in assets.js, set to the length of the oval primitive this replaces, so the model swap is a look change and not a balance one."
 bossYacht,1,,biolum:bossYacht,"The boss yacht. SIZE 1 IS NOT A CHOICE - it is what this asset already had. An id with no row resolves to 1 (sizeMultiplierFor returns ?? 1, and setting 1 deletes the entry), so the row exists to carry the surface cell and leaves the scale exactly where it was. The hull is sized by fit: 13 in assets.js, measured against the trawler, and that is the number to move."
 bounceShot,1.58,,,
 bubbleOrb,2.84,,,
@@ -37,7 +37,7 @@ enemySeaTurtle,3.08,,,
 enemyShark,2.66,,noise:shark+toon:shark,
 enemySquid,1,squidGlow,biolum:squidGlow,"Added for the SKIN, not the size. size=1 is what this asset already had - it has never carried a row, and an asset with no row spawns at 1 - so this changes nothing about how big the squid is or how big it is to hit. Left deliberately: the hitbox is derived from the visual scale, so retuning it here would be a balance edit smuggled in with a look. Its 2.8 fit against enemyShark's 2.66x2.5 is a separate question, worth asking on its own."
 enemyStingray,3.1,,,
-enemyTuna,1,tuna,noise:tuna+toon:tuna+biolum:tuna,"Added for the SURFACE, not the size. enemyTuna has never carried a row, and an asset with no row spawns at 1 - so size=1 is exactly what it is already, and this changes nothing about how big the tuna is or how big it is to hit. Its night variant enemyGlowTuna has no row either and is therefore also 1: keep these two equal, or the school changes size at dusk. The night one wears lantern rather than these three layers, on purpose."
+enemyTuna,,,noise:tuna+toon:tuna+biolum:tuna,"Added for the SURFACE, not the size. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the tuna wears and nothing about how big it is or how big it is to hit. Its night variant enemyGlowTuna has no row either and so is also 1 - keep these two equal, or the school changes size at dusk. The night one wears lantern rather than these three layers, on purpose."
 enemyWalkingCrab,2.3,,noise:walkingCrab+toon:walkingCrab+biolum:carapace,matched to enemyEmberCrab; 2.3 reproduces the old crab's on-screen height on the new rig
 harp,1,,,"the orbiting harp - fit is 1.6 world units against the seal's 2.6, so this column is the multiple of a deliberately under-sized instrument"
 headstone,1,,,"the upright run marker. Size 1: `fit` in assets.js (1.8) is where the scale lives, and it is one factor shared across the three stones so the set stays in proportion."
@@ -47,7 +47,7 @@ moneyRoll1,1,,,"the yacht's explosive — a banded roll of hundreds. Size is 1 o
 moneyRoll2,1,,,spare roll from the same pack. Unused by the yacht's two guns; here so a row exists before anybody reaches for it — an asset with no row spawns at 1 silently.
 moneyRoll3,1,,,the yacht's seeker — the shorter fit of the four
 moneyRoll4,1,,,"spare roll, seeker size. See moneyRoll2."
-musicNote,1,,,the harp's note
+musicNote,1,,biolum:musicNote,the harp's note
 musselOpen,2,,noise:mussel+toon:mussel,"The mussel's detonation state. Equal to missile on purpose - the two are the same animal and the pop is the shell OPENING, not the shell growing, so any difference here would read as the wrong thing. Same preset too: one surface, two states."
 octoGrabber,1.34,,biolum:octoGrabber,
 orcaFriendBull,1,,noise:orcaFriendBull+toon:orcaFriendBull,"The pod leader — Orca Family, slot 0."

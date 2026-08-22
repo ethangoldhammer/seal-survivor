@@ -312,10 +312,22 @@ export function reloadHold() {
     configureServer(server) {
       server.ws.on('stage:hold', (data, client) => {
         holding = !!data?.hold;
-        if (!holding) pending.clear();
         // Straight back to the client that asked, so the bar can confirm the
         // latch actually landed rather than assuming it did.
-        client.send('stage:pending', { holding, count: pending.size, files: [] });
+        //
+        // Reported BEFORE the clear, and with the file list, because releasing
+        // the latch does not un-apply anything: those updates were swallowed
+        // (handleHotUpdate returned []) and are never coming back. The page is
+        // still stale the instant a run ends, and a release that answered
+        // `count: 0` would be telling the client it was fresh — which is how a
+        // held run would end with the badge going dark over a page running
+        // code nobody had edited in ten minutes.
+        client.send('stage:pending', {
+          holding,
+          count: pending.size,
+          files: [...pending].map((f) => basename(f)),
+        });
+        if (!holding) pending.clear();
       });
 
       // A page that reloads while the latch is on would otherwise leave the
