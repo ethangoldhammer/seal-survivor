@@ -136,10 +136,19 @@ import { beginTitleSeal, endTitleSeal, resetTitleSeal, titleSealEngaged, updateT
 // it poses the run's own seal and claims the run's own camera, neither of which
 // the UI layer has ever known about.
 import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuGrid } from './systems/mainMenu.js';
+// The tip sheet, for the menu's fourth button. Parsed here the way pauseMenu,
+// riveSplash and ui all parse it — one `?raw` import and one parse per screen
+// that can open the panel, which is a few hundred bytes and no shared state
+// between screens that are never up at the same time.
+import { openTipSheet, tipSheetOpen, closeTipSheet } from './ui/tipJar.js';
+import { parseTipCsv } from './tipTable.js';
+import tipsCsv from './tips.csv?raw';
+
+const TIP_TIERS = parseTipCsv(tipsCsv);
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
-import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld } from './ui/ui.js';
+import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple } from './ui/upgradeHive.js';
 import { startHiveReward, hiveRewardActive, updateHiveRewardNav, resetHiveReward, bossDividendStacks } from './ui/hiveReward.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, CALLOUTS } from './systems/callouts.js';
@@ -536,6 +545,12 @@ async function boot() {
     onRestart: restartRun,
     onLevelChoice: applyLevelChoice,
     onResume: () => setPaused(false),
+    // The phone's only way in. A keyboard has Escape and a pad has Start; a
+    // thumb had neither, which meant Options, Resume and Restart were all
+    // unreachable from a run on mobile. Routed through setPaused rather than
+    // showPauseMenu so it takes the same path the key does — canPause(), the
+    // clock, and clearPendingInput on the way back out.
+    onPause: () => setPaused(true),
     // Restarting from the pause menu goes straight into a new run rather than
     // through the death transition restartRun uses: nothing is dilated,
     // filtered or pushed in here — there is nothing to glide back FROM, and a
@@ -1097,6 +1112,11 @@ function showMainMenu() {
           showHud();
           startGame();
         },
+        // THE PRIMARY BUTTON, said out loud rather than inferred from being
+        // first: bigger, with a heavier stroke on the glyphs, and a louder
+        // halo and a hotter tile under the pointer. See `label` in
+        // CONFIG.splashBust.menu for what each of those is worth.
+        lead: true,
       },
       // THE SETTINGS PANEL, on its own rather than behind a pause. Same surface
       // the pause menu is — one panel, one set of controls, one place they are
@@ -1114,7 +1134,27 @@ function showMainMenu() {
       // The board on its own surface, rather than only as a panel inside the
       // score card — until now the only way to look at it was to die. See
       // showLeaderboard.
-      { label: 'Leaderboard', onPress: showLeaderboard },
+      //
+      // BROKEN OVER TWO LINES, and it is the same word — `lines` is a place to
+      // break, not different copy, and `label` is still the whole string for
+      // everything that is not the type. The shipped face is a pixel monospace
+      // at one em per glyph, so eleven characters on one line forced every
+      // other label on the screen down to fit beside it; six is nearly twice
+      // the type size for free. Move the break by moving it here.
+      { label: 'Leaderboard', lines: ['Leader', 'board'], onPress: showLeaderboard },
+      // THE JAR, at last on the screen people actually stop on. It was already
+      // on the name card, in the pause panel and under the score — three
+      // places you reach by either not having started or having died. This is
+      // the fourth, and it is the one that closes the diamond: the arrangement
+      // has a cell under the two side buttons whether anything is in it or not
+      // (see `diamondCells`), so the fourth button costs the composition
+      // nothing.
+      //
+      // The SHEET, not the link. `tipJarLink` is an anchor that navigates, and
+      // a hex button is not an anchor — the tiers panel is what the other
+      // three call sites open anyway, and it is what quotes what a tip buys.
+      // Stacked at its own space, for the same reason as the line above.
+      { label: 'Tip jar', lines: ['Tip', 'jar'], onPress: () => openTipSheet({ tiers: TIP_TIERS }) },
     ],
   });
 }
@@ -1133,6 +1173,11 @@ function closeMainMenu() {
   if (!mainMenuActive()) return;
   hideLeaderboard();
   hidePauseMenu();
+  // ...and the tip sheet, which is the fourth button's panel and the third
+  // thing on this list for the same reason as the other two: it is a DOM
+  // surface with its own Escape handler, and nothing about a run starting
+  // takes it down.
+  closeTipSheet();
   mainMenu()?.release();
 }
 
@@ -4169,6 +4214,18 @@ function animate(now) {
   drawsLastFrame = world.renderer.info.render.calls;
   world.renderer.info.reset();
 
+  // THE TOUCH PAUSE BUTTON, and it lives at the TOP of the frame rather than
+  // down beside updateHUD, because down there it is inside
+  // `if (running && !paused && stageSimulates())` — a block that by definition
+  // stops running the moment the thing this button asks for has happened. The
+  // button would have shown itself on the first frame of a run and then never
+  // been told to go away, sitting live over the pause menu it had just opened.
+  //
+  // canPause() is already the single source of truth for whether the Escape key
+  // does anything, so this asks it the same question rather than tracking the
+  // four screens (level-up, death dive, score card, menu) separately.
+  setPauseButtonVisible(canPause() && !isPauseOpen());
+
   // Handed the STAMP, not rawDt, and deliberately before the clamp below —
   // see systems/perfLog.js. `Math.min(..., 0.05)` is correct for the
   // simulation and would record every hitch in the game as exactly 50ms.
@@ -6866,7 +6923,11 @@ function animate(now) {
   // `pad` is off while the settings panel is in front of the menu: updatePauseNav
   // is already spending the pad's confirm on that frame, and one press must not
   // also squash the hexagon behind the row being read.
-  if (mainMenuActive()) mainMenu()?.update(realDt, { pad: !isPauseOpen() });
+  // The pad is off while ANY panel this menu opened is in front of it — the
+  // settings panel and now the tip sheet. Both take the one confirm button, so
+  // leaving the pad on presses the hexagon behind whatever the player is
+  // actually looking at.
+  if (mainMenuActive()) mainMenu()?.update(realDt, { pad: !isPauseOpen() && !tipSheetOpen() });
   // The stage parks the shot on the seal, and records where it is so a staged
   // event fires ON the seal rather than at wherever the world origin happens
   // to be. Unconditional — the position has to be current the moment the panel

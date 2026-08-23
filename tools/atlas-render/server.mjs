@@ -24,6 +24,7 @@ import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { ICON_FORMATS, ICON_EXTS, isIconFile } from './icon-formats.mjs';
 
 const run = promisify(execFile);
 
@@ -39,7 +40,10 @@ await mkdir(SHOTS, { recursive: true });
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.json': 'application/json', '.glb': 'model/gltf-binary', '.fbx': 'application/octet-stream',
-  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+  // The image formats come from the shared list rather than being repeated,
+  // so serving an uploaded icon back for the preview can never disagree with
+  // the gate that accepted it. See icon-formats.mjs.
+  ...ICON_FORMATS,
 };
 
 // Prefix -> directory. Anything outside these is a 404, and `normalize` plus the
@@ -89,12 +93,21 @@ const server = http.createServer(async (req, res) => {
   //
   // Extension-checked, not sniffed: this only ever writes into `custom/` and the
   // only consumer is a data: URI in a generated module, so the question is not
-  // "is this really a webp" but "is this something a browser will render". A
+  // "is this really a webp" but "is this something a browser will render". The
+  // list of those lives in icon-formats.mjs, shared with the bake. A
   // wrong extension shows up immediately as a broken preview in the picker.
+  // The picker reads its file input's `accept` from here rather than hardcoding
+  // one, which is the fourth copy of the format list removed.
+  if (req.method === 'GET' && url.pathname === '/icon-formats.json') {
+    res.writeHead(200, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ exts: ICON_EXTS }));
+    return;
+  }
+
   if (req.method === 'POST' && url.pathname.startsWith('/custom/')) {
     const name = url.pathname.slice('/custom/'.length).replace(/[^\w.-]/g, '');
-    if (!/\.(webp|png|jpe?g)$/i.test(name)) {
-      res.writeHead(400).end('webp, png or jpg only');
+    if (!isIconFile(name)) {
+      res.writeHead(400).end(`${ICON_EXTS.join(', ')} only`);
       return;
     }
     const chunks = [];

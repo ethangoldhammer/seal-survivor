@@ -88,17 +88,34 @@ mountMainMenu({
   seal: player,
   root,
   items: [
-    { label: 'Play', onPress: () => { say('Play — releasing: watch the pull-out'); mainMenu()?.release(); } },
-    // The shipped row: Play / Options / Leaderboard. The labels are what the
-    // cell has to fit (see the shrink in hexMenu), so a stand-in with a
-    // different word length composes a different screen.
+    // `lead` and `lines` exactly as main.js sets them — the emphasis and the
+    // line breaks are most of what this page is now for, and a stand-in
+    // without them composes a screen the game does not have.
+    { label: 'Play', lead: true, onPress: () => { say('Play — releasing: watch the pull-out'); mainMenu()?.release(); } },
+    // The shipped four: Play / Options / Leaderboard / Tip jar. The labels are
+    // what the cell has to fit (see the shrink in hexMenu), so a stand-in with
+    // a different word length composes a different screen — which is also why
+    // the fourth is here at all rather than being left to the game.
     { label: 'Options', onPress: () => say('Options — the standalone Settings panel') },
-    { label: 'Leaderboard', onPress: () => say('Leaderboard — the board on its own surface') },
+    { label: 'Leaderboard', lines: ['Leader', 'board'], onPress: () => say('Leaderboard — the board on its own surface') },
+    { label: 'Tip jar', lines: ['Tip', 'jar'], onPress: () => say('Tip jar — the tiers panel, over this screen') },
   ],
 });
 
 function say(text) {
   pressedEl.textContent = text;
+}
+
+// --- THE ARRANGEMENTS, SIDE BY SIDE ----------------------------------------
+// The game picks one of these off the viewport aspect and never switches on a
+// screen nobody is rotating, so this page is the only place they can be looked
+// at against each other. `?shape=diamond` pins one from the URL, and the number
+// keys walk them live in the order below — 1 is the shipped portrait figure.
+const SHAPES = ['diamond', 'row', 'stack', 'triDown', 'triUp', 'trefoil', 'trefoilLeft'];
+const wanted = new URLSearchParams(location.search).get('shape');
+if (wanted && SHAPES.includes(wanted)) {
+  mainMenu()?.reshape(wanted);
+  say(`shape: ${wanted}`);
 }
 
 let last = performance.now();
@@ -161,6 +178,8 @@ function shoot(name) {
 }
 window.addEventListener('keydown', (e) => {
   if (e.key === 's') shoot(`menu-${Date.now()}`);
+  const n = Number(e.key) - 1;
+  if (SHAPES[n]) say(`shape: ${mainMenu()?.reshape(SHAPES[n])}`);
   // The release, from the keyboard, so the pull-out can be triggered without
   // finding a button — which is the only way to drive it from the agent's pane.
   if (e.key === 'p') { say('released'); mainMenu()?.release(); }
@@ -174,4 +193,4 @@ window.addEventListener('keydown', (e) => {
 // systems/hexMenu.js), so setting one here moves the screen immediately and a
 // value can be tried before it is typed into a slider. Writing a uniform
 // directly would not survive a frame, which is the point.
-window.mainMenuLook = { world, post, player, menu: () => mainMenu(), shoot, CONFIG };
+window.mainMenuLook = { world, post, player, menu: () => mainMenu(), shoot, CONFIG, SHAPES };

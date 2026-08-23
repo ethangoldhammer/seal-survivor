@@ -214,7 +214,7 @@ function buildPanel() {
     </div>
     <div id="imgBox" style="display:none">
       <div class="row" style="grid-template-columns:74px 1fr">
-        <label for="imgFile">upload</label><input type="file" id="imgFile" accept=".webp,.png,.jpg,.jpeg">
+        <label for="imgFile">upload</label><input type="file" id="imgFile">
       </div>
       <div class="row" style="grid-template-columns:74px 1fr">
         <label for="imgPath">path</label><input type="text" id="imgPath" placeholder="/sprites/starfish-1.webp">
@@ -233,6 +233,14 @@ function buildPanel() {
     if (!cur.image) delete cur.image;
     markDirty(); rebuild();
   });
+  // `accept` comes from the server rather than being written into the markup:
+  // the upload gate is the thing that actually decides, and a stale accept list
+  // here would either hide a format that works or offer one that 400s.
+  fetch('/icon-formats.json')
+    .then((r) => r.json())
+    .then(({ exts }) => { $('imgFile').accept = exts.join(','); })
+    .catch(() => { /* leave it open; the gate is still the real check */ });
+
   $('imgFile').addEventListener('change', async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;

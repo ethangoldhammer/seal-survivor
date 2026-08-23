@@ -119,7 +119,16 @@ export const SCHEMA = {
   // the wrong shape. Resolution stays under Video with the rest of the picture;
   // everything here is a thing the game can stop DOING.
   performance: {
-    label: 'Performance',
+    // 'Perf' AND NOT 'Performance', which is a layout constraint and not a
+    // preference. This label's only reader is the tab strip (pauseMenu.js), and
+    // a flex item cannot shrink below its own min-content width — the full word
+    // is the longest on the strip and overflowed the panel by 22px at 375px,
+    // with the last tab 37px outside the card. Wrapping fixes that and costs a
+    // whole extra row, which the shortest phone does not have: it pushed the
+    // panel's footnote 3px off the bottom. One row of five short words is the
+    // only shape that fits both. 'HUD' beside it is already an abbreviation, so
+    // the register matches. Measured both ways with npm run layout.
+    label: 'Perf',
     items: [
       // THE PRESET, and the only setting in this file that writes other
       // settings. `null` is Custom and is what any individual change below

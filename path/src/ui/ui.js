@@ -17,7 +17,7 @@ import { feedMouse, menuInput, resetMenuInput } from '../input.js';
 // mid-play, so both honour the system setting by skipping entirely. The CSS
 // rule at the bottom of STYLES only disables transitions, which would not touch
 // a canvas animation or a rAF loop.
-import { touchPrimary, prefersReducedMotion } from '../devices.js';
+import { touchPrimary, prefersReducedMotion, narrowScreen } from '../devices.js';
 // One setting, read live rather than pushed in: where the health and air
 // gauges are drawn. settings.js imports nothing from here, so this is a leaf
 // dependency and not half of a cycle.
@@ -576,6 +576,76 @@ const STYLES = `
      THE BAR IS AS THICK AS THE TYPE IT CARRIES, min 14px, rather than a fixed
      6px with text laid over it: the Level role's size is tunable (Text panel),
      and a fixed track would clip it the moment anyone dragged that slider. */
+  /* --- THE PAUSE BUTTON, which exists only for a thumb ---------------------
+     A phone has no Escape key, so without this there is no way into Options,
+     Resume or Restart from a run on mobile at all.
+
+     A DOM BUTTON RATHER THAN A REGION OF THE CANVAS, and that is the whole
+     reason this is safe. input.js binds its touch listeners to the CANVAS and
+     splits every pixel of it between two sticks — stickRoleAt gives the left
+     half to steering and the right half to aiming, with a third contact
+     charging a strike, and there is no dead zone anywhere. A hit test in canvas
+     space would have to carve an exception into the one function whose whole
+     job is that there are no exceptions. This element is a child of .sv-ui,
+     which is a fixed overlay ABOVE the canvas, so a touch that lands here
+     targets this button and never bubbles through the canvas: it cannot become
+     a stick, cannot be read as a strike, and cannot move the aim pointer.
+
+     TOP-LEFT, because it is the only quiet corner. Both thumbs live in the
+     bottom two for the whole run; .sv-bossbar owns the top centre and
+     .sv-hud-corner owns the top right (score, clock, hive). Pushed below the
+     XP track — 14 of .sv-hud inset, 14 of track, and a gap — so it sits under
+     the one thing the top left already has rather than over it.
+
+     44px because that is this file's own floor for a thumb (see the TAP
+     TARGETS block), and the glyph inside is less than half of it: the target is
+     invisible and the mark is two faint bars over empty sky. Screen space is
+     what you can see, and this costs almost none of it. */
+  .sv-pausebtn { display: none; position: fixed; z-index: 4;
+    top: calc(34px + env(safe-area-inset-top, 0px));
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    width: 44px; height: 44px; padding: 0; margin: 0;
+    border: 0; background: none; cursor: pointer;
+    /* OPTING BACK IN. .sv-ui is pointer-events:none so the overlay does not eat
+       the ocean underneath it, and that inherits — every interactive thing in
+       here has to say this or it is decoration. Forgetting it does not look
+       like a CSS bug: the button draws perfectly and simply cannot be pressed,
+       on every platform at once. */
+    pointer-events: all;
+    /* The press must not also scroll, rubber-band or raise a callout.
+       -webkit-touch-callout matters as much as the other three on iOS: a press
+       held past the callout threshold raises the selection/share sheet, and the
+       gesture that opens it fires pointercancel — which would abort a hold of
+       exactly the length this control is asking for. */
+    touch-action: none; -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none; user-select: none;
+    opacity: 0.45; transition: opacity 0.18s ease; }
+  /* Only where there is a thumb. A mouse has Escape, and a second way in that
+     is always on screen would be clutter on the surface it costs the most. */
+  .sv-touch .sv-pausebtn { display: block; }
+  .sv-pausebtn.sv-hidden { display: none; }
+  .sv-pausebtn.sv-arming { opacity: 1; }
+  .sv-pausebtn svg { display: block; width: 44px; height: 44px;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9)); }
+  /* The two bars, deliberately small inside a target more than twice their
+     size — see above. */
+  .sv-pausebtn-glyph { fill: #e8ecf3; }
+  /* THE ARMING RING. A hold, not a tap, is what makes a stray touch harmless:
+     a thumb brushing past this on the way to the stick releases long before
+     the ring closes and nothing happens. Drawn as a stroke the press animates
+     to zero offset, so the player can see how long is left and — the first
+     time — can see that a hold is what is being asked for.
+
+     -90deg so it starts at twelve o'clock, which is where an eye expects a
+     timer to begin. The dash numbers are the circumference of r=19 (119.4),
+     rounded up so no sliver of stroke survives at rest. */
+  .sv-pausebtn-ring { fill: none; stroke: #e8ecf3; stroke-width: 2;
+    stroke-linecap: round; stroke-dasharray: 120; stroke-dashoffset: 120;
+    transform: rotate(-90deg); transform-origin: 22px 22px;
+    transition: stroke-dashoffset 140ms ease; }
+  .sv-pausebtn-track { fill: none; stroke: rgba(232,236,243,0.22); stroke-width: 2; }
+
   .sv-xptop { position: absolute; top: 0; left: 0; right: 0; min-height: 14px;
     display: flex; align-items: center; justify-content: center;
     background: rgba(255,255,255,0.07); overflow: hidden; }
@@ -881,20 +951,21 @@ const STYLES = `
     .sv-playerbars-corner { --sv-track: 22vh; --sv-track-max: 58vh; }
   }
 
-  /* THE COLLISION, and it is a real one. On a phone the score and the clock
-     move to fixed bottom-right (see the responsive block below) — the exact
-     corner these bars are asking for. Rather than moving the gauges somewhere
-     they were not asked to be, the numbers step inboard by the width of the
-     stack: two 13px columns and a 7px gap, plus the same 14px breathing room
-     the corner already keeps from the edge. Applied to .sv-hud rather than to
-     the bars, because the thing that moves is the other block. */
+  /* THE COLLISION THAT USED TO BE HERE. The score and the clock were pinned to
+     the bottom right on a phone — the exact corner these bars ask for — and the
+     numbers stepped inboard by the width of the stack to clear them. They hold
+     the TOP right now (see the responsive block below), which is a corner these
+     columns can never reach: they grow upward from the bottom and are clamped
+     at 72vh, which on the shortest screen this breakpoint covers still leaves
+     the read-outs' whole block untouched.
+     So the sidestep is gone rather than merely disabled. The two classes that
+     drove it are still written by updateHUD — how wide this stack is, and
+     whether the fuel column is standing in it, are facts about the HUD worth
+     publishing to the sheet — and nothing reads them at the moment. That is a
+     hook with no rule on it, not a rule that stopped working. */
   .sv-hud-barcorner .sv-hud-corner { --sv-bars-w: 47px; }
   /* ...and 20px wider again with the fuel column standing beside them. */
   .sv-hud-barcorner.sv-hud-boostbar .sv-hud-corner { --sv-bars-w: 67px; }
-  @media (max-width: 700px) {
-    .sv-hud-barcorner .sv-hud-corner {
-      right: calc(14px + var(--sv-bars-w, 0px) + env(safe-area-inset-right, 0px)); }
-  }
 
   /* THE BOSS BAR (systems/boss.js). Top centre, clear of the xp strip and of
      both HUD corners. It is deliberately NOT a bar over the creature's head:
@@ -1818,45 +1889,75 @@ const STYLES = `
        is safe here: the fill is inset:0 and SCALED, so it can never leave the
        box on its own — the only thing the clip was holding in is the label. */
     .sv-xptop { position: fixed; top: 0; bottom: 0; left: 0; right: auto;
-      width: 10px; min-width: 0; height: auto; min-height: 0; overflow: visible; }
+      width: 10px; min-width: 0; height: auto; min-height: 0; overflow: visible;
+      /* AGAINST THE EDGE, NOT CENTRED ON THE TRACK. The label is wider than
+         the 10px strip whatever is done to it, and a centred one hung half its
+         width off the left of the GLASS: "Lv 14" arrived as "v 14" with the
+         first letter cut by the edge of the screen, which is the one place
+         overflow: visible cannot help. Aligned to the start, everything it
+         overflows by lands inboard where there is water to spare. */
+      justify-content: flex-start; }
     .sv-xptop-fill { transform: scaleY(var(--sv-xp, 0)); transform-origin: 50% 100%; }
-    /* A vertical bar takes a vertical label: "Lv" over the number, stacked, so
-       the strip stays as narrow as one short word instead of as long as a line
-       of text. The letters stay UPRIGHT — a rotated label is a thing to decode,
-       and this one is read at a glance mid-fight or not at all.
+    /* A VERTICAL BAR TAKES A VERTICAL LABEL, and it is turned on its side
+       rather than stacked: "Lv 14" reading UP the edge, in the direction the
+       meter itself fills. Stacked upright it was two rows of glyphs whose
+       widest was three times the strip, which is what pushed it off the screen;
+       on its side the line's LENGTH runs down the axis that has 667px of room
+       and only its cap height has to fit across the edge.
+       Bottom-to-top (vertical-rl turned through 180°) rather than top-to-bottom
+       for the same reason the fill grows upward — the label reads in the
+       direction the level is climbing, and the number ends up at the top of the
+       word rather than upside down under it.
        Centred on the long axis by the same flex rules as the desktop track, so
        it sits at the middle of the screen edge rather than at either end,
        clear of both the notch and the home indicator. */
-    .sv-xptop .sv-xptop-level { flex-direction: column; gap: 0.3em; padding: 8px 2px; }
+    .sv-xptop .sv-xptop-level { writing-mode: vertical-rl; transform: rotate(180deg);
+      flex-direction: row; gap: 0.4em; padding: 8px 2px; }
     .sv-xptop-word { display: none; }
     .sv-xptop-abbr { display: block; }
   }
 
-  /* --- THE TOP BAND BELONGS TO THE BOSS ----------------------------------
-     Score and time move to the BOTTOM right on a phone, and the boss bar takes
-     the width they were using.
-     The reason is that the top of a phone screen is the one place two things
-     genuinely cannot share. The boss bar is centred and its name runs to forty
-     characters ("Wicked Grimgullet the Chumbucket Rumbler"), so at 62vw it was
-     wrapping to three lines under a bar squeezed into two thirds of a screen
-     that is already only 375px — while a Score/Time panel sat in the corner
-     showing two numbers that do not change fast enough to need the best real
-     estate on the display. Downstairs they cost nothing, and the fight gets the
-     whole band.
+  /* --- THE TOP OF A PHONE, IN TWO ROWS -----------------------------------
+     The read-outs hold the top right and the boss bar hangs directly under
+     them, edge to edge. They are stacked rather than sharing the band because
+     the top of a phone screen is the one place two things genuinely cannot sit
+     side by side: the bar is centred and its name runs to forty characters
+     ("Wicked Grimgullet the Chumbucket Rumbler"), so beside a corner panel it
+     wrapped to three lines under a bar squeezed into two thirds of a screen
+     that is already only 375px.
+
+     THE SCORE AND THE CLOCK ARE WHERE THEY ARE ON A DESKTOP, which is the
+     point: they were downstairs in the bottom right for a while, which bought
+     the bar its width but put them in the corner both thumbs live in and the
+     corner the health and air columns ask for. The top right is the one piece
+     of chrome in this HUD that means the same thing on every screen the game
+     is played on, so it is the one that should not move.
+
      fixed, not absolute: .sv-hud is anchored at the TOP (and its floating
      hp/air bars are positioned inside it per frame from the seal's projected
      position), so moving the row itself would drag those bars off the animal.
-     Only this group moves. */
+     Only this group moves. The safe-area insets are what keep it out from
+     under the Dynamic Island and the rounded corner — the page draws edge to
+     edge (viewport-fit=cover in index.html), so 14px from the top of the
+     viewport is 14px from the top of the GLASS. */
   @media (max-width: 700px) {
     /* Column rather than row: anything that joins the score and the clock later
-       grows the block UPWARD into empty water, rather than sideways across a
-       screen that has none to spare. */
-    .sv-hud-corner { position: fixed; right: 14px; bottom: 14px; margin-left: 0;
+       grows the block DOWNWARD into empty water, rather than sideways across a
+       screen that has none to spare — which is also the direction the boss bar
+       is pushed by, so a third line moves the bar with it rather than under it. */
+    .sv-hud-corner { position: fixed; margin-left: 0;
+      top: calc(14px + env(safe-area-inset-top, 0px));
+      right: calc(14px + env(safe-area-inset-right, 0px));
       flex-direction: column; align-items: flex-end; gap: 8px; }
 
-    /* Up to where the Rive bar already sits (bossBarRive mounts at top: 14px),
-       so the coded fallback and the real one arrive in the same place. The
-       WIDTH is not set here on purpose — updateBossBar writes it inline per
+    /* THE SECOND ROW. --sv-bossbar-drop is how tall the block above is, written
+       onto the root by syncBossBarDrop() — it cannot be a constant here because
+       the read-outs are set in whatever face and size the Text panel currently
+       has, and a hardcoded gap would put the bar through the clock the first
+       time anyone dragged that slider. It is 0 on a desktop, where nothing is
+       above the bar.
+
+       The WIDTH is not set here on purpose — updateBossBar writes it inline per
        boss, which beats any rule, so the phone widening lives in
        bossBarWidth() instead.
 
@@ -1864,8 +1965,19 @@ const STYLES = `
        viewport puts a boss's name UNDER the island on every recent iPhone —
        the page draws edge to edge (viewport-fit=cover in index.html), so the
        top of the viewport is the top of the GLASS, not the top of the usable
-       screen. The inset is ~59px there and 0 on a laptop. */
-    .sv-bossbar { top: calc(14px + env(safe-area-inset-top, 0px)); }
+       screen. The inset is ~59px there and 0 on a laptop. The Rive bar builds
+       the same calc inline (see ui/bossBarRive.js) so the coded fallback and
+       the real one arrive in the same place. */
+    .sv-bossbar { top: calc(14px + var(--sv-bossbar-drop, 0px) + env(safe-area-inset-top, 0px)); }
+
+    /* AND THE RIVE BAR'S WIDTH, which is the one number of its wrapper that
+       cannot be written here directly: that wrapper is built once at boot with
+       an inline style, so this is the variable it falls through to (see
+       ui/bossBarRive.js). 96vw leaves 2vw at each end — the bar reads as the
+       frame around the fight rather than as a panel sitting on the water, which
+       on a screen this size is what a boss deserves. Unset on every wider
+       screen, where the tuned width applies untouched. */
+    :root { --sv-bossbar-w: 96vw; }
 
     /* --- THE HIVE OUTRANKS THE HUD ON A PHONE ---------------------------
        The two rungs swap, and only here. On a phone the xp meter becomes a
@@ -2018,8 +2130,8 @@ const STYLES = `
   .sv-touch .sv-next-row .sv-name-input, .sv-touch .sv-next-row .sv-btn { min-height: 48px; }
 `;
 
-export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart, onSplash, onMenu }) {
-  callbacks = { onStart, onRestart, onLevelChoice, onSplash, onMenu };
+export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart, onSplash, onMenu, onPause }) {
+  callbacks = { onStart, onRestart, onLevelChoice, onSplash, onMenu, onPause };
 
   const style = document.createElement('style');
   style.textContent = STYLES;
@@ -2042,6 +2154,22 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   markTouch(root);
   root.innerHTML = `
     <div class="sv-toast-layer" id="svToastLayer"></div>
+
+    <!-- See .sv-pausebtn. A sibling of .sv-hud rather than a child: the HUD is
+         hidden and shown by route (showHud / hideAllMenus) and this has its own
+         rule for when it may appear, which is "the run could be paused right
+         now" — see setPauseButtonVisible. -->
+    <button class="sv-pausebtn sv-hidden" id="svPauseBtn" type="button"
+            aria-label="Pause and open options">
+      <svg viewBox="0 0 44 44" aria-hidden="true">
+        <circle class="sv-pausebtn-track" cx="22" cy="22" r="19"></circle>
+        <circle class="sv-pausebtn-ring" id="svPauseRing" cx="22" cy="22" r="19"></circle>
+        <g class="sv-pausebtn-glyph">
+          <rect x="17" y="16" width="3.5" height="12" rx="1.2"></rect>
+          <rect x="23.5" y="16" width="3.5" height="12" rx="1.2"></rect>
+        </g>
+      </svg>
+    </button>
 
     <div class="sv-hud sv-hidden" id="svHud">
       <div class="sv-xptop">
@@ -2275,9 +2403,13 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     'svTrophy', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
     'svShotView', 'svShotImg', 'svShotShare', 'svShotSave', 'svShotStatus', 'svShotClose',
     'svTipRow',
+    'svPauseBtn', 'svPauseRing',
   ]) {
     el[id] = document.getElementById(id);
   }
+
+  // After `el`, because it reads both of those.
+  wirePauseButton();
 
   // The score card's tip jar, built rather than written into the markup above
   // so the link, its look and where it points live in one file — see
@@ -2309,6 +2441,13 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   // other two for space. Nothing is drawn until a fight starts, and if it never
   // finishes loading the coded bar below carries the run.
   initBossBarRive(root);
+  // How far the boss bar hangs below the read-outs, measured rather than
+  // guessed — see syncBossBarDrop. Once now, so the first fight of a session
+  // arrives in the right place even if nothing has resized, and again whenever
+  // the viewport changes: a rotation crosses the phone breakpoint in both
+  // directions and the answer on the far side is a different number (or none).
+  syncBossBarDrop();
+  window.addEventListener('resize', syncBossBarDrop);
   // And the polaroid's artboard, parsed once here rather than on the frame a
   // boss dies — see initSnapshotCards. It draws nothing until a kill.
   initSnapshotPrints();
@@ -2655,6 +2794,118 @@ function beginRun() {
 // or score on screen. Exported as well as used here, because the restart route
 // no longer starts its run on the click — it starts on the far side of the
 // transition, and that's where the HUD belongs with it.
+// --- the pause button -------------------------------------------------------
+// A HOLD, NOT A TAP, and that is the part that answers "without being hit by
+// stray touches". This control sits on the same screen the player is steering
+// and aiming on with both thumbs, so the failure mode to design against is not
+// a mis-aimed press — it is a thumb travelling past on its way somewhere else.
+// A tap target cannot tell those apart. A hold can: a brush releases in well
+// under 280ms and nothing happens, while the ring closing gives the deliberate
+// press its own visible confirmation.
+//
+// It also teaches itself. The first accidental brush lights the ring a little
+// and stops, which is a clearer explanation of "hold this" than any label that
+// would fit in 44px.
+const PAUSE_HOLD_MS = 280;
+// The dash length in the stylesheet. One number in two places is one number too
+// many, but the stylesheet cannot read a constant and the transition has to run
+// from exactly the value at rest or the ring jumps before it moves.
+const PAUSE_RING_DASH = 120;
+let pauseHoldTimer = null;
+
+function armPauseHold() {
+  const ring = el.svPauseRing;
+  if (!ring) return;
+  el.svPauseBtn?.classList.add('sv-arming');
+  ring.style.transitionDuration = `${PAUSE_HOLD_MS}ms`;
+  // Linear, not eased: this is a clock, and a ring that races and then crawls
+  // reads as the press having stalled.
+  ring.style.transitionTimingFunction = 'linear';
+  ring.style.strokeDashoffset = '0';
+  clearTimeout(pauseHoldTimer);
+  pauseHoldTimer = setTimeout(() => {
+    pauseHoldTimer = null;
+    releasePauseHold();
+    // feedback() rather than a bare call, so the press is confirmed by touch on
+    // a device that has no click to hear.
+    feedback('uiClick');
+    callbacks.onPause?.();
+  }, PAUSE_HOLD_MS);
+}
+
+function releasePauseHold() {
+  clearTimeout(pauseHoldTimer);
+  pauseHoldTimer = null;
+  const ring = el.svPauseRing;
+  if (!ring) return;
+  el.svPauseBtn?.classList.remove('sv-arming');
+  ring.style.transitionDuration = '140ms';
+  ring.style.transitionTimingFunction = 'ease';
+  ring.style.strokeDashoffset = String(PAUSE_RING_DASH);
+}
+
+function wirePauseButton() {
+  const btn = el.svPauseBtn;
+  if (!btn) return;
+  // TEMPORARY DIAGNOSTIC — remove. Prints which events actually reach the
+  // button on a real device, because there is no console to read on a phone.
+  const dbg = document.createElement('div');
+  dbg.style.cssText = 'position:fixed;left:8px;top:150px;z-index:99;color:#0f0;font:11px monospace;pointer-events:none;background:#000a;padding:2px 4px;max-width:200px;word-break:break-all';
+  dbg.textContent = 'dbg:';
+  document.body.appendChild(dbg);
+  for (const t of ['pointerdown','pointerup','pointercancel','click','touchstart','touchend']) {
+    btn.addEventListener(t, (e) => { dbg.textContent += ` ${t}${t==='click'?'/d'+e.detail:''}`; }, true);
+  }
+  // POINTER EVENTS, not touch: the same three handlers then cover a thumb, a
+  // stylus and the mouse, and `setPointerCapture` is what makes the release
+  // reliable — without it a finger that drifts a few pixels off the button
+  // sends pointerup to whatever is underneath and this would be left armed,
+  // firing a pause the player had already abandoned.
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    btn.setPointerCapture?.(e.pointerId);
+    armPauseHold();
+  });
+  // NOT pointerleave, and that is an iOS fix rather than a tidy-up. Calling
+  // setPointerCapture makes Safari fire pointerout/pointerleave as the capture
+  // moves to this element — on the element that just captured — so a listener
+  // here cancels the hold on the same tick the press begins, and the button is
+  // dead in exactly the way it was reported. Capture also makes it redundant:
+  // every subsequent pointer event comes here whatever the finger is over, so
+  // pointerup always arrives and pointercancel covers the real aborts.
+  for (const type of ['pointerup', 'pointercancel']) {
+    btn.addEventListener(type, () => releasePauseHold());
+  }
+  // A trusted click still opens it — a keyboard or a screen reader activating
+  // the button has no press duration to measure, and refusing them would make
+  // the one control that is only on screen for accessibility's sake the one
+  // control that cannot be reached that way. detail 0 is the tell: a real
+  // pointer click reports the click count, a synthesised one reports zero.
+  btn.addEventListener('click', (e) => {
+    if (e.detail === 0) callbacks.onPause?.();
+  });
+}
+
+/**
+ * Whether the button may be on screen at all — "could this run be paused right
+ * now", which main.js answers with canPause().
+ *
+ * Driven per frame from the loop rather than from the four routes that open and
+ * close things (level-up, the death dive, the score card, the menu), because
+ * four call sites for one question is four chances to leave a live pause button
+ * over a screen that is already a menu.
+ */
+export function setPauseButtonVisible(v) {
+  const btn = el.svPauseBtn;
+  if (!btn) return;
+  const hidden = btn.classList.contains('sv-hidden');
+  if (hidden === !v) return;
+  btn.classList.toggle('sv-hidden', !v);
+  // Going away mid-press must not leave the hold armed — the run has just
+  // ended or a menu has just opened, and firing into that is the bug.
+  if (!v) releasePauseHold();
+}
+
 export function showHud() {
   el.svHud.classList.remove('sv-hidden');
   // The seal's gauges are smoothed now, and smoothing carries state across the
@@ -4592,11 +4843,18 @@ export function bossBarSpan(maxHp) {
 }
 function bossBarWidth(maxHp) {
   const span = bossBarSpan(maxHp);
-  // ON A PHONE THE TOP BAND IS THE BOSS'S ALONE — score and time move to the
-  // bottom corner (see .sv-hud-corner) — so the bar is given it, over a much
-  // higher floor. 44vw of a 375px screen is 165px, and a forty-character boss
-  // name across 165px is three wrapped lines over a bar squeezed into two
-  // thirds of an already narrow screen.
+  // ON A PHONE THE BAND IS THE BOSS'S ALONE — score and time hold the top right
+  // and the bar hangs below them (see .sv-hud-corner and --sv-bossbar-drop) —
+  // so it is given the whole width of the screen, over a much higher floor.
+  // 44vw of a 375px screen is 165px, and a forty-character boss name across
+  // 165px is three wrapped lines over a bar squeezed into two thirds of an
+  // already narrow screen.
+  //
+  // NEARLY EDGE TO EDGE, and that is the point of this branch rather than a
+  // side effect of it: on a phone the fight is the whole screen, and a bar that
+  // stops two thirds of the way across reads as a panel sitting on the water
+  // instead of as the frame around the fight. 4vw of margin at each end is what
+  // keeps it off the glass.
   //
   // The SPAN still reads, which is why this remaps the range rather than
   // pinning the bar to one width: a bigger boss still arrives with a visibly
@@ -4604,28 +4862,57 @@ function bossBarWidth(maxHp) {
   //
   // Done here rather than as a CSS override because the width is written
   // INLINE by updateBossBar, and an inline style beats any rule — a media query
-  // would have been a declaration that silently never applied. The 700px is the
-  // same breakpoint the responsive block in STYLES uses.
-  if (narrowScreen()) return `${78 + span * 14}vw`;
+  // would have been a declaration that silently never applied. The breakpoint
+  // itself is narrowScreen() in devices.js, which is the same 700px the
+  // responsive block in STYLES uses.
+  if (narrowScreen()) return `${88 + span * 4}vw`;
   // Both ends are in vw so the bar keeps its proportion of the screen on every
   // display, and the ceiling is short of the full width because a bar running
   // edge to edge reads as a loading screen rather than as part of the HUD.
   return `${44 + span * 40}vw`;
 }
 
-/**
- * Is this a phone-shaped viewport? The JS half of the 700px breakpoint in
- * STYLES, for the handful of values CSS cannot own because they are written
- * inline per frame.
- *
- * Asked every time rather than latched at boot: a desktop window dragged narrow, or
- * a phone turned on its side, crosses this line without a reload.
- */
-function narrowScreen() {
-  return window.matchMedia?.('(max-width: 700px)').matches ?? false;
+// HOW FAR THE BOSS BAR HANGS BELOW THE READ-OUTS, in pixels, onto the root as
+// --sv-bossbar-drop. Both bars' `top` is a calc that adds it (the coded one in
+// STYLES, the Rive one inline in ui/bossBarRive.js), and it is 0 on a desktop,
+// where the bar has the top of the screen to itself.
+//
+// MEASURED, NOT A CONSTANT. On a phone the score and the clock hold the top
+// right and the bar goes underneath them, so what the bar has to clear is the
+// height of two lines of type in whatever face and size the Text panel is
+// currently set to — a number this stylesheet cannot know and a hardcoded gap
+// would get wrong the first time anyone dragged that slider.
+//
+// NOT PER FRAME, which is the whole reason this is a function and not a line in
+// updateHUD: reading a rect forces a layout, and the thing being measured only
+// changes when the type does or when the viewport crosses the breakpoint. It is
+// called at boot, on resize, and on the frame a boss arrives — and it writes
+// nothing when the answer has not moved, so the common case costs one
+// comparison.
+let bossBarDrop = -1;
+function syncBossBarDrop() {
+  if (!el.svCorner) return;
+  // The gap is the corner's own 14px again, so the bar sits as far below the
+  // clock as the clock sits below the top of the glass.
+  const drop = narrowScreen() ? Math.round(el.svCorner.getBoundingClientRect().height) + 14 : 0;
+  if (drop === bossBarDrop) return;
+  bossBarDrop = drop;
+  document.documentElement.style.setProperty('--sv-bossbar-drop', `${drop}px`);
 }
 
+let bossOnScreen = false;
+
 export function updateBossBar(banner) {
+  // ...and again on the frame a boss ARRIVES, which is the one moment the
+  // number is about to matter and the cheapest place to spend a layout. The
+  // corner can have changed height since the last fight without the window
+  // resizing — the Text panel is open for the whole of a tuning session — and
+  // the transition is what keeps this to one read per fight rather than sixty
+  // a second for the length of one.
+  if (!!banner !== bossOnScreen) {
+    bossOnScreen = !!banner;
+    if (bossOnScreen) syncBossBarDrop();
+  }
   // THE RIVE BAR FIRST, THE CODED ONE AS THE FALLBACK. Asked every frame rather
   // than decided once at boot, because "is the Rive bar drawing" genuinely can
   // change mid-run: the artboard loads asynchronously, and it can give up at

@@ -473,6 +473,113 @@ export const CONFIG = {
       // adjacent columns would put the three buttons in a zigzag. Two apart is
       // the closest they can be and still share a row.
       colStep: 2,
+
+      // --- WHERE THE BUTTONS SIT RELATIVE TO EACH OTHER --------------------
+      // The row above is the wide-screen arrangement and it cannot survive a
+      // phone held upright: at an aspect of 0.46 the three cells span ~4.6
+      // world units across, which forces a frame ten units TALL around a bust
+      // that is 1.6 — see wantsShape in systems/hexMenu.js for the arithmetic.
+      // So a tall screen gets a different arrangement of the same cells.
+      //
+      // Every option is a real figure on the game's own lattice, addressed in
+      // cells, so none of them is a hand-placed position:
+      //
+      //   'row'          the wide-screen across. Portrait: far too wide.
+      //   'diamond'  ◇   FOUR cells packed into a rhombus, which is a 2x2
+      //                  block of the honeycomb with no hole in it. Play on
+      //                  top, Options left, Leaderboard right, the tip jar
+      //                  below — a compass rather than a list, which is why it
+      //                  is the one arrangement that orders itself.
+      //   'stack'        one column. Narrowest, and the least like a hive.
+      //   'triDown'  ▽   two above, one below-centre. Play is the low apex.
+      //   'triUp'    ▲   one above, two below. Play is bottom-left.
+      //   'trefoil'  ⬡   the tight triad — three cells that all TOUCH, two
+      //                  stacked with one nested in the notch to their right.
+      //                  Points sideways; 'trefoilLeft' mirrors it.
+      //
+      // The three-cell figures are what the menu looked like before the tip
+      // jar joined it. They are kept because they are still the right answer
+      // for three buttons and because the look page can show them — a shape
+      // laid out with four items simply runs short or long, it does not fail.
+      portraitShape: 'diamond',
+      // The aspect below which a screen counts as portrait. A phone upright is
+      // ~0.46 and a laptop is ~1.7, so three-quarters is a wide margin either
+      // way rather than a line anything real sits near.
+      portraitBelowAspect: 0.75,
+      // Force one arrangement on every screen, ignoring the two above. Null is
+      // the shipped behaviour; a string here is how the look page shows them
+      // side by side, and how a decision gets pinned once it is made.
+      shape: null,
+
+      // --- THE WORDS IN THE CELLS -----------------------------------------
+      // The type itself — face, weight, tracking, the shadow mask — is the
+      // `blobButton` role in textRoles.js and belongs to the Text panel. What
+      // is here is only how a label is FITTED to the hexagon it is in, which
+      // the Text panel cannot answer because it does not know how big a
+      // hexagon is on this screen.
+      //
+      // THE SHIPPED FACE IS ONE EM PER GLYPH. Press Start 2P is a pixel
+      // monospace, so a label's width is its LETTER COUNT times the size, and
+      // "LEADERBOARD" is eleven of them plus 16% tracking each. At a size that
+      // let that fit across a cell, every other word on the screen was tiny —
+      // which is the whole reason the long labels are broken over two lines in
+      // main.js. Six characters instead of eleven is not a tidier shape, it is
+      // the type at nearly twice the size.
+      label: {
+        // One scale for every button, from whichever label needs the tightest
+        // fit — NOT a fit per label. Sized independently, "PLAY" would set
+        // four characters across a whole cell and stand at twice the height of
+        // "OPTIONS" beside it, which reads as a rendering fault rather than as
+        // emphasis. Emphasis is `leadScale`, and it is one button on purpose.
+        //
+        // Fractions of the cell. `fill` is across — but across the room the
+        // hexagon ACTUALLY has at the height the type is, not across 2r: the
+        // slanted edges take 1/√3 of the width back for every unit of height,
+        // so a two-line label is fitted into a narrower cell than a one-line
+        // one is, automatically. (Fitted to 2r instead, both of them hang out
+        // over the pointed ends — see fitLabels.) `fillTall` is down the
+        // apothem, a flat-top cell being 13% shorter than it is wide.
+        fill: 0.85,
+        fillTall: 0.68,
+        // The most the type may be scaled UP from the size the role asks for.
+        // A cap and not a target: it is only here so a very wide screen cannot
+        // blow 13px up past anything the role was ever looked at.
+        grow: 3,
+        // Stacked lines, tight — the face has a tall intrinsic line box and
+        // anything near 1.3 opens a gap the hexagon cannot afford.
+        lineHeight: 1.08,
+
+        // --- THE LEAD BUTTON, which is Play ---------------------------------
+        // Marked `lead: true` on the item (main.js), not by index: which
+        // button is the primary one is a fact about the menu, and a menu that
+        // reordered would otherwise emphasise whatever landed first.
+        //
+        // Bigger, by this much over the common scale.
+        leadScale: 1.3,
+        // ...and heavier. NOT a font-weight: the shipped face has exactly one
+        // cut, so the role's 700 is already a synthetic bold and 900 renders
+        // identically to it. A stroke on the glyph is what a heavier weight
+        // actually is on a pixel face — it thickens the stem instead of asking
+        // for a cut that does not exist. In px at the label's own size.
+        leadStroke: 1.2,
+
+        // --- HOVER ----------------------------------------------------------
+        // A HALO, NOT A BRIGHTENING. The labels are drawn in the ink colour,
+        // which is white — `filter: brightness()` on white is a no-op, and
+        // that is exactly what the first pass at this did. What can still get
+        // brighter is the air around the letters.
+        //
+        // In px of blur at full hover, over whatever the role's own shadow is
+        // already doing. The lead gets its own so the primary button answers a
+        // pointer harder than the others do.
+        hoverGlow: 7,
+        leadHoverGlow: 16,
+        // ...and the TILE under the lead lights harder too, as a multiple of
+        // `hoverHot` below. The word and the hexagon are one object and they
+        // are lit by the same light — see the note on the button's colour.
+        leadHot: 1.6,
+      },
+
       // How much of its cell a button fills. Just under 1 so the lattice line
       // it is sitting on still reads around it — at exactly 1 the two edges
       // land on each other and merge into one slightly thicker line.

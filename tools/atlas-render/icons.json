@@ -74,6 +74,7 @@
     "pitch": 17.4,
     "roll": 0,
     "clipAt": 0.33,
+    "image": "custom/heavyRounds.webp",
     "sceneNote": "the stone that got bigger, with the old one for scale",
     "parts": [
       {
@@ -98,8 +99,7 @@
         ],
         "scale": 0.38
       }
-    ],
-    "image": "custom/heavyRounds.webp"
+    ]
   },
   {
     "key": "overboost",
@@ -292,6 +292,7 @@
     "pitch": 35.45624999999998,
     "roll": 0,
     "clipAt": 0.33,
+    "zoom": 0.67,
     "sceneNote": "a whole seal inside a whole bubble",
     "parts": [
       {
@@ -333,8 +334,7 @@
         "opacity": 0.34,
         "ink": false
       }
-    ],
-    "zoom": 0.67
+    ]
   },
   {
     "key": "magnet",
@@ -529,6 +529,7 @@
     "pitch": -7.9640625000000185,
     "roll": 0,
     "clipAt": 0.33,
+    "zoom": 0.6,
     "sceneNote": "the mussel bending onto a fish",
     "parts": [
       {
@@ -547,9 +548,10 @@
       },
       {
         "asset": "missile",
-        "prim": "oval",
-        "color": 6978462,
-        "elongate": 1.8,
+        "file": "mussel.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+X",
         "at": [
           -1.05,
           -0.35,
@@ -560,10 +562,10 @@
           0,
           24
         ],
-        "scale": 0.5
+        "scale": 0.5,
+        "color": 6978462
       }
-    ],
-    "zoom": 0.6
+    ]
   },
   {
     "key": "seaGarlic",
@@ -674,39 +676,45 @@
     "parts": [
       {
         "asset": "missile",
-        "prim": "oval",
-        "color": 6978462,
-        "elongate": 1.8,
+        "file": "mussel.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+X",
         "at": [
           1.15,
           0.4,
           -0.6
         ],
-        "scale": 0.55
+        "scale": 0.55,
+        "color": 6978462
       },
       {
         "asset": "missile",
-        "prim": "oval",
-        "color": 6978462,
-        "elongate": 1.8,
+        "file": "mussel.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+X",
         "at": [
           0.15,
           0,
           0.1
         ],
-        "scale": 0.55
+        "scale": 0.55,
+        "color": 6978462
       },
       {
         "asset": "missile",
-        "prim": "oval",
-        "color": 6978462,
-        "elongate": 1.8,
+        "file": "mussel.glb",
+        "fmt": "glb",
+        "forward": "+Z",
+        "up": "+X",
         "at": [
           -0.9,
           -0.4,
           0.8
         ],
-        "scale": 0.55
+        "scale": 0.55,
+        "color": 6978462
       }
     ]
   },
@@ -729,6 +737,8 @@
     "pitch": -2.792578124999996,
     "roll": 37,
     "clipAt": 0.33,
+    "image": "custom/bounceShot.webp",
+    "zoom": 0.6,
     "sceneNote": "one guppy caught mid-bounce, its arc behind it",
     "parts": [
       {
@@ -764,9 +774,7 @@
         ],
         "scale": 0.4
       }
-    ],
-    "zoom": 0.6,
-    "image": "custom/bounceShot.webp"
+    ]
   },
   {
     "key": "laserEyes",
@@ -1024,6 +1032,26 @@
     ]
   },
   {
+    "key": "clubPower",
+    "name": "Bouncer",
+    "family": "projectile",
+    "enabled": true,
+    "kind": "none",
+    "square": true,
+    "outSize": 128,
+    "toon": true,
+    "bands": 3,
+    "bandLow": 70,
+    "bandHigh": 255,
+    "bandGamma": 1,
+    "bandSoft": 0,
+    "outline": 0.02,
+    "yaw": -26,
+    "pitch": 17.4,
+    "roll": 0,
+    "clipAt": 0.33
+  },
+  {
     "key": "clubIce",
     "name": "Iced Out in the Club",
     "family": "aoe",
@@ -1277,6 +1305,7 @@
     "pitch": 57.54609374999998,
     "roll": 12,
     "clipAt": 0.33,
+    "zoom": 0.91,
     "sceneNote": "the seal in the strike itself",
     "parts": [
       {
@@ -1318,8 +1347,7 @@
           0.3
         ]
       }
-    ],
-    "zoom": 0.91
+    ]
   },
   {
     "key": "strikeShrapnel",
@@ -1340,6 +1368,7 @@
     "pitch": 11.592968749999997,
     "roll": 0,
     "clipAt": 0.33,
+    "zoom": 0.71,
     "sceneNote": "bone leaving the impact",
     "parts": [
       {
@@ -1382,8 +1411,7 @@
         ],
         "scale": 0.27
       }
-    ],
-    "zoom": 0.71
+    ]
   },
   {
     "key": "strikeCharge",
@@ -1578,7 +1606,7 @@
   },
   {
     "key": "oxygenRefill",
-    "name": "Breathwork",
+    "name": "Mammal Mode",
     "family": "utility",
     "enabled": true,
     "kind": "scene",
@@ -1595,6 +1623,7 @@
     "pitch": -88.81015624999999,
     "roll": 0,
     "clipAt": 0.33,
+    "zoom": 0.76,
     "sceneNote": "bubbles reaching the surface",
     "parts": [
       {
@@ -1632,8 +1661,7 @@
         ],
         "scale": 0.34
       }
-    ],
-    "zoom": 0.76
+    ]
   },
   {
     "key": "ironLung",
@@ -1873,6 +1901,27 @@
     ]
   },
   {
+    "key": "razorClam",
+    "name": "Razor Clams",
+    "family": "projectile",
+    "enabled": true,
+    "kind": "image",
+    "square": true,
+    "outSize": 128,
+    "toon": true,
+    "bands": 3,
+    "bandLow": 70,
+    "bandHigh": 255,
+    "bandGamma": 1,
+    "bandSoft": 0,
+    "outline": 0.02,
+    "yaw": -26,
+    "pitch": 17.4,
+    "roll": 0,
+    "clipAt": 0.33,
+    "image": "custom/razorClam.webp"
+  },
+  {
     "key": "octoGrab",
     "name": "Octopus Grabber",
     "family": "companion",
@@ -1952,7 +2001,7 @@
   },
   {
     "key": "homingShot",
-    "name": "Sonar Teeth",
+    "name": "Homing Pebbles",
     "family": "gun",
     "enabled": true,
     "kind": "scene",
@@ -2027,6 +2076,26 @@
     "clipAt": 0.33,
     "zoom": 0.6,
     "flatColor": 15267064
+  },
+  {
+    "key": "orbiterAmount",
+    "name": "Entourage",
+    "family": "companion",
+    "enabled": true,
+    "kind": "none",
+    "square": true,
+    "outSize": 128,
+    "toon": true,
+    "bands": 3,
+    "bandLow": 70,
+    "bandHigh": 255,
+    "bandGamma": 1,
+    "bandSoft": 0,
+    "outline": 0.02,
+    "yaw": -26,
+    "pitch": 17.4,
+    "roll": 0,
+    "clipAt": 0.33
   },
   {
     "key": "projectileAmount",
@@ -2195,7 +2264,7 @@
   },
   {
     "key": "bioluminescence",
-    "name": "Glow Up!",
+    "name": "Glow Up!!",
     "family": "gun",
     "enabled": true,
     "kind": "scene",

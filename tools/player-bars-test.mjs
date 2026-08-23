@@ -961,5 +961,135 @@ S.setSetting('hud.boostMeter', 'bar');
 S.setSetting('hud.barPlacement', 'seal');
 RING.resetStrikeRing();
 
+// ---------------------------------------------------------------------------
+section('THE PAUSE BUTTON — a phone\'s only way into Options');
+
+// A phone has no Escape key and no Start button, so without this control
+// Options, Resume and Restart are all unreachable from a run on mobile.
+{
+  const btn = document.getElementById('svPauseBtn');
+  const ring = document.getElementById('svPauseRing');
+  check('the button exists at all', !!btn && !!ring);
+
+  // IT MUST BE REACHABLE BY A FINGER, and this is the check that was missing
+  // when the button shipped inert. .sv-ui is pointer-events:none — so the HUD
+  // overlay does not eat the ocean under it — and that INHERITS, so anything
+  // interactive inside has to opt back in. Without it the button draws
+  // perfectly, passes every behavioural assertion below, and cannot be pressed
+  // on any platform.
+  //
+  // The assertions below dispatch events straight at the element, which skips
+  // hit-testing entirely: they are a test of the handler, not of whether a
+  // thumb can reach it. Nothing that pokes a listener directly can ever catch
+  // this, which is exactly why it needs its own check on the COMPUTED style.
+  ui.setPauseButtonVisible(true);
+  check('a finger can actually reach it (pointer-events is not inherited none)',
+    getComputedStyle(btn).pointerEvents !== 'none',
+    `pointer-events: ${getComputedStyle(btn).pointerEvents}`);
+
+  // ...and the same for everything else interactive in the overlay, because
+  // this is a trap the next control walks into as readily as this one did.
+  {
+    const dead = [];
+    for (const node of document.querySelectorAll('.sv-ui button, .sv-ui input, .sv-ui a, .sv-ui select')) {
+      // Only things currently rendered: display:none has no computed
+      // pointer-events worth asserting, and a hidden menu is not a finding.
+      if (node.closest('.sv-hidden')) continue;
+      if (getComputedStyle(node).pointerEvents === 'none') dead.push(node.id || node.className || node.tagName);
+    }
+    check('no visible control in the overlay is unreachable', dead.length === 0,
+      dead.length ? dead.slice(0, 6).join(', ') : 'all reachable');
+  }
+
+  // IT MUST NOT BE ON THE CANVAS. This is the property that makes it safe, and
+  // it is a fact about the DOM rather than about any code here: input.js binds
+  // its touch listeners to the canvas and stickRoleAt splits every pixel of it
+  // between the two thumbs, so a control that lived inside that element would
+  // have to carve an exception into the one function whose job is that there
+  // are no exceptions. Asserted as "no canvas anywhere up the parent chain",
+  // which is what actually decides whether a touch bubbles into those handlers.
+  let node = btn?.parentNode, onCanvas = false;
+  while (node && node.tagName) {
+    if (node.tagName.toLowerCase() === 'canvas') onCanvas = true;
+    node = node.parentNode;
+  }
+  check('it is not inside the canvas, so it cannot steal a stick or a strike', !onCanvas);
+  check('...and it lives in the UI overlay, above the game', !!btn?.closest?.('.sv-ui'));
+
+  // A HOLD, NOT A TAP. The failure mode to design against is not a mis-aimed
+  // press — it is a thumb travelling past on its way to a stick, and only a
+  // duration can tell those apart.
+  let opened = 0;
+
+  // Re-init with a counter attached, since the callback is bound at initUI.
+  // THE OLD ROOT HAS TO GO FIRST. initUI builds a fresh .sv-ui every call and
+  // does not remove the last one, so a second call leaves two of every id in
+  // the document — getElementById then returns the FIRST while `el` holds the
+  // second, and the handler count comes out doubled. The game only ever calls
+  // it once; this is the harness paying for the shortcut.
+  for (const old of document.querySelectorAll('.sv-ui')) old.remove();
+  ui.initUI({
+    onStart() {}, onRestart() {}, onLevelChoice() {},
+    onResume() {}, onPauseRestart() {}, onSplash() {},
+    onPause() { opened++; },
+  });
+  const btn2 = document.getElementById('svPauseBtn');
+  const press2 = () => btn2.dispatchEvent(new dom.window.PointerEvent('pointerdown',
+    { pointerId: 1, bubbles: true, cancelable: true }));
+  const lift2 = () => btn2.dispatchEvent(new dom.window.PointerEvent('pointerup',
+    { pointerId: 1, bubbles: true, cancelable: true }));
+  ui.setPauseButtonVisible(true);
+
+  press2();
+  await new Promise((r) => setTimeout(r, 60));
+  lift2();
+  await new Promise((r) => setTimeout(r, 320));
+  check('a brush past it does nothing', opened === 0, `${opened} opens from a 60ms press`);
+
+  press2();
+  await new Promise((r) => setTimeout(r, 340));
+  check('a deliberate hold opens it', opened === 1, `${opened} opens from a 340ms hold`);
+  lift2();
+
+  // ...and the ring is what says so while the press is happening. Without a
+  // visible arming state a hold is an invisible requirement, and the first
+  // brush would read as a dead button rather than as a control that wants more.
+  opened = 0;
+  press2();
+  const arming = btn2.classList.contains('sv-arming');
+  const closing = btn2.querySelector('.sv-pausebtn-ring').style.strokeDashoffset === '0';
+  lift2();
+  check('the ring arms on press, so the hold explains itself', arming && closing,
+    `arming ${arming}, ring closing ${closing}`);
+  check('...and lets go on release',
+    !btn2.classList.contains('sv-arming')
+    && btn2.querySelector('.sv-pausebtn-ring').style.strokeDashoffset !== '0');
+  await new Promise((r) => setTimeout(r, 340));
+  check('an abandoned press never fires late', opened === 0, `${opened}`);
+
+  // HIDING MID-PRESS MUST DISARM. The run has just ended or a menu has just
+  // opened underneath the thumb, and a pause firing into that is the bug.
+  opened = 0;
+  press2();
+  ui.setPauseButtonVisible(false);
+  await new Promise((r) => setTimeout(r, 340));
+  check('going away mid-press does not fire a pause afterwards', opened === 0, `${opened}`);
+  check('...and it really is hidden', btn2.classList.contains('sv-hidden'));
+  ui.setPauseButtonVisible(true);
+  check('and it comes back', !btn2.classList.contains('sv-hidden'));
+
+  // A synthesised click — a keyboard or a screen reader — has no press duration
+  // to measure. Refusing it would make the one control that exists for reach
+  // the one control that cannot be reached.
+  opened = 0;
+  btn2.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, detail: 0 }));
+  check('a keyboard activation opens it without a hold', opened === 1, `${opened}`);
+  // ...but a real pointer click must NOT, or the hold is decorative: every
+  // press that reaches pointerup also produces a click with a real detail.
+  opened = 0;
+  btn2.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, detail: 1 }));
+  check('a real tap still does not, so the hold is not decorative', opened === 0, `${opened}`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

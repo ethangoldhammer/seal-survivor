@@ -83,8 +83,31 @@ const STYLES = `
   .sv-pm-head { display: flex; flex-wrap: wrap; align-items: baseline;
     justify-content: space-between; gap: 12px; margin-bottom: 14px; }
   .sv-pm-head .sv-hint { min-width: 0; overflow-wrap: anywhere; }
-  .sv-pm-tabs { display: flex; gap: 6px; margin-bottom: 4px; }
-  .sv-pm-tab { pointer-events: all; flex: 1; background: rgba(255,255,255,0.05);
+  /* WRAPS, because the strip outgrew one row. A fifth tab (Performance) is the
+     longest word on it, and a flex item cannot shrink below its own min-content
+     width — so at 375px the row did not compress, it overflowed the panel by
+     22px with the last tab 37px outside the card. Measured by npm run layout.
+
+     Wrapping rather than a breakpoint that shortens the labels: the point at
+     which five words stop fitting depends on the words, the tuned font and the
+     panel's own width, and a hand-picked pixel threshold is a fourth thing that
+     has to agree with the other three. flex: 1 1 auto lets the basis follow
+     the content, so a wide screen still lays all five in one row and a narrow
+     one folds to two, each row filling itself. Nothing to maintain when a tab
+     is added or renamed.
+
+     The nav is unaffected: stepTab walks the tabs by INDEX, not by geometry, so
+     a folded row is still one navigable strip.
+
+     IT SHOULD NEVER ACTUALLY WRAP as things stand — the labels were shortened
+     so five fit one row at 375px (see the Perf note in settings.js), because a
+     second row costs ~33px the shortest phone's pause panel does not have. This
+     is the backstop for the next tab, or a longer word in another language, and
+     it costs nothing while nothing wraps. min-width is 52 rather than 64 for
+     the same reason: five 64s plus gaps do not fit 375px, so the floor meant to
+     stop a short label going tiny would itself have forced the wrap. */
+  .sv-pm-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+  .sv-pm-tab { pointer-events: all; flex: 1 1 auto; min-width: 52px; background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 4px;
     color: rgba(232,236,243,0.6); font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
     text-transform: uppercase; cursor: pointer; transition: background 0.12s ease, color 0.12s ease; }

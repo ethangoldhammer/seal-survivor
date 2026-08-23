@@ -1,21 +1,21 @@
 // ============================================================================
-// SHIP:IOS TEST — the parts of the iOS deploy that can be wrong without an
-// error, checked without a ten-minute archive.
+// SHIP:PHONE TEST — the parts of the device install that can be wrong without
+// an error, checked without a four-minute Xcode build.
 //
-// 1. EXPORT OPTIONS. Two keys in that plist decide whether the upload does
-//    what the terminal said it did: `destination` (upload vs a silent local
-//    export that reaches nobody) and `manageAppVersionAndBuildNumber` (left
-//    at its YES default, Xcode renumbers the build on the way out and the
-//    number tied to the commit is not the number in TestFlight).
+// 1. DEVICE PICKING. devicectl lists every phone this Mac has ever paired, so
+//    "the phone" is a choice, and getting it wrong installs onto a device in a
+//    drawer and reports success. The two failure directions matter equally:
+//    refusing a phone that IS reachable (an unfamiliar tunnelState string) is
+//    as bad as picking one that isn't.
 //
-// 2. THE ARGUMENT LISTS. -allowProvisioningUpdates without the three
-//    authentication flags fails only when a certificate happens to have
-//    expired — months after the change that dropped it. Same for
-//    CURRENT_PROJECT_VERSION: forget it and every upload is build 1, which
-//    App Store Connect rejects as a duplicate.
+// 2. THE BUILD ARGUMENTS. A missing CURRENT_PROJECT_VERSION is not an error —
+//    it just means every build on the phone claims to be build 1, and no way
+//    to tell which one is installed. A simulator destination sneaking in
+//    produces an .app that cannot be installed on hardware at all.
 //
-// 3. THE KEY LOOKUP. A missing .p8 has to be a named failure with the paths
-//    it searched, not an xcodebuild error 250 pages into a log.
+// 3. THE APP PATH. It is assembled from the configuration name, so Debug and
+//    Release must not resolve to the same place — that is how a --debug run
+//    silently installs the Release build from an hour ago.
 //
 // Run: npm run test:shipios
 // ============================================================================
@@ -24,8 +24,8 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import {
-  parseEnvFile, resolveAuthKey, teamIdFrom, exportOptionsPlist,
-  buildNumber, archiveArgs, exportArgs, ShipIosError, KEY_DIRS,
+  teamIdFrom, bundleIdFrom, buildNumber, buildArgs, appPath,
+  pickDevice, shipTestflight, ShipIosError,
 } from './ship-ios.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,65 +37,76 @@ const ok = (cond, msg) => {
 const throws = (fn, match, msg) => {
   try { fn(); ok(false, `${msg} — did not throw`); }
   catch (err) {
-    ok(err instanceof ShipIosError && err.message.includes(match),
-      `${msg} — "${err.message}"`);
+    ok(err instanceof ShipIosError && err.message.includes(match), `${msg} — "${err.message}"`);
   }
 };
 
-const AUTH = { keyPath: '/keys/AuthKey_ABC1234567.p8', keyId: 'ABC1234567', issuerId: 'iss-uuid' };
+const phone = (name, tunnelState, extra = {}) => ({
+  identifier: extra.id ?? `id-${name}`,
+  deviceProperties: { name },
+  hardwareProperties: { platform: 'iOS', marketingName: 'iPhone 17 Pro', udid: extra.udid ?? `udid-${name}` },
+  connectionProperties: { tunnelState, pairingState: 'paired' },
+});
 
-console.log('\nexport options');
-const upload = exportOptionsPlist({ teamId: '2YN6CC34J3', destination: 'upload' });
-ok(/<key>destination<\/key>\s*<string>upload<\/string>/.test(upload), 'destination=upload reaches Apple');
-ok(/<key>manageAppVersionAndBuildNumber<\/key>\s*<false\/>/.test(upload),
-  'manageAppVersionAndBuildNumber is false, so Xcode keeps our build number');
-ok(upload.includes('<string>app-store-connect</string>'), 'method is app-store-connect');
-ok(upload.includes('<string>2YN6CC34J3</string>'), 'the team id is carried through');
-ok(exportOptionsPlist({ teamId: 'X', destination: 'export' }).includes('<string>export</string>'),
-  '--no-upload writes an .ipa locally instead');
-
-console.log('\nteam id');
+console.log('\nproject facts');
 const pbxproj = await readFile(join(ROOT, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8');
-ok(/^[A-Z0-9]{10}$/.test(teamIdFrom(pbxproj)), `read out of the real project: ${teamIdFrom(pbxproj)}`);
+ok(/^[A-Z0-9]{10}$/.test(teamIdFrom(pbxproj)), `team read out of the real project: ${teamIdFrom(pbxproj)}`);
+ok(bundleIdFrom(pbxproj).includes('.'), `bundle id read out of the real project: ${bundleIdFrom(pbxproj)}`);
 throws(() => teamIdFrom('nothing here'), 'no DEVELOPMENT_TEAM', 'an unsigned project is named, not guessed');
+throws(() => bundleIdFrom('nothing here'), 'no PRODUCT_BUNDLE_IDENTIFIER', 'a project with no bundle id is named');
 
 console.log('\nbuild number');
 ok(buildNumber({ commitCount: 412 }) === '412', 'defaults to the commit count');
-ok(buildNumber({ commitCount: 412, override: '900' }) === '900', '--build wins for a re-upload');
+ok(buildNumber({ commitCount: 412, override: '900' }) === '900', '--build wins for a second run on one commit');
 ok(buildNumber({ commitCount: 412, override: null }) === '412', 'a null override is not an override');
 throws(() => buildNumber({ commitCount: 1, override: '1.2' }), 'not a positive integer', 'a non-integer --build is refused');
 
 console.log('\nxcodebuild arguments');
-const arch = archiveArgs({ build: '412', version: null, auth: AUTH });
-ok(arch.includes('CURRENT_PROJECT_VERSION=412'), 'the archive carries the build number');
-ok(!arch.some((a) => a.startsWith('MARKETING_VERSION=')), 'no --version leaves the marketing version alone');
-ok(archiveArgs({ build: '412', version: '1.1', auth: AUTH }).includes('MARKETING_VERSION=1.1'),
-  '--version sets the marketing version');
-ok(arch.includes('-destination') && arch[arch.indexOf('-destination') + 1] === 'generic/platform=iOS',
-  'archives for a device, not a simulator');
+const args = buildArgs({ config: 'Release', build: '412', version: null });
+ok(args.includes('CURRENT_PROJECT_VERSION=412'), 'carries the build number, so the phone can be identified');
+ok(!args.some((a) => a.startsWith('MARKETING_VERSION=')), 'no --version leaves the marketing version alone');
+ok(buildArgs({ config: 'Release', build: '1', version: '1.1' }).includes('MARKETING_VERSION=1.1'), '--version sets it');
+ok(args[args.indexOf('-destination') + 1] === 'generic/platform=iOS', 'builds for hardware, never a simulator');
+ok(args.includes('-allowProvisioningUpdates'), 'lets xcodebuild renew the development profile');
+ok(args.includes('-derivedDataPath'), 'pins derived data, so the .app is at a path this script can find');
+ok(args[args.indexOf('-configuration') + 1] === 'Release', 'Release by default');
+ok(buildArgs({ config: 'Debug', build: '1' })[args.indexOf('-configuration') + 1] === 'Debug', '--debug switches configuration');
 
-for (const [label, args] of [['archive', arch], ['export', exportArgs({ plistPath: '/tmp/e.plist', auth: AUTH })]]) {
-  const authed = ['-authenticationKeyPath', '-authenticationKeyID', '-authenticationKeyIssuerID'].every((f) => args.includes(f));
-  ok(args.includes('-allowProvisioningUpdates') && authed,
-    `${label}: -allowProvisioningUpdates comes with all three key flags`);
-}
+console.log('\napp path');
+ok(appPath('Release').endsWith('Release-iphoneos/App.app'), 'Release resolves to the device product');
+ok(appPath('Debug') !== appPath('Release'), 'Debug and Release cannot alias, so --debug installs what it built');
 
-console.log('\n.env parsing');
-const env = parseEnvFile('# a comment\nASC_KEY_ID = ABC1234567 \nASC_ISSUER_ID="iss-uuid"\nnot a line\n');
-ok(env.ASC_KEY_ID === 'ABC1234567', 'whitespace around the value is trimmed');
-ok(env.ASC_ISSUER_ID === 'iss-uuid', 'quotes are stripped');
-ok(!('# a comment' in env), 'comments are skipped');
+console.log('\ndevice picking');
+ok(pickDevice([phone('Ethan’s iPhone', 'connected')]).name.includes('iPhone'), 'one connected phone needs no flag');
+ok(pickDevice([phone('mine', 'connected'), phone('drawer', 'disconnected')]).name === 'mine',
+  'the connected one wins over the paired-but-away one');
+ok(pickDevice([phone('mine', 'some-new-apple-state')]).name === 'mine',
+  'an unrecognised tunnelState is treated as reachable, not refused');
+// The first real run installed onto a phone reporting `disconnected` — the
+// tunnel is raised on demand. A gate that believed that field refused a phone
+// that worked, so one paired device is used whatever the field says.
+ok(pickDevice([phone('drawer', 'disconnected')]).name === 'drawer',
+  'the only paired phone is used even when it reports no connection');
+ok(pickDevice([phone('drawer', 'disconnected')]).stale === true,
+  '...and is flagged, so the run says the install is the real test');
+ok(pickDevice([phone('mine', 'connected')]).stale !== true, 'a connected phone carries no such caveat');
+throws(() => pickDevice([phone('a', 'disconnected'), phone('b', 'disconnected')]), 'none reports a connection',
+  'several paired and none live is a question, not a guess');
+throws(() => pickDevice([]), 'no iOS device is paired', 'no devices at all is its own message');
+throws(() => pickDevice([phone('a', 'connected'), phone('b', 'connected')]), '2 phones are connected',
+  'two live phones ask which, rather than guessing');
+ok(pickDevice([phone('a', 'connected'), phone('b', 'connected')], 'b').name === 'b', '--device by name');
+ok(pickDevice([phone('a', 'connected')], 'udid-a').name === 'a', '--device by udid');
+ok(pickDevice([phone('drawer', 'disconnected')], 'drawer').name === 'drawer',
+  'an explicit --device is obeyed even when it looks unreachable');
+throws(() => pickDevice([phone('a', 'connected')], 'nope'), 'no paired device matches', 'a typo in --device is named');
+throws(() => pickDevice([phone('iPhone one', 'connected'), phone('iPhone two', 'connected')], 'iPhone'),
+  'matches 2 devices', 'an ambiguous --device asks for a udid');
+ok(pickDevice([phone('mine', 'connected'), { identifier: 'watch', hardwareProperties: { platform: 'watchOS' }, deviceProperties: { name: 'Watch' }, connectionProperties: { tunnelState: 'connected' } }]).name === 'mine',
+  'a paired Watch is not a candidate');
 
-console.log('\nkey lookup');
-const found = resolveAuthKey({ ASC_KEY_ID: 'ABC1234567', ASC_ISSUER_ID: 'iss' }, '/home/x',
-  (p) => p === '/home/x/.appstoreconnect/private_keys/AuthKey_ABC1234567.p8');
-ok(found.keyPath.endsWith('AuthKey_ABC1234567.p8'), 'finds the key where App Store Connect keys live');
-ok(KEY_DIRS('/home/x').length === 4, 'searches all four directories Apple\'s own tools use');
-ok(resolveAuthKey({ ASC_KEY_ID: 'K', ASC_ISSUER_ID: 'i', ASC_KEY_PATH: '/custom/k.p8' }, '/home/x', () => true).keyPath === '/custom/k.p8',
-  'ASC_KEY_PATH overrides the search');
-throws(() => resolveAuthKey({}, '/home/x', () => true), 'no App Store Connect API key', 'missing identifiers are named');
-throws(() => resolveAuthKey({ ASC_KEY_ID: 'K', ASC_ISSUER_ID: 'i' }, '/home/x', () => false), 'not found',
-  'a missing .p8 is named, with the paths it looked in');
+console.log('\nTestFlight is parked');
+throws(shipTestflight, 'not wired up yet', 'the App Store path stops instead of half-working');
 
 console.log(failed ? `\n${failed} FAILED\n` : '\nall good\n');
 process.exit(failed ? 1 : 0);

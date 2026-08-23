@@ -18,7 +18,9 @@
        sheet mounts on the BODY, outside .sv-ui, so ui/typography.js never
        re-states its sizes — every px here is the literal px tipJar.js writes,
        unscaled by CONFIG.textStyles.
-       Measured in a browser at this width: panel 614x616.
+       Measured in a browser at this width: panel 614x645. The copy is the
+       live tips.csv and tipJar.js text — which is now Ethan's rewrite, so
+       the blurb runs to five lines here where the old one ran to two.
        ==================================================================== */
     body { margin: 0; width: 760px; height: 720px; overflow: hidden;
       font-family: 'Press Start 2P', monospace;
@@ -64,8 +66,8 @@
       letter-spacing: 0.02em; line-height: 1.4; }
     .sv-tip-desc { display: block; font-size: 11px; line-height: 1.5;
       letter-spacing: 0.02em; color: rgba(232,236,243,0.55); margin-top: 4px; }
-    /* 84.7px of every row, four times, saying the word the panel's own title
-       area already says once — and every row is a link to the same place. */
+    /* 84.7px of every row, four times, naming a place the footer already
+       names — and every row is a link to it. */
     .sv-tip-go { flex: none; font-size: 11px; letter-spacing: 0.1em;
       text-transform: uppercase; color: rgba(232,236,243,0.4); white-space: nowrap; }
     .sv-tip-tier:hover .sv-tip-go { color: #ffd9a0; }
@@ -86,14 +88,14 @@
 </helmet>
 <div class="sv-tip-sheet">
   <div class="sv-tip-panel">
-    <div class="sv-tip-title">Put a name in the water</div>
-    <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list. You can be on it.</div>
+    <div class="sv-tip-title">Add a name to the pool.</div>
+    <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list written by real mammals...contribute to the global mutual fund for true seal survivors and their loved ones.</div>
     <div class="sv-tip-tiers">
       <a class="sv-tip-tier">
         <span class="sv-tip-price">$1</span>
         <span class="sv-tip-what">
           <span class="sv-tip-label">Name a seal</span>
-          <span class="sv-tip-desc">One name, in the roller every player rolls from.</span>
+          <span class="sv-tip-desc">1 full name + each word added to the name pool.</span>
         </span>
         <span class="sv-tip-go">Ko-fi &rsaquo;</span>
       </a>
@@ -101,7 +103,7 @@
         <span class="sv-tip-price">$5</span>
         <span class="sv-tip-what">
           <span class="sv-tip-label">Name seven seals</span>
-          <span class="sv-tip-desc">Seven names. Put a whole pod in there.</span>
+          <span class="sv-tip-desc">Seven names. A whole pod!</span>
         </span>
         <span class="sv-tip-go">Ko-fi &rsaquo;</span>
       </a>
@@ -109,7 +111,7 @@
         <span class="sv-tip-price">$5</span>
         <span class="sv-tip-what">
           <span class="sv-tip-label">Name a boss</span>
-          <span class="sv-tip-desc">Prefix and root, on the thing that kills you.</span>
+          <span class="sv-tip-desc">Prefix, root and epithet.</span>
         </span>
         <span class="sv-tip-go">Ko-fi &rsaquo;</span>
       </a>
@@ -117,7 +119,7 @@
         <span class="sv-tip-price">$100</span>
         <span class="sv-tip-what">
           <span class="sv-tip-label">Your actual name</span>
-          <span class="sv-tip-desc">Your real, on-the-passport name, as a seal.</span>
+          <span class="sv-tip-desc">Your government name as a legendary seal.</span>
         </span>
         <span class="sv-tip-go">Ko-fi &rsaquo;</span>
       </a>

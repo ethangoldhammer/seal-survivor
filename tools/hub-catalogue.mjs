@@ -45,17 +45,18 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 //            and nothing else. A deploy is a decision, and a decision should
 //            not be one stray click away from a page you leave open all day.
 // ---------------------------------------------------------------------------
-const PUBLISH = new Set(['deploy', 'deploy:preview', 'ship']);
+const PUBLISH = new Set(['deploy', 'deploy:preview', 'ship', 'ship:all', 'ship:ios']);
 
 const WRITES = new Set([
   'build', 'whale', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply',
   'anglerfish', 'guest', 'icons', 'icons:sheet',
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
-  'upgrades:icons',
+  'upgrades:icons', 'ktx2', 'props', 'seabed', 'icons:app', 'spline:kit',
+  'ios', 'ios:run', 'ios:sync',
 ]);
 
 // Long-running: the process does not exit on its own, and that is correct.
-const SERVES = new Set(['dev', 'csv', 'preview', 'hub', 'atlas']);
+const SERVES = new Set(['dev', 'csv', 'preview', 'hub', 'atlas', 'icons:pick']);
 
 // ---------------------------------------------------------------------------
 // GROUPS — the drawers, in the order the hub shows them.
@@ -79,7 +80,7 @@ const GROUP_BY_PREFIX = [
 // than quietly appearing in a bucket called "Other".
 const GROUP_BY_NAME = {
   dev: 'Servers', csv: 'Servers', preview: 'Servers', hub: 'Servers', servers: 'Servers',
-  atlas: 'Servers',
+  atlas: 'Servers', 'icons:pick': 'Servers',
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
   // Reports by default and only rewrites files with --write, so it reads as
@@ -100,6 +101,14 @@ const GROUP_BY_NAME = {
   // release path in main.js's own order and shows the log the in-game overlay
   // shows on C, so a player's screenshot and a harness run can be compared.
   'chain:trace': 'Checks',
+'audit:hitboxes': 'Audits', 'copy:review': 'Audits', 'net:glsl': 'Audits',
+  'net:look': 'Look pages',
+  ktx2: 'Assets', props: 'Assets', seabed: 'Assets', 'icons:app': 'Assets',
+  'spline:kit': 'Assets',
+  // The iOS build drives Xcode and a device, so it lives with the other things
+  // that leave this machine rather than with the web build.
+  ios: 'Publish', 'ios:run': 'Publish', 'ios:sync': 'Publish',
+  'ship:all': 'Publish', 'ship:ios': 'Publish',
 };
 
 // ---------------------------------------------------------------------------
@@ -116,6 +125,9 @@ const BLURBS = {
   hub: 'This page. The index of every tool in the repo, on a port that never moves.',
   test: 'Every check in the repo, chained. The first failure hides the rest — see npm-test-is-and-chained.',
   'playtest:sync': 'Pulls remote runs and rebuilds the playtest atlas from them in one step.',
+  ios: 'Builds, syncs the Capacitor iOS project, and opens it in Xcode.',
+  'ios:run': 'Builds, syncs, and runs the iOS app on a simulator or attached device.',
+  'ios:sync': 'Builds and syncs the web bundle into the Capacitor iOS project. No Xcode.',
   // No banner on tools/head-socket-measure.mjs yet — its sibling
   // eye-socket-measure.mjs has one, and this stands in until it does.
   headsocket: 'Where a head-mounted socket lands on a rig, measured rather than guessed.',
@@ -322,16 +334,16 @@ const FIXED_PAGES = [
   { file: 'tools/csv-editor.html', on: 'own', server: 'csv', script: 'csv', port: 5177, path: '/', title: 'CSV editor',
     blurb: 'Spreadsheet for enemies, upgrades and quips, with the game’s own column rules baked into every cell.' },
   { file: 'tools/atlas-render/render.html', on: 'own', port: 4599, path: '/render.html',
-    script: 'atlas', title: 'Atlas renderer',
-    blurb: 'Renders every model portrait for the Model Atlas in a real browser.' },
+    script: 'icons:pick', title: 'Icon renderer',
+    blurb: 'Batch-renders every icon from the angles the picker chose, and POSTs the PNGs back. Needs real WebGL, which is why it runs in a browser.' },
   { file: 'tools/atlas-render/picker.html', on: 'own', port: 4599, path: '/picker.html',
-    script: 'atlas', title: 'Atlas picker',
-    blurb: 'Pick and frame the portrait pose for a model.' },
+    script: 'icons:pick', title: 'Icon picker',
+    blurb: 'Choose the yaw, pitch and clip time for each upgrade-card icon by eye, then bake the numbers straight into upgradeIcons.js.' },
   { file: 'tools/atlas-render/audition.html', on: 'own', port: 4599, path: '/audition.html',
-    script: 'atlas', title: 'Clip audition',
+    script: 'icons:pick', title: 'Clip audition',
     blurb: 'Play a model’s clips back to back to choose a take.' },
   { file: 'tools/atlas-render/rig-transfer.html', on: 'own', port: 4599, path: '/rig-transfer.html',
-    script: 'atlas', title: 'Rig transfer',
+    script: 'icons:pick', title: 'Rig transfer',
     blurb: 'Compare two rigs bone by bone before retargeting a clip between them.' },
 
 ];

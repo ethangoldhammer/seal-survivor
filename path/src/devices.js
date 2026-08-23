@@ -101,3 +101,23 @@ export function defaultDevice() {
 export function prefersReducedMotion() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
+
+/**
+ * Is this a phone-shaped viewport? The JS half of the 700px breakpoint the
+ * responsive block in ui/ui.js keys on, for the handful of values CSS cannot
+ * own because they are written inline per boss or per frame.
+ *
+ * HERE RATHER THAN IN ui.js because two modules need the same number and
+ * neither may depend on the other: ui.js sizes the coded boss bar from it, and
+ * ui/bossBarRive.js sizes the Rive one — and ui.js already imports that file,
+ * so an import back the other way would be a cycle. A copy of `700` in each is
+ * a copy that drifts, and the way it drifts is silent: the two bars would
+ * simply stop agreeing about which screen they are on, at one width.
+ *
+ * Asked every time rather than latched at boot: a desktop window dragged
+ * narrow, or a phone turned on its side, crosses this line without a reload.
+ */
+export function narrowScreen() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(max-width: 700px)').matches ?? false;
+}

@@ -20,11 +20,11 @@
        FOUR CHANGES, each against a number from the shipping panel:
 
        1. THE DESCRIPTION GOES FULL-WIDTH, under the price rather than beside
-          it. Beside it the desc had 337px and every one of the four wrapped to
-          two lines; spanning the row it has 528, and all four land on one.
-          Rows drop from 81px to 68px and the list stops being four grey
-          paragraphs. The margin is real but not generous: the longest row,
-          "One name, in the roller every player rolls from.", measures 517px
+          it. Beside it the desc has 337px, which the current copy wraps for
+          two of the four rows; spanning the row it has 528, and all four land
+          on one line. Rows come out an even 67-68px against the shipping
+          panel's ragged 81 / 65 / 65 / 81. The margin is real but not generous: the longest row,
+          "1 full name + each word added to the name pool.", measures 517px
           of the 528. A future tips.csv row past about 48 characters wraps to
           two lines again — which is fine, the row grows; it is just not a
           guarantee to design the next row against.
@@ -35,9 +35,10 @@
           the name of a place every row already goes to. It is said once, in
           the footer, which already named it: "Tip the amount on Ko-fi and
           write the name in the message" is the shipping sentence and it is
-          untouched here. NOT ONE WORD ON THIS ARTBOARD IS REWRITTEN — every
+          untouched here. NOTHING ON THIS ARTBOARD IS WRITTEN BY ME — every
           label, description and price is the live tips.csv string and the
-          title, blurb and footer are tipJar.js's own.
+          title, blurb and footer are tipJar.js's own. That now means Ethan's
+          rewritten copy, which is in both files.
        4. THE CARDS BECOME RULES. Four filled, bordered boxes inside a bordered
           panel is three borders deep; one hairline between rows is enough to
           separate them, and it lets the warm hover be the only fill on the
@@ -124,29 +125,29 @@
 <div class="sv-tip-sheet">
   <div class="sv-tip-panel">
     <div class="sv-tip-head">
-      <div class="sv-tip-title">Put a name in the water</div>
-      <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list. You can be on it.</div>
+      <div class="sv-tip-title">Add a name to the pool.</div>
+      <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list written by real mammals...contribute to the global mutual fund for true seal survivors and their loved ones.</div>
     </div>
     <div class="sv-tip-tiers">
       <a class="sv-tip-tier">
         <span class="sv-tip-price">$1</span>
         <span class="sv-tip-label">Name a seal</span>
-        <span class="sv-tip-desc">One name, in the roller every player rolls from.</span>
+        <span class="sv-tip-desc">1 full name + each word added to the name pool.</span>
       </a>
       <a class="sv-tip-tier">
         <span class="sv-tip-price">$5</span>
         <span class="sv-tip-label">Name seven seals</span>
-        <span class="sv-tip-desc">Seven names. Put a whole pod in there.</span>
+        <span class="sv-tip-desc">Seven names. A whole pod!</span>
       </a>
       <a class="sv-tip-tier">
         <span class="sv-tip-price">$5</span>
         <span class="sv-tip-label">Name a boss</span>
-        <span class="sv-tip-desc">Prefix and root, on the thing that kills you.</span>
+        <span class="sv-tip-desc">Prefix, root and epithet.</span>
       </a>
       <a class="sv-tip-tier">
         <span class="sv-tip-price">$100</span>
         <span class="sv-tip-label">Your actual name</span>
-        <span class="sv-tip-desc">Your real, on-the-passport name, as a seal.</span>
+        <span class="sv-tip-desc">Your government name as a legendary seal.</span>
       </a>
     </div>
     <div class="sv-tip-how">

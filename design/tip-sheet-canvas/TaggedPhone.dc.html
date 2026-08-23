@@ -33,19 +33,18 @@
 
        WHAT IT COSTS, measured against the same budget as A. Both phone
        artboards have 778px of outer height to spend (776 of content, which is
-       what 92vh resolves to at 844, plus the 2px border). A comes out at 722
-       and finishes with 56px in hand. B comes out at 777 and finishes with
-       ONE.
+       what 92vh resolves to at 844, plus the 2px border). A comes out at 765
+       and finishes with 13px in hand. B comes out at 735 and finishes with 43.
 
-       The 55px between them is all in the list. Both heads are 174px. B's
-       four rows are actually 12px SHORTER than A's, but the two group
-       headings cost 117px and their rules another 6, so B's list block is
-       111px heavier; the shortened footer gives back 56 of that (151 against
-       A's 207). 722 + 111 - 56 = 777.
+       B is the roomier of the two on a phone, which is the reverse of where
+       this started: with the old copy B fit by a single pixel and A had 56 to
+       spare. Deleting the footer is what turned that around — it is 181px on
+       A — and the rewritten blurb, seven lines of the pixel face against the
+       old three, is what ate A's margin.
 
-       So this direction fits, and fits with nothing spare. One more tier in
-       tips.csv, one description long enough to take a third line, or a phone
-       shorter than 844, and the list is scrolling again.
+       Neither direction scrolls on this screen now. A is the one with almost
+       nothing left over: one more tier in tips.csv, or a phone shorter than
+       844, and A is scrolling while B still is not.
 
        ==================================================================== */
     body { margin: 0; width: 390px; height: 844px; overflow: hidden;

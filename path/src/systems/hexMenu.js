@@ -266,6 +266,223 @@ const densityShader = /* glsl */ `
   }
 `;
 
+// --- THE ARRANGEMENTS -------------------------------------------------------
+//
+// Every shape below answers the same question in the same units: given the
+// anchor cell the crop asked for, WHICH CELLS does this arrangement use. They
+// return `{ col, y }` — a column and a height in ROWSTEPS above the origin
+// row — and never a row index, because a row index is not a height on this
+// lattice. Odd columns are pushed down half a row, so `row + 1` moves a cell
+// a whole step while `col + 1` moves it half a step sideways-and-down, and any
+// shape written in row indices has to carry a parity correction at every
+// branch. Written in heights they are all one line of arithmetic, and
+// `rowAtY` puts the parity back exactly once.
+//
+// A HEIGHT IN HALVES IS THE WHOLE ALPHABET. The only vertical distances this
+// lattice can express are multiples of half a rowStep, and which half a given
+// column can reach is decided by its parity — so a shape asking for `y0 + 0.5`
+// from a column of the wrong parity is asking for a cell that does not exist,
+// and `rowAtY` rounds it to the nearest one that does rather than inventing it.
+
+/** The row index that puts column `col`'s centre at `y` rowSteps up. */
+function rowAtY(col, y) {
+  return Math.round(y - ((col & 1) ? 0.5 : 0));
+}
+
+/** The height of a cell's centre, in rowSteps — the inverse of the above. */
+function yOfCell(col, row) {
+  return row + ((col & 1) ? 0.5 : 0);
+}
+
+/**
+ * A TRIANGLE OF CELLS, rows of 1, 2, 3... from the apex.
+ *
+ * `up` puts the apex at the top and widens downward (▲); false puts it at the
+ * bottom (▽). Row j holds j + 1 cells, two columns apart so they share a
+ * parity and therefore a height — one column apart is the zigzag the shipped
+ * row already avoids for the same reason — and each row sits HALF a rowStep
+ * from the last, because a column shifted by one is exactly half a row down.
+ * That half-step is what makes the apex touch both cells beneath it instead of
+ * floating above the gap between them.
+ *
+ * The last row is truncated for a count that is not triangular: 3 is the row
+ * the screen was composed for (1 + 2), 6 is the next whole one, and 4 or 5
+ * simply leave the bottom row short rather than refusing to lay out.
+ */
+function triangleCells(anchor, n, up) {
+  const y0 = yOfCell(anchor.col, anchor.row);
+  const out = [];
+  for (let j = 0; out.length < n; j++) {
+    const y = y0 + (up ? -j : j) / 2;
+    for (let i = 0; i <= j && out.length < n; i++) {
+      out.push({ col: anchor.col - j + 2 * i, y });
+    }
+  }
+  return out;
+}
+
+/**
+ * THE TIGHT TRIAD — three cells that all touch, which is as close as three
+ * flat-top hexagons can get. Two stacked in one column and one nested in the
+ * notch beside them, so the triangle points sideways (`dir` says which way).
+ *
+ * It is the only arrangement here with no gap in it: the triangle above has
+ * its base cells two columns apart, which leaves a cell-shaped hole under the
+ * apex. Both are honest hex triangles and they read completely differently —
+ * this one is a piece of honeycomb, that one is a constellation.
+ *
+ * Three only. A fourth cell has nowhere to go that keeps every one of them
+ * touching, so anything else falls back to the open triangle.
+ */
+function trefoilCells(anchor, n, dir) {
+  if (n !== 3) return triangleCells(anchor, n, false);
+  const y0 = yOfCell(anchor.col, anchor.row);
+  return [
+    { col: anchor.col, y: y0 },
+    { col: anchor.col + dir, y: y0 + 0.5 },
+    { col: anchor.col, y: y0 + 1 },
+  ];
+}
+
+/**
+ * THE DIAMOND — four cells, and the only arrangement here that is a COMPASS
+ * rather than a list: Play at the top, Options and Leaderboard on the two
+ * sides, the tip jar at the bottom. Four flat-top hexagons packed into a
+ * rhombus, which is a 2x2 block of the honeycomb and has no hole in it.
+ *
+ * IT IS THE OPEN TRIANGLE WITH ITS HOLE FILLED. The apex-down triangle's two
+ * upper cells are two columns apart, which leaves exactly one cell-shaped gap
+ * under them; the fourth button goes in it. That is why the figure did not
+ * have to be designed against the lattice — it was already the shape the
+ * lattice left over.
+ *
+ * The order it returns is the order it was ASKED for, top / left / right /
+ * bottom, and not the lowest-first rule the other shapes share. On a list, the
+ * first item wants to be nearest the thumb; on a compass, it wants to be the
+ * one at the top, and which item is where is the whole point of a compass.
+ */
+function diamondCells(anchor, n) {
+  const y0 = yOfCell(anchor.col, anchor.row);
+  const c = anchor.col;
+  return [
+    { col: c, y: y0 + 1 },      // Play
+    { col: c - 1, y: y0 + 0.5 }, // Options
+    { col: c + 1, y: y0 + 0.5 }, // Leaderboard
+    { col: c, y: y0 },           // the tip jar
+  ].slice(0, n);
+}
+
+/**
+ * Cells for an arrangement, IN ITEM ORDER.
+ *
+ * THE LISTS SHARE ONE ORDERING RULE — LOWEST FIRST, then left to right. The
+ * first item is Play and on all of them the lowest cell is nearest both the
+ * seal's crown and the thumb; it reproduces the shipped row (one height, so
+ * purely left to right) and the column (bottom up) exactly, which is why it
+ * can be the only rule those shapes need.
+ *
+ * THE DIAMOND IS NOT A LIST and orders itself — see the note on it above.
+ */
+function cellsFor(shape, anchor, n, step) {
+  const y0 = yOfCell(anchor.col, anchor.row);
+  let cells;
+  switch (shape) {
+    case 'stack':
+      cells = Array.from({ length: n }, (_, i) => ({ col: anchor.col, y: y0 + i }));
+      break;
+    case 'triUp':
+      cells = triangleCells(anchor, n, true);
+      break;
+    case 'triDown':
+      cells = triangleCells(anchor, n, false);
+      break;
+    case 'trefoil':
+      cells = trefoilCells(anchor, n, 1);
+      break;
+    case 'trefoilLeft':
+      cells = trefoilCells(anchor, n, -1);
+      break;
+    case 'diamond':
+      cells = diamondCells(anchor, n);
+      break;
+    default: {
+      // The row, centred on the anchor: three buttons at a step of 2 are
+      // columns -2, 0, +2 relative to it.
+      const first = anchor.col - Math.round(((n - 1) * step) / 2);
+      cells = Array.from({ length: n }, (_, i) => ({ col: first + i * step, y: y0 }));
+      break;
+    }
+  }
+  // NOTHING SITS BELOW THE ANCHOR. `rise` means "this far above the crown",
+  // and an arrangement whose lowest cell is not its anchor breaks that promise
+  // silently: the apex-up triangle's base row is a flipped parity, so it can
+  // only reach half-steps, and it comes out half a rowStep INTO the headroom
+  // the crop was composed with. Lifted by whole rows, which is the only shift
+  // that leaves parity — and therefore the figure's shape — untouched.
+  const lift = Math.max(0, Math.ceil(y0 - Math.min(...cells.map((c) => c.y))));
+  const placed = cells.map((c) => {
+    const y = c.y + lift;
+    return { col: c.col, row: rowAtY(c.col, y), y };
+  });
+  // The lists are sorted into their one rule; the diamond already knows where
+  // each of its four buttons goes and sorting it would throw that away.
+  if (shape !== 'diamond') placed.sort((a, b) => (a.y - b.y) || (a.col - b.col));
+  return placed;
+}
+
+/**
+ * HOW BIG THE TYPE IN A CELL CAN BE — one scale for every label, from whichever
+ * of them needs the tightest fit.
+ *
+ * Here rather than beside the DOM in mainMenu because it is entirely about the
+ * SHAPE OF A HEXAGON, which is this file's subject, and because separated from
+ * the elements it can be measured. It takes sizes and returns a number; it
+ * touches nothing.
+ *
+ * A HEXAGON IS ONLY ITS FULL WIDTH ALONG ONE LINE, and fitting to 2R as if it
+ * were a box is the mistake this exists to not make. A flat-top cell is 2R
+ * across at its vertical centre and narrows from there — the slanted edges give
+ * up 1/√3 of horizontal room per unit of height — so a block of type `h` tall
+ * and centred has only `2R − h/√3` to sit in. One line gets away with the box
+ * assumption; two lines are twice as tall, hang out past the pointed ends, and
+ * read as type that has escaped its button.
+ *
+ * Solved rather than iterated, because the room depends on the scale and the
+ * scale depends on the room:
+ *
+ *   s·w ≤ fill·(2R − s·h/√3)   →   s ≤ fill·2R / (w + fill·h/√3)
+ *
+ * ONE SCALE FOR ALL OF THEM. Fitted per label, a four-letter word would put
+ * four characters across a whole cell and stand at twice the height of a
+ * seven-letter one beside it — a fault, not emphasis. Emphasis is `emphasis`,
+ * per label, and it is inside the minimum so an emphasised label still has to
+ * fit at its own size.
+ *
+ * @param sizes  one `{ w, h, emphasis }` per label, in px at the type's
+ *               authored size. `emphasis` defaults to 1.
+ * @param cellPx the cell's full point-to-point width in px (2R).
+ * @param opts   `fill` across, `fillTall` down the apothem, `grow` as the cap
+ *               on scaling UP — a very wide screen can otherwise blow the
+ *               role's size past anything it was ever looked at.
+ * @returns the common scale. 1 when there is nothing to measure.
+ */
+export function fitScale(sizes, cellPx, { fill = 0.85, fillTall = 0.68, grow = 3 } = {}) {
+  if (!sizes?.length || !(cellPx > 0)) return 1;
+  // Down, it is the APOTHEM: a flat-top cell is 13% shorter than it is wide,
+  // and a two-line label is the first thing this menu has ever had that runs
+  // out of height before it runs out of width.
+  const roomH = cellPx * 0.866 * fillTall;
+  let scale = Infinity;
+  for (const s of sizes) {
+    const e = s.emphasis ?? 1;
+    const w = (s.w ?? 0) * e;
+    const h = (s.h ?? 0) * e;
+    if (w > 0) scale = Math.min(scale, (fill * cellPx) / (w + (fill * h) / Math.sqrt(3)));
+    if (h > 0) scale = Math.min(scale, roomH / h);
+  }
+  return Number.isFinite(scale) ? Math.min(scale, grow) : 1;
+}
+
 /**
  * The row of buttons. `items` is one entry per cell — `label`, and `onPress`
  * for what it does, which is the caller's business and not this file's.
@@ -431,6 +648,17 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
 
   const state = items.slice(0, count).map((item, i) => ({
     label: item.label ?? String(item),
+    // The label broken over more than one line, when the caller says so. It is
+    // the SAME string — a place to break, not different words — and it is here
+    // rather than in the label because everything that is not the type reads
+    // `label` and would have to strip a newline out of it (press and release
+    // both return it, and the sound bus keys off it).
+    lines: Array.isArray(item.lines) && item.lines.length ? item.lines.slice() : null,
+    // The primary button. A fact about the menu rather than about index 0, so
+    // a menu that reorders does not emphasise whatever lands first. What it
+    // buys is in mainMenu (bigger, heavier, a louder hover) and one thing
+    // here: the tile under it lights harder.
+    lead: !!item.lead,
     onPress: item.onPress ?? null,
     index: i,
     hover: 0,
@@ -469,50 +697,48 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
     items: state,
     metrics: m,
     radius,
+    // Which arrangement is currently laid out — written by layout(), read by
+    // whoever mounted the menu so a resize can tell a reshape from a reframe.
+    shape: 'row',
 
     /**
-     * SNAP THE ROW TO REAL CELLS. The wanted position — above the crown of the
-     * measured bust — is only a hint: it is turned into a lattice cell with
-     * hexCellAt and every button is then addressed as (col, row), so the row
-     * lands on the grid rather than near it.
-     *
-     * COLUMNS OF THE SAME PARITY, which is why `colStep` defaults to 2. In a
-     * flat-top offset layout odd columns are pushed down half a row, so three
-     * buttons in ADJACENT columns would zigzag. Two columns apart is the
-     * closest they can be and still share a row.
-     */
-    /**
-     * Does this viewport want the column rather than the row? Measured on the
-     * WINDOW and not on the frame, because the frame is composed from what this
-     * returns — asking the other way round is a loop.
+     * Does this viewport want a portrait arrangement rather than the row?
+     * Measured on the WINDOW and not on the frame, because the frame is
+     * composed from what this returns — asking the other way round is a loop.
      *
      * The threshold is an aspect, not a width. A phone held upright is ~0.46
      * and a laptop is ~1.7, so anything under about three-quarters is a screen
-     * with height to spare and no width, which is exactly the trade a column
-     * makes.
+     * with height to spare and no width, which is exactly the trade every
+     * portrait arrangement makes.
+     *
+     * WHY THE ROW CANNOT BE RESCUED BY FRAMING, since "just zoom out" is the
+     * obvious answer and it is wrong. At 375x812 every unit of width the
+     * buttons need costs 2.2 units of HEIGHT. Three cells in a row span ~4.6
+     * units across, which forces a frame ~10 tall around a bust that is 1.6 —
+     * the animal the screen is built around ends up a sixth of it. Shrinking
+     * the lattice instead puts "LEADERBOARD" inside 58px of hexagon. Every
+     * arrangement `portraitShape` can name is under 3 units wide, which is the
+     * entire point of having them.
      */
-    wantsStack() {
-      if (cfg.stack === true || cfg.stack === false) return cfg.stack;
+    wantsShape() {
+      if (typeof cfg.shape === 'string') return cfg.shape;
       const w = globalThis.innerWidth ?? 0;
       const h = globalThis.innerHeight ?? 0;
-      if (!w || !h) return false;
-      return w / h < (cfg.stackBelowAspect ?? 0.75);
+      if (!w || !h) return 'row';
+      return w / h < (cfg.portraitBelowAspect ?? 0.75)
+        ? (cfg.portraitShape ?? 'triDown')
+        : 'row';
     },
 
     /**
-     * A ROW ON A WIDE SCREEN, A COLUMN ON A TALL ONE.
+     * SNAP THE ARRANGEMENT TO REAL CELLS. The wanted position — above the
+     * crown of the measured bust — is only a hint: it is turned into a lattice
+     * cell with hexCellAt and every button is then addressed as (col, row), so
+     * the buttons land on the grid rather than near it.
      *
-     * The row cannot be rescued by framing on a phone held upright, and it is
-     * worth being precise about why, because "just zoom out" is the obvious
-     * answer and it is wrong. At 375x812 the aspect is 0.46, so every unit of
-     * width the buttons need costs 2.2 units of HEIGHT. Three cells span ~3.5
-     * units across, which forces a frame ~10 tall around a bust that is 1.6 —
-     * the animal the screen is built around ends up a sixth of it. Shrinking
-     * the lattice instead puts "LEADERBOARD" inside 58px of hexagon.
-     *
-     * A column is one cell wide and spends the height the shape already has.
-     * FIRST ITEM LOWEST: `hexCenter` puts +row upward, and the first item is
-     * Play — which wants to be nearest the crown, and nearest the thumb.
+     * WHICH cells is `cellsFor` above, one arrangement per shape, and which
+     * shape is `wantsShape` unless the caller names one — the look page does,
+     * which is the only way to see them side by side.
      */
     layout(box, opts = {}) {
       const wantX = (box.min.x + box.max.x) / 2 + (cfg.offsetX ?? 0);
@@ -527,35 +753,11 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
         console.warn('[hexMenu] no lattice cell for the wanted position — is the bust box empty?');
         return this;
       }
-      const stacked = opts.stack ?? this.wantsStack();
-      const centres = [];
-      if (stacked) {
-        // One column, climbing away from the crown. No parity correction to
-        // make and none possible — every cell shares `anchor.col`, so they
-        // share its half-row offset too and the column is exactly straight.
-        for (let i = 0; i < count; i++) {
-          const row = anchor.row + i;
-          state[i].cell = { col: anchor.col, row };
-          centres.push(hexCenter(anchor.col, row, m));
-        }
-      } else {
-        // Centred on the anchor: for three buttons at a step of 2 that is
-        // columns -2, 0, +2 relative to it.
-        const first = anchor.col - Math.round(((count - 1) * step) / 2) * 1;
-        for (let i = 0; i < count; i++) {
-          const col = first + i * step;
-          // Same visual row for every button. `hexCenter` adds the half-row
-          // offset for odd columns, so the ROW INDEX has to come back down by
-          // one whenever the parity flips — with an even `colStep` it never
-          // does, and this is here for the case where someone sets it odd on
-          // purpose.
-          const row = anchor.row + ((col & 1) === (anchor.col & 1) ? 0 : 0);
-          state[i].cell = { col, row };
-          centres.push(hexCenter(col, row, m));
-        }
-      }
+      this.shape = opts.shape ?? this.wantsShape();
+      const cells = cellsFor(this.shape, anchor, count, step);
+      const centres = cells.map((c) => hexCenter(c.col, c.row, m));
       // THE QUAD IS SIZED FROM THE CENTRES, not from the row's arithmetic. The
-      // construction-time `spanX` assumes one row and would leave a column's
+      // construction-time `spanX` assumes one row and would leave a triangle's
       // upper cells outside the plane the shader draws on — which does not
       // error, it just clips the buttons off at the quad's edge and looks like
       // the lattice ate them.
@@ -565,6 +767,7 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
       mesh.position.set(midX, midY, cfg.z ?? 1);
       gooMesh.position.copy(mesh.position);
       for (let i = 0; i < count; i++) {
+        state[i].cell = { col: cells[i].col, row: cells[i].row };
         // Two frames for the same point: `local` is the quad's own space, which
         // is what the shader wants, and `home` is the world, which is what the
         // hit test and the emitters want. The offset is added to both every
@@ -837,7 +1040,7 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
         // summing — a charged press on a hovered tile is one event, and adding
         // them would blow the tint past its own hot colour.
         uniforms.uHot.value[s.index] = Math.max(
-          s.hover * (cfg.hoverHot ?? 0.35),
+          s.hover * (cfg.hoverHot ?? 0.35) * (s.lead ? (cfg.label?.leadHot ?? 1) : 1),
           s.charge * (cfg.chargeHot ?? 1),
           s.squish >= 0 ? Math.exp(-3 * s.squish) : 0,
         );

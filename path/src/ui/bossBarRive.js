@@ -32,6 +32,9 @@ import rivUrl from './seal_survivor.riv?url';
 // than discovered as a bar that never moves. See riveContract.js.
 import { BOSS_BAR_ARTBOARD, BOSS_BAR_BINDINGS } from './riveContract.js';
 import { CONFIG } from '../config.js';
+// The phone breakpoint, shared with ui.js rather than re-typed here — see the
+// note on narrowScreen itself for why it lives in a file neither of them owns.
+import { narrowScreen } from '../devices.js';
 
 // What the module knows about itself. `ready` is the one flag ui.js acts on,
 // and it is only ever set from the runtime's own onLoad — a bar that is loading,
@@ -82,15 +85,28 @@ export function initBossBarRive(parent) {
   // Sized in vw with a px ceiling, like the div bar it stands in for, and with
   // the artboard's own 1920x307 aspect so Fit.Contain has nothing to letterbox.
   // pointer-events off: it sits over the water the player is aiming into.
-  const width = c.width ?? 'min(1040px, 88vw)';
+  //
+  // THROUGH A VARIABLE, because this is written ONCE — the wrapper is built at
+  // boot and never rebuilt — and the answer changes when the viewport crosses
+  // the phone breakpoint, which a rotation does without a reload. `--sv-bossbar-w`
+  // is set only inside the responsive block in ui/ui.js, so on every other
+  // screen this falls through to the tuned width and the Look panel still owns
+  // it. An inline width recomputed here instead would be a value no media query
+  // could ever beat.
+  const width = `var(--sv-bossbar-w, ${c.width ?? 'min(1040px, 88vw)'})`;
   // THE INSET IS ADDED, NOT SUBSTITUTED FOR THE TUNED TOP. `c.top` is a
   // composition choice about how far under the top edge the bar hangs; the
   // inset is how far down the top edge actually is once the page draws under
   // the Dynamic Island (index.html carries viewport-fit=cover). Sizes down to
   // 0 on anything without a notch, so this is not a phone special case — it is
   // the same 14px everywhere the top edge is the top edge.
+  // --sv-bossbar-drop is the height of whatever is above the bar, written onto
+  // the root by ui.js's syncBossBarDrop — on a phone the score and the clock
+  // hold the top right and this hangs below them. Zero everywhere else, and the
+  // coded fallback builds the same calc in STYLES so the two bars cannot land
+  // in different places.
   state.wrap.style.cssText =
-    `position:absolute; top:calc(${c.top ?? 14}px + env(safe-area-inset-top, 0px)); left:50%; transform:translateX(-50%);` +
+    `position:absolute; top:calc(${c.top ?? 14}px + var(--sv-bossbar-drop, 0px) + env(safe-area-inset-top, 0px)); left:50%; transform:translateX(-50%);` +
     `width:${width}; aspect-ratio:1920 / 307; pointer-events:none;`;
 
   state.canvas = document.createElement('canvas');
@@ -178,7 +194,24 @@ function sizePercent(span) {
   const c = cfg();
   const min = c.sizeMin ?? 52;
   const max = c.sizeMax ?? 100;
-  return min + (max - min) * Math.max(0, Math.min(1, span));
+  const t = Math.max(0, Math.min(1, span));
+  // ON A PHONE THE FLOOR COMES UP, exactly as it does for the coded bar (see
+  // bossBarWidth). Both numbers are percentages of a wrapper that is itself
+  // near the width of the screen there, so the tuned 52 would draw the first
+  // boss of a run as a bar across half a 375px phone — and on that screen the
+  // fight IS the whole picture, so the bar wants to read as the frame around it
+  // rather than as a panel floating in the middle. The span still reads: a late
+  // boss still arrives visibly longer than an early one, over a shorter range.
+  //
+  // Clamped between the tuned ends rather than replacing them: 88 is a raised
+  // FLOOR, so a sizeMax dragged below it in the Look panel gives a bar that is
+  // simply always that long — not one that gets shorter as the fights get
+  // bigger, which is what a bare 88 here would have produced.
+  if (narrowScreen()) {
+    const floor = Math.min(Math.max(min, 88), max);
+    return floor + (max - floor) * t;
+  }
+  return min + (max - min) * t;
 }
 
 /**

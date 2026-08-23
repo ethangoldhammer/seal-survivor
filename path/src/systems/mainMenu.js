@@ -78,7 +78,7 @@ import { ease } from '../ease.js';
 import { applyPlayerOutline } from './outlines.js';
 import { bustAim, bustPlumb, createBustPin, measureBust } from './splashBust.js';
 import { cineEnabled, cineMenu } from './cineCamera.js';
-import { createHexMenu } from './hexMenu.js';
+import { createHexMenu, fitScale } from './hexMenu.js';
 import { createGrid } from './grid.js';
 import { setCausticsPunch } from './water.js';
 import { stateForSpeed } from './animation.js';
@@ -491,22 +491,34 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   labelLayer.style.cssText = 'position:absolute; inset:0; pointer-events:none; z-index:3;';
   (root ?? document.body).appendChild(labelLayer);
 
+  // ONE ELEMENT PER LINE, always — a single-line label is a block of one, so
+  // there is no second path through any of this. The wrapper is a block that
+  // centres its rows and each row is nowrap: the wrapper's scrollWidth is then
+  // the WIDEST LINE, which is exactly the number the fit below needs, and it
+  // reads it for free rather than measuring every row.
+  //
+  // Where a label breaks is the caller's (main.js) and it is the same string
+  // either way — see `lines` in hexMenu.
   const labels = menu.items.map((item) => {
     const node = document.createElement('div');
     node.className = 'sv-blob-label';
-    node.style.cssText = 'position:absolute; transform:translate(-50%,-50%); white-space:nowrap;';
-    node.textContent = item.label;
+    node.style.cssText = 'position:absolute; transform:translate(-50%,-50%); text-align:center;';
+    for (const line of item.lines ?? [item.label]) {
+      const row = document.createElement('div');
+      row.style.whiteSpace = 'nowrap';
+      row.textContent = line;
+      node.appendChild(row);
+    }
     labelLayer.appendChild(node);
     return node;
   });
 
-  // How much each label has to be shrunk to stay inside its own hexagon, 1 when
-  // it already does — see fitLabels. And how wide it wants to be unscaled,
-  // measured rather than estimated: the type is whatever the Text panel has the
-  // `blobButton` role set to, and a character count is not a width in a face
-  // nobody has chosen yet.
+  // How much each label is scaled to sit in its own hexagon — see fitLabels.
+  // And how big it wants to be unscaled, MEASURED rather than estimated: the
+  // type is whatever the Text panel has the `blobButton` role set to, and a
+  // character count is not a width in a face nobody has chosen yet.
   const labelFit = labels.map(() => 1);
-  const naturalWidth = labels.map(() => 0);
+  const natural = labels.map(() => ({ w: 0, h: 0 }));
 
   function viewport() {
     const el = world.renderer.domElement;
@@ -533,6 +545,24 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       // shrinking off into the distance reads as debris — so it leaves early,
       // on its own curve, while the shot is still mostly a portrait.
       labels[i].style.opacity = String(Math.max(0, Math.min(1, w * 2.5 - 1.2)));
+
+      // THE WORD ANSWERS THE POINTER, and it answers with a HALO rather than
+      // with a brightening. These labels are drawn in the ink colour, which is
+      // white — `filter: brightness()` on white is a no-op, which is exactly
+      // what the first pass at this was. What can still get brighter is the
+      // air around the letters.
+      //
+      // A filter and not a text-shadow: the role's own shadow is inside the
+      // scan mask (see roleCss in ui/typography.js) and adding to it would be
+      // adding to something that is being cut into stripes. This sits on the
+      // finished glyph, so a hovered word grows a halo the grille never
+      // touches — which is the read: the sign is being driven harder.
+      const L = cfg.label ?? {};
+      const glow = item.hover
+        * (item.lead ? (L.leadHoverGlow ?? 16) : (L.hoverGlow ?? 7));
+      labels[i].style.filter = glow > 0.05
+        ? `drop-shadow(0 0 ${glow.toFixed(1)}px currentColor)`
+        : '';
     });
   }
 
@@ -555,16 +585,52 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
    * would walk the type down to nothing on the way out.
    */
   function fitLabels(pxPerUnitHeld) {
+    const L = cfg.label ?? {};
+    const lead = (i) => (menu.items[i].lead ? (L.leadScale ?? 1.3) : 1);
+
+    // MEASURED EVERY TIME, NOT CACHED — and that is not laziness, it is the one
+    // bug this function has ever had. `scrollWidth` is the UNSCALED layout
+    // width (a transform does not change layout), so re-measuring cannot walk
+    // the type down the way a font-size shrink would, and it costs four reads
+    // on a resize that is already recomposing a camera.
+    //
+    // The cache was a `document.fonts.ready` hook, and it was wrong in a way
+    // that only appeared once this fit could GROW. The shipped face arrives
+    // over the network; a label measured before it lands was measured in the
+    // fallback, which is a narrow proportional monospace against a pixel face
+    // at one em per glyph — "OPTIONS" is 80px in one and 121px in the other.
+    // While the fit could only shrink, a stale measurement meant slightly too
+    // little shrink and nobody ever saw it. Now it means the type is fitted for
+    // a word half the width of the one on the screen, and it hangs out of the
+    // hexagon by 20%.
     labels.forEach((node, i) => {
-      if (!naturalWidth[i]) {
-        // Measured with any previous shrink removed, or each pass would measure
-        // the last one's output and walk the type down over a few resizes.
-        node.style.transform = 'translate(-50%, -50%)';
-        naturalWidth[i] = node.scrollWidth;
+      node.style.lineHeight = String(L.lineHeight ?? 1.08);
+      // The lead's stroke goes on BEFORE the measurement, because a stroked
+      // glyph is wider than an unstroked one and a fit measured without it is
+      // a fit that is slightly too big.
+      //
+      // A stroke and not a font-weight: the shipped face (Press Start 2P) has
+      // one cut, so the role's 700 is already a synthetic bold and there is no
+      // 900 to ask for. Thickening the stem is what "heavier" means on a pixel
+      // face.
+      if (menu.items[i].lead) {
+        node.style.webkitTextStroke = `${L.leadStroke ?? 1.2}px currentColor`;
+        node.style.paintOrder = 'stroke fill';
       }
-      const room = menu.radius * 2 * pxPerUnitHeld * 0.78;
-      labelFit[i] = naturalWidth[i] > 0 ? Math.min(1, room / naturalWidth[i]) : 1;
+      natural[i] = { w: node.scrollWidth, h: node.scrollHeight };
     });
+
+    // THE FIT ITSELF IS `fitScale` IN hexMenu — it is entirely about the shape
+    // of a hexagon, which is that file's subject, and separated from these
+    // elements it can be measured (npm run test:hexmenu). What is left here is
+    // the two things only this file knows: how big a cell is on THIS screen,
+    // and which label is the lead.
+    const scale = fitScale(
+      natural.map((n, i) => ({ w: n.w, h: n.h, emphasis: lead(i) })),
+      menu.radius * 2 * pxPerUnitHeld,
+      L,
+    );
+    labels.forEach((node, i) => { labelFit[i] = scale * lead(i); });
   }
 
   // --- the framing ----------------------------------------------------------
@@ -664,28 +730,33 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   }
   composeHeld();
   // A ROTATION CAN CHANGE THE MENU'S SHAPE, not just its framing: hexMenu
-  // stacks the buttons into a column on a portrait screen and lays them in a
-  // row on a wide one. Re-laying out only when that decision actually flips
-  // keeps the geometry rebuild off every resize event while a window is being
-  // dragged, and leaves a mid-drag tile where the player is holding it.
-  let stacked = menu.wantsStack?.() ?? false;
+  // lays the buttons in a row on a wide screen and in whichever portrait
+  // arrangement `portraitShape` names on a tall one. Re-laying out only when
+  // that decision actually changes keeps the geometry rebuild off every resize
+  // event while a window is being dragged, and leaves a mid-drag tile where
+  // the player is holding it.
+  let shape = menu.wantsShape?.() ?? 'row';
   const onResize = () => {
-    const next = menu.wantsStack?.() ?? false;
-    if (next !== stacked) {
-      stacked = next;
+    const next = menu.wantsShape?.() ?? 'row';
+    if (next !== shape) {
+      shape = next;
       menu.layout(bust);
     }
     composeHeld();
   };
   window.addEventListener('resize', onResize);
   // ONE MORE PASS WHEN THE FACE ARRIVES. initTypography loads the family the
-  // `blobButton` role names, and a label measured before it lands was measured
-  // in the fallback — which is a different width, and the shrink is a ratio
-  // against exactly that number.
-  document.fonts?.ready?.then(() => {
-    naturalWidth.fill(0);
-    composeHeld();
-  });
+  // `blobButton` role names, and a label measured in the fallback is fitted to
+  // a word that is not the one on the screen — see fitLabels.
+  //
+  // BOTH HOOKS, because `fonts.ready` alone does not cover it: it resolves for
+  // the fonts the document was ASKING FOR at the time, and the role's family is
+  // requested by initTypography, which may well be after that promise has
+  // already settled. `loadingdone` fires for each batch that finishes, so it
+  // catches a face that arrives late — and firing twice costs one recompose.
+  const onFontsReady = () => composeHeld();
+  document.fonts?.ready?.then(onFontsReady);
+  document.fonts?.addEventListener?.('loadingdone', onFontsReady);
 
   // --- the pointer ----------------------------------------------------------
   // Two questions, deliberately separate, because a phone answers only one of
@@ -894,17 +965,59 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   }
 
   // --- the pad --------------------------------------------------------------
-  // A pad cannot point, so it gets a cursor of its own: left/right walks the
-  // row, confirm presses whatever it is on. Held separately from `hovered`
-  // because the mouse writes that every frame it moves, and a pad selection a
-  // stray mouse pixel could erase is not a selection.
+  // A pad cannot point, so it gets a cursor of its own: a push walks to the
+  // next button that way, confirm presses whatever it is on. Held separately
+  // from `hovered` because the mouse writes that every frame it moves, and a
+  // pad selection a stray mouse pixel could erase is not a selection.
+  //
+  // WALKED BY POSITION, NOT BY INDEX. Index order is only the same thing as
+  // screen order while the buttons are in a row: a triangle has two of them at
+  // the same height and one above, and "next in the list" from the bottom-left
+  // of that is a diagonal jump the stick never asked for. Nothing here knows
+  // which arrangement is up — it reads where the tiles actually are, so a shape
+  // added later navigates correctly without touching this.
+  function stepTo(dx, dy) {
+    const from = menu.items[padHover];
+    if (!from) return 0;
+    // Only what lies in the pushed direction, and among those the nearest —
+    // with the off-axis distance counted double so a push right prefers the
+    // tile beside it over one further up that happens to be a hair closer.
+    let best = -1;
+    let bestD = Infinity;
+    for (const item of menu.items) {
+      if (item.index === padHover) continue;
+      const ax = item.world.x - from.world.x;
+      const ay = item.world.y - from.world.y;
+      const along = ax * dx + ay * dy;
+      if (along <= 1e-4) continue;
+      const across = Math.abs(ax * -dy + ay * dx);
+      const d = along + across * 2;
+      if (d < bestD) { bestD = d; best = item.index; }
+    }
+    return best;
+  }
+
   function updatePad() {
-    if (menuInput.x) {
-      const from = padHover < 0 ? -1 : padHover;
-      padHover = Math.max(0, Math.min(menu.items.length - 1, from + (menuInput.x > 0 ? 1 : -1)));
-      hovered = padHover;
-      auto = false;
-      feedback('uiHover');
+    if (menuInput.x || menuInput.y) {
+      // menuInput is in SCREEN space and +y is DOWN; the tiles are in world
+      // units and +y is UP. Without the flip a push down walks the selection
+      // up the triangle, which on the shipped row was invisible because the row
+      // has no up.
+      const next = padHover < 0
+        // A fresh stick with nothing selected lands on the first item — Play —
+        // rather than walking from a button the player never chose.
+        ? 0
+        : stepTo(Math.sign(menuInput.x), -Math.sign(menuInput.y));
+      // Nothing that way is not an error: the edge of the arrangement holds
+      // the selection where it is, which is what every menu in the game does —
+      // and it stays silent, because a click on a push that moved nothing is
+      // the menu claiming something happened.
+      if (next >= 0 && next !== padHover) {
+        padHover = next;
+        hovered = padHover;
+        auto = false;
+        feedback('uiHover');
+      }
     }
     if (menuInput.confirm && hovered >= 0) {
       menu.press(hovered);
@@ -952,6 +1065,7 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     // is not there.
     if (cineEnabled()) cineMenu(false);
     window.removeEventListener('resize', onResize);
+    document.fonts?.removeEventListener?.('loadingdone', onFontsReady);
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerdown', onDown);
     window.removeEventListener('pointerup', onUp);
@@ -1010,6 +1124,24 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       // the tail and the hind flippers, and at the moment of release the camera
       // is still on the crop — where all three are off the bottom of the frame.
       pin?.release();
+    },
+
+    /**
+     * Re-lay the buttons in a named arrangement and recompose the frame around
+     * where they landed — the same two calls a rotation makes, in the same
+     * order (the crop is a union of the animal and the buttons, so composing
+     * before they have moved composes around the old figure).
+     *
+     * Here for the look page, which is the only place the arrangements can be
+     * compared: the game picks one from the viewport and never switches on a
+     * screen that is not being rotated. A null argument hands the choice back
+     * to `wantsShape`.
+     */
+    reshape(shape = null) {
+      menu.layout(bust, shape ? { shape } : {});
+      menu.replayIntro();
+      composeHeld();
+      return menu.shape;
     },
 
     /**

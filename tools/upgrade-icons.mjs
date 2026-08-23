@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { ASSETS } from '../path/src/assets.js';
 import { CONFIG } from '../path/src/config.js';
 import { SCENES } from './icon-scenes.mjs';
+import { ICON_FORMATS } from './atlas-render/icon-formats.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, 'atlas-render/icons.json');
@@ -156,7 +157,9 @@ if (bakeArg > -1) {
   const strict = process.argv.includes('--strict');
   const list = JSON.parse(await readFile(OUT, 'utf8'));
   const known = new Set(CONFIG.upgrades.map((u) => u.id));
-  const MIME = { '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
+  // Shared with the upload gate and the preview server — see icon-formats.mjs
+  // for why this is not a fourth copy of the list.
+  const MIME = ICON_FORMATS;
 
   const entries = [];
   const missing = [];

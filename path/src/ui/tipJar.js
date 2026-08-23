@@ -402,9 +402,8 @@ export function openTipSheet({ tiers = [], onHover, onClick } = {}) {
     <div class="sv-tip-panel" role="dialog" aria-modal="true" aria-label="What a tip buys">
       <div class="sv-tip-scroll">
       <div class="sv-tip-head">
-        <div class="sv-tip-title">Put a name in the water</div>
-        <div class="sv-tip-blurb">Every seal and every boss in this game is named
-          from a list. You can be on it.</div>
+        <div class="sv-tip-title">Add a name to the pool.</div>
+        <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list written by real mammals...contribute to the global mutual fund for true seal survivors and their loved ones.</div>
       </div>
       <div class="sv-tip-tiers">
         ${runs.map((run, r) => `
