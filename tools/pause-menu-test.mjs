@@ -120,6 +120,14 @@ check('bloom falls through to the authored flag',
   S.bloomEnabled(true) === true && S.bloomEnabled(false) === false);
 check('deadzone matches the constant it replaced', S.stickDeadzone() === 0.15,
   String(S.stickDeadzone()));
+check('field of view is exactly 1', S.fovScale() === 1, String(S.fovScale()));
+// The four performance overrides, all of which must be transparent until
+// somebody picks a side — a tuner change to any of them still has to reach a
+// player who never opened this menu.
+for (const [name, fn] of [['auto resolution', S.adaptiveResEnabled], ['caustics', S.causticsEnabled],
+  ['light beams', S.godRaysEnabled], ['weather', S.weatherEnabled]]) {
+  check(`${name} falls through to the authored flag`, fn(true) === true && fn(false) === false);
+}
 
 // ---------------------------------------------------------------------------
 section('Nothing reaches CONFIG');
@@ -138,7 +146,80 @@ check('CONFIG.bloom.enabled untouched', CONFIG.bloom.enabled === authoredBloom);
 check('the override is what changed instead',
   S.screenFilter(authoredPreset) === 'vga' && S.bloomEnabled(true) === false
   && S.sfxScale() === 0.2 && S.resolutionScale() === 0.5);
+
+// The performance tab is the newest way to get this wrong, and the most
+// tempting: every one of these has an obvious `CONFIG.x.enabled = false` that
+// would work perfectly until saveTuning() snapshotted it and shipped one
+// player's phone settings to everybody. See the header of settings.js.
+const authoredWeather = CONFIG.weather.enabled;
+const authoredCaustics = CONFIG.caustics.enabled;
+const authoredRays = CONFIG.godrays.enabled;
+const authoredAdaptive = CONFIG.render.adaptive.enabled;
+S.setSetting('performance.weather', false);
+S.setSetting('performance.caustics', false);
+S.setSetting('performance.godRays', false);
+S.setSetting('performance.adaptiveRes', false);
+check('CONFIG.weather.enabled untouched', CONFIG.weather.enabled === authoredWeather);
+check('CONFIG.caustics.enabled untouched', CONFIG.caustics.enabled === authoredCaustics);
+check('CONFIG.godrays.enabled untouched', CONFIG.godrays.enabled === authoredRays);
+check('CONFIG.render.adaptive.enabled untouched', CONFIG.render.adaptive.enabled === authoredAdaptive);
+check('...and all four overrides are what changed instead',
+  S.weatherEnabled(true) === false && S.causticsEnabled(true) === false
+  && S.godRaysEnabled(true) === false && S.adaptiveResEnabled(true) === false);
 S.resetSettings();
+
+// ---------------------------------------------------------------------------
+section('The quality preset');
+
+// A PRESET HAS TO ROUND-TRIP. Low then High must be High — which is only true
+// because every preset names every key it governs. One that left a key alone
+// would leave whatever the previous preset put there, and the failure is
+// invisible: the label says High and one setting is still on Low.
+S.applyQuality('high');
+const high = S.QUALITY_KEYS.map((k) => k.split('.').reduce((o, p) => o[p], S.settings));
+S.applyQuality('low');
+const low = S.QUALITY_KEYS.map((k) => k.split('.').reduce((o, p) => o[p], S.settings));
+S.applyQuality('high');
+const back = S.QUALITY_KEYS.map((k) => k.split('.').reduce((o, p) => o[p], S.settings));
+check('every governed key actually moves between low and high',
+  low.every((v, i) => v !== high[i]), `${low.length} keys, ${low.filter((v, i) => v !== high[i]).length} moved`);
+check('low then high is high again', back.every((v, i) => v === high[i]),
+  S.QUALITY_KEYS.filter((k, i) => back[i] !== high[i]).join(', ') || 'all six match');
+
+// It reaches ACROSS TABS. `video.resolution` is the biggest single lever there
+// is and its row lives under Video, so a preset that could only touch its own
+// section would be a preset for the small half of the problem.
+S.applyQuality('low');
+check('the preset reaches the resolution slider on the Video tab',
+  S.resolutionScale() < 1, `${S.resolutionScale()}`);
+check('...and the two water effects', S.causticsEnabled(true) === false && S.godRaysEnabled(true) === false);
+
+// TOUCHING ANYTHING GOVERNED MAKES IT CUSTOM. Without this the menu goes on
+// claiming "Low" while a setting under it says otherwise, and a reload cannot
+// tell which of the two was the player's actual intent.
+check('a preset pins the name', S.settings.performance.quality === 'low');
+S.setSetting('performance.godRays', true);
+check('...and any individual change drops it to Custom',
+  S.settings.performance.quality === null, String(S.settings.performance.quality));
+check('...without undoing the change that did it', S.godRaysEnabled(false) === true);
+// The cross-tab one too, since setSetting is reached from the Video tab's own
+// slider and the check there is the same one.
+S.applyQuality('high');
+S.setSetting('video.resolution', 0.7);
+check('a Video-tab change drops Quality to Custom as well',
+  S.settings.performance.quality === null && S.resolutionScale() === 0.7);
+// Nulling it deliberately must leave the settings alone — Custom is a name for
+// where they already are, not an instruction to change them.
+S.applyQuality('high');
+const beforeNull = S.QUALITY_KEYS.map((k) => k.split('.').reduce((o, p) => o[p], S.settings));
+S.applyQuality(null);
+const afterNull = S.QUALITY_KEYS.map((k) => k.split('.').reduce((o, p) => o[p], S.settings));
+check('clearing the pin changes nothing but the name',
+  S.settings.performance.quality === null && afterNull.every((v, i) => v === beforeNull[i]));
+S.resetSettings();
+check('a reset puts Quality back to Custom and every override back to Default',
+  S.settings.performance.quality === null && S.causticsEnabled(true) === true
+  && S.weatherEnabled(true) === true && S.fovScale() === 1);
 
 // ---------------------------------------------------------------------------
 section('Mute');

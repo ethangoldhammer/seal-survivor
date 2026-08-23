@@ -1536,7 +1536,74 @@ export const ASSETS = {
   // Bakalar's voicemail bomb — a fat dark canister with a warm blinking
   // light, built as a shape rather than a model so the blink can drive its
   // colour directly (see systems/bakalar.js).
-  voicemailBomb: { shape: 'sphere', radius: 0.72, color: 0x2a2118, unlit: true },
+  // BAKALAR'S VOICEMAIL BOMB. A cartoon black powder ball with a curly wick,
+  // decimated from a 4MB Sketchfab download by tools/optimize-bomb.mjs — read
+  // that file for what was wrong with the source and why each step is safe.
+  //
+  // `fit` IS NOT THE BALL. fit normalises the model's LONGEST axis, and the
+  // longest axis of this file is the ball plus the wick sticking out of it:
+  // 4.407 source units against a 2.958 ball. So the number here is the ball's
+  // wanted diameter divided by that ratio —
+  //
+  //     1.44 (the primitive sphere this replaced, r 0.72 x 2) / 0.671 = 2.15
+  //
+  // — and the effect of getting it wrong is a bomb a third too small, which is
+  // small enough to look deliberate. BOMB_BASE_RADIUS in systems/bakalar.js is
+  // the other half: CONFIG.bakalar.bomb.size is a RADIUS, and 0.72 is where it
+  // means "leave it at the authored size".
+  //
+  // `forward` POINTS THE WICK. In the side view orientationQuaternion sends the
+  // model's forward axis to world +Y, so naming the wick's own axis as forward
+  // stands the bomb up with its fuse at the top — the only orientation a bomb
+  // has. `up` then only picks the roll, which on a sphere with a wick is a
+  // choice about which way the wick leans.
+  //
+  // +Y IS THE WICK because tools/optimize-bomb.mjs bakes the source's node
+  // transforms into the vertices. The raw download is Z-up with the flip on a
+  // wrapper node, which means its accessors and the space three.js draws in
+  // disagree by ninety degrees — and the measured wickPath below is read off
+  // the accessors. Reading these axes off the ORIGINAL file gives '+Z' here,
+  // which points the fuse at the camera and the flame at the fuse's old home.
+  //
+  // The sphere below is still here as the fallback: a missing or broken model
+  // degrades to a working game, and this one is dropped mid-fight.
+  voicemailBomb: {
+    model: '/models/voicemailbomb.glb',
+    fit: 2.15,
+    forward: '+Y',
+    up: '+Z',
+    // Matte, because it is a cartoon powder ball and the source's spec-gloss
+    // shine was thrown away with the maps that carried it (see the optimizer).
+    // emissiveIntensity 0, and it is not redundant next to emissiveFromMap
+    // below. That block points the emissive slot at the base map and sets the
+    // emissive colour to white, which takes the material past the "seed a
+    // glow target and leave it switched off" branch further down — so without
+    // this the bomb ships self-lit at full map brightness. Zero here means the
+    // wiring is in place and doing nothing until the glow slider asks.
+    material: { roughness: 0.92, metalness: 0, emissiveIntensity: 0 },
+    // IF ANYTHING TURNS THE GLOW UP, it lights the bomb wearing its own paint
+    // rather than flooding it white. A lit model's glow slider scales
+    // emissiveIntensity, and the emissive colour it scales is seeded from the
+    // material's base colour FACTOR — which on a textured glTF is plain white,
+    // whatever the art actually looks like. So a glow of any size turns this
+    // black powder ball into a white lamp. Pointing the emissive at the map
+    // makes the slider mean "brighter", which is what a slider called glow
+    // should mean.
+    emissiveFromMap: true,
+    // A PALE rim, not an ink line, and that is the opposite of what a cartoon
+    // outline usually is. The bomb is a near-black ball drawn against dark
+    // water: a dark outline on it is invisible twice over — it does not
+    // separate the ball from the water and it does not read against the ball.
+    // The boats solve the same problem the same way (0x9fc6e8), so this is the
+    // house rim rather than a special case.
+    //
+    // Thickness is in SOURCE units and this file is 4.407 across, so 0.05
+    // lands at about 0.024 world once fit has scaled it — roughly three pixels
+    // on something one world unit wide, where the boats' 0.02 on a 9-unit fit
+    // would be a hairline.
+    outline: { color: 0x9fc6e8, thickness: 0.05 },
+    shape: 'sphere', radius: 0.72, color: 0x2a2118, unlit: true,
+  },
 
   // The fin-tip club (systems/club.js). Procedural for now — a stretched oval
   // reads as a length of driftwood at the size this thing swings at, and every
@@ -4183,6 +4250,11 @@ export async function preloadAssets(onProgress) {
   // consult this cache, so there is nothing left to serve.
   parsedModelCache.clear();
 
+  // The seabed's bubble prop is in now, so the film can finally pick its
+  // painted layer up off it. Harmless when nothing wears a shell yet: the
+  // materials are built on first use and call through here themselves.
+  applyBubbleShellSettings();
+
   if (total === 0) onProgress?.(1);
 }
 
@@ -4713,6 +4785,38 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
 
   const wrapper = new THREE.Group();
   wrapper.add(orient);
+
+  // A PATH BAKED INTO THE FILE, converted once into the space the game holds
+  // the model in.
+  //
+  // tools/optimize-bomb.mjs measures the bomb's wick — a polyline from where
+  // it enters the neck to its free tip — and writes it into the glTF scene's
+  // extras, because there is no node, bone or locator in the source marking
+  // it and systems/bakalar.js has to put a flame on the end and burn it down.
+  // GLTFLoader copies scene extras to scene.userData, so it arrives here.
+  //
+  // Transformed rather than passed through. Those coordinates are in the
+  // SOURCE file's axes, and everything above has just recentred the model on
+  // its centroid, scaled it by `fit` and rotated it by `forward`/`up` — a
+  // point read raw would sit somewhere inside the bomb, off to one side, at
+  // roughly a third of the right distance. Doing it here means it is done once
+  // per asset rather than once per bomb, and it cannot drift out of step with
+  // the transforms because it is computed FROM them.
+  //
+  // Plain numbers, not Object3D locators: cloneSafe JSON round-trips child
+  // userData on every clone, so an array of nine triples is free and a node
+  // reference would be either destroyed or shared with the template.
+  const wickSrc = source.userData?.wickPath;
+  if (Array.isArray(wickSrc) && wickSrc.length) {
+    wrapper.updateMatrixWorld(true);
+    const v = new THREE.Vector3();
+    const toWrapper = new THREE.Matrix4().copy(wrapper.matrixWorld).invert();
+    wrapper.userData.wickPath = wickSrc.map((p) => {
+      v.fromArray(p).applyMatrix4(model.matrixWorld).applyMatrix4(toWrapper);
+      return [v.x, v.y, v.z];
+    });
+  }
+
   wrapper.userData.clips = clips;
   wrapper.userData.rig = def.rig ?? null;
   wrapper.userData.aimRig = def.aimRig ?? null;
@@ -4843,6 +4947,10 @@ export function createVisual(key) {
     inst.userData.breathRig = template.userData.breathRig;
     inst.userData.morphs = template.userData.morphs;
     inst.userData.animationNames = template.userData.animationNames;
+    // Re-assigned like the rest: cloneSafe blanks the ROOT's userData, so
+    // anything the game reads off the top-level object has to be listed here
+    // or it silently arrives undefined on every clone but the template.
+    inst.userData.wickPath = template.userData.wickPath;
     if (sizeMul) inst.scale.multiplyScalar(sizeMul);
     // A glowing creature gets its OWN material here, unlike every other clone,
     // which shares the template's. That is the price of a per-individual
@@ -6769,6 +6877,57 @@ function getMaterial(key, def) {
 // balloon seen against open water.
 const shellMaterials = new Map();
 
+// One 1x1 white texture for every shell material to bind before the painted
+// layer arrives. Built lazily so importing this module does not touch THREE's
+// texture machinery, and cached because a DataTexture per material would be a
+// GL upload per material for a pixel they all agree on.
+let WHITE_PIXEL = null;
+function whitePixel() {
+  if (!WHITE_PIXEL) {
+    WHITE_PIXEL = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    WHITE_PIXEL.needsUpdate = true;
+  }
+  return WHITE_PIXEL;
+}
+
+// THE PAINTED LAYER'S IMAGE, TAKEN OFF A PROP THAT ALREADY HAS IT.
+//
+// models/seabed/bubble.glb carries a 64x64 webp on a material named "Bubbles"
+// — the same image as the texture layer in the Spline material this film was
+// ported from. It is registered as the `bubble` seabed asset, so by the time
+// any bubble is in the water it has been fetched, decoded and uploaded
+// already. Adding a copy of it to public/textures would have meant a second
+// download and a second GL upload of a picture the game is already holding.
+//
+// CLONED rather than used as-is. Texture.clone shares the Source, so the two
+// still resolve to ONE upload (see the note above parsedModelCache) — but the
+// sampler settings come apart, which matters here: this one is a matcap and
+// wants to clamp, while the prop's own is set to repeat and would tile the
+// painted bubble into the corners of the disc.
+//
+// Returns null until preloadAssets has installed the prop, and caches only a
+// real answer, so the retry costs a Map lookup and a short traverse.
+let filmPaint = null;
+function harvestFilmPaint() {
+  if (filmPaint) return filmPaint;
+  const template = loadedModels.get('bubble');
+  if (!template) return null;
+  let found = null;
+  template.traverse((o) => {
+    if (found || !o.isMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) if (m?.map) { found = m.map; break; }
+  });
+  if (!found) return null;
+  filmPaint = found.clone();
+  filmPaint.wrapS = THREE.ClampToEdgeWrapping;
+  filmPaint.wrapT = THREE.ClampToEdgeWrapping;
+  filmPaint.repeat.set(1, 1);
+  filmPaint.offset.set(0, 0);
+  filmPaint.needsUpdate = true;
+  return filmPaint;
+}
+
 // The one place the injected GLSL lives. Kept as a plain string rather than
 // spread across .replace() calls so the whole shader can be read at once — and
 // with NO backtick anywhere in it, including in the comments, since a backtick
@@ -6779,17 +6938,95 @@ const SHELL_FRAGMENT = `
   // far wall of a bubble is film too, and abs() is what lets one material
   // draw both without the back half inverting.
   float shellFace = 1.0 - abs(dot(normalize(vShellN), normalize(vShellV)));
+  // A WIDE band with a DEAD MIDDLE, which is the shape Spline's "Sea Bubbles"
+  // material makes and the thing a bare pow() cannot. pow alone trades the two
+  // against each other: drop the exponent for a broad film and the middle
+  // fills in with it, raise it for a clean middle and the film shrinks to a
+  // wire loop. Cutting everything under uShellBias to nothing buys both at
+  // once — a soft band that starts well outside the silhouette and still
+  // arrives at exactly zero before the centre.
+  //
+  // Spline spells this as a negative fresnel bias (-0.19) added after the
+  // power, which CLIPS: the band loses that much of its peak too, so its
+  // intensity has to be dialled back up to compensate. Renormalising instead
+  // means uShellRim and uShellBoost keep meaning what they meant, and bias 0
+  // is byte-for-byte the old curve.
   float shellRim = pow(clamp(shellFace, 0.0, 1.0), uShellPower);
+  shellRim = clamp((shellRim - uShellBias) / max(1.0 - uShellBias, 1e-4), 0.0, 1.0);
   // A second, much tighter band right at the silhouette. Without it the rim is
   // a soft halo — a glow around a ball — and with it there is a bright line ON
   // the surface, which is what sells a film with a thickness.
   float shellSheen = pow(clamp(shellFace, 0.0, 1.0), uShellPower * 4.0) * uShellSheen;
+  // THE CONTOUR, and it is most of why the Spline bubbles read better than a
+  // bare fresnel did: every object in that scene wears an ink outline, so a
+  // bubble there has a DEFINITE EDGE and therefore a definite size. A bubble
+  // that only fades out at its rim has neither — it reads as a glow that
+  // happens to be round.
+  //
+  // Not the game's outline system, which cannot do this one. That is an
+  // inverted hull, and a hull behind a surface that does not write depth is
+  // not a rim at all: its back faces project to the WHOLE DISC, so a bubble
+  // would come out as a dark circle with a fish inside it. The contour has to
+  // be part of the film, so it is a band far tighter than the fresnel, sitting
+  // outside it, that DARKENS where the fresnel brightens.
+  float shellInk = clamp(pow(clamp(shellFace, 0.0, 1.0), uShellInkPower) * uShellInk, 0.0, 1.0);
+
+  // THE CONTOUR TAKES THE OUTERMOST SLICE FROM THE FRESNEL, rather than being
+  // painted over the top of it, and this is the whole reason the port works at
+  // all. Both terms are the same dot product, so left alone they peak on the
+  // same pixels: a dark line drawn over a rim that is already HDR-bright is a
+  // dark line the bloom pass immediately fills back in.
+  //
+  // In Spline they never collide, because the outline there is an inverted
+  // hull — it lives OUTSIDE the geometry and the fresnel lives inside it. One
+  // dot product cannot buy that separation, but handing the outer band to the
+  // contour and letting the fresnel peak just inside it can, and it produces
+  // the same three-part read: dark edge, bright film, empty middle.
+  shellRim *= 1.0 - shellInk;
+
+  // THE PAINTED LAYER — the last of Spline's four visible "Sea Bubbles" layers,
+  // and the one that stops the film being visibly pure maths. It is the same
+  // 64x64 image, read straight out of models/seabed/bubble.glb rather than
+  // shipped a second time: that prop is already an asset and already resident,
+  // so this costs no download and no upload (see harvestFilmPaint).
+  //
+  // SAMPLED AS A MATCAP, not through the sphere's UVs, because of what the
+  // image actually is: a whole bubble painted face-on, with its highlight in
+  // it. Run that through a UV sphere's equirectangular unwrap and it smears
+  // into a band. Indexing it by the VIEW-SPACE normal instead lays the painted
+  // bubble over the rendered one exactly as it was painted, and it stays put
+  // as the bubble travels — the same trick as makeChromeMaterial below, which
+  // invents its matcap rather than sampling one.
+  //
+  // The normal is folded to the near wall first. Both walls are drawn
+  // (DoubleSide), and the far one's normal points away, so left alone it would
+  // sample the mirror image and paint a second highlight opposite the first.
+  // Folded, the two walls agree and the film simply reads twice as it should.
+  vec3 shellNF = vShellN * (dot(vShellN, vShellV) < 0.0 ? -1.0 : 1.0);
+  vec3 shellPaint = texture2D(uShellPaint, shellNF.xy * 0.5 + 0.5).rgb;
+  // Toward WHITE at zero strength, which is what makes the amount a genuine
+  // opacity: the image is opaque with a white surround, so the corners
+  // multiply by 1 and only the painted disc tints anything.
+  vec3 shellBase = diffuse * mix(vec3(1.0), shellPaint, uShellPaintAmt);
+
+  // Multiplied past 1.0 on purpose: the scene renders to an HDR target, so the
+  // rim is what bloom's bright-pass picks up while the body stays under
+  // threshold. See CONFIG.bloom.
+  vec3 shellLit = shellBase * (1.0 + shellRim * uShellBoost + shellSheen * 3.0);
+  float shellA = clamp(opacity * mix(uShellCore, uShellRim, shellRim) + shellSheen, 0.0, 1.0);
+
   vec4 diffuseColor = vec4(
-    // Multiplied past 1.0 on purpose: the scene renders to an HDR target, so
-    // the rim is what bloom's bright-pass picks up while the body stays under
-    // threshold. See CONFIG.bloom.
-    diffuse * (1.0 + shellRim * uShellBoost + shellSheen * 3.0),
-    clamp(opacity * mix(uShellCore, uShellRim, shellRim) + shellSheen, 0.0, 1.0)
+    // TOWARD the ink colour, not multiplied by it. The rim underneath is HDR —
+    // it can be 3.0 in a channel — and a multiply by a dark colour leaves a
+    // bright edge that has merely been tinted. mix() is the only one of the two
+    // that can actually reach black from up there.
+    mix(shellLit, uShellInkColor, shellInk),
+    // The contour is the one part of the film that is nearly solid, because
+    // that is what a drawn line is. max() rather than adding it to the
+    // fresnel's alpha: the two overlap at the silhouette, and summing them
+    // would put a ring of over-1.0 alpha around a bubble whose whole point is
+    // that you see through it.
+    max(shellA, shellInk)
   );
 `;
 
@@ -6813,6 +7050,21 @@ function makeShellMaterial(mat, cfgKey = 'bubbleShell') {
     uShellRim: { value: 0.95 },
     uShellBoost: { value: 2.2 },
     uShellSheen: { value: 0.35 },
+    // Both default to the old behaviour: bias 0 leaves the fresnel curve
+    // untouched, and ink 0 makes the contour term vanish from the mix. An
+    // asset that says nothing about either wears exactly the film it wore
+    // before the contour existed.
+    uShellBias: { value: 0 },
+    uShellInk: { value: 0 },
+    uShellInkPower: { value: 14 },
+    uShellInkColor: { value: new THREE.Color(0x03080d) },
+    // A 1x1 white pixel rather than null, and it is not defensiveness. GLSL
+    // cannot short-circuit, so the texture2D above runs even at amount 0 —
+    // and an UNBOUND sampler2D reads as opaque black on some drivers and
+    // warns on others. Binding white means the untextured path is provably
+    // the identity, whatever the driver does.
+    uShellPaint: { value: whitePixel() },
+    uShellPaintAmt: { value: 0 },
   };
 
   mat.onBeforeCompile = (shader) => {
@@ -6828,7 +7080,10 @@ function makeShellMaterial(mat, cfgKey = 'bubbleShell') {
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>',
         '#include <common>\nuniform float uShellPower;\nuniform float uShellCore;\nuniform float uShellRim;'
-        + '\nuniform float uShellBoost;\nuniform float uShellSheen;\nvarying vec3 vShellN;\nvarying vec3 vShellV;')
+        + '\nuniform float uShellBoost;\nuniform float uShellSheen;\nuniform float uShellBias;'
+        + '\nuniform float uShellInk;\nuniform float uShellInkPower;\nuniform vec3 uShellInkColor;'
+        + '\nuniform sampler2D uShellPaint;\nuniform float uShellPaintAmt;'
+        + '\nvarying vec3 vShellN;\nvarying vec3 vShellV;')
       // Replaces the line that DECLARES diffuseColor, so everything downstream
       // — the map, the tint, the alpha test — still runs on top of it exactly
       // as it would have. Injecting after <map_fragment> instead would throw
@@ -6858,6 +7113,20 @@ export function applyBubbleShellSettings() {
     u.uShellRim.value = cfg.rimAlpha ?? 0.95;
     u.uShellBoost.value = cfg.rimBoost ?? 2.2;
     u.uShellSheen.value = cfg.sheen ?? 0.35;
+    // Clamped below 1: at 1 the renormalising divisor in the shader is what
+    // saves it, but the band would already be a wire loop, and past it the
+    // whole film inverts.
+    u.uShellBias.value = Math.min(0.95, Math.max(0, cfg.bias ?? 0));
+    u.uShellInk.value = Math.max(0, cfg.ink ?? 0);
+    u.uShellInkPower.value = Math.max(1, cfg.inkPower ?? 14);
+    u.uShellInkColor.value.set(cfg.inkColor ?? 0x03080d);
+    const paint = harvestFilmPaint();
+    if (paint) u.uShellPaint.value = paint;
+    // Held at 0 until the image is actually in hand, so a bubble that reaches
+    // the screen before the seabed prop has parsed wears the plain film rather
+    // than a white multiply that would be indistinguishable from it anyway —
+    // and picks the paint up the moment preloadAssets calls back through here.
+    u.uShellPaintAmt.value = paint ? Math.max(0, cfg.paint ?? 0) : 0;
   }
 }
 

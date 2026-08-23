@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { weatherEnabled } from './settings.js';
 import { bounds, surfaceHeightAt } from '../arena.js';
 import { emit } from '../entities/particles.js';
 
@@ -63,7 +64,14 @@ export function resetWeather() {
  */
 export function updateWeather(dt) {
   const cfg = CONFIG.weather;
-  if (!cfg?.enabled) {
+  // ONE GATE, HERE, and not seven. `CONFIG.weather?.enabled` has readers in the
+  // rain sheet, the clouds, the horizon fog, the lightning, the swell and the
+  // day/night bus — patching the player's setting into each of them would be
+  // six chances to miss one, and the one missed is a storm that half exists.
+  // Everything downstream already reads `weatherState`, and everything already
+  // treats intensity 0 as clear, so zeroing the state at the source turns all
+  // of it off at once.
+  if (!cfg?.enabled || !weatherEnabled(true)) {
     weatherState.intensity = 0;
     weatherState.target = 0;
     weatherState.turbulence = 0;

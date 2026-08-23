@@ -64,6 +64,7 @@ shrimp,2.36,,,
 starfish,6.2,,,
 strikeOrb,1.18,,,
 tomb,1,,,the big gabled run marker. See headstone.
+voicemailBomb,1,,toon:voicemailBomb,"Toon-banded and outlined. Size 1 is the models own fit; the bombs scale is CONFIG.bakalar.bomb.size, a RADIUS, applied on top in systems/bakalar.js. Decimated from a 4MB download by tools/optimize-bomb.mjs, which also bakes the wick path the flame burns down."
 trapBubble,5.02,,,
 trawler,0.84,,,
 whale,2.6,,toon:whale+biolum:whale,"The bowhead sweeper. 12 fit x this = 31.2 world units of animal in an 80-wide frame - bigger than the mosasaur boss at 27.2, which is the largest thing in the game otherwise. Deliberately out of family with the boss column: the sweep reads as relief rather than as another arrival only if the silhouette is unmistakable at a glance. Its gulp reach is NOT derived from this - see whale.mouthRadius in spawning.csv."

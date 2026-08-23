@@ -397,7 +397,7 @@
       "emissive": null,
       "repeatX": 1,
       "repeatY": 1,
-      "glow": 4.2,
+      "glow": null,
       "emissiveMask": null
     },
     "enemyHammerhead": {
@@ -484,6 +484,7 @@
   "arena": {
     "viewHeight": 52,
     "surfaceFromTop": 0.2,
+    "referenceAspect": 1.7777777777777777,
     "widthScale": 2,
     "airScale": 3,
     "wallRestitution": 0.5,
@@ -668,6 +669,7 @@
     "base": {
       "zoom": 1.24,
       "zoomMax": 3.55,
+      "maxPunch": 1.6,
       "zoomStiffness": 26,
       "zoomDamping": 0.8,
       "stiffness": {
@@ -2659,6 +2661,11 @@
       "sizeMin": 52,
       "sizeMax": 100
     },
+    "dividend": {
+      "enabled": true,
+      "stacksPerBoss": 1,
+      "maxStacks": 6
+    },
     "kill": {
       "enabled": true,
       "hold": 0.12,
@@ -2948,7 +2955,12 @@
       "boostLerp": 4.5,
       "boostFall": 16,
       "radius": 0.22,
-      "haloRadius": 1.3
+      "haloRadius": 1.3,
+      "track": {
+        "enabled": true,
+        "maxSwivel": 0.55,
+        "lerp": 4
+      }
     },
     "angler": {
       "triggerRange": 11,
@@ -2964,8 +2976,28 @@
       "lurkTurnRate": 0.9,
       "windupTurnRate": 2.4,
       "stationRange": 13,
-      "stationSwing": 0.9,
-      "repositionSpeed": 4.2
+      "repositionSpeed": 4.2,
+      "wallMargin": 0.35,
+      "floorLift": 0.6,
+      "floorSink": 3.4,
+      "floorEase": 1.8,
+      "lureRange": 34,
+      "chargeTime": 1.25,
+      "dischargeTime": 0.55,
+      "attackGap": 5.6,
+      "lureNode": "Top_Bone_02",
+      "pulseRadius": 18,
+      "pulsePick": 1.15,
+      "pulseDamage": 0.35,
+      "pulseSnare": 1.05,
+      "pulseSnareMul": 0.12,
+      "pulseSnareThaw": 0.35,
+      "beamDamage": 1.35,
+      "beamLife": 0.85,
+      "beamTick": 0.3,
+      "beamWidth": 1.1,
+      "beamLength": 150,
+      "beamCore": 14678271
     },
     "perkFx": {
       "eyeSockets": {
@@ -3713,6 +3745,7 @@
     },
     "bossAnglerfish": {
       "ambushBoss": true,
+      "deepSpawn": true,
       "separates": true,
       "asset": "enemyBossAnglerfish",
       "behavior": "hunt",
@@ -6276,6 +6309,68 @@
         }
       ],
       "sfxMinGap": 0.11
+    },
+    "anglerCharge": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.3,
+      "sfx": "elementHit",
+      "sfxMinGap": 0.3
+    },
+    "anglerPulse": {
+      "emit": "elementChill",
+      "shake": 0.14,
+      "hitstop": 0,
+      "glow": 0.85,
+      "ripple": {
+        "strength": 2.6,
+        "radius": 18
+      },
+      "sfx": "elementFreeze",
+      "haptic": [
+        {
+          "duration": 26,
+          "magnitude": 0.45
+        }
+      ],
+      "sfxMinGap": 0.1
+    },
+    "anglerSnare": {
+      "emit": "breathBubbles",
+      "shake": 0.1,
+      "hitstop": 0.05,
+      "glow": 0.6,
+      "ripple": {
+        "strength": 1.4,
+        "radius": 6
+      },
+      "sfx": "clubFreeze",
+      "haptic": [
+        {
+          "duration": 40,
+          "magnitude": 0.6
+        }
+      ],
+      "sfxMinGap": 0.2
+    },
+    "anglerBeam": {
+      "emit": "sparks",
+      "shake": 0.16,
+      "hitstop": 0,
+      "glow": 1,
+      "ripple": {
+        "strength": 2,
+        "radius": 9
+      },
+      "sfx": "elementArc",
+      "haptic": [
+        {
+          "duration": 20,
+          "magnitude": 0.5
+        }
+      ],
+      "sfxMinGap": 0.1
     },
     "bulletHit": {
       "emit": "sparks",
@@ -8937,18 +9032,28 @@
     }
   },
   "bubbleShell": {
-    "power": 2.6,
+    "power": 1.6,
     "coreAlpha": 0.07,
     "rimAlpha": 0.85,
-    "rimBoost": 1.05,
-    "sheen": 0.15
+    "rimBoost": 1.9,
+    "sheen": 0.06,
+    "bias": 0.22,
+    "ink": 4,
+    "inkPower": 4.5,
+    "inkColor": 198669,
+    "paint": 0.21
   },
   "oxygenBubbleShell": {
-    "power": 1.9,
-    "coreAlpha": 0.09,
-    "rimAlpha": 0.9,
-    "rimBoost": 1.35,
-    "sheen": 0.28
+    "coreAlpha": 0.06,
+    "rimAlpha": 0.85,
+    "rimBoost": 2.4,
+    "sheen": 0.06,
+    "power": 1.6,
+    "bias": 0.22,
+    "ink": 5,
+    "inkPower": 6,
+    "inkColor": 198669,
+    "paint": 0.21
   },
   "chromeBlade": {
     "dark": 727596,
@@ -9852,14 +9957,12 @@
         70
       ],
       "decay": 0.22,
-      "gain": 2.6607250597988097,
+      "gain": 0.7498942093324559,
       "noise": 0.85,
       "filter": 2800,
       "pitchVary": 0.41,
       "filterVary": 0.31,
       "srcs": [
-        "/sfx/EliArf_Explode1.mp3",
-        "/sfx/EliArf_Explode_01.mp3",
         "/sfx/ESM_PG_fx_water_splash_weapon_cannon_impact_near_air_projectile_whoosh_02.mp3"
       ]
     },
@@ -10553,11 +10656,15 @@
         28
       ],
       "decay": 0.78,
-      "gain": 0.46,
+      "gain": 10.592537251772887,
       "noise": 0.65,
       "filter": 760,
-      "pitchVary": 0.08,
-      "filterVary": 0.18
+      "pitchVary": 0.37,
+      "filterVary": 0.31,
+      "srcs": [
+        "/sfx/EliArf_Explode_01.mp3",
+        "/sfx/EliArf_Explode1.mp3"
+      ]
     },
     "musselBlast": {
       "src": null,
@@ -10665,13 +10772,13 @@
   },
   "haptics": {
     "enabled": true,
-    "intensity": 2,
+    "intensity": 1,
     "fullAtMs": 85,
     "curve": 0.6,
     "floor": 0.15,
     "strongRatio": 1,
     "weakRatio": 1,
-    "minDuration": 20,
+    "minDuration": 25,
     "maxDuration": 1000,
     "taptic": {
       "enabled": true,
@@ -11542,7 +11649,7 @@
   },
   "seabed": {
     "enabled": true,
-    "seed": 1337,
+    "seed": 2618,
     "count": 150,
     "attempts": 30,
     "spacing": 1.8,
@@ -11553,8 +11660,8 @@
     ],
     "bedScale": 1.8,
     "scale": [
-      0.4,
-      2.1
+      1.15,
+      2.75
     ],
     "yawRange": 6.283,
     "species": {
@@ -11572,7 +11679,7 @@
   },
   "grass": {
     "sway": {
-      "enabled": true,
+      "enabled": false,
       "amplitude": 0.09,
       "stiffness": 1.8,
       "speedSync": "2 bars",
@@ -11648,7 +11755,8 @@
     "woundColor": 8384720,
     "woundGlow": 1.8,
     "woundOpacity": 0.9,
-    "woundLift": 0.12
+    "woundLift": 0.12,
+    "goo": true
   },
   "hotSpots": {
     "pool": 12,
@@ -13360,6 +13468,22 @@
       "hold": 0.04,
       "release": 0.22,
       "curve": "outQuad"
+    },
+    "charge": {
+      "from": 3.2,
+      "to": 16,
+      "attack": 1.25,
+      "hold": 0,
+      "release": 0.06,
+      "curve": "outQuad"
+    },
+    "zap": {
+      "from": 16,
+      "to": 19,
+      "attack": 0.03,
+      "hold": 0.05,
+      "release": 0.2,
+      "curve": "outQuad"
     }
   },
   "render": {
@@ -13913,11 +14037,25 @@
         "lift": 3
       }
     },
+    "reward": {
+      "enabled": true,
+      "title": "Boss down",
+      "scale": 2.4,
+      "pad": 40,
+      "gap": 26,
+      "bias": 0,
+      "seconds": 0.55,
+      "ease": "outCubic",
+      "scrim": 0.6,
+      "glow": {
+        "spread": 1.85
+      }
+    },
     "ripple": {
       "enabled": true,
       "delay": 90,
       "msPerPx": 0.9
     }
   },
-  "_savedAt": 1787424784244
+  "_savedAt": 1787506686870
 }

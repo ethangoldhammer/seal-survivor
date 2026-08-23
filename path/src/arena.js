@@ -1,4 +1,17 @@
 import { CONFIG } from './config.js';
+import { fovScale } from './systems/settings.js';
+
+// How far below the seabed the frame may travel, in world units, and equally
+// how far the seabed strip is extended down to meet it. One constant for both
+// because they are the same number seen from two sides: let the camera past
+// what the backdrop covers and you see the bare scene background under the
+// ocean floor.
+//
+// HERE rather than in world.js, where it used to live, because it now has a
+// third reader that cannot import world.js: updateBounds clamps the player's
+// field of view against it (see below). world.js still owns both the spending
+// of it — the death dive's framing — and the skirt that pays for it.
+export const FLOOR_OVERSCAN = 7;
 
 // The playfield is a vertical slice of ocean. Water surface sits at y = 0;
 // positive y is air, negative y is water. Bounds are recomputed on resize so
@@ -7,10 +20,14 @@ import { CONFIG } from './config.js';
 // left/right/width/top are the ARENA — where the walls and the ceiling are,
 // which is what almost everything in the game means when it asks about the
 // world. `frameWidth` and `frameTop` are the FRAME: what the camera sees at
-// zoom 1. They were the same numbers until `arena.widthScale` / `airScale`,
-// and are still equal at 1; above that the arena is bigger than the frame and
-// the camera pans across the difference. Anything that means "the screen"
-// rather than "the ocean" wants the frame pair.
+// zoom 1. Anything that means "the screen" rather than "the ocean" wants the
+// frame pair.
+//
+// THE TWO ARE NO LONGER PROPORTIONAL, and that is the point. The frame follows
+// the window's aspect, because it is a rectangle of screen. The arena does
+// not: it is measured off `arena.referenceAspect`, so the ocean is the same
+// ocean in portrait and landscape and only the window onto it changes. See
+// updateBounds for what that was costing.
 //
 // The FLOOR is deliberately not in that list: bounds.bottom is the frame's
 // bottom edge and the arena's floor at once, because the death dive already
@@ -25,6 +42,12 @@ export const bounds = {
   height: 50,
   frameWidth: 80,
   frameTop: 10,
+  // The frame's BOTTOM edge, which is only a separate number because of the
+  // field-of-view setting. At fov 1 it is exactly `bottom` — the arena's floor
+  // and the frame's lower edge are the same line, as they always were — and a
+  // wider view is what pulls the two apart. Anything that means THE FLOOR still
+  // wants `bottom`; only the camera wants this.
+  frameBottom: -40,
 };
 
 // How much visible seabed sits above bounds.bottom. world.js builds the floor
@@ -64,18 +87,71 @@ export function updateBounds(aspect) {
   bounds.bottom = -(h - air);
   bounds.height = h;
 
-  // The frame first — what the camera sees at zoom 1.
-  bounds.frameWidth = h * aspect;
-  bounds.frameTop = air;
+  // The frame first — what the camera sees at zoom 1. This one IS the window's
+  // aspect, and has to be: it is a rectangle of screen.
+  //
+  // ...times the player's field of view, which is the one term here that is a
+  // preference rather than a measurement. It scales the frame about the frame's
+  // OWN CENTRE, not about the water line, so widening the view shows more sky
+  // and more depth in the proportion the shot was composed in — anchoring it at
+  // the surface instead would slide the water line up the screen and quietly
+  // undo `surfaceFromTop`.
+  //
+  // Clamped against what the WORLD contains rather than against a typed limit.
+  // Above the frame there is arena all the way to the jump ceiling, but below
+  // it there is only the seabed skirt (FLOOR_OVERSCAN, which world.js builds
+  // the floor plane down to), and past that is bare scene background under the
+  // ocean. So the floor is the binding constraint and the ceiling never is —
+  // at the shipped 52-unit frame the skirt runs out at fov 1.27 while the
+  // ceiling would allow 1.80. Derived, so raising FLOOR_OVERSCAN or the air
+  // scale moves it on its own instead of leaving a stale number here.
+  const halfH = h / 2;
+  const centreY = air - halfH;
+  const fov = Math.min(fovScale(), (centreY - (-(h - air) - FLOOR_OVERSCAN)) / halfH);
+  bounds.frameWidth = h * aspect * fov;
+  bounds.frameTop = centreY + halfH * fov;
+  bounds.frameBottom = centreY - halfH * fov;
 
   // Then the walls and the ceiling, pushed out beyond it. Both cost a camera
   // that can follow, and the cinematic rig already pans and clamps in x and y
   // for the shot, so what they really cost is that the rig has somewhere to
   // go — see clampFocus in world.js.
+  //
+  // THE WALLS ARE MEASURED OFF A REFERENCE FRAME, NOT THE PLAYER'S. This is
+  // the one line that decides whether the ocean is the same ocean on every
+  // device, and it used to read `bounds.frameWidth` — the live one. That made
+  // the entire playfield a function of the window's aspect ratio, and on a
+  // phone that is not a subtlety: a portrait iPhone 14 Pro got a 48-unit
+  // arena, landscape got 225. Under eight seal lengths wall to wall, against
+  // thirty-seven. Turning the phone sideways did not re-frame the game, it
+  // replaced it — every wall bounce, every off-screen spawn distance
+  // (spawnEdgeX below), every crossing time and every chase geometry moved by
+  // 4.7x, while the per-second spawn budgets that know nothing about the arena
+  // stayed put and concentrated the same pressure into a fifth of the water.
+  //
+  // So the arena is now derived from `referenceAspect` — the shape the game is
+  // authored and tuned at — and the player's real aspect only decides how much
+  // of it is on screen. That is the camera's job, and the camera already has
+  // the vocabulary for it (see cineAspectZoom in systems/cineCamera.js).
+  //
+  // Vertical never had this problem: viewHeight is a constant, so the water
+  // has always been 41.6 deep whichever way the phone was held.
+  const ref = h * (CONFIG.arena.referenceAspect || 16 / 9);
   const wide = Math.max(1, CONFIG.arena.widthScale ?? 1);
-  bounds.right = (bounds.frameWidth * wide) / 2;
+  bounds.right = (ref * wide) / 2;
   bounds.left = -bounds.right;
   bounds.width = bounds.right - bounds.left;
+
+  // ...but a frame WIDER than the arena would show bare scene background past
+  // both walls, which no amount of camera work can hide. An ultrawide window,
+  // or a `widthScale` somebody has pulled down to 1, can both get there. The
+  // walls give way rather than the frame, because the frame is a fact about
+  // the display and the arena is a number we chose.
+  if (bounds.frameWidth > bounds.width) {
+    bounds.right = bounds.frameWidth / 2;
+    bounds.left = -bounds.right;
+    bounds.width = bounds.frameWidth;
+  }
 
   // THE CEILING, and it is a real one: clampToArena stops the seal dead at
   // bounds.top, so this is the height a breach is allowed to reach and not a

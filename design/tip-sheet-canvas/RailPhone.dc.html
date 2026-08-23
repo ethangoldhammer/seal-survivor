@@ -1,0 +1,134 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+  <style>
+    /* ========================================================================
+       A · RAIL — phone, 390x844. The small-screen values resolved flat, the
+       same way ShipsPhone.dc.html resolves the shipping ones.
+
+       THIS IS THE ARTBOARD THAT ARGUES FOR THE DIRECTION. The shipping panel
+       on this screen is 814px tall holding 824px of content: it scrolls, and
+       the part that falls off the bottom is the instruction — the one part
+       tipJar.js's own header calls the whole mechanism. Rail is built to fit,
+       and where it cannot, the footer is pinned so the instruction is the one
+       thing that never scrolls away.
+
+       Three phone-only moves on top of the desktop artboard:
+         · row padding 22 -> 18, because 321px of row is what is left after
+           the sheet's 4vw and the panel's border.
+         · the head's right gutter goes to 60px for the 44px touch-sized close
+           button, so the two-line title clears it.
+         · the price rail stays 4ch. It is 64px of 321 rather than 81px of
+           327, and it no longer floats: it sits on the label's line.
+       ==================================================================== */
+    body { margin: 0; width: 390px; height: 844px; overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+    /* For links added to this artboard later. Scoped off the tier rows:
+       the shipping panel changes only background and border-color on hover,
+       and a bare a:hover here outranks the row's own color: inherit. */
+    a { color: #ffd9a0; text-decoration: none; }
+    a:not(.sv-tip-tier):hover { color: #ffe9c6; }
+
+    .sv-tip-sheet { position: absolute; inset: 0; display: flex;
+      align-items: center; justify-content: center; padding: 33.8px 15.6px;
+      background: rgba(3,6,10,0.93);
+      font-family: 'Press Start 2P', monospace; }
+    /* No fixed height: the panel is as tall as it needs to be, up to 92vh.
+       The whole point of the direction is that on this screen it does not
+       reach that cap. */
+    .sv-tip-panel { position: relative; display: flex; flex-direction: column;
+      width: 357px; max-height: 776px;
+      background: #07090d; border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 14px; color: #e8ecf3;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset; }
+
+    .sv-tip-head { flex: none; padding: 20px 60px 14px 18px; }
+    .sv-tip-title { font-size: 18px; letter-spacing: 0.03em; line-height: 1.35;
+      margin-bottom: 10px; color: #ffffff; }
+    .sv-tip-blurb { font-size: 12px; line-height: 1.7; letter-spacing: 0.02em;
+      color: rgba(232,236,243,0.6); }
+
+    .sv-tip-tiers { flex: 1; min-height: 0; overflow-y: auto;
+      overscroll-behavior: contain;
+      border-top: 1px solid rgba(255,255,255,0.08); }
+    .sv-tip-tier { display: grid; grid-template-columns: 4ch 1fr;
+      column-gap: 12px; row-gap: 4px; align-items: baseline;
+      text-decoration: none; color: inherit; cursor: pointer;
+      padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .sv-tip-tier:last-child { border-bottom: 0; }
+    .sv-tip-tier:hover { background: rgba(255,190,110,0.10); }
+    .sv-tip-price { text-align: right; font-size: 16px; letter-spacing: 0.01em;
+      color: #ffd9a0; font-variant-numeric: tabular-nums; }
+    .sv-tip-label { font-size: 13px; letter-spacing: 0.02em; line-height: 1.4; }
+    .sv-tip-desc { grid-column: 1 / -1; font-size: 11px; line-height: 1.5;
+      letter-spacing: 0; color: rgba(232,236,243,0.55); }
+
+    /* PINNED. flex: none against a scrolling list — so on a shorter phone,
+       or with a fifth tier in tips.csv, this is the block that stays. */
+    .sv-tip-how { flex: none; padding: 14px 18px 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 11px; line-height: 1.7; letter-spacing: 0.02em;
+      color: rgba(232,236,243,0.55); }
+    .sv-tip-how b { color: #ffd9a0; }
+
+    .sv-tip-close { position: absolute; top: 12px; right: 14px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+      color: #e8ecf3; font: inherit; width: 44px; height: 44px;
+      border-radius: 50%; cursor: pointer; padding: 0; }
+  </style>
+</helmet>
+<div class="sv-tip-sheet">
+  <div class="sv-tip-panel">
+    <div class="sv-tip-head">
+      <div class="sv-tip-title">Put a name in the water</div>
+      <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list. You can be on it.</div>
+    </div>
+    <div class="sv-tip-tiers">
+      <a class="sv-tip-tier">
+        <span class="sv-tip-price">$1</span>
+        <span class="sv-tip-label">Name a seal</span>
+        <span class="sv-tip-desc">One name, in the roller every player rolls from.</span>
+      </a>
+      <a class="sv-tip-tier">
+        <span class="sv-tip-price">$5</span>
+        <span class="sv-tip-label">Name seven seals</span>
+        <span class="sv-tip-desc">Seven names. Put a whole pod in there.</span>
+      </a>
+      <a class="sv-tip-tier">
+        <span class="sv-tip-price">$5</span>
+        <span class="sv-tip-label">Name a boss</span>
+        <span class="sv-tip-desc">Prefix and root, on the thing that kills you.</span>
+      </a>
+      <a class="sv-tip-tier">
+        <span class="sv-tip-price">$100</span>
+        <span class="sv-tip-label">Your actual name</span>
+        <span class="sv-tip-desc">Your real, on-the-passport name, as a seal.</span>
+      </a>
+    </div>
+    <div class="sv-tip-how">
+      Tip the amount on Ko-fi and <b>write the name in the message</b>, starting with <b>SEAL</b> or <b>BOSS</b>. That message is the whole record &mdash; a tip with no name in it is just a tip, and I will have no idea what you wanted.
+    </div>
+    <button type="button" class="sv-tip-close" aria-label="Close">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

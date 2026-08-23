@@ -5,10 +5,12 @@
 // The expanded arena. `arena.widthScale` pushes the walls out past the frame so
 // there is ocean to swim into rather than a wall at the edge of the screen, and
 // `arena.airScale` raises the ceiling off it so a breach is not caught by a lid
-// nine units over the water. Nine things are checked, each one a bug with a
+// nine units over the water. Thirteen things are checked, each one a bug with a
 // plausible way of happening:
 //
-//   1. NEUTRAL   At widthScale 1 the arena IS the frame, at every aspect. This
+//   1. NEUTRAL   At widthScale 1 the arena IS the REFERENCE frame — the same
+//                width at every aspect, because the walls are measured off
+//                `arena.referenceAspect` and not off the player's window. This
 //                is the only check that protects the shipped game: everything
 //                else here describes a mode nobody is in by default, and a
 //                regression that widened the arena unconditionally would sail
@@ -41,6 +43,25 @@
 //   9. SHORE     The drawn rock face lands where clampToArena actually stops
 //                the seal. Off in one direction the seal bounces off open
 //                water; off in the other it swims into the cliff.
+//  10. ORIENTATION  A phone flipped between portrait and landscape gets the
+//                same ocean — same walls, same stopping coordinate, same
+//                crossing time. This was a real bug and not a small one: the
+//                playfield used to be `viewHeight * LIVE aspect * widthScale`,
+//                which handed a portrait iPhone a 48-unit arena and the same
+//                phone sideways 225, with identical per-second spawn budgets
+//                pouring into both.
+//  11. LENS      ...and the camera is what answers the window instead, showing
+//                a constant WIDTH of ocean. Neutral at 16:9, so the screen
+//                every number in config.js was tuned on is untouched.
+//  12. FOV       The player's field of view moves the FRAME and never a wall,
+//                grows about the frame's own centre (anchoring it at the water
+//                line would undo `surfaceFromTop`), and is clamped by the
+//                seabed skirt rather than by a typed number. Driven past its
+//                own maximum, because the cost of it being wrong is bare scene
+//                background under the ocean.
+//  13. ...and it survives the aspect correction. The two are the same quantity
+//                pulling opposite ways: left alone they cancel exactly and the
+//                slider does nothing at any aspect.
 //
 // No renderer, on purpose: the browser preview suspends requestAnimationFrame
 // and reports innerWidth 0, so a screenshot proves nothing about the frame.
@@ -52,11 +73,12 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
-import { bounds, updateBounds, clampToArena, seabedTopY, maxWaveExcursion } from '../path/src/arena.js';
+import { bounds, updateBounds, clampToArena, seabedTopY, maxWaveExcursion, FLOOR_OVERSCAN } from '../path/src/arena.js';
+import { setSetting } from '../path/src/systems/settings.js';
 import { skyPlaneMetrics } from '../path/src/systems/sky.js';
 import { createWallRocks } from '../path/src/systems/wallRocks.js';
 import { ASSETS, getAssetSizeMultiplier } from '../path/src/assets.js';
-import { updateCineCamera, resetCineCamera } from '../path/src/systems/cineCamera.js';
+import { updateCineCamera, resetCineCamera, cineAspectZoom } from '../path/src/systems/cineCamera.js';
 import { dayState, resetDayCycle, advanceClock, updateDayCycle } from '../path/src/systems/daylight.js';
 import { player, updatePlayer, recomputeStats, resetPlayer } from '../path/src/entities/player.js';
 
@@ -86,13 +108,22 @@ function at(widthScale, aspect = LANDSCAPE) {
 }
 
 // ---------------------------------------------------------------------------
-section('NEUTRAL — at widthScale 1 the arena is the frame, exactly');
+section('NEUTRAL — at widthScale 1 the arena is the REFERENCE frame, exactly');
 
+// Anchored to `referenceAspect` rather than to the live one, which is the whole
+// of the orientation fix: the arena used to be `viewHeight * aspect * scale`,
+// so a portrait phone got a 48-unit ocean and the same phone turned sideways
+// got 225. Same rules, same spawn budgets, 4.7x the water. Now the reference
+// frame is the ruler and the window only decides how much of it is on screen.
+const REF = VH * (CONFIG.arena.referenceAspect ?? 16 / 9);
 for (const [name, aspect] of [['landscape 16:9', LANDSCAPE], ['phone 9:19.5', PORTRAIT], ['square', 1]]) {
   at(1, aspect);
-  check(`${name}: walls flush with the frame`,
-    near(bounds.width, VH * aspect) && near(bounds.frameWidth, VH * aspect),
-    `${bounds.width.toFixed(2)} wide`);
+  // The frame still follows the window — it is a rectangle of screen and has
+  // to. Asserted alongside, because an implementation that pinned BOTH would
+  // pass the arena half of this and letterbox the game.
+  check(`${name}: walls at the reference frame, frustum at the window's`,
+    near(bounds.width, Math.max(REF, VH * aspect)) && near(bounds.frameWidth, VH * aspect),
+    `arena ${bounds.width.toFixed(2)}, frame ${bounds.frameWidth.toFixed(2)}`);
 }
 // The two knobs are independent, so this compares vertical ACROSS widthScale
 // rather than against a literal — pinning it to `viewHeight * surfaceFromTop`
@@ -624,7 +655,248 @@ rocks.build();
 check('one draw call, whatever the count', rocks.stats().draws === 1,
   `${rocks.stats().verts.toLocaleString()} verts in ${rocks.stats().draws}`);
 
+// ---------------------------------------------------------------------------
+section('ORIENTATION — turning the phone re-frames the game, it does not replace it');
+
+// The bug this section exists for. `bounds.right` used to be measured off the
+// LIVE frame, so the playfield was a function of the window's aspect ratio: a
+// portrait iPhone 14 Pro got a 48-unit ocean, the same phone turned sideways
+// got 225. Under 8 seal lengths wall to wall against 37, with the same
+// per-second spawn budgets pouring into both — every wall bounce, entrance
+// distance, crossing time and chase geometry moved by 4.7x mid-run.
+//
+// Portrait is checked against the phone's OWN landscape rather than against a
+// literal, because the failure was always a comparison between two orientations
+// of one device and a fixed expected number would pass an implementation that
+// broke both ends equally.
+CONFIG.arena.widthScale = 2;
+CONFIG.arena.airScale = 3;
+
+const PHONES = [
+  ['iPhone 14 Pro', 393, 852],
+  ['Pixel 8', 412, 915],
+  ['iPad mini', 744, 1133],
+];
+const ARENA_KEYS = ['left', 'right', 'width', 'top', 'bottom', 'height', 'surfaceY'];
+
+for (const [name, w, h] of PHONES) {
+  const port = { ...updateBounds(w / h) };
+  const land = { ...updateBounds(h / w) };
+  const moved = ARENA_KEYS.filter((k) => !near(port[k], land[k], 1e-9));
+  check(`${name}: the ocean is the same ocean either way up`, moved.length === 0,
+    moved.length ? `moved: ${moved.join(', ')}` : `${port.width.toFixed(1)} wide, ${(-port.bottom).toFixed(1)} deep, both`);
+  // And the frustum still moves, which is the half that must NOT be pinned.
+  check(`${name}: ...while the frame really does change shape`,
+    land.frameWidth > port.frameWidth * 2,
+    `frame ${port.frameWidth.toFixed(1)} -> ${land.frameWidth.toFixed(1)}`);
+}
+
+// Driving the real clamp rather than reading bounds, for the same reason the
+// REACH section does: bounds moving and the WALL moving are different
+// functions, and the physics reads the second one.
+{
+  const [, w, h] = PHONES[0];
+  const stops = [w / h, h / w].map((a) => {
+    updateBounds(a);
+    const pos = new THREE.Vector3(500, -8, 0);
+    clampToArena(pos, new THREE.Vector2(10, 0), 1.2, 0.5);
+    return pos.x;
+  });
+  check('a seal swimming right stops at the same coordinate in both',
+    near(stops[0], stops[1], 1e-9), `x = ${stops[0].toFixed(2)}`);
+}
+
+// The trip, through the real updatePlayer. The one number a player would feel.
+{
+  const [, w, h] = PHONES[0];
+  const swim = (aspect) => {
+    updateBounds(aspect);
+    resetPlayer();
+    player.mesh.position.set(bounds.left + 3, -8, 0);
+    player.velocity.set(0, 0);
+    for (let t = 0; t < 90; t += DT) {
+      updatePlayer(DT, input);
+      if (player.mesh.position.x >= bounds.right - (player.stats.hitRadius ?? 1.2) - 0.05) return t;
+    }
+    return null;
+  };
+  const [tp, tl] = [swim(w / h), swim(h / w)];
+  check('a flat-out crossing takes the same time in both',
+    tp != null && tl != null && Math.abs(tp - tl) < 0.05,
+    `${tp?.toFixed(2)}s portrait vs ${tl?.toFixed(2)}s landscape`);
+}
+
+// THE ONE CASE WHERE A WINDOW STILL MOVES THE WALLS, and it has to: a frame
+// wider than the arena would show bare scene background past both sides, which
+// no camera work can hide. It is also the case world.js's cheap resize path
+// must fall through on (see onWindowResize) — miss it and the shore is drawn
+// inside the shot. Reachable at the shipped widthScale 2 only past about 32:9,
+// but at widthScale 1 every landscape phone is already there.
+for (const [scale, aspect, label] of [[1, 21 / 9, 'widthScale 1 on a 21:9'], [2, 40 / 9, 'widthScale 2 on a 40:9']]) {
+  at(scale, aspect);
+  check(`${label}: the walls give way to the frame`,
+    near(bounds.width, bounds.frameWidth) && bounds.frameWidth > VH * (CONFIG.arena.referenceAspect ?? 16 / 9) * scale - 1e-9,
+    `arena ${bounds.width.toFixed(1)} = frame ${bounds.frameWidth.toFixed(1)}`);
+}
+CONFIG.arena.widthScale = 2;
+
+// ---------------------------------------------------------------------------
+section('LENS — the camera is what answers the window, and it shows a constant width');
+
+// The other half of the fix. Every zoom in config.js was typed on a 16:9 screen
+// and means "show this much ocean"; cineAspectZoom is what makes that true on a
+// screen that is not 16:9. Neutral at the reference aspect is the check that
+// protects the shipped game — a correction that fired on the laptop everything
+// was tuned on would be a silent retune of the whole feel.
+{
+  updateBounds(LANDSCAPE);
+  check('neutral at the reference aspect — the typed number, untouched',
+    near(cineAspectZoom(), 1, 1e-9), `x${cineAspectZoom().toFixed(4)}`);
+
+  const span = (aspect) => {
+    updateBounds(aspect);
+    // The same clamp the zoom spring applies. Below 1 there is no frustum to
+    // zoom out of, so a narrow window simply keeps what it has.
+    return bounds.frameWidth / Math.max(1.001, ZOOM * cineAspectZoom());
+  };
+  const ref = span(LANDSCAPE);
+  for (const [name, a] of [['iPad mini', 1133 / 744], ['iPhone landscape', 852 / 393], ['ultrawide 21:9', 21 / 9]]) {
+    check(`${name}: the same width of ocean as 16:9`, Math.abs(span(a) - ref) < 0.5,
+      `${span(a).toFixed(1)} vs ${ref.toFixed(1)} units`);
+  }
+
+  // Portrait is the case that CANNOT be equalised, and saying so here is the
+  // point: it is held at zoom 1 and keeps whatever its frustum holds. What it
+  // must never do is come out worse than it was — the old base zoom of 1.24
+  // was punching in on a frame already only 24 units wide.
+  const portraitSpan = span(393 / 852);
+  updateBounds(393 / 852);
+  check('a portrait phone is never punched in past 1',
+    near(Math.max(1.001, ZOOM * cineAspectZoom()), 1.001, 1e-6),
+    `x${(ZOOM * cineAspectZoom()).toFixed(2)} asked, clamped to 1`);
+  check('...and it recovers the span the old base zoom was taking',
+    portraitSpan > bounds.frameWidth / ZOOM,
+    `${portraitSpan.toFixed(1)} units, up from ${(bounds.frameWidth / ZOOM).toFixed(1)}`);
+
+  // THROUGH THE REAL RIG rather than through arithmetic on cineAspectZoom,
+  // because what matters is where the springs and clamps actually leave the
+  // zoom over a run of frames, and this is the regime where the aspect term
+  // makes the ceiling (zoomMax * 0.26 = 0.92) fall UNDER the 1.001 floor.
+  // clamp() tests the floor first, so today that inversion is caught on the
+  // way past and never reaches the `v > hi` branch — checked, this section
+  // passes with the Math.max guard in cineCamera.js removed. Which is the
+  // reason to assert the OUTCOME here and not the guard: a zoom below 1 asks
+  // the frustum to show more than the frame it was built from, and that stays
+  // the thing that must not happen however the limits get computed.
+  {
+    const wasEnabled = CONFIG.cinecam.enabled;
+    CONFIG.cinecam.enabled = true;
+    updateBounds(393 / 852);
+    resetCineCamera();
+    const ctx = rigCtx();
+    let worst = Infinity;
+    for (let i = 0; i < 240; i++) worst = Math.min(worst, updateCineCamera(DT, ctx).zoom);
+    check('the rig never settles below zoom 1 on a portrait phone',
+      worst >= 1 - 1e-9, `lowest zoom over 4s: ${worst.toFixed(4)}`);
+    CONFIG.cinecam.enabled = wasEnabled;
+    resetCineCamera();
+  }
+
+  // Without the cap a 32:9 display plays the game through a slot, which is a
+  // worse answer than letting it see a little extra ocean.
+  updateBounds(32 / 9);
+  check('the punch-in is capped before a 32:9 monitor becomes a keyhole',
+    cineAspectZoom() <= (CONFIG.cinecam.base.maxPunch ?? 1.6) + 1e-9,
+    `x${cineAspectZoom().toFixed(2)} at the ${(CONFIG.cinecam.base.maxPunch ?? 1.6)} cap`);
+}
+
+// ---------------------------------------------------------------------------
+section('FIELD OF VIEW — the frame moves, the ocean does not');
+
+// Why the FRUSTUM and not the rig's zoom, which is the obvious implementation:
+// zoom can only ever punch IN, and on any portrait screen the rig already sits
+// at 1. Measured above — x1.00 of headroom on an iPad or iPhone held upright.
+// A zoom-based fov slider would be a dead control on most of mobile, so this
+// scales the frame instead, which is a rectangle we choose rather than a limit
+// the display imposes.
+CONFIG.arena.widthScale = 2;
+CONFIG.arena.airScale = 3;
+{
+  const FOVS = [0.8, 1.0, 1.2];
+  const SCREENS = [['16:9 laptop', LANDSCAPE], ['iPhone landscape', 852 / 393],
+    ['iPhone portrait', 393 / 852], ['iPad portrait', 744 / 1133]];
+
+  // 1.0 IS AN EXACT NO-OP, and it is the only check here that protects the
+  // shipped game — every other line describes a setting nobody has touched.
+  setSetting('video.fov', 1);
+  updateBounds(LANDSCAPE);
+  const air = VH * CONFIG.arena.surfaceFromTop;
+  check('at fov 1 the frame is exactly what it always was',
+    near(bounds.frameTop, air) && near(bounds.frameBottom, bounds.bottom)
+    && near(bounds.frameWidth, VH * LANDSCAPE),
+    `top ${bounds.frameTop.toFixed(2)}, bottom ${bounds.frameBottom.toFixed(2)} = floor ${bounds.bottom.toFixed(2)}`);
+
+  // THE WHOLE POINT: it works on the screens the zoom version could not.
+  for (const [name, aspect] of SCREENS) {
+    const spans = FOVS.map((f) => { setSetting('video.fov', f); updateBounds(aspect); return bounds.frameWidth; });
+    check(`${name}: a wider view really is wider`,
+      spans[2] > spans[1] * 1.15 && spans[0] < spans[1] * 0.85,
+      `${spans[0].toFixed(1)} / ${spans[1].toFixed(1)} / ${spans[2].toFixed(1)} units`);
+  }
+
+  // ...and the ocean underneath is untouched, which is the promise the arena
+  // change makes and this setting is the first thing that could break.
+  for (const [name, aspect] of SCREENS) {
+    const seen = FOVS.map((f) => { setSetting('video.fov', f); updateBounds(aspect); return { ...bounds }; });
+    const moved = ARENA_KEYS.filter((k) => !seen.every((b) => near(b[k], seen[0][k], 1e-9)));
+    check(`${name}: fov never moves a wall`, moved.length === 0,
+      moved.length ? `moved: ${moved.join(', ')}` : `arena ${seen[0].width.toFixed(1)} at every fov`);
+  }
+
+  // SCALED ABOUT THE FRAME'S CENTRE, not about the water line. Anchoring at the
+  // surface would slide the water line up the screen as the view widened, which
+  // is `surfaceFromTop` being quietly undone by a video setting.
+  {
+    const centres = FOVS.map((f) => {
+      setSetting('video.fov', f); updateBounds(LANDSCAPE);
+      return (bounds.frameTop + bounds.frameBottom) / 2;
+    });
+    check('the frame grows about its own centre', centres.every((c) => near(c, centres[0], 1e-9)),
+      `centre ${centres[0].toFixed(2)} at every fov`);
+  }
+
+  // THE FLOOR IS THE BINDING CONSTRAINT, and it is derived rather than typed:
+  // below the frame there is only the seabed skirt, and past that is bare scene
+  // background under the ocean. Driven to the schema's maximum and past it.
+  for (const f of [1.2, 1.5, 4]) {
+    setSetting('video.fov', f);
+    updateBounds(LANDSCAPE);
+    check(`fov ${f}: the frame never drops through the seabed skirt`,
+      bounds.frameBottom >= bounds.bottom - FLOOR_OVERSCAN - 1e-9,
+      `frame bottom ${bounds.frameBottom.toFixed(2)} vs skirt at ${(bounds.bottom - FLOOR_OVERSCAN).toFixed(2)}`);
+    check(`fov ${f}: ...and never past the jump ceiling`,
+      bounds.frameTop <= bounds.top + 1e-9,
+      `frame top ${bounds.frameTop.toFixed(2)} vs ceiling ${bounds.top.toFixed(2)}`);
+  }
+
+  // The aspect term has to divide fov back out or the two cancel exactly and
+  // the slider does nothing at any aspect — the correction's entire job is to
+  // hold frameWidth/zoom constant, and fov is a deliberate change to frameWidth.
+  {
+    const spanAt = (f) => {
+      setSetting('video.fov', f); updateBounds(LANDSCAPE);
+      return bounds.frameWidth / Math.max(1.001, ZOOM * cineAspectZoom());
+    };
+    const [lo, mid, hi] = [spanAt(0.8), spanAt(1), spanAt(1.2)];
+    check('fov survives the aspect correction instead of cancelling against it',
+      Math.abs(hi / mid - 1.2) < 0.01 && Math.abs(lo / mid - 0.8) < 0.01,
+      `${lo.toFixed(1)} / ${mid.toFixed(1)} / ${hi.toFixed(1)} units on screen`);
+  }
+  setSetting('video.fov', 1);
+}
+
 CONFIG.arena.widthScale = 1;
 CONFIG.arena.airScale = 1;
+updateBounds(LANDSCAPE);
 console.log(failures === 0 ? '\nPASS — all checks' : `\nFAIL — ${failures} check(s)`);
 process.exit(failures === 0 ? 0 : 1);

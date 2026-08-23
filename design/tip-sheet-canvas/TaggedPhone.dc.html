@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+  <style>
+    /* ========================================================================
+       B · TAGGED — phone, 390x844. Small-screen values resolved flat.
+
+       THE GROUP HEADING IS THE ONE THING THAT CANNOT COME DOWN UNCHANGED.
+       On the desktop artboard the chip and the worked example share a line:
+       "Your Ko-fi message: SEAL [the name]" measures 374px, which is fine
+       against the 448px that row has left beside the chip at 572. At 390 the
+       same row has 241px. So the phone stacks it — a dim label line, then
+       the chip sitting inline at the head of the example, where the chip IS
+       the first word of the message being shown.
+
+       That turns out to be the better drawing of the idea at both sizes; it
+       is left different here on purpose, so the two artboards show the two
+       real resolutions rather than one guess applied twice.
+
+       AND THE SECOND GROUP DROPS THE LABEL. "Your Ko-fi message" over the
+       BOSS chip is the same sentence the player read forty pixels earlier;
+       the chip and the placeholder say it on their own by then. That is a
+       reading call first and a measurement second — but the measurement is
+       why it had to be made here: with both labels the panel overran its cap
+       and clipped the last description mid-word.
+
+       WHAT IT COSTS, measured against the same budget as A. Both phone
+       artboards have 778px of outer height to spend (776 of content, which is
+       what 92vh resolves to at 844, plus the 2px border). A comes out at 722
+       and finishes with 56px in hand. B comes out at 777 and finishes with
+       ONE.
+
+       The 55px between them is all in the list. Both heads are 174px. B's
+       four rows are actually 12px SHORTER than A's, but the two group
+       headings cost 117px and their rules another 6, so B's list block is
+       111px heavier; the shortened footer gives back 56 of that (151 against
+       A's 207). 722 + 111 - 56 = 777.
+
+       So this direction fits, and fits with nothing spare. One more tier in
+       tips.csv, one description long enough to take a third line, or a phone
+       shorter than 844, and the list is scrolling again.
+
+       ==================================================================== */
+    body { margin: 0; width: 390px; height: 844px; overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+    /* For links added to this artboard later. Scoped off the tier rows:
+       the shipping panel changes only background and border-color on hover,
+       and a bare a:hover here outranks the row's own color: inherit. */
+    a { color: #ffd9a0; text-decoration: none; }
+    a:not(.sv-tip-tier):hover { color: #ffe9c6; }
+
+    .sv-tip-sheet { position: absolute; inset: 0; display: flex;
+      align-items: center; justify-content: center; padding: 33.8px 15.6px;
+      background: rgba(3,6,10,0.93);
+      font-family: 'Press Start 2P', monospace; }
+    .sv-tip-panel { position: relative; display: flex; flex-direction: column;
+      width: 357px; max-height: 776px;
+      background: #07090d; border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 14px; color: #e8ecf3;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset; }
+
+    .sv-tip-head { flex: none; padding: 20px 60px 14px 18px; }
+    .sv-tip-title { font-size: 18px; letter-spacing: 0.03em; line-height: 1.35;
+      margin-bottom: 10px; color: #ffffff; }
+    .sv-tip-blurb { font-size: 12px; line-height: 1.7; letter-spacing: 0.02em;
+      color: rgba(232,236,243,0.6); }
+
+    .sv-tip-groups { flex: 1; min-height: 0; overflow-y: auto;
+      overscroll-behavior: contain; }
+    .sv-tip-group { border-top: 1px solid rgba(255,255,255,0.08); }
+    /* STACKED, not a row: label over example. */
+    .sv-tip-ghead { padding: 12px 18px 8px; }
+    .sv-tip-glabel { display: block; margin-bottom: 8px; font-size: 11px;
+      letter-spacing: 0.1em; text-transform: uppercase;
+      color: rgba(232,236,243,0.4); }
+    .sv-tip-eg { display: flex; align-items: center; gap: 8px;
+      font-size: 11px; line-height: 1.5; letter-spacing: 0;
+      color: rgba(232,236,243,0.45); }
+    .sv-tip-tag { flex: none; font-size: 11px; letter-spacing: 0.1em;
+      color: #ffd9a0; background: rgba(255,190,110,0.14);
+      border: 1px solid rgba(255,190,110,0.45); border-radius: 999px;
+      padding: 5px 10px; }
+
+    .sv-tip-tier { display: grid; grid-template-columns: 1fr auto;
+      column-gap: 12px; row-gap: 4px; align-items: baseline;
+      text-decoration: none; color: inherit; cursor: pointer;
+      padding: 12px 18px; }
+    .sv-tip-tier:hover { background: rgba(255,190,110,0.10); }
+    .sv-tip-label { font-size: 13px; letter-spacing: 0.02em; line-height: 1.4; }
+    .sv-tip-price { text-align: right; font-size: 16px; letter-spacing: 0.01em;
+      color: #ffd9a0; font-variant-numeric: tabular-nums; }
+    .sv-tip-desc { grid-column: 1 / -1; font-size: 11px; line-height: 1.5;
+      letter-spacing: 0; color: rgba(232,236,243,0.55); }
+    .sv-tip-tier-odd { border-top: 1px dashed rgba(255,255,255,0.10);
+      margin-top: 6px; padding-top: 14px; }
+    .sv-tip-tier-odd .sv-tip-price { font-size: 20px; color: #ffe9c6; }
+
+    .sv-tip-coda .sv-tip-tier-odd { border-top: 0; margin-top: 0;
+      padding-top: 12px; }
+
+    .sv-tip-close { position: absolute; top: 12px; right: 14px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+      color: #e8ecf3; font: inherit; width: 44px; height: 44px;
+      border-radius: 50%; cursor: pointer; padding: 0; }
+  </style>
+</helmet>
+<div class="sv-tip-sheet">
+  <div class="sv-tip-panel">
+    <div class="sv-tip-head">
+      <div class="sv-tip-title">Add a name to the pool.</div>
+      <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list written by real mammals...contribute to the global mutual fund for true seal survivors and their loved ones.</div>
+    </div>
+    <div class="sv-tip-groups">
+
+      <div class="sv-tip-group">
+        <div class="sv-tip-ghead">
+          <span class="sv-tip-glabel">Your Ko-fi message</span>
+          <span class="sv-tip-eg"><span class="sv-tip-tag">SEAL</span>[the name]</span>
+        </div>
+        <a class="sv-tip-tier">
+          <span class="sv-tip-label">Name a seal</span>
+          <span class="sv-tip-price">$1</span>
+          <span class="sv-tip-desc">1 full name + each word added to the name pool.</span>
+        </a>
+        <a class="sv-tip-tier">
+          <span class="sv-tip-label">Name seven seals</span>
+          <span class="sv-tip-price">$5</span>
+          <span class="sv-tip-desc">Seven names. A whole pod!</span>
+        </a>
+      </div>
+
+      <div class="sv-tip-group">
+        <div class="sv-tip-ghead">
+          <span class="sv-tip-eg"><span class="sv-tip-tag">BOSS</span>[prefix] [root]</span>
+        </div>
+        <a class="sv-tip-tier">
+          <span class="sv-tip-label">Name a boss</span>
+          <span class="sv-tip-price">$5</span>
+          <span class="sv-tip-desc">Prefix, root and epithet.</span>
+        </a>
+      </div>
+
+      <!-- THE CODA takes the groups' own shape here rather than the desktop's
+           inline chip: at 390 the label and a chip and the price do not share
+           a line, and the chip dropped onto a second line under the name,
+           which reads as a wrap rather than as a tag. A chip row above the
+           tier is the pattern the two groups already use. -->
+      <div class="sv-tip-group sv-tip-coda">
+        <div class="sv-tip-ghead">
+          <span class="sv-tip-eg"><span class="sv-tip-tag">SEAL</span>[your real name]</span>
+        </div>
+        <a class="sv-tip-tier sv-tip-tier-odd">
+          <span class="sv-tip-label">Your actual name</span>
+          <span class="sv-tip-price">$100</span>
+          <span class="sv-tip-desc">Your government name as a legendary seal.</span>
+        </a>
+      </div>
+
+    </div>
+    <button type="button" class="sv-tip-close" aria-label="Close">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { adaptiveResEnabled } from './settings.js';
 
 // ---------------------------------------------------------------------------
 // ADAPTIVE RESOLUTION — give back pixels on a machine that is drowning in
@@ -99,7 +100,11 @@ export function createAdaptiveScale() {
      */
     tick(frameMs, live) {
       const cfg = CONFIG.render?.adaptive;
-      if (!cfg?.enabled || !live) return false;
+      // The player's switch over the authored one. Exposed because this is the
+      // only performance feature that changes the picture WITHOUT being asked —
+      // somebody watching the resolution step down mid-fight has no way to know
+      // it is deliberate unless there is a control with its name on it.
+      if (!adaptiveResEnabled(cfg?.enabled) || !live) return false;
       if (!(frameMs > 0) || frameMs > MAX_PLAUSIBLE_MS) return false;
 
       recent[recentAt] = frameMs;

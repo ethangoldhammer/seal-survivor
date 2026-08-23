@@ -232,3 +232,10 @@ ironLung.maxBonus,3,0,20,iron lung: ceiling on the bonus
 oxygen.max,132,20,300,"the size of one breath, in points. Against a 5/sec deplete rate this is the seconds of dive it buys — 132 = 26.4s. Base for every Deep Lungs stack and what Iron Lung reads its damage off"
 oxygen.refillRateSurface,52.5,5,120,"how fast a breach refills the tank, per second above the water line — the only way air comes back other than a bubble. Against the 5/sec deplete it is the exchange rate of the whole dive: 52.5 buys 10.5 seconds of dive per second spent in the air, and refills a full 132-point breath in 2.5s. Was a slider, and a snapshot was holding it at 35 where config.js could not reach it"
 player.maxHp,115,20,400,"the seal's starting health. Read against the enemy toughness ramp (CONFIG.spawn.ramp) and player.hpPerLevel, not by eye — it is the survivability half of the same economy oxygen.max is the dive half of. Had no slider AND no CSV row, so the 100 sitting in imported-tuning.json was its only real home"
+bakalar.catch.refPrey,1.2,0.2,4,bakalar the prey radius the net is calibrated on (a shark)
+bakalar.catch.grip,1.6,0.05,8,bakalar seconds to ensnare a calibration-size fish at power 1
+bakalar.catch.power,1,0.1,10,bakalar net power at one stack
+bakalar.catch.powerPerLevel,0.55,0,3,bakalar net power gained per stack
+bakalar.catch.massExponent,2,0.5,4,"bakalar how fast resistance grows with radius - 2 is area, i.e. mass on a 2D field"
+bakalar.catch.gripReset,0.5,0,5,bakalar seconds out of the net before a part-gripped fish starts again
+bakalar.catch.maxPrey,3,0.5,12,bakalar biggest prey radius the net will hold at all - refuses whale-scale bodies outright

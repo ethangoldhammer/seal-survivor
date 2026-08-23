@@ -1,0 +1,214 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&amp;display=swap">
+  <style>
+    /* ========================================================================
+       B · TAGGED — desktop.
+
+       THE AXIS: the panel is a form you fill in on somebody else's website,
+       so put the instruction next to the thing it is about.
+
+       tipJar.js's own header says it plainly: "THE INSTRUCTION IS THE WHOLE
+       MECHANISM. Nothing in the game records what was bought — Ko-fi's message
+       field is the record." Today that mechanism is a paragraph at the very
+       bottom: 108px on a desktop panel, 165px on a phone, and on the phone it
+       starts below the fold. The tag word a player has to type is named there
+       and nowhere else, four rows away from the row it belongs to.
+
+       So the tag becomes the heading it always was. tips.csv already sorts
+       every tier under SEAL or BOSS — this reads that column instead of
+       flattening it, and each group carries a worked example of the message
+       the player is about to write.
+
+       AND THE FOOTER IS GONE ENTIRELY. That is the end of the same thought
+       rather than a separate idea: once the group headings say "Your Ko-fi
+       message: SEAL [the name]", the strip at the bottom was naming Ko-fi a
+       third time and nothing else. The instruction did not get deleted, it
+       got moved to where it is used.
+
+       THREE MORE THINGS MOVE, all downstream of that:
+         · The label leads and the price trails, right-aligned at the end of
+           the row. Inside a group you are choosing what to buy, not how much
+           to spend, so the thing comes first and the number last.
+         · The $100 tier is a CODA — out of the SEAL group, below the BOSS
+           group, last. It reads as the punchline it is, and it is not a
+           reordering of the data: tips.csv already orders these 1, 2, 3, 4
+           with realname last, and grouping was the thing that pulled it up.
+           Out on its own it has to carry the SEAL chip itself, because its
+           tag really is SEAL and a row that cannot say which word to type
+           is a row that arrives as a tip nobody can attribute.
+         · The BOSS group holds one row. That is honest and it looks thin;
+           see the note on the canvas.
+
+       THE COPY ON THIS ARTBOARD IS ETHAN'S, not tips.csv's — the title,
+       the blurb and all four descriptions were rewritten in the canvas and
+       are carried here verbatim. They are shorter than the CSV strings,
+       which is most of why this direction now fits a phone with room to
+       spare. Every other artboard still quotes tips.csv exactly, so the
+       two can be compared.
+       ==================================================================== */
+    body { margin: 0; width: 760px; height: 720px; overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+    /* For links added to this artboard later. Scoped off the tier rows:
+       the shipping panel changes only background and border-color on hover,
+       and a bare a:hover here outranks the row's own color: inherit. */
+    a { color: #ffd9a0; text-decoration: none; }
+    a:not(.sv-tip-tier):hover { color: #ffe9c6; }
+
+    .sv-tip-sheet { position: absolute; inset: 0; display: flex;
+      align-items: center; justify-content: center; padding: 4vh 4vw;
+      background: rgba(3,6,10,0.93);
+      font-family: 'Press Start 2P', monospace; }
+    .sv-tip-panel { position: relative; display: flex; flex-direction: column;
+      width: 572px; max-width: 100%; max-height: 92vh;
+      background: #07090d; border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 14px; color: #e8ecf3;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset; }
+
+    .sv-tip-head { flex: none; padding: 24px 68px 16px 22px; }
+    .sv-tip-title { font-size: 18px; letter-spacing: 0.03em; line-height: 1.35;
+      margin-bottom: 10px; color: #ffffff; }
+    .sv-tip-blurb { font-size: 12px; line-height: 1.7; letter-spacing: 0.02em;
+      color: rgba(232,236,243,0.6); }
+
+    .sv-tip-groups { flex: 1; min-height: 0; overflow-y: auto;
+      overscroll-behavior: contain; }
+
+    /* --- A GROUP --------------------------------------------------------- */
+    .sv-tip-group { border-top: 1px solid rgba(255,255,255,0.08); }
+    .sv-tip-ghead { display: flex; align-items: center; gap: 10px;
+      padding: 14px 22px 10px; }
+    /* The chip is the word, in the accent, at the size it is typed. It is the
+       only warm thing on the panel until something is hovered — which is the
+       point: it is the one piece a player has to carry off this screen. */
+    .sv-tip-tag { flex: none; font-size: 11px; letter-spacing: 0.1em;
+      color: #ffd9a0; background: rgba(255,190,110,0.14);
+      border: 1px solid rgba(255,190,110,0.45); border-radius: 999px;
+      padding: 5px 10px; }
+    /* The message, shown rather than described. The bracketed part is a
+       placeholder for the player's own words, not a name anybody has. */
+    .sv-tip-eg { min-width: 0; font-size: 11px; line-height: 1.5;
+      letter-spacing: 0; color: rgba(232,236,243,0.45); }
+    .sv-tip-eg b { color: rgba(232,236,243,0.75); }
+
+    /* --- A ROW ----------------------------------------------------------- */
+    /* Label and price on the first line, description spanning both beneath —
+       the same span Rail uses, for the same measured reason: beside the price
+       the description had 337px and wrapped; across the row it has 528. */
+    .sv-tip-tier { display: grid; grid-template-columns: 1fr auto;
+      column-gap: 14px; row-gap: 4px; align-items: baseline;
+      text-decoration: none; color: inherit; cursor: pointer;
+      padding: 12px 22px; transition: background 0.15s ease; }
+    .sv-tip-tier:hover { background: rgba(255,190,110,0.10); }
+    .sv-tip-label { font-size: 13px; letter-spacing: 0.02em; line-height: 1.4; }
+    .sv-tip-price { text-align: right; font-size: 16px; letter-spacing: 0.01em;
+      color: #ffd9a0; font-variant-numeric: tabular-nums; }
+    .sv-tip-desc { grid-column: 1 / -1; font-size: 11px; line-height: 1.5;
+      letter-spacing: 0; color: rgba(232,236,243,0.55); }
+
+    /* THE JOKE TIER. A rule and a brighter, larger number — inside its own
+       group, where its tag says it belongs. */
+    .sv-tip-tier-odd { border-top: 1px dashed rgba(255,255,255,0.10);
+      margin-top: 6px; padding-top: 14px; }
+    .sv-tip-tier-odd .sv-tip-price { font-size: 20px; color: #ffe9c6; }
+
+    /* THE CODA. Its own group, so it takes the same solid rule every group
+       takes; -odd's dashed rule would double up on that, so it is dropped
+       here and only the brighter, larger number survives. */
+    .sv-tip-coda .sv-tip-tier-odd { border-top: 0; margin-top: 0;
+      padding-top: 12px; }
+    /* The chip, small, sitting in the label's own line. */
+    .sv-tip-tag-sm { display: inline-block; margin-left: 8px;
+      vertical-align: 1px; font-size: 9px; letter-spacing: 0.1em;
+      padding: 3px 7px; }
+
+    /* THERE IS NO FOOTER ON THIS DIRECTION ANY MORE. Both of the things it
+       held have moved to where they are used: the tag instruction is in the
+       group headings, as the message the player is about to write, and the
+       destination is named in those same headings ("Your Ko-fi message"). A
+       strip at the bottom naming Ko-fi a third time was all that was left. */
+
+    .sv-tip-close { position: absolute; top: 12px; right: 14px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+      color: #e8ecf3; font: inherit; width: 34px; height: 34px;
+      border-radius: 50%; cursor: pointer; padding: 0; }
+    .sv-tip-close:hover { background: rgba(255,255,255,0.16); }
+  </style>
+</helmet>
+<div class="sv-tip-sheet">
+  <div class="sv-tip-panel">
+    <div class="sv-tip-head">
+      <div class="sv-tip-title">Add a name to the pool.</div>
+      <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list written by real mammals...contribute to the global mutual fund for true seal survivors and their loved ones.</div>
+    </div>
+    <div class="sv-tip-groups">
+
+      <div class="sv-tip-group">
+        <div class="sv-tip-ghead">
+          <span class="sv-tip-tag">SEAL</span>
+          <span class="sv-tip-eg">Your Ko-fi message: <b>SEAL</b> [the name]</span>
+        </div>
+        <a class="sv-tip-tier">
+          <span class="sv-tip-label">Name a seal</span>
+          <span class="sv-tip-price">$1</span>
+          <span class="sv-tip-desc">1 full name + each word added to the name pool.</span>
+        </a>
+        <a class="sv-tip-tier"><span class="sv-tip-label">Name seven seals</span>
+          <span class="sv-tip-price">$5</span>
+          <span class="sv-tip-desc">Seven names. A whole pod!</span>
+        </a>
+      </div>
+
+      <div class="sv-tip-group">
+        <div class="sv-tip-ghead">
+          <span class="sv-tip-tag">BOSS</span>
+          <span class="sv-tip-eg">Your Ko-fi message: <b>BOSS</b> [prefix] [root]</span>
+        </div>
+        <a class="sv-tip-tier">
+          <span class="sv-tip-label">Name a boss</span>
+          <span class="sv-tip-price">$5</span>
+          <span class="sv-tip-desc">Prefix, root and epithet.</span>
+        </a>
+      </div>
+
+      <!-- THE CODA. Out of the SEAL group and last, which is also exactly the
+           order tips.csv already gives: sealname 1, sealseven 2, bossname 3,
+           realname 4. Grouping was the thing that had pulled it up. Out here
+           it has to answer the question the group heading was answering for
+           it, so it carries its own SEAL chip — the tag is still SEAL, and a
+           row that cannot say which word to type is a row that arrives as an
+           unattributable tip. -->
+      <div class="sv-tip-group sv-tip-coda">
+        <a class="sv-tip-tier sv-tip-tier-odd">
+          <span class="sv-tip-label">Your actual name <span class="sv-tip-tag sv-tip-tag-sm">SEAL</span></span>
+          <span class="sv-tip-price">$100</span>
+          <span class="sv-tip-desc">Your government name as a legendary seal.</span>
+        </a>
+      </div>
+
+    </div>
+    
+    <button type="button" class="sv-tip-close" aria-label="Close">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+      </svg>
+    </button>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":760,"height":720}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

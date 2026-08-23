@@ -31,6 +31,7 @@ import { readFile, writeFile, stat, readdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, extname, basename } from 'node:path';
+import { DRAFT_PATTERN, isCopyColumn, REVIEW_COLUMN } from './draft-copy.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // 5177 is the door to knock on by hand. PORT is what a harness hands over when
@@ -549,9 +550,34 @@ function columnSpec(file, name, rows) {
   const docs = DOCS[base_]?.__sharedWith ? DOCS[DOCS[base_].__sharedWith] : DOCS[base_];
   const doc = docs?.[name];
   const blank = BLANK_MEANS[base_]?.[name];
-  const base = { name, doc, blank, type: 'text' };
+  // Is this a column a player READS? The flag rides on `base`, so every
+  // branch below inherits it however specific its control is — and the editor
+  // can paint the row amber while a placeholder is still in it. The list is
+  // shared with the ship gate (tools/draft-copy.mjs) so the flag on the row
+  // and the test that blocks the deploy are the same rule.
+  const copy = isCopyColumn(file, name);
+  const base = { name, doc, blank, copy, type: 'text' };
 
   if (name === 'id') return { ...base, type: 'text', readonly: !BY_FILE.get(file).addRows, key: true };
+
+  // Handled here rather than in DOCS because it means the same thing in all
+  // ten copy tables, and ten copies of one sentence is nine chances to drift.
+  // Two options only: it is either waiting on you or it is yours. TRUE is
+  // spelled out rather than offered as a checkbox so the cell reads the same
+  // way in a spreadsheet as it does here.
+  if (name === REVIEW_COLUMN) {
+    return {
+      ...base,
+      type: 'enum',
+      options: ['TRUE', ''],
+      review: true,
+      labels: {
+        TRUE: 'waiting on you',
+        '': '\u2014  (yours)',
+      },
+      doc: 'Whether this line still wants your eye. Every row that existed when the column was added is TRUE — not because the line is wrong, but because nothing recorded whose words it was. Clear it once you have read the line and kept it (or rewritten it). Nothing in the game reads this column, and it does not block a ship.',
+    };
+  }
 
   if (file === 'path/src/assets.csv') {
     if (name === 'size') return { ...base, type: 'number', min: 0.001, required: true };
@@ -867,7 +893,10 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/api/tables') {
       const tables = await Promise.all(TABLES.map(loadTable));
-      return json(res, 200, { tables });
+      // The client re-tests cells as they are typed, so it needs the rule
+      // rather than an answer computed here — sent as the pattern itself so
+      // there is still only one definition of it.
+      return json(res, 200, { tables, draftPattern: DRAFT_PATTERN });
     }
 
     if (req.method === 'GET' && url.pathname === '/api/cardart') {

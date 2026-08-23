@@ -7,13 +7,13 @@
     color-scheme: light dark;
     --bg: #0f1418; --panel: #161d23; --line: #26313a; --text: #dfe8ee;
     --dim: #8ba0af; --accent: #4fc3f7; --dirty: #f5c542; --bad: #ff6b6b;
-    --ok: #5ddc9a; --field: #0c1216;
+    --ok: #5ddc9a; --field: #0c1216; --draft: #d98b3a; --review: #6f8fa6;
   }
   @media (prefers-color-scheme: light) {
     :root {
       --bg: #f6f8fa; --panel: #fff; --line: #dde4ea; --text: #17242e;
       --dim: #5c7180; --accent: #0b7fb5; --dirty: #a9761a; --bad: #c92a2a;
-      --ok: #14804a; --field: #fff;
+      --ok: #14804a; --field: #fff; --draft: #a15c12; --review: #4a6b80;
     }
   }
   * { box-sizing: border-box; }
@@ -273,6 +273,63 @@
   .art-opt .none { border: 1px dashed var(--line); display: grid; place-items: center; color: var(--dim); }
   .art-opt small { display: block; margin-top: 4px; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
   .hint { color: var(--dim); font-size: 12px; }
+
+  /* ---------------------------------------------------------------------
+     DRAFT COPY — a placeholder staged so a feature could be tested, still
+     waiting to be written. Amber rather than red: nothing is BROKEN, the
+     line just isn't yours yet. It is a different amber from --dirty (an
+     unsaved edit) on purpose — the two say opposite things about a row, and
+     one shade for both would make "I changed this" and "this is not mine"
+     indistinguishable at a glance.
+
+     The stripe is on the row and the badge is on the offending cell, so a
+     table you are scrolling answers "which rows" and a row you have reached
+     answers "which words".                                              */
+  tr.draft > td:first-child { box-shadow: inset 3px 0 0 var(--draft); }
+  td.draft .cell {
+    border-color: var(--draft);
+    background: color-mix(in srgb, var(--draft) 10%, var(--field));
+  }
+  /* The mark goes in the ID cell, NOT over the copy cell. A badge floated on
+     top of the field covered the end of the very line it was pointing at —
+     "Lorem ipsum dolor sit amet consNEEDS YOUR WORDS" — and padding the field
+     to clear it only moves the collision to the next line long enough to
+     reach. The id cell is sticky, so the mark also survives scrolling right,
+     which the badge did not. The words themselves live in the tooltip and on
+     the toolbar chip, where nothing has to make room for them. */
+  tr.draft > td:first-child { position: relative; }
+  tr.draft > td:first-child::after {
+    content: "\270e";
+    position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+    pointer-events: none; font-size: 12px; color: var(--draft);
+  }
+  tr.draft > td:first-child .cell { padding-right: 20px; }
+  /* The count, in the toolbar, so the number is visible from any table —
+     including the ones whose drafts are in a table you are not looking at. */
+  /* Two chips, two different jobs, deliberately two different colours.
+     Amber is a PLACEHOLDER — rare, urgent, and blocking a ship. Slate is the
+     review backlog — 637 lines that already ship and are already fine, and
+     want your eye at your own pace. One colour for both would make an urgent
+     handful indistinguishable from a long, calm list. */
+  #draftCount, #reviewCount {
+    display: none; align-items: center; gap: 6px; cursor: pointer;
+    border: 1px solid currentColor; border-radius: 999px;
+    padding: 3px 10px; font-size: 12px; font-weight: 600;
+    background: transparent;
+  }
+  #draftCount { color: var(--draft); }
+  #reviewCount { color: var(--review); font-weight: 500; }
+  #draftCount.on { background: color-mix(in srgb, var(--draft) 18%, transparent); }
+  #reviewCount.on { background: color-mix(in srgb, var(--review) 20%, transparent); }
+  #draftCount.show, #reviewCount.show { display: inline-flex; }
+  #draftCount:disabled, #reviewCount:disabled { cursor: default; opacity: .6; }
+
+  /* The review column itself, dimmed while it is still TRUE so a table you
+     scroll shows the backlog draining down the right-hand edge as you clear
+     it. No row stripe: every row starts flagged, and a stripe on all 637
+     would say exactly as much as a stripe on none. */
+  td.review-on .cell { color: var(--review); }
+  td.review-off .cell { opacity: .45; }
 </style>
 
 <header>
@@ -280,6 +337,8 @@
   <span id="dirtyElse"></span>
   <div class="grow"></div>
   <input type="search" id="filter" placeholder="Filter rows…" autocomplete="off">
+  <button id="draftCount" type="button" title="Show only the rows still waiting for your words"></button>
+  <button id="reviewCount" type="button" title="Show only the lines you have not signed off yet"></button>
   <button class="action" id="addRow" hidden>+ Add row</button>
   <button class="action" id="revert" disabled>Revert</button>
   <button class="action primary" id="save" disabled>Save</button>
@@ -319,6 +378,8 @@ const $ = (id) => document.getElementById(id);
 let tables = [];      // as served, plus a pristine copy for dirty/revert
 let active = 0;
 let sortCol = null, sortDir = 1;
+let draftOnly = false;   // the amber chip: rows still holding a placeholder
+let reviewOnly = false;  // the slate chip: lines not yet signed off
 let art = null;       // key -> {label, src}, fetched on first use
 
 const T = () => tables[active];
@@ -326,9 +387,33 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 
 boot();
 
+// The rule for "this is still a placeholder", handed over by the server as a
+// pattern rather than an answer: cells are re-tested as they are typed, so the
+// flag clears the moment the lorem is gone rather than at the next save. One
+// definition, in tools/draft-copy.mjs, shared with the ship gate.
+let draftRe = null;
+const isDraft = (v) => !!draftRe && draftRe.test(String(v ?? ''));
+
+// A row is a draft if any column a player READS still holds a placeholder.
+// `notes` never counts — that is where the brief for the line is written.
+function rowIsDraft(t, i) {
+  return t.columns.some((c) => c.copy && isDraft(t.rows[i][c.name]));
+}
+const draftsIn = (t) => t.rows.reduce((n, _, i) => n + (rowIsDraft(t, i) ? 1 : 0), 0);
+
+// The review backlog. Stored in the row rather than derived from it, because
+// "has Ethan read this and kept it" is a fact about a person and there is
+// nothing in the words to read it off. TRUE while it waits, blank once it is
+// his — so a row he adds himself is confirmed by default.
+const needsReview = (t, i) =>
+  t.columns.some((c) => c.review) &&
+  String(t.rows[i].review ?? '').trim().toLowerCase() === 'true';
+const reviewsIn = (t) => t.rows.reduce((n, _, i) => n + (needsReview(t, i) ? 1 : 0), 0);
+
 async function boot() {
   const r = await fetch('/api/tables');
   const data = await r.json();
+  draftRe = new RegExp(data.draftPattern, 'i');
   // `origIndex` is what each live row was when the page loaded, so the "this
   // cell changed" highlight survives a row being inserted or deleted above it.
   // Comparing by POSITION instead paints every row below an insert as edited,
@@ -349,6 +434,16 @@ async function boot() {
     renderTabs(); renderTable();
   };
   $('filter').oninput = renderBody;
+  $('draftCount').onclick = () => {
+    draftOnly = !draftOnly;
+    $('draftCount').classList.toggle('on', draftOnly);
+    renderBody();
+  };
+  $('reviewCount').onclick = () => {
+    reviewOnly = !reviewOnly;
+    $('reviewCount').classList.toggle('on', reviewOnly);
+    renderBody();
+  };
   $('save').onclick = save;
   $('revert').onclick = revert;
   $('addRow').onclick = addRow;
@@ -367,10 +462,52 @@ function renderTabs() {
   tables.forEach((t, i) => {
     const o = document.createElement('option');
     o.value = i;
-    o.textContent = `${t.label}  ·  ${t.rows.length}${dirtyOf(t) ? '  •' : ''}`;
+    const d = draftsIn(t), rv = reviewsIn(t);
+    // Both counts ride in the option itself, so a table with lines waiting
+    // says so from the CLOSED picker — you find them without opening eleven
+    // tables to look. The backlog shows as a fraction because "12" alone
+    // reads as bad news on a table of 12 and as nearly done on one of 261.
+    o.textContent = `${t.label}  \u00b7  ${t.rows.length}`
+      + (d ? `  \u270e ${d}` : '')
+      + (rv ? `  \u25cb ${rv}/${t.rows.length}` : '')
+      + (dirtyOf(t) ? '  \u2022' : '');
     sel.append(o);
   });
   sel.value = active;
+
+  // The toolbar chip counts THIS table (which is what the filter acts on) and
+  // names the others, the same way the unsaved marker does — a bare total
+  // would send you hunting, which is the thing the marker exists to stop.
+  const here = draftsIn(T());
+  const elsewhere = tables.reduce((n, t, i) => n + (i === active ? 0 : draftsIn(t)), 0);
+  const chip = $('draftCount');
+  chip.classList.toggle('show', here + elsewhere > 0);
+  chip.textContent = here
+    ? `\u270e ${here} need${here === 1 ? 's' : ''} your words`
+    : `\u270e ${elsewhere} elsewhere`;
+  chip.disabled = !here;
+  chip.title = here
+    ? 'Show only the rows still holding a placeholder'
+    : `No placeholders in this table \u2014 ${elsewhere} in ${tables.filter((t, i) => i !== active && draftsIn(t)).map((t) => t.label).join(', ')}`;
+  // Deliberately does NOT re-render the body. The last draft stops being one
+  // the instant you finish typing the line, and a row vanishing out from under
+  // the cursor mid-sentence is worse than a filter that quietly turns itself
+  // off and leaves what you are writing where it is.
+  if (!here && draftOnly) { draftOnly = false; chip.classList.remove('on'); }
+
+  // The review chip, same shape as the draft one and deliberately quieter.
+  const rHere = reviewsIn(T());
+  const rAll = tables.reduce((n, t) => n + reviewsIn(t), 0);
+  const rChip = $('reviewCount');
+  rChip.classList.toggle('show', rAll > 0);
+  rChip.textContent = rHere
+    ? `\u25cb ${rHere} of ${T().rows.length} unread`
+    : (rAll ? `\u25cb ${rAll} elsewhere` : '');
+  rChip.disabled = !rHere;
+  rChip.title = rHere
+    ? 'Show only the lines you have not signed off yet \u2014 clear a row by setting its review cell to "yours"'
+    : `Every line in this table is yours \u2014 ${rAll} still unread in other tables`;
+  if (!rHere && reviewOnly) { reviewOnly = false; rChip.classList.remove('on'); }
 
   // Which OTHER tables are dirty. Named rather than counted: "2 unsaved" sends
   // you hunting through eleven options, and the whole point of the marker is
@@ -515,6 +652,8 @@ function visibleRows() {
   const q = $('filter').value.trim().toLowerCase();
   let idx = t.rows.map((_, i) => i);
   if (q) idx = idx.filter((i) => Object.values(t.rows[i]).some((v) => String(v).toLowerCase().includes(q)));
+  if (draftOnly) idx = idx.filter((i) => rowIsDraft(t, i));
+  if (reviewOnly) idx = idx.filter((i) => needsReview(t, i));
   if (sortCol) {
     const num = t.columns.find((c) => c.name === sortCol)?.type === 'number';
     idx.sort((a, b) => {
@@ -535,6 +674,7 @@ function renderBody() {
   for (const i of visibleRows()) {
     const tr = document.createElement('tr');
     tr.dataset.row = i;
+    tr.classList.toggle('draft', rowIsDraft(t, i));
     t.columns.forEach((c) => tr.append(cellFor(c, i)));
     if (t.addRows) {
       const td = document.createElement('td');
@@ -675,8 +815,33 @@ function paint(td, c, i) {
 
   const err = validate(c, raw);
   td.classList.toggle('bad', !!err);
+
+  // The placeholder flag, re-tested on every keystroke — so it clears as the
+  // lorem is deleted rather than at the next save. The row's stripe follows
+  // the cell, because a row is a draft exactly while one of its cells is.
+  const draft = !!c.copy && isDraft(raw);
+  td.classList.toggle('draft', draft);
+
+  // The review cell carries its own state, so the column reads as a column of
+  // ticks rather than a column of words you have to actually read.
+  if (c.review) {
+    const on = raw.trim().toLowerCase() === 'true';
+    td.classList.toggle('review-on', on);
+    td.classList.toggle('review-off', !on);
+  }
+  const tr = td.closest('tr');
+  if (tr) tr.classList.toggle('draft', rowIsDraft(T(), i));
+
   const el = td.querySelector('.cell');
-  if (el) el.title = err || (c.doc || '');
+  if (el) {
+    const hasNotes = T().columns.some((x) => x.name === 'notes');
+    el.title = err
+      || (draft
+        ? 'A placeholder, not copy \u2014 write the real line here. '
+          + (hasNotes ? 'The brief for it is in this row\u2019s notes column. ' : 'The brief for it is in design/COPY-TODO.md. ')
+          + '`npm run ship` is blocked until it is gone.'
+        : (c.doc || ''));
+  }
 }
 
 // Mirrors parseNumber/parseBool in path/src/csvTable.js. Anything flagged here

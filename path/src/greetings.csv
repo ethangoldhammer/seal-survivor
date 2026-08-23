@@ -1,31 +1,31 @@
-id,text,enabled,weight,when,causes
-welcome,Hello {player}!,TRUE,2,first,
-goodluck,"Good luck out there, {player}.",TRUE,1,first,
-firstdive,"First time, {player}?",TRUE,1,first,
-allyours,"Let's crack some clams, {player}.",TRUE,1,first,
-backagain,{departed} walked so that {player} could run,TRUE,2,again,
-watermissed,{departed} swam so that {player} could breach,TRUE,1,again,shark
-onemore,{departed} flipped so that {player} could flop,TRUE,1,again,
-lastrun,"{departed} got {cause}, {player}. Chin up.",TRUE,2,again,
-notoday,{cause} got you? {departed} I won't get {cause}'d again.,TRUE,2,again,
-fixthat,"Last run: {departed} got {cause}. Let's fix that, {player}.",TRUE,1,again,
-sharkmemory,{departed} waddled so that {player} could frolic,TRUE,1,again,shark
-sharkweek,"Still shark week, {player}. Mind the teeth.",TRUE,1,again,shark
-breathe,"You're a mammal, {player}. {departed} forgot that.",TRUE,1,again,drowning
-crabseabed,"{departed} got crabbed. Work smarter, not harder, {player}.",TRUE,1,again,crab
-boatafloat,"Stay in your lane, {player}.",TRUE,1,again,boat
-bosstoday,RIP {departed}. Let's go {player}!,TRUE,1,again,boss
-"squidarms","Mind the tentacles, {player}!",TRUE,1,again,squid
-smallfry,"Bait fish got {departed}. Embarrassing. Your turn, {player}.",TRUE,1,again,fish
-departedgone,"{departed} is down there somewhere. Don't join them, {player}.",TRUE,2,again,
-departedcause,"{departed} was lost to {cause}. Stake woke, {player}.",TRUE,2,again,
-departednow,"{departed} didn't make it. You're {player} now.",TRUE,2,again,
-departedstone,"There's a fresh stone down there with {departed} on it, {player}.",TRUE,1,again,
-departedshark,"{departed} got chummed. Swim good, {player}.",TRUE,1,again,shark
-departeddrown,"I think we're going to need a bigger seal. You're up, {player}.",TRUE,1,again,shark boat drowning
-departedcrab,"{departed} got pinched. Mind the snap, {player}.",TRUE,1,again,crab
-departedcrabCopy,"{departed} got crabs. Mind the snap, {player}.",TRUE,1,again,crab
-departedboss,"{departed} couldn't take the heat. You're cooked, {player}.",TRUE,1,again,boss
-stillhere,{departed} got fished. {player} don't take that mess. ,TRUE,2,again,sailfish puffer fish
-shakeitoff,"{departed} got whacked. Now you're family, {player}.",TRUE,1,again,
-shakeitoffCopy,"{departed} sleeps with the fishes. And now it's time for revenge, {player}.",TRUE,1,again,
+id,text,review,enabled,weight,when,causes
+welcome,Hello {player}!,TRUE,TRUE,2,first,
+goodluck,"Good luck out there, {player}.",TRUE,TRUE,1,first,
+firstdive,"First time, {player}?",TRUE,TRUE,1,first,
+allyours,"Let's crack some clams, {player}.",TRUE,TRUE,1,first,
+backagain,{departed} walked so that {player} could run,TRUE,TRUE,2,again,
+watermissed,{departed} swam so that {player} could breach,TRUE,TRUE,1,again,shark
+onemore,{departed} flipped so that {player} could flop,TRUE,TRUE,1,again,
+lastrun,"{departed} got {cause}, {player}. Chin up.",TRUE,TRUE,2,again,
+notoday,{cause} got you? {departed} I won't get {cause}'d again.,TRUE,TRUE,2,again,
+fixthat,"Last run: {departed} got {cause}. Let's fix that, {player}.",TRUE,TRUE,1,again,
+sharkmemory,{departed} waddled so that {player} could frolic,TRUE,TRUE,1,again,shark
+sharkweek,"Still shark week, {player}. Mind the teeth.",TRUE,TRUE,1,again,shark
+breathe,"You're a mammal, {player}. {departed} forgot that.",TRUE,TRUE,1,again,drowning
+crabseabed,"{departed} got crabbed. Work smarter, not harder, {player}.",TRUE,TRUE,1,again,crab
+boatafloat,"Stay in your lane, {player}.",TRUE,TRUE,1,again,boat
+bosstoday,RIP {departed}. Let's go {player}!,TRUE,TRUE,1,again,boss
+"squidarms","Mind the tentacles, {player}!",TRUE,TRUE,1,again,squid
+smallfry,"Bait fish got {departed}. Embarrassing. Your turn, {player}.",TRUE,TRUE,1,again,fish
+departedgone,"{departed} is down there somewhere. Don't join them, {player}.",TRUE,TRUE,2,again,
+departedcause,"{departed} was lost to {cause}. Stake woke, {player}.",TRUE,TRUE,2,again,
+departednow,"{departed} didn't make it. You're {player} now.",TRUE,TRUE,2,again,
+departedstone,"There's a fresh stone down there with {departed} on it, {player}.",TRUE,TRUE,1,again,
+departedshark,"{departed} got chummed. Swim good, {player}.",TRUE,TRUE,1,again,shark
+departeddrown,"I think we're going to need a bigger seal. You're up, {player}.",TRUE,TRUE,1,again,shark boat drowning
+departedcrab,"{departed} got pinched. Mind the snap, {player}.",TRUE,TRUE,1,again,crab
+departedcrabCopy,"{departed} got crabs. Mind the snap, {player}.",TRUE,TRUE,1,again,crab
+departedboss,"{departed} couldn't take the heat. You're cooked, {player}.",TRUE,TRUE,1,again,boss
+stillhere,{departed} got fished. {player} don't take that mess. ,TRUE,TRUE,2,again,sailfish puffer fish
+shakeitoff,"{departed} got whacked. Now you're family, {player}.",TRUE,TRUE,1,again,
+shakeitoffCopy,"{departed} sleeps with the fishes. And now it's time for revenge, {player}.",TRUE,TRUE,1,again,

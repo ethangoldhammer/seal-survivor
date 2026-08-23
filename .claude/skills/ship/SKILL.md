@@ -41,7 +41,12 @@ attached to a commit.
 2. **Check for stale local paths.** `.claude/launch.json` accumulates
    `scratch-preview` entries pointing at session temp directories that will
    not exist for anyone else. Drop those hunks rather than committing them.
-3. **Never commit `path/src/imported-tuning.json` without saying so.** It is
+3. **Never write copy to get the gate green.** `tests — copy` fails while
+   any lorem ipsum or `[DRAFT]` string is staged in `path/src`. That is the
+   rule in CLAUDE.md doing its job, not a broken harness: those lines are
+   waiting for Ethan's words. Show him what is outstanding and let him write
+   them. Never replace lorem with prose of your own to unblock a ship.
+4. **Never commit `path/src/imported-tuning.json` without saying so.** It is
    real tuning work saved from the live tuner, and whatever is committed is
    what the public build ships with. Confirm the current values are the ones
    that should go out.

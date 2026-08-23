@@ -759,6 +759,15 @@ function handleSettingsChange(path) {
   // Reallocates the drawing buffer, and post.js picks the new size up on its
   // next resize() — same path the tuner's render-scale slider takes.
   if (all || path === 'video.resolution') world.applyRenderScale();
+  // THE FIELD OF VIEW IS A REBUILD, not just a new frustum. It moves
+  // bounds.frameTop, and the sky plane's gradient is normalised against exactly
+  // that (skyPlaneMetrics) — so the full world.resize() rather than the cheap
+  // window path, or the sky keeps the ramp it was built with and the horizon
+  // sits at the wrong height for as long as the setting is held.
+  //
+  // Nothing about the ARENA moves here: the walls, the floor and every spawn
+  // are where they were. Only the window onto them changes. See updateBounds.
+  if (all || path === 'video.fov') world.resize();
   // The filter and the bloom toggle are resolved inside post.render every
   // frame, and the shake scale is read at the point the camera is offset, so
   // neither needs anything here.
@@ -5610,8 +5619,32 @@ function animate(now) {
       },
       onBombDrop: (x, y) => feedback('bakalarBombDrop', { x, y }),
       onBombBlast: (x, y, r) => {
-        feedback('bakalarBombBlast', { x, y, scale: Math.min(2.4, r / 6) });
+        // THE SMOKE IS SIZED OFF THE BLAST. `bakalarBombBlast` carries
+        // `goo: 'clubBoomGoo'` — the same mass every other explosion in the
+        // game leaves behind — and that emitter was authored for a club swing,
+        // which is a fraction of this radius. sizeMul and speedMul together,
+        // never one alone: a goo mass fuses on how far neighbouring lobes have
+        // separated RELATIVE TO THEIR OWN RADIUS, so bigger blobs alone weld
+        // into a featureless slab and faster ones alone tear into dots. Same
+        // pair systems/bossBoom.js passes for the same reason.
+        //
+        // CLAMPED, like `scale` beside it. The blast radius keeps growing with
+        // the stack and with Splash Zone, and an unclamped multiplier at eight
+        // stacks throws 1.5-unit lobes at a hundred units a second.
+        //
+        // It reaches the SPRAY as well as the goo — feedback() hands one `at`
+        // to both bursts. That is deliberate rather than tolerated: the debris
+        // from a bigger bomb should be bigger, the spray was previously a
+        // fixed size at every radius, and systems/bossBoom.js sizes its own
+        // burst off its subject the same way.
+        const boom = Math.min(2.2, r / 6);
+        feedback('bakalarBombBlast', {
+          x, y, scale: Math.min(2.4, boom), sizeMul: boom, speedMul: boom,
+        });
         world.grid.ripple(x, y, 5, r);
+        // The net it went off inside is punched by systems/bakalar.js, which
+        // owns the twine. Not from here: the kick has to be queued against the
+        // same frame the sim steps.
       },
       onEnemyDamaged: damageFrom('bakalarBomb'),
       onEnemyKilled: onEnemyKilledFeedback,

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { causticsEnabled, godRaysEnabled } from './settings.js';
 import { bounds, WAVE, sea } from '../arena.js';
 import { skyLight } from './daylight.js';
 // The veins are sampled here AND on the seal's wet film — see the note in that
@@ -376,7 +377,7 @@ export function updateWaterMaterial(material, clock) {
   const causticsLight = day && cc.followSun
     ? cc.nightFloor + (1 - cc.nightFloor) * skyLight.intensity
     : 1;
-  u.uCausticsOn.value = cc.enabled ? 1 : 0;
+  u.uCausticsOn.value = causticsEnabled(cc.enabled) ? 1 : 0;
   u.uCausticsIntensity.value = cc.intensity * causticsLight * causticsGain;
   u.uCausticsScale.value = cc.scale * causticsScaleMul;
   u.uCausticsSpeed.value = cc.speed;
@@ -465,7 +466,7 @@ export function updateWaterMaterial(material, clock) {
     ? Math.max(-1.5, Math.min(1.5, skyLight.x / Math.max(1, bounds.width / 2)))
     : 0;
 
-  u.uRayOn.value = gr.enabled ? 1 : 0;
+  u.uRayOn.value = godRaysEnabled(gr.enabled) ? 1 : 0;
   u.uRayCount.value = Math.min(MAX_GODRAYS, gr.count);
   u.uRaySpread.value = gr.spread;
   u.uRayOffset.value = lean * gr.spread * (gr.followShift ?? 0);

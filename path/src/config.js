@@ -58,11 +58,22 @@ export const CONFIG = {
   arena: {
     viewHeight: 52, // world units visible top to bottom
     surfaceFromTop: 0.2, // water line, as a fraction of screen height
-    // How much WIDER than the frame the walls sit, 1 = flush with the screen
-    // edge (how it was before this knob existed). Above 1 the ocean runs off
-    // past both sides and the camera pans to follow — the only way to get
-    // more room to swim sideways without zooming the whole game out, because
-    // the frame's width is `viewHeight * aspect` and nothing else.
+    // THE SHAPE THE GAME IS AUTHORED AT. The arena's width is measured off
+    // this rather than off the player's window, so the ocean is the same size
+    // on every device and turning a phone sideways re-frames the game instead
+    // of replacing it. Every number tuned by eye in this file was tuned on a
+    // 16:9 landscape screen, and every harness in tools/ calls
+    // `updateBounds(16 / 9)` — so this is a statement of what already
+    // happened, not a new preference.
+    //
+    // Changing it resizes the whole playfield for everybody. It is not a
+    // per-device knob and there is deliberately no way to make it one.
+    referenceAspect: 16 / 9,
+    // How much WIDER than the reference frame the walls sit, 1 = flush with a
+    // 16:9 screen's edge (how it was before this knob existed). Above 1 the
+    // ocean runs off past both sides and the camera pans to follow — the only
+    // way to get more room to swim sideways without zooming the whole game
+    // out, because the frame's width is `viewHeight * aspect` and nothing else.
     //
     // It buys travel, not density: spawn rate, concurrent caps and every
     // creature budget are per-second numbers that know nothing about the
@@ -754,6 +765,16 @@ export const CONFIG = {
         // 12 at the old 1.35. That is the trade being made here, on purpose.
         zoom: 1.18,
         zoomMax: 3,
+        // THE WIDE-SCREEN CAP. Every zoom above is written for the 16:9 screen
+        // the game is tuned on, and cineAspectZoom scales them so a wider
+        // window shows the same width of ocean rather than a free extra
+        // helping of it. This is the limit on that correction: past about a
+        // 2.8:1 display the punch-in needed to hold the width starts costing
+        // more than the extra ocean was worth, and a 32:9 monitor would end up
+        // playing the game through a slot. Above this it is allowed to see
+        // more. Narrow screens are not capped here — they are held at 1 by the
+        // zoom spring, because there is no zooming out past the display.
+        maxPunch: 1.6,
         zoomStiffness: 26,
         // Under 1, so every zoom move overshoots a little and settles back
         // rather than easing politely into place. This is what makes the strike
@@ -5507,10 +5528,29 @@ export const CONFIG = {
       spawnMax: 22,
       spawnFasterPerLevel: 1.6,
       spawnMinFloor: 5, // even a maxed stack leaves gaps to fight through
-      netWidth: 7,
-      netWidthPerLevel: 1.4,
+      // THE NET IS AS WIDE AS THE BOAT, and levelling does not change that.
+      //
+      // It was 7 units plus 1.4 a stack, which at eight stacks is a 16.8-unit
+      // mouth hanging off a 9-unit hull — a net nearly twice the width of the
+      // thing towing it, which stops reading as a net and starts reading as a
+      // wall. So the width is now the hull's own, MEASURED off the built boat
+      // (see netGeometry in systems/bakalar.js — `fit` and the T-panel size
+      // multiplier both scale it, so no number in the asset entry is the
+      // answer), and this is only a trim on it: 1 spans the hull exactly,
+      // below that the mouth sits inside the gunwales.
+      //
+      // Everything the stack used to buy in width it now buys in DEPTH, which
+      // is the axis where more is still believable — and the better one for
+      // the ability besides, because the water below the boat is where the
+      // fish are and the water beside it is where the boat already is.
+      netWidthFraction: 0.92,
       netDepth: 9,
-      netDepthPerLevel: 1.6,
+      netDepthPerLevel: 2.6,
+      // How much clear water the foot of the net keeps above the seabed. The
+      // depth is clamped against this (see netGeometry) — the growth axis is
+      // unbounded arithmetic and the ocean is 40 units, so without a clamp one
+      // retune drags the twine through the floor.
+      netFloorGap: 2.5,
       netTrail: 2.2, // how far behind the hull the net hangs, so it reads as dragged
       netColor: 0xbfe9ff, // now the BEAM colour — see the beam block below
       // (`netOpacity` lived here until the beam replaced the flat panel. It is
@@ -5519,6 +5559,56 @@ export const CONFIG = {
       // beam carries its strength in `beam.intensity`.)
       haulSpeed: 5.5, // how fast a catch is dragged up toward the hull
       haulCatchGap: 0.6, // how close to the hull counts as landed
+
+      // --- what it can take -----------------------------------------------
+      // The net took everything that was not a boss. That is right for a
+      // mechanic whose job is clearing schools and wrong the moment you watch
+      // a megalodon get lifted out of the water by a fishing boat.
+      //
+      // Now the net has POWER and a creature has RESISTANCE, and a creature is
+      // only ensnared once it has been held in the mouth long enough for the
+      // one to overcome the other. Nothing is listed per species: a creature
+      // inherits its place on the curve from how big it is, so a new fish
+      // needs no entry here on the day it lands.
+      //
+      // These are throughput and weapons.csv owns them — see the note on
+      // `bakalar` in the weapons table. The rest of the boat (the beam, the
+      // twine, the bomb's look) stays on sliders because it is judged by eye.
+      catch: {
+        // The fish the net is calibrated on — a shark, deliberately, because
+        // the interesting question is where the curve crosses from "swept up"
+        // to "gets away" and that is up at the apex end. Everything below this
+        // radius is easier than 1x and most of the roster is well below it.
+        refPrey: 1.2,
+        // Seconds to ensnare a creature AT that size with power 1. The net's
+        // mouth is the hull's width and the boat sails at 7 u/s, so a
+        // stationary fish is inside it for about a second and a half — which
+        // is what makes this number the difference between "sharks sometimes"
+        // and "sharks never".
+        grip: 1.6,
+        power: 1,
+        powerPerLevel: 0.55,
+        // SQUARED, and that is the whole shape of the thing. This is a 2D
+        // playfield, so area is the honest stand-in for mass — the same
+        // weighting entities/enemies.js uses to resolve a collision. Linear
+        // would make a shark three times a sardine; squared makes it eight,
+        // which is the difference between a net that FAVOURS small fish and a
+        // net that is FOR them.
+        massExponent: 2,
+        // Seconds out of the net before a part-gripped creature starts again.
+        // Short: a fish that dipped in and out across a whole sailing should
+        // not be accumulating toward a catch it never earned.
+        gripReset: 0.5,
+        // AN ABSOLUTE CEILING, in world units, above the curve. Some bodies
+        // are not "hard to net", they are not netted — and a resistance curve
+        // alone always leaves a number of seconds at which they would be.
+        // 3 clears the megalodon (2.2) for a maxed boat and refuses anything
+        // whale-scale. The bowhead is not an enemy today (systems/whale.js
+        // keeps its own list), which is exactly why this is a size rule and
+        // not a name check: a sweep creature that ever becomes an ordinary
+        // spawn should not need anyone to remember this file exists.
+        maxPrey: 3,
+      },
 
       // --- the tractor beam ----------------------------------------------------
       // The net was a flat translucent rectangle. It was honest about the
@@ -5562,6 +5652,117 @@ export const CONFIG = {
         // beam is uniformly bright across its width and reads flat.
         coreBoost: 0.9,
     },
+
+      // --- the net itself ------------------------------------------------------
+      // The beam above is the SUCTION drawn. This is the TWINE: an actual
+      // lattice hanging off the hull, simulated with Verlet and drawn as
+      // additive lines in the arena grid's idiom — cool at rest, heating
+      // toward `hotColor` wherever it has been dragged out of shape.
+      //
+      // The two exist together on purpose. The beam explains what the boat is
+      // doing to the fish; the net is the thing the fish are IN, and it is the
+      // only part of the ability that anything can push back on. A bomb going
+      // off in it punches a hole that springs shut; a shark being hauled
+      // bellies a pocket that travels up the mesh with it.
+      //
+      // See systems/bakalarNet.js. Node counts rebuild the lattice; everything
+      // else is live.
+      net: {
+        enabled: true,
+        // The weave. Tighter than the backdrop grid by design — a net has to
+        // read as a net at the scale of the fish in it, and at the arena's
+        // 2.6-unit spacing a mackerel fits through one cell. These are NODE
+        // COUNTS rather than a spacing, so the mesh stays the same density
+        // whatever the net has grown to at this level.
+        // ROUGHLY SQUARE CELLS is what these two are actually for. The net is
+        // taller than it is wide at every level (7x9 at one stack, 17x22 at
+        // eight), so equal counts on both axes give diamonds half again as
+        // tall as they are broad — which reads as a stretched fishnet stocking
+        // rather than as netting. More rows than columns cancels the aspect.
+        cols: 13,
+        // ROWS ARE DERIVED, not set. Levelling buys depth and not width, so a
+        // fixed row count stretches the diamonds taller with every stack — and
+        // past about 2:1 the diagonal springs run so close to vertical that
+        // nothing resists a sideways fold and the net pinches to an hourglass
+        // at its waist. `cellAspect` is the shape one cell should be (1 is
+        // square, above 1 is taller than wide) and `maxRows` is what that is
+        // allowed to cost at full depth.
+        cellAspect: 1.15,
+        maxRows: 40,
+        color: 0x2a6f8f,
+        hotColor: 0x9ef7ff,
+        opacity: 0.62,
+        // How far a node has to be dragged before the twine goes hot, as a
+        // fraction of one cell. Higher = the net lights up at the slightest
+        // disturbance.
+        warpGain: 1.8,
+
+        // --- the twine's physics ----------------------------------------
+        // Stretch-only constraints: a strand holds a node in when pulled taut
+        // and does nothing when the node drifts closer, which is what string
+        // does. Compression would make the net a sheet of foam.
+        twineStiffness: 0.85, // the diamond mesh
+        ropeStiffness: 1.0,   // headline, footrope and the two side ropes
+        // NOT DRAWN, and the net comes apart without it — a lattice sprung
+        // only on its diagonals splits into two checkerboards that drift
+        // through each other. Weak enough that the diamonds still open and
+        // close, which is the motion that reads as netting.
+        bindStiffness: 0.25,
+        // How much a strand resists being PUSHED TOGETHER, as a fraction of
+        // how hard it resists being pulled apart. Twine has no spine, so this
+        // is nearly nothing — but not quite nothing, because a mesh with no
+        // compression response at all has nothing holding its own cells open.
+        //
+        // IT DOES NOT TAKE MUCH, and it is the most dangerous number in the
+        // block. At 0.35 the springs inflate the mesh to full extension like a
+        // frame of rods: the net reaches its slack limit on its own, and from
+        // there NOTHING can deform it — a shark bellies it by a tenth of a
+        // unit, a bomb by an eighth, and the whole simulation is a static quad
+        // with extra steps. Measured across the range: 0.35 gives a 0.15
+        // pocket, 0.05 gives 0.82. Leave it near the floor.
+        compression: 0.05,
+        iterations: 4,   // relaxation passes per substep
+        slack: 1.16,     // rest length as a multiple of the cell, so it drapes
+        gravity: 8,
+        drag: 2.4,       // the water; higher = the net settles sooner
+        // The slow pull back toward the rectangle the net hangs in. This is
+        // the shape-keeper — with `compression` at the floor it is the only
+        // thing stopping the mesh drifting into a rag over a long sailing —
+        // and it is also a brake on everything interesting, so it wants to be
+        // under about 1. At 4 it removed 98% of any displacement every second
+        // and the net was rigid.
+        tension: 0.9,
+        // THE TOW. Water pushing back on the mesh, against the way the hull is
+        // dragging it, so the net streams out behind the boat instead of
+        // hanging under it like a curtain on a rail. Scales with the boat's
+        // actual speed, so this is a drag coefficient rather than a lag in
+        // units — leaving the trail to `drag` alone bought a sixth of a unit
+        // on an eleven-unit net, because at a constant tow speed drag has
+        // nothing to bite on but the error the constraints leave behind.
+        flow: 7.5,
+
+        // --- what the catch does to it ----------------------------------
+        // Every held creature shoves the mesh away from itself (the pocket)
+        // and drags a share of its weight down (the hang). Both scale with the
+        // creature's radius, so a sardine dimples and a shark bellies.
+        catchPush: 500,
+        catchSag: 725,
+        catchReach: 2.4, // pocket radius, in multiples of the creature's own
+        // The jolt when something is first caught, and the one when a bomb
+        // goes off inside the net. Impulses, not forces — they punch and let
+        // the mesh spring back on its own.
+        catchKick: 0.5,
+        // HEAVILY DIMINISHING, and this sits just past the knee. The punch is
+        // bounded by the slack in the twine rather than by the impulse: 1.6
+        // gives 0.54 of a cell and 3.4 gives 0.62, so more than doubling the
+        // energy bought 15%. Below about 3 the hole stops reading as a hole.
+        // If it needs to be bigger than this, `slack` is the number to move —
+        // this one is already mostly being eaten by the constraint solver on
+        // the frame it arrives. `npm run test:net` measures the peak in CELLS
+        // across the whole punch, because the frame it peaks on moves with the
+        // net's depth.
+        blastKick: 3.4,
+      },
 
       // --- suction -------------------------------------------------------------
       // The gameplay half of the same two curves the beam is DRAWN with (see
@@ -5642,6 +5843,44 @@ export const CONFIG = {
         size: 0.72, // visual radius of the falling bomb
         color: 0xffd27a,
         blinkSpeed: 9, // how fast it flashes once armed
+        // How bright the model goes on the ON half of the blink. This is
+        // emissiveIntensity against the bomb's own base map (emissiveFromMap
+        // on its def), so it lights up wearing its own paint rather than
+        // washing to a flat colour. The procedural fallback has no emissive
+        // and blinks `color` instead — see paintArmedBombs.
+        blinkGlow: 1.6,
+
+        // --- the wick ------------------------------------------------------
+        // The bomb is a model now (public/models/voicemailbomb.glb) and it has
+        // a real curly fuse. tools/optimize-bomb.mjs measures that fuse into a
+        // polyline and bakes it into the file; assets.js converts it into the
+        // model's own space; this is what burns along it.
+        //
+        // The burn is a COUNTDOWN, not a decoration. It is scheduled across
+        // the bomb's whole remaining life — the fall plus the fuse — so the
+        // flame arrives at the powder on the frame the thing goes off. A wick
+        // that burns at its own rate is a light on a stick: it tells you
+        // nothing, and the player learns to ignore it.
+        wick: {
+          enabled: true,
+          // Embers thrown off the burning point. Emitted on a timer rather
+          // than per frame, so the rate does not change with framerate.
+          emitEvery: 0.045,
+          // The lit point itself — a small additive blob riding the wick. Its
+          // radius is in world units at the bomb's authored size and scales
+          // with the bomb.
+          flameSize: 0.17,
+          flameColor: 0xffd08a,
+          flameHot: 0xfff6e0,
+          flameGlow: 2.6,
+          // How fast the flame gutters. This is the only thing that says the
+          // bomb is LIVE while it is still falling and a long way from
+          // anything, so it is fast enough to catch the eye at the edge of
+          // the screen.
+          flicker: 22,
+          flickerAmount: 0.3,
+        },
+
     },
     },
 
@@ -12762,6 +13001,16 @@ export const CONFIG = {
         colors: [0xf0dcb4, 0xd8b98a, 0xfff2dc], cone: 0, drag: 1.2,
         gravity: [0, -0.6], inherit: 0.08, glow: 1.6,
       },
+      // The bomb's wick, burning. Small, hot, and thrown UPWARD off the
+      // burning point — a fuse sheds sparks against its own fall, which is
+      // what makes a falling bomb read as lit rather than as a dark ball with
+      // a dot on it. Two per emit, on a 45ms timer (see bomb.wick.emitEvery),
+      // so the rate is the same on every machine.
+      bombWick: {
+        count: 2, speed: [0.6, 2.4], size: [0.05, 0.13], life: [0.18, 0.42],
+        colors: [0xfff0c8, 0xffc266, 0xff8a3c], cone: 0.9, drag: 2.4,
+        gravity: [0, 1.6], inherit: 0.15, glow: 3.2,
+      },
       clubEmberTrail: {
         count: 2, speed: [0.3, 1.6], size: [0.1, 0.24], life: [0.4, 0.9],
         colors: [0xffc98a, 0xff9a52, 0xffe9d2], cone: 0, drag: 1, glow: 3,
@@ -13914,7 +14163,14 @@ export const CONFIG = {
       // And the payoff. The biggest single blast in the game — a netful of fish
       // going up at once — so it's tuned near `bigKill` rather than near the
       // other ability events.
-      bakalarBombBlast: { emit: 'bigExplosion', shake: 0.6, hitstop: 0.06, glow: 1.1, ripple: { strength: 4.2, radius: 20 },
+      // ...and the mass it leaves in the water is the one every other
+      // explosion leaves: `clubBoomGoo`, thresholded against the shared `boom`
+      // surface (CONFIG.fx.goo.groups). Reused rather than given a bomb-shaped
+      // copy of its own — a second emitter with the same numbers is a second
+      // thing to keep in step, and the only real difference is SIZE, which
+      // main.js passes as sizeMul/speedMul off the blast radius.
+      bakalarBombBlast: { emit: 'bigExplosion', goo: 'clubBoomGoo',
+                          shake: 0.6, hitstop: 0.06, glow: 1.1, ripple: { strength: 4.2, radius: 20 },
                           sfx: 'bakalarBombBlast', haptic: [34, 24, 40] },
       // A bomber committing to its stoop. The one event here that fires far
       // from the player, so it's the sound that carries it, not the rumble.
@@ -16466,7 +16722,11 @@ export const CONFIG = {
       // How tightly the bright edge hugs the silhouette. Low values wash the
       // whole ball; high values shrink it to a wire loop and the bubble stops
       // reading as a volume.
-      power: 2.6,
+      //
+      // Down from 2.6 to Spline's 1.33, which on its own WOULD wash the ball —
+      // `bias` below is what makes the low number survivable, and the two only
+      // make sense moved together.
+      power: 1.6,
       // How much of the film you see facing you. This is the number that makes
       // it a bubble rather than a marble — it wants to be nearly zero, and the
       // creature inside is meant to be plainly visible through it.
@@ -16482,11 +16742,66 @@ export const CONFIG = {
       // together with trapBubble's glow (now 1.35) to a rim peak near 3, which
       // still blooms and no longer clips. Change one of the three and check the
       // others: this is a product, not a sum.
-      rimBoost: 1.05,
-      // The tight highlight riding on top of the rim — the thing that reads as
-      // a surface with a thickness rather than a halo. Multiplied by 3 in the
-      // shader, so it is the biggest of the three per unit dragged.
-      sheen: 0.15,
+      rimBoost: 1.9,
+      // The tight highlight riding on top of the rim. It used to be the ONLY
+      // thing giving the film a definite edge, and it is not any more — `ink`
+      // below does that job now and does it better, so this is down from 0.15
+      // to a glint. Note its width is uShellPower * 4 in the shader: dropping
+      // `power` for a wide band widens this with it, which is the other reason
+      // to spend less on it.
+      sheen: 0.06,
+
+      // --- THE SPLINE PAIR -----------------------------------------------
+      // Ported from the "Sea Bubbles" material in the Spline scene, whose
+      // bubbles read better than these did. Two things were doing it, and
+      // neither was the transmission layer everyone assumes: a fresnel far
+      // SOFTER than ours with the middle cut out from under it, and the same
+      // black contour every other object in that scene wears.
+
+      // Where the band stops. Everything under this is cut to nothing and what
+      // survives is rescaled back to full, so the film can start well outside
+      // the silhouette (see the low `power` above) and still be honestly empty
+      // in the middle. Spline says -0.19 as a fresnel bias; same number, sign
+      // flipped because ours subtracts.
+      bias: 0.22,
+
+      // The contour. 0 is the old bubble exactly.
+      //
+      // Deliberately far past 1, which is not an overdrive — it is what makes
+      // this a LINE. The term is clamped, so a strength of 4 means the band
+      // reaches full opacity well before the silhouette and then stays there,
+      // and the falloff you actually see is the short stretch on its way up.
+      // At 1 or below the contour never saturates and reads as a soft dark
+      // fade around the edge rather than as something drawn.
+      ink: 4.0,
+      // How tight the contour is, and the exponent is much smaller than it
+      // looks like it should be. `shellFace` is 1 - |N.V|, which on a sphere
+      // climbs almost vertically at the silhouette: at 96% of the way out from
+      // the centre it is already 0.72, so an exponent of 2.1 alone puts the
+      // half-strength point there. The 9 and 16 this shipped with first were
+      // measured on the rendered ball and drew nothing — the band was inside
+      // the last pixel of a 32-segment sphere, which never reaches face = 1.
+      //
+      // LOWER than the oxygen bubble's, because the exponent sets the band as
+      // a FRACTION of the radius: equal exponents give the smaller bubble a
+      // thinner line in actual pixels. Spline never has to think about this —
+      // its outline is 2 screen pixels by definition.
+      inkPower: 4.5,
+      // Spline's outline is pure #000000, which works there against a #354c53
+      // slate background. It does not work here: this water is far darker, and
+      // a black contour on it is not a line, it is a hole. A near-black with
+      // the water's own blue in it keeps the drawn-edge read and still
+      // separates from the background.
+      inkColor: 0x03080d,
+
+      // The painted layer, at Spline's own 0.21. Its image is not shipped here
+      // — it is read off models/seabed/bubble.glb, which already carries it
+      // (see harvestFilmPaint in assets.js) — and it is laid on as a MATCAP,
+      // so what you are tinting with is a painted bubble seen face-on rather
+      // than a tiling detail map. It only ever darkens: the image is opaque
+      // with a white surround, so this multiplies toward the paint over the
+      // disc and by 1 in the corners.
+      paint: 0.21,
     },
 
     // ---------------------------------------------------------------------------
@@ -16506,7 +16821,6 @@ export const CONFIG = {
     // and rimBoost and sheen. See the note in `bubbleShell`.
     // ---------------------------------------------------------------------------
     oxygenBubbleShell: {
-      power: 1.9,
       // Higher than the trap's 0.07 on purpose. Nothing is inside this one, so
       // there is no legibility cost to a faint milky body — and a big sphere at
       // near-zero core alpha reads as an empty outline rather than as a volume
@@ -16517,10 +16831,31 @@ export const CONFIG = {
       // composited and what you actually see in the middle is nearer
       // 1-(1-a)^2 than `a`. At 0.12 that is 0.23, which is already most of the
       // way to a veil.
-      coreAlpha: 0.09,
-      rimAlpha: 0.9,
-      rimBoost: 1.35,
-      sheen: 0.28,
+      // Up from 0.09. Spline's bubbles carry a transmission layer at 0.24
+      // alpha, which is most of what gives them a faintly milky body rather
+      // than an empty ring — and 0.11 through both walls of a DoubleSide
+      // sphere composites to 1-(1-0.11)^2 = 0.21, which lands on the same
+      // read without a transmission pass this game is never going to pay for.
+      coreAlpha: 0.06,
+      rimAlpha: 0.85,
+      // Up from 1.35, and it has to be: the contour now takes the outermost
+      // slice of the band away from the fresnel (see SHELL_FRAGMENT), so what
+      // is left peaks lower and needs more per unit to still read as a film.
+      rimBoost: 2.4,
+      // Was 0.28, when the sheen was the only crisp thing on the bubble. The
+      // contour is crisper and does not widen when `power` drops.
+      sheen: 0.06,
+
+      // The Spline pair — see the long note over in `bubbleShell`.
+      power: 1.6,
+      bias: 0.22,
+      ink: 5.0,
+      // Tighter than the trap bubble's 4.5: the exponent sets the contour as a
+      // fraction of the radius, so the bigger balloon can spend a smaller
+      // fraction and still draw the same weight of line.
+      inkPower: 6.0,
+      inkColor: 0x03080d,
+      paint: 0.21,
     },
 
     // ---------------------------------------------------------------------------
@@ -17556,15 +17891,29 @@ export const CONFIG = {
         // tap is still a distinct poke, so the bar for interrupting the player
         // has to be set by importance rather than by what the hardware can
         // physically render.
-        floor: 0.2,
+        //
+        // SET TO mediumAt DELIBERATELY, which means no Light tap ever fires.
+        // On a phone the Light tap is the one routine hits land on, so it was
+        // the whole of the constant rattle — and it is also the one that reads
+        // as noise rather than as information. Everything that survives this
+        // floor is a Medium or a Heavy, i.e. something worth a poke. Drop it
+        // back to 0.2 to hear the old bed again.
+        floor: 0.34,
         // The engine can only re-tap, never hold, so a burst of fire has to be
-        // thinned or it rattles. 60ms ~ 16 taps a second, which is a texture
-        // rather than a fault.
-        minGapMs: 60,
+        // thinned or it rattles. This is a CEILING on the rate, not a target:
+        // 140ms is ~7 taps a second, which reads as a texture. It was 60ms
+        // (~16/sec), which on a real device is a continuous buzz — audible,
+        // felt as one unbroken vibration rather than as separate events, and a
+        // measurable power draw for something the player stops noticing.
+        minGapMs: 140,
         // ...but an event this much stronger than what is currently playing
         // ignores the spacing. Without it a kill inside a burst is dropped,
         // which silences the channel at the only moment it matters.
-        cutThrough: 0.25,
+        //
+        // Raised alongside minGapMs: with taps now 140ms apart, a low bar here
+        // would let most of the thinned-out events back in through the side
+        // door and undo the spacing entirely.
+        cutThrough: 0.4,
       },
 
       // MIXING — sum overlapping events instead of letting the loudest replace
@@ -25392,6 +25741,26 @@ export const CONFIG = {
       shark: { steps: 3, low: 0.3, gamma: 1.15, soft: 0.12, range: 1.5 },
       orca: { steps: 2, low: 0.22, high: 1.0, soft: 0.06 },
 
+      // BAKALAR'S VOICEMAIL BOMB, and it needs the same correction the mussel
+      // does below for the same cause: it is a near-black body. Its albedo is
+      // roughly 0x3a3a3a straight out of the source atlas, so the family's
+      // 0.28 shadow band lands at 0.28 x an already-dark colour — not a
+      // shadow, a hole, and one that welds shut against the dark outline the
+      // def draws around it. `low` lifted and `range` shortened spreads two
+      // steps over the part of the ramp a dark object actually occupies.
+      //
+      // Two bands rather than three because the ball is about one world unit
+      // across: three steps on a sphere that small is a gradient again by the
+      // time it reaches a pixel, and two reads as a decision at any size.
+      // `high` ABOVE 1, which is the other half of the same problem and the one
+      // that is easy to miss: the toon pass divides the albedo out before it
+      // bands and multiplies it back after, so its lit band is capped at the
+      // body's own colour. On a 0x3a3a3a ball that cap is 0.23 and the
+      // "fully lit" side of a cartoon bomb comes out darker than the water it
+      // is falling through. mightyMeg's preset does the same thing for the
+      // same reason.
+      voicemailBomb: { steps: 2, low: 0.55, high: 1.6, gamma: 1.1, soft: 0.04, range: 0.8 },
+
       // THE HOMING MUSSEL, closed and open both. Two bands and a razor edge
       // between them: this is the smallest thing in the game wearing this
       // shader and it is usually moving fast, so three bands on a 0.58-unit
@@ -29000,6 +29369,10 @@ export const TUNER_SCHEMA = [
       { path: 'bubbleShell.power', min: 0.2, max: 8, step: 0.1, label: 'trap bubble: how tight the edge is' },
       { path: 'bubbleShell.rimBoost', min: 0, max: 8, step: 0.1, label: 'trap bubble: edge glow' },
       { path: 'bubbleShell.sheen', min: 0, max: 2, step: 0.05, label: 'trap bubble: highlight' },
+      { path: 'bubbleShell.bias', min: 0, max: 0.9, step: 0.01, label: 'trap bubble: how empty the middle is' },
+      { path: 'bubbleShell.ink', min: 0, max: 8, step: 0.05, label: 'trap bubble: outline strength' },
+      { path: 'bubbleShell.inkPower', min: 1, max: 40, step: 0.5, label: 'trap bubble: outline thinness' },
+      { path: 'bubbleShell.paint', min: 0, max: 1, step: 0.01, label: 'trap bubble: painted film' },
       // The OXYGEN bubble's film — same shader, its own numbers. See the note
       // on CONFIG.oxygenBubbleShell for why these are not the five above.
       { path: 'oxygenBubbleShell.coreAlpha', min: 0, max: 1, step: 0.01, label: 'air bubble: see-through in the middle' },
@@ -29007,6 +29380,10 @@ export const TUNER_SCHEMA = [
       { path: 'oxygenBubbleShell.power', min: 0.2, max: 8, step: 0.1, label: 'air bubble: how tight the edge is' },
       { path: 'oxygenBubbleShell.rimBoost', min: 0, max: 8, step: 0.1, label: 'air bubble: edge glow' },
       { path: 'oxygenBubbleShell.sheen', min: 0, max: 2, step: 0.05, label: 'air bubble: highlight' },
+      { path: 'oxygenBubbleShell.bias', min: 0, max: 0.9, step: 0.01, label: 'air bubble: how empty the middle is' },
+      { path: 'oxygenBubbleShell.ink', min: 0, max: 8, step: 0.05, label: 'air bubble: outline strength' },
+      { path: 'oxygenBubbleShell.inkPower', min: 1, max: 40, step: 0.5, label: 'air bubble: outline thinness' },
+      { path: 'oxygenBubbleShell.paint', min: 0, max: 1, step: 0.01, label: 'air bubble: painted film' },
     ],
   },
   {
@@ -29726,10 +30103,12 @@ export const TUNER_SCHEMA = [
       { path: 'bakalar.spawnMax', min: 2, max: 90, step: 1, label: 'seconds between sailings (max)' },
       { path: 'bakalar.spawnFasterPerLevel', min: 0, max: 6, step: 0.1, label: 'sails sooner per level' },
       { path: 'bakalar.spawnMinFloor', min: 1, max: 30, step: 0.5, label: 'fastest allowed interval' },
-      { path: 'bakalar.netWidth', min: 1, max: 30, step: 0.5, label: 'net width' },
-      { path: 'bakalar.netWidthPerLevel', min: 0, max: 5, step: 0.1, label: 'net width per level' },
+      // No width-per-level row: the mouth is the hull's, measured, and the
+      // stack buys depth instead. See CONFIG.bakalar.netWidthFraction.
+      { path: 'bakalar.netWidthFraction', min: 0.2, max: 1, step: 0.02, label: 'net mouth (fraction of the hull)' },
       { path: 'bakalar.netDepth', min: 1, max: 40, step: 0.5, label: 'net depth' },
       { path: 'bakalar.netDepthPerLevel', min: 0, max: 6, step: 0.1, label: 'net depth per level' },
+      { path: 'bakalar.netFloorGap', min: 0, max: 12, step: 0.5, label: 'clearance kept above the seabed' },
       { path: 'bakalar.netTrail', min: 0, max: 10, step: 0.1, label: 'net drag behind hull' },
       { path: 'bakalar.netColor', type: 'color', label: 'beam color' },
       // --- beam (the look) ---
@@ -29750,11 +30129,41 @@ export const TUNER_SCHEMA = [
       // --- suction (the pull) ---
       // Deliberately mirrors the two falloffs above. Drag them apart and fish
       // get pulled hardest through the dim parts of the beam.
+      // --- the twine (systems/bakalarNet.js) --------------------------------
+      { path: 'bakalar.net.enabled', type: 'bool', label: 'net twine drawn' },
+      { path: 'bakalar.net.cols', min: 5, max: 31, step: 1, label: 'mesh across (rebuilds)' },
+      // No row count: it follows the depth so the cells stay square. See
+      // CONFIG.bakalar.net.cellAspect.
+      { path: 'bakalar.net.cellAspect', min: 0.5, max: 2.5, step: 0.05, label: 'cell shape (1 = square)' },
+      { path: 'bakalar.net.maxRows', min: 8, max: 64, step: 1, label: 'row cap at full depth' },
+      { path: 'bakalar.net.color', type: 'color', label: 'twine color' },
+      { path: 'bakalar.net.hotColor', type: 'color', label: 'twine color — strained' },
+      { path: 'bakalar.net.opacity', min: 0, max: 1, step: 0.02, label: 'twine opacity' },
+      { path: 'bakalar.net.warpGain', min: 0, max: 6, step: 0.1, label: 'how easily it goes hot' },
+      { path: 'bakalar.net.twineStiffness', min: 0.05, max: 1, step: 0.05, label: 'mesh stiffness' },
+      { path: 'bakalar.net.ropeStiffness', min: 0.05, max: 1, step: 0.05, label: 'rope stiffness (perimeter)' },
+      { path: 'bakalar.net.bindStiffness', min: 0.02, max: 1, step: 0.02, label: 'weave bind (keep low)' },
+      { path: 'bakalar.net.compression', min: 0, max: 1, step: 0.02, label: 'cells hold open (0 = rag)' },
+      { path: 'bakalar.net.iterations', min: 1, max: 8, step: 1, label: 'solver passes' },
+      { path: 'bakalar.net.slack', min: 1, max: 1.4, step: 0.01, label: 'slack (how far it can belly)' },
+      { path: 'bakalar.net.gravity', min: 0, max: 30, step: 0.5, label: 'net weight' },
+      { path: 'bakalar.net.drag', min: 0, max: 12, step: 0.1, label: 'water drag (settles sooner)' },
+      { path: 'bakalar.net.tension', min: 0, max: 4, step: 0.05, label: 'drift back to shape (keep tiny)' },
+      { path: 'bakalar.net.flow', min: 0, max: 40, step: 0.5, label: 'streams behind the tow' },
+      { path: 'bakalar.net.catchPush', min: 0, max: 300, step: 2, label: 'pocket around the catch' },
+      { path: 'bakalar.net.catchSag', min: 0, max: 400, step: 2, label: 'the catch hangs' },
+      { path: 'bakalar.net.catchReach', min: 0.5, max: 8, step: 0.1, label: 'pocket reach (x body)' },
+      { path: 'bakalar.net.catchKick', min: 0, max: 3, step: 0.05, label: 'jolt as it goes in' },
+      { path: 'bakalar.net.blastKick', min: 0, max: 6, step: 0.1, label: 'jolt from the bomb' },
+
       { path: 'bakalar.suction.strength', min: 0, max: 3, step: 0.05, label: 'suction strength' },
       { path: 'bakalar.suction.edgeFalloff', min: 0.2, max: 6, step: 0.1, label: 'suction falloff across' },
       { path: 'bakalar.suction.depthFalloff', min: 0.1, max: 4, step: 0.05, label: 'suction falloff with depth' },
       { path: 'bakalar.suction.inwardRate', min: 0, max: 6, step: 0.1, label: 'pull toward the axis' },
       { path: 'bakalar.suction.minPull', min: 0, max: 1, step: 0.02, label: 'minimum pull at the edge' },
+      // No rows for bakalar.catch.*: what the net will and will not take is
+      // read against the whole roster over a run, not judged by eye in the
+      // second it happens, so weapons.csv owns it.
       { path: 'bakalar.haulSpeed', min: 0.5, max: 30, step: 0.5, label: 'haul speed' },
       { path: 'bakalar.bobSpeed', min: 0, max: 6, step: 0.1, label: 'hull bob speed' },
       { path: 'bakalar.bobAmount', min: 0, max: 2, step: 0.02, label: 'hull bob' },
@@ -29778,6 +30187,16 @@ export const TUNER_SCHEMA = [
       { path: 'bakalar.bomb.size', min: 0.1, max: 3, step: 0.02, label: 'bomb size' },
       { path: 'bakalar.bomb.color', type: 'color', label: 'bomb light color' },
       { path: 'bakalar.bomb.blinkSpeed', min: 1, max: 30, step: 0.5, label: 'blink speed' },
+      { path: 'bakalar.bomb.blinkGlow', min: 0, max: 5, step: 0.1, label: 'blink brightness (lit model)' },
+      // --- the burning wick (systems/bakalar.js) ---------------------------
+      { path: 'bakalar.bomb.wick.enabled', type: 'bool', label: 'wick burns' },
+      { path: 'bakalar.bomb.wick.flameSize', min: 0.02, max: 0.6, step: 0.01, label: 'flame size' },
+      { path: 'bakalar.bomb.wick.flameColor', type: 'color', label: 'flame color' },
+      { path: 'bakalar.bomb.wick.flameHot', type: 'color', label: 'flame color — peak of the flicker' },
+      { path: 'bakalar.bomb.wick.flameGlow', min: 0.5, max: 8, step: 0.1, label: 'flame brightness' },
+      { path: 'bakalar.bomb.wick.flicker', min: 0, max: 60, step: 1, label: 'gutter speed' },
+      { path: 'bakalar.bomb.wick.flickerAmount', min: 0, max: 1, step: 0.02, label: 'gutter depth' },
+      { path: 'bakalar.bomb.wick.emitEvery', min: 0.01, max: 0.3, step: 0.005, label: 'seconds between ember puffs' },
     ],
   },
   {
@@ -30641,7 +31060,7 @@ export const TUNER_SCHEMA = [
     items: [
       { path: 'arena.viewHeight', min: 20, max: 120, step: 2 },
       { path: 'arena.surfaceFromTop', min: 0, max: 0.6, step: 0.01, label: 'water line' },
-      { path: 'arena.widthScale', min: 1, max: 4, step: 0.05, label: 'arena width (x frame)' },
+      { path: 'arena.widthScale', min: 1, max: 4, step: 0.05, label: 'arena width (x 16:9 frame)' },
       { path: 'arena.airScale', min: 1, max: 8, step: 0.1, label: 'jump ceiling (x sky)' },
       { path: 'wallRocks.enabled', type: 'bool', label: 'rocks on the walls' },
       { path: 'wallRocks.count', min: 0, max: 80, step: 1, label: 'boulders per wall' },
@@ -31096,8 +31515,23 @@ const PATH_TABLES = [
     roots: ['weapon', 'missile', 'bounce', 'shrimpRing', 'scallop', 'oyster', 'razorClam', 'seagullBomb',
       'eel', 'sealTeam', 'beluga', 'club', 'clubStacks', 'clubThrow', 'clubBoom', 'clubIce', 'strike',
       'airborne', 'octoGrab', 'harp', 'homingShot', 'maneater', 'ironLung', 'oxygen',
-      'starfish', 'laserEyes', 'biolum', 'player'],
+      'starfish', 'laserEyes', 'biolum', 'player', 'bakalar'],
     forbid: (id) => {
+      // FENCED TO THE CATCH ECONOMY. `bakalar` is a big block and nearly all
+      // of it is judged by eye — the beam's three falloffs, the twine's
+      // physics, the bomb's blink and its cartoon flash. What is here is the
+      // one part read against the whole roster over a run: which creatures the
+      // net can take and how hard it has to work for each. That question is
+      // "how does a shark compare to a sardine compare to a megalodon", which
+      // is exactly the shape a spreadsheet answers and a slider cannot.
+      //
+      // The bomb's damage and cadence are throughput too and are NOT here yet.
+      // That is a bigger move — it would take four more rows off the panel
+      // Ethan tunes the boat on — and it should be made deliberately rather
+      // than as a side effect of this one.
+      if (id.startsWith('bakalar.') && !id.startsWith('bakalar.catch.')) {
+        return 'weapons.csv owns the net\'s catch economy only — the beam, the twine and the bomb are tuner sliders';
+      }
       // The beams' geometry at the FACE — which socket they leave and what
       // colour they are — is judged by eye on the seal's head, not against the
       // damage economy. Everything else about the laser (uptime, cadence,

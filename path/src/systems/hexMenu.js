@@ -58,6 +58,7 @@ const fragmentShader = /* glsl */ `
   uniform int uCount;
   uniform float uBevel;      // how far in from the edge the bevel reaches
   uniform float uPower;      // fresnel tightness
+  uniform float uBias;       // how much of the middle the band is cut back from
   uniform float uCoreAlpha;
   uniform float uRimAlpha;
   uniform float uRimBoost;
@@ -147,7 +148,13 @@ const fragmentShader = /* glsl */ `
     );
     vec3 n = normalize(vec3(normalize(g + 1e-6) * (1.0 - h) * uNormal, h + 0.08));
 
+    // Same two-part curve as the bubble film's (SHELL_FRAGMENT in assets.js),
+    // and it has to be, because uPower arrives from CONFIG.bubbleShell: the
+    // tiles deliberately wear whatever the trap bubble wears. When that block
+    // dropped to a wide soft band, a tile reading only the power would have
+    // gone milky right across its face.
     float fres = pow(1.0 - clamp(n.z, 0.0, 1.0), uPower);
+    fres = clamp((fres - uBias) / max(1.0 - uBias, 1e-4), 0.0, 1.0);
     vec3 l = normalize(vec3(uLight, 0.8));
     float spec = pow(max(dot(n, l), 0.0), uSpecPower) * uSheen;
 
@@ -285,6 +292,7 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
     uCount: { value: count },
     uBevel: { value: radius * (cfg.bevel ?? 0.32) },
     uPower: { value: shade('power', 2.6) },
+    uBias: { value: shade('bias', 0) },
     uCoreAlpha: { value: shade('coreAlpha', 0.16) },
     uRimAlpha: { value: shade('rimAlpha', 0.85) },
     uRimBoost: { value: shade('rimBoost', 1.05) },
@@ -325,6 +333,7 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
   function refreshFilm() {
     uniforms.uBevel.value = radius * (cfg.bevel ?? 0.32);
     uniforms.uPower.value = shade('power', 2.6);
+    uniforms.uBias.value = shade('bias', 0);
     uniforms.uCoreAlpha.value = shade('coreAlpha', 0.16);
     uniforms.uRimAlpha.value = shade('rimAlpha', 0.85);
     uniforms.uRimBoost.value = shade('rimBoost', 1.05);

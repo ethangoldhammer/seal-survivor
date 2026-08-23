@@ -1,12 +1,16 @@
 import * as THREE from 'three';
 import { snapSide } from './facing.js';
 import { CONFIG } from '../config.js';
-import { createVisual } from '../assets.js';
-import { bounds } from '../arena.js';
+import { createVisual, getAssetMaterials } from '../assets.js';
+import { bounds, seabedTopY } from '../arena.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { aoe, companionDamage } from './scaling.js';
 import { advanceCycles } from './beatSync.js';
 import { canHold } from './control.js';
+import { emit } from '../entities/particles.js';
+import {
+  createBakalarNet, updateBakalarNet, setBakalarNetVisible, seatBakalarNet, kickBakalarNet,
+} from './bakalarNet.js';
 
 // Bakalar's Boat — a friendly trawler that sails the surface on a timer,
 // dragging a net behind it. Anything the net sweeps through is caught, hauled
@@ -19,10 +23,15 @@ import { canHold } from './control.js';
 // so a boat sailing through a school is a clear AND a payday, and the tension
 // is that you don't choose when it sails.
 //
-// The net is a rectangle hanging under the boat: `netWidth` across, from the
-// surface down to `netDepth`. Enemies inside it are frozen with `trapTimer`
-// (topped up every frame, so they can't wriggle free mid-haul) and their
-// position is driven directly by this system.
+// The net is a rectangle hanging under the boat: as wide as the hull (measured
+// — see netGeometry) and reaching `netDepth` below the surface. Enemies inside
+// it are frozen with `trapTimer` (topped up every frame, so they can't wriggle
+// free mid-haul) and their position is driven directly by this system.
+//
+// WHAT IT WILL AND WON'T TAKE is a curve, not a list: resistance goes as the
+// square of a creature's radius against the net's power, so a school is swept
+// up on contact, a shark has to be dragged through for a second or more, and
+// the biggest bodies in the water are never held at all. See catchAt().
 
 // VOICEMAIL BOMBS — dropped into the loaded net while the boat sails, ON TOP
 // of the haul rather than instead of it. The haul is a quiet remover: fish go
@@ -36,10 +45,31 @@ import { canHold } from './control.js';
 // be competing to collect the same fish, and the boat would quietly become the
 // only upgrade worth taking. Paying in chum feeds the strike meter instead, so
 // the bomb pays into a different loop than the net it rides on.
+// What CONFIG.bakalar.bomb.size means when it is left alone. It is a RADIUS —
+// the primitive sphere this asset shipped as had r 0.72 — and the model that
+// replaced it is fitted so its ball comes out the same width (see the `fit`
+// note on voicemailBomb in assets.js, which does the ball-versus-wick
+// arithmetic). So the slider divides by this and 0.72 is exactly 1x.
+//
+// It briefly divided by the DIAMETER instead, which is a factor of two and
+// looks like a deliberately smaller bomb rather than like a bug.
+const BOMB_BASE_RADIUS = 0.72;
+
 const bombs = []; // { mesh, y, targetY, fuse, armed, level }
 let bombTimer = 0;
 
 const caught = []; // { enemy, offsetX } — offsetX keeps the catch spread across the net
+// Scratch, refilled every frame and handed to the net sim. Module scope, and
+// the entries are REUSED rather than replaced: a boat sailing through a school
+// runs this every frame of the pass, and a fresh object per fish per frame is
+// exactly the shape of garbage that shows up as a hitch a minute later.
+const netLoads = [];
+let netLoadCount = 0;
+function pushNetLoad(x, y, mass) {
+  const slot = netLoads[netLoadCount] ?? (netLoads[netLoadCount] = { x: 0, y: 0, mass: 1 });
+  slot.x = x; slot.y = y; slot.mass = mass;
+  netLoadCount++;
+}
 let boat = null;
 let visual = null;
 let spawnTimer = 0;
@@ -215,12 +245,36 @@ export function suctionAt(dx, depth, halfWidth, netDepth) {
   return Math.pow(radial, s.edgeFalloff) * Math.pow(v, s.depthFalloff) * s.strength;
 }
 
+// HOW WIDE THE HULL ACTUALLY IS, measured off the built visual.
+//
+// The net used to be `netWidth` world units with `netWidthPerLevel` added on
+// top, and by eight stacks that was a 16.8-unit mouth hanging off a 9-unit
+// boat — a net wider than the thing towing it, which reads as the trawler
+// dragging a wall. The net is now the hull's own width and grows DOWNWARD
+// only: a deeper net is a bigger net you can still believe.
+//
+// Measured, not typed, for the reason whale.js gives about its own body:
+// `fit` scales a grandchild of what createVisual hands back and the T-panel
+// size multiplier scales the root, so no single number in the asset entry is
+// the boat's world width. A hand-written 9 would go stale the first time
+// anyone dragged the size slider — and the failure is a net that is quietly
+// the wrong width, which looks like a tuning choice.
+let hullWidth = 0;
+
 function buildBoat() {
   const root = new THREE.Group();
   visual = createVisual('bakalarBoat');
   root.add(visual);
+  // Before any rotation or placement: createVisual has already applied the
+  // orientation, so the visual's local box is the hull as it will be seen, and
+  // its X extent is the beam-on width the net has to fit inside.
+  _hullBox.setFromObject(visual);
+  _hullBox.getSize(_hullSize);
+  hullWidth = _hullSize.x;
   return root;
 }
+const _hullBox = new THREE.Box3();
+const _hullSize = new THREE.Vector3();
 
 export function createBakalarBoat(scene) {
   boat = buildBoat();
@@ -237,6 +291,11 @@ export function createBakalarBoat(scene) {
   netMesh.position.z = -0.15;
   netMesh.visible = false;
   scene.add(netMesh);
+
+  // ...and the twine hanging in it. The beam is the suction drawn; the net is
+  // the physical thing the catch is inside, and the only part of the ability
+  // anything can push back on. See systems/bakalarNet.js.
+  createBakalarNet(scene);
 
   return boat;
 }
@@ -263,10 +322,16 @@ export function resetBakalar(scene = null) {
   bombTimer = 0;
   // Bombs DO have to be cleaned up: unlike the catch, they own meshes this
   // module put in the scene, and nothing else will take them out.
-  for (const b of bombs) b.mesh.parent?.remove(b.mesh);
+  // ...and their flames with them: the flame is a child of the bomb so removing
+  // the bomb hides it, but its material is per bomb (own flicker phase) and
+  // nothing else frees it.
+  for (const b of bombs) { b.flame?.material.dispose(); b.mesh.parent?.remove(b.mesh); }
   bombs.length = 0;
   if (boat) boat.visible = false;
   if (netMesh) netMesh.visible = false;
+  setBakalarNetVisible(false);
+  blinkOn = false; blinkAny = false;
+  paintArmedBombs();
   spawnTimer = randomBetween(CONFIG.bakalar.spawnMin, CONFIG.bakalar.spawnMax);
 }
 
@@ -285,18 +350,126 @@ export function bombDamage(level) {
   return companionDamage(c.damage + c.damagePerLevel * (lv - 1));
 }
 
+// ---------------------------------------------------------------------------
+// WHAT THE NET CAN TAKE
+//
+// It used to take everything that was not a boss. That is the right rule for a
+// mechanic whose whole job is clearing schools, and the wrong one the moment
+// you watch a megalodon get hauled out of the water by a fishing boat.
+//
+// So the net has POWER and a creature has RESISTANCE, and resistance goes as
+// the SQUARE of its radius. Squared rather than linear because this is a 2D
+// playfield: area is the honest stand-in for mass here, and it is the same
+// weighting entities/enemies.js already uses to resolve a collision between
+// two bodies. Linear would make a shark three times a sardine; squared makes
+// it eight, which is the difference between "the net favours small fish" and
+// "the net is FOR small fish".
+//
+// The result is a curve rather than a list. At one stack a school is swept up
+// on contact, a dolphin usually goes, a shark has to be dragged through the
+// whole mouth and mostly gets away; at eight the boat takes sharks reliably.
+// Nothing is hard-coded per species and nothing needs revisiting when a new
+// creature is added — it inherits its place from how big it is.
+//
+// TWO HARD REFUSALS SIT ABOVE THE CURVE, because neither is a question of
+// degree:
+//
+//   SCENERY. The sea turtle is `invincible` — the game has declared it cannot
+//   be killed. The haul is the one mechanic in the game that removes a
+//   creature WITHOUT dealing damage, so it is also the one thing that could
+//   quietly delete an unkillable animal. Refused by the flag rather than by
+//   name, so anything else marked scenery is covered on the day it lands.
+//
+//   ANYTHING WHALE-SIZED. `maxPrey` is an absolute ceiling in world units. The
+//   bowhead is not an enemy today (systems/whale.js owns its own list, and
+//   `enemiesList` never contains one), so this cannot fire on it yet — which
+//   is exactly why it is written as a size rule and not as a name check. A
+//   sweep creature that ever becomes an ordinary spawn should not need anyone
+//   to remember this file exists.
+//
+// (`canHold` still refuses every boss above all of it — see systems/control.js
+// for why that one is a flat no rather than a big number.)
+
+/** The net's power at this stack. */
+function netPower(level) {
+  const c = CONFIG.bakalar.catch;
+  return Math.max(0.01, c.power + c.powerPerLevel * Math.max(0, level - 1));
+}
+
+/**
+ * How hard this creature is to ensnare, as a multiple of the calibration fish.
+ * 1 at `refPrey`, and rising with the square of the radius from there.
+ */
+function netResistance(e) {
+  const c = CONFIG.bakalar.catch;
+  const r = Math.max(0.01, e.radius ?? 1);
+  return Math.pow(r / Math.max(0.01, c.refPrey), c.massExponent);
+}
+
+/**
+ * Can the net EVER hold this creature — before any question of how long?
+ *
+ * Split from the grip below so the answer is available without a net in the
+ * water: the smoke harness asks it directly, and a refusal here is a fact
+ * about the animal rather than about this pass.
+ */
+/**
+ * How long this creature has to be held in the mouth before it is ensnared, at
+ * this stack. Infinity if the net will never take it at all.
+ *
+ * The mechanic itself, as one pure function — exported so the harness can
+ * assert the CURVE rather than infer it from a stopwatch. Timing a haul
+ * end-to-end measures the spawn wait (14-22 seconds of it, rolled at random)
+ * plus the sweep up to the hull, and both of those dwarf the grip: the first
+ * version of that test read 21s against 17s for fish half a size apart and
+ * called the curve inverted.
+ */
+export function ensnareSeconds(e, level) {
+  if (!netAccepts(e)) return Infinity;
+  return CONFIG.bakalar.catch.grip * netResistance(e) / netPower(level);
+}
+
+export function netAccepts(e) {
+  if (!canHold(e)) return false;          // bosses — systems/control.js
+  if (e.invincible) return false;         // scenery; see the note above
+  return (e.radius ?? 1) <= CONFIG.bakalar.catch.maxPrey;
+}
+
 function bombStats(level) {
   const c = CONFIG.bakalar.bomb;
   const lv = Math.max(1, level);
   return {
     interval: Math.max(c.dropIntervalFloor, c.dropInterval - c.dropIntervalPerLevel * (lv - 1)),
     // Splash Zone widens the BLAST and Big Rigz makes it hit harder — but
-    // neither touches the net (netWidth/netDepth). The net is how the boat
+    // neither touches the net (its mouth or its depth). The net is how the boat
     // works; the bomb is the moment you watch. Widening the net as well
     // would quietly turn one card into a second Bakalar upgrade.
     radius: aoe(c.radius + c.radiusPerLevel * (lv - 1)),
     damage: bombDamage(lv),
   };
+}
+
+// WHERE THE CATCH IS, as one point — the thing the bomb is aimed at.
+//
+// Weighted by radius squared, which on a 2D playfield is area and therefore
+// mass (the same weighting entities/enemies.js uses to resolve a collision).
+// A plain mean would let six sardines outvote the shark, and the shark is what
+// the player is watching.
+//
+// Null when the net is empty, which is a real answer and not a failure: the
+// bomb then falls to the middle of the net the way it always did.
+function bundleCentre() {
+  let wx = 0;
+  let wy = 0;
+  let total = 0;
+  for (const h of caught) {
+    const r = h.enemy.radius ?? 1;
+    const m = r * r;
+    wx += h.enemy.mesh.position.x * m;
+    wy += h.enemy.mesh.position.y * m;
+    total += m;
+  }
+  return total > 0 ? { x: wx / total, y: wy / total } : null;
 }
 
 function dropBomb(scene, x, netTop, netBottom, level) {
@@ -305,7 +478,9 @@ function dropBomb(scene, x, netTop, netBottom, level) {
   mesh.position.set(x, bounds.surfaceY, -0.1);
   // multiplyScalar, not setScalar — see the note in systems/beluga.js. This
   // preserves the per-asset Size multiplier createVisual just applied.
-  mesh.scale.multiplyScalar(c.size / 0.72); // the asset's authored radius
+  //
+  // 1x at the authored size; see BOMB_BASE_RADIUS.
+  mesh.scale.multiplyScalar(c.size / BOMB_BASE_RADIUS);
   scene.add(mesh);
 
   bombs.push({
@@ -317,19 +492,216 @@ function dropBomb(scene, x, netTop, netBottom, level) {
     // had run, the fish it was meant to blow up were thirteen units downrange
     // and the blast reliably hit nothing at all.
     vx: dir * CONFIG.bakalar.speed,
-    // Falls to the MIDDLE of the net rather than the bottom. The catch is
-    // being hauled upward the whole time the bomb is falling downward, so
-    // aiming at the floor of the net means the two pass each other.
-    targetY: (netTop + netBottom) * 0.5,
+    // IT FALLS AT THE BUNDLE, and re-aims every frame while it is falling.
+    //
+    // This was a fixed depth — the middle of the net — with a comment
+    // explaining that the floor was wrong because the catch is hauled upward
+    // while the bomb falls downward and the two pass each other. The middle is
+    // the same bug with a smaller error bar: it is right only for a net whose
+    // catch happens to be halfway up at that moment, and the whole point of
+    // the bomb is that it goes off IN the fish.
+    //
+    // Re-aimed rather than led: the haul rate depends on where each fish sits
+    // in the beam (see suctionAt), so predicting where the bundle will be is
+    // predicting a curve the player can change by getting in the way.
+    //
+    // Seeded here so a bomb dropped into an empty net still has a target, and
+    // clamped into the net by the caller of the update below.
+    targetY: bundleCentre()?.y ?? (netTop + netBottom) * 0.5,
+    netTop,
+    netBottom,
     fuse: c.fuse,
     armed: false,
+    // THE WICK, as a countdown rather than a decoration.
+    //
+    // `burn` runs 0 (lit at the tip) to 1 (reached the powder), scheduled
+    // across the bomb's whole REMAINING life — the fall plus the fuse — so the
+    // flame arrives at the ball on the frame it detonates. A fuse that burns
+    // at its own rate is a light on a stick: it tells you nothing about when,
+    // and the player learns to ignore it.
+    //
+    // `wickSpan` is that life at the moment of the drop, and `burn` is kept
+    // monotonic against it below — the target moves while the bomb falls, so
+    // the remaining time can grow, and a fuse that un-burns is worse than one
+    // that runs slightly early.
+    burn: 0,
+    wickSpan: Math.max(0.1, (bounds.surfaceY - (bundleCentre()?.y ?? (netTop + netBottom) * 0.5)) / Math.max(0.1, c.fallSpeed) + c.fuse),
+    sparkTimer: 0,
+    flame: null,
     level,
   });
+}
+
+// ---------------------------------------------------------------------------
+// THE BURNING WICK
+//
+// The bomb model carries its fuse as a polyline: tools/optimize-bomb.mjs
+// measures the wick's centreline out of the mesh and bakes it into the file,
+// assets.js converts it into the model's own space on load (see wickPath in
+// prepareModel), and createVisual hands each clone the same array. There is no
+// bone, no node and no locator in the source — a fuse is not something a
+// modeller rigs — so a measured path is the only thing that can be trusted to
+// still point at the wick after the model is re-exported or re-decimated.
+//
+// The flame is a CHILD of the bomb. That is the whole reason it costs nothing:
+// the bomb bobs, sails with the hull, scales with the size slider and is
+// oriented by the def's forward/up, and a child at a local coordinate inherits
+// every one of those for free. Parented, not tracked — see the note in
+// systems/eyeLights.js about a light that follows a bone by copying its world
+// position and lags it by exactly one frame.
+
+// One geometry for every flame ever. The MATERIAL is per bomb, because each
+// one flickers on its own phase and a shared material would make two bombs
+// gutter in lockstep — the same trap as fading one bubble and fading them all
+// (see the note on primitive assets in assets.js).
+let flameGeometry = null;
+
+function makeFlame(bomb) {
+  const w = CONFIG.bakalar.bomb.wick;
+  const path = bomb.mesh.userData?.wickPath;
+  if (!w?.enabled || !Array.isArray(path) || path.length < 2) return null;
+  flameGeometry ??= new THREE.SphereGeometry(1, 8, 6);
+  const mesh = new THREE.Mesh(flameGeometry, new THREE.MeshBasicMaterial({
+    color: new THREE.Color(w.flameColor),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  }));
+  mesh.renderOrder = 10;
+  // Its own flicker phase, so two bombs in the water are two fires.
+  mesh.userData.phase = Math.random() * Math.PI * 2;
+  bomb.mesh.add(mesh);
+  return mesh;
+}
+
+// Where the flame sits, in the bomb's LOCAL space, at burn 0..1.
+//
+// The path runs root -> tip (that is the order the optimizer measures it in,
+// and the direction it is documented as), so a fuse burning DOWN walks it
+// backwards: burn 0 is the last point, burn 1 the first. Getting this
+// backwards produces a flame that starts at the powder and travels out to the
+// tip, which looks like the bomb is charging up rather than counting down —
+// and reads as perfectly intentional to anyone who has not seen the other one.
+const _flameLocal = new THREE.Vector3();
+function flameAt(path, burn) {
+  const t = (1 - Math.min(1, Math.max(0, burn))) * (path.length - 1);
+  const i = Math.min(path.length - 2, Math.floor(t));
+  const f = t - i;
+  const a = path[i];
+  const b = path[i + 1];
+  return _flameLocal.set(
+    a[0] + (b[0] - a[0]) * f,
+    a[1] + (b[1] - a[1]) * f,
+    a[2] + (b[2] - a[2]) * f,
+  );
+}
+
+const _flameWorld = new THREE.Vector3();
+function updateWick(bomb, dt) {
+  const c = CONFIG.bakalar.bomb;
+  const w = c.wick;
+  const path = bomb.mesh.userData?.wickPath;
+  if (!w?.enabled || !Array.isArray(path) || path.length < 2) return;
+
+  bomb.flame ??= makeFlame(bomb);
+  if (!bomb.flame) return;
+
+  // MONOTONIC, against the life the wick was cut to. The bomb re-aims at the
+  // catch every frame while it falls and the catch is being hauled UP, so the
+  // remaining time can grow — and a fuse that visibly un-burns is worse than
+  // one that runs a little early.
+  const remain = bomb.armed
+    ? Math.max(0, bomb.fuse)
+    : (bomb.mesh.position.y - bomb.targetY) / Math.max(0.1, c.fallSpeed) + Math.max(0, bomb.fuse);
+  bomb.burn = Math.min(1, Math.max(bomb.burn, 1 - remain / bomb.wickSpan));
+
+  const p = flameAt(path, bomb.burn);
+  bomb.flame.position.copy(p);
+
+  // Gutter. Scale and colour together, because a flame that only changes size
+  // reads as a pulsing ball and one that only changes colour reads as a lamp
+  // on a dimmer.
+  const phase = Math.sin(clock * w.flicker + bomb.flame.userData.phase);
+  const lick = 1 + phase * w.flickerAmount;
+  // The flame is a child of the bomb, so it is already in the bomb's scaled
+  // space — flameSize is in the AUTHORED bomb's units and needs no correction
+  // for the size slider. It does need the local space's own scale undone,
+  // which the parent applies for us; nothing to do here beyond the radius.
+  bomb.flame.scale.setScalar(Math.max(0.01, w.flameSize * lick));
+  bomb.flame.material.color.set(w.flameColor)
+    .lerp(_hotColor.set(w.flameHot), Math.max(0, phase))
+    .multiplyScalar(w.flameGlow);
+
+  // EMBERS, on a timer rather than per frame, so the shower is the same
+  // density at 30fps and at 144. World space: the particle system is not in
+  // the bomb's hierarchy.
+  bomb.sparkTimer -= dt;
+  if (bomb.sparkTimer <= 0) {
+    bomb.sparkTimer = Math.max(0.01, w.emitEvery);
+    bomb.mesh.localToWorld(_flameWorld.copy(p));
+    emit('bombWick', _flameWorld.x, _flameWorld.y);
+  }
+}
+const _hotColor = new THREE.Color();
+
+// THE ARMING BLINK, across whatever the bomb currently IS.
+//
+// This used to write b.mesh.material.color, which worked exactly as long as
+// the bomb stayed the procedural sphere it shipped as: createVisual returns a
+// Mesh for a primitive and a GROUP for an uploaded model, and a Group has no
+// `.material`. The guard on that line meant an uploaded toon bomb simply
+// stopped blinking — no error, no warning, and the one tell that says the
+// thing is about to go off silently gone.
+//
+// Written through getAssetMaterials so both cases land, and per ASSET rather
+// than per bomb, because every clone shares the template's materials anyway
+// (see the same note in systems/emissivePulse.js) — two armed bombs blink in
+// unison, which is what a shared material can express and is the right read
+// for two of the same object on the same fuse.
+//
+// The resting colour is captured the first time it is touched and put back the
+// frame nothing is armed. Without the restore the bomb keeps whatever half of
+// the blink it died on, and every bomb dropped afterwards inherits it.
+// material -> what it looked like before any blink. Two fields because the
+// blink writes a different one depending on what the bomb IS; see below.
+const bombRest = new Map();
+let blinkOn = false;
+let blinkAny = false;
+
+function paintArmedBombs() {
+  const c = CONFIG.bakalar.bomb;
+  for (const m of getAssetMaterials('voicemailBomb')) {
+    if (!m?.color) continue;
+    if (!bombRest.has(m)) {
+      bombRest.set(m, { color: m.color.clone(), ei: m.emissiveIntensity ?? null });
+    }
+    const rest = bombRest.get(m);
+
+    // LIT MODEL: blink the GLOW, not the paint. Writing `color` on a textured
+    // MeshStandardMaterial multiplies the map, so the off-beat repaints the
+    // bomb's own art half as dark and the on-beat tints the rope orange — a
+    // bomb changing colour rather than a bomb flashing. The model already
+    // carries emissiveFromMap (see its def), so pushing emissiveIntensity
+    // lights it up wearing its own paint and drops it back to nothing, which
+    // is what a warning light does.
+    if (rest.ei != null) {
+      m.emissiveIntensity = blinkAny && blinkOn ? c.blinkGlow : rest.ei;
+      continue;
+    }
+
+    // UNLIT FALLBACK: the procedural sphere has no emissive at all, and its
+    // glow is colour magnitude (see the note on unlit materials in assets.js),
+    // so the colour write is the only channel there is.
+    if (blinkAny) m.color.set(blinkOn ? c.color : 0x2a2118);
+    else m.color.copy(rest.color);
+  }
 }
 
 // hooks: { onEnemyDamaged, onEnemyKilled, onBombBlast(x, y, radius), onChum(x, y) }
 function updateBombs(dt, scene, enemiesList, hooks) {
   const c = CONFIG.bakalar.bomb;
+  blinkOn = false;
+  blinkAny = false;
 
   for (let i = bombs.length - 1; i >= 0; i--) {
     const b = bombs[i];
@@ -340,7 +712,20 @@ function updateBombs(dt, scene, enemiesList, hooks) {
     b.mesh.position.x += b.vx * dt;
 
     if (!b.armed) {
+      // RE-AIMED AT THE BUNDLE, every frame it is still falling. The catch is
+      // hauled upward the whole time the bomb falls downward, so a target
+      // fixed at drop time is a target the fish have left. Clamped inside the
+      // net the bomb was dropped into: a bundle that has already reached the
+      // hull would otherwise pull the bomb back up out of the water.
+      const bundle = bundleCentre();
+      if (bundle) {
+        b.targetY = Math.min(b.netTop - 0.4, Math.max(b.netBottom, bundle.y));
+      }
       b.mesh.position.y -= c.fallSpeed * dt;
+      // Armed when it MEETS the bundle, from either direction — the fish are
+      // rising into it as often as it is falling onto them, and a test that
+      // only fires on the way down leaves a bomb hanging above a catch that
+      // has already passed it.
       if (b.mesh.position.y <= b.targetY) {
         b.mesh.position.y = b.targetY;
         b.armed = true;
@@ -349,9 +734,13 @@ function updateBombs(dt, scene, enemiesList, hooks) {
       b.fuse -= dt;
       // Blink faster as the fuse runs out — the tell that says "now".
       const urgency = 1 + (1 - Math.max(0, b.fuse) / Math.max(1e-3, c.fuse)) * 2;
-      const on = Math.sin(clock * c.blinkSpeed * urgency) > 0;
-      if (b.mesh.material?.color) b.mesh.material.color.set(on ? c.color : 0x2a2118);
+      blinkOn ||= Math.sin(clock * c.blinkSpeed * urgency) > 0;
+      blinkAny = true;
     }
+
+    // After the fall and the fuse, so the flame is scheduled against the time
+    // that is actually left rather than against last frame's.
+    updateWick(b, dt);
 
     if (!b.armed || b.fuse > 0) continue;
 
@@ -362,6 +751,15 @@ function updateBombs(dt, scene, enemiesList, hooks) {
     let kills = 0;
 
     hooks.onBombBlast?.(x, y, s.radius);
+    // ...and the wick goes with it. The flame is a child of the bomb mesh, so
+    // scene.remove below takes it off screen — but the material is per bomb
+    // (each flickers on its own phase) and nothing else will ever free it.
+    b.flame?.material.dispose();
+    // The net is what the bomb went off INSIDE. Its own radius, not the
+    // blast's: the shockwave reaches across the arena and the twine only has
+    // the net's width to move in, so feeding it s.radius punched every node at
+    // once and the mesh simply jumped sideways instead of holing.
+    kickBakalarNet(x, y, CONFIG.bakalar.net.blastKick, s.radius * 0.5);
 
     for (let j = enemiesList.length - 1; j >= 0; j--) {
       const e = enemiesList[j];
@@ -422,13 +820,44 @@ function updateBombs(dt, scene, enemiesList, hooks) {
     scene.remove(b.mesh);
     bombs.splice(i, 1);
   }
+
+  // After the loop, so a bomb that detonated this frame has already been
+  // removed and cannot leave the shared material stuck mid-blink.
+  paintArmedBombs();
 }
 
-function netGeometry(level) {
+/**
+ * The net's mouth and reach at this level.
+ *
+ * WIDTH IS THE HULL'S and does not move with the stack. A trawler drags a net
+ * it can physically hold, and a mouth wider than the boat above it reads as a
+ * wall being towed rather than as a net being dragged — so levelling makes the
+ * net DEEPER, which is the axis where more is still believable and where the
+ * extra volume actually meets fish (the water below the boat is where they
+ * are; the water beside it is where the boat already is).
+ *
+ * `netWidthFraction` is a trim on the measured hull, not a size: at 1 the net
+ * spans the hull exactly, and below it the mouth sits inside the gunwales.
+ *
+ * Exported because tools/ability-smoke.mjs has to place a fish at the rim of
+ * the net and cannot re-derive it — the width comes from a MEASUREMENT of the
+ * built boat, so the harness's answer and the game's would differ by whatever
+ * the procedural fallback's box is.
+ */
+export function netGeometry(level) {
   const c = CONFIG.bakalar;
+  // CLAMPED AT THE SEABED, because depth is the growth axis now and an
+  // unbounded one runs out of ocean: the water column is 40 units and a maxed
+  // stack asks for nearly 35 of it, so a single retune of `netDepthPerLevel`
+  // puts the foot of the net through the floor. Twine drawn inside the seabed
+  // is a bug at any tuning, and the fish are not down there either.
+  //
+  // Against the seabed's TOP rather than bounds.bottom: the floor has visible
+  // height (SEABED_HEIGHT) and the net should stop on it, not in it.
+  const room = Math.max(2, bounds.surfaceY - seabedTopY() - (c.netFloorGap ?? 0));
   return {
-    halfWidth: (c.netWidth + c.netWidthPerLevel * (level - 1)) * 0.5,
-    depth: c.netDepth + c.netDepthPerLevel * (level - 1),
+    halfWidth: Math.max(0.5, hullWidth * (c.netWidthFraction ?? 1)) * 0.5,
+    depth: Math.min(room, c.netDepth + c.netDepthPerLevel * (level - 1)),
   };
 }
 
@@ -440,7 +869,7 @@ function launch(level) {
   // frame the boat appears with an empty one.
   bombTimer = bombStats(level).interval;
   dir = Math.random() < 0.5 ? 1 : -1;
-  const { halfWidth } = netGeometry(level);
+  const { halfWidth, depth } = netGeometry(level);
   // Start far enough out that the whole net is offscreen, so fish don't
   // materialise mid-haul at the arena edge.
   const margin = halfWidth + c.hullRadius + 2;
@@ -451,6 +880,13 @@ function launch(level) {
   snapSide(boat, dir);
   boat.visible = true;
   netMesh.visible = true;
+  // Seat the twine on the frame the boat appears, not on the first update:
+  // otherwise the net unfolds out of wherever the last sailing abandoned it,
+  // which for a boat entering from the opposite side is a lattice stretched
+  // across the whole arena for one visible frame.
+  const netTop = boat.position.y;
+  setBakalarNetVisible(CONFIG.bakalar.net.enabled);
+  seatBakalarNet(boat.position.x - dir * c.netTrail, netTop, halfWidth, depth);
 }
 
 // Release everything without collecting it — used when the boat leaves with
@@ -467,9 +903,14 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
 
   const active = level > 0 && CONFIG.bakalar.enabled;
   if (!active) {
-    if (sailing) { releaseAll(); sailing = false; boat.visible = false; netMesh.visible = false; }
-    for (const b of bombs) scene.remove(b.mesh);
+    if (sailing) { releaseAll(); sailing = false; boat.visible = false; netMesh.visible = false; setBakalarNetVisible(false); }
+    for (const b of bombs) { b.flame?.material.dispose(); scene.remove(b.mesh); }
     bombs.length = 0;
+    // Nothing is armed any more, and the blink writes a SHARED material — left
+    // unpainted it would keep whatever half of the flash the last bomb died on
+    // for the rest of the run.
+    blinkOn = false; blinkAny = false;
+    paintArmedBombs();
     return;
   }
 
@@ -514,19 +955,41 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
   applyBeamSettings();
 
   // --- catch: anything inside the net volume that isn't already held --------
+  const power = netPower(level);
+  const cc = CONFIG.bakalar.catch;
   for (const e of enemiesList) {
     if (caught.some((h) => h.enemy === e)) continue;
-    // The net passes over a boss. Refused at the CATCH rather than at the haul
-    // below, because a boss in `caught` would be dragged toward the surface
-    // with its steering intact — a worse picture than not catching it, and one
-    // where the net visibly holds something that is plainly not held. See
-    // systems/control.js.
-    if (!canHold(e)) continue;
+    // Bosses, scenery and anything whale-sized. Refused at the CATCH rather
+    // than at the haul below, because one of them sitting in `caught` would be
+    // dragged toward the surface with its steering intact — a worse picture
+    // than not catching it, and one where the net visibly holds something that
+    // is plainly not held. See netAccepts.
+    if (!netAccepts(e)) continue;
     const ex = e.mesh.position.x;
     const ey = e.mesh.position.y;
     if (Math.abs(ex - netCenterX) > halfWidth + e.radius) continue;
     if (ey > netTop + e.radius || ey < netBottom - e.radius) continue;
+
+    // IN THE NET IS NOT CAUGHT. Grip accumulates while the creature is inside
+    // the mouth, at the net's power over its own resistance — so a sardine is
+    // taken on the frame it touches the twine and a shark has to be dragged
+    // through the whole sweep, which it usually out-swims.
+    //
+    // Timestamped rather than decayed. The alternative is bleeding grip off
+    // every enemy in the water every frame to catch the ones that got away,
+    // which is a whole-list pass to maintain a number that only matters to
+    // whatever is standing in a 9-unit rectangle. A creature that has been out
+    // of the net longer than `gripReset` simply starts again.
+    if (clock - (e.netGripAt ?? -Infinity) > cc.gripReset) e.netGrip = 0;
+    e.netGripAt = clock;
+    e.netGrip = (e.netGrip ?? 0) + (power / netResistance(e)) * dt / Math.max(0.01, cc.grip);
+    if (e.netGrip < 1) continue;
+
     caught.push({ enemy: e, offsetX: ex - netCenterX });
+    // A jolt where it went in. The pocket the creature makes is a steady
+    // force (see the loads below) and steady forces have no MOMENT — without
+    // this the mesh eases open around a fish that arrived at full speed.
+    kickBakalarNet(ex, ey, CONFIG.bakalar.net.catchKick * (e.radius ?? 1), (e.radius ?? 1) * 3);
   }
 
   // --- drop a voicemail bomb into the loaded net ----------------------------
@@ -601,6 +1064,37 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
     }
   }
 
+  // --- the twine ------------------------------------------------------------
+  // Stepped LAST, after the haul has moved the catch: the net is a picture of
+  // where the fish are, and running it first would draw the pockets one frame
+  // behind the creatures making them — which on a haul travelling upward at
+  // speed reads as the fish escaping through their own net.
+  //
+  // Mass is the creature's collision radius. Not def.radius x sizeMul, which
+  // is the right number for anything that means MASS elsewhere: here the
+  // pocket has to line up with the BODY the player can see being held, and the
+  // hitbox is what the catch test above used to decide it was in the net at
+  // all. A pocket that disagreed with the catch would hold fish through gaps.
+  if (CONFIG.bakalar.net.enabled) {
+    setBakalarNetVisible(true);
+    netLoadCount = 0;
+    for (const h of caught) {
+      pushNetLoad(h.enemy.mesh.position.x, h.enemy.mesh.position.y, h.enemy.radius ?? 1);
+    }
+    // Bombs are in the net too, and the one thing in it with a visible weight
+    // the player is waiting on. A bomb that fell through the mesh without
+    // touching it is the whole illusion gone.
+    for (const b of bombs) {
+      if (Math.abs(b.mesh.position.x - netCenterX) > halfWidth) continue;
+      pushNetLoad(b.mesh.position.x, b.mesh.position.y, c.bomb.size);
+    }
+    // The COUNT, not the array's length — the pool keeps its high-water mark,
+    // so netLoads is longer than the catch and the tail is last frame's fish.
+    updateBakalarNet(dt, { centerX: netCenterX, top: netTop, halfWidth, depth }, netLoads, netLoadCount);
+  } else {
+    setBakalarNetVisible(false);
+  }
+
   // --- sailed off the far side ---------------------------------------------
   const margin = halfWidth + c.hullRadius + 3;
   if (boat.position.x < bounds.left - margin || boat.position.x > bounds.right + margin) {
@@ -608,6 +1102,7 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
     sailing = false;
     boat.visible = false;
     netMesh.visible = false;
+    setBakalarNetVisible(false);
     spawnTimer = randomBetween(c.spawnMin, c.spawnMax);
   }
 }

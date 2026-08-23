@@ -30,7 +30,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
-import { installModel, createVisual, ASSETS } from '../path/src/assets.js';
+import { installModel, createVisual, ASSETS, getAssetMaterials } from '../path/src/assets.js';
 import { enemies } from '../path/src/entities/enemies.js';
 import { boats } from '../path/src/systems/boats.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab } from '../path/src/systems/octoGrab.js';
@@ -40,7 +40,10 @@ import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } fro
 import { eelCfg } from '../path/src/systems/eel.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, trapSeconds } from '../path/src/systems/beluga.js';
 import { weatherState } from '../path/src/systems/weather.js';
-import { createBakalarBoat, updateBakalar, resetBakalar, suctionAt, __beamShader } from '../path/src/systems/bakalar.js';
+import {
+  createBakalarBoat, updateBakalar, resetBakalar, suctionAt, netGeometry,
+  netAccepts, ensnareSeconds, __beamShader,
+} from '../path/src/systems/bakalar.js';
 import {
   fireMusselBarrage, updateMusselVolley, resetMusselVolley,
   barrageCount, barrageDamage, barrageShells, chargePips, pendingShells,
@@ -51,7 +54,7 @@ import {
 } from '../path/src/systems/control.js';
 import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpStats, harpNoteCount } from '../path/src/systems/harp.js';
 import { installNoteGlyphs } from '../path/src/systems/noteStorm.js';
-import { bounds } from '../path/src/arena.js';
+import { bounds, seabedTopY } from '../path/src/arena.js';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -340,6 +343,200 @@ check('the blast damages the catch', bombDamage > 0, `${bombDamage} damage`);
 // of one ability competing for the same fish is what this split avoids.
 check('the blast pays out chum', chumBits > 0, `${chumBits} bit(s)`);
 
+// WHAT THE BLAST LEAVES IN THE WATER — the same mass every other explosion in
+// the game leaves, rather than a look of its own.
+//
+// Checked by NAME because the failure is silent at both ends. An event whose
+// `goo` points at nothing simply fires no second burst; an emitter whose group
+// is not in CONFIG.fx.goo.groups falls back to a SPRITE burst (see the warn in
+// entities/particles.js), which draws loose dots where a fused mass should be
+// and reads as a tuning problem rather than as a typo.
+{
+  const ev = CONFIG.feedback.bakalarBombBlast;
+  const em = CONFIG.emitters[ev?.goo];
+  check('the bomb blast leaves goo, not only spray', !!ev?.goo, ev?.goo ?? 'none');
+  check('...whose emitter exists', !!em, ev?.goo);
+  check('...and it is the shared boom surface, not a private one',
+    !!em?.goo && !!CONFIG.fx?.goo?.groups?.[em.goo], `group "${em?.goo}"`);
+  // The one that says SHARED rather than "a copy with a shared-sounding name":
+  // something else in the game has to be firing the same emitter.
+  const alsoUses = Object.entries(CONFIG.feedback)
+    .filter(([k, v]) => k !== 'bakalarBombBlast' && v?.goo === ev?.goo).map(([k]) => k);
+  check('...and something else fires it too', alsoUses.length > 0, alsoUses.join(', '));
+}
+
+// THE ARMING BLINK, and the reason it is checked here rather than looked at.
+//
+// It used to be written straight onto b.mesh.material.color, which is a field
+// that exists only while the bomb is the procedural sphere it shipped as:
+// createVisual returns a Mesh for a primitive and a GROUP for an uploaded
+// model, and a Group has no `.material`. Guarded as it was, an uploaded toon
+// bomb simply stopped blinking — no error, and the one tell that says the
+// thing is about to go off gone with it.
+//
+// Two halves, and the second is the one that bites. The blink writes a SHARED
+// material (every clone of an asset shares the template's), so a bomb that
+// detonates mid-flash leaves the colour stuck for every bomb after it and for
+// anything else wearing that material.
+{
+  const mats = getAssetMaterials('voicemailBomb').filter((m) => m?.color);
+  check('the bomb has a material the blink can reach', mats.length > 0,
+    `${mats.length} material(s)`);
+  const rest = mats.map((m) => m.color.getHex());
+
+  // Restock: the run above hauled and blew up the whole school, and a boat
+  // sailing through empty water never drops a bomb at all (bomb.minCatch), so
+  // without this the loop below simply times out and reports "no blink" for a
+  // blink that works.
+  enemies.length = 0;
+  for (let i = 0; i < 8; i++) enemies.push(fakeEnemy(-20 + i * 5, bounds.surfaceY - 3, 0.5, 2000));
+
+  // Run until something is armed, then look.
+  let sawBlink = false;
+  for (let i = 0; i < 60 * 120 && !sawBlink; i++) {
+    updateBakalar(dt, scene, 3, enemies, { onHauled: () => {}, onChum: () => {}, onEnemyDamaged: () => {}, onEnemyKilled: () => {} });
+    if (mats.some((m, k) => m.color.getHex() !== rest[k])) sawBlink = true;
+  }
+  check('an armed bomb actually blinks', sawBlink);
+
+  resetBakalar(scene);
+  check('...and the shared material is put back when nothing is armed',
+    mats.every((m, k) => m.color.getHex() === rest[k]),
+    mats.map((m) => '#' + m.color.getHexString()).join(' '));
+}
+
+// --- what the net will and will not take ------------------------------------
+// The net used to take everything that was not a boss. It is a curve now:
+// resistance goes as the square of a creature's radius against the net's
+// power, with two hard refusals above it (scenery, and anything whale-sized).
+//
+// Every check here is a RATIO or a REFUSAL rather than "did it catch
+// something", because the failure mode this replaced passes that test
+// perfectly — a net that takes everything catches the sardine too.
+section('BAKALAR — WHAT THE NET TAKES');
+{
+  const c = CONFIG.bakalar.catch;
+  const bombWas = CONFIG.bakalar.bomb.enabled;
+  CONFIG.bakalar.bomb.enabled = false; // the blast is a different question
+
+  // How long one sailing takes to haul a creature of this radius out, or null
+  // if it never does. Run per creature so nothing competes for the net.
+  function secondsToHaul(radius, level, { invincible = false, isBoss = false } = {}, limit = 240) {
+    resetBakalar(scene);
+    enemies.length = 0;
+    const e = fakeEnemy(0, bounds.surfaceY - 3, radius, 1e6);
+    e.invincible = invincible;
+    e.isBoss = isBoss;
+    enemies.push(e);
+    let hauled = null;
+    for (let i = 0; i < 60 * limit && hauled === null; i++) {
+      // Re-seated every frame: a fish that is not caught still gets shoved by
+      // nothing here, but a HAULED one is dragged, and the point of the clock
+      // is when it was taken rather than how fast it rose.
+      updateBakalar(dt, scene, level, enemies, { onHauled: () => { hauled = i * dt; } });
+    }
+    return hauled;
+  }
+
+  // THE TWO REFUSALS. Long runs, because "it did not happen in one pass" is
+  // not the claim — the claim is that it never happens.
+  check('a turtle is never netted, however long the boat sails',
+    secondsToHaul(1, 8, { invincible: true }) === null,
+    'invincible scenery, and the haul is the one remover that deals no damage');
+  check('nothing whale-sized is netted either',
+    secondsToHaul(c.maxPrey + 0.5, 8) === null,
+    `radius ${(c.maxPrey + 0.5).toFixed(1)} against a ceiling of ${c.maxPrey}`);
+  check('...and a boss still is not', secondsToHaul(1, 8, { isBoss: true }) === null);
+  // The ceiling has to sit ABOVE the biggest ordinary body or it is a boss
+  // rule wearing a size rule's clothes.
+  check('the ceiling still clears the biggest ordinary creature',
+    c.maxPrey > 2.2, `maxPrey ${c.maxPrey} vs the megalodon's 2.2`);
+
+  // THE CURVE, read off the mechanic rather than off a stopwatch.
+  //
+  // The first version of this timed two full hauls and compared them, and it
+  // was measuring the wrong thing entirely: a sailing is 14-22 seconds of
+  // SPAWN WAIT rolled at random plus a sweep up to the hull, and both dwarf
+  // the fraction of a second the grip actually takes. It reported 21s against
+  // 17s for fish half a size apart and called the curve inverted.
+  const grip = (r, level) => ensnareSeconds({ radius: r }, level);
+  const ratio = grip(0.8, 8) / grip(0.4, 8);
+  check('resistance goes as the square of the radius, exactly',
+    Math.abs(ratio - 2 ** c.massExponent) < 1e-6,
+    `doubling the radius is ${ratio.toFixed(2)}x the work, want ${(2 ** c.massExponent).toFixed(2)}x`);
+  check('...so a sardine is ensnared on contact and a shark is not',
+    grip(0.4, 1) < 0.25 && grip(c.refPrey, 1) > 1,
+    `${grip(0.4, 1).toFixed(2)}s at r 0.4 vs ${grip(c.refPrey, 1).toFixed(2)}s at r ${c.refPrey}`);
+
+  // A SHARK HAS TO GET AWAY AT ONE STACK, or the curve is decoration. The
+  // number that decides it is not the grip alone: it is the grip against how
+  // long the mouth takes to pass over a fish, which is the hull's width over
+  // the sailing speed. Asserted against that rather than against a constant,
+  // so retuning either one cannot quietly make the boat an apex-catcher.
+  const dwell = netGeometry(1).halfWidth * 2 / CONFIG.bakalar.speed;
+  check('a shark out-lasts the mouth at one stack', grip(c.refPrey, 1) > dwell,
+    `${grip(c.refPrey, 1).toFixed(2)}s of grip against ${dwell.toFixed(2)}s of sweep`);
+  check('...and does not at a full stack', grip(c.refPrey, 8) < dwell,
+    `${grip(c.refPrey, 8).toFixed(2)}s of grip against ${dwell.toFixed(2)}s of sweep`);
+
+  check('the two refusals are refusals, not very large numbers',
+    ensnareSeconds({ radius: 1, invincible: true }, 8) === Infinity
+    && ensnareSeconds({ radius: c.maxPrey + 0.5 }, 8) === Infinity);
+
+  // LEVELLING IS POWER, end to end.
+  const atOne = secondsToHaul(c.refPrey, 1, {}, 90);
+  const atEight = secondsToHaul(c.refPrey, 8, {}, 90);
+  check('a full stack takes the calibration fish faster than a fresh one',
+    atEight !== null && (atOne === null || atEight < atOne),
+    `${atOne === null ? 'never' : atOne.toFixed(1) + 's'} at one stack, ${atEight === null ? 'never' : atEight.toFixed(1) + 's'} at eight`);
+
+  // ...AND A SCHOOL IS STILL SWEPT UP. The whole point of the ability. If the
+  // curve made small fish anything other than trivial it has been mistuned
+  // into a boss-catcher.
+  resetBakalar(scene);
+  enemies.length = 0;
+  for (let i = 0; i < 10; i++) enemies.push(fakeEnemy(-4 + i * 0.9, bounds.surfaceY - 3, 0.4, 1e6));
+  let swept = 0;
+  for (let i = 0; i < 60 * 120 && swept < 10; i++) {
+    updateBakalar(dt, scene, 1, enemies, { onHauled: () => { swept++; } });
+  }
+  check('a school is still swept up whole at one stack', swept === 10, `${swept} of 10`);
+
+  CONFIG.bakalar.bomb.enabled = bombWas;
+  resetBakalar(scene);
+  enemies.length = 0;
+}
+
+// --- the net is the boat's width --------------------------------------------
+section('BAKALAR — THE NET IS THE BOAT');
+{
+  // Levelling buys DEPTH and nothing else. It used to buy width too, and by
+  // eight stacks the mouth was 16.8 units against a 9-unit hull — a net nearly
+  // twice the width of the thing towing it.
+  const one = netGeometry(1);
+  const eight = netGeometry(8);
+  check('the mouth does not widen with the stack',
+    Math.abs(one.halfWidth - eight.halfWidth) < 1e-6,
+    `${(one.halfWidth * 2).toFixed(2)} wide at both`);
+  check('...but it does get deeper', eight.depth > one.depth * 1.4,
+    `${one.depth.toFixed(1)} -> ${eight.depth.toFixed(1)}`);
+  // ...and stops at the seabed. Depth is the growth axis now and the ocean is
+  // finite: without the clamp one retune of netDepthPerLevel drags the twine
+  // through the floor, and twine inside the seabed looks like a z-fighting
+  // glitch rather than like a number that needs changing.
+  const floor = bounds.surfaceY - seabedTopY();
+  check('the net never reaches through the seabed', eight.depth <= floor,
+    `${eight.depth.toFixed(1)} deep in a ${floor.toFixed(1)}-unit water column`);
+  // Against the HULL, measured off the built boat rather than off the asset
+  // entry — in this harness that is the procedural fallback, which is the
+  // point: the rule holds whatever the boat currently is.
+  const hull = new THREE.Box3().setFromObject(createVisual('bakalarBoat'));
+  const hullW = hull.getSize(new THREE.Vector3()).x;
+  check('the net is never wider than the boat towing it',
+    eight.halfWidth * 2 <= hullW + 1e-6,
+    `net ${(eight.halfWidth * 2).toFixed(2)} vs hull ${hullW.toFixed(2)}`);
+}
+
 // --- the tractor beam -------------------------------------------------------
 // Two things worth checking that nothing else can.
 //
@@ -403,7 +600,10 @@ section('BAKALAR TRACTOR BEAM');
   // End to end: everything the net sweeps up still lands, edges included.
   resetBakalar(scene);
   enemies.length = 0;
-  const wide = CONFIG.bakalar.netWidth * 0.5;
+  // Asked for rather than re-derived: the net's mouth is the hull's MEASURED
+  // width now, so a harness that multiplied a config number would be placing
+  // its rim fish against a net that no longer exists.
+  const wide = netGeometry(1).halfWidth;
   // One dead on the axis, one right out at the rim — the two extremes of the
   // falloff, which both have to end up hauled.
   enemies.push(fakeEnemy(0, bounds.surfaceY - 3, 0.5, 500));

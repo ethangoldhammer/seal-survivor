@@ -1,6 +1,6 @@
-id,text,enabled,weight
-cause,cause of death:,TRUE,3
-beatdown,beat down by:,TRUE,1
-killd,kill'd by:,TRUE,1
-via,defeated via:,TRUE,1
-byway,taken down by way of:,TRUE,1
+id,text,review,enabled,weight
+cause,cause of death:,TRUE,TRUE,3
+beatdown,beat down by:,TRUE,TRUE,1
+killd,kill'd by:,TRUE,TRUE,1
+via,defeated via:,TRUE,TRUE,1
+byway,taken down by way of:,TRUE,TRUE,1

@@ -41,7 +41,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../../path/src/config.js';
 import { createPost } from '../../path/src/systems/post.js';
-import { createVisual, applyBubbleShellSettings } from '../../path/src/assets.js';
+import { createVisual, applyBubbleShellSettings, preloadAssets, applySavedAssetLooks } from '../../path/src/assets.js';
 import { initBubble, updateBubblePhysics, bubbleRadius } from '../../path/src/systems/oxygenBubble.js';
 import { createAttractiveClam, updateAttractiveClam } from '../../path/src/systems/attractiveClam.js';
 import { createCoralOrb, updateCoralOrb } from '../../path/src/systems/coralOrb.js';
@@ -287,6 +287,20 @@ function crossSection(y = 0.5) {
 // ===========================================================================
 // THE BUBBLE
 // ===========================================================================
+// THE PAGE HAS TO WEAR THE SAVED LOOK, and for a long time it did not. Every
+// bubble on this page was drawn at the asset's authored colour and a glow of
+// 1, while the shipped one carries a Look-panel tint and — for bubbleOrb — a
+// glow of 5.4, which multiplies through the film's rim before rimBoost ever
+// touches it. So this page under-reported the bubble's brightness by more than
+// five times, silently: it rendered, it was the right shape, it was a
+// plausible bubble, and it was not the one in the game. The same trap
+// menu-screen.js carries a note about.
+//
+// preloadAssets first, because the film's painted layer is read off the seabed
+// bubble prop (harvestFilmPaint) and there is nothing to read until the models
+// are in. Without it the paint slider moves and nothing happens.
+await preloadAssets();
+applySavedAssetLooks();
 applyBubbleShellSettings();
 const bubble = createVisual('bubbleOrb');
 scene.add(bubble);

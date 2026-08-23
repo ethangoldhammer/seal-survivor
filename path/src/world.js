@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { resolutionScale } from './systems/settings.js';
 import { createAdaptiveScale } from './systems/adaptiveScale.js';
-import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT, SEABED_Z, WATER_FILL_Z } from './arena.js';
+import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT, SEABED_Z, WATER_FILL_Z, FLOOR_OVERSCAN } from './arena.js';
 import { createGrid } from './systems/grid.js';
 import { createConstellations } from './systems/constellations.js';
 import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime, liveCaustics } from './systems/water.js';
@@ -19,12 +19,9 @@ import { createWallRocks, shoreOverscan } from './systems/wallRocks.js';
 import { refreshFlash, skyLight } from './systems/daylight.js';
 import { updateCineCamera, cineLens, cineSubject, cineEnabled } from './systems/cineCamera.js';
 
-// How far below the seabed the frame may travel, in world units, and equally
-// how far the seabed strip is extended down to meet it. One constant for both
-// because they are the same number seen from two sides: let the camera past
-// what the backdrop covers and you see the bare scene background under the
-// ocean floor. Only the death dive's framing ever spends it (see focusCamera).
-const FLOOR_OVERSCAN = 7;
+// FLOOR_OVERSCAN moved to arena.js — updateBounds clamps the field-of-view
+// setting against it and cannot import this file. Only the death dive's framing
+// ever spends it here (see focusCamera); the seabed skirt is what pays for it.
 
 // Vertices per world unit along the drawn water line, taken from what the
 // frame used to get (140 across 92.4 units) so a default-width arena builds
@@ -386,17 +383,39 @@ export function createWorld(container) {
     }
   }
 
-  function resize() {
-    const aspect = window.innerWidth / window.innerHeight;
-    updateBounds(aspect);
-    // The frustum is the FRAME, not the arena. They are the same rectangle at
-    // arena.widthScale / airScale 1; above that the walls and the ceiling sit
-    // outside the frustum and the gap is what the camera is free to pan
-    // across (see clampFocus). The floor is shared — it is both.
+  // The arena the backdrop, grid, stars and shore were last built for. Empty
+  // rather than null so the first resize() — the one that builds the world at
+  // startup — can never match it, whatever the window happens to be.
+  let arenaSig = '';
+  function arenaSignature() {
+    // The ARENA only. frameWidth is deliberately absent: it is the one number
+    // a window resize is allowed to move without anything being rebuilt, which
+    // is the whole point of the split below.
+    // frameTop is in here and frameWidth is not, and the asymmetry is exact:
+    // the sky plane's gradient is normalised against frameTop (skyPlaneMetrics)
+    // so a field-of-view change really does need a rebuild, while frameWidth
+    // reaches nothing in the backdrop and moves on every single window resize —
+    // including it would defeat the whole point of the cheap path below.
+    return `${bounds.left},${bounds.right},${bounds.top},${bounds.bottom},${bounds.surfaceY}`
+      + `,${bounds.frameTop}`
+      + `,${CONFIG.arena.waveAmplitude},${CONFIG.weather?.sea?.amp ?? 1}`
+      + `,${CONFIG.arena.showDepthLines},${CONFIG.arena.depthLineSpacing}`;
+  }
+
+  /** The frustum IS the frame, and the frame is the only thing a window owns. */
+  function applyFrustum() {
+    // They are the same rectangle at arena.widthScale / airScale 1; above that
+    // the walls and the ceiling sit outside the frustum and the gap is what
+    // the camera is free to pan across (see clampFocus). The floor is shared —
+    // it is both.
     camera.right = bounds.frameWidth / 2;
     camera.left = -camera.right;
     camera.top = bounds.frameTop;
-    camera.bottom = bounds.bottom;
+    // frameBottom, NOT bounds.bottom. They are the same line at the default
+    // field of view and only the fov setting pulls them apart — but reading the
+    // floor here would mean a widened view grew upward only, sliding the water
+    // line down the screen instead of showing more of the water.
+    camera.bottom = bounds.frameBottom;
     camera.near = -100;
     camera.far = 200;
     camera.updateProjectionMatrix();
@@ -406,12 +425,56 @@ export function createWorld(container) {
     // dragging a window between displays changes devicePixelRatio, and the cap
     // has to be re-applied to a ratio that moved.
     applyRenderScale();
+  }
+
+  /**
+   * THE FULL REBUILD. Every path that can move the walls comes through here —
+   * startup, and the `arena` branch of onTuningChanged in main.js, which is how
+   * the tuner applies a change to viewHeight, widthScale, the wave amplitude
+   * the water plane is sized for, or the depth-line spacing.
+   */
+  function resize() {
+    updateBounds(window.innerWidth / window.innerHeight);
+    applyFrustum();
+    arenaSig = arenaSignature();
     buildBackdrop();
     grid.build();
     // Both are generated across the arena's own bounds, so a resize is a
     // rebuild — same as the grid, and for the same reason.
     constellations.build();
     wallRocks.build();
+  }
+
+  /**
+   * THE WINDOW-RESIZE PATH, which is now a much smaller thing than a resize.
+   *
+   * Since the walls stopped being a function of the window's aspect (see
+   * updateBounds in arena.js), everything in the backdrop group is invariant
+   * under a window resize: the planes are `bounds.width * 1.2` wide and hung
+   * off frameTop, and the grid, the star field and the shore all walk the
+   * arena's own extents. Only the frustum and the drawing buffer actually move.
+   *
+   * It used to be the opposite, and violently. An orientation flip moved the
+   * walls by 4.7x, so the game disposed and regenerated the entire backdrop, a
+   * full-width grid, the constellation field and every shore boulder — mid-run,
+   * on a phone, on precisely the frame a player is least able to absorb a
+   * hitch. Worse than the cost: the seabed plant bed lives in world.scene
+   * rather than the backdrop group (see scatterSeabed in main.js) and is NOT
+   * re-seated by this path, so a flip that narrowed the arena left plants
+   * standing outside the new walls.
+   *
+   * MEASURED AFTER updateBounds, not before, and that ordering is the whole
+   * correctness of it. The signature is read off `bounds`, which is stale until
+   * updateBounds has run — and there is still one case where a window really
+   * does move the walls: a frame wider than the arena pushes them out to meet
+   * it (the ultrawide clamp in updateBounds), so a drag onto a very wide
+   * display has to fall through to the full rebuild. Checking first would miss
+   * it and leave the shore drawn inside the shot.
+   */
+  function onWindowResize() {
+    updateBounds(window.innerWidth / window.innerHeight);
+    if (arenaSignature() !== arenaSig) { resize(); return; }
+    applyFrustum();
   }
 
   // Set by main.js: what a flash SOUNDS like and what a strike DOES are
@@ -788,7 +851,7 @@ export function createWorld(container) {
   }
 
   resize();
-  window.addEventListener('resize', resize);
+  window.addEventListener('resize', onWindowResize);
 
   // `halfExtents` goes out for the same reason the cinematic rig is handed it:
   // anything that has to decide whether two things FIT in the shot needs the

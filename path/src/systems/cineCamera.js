@@ -1,4 +1,6 @@
 import { CONFIG } from '../config.js';
+import { bounds } from '../arena.js';
+import { fovScale } from './settings.js';
 
 // The CINEMATIC CAMERA — an opt-in second camera brain, sitting alongside the
 // plain fixed frame that has always shipped. `CONFIG.cinecam.enabled` is the
@@ -149,6 +151,64 @@ export function cineEnabled() {
   return !!cfg().enabled;
 }
 
+// ---------------------------------------------------------------------------
+// THE ASPECT TERM — how a zoom somebody typed on a 16:9 screen is read on a
+// screen that is not 16:9.
+//
+// Now that the arena no longer resizes itself to the window (see updateBounds
+// in arena.js), the window's shape has to be answered somewhere, and this is
+// the honest place: every authored zoom in config.js means "show this much
+// ocean", and it was written down as a multiplier because the frame it was
+// multiplying was always the same shape. It no longer is.
+//
+// So the rule is stated the way it was always meant: THE CAMERA SHOWS A
+// CONSTANT WIDTH OF OCEAN. `frameWidth / referenceFrameWidth` is exactly the
+// correction that holds `frameWidth / zoom` fixed, and it is 1.0 at the
+// reference aspect — so a 16:9 screen, which is every screen the game was
+// tuned on and every aspect the harnesses in tools/ pass to updateBounds, gets
+// the number that was typed and not a hair more.
+//
+// WHAT IT CAN AND CANNOT DO, because the asymmetry is the whole story and it
+// is easy to expect the wrong thing here. Zoom only ever punches IN — at 1 the
+// frustum already IS the frame, and there is no such thing as zooming out past
+// the display. So:
+//
+//   · A WIDE window (ultrawide, landscape phone) is corrected properly. It
+//     would otherwise show more and more ocean for free, which on a 2.2 phone
+//     was 93 units against the authored 75.
+//   · A NARROW window (any phone in portrait) asks for a zoom below 1, gets
+//     clamped at 1, and keeps the ~24 units its frustum can hold. It recovers
+//     the 24% the base zoom of 1.24 was taking, and that is the end of what is
+//     available: a portrait frustum is 24 units wide because it is 24 units
+//     wide. Closing the rest would mean punching landscape down to a keyhole,
+//     which is not a fix, it is the same unfairness pointed the other way.
+//
+// The narrow case is therefore a VIEW difference and not a rules difference,
+// which is the distinction the arena change exists to draw. A portrait player
+// swims in the same ocean, hits the same walls at the same coordinates, and
+// meets creatures that spawned the same distance out — they just see less of
+// it at once, and the rig's lookAhead is what buys that back.
+//
+// `maxPunch` caps the wide end. Without it a 32:9 display would be handed a
+// 2.4x punch-in and play the whole game through a slot, which is a worse
+// answer than letting it see a little extra ocean.
+export function cineAspectZoom() {
+  const h = CONFIG.arena?.viewHeight || 1;
+  const ref = h * (CONFIG.arena?.referenceAspect || 16 / 9);
+  // THE PLAYER'S FIELD OF VIEW DIVIDED BACK OUT, or it cancels itself exactly.
+  // This function's whole job is to hold `frameWidth / zoom` constant, and the
+  // fov setting is a deliberate change to `frameWidth` — so left in, the
+  // correction would punch in by precisely what the player just widened and the
+  // slider would do nothing at any aspect. The aspect term must see the frame
+  // the window alone implies, which is what dividing by fov recovers.
+  const live = bounds.frameWidth / (fovScale() || 1);
+  if (!(ref > 0) || !(live > 0)) return 1;
+  // Floored at nothing on the low side on purpose: the spring's own 1.001
+  // clamp is what stops a narrow screen, and it is the single place that limit
+  // belongs. A second floor here would be a number to keep in step with it.
+  return Math.min(live / ref, cfg().base?.maxPunch ?? 1.6);
+}
+
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
@@ -228,7 +288,18 @@ const menuState = { held: false, zoom: 0, offsetX: 0, offsetY: 0 };
 export function cineMenu(held, framing = null) {
   menuState.held = !!held;
   if (framing) {
-    menuState.zoom = framing.zoom ?? menuState.zoom;
+    // DIVIDED BACK OUT OF THE ASPECT TERM, because this number arrives already
+    // correct for this window and everything downstream is about to multiply
+    // by it again. mainMenu.js measures the bust against the REAL frame, so
+    // what it hands over is a finished zoom, where every other state in the
+    // config is a zoom written for a 16:9 screen. Stored in that same authored
+    // space and multiplied back at the point of use, the two are commensurable
+    // — which is what the menu → roundStart blend needs, since it interpolates
+    // between this bag and one that was typed. Without it the menu's framing
+    // is squared on any window that isn't 16:9, and the seal fills the screen
+    // on a laptop while a phone looks at one whisker.
+    const af = cineAspectZoom();
+    if (framing.zoom != null) menuState.zoom = framing.zoom / (af || 1);
     menuState.offsetX = framing.offsetX ?? menuState.offsetX;
     menuState.offsetY = framing.offsetY ?? menuState.offsetY;
   }
@@ -536,9 +607,36 @@ export function updateCineCamera(dt, ctx) {
   // asks for about fifteen, which is a composition rather than an overshoot.
   // A state that names a zoom is allowed to have it; anything the spring adds
   // on top of that is still capped.
-  const zoomCeil = Math.max(base.zoomMax ?? 3, p.zoom, machine.from?.zoom ?? 0);
+  //
+  // APPLIED HERE, at the point of use, rather than inside resolve(). The bags
+  // are resolved once on entering a state and then blended for up to a second,
+  // so a factor folded into them would be frozen at whatever the window was
+  // when the state began — and an orientation flip mid-run is precisely a
+  // window changing shape underneath a live blend. Read fresh every frame, the
+  // blend stays in authored space and the aspect is answered last, which also
+  // means a resize moves the frame on the zoom spring rather than cutting.
+  const af = cineAspectZoom();
+  const pz = p.zoom * af;
+  // FLOORED AT THE SAME 1.001 THE CLAMPS BELOW USE, because the aspect term can
+  // otherwise invert the two limits. On a portrait phone `af` is about 0.26, so
+  // a zoomMax of 3.55 scales to a CEILING of 0.92 — under the floor. Any aspect
+  // below ~0.5 gets there.
+  //
+  // Latent rather than live, and worth being exact about: clamp() tests the
+  // floor FIRST, and in this regime the spring is always pulling rig.zoom
+  // downward (the target is 0.32), so every value reaching the clamp is below
+  // 1.001 and is caught by that branch on the way past. The `v > hi` branch
+  // that would return 0.92 is unreachable today. It is one comparison order
+  // away from not being — and what it returns is a zoom below 1, which asks
+  // the frustum to show more than the frame it was built from: bare scene
+  // background past the walls, on exactly the devices this change is for.
+  //
+  // So this is a guard, not a fix for an observed symptom. It costs nothing and
+  // it means the two limits can never cross, which is the property worth having
+  // rather than the argument about which branch happens to fire first.
+  const zoomCeil = Math.max(1.001, (base.zoomMax ?? 3) * af, pz, (machine.from?.zoom ?? 0) * af);
   if (!rig.primed) {
-    rig.zoom = clamp(p.zoom, 1.001, zoomCeil);
+    rig.zoom = clamp(pz, 1.001, zoomCeil);
     rig.zoomVel = 0;
   }
 
@@ -556,7 +654,7 @@ export function updateCineCamera(dt, ctx) {
     // played backwards, and it costs nothing extra.
     const zd = (base.zoomDamping ?? 1) * p.zoomDamping;
     while (steps-- > 0) {
-      [rig.zoom, rig.zoomVel] = springStep(rig.zoom, rig.zoomVel, p.zoom, k, zd, h);
+      [rig.zoom, rig.zoomVel] = springStep(rig.zoom, rig.zoomVel, pz, k, zd, h);
     }
     // Kill the velocity into the stop as well as the value, exactly as the
     // positional clamp does — a spring left integrating against a limit it

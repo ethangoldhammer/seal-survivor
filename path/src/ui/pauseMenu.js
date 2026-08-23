@@ -39,6 +39,7 @@ import { revealPile, releasePile } from './snapshotPrint.js';
 import {
   ACTIONS,
   SCHEMA,
+  applyQuality,
   bindKey,
   isBindable,
   keyLabel,
@@ -533,8 +534,12 @@ function optionsFor(item) {
   // a real third state that the two named options cannot express. An enum with
   // an actual default (barPlacement) has no such state, and offering one would
   // put a row on the menu that resolves to a value already listed beside it.
+  // `nullLabel` where the null state is not "whatever the build ships" but a
+  // state of its own. Quality is the only one: there is no authored quality to
+  // fall back to — it is a NAME for the row of settings under it, so its null
+  // means "these do not currently match any of the presets", which is Custom.
   const rows = item.def == null
-    ? [{ value: null, label: `Default (${authoredLabel(item)})` }]
+    ? [{ value: null, label: item.nullLabel ?? `Default (${authoredLabel(item)})` }]
     : [];
   // `labels` where the setting brought its own prose. Upper-casing is right for
   // the filter names (CRT, VHS, VGA) and wrong for anything that is a phrase.
@@ -550,6 +555,10 @@ function optionsFor(item) {
 function authoredLabel(item) {
   if (item.key === 'filter') return CONFIG.post?.preset ?? 'off';
   if (item.key === 'bloom') return CONFIG.bloom?.enabled !== false;
+  if (item.key === 'adaptiveRes') return CONFIG.render?.adaptive?.enabled !== false;
+  if (item.key === 'caustics') return CONFIG.caustics?.enabled !== false;
+  if (item.key === 'godRays') return CONFIG.godrays?.enabled !== false;
+  if (item.key === 'weather') return CONFIG.weather?.enabled !== false;
   return '';
 }
 
@@ -567,8 +576,20 @@ function buildChoice(el, path, item) {
   const step = (dir) => {
     const opts = optionsFor(item);
     const at = Math.max(0, opts.findIndex((o) => o.value === settings[section][key]));
-    setSetting(path, opts[(at + dir + opts.length) % opts.length].value);
-    paint();
+    const next = opts[(at + dir + opts.length) % opts.length].value;
+    // THE ONE ROW THAT IS NOT A PLAIN WRITE. Quality sets six other settings,
+    // and applyQuality is the only path allowed to do that — it writes them all
+    // and notifies ONCE, where six setSetting calls would rebuild the post
+    // chain six times and, worse, repaint this menu from the fourth while the
+    // last two were still unwritten. setSetting also drops quality back to
+    // Custom on any governed key, so routing this through it would clear the
+    // very row being set.
+    if (path === 'performance.quality') applyQuality(next);
+    else setSetting(path, next);
+    // Every row, not just this one: a preset has just moved bloom, resolution
+    // and four toggles that are all drawn above and below it.
+    if (path === 'performance.quality') buildBody();
+    else paint();
   };
 
   btn.addEventListener('click', () => {

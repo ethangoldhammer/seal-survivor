@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+  <style>
+    /* ========================================================================
+       AS IT SHIPS TODAY — phone, 390x844.
+       The same STYLES literal from path/src/ui/tipJar.js with the two
+       small-screen blocks RESOLVED rather than left as queries: the
+       @media (max-width: 700px) block (panel padding 20/16/16, .sv-tip-go
+       hidden) and the .sv-touch block initUI's class turns on (tier
+       min-height 60px, close button 44px). Written out flat so this artboard
+       shows one state instead of depending on the frame width the canvas
+       happens to give it.
+
+       Measured in a browser at 390x844: the panel is 359 wide and 814 tall
+       OUTSIDE its border, holding 824px of content — so it SCROLLS, and what
+       falls below the fold is the instruction. The width and height below are
+       written as CONTENT values, because that is what the shipping rules are:
+       325 + 32 padding + 2 border = 359 across, and 776 (which is what 92vh
+       resolves to here) + 36 + 2 = 814 down.
+
+       Tier rows come out 114.2 / 115.9 / 97.7 / 115.9. That order looks wrong
+       and is not: height here is not only the description. "Name seven seals"
+       and "Your actual name" both WRAP at this width, so rows 2 and 4 carry a
+       two-line label over a three-line description, while row 3 is the only
+       one with a one-line label and a three-line description.
+       ==================================================================== */
+    body { margin: 0; width: 390px; height: 844px; overflow: hidden;
+      font-family: 'Press Start 2P', monospace;
+      background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+    /* For links added to this artboard later. Scoped off the tier rows:
+       the shipping panel changes only background and border-color on hover,
+       and a bare a:hover here outranks the row's own color: inherit. */
+    a { color: #ffd9a0; text-decoration: none; }
+    a:not(.sv-tip-tier):hover { color: #ffe9c6; }
+
+    .sv-tip-sheet { position: absolute; inset: 0; display: flex;
+      align-items: center; justify-content: center; padding: 33.8px 15.6px;
+      background: rgba(3,6,10,0.93);
+      font-family: 'Press Start 2P', monospace; }
+    /* 814px tall on an 844px screen. max-height: 92vh is a CONTENT height
+       here — no box-sizing is in scope outside .sv-ui — so the 36px of
+       padding and the 2px border sit on top of it. */
+    .sv-tip-panel { position: relative; width: 325px; max-height: 776px;
+      overflow-y: auto; overscroll-behavior: contain;
+      background: #07090d; border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 14px; padding: 20px 16px 16px; color: #e8ecf3;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.62), 0 2px 0 rgba(255,255,255,0.05) inset; }
+    /* THE CLOSE BUTTON LANDS ON THE TITLE. At 390px "Put a name in the water"
+       wraps to two lines, and the 44px touch-sized button is absolutely
+       positioned over the top-right with nothing reserving room for it — the
+       cross sits on top of "the". */
+    .sv-tip-title { font-size: 18px; font-weight: 700; letter-spacing: 0.03em;
+      line-height: 1.35; margin-bottom: 10px; }
+    .sv-tip-blurb { font-size: 12px; line-height: 1.7; letter-spacing: 0.02em;
+      color: rgba(232,236,243,0.6); margin-bottom: 18px; }
+    .sv-tip-tiers { display: flex; flex-direction: column; gap: 8px; }
+    /* align-items: center against a four-line block floats the price in the
+       middle of the row, level with nothing. */
+    .sv-tip-tier { display: flex; align-items: center; gap: 14px; min-height: 60px;
+      text-decoration: none; color: inherit; cursor: pointer;
+      padding: 12px 14px; border-radius: 10px;
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);
+      transition: background 0.15s ease, border-color 0.15s ease; }
+    /* 81px of a 327px row — a quarter of the width for one or two glyphs. */
+    .sv-tip-price { flex: none; min-width: 4ch; font-size: 20px; font-weight: 700;
+      letter-spacing: 0.01em; color: #ffd9a0; font-variant-numeric: tabular-nums; }
+    .sv-tip-what { min-width: 0; flex: 1; text-align: left; }
+    .sv-tip-label { display: block; font-size: 13px; font-weight: 600;
+      letter-spacing: 0.02em; line-height: 1.4; }
+    .sv-tip-desc { display: block; font-size: 11px; line-height: 1.5;
+      letter-spacing: 0.02em; color: rgba(232,236,243,0.55); margin-top: 4px; }
+    /* 165px measured, a fifth of the panel, and it starts below the fold. */
+    .sv-tip-how { margin-top: 18px; padding-top: 14px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 11px; line-height: 1.7; letter-spacing: 0.02em;
+      color: rgba(232,236,243,0.55); }
+    .sv-tip-how b { color: #ffd9a0; font-weight: 700; }
+    .sv-tip-close { position: absolute; top: 12px; right: 14px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+      color: #e8ecf3; font: inherit; width: 44px; height: 44px;
+      border-radius: 50%; cursor: pointer; }
+  </style>
+</helmet>
+<div class="sv-tip-sheet">
+  <div class="sv-tip-panel">
+    <div class="sv-tip-title">Put a name in the water</div>
+    <div class="sv-tip-blurb">Every seal and every boss in this game is named from a list. You can be on it.</div>
+    <div class="sv-tip-tiers">
+      <a class="sv-tip-tier">
+        <span class="sv-tip-price">$1</span>
+        <span class="sv-tip-what">
+          <span class="sv-tip-label">Name a seal</span>
+          <span class="sv-tip-desc">One name, in the roller every player rolls from.</span>
+        </span>
+      </a>
+      <a class="sv-tip-tier">
+        <span class="sv-tip-price">$5</span>
+        <span class="sv-tip-what">
+          <span class="sv-tip-label">Name seven seals</span>
+          <span class="sv-tip-desc">Seven names. Put a whole pod in there.</span>
+        </span>
+      </a>
+      <a class="sv-tip-tier">
+        <span class="sv-tip-price">$5</span>
+        <span class="sv-tip-what">
+          <span class="sv-tip-label">Name a boss</span>
+          <span class="sv-tip-desc">Prefix and root, on the thing that kills you.</span>
+        </span>
+      </a>
+      <a class="sv-tip-tier">
+        <span class="sv-tip-price">$100</span>
+        <span class="sv-tip-what">
+          <span class="sv-tip-label">Your actual name</span>
+          <span class="sv-tip-desc">Your real, on-the-passport name, as a seal.</span>
+        </span>
+      </a>
+    </div>
+    <div class="sv-tip-how">Tip the amount on Ko-fi and <b>write the name in the message</b>, starting with <b>SEAL</b> or <b>BOSS</b>. That message is the whole record &mdash; a tip with no name in it is just a tip, and I will have no idea what you wanted.</div>
+    <button type="button" class="sv-tip-close" aria-label="Close">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

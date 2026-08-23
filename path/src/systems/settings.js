@@ -89,6 +89,66 @@ export const SCHEMA = {
         key: 'shake', label: 'Screen shake', type: 'range', min: 0, max: 1, step: 0.05, def: 1,
         format: (v) => (v === 0 ? 'Off' : `${Math.round(v * 100)}%`),
       },
+      // HOW MUCH OCEAN IS ON SCREEN, and it is the FRUSTUM this moves, not the
+      // rig's zoom. The obvious implementation — a multiplier on the cinematic
+      // zoom — is inert on exactly the screens that most want it: zoom can only
+      // ever punch IN (there is no zooming out past the display), and on any
+      // portrait phone or tablet the rig already sits at 1. Measured: 1.24 of
+      // headroom on a 16:9 laptop, 1.51 on a landscape phone, and x1.00 —
+      // nothing at all — on an iPad or iPhone held upright.
+      //
+      // Scaling the frame instead works everywhere, because the frame is a
+      // rectangle we choose rather than a limit the display imposes. It is
+      // bounded by what the world actually contains: see FOV_LIMITS below,
+      // which is derived from the seabed skirt rather than typed.
+      //
+      // It does NOT touch `bounds`. The walls, the floor, every spawn and every
+      // clamp are where they were — this is the same split the arena change
+      // draws between the ocean and the window onto it.
+      {
+        key: 'fov', label: 'Field of view', type: 'range', min: 0.8, max: 1.2, step: 0.05, def: 1,
+        format: (v) => (v === 1 ? 'Default' : `${v > 1 ? '+' : ''}${Math.round((v - 1) * 100)}%`),
+        hint: 'How much ocean fits on screen',
+      },
+    ],
+  },
+  // --- performance ----------------------------------------------------------
+  // Its own tab rather than more rows under Video, because these are the ones
+  // somebody opens the menu specifically to find — on a phone that is dropping
+  // frames, hunting for them between the screen filter and the shake slider is
+  // the wrong shape. Resolution stays under Video with the rest of the picture;
+  // everything here is a thing the game can stop DOING.
+  performance: {
+    label: 'Performance',
+    items: [
+      // THE PRESET, and the only setting in this file that writes other
+      // settings. `null` is Custom and is what any individual change below
+      // drops it back to — see applyQualityPreset. Not a `boolOrNull`-style
+      // override on an authored value, because there is no authored "quality":
+      // it is a name for a row of the settings underneath it.
+      {
+        key: 'quality', label: 'Quality', type: 'choice',
+        options: ['low', 'medium', 'high'], def: null,
+        labels: { low: 'Low', medium: 'Medium', high: 'High' },
+        nullLabel: 'Custom',
+        hint: 'Sets everything below',
+      },
+      // ADAPTIVE RESOLUTION — the game giving pixels back on its own when it
+      // cannot hold the frame rate. On by default in the shipped tuning, and
+      // exposed because it is the one performance feature that CHANGES THE
+      // PICTURE WITHOUT BEING ASKED: a player who sees the resolution step down
+      // mid-fight and cannot find the switch has no way to know it is a feature.
+      { key: 'adaptiveRes', label: 'Auto resolution', type: 'boolOrNull', def: null, hint: 'Drops resolution when frames are slow' },
+      // The two per-pixel water effects, both a single uniform in the water
+      // shader (uCausticsOn / the godray loop), so toggling either is free at
+      // runtime and needs no recompile.
+      { key: 'caustics', label: 'Caustics', type: 'boolOrNull', def: null, hint: 'Light veins on the seabed' },
+      { key: 'godRays', label: 'Light beams', type: 'boolOrNull', def: null, hint: 'Shafts of sun through the water' },
+      // Weather is geometry AND per-pixel: the rain sheet is a few thousand
+      // points, and a storm drives the swell every water pixel is evaluated
+      // against. The one entry here a player might turn off for taste as well
+      // as for frames.
+      { key: 'weather', label: 'Weather', type: 'boolOrNull', def: null, hint: 'Rain and storms' },
     ],
   },
   hud: {
@@ -303,6 +363,15 @@ export function setSetting(path, value) {
   }
   const next = coerce(item, value);
   settings[section][key] = next;
+  // TOUCHING ANYTHING A PRESET GOVERNS MAKES IT CUSTOM. Without this the menu
+  // would go on claiming "High" while the player had just turned the god rays
+  // off underneath it — and worse, the next reload would re-apply nothing, so
+  // the label and the actual settings would disagree with no way to tell which
+  // one was real. `quality` itself is excluded: it is set through applyQuality,
+  // which is the one path allowed to write the row.
+  if (QUALITY_KEYS.includes(path) && settings.performance.quality != null) {
+    settings.performance.quality = null;
+  }
   saveSettings();
   notify(path);
   return next;
@@ -393,6 +462,93 @@ export function musicScale() {
 /** Multiplier over the authored pixel-ratio cap. */
 export function resolutionScale() {
   return settings.video.resolution;
+}
+
+/**
+ * Multiplier over the FRAME's height and width — not over `bounds`, and not
+ * over the rig's zoom. See the schema note on `fov` for why the zoom is the
+ * wrong lever (it is inert on every portrait screen).
+ *
+ * Clamped again here rather than trusted from storage. `coerce` already holds
+ * it to the schema's 0.8..1.2, but this is read on the frame path and the cost
+ * of being wrong is bare scene background under the seabed — so the limit that
+ * actually matters is asserted at the point of use, by the module that owns the
+ * frame, instead of being a property of how the value got here.
+ */
+export function fovScale() {
+  const v = settings.video.fov;
+  return Number.isFinite(v) ? Math.min(1.2, Math.max(0.8, v)) : 1;
+}
+
+// --- performance ------------------------------------------------------------
+// Each of these is an OVERRIDE on an authored value, exactly like bloomEnabled:
+// null means "whatever the build ships with", so a tuner change still reaches
+// every player who never opened this menu, and only a deliberate pick pins it.
+
+/** @param authored CONFIG.render.adaptive.enabled */
+export function adaptiveResEnabled(authored) {
+  return settings.performance.adaptiveRes == null ? authored : settings.performance.adaptiveRes;
+}
+
+/** @param authored CONFIG.caustics.enabled */
+export function causticsEnabled(authored) {
+  return settings.performance.caustics == null ? authored : settings.performance.caustics;
+}
+
+/** @param authored CONFIG.godrays.enabled */
+export function godRaysEnabled(authored) {
+  return settings.performance.godRays == null ? authored : settings.performance.godRays;
+}
+
+/** @param authored CONFIG.weather.enabled */
+export function weatherEnabled(authored) {
+  return settings.performance.weather == null ? authored : settings.performance.weather;
+}
+
+// THE PRESETS. Written as the full set every time — every preset names every
+// key it governs — so there is no "whatever it was before" hiding in one of
+// them. A preset that left a key alone would mean Low then High did not get
+// you back to High, which is the one thing a preset has to guarantee.
+//
+// `video.resolution` is in here even though its row lives under Video: the
+// pixel count is the biggest single lever there is (see CONFIG.render), and a
+// quality preset that could not reach it would be a preset for the small half
+// of the problem. The Video tab's slider still moves it directly, and doing so
+// drops Quality to Custom like any other individual change.
+const QUALITY_PRESETS = {
+  low: { resolution: 0.6, bloom: false, adaptiveRes: true, caustics: false, godRays: false, weather: false },
+  medium: { resolution: 0.85, bloom: true, adaptiveRes: true, caustics: true, godRays: false, weather: true },
+  high: { resolution: 1, bloom: true, adaptiveRes: false, caustics: true, godRays: true, weather: true },
+};
+
+/** The keys a preset governs, so the menu knows what to drop back to Custom. */
+export const QUALITY_KEYS = ['video.resolution', 'video.bloom',
+  'performance.adaptiveRes', 'performance.caustics', 'performance.godRays', 'performance.weather'];
+
+/**
+ * Apply a named preset, or clear the pin.
+ *
+ * ONE notify at the end, not one per key. Six separate notifications would have
+ * the game rebuilding its post chain and its water uniforms six times for a
+ * single click, and — worse — the menu repaints from the fourth one while the
+ * last two are still unwritten, which reads as a preset that only half applied.
+ *
+ * @param name 'low' | 'medium' | 'high', or null to go back to Custom without
+ *             changing anything the player can see.
+ */
+export function applyQuality(name) {
+  const preset = QUALITY_PRESETS[name];
+  settings.performance.quality = preset ? name : null;
+  if (preset) {
+    settings.video.resolution = coerce(itemFor('video', 'resolution'), preset.resolution);
+    settings.video.bloom = preset.bloom;
+    settings.performance.adaptiveRes = preset.adaptiveRes;
+    settings.performance.caustics = preset.caustics;
+    settings.performance.godRays = preset.godRays;
+    settings.performance.weather = preset.weather;
+  }
+  saveSettings();
+  notify('*');
 }
 
 /** Multiplier over every camera shake. */

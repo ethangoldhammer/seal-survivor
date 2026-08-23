@@ -1,23 +1,23 @@
-id,kind,text,textTouch,textPad,devices,enabled,anchor,priority,hold,repeat,subject
-boss,warn,Warning!,,,,TRUE,band,50,1.8,,
-health,warn,Health low!,,,,TRUE,band,40,1.6,5,
-oxygen,warn,Oxygen low!,,,,TRUE,band,30,1.6,6,
-boost,warn,Boost Empty!,,,,TRUE,player,20,0.8,,
-strikeNow,warn,STRIKE NOW!,,,,TRUE,player,25,.8,1.6,
-surface,coach,Swim up for air,,,,TRUE,band,80,6,,surface
-swim,coach,,First touch swims,Left stick to swim,touch pad,TRUE,band,65,5,,
-aim,coach,,Second touch aims,Right stick to aim,touch pad,TRUE,band,60,5,,
-strike,coach,Hold {strike} or click to charge — let go to strike,Third touch charges a strike,{bumper} to charge a strike,,TRUE,band,50,6,,
-chum,coach,Eat chum to refill your boost.,,,,TRUE,band,45,6,,chum
-bossWeakSpot,coach,Strike the bright spot — it takes critical damage.,,,,TRUE,band,44,6,,hotspot
-hiveStack,coach,Your upgrades live here. Stack more to increase the potency of each effect.,,,,TRUE,band,43,7,,hive
-foodChain,coach,Strike through the chum to keep a FOOD CHAIN going. ,,,,TRUE,band,42,5,,chum
-levelOrb,coach,This upgrades the level of one of your abilities.,,,,TRUE,band,40,6,,pickup
-bubbleOrb,coach,"Pop an air bubble. Free refill, no breach required..",,,,TRUE,band,38,6,,pickup
-strikeOrb,coach,This krill bucket gives you quick boost pips.,,,,TRUE,band,36,6,,pickup
-rapidFireOrb,coach,This tasty morsel doubles your shot rate for a hot sec...,,,,TRUE,band,34,6,,pickup
-chumChunk,coach,This one's a real deal seal meal.,,,,TRUE,band,32,6,,pickup
-attractorOrb,coach,Grab the attractive clam to pull the chum towards you.,,,,TRUE,band,30,6,,pickup
-crab,coach,Loose chum sinks to the bottom. And out come the crabs...,,,,TRUE,band,28,6,,seabed
-invincible,coach,Some creatures should not be attacked.,,,,TRUE,band,24,6,,creature
-breach,coach,Go ahead now... breach!!!,,,,TRUE,band,20,7,,surface
+id,kind,text,textTouch,textPad,review,devices,enabled,anchor,priority,hold,repeat,subject
+boss,warn,Warning!,,,TRUE,,TRUE,band,50,1.8,,
+health,warn,Health low!,,,TRUE,,TRUE,band,40,1.6,5,
+oxygen,warn,Oxygen low!,,,TRUE,,TRUE,band,30,1.6,6,
+boost,warn,Boost Empty!,,,TRUE,,TRUE,player,20,0.8,,
+strikeNow,warn,STRIKE NOW!,,,TRUE,,TRUE,player,25,.8,1.6,
+surface,coach,Swim up for air,,,TRUE,,TRUE,band,80,6,,surface
+swim,coach,,First touch swims,Left stick to swim,TRUE,touch pad,TRUE,band,65,5,,
+aim,coach,,Second touch aims,Right stick to aim,TRUE,touch pad,TRUE,band,60,5,,
+strike,coach,Hold {strike} or click to charge — let go to strike,Third touch charges a strike,{bumper} to charge a strike,TRUE,,TRUE,band,50,6,,
+chum,coach,Eat chum to refill your boost.,,,TRUE,,TRUE,band,45,6,,chum
+bossWeakSpot,coach,Strike the bright spot — it takes critical damage.,,,TRUE,,TRUE,band,44,6,,hotspot
+hiveStack,coach,Your upgrades live here. Stack more to increase the potency of each effect.,,,TRUE,,TRUE,band,43,7,,hive
+foodChain,coach,Strike through the chum to keep a FOOD CHAIN going. ,,,TRUE,,TRUE,band,42,5,,chum
+levelOrb,coach,This upgrades the level of one of your abilities.,,,TRUE,,TRUE,band,40,6,,pickup
+bubbleOrb,coach,"Pop an air bubble. Free refill, no breach required..",,,TRUE,,TRUE,band,38,6,,pickup
+strikeOrb,coach,This krill bucket gives you quick boost pips.,,,TRUE,,TRUE,band,36,6,,pickup
+rapidFireOrb,coach,This tasty morsel doubles your shot rate for a hot sec...,,,TRUE,,TRUE,band,34,6,,pickup
+chumChunk,coach,This one's a real deal seal meal.,,,TRUE,,TRUE,band,32,6,,pickup
+attractorOrb,coach,Grab the attractive clam to pull the chum towards you.,,,TRUE,,TRUE,band,30,6,,pickup
+crab,coach,Loose chum sinks to the bottom. And out come the crabs...,,,TRUE,,TRUE,band,28,6,,seabed
+invincible,coach,Some creatures should not be attacked.,,,TRUE,,TRUE,band,24,6,,creature
+breach,coach,Go ahead now... breach!!!,,,TRUE,,TRUE,band,20,7,,surface
