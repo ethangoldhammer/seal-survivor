@@ -1,18 +1,18 @@
 id,text,review,enabled,weight,causes
-died,You Died!,TRUE,TRUE,1,
-sealed,Your Fate is Sealed!,TRUE,TRUE,1,
-clubbed,Ya dead kehd!,TRUE,TRUE,1,boat
-chummy,Chummy.,TRUE,TRUE,1,
-chum,"You're the Chum Now, Dog",TRUE,TRUE,1,shark
-lastbreath,"Get ready to learn yoga, buddy!",TRUE,TRUE,1,drowning
-approval,Seal of Approval for you!,TRUE,TRUE,,
-whalebro,Crab Food.,TRUE,TRUE,,crab
-gdaychum,g'day chum. ,TRUE,,,shark orca crab
-drowned,ya drown'd!,TRUE,,,drowning
-squidded,you got squidded.,TRUE,,,squid
-inkd,you got ink'd!,TRUE,,,squid
-shark1,you got shark'd!,TRUE,,,shark
-shark,shark week is over!,TRUE,,,shark
-boat,Snuffed out by a boat!,TRUE,,,boat
-sailoar,"Goodbye, sailor. ",TRUE,,,boat
-kiss,Kissed by a rose on the grave.,TRUE,,,
+died,You Died!,,TRUE,1,
+sealed,Your Fate is Sealed!,,TRUE,1,
+clubbed,Ya dead kehd!,,TRUE,1,boat
+chummy,Chummed.,,TRUE,1,
+chum,"You're the Chum Now, Dog.",,TRUE,1,shark
+lastbreath,"Get ready to learn yoga, buddy!",,TRUE,1,drowning
+approval,Seal of Disapproval.,,TRUE,,
+whalebro,Crab Food.,,TRUE,,crab
+gdaychum,G'day chum. ,,TRUE,,shark orca crab
+drowned,Ya drown'd!,,TRUE,,drowning
+squidded,You got squidded.,,TRUE,,squid
+inkd,You got ink'd!,,TRUE,,squid
+shark1,You got shark'd!,,TRUE,,shark
+shark,Shark food.,,TRUE,,shark
+boat,Boated.,,TRUE,,boat
+sailoar,"Goodbye, sailor. ",,TRUE,,boat
+kiss,Kissed by a rose on the grave.,,TRUE,,
